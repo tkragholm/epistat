@@ -12,7 +12,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-epistat-linalg = { path = "../epistat-linalg" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.1.0" }
 faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
 thiserror = "2"
 
