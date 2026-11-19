@@ -1,6 +1,8 @@
-//! Small statistical functions that agree with R and Python to the bit:
-//! sample quantiles, the normal distribution and floating-point sums.
+//! Sample quantiles, the normal distribution, floating-point sums and
+//! log-likelihood helpers, checked against R and Python and computed the same
+//! way on every platform.
 
+pub mod likelihood;
 pub mod normal;
 pub mod quantile;
 pub mod sum;
