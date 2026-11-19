@@ -38,6 +38,8 @@ pub enum GlmError {
         expected: usize,
         found: usize,
     },
+    #[error("the family's parameter is outside its range")]
+    Family,
     #[error("response {index} is {value}, outside the family's support")]
     Response { index: usize, value: f64 },
     #[error("no valid coefficients were found; supply starting values")]
@@ -64,7 +66,8 @@ pub struct Fit {
     pub working_weights: Vec<f64>,
     /// The Pearson dispersion, or 1 for the binomial and Poisson families.
     pub dispersion: f64,
-    /// `dispersion * (X'WX)^-1` with the last iteration's weights, as R's
+    /// `dispersion * (X'WX + ridge)^-1`, the ridge on every diagonal entry
+    /// but the first, with the last iteration's weights, as R's
     /// `summary.glm` computes it, row-major.
     pub covariance: Vec<f64>,
 }
@@ -108,6 +111,9 @@ impl Glm {
         check("offset", n, offset.len())?;
         if let Some(start) = start {
             check("start", p, start.len())?;
+        }
+        if !self.family.valid() {
+            return Err(GlmError::Family);
         }
         if let Some((index, &value)) = y
             .iter()
@@ -313,6 +319,25 @@ mod tests {
         .fit(x.as_ref(), &y, None, None, None)
         .unwrap();
         assert!(ridged.coefficients[1].abs() < plain.coefficients[1].abs());
+    }
+
+    #[test]
+    fn tweedie_parameters_and_zeros_are_checked() {
+        let (x, y) = data();
+        let between = Glm::new(Family::Tweedie { power: 0.5 }, Link::Log);
+        assert_eq!(
+            between.fit(x.as_ref(), &y, None, None, None).unwrap_err(),
+            GlmError::Family
+        );
+        let mut zero = y.clone();
+        zero[0] = 0.0;
+        let above_two = Glm::new(Family::Tweedie { power: 2.5 }, Link::Log);
+        assert!(matches!(
+            above_two.fit(x.as_ref(), &zero, None, None, None),
+            Err(GlmError::Response { index: 0, .. })
+        ));
+        let compound = Glm::new(Family::Tweedie { power: 1.5 }, Link::Log);
+        assert!(compound.fit(x.as_ref(), &zero, None, None, None).is_ok());
     }
 
     #[test]
