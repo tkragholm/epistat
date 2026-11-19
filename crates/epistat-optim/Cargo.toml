@@ -1,0 +1,15 @@
+[package]
+name = "epistat-optim"
+description = "BFGS with a More-Thuente line search, Nelder-Mead and a dense simplex method for small statistical problems"
+keywords = ["optimization", "bfgs", "simplex", "nelder-mead", "statistics"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
