@@ -348,10 +348,10 @@ fn horner(x: f64, coefficients: &[f64]) -> f64 {
 ///
 /// Computed in the lower tail, mirroring an interval that lies above zero, so
 /// that intervals far out in either tail keep their precision. `None` when
-/// `p` is outside `[0, 1]` or the interval has no probability.
+/// `p` is outside `[0, 1]`, a bound is NaN or the interval has no probability.
 #[must_use]
 pub fn truncated_quantile(p: f64, lower: f64, upper: f64) -> Option<f64> {
-    if !(0.0..=1.0).contains(&p) || lower >= upper {
+    if !(0.0..=1.0).contains(&p) || lower.is_nan() || upper.is_nan() || lower >= upper {
         return None;
     }
     if lower > 0.0 {
@@ -472,6 +472,14 @@ pub fn quantile_acklam(p: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_nan_bound_has_no_truncated_quantile() {
+        assert_eq!(truncated_quantile(0.5, f64::NAN, 1.0), None);
+        assert_eq!(truncated_quantile(0.5, -1.0, f64::NAN), None);
+        assert_eq!(truncated_quantile(0.5, f64::NAN, f64::NAN), None);
+    }
+
     use super::*;
 
     #[test]
