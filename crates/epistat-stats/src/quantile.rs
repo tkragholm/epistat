@@ -46,11 +46,13 @@
 //!
 //! # Edge cases
 //!
-//! All functions return `None` for an empty sample and for `p` outside `[0, 1]`,
-//! including NaN. [`type7_ratio`] also returns `None` for a zero denominator, a
-//! numerator above the denominator, or an overflow in `numerator * (n - 1)`. NaN
-//! values in a sample are not checked. The sorted forms assume the sample is
-//! sorted, and the unsorted form orders NaN by `total_cmp`.
+//! All functions return `None` for an empty sample, for a sample that contains
+//! NaN, and for `p` outside `[0, 1]`, including NaN. A quantile of a sample with
+//! a missing value does not exist, and a sort would place the NaN at one end and
+//! return a number. [`type7_ratio`] also returns `None` for a zero denominator, a
+//! numerator above the denominator, or an overflow in `numerator * (n - 1)`. The
+//! sorted forms assume the sample is sorted. The check for NaN reads the whole
+//! sample, which is linear in its length.
 //!
 //! # References
 //!
@@ -61,6 +63,9 @@
 /// between the order statistics at `1 + (n - 1) p`.
 #[must_use]
 pub fn type7(sorted: &[f64], p: f64) -> Option<f64> {
+    if has_nan(sorted) {
+        return None;
+    }
     let (lo, hi, h) = type7_position(sorted.len(), p)?;
     Some(interpolate(sorted[lo], sorted[hi], h))
 }
@@ -68,6 +73,9 @@ pub fn type7(sorted: &[f64], p: f64) -> Option<f64> {
 /// [`type7`] for an unsorted sample, which it partially reorders.
 #[must_use]
 pub fn type7_unsorted(values: &mut [f64], p: f64) -> Option<f64> {
+    if has_nan(values) {
+        return None;
+    }
     let (lo, hi, h) = type7_position(values.len(), p)?;
     values.select_nth_unstable_by(lo, f64::total_cmp);
     let low = values[lo];
@@ -83,7 +91,7 @@ pub fn type7_unsorted(values: &mut [f64], p: f64) -> Option<f64> {
 #[must_use]
 pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Option<f64> {
     let n = sorted.len();
-    if n == 0 || denominator == 0 || numerator > denominator {
+    if n == 0 || denominator == 0 || numerator > denominator || has_nan(sorted) {
         return None;
     }
     let position = numerator.checked_mul(n - 1)?;
@@ -106,7 +114,7 @@ pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Opti
 )]
 pub fn type1(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
-    if n == 0 || !(0.0..=1.0).contains(&p) {
+    if n == 0 || !(0.0..=1.0).contains(&p) || has_nan(sorted) {
         return None;
     }
     // R adds four machine epsilons before taking the floor, so that n p
@@ -127,11 +135,15 @@ pub fn type1(sorted: &[f64], p: f64) -> Option<f64> {
 )]
 pub fn rounded_rank(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
-    if n == 0 || !(0.0..=1.0).contains(&p) {
+    if n == 0 || !(0.0..=1.0).contains(&p) || has_nan(sorted) {
         return None;
     }
     let index = (p * (n - 1) as f64).round() as usize;
     Some(sorted[index.min(n - 1)])
+}
+
+fn has_nan(sample: &[f64]) -> bool {
+    sample.iter().any(|v| v.is_nan())
 }
 
 /// Zero-based indices of the two order statistics and the weight of the
@@ -177,6 +189,16 @@ mod tests {
         assert_eq!(type7(&[1.0], f64::NAN), None);
         assert_eq!(type7_ratio(&[1.0], 1, 0), None);
         assert_eq!(type7_ratio(&[1.0], 3, 2), None);
+    }
+
+    #[test]
+    fn a_nan_in_the_sample_gives_none() {
+        let sample = [1.0, 2.0, f64::NAN];
+        assert_eq!(type7(&sample, 0.5), None);
+        assert_eq!(type1(&sample, 0.5), None);
+        assert_eq!(rounded_rank(&sample, 0.5), None);
+        assert_eq!(type7_ratio(&sample, 1, 2), None);
+        assert_eq!(type7_unsorted(&mut [f64::NAN, 1.0, 2.0], 0.5), None);
     }
 
     #[test]

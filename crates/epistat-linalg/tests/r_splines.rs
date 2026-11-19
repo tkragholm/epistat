@@ -13,7 +13,7 @@ fn floats(bits: &[u64]) -> Vec<f64> {
 
 #[test]
 fn values_and_derivatives() {
-    let basis = BSpline::new(3, &[0.2, 0.45, 0.7], 0.0, 1.0);
+    let basis = BSpline::new(3, &[0.2, 0.45, 0.7], 0.0, 1.0).unwrap();
     let tolerance = Tolerance::exact().abs(1e-14).ulps(4);
     for (i, &x) in reference::X.iter().enumerate() {
         assert_close(&basis.values(x), &floats(&reference::DERIV0[i]), tolerance);

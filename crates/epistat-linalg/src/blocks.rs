@@ -46,9 +46,13 @@
 //!
 //! # Weights
 //!
-//! [`weighted_gram`] uses `s_i = sqrt(max(w_i, 0))`, so a negative weight
-//! counts as zero. [`weighted_xtz`] does not floor the weights. It forms
-//! `w_i z_i` and calls [`xtv`].
+//! [`weighted_gram`] uses `s_i = sqrt(w_i)`. [`weighted_xtz`] forms `w_i z_i`
+//! and calls [`xtv`]. Both, and [`independent_columns`], refuse a weight that is
+//! negative, infinite or NaN with [`DesignError::Weight`], so the Gram matrix
+//! and the right-hand side of the normal equations always describe the same
+//! weighted problem. A weight of zero is valid.
+//!
+//! [`independent_columns`]: crate::design::independent_columns
 //!
 //! # References
 //!
@@ -57,6 +61,7 @@
 
 use std::ops::Range;
 
+use crate::error::{DesignError, check_length, check_weights};
 use faer::linalg::matmul::matmul;
 use faer::linalg::matmul::triangular::{self, BlockStructure};
 use faer::{Accum, Mat, MatMut, MatRef, Par};
@@ -102,16 +107,16 @@ pub fn row_scaled_gram(x: MatRef<'_, f64>, scale: impl Fn(usize) -> f64 + Sync) 
     gram
 }
 
-/// `X' W X` for the diagonal `W` of `weights`, with negative weights taken
-/// as zero.
+/// `X' W X` for the diagonal `W` of `weights`.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `weights` does not have one entry per row of `x`.
-#[must_use]
-pub fn weighted_gram(x: MatRef<'_, f64>, weights: &[f64]) -> Mat<f64> {
-    assert_eq!(weights.len(), x.nrows(), "one weight per row");
-    row_scaled_gram(x, |i| weights[i].max(0.0).sqrt())
+/// [`DesignError::Length`] when `weights` does not have one entry per row of
+/// `x`, and [`DesignError::Weight`] for a weight that is negative or not
+/// finite.
+pub fn weighted_gram(x: MatRef<'_, f64>, weights: &[f64]) -> Result<Mat<f64>, DesignError> {
+    check_weights(weights, x.nrows())?;
+    Ok(row_scaled_gram(x, |i| weights[i].sqrt()))
 }
 
 /// `X' v` as a `p x 1` column.
@@ -138,14 +143,20 @@ pub fn xtv(x: MatRef<'_, f64>, v: &[f64]) -> Mat<f64> {
 
 /// `X' W z` for the diagonal `W` of `weights`.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `weights` or `z` does not have one entry per row of `x`.
-#[must_use]
-pub fn weighted_xtz(x: MatRef<'_, f64>, weights: &[f64], z: &[f64]) -> Mat<f64> {
-    assert_eq!(z.len(), weights.len(), "one weight per value");
+/// [`DesignError::Length`] when `weights` or `z` does not have one entry per
+/// row of `x`, and [`DesignError::Weight`] for a weight that is negative or
+/// not finite.
+pub fn weighted_xtz(
+    x: MatRef<'_, f64>,
+    weights: &[f64],
+    z: &[f64],
+) -> Result<Mat<f64>, DesignError> {
+    check_weights(weights, x.nrows())?;
+    check_length("z", z.len(), x.nrows())?;
     let weighted: Vec<f64> = weights.iter().zip(z).map(|(w, v)| w * v).collect();
-    xtv(x, &weighted)
+    Ok(xtv(x, &weighted))
 }
 
 /// `out <- X beta` for a `p x 1` column `beta`, block by block.
@@ -243,8 +254,8 @@ mod tests {
         let z: Vec<f64> = (0..n)
             .map(|i| f64::from(u32::try_from(i % 7).unwrap()))
             .collect();
-        let gram = weighted_gram(x.as_ref(), &w);
-        let xtz = weighted_xtz(x.as_ref(), &w, &z);
+        let gram = weighted_gram(x.as_ref(), &w).unwrap();
+        let xtz = weighted_xtz(x.as_ref(), &w, &z).unwrap();
         for j in 0..p {
             let direct: f64 = (0..n).map(|i| w[i] * z[i] * x[(i, j)]).sum();
             assert_close(&[xtz[(j, 0)]], &[direct], Tolerance::exact().rel(1e-12));
@@ -274,8 +285,8 @@ mod tests {
             .map(|i| 1.0 + f64::from(u32::try_from(i % 3).unwrap()))
             .collect();
         assert_same_on_threads(|| {
-            let mut out = flat(&weighted_gram(x.as_ref(), &w));
-            out.extend(flat(&weighted_xtz(x.as_ref(), &w, &w)));
+            let mut out = flat(&weighted_gram(x.as_ref(), &w).unwrap());
+            out.extend(flat(&weighted_xtz(x.as_ref(), &w, &w).unwrap()));
             let mut eta = vec![0.0; n];
             matvec_into(
                 &mut eta,
@@ -298,5 +309,27 @@ mod tests {
                 assert_eq!(gram[(j, k)].to_bits(), gram[(k, j)].to_bits());
             }
         }
+    }
+
+    #[test]
+    fn invalid_weights_are_refused_by_every_product() {
+        let x = design(10, 3);
+        let z = vec![1.0; 10];
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            let mut w = vec![1.0; 10];
+            w[4] = bad;
+            let expected = Err(DesignError::Weight { row: 4 });
+            assert_eq!(weighted_gram(x.as_ref(), &w).map(|_| ()), expected);
+            assert_eq!(weighted_xtz(x.as_ref(), &w, &z).map(|_| ()), expected);
+        }
+        assert!(matches!(
+            weighted_gram(x.as_ref(), &[1.0; 9]),
+            Err(DesignError::Length { .. })
+        ));
+        assert!(matches!(
+            weighted_xtz(x.as_ref(), &[1.0; 10], &z[..9]),
+            Err(DesignError::Length { .. })
+        ));
+        assert!(weighted_gram(x.as_ref(), &[0.0; 10]).is_ok());
     }
 }

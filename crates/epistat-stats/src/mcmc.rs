@@ -28,8 +28,9 @@
 //! if none is. The truncation at the first non-positive value keeps the noisy
 //! tail of the autocorrelation out of the sum. The `max` keeps the result at or
 //! below `n`, so a negatively correlated chain does not report more draws than it
-//! has. A constant chain, and a chain of fewer than two draws, count as `n`
-//! independent draws.
+//! has. The result is `None` for a constant chain and for a chain of fewer than
+//! two draws, as [`split_rhat`] is: a sampler that never moves has not
+//! converged, and a number would read as if it had.
 //!
 //! # Split R-hat
 //!
@@ -72,14 +73,12 @@ pub fn autocorrelation(chain: &[f64], lag: usize) -> Option<f64> {
 /// Effective sample size `n / (1 + 2 sum rho_k)`, summing autocorrelations
 /// from lag 1 until the first that is not positive.
 ///
-/// A constant chain or one of fewer than two draws counts as `n`
-/// independent draws.
+/// `None` for a constant chain or one of fewer than two draws, where the
+/// autocorrelation does not exist.
 #[must_use]
-pub fn effective_sample_size(chain: &[f64]) -> f64 {
+pub fn effective_sample_size(chain: &[f64]) -> Option<f64> {
     let n = chain.len() as f64;
-    let Some((mean, squares)) = centred_squares(chain).filter(|_| chain.len() >= 2) else {
-        return n;
-    };
+    let (mean, squares) = centred_squares(chain)?;
     let mut rho_sum = 0.0;
     for lag in 1..chain.len() {
         let rho = lagged_products(chain, lag, mean) / squares;
@@ -88,7 +87,7 @@ pub fn effective_sample_size(chain: &[f64]) -> f64 {
         }
         rho_sum += rho;
     }
-    n / (1.0 + 2.0 * rho_sum).max(1.0)
+    Some(n / (1.0 + 2.0 * rho_sum).max(1.0))
 }
 
 /// Split R-hat (Gelman et al., Bayesian Data Analysis, 3rd ed., 2013): each
@@ -161,14 +160,16 @@ mod tests {
         assert!((autocorrelation(&chain, 1).unwrap() + 5.0 / 6.0).abs() < 1e-15);
         assert_eq!(autocorrelation(&chain, 6), None);
         assert_eq!(autocorrelation(&[2.0; 4], 1), None);
-        assert!((effective_sample_size(&chain) - 6.0).abs() < 1e-15);
+        assert!((effective_sample_size(&chain).unwrap() - 6.0).abs() < 1e-15);
     }
 
     #[test]
     fn a_persistent_chain_has_fewer_effective_draws() {
         let chain: Vec<f64> = (0..100).map(|i| f64::from(i / 10)).collect();
-        assert!(effective_sample_size(&chain) < 20.0);
-        assert!((effective_sample_size(&[3.0; 5]) - 5.0).abs() < 1e-15);
+        assert!(effective_sample_size(&chain).unwrap() < 20.0);
+        assert_eq!(effective_sample_size(&[3.0; 5]), None);
+        assert_eq!(effective_sample_size(&[3.0]), None);
+        assert_eq!(effective_sample_size(&[]), None);
     }
 
     #[test]

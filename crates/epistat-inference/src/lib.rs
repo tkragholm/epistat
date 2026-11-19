@@ -32,6 +32,8 @@ pub enum InferenceError {
         expected: usize,
         found: usize,
     },
+    #[error("a replicate is NaN")]
+    NanReplicate,
     #[error("the result is not finite")]
     NotFinite,
     #[error("alpha must lie in (0, 1), got {0}")]

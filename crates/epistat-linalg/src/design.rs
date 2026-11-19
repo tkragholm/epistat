@@ -50,6 +50,8 @@
 
 use faer::{Mat, MatRef};
 
+use crate::error::{DesignError, check_length, check_weights};
+
 /// The columns of a design that are linearly independent of the first
 /// column and of the columns kept before them, in the weighted Gram matrix
 /// `X'WX` of each group of rows.
@@ -67,28 +69,28 @@ use faer::{Mat, MatRef};
 ///
 /// Returns one flag per column, true where the column is kept.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If `weights` or `groups` does not have one entry per row of `x`, or
-/// `tolerance` is negative or not finite.
-#[must_use]
+/// [`DesignError::Length`] when `weights` or `groups` does not have one entry
+/// per row of `x`, [`DesignError::Weight`] for a weight that is negative or
+/// not finite, as in [`weighted_gram`](crate::weighted_gram), and
+/// [`DesignError::Tolerance`] for a tolerance that is negative or not finite.
 pub fn independent_columns(
     x: MatRef<'_, f64>,
     weights: &[f64],
     groups: Option<&[usize]>,
     tolerance: f64,
-) -> Vec<bool> {
+) -> Result<Vec<bool>, DesignError> {
     let (rows, p) = (x.nrows(), x.ncols());
-    assert_eq!(weights.len(), rows, "one weight per row");
-    assert!(
-        tolerance.is_finite() && tolerance >= 0.0,
-        "a finite, non-negative tolerance"
-    );
+    check_weights(weights, rows)?;
+    if !(tolerance.is_finite() && tolerance >= 0.0) {
+        return Err(DesignError::Tolerance);
+    }
     if let Some(groups) = groups {
-        assert_eq!(groups.len(), rows, "one group per row");
+        check_length("groups", groups.len(), rows)?;
     }
     if p <= 1 || rows == 0 {
-        return vec![true; p];
+        return Ok(vec![true; p]);
     }
     let group_of = |row: usize| groups.map_or(0, |g| g[row]);
     let group_count = (0..rows).map(group_of).max().map_or(0, |g| g + 1);
@@ -159,7 +161,7 @@ pub fn independent_columns(
     for k in kept {
         flags[k] = true;
     }
-    flags
+    Ok(flags)
 }
 
 /// The columns of `x` whose flag is true, in order.
@@ -198,7 +200,7 @@ mod tests {
             &[1.0, 1.0, 1.0],
         ]);
         assert_eq!(
-            independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8),
+            independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8).unwrap(),
             [true; 3]
         );
     }
@@ -212,7 +214,7 @@ mod tests {
             &[1.0, 0.0, 1.0],
         ]);
         assert_eq!(
-            independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8),
+            independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8).unwrap(),
             [true, true, false]
         );
     }
@@ -221,10 +223,32 @@ mod tests {
     fn a_column_constant_in_one_group_is_dropped() {
         // Column 1 varies overall but is zero throughout group 1.
         let x = design(&[&[1.0, 1.0], &[1.0, 0.0], &[1.0, 0.0], &[1.0, 0.0]]);
-        let pooled = independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8);
-        let grouped = independent_columns(x.as_ref(), &[1.0; 4], Some(&[0, 0, 1, 1]), 1e-8);
+        let pooled = independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8).unwrap();
+        let grouped =
+            independent_columns(x.as_ref(), &[1.0; 4], Some(&[0, 0, 1, 1]), 1e-8).unwrap();
         assert_eq!(pooled, [true, true]);
         assert_eq!(grouped, [true, false]);
+    }
+
+    #[test]
+    fn invalid_input_is_an_error() {
+        let x = design(&[&[1.0, 1.0], &[1.0, 0.0], &[1.0, 2.0]]);
+        let check = |w: &[f64], groups: Option<&[usize]>, tol: f64| {
+            independent_columns(x.as_ref(), w, groups, tol).unwrap_err()
+        };
+        assert_eq!(
+            check(&[1.0, -1.0, 1.0], None, 1e-8),
+            DesignError::Weight { row: 1 }
+        );
+        assert_eq!(
+            check(&[1.0, 1.0, f64::NAN], None, 1e-8),
+            DesignError::Weight { row: 2 }
+        );
+        assert!(matches!(
+            check(&[1.0; 3], Some(&[0, 1]), 1e-8),
+            DesignError::Length { .. }
+        ));
+        assert_eq!(check(&[1.0; 3], None, -1.0), DesignError::Tolerance);
     }
 
     #[test]

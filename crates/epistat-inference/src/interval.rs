@@ -3,8 +3,8 @@
 //!
 //! Levels are given as `alpha`, the probability outside the interval, which
 //! must lie in `(0, 1)`. The replicate functions sort their input in place.
-//! Replicates are ordered with `f64::total_cmp`, so a NaN sorts to an end
-//! rather than failing.
+//! A NaN replicate is [`InferenceError::NanReplicate`], since a percentile of a
+//! sample with a missing value does not exist.
 //!
 //! # Normal interval
 //!
@@ -15,7 +15,13 @@
 //!
 //! [`percentile`] reads the bounds of the percentile interval \[1\]\[2\] from
 //! the `n` sorted replicates `x(0) <= ... <= x(n-1)`. [`Percentile`] chooses
-//! the rule. With `last = n - 1`:
+//! the rule. Type 7 is the rule for new work: it is R's default, it is the
+//! quantile of \[3\] that most software computes, and it does not depend on a
+//! convention about which side to round to. The other two reproduce existing
+//! software and are kept so that its intervals can be reproduced exactly:
+//! `OutwardFromLast` the percentile interval of the PHD kernels, and
+//! `OutwardFromCount` that of the semicontinuous cost models. With
+//! `last = n - 1`:
 //!
 //! ```text
 //! Type7:            quantiles at alpha/2 and 1 - alpha/2, type 7 of [3]
@@ -62,7 +68,8 @@
 //! # Edge cases
 //!
 //! - `alpha` outside `(0, 1)` is [`InferenceError::Alpha`].
-//! - No replicates is [`InferenceError::Empty`].
+//! - No replicates is [`InferenceError::Empty`], and a NaN among them is
+//!   [`InferenceError::NanReplicate`].
 //! - One replicate gives that replicate as both bounds.
 //!
 //! # References
@@ -83,14 +90,19 @@ use epistat_stats::{normal, quantile};
 use crate::InferenceError;
 
 /// How a percentile interval reads its bounds from the sorted replicates.
+///
+/// Use [`Percentile::Type7`] for new work. The other two rules reproduce the
+/// intervals of existing software.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Percentile {
     /// R's type 7 quantiles at `alpha / 2` and `1 - alpha / 2`.
     Type7,
-    /// The replicates at positions `floor(alpha / 2 * (n - 1))` and
+    /// For reproducing the PHD kernels' `percentile_ci`. The replicates at
+    /// positions `floor(alpha / 2 * (n - 1))` and
     /// `ceil((1 - alpha / 2) * (n - 1))`, counting from 0.
     OutwardFromLast,
-    /// The replicates at positions `floor(alpha / 2 * n)` and
+    /// For reproducing semicontinuous_models' `bootstrap_percentile_ci`. The
+    /// replicates at positions `floor(alpha / 2 * n)` and
     /// `ceil((1 - alpha / 2) * n) - 1`, counting from 0.
     OutwardFromCount,
 }
@@ -110,8 +122,8 @@ pub fn normal(estimate: f64, se: f64, alpha: f64) -> Result<(f64, f64), Inferenc
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no replicates and [`InferenceError::Alpha`]
-/// unless `0 < alpha < 1`.
+/// [`InferenceError::Empty`] for no replicates, [`InferenceError::NanReplicate`]
+/// for a NaN among them and [`InferenceError::Alpha`] unless `0 < alpha < 1`.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -123,9 +135,7 @@ pub fn percentile(
     rule: Percentile,
 ) -> Result<(f64, f64), InferenceError> {
     check_alpha(alpha)?;
-    if replicates.is_empty() {
-        return Err(InferenceError::Empty);
-    }
+    check_replicates(replicates)?;
     replicates.sort_by(f64::total_cmp);
     let sorted = &*replicates;
     let last = sorted.len() - 1;
@@ -168,6 +178,8 @@ pub fn trimmed_percentile(
     trim: f64,
     rule: Percentile,
 ) -> Result<(f64, f64), InferenceError> {
+    check_alpha(alpha)?;
+    check_replicates(replicates)?;
     let n = replicates.len();
     let cut = (trim.clamp(0.0, 0.49) * n as f64).floor() as usize;
     if cut == 0 || 2 * cut >= n {
@@ -194,9 +206,7 @@ pub fn bias_corrected(
     alpha: f64,
 ) -> Result<(f64, f64), InferenceError> {
     check_alpha(alpha)?;
-    if replicates.is_empty() {
-        return Err(InferenceError::Empty);
-    }
+    check_replicates(replicates)?;
     replicates.sort_by(f64::total_cmp);
     let sorted = &*replicates;
     let n = sorted.len() as f64;
@@ -208,6 +218,16 @@ pub fn bias_corrected(
         quantile::rounded_rank(sorted, normal::cdf_as26(2.0 * z0 + z)).ok_or(InferenceError::Empty)
     };
     Ok((at(z_lower)?, at(z_upper)?))
+}
+
+fn check_replicates(replicates: &[f64]) -> Result<(), InferenceError> {
+    if replicates.is_empty() {
+        Err(InferenceError::Empty)
+    } else if replicates.iter().any(|v| v.is_nan()) {
+        Err(InferenceError::NanReplicate)
+    } else {
+        Ok(())
+    }
 }
 
 fn check_alpha(alpha: f64) -> Result<(), InferenceError> {
@@ -250,6 +270,31 @@ mod tests {
         // A point estimate at the median leaves the interval centred.
         let (lower, upper) = bias_corrected(&mut replicates(), 49.5, 0.1).unwrap();
         assert!((lower + upper - 99.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn a_nan_replicate_is_an_error() {
+        for rule in [
+            Percentile::Type7,
+            Percentile::OutwardFromLast,
+            Percentile::OutwardFromCount,
+        ] {
+            let mut sample = vec![1.0, f64::NAN, 3.0];
+            assert_eq!(
+                percentile(&mut sample, 0.1, rule),
+                Err(InferenceError::NanReplicate)
+            );
+        }
+        let mut sample: Vec<f64> = (0..20).map(f64::from).collect();
+        sample[0] = f64::NAN;
+        assert_eq!(
+            trimmed_percentile(&mut sample, 0.1, 0.1, Percentile::Type7),
+            Err(InferenceError::NanReplicate)
+        );
+        assert_eq!(
+            bias_corrected(&mut sample, 5.0, 0.1),
+            Err(InferenceError::NanReplicate)
+        );
     }
 
     #[test]

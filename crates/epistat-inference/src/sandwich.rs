@@ -32,9 +32,12 @@
 //! ```
 //!
 //! by two solves. It factorises `A` and solves `A L = M`, then factorises
-//! `A'` and solves `A' R = L'`, and returns `R'`, which is `L A^-T`. `A` is
-//! never inverted explicitly. The factorisation is tried with the given
-//! `attempts`, in order.
+//! `A'` and solves `A' R = L'`, so that `R'` is `L A^-T`. `A` is never
+//! inverted explicitly. The factorisation is tried with the given `attempts`,
+//! in order. The two solves round differently, so `R'` is symmetric only up to
+//! rounding, and the function returns the midpoint of `R'` and `R`. That matrix
+//! is exactly symmetric, its diagonal equals that of `R'` to the bit, and its
+//! off-diagonal entries differ from `R'` in the last bits.
 //!
 //! [`standard_errors`] is `sqrt(max(V_ii, 0))`. A negative diagonal entry,
 //! which rounding can produce when `V` is near singular, is read as zero.
@@ -52,7 +55,6 @@
 //!   [`InferenceError::Length`]. Without clusters the length of the
 //!   residuals is not checked, since they are a function of the row.
 //! - A singular or non-finite solve is [`InferenceError::Solve`].
-//! - The sandwich is not symmetrised. It is symmetric only up to rounding.
 //!
 //! # References
 //!
@@ -101,7 +103,8 @@ pub fn meat(
     Ok(row_scaled_gram(sums.as_ref(), |_| 1.0))
 }
 
-/// `A^-1 M A^-T`, by two solves with `A` factorised once through `attempts`.
+/// `A^-1 M A^-T`, by two solves through `attempts`, averaged with its
+/// transpose so that the result is exactly symmetric.
 ///
 /// # Errors
 ///
@@ -114,7 +117,10 @@ pub fn sandwich(
 ) -> Result<Mat<f64>, InferenceError> {
     let left = Factor::new(information, attempts)?.solve(meat)?;
     let transposed = Factor::new(information.transpose(), attempts)?.solve(left.transpose())?;
-    Ok(transposed.transpose().to_owned())
+    let n = transposed.nrows();
+    Ok(Mat::from_fn(n, n, |i, j| {
+        transposed[(j, i)].midpoint(transposed[(i, j)])
+    }))
 }
 
 /// The square roots of the diagonal, with negative variances read as zero.
@@ -153,5 +159,18 @@ mod tests {
         let clusters = Clusters::from_labels(&["a", "a", "b", "b"]);
         let m = meat(x.as_ref(), |i| residuals[i], Some(&clusters)).unwrap();
         assert!((m[(0, 0)] - 9.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn the_sandwich_is_exactly_symmetric() {
+        let information = mat![[2.0, 0.3, 0.1], [0.7, 1.5, 0.2], [0.1, 0.9, 3.0]];
+        let x = Mat::from_fn(7, 3, |i, j| ((i * 3 + j) % 5) as f64 - 1.7);
+        let m = meat(x.as_ref(), |i| 0.3 * i as f64 - 1.0, None).unwrap();
+        let v = sandwich(information.as_ref(), m.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_eq!(v[(i, j)].to_bits(), v[(j, i)].to_bits());
+            }
+        }
     }
 }

@@ -44,7 +44,9 @@
 //!
 //! # Edge cases
 //!
-//! The degree-0 functions are half open, which would leave the right end of
+//! [`BSpline::new`] returns a [`KnotError`] for internal knots that are
+//! unsorted or not strictly inside the boundary, and for a boundary that is
+//! not finite and increasing. The degree-0 functions are half open, which would leave the right end of
 //! the interval with every function zero. The last function is therefore also
 //! 1 when `x` is within 1e-12 of `upper`, so the basis sums to one on the
 //! whole closed interval and its derivatives sum to zero. Outside
@@ -129,6 +131,17 @@ impl Basis for Polynomial {
     }
 }
 
+/// Invalid knots given to [`BSpline::new`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum KnotError {
+    #[error("the boundary knots must be finite with lower below upper")]
+    Boundary,
+    #[error("the internal knots must lie strictly inside the boundary")]
+    OutsideBoundary,
+    #[error("the internal knots must be sorted")]
+    Unsorted,
+}
+
 /// B-splines of a given degree on `[lower, upper]` with sorted internal
 /// knots, by the Cox-de Boor recursion. The same basis as R's
 /// `splines::bs(x, knots, degree, intercept = TRUE, Boundary.knots)`.
@@ -142,21 +155,30 @@ pub struct BSpline {
 }
 
 impl BSpline {
-    /// # Panics
+    /// # Errors
     ///
-    /// If the internal knots are not sorted or do not lie strictly inside
-    /// `(lower, upper)`.
-    #[must_use]
-    pub fn new(degree: usize, internal_knots: &[f64], lower: f64, upper: f64) -> Self {
-        assert!(
-            internal_knots.windows(2).all(|pair| pair[0] <= pair[1])
-                && internal_knots.iter().all(|&k| lower < k && k < upper),
-            "internal knots must be sorted and inside the boundary"
-        );
+    /// [`KnotError`] when the boundary is not an increasing pair of finite
+    /// numbers, or the internal knots are not sorted or do not lie strictly
+    /// inside `(lower, upper)`. A NaN knot is refused as unsorted.
+    pub fn new(
+        degree: usize,
+        internal_knots: &[f64],
+        lower: f64,
+        upper: f64,
+    ) -> Result<Self, KnotError> {
+        if !(lower.is_finite() && upper.is_finite() && lower < upper) {
+            return Err(KnotError::Boundary);
+        }
+        if !internal_knots.iter().all(|&k| lower < k && k < upper) {
+            return Err(KnotError::OutsideBoundary);
+        }
+        if !internal_knots.windows(2).all(|pair| pair[0] <= pair[1]) {
+            return Err(KnotError::Unsorted);
+        }
         let mut knots = vec![lower; degree + 1];
         knots.extend_from_slice(internal_knots);
         knots.extend(std::iter::repeat_n(upper, degree + 1));
-        Self { degree, knots }
+        Ok(Self { degree, knots })
     }
 
     #[must_use]
@@ -234,7 +256,7 @@ mod tests {
 
     #[test]
     fn b_splines_sum_to_one_on_the_closed_interval() {
-        let basis = BSpline::new(3, &[0.25, 0.5, 0.5, 0.8], -1.0, 2.0);
+        let basis = BSpline::new(3, &[0.25, 0.5, 0.5, 0.8], -1.0, 2.0).unwrap();
         assert_eq!(basis.len(), 8);
         for x in [-1.0, -0.3, 0.25, 0.5, 0.79, 1.5, 2.0] {
             let total: f64 = basis.values(x).iter().sum();
@@ -244,8 +266,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "inside the boundary")]
-    fn knots_outside_the_boundary_are_refused() {
-        let _ = BSpline::new(2, &[1.5], 0.0, 1.0);
+    fn invalid_knots_are_errors() {
+        assert_eq!(
+            BSpline::new(2, &[1.5], 0.0, 1.0),
+            Err(KnotError::OutsideBoundary)
+        );
+        assert_eq!(
+            BSpline::new(2, &[0.0], 0.0, 1.0),
+            Err(KnotError::OutsideBoundary)
+        );
+        assert_eq!(
+            BSpline::new(2, &[0.6, 0.4], 0.0, 1.0),
+            Err(KnotError::Unsorted)
+        );
+        assert_eq!(
+            BSpline::new(2, &[f64::NAN], 0.0, 1.0),
+            Err(KnotError::OutsideBoundary)
+        );
+        assert_eq!(BSpline::new(2, &[], 1.0, 0.0), Err(KnotError::Boundary));
+        assert_eq!(
+            BSpline::new(2, &[], 0.0, f64::INFINITY),
+            Err(KnotError::Boundary)
+        );
     }
 }
