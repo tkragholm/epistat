@@ -13,11 +13,13 @@ impl Default for Fingerprint {
 }
 
 impl Fingerprint {
+    /// The hash of nothing, FNV-1a's offset basis.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Mixes in the eight little-endian bytes of `value`.
     #[must_use]
     pub fn u64(mut self, value: u64) -> Self {
         for byte in value.to_le_bytes() {
@@ -27,16 +29,19 @@ impl Fingerprint {
         self
     }
 
+    /// Mixes in the bit pattern of `value`, so `-0.0` and `0.0` differ.
     #[must_use]
     pub fn f64(self, value: f64) -> Self {
         self.u64(value.to_bits())
     }
 
+    /// Mixes in each of `values` in order.
     #[must_use]
     pub fn f64s(self, values: &[f64]) -> Self {
         values.iter().fold(self, |hash, &v| hash.f64(v))
     }
 
+    /// The hash of everything mixed in so far.
     #[must_use]
     pub fn finish(&self) -> u64 {
         self.0

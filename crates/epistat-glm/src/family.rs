@@ -84,23 +84,30 @@
 /// The link between the mean and the linear predictor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Link {
+    /// `eta = mu`.
     Identity,
+    /// `eta = ln mu`.
     Log,
+    /// `eta = ln(mu / (1 - mu))`.
     Logit,
 }
 
 /// The distribution of the response.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Family {
+    /// Constant variance.
     Gaussian,
     /// A proportion of successes, with the number of trials as the prior
     /// weight.
     Binomial,
+    /// Variance `mu`.
     Poisson,
+    /// Variance `mu^2`.
     Gamma,
     /// Variance `mu^power`, for `power` outside `(0, 1)`. Powers 0, 1 and 2
     /// are the Gaussian, Poisson and gamma variances.
     Tweedie {
+        /// The exponent of the variance function.
         power: f64,
     },
 }

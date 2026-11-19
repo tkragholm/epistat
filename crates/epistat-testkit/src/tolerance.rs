@@ -20,6 +20,7 @@ impl Tolerance {
         }
     }
 
+    /// `|got - expected| <= bound`.
     #[must_use]
     pub const fn abs(self, bound: f64) -> Self {
         Self {
@@ -46,6 +47,8 @@ impl Tolerance {
         }
     }
 
+    /// Whether `got` meets any of the bounds set against `expected`. Two NaNs
+    /// match, and infinities match only themselves.
     #[must_use]
     #[expect(
         clippy::float_cmp,

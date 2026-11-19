@@ -164,7 +164,9 @@ use crate::{Family, Link};
 /// A model and its fitting controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glm {
+    /// The distribution of the response.
     pub family: Family,
+    /// The link between the mean and the linear predictor.
     pub link: Link,
     /// R's `epsilon`.
     pub tolerance: f64,
@@ -176,6 +178,7 @@ pub struct Glm {
 }
 
 impl Glm {
+    /// A model with R's defaults: tolerance `1e-8`, 25 iterations, no ridge.
     #[must_use]
     pub const fn new(family: Family, link: Link) -> Self {
         Self {
@@ -188,28 +191,52 @@ impl Glm {
     }
 }
 
+/// Why a model could not be fitted.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum GlmError {
+    /// An input has the wrong length.
     #[error("{what} has {found} entries where {expected} were expected")]
     Length {
+        /// The name of the input.
         what: &'static str,
+        /// The length it needed.
         expected: usize,
+        /// The length it had.
         found: usize,
     },
+    /// The Tweedie power lies in `(0, 1)` or is not finite.
     #[error("the family's parameter is outside its range")]
     Family,
+    /// A prior weight is negative or not finite.
     #[error("prior weight {index} is {value}, which is negative or not finite")]
-    Weight { index: usize, value: f64 },
+    Weight {
+        /// The position of the weight.
+        index: usize,
+        /// Its value.
+        value: f64,
+    },
+    /// The tolerance is not positive and finite.
     #[error("the tolerance must be positive and finite")]
     Tolerance,
+    /// A response lies outside the support of the family.
     #[error("response {index} is {value}, outside the family's support")]
-    Response { index: usize, value: f64 },
+    Response {
+        /// The position of the response.
+        index: usize,
+        /// Its value.
+        value: f64,
+    },
+    /// The first iterate left the model's domain, with no earlier one to halve
+    /// toward.
     #[error("no valid coefficients were found; supply starting values")]
     NoValidStart,
+    /// Halving a step did not bring the fit back into the domain.
     #[error("the step could not be corrected by halving")]
     StepHalving,
+    /// The design could not be reduced to its identifiable columns.
     #[error(transparent)]
     Design(#[from] DesignError),
+    /// The normal equations could not be solved.
     #[error(transparent)]
     Solve(#[from] SolveError),
 }
@@ -221,10 +248,15 @@ pub struct Fit {
     pub coefficients: Vec<Option<f64>>,
     /// The number of coefficients that are not aliased.
     pub rank: usize,
+    /// The fitted means.
     pub fitted: Vec<f64>,
+    /// The linear predictor, offset included.
     pub linear_predictor: Vec<f64>,
+    /// The residual deviance.
     pub deviance: f64,
+    /// The number of IRLS iterations.
     pub iterations: usize,
+    /// Whether the deviance converged within the iteration limit.
     pub converged: bool,
     /// Whether a step was halved in the last iteration.
     pub boundary: bool,
