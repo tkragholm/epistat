@@ -365,12 +365,15 @@ pub fn state_occupation_curve(
 ///
 /// The total is a compensated sum. It is a normalising denominator, so a
 /// last-place difference here would move every probability of every curve.
+///
+/// A total weight of zero, which leaves no distribution to normalise, is an
+/// [`Error::Input`].
 fn initial_distribution(
     first_states: &[i32],
     first_positions: &[u32],
     weights: &[f64],
     states: usize,
-) -> Vec<f64> {
+) -> Result<Vec<f64>> {
     let mut occupancy = vec![0.0f64; states];
     for (&opening, &position) in first_states.iter().zip(first_positions.iter()) {
         // A negative rank is a state outside the declared space.
@@ -379,10 +382,12 @@ fn initial_distribution(
         }
     }
     let total = compensated(occupancy.iter().copied());
-    if total == 0.0 {
-        return vec![0.0f64; states];
+    if total <= 0.0 {
+        return Err(Error::input(
+            "the opening intervals carry no weight in the state space, so there is no initial distribution",
+        ));
     }
-    occupancy.iter().map(|value| value / total).collect()
+    Ok(occupancy.iter().map(|value| value / total).collect())
 }
 
 /// The product integral over `times`: `states` probabilities per time, and with
@@ -524,8 +529,10 @@ fn integrate(
 ///
 /// [`Error::Input`] for an empty state space, a slice of the wrong length, a
 /// cluster code not below `n_clusters`, a position outside the intervals, an
-/// opening state not below `states`, or when more weight leaves a state than
-/// was at risk in it in some replicate.
+/// opening state not below `states`, a replicate in which the opening
+/// intervals carry no weight inside the state space (no initial distribution
+/// exists), or when more weight leaves a state than was at risk in it in some
+/// replicate.
 pub fn bootstrap_state_occupation(
     intervals: Intervals<'_>,
     base: &[f64],
@@ -589,7 +596,7 @@ pub fn bootstrap_state_occupation(
                         .map(|(&weight, &code)| weight * draw[code as usize]),
                 );
                 let weights: &[f64] = weights;
-                let initial = initial_distribution(first_states, first_positions, weights, states);
+                let initial = initial_distribution(first_states, first_positions, weights, states)?;
                 let (curve, _) = product_integral(
                     intervals,
                     weights,
@@ -745,5 +752,28 @@ mod tests {
         assert!(refused(0, &[0; 5]), "empty state space");
         assert!(refused(2, &[0, 0, 0, 0, 2]), "cluster code out of range");
         assert!(!refused(2, &[0, 0, 0, 0, 1]));
+    }
+
+    #[test]
+    fn opening_intervals_without_weight_have_no_initial_distribution() {
+        let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
+        let run = |base: &[f64]| {
+            bootstrap_state_occupation(
+                intervals,
+                base,
+                &[0, 0, 0, 0, 0],
+                &[0, 2, 3],
+                &[0, 0, 0],
+                &[2.0],
+                &[],
+                0.0,
+                &[1],
+                1,
+                2,
+                1e-9,
+            )
+        };
+        assert!(run(&[1.0; 5]).is_ok());
+        assert!(run(&[0.0; 5]).is_err());
     }
 }

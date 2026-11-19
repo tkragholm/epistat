@@ -555,11 +555,11 @@ mod tests {
             let fit = fit_rows(&rows, &x);
             assert!(fit.converged);
             assert!(
-                close(fit.log_hazard_ratio, 0.151_472_434_751_664, 1e-10),
+                close(fit.log_hazard_ratio.unwrap(), 0.151_472_434_751_664, 1e-10),
                 "{fit:?}"
             );
             assert!(
-                close(fit.standard_error, 0.634_301_730_060_493, 1e-10),
+                close(fit.standard_error.unwrap(), 0.634_301_730_060_493, 1e-10),
                 "{fit:?}"
             );
         }
@@ -593,8 +593,8 @@ mod tests {
         let clustered =
             fine_gray_fit(&TIME, &EVENT, &weight, &x, 1, Ties::Breslow, Some(&family)).unwrap();
         assert!(close(
-            plain.log_hazard_ratio,
-            clustered.log_hazard_ratio,
+            plain.log_hazard_ratio.unwrap(),
+            clustered.log_hazard_ratio.unwrap(),
             1e-10
         ));
         assert!(plain.n_rows < clustered.n_rows);

@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-inference"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "epistat-linalg",
  "epistat-rng",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-linalg"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dyn-stack",
  "epistat-testkit",
@@ -230,14 +230,14 @@ dependencies = [
 
 [[package]]
 name = "epistat-rng"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rand_core",
 ]
 
 [[package]]
 name = "epistat-sequences"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "epistat-optim",
  "epistat-rng",
@@ -248,14 +248,14 @@ dependencies = [
 
 [[package]]
 name = "epistat-stats"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "epistat-testkit",
 ]
 
 [[package]]
 name = "epistat-survival"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "epistat-rng",
  "epistat-stats",

@@ -73,12 +73,11 @@
 //! # Edge cases
 //!
 //! Rows with a weight that is not positive are dropped before anything else, so
-//! `n_rows` counts the rows fitted. The fit is degenerate, with a NaN estimate,
+//! `n_rows` counts the rows fitted. The fit is degenerate, with no estimate,
 //! zero iterations and `converged` false, when no row is left, there is no
 //! event, the covariate takes one value among the rows kept, `exp(beta x)`
 //! overflows because the covariate separates the events, or the information is
-//! not positive. The robust standard error is then `Some(NaN)` if clusters were
-//! given. Without delayed entry, pass negative infinity as every entry time.
+//! not positive. The estimate and both standard errors are then `None`. Without delayed entry, pass negative infinity as every entry time.
 //! Times are compared with `total_cmp`, so a NaN time sorts after every number.
 //!
 //! # References
@@ -126,10 +125,11 @@ pub enum Ties {
 /// One Cox fit. See [`fit_cox_single_covariate`] for when it is degenerate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoxFit {
-    /// The estimate of `beta`, NaN when the fit is degenerate.
-    pub log_hazard_ratio: f64,
-    /// The model-based standard error, `1 / sqrt(I)`.
-    pub standard_error: f64,
+    /// The estimate of `beta`, `None` when the fit is degenerate.
+    pub log_hazard_ratio: Option<f64>,
+    /// The model-based standard error, `1 / sqrt(I)`, `None` when the fit is
+    /// degenerate.
+    pub standard_error: Option<f64>,
     /// The summed weight of the events among the rows fitted.
     pub n_events: f64,
     /// The rows fitted, after dropping rows whose weight is not positive.
@@ -139,20 +139,20 @@ pub struct CoxFit {
     /// Whether the last step was below the tolerance.
     pub converged: bool,
     /// Sandwich standard error with the scores summed within cluster. `None`
-    /// when no cluster was given, NaN when the fit is degenerate.
+    /// when no cluster was given or the fit is degenerate.
     pub robust_standard_error: Option<f64>,
 }
 
 impl CoxFit {
-    fn degenerate(n_events: f64, n_rows: usize, clustered: bool) -> Self {
+    fn degenerate(n_events: f64, n_rows: usize) -> Self {
         Self {
-            log_hazard_ratio: f64::NAN,
-            standard_error: f64::NAN,
+            log_hazard_ratio: None,
+            standard_error: None,
             n_events,
             n_rows,
             iterations: 0,
             converged: false,
-            robust_standard_error: clustered.then_some(f64::NAN),
+            robust_standard_error: None,
         }
     }
 }
@@ -548,12 +548,11 @@ pub fn fit_cox_single_covariate(data: &CoxData<'_>) -> Result<CoxFit> {
 
 #[must_use]
 fn fit_unchecked(input: &CoxData<'_>) -> CoxFit {
-    let clustered = input.cluster.is_some();
     let rows: Vec<usize> = (0..input.x.len())
         .filter(|&i| input.weight[i] > 0.0)
         .collect();
     if rows.is_empty() {
-        return CoxFit::degenerate(0.0, 0, clustered);
+        return CoxFit::degenerate(0.0, 0);
     }
     let n_rows = rows.len();
     let total_events = compensated(
@@ -564,7 +563,7 @@ fn fit_unchecked(input: &CoxData<'_>) -> CoxFit {
     let any_event = rows.iter().any(|&i| input.is_event[i]);
     let (distinct, level) = covariate_levels(input.x, &rows);
     if !any_event || distinct.len() < 2 {
-        return CoxFit::degenerate(total_events, n_rows, clustered);
+        return CoxFit::degenerate(total_events, n_rows);
     }
 
     let strata = build_strata(input, &rows, &level, &distinct);
@@ -583,7 +582,7 @@ fn fit_unchecked(input: &CoxData<'_>) -> CoxFit {
         if exponential.contains(&f64::INFINITY) {
             // The likelihood is monotone: the covariate separates the events
             // and there is no finite maximum.
-            return CoxFit::degenerate(total_events, n_rows, clustered);
+            return CoxFit::degenerate(total_events, n_rows);
         }
         let mut score = 0.0f64;
         information = 0.0;
@@ -594,7 +593,7 @@ fn fit_unchecked(input: &CoxData<'_>) -> CoxFit {
             information += stratum_information;
         }
         if information <= 0.0 || information.is_nan() {
-            return CoxFit::degenerate(total_events, n_rows, clustered);
+            return CoxFit::degenerate(total_events, n_rows);
         }
         let step = score / information;
         beta += step;
@@ -604,11 +603,7 @@ fn fit_unchecked(input: &CoxData<'_>) -> CoxFit {
         }
     }
 
-    let standard_error = if information > 0.0 {
-        (1.0 / information).sqrt()
-    } else {
-        f64::NAN
-    };
+    let standard_error = (1.0 / information).sqrt();
     let robust_standard_error = input.cluster.map(|cluster| {
         let n_clusters = rows
             .iter()
@@ -636,8 +631,8 @@ fn fit_unchecked(input: &CoxData<'_>) -> CoxFit {
         squares.sqrt() / final_information
     });
     CoxFit {
-        log_hazard_ratio: beta,
-        standard_error,
+        log_hazard_ratio: Some(beta),
+        standard_error: Some(standard_error),
         n_events: total_events,
         n_rows,
         iterations,
@@ -694,8 +689,8 @@ mod tests {
         ] {
             let fit = cause_specific(cause, 1.0);
             assert!(fit.converged);
-            assert!(close(fit.log_hazard_ratio, coef, 1e-10), "{fit:?}");
-            assert!(close(fit.standard_error, se, 1e-10), "{fit:?}");
+            assert!(close(fit.log_hazard_ratio.unwrap(), coef, 1e-10), "{fit:?}");
+            assert!(close(fit.standard_error.unwrap(), se, 1e-10), "{fit:?}");
             assert!((fit.n_events - events).abs() < f64::EPSILON);
         }
     }
@@ -723,17 +718,21 @@ mod tests {
         };
         let stratified = fit(&family);
         assert!(close(
-            stratified.log_hazard_ratio,
+            stratified.log_hazard_ratio.unwrap(),
             1.098_612_288_667_694,
             1e-9
         ));
         assert!(close(
-            stratified.standard_error,
+            stratified.standard_error.unwrap(),
             1.154_700_538_379_131,
             1e-9
         ));
         let plain = fit(&[0; 12]);
-        assert!(close(plain.log_hazard_ratio, 0.594_821_561_034_560, 1e-9));
+        assert!(close(
+            plain.log_hazard_ratio.unwrap(),
+            0.594_821_561_034_560,
+            1e-9
+        ));
     }
 
     /// `survival::coxph(Surv(time, event == k) ~ grp, ties = "efron",
@@ -770,8 +769,8 @@ mod tests {
                 cluster: Some(&family),
             });
             assert!(fit.converged);
-            assert!(close(fit.log_hazard_ratio, coef, 1e-10), "{fit:?}");
-            assert!(close(fit.standard_error, se, 1e-10), "{fit:?}");
+            assert!(close(fit.log_hazard_ratio.unwrap(), coef, 1e-10), "{fit:?}");
+            assert!(close(fit.standard_error.unwrap(), se, 1e-10), "{fit:?}");
             let got = fit.robust_standard_error.expect("clustered");
             assert!(close(got, robust, 1e-9), "{fit:?}");
         }
@@ -782,11 +781,11 @@ mod tests {
         let single = cause_specific(1, 1.0);
         let doubled = cause_specific(1, 2.0);
         assert!(close(
-            single.log_hazard_ratio,
-            doubled.log_hazard_ratio,
+            single.log_hazard_ratio.unwrap(),
+            doubled.log_hazard_ratio.unwrap(),
             1e-10
         ));
-        assert!(doubled.standard_error < single.standard_error);
+        assert!(doubled.standard_error.unwrap() < single.standard_error.unwrap());
     }
 
     #[test]
@@ -801,7 +800,7 @@ mod tests {
             ties: Ties::Breslow,
             cluster: None,
         });
-        assert!(none.log_hazard_ratio.is_nan() && !none.converged && none.iterations == 0);
+        assert!(none.log_hazard_ratio.is_none() && !none.converged && none.iterations == 0);
         let constant = fit_cox(&CoxData {
             x: &[1.0, 1.0, 1.0],
             is_event: &[true, true, false],
@@ -812,7 +811,7 @@ mod tests {
             ties: Ties::Breslow,
             cluster: None,
         });
-        assert!(constant.log_hazard_ratio.is_nan() && !constant.converged);
+        assert!(constant.log_hazard_ratio.is_none() && !constant.converged);
         assert!((constant.n_events - 2.0).abs() < f64::EPSILON);
     }
 
@@ -830,7 +829,7 @@ mod tests {
             ties: Ties::Breslow,
             cluster: None,
         });
-        assert!(fit.log_hazard_ratio.is_nan() || !fit.converged);
+        assert!(fit.log_hazard_ratio.is_none() || !fit.converged);
     }
 
     #[test]

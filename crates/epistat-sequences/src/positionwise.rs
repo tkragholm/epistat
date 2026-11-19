@@ -76,7 +76,7 @@ use epistat_rng::Stream;
 use rayon::prelude::*;
 
 use crate::silhouette::{rank_labels, weighted_average};
-use crate::{Attempt, SequenceError, best_attempt};
+use crate::{Attempt, Restarts, SequenceError, best_attempt};
 
 /// One panel of equal-length rank-encoded sequences and the costs over them.
 pub struct Panel<'a> {
@@ -323,9 +323,9 @@ fn seed_medoids(panel: &Panel, weights: &[f64], k: usize, stream: &mut Stream) -
 
 /// Every restart of the k-medoids fit, and the best of them.
 ///
-/// Restart `r` seeds by weighted k-means++ from `Stream::seeded(seed + 7919 r)`
+/// Restart `i` seeds by weighted k-means++ from `Stream::seeded(restarts.seeds()[i])`
 /// and then alternates assignment and medoid update, to convergence or
-/// `max_iterations`. A `restarts` of 0 runs one. The restarts run in parallel,
+/// `max_iterations`. The restarts run in parallel,
 /// each with its own stream.
 ///
 /// The [`Attempt`] holds the final medoids, the labels, the iterations run,
@@ -340,8 +340,7 @@ pub fn kmedoids(
     panel: &Panel<'_>,
     weights: &[f64],
     k: usize,
-    seed: u64,
-    restarts: usize,
+    restarts: &Restarts,
     max_iterations: usize,
 ) -> Result<Attempt, SequenceError> {
     if weights.len() != panel.count {
@@ -360,11 +359,11 @@ pub fn kmedoids(
 
     // The restarts are independent, and each owns a stream seeded from the
     // caller's, so the set is one deterministic fit.
-    let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.max(1), |attempt| {
-        let mut stream = Stream::seeded(seed.wrapping_add((attempt as u64).wrapping_mul(7919)));
+    let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.len(), |attempt| {
+        let mut stream = Stream::seeded(restarts.seeds()[attempt]);
         one_fit(panel, weights, k, max_iterations, &mut stream)
     });
-    Ok(best_attempt(attempts))
+    best_attempt(attempts).ok_or_else(|| SequenceError::input("a fit needs at least one restart"))
 }
 
 /// One seeding and the alternating loop that follows it.
@@ -544,6 +543,11 @@ pub fn silhouette(
 #[cfg(test)]
 mod tests {
     use super::{Panel, kmedoids, silhouette};
+    use crate::Restarts;
+
+    fn one() -> Restarts {
+        Restarts::from_seed(1, 1).unwrap()
+    }
 
     /// Twelve sequences with weights, and the partition `wcKMedoids` of
     /// WeightedCluster returned for them.
@@ -614,16 +618,56 @@ mod tests {
         }
         let panel = Panel::new(&encoded, 5, 3, None).unwrap();
         let weights: Vec<f64> = (0..12).map(|i| 1.0 + f64::from(i % 6)).collect();
-        let fit = kmedoids(&panel, &weights, 2, 3, 4, 20).unwrap();
+        let four = Restarts::from_seed(3, 4).unwrap();
+        let fit = kmedoids(&panel, &weights, 2, &four, 20).unwrap();
         assert!(fit.converged);
         assert_eq!(fit.labels.len(), 12);
         let first = fit.labels[0];
         assert!(fit.labels[..6].iter().all(|&label| label == first));
         assert!(fit.labels[6..].iter().all(|&label| label != first));
-        let again = kmedoids(&panel, &weights, 2, 3, 4, 20).unwrap();
+        let again = kmedoids(&panel, &weights, 2, &four, 20).unwrap();
         assert_eq!(fit, again);
         let ranked: Vec<i64> = fit.labels.iter().map(|&label| i64::from(label)).collect();
         assert!(silhouette(&panel, &weights, &ranked).unwrap() > 0.5);
+    }
+
+    #[test]
+    fn explicit_seeds_keep_the_best_single_restart_fit() {
+        let encoded: Vec<u8> = (0..12u8)
+            .flat_map(|i| [i % 3, (i / 2) % 3, i % 2])
+            .collect();
+        let panel = Panel::new(&encoded, 3, 3, None).unwrap();
+        let weights: Vec<f64> = (0..12).map(|i| 1.0 + f64::from(i % 4)).collect();
+        let seeds = vec![5, 5 + 7919, 5 + 2 * 7919, 5 + 3 * 7919];
+        let all = kmedoids(
+            &panel,
+            &weights,
+            3,
+            &Restarts::from_seeds(seeds.clone()).unwrap(),
+            20,
+        )
+        .unwrap();
+        let best = seeds
+            .iter()
+            .map(|&seed| {
+                kmedoids(
+                    &panel,
+                    &weights,
+                    3,
+                    &Restarts::from_seeds(vec![seed]).unwrap(),
+                    20,
+                )
+                .unwrap()
+            })
+            .reduce(|best, next| {
+                if next.objective < best.objective {
+                    next
+                } else {
+                    best
+                }
+            })
+            .unwrap();
+        assert_eq!(all, best);
     }
 
     #[test]
@@ -633,8 +677,8 @@ mod tests {
         assert!(Panel::new(&[0, 3], 2, 2, None).is_err());
         assert!(Panel::new(&[0, 1], 2, 2, Some(&[1.0; 7])).is_err());
         let panel = Panel::new(&[0, 1, 1, 0], 2, 2, None).unwrap();
-        assert!(kmedoids(&panel, &[1.0, 1.0], 0, 1, 1, 5).is_err());
-        assert!(kmedoids(&panel, &[1.0, 1.0], 3, 1, 1, 5).is_err());
-        assert!(kmedoids(&panel, &[1.0], 1, 1, 1, 5).is_err());
+        assert!(kmedoids(&panel, &[1.0, 1.0], 0, &one(), 5).is_err());
+        assert!(kmedoids(&panel, &[1.0, 1.0], 3, &one(), 5).is_err());
+        assert!(kmedoids(&panel, &[1.0], 1, &one(), 5).is_err());
     }
 }

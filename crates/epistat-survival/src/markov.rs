@@ -61,8 +61,10 @@
 //!
 //! # Edge cases
 //!
-//! With no replicates the p-values are NaN. A slot whose variance is not
+//! With no replicates the p-values are `None`. A slot whose variance is not
 //! positive has a normalised trace of 0 and contributes 0 to every replicate.
+//! That amounts to dropping the slot from the sum, while the mean is still
+//! taken over every landmark.
 //! The test needs at least one qualifying state and one landmark.
 //!
 //! # References
@@ -330,8 +332,8 @@ pub struct MarkovTest {
     /// The statistic of each qualifying state, `qualifying` values.
     pub statistic: Vec<f64>,
     /// The wild-bootstrap p-value of each qualifying state, `qualifying` values,
-    /// NaN without replicates.
-    pub p_value: Vec<f64>,
+    /// `None` without replicates.
+    pub p_value: Vec<Option<f64>>,
 }
 
 /// The observed traces, their variance, the summary statistic and the p-value,
@@ -478,13 +480,7 @@ fn titman_putter(stays: &Stays<'_>, grid: &[f64], qualifying: usize, seeds: &[u6
         );
     let p_value = exceeded
         .iter()
-        .map(|&count| {
-            if n_bootstrap == 0 {
-                f64::NAN
-            } else {
-                (count + 1) as f64 / (n_bootstrap + 1) as f64
-            }
-        })
+        .map(|&count| (n_bootstrap > 0).then(|| (count + 1) as f64 / (n_bootstrap + 1) as f64))
         .collect();
 
     MarkovTest {
@@ -503,6 +499,10 @@ fn titman_putter(stays: &Stays<'_>, grid: &[f64], qualifying: usize, seeds: &[u6
 /// of `stays`. There is one wild-bootstrap replicate per entry of `seeds`, and
 /// the multipliers of a replicate come from its seed. See [`MarkovTest`] for
 /// what comes back and the module documentation for the method.
+///
+/// A landmark and state whose variance is not positive adds 0 to the statistic
+/// and to every replicate, which drops the slot from the sum. The mean is still
+/// taken over all landmarks.
 ///
 /// # Errors
 ///
@@ -589,7 +589,7 @@ mod tests {
             assert!((statistic - 0.173_741_618_476_314).abs() < 1e-12);
         }
         assert_eq!(out.n_events_after, vec![7.0, 5.0, 4.0]);
-        assert!(out.p_value.iter().all(|p| p.is_nan()));
+        assert!(out.p_value.iter().all(Option::is_none));
     }
 
     /// The indicator reads the stay covering the landmark, over every stay of
@@ -656,19 +656,19 @@ mod tests {
             first
                 .p_value
                 .iter()
-                .map(|p| p.to_bits())
+                .map(|p| p.unwrap().to_bits())
                 .collect::<Vec<_>>(),
             second
                 .p_value
                 .iter()
-                .map(|p| p.to_bits())
+                .map(|p| p.unwrap().to_bits())
                 .collect::<Vec<_>>()
         );
         assert!(
             first
                 .p_value
                 .iter()
-                .all(|&p| (1.0 / 51.0..=1.0).contains(&p))
+                .all(|&p| (1.0 / 51.0..=1.0).contains(&p.unwrap()))
         );
     }
 

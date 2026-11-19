@@ -88,7 +88,7 @@ use epistat_rng::Stream;
 use rayon::prelude::*;
 
 use crate::silhouette::{rank_labels, weighted_average};
-use crate::{Attempt, SequenceError, best_attempt};
+use crate::{Attempt, Restarts, SequenceError, best_attempt};
 
 /// Rows of the triangle one worker takes at a time in the cluster sums.
 ///
@@ -195,9 +195,8 @@ impl CondensedMatrix {
     /// order the seeding walks and the order a tie between two equally central
     /// members resolves in.
     ///
-    /// Restart `r` seeds from `Stream::seeded(seed + 7919 r)` and the restart
-    /// with the least objective is kept, the earliest on a tie. A `restarts`
-    /// of 0 runs one.
+    /// Restart `i` seeds from `Stream::seeded(restarts.seeds()[i])` and the
+    /// restart with the least objective is kept, the earliest on a tie.
     ///
     /// # Errors
     ///
@@ -209,8 +208,7 @@ impl CondensedMatrix {
         offsets: &[u32],
         weights: &[f64],
         k: usize,
-        seed: u64,
-        restarts: usize,
+        restarts: &Restarts,
         max_iterations: usize,
     ) -> Result<Attempt, SequenceError> {
         let count = offsets.len();
@@ -232,11 +230,12 @@ impl CondensedMatrix {
             )));
         }
 
-        let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.max(1), |attempt| {
-            let mut stream = Stream::seeded(seed.wrapping_add((attempt as u64).wrapping_mul(7919)));
+        let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.len(), |attempt| {
+            let mut stream = Stream::seeded(restarts.seeds()[attempt]);
             self.one_fit(offsets, weights, k, max_iterations, &mut stream)
         });
-        Ok(best_attempt(attempts))
+        best_attempt(attempts)
+            .ok_or_else(|| SequenceError::input("a fit needs at least one restart"))
     }
 
     /// Weighted sum of distances from every sequence to every cluster.
@@ -735,7 +734,12 @@ pub fn condensed(
 #[cfg(test)]
 mod tests {
     use super::{CondensedMatrix, TILE, align, condensed};
+    use crate::Restarts;
     use epistat_rng::Stream;
+
+    fn one() -> Restarts {
+        Restarts::from_seed(1, 1).unwrap()
+    }
 
     fn bits(values: &[f64]) -> Vec<u64> {
         values.iter().map(|value| value.to_bits()).collect()
@@ -952,13 +956,17 @@ mod tests {
         assert!(condensed(&[0, 2], &[2], &substitution, 2, 1.0).is_err());
         let matrix = hamming_triangle(&SEQUENCES);
         let offsets: Vec<u32> = (0..12).collect();
-        assert!(matrix.kmedoids(&offsets, &WEIGHTS, 0, 1, 1, 5).is_err());
+        assert!(matrix.kmedoids(&offsets, &WEIGHTS, 0, &one(), 5).is_err());
         assert!(
             matrix
-                .kmedoids(&offsets, &WEIGHTS[1..], 2, 1, 1, 5)
+                .kmedoids(&offsets, &WEIGHTS[1..], 2, &one(), 5)
                 .is_err()
         );
-        assert!(matrix.kmedoids(&[0, 99], &[1.0, 1.0], 1, 1, 1, 5).is_err());
+        assert!(
+            matrix
+                .kmedoids(&[0, 99], &[1.0, 1.0], 1, &one(), 5)
+                .is_err()
+        );
         assert!(matrix.silhouette(&offsets, &WEIGHTS, &[0; 11]).is_err());
         assert!(matrix.cluster_distance_sums(&WEIGHTS, &[5; 12], 2).is_err());
     }
@@ -967,13 +975,14 @@ mod tests {
     fn the_weighted_fit_separates_the_reference_groups() {
         let matrix = hamming_triangle(&SEQUENCES);
         let offsets: Vec<u32> = (0..12).collect();
-        let fit = matrix.kmedoids(&offsets, &WEIGHTS, 3, 1, 6, 30).unwrap();
+        let six = Restarts::from_seed(1, 6).unwrap();
+        let fit = matrix.kmedoids(&offsets, &WEIGHTS, 3, &six, 30).unwrap();
         assert!(fit.converged);
         // The two heavy sequences differ at two positions and belong to
         // different types, and the all-N sequences share one.
         assert_ne!(fit.labels[0], fit.labels[1]);
         assert_eq!(fit.labels[3], fit.labels[4]);
-        let again = matrix.kmedoids(&offsets, &WEIGHTS, 3, 1, 6, 30).unwrap();
+        let again = matrix.kmedoids(&offsets, &WEIGHTS, 3, &six, 30).unwrap();
         assert_eq!(fit, again);
     }
 }

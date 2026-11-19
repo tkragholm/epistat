@@ -93,7 +93,7 @@ use epistat_stats::sum::compensated;
 use crate::nulls::{self, NullModel};
 use crate::optimal_matching;
 use crate::positionwise::{self, Panel};
-use crate::{Attempt, SequenceError};
+use crate::{Attempt, Restarts, SequenceError};
 
 /// The distances a typology can be fitted with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,17 +125,37 @@ impl Distance {
     }
 }
 
+/// The restart seeds of a fit, as a function of the seed of that fit.
+pub type RestartSeeds = dyn Fn(u64) -> Result<Restarts, SequenceError> + Sync;
+
 /// The settings every fit in a batch shares.
-#[derive(Clone, Copy, Debug)]
-pub struct FitSettings {
+#[derive(Clone, Copy)]
+pub struct FitSettings<'a> {
     /// The distance the fits use.
     pub distance: Distance,
     /// Number of types.
     pub k: usize,
-    /// Seedings per fit; the best is kept.
-    pub restarts: usize,
+    /// The restarts of a fit, given the seed of that fit. The functions of
+    /// this module fit once per null replicate or per refit, and each fit calls
+    /// this with its own seed: [`replicate_seed`]`(seed, r)` for null replicate
+    /// `r` of [`null_silhouettes`], which is also the seed of that replicate's
+    /// null draw, and `seed` itself for every refit of [`refit_agreements`].
+    /// Nothing else is derived. A new user writes
+    /// `&|seed| Restarts::from_seed(seed, 10)`; a caller reproducing seeds
+    /// computed another way returns [`Restarts::from_seeds`] of them.
+    pub restarts: &'a RestartSeeds,
     /// Cap on the iterations of each seeding's alternating loop.
     pub max_iterations: usize,
+}
+
+impl std::fmt::Debug for FitSettings<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FitSettings")
+            .field("distance", &self.distance)
+            .field("k", &self.k)
+            .field("max_iterations", &self.max_iterations)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Agreement between two partitions of the same weighted sequences.
@@ -516,7 +536,7 @@ fn fit(
     weights: &[f64],
     order: &[u32],
     fit_weights: &[f64],
-    settings: FitSettings,
+    settings: FitSettings<'_>,
     seed: u64,
     score: bool,
 ) -> Result<(Vec<u32>, Option<f64>), SequenceError> {
@@ -527,6 +547,7 @@ fn fit(
         max_iterations,
     } = settings;
     let labels_of = |attempt: Attempt| attempt.labels;
+    let restarts = restarts(seed)?;
     if distance == Distance::OptimalMatching {
         let substitution = substitution_costs(
             (0..panel.count).map(|index| panel.at(index)),
@@ -542,7 +563,7 @@ fn fit(
         let matrix =
             optimal_matching::condensed(&encoded, &lengths, &narrowed, panel.alphabet, indel)?;
         let labels =
-            labels_of(matrix.kmedoids(order, fit_weights, k, seed, restarts, max_iterations)?);
+            labels_of(matrix.kmedoids(order, fit_weights, k, &restarts, max_iterations)?);
         let silhouette = if score {
             let ranked: Vec<i64> = labels.iter().map(|&label| i64::from(label)).collect();
             Some(matrix.silhouette(order, fit_weights, &ranked)?)
@@ -559,8 +580,7 @@ fn fit(
         &ordered,
         fit_weights,
         k,
-        seed,
-        restarts,
+        &restarts,
         max_iterations,
     )?);
     let silhouette = if score {
@@ -617,7 +637,7 @@ pub fn null_silhouettes(
     panel: &Panel<'_>,
     weights: &[f64],
     model: NullModel,
-    settings: FitSettings,
+    settings: FitSettings<'_>,
     seed: u64,
     replicates: usize,
 ) -> Result<Vec<Option<f64>>, SequenceError> {
@@ -668,7 +688,7 @@ pub fn refit_agreements(
     weights: &[f64],
     replicate_weights: &[f64],
     reference: &[i64],
-    settings: FitSettings,
+    settings: FitSettings<'_>,
     seed: u64,
 ) -> Result<Vec<Option<(f64, f64)>>, SequenceError> {
     let count = panel.count;
@@ -721,9 +741,11 @@ pub fn refit_agreements(
 #[cfg(test)]
 mod tests {
     use super::{
-        Distance, FitSettings, NullModel, Panel, null_silhouettes, partition_agreement,
-        refit_agreements, substitution_costs, transition_costs,
+        Distance, FitSettings, NullModel, Panel, Restarts, collapse, null_silhouettes,
+        partition_agreement, refit_agreements, substitution_costs, transition_costs,
     };
+    use crate::{nulls, positionwise};
+    use epistat_rng::replicate_seed;
 
     #[test]
     fn identical_partitions_agree_fully() {
@@ -766,11 +788,11 @@ mod tests {
         assert!((pooled[2] - 2.0).abs() < 1e-15);
     }
 
-    fn settings(distance: Distance, k: usize) -> FitSettings {
+    fn settings(distance: Distance, k: usize) -> FitSettings<'static> {
         FitSettings {
             distance,
             k,
-            restarts: 2,
+            restarts: &|seed| Restarts::from_seed(seed, 2),
             max_iterations: 10,
         }
     }
@@ -884,5 +906,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(none, vec![None]);
+    }
+
+    /// Explicit seeds following the rule `seed + 7919 i` reproduce a loop
+    /// written out by hand over the same replicates.
+    #[test]
+    fn explicit_legacy_seeds_equal_a_hand_rolled_loop() {
+        let legacy = |seed: u64| {
+            Restarts::from_seeds((0..3u64).map(|i| seed.wrapping_add(i * 7919)).collect())
+        };
+        let encoded: Vec<u8> = (0..40u8).map(|i| (i / 3 + i % 2) % 3).collect();
+        let panel = Panel::new(&encoded, 4, 3, None).unwrap();
+        let weights: Vec<f64> = (0..10).map(|i| 1.0 + f64::from(i)).collect();
+        let model = NullModel::FirstOrderMarkov;
+        let given = FitSettings {
+            distance: Distance::Hamming,
+            k: 2,
+            restarts: &legacy,
+            max_iterations: 10,
+        };
+        let got = null_silhouettes(&panel, &weights, model, given, 7, 4).unwrap();
+        let by_hand: Vec<Option<f64>> = (0..4u64)
+            .map(|r| {
+                let seed = replicate_seed(7, r);
+                let drawn = nulls::null_sequences(&panel, &weights, model, seed).unwrap();
+                let (encoded, merged, alphabet) = collapse(&drawn, 4, &weights, 3);
+                if merged.len() < 2 {
+                    return None;
+                }
+                let null = Panel::new(&encoded, 4, alphabet, None).unwrap();
+                let fit =
+                    positionwise::kmedoids(&null, &merged, 2, &legacy(seed).unwrap(), 10).unwrap();
+                let ranked: Vec<i64> = fit.labels.iter().map(|&l| i64::from(l)).collect();
+                Some(positionwise::silhouette(&null, &merged, &ranked).unwrap())
+            })
+            .collect();
+        let bits = |v: &[Option<f64>]| -> Vec<Option<u64>> {
+            v.iter().map(|x| x.map(f64::to_bits)).collect()
+        };
+        assert_eq!(bits(&got), bits(&by_hand));
     }
 }

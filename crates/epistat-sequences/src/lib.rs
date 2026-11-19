@@ -53,9 +53,12 @@
 //! heaviest first seeds the heaviest. Each further medoid is drawn with
 //! probability proportional to `d(i, nearest medoid)^2 * w_i`. A step at which
 //! every score is zero takes the first sequence not yet chosen and draws
-//! nothing. Restart `r` uses the stream `Stream::seeded(seed + 7919 r)` of
-//! `epistat-rng`, and the restart with the least objective is kept, the
-//! earliest on a tie ([`best_attempt`]). The restarts run in parallel. Each owns
+//! nothing. Restart `i` uses the stream `Stream::seeded(seeds[i])` of
+//! `epistat-rng`, where the seeds are those of a [`Restarts`]. They are derived
+//! from one seed as [`replicate_seed`](epistat_rng::replicate_seed)`(seed, i)`
+//! or given one by one, for a caller that has to reproduce earlier seeds. The
+//! restart with the least objective is kept, the earliest on a tie
+//! ([`best_attempt`]). The restarts run in parallel. Each owns
 //! its stream and the choice does not depend on which finishes first, so a fit
 //! is the same on any number of threads.
 //!
@@ -105,6 +108,7 @@ mod error;
 pub mod nulls;
 pub mod optimal_matching;
 pub mod positionwise;
+mod restarts;
 pub mod silhouette;
 pub mod validation;
 
@@ -112,9 +116,10 @@ pub use error::SequenceError;
 pub use nulls::{NullModel, null_sequences};
 pub use optimal_matching::{CondensedMatrix, condensed};
 pub use positionwise::Panel;
+pub use restarts::Restarts;
 pub use validation::{
-    Agreement, Distance, FitSettings, indel_for, null_silhouettes, partition_agreement,
-    refit_agreements, substitution_costs, transition_costs,
+    Agreement, Distance, FitSettings, RestartSeeds, indel_for, null_silhouettes,
+    partition_agreement, refit_agreements, substitution_costs, transition_costs,
 };
 
 /// What one seeding and its alternating loop settle.
@@ -142,17 +147,13 @@ pub struct Attempt {
 /// Strictly less, scanning in attempt order, so the choice does not depend on
 /// which thread finished first. A NaN objective is never less than another, so
 /// it wins only when it comes first and no later attempt is less than it.
-///
-/// # Panics
-///
-/// When `attempts` is empty.
+/// `None` when `attempts` is empty.
 #[must_use]
-pub fn best_attempt(attempts: Vec<Attempt>) -> Attempt {
+pub fn best_attempt(attempts: Vec<Attempt>) -> Option<Attempt> {
     epistat_optim::multistart::select(attempts.into_iter().map(Some), |candidate, incumbent| {
         candidate.objective < incumbent.objective
     })
     .map(|(_, attempt)| attempt)
-    .expect("at least one restart is always run")
 }
 
 #[cfg(test)]
@@ -171,14 +172,13 @@ mod tests {
 
     #[test]
     fn the_least_objective_wins_and_the_earliest_takes_a_tie() {
-        let picked = best_attempt(vec![attempt(3.0, 1), attempt(2.0, 2), attempt(2.0, 3)]);
+        let picked = best_attempt(vec![attempt(3.0, 1), attempt(2.0, 2), attempt(2.0, 3)]).unwrap();
         assert_eq!(picked.iterations, 2);
         assert_eq!(picked.objective.to_bits(), 2.0_f64.to_bits());
     }
 
     #[test]
-    #[should_panic(expected = "at least one restart")]
-    fn no_attempt_panics() {
-        let _ = best_attempt(Vec::new());
+    fn no_attempt_has_no_best() {
+        assert_eq!(best_attempt(Vec::new()), None);
     }
 }
