@@ -1,0 +1,24 @@
+[package]
+name = "epistat-register"
+description = "Calendar-year person-time, interval merging, connected components over shared keys and constant-price deflation for register data"
+keywords = ["register-data", "person-time", "intervals", "cpi", "epidemiology"]
+categories = ["algorithms", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# The Statistics Denmark annual consumer price index, 1900 to 2025, as
+# `DENMARK_ANNUAL_CPI`. Off by default so the crate carries no national data
+# for callers who bring their own table.
+denmark = []
+
+[dependencies]
+thiserror = "2"
+
+[lints]
+workspace = true
