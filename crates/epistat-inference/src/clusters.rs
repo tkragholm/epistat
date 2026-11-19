@@ -6,7 +6,9 @@
 //! does not depend on the hasher or its random state. Every later sum over
 //! clusters runs in this order, which fixes the order of floating-point
 //! additions and makes the results reproducible. [`Clusters::singletons`] puts
-//! each observation in its own cluster.
+//! each observation in its own cluster. [`Clusters::from_sorted_labels`]
+//! numbers the labels in increasing order instead, which is the order R
+//! sums clusters in.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -34,6 +36,26 @@ impl Clusters {
         Self {
             of,
             count: number.len(),
+        }
+    }
+
+    /// Numbers the distinct labels in increasing order, as R's `rowsum`
+    /// with `reorder = TRUE` and `sort(unique(x))` do.
+    #[must_use]
+    pub fn from_sorted_labels<L: Ord>(labels: &[L]) -> Self {
+        let mut distinct: Vec<&L> = labels.iter().collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let of = labels
+            .iter()
+            .map(|label| {
+                // Every label is among the distinct ones, so this is `Ok`.
+                distinct.binary_search(&label).unwrap_or_else(|at| at)
+            })
+            .collect();
+        Self {
+            of,
+            count: distinct.len(),
         }
     }
 
@@ -89,5 +111,12 @@ mod tests {
         assert_eq!(clusters.of(), [0, 1, 0, 2, 1]);
         assert_eq!((clusters.count(), clusters.len()), (3, 5));
         assert_eq!(clusters.sums([1.0, 2.0, 3.0, 4.0, 5.0]), [4.0, 7.0, 4.0]);
+    }
+
+    #[test]
+    fn sorted_labels_are_numbered_in_increasing_order() {
+        let clusters = Clusters::from_sorted_labels(&[30, 10, 30, 20, 10]);
+        assert_eq!(clusters.of(), [2, 0, 2, 1, 0]);
+        assert_eq!((clusters.count(), clusters.len()), (3, 5));
     }
 }

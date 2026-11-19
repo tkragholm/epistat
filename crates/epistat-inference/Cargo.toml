@@ -4,7 +4,7 @@ description = "Influence-function and sandwich variances, cluster-robust and boo
 keywords = ["statistics", "bootstrap", "sandwich", "cluster-robust", "inference"]
 categories = ["mathematics", "science"]
 readme = "README.md"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,6 +21,9 @@ thiserror = "2"
 
 [dev-dependencies]
 epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1.0.200", features = ["derive"] }
+# Parses floats to the nearest double, so the R reference is compared to the bit.
+serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
 
 [lints]
 workspace = true
