@@ -1,8 +1,9 @@
 # epistat-stats
 
 Sample quantiles (R's types 1 and 7), the normal distribution function and
-its inverse with truncated and folded quantiles, floating-point sums in the order Python computes them, and
-log-sum-exp, softmax, information criteria and covariate balance statistics
+its inverse with truncated and folded quantiles, the log-gamma and
+regularised incomplete gamma functions with the chi-square distribution,
+floating-point sums in the order Python computes them, and log-sum-exp, softmax, information criteria and covariate balance statistics
 (standardised mean differences, variance ratios, eCDF and eQQ distances,
 Cramér's V), and MCMC diagnostics (autocorrelation, effective sample size,
 split R-hat).

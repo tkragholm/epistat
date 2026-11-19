@@ -2,11 +2,14 @@
 //! to two units in the last place because R's own last bit depends on whether
 //! it was compiled with fused multiply-add.
 
-use epistat_stats::{normal, quantile};
+use epistat_stats::{gamma, normal, quantile};
 use epistat_testkit::Tolerance;
 
 mod normal_values {
     include!("data/normal.rs");
+}
+mod gamma_values {
+    include!("data/gamma.rs");
 }
 mod quantile_values {
     include!("data/quantile.rs");
@@ -53,5 +56,36 @@ fn quantile_types() {
             check("type1", p, quantile::type1(&sample, p).unwrap(), type1[i]);
             check("type7", p, quantile::type7(&sample, p).unwrap(), type7[i]);
         }
+    }
+}
+
+#[test]
+fn pchisq_and_lgamma() {
+    let close = Tolerance::exact().rel(1e-13).abs(1e-300);
+    for &(x, df, lower, upper) in gamma_values::CHISQ {
+        let (x, df) = (f64::from_bits(x), f64::from_bits(df));
+        let (got_lower, got_upper) = (gamma::chi_square_cdf(x, df), gamma::chi_square_sf(x, df));
+        assert!(
+            close.accepts(got_lower, f64::from_bits(lower)),
+            "pchisq({x}, {df}) = {got_lower:e}, R {:e}",
+            f64::from_bits(lower)
+        );
+        assert!(
+            close.accepts(got_upper, f64::from_bits(upper)),
+            "pchisq({x}, {df}, upper) = {got_upper:e}, R {:e}",
+            f64::from_bits(upper)
+        );
+    }
+    for &(x, value) in gamma_values::LGAMMA {
+        let x = f64::from_bits(x);
+        let expected = f64::from_bits(value);
+        let got = gamma::ln_gamma(x);
+        assert!(
+            Tolerance::exact()
+                .rel(1e-14)
+                .abs(1e-15)
+                .accepts(got, expected),
+            "lgamma({x}) = {got:e}, R {expected:e}"
+        );
     }
 }
