@@ -1,0 +1,21 @@
+[package]
+name = "epistat-survival"
+description = "Cox regression, Fine-Gray, Aalen-Johansen, multi-state occupation and the Titman-Putter test, with results that do not depend on the number of threads"
+keywords = ["statistics", "survival", "cox", "competing-risks", "multi-state"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+epistat-rng = { path = "../epistat-rng", version = "0.1.1" }
+epistat-stats = { path = "../epistat-stats", version = "0.1.1" }
+rayon = "1.10"
+thiserror = "2"
+
+[lints]
+workspace = true
