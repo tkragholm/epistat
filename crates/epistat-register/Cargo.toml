@@ -4,7 +4,7 @@ description = "Calendar-year person-time, interval merging, connected components
 keywords = ["register-data", "person-time", "intervals", "cpi", "epidemiology"]
 categories = ["algorithms", "science"]
 readme = "README.md"
-version.workspace = true
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,9 +16,15 @@ repository.workspace = true
 # `DENMARK_ANNUAL_CPI`. Off by default so the crate carries no national data
 # for callers who bring their own table.
 denmark = []
+# Serde support for `icd10::Icd10Chapter`, as its label string.
+serde = ["dep:serde"]
 
 [dependencies]
 thiserror = "2"
+serde = { version = "1", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true
