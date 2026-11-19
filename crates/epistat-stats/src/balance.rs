@@ -34,7 +34,6 @@ pub fn variance_ratio(var_a: f64, var_b: f64) -> Option<f64> {
 ///
 /// Non-finite values are ignored.
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
 pub fn ecdf_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
     let a = sorted_finite(a)?;
     let b = sorted_finite(b)?;
@@ -69,7 +68,6 @@ pub fn ecdf_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
 /// read at `max(n_a, n_b)` evenly spaced probabilities from 0 to 1 by R's
 /// type 7 quantile. Non-finite values are ignored.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
     let a = sorted_finite(a)?;
     let b = sorted_finite(b)?;
@@ -95,7 +93,6 @@ pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
 /// Categories absent from both groups are skipped. Returns `None` when both
 /// groups are empty.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn cramers_v(counts_a: &[usize], counts_b: &[usize]) -> Option<f64> {
     let total_a: usize = counts_a.iter().sum();
     let total_b: usize = counts_b.iter().sum();

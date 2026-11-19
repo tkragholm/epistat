@@ -308,7 +308,6 @@ fn on_one_thread<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 }
 
 #[cfg(test)]
-#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use epistat_testkit::{Tolerance, assert_close};

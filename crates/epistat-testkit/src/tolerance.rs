@@ -47,7 +47,10 @@ impl Tolerance {
     }
 
     #[must_use]
-    #[allow(clippy::float_cmp)]
+    #[expect(
+        clippy::float_cmp,
+        reason = "an exact match passes before any bound is tried"
+    )]
     pub fn accepts(&self, got: f64, expected: f64) -> bool {
         if got.is_nan() || expected.is_nan() {
             return got.is_nan() && expected.is_nan();
@@ -70,7 +73,10 @@ impl Tolerance {
 /// How many representable doubles lie between `a` and `b`, counting across
 /// zero; `u64::MAX` when either is NaN.
 #[must_use]
-#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "the bits are reordered, not converted"
+)]
 pub fn ulps_apart(a: f64, b: f64) -> u64 {
     if a.is_nan() || b.is_nan() {
         return u64::MAX;

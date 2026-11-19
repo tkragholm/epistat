@@ -134,7 +134,6 @@ pub fn select_rows(x: MatRef<'_, f64>, rows: &[usize]) -> Mat<f64> {
 }
 
 #[cfg(test)]
-#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 

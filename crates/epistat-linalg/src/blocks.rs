@@ -152,12 +152,10 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::many_single_char_names)]
 mod tests {
     use super::*;
     use epistat_testkit::{Tolerance, assert_close, assert_same_on_threads};
 
-    #[allow(clippy::cast_precision_loss)]
     fn design(n: usize, p: usize) -> Mat<f64> {
         let mut stream = 0x1234_5678_u64;
         Mat::from_fn(n, p, |_, j| {

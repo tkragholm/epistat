@@ -90,11 +90,6 @@ impl Glm {
     /// # Errors
     ///
     /// See [`GlmError`].
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cast_precision_loss,
-        clippy::many_single_char_names
-    )]
     pub fn fit(
         &self,
         x: MatRef<'_, f64>,

@@ -128,7 +128,6 @@ impl Basis for BSpline {
         }
     }
 
-    #[allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
     fn derivatives_into(&self, x: f64, out: &mut [f64]) {
         let (n, d, t) = (self.len(), self.degree, &self.knots);
         if d == 0 {

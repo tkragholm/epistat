@@ -36,10 +36,10 @@ pub fn normal(estimate: f64, se: f64, alpha: f64) -> Result<(f64, f64), Inferenc
 ///
 /// [`InferenceError::Empty`] for no replicates and [`InferenceError::Alpha`]
 /// unless `0 < alpha < 1`.
-#[allow(
-    clippy::cast_precision_loss,
+#[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "the value is a non-negative position below the length"
 )]
 pub fn percentile(
     replicates: &mut [f64],
@@ -81,10 +81,10 @@ pub fn percentile(
 /// # Errors
 ///
 /// As [`percentile`].
-#[allow(
-    clippy::cast_precision_loss,
+#[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "the value is a non-negative position below the length"
 )]
 pub fn trimmed_percentile(
     replicates: &mut [f64],
@@ -112,7 +112,6 @@ pub fn trimmed_percentile(
 /// # Errors
 ///
 /// As [`percentile`].
-#[allow(clippy::cast_precision_loss)]
 pub fn bias_corrected(
     replicates: &mut [f64],
     estimate: f64,
@@ -144,7 +143,7 @@ fn check_alpha(alpha: f64) -> Result<(), InferenceError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)]
+#[expect(clippy::float_cmp, reason = "the tests compare exact values")]
 mod tests {
     use super::*;
 

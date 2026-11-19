@@ -717,10 +717,6 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::many_single_char_names,
-    reason = "linear algebra notation: m, n, c, g, y"
-)]
 mod tests {
     use super::{DenseSimplex, LpError};
 
@@ -737,14 +733,13 @@ mod tests {
         }
 
         /// Uniform in `[lo, hi)`.
-        #[allow(clippy::cast_precision_loss, reason = "53 bit mantissa is the intent")]
         fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
             let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
             lo + (hi - lo) * unit
         }
 
         /// Uniform integer in `[lo, hi)`.
-        #[allow(clippy::cast_possible_truncation, reason = "the range is tiny")]
+        #[expect(clippy::cast_possible_truncation, reason = "the range is small")]
         fn range(&mut self, lo: usize, hi: usize) -> usize {
             lo + (self.next_u64() % (hi - lo) as u64) as usize
         }

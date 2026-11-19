@@ -18,7 +18,6 @@ pub fn autocorrelation(chain: &[f64], lag: usize) -> Option<f64> {
 /// A constant chain or one of fewer than two draws counts as `n`
 /// independent draws.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn effective_sample_size(chain: &[f64]) -> f64 {
     let n = chain.len() as f64;
     let Some((mean, squares)) = centred_squares(chain).filter(|_| chain.len() >= 2) else {
@@ -42,7 +41,6 @@ pub fn effective_sample_size(chain: &[f64]) -> f64 {
 /// `None` for fewer than two chains, fewer than four draws per chain, or
 /// half-chains without variance. The result is at least 1.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn split_rhat(chains: &[&[f64]]) -> Option<f64> {
     let shortest = chains.iter().map(|chain| chain.len()).min()?;
     let half = shortest / 2;
@@ -71,7 +69,6 @@ pub fn split_rhat(chains: &[&[f64]]) -> Option<f64> {
 }
 
 /// Mean and `n - 1` variance by Welford's update.
-#[allow(clippy::cast_precision_loss)]
 fn mean_and_variance(values: &[f64]) -> (f64, f64) {
     let mut mean = 0.0;
     let mut m2 = 0.0;
@@ -83,7 +80,6 @@ fn mean_and_variance(values: &[f64]) -> (f64, f64) {
     (mean, m2 / (values.len() as f64 - 1.0))
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn centred_squares(chain: &[f64]) -> Option<(f64, f64)> {
     let mean = chain.iter().sum::<f64>() / chain.len() as f64;
     let squares: f64 = chain.iter().map(|&v| (v - mean) * (v - mean)).sum();

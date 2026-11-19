@@ -13,7 +13,6 @@ use crate::{InferenceError, check_length};
 /// # Errors
 ///
 /// [`InferenceError::Empty`] for an empty influence function.
-#[allow(clippy::cast_precision_loss)]
 pub fn multiplier(
     estimate: f64,
     psi: &[f64],

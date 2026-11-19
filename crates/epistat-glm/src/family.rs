@@ -1,8 +1,10 @@
 //! Error distributions and link functions, as R's `family` objects define
 //! them.
 
-// Exact comparisons pick out the special powers and zero responses.
-#![allow(clippy::float_cmp)]
+#![expect(
+    clippy::float_cmp,
+    reason = "the special powers and zero responses are exact values"
+)]
 
 /// The link between the mean and the linear predictor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

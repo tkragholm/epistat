@@ -31,27 +31,24 @@ pub fn softmax(values: &mut [f64]) -> f64 {
 
 /// Akaike's information criterion, `-2 ll + 2 k`, for `k` parameters.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn aic(log_likelihood: f64, parameters: usize) -> f64 {
     -2.0 * log_likelihood + 2.0 * parameters as f64
 }
 
 /// Schwarz's Bayesian information criterion, `-2 ll + k ln(n)`.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn bic(log_likelihood: f64, parameters: usize, observations: usize) -> f64 {
     -2.0 * log_likelihood + parameters as f64 * (observations as f64).ln()
 }
 
 /// Sclove's sample-size adjusted BIC, `-2 ll + k ln((n + 2) / 24)`.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn sabic(log_likelihood: f64, parameters: usize, observations: usize) -> f64 {
     -2.0 * log_likelihood + parameters as f64 * ((observations as f64 + 2.0) / 24.0).ln()
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)]
+#[expect(clippy::float_cmp, reason = "the tests compare exact values")]
 mod tests {
     use super::*;
 

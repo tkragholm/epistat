@@ -27,7 +27,10 @@ pub fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
 /// Shewchuk's exact partials, as Python's `math.fsum()` computes it.
 ///
 /// A sum beyond the range of `f64` is infinite.
-#[allow(clippy::float_cmp)]
+#[expect(
+    clippy::float_cmp,
+    reason = "the algorithm tests whether a rounding was exact"
+)]
 pub fn exact(values: impl IntoIterator<Item = f64>) -> f64 {
     let mut partials: Vec<f64> = Vec::new();
     for value in values {
@@ -76,7 +79,7 @@ pub fn exact(values: impl IntoIterator<Item = f64>) -> f64 {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)]
+#[expect(clippy::float_cmp, reason = "the tests compare exact values")]
 mod tests {
     use super::*;
 

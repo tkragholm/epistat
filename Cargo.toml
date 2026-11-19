@@ -13,5 +13,22 @@ repository = "https://github.com/tkragholm/epistat"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Pedantic, with the lints below allowed because in numerical code they flag
+# the method rather than a mistake.
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Counts and positions become f64 in every estimator.
+cast_precision_loss = "allow"
+# x, y, n, p and the like are the notation of the methods.
+many_single_char_names = "allow"
+# An algorithm transcribed from its reference is as long as the method is.
+too_many_lines = "allow"
+too_many_arguments = "allow"
+# The docs name methods, papers and R functions far more often than code.
+doc_markdown = "allow"
+# Allowed explicitly although it sits in `nursery`: `mul_add` rounds once where
+# the R and Python references round twice.
+suboptimal_flops = "allow"
+# A local exception is `#[expect(.., reason = "..")]`, never `#[allow]`, so an
+# exception that no longer applies is itself a warning.
+allow_attributes = "warn"

@@ -104,7 +104,6 @@ impl Bfgs {
     /// # Errors
     ///
     /// See [`BfgsError`].
-    #[allow(clippy::many_single_char_names)]
     pub fn minimize(
         &self,
         x0: &[f64],
@@ -178,7 +177,6 @@ impl Bfgs {
 }
 
 /// `(I - r s y') H (I - r y s') + r s s'`.
-#[allow(clippy::many_single_char_names)]
 fn bfgs_update(h: &[f64], s: &[f64], y: &[f64], r: f64) -> Vec<f64> {
     let n = s.len();
     // left[i][j] = delta_ij - r s_i y_j, right = left'.
@@ -216,12 +214,9 @@ struct End {
 impl MoreThuente {
     /// Searches from `x` along `direction`, returning the last point
     /// evaluated.
-    // The step is clamped to its bounds, so comparing it with them exactly is
-    // the test for having reached one.
-    #[allow(
-        clippy::similar_names,
-        clippy::many_single_char_names,
-        clippy::float_cmp
+    #[expect(
+        clippy::float_cmp,
+        reason = "the step is clamped, so reaching a bound is an exact equality"
     )]
     fn search(
         &self,
@@ -339,12 +334,6 @@ impl MoreThuente {
 /// with the trial `t` and replaces `t.step` by the next trial step. Returns
 /// whether the minimum is bracketed and whether the step was taken (`false`
 /// when the inputs were inconsistent and nothing changed).
-// One routine, as in MINPACK, so its four cases read side by side.
-#[allow(
-    clippy::many_single_char_names,
-    clippy::similar_names,
-    clippy::too_many_lines
-)]
 fn cstep(
     x: &mut End,
     y: &mut End,

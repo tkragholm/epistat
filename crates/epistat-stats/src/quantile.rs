@@ -29,7 +29,6 @@ pub fn type7_unsorted(values: &mut [f64], p: f64) -> Option<f64> {
 /// [`type7`] at the probability `numerator / denominator`, which avoids
 /// rounding the probability.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Option<f64> {
     let n = sorted.len();
     if n == 0 || denominator == 0 || numerator > denominator {
@@ -48,10 +47,10 @@ pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Opti
 /// R's type 1, the inverse of the empirical distribution function: the
 /// smallest order statistic whose rank is at least `n p`.
 #[must_use]
-#[allow(
-    clippy::cast_precision_loss,
+#[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "the value is a non-negative position below the length"
 )]
 pub fn type1(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
@@ -69,10 +68,10 @@ pub fn type1(sorted: &[f64], p: f64) -> Option<f64> {
 /// The order statistic nearest to position `p (n - 1)`, rounding halves away
 /// from zero. Not one of the Hyndman and Fan types.
 #[must_use]
-#[allow(
-    clippy::cast_precision_loss,
+#[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "the value is a non-negative position below the length"
 )]
 pub fn rounded_rank(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
@@ -85,10 +84,10 @@ pub fn rounded_rank(sorted: &[f64], p: f64) -> Option<f64> {
 
 /// Zero-based indices of the two order statistics and the weight of the
 /// upper one, computed as R does from the one-based index `1 + (n - 1) p`.
-#[allow(
-    clippy::cast_precision_loss,
+#[expect(
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "the value is a non-negative position below the length"
 )]
 fn type7_position(n: usize, p: f64) -> Option<(usize, usize, f64)> {
     if n == 0 || !(0.0..=1.0).contains(&p) {
@@ -101,7 +100,10 @@ fn type7_position(n: usize, p: f64) -> Option<(usize, usize, f64)> {
 }
 
 /// `(1 - h) a + h b`, or `a` when the two are equal, as R computes it.
-#[allow(clippy::float_cmp)]
+#[expect(
+    clippy::float_cmp,
+    reason = "equal order statistics are returned unchanged, as R does"
+)]
 fn interpolate(a: f64, b: f64, h: f64) -> f64 {
     if h == 0.0 || a == b {
         a
@@ -129,7 +131,6 @@ mod tests {
     fn the_unsorted_and_ratio_forms_agree_with_the_sorted_one() {
         let sorted = [-3.0, 0.25, 1.0, 1.0, 2.5, 8.0, 13.0];
         for (numerator, denominator) in [(0, 4), (1, 4), (1, 3), (1, 2), (5, 7), (4, 4)] {
-            #[allow(clippy::cast_precision_loss)]
             let p = numerator as f64 / denominator as f64;
             let mut shuffled = [8.0, 1.0, -3.0, 13.0, 2.5, 1.0, 0.25];
             let expected = type7(&sorted, p).unwrap();

@@ -8,7 +8,6 @@ use crate::{Clusters, InferenceError, check_length};
 /// # Errors
 ///
 /// [`InferenceError::Empty`] for no values.
-#[allow(clippy::cast_precision_loss)]
 pub fn standard_error(psi: &[f64]) -> Result<f64, InferenceError> {
     if psi.is_empty() {
         return Err(InferenceError::Empty);
@@ -30,7 +29,6 @@ pub fn standard_error(psi: &[f64]) -> Result<f64, InferenceError> {
 /// [`InferenceError::Empty`] for no values, [`InferenceError::Length`] when
 /// `clusters` covers another number of observations, and
 /// [`InferenceError::NotFinite`].
-#[allow(clippy::cast_precision_loss)]
 pub fn clustered_variance(psi: &[f64], clusters: &Clusters) -> Result<f64, InferenceError> {
     if psi.is_empty() {
         return Err(InferenceError::Empty);
@@ -72,7 +70,6 @@ pub fn clustered_standard_error(psi: &[f64], clusters: &Clusters) -> Result<f64,
 ///
 /// As [`clustered_variance`], and [`InferenceError::Length`] when the columns
 /// differ in length.
-#[allow(clippy::cast_precision_loss)]
 pub fn clustered_covariance(
     columns: &[&[f64]],
     clusters: &Clusters,

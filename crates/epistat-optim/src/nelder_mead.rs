@@ -112,7 +112,6 @@ fn sort_by_cost(vertices: &mut [Vertex]) {
 }
 
 /// Sample standard deviation of the vertex costs.
-#[allow(clippy::cast_precision_loss)]
 fn cost_sd(vertices: &[Vertex]) -> f64 {
     let n = vertices.len() as f64;
     let mean = vertices.iter().map(|v| v.cost).sum::<f64>() / n;
@@ -217,7 +216,6 @@ impl NelderMead {
     ) -> Result<(), NelderMeadError> {
         // Centroid of every vertex but the worst.
         let last = vertices.len() - 1;
-        #[allow(clippy::cast_precision_loss)]
         let scale = 1.0 / (last as f64);
         let mut centroid = vertices[0].x.clone();
         for v in &vertices[1..last] {

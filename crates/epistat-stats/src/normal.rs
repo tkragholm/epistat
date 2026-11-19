@@ -14,10 +14,14 @@
 //! Everything here uses plain operations in a fixed order, without fused
 //! multiply-add, so the results are the same on every platform.
 
-// The coefficients are written digit for digit as published.
-#![allow(clippy::excessive_precision, clippy::unreadable_literal)]
-// Exact comparisons are with the endpoints 0 and 1.
-#![allow(clippy::float_cmp)]
+#![expect(
+    clippy::excessive_precision,
+    reason = "the coefficients are written as published"
+)]
+#![expect(
+    clippy::float_cmp,
+    reason = "the endpoints 0 and 1 are compared exactly"
+)]
 
 use std::f64::consts::SQRT_2;
 
@@ -120,7 +124,6 @@ pub fn cdf(x: f64) -> f64 {
 
 /// `exp(-x^2 / 2) * factor`, with `x^2` split so that the exponential loses
 /// no precision in the tail.
-#[allow(clippy::float_cmp)]
 fn gaussian_tail(x: f64, factor: f64) -> f64 {
     let head = (x * 16.0).trunc() / 16.0;
     let rest = (x - head) * (x + head);
