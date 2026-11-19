@@ -1,12 +1,13 @@
 //! Dense linear algebra on [faer] whose results do not depend on the number
 //! of threads: solves that fall back through a chosen sequence of
 //! factorisations, and products over the rows of a design matrix computed in
-//! fixed blocks.
+//! fixed blocks, and the B-spline and polynomial bases of series estimators.
 //!
 //! Factorisations run on one thread; the systems they solve are the small
 //! `p x p` ones of regression. The row products run in parallel, one block of
 //! 4096 rows per task, and add the blocks in order.
 
+pub mod basis;
 mod blocks;
 mod solve;
 
