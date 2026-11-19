@@ -227,6 +227,54 @@ fn horner(x: f64, coefficients: &[f64]) -> f64 {
         .fold(coefficients[0], |sum, &c| sum * x + c)
 }
 
+/// The `p` quantile of a standard normal truncated to `[lower, upper]`.
+///
+/// Computed in the lower tail, mirroring an interval that lies above zero, so
+/// that intervals far out in either tail keep their precision. `None` when
+/// `p` is outside `[0, 1]` or the interval has no probability.
+#[must_use]
+pub fn truncated_quantile(p: f64, lower: f64, upper: f64) -> Option<f64> {
+    if !(0.0..=1.0).contains(&p) || lower >= upper {
+        return None;
+    }
+    if lower > 0.0 {
+        return truncated_quantile(1.0 - p, -upper, -lower).map(|z| -z);
+    }
+    let (cdf_lower, cdf_upper) = (cdf(lower), cdf(upper));
+    if cdf_upper <= cdf_lower {
+        return None;
+    }
+    let z = quantile(cdf_lower + p * (cdf_upper - cdf_lower));
+    Some(z.clamp(lower, upper))
+}
+
+/// The `p` quantile of `|Z + mu|` for a standard normal `Z`, by bisection on
+/// its distribution function `cdf(q - |mu|) + cdf(q + |mu|) - 1` to the
+/// precision of an `f64`. `None` when `p` is outside `[0, 1)`.
+#[must_use]
+pub fn folded_quantile(p: f64, mu: f64) -> Option<f64> {
+    if !(0.0..1.0).contains(&p) || mu.is_nan() {
+        return None;
+    }
+    let mu = mu.abs();
+    let folded_cdf = |q: f64| cdf(q - mu) + cdf(q + mu) - 1.0;
+    let (mut low, mut high) = (0.0_f64, mu + 8.0);
+    while folded_cdf(high) < p {
+        high *= 2.0;
+    }
+    loop {
+        let mid = f64::midpoint(low, high);
+        if mid <= low || mid >= high {
+            return Some(high);
+        }
+        if folded_cdf(mid) >= p {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+}
+
 /// [`cdf`] by the error-function approximation 7.1.26 of Abramowitz and
 /// Stegun (1964), whose absolute error is below `1.5e-7`.
 #[must_use]
@@ -326,6 +374,30 @@ mod tests {
             let p = f64::from(i) / 200.0;
             assert!((cdf(quantile(p)) - p).abs() < 1e-15);
         }
+    }
+
+    #[test]
+    fn truncated_and_folded_quantiles() {
+        // Truncation to the whole line changes nothing.
+        let z = truncated_quantile(0.3, f64::NEG_INFINITY, f64::INFINITY).unwrap();
+        assert!((z - quantile(0.3)).abs() < 1e-15);
+        // Far in the upper tail the mirror keeps the interval resolvable.
+        let z = truncated_quantile(0.5, 30.0, 31.0).unwrap();
+        assert!((30.0..30.1).contains(&z));
+        assert_eq!(truncated_quantile(0.5, 2.0, 1.0), None);
+        // The quantile has the requested share of the interval's probability.
+        let (lower, upper) = (-1.5, 0.75);
+        let z = truncated_quantile(0.2, lower, upper).unwrap();
+        let share = (cdf(z) - cdf(lower)) / (cdf(upper) - cdf(lower));
+        assert!((share - 0.2).abs() < 1e-14);
+        // With mu = 0 the folded normal is the half-normal.
+        let q = folded_quantile(0.5, 0.0).unwrap();
+        assert!((q - quantile(0.75)).abs() < 1e-12);
+        assert!(
+            (folded_quantile(0.95, -3.0).unwrap() - folded_quantile(0.95, 3.0).unwrap()).abs()
+                < 1e-15
+        );
+        assert_eq!(folded_quantile(1.0, 0.0), None);
     }
 
     #[test]
