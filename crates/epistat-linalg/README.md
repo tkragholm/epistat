@@ -7,3 +7,5 @@ or full pivoting, each optionally retried with a growing ridge), and the
 products of regression (`X'WX`, `X'Wz`, `X beta`) computed over fixed blocks
 of rows. Also B-spline and polynomial bases, a test for the columns of a
 design that each group of rows can identify, and row and column selection.
+
+The `nightly` feature enables faer's AVX-512 kernels and needs Rust 1.89 on x86.

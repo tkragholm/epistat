@@ -29,9 +29,23 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # The committed lock is ignored: a fresh resolution is what a consumer gets.
+  # Rust 1.89 is only for `epistat-linalg`'s `nightly` feature, which makes
+  # faer enable bytemuck's AVX-512 types, stable from 1.89 and compiled only
+  # on x86.
   msrv:
+    strategy:
+      matrix:
+        include:
+          - toolchain: "1.85"
+            flags: --workspace
+          - toolchain: "1.89"
+            flags: --workspace --all-features
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-      - run: cargo check --workspace
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - run: rm Cargo.lock
+      - run: cargo check ${{ matrix.flags }}
