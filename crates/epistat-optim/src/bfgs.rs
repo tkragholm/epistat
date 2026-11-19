@@ -1,5 +1,161 @@
-//! BFGS with the line search of Moré and Thuente (ACM TOMS 20:286-307,
-//! 1994), as in MINPACK's `cvsrch` and `cstep`.
+//! BFGS minimisation with the line search of Moré and Thuente.
+//!
+//! [`Bfgs`] minimises a smooth function of `n` variables from its value and
+//! gradient, keeping an estimate of the inverse Hessian. [`MoreThuente`] chooses
+//! the step along each direction. Both are written for the small problems of
+//! statistical estimation, where `n` is a few dozen at most and the inverse
+//! Hessian is stored densely.
+//!
+//! # Algorithm
+//!
+//! The iterate is `x`, the gradient `g`, and `H` the inverse Hessian estimate. `H`
+//! starts as the identity, or as the matrix passed to [`Bfgs::minimize`]. Each
+//! iteration takes the direction
+//!
+//! ```text
+//! d = -H g
+//! ```
+//!
+//! and asks the line search for a step `a` along `d` with initial trial `a = 1`.
+//! With `s = a d` and `y = g(x + s) - g(x)`, and when `y's > 0`, the update of
+//! Nocedal and Wright \[2\] (eq. 6.17) is
+//!
+//! ```text
+//! r  = 1 / y's
+//! H+ = (I - r s y') H (I - r y s') + r s s'
+//! ```
+//!
+//! When `y's <= 0` the update is skipped and `H` is kept, so `H` stays positive
+//! definite as long as it started so \[2\]. If `d` is not a descent direction,
+//! `g'd >= 0`, the search fails with [`BfgsError::NotDescent`]. This can
+//! happen when an inverse Hessian passed by the caller is not positive
+//! definite.
+//!
+//! # Stopping rules
+//!
+//! [`Bfgs`] checks, in this order:
+//!
+//! 1. At the start of an iteration, `|g| < gradient_tolerance`, the Euclidean
+//!    norm. The result is converged. This also holds at iteration 0.
+//! 2. After the step, `|f_old - f_new| < cost_tolerance`, an absolute change.
+//!    The result is converged.
+//! 3. A step whose value is not finite, whose gradient is not finite, or whose
+//!    value is above the current one ends the search at the current point,
+//!    which is not converged.
+//! 4. After `max_iterations` iterations the loop ends. The result is converged
+//!    only if the gradient at the last point has norm below
+//!    `gradient_tolerance`.
+//!
+//! The defaults are 100 iterations, `gradient_tolerance = sqrt(ε)` and
+//! `cost_tolerance = ε`, with `ε = f64::EPSILON`. Because rule 3 refuses a step
+//! that raises the cost, the costs of the iterates do not increase and the
+//! returned [`Minimum`] is the last iterate, with its value and gradient.
+//!
+//! # Line search
+//!
+//! [`MoreThuente`] follows the algorithm of Moré and Thuente \[1\] as it is
+//! implemented in MINPACK (`cvsrch` and `cstep`). Write `f(a) = f(x + a d)`.
+//! It looks for a step that satisfies the strong Wolfe conditions
+//!
+//! ```text
+//! f(a)   <= f(0) + c1 a g'd          sufficient decrease
+//! |f'(a)| <= c2 |g'd|                 curvature,   f'(a) = g(x + a d)'d
+//! ```
+//!
+//! with `0 < c1 < c2 < 1`. The defaults are `c1 = 1e-4` and `c2 = 0.9`, the usual
+//! choice for quasi-Newton directions \[2\] \[3\]. The step is kept in
+//! `[step_min, step_max]`, by default `[sqrt(ε), ∞)`.
+//!
+//! The search keeps an interval of uncertainty with end points `l` and `u`, each
+//! a step with its value and derivative, and a trial step `t`. Until a step has
+//! been found whose derivative has the opposite sign to the end point's, the
+//! interval is not bracketed and the trial is extrapolated. While it is not
+//! bracketed, the trial is limited to
+//!
+//! ```text
+//! [ l, t + 4 (t - l) ]
+//! ```
+//!
+//! so the step grows by a factor of at most 4 beyond the last trial. In the
+//! first stage the search works on the modified function
+//!
+//! ```text
+//! ψ(a) = f(a) - c1 a g'd,        ψ'(a) = f'(a) - c1 g'd
+//! ```
+//!
+//! whenever the trial has `f(t) <= f(l)` but fails sufficient decrease. A
+//! minimiser of `ψ` that is bracketed this way lies in an interval that contains
+//! steps satisfying both conditions \[1\]. The first stage ends when
+//! `f(t)` satisfies sufficient decrease and `f'(t) >= min(c1, c2) g'd`. After
+//! that the search uses `f` itself.
+//!
+//! Each trial is evaluated, tested against the termination rules below, and
+//! otherwise passed to a safeguarded step `cstep` that updates the interval and
+//! proposes the next trial. Write `l` for the end point with the lowest value,
+//! `f` for values and `d` for derivatives. The four cases of `cstep` are:
+//!
+//! 1. `f(t) > f(l)`. The minimum is bracketed. The cubic through `l` and `t`
+//!    that matches both values and derivatives gives `a_c`, and the quadratic
+//!    through `f(l)`, `f(t)` and `d(l)` gives `a_q`. The next trial is `a_c`
+//!    when it is closer to `l` than `a_q`, and the midpoint of `a_c` and `a_q`
+//!    otherwise. The interval becomes `[l, t]`.
+//! 2. `f(t) <= f(l)` and `d(t)` has the opposite sign to `d(l)`. The minimum is
+//!    bracketed. The cubic `a_c` and the secant step `a_s` on the derivatives
+//!    are formed, and the one farther from `t` is the next trial. The interval
+//!    becomes `[t, l]`.
+//! 3. `f(t) <= f(l)`, the derivatives have the same sign, and `|d(t)| < |d(l)|`.
+//!    The cubic is computed with its discriminant clamped at 0. It is used when
+//!    its extrapolation parameter is negative and the discriminant is not zero,
+//!    and otherwise the step limit in the direction of the search, `step_max` or
+//!    `step_min`, is used. The secant step `a_s` is also formed. If the minimum is
+//!    bracketed the nearer of the two to `t` is taken, and otherwise the farther.
+//!    The interval becomes `[t, u]`.
+//! 4. `f(t) <= f(l)`, the derivatives have the same sign, and
+//!    `|d(t)| >= |d(l)|`. If the minimum is bracketed, the next trial is the
+//!    cubic through `t` and `u`. Otherwise it is `step_max` or `step_min`,
+//!    whichever lies in the direction of descent. The interval becomes `[t, u]`.
+//!
+//! The proposal is then clamped to the current interval. In cases 1 and 3, where
+//! the step is bounded, and when the minimum is bracketed, it is also limited to
+//!
+//! ```text
+//! l + 0.66 (u - l)
+//! ```
+//!
+//! so the next trial stays well inside the interval. After `cstep`, if the
+//! minimum is bracketed and the interval has not shrunk to below 0.66 times the
+//! width two trials ago, the next trial is the midpoint of the interval. This
+//! bisection guarantees that the width falls geometrically \[1\].
+//!
+//! `cstep` changes nothing and reports failure when its inputs are inconsistent:
+//! the trial lies outside a bracketed interval, the derivative at `l` does not
+//! point toward `t`, or the step limits cross. The next trial is then `l`, and
+//! the search ends after evaluating it.
+//!
+//! # Termination of the line search
+//!
+//! The search ends, returning the last point evaluated, when any of these holds:
+//!
+//! - the trial satisfies both strong Wolfe conditions;
+//! - the interval is bracketed and the trial lies on its boundary, or the interval
+//!   is narrower than `x_tolerance` times its upper end, by default `1e-10`;
+//! - the trial is at `step_max` and still decreasing enough, or at `step_min` and
+//!   still not decreasing enough;
+//! - `cstep` failed;
+//! - the cost at the trial is not finite;
+//! - `max_evaluations` evaluations have been made, by default 40.
+//!
+//! The point returned need not satisfy the Wolfe conditions. In particular a
+//! non-finite point is returned as it is.
+//!
+//! # References
+//!
+//! 1. Moré JJ, Thuente DJ. Line search algorithms with guaranteed sufficient
+//!    decrease. ACM Trans Math Softw. 1994;20(3):286-307.
+//! 2. Nocedal J, Wright SJ. Numerical Optimization. 2nd ed. New York: Springer;
+//!    2006. Chapters 3 and 6.
+//! 3. Fletcher R. Practical Methods of Optimization. 2nd ed. Chichester: Wiley;
+//!    1987. Chapter 3.
 
 use std::fmt;
 
@@ -148,18 +304,24 @@ impl Bfgs {
                 .zip(&grad)
                 .map(|(a, b)| a - b)
                 .collect();
+            // A step that leaves the finite region or does not decrease the
+            // cost ends the search at the current point, which is the best.
+            if step.value.is_nan()
+                || step.value > cost
+                || step.gradient.iter().any(|g| !g.is_finite())
+            {
+                best.iterations = iteration;
+                return Ok(best);
+            }
             let previous = cost;
             (x, cost, grad) = (step.x, step.value, step.gradient);
-            if cost < best.value {
-                best = Minimum {
-                    x: x.clone(),
-                    value: cost,
-                    gradient: grad.clone(),
-                    iterations: iteration,
-                    converged: false,
-                };
-            }
-            best.iterations = iteration;
+            best = Minimum {
+                x: x.clone(),
+                value: cost,
+                gradient: grad.clone(),
+                iterations: iteration,
+                converged: false,
+            };
             if (previous - cost).abs() < self.cost_tolerance {
                 best.converged = true;
                 return Ok(best);
@@ -169,9 +331,7 @@ impl Bfgs {
                 h = bfgs_update(&h, &s, &y, 1.0 / ys);
             }
         }
-        if norm(&best.gradient) < self.gradient_tolerance {
-            best.converged = true;
-        }
+        best.converged = norm(&best.gradient) < self.gradient_tolerance;
         Ok(best)
     }
 }
@@ -527,6 +687,25 @@ mod tests {
             .unwrap();
         assert!(minimum.x[0].abs() < 1e-12);
         assert_eq!(minimum.iterations, 1);
+    }
+
+    #[test]
+    fn a_step_into_nan_stops_at_the_last_finite_point() {
+        // Finite only on x > -1; from x = 0 a full Newton-like step overshoots.
+        let f = |p: &[f64]| {
+            if p[0] <= -1.0 {
+                (f64::NAN, vec![f64::NAN])
+            } else {
+                (
+                    -(p[0] + 1.0).ln() + 0.01 * p[0] * p[0],
+                    vec![-1.0 / (p[0] + 1.0) + 0.02 * p[0]],
+                )
+            }
+        };
+        let minimum = Bfgs::default()
+            .minimize(&[5.0], f, Some(vec![1e6]))
+            .unwrap();
+        assert!(minimum.value.is_finite() && minimum.x[0] > -1.0);
     }
 
     #[test]

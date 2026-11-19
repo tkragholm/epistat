@@ -16,10 +16,71 @@
 //! so each solve starts from the basis the previous one ended with (the warm
 //! start). The first solve goes through a phase one on artificial columns.
 //!
-//! The basis inverse is held explicitly and updated by the pivot's elementary
-//! row operations, with a fresh Gauss-Jordan factorisation every 40 pivots.
-//! Pricing is Dantzig's rule, with a switch to Bland's rule after a run of
-//! degenerate pivots, which cannot cycle.
+//! # Algorithm
+//!
+//! The method is the revised primal simplex method of Dantzig \[1\] \[3\]. A basis
+//! `B` is a set of `m` columns. It is kept as the explicit inverse `B^{-1}`,
+//! with `x_B = B^{-1} g` the basic values and `y = B^{-T} c_B` the duals. The
+//! reduced cost of a column `j` that is not basic is
+//!
+//! ```text
+//! d_j = c_j - a_j'y
+//! ```
+//!
+//! and the basis is optimal when no `d_j` exceeds `1e-9`.
+//!
+//! Phase one. Row `i` gets an artificial column `±e_i`, with the sign of `g_i`,
+//! so the all-artificial basis has `x_B = |g|`. Phase one maximises minus the sum
+//! of the artificials, with cost 0 on the original columns and -1 on the
+//! artificial ones. If the optimum leaves artificials with a total above `1e-8`,
+//! the problem is [`LpError::Infeasible`]. Otherwise the basis is feasible for
+//! every `c`. [`DenseSimplex::prepare`] runs phase one alone, so a solver can be
+//! cloned after it and each clone solve for its own `c`.
+//!
+//! Each pivot, in either phase, does the following.
+//!
+//! 1. Pricing. Only original columns may enter. Dantzig's rule \[1\] takes the
+//!    column with the largest `d_j` above `1e-9`. If none has one, the basis is
+//!    optimal and the solve ends.
+//! 2. Ratio test. With `α = B^{-1} a_q` for the entering column `q`, the leaving
+//!    row is the one with `α_i > 1e-10` that minimises `x_{B,i} / α_i`. Ratios
+//!    within `1e-12` of each other are ties, and the row whose basic column has the
+//!    lowest index wins. If no row has `α_i > 1e-10`, the problem is
+//!    [`LpError::Unbounded`]. A basic artificial in phase two sits at zero, and it
+//!    leaves at step 0 as soon as the entering column has `|α_i| > 1e-10` in its
+//!    row, whichever way the pivot would move it, so it cannot become positive.
+//! 3. Update. The basic values and `B^{-1}` are updated by the elementary row
+//!    operations of the pivot, and `y` by the entering column's reduced cost times
+//!    the scaled pivot row, which costs `m` operations instead of the `m²` of
+//!    forming `B^{-T} c_B` again. Basic values that round below zero are set
+//!    to 0.
+//!
+//! `B^{-1}` is rebuilt from the basis by Gauss-Jordan elimination with partial
+//! pivoting after every 40 pivots, and `x_B` and `y` with it. A pivot below
+//! `1e-13` in that elimination is [`LpError::Singular`].
+//!
+//! # Degeneracy
+//!
+//! A pivot with step length at most `1e-12` is degenerate. Dantzig's rule can
+//! cycle through degenerate bases \[3\]. After 25 degenerate pivots in a row,
+//! pricing switches to Bland's rule \[2\] for the rest of that phase: the entering
+//! column is the one of lowest index with `d_j > 1e-9`. Together with the
+//! tie-break of the ratio test, this cannot cycle. A pivot with a longer step
+//! resets the count, but not the switch.
+//!
+//! Each phase is limited to `100 (m + n) + 1000` pivots, after which the solve
+//! fails with [`LpError::IterationLimit`].
+//!
+//! # Warm starts
+//!
+//! Feasibility does not depend on `c`, so after the first solve, phase one is not
+//! repeated. [`DenseSimplex::solve`] starts phase two from the basis the last
+//! solve ended with. When it fails with anything but `Singular`, that basis is
+//! still primal feasible. [`DenseSimplex::set_memory`] keeps further optimal bases
+//! for starting points. [`DenseSimplex::optimality_interval`] gives the range of a
+//! cost parameter over which the current basis stays optimal.
+//!
+//! # Example
 //!
 //! ```
 //! use epistat_optim::simplex::DenseSimplex;
@@ -36,6 +97,14 @@
 //! lp.solve().unwrap();
 //! assert!((lp.objective() - 12.0).abs() < 1e-9);
 //! ```
+//!
+//! # References
+//!
+//! 1. Dantzig GB. Linear Programming and Extensions. Princeton: Princeton
+//!    University Press; 1963.
+//! 2. Bland RG. New finite pivoting rules for the simplex method. Math Oper Res.
+//!    1977;2(2):103-7.
+//! 3. Chvátal V. Linear Programming. New York: W. H. Freeman; 1983.
 
 use std::fmt;
 

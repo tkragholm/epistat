@@ -1,11 +1,73 @@
 // The algorithm follows argmin's NelderMead (MIT OR Apache-2.0).
 //! Nelder-Mead simplex minimiser.
 //!
-//! The caller supplies the starting simplex. Each iteration reflects the worst
-//! vertex through the centroid of the others, then expands, contracts or
-//! shrinks the simplex. The search stops when the standard deviation of the
-//! cost values over the vertices falls below a tolerance, or after a fixed
-//! number of iterations.
+//! The caller supplies the starting simplex of `n + 1` vertices in `n`
+//! dimensions. Each iteration replaces the worst vertex by a reflected, expanded
+//! or contracted point, or shrinks the whole simplex toward the best vertex.
+//! The method needs only function values \[1\]. Its convergence to a minimiser is
+//! proved only for strictly convex functions in one and two dimensions \[2\].
+//!
+//! # Algorithm
+//!
+//! Order the vertices so that `f(x_0) <= f(x_1) <= ... <= f(x_n)`. Let `c` be the
+//! centroid of every vertex but the worst:
+//!
+//! ```text
+//! c = (x_0 + ... + x_{n-1}) / n
+//! ```
+//!
+//! The coefficients are `α` for reflection, `γ` for expansion, `ρ` for
+//! contraction and `σ` for shrinkage, with defaults 1, 2, 0.5 and 0.5, the
+//! standard values \[1\] \[2\]. The reflected point is
+//!
+//! ```text
+//! x_r = c + α (c - x_n)
+//! ```
+//!
+//! The tests are made in this order, with `f_r = f(x_r)`:
+//!
+//! 1. `f_0 <= f_r < f_{n-1}`: `x_r` replaces `x_n`.
+//! 2. `f_r < f_0`: the expanded point `x_e = c + γ (x_r - c)` is evaluated. It
+//!    replaces `x_n` if `f_e < f_r`, and otherwise `x_r` does.
+//! 3. `f_r >= f_{n-1}`: a contraction is tried.
+//!    - If `f_r < f_n`, the outside contraction `x_c = c + ρ (x_r - c)` replaces
+//!      `x_n` when `f_c <= f_r`.
+//!    - Otherwise the inside contraction `x_c = c + ρ (x_n - c)` replaces `x_n`
+//!      when `f_c < f_n`.
+//!    - If the contraction is not accepted, the simplex shrinks: every vertex but
+//!      the best moves to `x_i = x_0 + σ (x_i - x_0)` and is evaluated again.
+//! 4. Otherwise `f_r` cannot be ordered, as when it is NaN, and the search fails
+//!    with [`NelderMeadError::Unordered`].
+//!
+//! The vertices are sorted again after every step. The sort treats NaN costs of
+//! the starting vertices as equal to every other value.
+//!
+//! # Stopping rules
+//!
+//! Before each iteration the sample standard deviation of the `n + 1` vertex
+//! costs, with divisor `n`, is compared with `sd_tolerance`, by default
+//! `f64::EPSILON`. Below it the search stops and is converged. It also stops, not
+//! converged, after `max_iterations` iterations, by default 1000, or when the best
+//! cost is `-∞`. The test is made before the first iteration, so a simplex whose
+//! vertices have equal costs returns at once with 0 iterations.
+//!
+//! The standard deviation measures the spread of the costs and not of the
+//! vertices, so a simplex on a flat ridge can stop while the vertices are far
+//! apart.
+//!
+//! # Result
+//!
+//! [`Minimum`] holds the best point seen. It is replaced only when a vertex has a
+//! strictly lower cost, so on ties the earlier point is kept. Infinite costs are
+//! handled so that the first vertex is accepted when every cost is `+∞`.
+//!
+//! # References
+//!
+//! 1. Nelder JA, Mead R. A simplex method for function minimization. Comput J.
+//!    1965;7(4):308-13. doi:10.1093/comjnl/7.4.308
+//! 2. Lagarias JC, Reeds JA, Wright MH, Wright PE. Convergence properties of the
+//!    Nelder-Mead simplex method in low dimensions. SIAM J Optim.
+//!    1998;9(1):112-47. doi:10.1137/S1052623496303470
 
 use std::fmt;
 
