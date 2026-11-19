@@ -35,18 +35,30 @@
 //! reference \[1\], \[2\]. The choice between them changes the split, not the gap.
 //! [`shares`] turns weights into shares.
 //!
+//! [`kitagawa_parts`] forms the same three quantities as [`kitagawa`] but
+//! reports each one on its own, so a quantity that is undefined does not take
+//! the others with it.
+//!
 //! # Summation
 //!
 //! Each sum is the correctly rounded sum of its terms ([`crate::sum::exact`]),
 //! so it does not depend on the order of the strata. In [`kitagawa`] a term with
 //! a share of exactly 0 is left out, even where its rate is NaN, since a
 //! stratum without members has no rate. Any other term that is not finite makes
-//! the result `None`.
+//! the result `None`. [`kitagawa_parts`] applies the same rule to each part:
+//! the gap needs the shares and rates of both populations, the composition part
+//! needs the share gaps and the reference rates, and the rate part needs the
+//! shares and the rate gaps. A part whose terms are all skipped or finite is
+//! defined, even when another part is not. With reference rates that are all
+//! NaN and shares equal to the reference shares, the composition part is 0
+//! while the gap and the rate part are `None`.
 //!
 //! # Edge cases
 //!
 //! `None` when the four slices differ in length, are empty, or a term used is
-//! NaN or infinite. [`shares`] returns `None` when the weights do not have a
+//! NaN or infinite. [`kitagawa_parts`] returns all three parts `None` for
+//! slices that differ in length or are empty, and otherwise `None` only for the
+//! part with a term that is not finite. [`shares`] returns `None` when the weights do not have a
 //! positive finite total, or one is NaN or negative.
 //!
 //! # Agreement with other software
@@ -74,6 +86,18 @@ pub struct Decomposition {
     pub composition: f64,
     /// The part from the difference in rates.
     pub rate: f64,
+}
+
+/// A gap split into its two parts, each `None` when its own terms are not
+/// finite. See [`kitagawa_parts`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecompositionParts {
+    /// The overall rate of A minus that of B.
+    pub gap: Option<f64>,
+    /// The part from the difference in shares.
+    pub composition: Option<f64>,
+    /// The part from the difference in rates.
+    pub rate: Option<f64>,
 }
 
 /// The sum of `left * right` over the strata, skipping a zero `left`, or
@@ -141,6 +165,37 @@ pub fn kitagawa(
         composition: sum_products(&share_gap, reference_rates)?,
         rate: sum_products(shares, &rate_gap)?,
     })
+}
+
+/// The same decomposition as [`kitagawa`], with each of the gap, the
+/// composition part and the rate part `None` on its own when a term it uses is
+/// not finite. A term with a share or share gap of exactly 0 is left out.
+///
+/// Where [`kitagawa`] is `Some`, every part here is `Some` and equal to it bit
+/// for bit. All three are `None` when the slices differ in length or are empty.
+#[must_use]
+pub fn kitagawa_parts(
+    shares: &[f64],
+    rates: &[f64],
+    reference_shares: &[f64],
+    reference_rates: &[f64],
+) -> DecompositionParts {
+    if !same_length([shares, rates, reference_shares, reference_rates]) {
+        return DecompositionParts {
+            gap: None,
+            composition: None,
+            rate: None,
+        };
+    }
+    let gaps = |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x - y).collect() };
+    let gap = sum_products(shares, rates)
+        .zip(sum_products(reference_shares, reference_rates))
+        .map(|(own, reference)| own - reference);
+    DecompositionParts {
+        gap,
+        composition: sum_products(&gaps(shares, reference_shares), reference_rates),
+        rate: sum_products(shares, &gaps(rates, reference_rates)),
+    }
 }
 
 /// The decomposition with both parts weighted at the average of A and B:
@@ -299,6 +354,33 @@ mod tests {
         assert_eq!(d.gap.to_bits(), reference[0].to_bits());
         assert_eq!(d.composition.to_bits(), reference[1].to_bits());
         assert_eq!(d.rate.to_bits(), reference[2].to_bits());
+    }
+
+    #[test]
+    fn parts_agree_with_the_whole_and_split_when_undefined() {
+        let d = kitagawa(&A, &R, &B, &Q).unwrap();
+        let p = kitagawa_parts(&A, &R, &B, &Q);
+        assert_eq!(p.gap.unwrap().to_bits(), d.gap.to_bits());
+        assert_eq!(p.composition.unwrap().to_bits(), d.composition.to_bits());
+        assert_eq!(p.rate.unwrap().to_bits(), d.rate.to_bits());
+        // No comparator weight: every rate is NaN. The reference level has a
+        // share gap of exactly 0 in each stratum, so its composition part is 0.
+        let nan = [f64::NAN; 2];
+        let p = kitagawa_parts(&B, &nan, &B, &nan);
+        assert_eq!(p.composition.unwrap().to_bits(), 0.0_f64.to_bits());
+        assert_eq!((p.gap, p.rate), (None, None));
+        // Another level: the composition part needs the reference rates too.
+        let p = kitagawa_parts(&A, &nan, &B, &nan);
+        assert_eq!(
+            p,
+            DecompositionParts {
+                gap: None,
+                composition: None,
+                rate: None
+            }
+        );
+        let p = kitagawa_parts(&A, &R, &B, &Q[..1]);
+        assert_eq!(p.gap, None);
     }
 
     #[test]

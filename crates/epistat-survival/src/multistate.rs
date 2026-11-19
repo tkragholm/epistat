@@ -469,7 +469,13 @@ fn product_integral(
 /// The integral of the occupation probability, a sum of rectangles because the
 /// curve is a step function. The segment from the origin to the first event
 /// time uses the starting distribution.
-fn integrate(
+///
+/// `curve` holds one row of `states` probabilities for each of `times`, row
+/// major, the row at a time being the distribution from that time on. Rows at
+/// or before `origin` only set the current distribution. The result has one
+/// total per state, all zero when `horizon` is not after `origin`.
+#[must_use]
+pub fn integrate(
     curve: &[f64],
     times: &[f64],
     initial: &[f64],

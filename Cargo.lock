@@ -251,14 +251,14 @@ dependencies = [
 
 [[package]]
 name = "epistat-stats"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "epistat-testkit",
 ]
 
 [[package]]
 name = "epistat-survival"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "epistat-rng",
  "epistat-stats",
