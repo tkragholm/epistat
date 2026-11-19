@@ -1,0 +1,26 @@
+[package]
+name = "epistat-inference"
+description = "Influence-function and sandwich variances, cluster-robust and bootstrap intervals that reproduce across thread counts"
+keywords = ["statistics", "bootstrap", "sandwich", "cluster-robust", "inference"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+epistat-linalg = { path = "../epistat-linalg" }
+epistat-rng = { path = "../epistat-rng" }
+epistat-stats = { path = "../epistat-stats" }
+faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
+rayon = "1.10"
+thiserror = "2"
+
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+
+[lints]
+workspace = true

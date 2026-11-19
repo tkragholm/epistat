@@ -178,6 +178,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "epistat-inference"
+version = "0.1.0"
+dependencies = [
+ "epistat-linalg",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
+ "faer",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "epistat-linalg"
 version = "0.1.0"
 dependencies = [
