@@ -11,5 +11,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+
 [lints]
 workspace = true

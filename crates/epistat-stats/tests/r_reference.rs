@@ -3,6 +3,7 @@
 //! it was compiled with fused multiply-add.
 
 use epistat_stats::{normal, quantile};
+use epistat_testkit::Tolerance;
 
 mod normal_values {
     include!("data/normal.rs");
@@ -22,13 +23,13 @@ fn check(name: &str, input: f64, got: f64, expected: u64) {
 
 #[test]
 fn qnorm() {
+    let within_two = Tolerance::exact().ulps(2);
     for &(p, z) in normal_values::QNORM {
         let p = f64::from_bits(p);
-        let got = normal::quantile(p);
+        let (got, expected) = (normal::quantile(p), f64::from_bits(z));
         assert!(
-            got.to_bits().abs_diff(z) <= 2,
-            "quantile({p:e}) = {got:e}, R gives {:e}",
-            f64::from_bits(z)
+            within_two.accepts(got, expected),
+            "quantile({p:e}) = {got:e}, R gives {expected:e}"
         );
     }
 }
