@@ -52,8 +52,8 @@
 //! units in the last place.
 //!
 //! The multipliers are standard normals by the Box-Muller transform \[2\] over
-//! `epistat_rng::Stream`: `sqrt(-2 ln(1 - u1)) cos(2 pi u2)` for two successive
-//! uniforms. The stream is exact, but `ln` and `cos` come from the platform's
+//! `epistat_rng::Stream` (`Stream::normal`: `sqrt(-2 ln u1) cos(2 pi u2)` for
+//! two successive uniforms). The stream is exact, but `ln` and `cos` come from the platform's
 //! maths library and may differ in the last place between platforms. The
 //! p-value is a Monte Carlo quantity, so a difference of that size is
 //! immaterial. Replicates and slots run in parallel, each depending on its seed
@@ -216,16 +216,10 @@ impl StepCumulative {
     }
 }
 
-/// Box-Muller over the stream. See the module documentation on exactness.
+/// Standard normal multipliers from the stream, one `Stream::normal` each.
 fn standard_normals(count: usize, seed: u64) -> Vec<f64> {
     let mut stream = Stream::seeded(seed);
-    (0..count)
-        .map(|_| {
-            let first = 1.0 - stream.uniform();
-            let second = stream.uniform();
-            (-2.0 * first.ln()).sqrt() * (2.0 * std::f64::consts::PI * second).cos()
-        })
-        .collect()
+    (0..count).map(|_| stream.normal()).collect()
 }
 
 /// The code of a stay in no qualifying state, and of an individual whose stays

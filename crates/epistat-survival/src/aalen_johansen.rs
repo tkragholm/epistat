@@ -89,14 +89,28 @@ use crate::error::{Error, Result};
 
 const CENSORED: i32 = 0;
 
-/// One distinct time of the estimator, shared by the point estimate and the
-/// bootstrap, so a curve and the replicates around it are one computation.
+/// Advances the estimator over one distinct time.
 ///
-/// `survival` enters as `S(t-)` and leaves as `S(t)`, and each cause's incidence
-/// gains `S(t-) d_k / Y`. A time with nobody at risk moves nothing; it can only
-/// arise with zero weights, where every `d_k` is zero too.
+/// `survival` is `S(t-)` on entry and `S(t)` on return. With `Y` the weight at
+/// risk just before the time, `d_any` the weighted events of every cause and
+/// `d_causes[k]` those of cause `k`,
+///
+/// ```text
+/// F_k  <- F_k + S(t-) d_k / Y,        S(t) = S(t-) (1 - d_any / Y).
+/// ```
+///
+/// `incidence[k]` is `F_k` and gains the increment of cause `k`. The
+/// increment is `S(t-) * d / Y`, formed in that order, and the survival is
+/// `S(t-) * (1 - d_any / Y)`. A time with nobody at risk, `at_risk <= 0` or NaN,
+/// moves nothing. That can arise only with zero weights, where every `d` is zero
+/// too. The shorter of `incidence` and `d_causes` decides how many causes
+/// are advanced.
+///
+/// This is the step [`curves`] and the bootstrap use, so a caller that
+/// accumulates the same sums itself, for example for reweighted data, gets the
+/// same bits by calling it.
 #[inline]
-pub(crate) fn advance(
+pub fn advance(
     survival: &mut f64,
     at_risk: f64,
     d_any: f64,
@@ -1005,8 +1019,35 @@ mod curve_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArmColumns, Cell, Draw, Error, RowWindows, Scratch, bootstrap_arm_incidence, scatter,
+        ArmColumns, Cell, Draw, Error, RowWindows, Scratch, advance, bootstrap_arm_incidence,
+        scatter,
     };
+
+    #[test]
+    fn advance_steps_the_survival_and_each_incidence() {
+        // Four at risk, one event of cause 0: S = 3/4, F = (1/4, 0).
+        let mut survival = 1.0;
+        let mut incidence = [0.0, 0.0];
+        advance(&mut survival, 4.0, 1.0, &[1.0, 0.0], &mut incidence);
+        assert_eq!(survival.to_bits(), 0.75_f64.to_bits());
+        assert_eq!(
+            incidence.map(f64::to_bits),
+            [0.25_f64, 0.0].map(f64::to_bits)
+        );
+        // Three at risk, one event of each cause: S = 3/4 * 1/3 = 1/4, and each
+        // incidence gains (3/4) (1/3) = 1/4.
+        advance(&mut survival, 3.0, 2.0, &[1.0, 1.0], &mut incidence);
+        assert_eq!(survival.to_bits(), (0.75_f64 * (1.0 - 2.0 / 3.0)).to_bits());
+        assert_eq!(
+            incidence[0].to_bits(),
+            (0.25_f64 + 0.75 * 1.0 / 3.0).to_bits()
+        );
+        assert_eq!(incidence[1].to_bits(), (0.75_f64 * 1.0 / 3.0).to_bits());
+        // Nobody at risk moves nothing.
+        let before = (survival, incidence);
+        advance(&mut survival, 0.0, 0.0, &[0.0, 0.0], &mut incidence);
+        assert_eq!((survival, incidence), before);
+    }
 
     fn cell(time: &[f64], event: &[i32], exposed: &[bool], family: &[u32]) -> Cell {
         let weight = vec![1.0; time.len()];

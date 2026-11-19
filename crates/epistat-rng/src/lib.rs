@@ -70,8 +70,12 @@
 //! - [`rademacher_sum`] takes the signs of 64 values from each output, lowest
 //!   bit first, a set bit being `+1`.
 //!
-//! No normal deviate is provided, since it needs `ln` and `cos` and would
-//! carry the same caveat as `exp1` with less benefit.
+//! - [`dirichlet_scale`] is the factor [`dirichlet_weights`] scales by, without
+//!   keeping the weights.
+//!
+//! Normal, gamma, chi-square, Beta, Wishart and inverse Wishart draws, and
+//! a sign fill, are on [`Stream`] and described in the `draws` module. They
+//! call `ln`, `cos` and the like, with the caveat of `exp1`.
 //!
 //! # Python reference
 //!
@@ -118,6 +122,10 @@
 //!    doi:10.1145/2660193.2660195
 //! 2. Lemire D. Fast random integer generation in an interval. ACM Trans
 //!    Model Comput Simul. 2019;29(1):3. doi:10.1145/3230636
+
+mod draws;
+
+pub use draws::DrawError;
 
 /// The Weyl increment of `SplitMix64`: the odd integer nearest `2^64` divided by
 /// the golden ratio.
@@ -292,10 +300,31 @@ pub fn dirichlet_weights(n: usize, seed: u64, out: &mut Vec<f64>) {
         out.push(variate);
         sum += variate;
     }
-    let scale = if sum > 0.0 { n as f64 / sum } else { 1.0 };
+    let scale = weight_scale(n, sum);
     for weight in out.iter_mut() {
         *weight *= scale;
     }
+}
+
+/// The factor [`dirichlet_weights`] multiplies its variates by: `n` divided by
+/// the sum of the `n` `Exp(1)` variates of the stream seeded with `seed`,
+/// summed in index order, or 1 when that sum is not positive.
+///
+/// The weight of unit `i` is the `i`-th variate times this scale, so a
+/// caller that needs only the scale, or draws the variates itself, does not
+/// store the weights.
+#[must_use]
+pub fn dirichlet_scale(n: usize, seed: u64) -> f64 {
+    let mut stream = Stream::seeded(seed);
+    let mut sum = 0.0;
+    for _ in 0..n {
+        sum += stream.exp1();
+    }
+    weight_scale(n, sum)
+}
+
+fn weight_scale(n: usize, sum: f64) -> f64 {
+    if sum > 0.0 { n as f64 / sum } else { 1.0 }
 }
 
 /// `sum(s_i * values_i)` with independent signs `s_i = ±1`, the draw of a
