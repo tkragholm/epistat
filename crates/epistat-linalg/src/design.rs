@@ -1,0 +1,191 @@
+//! Helpers for design matrices.
+
+use faer::{Mat, MatRef};
+
+/// The columns of a design that are linearly independent of the first
+/// column and of the columns kept before them, in the weighted Gram matrix
+/// `X'WX` of each group of rows.
+///
+/// Column 0, normally the intercept, is always kept. Each later column is
+/// tested in order: it is dropped when its own diagonal entry is not positive
+/// in a group that has rows, or when the share of it left after projecting
+/// out the kept columns is at most `tolerance` in any group. Of a dependent
+/// set, the first column is therefore kept. With `groups` `None` all rows form
+/// one group; otherwise `groups[i]` numbers the group of row `i` from 0.
+///
+/// The test is a Cholesky factorisation grown one column at a time. A
+/// `tolerance` of `1e-8` on the Gram matrix drops columns whose relative norm
+/// left after projection is below `1e-4`.
+///
+/// Returns one flag per column, true where the column is kept.
+///
+/// # Panics
+///
+/// If `weights` or `groups` does not have one entry per row of `x`, or
+/// `tolerance` is negative or not finite.
+#[must_use]
+pub fn independent_columns(
+    x: MatRef<'_, f64>,
+    weights: &[f64],
+    groups: Option<&[usize]>,
+    tolerance: f64,
+) -> Vec<bool> {
+    let (rows, p) = (x.nrows(), x.ncols());
+    assert_eq!(weights.len(), rows, "one weight per row");
+    assert!(
+        tolerance.is_finite() && tolerance >= 0.0,
+        "a finite, non-negative tolerance"
+    );
+    if let Some(groups) = groups {
+        assert_eq!(groups.len(), rows, "one group per row");
+    }
+    if p <= 1 || rows == 0 {
+        return vec![true; p];
+    }
+    let group_of = |row: usize| groups.map_or(0, |g| g[row]);
+    let group_count = (0..rows).map(group_of).max().map_or(0, |g| g + 1);
+
+    // One weighted Gram matrix per group, upper triangle, rows added in order.
+    let size = p * p;
+    let mut grams = vec![0.0; group_count * size];
+    let mut nonzero = Vec::with_capacity(p);
+    for row in 0..rows {
+        let group = group_of(row);
+        let gram = &mut grams[group * size..(group + 1) * size];
+        let w = weights[row];
+        nonzero.clear();
+        nonzero.extend((0..p).filter(|&c| x[(row, c)] != 0.0));
+        for (a, &i) in nonzero.iter().enumerate() {
+            let wi = w * x[(row, i)];
+            for &j in &nonzero[a..] {
+                gram[i * p + j] += wi * x[(row, j)];
+            }
+        }
+    }
+    let entry = |gram: &[f64], i: usize, j: usize| {
+        let (a, b) = if i <= j { (i, j) } else { (j, i) };
+        gram[a * p + b]
+    };
+
+    let mut kept: Vec<usize> = Vec::with_capacity(p);
+    let mut factors: Vec<Vec<Vec<f64>>> = vec![Vec::new(); group_count];
+    for candidate in 0..p {
+        let mut projections = Vec::with_capacity(group_count);
+        let mut independent = true;
+        for (group, factor) in factors.iter().enumerate() {
+            let gram = &grams[group * size..(group + 1) * size];
+            let own = entry(gram, candidate, candidate);
+            if own <= 0.0 {
+                // A group without rows says nothing about the column.
+                if gram[0] > 0.0 {
+                    independent = false;
+                }
+                projections.push(Vec::new());
+                continue;
+            }
+            let mut projection = vec![0.0; kept.len()];
+            for (r, &k) in kept.iter().enumerate() {
+                let mut total = entry(gram, candidate, k);
+                for c in 0..r {
+                    total -= factor[r][c] * projection[c];
+                }
+                projection[r] = total / factor[r][r];
+            }
+            let residual = own - projection.iter().map(|v| v * v).sum::<f64>();
+            if candidate > 0 && residual <= tolerance * own {
+                independent = false;
+            }
+            projection.push(residual.max(0.0).sqrt());
+            projections.push(projection);
+        }
+        if independent {
+            for (factor, projection) in factors.iter_mut().zip(projections) {
+                if !projection.is_empty() {
+                    factor.push(projection);
+                }
+            }
+            kept.push(candidate);
+        }
+    }
+    let mut flags = vec![false; p];
+    for k in kept {
+        flags[k] = true;
+    }
+    flags
+}
+
+/// The columns of `x` whose flag is true, in order.
+///
+/// # Panics
+///
+/// If `keep` does not have one flag per column.
+#[must_use]
+pub fn select_columns(x: MatRef<'_, f64>, keep: &[bool]) -> Mat<f64> {
+    assert_eq!(keep.len(), x.ncols(), "one flag per column");
+    let columns: Vec<usize> = (0..x.ncols()).filter(|&j| keep[j]).collect();
+    Mat::from_fn(x.nrows(), columns.len(), |i, k| x[(i, columns[k])])
+}
+
+/// The rows of `x` at `rows`, in that order and with repeats, as a bootstrap
+/// resample needs.
+#[must_use]
+pub fn select_rows(x: MatRef<'_, f64>, rows: &[usize]) -> Mat<f64> {
+    Mat::from_fn(rows.len(), x.ncols(), |k, j| x[(rows[k], j)])
+}
+
+#[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
+mod tests {
+    use super::*;
+
+    fn design(rows: &[&[f64]]) -> Mat<f64> {
+        Mat::from_fn(rows.len(), rows[0].len(), |i, j| rows[i][j])
+    }
+
+    #[test]
+    fn full_rank_designs_keep_every_column() {
+        let x = design(&[
+            &[1.0, 0.0, 2.0],
+            &[1.0, 1.0, 3.0],
+            &[1.0, 0.0, 5.0],
+            &[1.0, 1.0, 1.0],
+        ]);
+        assert_eq!(
+            independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8),
+            [true; 3]
+        );
+    }
+
+    #[test]
+    fn dummies_that_sum_to_the_intercept_lose_the_last() {
+        let x = design(&[
+            &[1.0, 1.0, 0.0],
+            &[1.0, 0.0, 1.0],
+            &[1.0, 1.0, 0.0],
+            &[1.0, 0.0, 1.0],
+        ]);
+        assert_eq!(
+            independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8),
+            [true, true, false]
+        );
+    }
+
+    #[test]
+    fn a_column_constant_in_one_group_is_dropped() {
+        // Column 1 varies overall but is zero throughout group 1.
+        let x = design(&[&[1.0, 1.0], &[1.0, 0.0], &[1.0, 0.0], &[1.0, 0.0]]);
+        let pooled = independent_columns(x.as_ref(), &[1.0; 4], None, 1e-8);
+        let grouped = independent_columns(x.as_ref(), &[1.0; 4], Some(&[0, 0, 1, 1]), 1e-8);
+        assert_eq!(pooled, [true, true]);
+        assert_eq!(grouped, [true, false]);
+    }
+
+    #[test]
+    fn selections() {
+        let x = Mat::from_fn(3, 3, |i, j| (i * 3 + j) as f64);
+        let kept = select_columns(x.as_ref(), &[true, false, true]);
+        assert_eq!((kept.ncols(), kept[(2, 1)]), (2, 8.0));
+        let rows = select_rows(x.as_ref(), &[2, 2, 0]);
+        assert_eq!((rows.nrows(), rows[(1, 0)], rows[(2, 2)]), (3, 6.0, 2.0));
+    }
+}

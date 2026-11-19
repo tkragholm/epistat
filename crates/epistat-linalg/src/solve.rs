@@ -115,6 +115,19 @@ pub fn solve(
     Err(SolveError::NotFinite)
 }
 
+/// The inverse of `a`, by [`solve`] against the identity.
+///
+/// # Errors
+///
+/// As [`solve`].
+pub fn inverse(a: MatRef<'_, f64>, attempts: &[Attempt]) -> Result<Solution, SolveError> {
+    solve(
+        a,
+        Mat::<f64>::identity(a.nrows(), a.nrows()).as_ref(),
+        attempts,
+    )
+}
+
 /// A factorised matrix, for solving with several right-hand sides.
 pub struct Factor {
     kind: Kind,
@@ -362,6 +375,19 @@ mod tests {
         )
         .unwrap();
         assert!(solution.ridge > 0.0);
+    }
+
+    #[test]
+    fn the_inverse_times_the_matrix_is_the_identity() {
+        let a = mat![[4.0, 1.0, 0.5], [1.0, 3.0, 0.2], [0.5, 0.2, 2.0]];
+        let inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC).unwrap().x;
+        let product = &a * &inverse;
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!((product[(i, j)] - expected).abs() < 1e-15);
+            }
+        }
     }
 
     #[test]

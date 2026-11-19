@@ -9,10 +9,11 @@
 
 pub mod basis;
 mod blocks;
+pub mod design;
 mod solve;
 
 pub use blocks::{ROW_BLOCK, matvec_into, row_scaled_gram, weighted_gram, weighted_xtz, xtv};
-pub use solve::{Attempt, Factor, Method, Ridge, Solution, SolveError, solve};
+pub use solve::{Attempt, Factor, Method, Ridge, Solution, SolveError, inverse, solve};
 
 /// Whether every entry of `matrix` is finite.
 #[must_use]
