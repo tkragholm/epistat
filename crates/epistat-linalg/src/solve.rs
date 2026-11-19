@@ -1,3 +1,80 @@
+//! Solves of `A x = b` for a square matrix `A` that fall back through a
+//! chosen sequence of factorisations, with optional ridge retries.
+//!
+//! Each factorisation runs on one thread, so a solution does not depend on
+//! the number of threads available. The systems are the small `p x p` ones of
+//! regression.
+//!
+//! # Algorithm
+//!
+//! An [`Attempt`] is a [`Method`] with an optional [`Ridge`]. [`solve`] and
+//! [`Factor::new`] go through the attempts in order. For each attempt they
+//! try the matrix `A` itself, and then, if the attempt has a ridge, the
+//! matrices `A + r I` for
+//!
+//! ```text
+//! r(0) = start,    r(k+1) = r(k) * growth,    k = 0, ..., tries - 1.
+//! ```
+//!
+//! Each `r(k)` is formed by repeated multiplication and is added to the
+//! original `A`, not to a matrix already ridged. The first candidate that
+//! succeeds is used, and the [`Solution`] or [`Factor`] records the method and
+//! the ridge `r` that produced it, with `r = 0` for the matrix itself.
+//!
+//! The methods are the dense factorisations of \[1\] and \[3\]:
+//!
+//! ```text
+//! Cholesky      A = L L'       symmetric positive definite
+//! Lblt          A = L B L'     symmetric indefinite, B block diagonal
+//! PartialPivLu  P A = L U      row pivoting
+//! FullPivLu     P A Q = L U    row and column pivoting
+//! ```
+//!
+//! Cholesky and Lblt read only the lower triangle of `A`. Lblt is the
+//! Bunch-Kaufman factorisation \[2\], which pivots symmetrically and so keeps
+//! the symmetry of `A`. `B` has blocks of order 1 and 2. Full pivoting is the
+//! most reliable of the four on rank-deficient or nearly singular matrices
+//! \[1, 3\]. [`Attempt::SYMMETRIC`] runs the four in the order above, without
+//! ridge.
+//!
+//! # Failure
+//!
+//! A candidate fails when its factorisation fails or when its solution has a
+//! non-finite entry. Only Cholesky can fail in the first way, when it meets a
+//! pivot that is not positive. The other three factorise any matrix, so for
+//! them failure shows only as a non-finite solution, which [`Factor::solve`]
+//! reports as [`SolveError::NotFinite`]. When every candidate fails, [`solve`]
+//! returns [`SolveError::NotFinite`]. A shape error is returned before any
+//! factorisation.
+//!
+//! # Factor and solve
+//!
+//! [`solve`] factorises and solves each candidate in turn, so it moves on to
+//! the next candidate when a solution is not finite. [`Factor::new`] stops at
+//! the first candidate that factorises, whether or not its solutions turn out
+//! to be finite, and keeps the factorisation for several right-hand sides.
+//! The two can therefore choose different methods for the same matrix.
+//! [`inverse`] is [`solve`] against the identity.
+//!
+//! # Determinism
+//!
+//! Cholesky runs through faer's in-place routines with `Par::Seq`. The other
+//! factorisations and their solves have no such argument, so they run inside a
+//! rayon pool of one thread, where faer's default parallelism resolves to one
+//! thread. No step splits a sum across threads, so the bits of a result are
+//! the same for every thread count of the calling program. faer chooses its
+//! SIMD kernels from the CPU at run time. The bits are therefore not promised
+//! to be the same across CPUs.
+//!
+//! # References
+//!
+//! 1. Golub GH, Van Loan CF. Matrix Computations. 4th ed. Baltimore: Johns
+//!    Hopkins University Press; 2013.
+//! 2. Bunch JR, Kaufman L. Some stable methods for calculating inertia and
+//!    solving symmetric linear systems. Math Comput. 1977;31(137):163-79.
+//! 3. Higham NJ. Accuracy and Stability of Numerical Algorithms. 2nd ed.
+//!    Philadelphia: SIAM; 2002.
+
 use std::sync::OnceLock;
 
 use dyn_stack::{MemBuffer, MemStack};
@@ -144,9 +221,11 @@ enum Kind {
 }
 
 impl Factor {
-    /// Factorises `a` with the first attempt that succeeds. The LU methods
-    /// always succeed; whether their solutions are finite shows only in
-    /// [`Factor::solve`].
+    /// Factorises `a` with the first attempt that succeeds. Bunch-Kaufman and
+    /// the LU methods always succeed, so attempts after the first of them are
+    /// not reached; whether a solution is finite shows only in
+    /// [`Factor::solve`], so this can choose another method than [`solve`]
+    /// does for the same matrix.
     ///
     /// # Errors
     ///

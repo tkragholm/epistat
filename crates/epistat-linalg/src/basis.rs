@@ -1,4 +1,74 @@
-//! Basis expansions of one variable, for series and sieve estimators.
+//! Basis expansions of one variable, for series and sieve estimators: the
+//! polynomial basis and B-splines, with first derivatives.
+//!
+//! # Polynomial
+//!
+//! [`Polynomial`] of degree `d` has the `d + 1` functions
+//!
+//! ```text
+//! 1, x, x^2, ..., x^d
+//! ```
+//!
+//! with the derivatives `0, 1, 2x, ..., d x^(d-1)`. Powers are built by
+//! repeated multiplication.
+//!
+//! # B-splines
+//!
+//! [`BSpline`] of degree `d` is built on the augmented knot vector
+//!
+//! ```text
+//! t = ( lower x (d+1),  internal knots,  upper x (d+1) )
+//! ```
+//!
+//! where the boundary knots are repeated `d + 1` times and the internal knots
+//! are sorted and lie strictly inside `(lower, upper)`. Repeated internal
+//! knots are allowed. With `m` internal knots there are `n = m + d + 1`
+//! functions. The Cox-de Boor recursion \[1, 2, 3\] defines function `i` of
+//! degree `k` by
+//!
+//! ```text
+//! B(i, 0)(x) = 1 if t[i] <= x < t[i+1], else 0
+//!
+//! B(i, k)(x) =   (x - t[i])       / (t[i+k]   - t[i])   * B(i,   k-1)(x)
+//!              + (t[i+k+1] - x)   / (t[i+k+1] - t[i+1]) * B(i+1, k-1)(x)
+//! ```
+//!
+//! where a term whose denominator is zero is left out. The first derivative is
+//!
+//! ```text
+//! B'(i, k)(x) =   k / (t[i+k]   - t[i])   * B(i,   k-1)(x)
+//!               - k / (t[i+k+1] - t[i+1]) * B(i+1, k-1)(x)
+//! ```
+//!
+//! with the same rule for a zero denominator, and it is 0 for degree 0 \[3\].
+//!
+//! # Edge cases
+//!
+//! The degree-0 functions are half open, which would leave the right end of
+//! the interval with every function zero. The last function is therefore also
+//! 1 when `x` is within 1e-12 of `upper`, so the basis sums to one on the
+//! whole closed interval and its derivatives sum to zero. Outside
+//! `[lower, upper]` every function is 0. The recursion is evaluated directly
+//! without caching, which costs `O(2^d)` calls per function and suits the low
+//! degrees of series estimators.
+//!
+//! This is the basis of R's `splines::bs` with `intercept = TRUE`. The
+//! integration test `tests/r_splines.rs` compares values and first
+//! derivatives of a cubic with three internal knots against
+//! `splines::splineDesign` of R \[4\], and they agree to within four units in
+//! the last place, or within an absolute 1e-14 for values and 1e-12 for
+//! derivatives, on the test grid.
+//!
+//! # References
+//!
+//! 1. de Boor C. A Practical Guide to Splines. Revised ed. New York:
+//!    Springer; 2001. (First edition 1978.)
+//! 2. Cox MG. The numerical evaluation of B-splines. IMA J Appl Math.
+//!    1972;10(2):134-49.
+//! 3. de Boor C. On calculating with B-splines. J Approx Theory.
+//!    1972;6(1):50-62.
+//! 4. R Core Team. R: A Language and Environment for Statistical Computing.
+//!    Vienna: R Foundation for Statistical Computing. The `splines` package.
 
 /// A finite set of functions of one variable and their derivatives.
 pub trait Basis {

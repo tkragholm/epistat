@@ -1,4 +1,52 @@
-//! Helpers for design matrices.
+//! Helpers for design matrices: finding the columns that are linearly
+//! independent within every group of rows, and selecting columns and rows.
+//!
+//! # Algorithm
+//!
+//! [`independent_columns`] grows a Cholesky factorisation \[1\] one column
+//! at a time. Let `G_g = X_g' W_g X_g` be the weighted Gram matrix of the rows
+//! in group `g`, with the rows added in order. For a candidate column `c`
+//! and the kept columns `k(1), ..., k(m)`, each group has a lower triangular
+//! factor `L` of the Gram matrix of the kept columns. The projection `q` of
+//! the candidate on them solves
+//!
+//! ```text
+//! L q = ( G[c, k(1)], ..., G[c, k(m)] )'
+//! ```
+//!
+//! by forward substitution, and the residual is
+//!
+//! ```text
+//! residual = G[c, c] - q'q
+//! ```
+//!
+//! which is the squared weighted norm of the part of the column that is not
+//! in the span of the kept columns. The column is dropped when, in any group,
+//!
+//! ```text
+//! residual <= tolerance * G[c, c].
+//! ```
+//!
+//! Otherwise `sqrt(max(residual, 0))` is appended to `q` as the new row of `L`
+//! in every group, and the column is kept. Column 0 is always kept. A
+//! `tolerance` of 1e-8 on the Gram matrix drops a column whose relative norm
+//! after projection is below 1e-4.
+//!
+//! # Groups
+//!
+//! With `groups` set to `None` all rows are one group. Otherwise `groups[i]`
+//! numbers the group of row `i` from 0, and a column must be independent in
+//! every group to be kept. A column whose diagonal entry `G[c, c]` is not
+//! positive in a group is dropped when that group has rows, meaning that its
+//! first diagonal entry is positive. In a group without rows the column says
+//! nothing and is not tested. Of a dependent set the first column is kept,
+//! since columns are tested in order. With one column or no rows every column
+//! is kept.
+//!
+//! # References
+//!
+//! 1. Golub GH, Van Loan CF. Matrix Computations. 4th ed. Baltimore: Johns
+//!    Hopkins University Press; 2013.
 
 use faer::{Mat, MatRef};
 

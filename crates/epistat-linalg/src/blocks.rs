@@ -1,3 +1,60 @@
+//! Products over the rows of a design matrix, computed in fixed blocks of
+//! rows so that the result does not depend on the number of threads.
+//!
+//! # Algorithm
+//!
+//! Let `X` have `n` rows and `p` columns. The rows are cut into blocks of
+//! [`ROW_BLOCK`] = 4096, the last one shorter. Each product is a sum over
+//! rows, so it splits into one partial per block:
+//!
+//! ```text
+//! X' W X = sum over blocks b of  X_b' W_b X_b
+//! X' v   = sum over blocks b of  X_b' v_b
+//! ```
+//!
+//! The partials are computed in parallel, one task per block, each with
+//! sequential faer kernels. They are then added to a zero matrix in block
+//! order on the calling thread. A system of at most one block is computed
+//! directly, which is the same sum.
+//!
+//! # Determinism
+//!
+//! The rows in a block and the order of the blocks do not depend on the
+//! thread count, and nothing is added across blocks except in block order.
+//! The floating-point additions are therefore the same for every thread count,
+//! and so are [`weighted_gram`], [`row_scaled_gram`], [`xtv`] and
+//! [`weighted_xtz`]. [`matvec_into`] needs no addition across blocks, since
+//! each output entry comes from one row, and it fills blocks of the output in
+//! parallel. Changing [`ROW_BLOCK`] changes the grouping of the additions and
+//! so the last bits of the results. faer chooses its SIMD kernels from the CPU
+//! at run time, so the bits are not promised to be the same across CPUs.
+//!
+//! # Symmetry
+//!
+//! [`row_scaled_gram`] computes
+//!
+//! ```text
+//! G = sum_i s_i^2 x_i x_i'
+//! ```
+//!
+//! where `x_i` is row `i` of `X` as a column and `s_i` is the scale of the
+//! row. Each block scales its rows by `s_i` to give `S_b` and adds `S_b' S_b`
+//! through a rank-k update of the lower triangle only. After the blocks are
+//! added, the lower triangle is copied to the upper. The result is therefore
+//! exactly symmetric, entry for entry, as the Cholesky and Bunch-Kaufman
+//! factorisations of [`crate::Factor`] assume \[1\].
+//!
+//! # Weights
+//!
+//! [`weighted_gram`] uses `s_i = sqrt(max(w_i, 0))`, so a negative weight
+//! counts as zero. [`weighted_xtz`] does not floor the weights. It forms
+//! `w_i z_i` and calls [`xtv`].
+//!
+//! # References
+//!
+//! 1. Golub GH, Van Loan CF. Matrix Computations. 4th ed. Baltimore: Johns
+//!    Hopkins University Press; 2013.
+
 use std::ops::Range;
 
 use faer::linalg::matmul::matmul;

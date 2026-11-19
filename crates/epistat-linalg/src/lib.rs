@@ -3,9 +3,15 @@
 //! factorisations, and products over the rows of a design matrix computed in
 //! fixed blocks, and the B-spline and polynomial bases of series estimators.
 //!
-//! Factorisations run on one thread; the systems they solve are the small
-//! `p x p` ones of regression. The row products run in parallel, one block of
-//! 4096 rows per task, and add the blocks in order.
+//! The modules, each with its own method notes:
+//!
+//! - [`solve`](crate::solve()) solves with a fallback sequence of
+//!   factorisations, each on one thread.
+//! - `blocks` holds the products over the rows of a design matrix, computed
+//!   in blocks of [`ROW_BLOCK`] rows and added in block order.
+//! - [`design`] finds linearly independent columns and selects rows and
+//!   columns.
+//! - [`basis`] holds the polynomial and B-spline bases.
 
 pub mod basis;
 mod blocks;
