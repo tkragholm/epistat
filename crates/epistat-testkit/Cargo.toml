@@ -1,0 +1,20 @@
+[package]
+name = "epistat-testkit"
+description = "Test helpers for numerical code: tolerances, bit fingerprints, thread-count checks and R reference files"
+keywords = ["testing", "numerical", "reproducible", "statistics"]
+categories = ["development-tools::testing", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+rayon = "1.10"
+serde = { version = "1.0.200", features = ["derive"] }
+serde_json = "1.0.120"
+
+[lints]
+workspace = true
