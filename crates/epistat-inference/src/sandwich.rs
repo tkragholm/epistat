@@ -1,4 +1,71 @@
-//! Sandwich covariances `A^-1 M A^-T` for M-estimators.
+//! Sandwich covariances for M-estimators.
+//!
+//! An M-estimator solves `sum_i psi(z_i; theta) = 0`. Under regularity
+//! conditions its covariance is `A^-1 M A^-T`, the form of Huber \[1\] and
+//! White \[2\], where `A` is the derivative of the summed score (the
+//! information) and `M` is the variance of the summed score (the meat).
+//! The functions here build `M`, form the sandwich and read standard errors
+//! from it. The caller supplies `A`, the rows `x_i` and the score residuals.
+//!
+//! # Method
+//!
+//! For a score `r_i x_i`, where `r_i` is the residual of row `i` and `x_i` its
+//! row of the design matrix, [`meat`] without clusters is the
+//! heteroskedasticity-robust form \[2\]:
+//!
+//! ```text
+//! M = sum_i r_i^2 x_i x_i'
+//! ```
+//!
+//! With clusters it sums the scores within each cluster `g` first, as in \[3\]
+//! and \[4\]:
+//!
+//! ```text
+//! s_g = sum_{i in g} r_i x_i
+//! M   = sum_g s_g s_g'
+//! ```
+//!
+//! No small-sample factor is applied. [`sandwich`] returns
+//!
+//! ```text
+//! V = A^-1 M A^-T
+//! ```
+//!
+//! by two solves. It factorises `A` and solves `A L = M`, then factorises
+//! `A'` and solves `A' R = L'`, and returns `R'`, which is `L A^-T`. `A` is
+//! never inverted explicitly. The factorisation is tried with the given
+//! `attempts`, in order.
+//!
+//! [`standard_errors`] is `sqrt(max(V_ii, 0))`. A negative diagonal entry,
+//! which rounding can produce when `V` is near singular, is read as zero.
+//!
+//! # Determinism
+//!
+//! Without clusters the meat is the Gram matrix of the scaled rows from
+//! `epistat-linalg`. With clusters the score sums are formed in row order
+//! into one row per cluster, in order of first appearance, and the meat is the
+//! Gram matrix of those rows.
+//!
+//! # Edge cases
+//!
+//! - A `clusters` argument that covers another number of rows is
+//!   [`InferenceError::Length`]. Without clusters the length of the
+//!   residuals is not checked, since they are a function of the row.
+//! - A singular or non-finite solve is [`InferenceError::Solve`].
+//! - The sandwich is not symmetrised. It is symmetric only up to rounding.
+//!
+//! # References
+//!
+//! 1. Huber PJ. The behavior of maximum likelihood estimates under
+//!    nonstandard conditions. In: Proceedings of the Fifth Berkeley Symposium
+//!    on Mathematical Statistics and Probability, vol 1. Berkeley: University
+//!    of California Press; 1967. p. 221-33.
+//! 2. White H. A heteroskedasticity-consistent covariance matrix estimator and
+//!    a direct test for heteroskedasticity. Econometrica. 1980;48(4):817-38.
+//! 3. Liang KY, Zeger SL. Longitudinal data analysis using generalized linear
+//!    models. Biometrika. 1986;73(1):13-22.
+//! 4. Cameron AC, Gelbach JB, Miller DL. Bootstrap-based improvements for
+//!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
 use epistat_linalg::{Attempt, Factor, row_scaled_gram};
 use faer::{Mat, MatRef};

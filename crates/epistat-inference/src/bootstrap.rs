@@ -1,5 +1,64 @@
 //! Bootstrap replicates whose draws depend only on the seed and the
-//! replicate number, so they are the same on any number of threads.
+//! replicate number.
+//!
+//! Replicate `r` draws from the stream seeded with
+//! [`replicate_seed`]`(seed, r)`, so a replicate is the same whichever thread
+//! computes it and in whatever order. The output is the same on any number
+//! of threads.
+//!
+//! # Method
+//!
+//! [`multiplier`] is the multiplier bootstrap of an asymptotically linear
+//! estimator \[1\], here with Rademacher multipliers \[2\]. Given the estimate
+//! and its influence function `psi`, each replicate is
+//!
+//! ```text
+//! estimate + sum_i s_i psi_i / n,      s_i = +1 or -1 with probability 1/2
+//! ```
+//!
+//! The signs come from the bits of `SplitMix64` outputs, 64 per output, lowest
+//! bit first, a set bit meaning `+1`. The values are not centred.
+//!
+//! [`cluster_totals`] is the pairs cluster bootstrap \[3\]\[4\], reduced to what
+//! an estimator that is linear in per-cluster totals needs. Each replicate
+//! draws `G` of the `G` clusters with replacement. If cluster `g` is drawn
+//! `k_g` times, then for each column `v` the replicate total is
+//!
+//! ```text
+//! T = sum_g k_g v_g
+//! ```
+//!
+//! The caller builds a ratio or other statistic from the totals. The counts
+//! `k_g` come from `epistat_rng::resample_counts`, which draws each cluster
+//! index with the multiply-and-shift mapping of `Stream::below`, so the
+//! draws carry its negligible bias. The output holds `replicates * columns`
+//! totals, replicate by replicate. All columns use the same counts within a
+//! replicate.
+//!
+//! # Determinism
+//!
+//! Replicates are computed in parallel, each from its own seed, and written to
+//! its own slot. Inside a replicate the sums run in cluster order. The result
+//! is therefore identical, to the bit, for any number of threads.
+//!
+//! # Edge cases
+//!
+//! - An empty influence function is [`InferenceError::Empty`].
+//! - No columns is [`InferenceError::Empty`] and columns of different lengths
+//!   are [`InferenceError::Length`]. Columns of length zero give an empty
+//!   result.
+//! - Zero replicates give an empty result.
+//!
+//! # References
+//!
+//! 1. Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
+//!    periods. J Econom. 2021;225(2):200-30.
+//! 2. Liu RY. Bootstrap procedures under some non-i.i.d. models. Ann Stat.
+//!    1988;16(4):1696-1708.
+//! 3. Efron B. Bootstrap methods: another look at the jackknife. Ann Stat.
+//!    1979;7(1):1-26.
+//! 4. Efron B, Tibshirani RJ. An introduction to the bootstrap. New York:
+//!    Chapman & Hall; 1993.
 
 use epistat_rng::{Stream, rademacher_sum, replicate_seed, resample_counts};
 use rayon::prelude::*;

@@ -1,3 +1,13 @@
+//! Cluster labels reduced to the numbers `0..G`.
+//!
+//! [`Clusters::from_labels`] numbers the distinct labels in the order in which
+//! they first appear. A hash map looks the labels up, but the numbers come
+//! from a counter and never from the map's iteration order, so the numbering
+//! does not depend on the hasher or its random state. Every later sum over
+//! clusters runs in this order, which fixes the order of floating-point
+//! additions and makes the results reproducible. [`Clusters::singletons`] puts
+//! each observation in its own cluster.
+
 use std::collections::HashMap;
 use std::hash::Hash;
 

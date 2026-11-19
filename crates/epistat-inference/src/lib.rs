@@ -1,9 +1,15 @@
-//! Variances and intervals for estimators: from influence functions, from
-//! sandwich estimators with or without clusters, and from the bootstrap.
+//! Standard errors, covariances and confidence intervals for estimators.
+//!
+//! The crate has four parts. [`influence`] gives variances from an
+//! influence function, with or without clusters. [`sandwich`] gives the
+//! M-estimator sandwich covariance. [`bootstrap`] draws multiplier and
+//! cluster bootstrap replicates. [`interval`] turns an estimate and a standard
+//! error, or a set of replicates, into a confidence interval. [`Clusters`]
+//! numbers the clusters the others sum over.
 //!
 //! Clusters are numbered in order of first appearance and every sum runs in a
 //! fixed order, so results do not depend on hashing or on the number of
-//! threads.
+//! threads. Each module documents its formulas, edge cases and references.
 
 pub mod bootstrap;
 mod clusters;

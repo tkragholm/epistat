@@ -1,5 +1,77 @@
-//! Variances of an estimator from its influence function: one value `psi_i`
-//! per observation, with the estimator's error about `sum(psi) / n`.
+//! Variances of an estimator from its influence function.
+//!
+//! An estimator `theta_hat` is asymptotically linear when
+//! `theta_hat - theta = sum(psi_i) / n` plus a negligible remainder, where
+//! `psi_i` is the influence function of observation `i` \[1\]. Its variance is
+//! then estimated from the sample values of `psi_i`. The functions take those
+//! values as given.
+//!
+//! # Method
+//!
+//! [`standard_error`] centres the values and treats the observations as
+//! independent:
+//!
+//! ```text
+//! se = sqrt( mean((psi - mean(psi))^2) ) / sqrt(n)
+//! ```
+//!
+//! [`clustered_variance`] sums the values within each of `G` clusters and
+//! does not centre them. It follows the cluster-robust variance of \[2\] and
+//! \[3\] with the finite-cluster factor `G / (G - 1)`, as R's `did` package
+//! computes it:
+//!
+//! ```text
+//! s_g = sum_{i in g} psi_i
+//! V   = G / (G - 1) * sum_g s_g^2 / n^2
+//! ```
+//!
+//! With fewer than two clusters the factor is undefined, and the variance is
+//! `sum(psi_i^2) / n^2`, the value for singleton clusters without the factor.
+//! [`clustered_standard_error`] is its square root.
+//!
+//! [`clustered_covariance`] takes `K` influence functions and returns the
+//! `K x K` matrix with entry `(a, b)`
+//!
+//! ```text
+//! G / (G - 1) * sum_g s_ga s_gb / n^2
+//! ```
+//!
+//! with the same fallback below two clusters.
+//!
+//! # Properties
+//!
+//! - [`standard_error`] subtracts the mean, the clustered forms do not. With
+//!   singleton clusters and values of mean zero, as an influence function
+//!   has at the estimate, the clustered variance is the square of
+//!   [`standard_error`] times `G / (G - 1)`.
+//! - The matrix is symmetric, since the entry for `(b, a)` is a copy of the
+//!   entry for `(a, b)`.
+//!
+//! # Determinism
+//!
+//! Cluster sums are formed in observation order and added in cluster order.
+//! The covariance computes the variance of column `a` with the same sums and
+//! the same products in the same order, so its diagonal entry equals
+//! [`clustered_variance`] of that column to the bit.
+//!
+//! # Edge cases
+//!
+//! - No observations, or no columns, is [`InferenceError::Empty`].
+//! - A `clusters` argument that covers another number of observations, or a
+//!   column of another length, is [`InferenceError::Length`].
+//! - A non-finite variance, or covariance entry, is
+//!   [`InferenceError::NotFinite`]. [`standard_error`] does not check, and
+//!   returns NaN or infinity for non-finite input.
+//! - One observation gives a standard error of 0.
+//!
+//! # References
+//!
+//! 1. Hampel FR. The influence curve and its role in robust estimation. J Am
+//!    Stat Assoc. 1974;69(346):383-93.
+//! 2. Liang KY, Zeger SL. Longitudinal data analysis using generalized linear
+//!    models. Biometrika. 1986;73(1):13-22.
+//! 3. Cameron AC, Gelbach JB, Miller DL. Bootstrap-based improvements for
+//!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
 use crate::{Clusters, InferenceError, check_length};
 
