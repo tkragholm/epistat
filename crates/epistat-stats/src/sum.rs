@@ -1,8 +1,8 @@
 //! Floating-point sums that do not depend on how the terms happen to round.
 //!
 //! [`compensated`] is a compensated sum that matches Python's `sum()` over floats,
-//! and [`exact`] is the correctly rounded sum that matches Python's
-//! `math.fsum()`.
+//! [`exact`] is the correctly rounded sum that matches Python's `math.fsum()`,
+//! and [`blocked`] is the pairwise sum that polars uses for a float column.
 //!
 //! # Compensated sum
 //!
@@ -47,6 +47,20 @@
 //! rounded in the tie case, where the partial sum alone would round the wrong way.
 //! The result does not depend on the order of the terms. Terms must be finite. A
 //! sum beyond the range of `f64` is infinite, and an empty sum is 0.
+//!
+//! # Blocked sum
+//!
+//! [`blocked`] adds in the order of the float sum of polars 1.41, a
+//! pairwise sum over blocks. With `r = len mod 128`, the first `r` terms are
+//! added left to right into one total, and the rest, a multiple of 128 terms,
+//! is summed recursively. A run of at least two blocks is split after
+//! `floor(blocks / 2)` blocks and the two halves are added. A single block of 128
+//! terms keeps 16 running sums, one per position modulo 16, each adding
+//! its terms in order. The 16 sums are folded onto each other: sum `j` gains sum
+//! `j + 8`, then `j + 4`, so four remain, and the block's sum is `(s0 + s2) +
+//! (s1 + s3)`. The result is main sum plus remainder sum. It is a fixed
+//! sequence of roundings, so it does not depend on a thread count, but it is not
+//! the correctly rounded sum.
 //!
 //! # References
 //!
@@ -131,6 +145,50 @@ pub fn exact(values: impl IntoIterator<Item = f64>) -> f64 {
         }
     }
     hi
+}
+
+const BLOCK: usize = 128;
+const LANES: usize = 16;
+
+/// The sum of `values` in the order of the float sum of polars 1.41: the first
+/// `len mod 128` terms in order, the remainder as a pairwise sum of blocks of
+/// 128 terms with 16 lanes. An empty sum is 0.
+#[must_use]
+pub fn blocked(values: &[f64]) -> f64 {
+    let remainder = values.len() % BLOCK;
+    let (rest, main) = values.split_at(remainder);
+    let main_sum = if main.is_empty() {
+        0.0
+    } else {
+        blocked_pairwise(main)
+    };
+    let mut rest_sum = 0.0;
+    for &value in rest {
+        rest_sum += value;
+    }
+    main_sum + rest_sum
+}
+
+/// `values.len()` is a positive multiple of [`BLOCK`].
+fn blocked_pairwise(values: &[f64]) -> f64 {
+    if values.len() == BLOCK {
+        let mut lanes = [0.0_f64; LANES];
+        for chunk in values.chunks_exact(LANES) {
+            for (lane, &value) in lanes.iter_mut().zip(chunk) {
+                *lane += value;
+            }
+        }
+        let mut width = LANES;
+        while width > 4 {
+            for j in 0..width / 2 {
+                lanes[j] += lanes[width / 2 + j];
+            }
+            width /= 2;
+        }
+        return (lanes[0] + lanes[2]) + (lanes[1] + lanes[3]);
+    }
+    let left = (values.len() / BLOCK / 2) * BLOCK;
+    blocked_pairwise(&values[..left]) + blocked_pairwise(&values[left..])
 }
 
 #[cfg(test)]

@@ -35,6 +35,16 @@
 //! interval covers. The overlaps of one interval sum to its inclusive length
 //! when there is no floor.
 //!
+//! # SAS epoch
+//!
+//! SAS stores a date as days since 1960-01-01 and a datetime as seconds since
+//! 1960-01-01 00:00:00. The Unix epoch is 3 653 days, or 315 619 200 seconds,
+//! later (10 years with 3 leap days, 1960, 1964 and 1968, times 86 400).
+//! [`SAS_EPOCH_OFFSET_DAYS`] and [`SAS_EPOCH_OFFSET_SECONDS`] are those
+//! offsets. [`days_from_civil_sas`], [`civil_from_days_sas`],
+//! [`civil_from_sas_seconds`] and the unit conversions add or subtract them
+//! around the functions above, in integer arithmetic.
+//!
 //! # Edge cases
 //!
 //! - An `end` in an earlier year than `start` spans no year and gives nothing.
@@ -79,6 +89,62 @@ pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
 #[must_use]
 pub fn year_from_days(z: i64) -> i64 {
     civil_from_days(z).0
+}
+
+/// Days from 1960-01-01, the SAS date epoch, to 1970-01-01: 3 653.
+pub const SAS_EPOCH_OFFSET_DAYS: i64 = 3_653;
+
+/// Seconds from 1960-01-01 00:00:00, the SAS datetime epoch, to
+/// 1970-01-01 00:00:00: 315 619 200.
+pub const SAS_EPOCH_OFFSET_SECONDS: i64 = SAS_EPOCH_OFFSET_DAYS * 86_400;
+
+/// A SAS date, in days from 1960-01-01, as days from 1970-01-01.
+#[must_use]
+pub const fn sas_days_to_unix(sas_days: i64) -> i64 {
+    sas_days - SAS_EPOCH_OFFSET_DAYS
+}
+
+/// A day count from 1970-01-01 as a SAS date, in days from 1960-01-01.
+#[must_use]
+pub const fn unix_days_to_sas(unix_days: i64) -> i64 {
+    unix_days + SAS_EPOCH_OFFSET_DAYS
+}
+
+/// A SAS datetime, in seconds from 1960-01-01 00:00:00, as seconds from
+/// 1970-01-01 00:00:00.
+#[must_use]
+pub const fn sas_seconds_to_unix(sas_seconds: i64) -> i64 {
+    sas_seconds - SAS_EPOCH_OFFSET_SECONDS
+}
+
+/// Seconds from 1970-01-01 00:00:00 as a SAS datetime.
+#[must_use]
+pub const fn unix_seconds_to_sas(unix_seconds: i64) -> i64 {
+    unix_seconds + SAS_EPOCH_OFFSET_SECONDS
+}
+
+/// Days from 1960-01-01, the value SAS stores for a date, to the proleptic
+/// Gregorian date `(y, m, d)`.
+#[must_use]
+pub fn days_from_civil_sas(y: i64, m: i64, d: i64) -> i64 {
+    unix_days_to_sas(days_from_civil(y, m, d))
+}
+
+/// The proleptic Gregorian `(year, month, day)` of a SAS date.
+#[must_use]
+pub fn civil_from_days_sas(sas_days: i64) -> (i64, i64, i64) {
+    civil_from_days(sas_days_to_unix(sas_days))
+}
+
+/// The `((year, month, day), seconds_since_midnight)` of a SAS datetime. The
+/// seconds are from 0 to 86 399, also before 1960.
+#[must_use]
+pub fn civil_from_sas_seconds(sas_seconds: i64) -> ((i64, i64, i64), i64) {
+    let unix = sas_seconds_to_unix(sas_seconds);
+    (
+        civil_from_days(unix.div_euclid(86_400)),
+        unix.rem_euclid(86_400),
+    )
 }
 
 /// One calendar year's share of an interval.
@@ -216,5 +282,74 @@ mod tests {
                 .sum();
             assert_eq!(total, length + 1);
         }
+    }
+
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "a copy of the tool's code, where a month and a day are small"
+    )]
+    /// `days_since_sas_epoch` of `sas7bdat-writer` (and `days_from_civil` of
+    /// `register-delivery`, which is the same arithmetic in another type).
+    fn tool_days_since_sas_epoch(year: i32, month: u32, day: u32) -> f64 {
+        let adjusted_year = if month <= 2 { year - 1 } else { year };
+        let era = if adjusted_year >= 0 {
+            adjusted_year
+        } else {
+            adjusted_year - 399
+        } / 400;
+        let year_of_era = adjusted_year - era * 400;
+        let day_of_year =
+            (153 * (if month > 2 { month - 3 } else { month + 9 }) as i32 + 2) / 5 + day as i32 - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        f64::from(era * 146_097 + day_of_era - 719_468 + 3_653)
+    }
+
+    /// `iso_date` of `dst-disclose`, applied to days from 1970-01-01.
+    fn tool_iso_date(days: i64) -> String {
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("{year:04}-{month:02}-{day:02}")
+    }
+
+    #[test]
+    fn the_sas_epoch_is_3653_days_and_the_tools_agree() {
+        assert_eq!(SAS_EPOCH_OFFSET_DAYS, 3_653);
+        assert_eq!(SAS_EPOCH_OFFSET_SECONDS, 315_619_200);
+        assert_eq!(days_from_civil_sas(1960, 1, 1), 0);
+        assert_eq!(days_from_civil_sas(1970, 1, 1), 3_653);
+        assert_eq!(civil_from_days_sas(-1), (1959, 12, 31));
+        for sas in -40_000..60_000 {
+            let (y, m, d) = civil_from_days_sas(sas);
+            assert_eq!(days_from_civil_sas(y, m, d), sas);
+            let tool = tool_days_since_sas_epoch(
+                i32::try_from(y).unwrap(),
+                u32::try_from(m).unwrap(),
+                u32::try_from(d).unwrap(),
+            );
+            assert_eq!(tool.to_bits(), (sas as f64).to_bits());
+            assert_eq!(
+                tool_iso_date(sas_days_to_unix(sas)),
+                format!("{y:04}-{m:02}-{d:02}")
+            );
+        }
+    }
+
+    #[test]
+    fn sas_seconds_split_into_a_date_and_a_time_of_day() {
+        assert_eq!(civil_from_sas_seconds(0), ((1960, 1, 1), 0));
+        assert_eq!(
+            civil_from_sas_seconds(SAS_EPOCH_OFFSET_SECONDS + 86_399),
+            ((1970, 1, 1), 86_399)
+        );
+        assert_eq!(civil_from_sas_seconds(-1), ((1959, 12, 31), 86_399));
+        assert_eq!(sas_seconds_to_unix(unix_seconds_to_sas(-5)), -5);
+        assert_eq!(unix_days_to_sas(sas_days_to_unix(77)), 77);
     }
 }

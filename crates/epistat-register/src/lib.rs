@@ -5,7 +5,8 @@
 //! Each module is one small, self-contained method on plain slices and integers,
 //! with no dependence on a data-frame library.
 //!
-//! - [`person_time`] converts between day counts and civil dates, and splits an
+//! - [`person_time`] converts between day counts and civil dates, with the
+//!   SAS epoch of 1960 beside the Unix epoch, and splits an
 //!   interval of days across the calendar years it spans, with the length of
 //!   each year for prorating an annual value.
 //! - [`spans`] merges intervals that overlap, or lie within a grace of each
@@ -44,7 +45,10 @@ pub use icd10::{
     normalize_diagnosis_code,
 };
 pub use person_time::{
-    YearOverlap, calendar_year_overlaps, civil_from_days, days_from_civil, year_from_days,
+    SAS_EPOCH_OFFSET_DAYS, SAS_EPOCH_OFFSET_SECONDS, YearOverlap, calendar_year_overlaps,
+    civil_from_days, civil_from_days_sas, civil_from_sas_seconds, days_from_civil,
+    days_from_civil_sas, sas_days_to_unix, sas_seconds_to_unix, unix_days_to_sas,
+    unix_seconds_to_sas, year_from_days,
 };
 pub use relations::connected_components;
 pub use spans::{MergedSpans, merge_sorted_spans};
