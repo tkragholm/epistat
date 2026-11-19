@@ -27,11 +27,27 @@ pub fn on_threads<T: Send>(thread_counts: &[usize], f: impl Fn() -> T + Sync) ->
 /// At the first value that differs, naming its index and the thread count.
 #[track_caller]
 pub fn assert_same_on_threads(f: impl Fn() -> Vec<f64> + Sync) {
-    let counts = [1, 2, 8, 1];
-    let runs = on_threads(&counts, f);
+    assert_same_on_pools(&[1, 2, 8, 1], f);
+}
+
+/// Checks that `f` returns bit-identical values in a rayon pool of each of
+/// `thread_counts` threads, each compared with the first.
+///
+/// [`assert_same_on_threads`] fixes the sizes at 1, 2, 8 and 1. Use this when
+/// the code under test splits work in a way that depends on the pool size,
+/// for example at a size that does not divide the input evenly.
+///
+/// # Panics
+///
+/// If `thread_counts` is empty, or at the first value that differs, naming its
+/// index and the thread count.
+#[track_caller]
+pub fn assert_same_on_pools(thread_counts: &[usize], f: impl Fn() -> Vec<f64> + Sync) {
+    assert!(!thread_counts.is_empty(), "no pool sizes given");
+    let runs = on_threads(thread_counts, f);
     let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
     let first = bits(&runs[0]);
-    for (run, threads) in runs.iter().zip(counts).skip(1) {
+    for (run, &threads) in runs.iter().zip(thread_counts).skip(1) {
         let other = bits(run);
         assert_eq!(
             first.len(),
@@ -40,8 +56,8 @@ pub fn assert_same_on_threads(f: impl Fn() -> Vec<f64> + Sync) {
         );
         if let Some(index) = first.iter().zip(&other).position(|(a, b)| a != b) {
             panic!(
-                "index {index} differs on {threads} threads: {:e} against {:e} on 1",
-                run[index], runs[0][index]
+                "index {index} differs on {threads} threads: {:e} against {:e} on {}",
+                run[index], runs[0][index], thread_counts[0]
             );
         }
     }
@@ -63,6 +79,20 @@ mod tests {
             let terms: Vec<f64> = (1..10_000).map(|i| 1.0 / f64::from(i)).collect();
             vec![terms.iter().sum()]
         });
+    }
+
+    #[test]
+    fn pool_sizes_are_free() {
+        assert_same_on_pools(&[1, 2, 3, 12], || {
+            let terms: Vec<f64> = (1..10_000).map(|i| 1.0 / f64::from(i)).collect();
+            vec![terms.iter().sum()]
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "differs on 3 threads")]
+    fn a_pool_size_that_changes_the_result_is_named() {
+        assert_same_on_pools(&[1, 1, 3], || vec![rayon::current_num_threads() as f64]);
     }
 
     #[test]

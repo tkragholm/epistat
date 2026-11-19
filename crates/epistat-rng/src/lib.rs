@@ -73,6 +73,42 @@
 //! No normal deviate is provided, since it needs `ln` and `cos` and would
 //! carry the same caveat as `exp1` with less benefit.
 //!
+//! # Python reference
+//!
+//! The draws above, written in Python. Python integers do not wrap, so each
+//! step that wraps in a `u64` is masked. The outputs in the comments are the
+//! values the tests of this crate check.
+//!
+//! ```python
+//! MASK = (1 << 64) - 1
+//! GAMMA = 0x9E3779B97F4A7C15
+//!
+//! def splitmix64(value):
+//!     z = (value + GAMMA) & MASK
+//!     z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
+//!     z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
+//!     return z ^ (z >> 31)
+//!
+//! class Stream:
+//!     def __init__(self, seed):          # Stream::seeded
+//!         self.state = seed & MASK
+//!
+//!     def next_u64(self):
+//!         out = splitmix64(self.state)
+//!         self.state = (self.state + GAMMA) & MASK
+//!         return out
+//!
+//!     def uniform(self):
+//!         return (self.next_u64() >> 11) / 2.0**53
+//!
+//! def replicate_seed(base, replicate):
+//!     return splitmix64((base & MASK) ^ ((replicate * GAMMA) & MASK))
+//!
+//! Stream(0).next_u64()      # 0xE220A8397B1DCDAF
+//! Stream(0).uniform()       # 0.8833108082136426
+//! replicate_seed(1, 2)      # 0xF893A2EEFB32555E
+//! ```
+//!
 //! # References
 //!
 //! 1. Steele GL, Lea D, Flood CH. Fast splittable pseudorandom number
@@ -315,6 +351,16 @@ mod tests {
                 0xF88B_B8A8_724C_81EC,
             ]
         );
+    }
+
+    #[test]
+    fn the_python_reference_in_the_docs_gives_these_values() {
+        assert_eq!(Stream::seeded(0).next_u64(), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(
+            Stream::seeded(0).uniform().to_bits(),
+            0.883_310_808_213_642_6_f64.to_bits()
+        );
+        assert_eq!(replicate_seed(1, 2), 0xF893_A2EE_FB32_555E);
     }
 
     #[test]

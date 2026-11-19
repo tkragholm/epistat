@@ -34,7 +34,7 @@ pub mod person_time;
 pub mod relations;
 pub mod spans;
 
-pub use age::{AgeRule, age_in_years};
+pub use age::{AgeRule, LeapBirthday, age_in_years};
 pub use cpi::CpiTable;
 #[cfg(feature = "denmark")]
 pub use cpi::DENMARK_ANNUAL_CPI;
