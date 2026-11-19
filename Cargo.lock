@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "epistat-rng"
 version = "0.1.0"
+
+[[package]]
+name = "epistat-stats"
+version = "0.1.0"

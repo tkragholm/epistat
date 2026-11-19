@@ -1,0 +1,15 @@
+[package]
+name = "epistat-stats"
+description = "Sample quantiles, the normal distribution and floating-point sums that agree with R and Python to the bit"
+keywords = ["statistics", "quantile", "normal-distribution", "summation"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
