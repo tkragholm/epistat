@@ -136,7 +136,18 @@ fn mean_and_variance(values: &[f64]) -> (f64, f64) {
     (mean, m2 / (values.len() as f64 - 1.0))
 }
 
+/// The mean and the sum of squared deviations, or `None` for an empty or
+/// constant chain. Constancy is decided by comparing the draws, because the
+/// mean of identical draws can round away from them and leave a positive sum.
+#[expect(
+    clippy::float_cmp,
+    reason = "a chain is constant when its draws are exactly equal"
+)]
 fn centred_squares(chain: &[f64]) -> Option<(f64, f64)> {
+    let first = *chain.first()?;
+    if chain.iter().all(|&value| value == first) {
+        return None;
+    }
     let mean = chain.iter().sum::<f64>() / chain.len() as f64;
     let squares: f64 = chain.iter().map(|&v| (v - mean) * (v - mean)).sum();
     (squares > 0.0).then_some((mean, squares))
@@ -152,6 +163,18 @@ fn lagged_products(chain: &[f64], lag: usize, mean: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn identical_draws_whose_mean_rounds_away_are_constant() {
+        let chain = [0.1, 0.1, 0.1];
+        assert_ne!(
+            (chain.iter().sum::<f64>() / 3.0).to_bits(),
+            0.1f64.to_bits()
+        );
+        assert_eq!(effective_sample_size(&chain), None);
+        assert_eq!(autocorrelation(&chain, 1), None);
+    }
+
     use super::*;
 
     #[test]
