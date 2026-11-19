@@ -1,0 +1,21 @@
+[package]
+name = "epistat-sequences"
+description = "Optimal-matching, Hamming and dynamic Hamming distances between state sequences, weighted k-medoids, silhouettes and null-model validation"
+keywords = ["sequence-analysis", "optimal-matching", "k-medoids", "clustering", "silhouette"]
+categories = ["algorithms", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+epistat-rng = { path = "../epistat-rng", version = "0.1.1" }
+epistat-stats = { path = "../epistat-stats", version = "0.1.1" }
+rayon = "1.10"
+thiserror = "2"
+
+[lints]
+workspace = true
