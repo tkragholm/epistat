@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-inference"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "epistat-linalg",
  "epistat-rng",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-linalg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dyn-stack",
  "epistat-testkit",
@@ -218,7 +218,10 @@ version = "0.1.0"
 
 [[package]]
 name = "epistat-rng"
-version = "0.1.0"
+version = "0.1.1"
+dependencies = [
+ "rand_core",
+]
 
 [[package]]
 name = "epistat-stats"
@@ -766,6 +769,12 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "rand_core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "raw-cpuid"

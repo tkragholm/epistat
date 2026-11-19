@@ -87,6 +87,7 @@ use crate::is_finite;
 
 /// A factorisation to try.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Method {
     /// `L L'` of the lower triangle, for symmetric positive definite systems.
     Cholesky,
@@ -110,9 +111,14 @@ pub struct Ridge {
 
 /// One step of a fallback sequence.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Attempt {
     pub method: Method,
     pub ridge: Option<Ridge>,
+    /// A factorisation whose smallest pivot is at most this in absolute
+    /// value counts as failed: the diagonal of `U` for the LU methods, of `L`
+    /// for Cholesky. 0 accepts any non-zero pivot.
+    pub min_pivot: f64,
 }
 
 impl Attempt {
@@ -121,6 +127,7 @@ impl Attempt {
         Self {
             method,
             ridge: None,
+            min_pivot: 0.0,
         }
     }
 
@@ -129,7 +136,16 @@ impl Attempt {
         Self {
             method,
             ridge: Some(ridge),
+            min_pivot: 0.0,
         }
+    }
+
+    /// The same attempt, failing when a pivot is at most `threshold` in
+    /// absolute value. Not checked for Bunch-Kaufman.
+    #[must_use]
+    pub const fn with_min_pivot(mut self, threshold: f64) -> Self {
+        self.min_pivot = threshold;
+        self
     }
 
     /// Cholesky, then Bunch-Kaufman, then LU with partial and then full
@@ -178,7 +194,9 @@ pub fn solve(
     check_shape(a, b.nrows())?;
     for attempt in attempts {
         for (matrix, ridge) in candidates(a, attempt.ridge) {
-            if let Some(factor) = Factor::with_method(matrix.as_ref(), attempt.method) {
+            if let Some(factor) =
+                Factor::with_method(matrix.as_ref(), attempt.method, attempt.min_pivot)
+            {
                 if let Ok(x) = factor.solve(b) {
                     return Ok(Solution {
                         x,
@@ -235,7 +253,9 @@ impl Factor {
         check_shape(a, a.nrows())?;
         for attempt in attempts {
             for (matrix, ridge) in candidates(a, attempt.ridge) {
-                if let Some(mut factor) = Self::with_method(matrix.as_ref(), attempt.method) {
+                if let Some(mut factor) =
+                    Self::with_method(matrix.as_ref(), attempt.method, attempt.min_pivot)
+                {
                     factor.ridge = ridge;
                     return Ok(factor);
                 }
@@ -253,6 +273,16 @@ impl Factor {
     #[must_use]
     pub const fn ridge(&self) -> f64 {
         self.ridge
+    }
+
+    /// The lower Cholesky factor `L`, with `L L'` the factorised matrix, when
+    /// the method is Cholesky.
+    #[must_use]
+    pub fn cholesky_factor(&self) -> Option<MatRef<'_, f64>> {
+        match &self.kind {
+            Kind::Cholesky(lower) => Some(lower.as_ref()),
+            _ => None,
+        }
     }
 
     /// Solves for `b`.
@@ -283,13 +313,27 @@ impl Factor {
         }
     }
 
-    fn with_method(a: MatRef<'_, f64>, method: Method) -> Option<Self> {
+    fn with_method(a: MatRef<'_, f64>, method: Method, min_pivot: f64) -> Option<Self> {
         let kind = match method {
             Method::Cholesky => Kind::Cholesky(cholesky(a)?),
             Method::Lblt => Kind::Lblt(on_one_thread(|| a.lblt(Side::Lower))),
             Method::PartialPivLu => Kind::PartialPivLu(on_one_thread(|| a.partial_piv_lu())),
             Method::FullPivLu => Kind::FullPivLu(on_one_thread(|| a.full_piv_lu())),
         };
+        if min_pivot > 0.0 {
+            let diagonal = match &kind {
+                Kind::Cholesky(lower) => Some(lower.as_ref()),
+                Kind::PartialPivLu(f) => Some(f.U()),
+                Kind::FullPivLu(f) => Some(f.U()),
+                Kind::Lblt(_) => None,
+            };
+            if let Some(factor) = diagonal {
+                let n = factor.nrows().min(factor.ncols());
+                if (0..n).any(|i| factor[(i, i)].abs() <= min_pivot) {
+                    return None;
+                }
+            }
+        }
         Some(Self {
             kind,
             method,
@@ -466,6 +510,39 @@ mod tests {
                 assert!((product[(i, j)] - expected).abs() < 1e-15);
             }
         }
+    }
+
+    #[test]
+    fn a_pivot_threshold_turns_a_tiny_pivot_into_a_failure() {
+        // Rank one plus 1e-16: LU succeeds with a pivot near 1e-16.
+        let a = mat![[1.0, 2.0], [2.0, 4.0 + 1e-15]];
+        let b = column(&[1.0, 2.0]);
+        let loose = solve(
+            a.as_ref(),
+            b.as_ref(),
+            &[Attempt::plain(Method::PartialPivLu)],
+        );
+        assert!(loose.is_ok());
+        let strict = [Attempt::plain(Method::PartialPivLu).with_min_pivot(1e-14)];
+        assert_eq!(
+            solve(a.as_ref(), b.as_ref(), &strict).unwrap_err(),
+            SolveError::NotFinite
+        );
+        let ridge = Ridge {
+            start: 1e-8,
+            growth: 10.0,
+            tries: 7,
+        };
+        let ridged = [Attempt::ridged(Method::PartialPivLu, ridge).with_min_pivot(1e-14)];
+        assert!(solve(a.as_ref(), b.as_ref(), &ridged).unwrap().ridge > 0.0);
+    }
+
+    #[test]
+    fn the_cholesky_factor_is_exposed() {
+        let a = mat![[4.0, 2.0], [2.0, 3.0]];
+        let factor = Factor::new(a.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        let lower = factor.cholesky_factor().unwrap();
+        assert!((lower[(0, 0)] - 2.0).abs() < 1e-15 && lower[(0, 1)].abs() < 1e-300);
     }
 
     #[test]

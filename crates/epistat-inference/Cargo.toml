@@ -4,7 +4,7 @@ description = "Influence-function and sandwich variances, cluster-robust and boo
 keywords = ["statistics", "bootstrap", "sandwich", "cluster-robust", "inference"]
 categories = ["mathematics", "science"]
 readme = "README.md"
-version = "0.1.1"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-epistat-linalg = { path = "../epistat-linalg", version = "0.1.0" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.2.0" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.1.1" }
 faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
