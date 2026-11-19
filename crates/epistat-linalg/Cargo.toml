@@ -1,0 +1,28 @@
+[package]
+name = "epistat-linalg"
+description = "Dense solves with fallbacks and row-blocked products on faer, with results that do not depend on the number of threads"
+keywords = ["linear-algebra", "faer", "reproducible", "statistics"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# faer's runtime-dispatched AVX-512 kernels.
+nightly = ["faer/nightly"]
+
+[dependencies]
+dyn-stack = "0.13"
+faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
+rayon = "1.10"
+thiserror = "2"
+
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+
+[lints]
+workspace = true
