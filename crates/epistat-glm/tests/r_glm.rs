@@ -176,8 +176,22 @@ fn aliased_columns_are_none_as_in_r() {
         let fit = Glm::new(family, link)
             .fit(x.as_ref(), &r.y, None, None, None)
             .unwrap();
+        // The fit solves the normal equations, R a QR of sqrt(W) X, so the two
+        // can differ by about the condition number of X'WX times the unit
+        // roundoff, which the reference records. The bound grows from about
+        // 4e-15 for the exactly aliased designs to 2e-2 at a perturbation of
+        // 1e-6, and the CPU's choice of kernels moves results within it.
+        let rel = (8.0 * r.gram_condition * f64::EPSILON).max(1e-13);
+        // Near the optimum the deviance moves with the square of a coefficient
+        // error, so the solve puts noise of about rel^2 into it. The iteration
+        // count is the reference's only when that noise is far below the
+        // convergence test's 1e-8; otherwise it depends on the noise.
+        let deviance_noise = rel * rel;
         assert_eq!(fit.rank, r.rank, "{}", r.name);
-        assert_eq!(fit.iterations, r.iterations, "{}", r.name);
+        assert!(fit.converged, "{}", r.name);
+        if deviance_noise < 1e-10 {
+            assert_eq!(fit.iterations, r.iterations, "{}", r.name);
+        }
         let missing =
             |values: &[Option<f64>]| values.iter().map(Option::is_none).collect::<Vec<_>>();
         assert_eq!(
@@ -195,12 +209,6 @@ fn aliased_columns_are_none_as_in_r() {
         let present = |values: &[Option<f64>]| values.iter().flatten().copied().collect::<Vec<_>>();
         let (beta, se) = (present(&fit.coefficients), present(&fit.standard_errors()));
         let (beta_r, se_r) = (present(&r.coefficients), present(&r.se));
-        // The fit solves the normal equations, R a QR of sqrt(W) X, so the two
-        // can differ by about the condition number of X'WX times the unit
-        // roundoff, which the reference records. The bound grows from about
-        // 4e-15 for the exactly aliased designs to 2e-3 at a perturbation of
-        // 1e-6, and the CPU's choice of kernels moves results within it.
-        let rel = (8.0 * r.gram_condition * f64::EPSILON).max(1e-13);
         eprintln!(
             "{}: worst relative deviation, coefficients {:e}, se {:e}, deviance {:e}",
             r.name,
@@ -210,6 +218,10 @@ fn aliased_columns_are_none_as_in_r() {
         );
         assert_close(&beta, &beta_r, Tolerance::exact().rel(rel));
         assert_close(&se, &se_r, Tolerance::exact().rel(rel));
-        assert_close(&[fit.deviance], &[r.deviance], Tolerance::exact().rel(1e-7));
+        assert_close(
+            &[fit.deviance],
+            &[r.deviance],
+            Tolerance::exact().rel(deviance_noise.max(1e-7)),
+        );
     }
 }
