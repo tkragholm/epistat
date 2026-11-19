@@ -1,4 +1,59 @@
 //! Floating-point sums that do not depend on how the terms happen to round.
+//!
+//! [`compensated`] is a compensated sum that matches Python's `sum()` over floats,
+//! and [`exact`] is the correctly rounded sum that matches Python's
+//! `math.fsum()`.
+//!
+//! # Compensated sum
+//!
+//! [`compensated`] is Neumaier's improvement of Kahan's summation \[1\], in the
+//! order of operations of CPython 3.12 and later. With running total `s` and
+//! compensation `c`, for each term `v`:
+//!
+//! ```text
+//! t = s + v
+//! c = c + ((s - t) + v)    if |s| >= |v|
+//! c = c + ((v - t) + s)    otherwise
+//! s = t
+//! ```
+//!
+//! The expression in `c` is the rounding error of `s + v`, recovered exactly
+//! when the larger operand is subtracted first. The result is `s + c`. The
+//! compensation is added only when it is finite and non-zero, so a sum with an
+//! infinite term stays infinite instead of becoming NaN, as in CPython. The
+//! error is not exact in general. It is about `2^-53` times the sum of the
+//! absolute values, plus terms of second order in the rounding error.
+//!
+//! # Exact sum
+//!
+//! [`exact`] is Shewchuk's method of exact partials \[2\], the algorithm of
+//! `math.fsum()`. It keeps a list of non-overlapping partial sums whose exact
+//! total equals the exact sum of the terms so far. Adding a term `x` runs through
+//! the partials `y`. For each, with `big` the larger and `small` the smaller in
+//! absolute value:
+//!
+//! ```text
+//! hi = big + small,    lo = small - (hi - big)
+//! ```
+//!
+//! Here `hi + lo = big + small` exactly. A non-zero `lo` is kept as a partial, and
+//! `hi` carries on as `x`. A non-zero last `x` becomes a new partial. The partials
+//! are then summed from the largest down until a remainder `lo` is non-zero.
+//!
+//! The result is rounded half to even. If the remainder `lo` and the next
+//! partial have the same sign, the exact sum lies on the far side of a tie or
+//! beyond it, so the code doubles `lo`, adds it to `hi`, and uses that sum if the
+//! addition was exact. This is the correction that makes the sum correctly
+//! rounded in the tie case, where the partial sum alone would round the wrong way.
+//! The result does not depend on the order of the terms. Terms must be finite. A
+//! sum beyond the range of `f64` is infinite, and an empty sum is 0.
+//!
+//! # References
+//!
+//! 1. Neumaier A. Rundungsfehleranalyse einiger Verfahren zur Summation endlicher
+//!    Summen. Zeitschrift für Angewandte Mathematik und Mechanik 1974;54:39-51.
+//! 2. Shewchuk JR. Adaptive precision floating-point arithmetic and fast robust
+//!    geometric predicates. Discrete and Computational Geometry 1997;18:305-363.
 
 /// Neumaier's compensated sum, in the order of operations of Python's
 /// built-in `sum()` over floats (Python 3.12 and later).

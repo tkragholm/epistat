@@ -3,6 +3,49 @@
 //!
 //! Each function returns `None` when the statistic is undefined: an empty
 //! group, or a pooled variance that is not positive.
+//!
+//! # Formulas
+//!
+//! [`smd`] is the standardised mean difference of a continuous variable \[2\], and
+//! [`smd_proportion`] the same for a binary variable from its proportions \[1\]:
+//!
+//! ```text
+//! d = (mean_a - mean_b) / sqrt((var_a + var_b) / 2)
+//! d = (p_a - p_b) / sqrt((p_a (1 - p_a) + p_b (1 - p_b)) / 2)
+//! ```
+//!
+//! The denominator is not weighted by group size. [`variance_ratio`] is
+//! `var_a / var_b`.
+//!
+//! [`ecdf_distance`] compares the empirical distribution functions `F_a` and
+//! `F_b` at every distinct value `v_1, ..., v_K` in the pooled sample, and returns
+//!
+//! ```text
+//! mean = (1/K) sum_k |F_a(v_k) - F_b(v_k)|,    max = max_k |F_a(v_k) - F_b(v_k)|
+//! ```
+//!
+//! The maximum is the Kolmogorov-Smirnov statistic. [`eqq_distance`] does the same
+//! for the empirical quantile functions \[3\]. For groups of equal size it
+//! compares the order statistics pair by pair. Otherwise it reads both groups at
+//! `N = max(n_a, n_b)` probabilities `k / (N - 1)`, `k = 0, ..., N - 1`, with the
+//! type 7 quantile. Both functions ignore non-finite values and return `None` if a
+//! group has none left.
+//!
+//! [`cramers_v`] is `sqrt(chi² / n)` for the two-way table of group by category,
+//! with expected counts `row * n_group / n`. With two groups the usual divisor
+//! `min(rows - 1, columns - 1)` is 1. Categories absent from both groups are
+//! skipped, and an expected count is floored at `1e-12` in the denominator.
+//!
+//! # References
+//!
+//! 1. Austin PC. Balance diagnostics for comparing the distribution of baseline
+//!    covariates between treatment groups in propensity-score matched samples.
+//!    Statistics in Medicine 2009;28:3083-3107.
+//! 2. Cohen J. Statistical Power Analysis for the Behavioral Sciences. 2nd ed.
+//!    Hillsdale: Lawrence Erlbaum Associates; 1988.
+//! 3. Ho DE, Imai K, King G, Stuart EA. MatchIt: nonparametric preprocessing for
+//!    parametric causal inference. Journal of Statistical Software
+//!    2011;42(8):1-28.
 
 use crate::quantile;
 

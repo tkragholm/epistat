@@ -1,9 +1,61 @@
 //! Sample quantiles.
 //!
-//! The functions take a sample sorted ascending and a probability in
-//! `[0, 1]`, and return `None` for an empty sample or a probability outside
-//! that range. Types 1 and 7 are those of Hyndman and Fan (1996) and give the
-//! same doubles as R's `quantile()`.
+//! The functions take a sample sorted ascending and a probability in `[0, 1]`.
+//! Types 1 and 7 are those of Hyndman and Fan \[1\] and give the same doubles as
+//! R's `quantile()`.
+//!
+//! # Algorithm
+//!
+//! Let `x[1] <= ... <= x[n]` be the order statistics, counted from one as R
+//! defines them, and `p` the probability. [`type7`], the default of R, uses
+//!
+//! ```text
+//! index = 1 + (n - 1) p
+//! lo    = floor(index),    hi = ceil(index),    h = index - lo
+//! Q(p)  = (1 - h) x[lo] + h x[hi]
+//! ```
+//!
+//! When `h = 0` or `x[lo] = x[hi]` the result is `x[lo]` unchanged, which is
+//! what R does and avoids the rounding of `(1 - h) a + h b` when both terms are
+//! equal. The code subtracts one from `lo` and `hi` to index the slice.
+//!
+//! [`type1`] is the inverse of the empirical distribution function. With
+//! `np = n p`, `eps` the machine epsilon and `j = floor(np + 4 eps)`,
+//!
+//! ```text
+//! rank = j + 1   if np > j,    rank = j   otherwise,
+//! Q(p) = x[clamp(rank, 1, n)]
+//! ```
+//!
+//! R adds the four epsilons, so that a product `n p` which rounded to just below an
+//! integer still counts as that integer.
+//!
+//! # Other forms
+//!
+//! - [`type7_ratio`] takes `p = numerator / denominator` as integers. The position
+//!   `(n - 1) numerator` is split by integer division into `lo` and a remainder,
+//!   and `h = remainder / denominator`. The probability is never rounded. The
+//!   result can differ from [`type7`] in the last bits, because `h` is formed
+//!   differently.
+//! - [`type7_unsorted`] needs no sorted input. It selects the element at `lo` and
+//!   then the element at `hi` among the larger ones, using `f64::total_cmp`, and
+//!   reorders the slice. It returns the same doubles as [`type7`] on the sorted
+//!   sample.
+//! - [`rounded_rank`] returns `x` at zero-based position `round(p (n - 1))`, with
+//!   halves rounded away from zero. It is not a Hyndman and Fan type.
+//!
+//! # Edge cases
+//!
+//! All functions return `None` for an empty sample and for `p` outside `[0, 1]`,
+//! including NaN. [`type7_ratio`] also returns `None` for a zero denominator, a
+//! numerator above the denominator, or an overflow in `numerator * (n - 1)`. NaN
+//! values in a sample are not checked. The sorted forms assume the sample is
+//! sorted, and the unsorted form orders NaN by `total_cmp`.
+//!
+//! # References
+//!
+//! 1. Hyndman RJ, Fan Y. Sample quantiles in statistical packages. The American
+//!    Statistician 1996;50:361-365.
 
 /// R's type 7, the default of R and of most software: linear interpolation
 /// between the order statistics at `1 + (n - 1) p`.

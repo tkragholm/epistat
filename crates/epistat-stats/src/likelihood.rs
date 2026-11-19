@@ -1,4 +1,35 @@
 //! Log-likelihood helpers: log-sum-exp, softmax and information criteria.
+//!
+//! # Formulas
+//!
+//! [`log_sum_exp`] subtracts the maximum `M` so that no term overflows:
+//!
+//! ```text
+//! ln(sum_i exp(v_i)) = M + ln(sum_i exp(v_i - M))
+//! ```
+//!
+//! [`softmax`] replaces `v_i` by `exp(v_i - log_sum_exp(v))`, so that the values
+//! sum to 1, and returns the log-sum.
+//!
+//! With log-likelihood `ll`, `k` parameters and `n` observations, the criteria are
+//!
+//! ```text
+//! AIC   = -2 ll + 2 k                   (Akaike \[1\])
+//! BIC   = -2 ll + k ln(n)               (Schwarz \[2\])
+//! SABIC = -2 ll + k ln((n + 2) / 24)    (Sclove \[3\])
+//! ```
+//!
+//! [`sabic`] replaces `n` in the BIC by `(n + 2) / 24`, so its penalty is negative
+//! for fewer than 22 observations.
+//!
+//! # References
+//!
+//! 1. Akaike H. A new look at the statistical model identification. IEEE
+//!    Transactions on Automatic Control 1974;19:716-723.
+//! 2. Schwarz G. Estimating the dimension of a model. The Annals of Statistics
+//!    1978;6:461-464.
+//! 3. Sclove SL. Application of model-selection criteria to some problems in
+//!    multivariate analysis. Psychometrika 1987;52:333-343.
 
 /// `ln(sum(exp(values)))`, shifted by the maximum so that no term overflows.
 ///

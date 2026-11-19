@@ -1,18 +1,132 @@
 //! The standard normal distribution function and its inverse.
 //!
-//! [`cdf`] is Cody's rational Chebyshev approximation (Cody 1969, Math.
-//! Comp. 23:631-637) and [`quantile`] is Wichura's AS 241 (1988, Appl.
-//! Statist. 37:477-484), the algorithms behind R's `pnorm()` and `qnorm()`.
-//! [`cdf`] gives the same doubles as R; [`quantile`] is within two units in
-//! the last place of it, since R built with fused multiply-add rounds its
-//! polynomials differently.
+//! [`cdf`] and [`quantile`] are the algorithms behind R's `pnorm()` and `qnorm()`.
+//! Both use plain operations in a fixed order and no fused multiply-add, so the
+//! results are the same on every platform. [`cdf_as26`] and [`quantile_acklam`]
+//! are shorter approximations with stated error bounds. [`truncated_quantile`] and
+//! [`folded_quantile`] build on [`cdf`] and [`quantile`].
 //!
-//! [`cdf_as26`] and [`quantile_acklam`] are shorter approximations that older
-//! code uses, kept so that such code can move here without its results
-//! changing.
+//! # Algorithm
 //!
-//! Everything here uses plain operations in a fixed order, without fused
-//! multiply-add, so the results are the same on every platform.
+//! [`cdf`] is the rational Chebyshev approximation of Cody \[1\]. With `y = |x|`
+//! it has three regions. In the first, `y <= 0.67448975`, the function is odd
+//! about 1/2:
+//!
+//! ```text
+//! Φ(x) = 1/2 + x * (a_4 x² + ... ) / (x² + ... )
+//! ```
+//!
+//! that is, a ratio of two polynomials in `x²`, with a numerator of degree 4 and a
+//! monic denominator of degree 4. For `y` below half the machine epsilon the
+//! polynomials are skipped and the result is exactly 1/2. In the second region,
+//! `0.67448975 < y <= sqrt(32)`, the lower tail `Φ(-y)` is
+//!
+//! ```text
+//! Φ(-y) = exp(-y²/2) * (c_8 y^8 + ... + c_0) / (y^8 + d_7 y^7 + ... + d_0)
+//! ```
+//!
+//! In the third region, `y > sqrt(32)`, with `s = 1 / y²`:
+//!
+//! ```text
+//! Φ(-y) = exp(-y²/2) / y * (1/sqrt(2π) - s R(s)),    R(s) = (p_5 s^5 + ... ) / (s^5 + ... )
+//! ```
+//!
+//! The region is chosen on `|x|`, and the result is `Φ(-y)` for `x < 0` and
+//! `1 - Φ(-y)` for `x > 0`. In the third region the cutoffs are `x > -38.4674` and
+//! `x < 8.2924`. Outside them the lower tail is set to 0, so the result is 0 for
+//! `x <= -38.4674` and 1 for `x >= 8.2924`. A NaN input is returned unchanged.
+//!
+//! `exp(-y²/2)` is formed in `gaussian_tail` as a product of two exponentials. With
+//! `h = trunc(16 y) / 16`, which has few significant bits, the code uses
+//!
+//! ```text
+//! y² = h² + (y - h)(y + h),    exp(-y²/2) = exp(-h²/2) * exp(-(y - h)(y + h)/2).
+//! ```
+//!
+//! Here `h²` is exact in a `f64`, so the rounding error of `y²` does not get
+//! multiplied by a large exponent. Without the split, a relative error of `2^-53`
+//! in `y²` becomes a relative error of about `y² 2^-54` in the result, which
+//! grows with `y²` across the tail.
+//!
+//! [`quantile`] is Wichura's AS 241, algorithm PPND16 \[2\]. With `q = p - 1/2`
+//! and `r = 0.180625 - q²`, the central region `|q| <= 0.425` is
+//!
+//! ```text
+//! z = q * (a_7 r^7 + ... + a_0) / (b_7 r^7 + ... + 1).
+//! ```
+//!
+//! Otherwise `t = min(p, 1 - p)` and `r = sqrt(-ln t)`. For `r <= 5` the code
+//! evaluates a ratio of degree 7 polynomials in `r - 1.6`, and for `r > 5` a
+//! second ratio in `r - 5`. The result takes the sign of `q`. The value is
+//! `-inf` at 0, `inf` at 1 and NaN outside `[0, 1]`, and `1 - p` is rounded
+//! before the log in the upper tail. AS 241 states a relative accuracy of about
+//! `10^-16`.
+//!
+//! # Agreement with R
+//!
+//! All polynomials are evaluated by Horner's rule with separate multiplication
+//! and addition. [`cdf`] gives the same doubles as R's `pnorm()` on the values the
+//! tests use. [`quantile`] is within two units in the last place of `qnorm()`.
+//! R built with fused multiply-add rounds its polynomials differently, and a
+//! single fused step changes the last bit, so bit equality is not expected for
+//! the quantile.
+//!
+//! # Shorter approximations
+//!
+//! [`erf_as26`] is formula 7.1.26 of Abramowitz and Stegun \[3\]. With
+//! `t = 1 / (1 + 0.3275911 x)` for `x >= 0`,
+//!
+//! ```text
+//! erf(x) = 1 - (a_1 t + a_2 t² + a_3 t³ + a_4 t⁴ + a_5 t⁵) exp(-x²),
+//! ```
+//!
+//! and `erf(-x) = -erf(x)`. The absolute error is below `1.5e-7`. [`cdf_as26`] is
+//! `(1 + erf(x / sqrt(2))) / 2`, with the same bound. [`quantile_acklam`] is the
+//! rational approximation of Acklam \[4\], a ratio of degree 5 and 5 polynomials in
+//! `q²` times `q` for `0.02425 <= p <= 0.97575`, and a ratio in
+//! `sqrt(-2 ln p)` for the tails, mirrored in the upper tail. Its relative error is
+//! below `1.2e-9`. The tests check both bounds against [`cdf`] and [`quantile`].
+//!
+//! # Truncated and folded quantiles
+//!
+//! [`truncated_quantile`] inverts the distribution function of `Z` given
+//! `lower <= Z <= upper`:
+//!
+//! ```text
+//! z = Φ^-1( Φ(lower) + p (Φ(upper) - Φ(lower)) ),
+//! ```
+//!
+//! clamped to `[lower, upper]`. An interval with `lower > 0` is mirrored to
+//! `(-upper, -lower)` with `1 - p`, and the answer is negated. The lower tail of
+//! the normal is where [`cdf`] keeps its relative precision, so mirroring keeps
+//! intervals far out in either tail resolvable. It returns `None` for `p` outside
+//! `[0, 1]`, for `lower >= upper`, and when `Φ(upper) <= Φ(lower)` in floating
+//! point.
+//!
+//! [`folded_quantile`] is the quantile of `|Z + mu|`. Its distribution function is
+//!
+//! ```text
+//! F(q) = Φ(q - |mu|) + Φ(q + |mu|) - 1,    q >= 0.
+//! ```
+//!
+//! The code brackets the root in `[0, |mu| + 8]`, doubling the upper end until
+//! `F` reaches `p`, and bisects until the midpoint equals an endpoint, which is the
+//! precision of an `f64`. The sign of `mu` does not matter. It returns `None` for
+//! `p` outside `[0, 1)` and for a NaN `mu`.
+//!
+//! # References
+//!
+//! 1. Cody WJ. Rational Chebyshev approximations for the error function.
+//!    Mathematics of Computation 1969;23:631-637.
+//! 2. Wichura MJ. Algorithm AS 241: the percentage points of the normal
+//!    distribution. Journal of the Royal Statistical Society, Series C (Applied
+//!    Statistics) 1988;37:477-484.
+//! 3. Abramowitz M, Stegun IA, editors. Handbook of Mathematical Functions with
+//!    Formulas, Graphs, and Mathematical Tables. National Bureau of Standards
+//!    Applied Mathematics Series 55. Washington, DC: US Government Printing
+//!    Office; 1964. Formula 7.1.26.
+//! 4. Acklam PJ. An algorithm for computing the inverse normal cumulative
+//!    distribution function. Web note; 2003.
 
 #![expect(
     clippy::excessive_precision,

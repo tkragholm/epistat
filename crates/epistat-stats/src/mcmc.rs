@@ -1,4 +1,61 @@
 //! Convergence diagnostics for Markov chain Monte Carlo draws.
+//!
+//! The functions compute the autocorrelation of one chain, the effective sample
+//! size of one chain, and the split potential scale reduction factor of several
+//! chains \[1\].
+//!
+//! # Autocorrelation
+//!
+//! For a chain `x_1, ..., x_n` with mean `m`, [`autocorrelation`] at lag `k` is
+//!
+//! ```text
+//! rho_k = sum_{t=1}^{n-k} (x_t - m)(x_{t+k} - m)  /  sum_{t=1}^{n} (x_t - m)²
+//! ```
+//!
+//! The denominator is the lag 0 sum of squares, not scaled by `n - k`, so the
+//! estimate is biased towards 0 at large lags. It is `None` when `k >= n` or the
+//! chain is constant.
+//!
+//! # Effective sample size
+//!
+//! [`effective_sample_size`] is
+//!
+//! ```text
+//! ESS = n / max(1, 1 + 2 sum_{k=1}^{K} rho_k)
+//! ```
+//!
+//! where `K + 1` is the first lag with `rho <= 0`, or the sum runs to lag `n - 1`
+//! if none is. The truncation at the first non-positive value keeps the noisy
+//! tail of the autocorrelation out of the sum. The `max` keeps the result at or
+//! below `n`, so a negatively correlated chain does not report more draws than it
+//! has. A constant chain, and a chain of fewer than two draws, count as `n`
+//! independent draws.
+//!
+//! # Split R-hat
+//!
+//! [`split_rhat`] cuts each chain into a first and a second half of length
+//! `n = floor(shortest / 2)`, where `shortest` is the length of the shortest chain.
+//! Longer chains are truncated to `2 n` draws. Over the `m` half-chains with
+//! means `mean_j` and variances `s_j²` (divisor `n - 1`), with grand mean
+//! `mean`:
+//!
+//! ```text
+//! B = n / (m - 1) * sum_j (mean_j - mean)²        (between)
+//! W = (1 / m) * sum_j s_j²                         (within)
+//! var_plus = (n - 1)/n * W + B / n
+//! R-hat = sqrt(var_plus / W)
+//! ```
+//!
+//! The result is at least 1. Splitting makes the statistic react to a trend within
+//! a chain as well as to disagreement between chains. The means and variances use
+//! Welford's update. The result is `None` for fewer than two chains, fewer than
+//! four draws in the shortest chain, or a within-chain variance that is zero or
+//! not finite.
+//!
+//! # References
+//!
+//! 1. Gelman A, Carlin JB, Stern HS, Dunson DB, Vehtari A, Rubin DB. Bayesian
+//!    Data Analysis. 3rd ed. Boca Raton: CRC Press; 2013.
 
 /// The lag-`lag` autocorrelation of a chain, with the lag-0 sum of squares in
 /// the denominator. `None` when the lag is not shorter than the chain or the
