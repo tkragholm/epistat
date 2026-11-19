@@ -1,0 +1,24 @@
+[package]
+name = "epistat-glm"
+description = "Generalised linear models fitted by IRLS as R's glm.fit does, with results that do not depend on the number of threads"
+keywords = ["statistics", "glm", "regression", "irls", "tweedie"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+epistat-linalg = { path = "../epistat-linalg" }
+faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
+thiserror = "2"
+
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1.0.200", features = ["derive"] }
+
+[lints]
+workspace = true
