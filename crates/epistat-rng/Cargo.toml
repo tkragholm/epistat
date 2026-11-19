@@ -3,13 +3,23 @@ name = "epistat-rng"
 description = "SplitMix64 streams and bootstrap draws that reproduce across threads, platforms and languages"
 keywords = ["random", "splitmix64", "bootstrap", "reproducible", "statistics"]
 categories = ["algorithms", "science"]
-version.workspace = true
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
+
+[features]
+# Lets `rand` and `rand_distr` draw from a `Stream` through rand_core's traits.
+rand = ["dep:rand_core"]
+
+[dependencies]
+rand_core = { version = "0.10", optional = true }
+
+[dev-dependencies]
+rand_core = "0.10"
 
 [lints]
 workspace = true

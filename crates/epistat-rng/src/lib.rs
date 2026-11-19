@@ -182,6 +182,53 @@ impl Stream {
     }
 }
 
+/// With the `rand` feature, a [`Stream`] is a `rand_core` generator, so the
+/// distributions of `rand` and `rand_distr` can draw from it. `next_u64` is the
+/// stream's own output, `next_u32` its upper 32 bits, and bytes are filled
+/// eight at a time from successive outputs, little-endian.
+/// `SeedableRng::seed_from_u64(s)` is [`Stream::seeded`]`(s)`, so a seed gives
+/// the same stream either way.
+#[cfg(feature = "rand")]
+mod rand_impl {
+    use core::convert::Infallible;
+
+    use rand_core::{SeedableRng, TryRng};
+
+    use super::Stream;
+
+    impl TryRng for Stream {
+        type Error = Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Infallible> {
+            Ok((self.next_u64() >> 32) as u32)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Infallible> {
+            Ok(self.next_u64())
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Infallible> {
+            for chunk in dst.chunks_mut(8) {
+                let bytes = self.next_u64().to_le_bytes();
+                chunk.copy_from_slice(&bytes[..chunk.len()]);
+            }
+            Ok(())
+        }
+    }
+
+    impl SeedableRng for Stream {
+        type Seed = [u8; 8];
+
+        fn from_seed(seed: [u8; 8]) -> Self {
+            Self::seeded(u64::from_le_bytes(seed))
+        }
+
+        fn seed_from_u64(state: u64) -> Self {
+            Self::seeded(state)
+        }
+    }
+}
+
 /// How often each of `n` units is drawn in one resample of `n` with
 /// replacement, as one count per unit in index order.
 #[must_use]
@@ -235,6 +282,25 @@ pub fn rademacher_sum(values: &[f64], stream: &mut Stream) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn the_rand_core_view_is_the_same_stream() {
+        use rand_core::{Rng, SeedableRng};
+        let mut via_rand = Stream::seed_from_u64(5);
+        let mut direct = Stream::seeded(5);
+        assert_eq!(Rng::next_u64(&mut via_rand), direct.next_u64());
+        assert_eq!(
+            Rng::next_u32(&mut via_rand),
+            u32::try_from(direct.next_u64() >> 32).unwrap()
+        );
+        let mut bytes = [0u8; 12];
+        via_rand.fill_bytes(&mut bytes);
+        let first = direct.next_u64().to_le_bytes();
+        let second = direct.next_u64().to_le_bytes();
+        assert_eq!(&bytes[..8], &first);
+        assert_eq!(&bytes[8..], &second[..4]);
+    }
 
     #[test]
     fn seed_zero_gives_the_published_outputs() {
