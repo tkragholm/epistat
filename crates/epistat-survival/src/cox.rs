@@ -1,10 +1,13 @@
 //! Cox regression on one covariate, with Breslow or Efron ties, delayed entry,
 //! strata, case weights and a cluster-robust variance.
 //!
-//! The fit is a single covariate. A general design matrix is later work, and
-//! the function and type names say so: [`fit_cox_single_covariate`] and
+//! This module fits one covariate with [`fit_cox_single_covariate`] and
 //! [`CoxData`]. With one covariate the score and the information are scalars,
-//! which keeps the Newton step and the sweep over the risk sets simple.
+//! which keeps the Newton step and the sweep over the risk sets simple. A design
+//! matrix is fitted by [`fit_cox`] and [`CoxDesign`], which follow
+//! `survival::coxph` in their iteration and are documented in the
+//! [`design`] module. The two stop by different rules, so a fit of one column
+//! by either can differ in the last digits.
 //!
 //! # Algorithm
 //!
@@ -105,6 +108,9 @@ use epistat_stats::sum::compensated;
 
 use crate::check::{check_lengths, check_row_count};
 use crate::error::Result;
+
+pub mod design;
+pub use design::{CoxDesign, CoxModelFit, fit_cox};
 
 /// Largest number of Newton-Raphson steps.
 const MAX_ITERATIONS: u32 = 50;
@@ -526,8 +532,8 @@ impl Stratum {
 /// Newton-Raphson on the weighted partial likelihood of one covariate, Breslow
 /// or Efron.
 ///
-/// A general design matrix is later work. See the module documentation for the
-/// method, the robust variance and when the fit is degenerate.
+/// See the module documentation for the method, the robust variance and when
+/// the fit is degenerate. [`fit_cox`] takes a design matrix.
 ///
 /// # Errors
 ///

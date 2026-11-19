@@ -1,7 +1,7 @@
 # epistat-survival
 
-Cox regression on one covariate (Breslow and Efron ties, delayed entry, strata,
-cluster-robust variance), the Fine-Gray model, Aalen-Johansen cumulative
+Cox regression on one covariate or a design matrix (Breslow and Efron ties,
+delayed entry, strata, case weights, cluster-robust variance), the Fine-Gray model, Aalen-Johansen cumulative
 incidence with a clustered bootstrap, multi-state occupation probabilities and
 the Titman-Putter test of the Markov property.
 

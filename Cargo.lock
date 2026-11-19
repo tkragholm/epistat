@@ -248,18 +248,21 @@ dependencies = [
 
 [[package]]
 name = "epistat-stats"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "epistat-testkit",
 ]
 
 [[package]]
 name = "epistat-survival"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "epistat-rng",
  "epistat-stats",
+ "epistat-testkit",
+ "faer",
  "rayon",
+ "serde",
  "thiserror 2.0.21",
 ]
 
