@@ -2,7 +2,9 @@
 
 Sample quantiles (R's types 1 and 7), the normal distribution function and
 its inverse, floating-point sums in the order Python computes them, and
-log-sum-exp, softmax and information criteria.
+log-sum-exp, softmax, information criteria and covariate balance statistics
+(standardised mean differences, variance ratios, eCDF and eQQ distances,
+Cramér's V).
 
 The quantiles and the normal distribution function give the same doubles as
 R; the normal quantile is within two units in the last place of R's `qnorm`.
