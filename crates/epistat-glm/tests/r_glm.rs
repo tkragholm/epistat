@@ -155,6 +155,7 @@ struct AliasedFit {
     rank: usize,
     deviance: f64,
     iterations: usize,
+    gram_condition: f64,
 }
 
 /// glm() on designs with an exactly aliased column, where R reports NA, and
@@ -194,17 +195,12 @@ fn aliased_columns_are_none_as_in_r() {
         let present = |values: &[Option<f64>]| values.iter().flatten().copied().collect::<Vec<_>>();
         let (beta, se) = (present(&fit.coefficients), present(&fit.standard_errors()));
         let (beta_r, se_r) = (present(&r.coefficients), present(&r.se));
-        // Normal equations square the condition number, so the nearly aliased
-        // designs are compared at a tolerance that grows with it. At a
-        // perturbation of 1e-6 the Gram matrix has a condition number near
-        // 1e13 and the coefficients, of order 1e4, agree to three digits.
-        let rel = if r.name.starts_with("near_1e_6") {
-            5e-3
-        } else if r.name.starts_with("near") {
-            1e-7
-        } else {
-            1e-10
-        };
+        // The fit solves the normal equations, R a QR of sqrt(W) X, so the two
+        // can differ by about the condition number of X'WX times the unit
+        // roundoff, which the reference records. The bound grows from about
+        // 4e-15 for the exactly aliased designs to 2e-3 at a perturbation of
+        // 1e-6, and the CPU's choice of kernels moves results within it.
+        let rel = (8.0 * r.gram_condition * f64::EPSILON).max(1e-13);
         eprintln!(
             "{}: worst relative deviation, coefficients {:e}, se {:e}, deviance {:e}",
             r.name,

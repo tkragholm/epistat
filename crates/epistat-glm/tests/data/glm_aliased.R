@@ -2,6 +2,9 @@
 # glm(). R reports NA for the coefficient and the standard error of an aliased
 # column, which it chooses by a pivoted QR with tolerance
 # min(1e-7, epsilon / 1000), and fits the others.
+# gram_condition is the 2-norm condition number of X'WX over the fitted columns
+# at the final working weights, which bounds how far a fit by the normal
+# equations can differ from R's QR.
 # Run: Rscript glm_aliased.R > glm_aliased.json
 suppressMessages(library(jsonlite))
 set.seed(20261119)
@@ -39,7 +42,9 @@ for (name in names(designs)) {
     fits[[length(fits) + 1]] <- list(
       name = paste(name, fam, sep = "_"), family = fam, x = unname(x), y = y,
       coefficients = unname(coef(fit)), se = se, rank = fit$rank,
-      deviance = fit$deviance, iterations = fit$iter)
+      deviance = fit$deviance, iterations = fit$iter,
+      gram_condition = kappa(crossprod(sqrt(fit$weights) * x[, !is.na(coef(fit)), drop = FALSE]),
+                             exact = TRUE))
   }
 }
 cat(toJSON(list(fits = fits), digits = NA, auto_unbox = TRUE, na = "null"))
