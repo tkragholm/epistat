@@ -148,16 +148,11 @@ pub struct Attempt {
 /// When `attempts` is empty.
 #[must_use]
 pub fn best_attempt(attempts: Vec<Attempt>) -> Attempt {
-    let mut best = 0usize;
-    for (attempt, candidate) in attempts.iter().enumerate() {
-        if candidate.objective < attempts[best].objective {
-            best = attempt;
-        }
-    }
-    attempts
-        .into_iter()
-        .nth(best)
-        .expect("at least one restart is always run")
+    epistat_optim::multistart::select(attempts.into_iter().map(Some), |candidate, incumbent| {
+        candidate.objective < incumbent.objective
+    })
+    .map(|(_, attempt)| attempt)
+    .expect("at least one restart is always run")
 }
 
 #[cfg(test)]

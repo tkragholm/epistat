@@ -232,14 +232,10 @@ impl CondensedMatrix {
             )));
         }
 
-        let attempts: Vec<Attempt> = (0..restarts.max(1))
-            .into_par_iter()
-            .map(|attempt| {
-                let mut stream =
-                    Stream::seeded(seed.wrapping_add((attempt as u64).wrapping_mul(7919)));
-                self.one_fit(offsets, weights, k, max_iterations, &mut stream)
-            })
-            .collect();
+        let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.max(1), |attempt| {
+            let mut stream = Stream::seeded(seed.wrapping_add((attempt as u64).wrapping_mul(7919)));
+            self.one_fit(offsets, weights, k, max_iterations, &mut stream)
+        });
         Ok(best_attempt(attempts))
     }
 

@@ -215,6 +215,9 @@ dependencies = [
 [[package]]
 name = "epistat-optim"
 version = "0.1.0"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "epistat-register"
@@ -236,6 +239,7 @@ dependencies = [
 name = "epistat-sequences"
 version = "0.1.0"
 dependencies = [
+ "epistat-optim",
  "epistat-rng",
  "epistat-stats",
  "rayon",
