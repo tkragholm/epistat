@@ -218,7 +218,7 @@ mod tests {
     fn resample_counts_add_up() {
         let counts = resample_counts(1_000, 4);
         assert_eq!(counts.iter().sum::<u32>(), 1_000);
-        assert!(resample_counts(0, 4).is_empty());
+        assert_eq!(resample_counts(0, 4), Vec::<u32>::new());
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         assert!(weights.iter().all(|&w| w > 0.0 && w.is_finite()));
         assert!((weights.iter().sum::<f64>() - 500.0).abs() < 1e-9);
         dirichlet_weights(0, 11, &mut weights);
-        assert!(weights.is_empty());
+        assert_eq!(weights, Vec::<f64>::new());
     }
 
     #[test]
