@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-glm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "epistat-linalg",
  "epistat-testkit",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-inference"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "epistat-linalg",
  "epistat-rng",
@@ -198,6 +198,8 @@ dependencies = [
  "epistat-testkit",
  "faer",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -221,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-register"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -230,8 +232,9 @@ dependencies = [
 
 [[package]]
 name = "epistat-rng"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
+ "epistat-testkit",
  "rand_core",
 ]
 
@@ -248,14 +251,14 @@ dependencies = [
 
 [[package]]
 name = "epistat-stats"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "epistat-testkit",
 ]
 
 [[package]]
 name = "epistat-survival"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "epistat-rng",
  "epistat-stats",

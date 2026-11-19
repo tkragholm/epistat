@@ -7,9 +7,16 @@
 //! and [`Link`]. The fit is checked against R's `glm()`, including the `NA` that
 //! R reports for an aliased column, which is `None` here. The [`fit`] module
 //! explains the method, with its formulas, edge cases and references.
+//!
+//! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
+//! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
+//! variance function and the classic Park test.
 
+pub mod elastic_net;
 mod family;
 pub mod fit;
+pub mod park;
 
+pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};
 pub use family::{Family, Link};
 pub use fit::{Fit, Glm, GlmError};
