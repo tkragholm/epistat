@@ -64,7 +64,6 @@ impl Number {
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp, reason = "the tests compare exact values")]
 mod tests {
     use super::*;
 
@@ -84,8 +83,8 @@ mod tests {
         assert!(parsed.estimate.is_nan());
         assert_eq!(parsed.bounds[0].to_bits(), 1.5f64.to_bits());
         assert!(parsed.bounds[1].is_nan());
-        assert_eq!(parsed.bounds[2], f64::INFINITY);
-        assert_eq!(parsed.bounds[3], f64::NEG_INFINITY);
+        assert_eq!(parsed.bounds[2].to_bits(), f64::INFINITY.to_bits());
+        assert_eq!(parsed.bounds[3].to_bits(), f64::NEG_INFINITY.to_bits());
         assert!(serde_json::from_str::<Reference>(r#"{"estimate": "x", "bounds": []}"#).is_err());
     }
 

@@ -306,7 +306,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp, reason = "the tests compare exact values")]
     fn rademacher_signs_come_from_the_bits() {
         let values = vec![1.0; 70];
         let mut stream = Stream::seeded(8);
@@ -316,7 +315,10 @@ mod tests {
         let first = reference.next_u64();
         let second = reference.next_u64() & ((1 << 6) - 1);
         let plus = first.count_ones() + second.count_ones();
-        assert_eq!(sum, f64::from(plus) - f64::from(70 - plus));
+        assert_eq!(
+            sum.to_bits(),
+            (f64::from(plus) - f64::from(70 - plus)).to_bits()
+        );
         assert_eq!(stream, reference);
     }
 }

@@ -219,7 +219,6 @@ fn check_alpha(alpha: f64) -> Result<(), InferenceError> {
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp, reason = "the tests compare exact values")]
 mod tests {
     use super::*;
 
@@ -257,7 +256,7 @@ mod tests {
     fn the_normal_interval() {
         let (lower, upper) = normal(1.0, 0.5, 0.05).unwrap();
         assert!((upper - 1.0 - 1.959_963_984_540_054 * 0.5).abs() < 1e-15);
-        assert_eq!(lower + upper, 2.0);
+        assert_eq!((lower + upper).to_bits(), 2.0_f64.to_bits());
         assert_eq!(normal(0.0, 1.0, 0.0), Err(InferenceError::Alpha(0.0)));
     }
 }

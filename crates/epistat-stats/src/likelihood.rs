@@ -79,7 +79,6 @@ pub fn sabic(log_likelihood: f64, parameters: usize, observations: usize) -> f64
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp, reason = "the tests compare exact values")]
 mod tests {
     use super::*;
 
@@ -87,9 +86,18 @@ mod tests {
     fn log_sum_exp_does_not_overflow() {
         assert!((log_sum_exp(&[1000.0, 1000.0]) - (1000.0 + 2f64.ln())).abs() < 1e-12);
         assert!((log_sum_exp(&[0.0, 1.0f64.ln()]) - 2f64.ln()).abs() < 1e-15);
-        assert_eq!(log_sum_exp(&[]), f64::NEG_INFINITY);
-        assert_eq!(log_sum_exp(&[f64::NEG_INFINITY; 2]), f64::NEG_INFINITY);
-        assert_eq!(log_sum_exp(&[1.0, f64::INFINITY]), f64::INFINITY);
+        assert_eq!(
+            f64::to_bits(log_sum_exp(&[])),
+            f64::to_bits(f64::NEG_INFINITY)
+        );
+        assert_eq!(
+            f64::to_bits(log_sum_exp(&[f64::NEG_INFINITY; 2])),
+            f64::to_bits(f64::NEG_INFINITY)
+        );
+        assert_eq!(
+            f64::to_bits(log_sum_exp(&[1.0, f64::INFINITY])),
+            f64::to_bits(f64::INFINITY)
+        );
     }
 
     #[test]
