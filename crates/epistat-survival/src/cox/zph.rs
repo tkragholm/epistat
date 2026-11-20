@@ -87,6 +87,7 @@ use super::design::{ChiSquareTest, CoxModelFit, CoxOptions};
 use super::residuals::{Prepared, Sums, prepare, schoenfeld_rows};
 use crate::check::check_lengths;
 use crate::error::{Error, Result};
+use crate::step::Steps;
 use crate::surv::SurvData;
 
 /// The transform of time that the coefficients are tested against.
@@ -169,9 +170,8 @@ enum Transformer {
     Identity,
     Log,
     Rank(Vec<f64>),
-    /// The event times in ascending order and the survival before each: one
-    /// more entry than times, the first 1.
-    Km(Vec<f64>, Vec<f64>),
+    /// The Kaplan-Meier curve over the event times, read just before a time.
+    Km(Steps),
 }
 
 impl Transformer {
@@ -207,7 +207,7 @@ impl Transformer {
                 starts.sort_unstable_by(f64::total_cmp);
                 events.sort_unstable_by(f64::total_cmp);
                 let mut times = Vec::new();
-                let mut before = vec![1.0f64];
+                let mut survival = Vec::new();
                 let mut i = 0;
                 while i < events.len() {
                     let t = events[i];
@@ -219,12 +219,16 @@ impl Transformer {
                     let at_risk_stop = (stops.len() - stops.partition_point(|&s| s < t)) as f64;
                     let entered_later = (starts.len() - starts.partition_point(|&a| a < t)) as f64;
                     let at_risk = at_risk_stop - entered_later;
-                    let last = *before.last().unwrap_or(&1.0);
+                    let last = survival.last().copied().unwrap_or(1.0);
                     times.push(t);
-                    before.push(last * ((at_risk - deaths) / at_risk));
+                    survival.push(last * ((at_risk - deaths) / at_risk));
                     i = j;
                 }
-                Self::Km(times, before)
+                Self::Km(Steps {
+                    time: times,
+                    first: 1.0,
+                    value: survival,
+                })
             }
         }
     }
@@ -238,7 +242,7 @@ impl Transformer {
                 let through = sorted.partition_point(|&s| s <= t) as f64;
                 (below + through + 1.0) / 2.0
             }
-            Self::Km(times, before) => 1.0 - before[times.partition_point(|&s| s < t)],
+            Self::Km(curve) => 1.0 - curve.before(t),
         }
     }
 }
