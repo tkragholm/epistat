@@ -11,7 +11,13 @@
 //! To record the table again after an intended change, run with
 //! `GOLDEN_RECORD=1 cargo test --test golden_fine_gray -- --nocapture` and
 //! paste the printed lines into `EXPECTED`.
+//!
+//! The bits depend on the platform's `ln` and `exp`, which come from its maths
+//! library, so the test runs only on the target it was recorded on, aarch64
+//! macOS. CI's macOS runner is that target. Thread-count independence, which
+//! does not depend on the platform, is checked everywhere by the thread tests.
 
+#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     deprecated,
     reason = "the test pins the deprecated slice-based functions, which stay as wrappers"

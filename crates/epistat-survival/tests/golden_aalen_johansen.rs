@@ -8,7 +8,13 @@
 //! input. The bootstrap runs in both draw modes over overlapping cells, a cell
 //! with an empty arm, a cell with no rows, zero weights and ages before the
 //! first and after the last event time.
+//!
+//! The bits depend on the platform's `ln` and `exp`, which come from its maths
+//! library, so the test runs only on the target it was recorded on, aarch64
+//! macOS. CI's macOS runner is that target. Thread-count independence, which
+//! does not depend on the platform, is checked everywhere by the thread tests.
 
+#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
