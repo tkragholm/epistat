@@ -7,6 +7,32 @@
 //! on one covariate, like the Cox fit, and a general design matrix is later
 //! work.
 //!
+//! # Input
+//!
+//! [`rows`], [`risk_rows`] and [`fit`] take a [`SurvData`]. Its status is the
+//! cause code, with 0 for censoring, the cause of interest is a code in
+//! `1..=n_codes`, and every other nonzero code is a competing event. Its
+//! stop is the time, its weight the case weight and, for [`fit`], its cluster
+//! the cluster of the robust variance, as the dense codes the type holds. The
+//! model follows every individual from time 0, so data with a start column is
+//! an error.
+//!
+//! The tie rule of [`FineGrayOptions::timefix`] and [`RowsOptions::timefix`]
+//! is applied to the times first. It defaults to the rule of
+//! `survival::aeqSurv`, which `finegray` and `coxph` apply, so times that
+//! differ by rounding error are one time. Integer times are unaffected.
+//!
+//! Rows of weight 0 are individuals who do not take part. They are left out
+//! before the censoring distribution is estimated, so they have no rows and no
+//! say in `G` or in the last time the rows run to. The rows keep the row
+//! numbers of the data. The fit reports the rows of the form it used in
+//! `n_rows`, after the Cox fit has dropped rows of weight 0.
+//!
+//! [`fine_gray_fit`] and [`FineGrayData`] are deprecated. They take slices,
+//! compare times exactly and keep every row, including those of weight 0, in
+//! the censoring distribution, so their results are those of release 0.2. They
+//! share the implementation of the new functions.
+//!
 //! # Algorithm
 //!
 //! Individual `i` has a time `x_i`, a cause code `c_i` with 0 for censoring, a
@@ -29,7 +55,7 @@
 //! tied failure to the risk set and change every weight derived from `G`.
 //! `G(t-)` is `G` just before `t`, which is 1 before the first censoring.
 //!
-//! The rows are counting-process intervals. [`FineGrayData::expand`] writes one
+//! The rows are counting-process intervals. [`rows`] writes one
 //! row per individual and interval, which is the form `survival::finegray` in R
 //! produces. Individuals with the cause of interest or censored have the single
 //! row `(0, x_i]`. An individual with a competing event has rows at full weight
@@ -41,14 +67,14 @@
 //! gives weights above 1 when the event falls after censoring has begun. Rows of
 //! weight zero are left out.
 //!
-//! [`FineGrayData::risk_rows`] sums the competing-event rows that share an
+//! [`risk_rows`] sums the competing-event rows that share an
 //! interval and a covariate value. These rows all end without an event, so
 //! they enter the partial likelihood only through weighted sums, and adding
 //! them is exact. The weight on the interval opening at censoring time `c_j`
 //! factorises as `G(c_j) w_i / G(x_i-)`, so one prefix sum of `w_i / G(x_i-)`
 //! over the event times, per covariate level, gives every interval.
-//! [`fine_gray_fit`] fits on these collapsed rows, or on the expanded rows when
-//! cluster codes are given, because the robust variance needs each individual's
+//! [`fit`] fits on these collapsed rows, or on the expanded rows when the data
+//! has clusters, because the robust variance needs each individual's
 //! own rows.
 //!
 //! # Agreement with R
@@ -58,9 +84,9 @@
 //! individual as cluster, and with `cmprsk::crr`.
 //!
 //! - `survival::finegray` writes no row whose interval holds no event time of
-//!   the cause, because such a row enters no risk set. `expand` writes every
-//!   interval between censoring times. Every row of R is a row of `expand`
-//!   with the same start, stop, status and weight, and every row of `expand`
+//!   the cause, because such a row enters no risk set. [`rows`] writes every
+//!   interval between censoring times. Every row of R is a row of [`rows`]
+//!   with the same start, stop, status and weight, and every row of [`rows`]
 //!   that R leaves out holds no event time of the cause.
 //! - Case weights enter the censoring distribution here, which is then the
 //!   weighted Kaplan-Meier estimate, as if each individual were repeated
@@ -83,7 +109,7 @@
 //!
 //! Cause 0 is censoring and is refused as a cause of interest. An individual
 //! whose `G(x_i-)` is zero contributes no weight after the event. The estimates
-//! of `expand` and `risk_rows` are the same, and `n_rows` of the fit counts the
+//! of [`rows`] and [`risk_rows`] are the same, and `n_rows` of the fit counts the
 //! rows of the form used.
 //!
 //! # References
@@ -103,12 +129,15 @@
     reason = "the entry points check that the row count fits in u32"
 )]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::check::{check_lengths, check_row_count};
+use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::cox::{CoxData, CoxFit, Ties, fit_cox_single_covariate};
 use crate::error::{Error, Result};
+use crate::surv::SurvData;
+use crate::timefix::TimeFix;
 
 /// The Kaplan-Meier estimate of the censoring distribution `G`, as a step
 /// function.
@@ -202,9 +231,8 @@ impl CensoringCurve {
 }
 
 /// Counting-process rows for a Cox fit. `row` is an input row: the individual
-/// for [`FineGrayData::expand`], and for [`FineGrayData::risk_rows`] the
-/// individual or any individual with the covariate value the collapsed row
-/// carries.
+/// for [`rows`], and for [`risk_rows`] the individual or any individual with
+/// the covariate value the collapsed row carries.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Rows {
     /// The input row each row comes from.
@@ -235,7 +263,11 @@ type TiedEvent = (f64, f64, f64);
 
 /// What every Fine-Gray construction starts from: the data, the cause of
 /// interest and the Kaplan-Meier estimate of the censoring distribution.
-pub struct FineGrayData<'a> {
+///
+/// The columns are slices of the individuals that take part, which are all of
+/// them for the deprecated functions and the rows of positive weight for the
+/// [`SurvData`] entry points. Both go through this one implementation.
+struct Expansion<'a> {
     time: &'a [f64],
     event: &'a [i32],
     weight: &'a [f64],
@@ -244,14 +276,14 @@ pub struct FineGrayData<'a> {
     horizon: f64,
 }
 
-impl<'a> FineGrayData<'a> {
+impl<'a> Expansion<'a> {
     /// The data of one analysis: one `time`, cause code `event` (0 for
     /// censoring) and `weight` per individual, and the `cause` of interest.
     ///
     /// # Errors
     ///
     /// [`Error::Input`] when the slices differ in length or `cause` is 0.
-    pub fn new(time: &'a [f64], event: &'a [i32], weight: &'a [f64], cause: i32) -> Result<Self> {
+    fn new(time: &'a [f64], event: &'a [i32], weight: &'a [f64], cause: i32) -> Result<Self> {
         check_lengths(&[
             ("time", time.len()),
             ("event", event.len()),
@@ -301,8 +333,7 @@ impl<'a> FineGrayData<'a> {
     /// censoring, as in `survival::finegray`. `G` is read at `max(start, x)`
     /// because `G(start)` alone gives weights above 1 when the event falls
     /// after censoring has begun. Rows of weight zero are left out.
-    #[must_use]
-    pub fn expand(&self) -> Rows {
+    fn expand(&self) -> Rows {
         let mut rows = Rows::default();
         for i in 0..self.time.len() {
             let (t, w) = (self.time[i], self.weight[i]);
@@ -349,7 +380,7 @@ impl<'a> FineGrayData<'a> {
     /// # Errors
     ///
     /// [`Error::Input`] when `level` does not hold one code per individual.
-    pub fn risk_rows(&self, level: &[u32]) -> Result<Rows> {
+    fn risk_rows(&self, level: &[u32]) -> Result<Rows> {
         check_lengths(&[("time", self.time.len()), ("level", level.len())])?;
         let mut rows = Rows::default();
         self.direct_rows(&mut rows);
@@ -441,39 +472,21 @@ pub fn float_codes(values: &[f64]) -> Vec<u32> {
         .collect()
 }
 
-/// Fit the subdistribution log hazard ratio of `cause` for one covariate.
+/// Fit the weighted Cox model with delayed entry to the rows of `expansion`.
 ///
-/// Builds the collapsed rows ([`FineGrayData::risk_rows`]) and fits the weighted
-/// Cox model with delayed entry on them. `n_rows` in the result counts the
-/// collapsed rows. Every individual is at risk from time 0.
-///
-/// With `cluster`, one code per individual, the fit is on the uncollapsed rows
-/// ([`FineGrayData::expand`]), because the robust variance needs each
-/// individual's rows. The estimate is the same and `n_rows` counts the expanded
-/// rows.
-///
-/// # Errors
-///
-/// [`Error::Input`] when the slices differ in length or `cause` is 0.
-pub fn fine_gray_fit(
-    time: &[f64],
-    event: &[i32],
-    weight: &[f64],
+/// `x` and `cluster` hold one value per individual of the expansion. Without
+/// `cluster` the fit is on the collapsed rows, and with it on the expanded
+/// rows, because the robust variance needs each individual's own rows.
+fn fit_expansion(
+    expansion: &Expansion<'_>,
     x: &[f64],
-    cause: i32,
     ties: Ties,
     cluster: Option<&[u32]>,
 ) -> Result<CoxFit> {
-    check_lengths(&[
-        ("time", time.len()),
-        ("x", x.len()),
-        ("cluster", cluster.map_or(time.len(), <[u32]>::len)),
-    ])?;
-    let data = FineGrayData::new(time, event, weight, cause)?;
     let rows = if cluster.is_some() {
-        data.expand()
+        expansion.expand()
     } else {
-        data.risk_rows(&float_codes(x))?
+        expansion.risk_rows(&float_codes(x))?
     };
     let row_x: Vec<f64> = rows.row.iter().map(|&i| x[i as usize]).collect();
     let row_cluster: Option<Vec<u32>> =
@@ -492,10 +505,251 @@ pub fn fine_gray_fit(
     })
 }
 
+/// The options of [`rows`] and [`risk_rows`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RowsOptions {
+    /// How times that differ by rounding error are treated. The default is the
+    /// rule of `survival::aeqSurv`, which `finegray` applies.
+    pub timefix: TimeFix,
+}
+
+/// The options of [`fit`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FineGrayOptions {
+    /// The cause of interest, a status code in `1..=n_codes` of the data.
+    pub cause: u32,
+    /// How tied events enter the partial likelihood.
+    pub ties: Ties,
+    /// How times that differ by rounding error are treated. The default is the
+    /// rule of `survival::aeqSurv`, which `coxph` applies.
+    pub timefix: TimeFix,
+}
+
+impl FineGrayOptions {
+    /// The options for `cause` with the defaults of `coxph`: Efron's
+    /// approximation for ties and the `aeqSurv` rule for times.
+    #[must_use]
+    pub fn new(cause: u32) -> Self {
+        Self {
+            cause,
+            ties: Ties::Efron,
+            timefix: TimeFix::default(),
+        }
+    }
+}
+
+/// `values` of the used individuals, or all of them when `index` is `None`.
+fn gather<'a, T: Copy>(values: &'a [T], index: Option<&[u32]>) -> Cow<'a, [T]> {
+    match index {
+        None => Cow::Borrowed(values),
+        Some(index) => Cow::Owned(index.iter().map(|&i| values[i as usize]).collect()),
+    }
+}
+
+/// Run `body` on the Fine-Gray construction for `data` and `cause`, with the
+/// tie rule applied and the rows of weight zero left out.
+///
+/// `body` also gets the positions of the used rows in `data`, `None` when all
+/// are used, to gather its own columns by.
+fn with_expansion<T>(
+    data: &SurvData<'_>,
+    cause: u32,
+    timefix: TimeFix,
+    body: impl FnOnce(&Expansion<'_>, Option<&[u32]>) -> Result<T>,
+) -> Result<T> {
+    if data.followup()?.start().is_some() {
+        return Err(Error::input(
+            "Fine-Gray follows every individual from time 0, so data with a start column is not supported",
+        ));
+    }
+    let code = i32::try_from(data.cause(cause)?.code())
+        .expect("SurvData::cause checked that the code is a status");
+    let fixed = data.clone().with_timefix(timefix)?;
+    let surv = fixed.followup()?;
+    let index = fixed.used_index();
+    let time = gather(surv.stop(), index.as_deref());
+    let event = gather(surv.status(), index.as_deref());
+    let weight: Cow<'_, [f64]> = match fixed.weight() {
+        None => Cow::Owned(vec![1.0; fixed.n_rows()]),
+        Some(weight) => gather(weight, index.as_deref()),
+    };
+    let expansion = Expansion::new(&time, &event, &weight, code)?;
+    body(&expansion, index.as_deref())
+}
+
+/// Point the rows at the rows of the data they came from.
+fn original_rows(mut rows: Rows, index: Option<&[u32]>) -> Rows {
+    if let Some(index) = index {
+        for row in &mut rows.row {
+            *row = index[*row as usize];
+        }
+    }
+    rows
+}
+
+/// The counting-process rows of the Fine-Gray model for `cause`, one row per
+/// individual and interval, as `survival::finegray` writes them.
+///
+/// The cause is a status code of `data`, a code other than 0 and another
+/// cause is a competing event. The tie rule of `opts` is applied to the times
+/// first, and rows of weight 0 are left out of the data, of the censoring
+/// distribution and of the rows. [`Rows::row`] is the row of `data` each row
+/// comes from.
+///
+/// # Errors
+///
+/// [`Error::Input`] when `data` has a start column, when `cause` is not a
+/// status code of `data`, or as for [`SurvData::with_timefix`].
+pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<Rows> {
+    with_expansion(data, cause, opts.timefix, |expansion, index| {
+        Ok(original_rows(expansion.expand(), index))
+    })
+}
+
+/// The expansion of [`rows`] with the competing-event rows summed per
+/// interval and covariate level.
+///
+/// `level` holds one code per row of `data`, the covariate level of the row.
+/// The rows are the ones a fit on a covariate with those levels uses.
+/// [`Rows::row`] is the first row of `data` of the level that has a
+/// competing event, and levels are emitted in order of that first row.
+///
+/// # Errors
+///
+/// [`Error::Input`] as for [`rows`], and when `level` does not hold one code
+/// per row of `data`.
+pub fn risk_rows(
+    data: &SurvData<'_>,
+    cause: u32,
+    level: &[u32],
+    opts: &RowsOptions,
+) -> Result<Rows> {
+    check_lengths(&[("stop", data.n_rows()), ("level", level.len())])?;
+    with_expansion(data, cause, opts.timefix, |expansion, index| {
+        let level = gather(level, index);
+        Ok(original_rows(expansion.risk_rows(&level)?, index))
+    })
+}
+
+/// Fit the subdistribution log hazard ratio of a cause for one covariate.
+///
+/// `x` holds the covariate, one value per row of `data`. The cause is
+/// [`FineGrayOptions::cause`], a status code of `data`. Rows of weight 0 are
+/// dropped, the tie rule of `opts` is applied to the times, and every
+/// individual is at risk from time 0. The fit is on the collapsed rows
+/// ([`risk_rows`]). When `data` has clusters it is on the uncollapsed rows
+/// ([`rows`]), because the robust variance needs each individual's rows,
+/// and clusters are the dense codes of `data`. The estimate is the same.
+/// `n_rows` of the result counts the rows of the form used.
+///
+/// # Errors
+///
+/// [`Error::Input`] when `x` does not hold one value per row of `data` or has
+/// a value that is not finite, and as for [`rows`].
+pub fn fit(data: &SurvData<'_>, x: &[f64], opts: &FineGrayOptions) -> Result<CoxFit> {
+    check_lengths(&[("stop", data.n_rows()), ("x", x.len())])?;
+    refuse_non_finite(x, "x")?;
+    with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
+        let x = gather(x, index);
+        let cluster = data.cluster().map(|cluster| gather(cluster, index));
+        fit_expansion(expansion, &x, opts.ties, cluster.as_deref())
+    })
+}
+
+/// What every Fine-Gray construction starts from: the data, the cause of
+/// interest and the Kaplan-Meier estimate of the censoring distribution.
+#[deprecated(
+    since = "0.3.0",
+    note = "use `fine_gray::rows` and `fine_gray::risk_rows`, which take a `SurvData`"
+)]
+pub struct FineGrayData<'a>(Expansion<'a>);
+
+#[expect(
+    deprecated,
+    reason = "the methods of the deprecated type are deprecated with it"
+)]
+impl<'a> FineGrayData<'a> {
+    /// The data of one analysis: one `time`, cause code `event` (0 for
+    /// censoring) and `weight` per individual, and the `cause` of interest.
+    /// Times are compared exactly.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when the slices differ in length or `cause` is 0.
+    #[deprecated(since = "0.3.0", note = "use `fine_gray::rows` with a `SurvData`")]
+    pub fn new(time: &'a [f64], event: &'a [i32], weight: &'a [f64], cause: i32) -> Result<Self> {
+        Expansion::new(time, event, weight, cause).map(Self)
+    }
+
+    /// One row per individual and interval, as `survival::finegray` writes it.
+    ///
+    /// A competing-event individual runs at full weight to the first
+    /// censoring time at or after the event and at `w * G(max(start, x)) /
+    /// G(x-)` after it, split at every later censoring time and ending at the
+    /// largest observed time. The denominator is `G` before the event, so an
+    /// event that ties with a censoring time loses the weight of that
+    /// censoring, as in `survival::finegray`. `G` is read at `max(start, x)`
+    /// because `G(start)` alone gives weights above 1 when the event falls
+    /// after censoring has begun. Rows of weight zero are left out.
+    #[must_use]
+    #[deprecated(since = "0.3.0", note = "use `fine_gray::rows` with a `SurvData`")]
+    pub fn expand(&self) -> Rows {
+        self.0.expand()
+    }
+
+    /// The expansion with competing-event rows summed per interval and level.
+    ///
+    /// `level` codes the covariate; levels are emitted in order of their first
+    /// competing-event individual.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when `level` does not hold one code per individual.
+    #[deprecated(since = "0.3.0", note = "use `fine_gray::risk_rows` with a `SurvData`")]
+    pub fn risk_rows(&self, level: &[u32]) -> Result<Rows> {
+        self.0.risk_rows(level)
+    }
+}
+
+/// Fit the subdistribution log hazard ratio of `cause` for one covariate.
+///
+/// Times are compared exactly, and every individual is at risk from time 0.
+/// Builds the collapsed rows and fits the weighted Cox model with delayed
+/// entry on them. `n_rows` in the result counts the collapsed rows. With
+/// `cluster`, one code per individual, the fit is on the uncollapsed rows,
+/// because the robust variance needs each individual's rows. The estimate is
+/// the same and `n_rows` counts the expanded rows.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the slices differ in length or `cause` is 0.
+#[deprecated(since = "0.3.0", note = "use `fine_gray::fit` with a `SurvData`")]
+pub fn fine_gray_fit(
+    time: &[f64],
+    event: &[i32],
+    weight: &[f64],
+    x: &[f64],
+    cause: i32,
+    ties: Ties,
+    cluster: Option<&[u32]>,
+) -> Result<CoxFit> {
+    check_lengths(&[
+        ("time", time.len()),
+        ("x", x.len()),
+        ("cluster", cluster.map_or(time.len(), <[u32]>::len)),
+    ])?;
+    let expansion = Expansion::new(time, event, weight, cause)?;
+    fit_expansion(&expansion, x, ties, cluster)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CensoringCurve, FineGrayData, Rows, fine_gray_fit};
+    use super::{
+        CensoringCurve, Expansion, FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows,
+    };
     use crate::cox::{CoxData, CoxFit, Ties, fit_cox_single_covariate};
+    use crate::surv::SurvData;
+    use crate::timefix::TimeFix;
 
     // Two groups, two causes, with ties within a cause, across causes, and
     // between a censoring time and an event time.
@@ -519,7 +773,7 @@ mod tests {
     #[test]
     fn expansion_matches_r() {
         let weight = [1.0; 20];
-        let data = FineGrayData::new(&TIME, &EVENT, &weight, 1).unwrap();
+        let data = Expansion::new(&TIME, &EVENT, &weight, 1).unwrap();
         let rows = data.expand();
         assert_eq!(rows.row.len(), 30);
         let subject: Vec<usize> = (0..rows.row.len()).filter(|&k| rows.row[k] == 1).collect();
@@ -547,7 +801,7 @@ mod tests {
         let time = [1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let event = [0, 2, 0, 1, 0, 1, 1];
         let weight = [1.0; 7];
-        let data = FineGrayData::new(&time, &event, &weight, 1).unwrap();
+        let data = Expansion::new(&time, &event, &weight, 1).unwrap();
         let rows = data.expand();
         let subject: Vec<usize> = (0..rows.row.len()).filter(|&k| rows.row[k] == 1).collect();
         let stops: Vec<f64> = subject.iter().map(|&k| rows.stop[k]).collect();
@@ -580,7 +834,7 @@ mod tests {
     fn fine_gray_fit_matches_r_on_both_forms() {
         let weight = [1.0; 20];
         let x = group();
-        let data = FineGrayData::new(&TIME, &EVENT, &weight, 1).unwrap();
+        let data = Expansion::new(&TIME, &EVENT, &weight, 1).unwrap();
         let levels: Vec<u32> = x.iter().map(|&v| u32::from(v > 0.5)).collect();
         for rows in [data.expand(), data.risk_rows(&levels).unwrap()] {
             let fit = fit_rows(&rows, &x);
@@ -615,14 +869,44 @@ mod tests {
         ));
     }
 
+    fn data<'a>(
+        time: &'a [f64],
+        event: &'a [i32],
+        weight: &'a [f64],
+        cluster: Option<&'a [u32]>,
+    ) -> SurvData<'a> {
+        let mut builder = SurvData::builder(time, event).n_codes(2).weight(weight);
+        if let Some(cluster) = cluster {
+            builder = builder.cluster(cluster);
+        }
+        builder.build().unwrap()
+    }
+
+    fn options(cause: u32, ties: Ties) -> FineGrayOptions {
+        FineGrayOptions {
+            cause,
+            ties,
+            timefix: TimeFix::default(),
+        }
+    }
+
     #[test]
     fn the_entry_point_fits_both_forms_to_the_same_estimate() {
         let weight = [1.0; 20];
         let x = group();
-        let plain = fine_gray_fit(&TIME, &EVENT, &weight, &x, 1, Ties::Breslow, None).unwrap();
+        let plain = fit(
+            &data(&TIME, &EVENT, &weight, None),
+            &x,
+            &options(1, Ties::Breslow),
+        )
+        .unwrap();
         let family: Vec<u32> = (0..20).map(|i| i % 10).collect();
-        let clustered =
-            fine_gray_fit(&TIME, &EVENT, &weight, &x, 1, Ties::Breslow, Some(&family)).unwrap();
+        let clustered = fit(
+            &data(&TIME, &EVENT, &weight, Some(&family)),
+            &x,
+            &options(1, Ties::Breslow),
+        )
+        .unwrap();
         assert!(close(
             plain.log_hazard_ratio.unwrap(),
             clustered.log_hazard_ratio.unwrap(),
@@ -633,15 +917,118 @@ mod tests {
     }
 
     #[test]
-    fn cause_zero_and_mismatched_slices_are_refused() {
+    fn invalid_causes_columns_and_start_are_refused() {
         let weight = [1.0; 20];
         let x = group();
-        let zero = fine_gray_fit(&TIME, &EVENT, &weight, &x, 0, Ties::Breslow, None);
+        let d = data(&TIME, &EVENT, &weight, None);
+        let zero = fit(&d, &x, &options(0, Ties::Breslow));
         assert_eq!(
             zero.unwrap_err().to_string(),
-            "cause 0 is censoring, not a cause"
+            "cause 0 is outside 1..=2; 0 is censoring"
         );
-        let short = fine_gray_fit(&TIME, &EVENT, &weight, &x[..19], 1, Ties::Breslow, None);
-        assert!(short.is_err());
+        let above = rows(&d, 3, &RowsOptions::default());
+        assert!(above.is_err());
+        let short = fit(&d, &x[..19], &options(1, Ties::Breslow));
+        assert_eq!(
+            short.unwrap_err().to_string(),
+            "columns differ in length: x has 19 values against 20 in stop"
+        );
+        let levels = vec![0u32; 19];
+        assert!(risk_rows(&d, 1, &levels, &RowsOptions::default()).is_err());
+        let mut nan = x.clone();
+        nan[3] = f64::NAN;
+        assert!(fit(&d, &nan, &options(1, Ties::Breslow)).is_err());
+
+        let start = [0.0; 20];
+        let delayed = SurvData::builder(&TIME, &EVENT)
+            .n_codes(2)
+            .start(&start)
+            .build()
+            .unwrap();
+        let error = fit(&delayed, &x, &options(1, Ties::Breslow)).unwrap_err();
+        assert!(error.to_string().contains("start column"), "{error}");
+        assert!(rows(&delayed, 1, &RowsOptions::default()).is_err());
+    }
+
+    /// With no weights or all weights positive, the entry points use the same
+    /// code as the slice functions, so the rows are the same.
+    #[test]
+    fn the_rows_are_those_of_the_core_when_every_row_is_used() {
+        let weight: Vec<f64> = (0..20).map(|i| 0.5 + f64::from(i % 3)).collect();
+        let d = data(&TIME, &EVENT, &weight, None);
+        let core = Expansion::new(&TIME, &EVENT, &weight, 1).unwrap();
+        let ours = rows(&d, 1, &RowsOptions::default()).unwrap();
+        assert_eq!(ours, core.expand());
+        let levels: Vec<u32> = (0..20).map(|i| i % 4).collect();
+        let ours = risk_rows(&d, 1, &levels, &RowsOptions::default()).unwrap();
+        assert_eq!(ours, core.risk_rows(&levels).unwrap());
+    }
+
+    /// A row of weight 0 is no individual: it does not enter the censoring
+    /// distribution and has no rows, and the others keep their row numbers.
+    #[test]
+    fn rows_of_weight_zero_are_dropped_and_the_others_keep_their_numbers() {
+        let mut weight = vec![1.0; 20];
+        for dropped in [0, 5, 13, 19] {
+            weight[dropped] = 0.0;
+        }
+        let kept: Vec<usize> = (0..20).filter(|&i| weight[i] > 0.0).collect();
+        let time: Vec<f64> = kept.iter().map(|&i| TIME[i]).collect();
+        let event: Vec<i32> = kept.iter().map(|&i| EVENT[i]).collect();
+        let x: Vec<f64> = group();
+        let kept_x: Vec<f64> = kept.iter().map(|&i| x[i]).collect();
+        let clusters: Vec<u32> = (0..20).map(|i| i % 7 + 10).collect();
+        let kept_clusters: Vec<u32> = kept.iter().map(|&i| clusters[i]).collect();
+
+        let all = data(&TIME, &EVENT, &weight, Some(&clusters));
+        let unit = vec![1.0; kept.len()];
+        let only = data(&time, &event, &unit, Some(&kept_clusters));
+        let opts = RowsOptions::default();
+        let full = rows(&all, 1, &opts).unwrap();
+        let small = rows(&only, 1, &opts).unwrap();
+        let renumbered: Vec<u32> = small.row.iter().map(|&r| kept[r as usize] as u32).collect();
+        assert_eq!(full.row, renumbered);
+        assert_eq!(full.start, small.start);
+        assert_eq!(full.stop, small.stop);
+        assert_eq!(full.event, small.event);
+        assert_eq!(full.weight, small.weight);
+        for ties in [Ties::Breslow, Ties::Efron] {
+            let a = fit(&all, &x, &options(1, ties)).unwrap();
+            let b = fit(&only, &kept_x, &options(1, ties)).unwrap();
+            assert_eq!(a.log_hazard_ratio, b.log_hazard_ratio);
+            assert_eq!(a.robust_standard_error, b.robust_standard_error);
+            assert_eq!(a.n_rows, b.n_rows);
+        }
+    }
+
+    /// Times that differ by rounding error are one time under the default
+    /// rule and two under `Exact`.
+    #[test]
+    fn the_default_rule_merges_near_ties_and_exact_does_not() {
+        // Individual 5 has a competing event just before the censoring of
+        // individual 7. The rule sets both to the smaller time.
+        let mut time = TIME.map(|t| t * 0.1);
+        time[5] = time[7] * (1.0 - 1e-12);
+        let mut merged = time;
+        merged[7] = time[5];
+        let weight = [1.0; 20];
+        let d = data(&time, &EVENT, &weight, None);
+        let by_default = rows(&d, 1, &RowsOptions::default()).unwrap();
+        let exact = rows(
+            &d,
+            1,
+            &RowsOptions {
+                timefix: TimeFix::Exact,
+            },
+        )
+        .unwrap();
+        let reference = rows(
+            &data(&merged, &EVENT, &weight, None),
+            1,
+            &RowsOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(by_default, reference);
+        assert_ne!(exact, reference);
     }
 }

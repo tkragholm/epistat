@@ -13,6 +13,10 @@
 //! paste the printed lines into `EXPECTED`.
 
 #![expect(
+    deprecated,
+    reason = "the test pins the deprecated slice-based functions, which stay as wrappers"
+)]
+#![expect(
     clippy::unreadable_literal,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
