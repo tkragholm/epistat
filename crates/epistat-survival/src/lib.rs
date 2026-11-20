@@ -43,4 +43,6 @@ pub mod surv;
 pub mod timefix;
 
 pub use error::{Error, Result};
-pub use surv::{Outcome, Surv, SurvBuf, SurvBufBuilder, SurvData, SurvDataBuilder};
+pub use surv::{
+    Cause, Levels, Outcome, Surv, SurvBuf, SurvBufBuilder, SurvData, SurvDataBuilder, UsedRows,
+};

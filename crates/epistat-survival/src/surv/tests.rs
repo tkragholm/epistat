@@ -1,5 +1,6 @@
 use super::{Outcome, SurvBuf, SurvData};
 use crate::check::check_row_count;
+use crate::timefix::TimeFix;
 
 fn message<T>(result: crate::Result<T>) -> String {
     match result {
@@ -292,4 +293,336 @@ fn the_buffer_hands_out_the_same_data_as_the_borrowed_builder() {
     assert_eq!(surv.start().unwrap(), &[0.0, 0.5, 0.5, 1.0]);
     assert_eq!(surv.n_codes(), 2);
     assert_eq!(data.weight().unwrap(), &[1.0, 0.0, 2.0, 1.0]);
+}
+
+fn is_borrowed(data: &SurvData<'_>) -> bool {
+    let surv = data.followup().unwrap();
+    matches!(surv.stop, std::borrow::Cow::Borrowed(_))
+        && surv
+            .start
+            .as_ref()
+            .is_none_or(|start| matches!(start, std::borrow::Cow::Borrowed(_)))
+}
+
+const NEAR: f64 = 1e-12;
+
+#[test]
+fn a_new_data_set_has_had_no_tie_policy_applied() {
+    let (stop, status) = simple();
+    let data = SurvData::builder(&stop, &status).build().unwrap();
+    assert_eq!(data.timefix().unwrap(), TimeFix::Exact);
+}
+
+#[test]
+fn timefix_replaces_only_the_times_and_only_when_a_tie_is_found() {
+    let stop = [1.0, 1.0 + NEAR, 5.0, 7.0];
+    let start = [0.0, 0.0, 1.0, 5.0 + NEAR];
+    let status = [1, 0, 1, 0];
+    let weight = [1.0, 2.0, 0.0, 1.0];
+    let stratum = [3_u32, 1, 3, 1];
+    let data = SurvData::builder(&stop, &status)
+        .start(&start)
+        .weight(&weight)
+        .stratum(&stratum)
+        .build()
+        .unwrap();
+    let fixed = data.with_timefix(TimeFix::default()).unwrap();
+    let surv = fixed.followup().unwrap();
+    assert_eq!(surv.stop(), &[1.0, 1.0, 5.0, 7.0]);
+    assert_eq!(surv.start().unwrap(), &[0.0, 0.0, 1.0, 5.0]);
+    assert!(!is_borrowed(&fixed));
+    assert_eq!(surv.status().as_ptr(), status.as_ptr());
+    assert_eq!(fixed.weight().unwrap().as_ptr(), weight.as_ptr());
+    assert_eq!(fixed.stratum().unwrap(), &[1, 0, 1, 0]);
+    assert_eq!(fixed.timefix().unwrap(), TimeFix::default());
+    assert_eq!((fixed.n_rows(), fixed.n_used()), (4, 3));
+}
+
+#[test]
+fn timefix_without_a_tie_keeps_the_times_borrowed_and_records_the_policy() {
+    let stop = [1.0, 2.5, 3.5];
+    let status = [0, 1, 0];
+    let data = SurvData::builder(&stop, &status).build().unwrap();
+    let fixed = data.with_timefix(TimeFix::default()).unwrap();
+    assert!(is_borrowed(&fixed));
+    assert_eq!(fixed.followup().unwrap().stop().as_ptr(), stop.as_ptr());
+    assert_eq!(fixed.timefix().unwrap(), TimeFix::default());
+}
+
+#[test]
+fn integer_day_numbers_pass_through_borrowed() {
+    let stop = [100.0, 101.0, 20_000.0];
+    let status = [1, 0, 1];
+    let fixed = SurvData::builder(&stop, &status)
+        .build()
+        .unwrap()
+        .with_timefix(TimeFix::default())
+        .unwrap();
+    assert!(is_borrowed(&fixed));
+}
+
+#[test]
+fn exact_and_a_zero_tolerance_change_nothing_and_are_not_recorded() {
+    let stop = [1.0, 1.0 + NEAR];
+    let status = [1, 0];
+    for policy in [TimeFix::Exact, TimeFix::Aeq { tolerance: 0.0 }] {
+        let fixed = SurvData::builder(&stop, &status)
+            .build()
+            .unwrap()
+            .with_timefix(policy)
+            .unwrap();
+        assert!(is_borrowed(&fixed));
+        assert_eq!(fixed.followup().unwrap().stop(), &stop[..]);
+        assert_eq!(fixed.timefix().unwrap(), TimeFix::Exact);
+    }
+}
+
+#[test]
+fn exact_does_not_undo_an_applied_policy() {
+    let stop = [1.0, 1.0 + NEAR];
+    let status = [1, 0];
+    let fixed = SurvData::builder(&stop, &status)
+        .build()
+        .unwrap()
+        .with_timefix(TimeFix::default())
+        .unwrap()
+        .with_timefix(TimeFix::Exact)
+        .unwrap();
+    assert_eq!(fixed.followup().unwrap().stop(), &[1.0, 1.0]);
+    assert_eq!(fixed.timefix().unwrap(), TimeFix::default());
+}
+
+#[test]
+fn applying_the_same_policy_twice_changes_nothing() {
+    let stop = [1.0, 1.0 + NEAR, 5.0];
+    let status = [1, 0, 1];
+    let once = SurvData::builder(&stop, &status)
+        .build()
+        .unwrap()
+        .with_timefix(TimeFix::default())
+        .unwrap();
+    let before = once.followup().unwrap().stop().to_vec();
+    let twice = once.with_timefix(TimeFix::default()).unwrap();
+    assert_eq!(twice.followup().unwrap().stop(), &before[..]);
+    assert_eq!(twice.timefix().unwrap(), TimeFix::default());
+}
+
+#[test]
+fn a_different_policy_is_applied_to_the_times_as_they_stand() {
+    let stop = [1.0, 1.0 + 1e-3, 5.0];
+    let status = [1, 0, 1];
+    let first = SurvData::builder(&stop, &status)
+        .build()
+        .unwrap()
+        .with_timefix(TimeFix::default())
+        .unwrap();
+    assert_eq!(first.followup().unwrap().stop(), &stop[..]);
+    let loose = TimeFix::Aeq { tolerance: 1e-2 };
+    let second = first.with_timefix(loose).unwrap();
+    assert_eq!(second.followup().unwrap().stop(), &[1.0, 1.0, 5.0]);
+    assert_eq!(second.timefix().unwrap(), loose);
+}
+
+#[test]
+fn timefix_refuses_what_fix_times_refuses() {
+    let (stop, status) = simple();
+    for tolerance in [-1.0, f64::NAN, f64::INFINITY] {
+        let data = SurvData::builder(&stop, &status).build().unwrap();
+        assert!(
+            message(data.with_timefix(TimeFix::Aeq { tolerance })).contains("tolerance"),
+            "{tolerance}"
+        );
+    }
+    let stop = [1.0 + NEAR, 2.0];
+    let status = [1, 0];
+    let start = [1.0, 0.0];
+    let data = SurvData::builder(&stop, &status)
+        .start(&start)
+        .build()
+        .unwrap();
+    assert!(message(data.with_timefix(TimeFix::default())).contains("effective length 0"));
+}
+
+#[test]
+fn timefix_works_on_data_from_a_buffer_and_leaves_the_buffer_alone() {
+    let buf = SurvBuf::builder(vec![1.0, 1.0 + NEAR, 3.0], vec![1, 0, 1])
+        .stratum(vec![9, 4, 9])
+        .build()
+        .unwrap();
+    let fixed = buf.as_data().with_timefix(TimeFix::default()).unwrap();
+    assert_eq!(fixed.followup().unwrap().stop(), &[1.0, 1.0, 3.0]);
+    assert_eq!(fixed.stratum_levels().unwrap().to_vec(), [4, 9]);
+    assert_eq!(
+        buf.as_data().followup().unwrap().stop()[1].to_bits(),
+        (1.0 + NEAR).to_bits()
+    );
+}
+
+#[test]
+fn already_dense_columns_have_no_level_map() {
+    let (stop, status) = simple();
+    let data = SurvData::builder(&stop, &status)
+        .stratum(&[1, 0, 1])
+        .build()
+        .unwrap();
+    let levels = data.stratum_levels().unwrap();
+    assert!(levels.is_identity());
+    assert_eq!((levels.len(), levels.is_empty()), (2, false));
+    assert_eq!(levels.code(1), Some(1));
+    assert_eq!(levels.code(2), None);
+    assert_eq!(levels.to_vec(), [0, 1]);
+    assert!(data.cluster_levels().is_none() && data.id_levels().is_none());
+}
+
+#[test]
+fn recoded_columns_map_each_level_back_to_the_callers_code() {
+    let stop = [1.0; 5];
+    let status = [0; 5];
+    // A maximum below the row count is recoded through a table.
+    let data = SurvData::builder(&stop, &status)
+        .cluster(&[4, 0, 4, 2, 0])
+        .build()
+        .unwrap();
+    let levels = data.cluster_levels().unwrap();
+    assert!(!levels.is_identity());
+    assert_eq!(levels.to_vec(), [0, 2, 4]);
+    assert_eq!(levels.code(2), Some(4));
+    assert_eq!(levels.code(3), None);
+    // A maximum above it is recoded through sorting.
+    let data = SurvData::builder(&stop, &status)
+        .id(&[4_000_000_000, 7, 4_000_000_000, 100, 7])
+        .stratum(&[2, 3, 2, 3, 3])
+        .build()
+        .unwrap();
+    assert_eq!(data.id_levels().unwrap().to_vec(), [7, 100, 4_000_000_000]);
+    assert_eq!(data.stratum_levels().unwrap().to_vec(), [2, 3]);
+    // Level k is the k-th smallest code, so the map and the dense codes agree.
+    let id = data.id().unwrap();
+    let labels = data.id_levels().unwrap();
+    let original = [4_000_000_000, 7, 4_000_000_000, 100, 7];
+    for (row, &level) in id.iter().enumerate() {
+        assert_eq!(labels.code(level as usize), Some(original[row]));
+    }
+    let mut ascending = labels.iter().collect::<Vec<_>>();
+    ascending.sort_unstable();
+    assert_eq!(ascending, labels.to_vec());
+    assert_eq!(labels.iter().len(), 3);
+    assert_eq!(labels.iter().next_back(), Some(4_000_000_000));
+}
+
+#[test]
+fn the_buffer_keeps_the_level_maps() {
+    let buf = SurvBuf::builder(vec![1.0; 4], vec![0; 4])
+        .stratum(vec![5, 3, 5, 3])
+        .cluster(vec![0, 1, 1, 0])
+        .id(vec![10, 20, 20, 10])
+        .build()
+        .unwrap();
+    let data = buf.as_data();
+    assert_eq!(data.stratum_levels().unwrap().to_vec(), [3, 5]);
+    assert!(data.cluster_levels().unwrap().is_identity());
+    assert_eq!(data.id_levels().unwrap().to_vec(), [10, 20]);
+}
+
+#[test]
+fn used_rows_are_the_rows_of_positive_weight_in_both_directions() {
+    let stop = [1.0; 5];
+    let status = [0; 5];
+    let weight = [1.0, 0.0, 2.0, -0.0, 0.5];
+    let data = SurvData::builder(&stop, &status)
+        .weight(&weight)
+        .build()
+        .unwrap();
+    let used = data.used_rows();
+    assert_eq!(used.len(), 3);
+    assert_eq!(used.clone().collect::<Vec<_>>(), [0, 2, 4]);
+    assert_eq!(used.rev().collect::<Vec<_>>(), [4, 2, 0]);
+    assert_eq!(data.used_index(), Some(vec![0, 2, 4]));
+    // Both ends can be consumed together.
+    let mut both = data.used_rows();
+    assert_eq!(
+        (both.next(), both.next_back(), both.len()),
+        (Some(0), Some(4), 1)
+    );
+    assert_eq!(
+        (both.next(), both.next(), both.next_back()),
+        (Some(2), None, None)
+    );
+}
+
+#[test]
+fn without_unused_rows_there_is_no_index() {
+    let (stop, status) = simple();
+    let data = SurvData::builder(&stop, &status).build().unwrap();
+    assert_eq!(data.used_rows().collect::<Vec<_>>(), [0, 1, 2]);
+    assert_eq!(data.used_index(), None);
+    let data = SurvData::builder(&stop, &status)
+        .weight(&[1.0, 2.0, 3.0])
+        .build()
+        .unwrap();
+    assert_eq!(data.used_index(), None);
+    assert_eq!(data.used_rows().len(), 3);
+}
+
+#[test]
+fn used_rows_handle_all_zero_weights_and_no_rows() {
+    let (stop, status) = simple();
+    let data = SurvData::builder(&stop, &status)
+        .weight(&[0.0; 3])
+        .build()
+        .unwrap();
+    assert_eq!(data.used_rows().len(), 0);
+    assert_eq!(data.used_rows().next(), None);
+    assert_eq!(data.used_index(), Some(vec![]));
+    let empty = SurvData::builder(&[], &[]).build().unwrap();
+    assert_eq!(empty.used_rows().next_back(), None);
+    assert_eq!(empty.used_index(), None);
+}
+
+#[test]
+fn a_cause_reads_one_code_as_the_event_without_copying_status() {
+    let stop = [1.0; 5];
+    let status = [0, 1, 2, 3, 2];
+    let data = SurvData::builder(&stop, &status)
+        .n_codes(3)
+        .weight(&[1.0, 1.0, 0.0, 1.0, 2.0])
+        .build()
+        .unwrap();
+    let cause = data.cause(2).unwrap();
+    assert_eq!(cause.code(), 2);
+    assert_eq!(cause.status.as_ptr(), status.as_ptr());
+    assert_eq!((cause.len(), cause.is_empty()), (5, false));
+    assert_eq!(
+        cause.iter().collect::<Vec<_>>(),
+        [false, false, true, false, true]
+    );
+    assert!(cause.is_event(2) && !cause.is_event(1));
+    assert!(cause.is_competing(1) && cause.is_competing(3));
+    assert!(!cause.is_competing(0) && !cause.is_competing(2));
+    // The row of weight 0 is not counted.
+    assert_eq!(cause.n_events(), 1);
+    assert_eq!(data.cause(1).unwrap().n_events(), 1);
+    assert_eq!(data.cause(3).unwrap().n_events(), 1);
+}
+
+#[test]
+fn n_events_without_weights_counts_every_row() {
+    let stop = [1.0; 4];
+    let data = SurvData::builder(&stop, &[1, 1, 0, 1]).build().unwrap();
+    assert_eq!(data.cause(1).unwrap().n_events(), 3);
+}
+
+#[test]
+fn a_cause_of_zero_or_above_n_codes_is_refused() {
+    let (stop, status) = simple();
+    let data = SurvData::builder(&stop, &status)
+        .n_codes(2)
+        .build()
+        .unwrap();
+    assert!(message(data.cause(0)).contains("0 is censoring"));
+    assert_eq!(
+        message(data.cause(3)),
+        "cause 3 is outside 1..=2; 0 is censoring"
+    );
+    data.cause(2).unwrap();
 }

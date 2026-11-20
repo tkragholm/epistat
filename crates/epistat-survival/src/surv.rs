@@ -74,25 +74,58 @@
 //! table of up to as many entries is held, so the peak is about 80 MB per
 //! sparse column. [`SurvData::n_strata`] and its two siblings give `k`, and 0
 //! when the column is absent. The recoded codes are what the accessors
-//! return, so the original codes cannot be recovered from them. `istate` is
-//! a state, not a grouping, and is not recoded.
+//! return, so the original codes are read back through
+//! [`SurvData::stratum_levels`] and its two siblings, which give the caller's
+//! code of each level ([`Levels`]). A recoded column keeps one `u32` per
+//! level, in sorted order, so level `k` is the `k`-th smallest code given. A
+//! column that was already dense keeps no map, since a level is its own code.
+//! `istate` is a state, not a grouping, and is not recoded.
 //!
-//! # Borrowed or owned times
+//! # Ties
 //!
-//! The follow-up times are held as copy-on-write slices, so a later step that
-//! has to change times, as the tie policy does, can replace them without
-//! copying status, weights or the codes. Nothing in this module modifies
-//! them.
+//! Times are used as given until [`SurvData::with_timefix`] applies the tie
+//! policy of `survival::aeqSurv`. The follow-up times are held as
+//! copy-on-write slices, so the policy replaces start and stop, and only
+//! them, when it finds a tie. Status, weights and codes stay borrowed.
+//! [`SurvData::timefix`] says which policy was applied, which is what makes
+//! applying the same policy twice a no-op: the rule is not provably a fixed
+//! point, because the mean absolute time it compares against changes when
+//! values are merged, so repeating it is skipped rather than recomputed.
+//! Applying `TimeFix::Exact` changes nothing and does not undo an earlier
+//! policy.
+//!
+//! # Rows used
+//!
+//! Rows of weight 0 stay in the data and are dropped from a fit
+//! ([`n_rows`](SurvData::n_rows) against [`n_used`](SurvData::n_used)).
+//! [`SurvData::used_rows`] iterates over the rows with positive weight
+//! without allocating, and [`SurvData::used_index`] collects them when a fit
+//! needs a slice, which costs 4 bytes per used row (40 MB at 10^7) and is
+//! `None` when every row is used. Neither is cached, so a fit that needs the
+//! index more than once keeps its own.
+//!
+//! # One cause as the event
+//!
+//! [`SurvData::cause`] reads status `k` as the event and every other code as
+//! censoring or, for [`Cause::is_competing`], as a competing event, without
+//! copying the status column.
 
 use std::borrow::Cow;
 
 use crate::check::{check_lengths, check_row_count};
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::timefix::{TimeFix, fix_times};
 
+mod cause;
 mod checks;
 mod dense;
+mod levels;
+mod rows;
 
-use dense::Dense;
+pub use cause::Cause;
+use dense::{Dense, RecodedParts};
+pub use levels::Levels;
+pub use rows::UsedRows;
 
 /// Follow-up intervals with an event status.
 ///
@@ -104,6 +137,7 @@ pub struct Surv<'a> {
     stop: Cow<'a, [f64]>,
     status: &'a [i32],
     n_codes: u32,
+    timefix: TimeFix,
 }
 
 impl<'a> Surv<'a> {
@@ -133,6 +167,13 @@ impl<'a> Surv<'a> {
         self.n_codes
     }
 
+    /// The tie policy applied to the times, [`TimeFix::Exact`] until
+    /// [`SurvData::with_timefix`] applies another.
+    #[must_use]
+    pub fn timefix(&self) -> TimeFix {
+        self.timefix
+    }
+
     /// The number of rows.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -144,8 +185,23 @@ impl<'a> Surv<'a> {
     pub fn is_empty(&self) -> bool {
         self.stop.is_empty()
     }
-}
 
+    /// Apply a tie policy, unless it changes nothing or was applied already.
+    fn apply_timefix(&mut self, policy: TimeFix) -> Result<()> {
+        if matches!(policy, TimeFix::Exact | TimeFix::Aeq { tolerance: 0.0 }) {
+            return Ok(());
+        }
+        if self.timefix == policy {
+            return Ok(());
+        }
+        if let Some(fixed) = fix_times(self.start.as_deref(), &self.stop, policy)? {
+            self.stop = Cow::Owned(fixed.stop);
+            self.start = fixed.start.map(Cow::Owned);
+        }
+        self.timefix = policy;
+        Ok(())
+    }
+}
 /// The outcome of a survival dataset.
 ///
 /// Only follow-up data exists today. The enum is non-exhaustive so that left
@@ -201,7 +257,7 @@ impl<'a> SurvData<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`](crate::Error::Input) when the outcome is not follow-up data. Not possible
+    /// [`Error::Input`] when the outcome is not follow-up data. Not possible
     /// yet, since no other kind exists.
     pub fn followup(&self) -> Result<&Surv<'a>> {
         match &self.outcome {
@@ -239,6 +295,27 @@ impl<'a> SurvData<'a> {
         self.istate
     }
 
+    /// The caller's code of each stratum level, or `None` without a stratum
+    /// column. See [`Levels`].
+    #[must_use]
+    pub fn stratum_levels(&self) -> Option<Levels<'_>> {
+        self.stratum.as_ref().map(Dense::levels_view)
+    }
+
+    /// The caller's code of each cluster level, or `None` without a cluster
+    /// column. See [`Levels`].
+    #[must_use]
+    pub fn cluster_levels(&self) -> Option<Levels<'_>> {
+        self.cluster.as_ref().map(Dense::levels_view)
+    }
+
+    /// The caller's code of each subject level, or `None` without an id
+    /// column. See [`Levels`].
+    #[must_use]
+    pub fn id_levels(&self) -> Option<Levels<'_>> {
+        self.id.as_ref().map(Dense::levels_view)
+    }
+
     /// The number of strata, 0 when there is no stratum column.
     #[must_use]
     pub fn n_strata(&self) -> usize {
@@ -268,6 +345,93 @@ impl<'a> SurvData<'a> {
     #[must_use]
     pub fn n_used(&self) -> usize {
         self.n_used
+    }
+}
+
+impl<'a> SurvData<'a> {
+    /// Apply the tie policy to the follow-up times and return the data.
+    ///
+    /// The policy is that of `survival::aeqSurv`, see
+    /// [`fix_times`]. Only start and stop can change. When no tie is found
+    /// they stay borrowed, and when one is found they become owned, which
+    /// costs 8 bytes per row for each of the two columns (80 MB each at
+    /// 10^7) and a transient pooled copy for the search of up to 16 bytes
+    /// per row. Status, weights, the grouping codes and their level maps are
+    /// moved through untouched. The data is taken by value so that nothing
+    /// is cloned. Clone first to keep the original.
+    ///
+    /// [`TimeFix::Exact`] and a tolerance of zero return the data unchanged.
+    /// The policy applied is recorded, see [`timefix`](Self::timefix), and
+    /// the same policy applied again returns at once without searching. A
+    /// different policy is applied to the times as they now stand.
+    ///
+    /// The result is the same on any number of threads.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] as for [`fix_times`]: a negative or non-finite
+    /// tolerance, a sum of absolute times that overflows, or a row whose
+    /// start and stop become equal. The data is consumed whether or not the
+    /// call succeeds.
+    pub fn with_timefix(mut self, policy: TimeFix) -> Result<Self> {
+        let Outcome::Followup(surv) = &mut self.outcome;
+        surv.apply_timefix(policy)?;
+        Ok(self)
+    }
+
+    /// The tie policy applied so far, [`TimeFix::Exact`] when none.
+    ///
+    /// A result that depends on how ties were treated can report this, and a
+    /// caller that needs exact ties can check it.
+    ///
+    /// # Errors
+    ///
+    /// As for [`followup`](Self::followup).
+    pub fn timefix(&self) -> Result<TimeFix> {
+        Ok(self.followup()?.timefix())
+    }
+
+    /// The rows with positive weight, ascending, which are the rows a fit
+    /// uses. All rows when there are no weights.
+    ///
+    /// Allocates nothing and reads the weights lazily, one pass in total,
+    /// so the order and the rows do not depend on threads. The iterator knows
+    /// its length, [`n_used`](Self::n_used), and can be walked from the back.
+    #[must_use]
+    pub fn used_rows(&self) -> UsedRows<'a> {
+        UsedRows::new(self.weight, self.n_rows, self.n_used)
+    }
+
+    /// The rows with positive weight as a vector, or `None` when every row
+    /// is used and the index would only list `0..n_rows`.
+    ///
+    /// Built on each call in one pass: 4 bytes per used row, 40 MB at 10^7.
+    #[must_use]
+    pub fn used_index(&self) -> Option<Vec<u32>> {
+        (self.n_used < self.n_rows).then(|| self.used_rows().collect())
+    }
+
+    /// Status code `code` read as the event, for a cause-specific analysis.
+    ///
+    /// Copies nothing and costs nothing to make.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when `code` is 0, which is censoring, or above
+    /// `n_codes`.
+    pub fn cause(&self, code: u32) -> Result<Cause<'a>> {
+        let surv = self.followup()?;
+        match i32::try_from(code) {
+            Ok(signed) if code != 0 && code <= surv.n_codes => Ok(Cause {
+                status: surv.status,
+                weight: self.weight,
+                code: signed,
+            }),
+            _ => Err(Error::input(format!(
+                "cause {code} is outside 1..={}; 0 is censoring",
+                surv.n_codes
+            ))),
+        }
     }
 }
 
@@ -410,7 +574,7 @@ impl<'a> SurvDataBuilder<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`](crate::Error::Input) for the first rule that fails, in the order of the
+    /// [`Error::Input`] for the first rule that fails, in the order of the
     /// list in the [module documentation](self).
     pub fn build(self) -> Result<SurvData<'a>> {
         let c = self.columns;
@@ -421,6 +585,7 @@ impl<'a> SurvDataBuilder<'a> {
                 stop: Cow::Borrowed(c.stop),
                 status: c.status,
                 n_codes: c.n_codes,
+                timefix: TimeFix::Exact,
             }),
             weight: c.weight,
             stratum: checked.stratum,
@@ -445,9 +610,9 @@ pub struct SurvBuf {
     status: Vec<i32>,
     n_codes: u32,
     weight: Option<Vec<f64>>,
-    stratum: Option<(Vec<u32>, usize)>,
-    cluster: Option<(Vec<u32>, usize)>,
-    id: Option<(Vec<u32>, usize)>,
+    stratum: Option<OwnedDense>,
+    cluster: Option<OwnedDense>,
+    id: Option<OwnedDense>,
     istate: Option<Vec<u32>>,
     n_used: usize,
 }
@@ -477,6 +642,7 @@ impl SurvBuf {
                 stop: Cow::Borrowed(&self.stop),
                 status: &self.status,
                 n_codes: self.n_codes,
+                timefix: TimeFix::Exact,
             }),
             weight: self.weight.as_deref(),
             stratum: borrow_dense(self.stratum.as_ref()),
@@ -489,10 +655,20 @@ impl SurvBuf {
     }
 }
 
-fn borrow_dense(column: Option<&(Vec<u32>, usize)>) -> Option<Dense<'_>> {
-    column.map(|(codes, levels)| Dense {
-        codes: Cow::Borrowed(codes.as_slice()),
-        levels: *levels,
+/// A grouping column kept by a [`SurvBuf`]: dense codes, the number of
+/// levels and, when the column was recoded, the caller's code of each level.
+#[derive(Debug, Clone)]
+struct OwnedDense {
+    codes: Vec<u32>,
+    levels: usize,
+    labels: Option<Vec<u32>>,
+}
+
+fn borrow_dense(column: Option<&OwnedDense>) -> Option<Dense<'_>> {
+    column.map(|owned| Dense {
+        codes: Cow::Borrowed(owned.codes.as_slice()),
+        levels: owned.levels,
+        labels: owned.labels.as_deref().map(Cow::Borrowed),
     })
 }
 
@@ -562,7 +738,7 @@ impl SurvBufBuilder {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`](crate::Error::Input) for the first rule that fails, as for
+    /// [`Error::Input`] for the first rule that fails, as for
     /// [`SurvDataBuilder::build`].
     pub fn build(self) -> Result<SurvBuf> {
         let columns = Columns {
@@ -578,15 +754,23 @@ impl SurvBufBuilder {
         };
         let checked = columns.check()?;
         let n_used = checked.n_used;
+        // The recoded parts own their data, so the borrow of the raw columns
+        // ends here and they can be moved below.
         let recode = |dense: Option<Dense<'_>>| dense.map(Dense::into_recoded);
-        let stratum = recode(checked.stratum);
-        let cluster = recode(checked.cluster);
-        let id = recode(checked.id);
-        let keep = |recoded: Option<(Option<Vec<u32>>, usize)>, raw: Option<Vec<u32>>| {
-            let (recoded, levels) = recoded?;
+        let (stratum, cluster, id) = (
+            recode(checked.stratum),
+            recode(checked.cluster),
+            recode(checked.id),
+        );
+        let keep = |recoded: Option<RecodedParts>, raw: Option<Vec<u32>>| {
+            let (recoded, levels, labels) = recoded?;
             // A column without a recoding was dense and is kept as given.
             let codes = recoded.or(raw)?;
-            Some((codes, levels))
+            Some(OwnedDense {
+                codes,
+                levels,
+                labels,
+            })
         };
         Ok(SurvBuf {
             stratum: keep(stratum, self.stratum),
