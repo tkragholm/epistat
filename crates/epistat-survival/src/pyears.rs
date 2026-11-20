@@ -112,8 +112,9 @@ pub struct PyearsOptions {
     /// The status code that counts as an event. `None` is allowed only when
     /// `n_codes` is 1, which makes status 1 the event.
     pub cause: Option<u32>,
-    /// How near-equal times are treated. The default is `survival`'s rule,
-    /// see [`TimeFix`]. R's `pyears` does not apply it.
+    /// How near-equal times are treated. The default is exact times, as R's
+    /// `pyears` has no tie rule; [`TimeFix::default`] gives `survival`'s
+    /// `aeqSurv` rule for callers who want near-ties merged.
     pub timefix: TimeFix,
 }
 
@@ -122,7 +123,7 @@ impl Default for PyearsOptions {
         Self {
             scale: 1.0,
             cause: None,
-            timefix: TimeFix::default(),
+            timefix: TimeFix::Exact,
         }
     }
 }
