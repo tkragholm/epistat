@@ -25,6 +25,8 @@
 //!   product integral, their infinitesimal jackknife standard errors, and their
 //!   clustered bootstrap.
 //! - [`markov`]: the landmark test of the Markov property.
+//! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
+//!   standard errors, confidence limits, quantiles and restricted means.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`SurvData`]: the checked input type that the estimators share, for
@@ -62,6 +64,7 @@ pub mod split;
 pub mod surv;
 pub mod survcheck;
 pub mod survdiff;
+pub mod survfit;
 pub mod survreg;
 pub mod timefix;
 pub mod tmerge;
