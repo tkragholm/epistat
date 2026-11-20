@@ -478,6 +478,79 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 let mut local_diagnostics = MatchDiagnostics::default();
                 let mut local_selector = self.selector.clone();
 
+                if self.selector.assignment() == super::selection::Assignment::Rounds {
+                    // Every anchor takes a first control before any takes a
+                    // second. The ratio is the criteria's own: a fallback tier
+                    // is a property of one anchor's pool, and the pool changes
+                    // between rounds.
+                    let ratio = self.criteria.match_ratio;
+                    let mut taken: Vec<Vec<usize>> = vec![Vec::new(); anchor_indices.len()];
+                    let mut alive = vec![true; anchor_indices.len()];
+                    eligible_anchors += anchor_indices.len();
+                    for _ in 0..ratio {
+                        for (slot, &anchor_idx) in anchor_indices.iter().enumerate() {
+                            if !alive[slot] {
+                                continue;
+                            }
+                            let case = &anchors[anchor_idx];
+                            let mut candidates = self
+                                .candidate_pool_with_distance_and_constraint_group(
+                                    case,
+                                    &CandidatePoolConfig {
+                                        used_controls: &used_controls,
+                                        used_unique: &used_unique,
+                                        unique_interner: &unique_interner,
+                                        distance_metric: distance_config.distance_metric,
+                                        distance_caliper: distance_config.distance_caliper,
+                                        use_birth_date_index: distance_config.use_birth_date_index,
+                                        caliper_reason: distance_config.caliper_reason,
+                                    },
+                                    extra_constraints,
+                                    |idx, _control| {
+                                        !trimmed_indices
+                                            .candidates
+                                            .is_some_and(|trimmed| trimmed.contains(&idx))
+                                    },
+                                    &mut local_diagnostics,
+                                );
+                            let Some(pos) =
+                                local_selector.select_position(case, self.controls, &candidates)
+                            else {
+                                alive[slot] = false;
+                                continue;
+                            };
+                            let raw_idx = candidates.swap_remove(pos);
+                            let control = &self.controls[raw_idx];
+                            used_controls.insert(ControlIdx::new(raw_idx));
+                            if let Some(value) = unique_value(control, self.criteria) {
+                                used_unique.insert(intern_unique(&mut unique_interner, value));
+                            }
+                            taken[slot].push(raw_idx);
+                        }
+                    }
+                    for (slot, controls) in taken.into_iter().enumerate() {
+                        let case = &anchors[anchor_indices[slot]];
+                        if controls.is_empty() {
+                            local_diagnostics.anchors_with_no_candidates += 1;
+                            continue;
+                        }
+                        if controls.len() < ratio {
+                            local_diagnostics.anchors_below_required_ratio += 1;
+                        }
+                        matched_cases += 1;
+                        for raw_idx in controls {
+                            pairs.push(MatchedPair::new(case.id(), self.controls[raw_idx].id()));
+                        }
+                    }
+                    return GroupResult {
+                        pairs,
+                        matched_cases,
+                        eligible_anchors,
+                        used_controls_count: used_controls.len(),
+                        diagnostics: local_diagnostics,
+                    };
+                }
+
                 for anchor_idx in anchor_indices {
                     let case = &anchors[anchor_idx];
                     eligible_anchors += 1;
@@ -742,6 +815,29 @@ pub fn match_standard<
         anchors: support.as_ref().map(|support| &support.anchors),
         candidates: support.as_ref().map(|support| &support.candidates),
     };
+
+    if let Some(nearest) = engine.selector.nearest() {
+        if !request.ratio_fallback.is_empty() {
+            return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
+        }
+        return super::nearest::match_nearest(
+            &super::nearest::NearestRequest {
+                anchors,
+                candidates,
+                criteria,
+                constraints: request.constraints,
+                distance_config: request.distance_config,
+                trimmed,
+            },
+            nearest,
+            diagnostics,
+        );
+    }
+    if engine.selector.assignment() == super::selection::Assignment::Rounds
+        && !request.ratio_fallback.is_empty()
+    {
+        return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
+    }
 
     // The unconfigured path is the common one, so it keeps the concrete date
     // metric rather than paying `ConfiguredMetric`'s match on every candidate.

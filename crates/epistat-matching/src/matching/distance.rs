@@ -216,6 +216,43 @@ impl DistanceConfig {
     }
 }
 
+/// A distance that is the absolute difference of one number per record.
+///
+/// Records are ranked on such a distance by sorting them on that number, so a
+/// nearest neighbour is found without comparing every pair.
+#[derive(Clone, Copy)]
+pub(crate) enum ScalarLookup<'a> {
+    /// The birth date as a day number.
+    BirthDate,
+    /// A score per record id.
+    Scores(&'a RapidHashMap<String, f64>),
+}
+
+impl ScalarLookup<'_> {
+    /// The record's number, or `None` when it has none or it is not finite.
+    pub(crate) fn value<R: MatchingRecord>(self, record: &R) -> Option<f64> {
+        use chrono::Datelike;
+        match self {
+            Self::BirthDate => Some(f64::from(record.birth_date().num_days_from_ce())),
+            Self::Scores(scores) => scores
+                .get(record.id())
+                .copied()
+                .filter(|score| score.is_finite()),
+        }
+    }
+}
+
+impl DistanceConfig {
+    /// The one-number-per-record form of this distance, when it has one.
+    pub(crate) const fn scalar(&self) -> Option<ScalarLookup<'_>> {
+        match self {
+            Self::Date { .. } => Some(ScalarLookup::BirthDate),
+            Self::PropensityScoreMap { scores, .. } => Some(ScalarLookup::Scores(scores)),
+            Self::MahalanobisMap { .. } | Self::EuclideanMap { .. } => None,
+        }
+    }
+}
+
 /// One of the metrics a [`DistanceConfig`] can name, so the matchers take a
 /// single metric type whichever variant the caller configured.
 pub(crate) enum ConfiguredMetric<'a> {

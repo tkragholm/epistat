@@ -130,27 +130,28 @@ pub use balance::{
     build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values, variance,
 };
 pub use matching::{
-    CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
+    Assignment, CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
     CovariateEncodingConfig, CovariateMatrix, CovariateRecord, DateDistance,
     DeterministicSelection, DistanceChannel, DistanceConfig, DistanceMetric,
     ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,
     EuclideanPreparationConfig, EuclideanScale, ExactMatchConstraint, IdMapEuclideanDistance,
     IdMapMahalanobisDistance, IdMapPropensityScoreDistance, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisDistance, MahalanobisDistancePreparation,
-    MahalanobisError, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
-    MatchWeightMethod, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, PairWeight,
-    PairWeightRow, PairWeightSet, PairWeightTable, PropensityDistancePreparation,
-    PropensityEstimator, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
-    PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection, ReconstructedEpisode,
-    ReconstructedMatchedPair, ReconstructedMatchingOptions, ReconstructedMatchingOutput,
-    ReconstructedMatchingTier, ResidentAtIndexRecord, RidgeReport, RoleIndexedRecord,
-    SelectionStrategy, StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup,
-    SubclassSummary, SubclassificationConfig, SubclassificationOutcome, UnitRole, UnitWeightRow,
-    UnitWeightSet, UnitWeightTable, UsedControlsVec, effective_sample_size,
-    estimate_propensity_and_match, match_standard, match_weights_from_pairs,
-    pair_weights_from_pairs, prepare_euclidean_distance_config,
-    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
-    reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
+    MahalanobisError, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder,
+    MatchWeightMethod, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection,
+    NearestSelection, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable,
+    PropensityDistancePreparation, PropensityEstimator, PropensityMatchedOutcome,
+    PropensityScoreConfig, PropensityScoreDistance, PropensityScoreEstimate,
+    PropensityScoreOutputScale, RandomSelection, ReconstructedEpisode, ReconstructedMatchedPair,
+    ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
+    ResidentAtIndexRecord, RidgeReport, RoleIndexedRecord, Rounds, SelectionStrategy,
+    StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup, SubclassSummary,
+    SubclassificationConfig, SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet,
+    UnitWeightTable, UsedControlsVec, effective_sample_size, estimate_propensity_and_match,
+    match_standard, match_weights_from_pairs, pair_weights_from_pairs,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    prepare_propensity_distance_config, reconstruct_case_control_pairs,
+    subclassify_by_propensity_score_map,
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use role_transition::{
@@ -227,8 +228,8 @@ pub mod prelude {
 
     pub mod constraints {
         pub use crate::constraints::{
-            Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive, MustBeResident,
-            caliper_on_field,
+            AntiExact, Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive,
+            MustBeResident, caliper_on_field, numeric_field_sd,
         };
     }
 }

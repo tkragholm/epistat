@@ -1,5 +1,20 @@
+use super::nearest::NearestSelection;
 use super::records::MatchingRecord;
 use epistat_rng::Stream;
+
+/// How anchors share the candidates when each takes more than one.
+///
+/// Without replacement and with a ratio above 1, the order in which anchors
+/// receive their controls decides who is left short when candidates run out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Assignment {
+    /// Each anchor takes all its controls before the next anchor starts.
+    #[default]
+    Sequential,
+    /// Every anchor takes a first control before any takes a second, and so on
+    /// up to the ratio, as `matchit()` does.
+    Rounds,
+}
 
 /// Strategy for selecting one control from a candidate index set.
 pub trait SelectionStrategy<R: MatchingRecord> {
@@ -10,11 +25,49 @@ pub trait SelectionStrategy<R: MatchingRecord> {
         controls: &[R],
         candidate_indices: &[usize],
     ) -> Option<usize>;
+
+    /// The order in which anchors receive their controls in standard matching
+    /// without replacement. Risk-set matching always assigns sequentially.
+    fn assignment(&self) -> Assignment {
+        Assignment::Sequential
+    }
+
+    /// The nearest-neighbour configuration, when this strategy ranks
+    /// candidates by a distance. Standard matching then hands the whole job to
+    /// the distance-ranked matcher instead of calling
+    /// [`Self::select_position`].
+    fn nearest(&self) -> Option<&NearestSelection> {
+        None
+    }
+}
+
+/// Wraps a strategy so that anchors take their controls in rounds.
+///
+/// The wrapped strategy still chooses each control. Only the order of
+/// assignment changes, and only in standard matching without replacement at a
+/// ratio above 1.
+#[derive(Clone)]
+pub struct Rounds<S>(pub S);
+
+impl<R: MatchingRecord, S: SelectionStrategy<R>> SelectionStrategy<R> for Rounds<S> {
+    fn select_position(
+        &mut self,
+        case: &R,
+        controls: &[R],
+        candidate_indices: &[usize],
+    ) -> Option<usize> {
+        self.0.select_position(case, controls, candidate_indices)
+    }
+
+    fn assignment(&self) -> Assignment {
+        Assignment::Rounds
+    }
 }
 
 /// Random control selection using a reproducible RNG seed.
 #[derive(Clone)]
 pub struct RandomSelection {
+    seed: u64,
     rng: Stream,
 }
 
@@ -22,8 +75,15 @@ impl RandomSelection {
     #[must_use]
     pub fn seeded(seed: u64) -> Self {
         Self {
+            seed,
             rng: Stream::seeded(seed),
         }
+    }
+
+    /// The seed the stream started from.
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
+        self.seed
     }
 }
 

@@ -1,7 +1,8 @@
 use crate::matching::engine::{StandardMatchRequest, match_standard};
 use crate::matching::{
-    Chained, Constraint, ConstraintGroup, DistanceConfig, MatchingRecord, RandomSelection,
-    ResidentAtIndexRecord, RoleIndexedRecord, SelectionStrategy,
+    Assignment, Chained, Constraint, ConstraintGroup, DistanceConfig, MatchOrder, MatchingRecord,
+    NearestSelection, RandomSelection, ResidentAtIndexRecord, RoleIndexedRecord, Rounds,
+    SelectionStrategy,
 };
 use crate::role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
@@ -279,6 +280,16 @@ where
         }
     }
 
+    /// Require matched units to differ on a key of the strata map
+    /// (`antiexact`). See [`AntiExact`](crate::constraints::AntiExact).
+    #[must_use]
+    pub fn with_antiexact(
+        self,
+        key: impl Into<String>,
+    ) -> MatchJob<Mode, R, S, (G, crate::constraints::AntiExact), P> {
+        self.with_constraint(crate::constraints::AntiExact::on_key(key))
+    }
+
     /// Add a gender match constraint.
     ///
     /// Convenience helper that adds a [`GenderMatch`](crate::constraints::GenderMatch) constraint using the "sex" strata key.
@@ -288,6 +299,85 @@ where
     ) -> MatchJob<Mode, R, S, (G, crate::constraints::GenderMatch), P> {
         use crate::constraints::GenderMatch;
         self.with_constraint(GenderMatch::on_key("sex"))
+    }
+}
+
+impl<'a, R: MatchingRecord, S, G, P> MatchJob<StandardMode<'a, R>, R, S, G, P>
+where
+    G: ConstraintGroup<R>,
+{
+    /// Give every anchor a first control before any gets a second, and so on
+    /// up to the ratio, as `matchit()` does.
+    ///
+    /// This applies to standard matching without replacement at a ratio above
+    /// 1, with the strategy still choosing each control. It cannot be combined
+    /// with ratio fallbacks, and a job that does so returns an
+    /// [`InvalidCriteriaReason::NearestOptions`](crate::InvalidCriteriaReason)
+    /// outcome. Each round builds every anchor's candidate pool again, so the
+    /// cost is the ratio times that of the default order.
+    #[must_use]
+    pub fn with_round_assignment(self) -> MatchJob<StandardMode<'a, R>, R, Rounds<S>, G, P> {
+        MatchJob {
+            mode: self.mode,
+            criteria: self.criteria,
+            strategy: Rounds(self.strategy),
+            constraints: self.constraints,
+            risk_set_policy: self.risk_set_policy,
+            record: PhantomData,
+        }
+    }
+}
+
+impl<'a, R: MatchingRecord, G, P> MatchJob<StandardMode<'a, R>, R, RandomSelection, G, P>
+where
+    G: ConstraintGroup<R>,
+{
+    /// Rank candidates by the distance instead of choosing among them, as
+    /// `matchit(method = "nearest")` does. See [`NearestSelection`] for the
+    /// rules. The job's seed is used for the random order of anchors.
+    ///
+    /// The distance is the one set with [`Self::with_distance_config`], or the
+    /// birth date. Anchors take their controls in rounds unless
+    /// [`Self::with_assignment`] says otherwise.
+    #[must_use]
+    pub fn with_nearest(self) -> MatchJob<StandardMode<'a, R>, R, NearestSelection, G, P> {
+        let seed = self.strategy.seed();
+        self.with_strategy(NearestSelection::new(seed))
+    }
+}
+
+impl<R: MatchingRecord, G, P> MatchJob<StandardMode<'_, R>, R, NearestSelection, G, P>
+where
+    G: ConstraintGroup<R>,
+{
+    /// Set the order in which anchors are matched (`m.order`).
+    #[must_use]
+    pub fn with_m_order(mut self, order: MatchOrder) -> Self {
+        self.strategy = self.strategy.with_order(order);
+        self
+    }
+
+    /// Choose rounds or sequential assignment.
+    #[must_use]
+    pub fn with_assignment(mut self, assignment: Assignment) -> Self {
+        self.strategy = self.strategy.with_assignment(assignment);
+        self
+    }
+
+    /// Read the distance caliper in standard deviations of the distance
+    /// (`std.caliper`).
+    #[must_use]
+    pub fn with_std_caliper(mut self, std_caliper: bool) -> Self {
+        self.strategy = self.strategy.with_std_caliper(std_caliper);
+        self
+    }
+
+    /// Rank candidates by this distance and use the job's distance as a
+    /// caliper and for the order of anchors (`mahvars`).
+    #[must_use]
+    pub fn with_mahvars(mut self, ranking: DistanceConfig) -> Self {
+        self.strategy = self.strategy.with_mahvars(ranking);
+        self
     }
 }
 
