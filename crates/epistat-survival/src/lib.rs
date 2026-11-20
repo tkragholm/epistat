@@ -16,7 +16,7 @@
 //!   and iteration limits, a cluster-robust variance, and the Wald, score and
 //!   likelihood-ratio tests of the coefficients.
 //! - [`fine_gray`]: the rows of the Fine-Gray model, the Kaplan-Meier estimate of
-//!   the censoring distribution they need, and the fit on one covariate.
+//!   the censoring distribution they need, and the fit on a design matrix.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
 //!   groups, weights and delayed entry, its infinitesimal jackknife standard
 //!   errors, and a clustered bootstrap of the incidence in two arms over many

@@ -1,11 +1,11 @@
-//! The Fine-Gray subdistribution hazard model for one cause, fitted on one
-//! covariate, with the Kaplan-Meier estimate of the censoring distribution it
+//! The Fine-Gray subdistribution hazard model for one cause, fitted on a design
+//! matrix, with the Kaplan-Meier estimate of the censoring distribution it
 //! needs.
 //!
 //! The model is fitted as a weighted Cox model on rows built from the data \[1\],
-//! so the fit itself is [`crate::cox`]. This module builds the rows. The fit is
-//! on one covariate, like the Cox fit, and a general design matrix is later
-//! work.
+//! so the fit itself is [`crate::cox::fit`] and the result is a
+//! [`CoxModelFit`]: coefficients, model-based and robust covariance, and the
+//! Wald, score and likelihood ratio tests. This module builds the rows.
 //!
 //! # Input
 //!
@@ -14,6 +14,8 @@
 //! `1..=n_codes`, and every other nonzero code is a competing event. Its
 //! stop is the time, its weight the case weight and, for [`fit`], its cluster
 //! the cluster of the robust variance, as the dense codes the type holds. The
+//! covariates of [`fit`] are the columns of a matrix with one row per row of
+//! the data. The
 //! model follows every individual from time 0, so data with a start column is
 //! an error.
 //!
@@ -26,7 +28,8 @@
 //! before the censoring distribution is estimated, so they have no rows and no
 //! say in `G` or in the last time the rows run to. The rows keep the row
 //! numbers of the data. The fit reports the rows of the form it used in
-//! `n_rows`, after the Cox fit has dropped rows of weight 0.
+//! `n_rows`, and `n_used` is the same, since the rows of the form fitted have
+//! positive weight.
 //!
 //! [`fine_gray_fit`] and [`FineGrayData`] are deprecated. They take slices,
 //! compare times exactly and keep every row, including those of weight 0, in
@@ -73,15 +76,16 @@
 //! them is exact. The weight on the interval opening at censoring time `c_j`
 //! factorises as `G(c_j) w_i / G(x_i-)`, so one prefix sum of `w_i / G(x_i-)`
 //! over the event times, per covariate level, gives every interval.
-//! [`fit`] fits on these collapsed rows, or on the expanded rows when the data
-//! has clusters, because the robust variance needs each individual's
-//! own rows.
+//! [`fit`] fits on these collapsed rows, with the rows of the design matrix
+//! as levels, or on the expanded rows when the data has clusters, because the
+//! robust variance needs each individual's own rows.
 //!
 //! # Agreement with R
 //!
 //! `tests/r_fine_gray.rs` compares with `survival::finegray` followed by
 //! `coxph` on its rows, with weights `fgwt` and, for the robust variance, the
-//! individual as cluster, and with `cmprsk::crr`.
+//! individual as cluster, and with `cmprsk::crr`. A factor is written as
+//! indicator columns, as `model.matrix` does.
 //!
 //! - `survival::finegray` writes no row whose interval holds no event time of
 //!   the cause, because such a row enters no risk set. [`rows`] writes every
@@ -101,6 +105,8 @@
 //!   no failure ties with a censoring, with Breslow's approximation for
 //!   ties among failures in both, and differ otherwise. `crr` has no Efron
 //!   option.
+//! - `crr` fits several covariates as well, and the comparison on a matrix
+//!   has the same conditions.
 //! - The standard errors of `crr` include the variance from estimating the
 //!   censoring distribution. The robust standard error here is the sandwich
 //!   of `coxph` on the rows, which treats the weights as known, and does not.
@@ -133,8 +139,10 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use crate::check::{check_lengths, check_row_count, refuse_non_finite};
-use crate::cox::{CoxData, CoxFit, Ties, fit_cox_single_covariate};
+use faer::{Mat, MatRef};
+
+use crate::check::{check_lengths, check_row_count};
+use crate::cox::{CoxData, CoxFit, CoxModelFit, CoxOptions, Ties, fit_cox_single_covariate};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -472,7 +480,21 @@ pub fn float_codes(values: &[f64]) -> Vec<u32> {
         .collect()
 }
 
-/// Fit the weighted Cox model with delayed entry to the rows of `expansion`.
+/// Codes for the distinct rows of a matrix, in order of first appearance, by
+/// bit pattern.
+fn row_codes(x: MatRef<'_, f64>) -> Vec<u32> {
+    let mut codes: HashMap<Vec<u64>, u32> = HashMap::new();
+    (0..x.nrows())
+        .map(|i| {
+            let next = codes.len() as u32;
+            let key: Vec<u64> = (0..x.ncols()).map(|j| x[(i, j)].to_bits()).collect();
+            *codes.entry(key).or_insert(next)
+        })
+        .collect()
+}
+
+/// Fit the weighted Cox model with delayed entry to the rows of `expansion`
+/// on a single covariate, for the deprecated function.
 ///
 /// `x` and `cluster` hold one value per individual of the expansion. Without
 /// `cluster` the fit is on the collapsed rows, and with it on the expanded
@@ -523,17 +545,26 @@ pub struct FineGrayOptions {
     /// How times that differ by rounding error are treated. The default is the
     /// rule of `survival::aeqSurv`, which `coxph` applies.
     pub timefix: TimeFix,
+    /// The relative change of the log partial likelihood at which the
+    /// iteration stops, `eps` of `coxph.control`. It must be positive.
+    pub eps: f64,
+    /// The largest number of trial points, `iter.max` of `coxph.control`.
+    pub iter_max: u32,
 }
 
 impl FineGrayOptions {
     /// The options for `cause` with the defaults of `coxph`: Efron's
-    /// approximation for ties and the `aeqSurv` rule for times.
+    /// approximation for ties, the `aeqSurv` rule for times and the
+    /// convergence limits of [`CoxOptions::default`].
     #[must_use]
     pub fn new(cause: u32) -> Self {
+        let cox = CoxOptions::default();
         Self {
             cause,
-            ties: Ties::Efron,
-            timefix: TimeFix::default(),
+            ties: cox.ties,
+            timefix: cox.timefix,
+            eps: cox.eps,
+            iter_max: cox.iter_max,
         }
     }
 }
@@ -631,28 +662,75 @@ pub fn risk_rows(
     })
 }
 
-/// Fit the subdistribution log hazard ratio of a cause for one covariate.
+/// Fit the subdistribution hazard model of a cause on a design matrix.
 ///
-/// `x` holds the covariate, one value per row of `data`. The cause is
-/// [`FineGrayOptions::cause`], a status code of `data`. Rows of weight 0 are
-/// dropped, the tie rule of `opts` is applied to the times, and every
-/// individual is at risk from time 0. The fit is on the collapsed rows
-/// ([`risk_rows`]). When `data` has clusters it is on the uncollapsed rows
-/// ([`rows`]), because the robust variance needs each individual's rows,
-/// and clusters are the dense codes of `data`. The estimate is the same.
-/// `n_rows` of the result counts the rows of the form used.
+/// `x` holds the covariates, one row per row of `data` and one column per
+/// covariate, with no intercept column. A factor is its indicator columns. The
+/// cause is [`FineGrayOptions::cause`], a status code of `data`. Rows of
+/// weight 0 are dropped, the tie rule of `opts` is applied to the times, and
+/// every individual is at risk from time 0. The weighted Cox model with delayed
+/// entry is fitted to the rows of the model by [`crate::cox::fit`], so the
+/// result is that of the Cox fit: coefficients, covariances, tests, aliased
+/// columns and the convergence report.
+///
+/// The fit is on the collapsed rows ([`risk_rows`], with the distinct rows of
+/// `x` as levels). When `data` has clusters it is on the uncollapsed rows
+/// ([`rows`]), because the robust variance needs each individual's rows, and
+/// clusters are the dense codes of `data`. The robust covariance is then the
+/// sandwich of the Cox fit on those rows, which treats the weights as known.
+/// The estimate is the same in both forms. `n_rows` and `n_used` of the result
+/// count the rows of the form used.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` does not hold one value per row of `data` or has
-/// a value that is not finite, and as for [`rows`].
-pub fn fit(data: &SurvData<'_>, x: &[f64], opts: &FineGrayOptions) -> Result<CoxFit> {
-    check_lengths(&[("stop", data.n_rows()), ("x", x.len())])?;
-    refuse_non_finite(x, "x")?;
+/// [`Error::Input`] when `x` has no column, does not hold one row per row of
+/// `data` or has a value that is not finite, when `opts.eps` is not positive
+/// and finite, and as for [`rows`].
+pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> Result<CoxModelFit> {
+    check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
+    if x.ncols() == 0 {
+        return Err(Error::input("x has no columns"));
+    }
+    if (0..x.ncols()).any(|j| (0..x.nrows()).any(|i| !x[(i, j)].is_finite())) {
+        return Err(Error::input("x: a value is not finite"));
+    }
     with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
-        let x = gather(x, index);
-        let cluster = data.cluster().map(|cluster| gather(cluster, index));
-        fit_expansion(expansion, &x, opts.ties, cluster.as_deref())
+        let source = |row: u32| index.map_or(row as usize, |index| index[row as usize] as usize);
+        let rows = if data.cluster().is_some() {
+            expansion.expand()
+        } else {
+            let used = Mat::from_fn(expansion.time.len(), x.ncols(), |i, j| {
+                x[(source(i as u32), j)]
+            });
+            expansion.risk_rows(&row_codes(used.as_ref()))?
+        };
+        let design = Mat::from_fn(rows.row.len(), x.ncols(), |k, j| {
+            x[(source(rows.row[k]), j)]
+        });
+        let cluster: Option<Vec<u32>> = data
+            .cluster()
+            .map(|cluster| rows.row.iter().map(|&row| cluster[source(row)]).collect());
+        let mut builder = SurvData::builder(&rows.stop, &rows.event)
+            .n_codes(1)
+            .start(&rows.start)
+            .weight(&rows.weight);
+        if let Some(cluster) = &cluster {
+            builder = builder.cluster(cluster);
+        }
+        // The tie rule is applied to the individuals' times above; the rows
+        // carry those times and the censoring times, so there is nothing to
+        // merge.
+        crate::cox::fit(
+            &builder.build()?,
+            design.as_ref(),
+            &CoxOptions {
+                ties: opts.ties,
+                timefix: TimeFix::Exact,
+                eps: opts.eps,
+                iter_max: opts.iter_max,
+                ..CoxOptions::default()
+            },
+        )
     })
 }
 
@@ -744,6 +822,8 @@ pub fn fine_gray_fit(
 
 #[cfg(test)]
 mod tests {
+    use faer::Mat;
+
     use super::{
         CensoringCurve, Expansion, FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows,
     };
@@ -884,10 +964,13 @@ mod tests {
 
     fn options(cause: u32, ties: Ties) -> FineGrayOptions {
         FineGrayOptions {
-            cause,
             ties,
-            timefix: TimeFix::default(),
+            ..FineGrayOptions::new(cause)
         }
+    }
+
+    fn column(x: &[f64]) -> Mat<f64> {
+        Mat::from_fn(x.len(), 1, |i, _| x[i])
     }
 
     #[test]
@@ -896,24 +979,73 @@ mod tests {
         let x = group();
         let plain = fit(
             &data(&TIME, &EVENT, &weight, None),
-            &x,
+            column(&x).as_ref(),
             &options(1, Ties::Breslow),
         )
         .unwrap();
         let family: Vec<u32> = (0..20).map(|i| i % 10).collect();
         let clustered = fit(
             &data(&TIME, &EVENT, &weight, Some(&family)),
-            &x,
+            column(&x).as_ref(),
             &options(1, Ties::Breslow),
         )
         .unwrap();
         assert!(close(
-            plain.log_hazard_ratio.unwrap(),
-            clustered.log_hazard_ratio.unwrap(),
+            plain.coefficients[0].unwrap(),
+            clustered.coefficients[0].unwrap(),
             1e-10
         ));
         assert!(plain.n_rows < clustered.n_rows);
-        assert!(clustered.robust_standard_error.is_some());
+        assert_eq!(plain.n_rows, plain.n_used);
+        assert!(clustered.robust_standard_errors.is_some());
+        assert!(plain.robust_standard_errors.is_none());
+    }
+
+    /// Three columns, one of them a factor's indicator pair: the collapsed
+    /// and the expanded form give the same model, and the model is the Cox
+    /// fit of the rows.
+    #[test]
+    fn a_design_matrix_gives_the_same_model_in_both_forms() {
+        let weight: Vec<f64> = (0..20).map(|i| 1.0 + f64::from(i % 2)).collect();
+        let g = group();
+        let level: Vec<usize> = (0..20)
+            .map(|i| (i * 7 + usize::try_from(EVENT[i]).unwrap()) % 3)
+            .collect();
+        let x = Mat::from_fn(20, 3, |i, j| match j {
+            0 => g[i],
+            1 => f64::from(u8::from(level[i] == 1)),
+            _ => f64::from(u8::from(level[i] == 2)),
+        });
+        let each: Vec<u32> = (0..20).collect();
+        let plain = fit(
+            &data(&TIME, &EVENT, &weight, None),
+            x.as_ref(),
+            &options(1, Ties::Efron),
+        )
+        .unwrap();
+        let clustered = fit(
+            &data(&TIME, &EVENT, &weight, Some(&each)),
+            x.as_ref(),
+            &options(1, Ties::Efron),
+        )
+        .unwrap();
+        assert_eq!(plain.rank, 3);
+        for (a, b) in plain.coefficients.iter().zip(&clustered.coefficients) {
+            assert!(close(a.unwrap(), b.unwrap(), 1e-9), "{plain:?}");
+        }
+        for (a, b) in plain.covariance.iter().zip(&clustered.covariance) {
+            assert!(close(a.unwrap(), b.unwrap(), 1e-9));
+        }
+        assert!(close(
+            plain.tests.score.unwrap().statistic,
+            clustered.tests.score.unwrap().statistic,
+            1e-9
+        ));
+        let robust = clustered.robust_covariance.as_ref().unwrap();
+        assert_eq!(robust.len(), 9);
+        assert!(clustered.tests.robust_wald.is_some());
+        assert!(plain.tests.wald.is_some() && plain.tests.robust_wald.is_none());
+        assert!(plain.n_events > 0.0);
     }
 
     #[test]
@@ -921,23 +1053,31 @@ mod tests {
         let weight = [1.0; 20];
         let x = group();
         let d = data(&TIME, &EVENT, &weight, None);
-        let zero = fit(&d, &x, &options(0, Ties::Breslow));
+        let zero = fit(&d, column(&x).as_ref(), &options(0, Ties::Breslow));
         assert_eq!(
             zero.unwrap_err().to_string(),
             "cause 0 is outside 1..=2; 0 is censoring"
         );
         let above = rows(&d, 3, &RowsOptions::default());
         assert!(above.is_err());
-        let short = fit(&d, &x[..19], &options(1, Ties::Breslow));
+        let short = fit(&d, column(&x[..19]).as_ref(), &options(1, Ties::Breslow));
         assert_eq!(
             short.unwrap_err().to_string(),
             "columns differ in length: x has 19 values against 20 in stop"
         );
+        let none = Mat::<f64>::zeros(20, 0);
+        let error = fit(&d, none.as_ref(), &options(1, Ties::Breslow)).unwrap_err();
+        assert_eq!(error.to_string(), "x has no columns");
         let levels = vec![0u32; 19];
         assert!(risk_rows(&d, 1, &levels, &RowsOptions::default()).is_err());
         let mut nan = x.clone();
         nan[3] = f64::NAN;
-        assert!(fit(&d, &nan, &options(1, Ties::Breslow)).is_err());
+        assert!(fit(&d, column(&nan).as_ref(), &options(1, Ties::Breslow)).is_err());
+        let loose = FineGrayOptions {
+            eps: 0.0,
+            ..options(1, Ties::Breslow)
+        };
+        assert!(fit(&d, column(&x).as_ref(), &loose).is_err());
 
         let start = [0.0; 20];
         let delayed = SurvData::builder(&TIME, &EVENT)
@@ -945,7 +1085,7 @@ mod tests {
             .start(&start)
             .build()
             .unwrap();
-        let error = fit(&delayed, &x, &options(1, Ties::Breslow)).unwrap_err();
+        let error = fit(&delayed, column(&x).as_ref(), &options(1, Ties::Breslow)).unwrap_err();
         assert!(error.to_string().contains("start column"), "{error}");
         assert!(rows(&delayed, 1, &RowsOptions::default()).is_err());
     }
@@ -993,10 +1133,10 @@ mod tests {
         assert_eq!(full.event, small.event);
         assert_eq!(full.weight, small.weight);
         for ties in [Ties::Breslow, Ties::Efron] {
-            let a = fit(&all, &x, &options(1, ties)).unwrap();
-            let b = fit(&only, &kept_x, &options(1, ties)).unwrap();
-            assert_eq!(a.log_hazard_ratio, b.log_hazard_ratio);
-            assert_eq!(a.robust_standard_error, b.robust_standard_error);
+            let a = fit(&all, column(&x).as_ref(), &options(1, ties)).unwrap();
+            let b = fit(&only, column(&kept_x).as_ref(), &options(1, ties)).unwrap();
+            assert_eq!(a.coefficients, b.coefficients);
+            assert_eq!(a.robust_covariance, b.robust_covariance);
             assert_eq!(a.n_rows, b.n_rows);
         }
     }

@@ -10,12 +10,17 @@
 //! sum of `k` such weights adds `k epsilon`. Starts, stops and statuses are
 //! compared exactly.
 //!
-//! The fit bounds are derived at `coefficient_deviation` and
-//! `se_deviation`. The other fit outputs are bounded by `8 epsilon`
-//! relative to the value or to 1 for a value below 1, as in `r_cox.rs`, where
-//! the factor is the condition number of the information, which is 1 for one
-//! covariate. The reference coefficient is polished in R by two Newton steps,
-//! because `coxph` stops a step early.
+//! The one-covariate fit bounds are derived at `coefficient_deviation`. The
+//! other one-covariate outputs are bounded by `8 epsilon` relative to the value
+//! or to 1 for a value below 1, as in `r_cox.rs`, where the factor is the
+//! condition number of the information, which is 1 for one covariate. `coxph`
+//! and the Rust fit run with the default convergence rule, so both stop at the
+//! same iteration, which the test checks.
+//!
+//! The fits on several covariates have the bounds of `r_cox.rs` and
+//! `r_cox_control.rs` with the term for the weights derived at
+//! `multi_bounds`. The comparison with `crr` runs the Rust fit to a tighter
+//! `eps`, because `crr` stops at its own tolerance near the root.
 
 #![expect(
     clippy::float_cmp,
@@ -29,8 +34,8 @@ use epistat_survival::cox::Ties;
 use epistat_survival::fine_gray::{
     FineGrayOptions, Rows, RowsOptions, fit, float_codes, risk_rows, rows,
 };
-use epistat_survival::timefix::TimeFix;
 use epistat_testkit::load_json;
+use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -48,6 +53,7 @@ struct Dataset {
     weight: Vec<f64>,
     x: Vec<f64>,
     bin: Vec<f64>,
+    fac: Vec<u32>,
     id: Vec<u32>,
     group: Vec<u32>,
     results: Vec<CauseResult>,
@@ -60,6 +66,37 @@ struct CauseResult {
     fits: Vec<RFit>,
     rows_weights_argument: Option<RRows>,
     crr: Option<Vec<RCrr>>,
+    multi: Vec<RMulti>,
+    crr_multi: Option<RCrrMulti>,
+}
+
+/// `coxph` on the rows with `bin + x + factor(fac)`, whose columns are bin, x
+/// and the indicators of levels 1 and 2 of fac.
+#[derive(Deserialize)]
+struct RMulti {
+    ties: String,
+    cluster: String,
+    coefficients: Vec<f64>,
+    vcov: Vec<Vec<f64>>,
+    info: Vec<Vec<f64>>,
+    vcov_robust: Vec<Vec<f64>>,
+    loglik: f64,
+    loglik_null: f64,
+    iterations: u32,
+    wald_model: f64,
+    wald: f64,
+    score: f64,
+    kappa: f64,
+    kappa_init: f64,
+    kappa_robust: Option<f64>,
+    n_events: f64,
+}
+
+#[derive(Deserialize)]
+struct RCrrMulti {
+    coefficients: Vec<f64>,
+    information: Vec<Vec<f64>>,
+    loglik: f64,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +116,7 @@ struct RFit {
     coefficient: f64,
     se: f64,
     robust_se: Option<f64>,
+    iterations: u32,
     n_events: f64,
 }
 
@@ -117,6 +155,37 @@ fn surv<'a>(data: &'a Dataset, weight: &'a [f64], cluster: Option<&'a [u32]>) ->
 
 fn cause_code(result: &CauseResult) -> u32 {
     u32::try_from(result.cause).unwrap()
+}
+
+/// The columns of a design matrix with one covariate or with bin, x and the
+/// indicators of levels 1 and 2 of fac.
+fn design(data: &Dataset, names: &[&str]) -> Mat<f64> {
+    Mat::from_fn(data.time.len(), names.len(), |i, j| match names[j] {
+        "x" => data.x[i],
+        "bin" => data.bin[i],
+        "fac1" => f64::from(u8::from(data.fac[i] == 1)),
+        "fac2" => f64::from(u8::from(data.fac[i] == 2)),
+        other => panic!("unknown covariate {other}"),
+    })
+}
+
+const MULTI: [&str; 4] = ["bin", "x", "fac1", "fac2"];
+
+fn ties_of(name: &str) -> Ties {
+    if name == "efron" {
+        Ties::Efron
+    } else {
+        Ties::Breslow
+    }
+}
+
+fn cluster_of<'a>(data: &'a Dataset, name: &str) -> Option<&'a [u32]> {
+    match name {
+        "none" => None,
+        "id" => Some(data.id.as_slice()),
+        "group" => Some(data.group.as_slice()),
+        other => panic!("unknown cluster {other}"),
+    }
 }
 
 fn covariate<'a>(data: &'a Dataset, name: &str) -> &'a [f64] {
@@ -425,24 +494,6 @@ fn coefficient_deviation(got: f64, want: f64, events: f64, range: f64, se: f64) 
     (got - want).abs() / bound
 }
 
-/// The Newton iteration stops when a step is below this.
-const STEP_TOLERANCE: f64 = 1e-10;
-
-/// Deviation of a model-based standard error in units of its bound.
-///
-/// The fit reports `1 / sqrt(I)` with `I` evaluated at the iterate before its
-/// last step, `R` at the estimate. `d I / d beta` is a sum of third central
-/// moments of the covariate over the risk sets, each at most the range of the
-/// covariate times the variance, so `|d ln I / d beta| <= range`. The last step
-/// is below [`STEP_TOLERANCE`], so the standard error differs from the one at
-/// the estimate by at most `range / 2 * STEP_TOLERANCE` relative to itself, on
-/// top of the `8 epsilon` of the arithmetic.
-fn se_deviation(got: f64, want: f64, range: f64) -> f64 {
-    let bound =
-        8.0 * f64::EPSILON * want.abs().max(1.0) + 0.5 * range * STEP_TOLERANCE * want.abs();
-    (got - want).abs() / bound
-}
-
 #[test]
 fn fits_match_coxph_on_finegray_rows() {
     let reference = reference();
@@ -451,24 +502,14 @@ fn fits_match_coxph_on_finegray_rows() {
         for result in &data.results {
             for r in &result.fits {
                 let x = covariate(data, &r.covariate);
-                let cluster = match r.cluster.as_str() {
-                    "none" => None,
-                    "id" => Some(data.id.as_slice()),
-                    "group" => Some(data.group.as_slice()),
-                    other => panic!("unknown cluster {other}"),
-                };
-                let ties = if r.ties == "efron" {
-                    Ties::Efron
-                } else {
-                    Ties::Breslow
-                };
+                let cluster = cluster_of(data, &r.cluster);
+                let column = design(data, &[r.covariate.as_str()]);
                 let fit = fit(
                     &surv(data, &data.weight, cluster),
-                    x,
+                    column.as_ref(),
                     &FineGrayOptions {
-                        cause: cause_code(result),
-                        ties,
-                        timefix: TimeFix::default(),
+                        ties: ties_of(&r.ties),
+                        ..FineGrayOptions::new(cause_code(result))
                     },
                 )
                 .unwrap();
@@ -477,19 +518,20 @@ fn fits_match_coxph_on_finegray_rows() {
                     data.name, result.cause, r.covariate, r.ties, r.cluster
                 );
                 assert!(fit.converged, "{label}");
+                assert_eq!(fit.iterations, r.iterations, "{label}");
 
                 let range = x.iter().copied().fold(f64::NEG_INFINITY, f64::max)
                     - x.iter().copied().fold(f64::INFINITY, f64::min);
                 let coefficient = coefficient_deviation(
-                    fit.log_hazard_ratio.unwrap(),
+                    fit.coefficients[0].unwrap(),
                     r.coefficient,
                     r.n_events,
                     range,
                     r.se,
                 );
-                let se = se_deviation(fit.standard_error.unwrap(), r.se, range);
-                let robust = match (fit.robust_standard_error, r.robust_se) {
-                    (Some(got), Some(want)) => fit_deviation(got, want),
+                let se = fit_deviation(fit.standard_errors[0].unwrap(), r.se);
+                let robust = match (&fit.robust_standard_errors, r.robust_se) {
+                    (Some(got), Some(want)) => fit_deviation(got[0].unwrap(), want),
                     (None, None) => 0.0,
                     other => panic!("{label}: robust standard errors {other:?}"),
                 };
@@ -541,18 +583,18 @@ fn coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
         for result in &data.results {
             let Some(crr) = &result.crr else { continue };
             for r in crr {
-                let x = covariate(data, &r.covariate);
+                let column = design(data, &[r.covariate.as_str()]);
                 let fit = fit(
                     &surv(data, &data.weight, None),
-                    x,
+                    column.as_ref(),
                     &FineGrayOptions {
-                        cause: cause_code(result),
                         ties: Ties::Breslow,
-                        timefix: TimeFix::default(),
+                        eps: 1e-13,
+                        ..FineGrayOptions::new(cause_code(result))
                     },
                 )
                 .unwrap();
-                let beta = fit.log_hazard_ratio.unwrap();
+                let beta = fit.coefficients[0].unwrap();
                 let tolerance = 2.0 * CRR_GTOL * r.loglik.abs().max(1.0) / r.information;
                 let difference = (beta - r.coefficient).abs();
                 eprintln!(
@@ -562,7 +604,7 @@ fn coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
                     r.covariate,
                     r.coefficient,
                     difference / tolerance,
-                    fit.standard_error.unwrap(),
+                    fit.standard_errors[0].unwrap(),
                     r.se
                 );
                 if tie {
@@ -583,4 +625,371 @@ fn coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
             }
         }
     }
+}
+
+/// Tolerances for the fits on several covariates.
+///
+/// Both fits take the same Newton steps and stop at the same iteration. They
+/// differ by the error of the solves, `bound = 8 kappa epsilon` as in
+/// `r_cox.rs`, and by the weights: the Rust rows are built by the same
+/// arithmetic as `finegray`, up to the `f = (2 m + 4 + k) epsilon` relative
+/// error derived at the top, with `m` censoring times and `k` rows.
+///
+/// A relative change `f` in every weight changes the score at a coefficient by
+/// at most `2 f W r_k` in column `k`, with `W` the weight of the events and
+/// `r_k` the range of the column (a sum of `W` terms, each a difference of a
+/// covariate and a weighted mean, with a ratio of two sums each off by `f`).
+/// It moves the root by `V` times that, `db_j = sum_k |V_jk| 2 f W r_k`. The
+/// information changes by `dI_kl = r_k r_l (2 f W + W sum_m r_m db_m)`, the
+/// second term because `dI_kl / d beta_m` is a sum of third central moments,
+/// each at most `r_k r_l r_m`. The covariance `V I V` changes by
+/// `dV_ab = sum_kl |V_ak| dI_kl |V_lb|`.
+struct MultiBounds {
+    solve: f64,
+    db: Vec<f64>,
+    di: Vec<Vec<f64>>,
+    dv: Vec<Vec<f64>>,
+    f: f64,
+}
+
+fn multi_bounds(
+    r: &RMulti,
+    ranges: &[f64],
+    weight: f64,
+    censoring_times: usize,
+    rows: usize,
+) -> MultiBounds {
+    let p = r.coefficients.len();
+    let f = (2 * censoring_times + 4 + rows) as f64 * f64::EPSILON;
+    let db: Vec<f64> = (0..p)
+        .map(|j| {
+            (0..p)
+                .map(|k| r.vcov[j][k].abs() * 2.0 * f * weight * ranges[k])
+                .sum()
+        })
+        .collect();
+    let beta_term: f64 = (0..p).map(|m| ranges[m] * db[m]).sum();
+    let di: Vec<Vec<f64>> = (0..p)
+        .map(|k| {
+            (0..p)
+                .map(|l| ranges[k] * ranges[l] * (2.0 * f * weight + weight * beta_term))
+                .collect()
+        })
+        .collect();
+    let dv = (0..p)
+        .map(|a| {
+            (0..p)
+                .map(|b| {
+                    (0..p)
+                        .flat_map(|k| (0..p).map(move |l| (k, l)))
+                        .map(|(k, l)| r.vcov[a][k].abs() * di[k][l] * r.vcov[l][b].abs())
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
+    MultiBounds {
+        solve: 8.0 * r.kappa * f64::EPSILON,
+        db,
+        di,
+        dv,
+        f,
+    }
+}
+
+/// The largest deviation in units of the tolerance, entry by entry.
+fn units(got: f64, want: f64, tolerance: f64) -> f64 {
+    (got - want).abs() / tolerance
+}
+
+#[test]
+fn fits_on_several_covariates_match_coxph_on_finegray_rows() {
+    let reference = reference();
+    let mut worst: BTreeMap<&str, f64> = BTreeMap::new();
+    let mut record = |what: &'static str, value: f64, label: &str| {
+        assert!(value <= 1.0, "{label} {what}: {value} of the tolerance");
+        let slot = worst.entry(what).or_insert(0.0);
+        *slot = slot.max(value);
+    };
+    for data in &reference.datasets {
+        let x = design(data, &MULTI);
+        let ranges: Vec<f64> = (0..4)
+            .map(|j| {
+                let column: Vec<f64> = (0..x.nrows()).map(|i| x[(i, j)]).collect();
+                column.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                    - column.iter().copied().fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        let largest: Vec<f64> = (0..4)
+            .map(|j| (0..x.nrows()).map(|i| x[(i, j)].abs()).fold(0.0, f64::max))
+            .collect();
+        let m = censoring_times(data);
+        for result in &data.results {
+            for r in &result.multi {
+                let label = format!(
+                    "{} cause {} {} {}",
+                    data.name, result.cause, r.ties, r.cluster
+                );
+                let model = fit(
+                    &surv(data, &data.weight, cluster_of(data, &r.cluster)),
+                    x.as_ref(),
+                    &FineGrayOptions {
+                        ties: ties_of(&r.ties),
+                        ..FineGrayOptions::new(cause_code(result))
+                    },
+                )
+                .unwrap();
+                assert!(model.converged && model.rank == 4, "{label}");
+                assert_eq!(model.iterations, r.iterations, "{label}");
+                let k = result.rows.orig.len();
+                let w = r.n_events;
+                let b = multi_bounds(r, &ranges, w, m, k);
+                let n = k as f64;
+                let p = 4.0;
+                let eps = f64::EPSILON;
+                assert!(units(model.n_events, w, 4.0 * b.f * w) <= 1.0, "{label}");
+
+                let mut coefficient = 0.0f64;
+                let mut se = 0.0f64;
+                let mut covariance = 0.0f64;
+                for a in 0..4 {
+                    let beta = model.coefficients[a].unwrap();
+                    let tolerance = b.db[a] + b.solve * r.coefficients[a].abs().max(1.0);
+                    coefficient = coefficient.max(units(beta, r.coefficients[a], tolerance));
+                    let sd = r.vcov[a][a].sqrt();
+                    // sqrt is 1/2 relative of the variance.
+                    let tolerance = f64::midpoint(b.dv[a][a], p * b.solve * r.vcov[a][a]) / sd;
+                    se = se.max(units(model.standard_errors[a].unwrap(), sd, tolerance));
+                    for c in 0..4 {
+                        let tolerance =
+                            b.dv[a][c] + p * b.solve * (r.vcov[a][a] * r.vcov[c][c]).sqrt();
+                        covariance = covariance.max(units(
+                            model.covariance[a * 4 + c].unwrap(),
+                            r.vcov[a][c],
+                            tolerance,
+                        ));
+                    }
+                }
+                record("coefficient", coefficient, &label);
+                record("se", se, &label);
+                record("covariance", covariance, &label);
+
+                // The robust covariance V M V: the relative changes of V enter
+                // twice and are amplified by at most kappa, the meat has the
+                // weights squared, and the solves and sums are those of
+                // `r_cox.rs`: `4 p bound + 2 n epsilon`.
+                if r.cluster == "none" {
+                    assert!(model.robust_covariance.is_none(), "{label}");
+                    assert!(!r.vcov_robust.iter().any(|row| !row.is_empty()), "{label}");
+                } else {
+                    let robust = model.robust_covariance.as_ref().unwrap();
+                    let relative_v = (0..4)
+                        .flat_map(|a| (0..4).map(move |c| (a, c)))
+                        .map(|(a, c)| b.dv[a][c] / (r.vcov[a][a] * r.vcov[c][c]).sqrt())
+                        .fold(0.0, f64::max);
+                    let relative =
+                        4.0 * p * b.solve + 2.0 * n * eps + 2.0 * r.kappa * relative_v + 4.0 * b.f;
+                    let mut worst_robust = 0.0f64;
+                    for a in 0..4 {
+                        for c in 0..4 {
+                            let scale = (r.vcov_robust[a][a] * r.vcov_robust[c][c]).sqrt();
+                            worst_robust = worst_robust.max(units(
+                                robust[a * 4 + c].unwrap(),
+                                r.vcov_robust[a][c],
+                                relative * scale,
+                            ));
+                        }
+                    }
+                    record("robust covariance", worst_robust, &label);
+                }
+
+                // Log partial likelihoods: `W f` from the weights in the
+                // log of each risk-set sum, `W f max|x| sum |beta|` in the
+                // linear predictor, and the rounding of `n` terms.
+                let eta: f64 = (0..4).map(|j| largest[j] * r.coefficients[j].abs()).sum();
+                let tolerance_loglik =
+                    2.0 * b.f * w * (1.0 + eta) + (b.solve + n * eps) * r.loglik.abs().max(1.0);
+                let tolerance_null = 2.0 * b.f * w + n * eps * r.loglik_null.abs().max(1.0);
+                let loglik = model.log_partial_likelihood.unwrap();
+                let null = model.null_log_partial_likelihood.unwrap();
+                record("loglik", units(loglik, r.loglik, tolerance_loglik), &label);
+                record(
+                    "null loglik",
+                    units(null, r.loglik_null, tolerance_null),
+                    &label,
+                );
+                let lr = model.tests.likelihood_ratio.unwrap();
+                assert_eq!(lr.df, 4, "{label}");
+                record(
+                    "likelihood ratio",
+                    units(
+                        lr.statistic,
+                        2.0 * (r.loglik - r.loglik_null),
+                        2.0 * (tolerance_loglik + tolerance_null),
+                    ),
+                    &label,
+                );
+
+                // The Wald statistic `beta' I beta` changes by
+                // `2 |I beta|' db + |beta|' dI |beta|`, and by the solve.
+                let info_beta: Vec<f64> = (0..4)
+                    .map(|j| {
+                        (0..4)
+                            .map(|k| r.info[j][k] * r.coefficients[k])
+                            .sum::<f64>()
+                    })
+                    .collect();
+                let from_weights: f64 = (0..4)
+                    .map(|j| 2.0 * info_beta[j].abs() * b.db[j])
+                    .sum::<f64>()
+                    + (0..4)
+                        .flat_map(|k| (0..4).map(move |l| (k, l)))
+                        .map(|(k, l)| {
+                            r.coefficients[k].abs() * b.di[k][l] * r.coefficients[l].abs()
+                        })
+                        .sum::<f64>();
+                let wald = model.tests.wald.unwrap();
+                assert_eq!(wald.df, 4, "{label}");
+                record(
+                    "wald",
+                    units(
+                        wald.statistic,
+                        r.wald_model,
+                        from_weights + 2.0 * p * b.solve * r.wald_model.max(1.0),
+                    ),
+                    &label,
+                );
+                if r.cluster == "none" {
+                    assert!(model.tests.robust_wald.is_none(), "{label}");
+                } else {
+                    // `d' V^-1 d` with the robust `V`: a relative change of `V`
+                    // moves it by at most kappa(V) times that change.
+                    let kappa = r.kappa_robust.unwrap();
+                    let relative_v = (0..4)
+                        .flat_map(|a| (0..4).map(move |c| (a, c)))
+                        .map(|(a, c)| b.dv[a][c] / (r.vcov[a][a] * r.vcov[c][c]).sqrt())
+                        .fold(0.0, f64::max);
+                    let relative = kappa
+                        * (4.0 * p * b.solve
+                            + 2.0 * n * eps
+                            + 2.0 * r.kappa * relative_v
+                            + 4.0 * b.f)
+                        + 8.0 * kappa * eps
+                        + 2.0 * relative_v;
+                    let robust_wald = model.tests.robust_wald.unwrap();
+                    record(
+                        "robust wald",
+                        units(robust_wald.statistic, r.wald, relative * r.wald.max(1.0)),
+                        &label,
+                    );
+                }
+                // The score test is at zero, where only the weights act:
+                // `u' I^-1 u` changes by `6 f` relative, and the solve and
+                // the sums add `8 kappa_0 epsilon + n epsilon`.
+                let score = model.tests.score.unwrap();
+                record(
+                    "score",
+                    units(
+                        score.statistic,
+                        r.score,
+                        (6.0 * b.f + 8.0 * r.kappa_init * eps + n * eps) * r.score.max(1.0),
+                    ),
+                    &label,
+                );
+            }
+        }
+    }
+    for (what, value) in &worst {
+        eprintln!("several covariates, worst {what}: {value:.2e} of its tolerance");
+    }
+}
+
+/// The Rust fit and `crr` with several covariates, on the data sets where no
+/// failure ties with a censoring, which is the case where they estimate the
+/// same censoring distribution. `crr` stops when its score is below `gtol
+/// max(|loglik|, 1) / max(|b|, 1)`, so each coefficient is within that over
+/// the smallest eigenvalue of the information, bounded by the trace of the
+/// inverse: `|b - b*| <= ||I^-1|| ||score||`, with the score below
+/// `gtol max(|loglik|, 1)` in the norm. The bound takes `||I^-1||` as the
+/// largest row sum of `|I^-1|`, with `I^-1` from the inverse of the matrix
+/// `crr` reports.
+#[test]
+fn several_coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
+    let reference = reference();
+    let mut checked = 0;
+    for data in &reference.datasets {
+        let tie = (0..data.time.len()).any(|i| {
+            data.event[i] != 0
+                && (0..data.time.len()).any(|j| data.event[j] == 0 && data.time[j] == data.time[i])
+        });
+        if tie {
+            continue;
+        }
+        let x = design(data, &MULTI);
+        for result in &data.results {
+            let Some(crr) = &result.crr_multi else {
+                continue;
+            };
+            let model = fit(
+                &surv(data, &data.weight, None),
+                x.as_ref(),
+                &FineGrayOptions {
+                    ties: Ties::Breslow,
+                    eps: 1e-13,
+                    ..FineGrayOptions::new(cause_code(result))
+                },
+            )
+            .unwrap();
+            // The inverse of the 4 by 4 information, by Gauss-Jordan.
+            let inverse = invert(&crr.information);
+            let norm = inverse
+                .iter()
+                .map(|row| row.iter().map(|v| v.abs()).sum::<f64>())
+                .fold(0.0, f64::max);
+            let tolerance = 2.0 * CRR_GTOL * crr.loglik.abs().max(1.0) * norm;
+            for (j, &want) in crr.coefficients.iter().enumerate() {
+                let got = model.coefficients[j].unwrap();
+                eprintln!(
+                    "{} cause {} column {j}: rust {got:.10} crr {want:.10} |diff| {:.2e} of tolerance",
+                    data.name,
+                    result.cause,
+                    (got - want).abs() / tolerance
+                );
+                assert!((got - want).abs() <= tolerance, "{} {j}", data.name);
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0);
+}
+
+fn invert(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = a.len();
+    let mut m: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            let mut row = a[i].clone();
+            row.extend((0..n).map(|j| f64::from(u8::from(i == j))));
+            row
+        })
+        .collect();
+    for c in 0..n {
+        let pivot = (c..n)
+            .max_by(|&i, &j| m[i][c].abs().total_cmp(&m[j][c].abs()))
+            .unwrap();
+        m.swap(c, pivot);
+        let d = m[c][c];
+        for v in &mut m[c] {
+            *v /= d;
+        }
+        for i in 0..n {
+            if i != c {
+                let factor = m[i][c];
+                let source = m[c].clone();
+                for (v, s) in m[i].iter_mut().zip(&source) {
+                    *v -= factor * s;
+                }
+            }
+        }
+    }
+    m.into_iter().map(|row| row[n..].to_vec()).collect()
 }

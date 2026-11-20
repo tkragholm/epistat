@@ -14,12 +14,13 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::cox::Ties;
+use epistat_survival::cox::{CoxModelFit, Ties};
 use epistat_survival::fine_gray::{
     FineGrayOptions, Rows, RowsOptions, fit, float_codes, risk_rows, rows,
 };
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::assert_same_on_pools;
+use faer::Mat;
 
 const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
@@ -111,34 +112,65 @@ fn fine_gray_rows() {
     }
 }
 
-/// The fit on the collapsed rows, and on the expanded rows with clusters.
+/// Every number of a fit, with an absent one as a marker.
+fn fit_bits(fit: &CoxModelFit) -> Vec<f64> {
+    let mut out: Vec<f64> = fit.coefficients.iter().copied().map(opt).collect();
+    out.extend(fit.standard_errors.iter().copied().map(opt));
+    out.extend(fit.covariance.iter().copied().map(opt));
+    for matrix in [&fit.robust_standard_errors, &fit.robust_covariance] {
+        out.extend(matrix.iter().flatten().copied().map(opt));
+    }
+    for value in [fit.log_partial_likelihood, fit.null_log_partial_likelihood] {
+        out.push(opt(value));
+    }
+    for test in [
+        fit.tests.wald,
+        fit.tests.robust_wald,
+        fit.tests.score,
+        fit.tests.robust_score,
+        fit.tests.likelihood_ratio,
+    ] {
+        out.push(opt(test.map(|t| t.statistic)));
+        out.push(opt(test.map(|t| t.p_value)));
+    }
+    out.extend([
+        fit.n_events,
+        fit.n_rows as f64,
+        fit.n_used as f64,
+        fit.rank as f64,
+        f64::from(fit.iterations),
+        f64::from(u8::from(fit.converged)),
+    ]);
+    out
+}
+
+/// The fit on the collapsed rows, and on the expanded rows with clusters, with
+/// a binary column, a continuous one and the indicators of a three-level
+/// factor.
 #[test]
 fn fine_gray_fit_all_options() {
     let s = sample(2003, 42);
+    let x = Mat::from_fn(s.x.len(), 4, |i, j| match j {
+        0 => s.x[i],
+        1 => f64::from(u8::from(s.cluster[i] % 2 == 0)),
+        2 => f64::from(u8::from(s.cluster[i] % 3 == 1)),
+        _ => f64::from(u8::from(s.cluster[i] % 3 == 2)),
+    });
     for ties in [Ties::Breslow, Ties::Efron] {
         for clustered in [false, true] {
             let d = data(&s, clustered);
             assert_same_on_pools(&POOLS, || {
                 let fit = fit(
                     &d,
-                    &s.x,
+                    x.as_ref(),
                     &FineGrayOptions {
-                        cause: 1,
                         ties,
-                        timefix: TimeFix::default(),
+                        ..FineGrayOptions::new(1)
                     },
                 )
                 .unwrap();
-                assert!(fit.converged && fit.log_hazard_ratio.is_some());
-                vec![
-                    opt(fit.log_hazard_ratio),
-                    opt(fit.standard_error),
-                    fit.n_events,
-                    fit.n_rows as f64,
-                    f64::from(fit.iterations),
-                    f64::from(u8::from(fit.converged)),
-                    opt(fit.robust_standard_error),
-                ]
+                assert!(fit.converged && fit.rank == 4);
+                fit_bits(&fit)
             });
         }
     }

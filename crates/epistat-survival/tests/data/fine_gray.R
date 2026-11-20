@@ -9,9 +9,21 @@
 #   weighted    integer times, integer case weights, two causes
 # For every data set and cause: the rows survival::finegray writes (original
 # row, start, stop, status, weight) and coxph fits on them with Breslow and
-# Efron ties (the estimate polished by two further Newton steps, since coxph stops
-# a step early), with no cluster, with the subject as cluster and with groups of
-# four subjects as cluster.
+# Efron ties, with no cluster, with the subject as cluster and with groups of
+# four subjects as cluster. coxph runs with its default convergence rule (eps
+# 1e-9, no polishing), so its Newton path is that of the Rust fit, and the
+# iteration count is recorded.
+#
+# Several covariates: coxph on the same rows with a binary covariate, a
+# continuous one and a factor of three levels (fac), as bin + x + factor(fac),
+# whose columns are bin, x, fac1 and fac2. coxph runs with its default
+# convergence rule (eps 1e-9, no polishing), so the Newton path is that of the
+# Rust fit, and the iteration count is recorded. The reference holds the
+# coefficients, the model-based covariance, the robust covariance with the
+# subject or a group of four as cluster, the log partial likelihoods, the Wald
+# test (model-based, and robust with a cluster), the score test, and the
+# condition numbers of the information at the fit, at zero and of the robust
+# covariance, on covariates scaled by their weighted mean absolute deviation.
 #
 # Case weights. finegray(weights =) estimates the censoring distribution
 # without them. The reference for a weighted analysis is therefore finegray on
@@ -42,6 +54,7 @@ make <- function(name, time, event, weight = rep(1L, length(time)), kmax) {
     name = name, time = time, event = event, weight = weight,
     x = round(rnorm(n) + 0.3 * (event == 1), 2),
     bin = rbinom(n, 1, 0.45),
+    fac = (seq_len(n) + event) %% 3L,
     id = seq_len(n),
     group = rep(seq_len(ceiling(n / 4)), each = 4)[seq_len(n)],
     causes = 1:kmax
@@ -58,7 +71,7 @@ nw <- 80
 sets[[4]] <- make("weighted", sample(1:12, nw, TRUE), sample(0:2, nw, TRUE, prob = c(.3, .45, .25)),
                   weight = sample(1:3, nw, TRUE), kmax = 2)
 
-control <- coxph.control(timefix = FALSE, eps = 1e-13, toler.chol = 1e-15, iter.max = 50)
+multi_control <- coxph.control(timefix = FALSE, iter.max = 50)
 
 fg_rows <- function(s, cause, use_weight_argument = FALSE) {
   n <- length(s$time)
@@ -85,20 +98,51 @@ fg_rows <- function(s, cause, use_weight_argument = FALSE) {
 fit_one <- function(s, rows, cov, ties, cl) {
   rows$X <- s[[cov]][rows$orig]
   args <- list(formula = Surv(start, stop, status) ~ X, data = rows, weights = rows$weight,
-               ties = ties, control = control, robust = cl != "none")
+               ties = ties, control = multi_control, robust = cl != "none")
   if (cl != "none") args$cluster <- s[[cl]][rows$orig]
   fit <- do.call(coxph, args)
-  # coxph stops when the log likelihood changes by less than eps, which leaves
-  # the last Newton step, not its square, in the coefficient. Two more steps
-  # from its estimate make the reference the root of the score.
-  first <- coef(fit)
-  for (k in 1:2) fit <- do.call(coxph, c(args, list(init = coef(fit))))
-  list(first_step_error = abs(unname(coef(fit)) - unname(first)),
-covariate = cov, ties = ties, cluster = cl,
+  stopifnot(fit$iter < 50)
+  list(covariate = cov, ties = ties, cluster = cl,
        coefficient = unname(coef(fit)),
        se = as.numeric(sqrt(if (cl != "none") fit$naive.var else fit$var)),
        robust_se = if (cl != "none") as.numeric(sqrt(fit$var)) else NA_real_,
        iterations = fit$iter,
+       n_events = sum(rows$weight[rows$status == 1]))
+}
+
+kappa_scaled <- function(v, xs, w) {
+  centred <- sweep(xs, 2, colSums(w * xs) / sum(w))
+  sc <- colSums(w * abs(centred)) / sum(w)
+  sc[sc == 0] <- 1
+  d <- diag(sc, length(sc))
+  kappa(d %*% v %*% d, exact = TRUE)
+}
+
+fit_multi <- function(s, rows, ties, cl) {
+  rows$bin <- s$bin[rows$orig]
+  rows$x <- s$x[rows$orig]
+  rows$fac <- factor(s$fac[rows$orig], 0:2)
+  args <- list(formula = Surv(start, stop, status) ~ bin + x + fac, data = rows,
+               weights = rows$weight, ties = ties, control = multi_control,
+               robust = cl != "none")
+  if (cl != "none") args$cluster <- s[[cl]][rows$orig]
+  fit <- do.call(coxph, args)
+  stopifnot(fit$iter < 50)
+  args0 <- args
+  args0$control <- coxph.control(timefix = FALSE, iter.max = 0)
+  zero <- do.call(coxph, c(args0, list(init = rep(0, 4))))
+  naive <- function(f) as.matrix(if (cl != "none") f$naive.var else f$var)
+  vn <- naive(fit)
+  b <- coef(fit)
+  xs <- model.matrix(~ bin + x + fac, rows)[, -1]
+  w <- rows$weight
+  list(ties = ties, cluster = cl, coefficients = unname(b),
+       vcov = unname(vn), info = unname(solve(vn)), vcov_robust = if (cl != "none") unname(as.matrix(fit$var)) else numeric(),
+       loglik = fit$loglik[2], loglik_null = fit$loglik[1], iterations = fit$iter,
+       wald_model = sum(b * solve(vn, b)), wald = fit$wald.test, score = fit$score,
+       kappa = kappa_scaled(solve(vn), xs, w),
+       kappa_init = kappa_scaled(solve(naive(zero)), xs, w),
+       kappa_robust = if (cl != "none") kappa_scaled(as.matrix(fit$var), xs, w) else NA_real_,
        n_events = sum(rows$weight[rows$status == 1]))
 }
 
@@ -157,7 +201,11 @@ for (s in sets) {
         fits[[length(fits) + 1]] <- fit_one(s, rows, cov, ties, cl)
       }
     }
-    entry <- list(cause = cause, rows = rows, fits = fits)
+    multi <- list()
+    for (ties in c("breslow", "efron")) for (cl in c("none", "id", "group")) {
+      multi[[length(multi) + 1]] <- fit_multi(s, rows, ties, cl)
+    }
+    entry <- list(cause = cause, rows = rows, fits = fits, multi = multi)
     if (s$name == "weighted") {
       entry$rows_weights_argument <- fg_rows(s, cause, TRUE)
     } else {
@@ -176,11 +224,20 @@ for (s in sets) {
         )
       }
       entry$crr <- crr_fits
+      # Several covariates: bin, x and the two indicators of fac.
+      covs <- cbind(s$bin, s$x, s$fac == 1, s$fac == 2) + 0
+      cr <- crr(s$time, s$event, covs, failcode = cause, cencode = 0,
+                gtol = 1e-8, maxiter = 100)
+      stopifnot(cr$converged)
+      entry$crr_multi <- list(
+        coefficients = unname(cr$coef), information = unname(cr$inf),
+        loglik = as.numeric(cr$loglik)
+      )
     }
     causes[[length(causes) + 1]] <- entry
   }
   datasets[[length(datasets) + 1]] <- c(
-    s[c("name", "time", "event", "weight", "x", "bin", "id", "group")],
+    s[c("name", "time", "event", "weight", "x", "bin", "fac", "id", "group")],
     list(results = causes)
   )
 }
@@ -190,4 +247,4 @@ cat(toJSON(list(
   r_version = R.version.string,
   packages = setNames(lapply(pkgs, function(p) as.character(packageVersion(p))), pkgs),
   datasets = datasets
-), digits = NA, auto_unbox = TRUE, na = "null", dataframe = "columns"))
+), digits = I(17), auto_unbox = TRUE, na = "null", dataframe = "columns"))
