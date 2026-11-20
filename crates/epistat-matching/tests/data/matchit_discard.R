@@ -111,5 +111,5 @@ out <- list(
                   matchit = as.character(packageVersion("MatchIt")),
                   jsonlite = as.character(packageVersion("jsonlite"))),
   cases = cases)
-write_json(out, "tests/data/matchit_discard.json", digits = NA,
+write_json(out, "tests/data/matchit_discard.json", digits = I(17),
            auto_unbox = TRUE)

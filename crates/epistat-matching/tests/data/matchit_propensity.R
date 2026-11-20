@@ -81,5 +81,5 @@ out <- list(
   l2_penalty = L2,
   fits = list(fit_one("lalonde", lal), fit_one("sim_continuous", sim_cont),
               fit_one("sim_discrete", sim_discrete)))
-write_json(out, "tests/data/matchit_propensity.json", digits = NA,
+write_json(out, "tests/data/matchit_propensity.json", digits = I(17),
            auto_unbox = TRUE)

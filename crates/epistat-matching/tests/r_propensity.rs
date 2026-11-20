@@ -96,7 +96,10 @@ fn rounding_floor(eta: f64) -> f64 {
 #[test]
 fn linear_predictor_scale_matches_matchit() {
     let reference = reference();
-    println!("{} / MatchIt {}", reference.versions.r, reference.versions.matchit);
+    println!(
+        "{} / MatchIt {}",
+        reference.versions.r, reference.versions.matchit
+    );
     for fit in &reference.fits {
         let ours = fit_ours(fit, PropensityScoreOutputScale::LinearPredictor);
         assert!(ours.estimate.converged, "{}", fit.name);
@@ -112,17 +115,24 @@ fn linear_predictor_scale_matches_matchit() {
                 fit.name
             );
         }
-        println!("{}: linear predictor worst ratio to allowance {worst:.3}", fit.name);
+        println!(
+            "{}: linear predictor worst ratio to allowance {worst:.3}",
+            fit.name
+        );
         // MatchIt's linear link and its logit link fit the same model.
         for (a, b) in fit.coefficients.iter().zip(&fit.linear_link_coefficients) {
             assert!((a - b).abs() <= 1e-12 * (1.0 + a.abs()), "{}", fit.name);
         }
-        for (name, (expected, shift)) in fit.coefficient_names.iter().zip(
-            fit.coefficients
-                .iter()
-                .zip(&fit.penalty_shift_coefficients),
-        ) {
-            let ours_name = if name == "(Intercept)" { "intercept" } else { name };
+        for (name, (expected, shift)) in fit
+            .coefficient_names
+            .iter()
+            .zip(fit.coefficients.iter().zip(&fit.penalty_shift_coefficients))
+        {
+            let ours_name = if name == "(Intercept)" {
+                "intercept"
+            } else {
+                name
+            };
             let position = ours
                 .estimate
                 .column_names
@@ -163,7 +173,10 @@ fn probability_scale_matches_matchit() {
                 fit.name
             );
         }
-        println!("{}: probability worst ratio to allowance {worst:.3}", fit.name);
+        println!(
+            "{}: probability worst ratio to allowance {worst:.3}",
+            fit.name
+        );
     }
 }
 

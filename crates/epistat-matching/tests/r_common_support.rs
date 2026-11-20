@@ -95,8 +95,16 @@ fn run(case: &Case, policy: Option<CommonSupport>) -> Run {
         .with_distance_config(&config);
     let outcome = match_standard(&anchors, &candidates, request);
     let index_of = |text: &str| text[1..].parse::<usize>().expect("unit id");
-    let kept_anchors = outcome.pairs.iter().map(|p| index_of(p.anchor_id())).collect();
-    let kept_candidates = outcome.pairs.iter().map(|p| index_of(p.comparator_id())).collect();
+    let kept_anchors = outcome
+        .pairs
+        .iter()
+        .map(|p| index_of(p.anchor_id()))
+        .collect();
+    let kept_candidates = outcome
+        .pairs
+        .iter()
+        .map(|p| index_of(p.comparator_id()))
+        .collect();
     Run {
         outcome,
         kept_anchors,
@@ -136,7 +144,10 @@ fn range_of(case: &Case, group: f64) -> (f64, f64) {
 #[test]
 fn trimmed_units_match_matchit() {
     let reference = reference();
-    println!("{} / MatchIt {}", reference.versions.r, reference.versions.matchit);
+    println!(
+        "{} / MatchIt {}",
+        reference.versions.r, reference.versions.matchit
+    );
     let mut boundary_kept = HashMap::<&str, usize>::new();
     for case in reference.cases.iter().filter(|c| c.name != "disjoint") {
         let treated_range = range_of(case, 1.0);
@@ -193,7 +204,8 @@ fn trimmed_units_match_matchit() {
                 for group in [1.0, 0.0] {
                     let on_end = (0..case.treat.len()).filter(|idx| {
                         (case.treat[*idx] - group).abs() < 0.5
-                            && (case.distance[*idx] == lower || case.distance[*idx] == upper)
+                            && (case.distance[*idx].to_bits() == lower.to_bits()
+                                || case.distance[*idx].to_bits() == upper.to_bits())
                             && !discarded[*idx]
                     });
                     *boundary_kept
@@ -232,7 +244,11 @@ fn both_scales_trim_the_same_units() {
             let a = run(case, Some(policy));
             let b = run(linear, Some(policy));
             assert_eq!(a.kept_anchors, b.kept_anchors, "{} {policy:?}", case.name);
-            assert_eq!(a.kept_candidates, b.kept_candidates, "{} {policy:?}", case.name);
+            assert_eq!(
+                a.kept_candidates, b.kept_candidates,
+                "{} {policy:?}",
+                case.name
+            );
         }
     }
     assert!(pairs >= 6);
@@ -259,7 +275,11 @@ fn no_overlap_is_reported() {
         CommonSupport::Both,
     ] {
         let got = run(case, Some(policy));
-        assert!(got.outcome.pairs.is_empty(), "{policy:?}");
+        assert!(
+            got.outcome.pairs.is_empty(),
+            "{policy:?} {:?}",
+            got.outcome.pairs
+        );
         assert_eq!(
             got.outcome
                 .diagnostics
@@ -284,7 +304,7 @@ fn policy_without_scores_is_refused() {
     criteria.common_support = Some(CommonSupport::Both);
     let request = StandardMatchRequest::new(&criteria, DeterministicSelection, &());
     let outcome = match_standard(&anchors, &candidates, request);
-    assert!(outcome.pairs.is_empty());
+    assert!(outcome.pairs.is_empty(), "{:?}", outcome.pairs);
     assert_eq!(
         outcome
             .diagnostics
