@@ -15,7 +15,9 @@ use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
     ArmColumns, Draw, RowWindows, advance, bootstrap_arm_incidence, curves,
 };
-use epistat_survival::cox::{CoxData, CoxDesign, Ties, fit_cox, fit_cox_single_covariate};
+use epistat_survival::cox::{
+    CoxData, CoxDesign, Ties, cox_score_residuals, fit_cox, fit_cox_single_covariate,
+};
 use epistat_survival::fine_gray::{FineGrayData, Rows, fine_gray_fit, float_codes};
 use epistat_survival::markov::{Stays, markov_test};
 use epistat_survival::multistate::{
@@ -137,7 +139,7 @@ fn cox_design_matrix() {
     for ties in [Ties::Breslow, Ties::Efron] {
         for clustered in [false, true] {
             assert_same_on_pools(&POOLS, || {
-                let fit = fit_cox(&CoxDesign {
+                let data = CoxDesign {
                     x: design.as_ref(),
                     is_event: &is_event,
                     start: &s.entry,
@@ -146,8 +148,8 @@ fn cox_design_matrix() {
                     stratum: &stratum,
                     ties,
                     cluster: clustered.then_some(s.cluster.as_slice()),
-                })
-                .unwrap();
+                };
+                let fit = fit_cox(&data).unwrap();
                 assert!(fit.converged && fit.coefficients[0].is_some());
                 assert!(fit.coefficients[3].is_none(), "the duplicate is aliased");
                 let mut out = opts(&fit.coefficients);
@@ -165,6 +167,13 @@ fn cox_design_matrix() {
                     f64::from(u8::from(fit.converged)),
                 ]);
                 out.extend(fit.monotone_columns.iter().map(|&c| c as f64));
+                out.extend(opts(&fit.covariance));
+                if let Some(robust) = &fit.robust_covariance {
+                    out.extend(opts(robust));
+                }
+                for column in cox_score_residuals(&data, &fit.coefficients).unwrap() {
+                    out.extend(column.unwrap_or_default());
+                }
                 out
             });
         }
