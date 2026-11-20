@@ -704,7 +704,7 @@ fn reconstructed_pairs() {
 #[test]
 fn nearest_matching_in_every_order() {
     use epistat_matching::constraints::caliper_on_field;
-    use epistat_matching::{Assignment, MatchOrder, RapidHashMap};
+    use epistat_matching::{Assignment, MatchOrder, RapidHashMap, VariableRatio};
     let (mut anchors, mut candidates) = base_pair(300, 1_200, 21);
     let mut rng = common::Lcg::new(77);
     let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
@@ -778,6 +778,23 @@ fn nearest_matching_in_every_order() {
                 .run();
             assert!(!out.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&out);
+            for replace in [false, true] {
+                let out = MatchJob::new_standard(&anchors, &candidates, 5)
+                    .with_nearest()
+                    .with_m_order(order)
+                    .with_variable_ratio(VariableRatio::new(2.5, 1, 5).unwrap())
+                    .with_replacement(replace)
+                    .with_exact_matches(["sex"])
+                    .with_distance_config(DistanceConfig::propensity_score_map(
+                        scores.clone(),
+                        DistanceCaliper::new(0.4),
+                    ))
+                    .with_std_caliper(true)
+                    .run();
+                assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&out);
+                d.weights(&out);
+            }
         }
         for order in [MatchOrder::Data, MatchOrder::Closest, MatchOrder::Farthest] {
             let out = MatchJob::new_standard(&anchors, &candidates[..300], 5)
