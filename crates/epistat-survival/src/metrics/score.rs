@@ -17,10 +17,12 @@
 //! default `G` is the Kaplan-Meier estimate of the censoring times, in which a
 //! death at a tied time leaves the risk set before the censoring does, as in
 //! `prodlim` with `reverse = TRUE`, which `Score` calls. It is
-//! [`Censoring::KaplanMeier`]. Weights from any other model can be supplied
-//! with [`Censoring::Supplied`], for example a Cox model for the censoring
-//! times, and then the standard errors are the conservative ones: they treat
-//! the weights as known.
+//! [`Censoring::KaplanMeier`]. A Cox model for the censoring times, fitted here
+//! by [`cox::fit`](crate::cox::fit), is [`Censoring::Cox`], `cens.model =
+//! "cox"`: `G_i(s) = exp(-exp(x_i' b) L0(s))` with the Breslow baseline `L0`.
+//! Weights from any other model can be supplied with [`Censoring::Supplied`],
+//! and then the standard errors are the conservative ones: they treat the
+//! weights as known.
 //!
 //! # Brier score
 //!
@@ -101,6 +103,30 @@
 //! term out. As `Score` does, the area's censoring term is left out at `t` at or
 //! beyond the last time.
 //!
+//! With a Cox model for the censoring times `G_i(s) = exp(-q_i L0(s))`, with
+//! `q_i = exp(x_i' b)` and `L0` the Breslow estimate whose jumps are `d_l /
+//! S0(u_l)` at the distinct censoring times `u_l`, `S0(u)` the sum of `q_j` over
+//! the rows with a time at or after `u` (a death at a censoring time stays in the
+//! risk set), the term is `IF_k += sum_i g_i f_ik(s_i)`, with `f_ik(s)` the
+//! influence of row `k` on the cumulative hazard `q_i L0(s)` of row `i`:
+//!
+//! ```text
+//! f_ik(s) = q_i { c_k(s) + (L0(s) x_i - H(s))' f_k },
+//! c_k(s) = d_k 1(T_k <= s) / S0(T_k) - q_k C(min(T_k, s)),
+//! C(v) = sum over u_l <= v of d_l / S0(u_l)^2,
+//! H(s) = sum over u_l <= s of d_l E(u_l) / S0(u_l),
+//! ```
+//!
+//! where `d_k` is 1 for a row that was censored, `E` the `q`-weighted mean of
+//! `x` in the risk set and `f_k = V u_k` the influence of row `k` on the
+//! coefficients, with the model covariance `V` and the Breslow score residual
+//! `u_k`. The sum over `i` is formed with cumulative sums over the censoring
+//! times, `O(n + m p)` for each time. `Score` takes the same function from
+//! `iidCox`. With tied censoring times `iidCox` counts a tied time once, and the
+//! function here is the exact derivative of the score with respect to the case
+//! weights, which the tests check by numerical differences; without ties the
+//! two are equal to rounding error.
+//!
 //! The standard error of the IPA uses the influence functions of the model and
 //! the null model, `IF_IPA = -IF_B / B_0 + B IF_B0 / B_0^2`, as `Score` does,
 //! and takes the null model's predictions as fixed.
@@ -118,9 +144,14 @@
 //!   `Score` warns.
 //! - The tie rule of `aeqSurv` is not applied by default, since neither
 //!   function applies it.
-//! - The standard error with a Cox model for the censoring times is the
-//!   conservative one only; `Score`'s own needs the influence function of the
-//!   Cox model and is not implemented.
+//! - The Cox model for the censoring times is fitted by [`cox::fit`](crate::cox::fit)
+//!   with the options given, `Efron` ties by default as `coxph`; `Score` fits it
+//!   with `rms::cph`, which stops at a relative change of `1e-6` of the log
+//!   partial likelihood, so `eps = 1e-6` reproduces its coefficients. The
+//!   baseline is Breslow's and the survival is `exp(-L)`, as `Score` has it, and
+//!   the influence of the coefficients is `V u` with the model covariance and
+//!   the Breslow score residual. A model with strata, an offset or the exact
+//!   ties method is not supported.
 //!
 //! # Errors of the computed numbers
 //!
@@ -162,6 +193,8 @@ use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
 use super::censoring::CensoringKm;
+use super::coxcens::CoxCens;
+pub use super::coxcens::CoxCensoring;
 use super::marginal::marginal_risk;
 use super::prepare::{Kind, Sorted, check_matrix, check_times, sort_rows};
 use crate::error::{Error, Result};
@@ -178,6 +211,10 @@ pub enum Censoring<'a> {
     /// Probabilities the caller computed from another model of the censoring
     /// times. The standard errors are the conservative ones.
     Supplied(SuppliedCensoring<'a>),
+    /// A Cox model for the censoring times, fitted here, `cens.model = "cox"`.
+    /// The standard errors include the estimation of the model unless
+    /// [`ScoreOptions::conservative`] is set.
+    Cox(CoxCensoring<'a>),
 }
 
 /// Censoring probabilities from a model of the caller's.
@@ -327,16 +364,31 @@ struct Core<'a> {
     /// `G(T_i-)` at each sorted position.
     g_own: Vec<f64>,
     supplied: Option<SuppliedCensoring<'a>>,
+    cox: Option<CoxCens>,
+    /// The baseline hazard of the censoring Cox model at each evaluation time.
+    lam_times: Vec<f64>,
     n: usize,
 }
 
 impl<'a> Core<'a> {
-    fn new(data: &SurvData<'_>, opts: &ScoreOptions<'a>, n_times: usize) -> Result<Self> {
+    fn new(data: &SurvData<'_>, opts: &ScoreOptions<'a>, times: &[f64]) -> Result<Self> {
+        let n_times = times.len();
         let sorted = sort_rows(data, opts.timefix, opts.cause)?;
         let n = sorted.n();
         let w = vec![1.0; n];
         let km = CensoringKm::new(&sorted.time, &sorted.is_censored(), &w, true);
+        let mut cox = None;
+        let mut lam_times = Vec::new();
         let (supplied, g_own) = match opts.censoring {
+            Censoring::Cox(spec) => {
+                let model = CoxCens::new(&sorted, &spec)?;
+                let g_own = (0..n)
+                    .map(|pos| model.survival(pos, model.lambda_before(sorted.time[pos])))
+                    .collect();
+                lam_times = times.iter().map(|&t| model.lambda_through(t)).collect();
+                cox = Some(model);
+                (None, g_own)
+            }
             Censoring::KaplanMeier => (
                 None,
                 sorted
@@ -379,6 +431,8 @@ impl<'a> Core<'a> {
             km,
             g_own,
             supplied,
+            cox,
+            lam_times,
             n,
         })
     }
@@ -386,6 +440,9 @@ impl<'a> Core<'a> {
     /// `G(t)` for the row at sorted position `pos`, evaluation time `t` in
     /// column `j`.
     fn g_at(&self, pos: usize, j: usize, t: f64) -> f64 {
+        if let Some(cox) = &self.cox {
+            return cox.survival(pos, self.lam_times[j]);
+        }
         match &self.supplied {
             None => self.km.at(t),
             Some(s) => s.at_times[(self.sorted.row[pos] as usize, j)],
@@ -401,6 +458,9 @@ impl<'a> Core<'a> {
     /// derivative `g` with respect to each row's relative weight. See the
     /// module documentation.
     fn censoring_term(&self, t: f64, g: &[f64]) -> Vec<f64> {
+        if let Some(cox) = &self.cox {
+            return cox.term(&self.sorted, t, g);
+        }
         let sorted = &self.sorted;
         let km = &self.km;
         let n = sorted.n();
@@ -463,7 +523,7 @@ impl<'a> Core<'a> {
 }
 
 /// The standard error `sd(IF) / sqrt(N)`, `sd` with divisor `N - 1`.
-fn std_err_of(influence: &[f64]) -> Option<f64> {
+pub(super) fn std_err_of(influence: &[f64]) -> Option<f64> {
     let n = influence.len();
     if n < 2 {
         return None;
@@ -569,7 +629,7 @@ pub fn brier(
     times: &[f64],
     opts: &ScoreOptions<'_>,
 ) -> Result<Score> {
-    let core = Core::new(data, opts, times.len())?;
+    let core = Core::new(data, opts, times)?;
     check_times(times, core.sorted.max_time)?;
     check_matrix("predicted", predicted, core.sorted.n_rows, times.len())?;
     let complement = match opts.predicted {
@@ -617,7 +677,7 @@ pub fn brier(
 ///
 /// As for [`brier`], except those about `predicted`.
 pub fn null_brier(data: &SurvData<'_>, times: &[f64], opts: &ScoreOptions<'_>) -> Result<Score> {
-    let core = Core::new(data, opts, times.len())?;
+    let core = Core::new(data, opts, times)?;
     check_times(times, core.sorted.max_time)?;
     let marginal = marginal_risk(&core.sorted.time, &core.sorted.kind, times);
     let columns: Vec<BrierColumn> = times
@@ -828,7 +888,7 @@ pub fn auc(
     times: &[f64],
     opts: &ScoreOptions<'_>,
 ) -> Result<Auc> {
-    let core = Core::new(data, opts, times.len())?;
+    let core = Core::new(data, opts, times)?;
     check_times(times, core.sorted.max_time)?;
     check_matrix("marker", marker, core.sorted.n_rows, times.len())?;
     let columns: Vec<AucColumn> = times
