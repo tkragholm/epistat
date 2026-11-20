@@ -1,6 +1,7 @@
 //! Standardised risks and average treatment effects by the g-formula, with
 //! influence-function standard errors, as `ate` of riskRegression with
-//! `estimator = "GFORMULA"`.
+//! `estimator = "GFORMULA"`, and population-averaged predictions and
+//! contrasts of a fitted model as `yates` of survival ([`yates`]).
 //!
 //! # The estimate
 //!
@@ -112,6 +113,7 @@ use crate::surv::SurvData;
 mod cox;
 mod csc;
 mod model;
+pub mod yates;
 
 use model::{Baselines, Influence, ModelInput};
 
@@ -224,6 +226,31 @@ pub struct Inference {
 }
 
 impl Standardised {
+    /// The Wald test that the standardised risks of the levels are equal at time
+    /// `k`, with the covariance of the risks of the levels from the influence
+    /// function, as the tests of [`yates`]. The global test is of all levels, the
+    /// others one per pair or per level against the mean.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] without `std_err`, for a time that does not exist or
+    /// where a risk is not defined, and for fewer than two levels.
+    pub fn tests(&self, k: usize, kind: yates::Test) -> Result<Vec<yates::WaldTest>> {
+        let Some(cov) = &self.covariance else {
+            return Err(Error::input("tests: the result has no standard errors"));
+        };
+        if k >= self.n_times {
+            return Err(Error::input(format!("time {k} is outside the times")));
+        }
+        let l = self.n_levels;
+        let estimate: Option<Vec<f64>> = (0..l).map(|a| self.risk[a * self.n_times + k]).collect();
+        let block: Option<Vec<f64>> = cov[k * l * l..(k + 1) * l * l].iter().copied().collect();
+        match (estimate, block) {
+            (Some(e), Some(b)) => yates::wald_tests(&e, &b, kind),
+            _ => Err(Error::input(format!("time {k}: a risk is not defined"))),
+        }
+    }
+
     /// The risk difference and the risk ratio of level `first` against level
     /// `second`, as `diffRisk` and `ratioRisk` of `ate`.
     ///

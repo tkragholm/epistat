@@ -82,7 +82,8 @@
 //!   without copying the columns.
 //! - [`standardise`]: standardised risks and average treatment effects of Cox and
 //!   cause-specific Cox models by the g-formula, with influence-function standard
-//!   errors, as `riskRegression::ate`.
+//!   errors, as `riskRegression::ate`, and population-averaged predictions and
+//!   contrasts of a fitted model, as `survival::yates` ([`standardise::yates`]).
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
