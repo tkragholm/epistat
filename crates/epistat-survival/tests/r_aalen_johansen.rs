@@ -1,9 +1,10 @@
-//! `aalen_johansen::curves` checked against R 4.6.2's `survival::survfit` with
+//! `aalen_johansen::estimate` checked against R 4.6.2's `survival::survfit` with
 //! a factor status, and against `etm::etm`, `cmprsk::cuminc` and
 //! `prodlim::prodlim` where they cover the case. The bootstraps have no R counterpart and are not checked
 //! here.
 
-use epistat_survival::aalen_johansen::curves;
+use epistat_survival::SurvData;
+use epistat_survival::aalen_johansen::{AalenJohansenOptions, estimate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -203,8 +204,20 @@ fn curves_match_r() {
         } else {
             vec![0; n]
         };
-        let entry = case.use_entry.then_some(reference.entry.as_slice());
-        let got = curves(&reference.time, &reference.status, &weight, &group, entry).unwrap();
+        let mut builder = SurvData::builder(&reference.time, &reference.status).n_codes(3);
+        if case.weights != "none" {
+            builder = builder.weight(&weight);
+        }
+        if case.use_group {
+            builder = builder.stratum(&group);
+        }
+        if case.use_entry {
+            builder = builder.start(&reference.entry);
+        }
+        let data = builder.build().unwrap();
+        let got = estimate(&data, &AalenJohansenOptions::default()).unwrap();
+        assert_eq!(got.n_rows, n, "{}", case.name);
+        assert_eq!(got.n_used, n, "{}", case.name);
         assert_eq!(got.causes, vec![1, 2, 3], "{}", case.name);
 
         for r in &case.groups {
