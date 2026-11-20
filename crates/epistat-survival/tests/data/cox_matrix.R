@@ -4,10 +4,17 @@
 # that diverges. Times are integers, so events tie.
 # For each fit: coefficients and standard errors (NA, written null, for an
 # aliased column), the log partial likelihood at the fit and at zero, the
-# iteration count, coxph's warnings, and the condition number of the
+# iteration count, coxph's warnings, the model-based covariance matrix, the
+# cluster-robust one where a cluster is used, the score residuals of each row
+# with and without the case weight (all on the scale of the columns given, NA,
+# written null, in the rows and columns of an aliased coefficient), and the
+# condition number of the
 # information matrix on the covariates scaled as coxph scales them (centred,
 # divided by their weighted mean absolute deviation), which bounds how far two
 # implementations of the same Newton iteration can differ.
+# The versions of R, survival and jsonlite that wrote the file are in it.
+# Numbers are written with 17 significant digits, so every double reads back
+# as written.
 # Run: Rscript cox_matrix.R > cox_matrix.json
 suppressMessages({
   library(jsonlite)
@@ -85,6 +92,13 @@ for (s in specs) {
   vr <- as.matrix(fit$var)
   # The covariance matrices may or may not carry rows for aliased columns.
   keep <- function(v) if (nrow(v) == length(ok)) v[ok, ok, drop = FALSE] else v
+  # A covariance matrix over all columns, NA in the rows and columns of an
+  # aliased one.
+  embed <- function(v) {
+    out <- matrix(NA_real_, length(ok), length(ok))
+    out[ok, ok] <- v
+    unname(out)
+  }
   vn <- keep(vn)
   naive_se <- full(sqrt(diag(vn)))
   robust_se <- if (use_cluster) full(sqrt(diag(keep(vr)))) else numeric()
@@ -100,6 +114,18 @@ for (s in specs) {
       monotone <- c(monotone, as.integer(strsplit(trimws(sub(";.*", "", sub(".*variable", "", m))), "[ ,]+")[[1]]))
     }
   }
+  vcov_model <- embed(keep(as.matrix(if (use_cluster) fit$naive.var else vcov(fit))))
+  vcov_robust <- if (use_cluster) embed(keep(as.matrix(vcov(fit)))) else list()
+  # Over all columns when a coefficient is aliased, the aliased ones not
+  # meaningful.
+  # residuals() leaves the case weight out of a score residual unless asked;
+  # the weighted ones add up to the score and are what the robust variance sums.
+  score_columns <- function(weighted) {
+    sc <- as.matrix(residuals(fit, type = "score", weighted = weighted))
+    out <- matrix(NA_real_, n, length(ok))
+    out[, ok] <- if (ncol(sc) == length(ok)) sc[, ok, drop = FALSE] else sc
+    unname(out)
+  }
   fits[[length(fits) + 1]] <- list(
     name = name, columns = cols, ties = ties,
     use_start = use_start, use_strata = use_strata,
@@ -107,11 +133,18 @@ for (s in specs) {
     coefficients = unname(coef(fit)), se = naive_se, robust_se = robust_se,
     loglik = fit$loglik[2], loglik_null = fit$loglik[1], iterations = fit$iter,
     rank = sum(ok), warnings = warns, monotone_columns = as.list(monotone),
-    information_condition = kappa(solve(vs), exact = TRUE)
+    information_condition = kappa(solve(vs), exact = TRUE),
+    vcov = vcov_model, vcov_robust = vcov_robust, score_residuals = score_columns(FALSE),
+    score_residuals_weighted = score_columns(TRUE)
   )
 }
 cat(toJSON(list(
+  versions = list(
+    r = R.version.string,
+    survival = as.character(packageVersion("survival")),
+    jsonlite = as.character(packageVersion("jsonlite"))
+  ),
   columns = unname(columns), column_names = colnames(columns),
   start = start, stop = stop, event = event, stratum = stratum,
   weight = weight, id = id, fits = fits
-), digits = NA, auto_unbox = TRUE, na = "null"))
+), digits = I(17), auto_unbox = TRUE, na = "null"))
