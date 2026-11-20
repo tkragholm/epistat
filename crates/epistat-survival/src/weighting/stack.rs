@@ -77,6 +77,23 @@ impl Iptw<'_> {
         }
     }
 
+    /// The derivative of the log weight of subject `i` with respect to the
+    /// parameters, `n_params` values.
+    pub(super) fn log_weight_gradient_into(&self, i: usize, out: &mut [f64]) {
+        let p = self.design.ncols();
+        let f = self.log_slope(i);
+        for (j, o) in out.iter_mut().enumerate().take(p) {
+            *o = f * self.design[(i, j)];
+        }
+        if let Some(pi) = self.marginal {
+            out[p] = if self.treatment[i] {
+                1.0 / pi
+            } else {
+                -1.0 / (1.0 - pi)
+            };
+        }
+    }
+
     /// The derivative of the summed estimating functions, block diagonal.
     pub(super) fn bread(&self) -> Result<Mat<f64>> {
         let (n, p) = (self.len(), self.design.ncols());

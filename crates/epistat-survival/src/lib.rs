@@ -76,9 +76,10 @@
 //!   `ci.lin` and `ci.exp` limits.
 //! - [`surv2`]: timeline data (one row per observation) turned into counting-process
 //!   intervals, as `Surv2` and `fromtimeline`.
-//! - [`weighting`]: inverse probability of treatment and censoring weights, and Cox
-//!   and Kaplan-Meier estimates with a variance that accounts for the estimated
-//!   weights.
+//! - [`weighting`]: inverse probability of treatment and censoring weights, with
+//!   the pooled logistic censoring model, and Cox and Kaplan-Meier estimates with a
+//!   variance that accounts for the estimated weights of treatment, of censoring
+//!   or of both.
 //! - `arrow` (feature `arrow`): [`SurvData`] built from Apache Arrow arrays and record batches
 //!   without copying the columns.
 //! - [`standardise`]: standardised risks and average treatment effects of Cox and

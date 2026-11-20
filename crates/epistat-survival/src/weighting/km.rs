@@ -56,6 +56,8 @@
 use epistat_linalg::{Factor, Mat};
 use epistat_stats::sum::Compensated;
 
+use super::adjust::Nuisance;
+use super::estimated::{Estimated, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
 use crate::error::{Error, Result};
@@ -183,6 +185,40 @@ pub fn estimate(
         &unit_of_row,
         n_units,
         Some(&correction),
+        None,
+    )
+}
+
+/// The curves of `data` weighted by the product of the estimated weights of
+/// `estimated`, with the variance that accounts for each model of the weights
+/// being estimated.
+///
+/// The weights, the units and the models are as for
+/// [`cox::fit_estimated`](super::cox::fit_estimated), and the groups are the
+/// strata of `data`. The curves are those of [`estimate`] for propensity
+/// weights alone, with the same covariance up to rounding. `data` must carry
+/// no case weights.
+///
+/// # Errors
+///
+/// [`Error::Input`] as for [`estimate`] and for the models of the weights.
+pub fn estimate_estimated(
+    data: &SurvData<'_>,
+    times: &[f64],
+    opts: &KmOptions,
+    estimated: &Estimated<'_>,
+) -> Result<WeightedKm> {
+    let prepared = prepare(data, estimated)?;
+    let buf = with_weights(data, prepared.weight.clone())?;
+    let weighted = buf.as_data().with_timefix(opts.timefix)?;
+    curves(
+        &weighted,
+        times,
+        opts,
+        &prepared.unit_of_row,
+        prepared.n_units,
+        None,
+        Some(&prepared.nuisances),
     )
 }
 
@@ -206,7 +242,7 @@ pub fn estimate_known(data: &SurvData<'_>, times: &[f64], opts: &KmOptions) -> R
         (None, Some(i)) => (i.iter().map(|&u| u as usize).collect(), weighted.n_ids()),
         (None, None) => ((0..n).collect(), n),
     };
-    curves(&weighted, times, opts, &unit_of_row, n_units, None)
+    curves(&weighted, times, opts, &unit_of_row, n_units, None, None)
 }
 
 /// The rows of one group and what the influence of each needs.
@@ -234,6 +270,7 @@ fn curves(
     unit_of_row: &[usize],
     n_units: usize,
     correction: Option<&Correction<'_>>,
+    general: Option<&[Box<dyn Nuisance + '_>]>,
 ) -> Result<WeightedKm> {
     if let Some(t) = times.iter().find(|t| !t.is_finite()) {
         return Err(Error::input(format!("times: {t} is not finite")));
@@ -406,6 +443,7 @@ fn curves(
         let mut adjusted: Vec<Vec<f64>> = Vec::new();
         let mut defined = vec![true; n_out];
         let mut c = vec![vec![0.0; k]; n_out];
+        let mut a_mat = general.map(|_| Mat::<f64>::zeros(data.n_rows(), n_out));
         for (gi, b) in built.iter().enumerate() {
             let ct = b.events.partition_point(|&e| e <= t);
             if ct > b.dead || b.s_at[ct] <= 0.0 {
@@ -424,6 +462,9 @@ fn curves(
                     phi += b.gsum[upper] - b.gsum[b.at_start[idx] as usize];
                 }
                 known[gi][unit_of_row[r]] += weight[r] * phi;
+                if let Some(am) = a_mat.as_mut() {
+                    am[(r, gi)] = weight[r] * phi;
+                }
                 if let Some(cor) = correction {
                     cor.iptw
                         .weight_gradient_into(cor.subject[r] as usize, &mut grad);
@@ -444,6 +485,19 @@ fn curves(
                 adjusted.push(v);
             }
         }
+        if let (Some(nuisances), Some(am)) = (general, &a_mat) {
+            let mut extra = Mat::<f64>::zeros(n_units, n_out);
+            for nuisance in nuisances {
+                nuisance.add(am.as_ref(), &mut extra)?;
+            }
+            for gi in 0..n_out {
+                adjusted.push(
+                    (0..n_units)
+                        .map(|u| known[gi][u] + extra[(u, gi)])
+                        .collect(),
+                );
+            }
+        }
         let s_of = |gi: usize| built[gi].s_at[built[gi].events.partition_point(|&e| e <= t)];
         for gi in 0..n_out {
             for hi in 0..n_out {
@@ -456,7 +510,7 @@ fn curves(
                     Some(scale * dot(&known[gi], &known[hi]));
                 cov[(ti * n_out + gi) * n_out + hi] = Some(
                     scale
-                        * if correction.is_some() {
+                        * if correction.is_some() || general.is_some() {
                             dot(&adjusted[gi], &adjusted[hi])
                         } else {
                             dot(&known[gi], &known[hi])

@@ -68,6 +68,7 @@ use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, MatRef, inverse};
 
+use super::estimated::{Estimated, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
 use crate::cox::{CoxModelFit, CoxOptions, fit as cox_fit, score_residuals};
@@ -223,6 +224,126 @@ pub fn fit(
         robust_covariance,
         weight_covariance: flat(&stacked, 0, k),
         n_units,
+        fit: model,
+    })
+}
+
+/// A Cox fit weighted by estimated weights and its two variances.
+#[derive(Debug, Clone)]
+pub struct EstimatedCox {
+    /// The weighted fit of [`crate::cox::fit`].
+    pub fit: CoxModelFit,
+    /// The coefficients.
+    pub coefficients: Vec<f64>,
+    /// The covariance of the coefficients that accounts for the estimation of
+    /// every model of the weights, `p x p` row-major.
+    pub covariance: Vec<f64>,
+    /// The standard errors from `covariance`.
+    pub standard_errors: Vec<f64>,
+    /// The covariance that takes the weights as known, over the same units.
+    pub robust_covariance: Vec<f64>,
+    /// The standard errors from `robust_covariance`.
+    pub robust_standard_errors: Vec<f64>,
+    /// The number of units the estimating functions were summed over.
+    pub n_units: usize,
+}
+
+/// Fit the Cox model of `data` on `x` weighted by the product of the estimated
+/// weights of `estimated`, and give the variance that accounts for each model of
+/// the weights being estimated.
+///
+/// The weights are the propensity weights of the subject of each row and the
+/// censoring weights of the row, see [`Estimated`]; the censoring weights of the
+/// Kaplan-Meier and Cox models are fitted here to `data`. With propensity
+/// weights alone this is [`fit`], which also gives the covariance of the
+/// parameters of the weights. The variance adds to the influence of each unit
+/// the influence of the weights through every model, see the [module
+/// documentation of `weighting`](super), and treats the models as separate
+/// estimating equations.
+///
+/// The influence of a unit sums the score residuals of its rows, and the units are
+/// the clusters of `data`, the subjects of the propensity weights, the `id` of
+/// `data` or the rows, in that order of preference.
+///
+/// # Errors
+///
+/// [`Error::Input`] for the invalid input of [`crate::cox::fit`] and of the models of
+/// the weights, for data with case weights, for neither kind of weights given,
+/// for `subject` without propensity weights or with the wrong length or an unknown
+/// subject, for rows of one subject in several clusters, for exact ties, when the
+/// fit does not converge or has an aliased column, and when a solve fails.
+pub fn fit_estimated(
+    data: &SurvData<'_>,
+    x: MatRef<'_, f64>,
+    opts: &CoxOptions<'_>,
+    estimated: &Estimated<'_>,
+) -> Result<EstimatedCox> {
+    let n = data.n_rows();
+    let prepared = prepare(data, estimated)?;
+    let buf = with_weights(data, prepared.weight.clone())?;
+    let weighted = buf.as_data();
+    let model = cox_fit(&weighted, x, opts)?;
+    if !model.converged {
+        return Err(Error::input("the weighted Cox fit did not converge"));
+    }
+    let p = x.ncols();
+    let coefficients: Vec<f64> = model
+        .coefficients
+        .iter()
+        .enumerate()
+        .map(|(j, c)| c.ok_or_else(|| Error::input(format!("x: column {j} is aliased"))))
+        .collect::<Result<_>>()?;
+    let v: Vec<f64> = model
+        .covariance
+        .iter()
+        .map(|c| c.ok_or_else(|| Error::input("the covariance of the fit is undefined")))
+        .collect::<Result<_>>()?;
+    let residuals = score_residuals(&weighted, x, &model.coefficients, opts)?;
+    let residuals: Vec<Vec<f64>> = residuals
+        .into_iter()
+        .map(|r| r.ok_or_else(|| Error::input("a score residual is undefined")))
+        .collect::<Result<_>>()?;
+    let a = Mat::from_fn(n, p, |row, j| residuals[j][row]);
+    let mut known = Mat::<f64>::zeros(prepared.n_units, p);
+    for row in 0..n {
+        for j in 0..p {
+            known[(prepared.unit_of_row[row], j)] += a[(row, j)];
+        }
+    }
+    let mut influence = known.clone();
+    for nuisance in &prepared.nuisances {
+        nuisance.add(a.as_ref(), &mut influence)?;
+    }
+    let vmat = Mat::from_fn(p, p, |i, j| v[i * p + j]);
+    let information = inverse(vmat.as_ref(), &Attempt::SYMMETRIC)
+        .map_err(|e| Error::input(format!("the information of the fit: {e}")))?
+        .x;
+    let minus_information = Mat::from_fn(p, p, |i, j| -information[(i, j)]);
+    let ones = Clusters::singletons(prepared.n_units);
+    let form = |psi: &Mat<f64>| -> Result<Mat<f64>> {
+        let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))
+            .map_err(|e| Error::input(format!("the estimating functions: {e}")))?;
+        sandwich(minus_information.as_ref(), b.as_ref(), &Attempt::SYMMETRIC)
+            .map_err(|e| Error::input(format!("the variance: {e}")))
+    };
+    let adjusted = form(&influence)?;
+    let ignoring = form(&known)?;
+    let flat = |m: &Mat<f64>| -> Vec<f64> {
+        (0..p)
+            .flat_map(|i| (0..p).map(move |j| (i, j)))
+            .map(|(i, j)| m[(i, j)])
+            .collect()
+    };
+    let covariance = flat(&adjusted);
+    let robust_covariance = flat(&ignoring);
+    let se = |c: &[f64]| (0..p).map(|i| c[i * p + i].max(0.0).sqrt()).collect();
+    Ok(EstimatedCox {
+        coefficients,
+        standard_errors: se(&covariance),
+        robust_standard_errors: se(&robust_covariance),
+        covariance,
+        robust_covariance,
+        n_units: prepared.n_units,
         fit: model,
     })
 }

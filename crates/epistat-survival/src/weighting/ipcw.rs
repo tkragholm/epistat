@@ -119,6 +119,39 @@ pub struct Ipcw {
 /// has two last rows at the same stop, when the Cox model of censoring does
 /// not converge, and when the censoring survival is 0 before a row.
 pub fn fit(data: &SurvData<'_>, model: CensoringModel<'_>, opts: &IpcwOptions) -> Result<Ipcw> {
+    fit_parts(data, model, opts).map(|(weights, _)| weights)
+}
+
+/// What the variance of an outcome that uses the weights needs besides the
+/// weights.
+pub(super) struct Parts<'a> {
+    /// The stops and starts of the censoring process, with the tie rule applied.
+    pub stop: Vec<f64>,
+    pub start: Option<Vec<f64>>,
+    pub censored: Vec<bool>,
+    /// The dense stratum of each row, and the number of strata.
+    pub group: Vec<usize>,
+    pub n_groups: usize,
+    /// The design of the Cox model, its coefficients and covariance, `None` for
+    /// the Kaplan-Meier model.
+    pub x: Option<MatRef<'a, f64>>,
+    pub coefficients: Option<Vec<Option<f64>>>,
+    pub covariance: Option<Vec<Option<f64>>>,
+    pub ties: Ties,
+    pub stabilise: bool,
+    /// The first start of the subject of each row.
+    pub entry: Vec<f64>,
+    /// The rows in the order of their subject and stop, the rows of a subject
+    /// next to each other, and the subject of each row.
+    pub order: Vec<usize>,
+    pub subject: Vec<usize>,
+}
+
+pub(super) fn fit_parts<'a>(
+    data: &SurvData<'_>,
+    model: CensoringModel<'a>,
+    opts: &IpcwOptions,
+) -> Result<(Ipcw, Parts<'a>)> {
     let surv = data.followup()?;
     let n = data.n_rows();
     let fixed = {
@@ -207,6 +240,7 @@ pub fn fit(data: &SurvData<'_>, model: CensoringModel<'_>, opts: &IpcwOptions) -
     // The cumulative hazard of the censoring model along each row, the part
     // of the earlier rows of the subject and the part of the row up to a time.
     let mut coefficients = None;
+    let mut covariance = None;
     let mut risk = vec![1.0; n];
     let mut baseline: Vec<Steps> = Vec::new();
     if let CensoringModel::Cox { x } = model {
@@ -262,6 +296,7 @@ pub fn fit(data: &SurvData<'_>, model: CensoringModel<'_>, opts: &IpcwOptions) -
             })
             .collect();
         coefficients = Some(model_fit.coefficients.clone());
+        covariance = Some(model_fit.covariance.clone());
     }
     let cox_model = matches!(model, CensoringModel::Cox { .. });
 
@@ -331,10 +366,32 @@ pub fn fit(data: &SurvData<'_>, model: CensoringModel<'_>, opts: &IpcwOptions) -
         weight_at_stop[r] = ws;
         weight_at_start[r] = w0;
     }
-    Ok(Ipcw {
-        weight_at_stop,
-        weight_at_start,
-        censored,
-        coefficients,
-    })
+    let cox_x = match model {
+        CensoringModel::Cox { x } => Some(x),
+        CensoringModel::KaplanMeier => None,
+    };
+    let parts = Parts {
+        stop,
+        start,
+        censored: censored.clone(),
+        group: (0..n).map(group_of).collect(),
+        n_groups,
+        x: cox_x,
+        coefficients: coefficients.clone(),
+        covariance,
+        ties: opts.ties,
+        stabilise: opts.stabilise,
+        entry,
+        subject: (0..n).map(|r| id.map_or(r, |id| id[r] as usize)).collect(),
+        order,
+    };
+    Ok((
+        Ipcw {
+            weight_at_stop,
+            weight_at_start,
+            censored,
+            coefficients,
+        },
+        parts,
+    ))
 }
