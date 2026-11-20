@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 
 #[derive(Deserialize)]
 struct Reference {
+    refusals: BTreeMap<String, String>,
     versions: Versions,
     data: BTreeMap<String, Data>,
     runs: Vec<Run>,
@@ -52,6 +53,7 @@ struct Data {
     numerics: BTreeMap<String, Vec<f64>>,
     factors: BTreeMap<String, Vec<String>>,
     s: Vec<String>,
+    age_sd: f64,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +62,7 @@ struct Spec {
     ratio: usize,
     replace: bool,
     covcal: Option<f64>,
+    covcal_std: Option<f64>,
     exact: bool,
     estimand: String,
 }
@@ -144,13 +147,14 @@ fn prepared(
     distance: &str,
     anchors: &[BalanceRecord],
     candidates: &[BalanceRecord],
+    caliper: Option<DistanceCaliper>,
 ) -> DistanceConfig {
     match distance {
         "mahalanobis" => {
             prepare_mahalanobis_distance_config(
                 anchors,
                 candidates,
-                None,
+                caliper,
                 &MahalanobisPreparationConfig::default(),
             )
             .expect("preparation")
@@ -161,7 +165,7 @@ fn prepared(
                 .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
                 .transform(MahalanobisTransform::RankTieAdjusted)
                 .build();
-            prepare_mahalanobis_distance_config(anchors, candidates, None, &config)
+            prepare_mahalanobis_distance_config(anchors, candidates, caliper, &config)
                 .expect("preparation")
                 .distance_config
         }
@@ -172,7 +176,7 @@ fn prepared(
                 EuclideanScale::PooledWithinGroupSd
             };
             let config = EuclideanPreparationConfig::builder().scale(scale).build();
-            prepare_euclidean_distance_config(anchors, candidates, None, &config)
+            prepare_euclidean_distance_config(anchors, candidates, caliper, &config)
                 .expect("preparation")
                 .distance_config
         }
@@ -196,9 +200,13 @@ fn prepared_distances_give_matchits_pairs() {
         let spec = &run.spec;
         let focal = u8::from(spec.estimand != "ATC");
         let (anchors, candidates) = split(data, focal);
-        let config = prepared(&run.distance, &anchors, &candidates);
-        let calipers: Vec<_> = spec
+        let config = prepared(&run.distance, &anchors, &candidates, None);
+        // A caliper on a covariate in standard deviation units is the raw
+        // width times the covariate's sample standard deviation over all units.
+        let covariate_width = spec
             .covcal
+            .or_else(|| spec.covcal_std.map(|width| width * data.age_sd));
+        let calipers: Vec<_> = covariate_width
             .map(|width| caliper_on_field::<BalanceRecord>("age", width))
             .into_iter()
             .collect();
@@ -245,4 +253,44 @@ fn prepared_distances_give_matchits_pairs() {
         compared += 1;
     }
     assert_eq!(compared, reference.runs.len());
+}
+
+/// `matchit()` refuses a caliper on the distance itself when the distance is
+/// a covariate distance: every caliper must name a covariate. It follows that
+/// `std.caliper` has no meaning there. The crate refuses a caliper in standard
+/// deviation units on such a distance too. A caliper in the distance's own
+/// units is accepted as an extension, since a Mahalanobis or Euclidean
+/// distance has units a user can reason about, and a caliper on a covariate is
+/// an ordinary constraint (above).
+#[test]
+fn a_caliper_in_standard_deviations_of_a_covariate_distance_is_refused() {
+    let reference = reference();
+    for message in reference.refusals.values() {
+        assert!(message.contains("must be named"), "{message}");
+    }
+    let data = &reference.data["sim"];
+    let (anchors, candidates) = split(data, 1);
+    for distance in [
+        "mahalanobis",
+        "robust_mahalanobis",
+        "euclidean",
+        "scaled_euclidean",
+    ] {
+        let width = DistanceCaliper::new(2.0).expect("positive");
+        let config = prepared(distance, &anchors, &candidates, Some(width));
+        let refused = MatchJob::new_standard(&anchors, &candidates, 0)
+            .with_nearest()
+            .with_std_caliper(true)
+            .with_distance_config(config)
+            .run();
+        assert!(refused.pairs.is_empty(), "{distance}");
+        assert!(
+            refused
+                .diagnostics
+                .exclusion_counts
+                .keys()
+                .any(|reason| reason.to_string() == "invalid_criteria:nearest_options"),
+            "{distance}"
+        );
+    }
 }

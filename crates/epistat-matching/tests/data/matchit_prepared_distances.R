@@ -58,14 +58,18 @@ dist_fun <- list(
 )
 
 specs <- list()
-add <- function(order, ratio, replace = FALSE, covcal = NULL, exact = FALSE, estimand = "ATT")
+add <- function(order, ratio, replace = FALSE, covcal = NULL, exact = FALSE, estimand = "ATT",
+                covcal_std = NULL)
   specs[[length(specs) + 1]] <<- list(order = order, ratio = ratio, replace = replace,
-                                      covcal = covcal, exact = exact, estimand = estimand)
+                                      covcal = covcal, exact = exact, estimand = estimand,
+                                      covcal_std = covcal_std)
 for (o in c("data", "closest", "farthest")) for (r in 1:3) add(o, r)
 add("data", 2, replace = TRUE)
 add("data", 1, replace = TRUE)
 add("data", 2, covcal = 4)
 add("closest", 2, covcal = 4)
+add("data", 2, covcal_std = 0.5)
+add("closest", 2, covcal_std = 0.25)
 add("data", 2, exact = TRUE)
 add("farthest", 2, exact = TRUE)
 add("data", 2, estimand = "ATC")
@@ -81,7 +85,7 @@ for (dname in names(datasets)) {
     treat = d$treat,
     numerics = lapply(Filter(is.numeric, d[covs]), function(x) x),
     factors = lapply(Filter(is.character, d[covs]), function(x) x),
-    s = d$s, age = d$age)
+    s = d$s, age = d$age, age_sd = sd(d$age))
   for (dist in distances) {
     D <- unname(dist_fun[[dist]](f, d))
     if (any(apply(D, 1, anyDuplicated) > 0)) stop(sprintf("equal distances in a row: %s %s", dname, dist))
@@ -91,12 +95,12 @@ for (dname in names(datasets)) {
     for (sp in specs) {
       focal <- if (sp$estimand == "ATC") 0L else 1L
       fi <- which(d$treat == focal)
-      cal <- if (is.null(sp$covcal)) NULL else c(age = sp$covcal)
+      cal <- if (!is.null(sp$covcal)) c(age = sp$covcal) else if (!is.null(sp$covcal_std)) c(age = sp$covcal_std) else NULL
       f_m <- matchit(f, data = d, method = "nearest", distance = dist,
                      m.order = sp$order, ratio = sp$ratio, replace = sp$replace,
                      estimand = sp$estimand,
                      exact = if (sp$exact) ~ s else NULL,
-                     caliper = cal, std.caliper = FALSE)
+                     caliper = cal, std.caliper = !is.null(sp$covcal_std))
       mm <- f_m$match.matrix
       rows <- lapply(seq_along(fi), function(i) { v <- mm[i, ]; as.integer(v[!is.na(v)]) })
       runs[[length(runs) + 1]] <- list(data = dname, distance = dist, spec = sp,
@@ -105,7 +109,20 @@ for (dname in names(datasets)) {
   }
 }
 
+# What matchit() does with a caliper on a covariate distance: every caliper
+# must be named, so a caliper on the distance itself, in standard deviation
+# units or not, is an error.
+refusal <- function(...) tryCatch({ matchit(..., data = lal, method = "nearest"); "accepted" },
+                                  error = function(e) conditionMessage(e))
+refusals <- list(
+  mahalanobis_std = refusal(treat ~ age + educ + re74, distance = "mahalanobis", caliper = 0.5, std.caliper = TRUE),
+  mahalanobis_raw = refusal(treat ~ age + educ + re74, distance = "mahalanobis", caliper = 0.5, std.caliper = FALSE),
+  euclidean_std = refusal(treat ~ age + educ + re74, distance = "euclidean", caliper = 0.5, std.caliper = TRUE),
+  scaled_euclidean_raw = refusal(treat ~ age + educ + re74, distance = "scaled_euclidean", caliper = 0.5, std.caliper = FALSE)
+)
+
 out <- list(
+  refusals = refusals,
   versions = list(r = R.version.string, matchit = as.character(packageVersion("MatchIt")),
                   jsonlite = as.character(packageVersion("jsonlite"))),
   data = data_out, runs = runs

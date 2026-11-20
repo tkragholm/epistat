@@ -544,6 +544,9 @@ where
     G: ConstraintGroup<R>,
 {
     /// Set optional descending fallback ratios for standard matching.
+    ///
+    /// They cannot be combined with the nearest mode or with round assignment:
+    /// the job returns an invalid outcome (`nearest_options`).
     #[must_use]
     pub fn with_ratio_fallback(mut self, fallback: Vec<MatchRatio>) -> Self {
         self.mode.ratio_fallback = fallback;

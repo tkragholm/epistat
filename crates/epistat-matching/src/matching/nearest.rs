@@ -27,6 +27,20 @@
 //! * **Assignment.** Without replacement and with a ratio above 1, every
 //!   anchor takes a first control before any takes a second, and so on, unless
 //!   [`Assignment::Sequential`] is asked for.
+//! * **Variable ratio.** [`VariableRatio`] sets the number of controls of each
+//!   anchor from its score before matching, as `min.controls` and
+//!   `max.controls` do in `matchit()`. It needs a score distance.
+//! * **Calipers on a covariate distance.** `matchit()` accepts calipers only
+//!   on named covariates when the distance is Mahalanobis or Euclidean. A
+//!   caliper in standard deviation units of such a distance has no score to
+//!   take the deviation of, and the outcome is invalid. A caliper in the
+//!   distance's own units is accepted.
+//! * **Ratio fallbacks.** Fallback ratios choose a smaller ratio for a stratum
+//!   that cannot reach the full one. Ranking by distance in rounds gives every
+//!   anchor its controls one at a time and leaves an anchor with fewer when
+//!   the candidates run out, and a variable ratio sets each anchor's number
+//!   itself, so a tier has nothing left to decide. A job that sets fallback
+//!   ratios with the nearest mode returns an invalid outcome (`nearest_options`).
 //! * **Exact strata.** Anchors and candidates are split by the exact-match
 //!   keys first, and the strata are matched in parallel. Within a stratum the
 //!   matching is sequential, since each assignment depends on the last.
@@ -1258,5 +1272,54 @@ mod tests {
                 .keys()
                 .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
         );
+    }
+
+    #[test]
+    fn ratio_fallbacks_with_the_nearest_mode_are_invalid() {
+        use crate::types::{BaseRecord, MatchRatio};
+        let anchors = vec![BaseRecord::new("a", crate::date(2010, 1, 1))];
+        let candidates = vec![BaseRecord::new("c", crate::date(2010, 1, 1))];
+        for variable in [false, true] {
+            let mut job = crate::MatchJob::new_standard(&anchors, &candidates, 0)
+                .with_nearest()
+                .with_ratio_fallback(vec![MatchRatio::new(1).expect("ratio")]);
+            if variable {
+                job = job.with_variable_ratio(VariableRatio::new(2.0, 1, 3).expect("valid"));
+            }
+            let outcome = job.run();
+            assert_eq!(outcome.matched_cases, 0);
+            assert!(
+                outcome
+                    .diagnostics
+                    .exclusion_counts
+                    .keys()
+                    .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+            );
+        }
+    }
+
+    #[test]
+    fn variable_ratio_numbers_add_up_and_keep_to_the_bounds() {
+        for (n, average, min, max) in [
+            (60, 2.0, 1, 4),
+            (60, 2.5, 2, 5),
+            (139, 2.5, 2, 5),
+            (7, 1.5, 1, 2),
+            (50, 3.0, 2, 12),
+        ] {
+            let ratio = VariableRatio::new(average, min, max).expect("valid");
+            let counts = ratio.counts(n).expect("counts");
+            assert_eq!(counts.len(), n);
+            assert!(counts.iter().all(|c| (min..=max).contains(c)));
+            assert!(counts.windows(2).all(|w| w[0] <= w[1]));
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "small positive numbers"
+            )]
+            let total = (average * n as f64).round_ties_even() as usize;
+            assert_eq!(counts.iter().sum::<usize>(), total, "{n} {average}");
+        }
     }
 }

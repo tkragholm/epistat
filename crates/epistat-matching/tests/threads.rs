@@ -525,7 +525,10 @@ fn reestimated_propensity_and_nearest_matching() {
                 &config,
             )
             .unwrap();
-            assert!(!matched.outcome.pairs.is_empty());
+            assert!(
+                !matched.outcome.pairs.is_empty(),
+                "no output, test is vacuous"
+            );
             d.outcome(&matched.outcome);
             d.weights(&matched.outcome);
             d.estimate(&matched.propensity);
