@@ -1,7 +1,7 @@
-//! Pseudo-observations of survival, cumulative incidence and restricted means,
-//! from the infinitesimal jackknife as `survival::pseudo` makes them or from the
-//! exact leave-one-out jackknife as the `pseudo` package does, and regression on
-//! them.
+//! Pseudo-observations of survival, cumulative incidence, restricted means and
+//! cumulative hazards, from the infinitesimal jackknife as `survival::pseudo`
+//! makes them or from the exact leave-one-out jackknife as the `pseudo` package
+//! does, and regression on them.
 //!
 //! # Algorithm
 //!
@@ -14,6 +14,9 @@
 //! CumulativeIncidence(k)           F_k(t)        the incidence of cause k
 //! RestrictedMean                   integral of S from the origin to t
 //! RestrictedTimeLost(k)            integral of F_k from the origin to t
+//! CumulativeHazard                 H(t), the sum of d / Y over the event times
+//!                                  up to t, every event counted
+//! CauseHazard(k)                   H_k(t), the same with the events of cause k
 //! ```
 //!
 //! at the times `t` asked for, within each group (stratum) of the data, with
@@ -32,8 +35,8 @@
 //! The infinitesimal one is what `survival::pseudo` computes, with its
 //! `collapse = TRUE`. The estimate is the Kaplan-Meier curve of the group for the
 //! survival probability and the restricted mean, which for competing causes treat
-//! every cause as the event, and the Aalen-Johansen estimate for the incidence
-//! and the time lost. The estimates are those of [`survfit`](crate::survfit) and
+//! every cause as the event, the Nelson-Aalen estimate for the hazards, and the
+//! Aalen-Johansen estimate for the incidence and the time lost. The estimates are those of [`survfit`](crate::survfit) and
 //! [`aalen_johansen`](crate::aalen_johansen), read at the times as
 //! `summary.survfit(times = , extend = TRUE)` reads them, and the restricted
 //! mean as `summary(, rmean = )`.
@@ -50,14 +53,19 @@
 //! infinitesimal one the one `survival` offers. `eventglm` uses neither, but a
 //! censoring-weighted construction, which is not done here.
 //!
-//! *Cost.* The infinitesimal jackknife of the survival probability and the
-//! restricted mean is in closed form, `O(rows log events + rows times)` for the
-//! times asked for. The incidence and the time lost come from the recursion of
-//! [`aalen_johansen::variance`](crate::aalen_johansen::variance), which costs
-//! `O(subjects exit times states)`. The time lost needs the influence at every
-//! exit time before the largest horizon, which takes subjects times exit times
-//! times states values of memory, and
-//! [`PseudoOptions::max_influence_values`] bounds it. The exact jackknife costs
+//! *Cost.* The infinitesimal jackknife of the survival probability, the
+//! restricted mean and the hazards is in closed form, `O(rows log events + rows
+//! times)` for the times asked for. The incidence and the time lost come from the
+//! recursion of [`aalen_johansen::variance`](crate::aalen_johansen::variance),
+//! which costs `O(subjects exit times states)`. The time lost is the integral of
+//! the influence of the incidence, which needs it at every exit time before the
+//! largest horizon. The integral is a running sum, so the recursion is asked for
+//! a chunk of exit times at a time and the sums take each chunk in as it comes.
+//! [`PseudoOptions::max_influence_values`] sets how many values of influence
+//! (subjects times exit times times states) may be held at once, and the
+//! recursion runs once for each chunk, so a smaller bound costs a longer run and
+//! not another answer: the values are the same bits for any bound. With no bound
+//! it is one run. The exact jackknife costs
 //! `O(subjects exit times)` for every target. It does not refit the curve for
 //! each subject, nor does it take the direct `O(n^2)` route. It edits the table
 //! of risk sets and events that the estimate is read from, needs no memory beyond
@@ -101,9 +109,11 @@
 //!    Ann Stat 45: 1988-2015.
 
 mod engine;
+mod hazard;
 mod infinitesimal;
 mod jackknife;
 pub mod regression;
+mod steps;
 mod table;
 
 use epistat_linalg::{Mat, MatRef};
@@ -135,12 +145,23 @@ pub enum Target {
         /// The cause, from 1 to `n_codes`.
         cause: u32,
     },
+    /// The cumulative hazard of any event, the Nelson-Aalen estimate, `cumhaz`
+    /// of `survival::pseudo` on a single-event fit.
+    CumulativeHazard,
+    /// The cumulative hazard of a cause, the transition from the event-free
+    /// state to it, `cumhaz` of `survival::pseudo` on a competing-risks fit.
+    CauseHazard {
+        /// The cause, from 1 to `n_codes`.
+        cause: u32,
+    },
 }
 
 impl Target {
     pub(crate) fn cause(self) -> Option<u32> {
         match self {
-            Self::CumulativeIncidence { cause } | Self::RestrictedTimeLost { cause } => Some(cause),
+            Self::CumulativeIncidence { cause }
+            | Self::RestrictedTimeLost { cause }
+            | Self::CauseHazard { cause } => Some(cause),
             _ => None,
         }
     }
@@ -167,8 +188,11 @@ pub struct PseudoOptions {
     /// see [`TimeFix`].
     pub timefix: TimeFix,
     /// The most values of influence the incidence and time-lost targets may
-    /// hold at once under the infinitesimal jackknife, which is subjects times
-    /// exit times times states. `None`, the default, sets no bound.
+    /// hold at once under the infinitesimal jackknife. The influence at one
+    /// time is subjects times states values, so a bound below that is an error;
+    /// above it the influence is read a chunk of times at a time, one run of
+    /// the recursion for each, and the values do not change. `None`, the
+    /// default, sets no bound and takes one run.
     pub max_influence_values: Option<usize>,
 }
 
@@ -292,6 +316,20 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
                 .zip(&reads)
                 .map(|(g, read)| {
                     infinitesimal::run(
+                        g,
+                        &table::Reading {
+                            target: opts.target,
+                            at: times,
+                            reads: read,
+                        },
+                    )
+                })
+                .collect(),
+            Target::CumulativeHazard | Target::CauseHazard { .. } => groups
+                .iter()
+                .zip(&reads)
+                .map(|(g, read)| {
+                    hazard::run(
                         g,
                         &table::Reading {
                             target: opts.target,

@@ -206,16 +206,45 @@ fn refusals() {
         .build()
         .unwrap();
     assert!(pseudo(&none, &[2.0], &ok).is_err());
-    // The memory bound on the influence of the time lost.
+    // The bound on the influence held at once: the influence at one time is
+    // 6 subjects times 3 states values, and fewer is refused.
     let lost = |limit| {
         let mut o = PseudoOptions::new(Target::RestrictedTimeLost { cause: 1 });
         o.max_influence_values = limit;
-        pseudo(&data, &[4.0], &o)
+        pseudo(&data, &[1.5, 2.5, 4.0], &o)
     };
-    assert!(lost(None).is_ok());
-    // 6 subjects, 4 exit times up to the horizon and 3 states.
-    assert!(lost(Some(72)).is_ok());
-    assert!(lost(Some(71)).is_err());
+    let whole = lost(None).unwrap();
+    assert!(lost(Some(17)).is_err());
+    // Chunks of one, two and three exit times give the values of one pass, bit
+    // for bit, for the incidence as well.
+    for limit in [18, 36, 54, 72] {
+        let chunked = lost(Some(limit)).unwrap();
+        assert_eq!(
+            whole.values.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            chunked
+                .values
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "limit {limit}"
+        );
+    }
+    let mut o = PseudoOptions::new(Target::CumulativeIncidence { cause: 2 });
+    let unbounded = pseudo(&data, &[1.0, 2.0, 3.0, 4.0], &o).unwrap();
+    o.max_influence_values = Some(18);
+    let bounded = pseudo(&data, &[1.0, 2.0, 3.0, 4.0], &o).unwrap();
+    assert_eq!(
+        unbounded
+            .values
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>(),
+        bounded
+            .values
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

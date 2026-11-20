@@ -94,6 +94,8 @@ fn pseudo_does_not_depend_on_the_number_of_threads() {
             Target::CumulativeIncidence { cause: 2 },
             Target::RestrictedMean,
             Target::RestrictedTimeLost { cause: 2 },
+            Target::CumulativeHazard,
+            Target::CauseHazard { cause: 2 },
         ] {
             for method in [Method::InfinitesimalJackknife, Method::Jackknife] {
                 let mut opts = PseudoOptions::new(target);
@@ -144,6 +146,33 @@ fn regression_does_not_depend_on_the_number_of_threads() {
             out.extend_from_slice(&fit.covariance);
             out.extend_from_slice(&fit.fitted);
             out.extend([fit.information_condition, fit.iterations as f64]);
+            out
+        });
+    }
+}
+
+#[test]
+fn bounded_influence_does_not_depend_on_the_number_of_threads() {
+    let s = sample(3001, 61);
+    let times = [0.5, 1.5, 3.0, 6.0, 12.0];
+    let data = SurvData::builder(&s.stop, &s.status)
+        .n_codes(2)
+        .weight(&s.weight)
+        .stratum(&s.stratum)
+        .id(&s.id)
+        .build()
+        .unwrap();
+    for target in [
+        Target::CumulativeIncidence { cause: 1 },
+        Target::RestrictedTimeLost { cause: 2 },
+    ] {
+        let mut opts = PseudoOptions::new(target);
+        // Some 1500 subjects and 3 states, a few exit times in a pass.
+        opts.max_influence_values = Some(20_000);
+        assert_same_on_pools(&POOLS, || {
+            let p = pseudo(&data, &times, &opts).unwrap();
+            let mut out = Vec::new();
+            flatten(&p, &mut out);
             out
         });
     }

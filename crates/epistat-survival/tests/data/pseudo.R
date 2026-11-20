@@ -1,4 +1,5 @@
-# Pseudo-observations by survival::pseudo (the infinitesimal jackknife) and by
+# Pseudo-observations of survival, incidence, restricted means and cumulative hazards by
+# survival::pseudo (the infinitesimal jackknife) and by
 # leave-one-subject-out refits of survival::survfit (the exact jackknife), and
 # by the pseudo package's pseudosurv, pseudomean and pseudoci.
 #
@@ -105,6 +106,11 @@ fit_of <- function(d, kind) {
 state_of <- c(survival = "(s0)", cif1 = "1", cif2 = "2", rmst = "(s0)", rmtl1 = "1", rmtl2 = "2")
 state_col <- c(survival = 1, cif1 = 2, cif2 = 3, rmst = 1, rmtl1 = 2, rmtl2 = 3)
 is_auc <- function(target) target %in% c("rmst", "rmtl1", "rmtl2")
+# The cumulative hazard of any event ("chaz", single-event fits) and of the
+# transition from the event-free state to a cause ("chaz1", "chaz2").
+is_haz <- function(target) target %in% c("chaz", "chaz1", "chaz2")
+transition_of <- c(chaz1 = "1:2", chaz2 = "1:3")
+type_of <- function(target) if (is_auc(target)) "auc" else if (is_haz(target)) "cumhaz" else "pstate"
 
 # The label (id, cluster or row number), and the group, of each row.
 labels_of <- function(d) {
@@ -116,6 +122,11 @@ labels_of <- function(d) {
 # survfit's own estimate of a target of one stratum's rows.
 estimate <- function(d, kind, target, times) {
   fit <- fit_of(d, kind)
+  if (is_haz(target)) {
+    sm <- summary(fit, times = times, extend = TRUE)
+    if (kind == "km") return(as.numeric(sm$cumhaz))
+    return(as.numeric(sm$cumhaz[, transition_of[[target]]]))
+  }
   if (!is_auc(target)) {
     sm <- summary(fit, times = times, extend = TRUE)
     if (kind == "km") return(as.numeric(sm$surv))
@@ -130,9 +141,10 @@ estimate <- function(d, kind, target, times) {
 # The residuals of one stratum's fit for a target: rows by times.
 residual_matrix <- function(dg, kind, target, times) {
   fit <- fit_of(dg, kind)
-  rr <- residuals(fit, times = times, type = if (is_auc(target)) "auc" else "pstate",
+  rr <- residuals(fit, times = times, type = type_of(target),
                   weighted = FALSE, collapse = FALSE, data.frame = TRUE)
-  if (kind == "cr") rr <- rr[rr$state == state_of[[target]], ]
+  if (kind == "cr" && is_haz(target)) rr <- rr[rr$transition == transition_of[[target]], ]
+  else if (kind == "cr") rr <- rr[rr$state == state_of[[target]], ]
   matrix(rr$resid, nrow = nrow(dg))
 }
 
@@ -170,10 +182,11 @@ build_case <- function(s, kind, target, times, method) {
               n_subjects = v(nsubs))
   # What survival::pseudo gives itself, to show where it is the same.
   if (method == "ij") {
-    rf <- tryCatch(pseudo(fit_of(d, kind), times, type = if (is_auc(target)) "auc" else "pstate",
+    rf <- tryCatch(pseudo(fit_of(d, kind), times, type = type_of(target),
                           data.frame = TRUE), error = function(e) NULL)
     if (!is.null(rf)) {
-      if (kind == "cr") rf <- rf[rf$state == state_of[[target]], ]
+      if (kind == "cr" && is_haz(target)) rf <- rf[rf$transition == transition_of[[target]], ]
+      else if (kind == "cr") rf <- rf[rf$state == state_of[[target]], ]
       out$r_rows <- nrow(rf) / length(times)
       # Same shape: compare in the order of the subjects.
       if (out$r_rows == length(labels)) {
@@ -192,7 +205,8 @@ times_of <- function(kind, target) c(2, 5, 9, 14, 20, 25)
 cases <- list()
 for (s in sets) {
   for (kind in c("km", "cr")) {
-    targets <- if (kind == "km") c("survival", "rmst") else c("survival", "cif1", "cif2", "rmst", "rmtl1", "rmtl2")
+    targets <- if (kind == "km") c("survival", "rmst", "chaz")
+               else c("survival", "cif1", "cif2", "rmst", "rmtl1", "rmtl2", "chaz1", "chaz2")
     for (target in targets) for (method in c("ij", "jack")) {
       times <- times_of(kind, target)
       r <- tryCatch(build_case(s, kind, target, times, method),

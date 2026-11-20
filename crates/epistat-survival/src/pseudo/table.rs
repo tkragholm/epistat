@@ -256,23 +256,43 @@ pub(super) fn evaluate(columns: &Columns<'_>, origin: f64, reading: &Reading<'_>
     let mut survival = 1.0f64;
     let mut incidence = [0.0f64];
     let (mut area_s, mut area_f) = (0.0f64, 0.0f64);
+    let mut cumulative_hazard = 0.0f64;
     let mut previous = origin;
     let mut k = 0;
-    let read = |tau: f64, s: f64, f: f64, area_s: f64, area_f: f64, previous: f64| match target {
-        Target::Survival => s,
-        Target::CumulativeIncidence { .. } => f,
-        Target::RestrictedMean => area_s + s * (tau - previous),
-        Target::RestrictedTimeLost { .. } => area_f + f * (tau - previous),
-    };
+    let read =
+        |tau: f64, s: f64, f: f64, area_s: f64, area_f: f64, previous: f64, h: f64| match target {
+            Target::Survival => s,
+            Target::CumulativeIncidence { .. } => f,
+            Target::RestrictedMean => area_s + s * (tau - previous),
+            Target::RestrictedTimeLost { .. } => area_f + f * (tau - previous),
+            Target::CumulativeHazard | Target::CauseHazard { .. } => h,
+        };
     for j in 0..times.len() {
         while k < at.len() && reads[k] == j {
-            out[k] = read(at[k], survival, incidence[0], area_s, area_f, previous);
+            out[k] = read(
+                at[k],
+                survival,
+                incidence[0],
+                area_s,
+                area_f,
+                previous,
+                cumulative_hazard,
+            );
             k += 1;
         }
         let step = times[j] - previous;
         area_s += survival * step;
         area_f += incidence[0] * step;
         previous = times[j];
+        match target {
+            Target::CumulativeHazard if events[j] > 0.0 => {
+                cumulative_hazard += events[j] / risk[j];
+            }
+            Target::CauseHazard { .. } if with_cause && cause_events[j] > 0.0 => {
+                cumulative_hazard += cause_events[j] / risk[j];
+            }
+            _ => {}
+        }
         if with_cause {
             advance(
                 &mut survival,
@@ -286,7 +306,15 @@ pub(super) fn evaluate(columns: &Columns<'_>, origin: f64, reading: &Reading<'_>
         }
     }
     while k < at.len() {
-        out[k] = read(at[k], survival, incidence[0], area_s, area_f, previous);
+        out[k] = read(
+            at[k],
+            survival,
+            incidence[0],
+            area_s,
+            area_f,
+            previous,
+            cumulative_hazard,
+        );
         k += 1;
     }
 }

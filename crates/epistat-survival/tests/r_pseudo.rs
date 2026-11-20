@@ -5,7 +5,8 @@
 //! with several rows, clusters with weights and strata) are used as single-event
 //! data and as data with two causes, for the survival probability, the
 //! incidences, the restricted mean and the restricted time lost to each cause,
-//! each by both jackknives. See `data/pseudo.R`.
+//! and the cumulative hazards of any event and of each cause, each by both
+//! jackknives. See `data/pseudo.R`.
 //!
 //! # Tolerances
 //!
@@ -146,6 +147,9 @@ fn target_of(name: &str) -> Target {
         "rmst" => Target::RestrictedMean,
         "rmtl1" => Target::RestrictedTimeLost { cause: 1 },
         "rmtl2" => Target::RestrictedTimeLost { cause: 2 },
+        "chaz" => Target::CumulativeHazard,
+        "chaz1" => Target::CauseHazard { cause: 1 },
+        "chaz2" => Target::CauseHazard { cause: 2 },
         _ => unreachable!(),
     }
 }
@@ -285,6 +289,10 @@ fn pseudo_agrees_with_r() {
             opts.target,
             Target::RestrictedMean | Target::RestrictedTimeLost { .. }
         );
+        let hazard = matches!(
+            opts.target,
+            Target::CumulativeHazard | Target::CauseHazard { .. }
+        );
         let engine = matches!(
             opts.target,
             Target::CumulativeIncidence { .. } | Target::RestrictedTimeLost { .. }
@@ -296,7 +304,17 @@ fn pseudo_agrees_with_r() {
             let (m, nf) = (m as f64, n as f64);
             for (j, &t) in case.times.iter().enumerate() {
                 let scale = if area { t.max(1.0) } else { 1.0 };
-                let est_tol = 12.0 * (m + 4.0) * EPS * scale;
+                // A cumulative hazard is a sum of at most `m` increments, each
+                // of three roundings, so its error is that of a sum of positive
+                // terms and grows with its value. Its influence is a difference
+                // of sums of `d / Y^2` and a single `1 / Y`, no larger than the
+                // `A` and `b` of the bound.
+                let value_scale = if hazard {
+                    case.estimate[g * k + j].max(1.0)
+                } else {
+                    scale
+                };
+                let est_tol = 12.0 * (m + 4.0) * EPS * value_scale;
                 worst.see(
                     "estimate",
                     &format!("{label} group {} time {t}", estimate_g.group),
@@ -383,7 +401,7 @@ fn pseudo_agrees_with_r() {
     }
     eprintln!("compared {compared} cases, {same_as_pseudo} against survival::pseudo itself");
     worst.report();
-    assert_eq!(compared, 112);
+    assert_eq!(compared, 154);
 }
 
 /// The exact jackknife against `pseudosurv`, `pseudomean` and `pseudoci` of
