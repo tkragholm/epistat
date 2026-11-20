@@ -486,7 +486,7 @@ where
 mod tests {
     use super::*;
     use crate::date;
-    use crate::types::BaseRecord;
+    use crate::types::{BaseRecord, EstimandDriftReason};
 
     #[test]
     fn match_job_runs_transition() {
@@ -506,6 +506,33 @@ mod tests {
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs.len(), 1);
+    }
+
+    #[test]
+    fn with_replacement_counts_anchors_without_candidates_as_unmatched() {
+        let anchors = vec![
+            BaseRecord::new("a1", date(2010, 1, 1)),
+            BaseRecord::new("a2", date(2010, 1, 1)),
+            BaseRecord::new("a3", date(2015, 1, 1)),
+        ];
+        let candidates = vec![BaseRecord::new("c1", date(2010, 1, 2))];
+
+        for replacement in [false, true] {
+            let result = MatchJob::new_standard(&anchors, &candidates, 42)
+                .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
+                .with_replacement(replacement)
+                .run();
+            // a3 is outside the birth window of every candidate. Without
+            // replacement a2 finds c1 used already.
+            assert_eq!(result.unmatched_cases, if replacement { 1 } else { 2 });
+            assert_eq!(result.diagnostics.total_anchors_evaluated, 3);
+            assert!(
+                result
+                    .diagnostics
+                    .estimand_drift_reasons
+                    .contains(&EstimandDriftReason::UnmatchedAnchors)
+            );
+        }
     }
 
     #[test]

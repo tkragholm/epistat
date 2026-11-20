@@ -269,6 +269,6 @@ const E_UNIQUE_FAMILY: (u64, u64) = (0x65b45674334aeb7e, 0x9e58c677dd7580ca);
 const E_NO_STRATA: (u64, u64) = (0x3ccfb32824266e76, 0x1107c990cf13157d);
 const E_MISSING_KEY: (u64, u64) = (0xc2b13bb16547f35a, 0x03f832b6063ce40b);
 const E_STD_NOREPL: (u64, u64) = (0x54babf39ce9e9dba, 0x7e322fddce9b9854);
-const E_STD_REPL: (u64, u64) = (0x4cc9dcc57250d16d, 0x45fb7072aa50bd57);
+const E_STD_REPL: (u64, u64) = (0x19c9eab8807cd43f, 0x45fb7072aa50bd57);
 const E_STD_UNIQUE: (u64, u64) = (0xd90cf67cee081244, 0x0ad234b2f7937bb0);
 const E_STD_NOSTRATA: (u64, u64) = (0xfbe1e86e4ad4936d, 0x1a8b1221f7c395a3);
