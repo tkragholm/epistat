@@ -36,6 +36,10 @@
 //!   and the cumulative hazards and transition probabilities of a covariate profile, as
 //!   `msfit` and `probtrans` of `mstate`.
 //! - [`markov`]: the landmark test of the Markov property.
+//! - [`metrics`]: redistribute-to-the-right weights, the Brier score, the IPCW
+//!   Brier score and index of prediction accuracy, the time-dependent AUC and
+//!   calibration by risk group, as `rttright`, `brier`, `riskRegression::Score`
+//!   and `timeROC`.
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
 //!   standard errors, confidence limits, quantiles and restricted means, read at chosen
 //!   times as `summary.survfit(times = )` with the starting point of `survfit0`.
@@ -86,6 +90,7 @@ mod error;
 pub mod fine_gray;
 pub mod lexis;
 pub mod markov;
+pub mod metrics;
 pub mod msreg;
 pub mod multistate;
 pub mod pyears;
