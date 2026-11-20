@@ -2,11 +2,13 @@
 
 mod config;
 mod covariance;
+mod cross_validation;
 mod encoding;
 mod linalg;
 mod logistic;
 
 pub use config::*;
+pub use cross_validation::CrossValidation;
 pub use encoding::CovariateMatrix;
 
 use super::constraints::ConstraintGroup;
@@ -14,34 +16,30 @@ use super::distance::DistanceConfig;
 use super::engine::{StandardMatchRequest, match_standard};
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
-use crate::types::{DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
+use crate::types::{CommonSupport, DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
 use covariance::{covariance_matrix, rank_transform_columns};
+use cross_validation::fit_elastic_net_cv;
 use encoding::build_covariate_matrix;
 use itertools::Itertools;
 use linalg::invert_matrix_with_ridge;
-use logistic::{fit_elastic_net_logistic, fit_logistic_regression};
+use logistic::{any_fitted_at_boundary, fit_elastic_net_logistic, fit_glm};
 use rapidhash::RapidHashMap;
 
 /// Whether a linear solve needed a ridge, and how large it was.
 ///
-/// The solves add a ridge to the diagonal when a pivot of the matrix is at most
-/// 1e-14, which happens when the covariates are collinear. The propensity fit
-/// also adds its configured L2 penalty
-/// ([`LogisticRegressionConfig::l2_penalty`]) and the Mahalanobis covariance its
-/// configured starting ridge ([`MahalanobisPreparationConfig::ridge`]). Both are
-/// added from the start, so `ridge` alone does not show collinearity, and
-/// `singular_without_ridge` is the flag to read.
+/// The inversion adds a ridge to the diagonal when a pivot of the matrix is at
+/// most 1e-14, which happens when the covariates are collinear. The Mahalanobis
+/// covariance also adds its configured starting ridge
+/// ([`MahalanobisPreparationConfig::ridge`]) from the start, so `ridge` alone
+/// does not show collinearity, and `singular_without_ridge` is the flag to read.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RidgeReport {
-    /// The ridge added to the diagonal by the solver: for the propensity fit
-    /// the largest over all IRLS iterations, not counting the L2 penalty, and
-    /// for the Mahalanobis inverse the one used, counting the configured
-    /// starting ridge. 0 when none was added.
+    /// The ridge added to the covariance diagonal before the inversion, the one
+    /// used, counting the configured starting ridge. 0 when none was added.
     pub ridge: f64,
-    /// Whether the matrix, without any ridge or penalty, had a pivot at most
-    /// 1e-14. For the propensity fit the matrix is the weighted cross-product
-    /// of the design at the first iteration. `true` means the design is
-    /// collinear or near collinear and the estimates depend on the ridge.
+    /// Whether the covariance matrix, without any ridge, had a pivot at most
+    /// 1e-14. `true` means the covariates are collinear or near collinear and
+    /// the inverse depends on the ridge.
     pub singular_without_ridge: bool,
 }
 
@@ -54,19 +52,38 @@ pub struct PropensityScoreEstimate {
     pub linear_predictor: RapidHashMap<String, f64>,
     /// Distance-scale scores (selected by [`PropensityScoreOutputScale`]).
     pub distance_scores: RapidHashMap<String, f64>,
-    /// Fitted coefficients aligned with `column_names`.
-    pub coefficients: Vec<f64>,
+    /// Fitted coefficients aligned with `column_names`. `None` for a column
+    /// the generalised linear model could not identify, which R reports as
+    /// `NA`; the names are in `aliased_columns`.
+    pub coefficients: Vec<Option<f64>>,
     /// Design-matrix column names.
     pub column_names: Vec<String>,
     /// Estimator used for this run.
     pub estimator: &'static str,
-    /// Whether IRLS converged within max iterations.
+    /// Whether the fit met its stopping rule within the iteration limit.
     pub converged: bool,
     /// Iterations executed.
     pub iterations: usize,
-    /// The ridge the IRLS solves needed; `None` for the elastic net, which
-    /// solves no linear system.
-    pub ridge: Option<RidgeReport>,
+    /// The columns the generalised linear model dropped because they are a
+    /// linear combination of the columns before them, as R's `glm()` does.
+    /// Always empty for the elastic net.
+    pub aliased_columns: Vec<String>,
+    /// Whether a fitted probability lies within ten machine epsilons of 0 or
+    /// 1, the condition R reports as "fitted probabilities numerically 0 or 1
+    /// occurred". It marks complete or quasi-complete separation, where the
+    /// likelihood has no finite maximum and the scores are not reliable.
+    pub fitted_at_boundary: bool,
+    /// The penalty of an elastic net fit, given or chosen by cross-validation.
+    /// `None` for the generalised linear model.
+    pub lambda: Option<f64>,
+    /// The cross-validation curve and the folds, for the cross-validated
+    /// elastic net.
+    pub cross_validation: Option<CrossValidation>,
+    /// Anchor ids discarded by common-support trimming before the refit, when
+    /// the model was re-estimated. Their scores are those of the first fit.
+    pub discarded_anchors: Vec<String>,
+    /// Candidate ids discarded by common-support trimming before the refit.
+    pub discarded_candidates: Vec<String>,
 }
 
 /// Combined propensity output and distance config.
@@ -123,6 +140,22 @@ pub enum EstimationError {
     },
     NoCovariatesAvailable,
     InvalidElasticNetConfig,
+    /// The iteration limit is 0 or the tolerance is not positive and finite.
+    InvalidGlmConfig,
+    /// The cross-validation settings are out of range, a training set lacks one
+    /// of the two groups, or the penalty path is undefined.
+    InvalidCrossValidation,
+    /// A sampling weight is missing for a record, negative or not finite.
+    InvalidSamplingWeight {
+        record_id: String,
+    },
+    /// `reestimate` was set but no common-support policy was given.
+    ReestimateWithoutDiscard,
+    /// The anchors' and the candidates' scores do not overlap, so common-support
+    /// trimming leaves nothing to refit on.
+    NoCommonSupport,
+    /// The generalised linear model could not be fitted.
+    GlmFitFailed(epistat_glm::GlmError),
     LinearSystemSolveFailed,
     InvalidCovarianceMatrix,
     MahalanobisConfigBuildFailed,
@@ -130,16 +163,131 @@ pub enum EstimationError {
 
 /// Build propensity-score distance config directly from covariate records.
 ///
+/// With `config.reestimate` set, use
+/// [`prepare_propensity_distance_config_with_discard`], which takes the
+/// trimming policy.
+///
 /// # Errors
 ///
-/// Returns [`EstimationError`] when preprocessing or model fitting fails.
+/// Returns [`EstimationError`] when preprocessing or model fitting fails, or
+/// when `config.reestimate` is set, since no trimming policy is given here.
 pub fn prepare_propensity_distance_config<R: CovariateRecord>(
     anchors: &[R],
     candidates: &[R],
     config: &PropensityScoreConfig,
 ) -> Result<PropensityDistancePreparation, EstimationError> {
+    prepare_propensity_distance_config_with_discard(anchors, candidates, config, None)
+}
+
+/// The estimator's fit on a design, with prior weights.
+fn fit_estimator(
+    matrix: &CovariateMatrix,
+    labels: &[f64],
+    weights: Option<&[f64]>,
+    config: &PropensityScoreConfig,
+) -> Result<(logistic::LogisticFit, &'static str), EstimationError> {
+    Ok(match &config.estimator {
+        PropensityEstimator::GlmLogit => (
+            fit_glm(matrix, labels, weights, &config.logistic)?,
+            match config.logistic.link {
+                PropensityLink::Logit => "glm_logit",
+                PropensityLink::Probit => "glm_probit",
+                PropensityLink::Cloglog => "glm_cloglog",
+            },
+        ),
+        PropensityEstimator::ElasticNetLogit(elastic_net) => (
+            fit_elastic_net_logistic(matrix, labels, weights, elastic_net)?,
+            "elastic_net_logit",
+        ),
+        PropensityEstimator::ElasticNetCv(cv) => (
+            fit_elastic_net_cv(matrix, labels, weights, cv)?,
+            "elastic_net_cv",
+        ),
+    })
+}
+
+/// The rows of `matrix` at `rows`, in that order.
+fn select_rows(matrix: &CovariateMatrix, rows: &[usize]) -> CovariateMatrix {
+    let mut values = Vec::with_capacity(rows.len() * matrix.n_cols);
+    for &row in rows {
+        values.extend_from_slice(matrix.row(row));
+    }
+    CovariateMatrix {
+        row_ids: rows
+            .iter()
+            .map(|&row| matrix.row_ids[row].clone())
+            .collect(),
+        column_names: matrix.column_names.clone(),
+        values,
+        n_rows: rows.len(),
+        n_cols: matrix.n_cols,
+    }
+}
+
+/// The rows that common-support trimming discards: those whose score is not
+/// inside the interval where the two groups' score ranges overlap, with its
+/// ends inside, for the groups the policy names. `n_anchors` rows come first.
+/// `None` when the groups' ranges do not overlap.
+fn rows_outside_common_support(
+    scores: &[f64],
+    n_anchors: usize,
+    policy: CommonSupport,
+) -> Option<Vec<usize>> {
+    let bounds = |rows: std::ops::Range<usize>| -> Option<(f64, f64)> {
+        rows.filter(|&row| scores[row].is_finite())
+            .fold(None, |acc, row| match acc {
+                None => Some((scores[row], scores[row])),
+                Some((low, high)) => {
+                    Some((f64::min(low, scores[row]), f64::max(high, scores[row])))
+                }
+            })
+    };
+    let anchor_bounds = bounds(0..n_anchors)?;
+    let candidate_bounds = bounds(n_anchors..scores.len())?;
+    let lower = anchor_bounds.0.max(candidate_bounds.0);
+    let upper = anchor_bounds.1.min(candidate_bounds.1);
+    if lower > upper {
+        return None;
+    }
+    let outside =
+        |row: usize| !(scores[row].is_finite() && scores[row] >= lower && scores[row] <= upper);
+    let mut rows = Vec::new();
+    if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+        rows.extend((0..n_anchors).filter(|&row| outside(row)));
+    }
+    if matches!(policy, CommonSupport::Control | CommonSupport::Both) {
+        rows.extend((n_anchors..scores.len()).filter(|&row| outside(row)));
+    }
+    Some(rows)
+}
+
+/// Build propensity-score distance config from covariate records, with
+/// common-support trimming for `config.reestimate`.
+///
+/// The model is fitted on all units. When `config.reestimate` is set, the units
+/// that `discard` removes are found from those scores, on the scale of the
+/// distance used, as MatchIt's `discard` does, and the model is fitted again on
+/// the others, as `matchit(reestimate = TRUE)` does. The scores of the kept
+/// units are those of the second fit. The discarded units keep the scores of the
+/// first fit and are listed in the estimate. Without `config.reestimate`,
+/// `discard` is not used.
+///
+/// # Errors
+///
+/// Returns [`EstimationError`] when preprocessing or model fitting fails, when
+/// a sampling weight is missing or invalid, when `config.reestimate` is set
+/// without a `discard` policy, or when the two groups' scores do not overlap.
+pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    config: &PropensityScoreConfig,
+    discard: Option<CommonSupport>,
+) -> Result<PropensityDistancePreparation, EstimationError> {
     if anchors.is_empty() || candidates.is_empty() {
         return Err(EstimationError::EmptyInput);
+    }
+    if config.reestimate && discard.is_none() {
+        return Err(EstimationError::ReestimateWithoutDiscard);
     }
 
     let records = anchors.iter().chain(candidates.iter()).collect_vec();
@@ -148,44 +296,93 @@ pub fn prepare_propensity_distance_config<R: CovariateRecord>(
     let labels = std::iter::repeat_n(1.0_f64, anchors.len())
         .chain(std::iter::repeat_n(0.0_f64, candidates.len()))
         .collect_vec();
-    let (fit, estimator_name) = match &config.estimator {
-        PropensityEstimator::GlmLogit => (
-            fit_logistic_regression(&matrix, &labels, &config.logistic)?,
-            "glm_logit",
-        ),
-        PropensityEstimator::ElasticNetLogit(elastic_net) => (
-            fit_elastic_net_logistic(&matrix, &labels, elastic_net)?,
-            "elastic_net_logit",
-        ),
-    };
+    let weights = config
+        .sampling_weights
+        .as_ref()
+        .map(|by_id| {
+            matrix
+                .row_ids
+                .iter()
+                .map(|id| match by_id.get(id) {
+                    Some(weight) if weight.is_finite() && *weight >= 0.0 => Ok(*weight),
+                    _ => Err(EstimationError::InvalidSamplingWeight {
+                        record_id: id.clone(),
+                    }),
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    let (mut fit, estimator_name) = fit_estimator(&matrix, &labels, weights.as_deref(), config)?;
 
-    let probabilities = matrix
-        .row_ids
-        .iter()
-        .cloned()
-        .zip(fit.probabilities.iter().copied())
-        .collect::<RapidHashMap<_, _>>();
-    let linear_predictor = matrix
-        .row_ids
-        .iter()
-        .cloned()
-        .zip(fit.linear_predictor.iter().copied())
-        .collect::<RapidHashMap<_, _>>();
-    let distance_scores = match config.output_scale {
-        PropensityScoreOutputScale::Probability => probabilities.clone(),
-        PropensityScoreOutputScale::LinearPredictor => linear_predictor.clone(),
+    let score_of = |fit: &logistic::LogisticFit| match config.output_scale {
+        PropensityScoreOutputScale::Probability => fit.probabilities.clone(),
+        PropensityScoreOutputScale::LinearPredictor => fit.linear_predictor.clone(),
     };
+    let mut probabilities = fit.probabilities.clone();
+    let mut linear_predictor = fit.linear_predictor.clone();
+    let mut distance = score_of(&fit);
+    let mut discarded_anchors = Vec::new();
+    let mut discarded_candidates = Vec::new();
 
+    if let (true, Some(policy)) = (config.reestimate, discard) {
+        let outside = rows_outside_common_support(&distance, anchors.len(), policy)
+            .ok_or(EstimationError::NoCommonSupport)?;
+        let dropped: std::collections::HashSet<usize> = outside.iter().copied().collect();
+        let kept = (0..matrix.n_rows)
+            .filter(|row| !dropped.contains(row))
+            .collect_vec();
+        let kept_labels = kept.iter().map(|&row| labels[row]).collect_vec();
+        let kept_weights = weights
+            .as_ref()
+            .map(|w| kept.iter().map(|&row| w[row]).collect_vec());
+        let (refit, _) = fit_estimator(
+            &select_rows(&matrix, &kept),
+            &kept_labels,
+            kept_weights.as_deref(),
+            config,
+        )?;
+        let refit_distance = score_of(&refit);
+        for (position, &row) in kept.iter().enumerate() {
+            probabilities[row] = refit.probabilities[position];
+            linear_predictor[row] = refit.linear_predictor[position];
+            distance[row] = refit_distance[position];
+        }
+        for &row in &outside {
+            let id = matrix.row_ids[row].clone();
+            if row < anchors.len() {
+                discarded_anchors.push(id);
+            } else {
+                discarded_candidates.push(id);
+            }
+        }
+        fit = refit;
+    }
+
+    let fitted_at_boundary = any_fitted_at_boundary(&fit.probabilities);
+    let to_map = |values: &[f64]| {
+        matrix
+            .row_ids
+            .iter()
+            .cloned()
+            .zip(values.iter().copied())
+            .collect::<RapidHashMap<_, _>>()
+    };
+    let distance_scores = to_map(&distance);
     let estimate = PropensityScoreEstimate {
-        probabilities,
-        linear_predictor,
+        probabilities: to_map(&probabilities),
+        linear_predictor: to_map(&linear_predictor),
         distance_scores: distance_scores.clone(),
         coefficients: fit.coefficients,
         column_names: matrix.column_names,
         estimator: estimator_name,
         converged: fit.converged,
         iterations: fit.iterations,
-        ridge: fit.ridge,
+        aliased_columns: fit.aliased_columns,
+        fitted_at_boundary,
+        lambda: fit.lambda,
+        cross_validation: fit.cross_validation,
+        discarded_anchors,
+        discarded_candidates,
     };
     let distance_config = DistanceConfig::propensity_score_map(distance_scores, config.caliper);
 
@@ -253,6 +450,11 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
 
 /// Run matching with propensity scores estimated internally from covariates.
 ///
+/// With `propensity_config.reestimate`, the model is refitted on the units that
+/// `criteria.common_support` keeps, and the matching then trims to common
+/// support again on the refitted scores, which can remove further units. The
+/// scores themselves are MatchIt's.
+///
 /// # Errors
 ///
 /// Returns [`EstimationError`] when preprocessing or model fitting fails.
@@ -269,7 +471,12 @@ pub fn estimate_propensity_and_match<
     extra_constraints: &G,
     propensity_config: &PropensityScoreConfig,
 ) -> Result<PropensityMatchedOutcome, EstimationError> {
-    let prepared = prepare_propensity_distance_config(anchors, candidates, propensity_config)?;
+    let prepared = prepare_propensity_distance_config_with_discard(
+        anchors,
+        candidates,
+        propensity_config,
+        criteria.common_support,
+    )?;
     let outcome = match_standard(
         anchors,
         candidates,
@@ -384,19 +591,16 @@ mod tests {
             .coefficients
             .iter()
             .enumerate()
-            .filter_map(|(idx, value)| {
-                (glm_prepared.estimate.column_names[idx] != "intercept").then_some(value.abs())
-            })
+            .filter(|(idx, _)| glm_prepared.estimate.column_names[*idx] != "intercept")
+            .map(|(_, value)| value.expect("glm identifies every column").abs())
             .sum::<f64>();
         let elastic_abs_sum = elastic_net_prepared
             .estimate
             .coefficients
             .iter()
             .enumerate()
-            .filter_map(|(idx, value)| {
-                (elastic_net_prepared.estimate.column_names[idx] != "intercept")
-                    .then_some(value.abs())
-            })
+            .filter(|(idx, _)| elastic_net_prepared.estimate.column_names[*idx] != "intercept")
+            .map(|(_, value)| value.expect("the elastic net fits every column").abs())
             .sum::<f64>();
         assert!(elastic_abs_sum <= glm_abs_sum + 1e-8);
     }
@@ -677,13 +881,26 @@ mod tests {
             &candidates,
             &PropensityScoreConfig::default(),
         )
-        .expect("a ridged fit should succeed");
-        let ridge = prepared.estimate.ridge.expect("IRLS reports its ridge");
-        assert!(ridge.singular_without_ridge);
+        .expect("an aliased column is dropped, as in R");
+        assert_eq!(prepared.estimate.aliased_columns, ["age_twice"]);
+        let position = prepared
+            .estimate
+            .column_names
+            .iter()
+            .position(|name| name == "age_twice")
+            .expect("column exists");
+        assert_eq!(prepared.estimate.coefficients[position], None);
+        assert!(
+            prepared
+                .estimate
+                .distance_scores
+                .values()
+                .all(|score| score.is_finite())
+        );
     }
 
     #[test]
-    fn independent_covariates_report_no_ridge_in_the_propensity_fit() {
+    fn independent_covariates_report_no_aliased_column_in_the_propensity_fit() {
         let anchors = vec![
             record("a1", date(2010, 1, 1), 10.0, "north"),
             record("a2", date(2010, 1, 2), 12.0, "south"),
@@ -700,9 +917,8 @@ mod tests {
             &PropensityScoreConfig::default(),
         )
         .expect("propensity estimation should succeed");
-        let ridge = prepared.estimate.ridge.expect("IRLS reports its ridge");
-        assert!(!ridge.singular_without_ridge);
-        assert!(ridge.ridge.abs() < f64::EPSILON);
+        assert_eq!(prepared.estimate.aliased_columns, Vec::<String>::new());
+        assert!(prepared.estimate.coefficients.iter().all(Option::is_some));
     }
 
     #[test]
@@ -743,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn elastic_net_fit_reports_no_ridge() {
+    fn elastic_net_fit_reports_no_aliased_column() {
         let (anchors, candidates) = collinear_groups();
         let config = PropensityScoreConfig::builder()
             .estimator(PropensityEstimator::ElasticNetLogit(
@@ -752,7 +968,7 @@ mod tests {
             .build();
         let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config)
             .expect("elastic net fit should succeed");
-        assert_eq!(prepared.estimate.ridge, None);
+        assert_eq!(prepared.estimate.aliased_columns, Vec::<String>::new());
     }
 
     #[test]
@@ -775,7 +991,12 @@ mod tests {
                 estimator: "glm_logit",
                 converged: true,
                 iterations: 0,
-                ridge: None,
+                aliased_columns: Vec::new(),
+                fitted_at_boundary: false,
+                lambda: None,
+                cross_validation: None,
+                discarded_anchors: Vec::new(),
+                discarded_candidates: Vec::new(),
             },
         };
     }

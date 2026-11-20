@@ -21,13 +21,14 @@ pub use distance::{
 };
 pub use engine::{StandardMatchRequest, match_standard};
 pub use estimation::{
-    CovariateEncodingConfig, CovariateMatrix, ElasticNetLogisticConfig, EstimationError,
-    LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisDistancePreparation,
-    MahalanobisPreparationConfig, MahalanobisTransform, MissingValuePolicy,
-    PropensityDistancePreparation, PropensityEstimator, PropensityMatchedOutcome,
-    PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale, RidgeReport,
-    estimate_propensity_and_match, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config,
+    CovariateEncodingConfig, CovariateMatrix, CrossValidation, ElasticNetCvConfig,
+    ElasticNetLogisticConfig, EstimationError, LambdaRule, LogisticRegressionConfig,
+    MahalanobisCovarianceStrategy, MahalanobisDistancePreparation, MahalanobisPreparationConfig,
+    MahalanobisTransform, MissingValuePolicy, PropensityDistancePreparation, PropensityEstimator,
+    PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreEstimate,
+    PropensityScoreOutputScale, RidgeReport, estimate_propensity_and_match,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    prepare_propensity_distance_config_with_discard,
 };
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,

@@ -93,7 +93,7 @@ fn fit_with(design: &Design, config: ElasticNetLogisticConfig) -> Fitted {
                 .iter()
                 .position(|n| *n == name)
                 .expect("column exists");
-            prepared.estimate.coefficients[position]
+            prepared.estimate.coefficients[position].expect("the elastic net fits every column")
         })
         .collect();
     Fitted {

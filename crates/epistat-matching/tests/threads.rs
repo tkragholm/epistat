@@ -98,14 +98,15 @@ impl Digest {
         self.floats(&estimate.probabilities);
         self.floats(&estimate.linear_predictor);
         self.floats(&estimate.distance_scores);
-        for coefficient in &estimate.coefficients {
-            self.float(*coefficient);
-        }
+        self.debug(&estimate.coefficients);
         self.debug(&estimate.column_names);
         self.text(estimate.estimator);
         self.int(usize::from(estimate.converged));
         self.int(estimate.iterations);
-        self.debug(&estimate.ridge);
+        self.debug(&estimate.aliased_columns);
+        self.int(usize::from(estimate.fitted_at_boundary));
+        self.debug(&estimate.lambda);
+        self.debug(&estimate.cross_validation);
     }
 }
 
@@ -389,22 +390,56 @@ fn transition_run_with_balance() {
 fn propensity_estimation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 4);
     let elastic = PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig::default());
-    for (name, estimator, scale) in [
+    let cross_validated = PropensityEstimator::ElasticNetCv(
+        ElasticNetCvConfig::builder()
+            .seed(11)
+            .nfolds(3)
+            .nlambda(12)
+            .build(),
+    );
+    let logit = PropensityLink::Logit;
+    for (name, estimator, scale, link) in [
         (
             "logit",
             PropensityEstimator::GlmLogit,
             PropensityScoreOutputScale::Probability,
+            logit,
         ),
         (
             "logit_lp",
             PropensityEstimator::GlmLogit,
             PropensityScoreOutputScale::LinearPredictor,
+            logit,
         ),
-        ("elastic", elastic, PropensityScoreOutputScale::Probability),
+        (
+            "probit",
+            PropensityEstimator::GlmLogit,
+            PropensityScoreOutputScale::Probability,
+            PropensityLink::Probit,
+        ),
+        (
+            "cloglog",
+            PropensityEstimator::GlmLogit,
+            PropensityScoreOutputScale::LinearPredictor,
+            PropensityLink::Cloglog,
+        ),
+        (
+            "elastic",
+            elastic,
+            PropensityScoreOutputScale::Probability,
+            logit,
+        ),
+        (
+            "elastic_cv",
+            cross_validated,
+            PropensityScoreOutputScale::Probability,
+            logit,
+        ),
     ] {
         let config = PropensityScoreConfig::builder()
             .estimator(estimator)
             .output_scale(scale)
+            .logistic(LogisticRegressionConfig::builder().link(link).build())
             .encoding(
                 CovariateEncodingConfig::builder()
                     .include_intercept(true)

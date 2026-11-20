@@ -370,6 +370,10 @@ fn probit_fits_match_r() {
             Tolerance::exact().rel(1e-11).abs(1e-13),
         );
         assert_close(&se, &r.se, Tolerance::exact().rel(1e-10));
-        assert_close(&[fit.deviance], &[r.deviance], Tolerance::exact().rel(1e-11));
+        assert_close(
+            &[fit.deviance],
+            &[r.deviance],
+            Tolerance::exact().rel(1e-11),
+        );
     }
 }

@@ -1,119 +1,229 @@
-//! Logistic propensity models: IRLS with a ridge penalty, and elastic net by coordinate descent.
+//! Binomial propensity models: the generalised linear model by IRLS, and the
+//! elastic net by coordinate descent.
 
-use super::config::{ElasticNetLogisticConfig, LogisticRegressionConfig};
+use super::EstimationError;
+use super::config::{ElasticNetLogisticConfig, LogisticRegressionConfig, PropensityLink};
+use super::cross_validation::CrossValidation;
 use super::encoding::CovariateMatrix;
-use super::linalg::{is_singular, solve_with_ridge_retry};
-use super::{EstimationError, RidgeReport};
-use epistat_glm::{ElasticNet, Family};
+use epistat_glm::{ElasticNet, Family, Glm, Link};
+use epistat_linalg::MatRef;
 
 #[derive(Debug, Clone)]
 pub(super) struct LogisticFit {
-    pub(super) coefficients: Vec<f64>,
+    /// `None` for a column the model could not identify (an aliased column).
+    pub(super) coefficients: Vec<Option<f64>>,
     pub(super) linear_predictor: Vec<f64>,
     pub(super) probabilities: Vec<f64>,
     pub(super) converged: bool,
     pub(super) iterations: usize,
-    /// The ridge of the linear solves; `None` for the elastic net, which solves none.
-    pub(super) ridge: Option<RidgeReport>,
+    /// Names of the aliased columns.
+    pub(super) aliased_columns: Vec<String>,
+    /// The penalty of an elastic net fit.
+    pub(super) lambda: Option<f64>,
+    pub(super) cross_validation: Option<CrossValidation>,
 }
 
-pub(super) fn fit_logistic_regression(
+/// The binomial generalised linear model with the configured link, fitted by
+/// [`epistat_glm::Glm`] with prior weights `weights` (1 when `None`).
+///
+/// A column that is a linear combination of the columns before it is aliased,
+/// as in R, and its coefficient is `None`. Non-convergence is reported in
+/// `converged`. A first step that leaves the model's domain, or a step that
+/// halving cannot correct, is an error.
+pub(super) fn fit_glm(
     matrix: &CovariateMatrix,
     labels: &[f64],
+    weights: Option<&[f64]>,
     config: &LogisticRegressionConfig,
 ) -> Result<LogisticFit, EstimationError> {
-    if labels.len() != matrix.n_rows {
+    if labels.len() != matrix.n_rows || weights.is_some_and(|w| w.len() != matrix.n_rows) {
         return Err(EstimationError::LinearSystemSolveFailed);
     }
+    if config.max_iter == 0 || !(config.tolerance.is_finite() && config.tolerance > 0.0) {
+        return Err(EstimationError::InvalidGlmConfig);
+    }
+    let link = match config.link {
+        PropensityLink::Logit => Link::Logit,
+        PropensityLink::Probit => Link::Probit,
+        PropensityLink::Cloglog => Link::Cloglog,
+    };
+    let mut model = Glm::new(Family::Binomial, link);
+    model.tolerance = config.tolerance;
+    model.max_iterations = config.max_iter;
+    let design = MatRef::from_row_major_slice(&matrix.values, matrix.n_rows, matrix.n_cols);
+    let fit = model
+        .fit(design, labels, weights, None, None)
+        .map_err(EstimationError::GlmFitFailed)?;
+    let aliased_columns = fit
+        .coefficients
+        .iter()
+        .zip(&matrix.column_names)
+        .filter(|(coefficient, _)| coefficient.is_none())
+        .map(|(_, name)| name.clone())
+        .collect();
+    Ok(LogisticFit {
+        coefficients: fit.coefficients,
+        linear_predictor: fit.linear_predictor,
+        probabilities: fit.fitted,
+        converged: fit.converged,
+        iterations: fit.iterations,
+        aliased_columns,
+        lambda: None,
+        cross_validation: None,
+    })
+}
 
-    let mut coefficients = vec![0.0_f64; matrix.n_cols];
-    let mut linear_predictor = vec![0.0_f64; matrix.n_rows];
-    let mut probabilities = vec![0.5_f64; matrix.n_rows];
-    let mut converged = false;
-    let mut iterations = 0usize;
-    let mut ridge = RidgeReport::default();
+/// Whether a fitted probability is as close to 0 or 1 as R's `glm()` flags
+/// with "fitted probabilities numerically 0 or 1 occurred": within ten
+/// machine epsilons. It is the sign of complete or quasi-complete separation,
+/// where the likelihood has no finite maximum, or of a near-degenerate fit.
+pub(super) fn any_fitted_at_boundary(probabilities: &[f64]) -> bool {
+    let margin = 10.0 * f64::EPSILON;
+    probabilities
+        .iter()
+        .any(|p| *p < margin || *p > 1.0 - margin)
+}
 
-    for iter_idx in 0..config.max_iter {
-        iterations = iter_idx + 1;
-        refresh_predictions(
-            matrix,
-            &coefficients,
-            config.probability_clip,
-            &mut linear_predictor,
-            &mut probabilities,
-        );
+/// The settings of one elastic-net fit that do not depend on `lambda`.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct NetSettings {
+    pub(super) alpha: f64,
+    pub(super) tolerance: f64,
+    pub(super) max_iter: usize,
+    pub(super) probability_clip: f64,
+    pub(super) standardize: bool,
+}
 
-        let mut normal_matrix = vec![0.0_f64; matrix.n_cols.saturating_mul(matrix.n_cols)];
-        let mut weighted_target = vec![0.0_f64; matrix.n_cols];
-        for row_idx in 0..matrix.n_rows {
-            let probability = probabilities[row_idx];
-            let weight = (probability * (1.0 - probability)).max(config.probability_clip);
-            let adjusted_response =
-                linear_predictor[row_idx] + (labels[row_idx] - probability) / weight;
-            let row = matrix.row(row_idx);
+impl NetSettings {
+    pub(super) fn validate(&self) -> Result<(), EstimationError> {
+        if !self.alpha.is_finite()
+            || !self.tolerance.is_finite()
+            || !self.probability_clip.is_finite()
+            || self.max_iter == 0
+            || self.tolerance <= 0.0
+            || self.probability_clip <= 0.0
+            || self.probability_clip >= 0.5
+        {
+            return Err(EstimationError::InvalidElasticNetConfig);
+        }
+        Ok(())
+    }
+}
 
-            for left in 0..matrix.n_cols {
-                let x_left = row[left];
-                weighted_target[left] =
-                    (weight * x_left).mul_add(adjusted_response, weighted_target[left]);
-                for (right, x_right) in row.iter().enumerate().take(left + 1) {
-                    let idx = left * matrix.n_cols + right;
-                    normal_matrix[idx] = (weight * x_left).mul_add(*x_right, normal_matrix[idx]);
+/// The penalty factor of each column: 0 for the intercept, 1 for the others.
+pub(super) fn penalty_factors(matrix: &CovariateMatrix) -> Vec<f64> {
+    matrix
+        .column_names
+        .iter()
+        .map(|name| if name == "intercept" { 0.0 } else { 1.0 })
+        .collect()
+}
+
+/// A subset of rows of the design with its response and weights, the penalised
+/// columns scaled to unit weighted standard deviation when asked.
+///
+/// The scaling uses the weights normalised to sum to 1 and divisor 1, as
+/// `glmnet(standardize = TRUE)` does. A column with no weighted variation, and
+/// every unpenalised column, keeps scale 1. The design is not centred: the
+/// unpenalised intercept column absorbs the means, so a fit on the scaled
+/// design gives the original coefficients by dividing by the scales.
+pub(super) struct NetProblem {
+    pub(super) values: Vec<f64>,
+    pub(super) y: Vec<f64>,
+    /// Prior weights; `None` when the caller gave none, which keeps the unit
+    /// weights exact.
+    pub(super) weights: Option<Vec<f64>>,
+    pub(super) scale: Vec<f64>,
+    n_rows: usize,
+    n_cols: usize,
+}
+
+impl NetProblem {
+    pub(super) fn new(
+        matrix: &CovariateMatrix,
+        rows: &[usize],
+        labels: &[f64],
+        weights: Option<&[f64]>,
+        penalty: &[f64],
+        standardize: bool,
+    ) -> Self {
+        let n_cols = matrix.n_cols;
+        let weight = |row: usize| weights.map_or(1.0, |w| w[row]);
+        let total: f64 = rows.iter().map(|&row| weight(row)).sum();
+        let mut scale = vec![1.0; n_cols];
+        if standardize && total > 0.0 {
+            for col in 0..n_cols {
+                if penalty[col] <= 0.0 {
+                    continue;
+                }
+                let mean = rows
+                    .iter()
+                    .map(|&row| weight(row) * matrix.row(row)[col])
+                    .sum::<f64>()
+                    / total;
+                let variance = rows
+                    .iter()
+                    .map(|&row| {
+                        let d = matrix.row(row)[col] - mean;
+                        weight(row) * d * d
+                    })
+                    .sum::<f64>()
+                    / total;
+                let sd = variance.sqrt();
+                if sd.is_finite() && sd > 0.0 {
+                    scale[col] = sd;
                 }
             }
         }
-        for left in 0..matrix.n_cols {
-            for right in (left + 1)..matrix.n_cols {
-                let upper = left * matrix.n_cols + right;
-                let lower = right * matrix.n_cols + left;
-                normal_matrix[upper] = normal_matrix[lower];
+        let mut values = Vec::with_capacity(rows.len() * n_cols);
+        for &row in rows {
+            for (x, s) in matrix.row(row).iter().zip(&scale) {
+                values.push(x / s);
             }
         }
-
-        if iter_idx == 0 {
-            // At the start every weight is 1/4, so this tests the design alone.
-            ridge.singular_without_ridge = is_singular(&normal_matrix, matrix.n_cols);
-        }
-        for diag in 0..matrix.n_cols {
-            if matrix.column_names[diag] == "intercept" {
-                continue;
-            }
-            normal_matrix[diag * matrix.n_cols + diag] += config.l2_penalty.max(0.0);
-        }
-
-        let (updated, added) =
-            solve_with_ridge_retry(&normal_matrix, &weighted_target, matrix.n_cols)?;
-        ridge.ridge = ridge.ridge.max(added);
-        ridge.singular_without_ridge |= added > 0.0;
-        let max_delta = updated
-            .iter()
-            .zip(coefficients.iter())
-            .map(|(next, prev)| (next - prev).abs())
-            .fold(0.0_f64, f64::max);
-        coefficients = updated;
-
-        if max_delta <= config.tolerance {
-            converged = true;
-            break;
+        Self {
+            values,
+            y: rows.iter().map(|&row| labels[row]).collect(),
+            weights: weights.map(|w| rows.iter().map(|&row| w[row]).collect()),
+            scale,
+            n_rows: rows.len(),
+            n_cols,
         }
     }
 
-    refresh_predictions(
-        matrix,
-        &coefficients,
-        config.probability_clip,
-        &mut linear_predictor,
-        &mut probabilities,
-    );
+    /// Fits at `lambda`, from `start` (coefficients on the scaled design).
+    pub(super) fn fit(
+        &self,
+        settings: &NetSettings,
+        lambda: f64,
+        penalty: &[f64],
+        start: Option<&[f64]>,
+    ) -> Result<epistat_glm::ElasticNetFit, EstimationError> {
+        let design = MatRef::from_row_major_slice(&self.values, self.n_rows, self.n_cols);
+        let mut model = ElasticNet::new(
+            Family::Binomial,
+            lambda.max(0.0),
+            settings.alpha.clamp(0.0, 1.0),
+        );
+        model.tolerance = settings.tolerance;
+        model.max_iterations = settings.max_iter;
+        model.probability_clip = settings.probability_clip;
+        model
+            .fit(
+                design,
+                &self.y,
+                self.weights.as_deref(),
+                None,
+                Some(penalty),
+                start,
+            )
+            .map_err(|_| EstimationError::InvalidElasticNetConfig)
+    }
 
-    Ok(LogisticFit {
-        ridge: Some(ridge),
-        coefficients,
-        linear_predictor,
-        probabilities,
-        converged,
-        iterations,
-    })
+    /// Coefficients on the scale of the original covariates.
+    pub(super) fn unscale(&self, scaled: &[f64]) -> Vec<f64> {
+        scaled.iter().zip(&self.scale).map(|(b, s)| b / s).collect()
+    }
 }
 
 /// Elastic-net logistic regression by IRLS with cyclic coordinate descent,
@@ -121,10 +231,12 @@ pub(super) fn fit_logistic_regression(
 ///
 /// The objective is the mean log-loss plus
 /// `lambda * (alpha * |b|_1 + (1 - alpha) / 2 * |b|_2^2)`, with the intercept
-/// unpenalised and the covariates used as given. It is the objective of R's
-/// `glmnet(family = "binomial", standardize = FALSE)`. The column named
-/// `intercept` has penalty factor 0 and every other column 1. `alpha` is
-/// clamped to `[0, 1]` and a negative `lambda` is taken as 0.
+/// unpenalised. The covariates are used as given, or scaled to unit weighted
+/// standard deviation first with `standardize`. It is the objective of R's
+/// `glmnet(family = "binomial")` with `standardize` set the same way. The
+/// column named `intercept` has penalty factor 0 and every other column 1.
+/// `alpha` is clamped to `[0, 1]` and a negative `lambda` is taken as 0.
+/// `weights` are prior weights (1 when `None`).
 ///
 /// The coordinate pass stops when `max_j v_j * (change in b_j)^2` is at most
 /// `tolerance`, the rule of `glmnet`'s `thresh`, and the outer loop stops on the
@@ -137,80 +249,46 @@ pub(super) fn fit_logistic_regression(
 pub(super) fn fit_elastic_net_logistic(
     matrix: &CovariateMatrix,
     labels: &[f64],
+    weights: Option<&[f64]>,
     config: &ElasticNetLogisticConfig,
 ) -> Result<LogisticFit, EstimationError> {
-    if labels.len() != matrix.n_rows {
+    if labels.len() != matrix.n_rows || weights.is_some_and(|w| w.len() != matrix.n_rows) {
         return Err(EstimationError::LinearSystemSolveFailed);
     }
-    if !config.alpha.is_finite()
-        || !config.lambda.is_finite()
-        || !config.tolerance.is_finite()
-        || !config.probability_clip.is_finite()
-        || config.max_iter == 0
-        || config.tolerance <= 0.0
-        || config.probability_clip <= 0.0
-        || config.probability_clip >= 0.5
-        || matrix.n_rows == 0
-    {
+    let settings = NetSettings {
+        alpha: config.alpha,
+        tolerance: config.tolerance,
+        max_iter: config.max_iter,
+        probability_clip: config.probability_clip,
+        standardize: config.standardize,
+    };
+    settings.validate()?;
+    if !config.lambda.is_finite() || matrix.n_rows == 0 {
         return Err(EstimationError::InvalidElasticNetConfig);
     }
-
-    let design =
-        epistat_linalg::MatRef::from_row_major_slice(&matrix.values, matrix.n_rows, matrix.n_cols);
-    let penalty_factor: Vec<f64> = matrix
-        .column_names
-        .iter()
-        .map(|name| if name == "intercept" { 0.0 } else { 1.0 })
-        .collect();
-    let mut model = ElasticNet::new(
-        Family::Binomial,
-        config.lambda.max(0.0),
-        config.alpha.clamp(0.0, 1.0),
+    let penalty = penalty_factors(matrix);
+    let rows: Vec<usize> = (0..matrix.n_rows).collect();
+    let problem = NetProblem::new(
+        matrix,
+        &rows,
+        labels,
+        weights,
+        &penalty,
+        settings.standardize,
     );
-    model.tolerance = config.tolerance;
-    model.max_iterations = config.max_iter;
-    model.probability_clip = config.probability_clip;
-    let fit = model
-        .fit(design, labels, None, None, Some(&penalty_factor), None)
-        .map_err(|_| EstimationError::InvalidElasticNetConfig)?;
-
+    let fit = problem.fit(&settings, config.lambda, &penalty, None)?;
     Ok(LogisticFit {
-        ridge: None,
-        coefficients: fit.coefficients,
+        coefficients: problem
+            .unscale(&fit.coefficients)
+            .into_iter()
+            .map(Some)
+            .collect(),
         linear_predictor: fit.linear_predictor,
         probabilities: fit.fitted,
         converged: fit.converged,
         iterations: fit.iterations,
+        aliased_columns: Vec::new(),
+        lambda: Some(config.lambda.max(0.0)),
+        cross_validation: None,
     })
-}
-
-fn sigmoid_clipped(value: f64, clip: f64) -> f64 {
-    let probability = if value >= 0.0 {
-        let exp_neg = (-value).exp();
-        1.0 / (1.0 + exp_neg)
-    } else {
-        let exp_pos = value.exp();
-        exp_pos / (1.0 + exp_pos)
-    };
-    probability.clamp(clip, 1.0 - clip)
-}
-
-/// Recompute the linear predictor and the clipped probabilities in place.
-fn refresh_predictions(
-    matrix: &CovariateMatrix,
-    coefficients: &[f64],
-    probability_clip: f64,
-    linear_predictor: &mut [f64],
-    probabilities: &mut [f64],
-) {
-    for row_idx in 0..matrix.n_rows {
-        let linear = matrix
-            .row(row_idx)
-            .iter()
-            .zip(coefficients.iter())
-            .map(|(x, beta)| x * beta)
-            .sum::<f64>();
-        linear_predictor[row_idx] = linear;
-        probabilities[row_idx] = sigmoid_clipped(linear, probability_clip);
-    }
 }
