@@ -38,12 +38,12 @@
 //! column, or a case weight that is not a whole number, or a subject with more
 //! than one event row, and the model-based variance otherwise.
 //!
-//! - Greenwood [1] for the product limit: `Var log S(t) = sum d / (Y (Y - d))`.
+//! - Greenwood \[1\] for the product limit: `Var log S(t) = sum d / (Y (Y - d))`.
 //!   For the hazard `Var H(t) = sum d / Y^2`, and for ctype 2 the sum of
 //!   `(d/m) / (Y - j d/m)^2` over the events. With stype 2 the variance of
 //!   `log S` is that of `H`. With case weights the weights are used as they are,
 //!   so whole-number weights act as counts of identical subjects.
-//! - The infinitesimal jackknife, in [`jackknife`]'s notation: the sum over
+//! - The infinitesimal jackknife, in `jackknife`'s notation: the sum over
 //!   clusters of the squared derivative of the curve with respect to the weight
 //!   of the cluster. The clusters are the cluster column, else the id column,
 //!   else each row. It is computed in a sort and one pass.
@@ -56,18 +56,18 @@
 //! limit is `None`, and a zero standard error gives the point estimate itself.
 //! The limits of type `Log` are `S exp(-+ z se)`, of type `LogLog`
 //! `exp(-exp(log(-log S) -+ z se / log S))`, `Plain` `S -+ z se S`, `Logit` and
-//! `Arcsin` the usual transformations [2][3]. The lower limit of the Peto and
-//! modified variants uses another standard error [4][5].
+//! `Arcsin` the usual transformations \[2\]\[3\]. The lower limit of the Peto and
+//! modified variants uses another standard error \[4\]\[5\].
 //!
 //! # Quantiles and restricted means
 //!
 //! [`GroupCurve::quantiles`] gives the smallest time at which the curve is at
 //! or below `1 - p`, the midpoint of a flat part of the curve that lies exactly
 //! at the level, `None` when the curve does not reach it, and the same for the
-//! limits [6]. [`GroupCurve::rmean`] integrates the curve from its origin to
+//! limits \[6\]. [`GroupCurve::rmean`] integrates the curve from its origin to
 //! a horizon `tau`, holding the last value beyond the last time, with the
 //! variance `sum_i A_i^2 d_i / (Y_i (Y_i - d_i))`, where `A_i` is the area under
-//! the curve from the `i`-th time to `tau` [7]. That variance is Greenwood's
+//! the curve from the `i`-th time to `tau` \[7\]. That variance is Greenwood's
 //! whatever variance the curve itself uses, as in `survfit`.
 //!
 //! # Differences from survfit

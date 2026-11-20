@@ -133,8 +133,8 @@ pub use predict::{
     SurvfitOptions, TermsPrediction, Variance, basehaz, predict, predict_terms, reference_means,
     reference_offset, survfit,
 };
-pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
 pub use residuals::{Collapse, CoxResiduals, ResidualKind, ResidualOptions, residuals};
+pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
 pub use zph::{CoxZph, ZphOptions, ZphTransform, zph};
 
 /// Largest number of Newton-Raphson steps.

@@ -42,7 +42,7 @@
 //! `-ln t`, as `survreg`'s does and as a likelihood for `T` must, which makes
 //! log likelihoods comparable between a Weibull and a Gaussian fit to the
 //! same times. The derivatives of a row in `eta = x'beta` and `ln sigma` are
-//! in [`dist`]'s documentation for the code and in Lawless \[1\] for the
+//! in the `dist` module's documentation for the code and in Lawless \[1\] for the
 //! formulas.
 //!
 //! # Rows and outcomes
