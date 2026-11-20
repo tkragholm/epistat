@@ -4,13 +4,29 @@ use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
 
 /// Match-weight extraction method for matched pairs.
+///
+/// The weights are raw: no group is rescaled. `matchit()` rescales by default
+/// (`normalize = TRUE`); [`UnitWeightSet::normalized`] does the same here.
+/// Raw weights equal `matchit(normalize = FALSE)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchWeightMethod {
     /// Every pair contributes +1 to both anchor and candidate units.
+    ///
+    /// `matchit()` has no such weighting. Its weights for `estimand = "ATE"`
+    /// are stratum weights, which equal these only when every anchor has the
+    /// same number of controls and both are normalized.
     PairCount,
     /// Every matched anchor has weight 1, candidate pairs are divided by anchor match count.
+    ///
+    /// This is `matchit()`'s weighting for the estimand whose focal group is
+    /// the anchors, with or without replacement.
     AnchorUnitCandidateFractional,
     /// Every matched candidate has weight 1, anchor pairs are divided by candidate reuse count.
+    ///
+    /// This is `matchit()`'s weighting for the estimand whose focal group is
+    /// the candidates, applied to pairs that were formed from the anchors'
+    /// side. `matchit()` itself would form the pairs from the candidates'
+    /// side.
     CandidateUnitAnchorFractional,
 }
 
@@ -149,6 +165,26 @@ impl UnitWeightSet {
         Self {
             anchor: compose_with_sampling(&self.anchor, sampling_weights),
             candidate: compose_with_sampling(&self.candidate, sampling_weights),
+        }
+    }
+
+    /// Rescale the weights of each group so that their mean is 1.
+    ///
+    /// Within the anchor group and within the candidate group separately,
+    /// every positive weight is divided by the mean of the positive weights of
+    /// that group, so that the weights of a group sum to the number of its
+    /// units that have one. This is the rule of `matchit()` with
+    /// `normalize = TRUE`. It changes the scale of the weights and not their
+    /// ratios, so weighted means are unchanged. A group with no positive
+    /// weight is left as it is.
+    ///
+    /// The mean is formed in the order of the unit identifiers, so the result
+    /// does not depend on the order of the hash map.
+    #[must_use]
+    pub fn normalized(&self) -> Self {
+        Self {
+            anchor: normalize_group(&self.anchor),
+            candidate: normalize_group(&self.candidate),
         }
     }
 
@@ -439,6 +475,33 @@ fn candidate_unit_anchor_fractional_weights(pairs: &[MatchedPair]) -> UnitWeight
     UnitWeightSet { anchor, candidate }
 }
 
+fn normalize_group(group: &RapidHashMap<String, f64>) -> RapidHashMap<String, f64> {
+    let mut positive: Vec<(&String, f64)> = group
+        .iter()
+        .filter(|(_, weight)| **weight > 0.0)
+        .map(|(id, weight)| (id, *weight))
+        .collect();
+    positive.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let sum = positive
+        .iter()
+        .fold(0.0_f64, |acc, (_, weight)| acc + weight);
+    if positive.is_empty() || !sum.is_finite() {
+        return group.clone();
+    }
+    let mean = sum / to_f64(positive.len());
+    group
+        .iter()
+        .map(|(id, weight)| {
+            let scaled = if *weight > 0.0 {
+                *weight / mean
+            } else {
+                *weight
+            };
+            (id.clone(), scaled)
+        })
+        .collect()
+}
+
 fn compose_with_sampling(
     match_weights: &RapidHashMap<String, f64>,
     sampling_weights: &RapidHashMap<String, f64>,
@@ -552,6 +615,32 @@ mod tests {
         let total_anchor: f64 = weights.anchor.values().sum();
         let total_candidate: f64 = weights.candidate.values().sum();
         assert!((total_anchor - total_candidate).abs() < 1e-12);
+    }
+
+    #[test]
+    fn normalized_weights_have_mean_one_in_each_group_and_keep_zeros() {
+        let mut weights = UnitWeightSet::default();
+        weights.anchor.insert("a1".into(), 1.0);
+        weights.anchor.insert("a2".into(), 1.0);
+        weights.candidate.insert("c1".into(), 0.5);
+        weights.candidate.insert("c2".into(), 1.5);
+        weights.candidate.insert("c3".into(), 0.0);
+        weights.candidate.insert("c4".into(), 1.0);
+
+        let normalized = weights.normalized();
+        assert_eq!(normalized.anchor.get("a1").copied(), Some(1.0));
+        // The positive candidate weights have mean 1, so they are unchanged.
+        assert_eq!(normalized.candidate.get("c1").copied(), Some(0.5));
+        assert_eq!(normalized.candidate.get("c2").copied(), Some(1.5));
+        assert_eq!(normalized.candidate.get("c3").copied(), Some(0.0));
+
+        let mut scaled = UnitWeightSet::default();
+        scaled.candidate.insert("c1".into(), 1.0 / 3.0);
+        scaled.candidate.insert("c2".into(), 1.0 / 3.0);
+        let scaled = scaled.normalized();
+        assert!((scaled.candidate["c1"] - 1.0).abs() < 1e-15);
+        assert!((scaled.candidate_total_weight() - 2.0).abs() < 1e-15);
+        assert!(UnitWeightSet::default().normalized().anchor.is_empty());
     }
 
     #[test]

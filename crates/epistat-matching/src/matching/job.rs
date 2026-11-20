@@ -120,6 +120,13 @@ where
     G: ConstraintGroup<R>,
 {
     /// Set the matching ratio (number of controls per case).
+    ///
+    /// Without replacement, each anchor takes all its controls before the
+    /// next anchor starts. `matchit()` gives every anchor one control before
+    /// any anchor gets a second. When controls run short, the crate's order
+    /// leaves the last anchors with fewer controls or none, and `matchit()`'s
+    /// leaves every anchor with at least one for as long as controls last.
+    /// An anchor that finds fewer than the ratio gets what is available.
     #[must_use]
     pub const fn with_ratio(mut self, ratio: MatchRatio) -> Self {
         self.criteria.match_ratio = ratio.get();
