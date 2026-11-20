@@ -1,7 +1,7 @@
 //! The elastic-net logistic fit checked against R's `glmnet`.
 //!
-//! The reference is `tests/glmnet_reference.json`, written by
-//! `tests/glmnet_reference.R` with `standardize = FALSE` so that the penalty
+//! The reference is `tests/data/glmnet.json`, written by
+//! `tests/data/glmnet.R` with `standardize = FALSE` so that the penalty
 //! sits on the raw covariate scale, as in the Rust fit. Both minimise the mean
 //! log-loss plus `lambda * (alpha * |b|_1 + (1 - alpha) / 2 * |b|_2^2)` with an
 //! unpenalised intercept.
@@ -38,7 +38,7 @@ struct RFit {
 fn reference() -> Reference {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/glmnet_reference.json"
+        "/tests/data/glmnet.json"
     ))
     .expect("fixture is readable");
     serde_json::from_str(&text).expect("fixture parses")
