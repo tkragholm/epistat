@@ -24,14 +24,15 @@ pub use distance::{
 };
 pub use engine::{StandardMatchRequest, match_standard};
 pub use estimation::{
-    CovariateEncodingConfig, CovariateMatrix, ElasticNetLogisticConfig, EstimationError,
-    EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
-    LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisDistancePreparation,
-    MahalanobisPreparationConfig, MahalanobisTransform, MissingValuePolicy,
-    PropensityDistancePreparation, PropensityEstimator, PropensityMatchedOutcome,
-    PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale, RidgeReport,
-    estimate_propensity_and_match, prepare_euclidean_distance_config,
-    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    CovariateEncodingConfig, CovariateMatrix, CrossValidation, ElasticNetCvConfig,
+    ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,
+    EuclideanPreparationConfig, EuclideanScale, LambdaRule, LogisticRegressionConfig,
+    MahalanobisCovarianceStrategy, MahalanobisDistancePreparation, MahalanobisPreparationConfig,
+    MahalanobisTransform, MissingValuePolicy, PropensityDistancePreparation, PropensityEstimator,
+    PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreEstimate,
+    PropensityScoreOutputScale, RidgeReport, cross_validation_folds, estimate_propensity_and_match,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use nearest::{MatchOrder, NearestSelection};

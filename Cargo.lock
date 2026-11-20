@@ -493,6 +493,7 @@ name = "epistat-glm"
 version = "0.1.1"
 dependencies = [
  "epistat-linalg",
+ "epistat-stats",
  "epistat-testkit",
  "serde",
  "thiserror 2.0.21",

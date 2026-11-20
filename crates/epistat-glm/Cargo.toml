@@ -13,6 +13,7 @@ repository.workspace = true
 
 [dependencies]
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }
+epistat-stats = { path = "../epistat-stats", version = "0.2.4" }
 thiserror = "2"
 
 [dev-dependencies]

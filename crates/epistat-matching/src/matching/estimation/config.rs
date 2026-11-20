@@ -1,6 +1,7 @@
 //! Configuration for covariate encoding, propensity estimation and Mahalanobis preparation.
 
 use crate::types::DistanceCaliper;
+use rapidhash::RapidHashMap;
 
 /// Missing-value handling for in-crate covariate preprocessing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -41,30 +42,46 @@ impl Default for CovariateEncodingConfig {
     }
 }
 
-/// Logistic-regression settings used for propensity estimation.
+/// The link of the generalised linear propensity model.
+///
+/// These are the links of R's `binomial()` that MatchIt's
+/// `distance = "glm"` accepts for a propensity score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PropensityLink {
+    /// `eta = ln(p / (1 - p))`.
+    #[default]
+    Logit,
+    /// `eta = Phi^-1(p)`, with `Phi` the standard normal distribution function.
+    Probit,
+    /// `eta = ln(-ln(1 - p))`.
+    Cloglog,
+}
+
+/// Settings of the generalised linear propensity model, fitted by
+/// [`epistat_glm::Glm`] as R's `glm()` does, with no penalty.
+///
+/// The defaults are those of R's `glm.control`: 25 iterations and a relative
+/// deviance change of 1e-8.
 #[derive(bon::Builder, Debug, Clone, Copy)]
 pub struct LogisticRegressionConfig {
     /// Maximum IRLS iterations.
-    #[builder(default = 100_usize)]
+    #[builder(default = 25_usize)]
     pub max_iter: usize,
-    /// Convergence tolerance on the largest variance-weighted squared coefficient change.
+    /// Convergence tolerance on the relative change of the deviance, R's
+    /// `epsilon`.
     #[builder(default = 1e-8_f64)]
     pub tolerance: f64,
-    /// L2 penalty added to non-intercept coefficients.
-    #[builder(default = 1e-6_f64)]
-    pub l2_penalty: f64,
-    /// Numeric stability clipping for predicted probabilities.
-    #[builder(default = 1e-8_f64)]
-    pub probability_clip: f64,
+    /// The link between the propensity score and the linear predictor.
+    #[builder(default)]
+    pub link: PropensityLink,
 }
 
 impl Default for LogisticRegressionConfig {
     fn default() -> Self {
         Self {
-            max_iter: 100,
+            max_iter: 25,
             tolerance: 1e-8,
-            l2_penalty: 1e-6,
-            probability_clip: 1e-8,
+            link: PropensityLink::Logit,
         }
     }
 }
@@ -105,6 +122,11 @@ pub struct ElasticNetLogisticConfig {
     /// Numeric stability clipping for predicted probabilities.
     #[builder(default = 1e-8_f64)]
     pub probability_clip: f64,
+    /// Scale each penalised column to unit weighted standard deviation before
+    /// fitting, as `glmnet(standardize = TRUE)` does. The coefficients are
+    /// returned on the scale of the covariates.
+    #[builder(default = false)]
+    pub standardize: bool,
 }
 
 impl Default for ElasticNetLogisticConfig {
@@ -115,18 +137,83 @@ impl Default for ElasticNetLogisticConfig {
             lambda: 1e-2,
             alpha: 0.5,
             probability_clip: 1e-8,
+            standardize: false,
         }
     }
+}
+
+/// Which cross-validated penalty `lambda` is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LambdaRule {
+    /// The `lambda` with the smallest mean cross-validated deviance, the
+    /// largest of them if several tie (`lambda.min` of `cv.glmnet`).
+    Min,
+    /// The largest `lambda` whose mean deviance is within one standard error
+    /// of the smallest (`lambda.1se` of `cv.glmnet`), which is the one MatchIt
+    /// uses.
+    #[default]
+    OneStandardError,
+}
+
+/// Elastic-net logistic settings with the penalty chosen by cross-validation,
+/// as MatchIt does for `distance = "lasso"`, `"ridge"` and `"elasticnet"`.
+///
+/// The folds come from `epistat-rng` seeded with `seed`: the row indices are
+/// dealt to the `nfolds` folds in turn and shuffled, so the fold sizes differ
+/// by at most one. R's `cv.glmnet` draws its folds the same way with R's
+/// generator, so the folds, and the chosen `lambda`, differ from R's unless
+/// R is given the same `foldid`. The `lambda` path is `glmnet`'s: `nlambda`
+/// values from the smallest `lambda` that sets every penalised coefficient to
+/// zero down to that value times `lambda_min_ratio`, equally spaced on the log
+/// scale. The deviance is the binomial deviance with probabilities clipped to
+/// `[1e-5, 1 - 1e-5]`. A column is standardised by default, as `glmnet` does.
+#[derive(bon::Builder, Debug, Clone, Copy)]
+pub struct ElasticNetCvConfig {
+    /// Seed of the random number stream that assigns the folds.
+    pub seed: u64,
+    /// Elastic-net mixing parameter (0 = ridge, 1 = lasso).
+    #[builder(default = 0.5_f64)]
+    pub alpha: f64,
+    /// Number of folds, at least 3.
+    #[builder(default = 10_usize)]
+    pub nfolds: usize,
+    /// Number of `lambda` values on the path.
+    #[builder(default = 100_usize)]
+    pub nlambda: usize,
+    /// Smallest `lambda` as a fraction of the largest. `None` is `glmnet`'s
+    /// default, 1e-4 when there are more rows than covariates and 1e-2
+    /// otherwise.
+    pub lambda_min_ratio: Option<f64>,
+    /// The rule that picks `lambda` from the cross-validation curve.
+    #[builder(default)]
+    pub rule: LambdaRule,
+    /// Scale each penalised column to unit weighted standard deviation.
+    #[builder(default = true)]
+    pub standardize: bool,
+    /// Maximum IRLS steps per fit.
+    #[builder(default = 100_usize)]
+    pub max_iter: usize,
+    /// Convergence tolerance of each fit, as in [`ElasticNetLogisticConfig`].
+    #[builder(default = 1e-20_f64)]
+    pub tolerance: f64,
+    /// Numeric stability clipping for predicted probabilities.
+    #[builder(default = 1e-8_f64)]
+    pub probability_clip: f64,
 }
 
 /// In-crate propensity estimator selection.
 #[derive(Debug, Clone, Default)]
 pub enum PropensityEstimator {
-    /// Logistic regression (`glm`-style IRLS).
+    /// A binomial generalised linear model with the link of
+    /// [`LogisticRegressionConfig::link`], logit by default, fitted as R's
+    /// `glm()` does.
     #[default]
     GlmLogit,
-    /// Elastic-net penalized logistic regression.
+    /// Elastic-net penalized logistic regression at a given `lambda`.
     ElasticNetLogit(ElasticNetLogisticConfig),
+    /// Elastic-net penalized logistic regression with `lambda` chosen by
+    /// cross-validation.
+    ElasticNetCv(ElasticNetCvConfig),
 }
 
 /// Output scale used for propensity-score distance values.
@@ -135,7 +222,8 @@ pub enum PropensityScoreOutputScale {
     /// Use probability scale.
     #[default]
     Probability,
-    /// Use linear predictor (`logit` when logistic link is used).
+    /// Use the linear predictor, the scale of the link (`logit` for the logit
+    /// link): MatchIt's `link = "linear.logit"` and its siblings.
     LinearPredictor,
 }
 
@@ -156,6 +244,17 @@ pub struct PropensityScoreConfig {
     pub output_scale: PropensityScoreOutputScale,
     /// Optional caliper on selected output scale.
     pub caliper: Option<DistanceCaliper>,
+    /// Sampling weights by record id, entered into the fit as prior weights as
+    /// MatchIt passes `s.weights` to `glm()`. Every record needs a finite,
+    /// non-negative weight. `None` is a weight of 1 for every record.
+    pub sampling_weights: Option<RapidHashMap<String, f64>>,
+    /// Refit the model on the units that common-support trimming keeps, as
+    /// `matchit(reestimate = TRUE)` does. It needs a trimming policy, which
+    /// [`prepare_propensity_distance_config_with_discard`](super::prepare_propensity_distance_config_with_discard)
+    /// and [`estimate_propensity_and_match`](super::estimate_propensity_and_match)
+    /// take from the caller and the matching criteria.
+    #[builder(default = false)]
+    pub reestimate: bool,
 }
 
 impl Default for PropensityScoreConfig {
@@ -168,6 +267,8 @@ impl Default for PropensityScoreConfig {
             logistic: LogisticRegressionConfig::default(),
             output_scale: PropensityScoreOutputScale::Probability,
             caliper: None,
+            sampling_weights: None,
+            reestimate: false,
         }
     }
 }
