@@ -192,15 +192,17 @@ pub enum HazardType {
     FlemingHarrington,
 }
 
-/// The transformation of the confidence limits, `conf.type` in `survfit`.
+/// The transformation of the confidence limits, `conf.type` in `survfit`. The
+/// same type is the one of [`cox::survfit`](crate::cox::survfit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConfType {
-    /// Limits on the log scale.
+    /// Limits on the log scale, `S exp(-+ z se)`, the upper limit at most 1.
     #[default]
     Log,
-    /// Limits on the log-log scale.
+    /// Limits on the log-log scale, `exp(-exp(log(-log S) -+ z se / log S))`.
     LogLog,
-    /// Limits on the probability scale.
+    /// Limits on the probability scale, `S -+ z se S`, clipped to the unit
+    /// interval.
     Plain,
     /// Limits on the logit scale.
     Logit,

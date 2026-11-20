@@ -367,23 +367,7 @@ impl Default for PredictOptions<'_> {
     }
 }
 
-/// The confidence limits of a survival curve, `conf.type` of `survfit`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ConfType {
-    /// No limits.
-    None,
-    /// `S exp(-+ z se)`, the upper limit at most 1.
-    #[default]
-    Log,
-    /// `exp(-exp(log(-log S) -+ z se / log S))`.
-    LogLog,
-    /// `S -+ z se S`, clipped to the unit interval.
-    Plain,
-    /// The logit scale.
-    Logit,
-    /// The arcsine-square-root scale.
-    Arcsin,
-}
+pub use crate::survfit::ConfType;
 
 /// The survival estimate of a curve, `stype` of `survfit.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
