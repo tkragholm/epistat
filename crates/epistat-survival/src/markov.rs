@@ -59,6 +59,23 @@
 //! immaterial. Replicates and slots run in parallel, each depending on its seed
 //! or its slot only, so the result does not depend on the number of threads.
 //!
+//! # Agreement with mstate
+//!
+//! `mstate::MarkovTest` is the authors' implementation. For a test without
+//! covariates and with the mean of the absolute normalised traces as the
+//! statistic, the traces, variances, event counts and statistics agree with it
+//! to the rounding error of the sums, and the p-values agree within their
+//! Monte Carlo error (`tests/r_markov.rs`). The Rust test has no counterpart to
+//! the covariates of the intensity model (`formula`), the chi-squared trace
+//! over the other qualifying states (`fn2`), other summary functions, the
+//! optimal weights or the centred Poisson multipliers. R's p-value is the
+//! share of replicates that exceed the observed statistic, `c / B`, and this
+//! test's is `(c + 1) / (B + 1)` with ties counted. R's normalised trace of a
+//! slot of zero variance is the trace itself, a rounding residue, and here it
+//! is 0. Where several stays of one person cover a landmark R takes the first
+//! and this test the last, which makes no difference for stays that do not
+//! overlap.
+//!
 //! # Edge cases
 //!
 //! With no replicates the p-values are `None`. A slot whose variance is not
