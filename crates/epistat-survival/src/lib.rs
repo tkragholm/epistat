@@ -30,6 +30,9 @@
 //!   standard errors, confidence limits, quantiles and restricted means.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
+//! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
+//!   number of events, terms and predicted survival curves of a Cox fit, as
+//!   `basehaz`, `predict.coxph` and `survfit.coxph`.
 //! - [`SurvData`]: the checked input type that the estimators share, for
 //!   follow-up data and for interval-censored times.
 //! - [`survreg`]: accelerated failure time models for right, left and interval

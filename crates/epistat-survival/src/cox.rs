@@ -117,6 +117,7 @@ use crate::check::{check_lengths, check_row_count};
 use crate::error::Result;
 
 pub mod design;
+pub mod predict;
 pub mod tt;
 pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_residuals};
 #[expect(
@@ -124,6 +125,12 @@ pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_re
     reason = "the deprecated names stay exported for a release"
 )]
 pub use design::{CoxDesign, cox_score_residuals, fit_cox};
+pub use predict::{
+    Baseline, BaselineOptions, Centring, ConfType, Curve, CurveTimes, FittedModel, HazardType,
+    NewData, PredictOptions, PredictType, Prediction, Reference, StratumBaseline, SurvCurves,
+    SurvfitOptions, TermsPrediction, Variance, basehaz, predict, predict_terms, reference_means,
+    reference_offset, survfit,
+};
 pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
 
 /// Largest number of Newton-Raphson steps.
