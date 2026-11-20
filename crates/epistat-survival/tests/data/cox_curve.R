@@ -12,6 +12,11 @@
 # changing covariates; the fourth has a gap between its two intervals, where
 # survfit.coxph shifts the times after the gap back by its length, which is
 # written down as gap_start and gap_length.
+# Fits with a name ending in zero have their coefficients fixed at 0 (iter.max
+# = 0), so that every relative risk is 1. There the variance of the
+# Kalbfleisch-Prentice curve that survival gives, W / (nrisk (nrisk - W)), has
+# the same units in W and nrisk and the test compares it with epistat's. For
+# the other fits the test records that survival's value differs.
 # The Kalbfleisch-Prentice increment at a time with tied events is the root of
 # sum w_j r_j / (1 - a^r_j) = nrisk, which survival finds by 35 bisection steps
 # from 0.5 with step 0.25. Its error is therefore up to 2^-36 in a, and the
@@ -81,6 +86,8 @@ specs <- list(
   list(name = "sim_breslow_counting_strata_weights", d = "sim", terms = "x1 + x2 + x3", ties = "breslow", entry = TRUE, strata = TRUE, weights = TRUE, st = 8, paths = TRUE),
   list(name = "sim_efron_counting_strata_weights", d = "sim", terms = "x1 + x2 + x3", ties = "efron", entry = TRUE, strata = TRUE, weights = TRUE, st = 8, paths = TRUE),
   list(name = "sim_efron_counting_strata_offset", d = "sim", terms = "x1 + x3", ties = "efron", entry = TRUE, strata = TRUE, offset = TRUE, st = 8, paths = TRUE),
+  list(name = "lung_efron_counting_zero", d = "lung", terms = "x1 + x2 + x3", ties = "efron", entry = TRUE, weights = TRUE, st = 150, paths = TRUE, zero = TRUE),
+  list(name = "sim_breslow_counting_strata_weights_zero", d = "sim", terms = "x1 + x2", ties = "breslow", entry = TRUE, strata = TRUE, weights = TRUE, st = 8, paths = TRUE, zero = TRUE),
   list(name = "sim_breslow_nostart_weights", d = "sim", terms = "x1 + x2", ties = "breslow", weights = TRUE, st = 6)
 )
 
@@ -112,7 +119,13 @@ run <- function(s) {
   f <- as.formula(paste(resp, "~", rhs))
   args <- list(formula = f, data = d, ties = s$ties)
   if (isTRUE(s$weights)) args$weights <- d$w
-  fit <- do.call(coxph, args)
+  if (isTRUE(s$zero)) {
+    # coefficients fixed at 0, so every relative risk is 1
+    p0 <- length(strsplit(s$terms, "+", fixed = TRUE)[[1]])
+    args$init <- rep(0, p0)
+    args$control <- coxph.control(iter.max = 0)
+  }
+  fit <- suppressWarnings(do.call(coxph, args))
   X <- model.matrix(fit)
   cn <- colnames(X)
   beta <- coef(fit)
@@ -123,7 +136,7 @@ run <- function(s) {
   newoff <- if (isTRUE(s$offset)) nd$off else rep(0, nrow(nd))
   theta <- exp(c((newX - rep(fit$means, each = nrow(newX))) %*% beta) + newoff - offset_mean)
   out <- list(
-    name = s$name, ties = s$ties, entry = isTRUE(s$entry), strata = isTRUE(s$strata),
+    name = s$name, zero = isTRUE(s$zero), ties = s$ties, entry = isTRUE(s$entry), strata = isTRUE(s$strata),
     weights = isTRUE(s$weights), offset = isTRUE(s$offset),
     columns = cn, x = X, coefficients = unname(beta), var = fit$var,
     means = unname(fit$means), start = d$start, stop = d$stop, event = d$event,

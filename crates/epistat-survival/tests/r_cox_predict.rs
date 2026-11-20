@@ -214,6 +214,14 @@ fn flatten(m: &[Vec<f64>]) -> Vec<Option<f64>> {
     m.iter().flatten().copied().map(Some).collect()
 }
 
+/// The reference curves are R's with `censor = FALSE`, at the event times.
+fn at_events() -> SurvfitOptions<'static> {
+    SurvfitOptions {
+        censor_times: false,
+        ..SurvfitOptions::default()
+    }
+}
+
 fn matrix(rows: &[Vec<f64>]) -> Mat<f64> {
     Mat::from_fn(rows.len(), rows[0].len(), |i, j| rows[i][j])
 }
@@ -639,7 +647,7 @@ fn predictions_match_r() {
             ("logit", ConfType::Logit),
             ("arcsin", ConfType::Arcsin),
         ];
-        let sf_opts = SurvfitOptions::default();
+        let sf_opts = at_events();
         let curves = survfit(&fitted, &new, &sf_opts).unwrap();
         for (i, rc) in r.survfit.iter().enumerate() {
             let c = &curves.curves[i];
@@ -665,7 +673,7 @@ fn predictions_match_r() {
             for (key, kind) in kinds {
                 let o = SurvfitOptions {
                     conf_type: kind,
-                    ..SurvfitOptions::default()
+                    ..at_events()
                 };
                 let cc = survfit(&fitted, &new, &o).unwrap();
                 let rl = &rc.ci[key];
@@ -678,7 +686,7 @@ fn predictions_match_r() {
             }
             let o90 = SurvfitOptions {
                 conf_level: 0.9,
-                ..SurvfitOptions::default()
+                ..at_events()
             };
             let c90 = survfit(&fitted, &new, &o90).unwrap();
             note(
@@ -699,7 +707,7 @@ fn predictions_match_r() {
             &new,
             &SurvfitOptions {
                 hazard: Some(alt_kind),
-                ..SurvfitOptions::default()
+                ..at_events()
             },
         )
         .unwrap();

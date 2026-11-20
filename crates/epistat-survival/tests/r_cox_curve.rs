@@ -82,6 +82,7 @@ struct Reference_ {
 )]
 struct RFit {
     name: String,
+    zero: bool,
     ties: String,
     entry: bool,
     strata: bool,
@@ -183,7 +184,7 @@ enum Time {
 
 struct Table {
     kind: HashMap<(u32, u64), Time>,
-    /// `s0 / (s0 - W)` of every event time, 1 where `W >= s0`.
+    /// `s0 / (s0 - e0)` of every event time that is not exhausted.
     variance_amplification: f64,
     single_amplification: f64,
 }
@@ -257,7 +258,7 @@ fn table(r: &RFit, theta: &[f64]) -> Table {
     for (c, bits) in seen {
         let t = f64::from_bits(bits);
         let mut s0 = 0.0;
-        let (mut e0, mut w_events) = (0.0, 0.0);
+        let mut e0 = 0.0;
         let (mut ws, mut rs) = (Vec::new(), Vec::new());
         for (i, &risk) in theta.iter().enumerate() {
             if code(i) != c || r.stop[i] < t || (r.entry && r.start[i] >= t) {
@@ -266,7 +267,6 @@ fn table(r: &RFit, theta: &[f64]) -> Table {
             s0 += weight(i) * risk;
             if r.stop[i].to_bits() == bits && r.event[i] == 1 {
                 e0 += weight(i) * risk;
-                w_events += weight(i);
                 ws.push(weight(i));
                 rs.push(risk);
             }
@@ -274,8 +274,8 @@ fn table(r: &RFit, theta: &[f64]) -> Table {
         let entry = if ws.is_empty() {
             Time::Censor
         } else {
-            if w_events < s0 {
-                variance_amplification = variance_amplification.max(s0 / (s0 - w_events));
+            if s0 - e0 > 8.0 * eps * s0 {
+                variance_amplification = variance_amplification.max(s0 / (s0 - e0));
             }
             if s0 - e0 <= 8.0 * eps * s0 {
                 Time::Exhausted
@@ -323,6 +323,7 @@ fn compare(
     theta: &[f64],
     table: &Table,
     b: &Bounds,
+    exact_se: bool,
     note: &mut dyn FnMut(&str, f64),
 ) {
     let eps = f64::EPSILON;
@@ -345,10 +346,12 @@ fn compare(
         deviation(&got.cumhaz, &want.cumhaz, b.b_sum, 0.0),
     );
     let b_se = if stype == 1 { b.b_se_kp } else { b.b_se };
-    note(
-        &what("std_err"),
-        deviation(&got.std_err, &want.std_err, b_se, 0.0),
-    );
+    if exact_se {
+        note(
+            &what("std_err"),
+            deviation(&got.std_err, &want.std_err, b_se, 0.0),
+        );
+    }
     let len = got.time.len();
     // The error of the log of the survival at each point, and where the
     // survival stops being defined.
@@ -391,7 +394,12 @@ fn compare(
         );
     }
     // limits
-    for (key, (lo, hi)) in [("log", &got.log), ("log-log", &got.loglog)] {
+    let compared = if exact_se {
+        vec![("log", &got.log), ("log-log", &got.loglog)]
+    } else {
+        Vec::new()
+    };
+    for (key, (lo, hi)) in compared {
         let rl = &want.limits[key];
         let allowed: Vec<f64> = (0..cut)
             .map(|k| {
@@ -418,6 +426,77 @@ fn compare(
         ));
         note(&what(&format!("limits {key}")), dev);
     }
+}
+
+/// The standard error of the product-limit curve of a row with centred
+/// covariates `z` and relative risk `theta_new` in stratum `code`, at `times`,
+/// from direct sums over the fitted rows: the delta method of the Breslow
+/// hazard with the increments `W / (s0 (s0 - e0))`.
+fn brute_se(
+    r: &RFit,
+    theta: &[f64],
+    z: &[f64],
+    theta_new: f64,
+    code: u32,
+    times: &[f64],
+    start_time: Option<f64>,
+) -> Vec<f64> {
+    let p = z.len();
+    let weight = |i: usize| if r.weights { r.weight[i] } else { 1.0 };
+    let in_stratum = |i: usize| !r.strata || r.stratum[i] == code;
+    let mut event_times: Vec<f64> = (0..r.stop.len())
+        .filter(|&i| in_stratum(i) && r.event[i] == 1)
+        .map(|i| r.stop[i])
+        .filter(|&t| start_time.is_none_or(|s| t >= s))
+        .collect();
+    event_times.sort_by(f64::total_cmp);
+    event_times.dedup();
+    let mut steps = Vec::new();
+    let (mut cum_v, mut d) = (0.0, vec![0.0; p]);
+    for &t in &event_times {
+        let (mut s0, mut e0, mut w) = (0.0, 0.0, 0.0);
+        let mut s1 = vec![0.0; p];
+        for (i, &theta_i) in theta.iter().enumerate() {
+            if !in_stratum(i) || r.stop[i] < t || (r.entry && r.start[i] >= t) {
+                continue;
+            }
+            let risk = weight(i) * theta_i;
+            s0 += risk;
+            for (a, v) in s1.iter_mut().enumerate() {
+                *v += risk * (r.x[i][a] - r.means[a]);
+            }
+            if r.stop[i].to_bits() == t.to_bits() && r.event[i] == 1 {
+                e0 += risk;
+                w += weight(i);
+            }
+        }
+        let h = w / s0;
+        cum_v += if s0 - e0 > 8.0 * f64::EPSILON * s0 {
+            w / (s0 * (s0 - e0))
+        } else {
+            w / (s0 * s0)
+        };
+        for a in 0..p {
+            d[a] += h * z[a] - s1[a] / s0 * h;
+        }
+        let mut q = 0.0;
+        for a in 0..p {
+            for c in 0..p {
+                q += d[a] * r.var[a][c] * d[c];
+            }
+        }
+        steps.push((t, theta_new * (cum_v + q).sqrt()));
+    }
+    times
+        .iter()
+        .map(|&t| {
+            steps
+                .iter()
+                .take_while(|(s, _)| *s <= t)
+                .last()
+                .map_or(0.0, |&(_, v)| v)
+        })
+        .collect()
 }
 
 fn from_curves(
@@ -573,6 +652,7 @@ fn curves_match_r() {
         );
 
         // Curves of new rows.
+        let mut differs = 0.0f64;
         let levels: Vec<u32> = r.new_stratum.clone();
         let mut new = NewData::new(new_x.as_ref());
         new.stratum = r.strata.then_some(levels.as_slice());
@@ -600,8 +680,48 @@ fn curves_match_r() {
                     sc.start_time.is_some(),
                     sc.censor
                 );
-                compare(&tag, sc.stype, &got, rc, &thetas, &tab, &bounds, &mut note);
+                let exact = sc.stype == 2 || r.zero;
+                compare(
+                    &tag, sc.stype, &got, rc, &thetas, &tab, &bounds, exact, &mut note,
+                );
+                if sc.stype == 1 {
+                    let z: Vec<f64> = (0..p).map(|a| r.new_x[i][a] - r.means[a]).collect();
+                    let own = brute_se(
+                        r,
+                        &theta,
+                        &z,
+                        r.new_theta[i],
+                        got.stratum_code[0],
+                        &got.time,
+                        sc.start_time,
+                    );
+                    note(
+                        "std_err against direct sums",
+                        deviation(&got.std_err, &own, bounds.b_se_kp, 0.0),
+                    );
+                    if !r.zero {
+                        differs = differs.max(
+                            got.std_err
+                                .iter()
+                                .zip(&rc.std_err)
+                                .map(|(g, w)| (g - w).abs() / w.abs().max(1e-300))
+                                .fold(0.0, f64::max),
+                        );
+                    }
+                }
             }
+        }
+
+        if r.zero {
+            assert!(r.coefficients.iter().all(|&c| c == 0.0));
+        } else {
+            // survival's variance of the product-limit curve is not the one
+            // with consistent units.
+            assert!(
+                differs > 1e-6,
+                "{name}: the variance of survival and the one here do not differ ({differs})"
+            );
+            eprintln!("{name}: largest relative difference from survival's variance {differs:.3e}");
         }
 
         // Curves of covariate paths.
@@ -706,7 +826,15 @@ fn curves_match_r() {
                     sc.censor
                 );
                 compare(
-                    &tag, sc.stype, &got, &want, &thetas, &tab, &bounds, &mut note,
+                    &tag,
+                    sc.stype,
+                    &got,
+                    &want,
+                    &thetas,
+                    &tab,
+                    &bounds,
+                    sc.stype == 2 || r.zero,
+                    &mut note,
                 );
             }
         }

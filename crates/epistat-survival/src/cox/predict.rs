@@ -58,10 +58,10 @@
 //! [`basehaz`] returns the baseline at the event times of each stratum, with
 //! these partial sums, and its `centered = FALSE` form is the hazard
 //! multiplied by `exp(-c' beta)`. A stratum with no event has no time and a
-//! hazard of zero everywhere. The curves are at the event times by default,
-//! as `survfit` with `censor = FALSE`. With `censor_times` they are at every
-//! distinct exit time, as `censor = TRUE`, and `n_censor` is the sum of the
+//! hazard of zero everywhere. The curves are by default at every distinct exit
+//! time, as `survfit` with `censor = TRUE`, and `n_censor` is the sum of the
 //! case weights of the rows that leave at the time without the event.
+//! `censor_times: false` gives the event times only, as `censor = FALSE`.
 //!
 //! # The product-limit curve
 //!
@@ -80,13 +80,29 @@
 //! steps from 0.5, which leaves up to `2^-36` in `a`. A time at which the risk
 //! set is the set of events has the factor 0 and the curve is 0 from there.
 //!
-//! The cumulative hazard reported with this curve is the Breslow one. The
-//! variance is that of the Breslow cumulative hazard with the increment
-//! `W / (S_0 (S_0 - W))`, or `W / S_0^2` when `W >= S_0`, which is what
-//! `survfit.coxph` gives, and the standard error is that of `ln S` in the same
-//! way. `W` is a sum of case weights and `S_0` a sum of case weights times risk,
-//! so the two have the same unit only when the risks are 1. The choice of
-//! hazard form does not apply and is refused.
+//! The cumulative hazard reported with this curve is the Breslow one, and the
+//! standard error is that of `ln S`, from the delta method of the Breslow
+//! hazard with the coefficient term as for the other curve. The increment of
+//! the variance of the hazard at an event time is
+//!
+//! ```text
+//! v = W / (S_0 (S_0 - E_0))      (E_0 < S_0),        v = W / S_0^2   (E_0 = S_0),
+//! ```
+//!
+//! with `W` the case weights of the events and `E_0` the sum of case weight
+//! times risk over them, so that `E_0` and `S_0` are in the same unit. The
+//! second form is taken when `S_0 - E_0` is no more than `8 eps S_0`, a risk
+//! set that is the set of events up to rounding. The first form is Greenwood's
+//! `d / (n (n - d))` when every risk is 1, and it is
+//! `W / S_0^2 (1 + E_0 / S_0 + ...)`, so that it agrees to first order in
+//! `E_0 / S_0` with the variance of `ln S` of the other curve, to which
+//! `ln S_KP = -H + O(increments^2)` is equivalent. `survfit.coxph` has
+//! `W / (S_0 (S_0 - W))`, which compares the case weights `W` with the
+//! risk-weighted `S_0` and is right only when the risks are 1. That is not
+//! copied. The two agree when every risk is 1, which the tests use for the
+//! comparison with `survival`, and the tests compare the rest with the
+//! variance formed from direct sums. The choice of hazard form does not apply
+//! and is refused.
 //!
 //! # Curves from a start time
 //!
@@ -405,8 +421,8 @@ pub struct SurvfitOptions<'a> {
     /// itself are kept.
     pub start_time: Option<f64>,
     /// Whether the curves are given at every distinct exit time of the
-    /// stratum, `censor = TRUE` of `survfit`, with `n_censor` at the times
-    /// without an event. Otherwise at the event times only.
+    /// stratum, `censor = TRUE` of `survfit` and its default, with `n_censor`
+    /// at the times without an event. Otherwise at the event times only.
     pub censor_times: bool,
 }
 
@@ -421,7 +437,7 @@ impl Default for SurvfitOptions<'_> {
             conf_level: 0.95,
             curve_type: CurveType::ExpCumulativeHazard,
             start_time: None,
-            censor_times: false,
+            censor_times: true,
         }
     }
 }
@@ -1135,10 +1151,10 @@ fn build_baseline(
                 // The product-limit curve takes the Breslow hazard and a
                 // Greenwood-type variance.
                 let at_risk = s0.value();
-                inc.variance = if weight >= at_risk {
-                    weight / (at_risk * at_risk)
+                inc.variance = if at_risk - e0 > 8.0 * f64::EPSILON * at_risk {
+                    weight / (at_risk * (at_risk - e0))
                 } else {
-                    weight / (at_risk * (at_risk - weight))
+                    weight / (at_risk * at_risk)
                 };
                 let w: Vec<f64> = events
                     .iter()
