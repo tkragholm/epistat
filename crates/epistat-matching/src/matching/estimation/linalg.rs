@@ -1,6 +1,7 @@
 //! Dense solves and inversions, with a ridge added when the system is singular.
 
 use super::{EstimationError, RidgeReport};
+use epistat_linalg::eigen::symmetric_eigen_jacobi;
 use epistat_linalg::{Attempt, Mat, MatRef, Method, Ridge, inverse, solve};
 
 /// A pivot at most this in absolute value makes a factorisation count as failed.
@@ -111,6 +112,41 @@ pub(super) fn invert_matrix_with_ridge(
             (row_major(&solution.x, dimension), report)
         })
         .map_err(|_| EstimationError::InvalidCovarianceMatrix)
+}
+
+/// The generalised inverse of a symmetric non-negative row-major `matrix`: the
+/// eigenvalues at most `relative_tolerance` times the largest are dropped and
+/// the rest inverted. Returns the inverse and the number of eigenvalues kept.
+/// The matrix must have a positive largest eigenvalue.
+pub(super) fn pseudo_inverse(
+    matrix: &[f64],
+    relative_tolerance: f64,
+) -> Result<(Vec<f64>, usize), EstimationError> {
+    let dimension = to_dimension(matrix.len()).ok_or(EstimationError::InvalidCovarianceMatrix)?;
+    if dimension == 0 || matrix.iter().any(|value| !value.is_finite()) {
+        return Err(EstimationError::InvalidCovarianceMatrix);
+    }
+    let (values, vectors) = symmetric_eigen_jacobi(matrix, dimension);
+    let largest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if largest <= 0.0 {
+        return Err(EstimationError::InvalidCovarianceMatrix);
+    }
+    let threshold = relative_tolerance * largest;
+    let mut inverse = vec![0.0_f64; dimension * dimension];
+    let mut kept = 0usize;
+    for (index, value) in values.iter().enumerate() {
+        if *value <= threshold {
+            continue;
+        }
+        kept += 1;
+        for row in 0..dimension {
+            for col in 0..dimension {
+                inverse[row * dimension + col] +=
+                    vectors[row * dimension + index] * vectors[col * dimension + index] / value;
+            }
+        }
+    }
+    Ok((inverse, kept))
 }
 
 fn row_major(matrix: &Mat<f64>, dimension: usize) -> Vec<f64> {

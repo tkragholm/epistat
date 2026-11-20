@@ -207,8 +207,14 @@ impl Default for MahalanobisPreparationConfig {
 /// Covariance strategy used for Mahalanobis preparation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MahalanobisCovarianceStrategy {
-    /// Average treatment-group covariance matrices (pooled within groups).
+    /// Average of the anchor and candidate covariance matrices, each with the
+    /// same weight, whatever the group sizes.
     PooledWithinGroups,
+    /// Pooled within-group covariance: the sums of squares and cross-products
+    /// about each group's own mean, over the number of units less two. This is
+    /// the matrix MatchIt's `mahalanobis_dist()` uses, and it equals
+    /// [`Self::PooledWithinGroups`] only when the groups are the same size.
+    PooledByDegreesOfFreedom,
     /// Covariance over the full sample after encoding.
     FullSample,
 }
@@ -220,4 +226,47 @@ pub enum MahalanobisTransform {
     Raw,
     /// Rank-transform each column (average ranks for ties).
     Rank,
+    /// Rank-transform each column (average ranks for ties) and rescale the
+    /// covariance of the ranks so that every diagonal entry is the variance of
+    /// the untied ranks `1, ..., n`, `n (n + 1) / 12` (Rosenbaum 2010, Design of
+    /// Observational Studies, section 8.3). Ties shrink the variance of a
+    /// column's ranks, and the rescaling stops a tied column from counting more
+    /// in the distance than an untied one. With the full-sample covariance this
+    /// is MatchIt's `robust_mahalanobis_dist()`.
+    ///
+    /// Categorical covariates are encoded with a column for every level, as
+    /// MatchIt does, so the covariance of the ranks is singular and the
+    /// distance uses its generalised inverse (eigenvalues at most 1e-8 of the
+    /// largest are dropped). [`MahalanobisDistancePreparation::covariance_rank`](super::MahalanobisDistancePreparation::covariance_rank)
+    /// reports the rank kept, and `ridge` is not used.
+    RankTieAdjusted,
+}
+
+/// How the columns are scaled before a Euclidean distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EuclideanScale {
+    /// The columns as encoded. This is MatchIt's `euclidean_dist()`.
+    #[default]
+    None,
+    /// Each column divided by its pooled within-group standard deviation, the
+    /// two groups being the anchors and the candidates. This is MatchIt's
+    /// `scaled_euclidean_dist()`: a column of only 0 and 1 has the variance
+    /// `sum_g n_g p_g (1 - p_g) / n`, any other column the sum of squares about
+    /// its group mean over `n - 2`.
+    PooledWithinGroupSd,
+}
+
+/// Euclidean distance preprocessing configuration.
+///
+/// Categorical covariates get a column for every level, each scaled by
+/// `1 / sqrt(2)`, so that two units in different levels are 1 apart, as in
+/// MatchIt. `encoding.drop_first_categorical_level` is ignored.
+#[derive(bon::Builder, Debug, Clone, Default)]
+pub struct EuclideanPreparationConfig {
+    /// Covariate encoding options.
+    #[builder(default)]
+    pub encoding: CovariateEncodingConfig,
+    /// Scaling of the columns.
+    #[builder(default)]
+    pub scale: EuclideanScale,
 }

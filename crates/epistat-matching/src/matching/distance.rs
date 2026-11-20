@@ -59,6 +59,12 @@ pub enum DistanceConfig {
         caliper: Option<DistanceCaliper>,
         reason: &'static str,
     },
+    EuclideanMap {
+        vectors: RapidHashMap<String, Vec<f64>>,
+        dimension: usize,
+        caliper: Option<DistanceCaliper>,
+        reason: &'static str,
+    },
 }
 
 impl DistanceConfig {
@@ -109,12 +115,35 @@ impl DistanceConfig {
         })
     }
 
+    /// Build a Euclidean config from id-indexed vectors, already scaled as the
+    /// caller wants them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MahalanobisError::ZeroDimension`] when `dimension` is zero.
+    pub fn euclidean_map(
+        vectors: RapidHashMap<String, Vec<f64>>,
+        dimension: usize,
+        caliper: Option<DistanceCaliper>,
+    ) -> Result<Self, MahalanobisError> {
+        if dimension == 0 {
+            return Err(MahalanobisError::ZeroDimension);
+        }
+        Ok(Self::EuclideanMap {
+            vectors,
+            dimension,
+            caliper,
+            reason: "euclidean_caliper",
+        })
+    }
+
     #[must_use]
     pub const fn with_reason(mut self, reason: &'static str) -> Self {
         match &mut self {
             Self::Date { reason: slot, .. }
             | Self::PropensityScoreMap { reason: slot, .. }
-            | Self::MahalanobisMap { reason: slot, .. } => *slot = reason,
+            | Self::MahalanobisMap { reason: slot, .. }
+            | Self::EuclideanMap { reason: slot, .. } => *slot = reason,
         }
         self
     }
@@ -124,7 +153,8 @@ impl DistanceConfig {
         match self {
             Self::Date { caliper, .. }
             | Self::PropensityScoreMap { caliper, .. }
-            | Self::MahalanobisMap { caliper, .. } => match caliper {
+            | Self::MahalanobisMap { caliper, .. }
+            | Self::EuclideanMap { caliper, .. } => match caliper {
                 Some(caliper) => Some(caliper.get()),
                 None => None,
             },
@@ -136,7 +166,8 @@ impl DistanceConfig {
         match self {
             Self::Date { caliper, .. }
             | Self::PropensityScoreMap { caliper, .. }
-            | Self::MahalanobisMap { caliper, .. } => *caliper,
+            | Self::MahalanobisMap { caliper, .. }
+            | Self::EuclideanMap { caliper, .. } => *caliper,
         }
     }
 
@@ -145,7 +176,8 @@ impl DistanceConfig {
         match self {
             Self::Date { reason, .. }
             | Self::PropensityScoreMap { reason, .. }
-            | Self::MahalanobisMap { reason, .. } => reason,
+            | Self::MahalanobisMap { reason, .. }
+            | Self::EuclideanMap { reason, .. } => reason,
         }
     }
 }
@@ -168,6 +200,9 @@ impl DistanceConfig {
                 inverse_covariance,
                 *dimension,
             )),
+            Self::EuclideanMap {
+                vectors, dimension, ..
+            } => ConfiguredMetric::Euclidean(IdMapEuclideanDistance::new(vectors, *dimension)),
         }
     }
 
@@ -176,7 +211,7 @@ impl DistanceConfig {
     pub(crate) const fn propensity_scores(&self) -> Option<&RapidHashMap<String, f64>> {
         match self {
             Self::PropensityScoreMap { scores, .. } => Some(scores),
-            Self::Date { .. } | Self::MahalanobisMap { .. } => None,
+            Self::Date { .. } | Self::MahalanobisMap { .. } | Self::EuclideanMap { .. } => None,
         }
     }
 }
@@ -187,6 +222,7 @@ pub(crate) enum ConfiguredMetric<'a> {
     Date(DateDistance),
     PropensityScore(IdMapPropensityScoreDistance<'a>),
     Mahalanobis(IdMapMahalanobisDistance<'a>),
+    Euclidean(IdMapEuclideanDistance<'a>),
 }
 
 impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
@@ -195,6 +231,7 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
             Self::Date(metric) => DistanceMetric::<R>::channel(metric),
             Self::PropensityScore(metric) => DistanceMetric::<R>::channel(metric),
             Self::Mahalanobis(metric) => DistanceMetric::<R>::channel(metric),
+            Self::Euclidean(metric) => DistanceMetric::<R>::channel(metric),
         }
     }
 
@@ -203,6 +240,7 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
             Self::Date(metric) => metric.distance(anchor, candidate),
             Self::PropensityScore(metric) => metric.distance(anchor, candidate),
             Self::Mahalanobis(metric) => metric.distance(anchor, candidate),
+            Self::Euclidean(metric) => metric.distance(anchor, candidate),
         }
     }
 
@@ -211,6 +249,7 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
             Self::Date(metric) => metric.candidate_indices(anchor, caliper),
             Self::PropensityScore(metric) => metric.candidate_indices(anchor, caliper),
             Self::Mahalanobis(metric) => metric.candidate_indices(anchor, caliper),
+            Self::Euclidean(metric) => metric.candidate_indices(anchor, caliper),
         }
     }
 }
@@ -398,6 +437,43 @@ impl<R: MatchingRecord> DistanceMetric<R> for IdMapMahalanobisDistance<'_> {
             return None;
         }
         mahalanobis_distance_faer(left, right, &self.inverse_covariance_matrix)
+    }
+}
+
+/// Euclidean distance keyed by [`MatchingRecord::id`].
+///
+/// The squares are summed in column order with a plain multiply and add, so
+/// the value does not depend on the CPU or the number of threads.
+#[derive(Debug, Clone)]
+pub struct IdMapEuclideanDistance<'a> {
+    vectors: &'a RapidHashMap<String, Vec<f64>>,
+    dimension: usize,
+}
+
+impl<'a> IdMapEuclideanDistance<'a> {
+    #[must_use]
+    pub const fn new(vectors: &'a RapidHashMap<String, Vec<f64>>, dimension: usize) -> Self {
+        Self { vectors, dimension }
+    }
+}
+
+impl<R: MatchingRecord> DistanceMetric<R> for IdMapEuclideanDistance<'_> {
+    fn channel(&self) -> &'static str {
+        "euclidean_caliper"
+    }
+
+    fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
+        let left = self.vectors.get(anchor.id())?;
+        let right = self.vectors.get(candidate.id())?;
+        if left.len() != self.dimension || right.len() != self.dimension {
+            return None;
+        }
+        let mut sum = 0.0_f64;
+        for (a, b) in left.iter().zip(right) {
+            let delta = a - b;
+            sum += delta * delta;
+        }
+        sum.is_finite().then(|| sum.sqrt())
     }
 }
 

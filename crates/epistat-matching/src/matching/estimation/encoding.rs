@@ -48,6 +48,15 @@ pub(super) fn build_covariate_matrix<R: CovariateRecord>(
     records: &[&R],
     config: &CovariateEncodingConfig,
 ) -> Result<CovariateMatrix, EstimationError> {
+    build_covariate_matrix_marked(records, config).map(|(matrix, _)| matrix)
+}
+
+/// The matrix and, for each of its columns, whether it is a level indicator of
+/// a categorical covariate.
+pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
+    records: &[&R],
+    config: &CovariateEncodingConfig,
+) -> Result<(CovariateMatrix, Vec<bool>), EstimationError> {
     if records.is_empty() {
         return Err(EstimationError::EmptyInput);
     }
@@ -65,18 +74,24 @@ pub(super) fn build_covariate_matrix<R: CovariateRecord>(
     }
 
     let mut column_names = Vec::new();
+    let mut indicator = Vec::new();
     if config.include_intercept {
         column_names.push("intercept".to_string());
+        indicator.push(false);
     }
     for schema in &schemas {
         match schema {
-            CovariateSchema::Numeric { key, .. } => column_names.push(key.clone()),
+            CovariateSchema::Numeric { key, .. } => {
+                column_names.push(key.clone());
+                indicator.push(false);
+            }
             CovariateSchema::Categorical {
                 key,
                 emitted_levels,
                 ..
             } => {
                 column_names.extend(emitted_levels.iter().map(|level| format!("{key}={level}")));
+                indicator.extend(emitted_levels.iter().map(|_| true));
             }
         }
     }
@@ -127,8 +142,8 @@ pub(super) fn build_covariate_matrix<R: CovariateRecord>(
         n_rows,
         n_cols,
     };
-    drop_near_constant_columns(&mut matrix, 1e-12)?;
-    Ok(matrix)
+    drop_near_constant_columns(&mut matrix, &mut indicator, 1e-12)?;
+    Ok((matrix, indicator))
 }
 
 fn resolve_covariate_keys<R: CovariateRecord>(records: &[&R], requested: &[String]) -> Vec<String> {
@@ -286,6 +301,7 @@ fn encode_categorical_level<R: CovariateRecord>(
 
 fn drop_near_constant_columns(
     matrix: &mut CovariateMatrix,
+    indicator: &mut Vec<bool>,
     tolerance: f64,
 ) -> Result<(), EstimationError> {
     if matrix.n_cols == 0 {
@@ -323,6 +339,7 @@ fn drop_near_constant_columns(
         }
     }
 
+    *indicator = keep.iter().map(|idx| indicator[*idx]).collect_vec();
     matrix.column_names = keep
         .iter()
         .map(|idx| matrix.column_names[*idx].clone())
