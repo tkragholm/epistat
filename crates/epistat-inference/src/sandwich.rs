@@ -103,8 +103,13 @@ pub fn meat(
     Ok(row_scaled_gram(sums.as_ref(), |_| 1.0))
 }
 
-/// `A^-1 M A^-T`, by two solves through `attempts`, averaged with its
-/// transpose so that the result is exactly symmetric.
+/// `A^-1 M A^-T` for a symmetric meat `M`, by two solves with one
+/// factorisation of `A` through `attempts`, averaged with its transpose so that
+/// the result is exactly symmetric.
+///
+/// `A` need not be symmetric: the bread of a stacked M-estimator is not. With
+/// `L = A^-1 M`, the sandwich is `L A^-T`, whose transpose is `A^-1 L'`, so the
+/// second solve is with `A` again.
 ///
 /// # Errors
 ///
@@ -115,8 +120,9 @@ pub fn sandwich(
     meat: MatRef<'_, f64>,
     attempts: &[Attempt],
 ) -> Result<Mat<f64>, InferenceError> {
-    let left = Factor::new(information, attempts)?.solve(meat)?;
-    let transposed = Factor::new(information.transpose(), attempts)?.solve(left.transpose())?;
+    let factor = Factor::new(information, attempts)?;
+    let left = factor.solve(meat)?;
+    let transposed = factor.solve(left.transpose())?;
     let n = transposed.nrows();
     Ok(Mat::from_fn(n, n, |i, j| {
         transposed[(j, i)].midpoint(transposed[(i, j)])
@@ -159,6 +165,56 @@ mod tests {
         let clusters = Clusters::from_labels(&["a", "a", "b", "b"]);
         let m = meat(x.as_ref(), |i| residuals[i], Some(&clusters)).unwrap();
         assert!((m[(0, 0)] - 9.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn the_sandwich_of_a_non_symmetric_bread_is_a_inverse_m_a_inverse_transposed() {
+        // A stacked M-estimator has a block triangular bread. The reference is
+        // the inverse formed column by column and multiplied out; both are
+        // within a few units of kappa(A) eps of the exact value, kappa(A) < 10.
+        let a = mat![[2.0, 0.0, 0.0], [0.7, 1.5, 0.0], [0.4, -0.9, 3.0]];
+        let x = Mat::from_fn(9, 3, |i, j| ((i * 3 + j) % 5) as f64 - 1.7);
+        let m = meat(x.as_ref(), |i| 0.3 * i as f64 - 1.0, None).unwrap();
+        let v = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        let inverse = Factor::new(a.as_ref(), &Attempt::SYMMETRIC)
+            .unwrap()
+            .solve(Mat::<f64>::identity(3, 3).as_ref())
+            .unwrap();
+        let reference = &inverse * &m * inverse.transpose();
+        let scale = (0..3).map(|i| reference[(i, i)].abs()).fold(0.0, f64::max);
+        for i in 0..3 {
+            for j in 0..3 {
+                let err = (v[(i, j)] - reference[(i, j)]).abs();
+                assert!(
+                    err <= 64.0 * 10.0 * f64::EPSILON * scale,
+                    "({i},{j}): {err:e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_symmetric_bread_gives_the_bits_it_gave_before() {
+        // The earlier form solved the second time with A transposed, which is
+        // the same matrix when A is symmetric, so callers' numbers do not move.
+        let a = mat![[2.0, 0.3, 0.1], [0.3, 1.5, 0.2], [0.1, 0.2, 3.0]];
+        let x = Mat::from_fn(7, 3, |i, j| ((i * 3 + j) % 5) as f64 - 1.7);
+        let m = meat(x.as_ref(), |i| 0.3 * i as f64 - 1.0, None).unwrap();
+        let left = Factor::new(a.as_ref(), &Attempt::SYMMETRIC)
+            .unwrap()
+            .solve(m.as_ref())
+            .unwrap();
+        let old = Factor::new(a.transpose(), &Attempt::SYMMETRIC)
+            .unwrap()
+            .solve(left.transpose())
+            .unwrap();
+        let old = Mat::from_fn(3, 3, |i, j| old[(j, i)].midpoint(old[(i, j)]));
+        let new = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_eq!(new[(i, j)].to_bits(), old[(i, j)].to_bits());
+            }
+        }
     }
 
     #[test]
