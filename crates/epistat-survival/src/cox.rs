@@ -118,7 +118,9 @@ use crate::error::Result;
 
 pub mod design;
 pub mod predict;
+pub mod residuals;
 pub mod tt;
+pub mod zph;
 pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_residuals};
 #[expect(
     deprecated,
@@ -132,6 +134,8 @@ pub use predict::{
     reference_offset, survfit,
 };
 pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
+pub use residuals::{Collapse, CoxResiduals, ResidualKind, ResidualOptions, residuals};
+pub use zph::{CoxZph, ZphOptions, ZphTransform, zph};
 
 /// Largest number of Newton-Raphson steps.
 const MAX_ITERATIONS: u32 = 50;
