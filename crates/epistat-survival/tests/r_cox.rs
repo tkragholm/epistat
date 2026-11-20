@@ -195,9 +195,14 @@ fn residual_deviation(
 ///
 /// A covariance matrix is the inverse of the information matrix, and each of
 /// the `p` entries of a row of the inverse carries that error, so its
-/// tolerance is `p` times the bound. The robust matrix is `V M V` with the
-/// error of `V` entering twice, so its tolerance is twice that. The score
-/// residuals are described at `residual_deviation`.
+/// tolerance is `p` times the bound. The robust matrix is `V M V`. The error of
+/// `V` enters twice, `2 p` times the bound, and the meat `M` is a sum of
+/// products of score residuals, each off by the residual bound described at
+/// `residual_deviation`, `p` times the bound plus `n` units of rounding for the
+/// running sums over the risk sets, entering twice. So the robust tolerance is
+/// `2 p bound + 2 (p bound + n eps)`, with `n` the rows used. The `n eps` part
+/// is negligible when the information is ill-conditioned and decides the
+/// tolerance when its condition number is near 1.
 #[test]
 fn fits_match_r() {
     let reference: Reference = load_json(concat!(
@@ -260,11 +265,16 @@ fn fits_match_r() {
         // The deviations in absolute terms, relative to the value or to 1.
         let p = r.columns.len() as f64;
         let covariance = covariance_deviation(&fit.covariance, &r.vcov, p * bound);
+        let rows_used = if r.use_weights {
+            reference.weight.iter().filter(|&&w| w > 0.0).count()
+        } else {
+            reference.stop.len()
+        } as f64;
         let robust_covariance = if r.use_cluster {
             covariance_deviation(
                 fit.robust_covariance.as_ref().unwrap(),
                 &r.vcov_robust,
-                2.0 * p * bound,
+                4.0 * p * bound + 2.0 * rows_used * f64::EPSILON,
             )
         } else {
             assert!(fit.robust_covariance.is_none() && r.vcov_robust.is_empty());
