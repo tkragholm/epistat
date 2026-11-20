@@ -1,5 +1,6 @@
 //! State occupation probabilities of a multi-state process, by the Aalen-Johansen
-//! product integral, and a clustered bootstrap of them.
+//! product integral, their infinitesimal jackknife standard errors, and a
+//! clustered bootstrap of them.
 //!
 //! # Algorithm
 //!
@@ -97,6 +98,25 @@
 //! the weights in the same order, so the sums are the same numbers. The plan
 //! depends on the intervals and the times only, so a bootstrap builds it once.
 //!
+//! # The variance
+//!
+//! [`variance`] gives the standard errors that `survfit` reports for a
+//! multi-state fit: of the state probabilities (`std.err`), of the cumulative
+//! transition hazards (`std.chaz`), of the restricted time in each state from
+//! the origin (`std.auc`), and of the initial distribution when it is estimated
+//! (`se0`), by the infinitesimal jackknife \[4\]\[5\]. The influence of a row is the
+//! derivative of the estimate with respect to its case weight times the weight,
+//! the rows of a cluster, the cluster column or else the id column, are summed,
+//! and the variance is the sum of squares over clusters. `survfit` fixes the
+//! origin of the restricted times from the data in a way that depends on the
+//! initial states, so it is an argument here, as it is for [`integrate`].
+//! The standard error of the restricted time to a horizon between event times is
+//! exact, the one `summary(fit, rmean =)` gives for a fit made with
+//! `influence = TRUE`, and not the interpolation it makes without. The recursion
+//! and how its memory is bounded are described in `influence`: clusters are
+//! processed in blocks, so the influence of every cluster at every time is never
+//! held. The influence at times chosen by the caller is returned.
+//!
 //! # The bootstrap
 //!
 //! [`bootstrap`] reweights the intervals by random cluster
@@ -126,6 +146,11 @@
 //!    counting processes. New York: Springer; 1993.
 //! 3. Rubin DB. The Bayesian bootstrap. Ann Stat 1981;9(1):130-4.
 //!    doi:10.1214/aos/1176345338
+//! 4. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
+//!    model. New York: Springer; 2000.
+//! 5. Therneau TM. Methods of the survfit function, vignette `methods` of the
+//!    survival package, on the infinitesimal jackknife for the Aalen-Johansen
+//!    estimate.
 
 #![expect(
     clippy::cast_possible_truncation,
@@ -143,6 +168,8 @@ use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::survcheck::{Policy, survcheck};
 use crate::timefix::TimeFix;
+
+pub(crate) mod influence;
 
 /// The intervals of a multi-state process, one entry per row.
 ///
@@ -1133,6 +1160,270 @@ pub fn bootstrap(
         values,
         n_replicates: seeds.len(),
         n_states: prepared.n_states,
+        n_rows: prepared.data.n_rows(),
+        n_used: prepared.data.n_used(),
+    })
+}
+
+/// What [`variance`] reports besides the standard errors at each time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarianceOptions {
+    /// The starting time of the curve, `fit$t0` of `survfit`: where the
+    /// restricted time in state begins. It has no default, since `survfit` takes
+    /// it from the data in ways that depend on the initial states. No time of
+    /// `times` may be before it.
+    pub origin: f64,
+    /// Horizons at which the standard error of the restricted time in each
+    /// state, from `origin`, is wanted. Ascending. A horizon not after `origin`
+    /// has a standard error of 0.
+    pub horizons: Vec<f64>,
+    /// Times at which the influence of every cluster is returned. Ascending. The
+    /// influence at a time is that after the last of `times` not after it, and
+    /// that of the initial distribution before the first. The influence of all
+    /// clusters at all times is not kept, see [`Variance::influence`].
+    pub influence_times: Vec<f64>,
+}
+
+impl VarianceOptions {
+    /// Options with the given starting time and nothing else requested.
+    #[must_use]
+    pub const fn new(origin: f64) -> Self {
+        Self {
+            origin,
+            horizons: Vec::new(),
+            influence_times: Vec::new(),
+        }
+    }
+}
+
+/// The standard errors of the occupation probabilities and the cumulative
+/// hazards by the infinitesimal jackknife, with what is needed to read them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Variance {
+    /// `time * state`, row-major: the probability of each state after each
+    /// time, from the recursion the standard errors come from. It equals
+    /// [`Estimate::probabilities`] up to rounding, and is the estimate the
+    /// errors belong to.
+    pub probabilities: Vec<f64>,
+    /// `time * state`, row-major: the standard error of the probability of each
+    /// state, `fit$std.err` of `survfit`.
+    pub std_err: Vec<f64>,
+    /// The transitions that occur among the rows used, as `(from, to)` ranks of
+    /// states, ordered by `to` and then `from`, the order of the columns of
+    /// `fit$cumhaz`. A move to the state the row is in is a transition. `survfit`
+    /// also has a column for a transition seen only in rows of weight 0, which
+    /// is not used here.
+    pub transitions: Vec<(u32, u32)>,
+    /// `time * transition`: the cumulative hazard of each transition.
+    pub cumhaz: Vec<f64>,
+    /// `time * transition`: its standard error, `fit$std.chaz`.
+    pub std_cumhaz: Vec<f64>,
+    /// `time * state`: the standard error of the restricted time in each state
+    /// from `origin` to each time, `fit$std.auc`. It is exact when `times`
+    /// holds every event time.
+    pub std_time: Vec<f64>,
+    /// The standard error of each state's initial probability, 0 when the
+    /// initial distribution is given.
+    pub std_initial: Vec<f64>,
+    /// The horizons of [`VarianceOptions::horizons`].
+    pub horizons: Vec<f64>,
+    /// `horizon * state`: the standard error of the restricted time in each
+    /// state from the origin to the horizon, the `se(rmean)` that
+    /// `summary(fit, rmean = horizon)` gives for a `fit` made with
+    /// `influence = TRUE`.
+    pub std_rmean: Vec<f64>,
+    /// The number of states.
+    pub n_states: usize,
+    /// The number of clusters, the cluster column or else the ids, among the
+    /// rows used.
+    pub n_clusters: usize,
+    /// The caller's code of each cluster, ascending.
+    pub clusters: Vec<u32>,
+    /// The times of [`VarianceOptions::influence_times`].
+    pub influence_times: Vec<f64>,
+    /// `cluster * influence time * state`, row-major: the influence of each
+    /// cluster on the probability of each state, the sum over its rows of the
+    /// weight times the derivative of the probability with respect to it. The
+    /// squares of a column sum to the variance. Only the times asked for are
+    /// kept, since all of them would hold `clusters * times * states` values.
+    pub influence: Vec<f64>,
+    /// The number of rows of the data, including rows of weight 0.
+    pub n_rows: usize,
+    /// The number of rows of positive weight, which are the rows used.
+    pub n_used: usize,
+}
+
+/// Checks that `values` are finite and ascending.
+pub(crate) fn check_ascending(values: &[f64], name: &str, strict: bool) -> Result<()> {
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(Error::input(format!("{name} must be finite")));
+    }
+    if values
+        .windows(2)
+        .any(|w| if strict { w[0] >= w[1] } else { w[0] > w[1] })
+    {
+        return Err(Error::input(format!(
+            "{name} must be {}ascending",
+            if strict { "strictly " } else { "" }
+        )));
+    }
+    Ok(())
+}
+
+/// For each of `at`, the index of the last of `times` not after it, or `None`
+/// when it is before the first.
+pub(crate) fn snapshot_positions(times: &[f64], at: &[f64]) -> Vec<Option<usize>> {
+    at.iter()
+        .map(|&t| times.partition_point(|&x| x <= t).checked_sub(1))
+        .collect()
+}
+
+/// The standard errors of the occupation probabilities, the cumulative hazards
+/// and the restricted time in each state, by the infinitesimal jackknife that
+/// `survfit` reports.
+///
+/// `times` are the event times, strictly ascending and not before
+/// `v.origin`, as for [`estimate`], and every event time must be among them,
+/// since an event at another time is not counted. The influence of each cluster
+/// is collapsed over its rows, the cluster column or else the id column, and the
+/// standard error at a time is the square root of the sum of squares over the
+/// clusters. Weights enter as case weights: the influence of a row is the weight
+/// times the derivative of the estimate with respect to it. The initial
+/// distribution is given in `opts.initial`, and then it carries no variance, or
+/// formed from the opening rows, and then its estimation adds to the variance,
+/// as in `survfit` without `p0`. See the module `influence` for the recursion
+/// and for how memory is bounded: the influence of every cluster at every time is
+/// never held, only that at [`VarianceOptions::influence_times`].
+///
+/// # Errors
+///
+/// As [`estimate`], and [`Error::Input`] when `times`, `v.horizons` or
+/// `v.influence_times` is not ascending or has a value that is not finite, or a
+/// time is before `v.origin`.
+pub fn variance(
+    data: &SurvData<'_>,
+    times: &[f64],
+    opts: &Options,
+    v: &VarianceOptions,
+) -> Result<Variance> {
+    check_ascending(times, "times", true)?;
+    check_ascending(&v.horizons, "horizons", false)?;
+    check_ascending(&v.influence_times, "influence_times", false)?;
+    if !v.origin.is_finite() {
+        return Err(Error::input("origin must be finite"));
+    }
+    if times.first().is_some_and(|&t| t < v.origin) {
+        return Err(Error::input("no time may be before the origin"));
+    }
+    let prepared = Prepared::new(data, opts.timefix, false)?;
+    let Columns {
+        starts,
+        stops,
+        weights,
+    } = prepared.columns()?;
+    let states = prepared.n_states;
+    let initial = match &opts.initial {
+        Some(given) => {
+            check_distribution(given, states)?;
+            given.clone()
+        }
+        None => initial_distribution(
+            &prepared.first_states,
+            &prepared.first_positions,
+            &weights,
+            states,
+        )?,
+    };
+
+    // Clusters: the cluster column, else the ids.
+    let (codes, levels) = match (prepared.data.cluster(), prepared.data.id()) {
+        (Some(codes), _) => (codes, prepared.data.cluster_levels()),
+        (None, Some(codes)) => (codes, prepared.data.id_levels()),
+        (None, None) => unreachable!("Prepared::new needs an id column"),
+    };
+    let rows_used: Cow<'_, [u32]> = prepared.index.as_deref().map_or_else(
+        || Cow::Owned((0..prepared.data.n_rows() as u32).collect()),
+        Cow::Borrowed,
+    );
+    let row_cluster: Vec<u32> = rows_used.iter().map(|&r| codes[r as usize]).collect();
+    let mut present = row_cluster.clone();
+    present.sort_unstable();
+    present.dedup();
+    let local: Vec<u32> = row_cluster
+        .iter()
+        .map(|&c| present.partition_point(|&p| p < c) as u32)
+        .collect();
+    let n_clusters = present.len();
+
+    // The influence of the initial distribution, when it is estimated.
+    let u0 = if opts.initial.is_none() {
+        let total = compensated(
+            prepared
+                .first_positions
+                .iter()
+                .map(|&position| weights[position as usize]),
+        );
+        let mut u0 = vec![0.0f64; n_clusters * states];
+        for (&position, &opening) in prepared
+            .first_positions
+            .iter()
+            .zip(prepared.first_states.iter())
+        {
+            let cluster = local[position as usize] as usize;
+            let weight = weights[position as usize];
+            for (j, &p0) in initial.iter().enumerate() {
+                let indicator = if usize::try_from(opening) == Ok(j) {
+                    1.0
+                } else {
+                    0.0
+                };
+                u0[cluster * states + j] += weight * (indicator - p0) / total;
+            }
+        }
+        Some(u0)
+    } else {
+        None
+    };
+
+    let snapshots = snapshot_positions(times, &v.influence_times);
+    let out = influence::run(
+        &influence::Process {
+            start: &starts,
+            stop: &stops,
+            from: &prepared.from_states,
+            to: &prepared.to_states,
+            weight: &weights,
+            cluster: &local,
+        },
+        &influence::Request {
+            states,
+            n_clusters,
+            times,
+            p0: &initial,
+            u0: u0.as_deref(),
+            origin: v.origin,
+            horizons: &v.horizons,
+            snapshots: &snapshots,
+        },
+    );
+    Ok(Variance {
+        probabilities: out.p,
+        std_err: out.std_p,
+        transitions: out.transitions,
+        cumhaz: out.cumhaz,
+        std_cumhaz: out.std_c,
+        std_time: out.std_a,
+        std_initial: out.std_initial,
+        horizons: v.horizons.clone(),
+        std_rmean: out.std_h,
+        n_states: states,
+        n_clusters,
+        clusters: present
+            .iter()
+            .map(|&c| levels.map_or(c, |l| l.code(c as usize).unwrap_or(c)))
+            .collect(),
+        influence_times: v.influence_times.clone(),
+        influence: out.influence,
         n_rows: prepared.data.n_rows(),
         n_used: prepared.data.n_used(),
     })
