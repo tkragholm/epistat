@@ -157,7 +157,7 @@
 
 use epistat_linalg::design::select_columns;
 use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, weighted_xtz};
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::{Family, Link};
 

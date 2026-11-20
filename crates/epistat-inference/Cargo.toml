@@ -15,7 +15,6 @@ repository.workspace = true
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.2.0" }
-faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
 rayon = "1.10"
 thiserror = "2"
 

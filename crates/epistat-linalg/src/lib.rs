@@ -29,7 +29,7 @@ mod solve;
 
 pub use blocks::{ROW_BLOCK, matvec_into, row_scaled_gram, weighted_gram, weighted_xtz, xtv};
 pub use error::DesignError;
-pub use faer::{Mat, MatRef, Side};
+pub use faer::{Mat, MatRef, Side, mat};
 pub use solve::{Attempt, Factor, Method, Ridge, Solution, SolveError, inverse, solve};
 
 /// Whether every entry of `matrix` is finite.

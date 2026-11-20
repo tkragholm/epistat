@@ -115,7 +115,7 @@
 //!    net. J R Stat Soc Ser B. 2005;67(2):301-20.
 //!    doi:10.1111/j.1467-9868.2005.00503.x
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use crate::Family;
 
@@ -709,7 +709,7 @@ impl ElasticNet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     fn data(n: usize) -> (Mat<f64>, Vec<f64>) {
         let x = Mat::from_fn(n, 3, |i, j| {

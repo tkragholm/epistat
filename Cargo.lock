@@ -304,7 +304,6 @@ version = "0.1.1"
 dependencies = [
  "epistat-linalg",
  "epistat-testkit",
- "faer",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -317,7 +316,6 @@ dependencies = [
  "epistat-rng",
  "epistat-stats",
  "epistat-testkit",
- "faer",
  "rayon",
  "serde",
  "serde_json",

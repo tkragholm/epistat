@@ -87,9 +87,9 @@
 
 use std::f64::consts::PI;
 
+use epistat_linalg::MatRef;
 use epistat_rng::{Stream, replicate_seed};
 use epistat_stats::{normal, quantile};
-use faer::MatRef;
 use rayon::prelude::*;
 
 use crate::{Clusters, InferenceError, check_length};
@@ -372,8 +372,8 @@ fn from_draws(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_linalg::Mat;
     use epistat_testkit::{assert_same_on_threads, load_json};
-    use faer::Mat;
     use serde::Deserialize;
 
     #[derive(Deserialize)]

@@ -73,7 +73,7 @@
 //!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
 use epistat_linalg::{Attempt, Factor, row_scaled_gram};
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::{Clusters, InferenceError, check_length};
 
@@ -172,7 +172,7 @@ pub fn standard_errors(covariance: MatRef<'_, f64>) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faer::mat;
+    use epistat_linalg::mat;
 
     #[test]
     fn the_least_squares_sandwich_is_the_white_covariance() {

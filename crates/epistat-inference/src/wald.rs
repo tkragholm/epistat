@@ -16,8 +16,8 @@
 //! relative precision.
 
 use epistat_linalg::{Attempt, Method, solve};
+use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
-use faer::{Mat, MatRef};
 
 use crate::{InferenceError, check_length};
 
@@ -61,7 +61,7 @@ pub fn wald(estimates: &[f64], covariance: MatRef<'_, f64>) -> Result<Wald, Infe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faer::mat;
+    use epistat_linalg::mat;
 
     #[test]
     fn a_diagonal_covariance_sums_the_squared_z_scores() {

@@ -51,7 +51,7 @@
 //! 3. R Core Team. Fitting generalized linear models: `glm` and `summary.glm`.
 //!    Help pages of the stats package of R.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::{Family, Glm, GlmError, Link};
 
