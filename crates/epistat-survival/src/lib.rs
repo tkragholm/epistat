@@ -113,6 +113,7 @@ pub mod metrics;
 pub mod msreg;
 pub mod multistate;
 mod order;
+mod par;
 pub mod pseudo;
 pub mod pyears;
 pub mod rmst;

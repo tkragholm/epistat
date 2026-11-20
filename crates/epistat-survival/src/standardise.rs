@@ -111,12 +111,12 @@ use std::ops::Range;
 
 use epistat_stats::normal;
 use faer::MatRef;
-use rayon::prelude::*;
 
 use crate::absrisk::{CscOptions, SurvType};
 use crate::check::{check_lengths, refuse_non_finite};
 use crate::cox::{CoxModelFit, CoxOptions};
 use crate::error::{Error, Result};
+use crate::par;
 use crate::surv::SurvData;
 
 mod cox;
@@ -717,23 +717,5 @@ pub(crate) fn ordered_reduce<T: Send>(
     make: impl Fn(Range<usize>) -> Result<T> + Sync,
     merge: impl Fn(&mut T, T),
 ) -> Result<T> {
-    let starts: Vec<usize> = (0..n).step_by(BLOCK).collect();
-    let mut total: Option<T> = None;
-    for wave in starts.chunks(WAVE) {
-        let parts: Vec<Result<T>> = wave
-            .par_iter()
-            .map(|&s| make(s..(s + BLOCK).min(n)))
-            .collect();
-        for part in parts {
-            let part = part?;
-            match total.as_mut() {
-                Some(t) => merge(t, part),
-                None => total = Some(part),
-            }
-        }
-    }
-    match total {
-        Some(t) => Ok(t),
-        None => make(0..0),
-    }
+    par::try_ordered_reduce(n, BLOCK, WAVE, make, merge)
 }
