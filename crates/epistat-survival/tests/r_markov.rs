@@ -246,11 +246,11 @@ fn markov_test_matches_mstate() {
         for (code, bound) in stat_bound.iter().enumerate() {
             let r_stat = case.orig_stat[case.col_of_code[code] - 1];
             let tol = bound + 2.0 * U * r_stat;
-            worst[2] = worst[2].max((out.statistic[code] - r_stat).abs() / tol);
+            let got = out.statistic[code].expect("the state has a positive variance");
+            worst[2] = worst[2].max((got - r_stat).abs() / tol);
             assert!(
-                (out.statistic[code] - r_stat).abs() <= tol,
-                "{name}: statistic of state {code}: {} vs {r_stat}",
-                out.statistic[code]
+                (got - r_stat).abs() <= tol,
+                "{name}: statistic of state {code}: {got} vs {r_stat}"
             );
         }
 

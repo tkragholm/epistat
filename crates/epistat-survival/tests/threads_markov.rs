@@ -71,9 +71,14 @@ fn markov_test_does_not_depend_on_the_number_of_threads() {
         assert!(t.p_value.iter().all(Option::is_some));
         assert!(t.variance.iter().any(|&v| v > 0.0));
         let mut out = t.trace.clone();
-        for column in [&t.variance, &t.n_occupied, &t.n_events_after, &t.statistic] {
+        for column in [&t.variance, &t.n_occupied, &t.n_events_after] {
             out.extend(column.iter().copied());
         }
+        out.extend(
+            t.statistic
+                .iter()
+                .map(|p| p.unwrap_or_else(|| f64::from_bits(ABSENT))),
+        );
         out.extend(
             t.p_value
                 .iter()

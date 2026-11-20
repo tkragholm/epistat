@@ -103,7 +103,9 @@
 //! With no replicates the p-values are `None`. A slot whose variance is not
 //! positive has a normalised trace of 0 and contributes 0 to every replicate.
 //! That amounts to dropping the slot from the sum, while the mean is still
-//! taken over every landmark.
+//! taken over every landmark. A qualifying state for which every slot is of
+//! that kind has no test: [`fn@test`] gives it no statistic and no p-value,
+//! where 0 and 1 would read as a test that found nothing. The deprecated [`markov_test`] keeps the 0 and the p-value it always gave.
 //! The test needs at least one qualifying state and one landmark.
 //!
 //! # References
@@ -599,10 +601,12 @@ pub struct Test {
     pub n_occupied: Vec<f64>,
     /// Transitions under test after each landmark, `grid` values.
     pub n_events_after: Vec<f64>,
-    /// The statistic of each qualifying state, `qualifying` values.
-    pub statistic: Vec<f64>,
-    /// The wild-bootstrap p-value of each qualifying state, `qualifying` values,
-    /// `None` without replicates.
+    /// The statistic of each qualifying state, `qualifying` values. `None` for
+    /// a state whose variance is not positive at any landmark: no trace of it
+    /// can be normalised, so it has no test.
+    pub statistic: Vec<Option<f64>>,
+    /// The wild-bootstrap p-value of each qualifying state, `qualifying` values.
+    /// `None` without replicates, and for a state without a statistic.
     pub p_value: Vec<Option<f64>>,
     /// The qualifying states as the caller gave them, which label the columns
     /// of the values above. The first is the origin of the transition.
@@ -626,7 +630,8 @@ pub struct Test {
 ///
 /// A landmark and state whose variance is not positive adds 0 to the statistic
 /// and to every replicate, which drops the slot from the sum. The mean is still
-/// taken over all landmarks.
+/// taken over all landmarks. A state whose variance is not positive at any
+/// landmark has no test, and its statistic and p-value are `None`.
 ///
 /// # Errors
 ///
@@ -725,13 +730,29 @@ pub fn test(
         event: &event,
     };
     let done = run(&stays, grid, qualifying.len(), seeds)?;
+    let width = qualifying.len();
+    let defined: Vec<bool> = (0..width)
+        .map(|state| (0..grid.len()).any(|landmark| done.variance[landmark * width + state] > 0.0))
+        .collect();
+    let statistic = done
+        .statistic
+        .iter()
+        .zip(&defined)
+        .map(|(&value, &ok)| ok.then_some(value))
+        .collect();
+    let p_value = done
+        .p_value
+        .iter()
+        .zip(&defined)
+        .map(|(&value, &ok)| if ok { value } else { None })
+        .collect();
     Ok(Test {
         trace: done.trace,
         variance: done.variance,
         n_occupied: done.n_occupied,
         n_events_after: done.n_events_after,
-        statistic: done.statistic,
-        p_value: done.p_value,
+        statistic,
+        p_value,
         qualifying: qualifying.to_vec(),
         n_rows: data.n_rows(),
         n_used: data.n_used(),

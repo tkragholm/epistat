@@ -95,6 +95,7 @@ fn test_gives_the_bits_of_the_deprecated_function() {
     let opts = Options {
         timefix: epistat_survival::timefix::TimeFix::Exact,
     };
+    let mut undefined = 0;
     // (qualifying codes, target code)
     for (qualifying, target) in [
         (vec![1_u32], 2_u32),
@@ -129,12 +130,26 @@ fn test_gives_the_bits_of_the_deprecated_function() {
         assert_eq!(bits(&new.variance), bits(&old.variance));
         assert_eq!(bits(&new.n_occupied), bits(&old.n_occupied));
         assert_eq!(bits(&new.n_events_after), bits(&old.n_events_after));
-        assert_eq!(bits(&new.statistic), bits(&old.statistic));
-        assert_eq!(new.p_value, old.p_value);
+        let width = qualifying.len();
+        for j in 0..width {
+            let defined = (0..grid.len()).any(|l| old.variance[l * width + j] > 0.0);
+            if defined {
+                assert_eq!(
+                    new.statistic[j].map(f64::to_bits),
+                    Some(old.statistic[j].to_bits())
+                );
+                assert_eq!(new.p_value[j], old.p_value[j]);
+            } else {
+                assert_eq!(new.statistic[j], None);
+                assert_eq!(new.p_value[j], None);
+                undefined += 1;
+            }
+        }
         assert_eq!(new.qualifying, qualifying);
         assert_eq!(new.n_rows, p.start.len());
         assert_eq!(new.n_used, keep.len());
     }
+    assert!(undefined > 0, "the fixture has a state without a test");
 }
 
 fn build<'a>(
