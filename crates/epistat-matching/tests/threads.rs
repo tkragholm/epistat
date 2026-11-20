@@ -529,6 +529,7 @@ fn subclassification() {
                     &SubclassificationConfig {
                         subclasses,
                         reference_group: None,
+                        min_n: 1,
                     },
                 );
                 assert!(out.retained_units() > 0);
