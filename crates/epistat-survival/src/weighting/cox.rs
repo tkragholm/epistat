@@ -48,10 +48,9 @@
 //! and differentiates the Breslow likelihood whatever ties are asked for, so only
 //! the Breslow fits are compared with it.
 //!
-//! The sandwich of `epistat_inference::sandwich::sandwich` is `A^-1 M A^-1`, which
-//! is `A^-1 M A^-T` only for a symmetric `A`. The stacked matrix is not symmetric,
-//! so the module solves with `epistat_linalg::Factor` directly there and uses
-//! `sandwich` for the symmetric matrix of the Cox information alone.
+//! The stacked matrix is block lower triangular, so its sandwich is taken with
+//! the LU attempts of `stack::GENERAL`. The Cox information alone is symmetric
+//! and is taken with the symmetric attempts.
 //!
 //! # Memory
 //!
@@ -71,7 +70,7 @@ use epistat_linalg::{Attempt, inverse};
 use faer::{Mat, MatRef};
 
 use super::iptw::Iptw;
-use super::stack::{check_subjects, sandwich_general, units, with_weights};
+use super::stack::{GENERAL, check_subjects, units, with_weights};
 use crate::cox::{CoxModelFit, CoxOptions, fit as cox_fit, score_residuals};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
@@ -197,7 +196,8 @@ pub fn fit(
     let ones = Clusters::singletons(n_units);
     let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))
         .map_err(|e| Error::input(format!("the stacked estimating functions: {e}")))?;
-    let stacked = sandwich_general(a.as_ref(), b.as_ref())?;
+    let stacked = sandwich(a.as_ref(), b.as_ref(), &GENERAL)
+        .map_err(|e| Error::input(format!("the stacked system: {e}")))?;
     let b_beta = Mat::from_fn(p, p, |i, j| b[(k + i, k + j)]);
     let minus_information = Mat::from_fn(p, p, |i, j| -information[(i, j)]);
     let ignoring = sandwich(

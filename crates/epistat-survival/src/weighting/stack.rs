@@ -16,7 +16,7 @@
 //! effect on the treated, `-1` for a treated subject under the effect on the
 //! controls, and 0 otherwise.
 
-use epistat_linalg::{Attempt, Factor, Method, weighted_gram};
+use epistat_linalg::{Attempt, Method, weighted_gram};
 use faer::Mat;
 
 use super::iptw::{Estimand, Iptw};
@@ -188,30 +188,4 @@ pub(super) fn with_weights(data: &SurvData<'_>, weight: Vec<f64>) -> Result<Surv
         builder = builder.istate(s.to_vec());
     }
     builder.build()
-}
-
-/// `A^-1 M A^-T` for a square `A` that need not be symmetric, by two solves,
-/// averaged with its transpose so that the result is exactly symmetric.
-///
-/// `epistat_inference::sandwich::sandwich` computes `A^-1 M A^-1`, which is
-/// the same only for a symmetric `A`, and the stacked matrix is block lower
-/// triangular.
-pub(super) fn sandwich_general(
-    a: faer::MatRef<'_, f64>,
-    m: faer::MatRef<'_, f64>,
-) -> Result<Mat<f64>> {
-    let solve = |e: epistat_linalg::SolveError| Error::input(format!("the stacked system: {e}"));
-    let left = Factor::new(a, &GENERAL)
-        .map_err(solve)?
-        .solve(m)
-        .map_err(solve)?;
-    // V' = A^-1 L', with L = A^-1 M.
-    let right = Factor::new(a, &GENERAL)
-        .map_err(solve)?
-        .solve(left.transpose())
-        .map_err(solve)?;
-    let n = right.nrows();
-    Ok(Mat::from_fn(n, n, |i, j| {
-        right[(j, i)].midpoint(right[(i, j)])
-    }))
 }
