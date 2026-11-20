@@ -36,7 +36,7 @@
 //! of the coefficients.
 
 use epistat_linalg::Mat;
-use epistat_survival::pseudo::regression::{GeeOptions, Link, fit};
+use epistat_survival::pseudo::regression::{Covariance, GeeOptions, Link, fit};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -67,6 +67,7 @@ struct Case {
     id: Vec<u32>,
     coef: Vec<f64>,
     vcov: Vec<f64>,
+    vcov_hc3: Option<Vec<f64>>,
     converged: bool,
     method: Option<String>,
 }
@@ -80,7 +81,7 @@ fn link_of(name: &str) -> Link {
     }
 }
 
-fn run(case: &Case, worst: &mut (f64, f64, String)) {
+fn run(case: &Case, worst: &mut (f64, f64, String, f64)) {
     assert!(case.converged, "{}: R converged", case.name);
     let n = case.y.len();
     let p = case.p;
@@ -141,6 +142,44 @@ fn run(case: &Case, worst: &mut (f64, f64, String)) {
             }
         }
     }
+    // The covariance `eventglm` reports for one time, HC3. Each score is divided by
+    // one less its leverage, so a relative error `delta` of a leverage `h` moves a
+    // score by `delta h / (1 - h)`, and the meat, a sum of squares, by twice that
+    // and the rounding of the solve, so the bound above is multiplied by
+    // `1 + 2 h_max / (1 - h_max)` for the factor and by the factor itself,
+    // `1 / (1 - h_max)^2`, for the size of the entries relative to HC0.
+    if case.method.as_deref() == Some("glm.fit") {
+        let want = case.vcov_hc3.as_ref().expect("eventglm's covariance");
+        let mut hc3 = opts;
+        hc3.covariance = Covariance::Hc3;
+        let got = fit(x.as_ref(), &case.y, &case.id, None, None, None, &hc3)
+            .unwrap_or_else(|e| panic!("{}: {e}", case.name));
+        let h_max = got
+            .leverage
+            .as_ref()
+            .unwrap()
+            .iter()
+            .fold(0.0f64, |m, &h| m.max(h));
+        let amplification = (1.0 + 2.0 * h_max / (1.0 - h_max)) / (1.0 - h_max).powi(2);
+        for i in 0..p {
+            for j in 0..p {
+                let tv = (32.0 * kappa * (n + p) as f64 * EPS + 8.0 * tc)
+                    * amplification
+                    * (want[i * p + i] * want[j * p + j]).sqrt();
+                let ratio = (got.covariance[i * p + j] - want[i * p + j]).abs() / tv;
+                assert!(
+                    ratio <= 1.0,
+                    "{} HC3 covariance ({i}, {j}): got {:e}, R {:e}, tolerance {tv:e}",
+                    case.name,
+                    got.covariance[i * p + j],
+                    want[i * p + j]
+                );
+                if ratio >= worst.3 {
+                    worst.3 = ratio;
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -153,12 +192,12 @@ fn regression_agrees_with_geese_and_eventglm() {
         "{}, geepack {}, eventglm {}",
         reference.versions.r, reference.versions.geepack, reference.versions.eventglm
     );
-    let mut worst = (0.0, 0.0, String::new());
+    let mut worst = (0.0, 0.0, String::new(), 0.0);
     for case in reference.geese.iter().chain(&reference.eventglm) {
         run(case, &mut worst);
     }
     eprintln!(
-        "worst coefficient {:.4} of tolerance, worst covariance {:.4} at {}",
-        worst.0, worst.1, worst.2
+        "worst coefficient {:.4} of tolerance, worst covariance {:.4} at {}, worst HC3 covariance {:.4}",
+        worst.0, worst.1, worst.2, worst.3
     );
 }

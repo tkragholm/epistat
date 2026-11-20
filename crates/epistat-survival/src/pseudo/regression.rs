@@ -45,6 +45,17 @@
 //! cancels, so it is not estimated. `M` is formed by
 //! [`epistat_inference::sandwich::meat`].
 //!
+//! With [`Covariance::Hc3`] each score is divided by one less the leverage of
+//! its observation, `h_i = w_i mu'_i^2 x_i' A^-1 x_i`, so that
+//!
+//! ```text
+//! V = A^-1 ( sum over i of s_i s_i' / (1 - h_i)^2 ) A^-1,
+//! ```
+//!
+//! which is `sandwich::vcovHC(type = "HC3")` of the `glm` fit \[4\], and what
+//! `eventglm` reports for a single time. It is defined for one observation in
+//! each cluster, as `vcovHC` is, and is an error otherwise.
+//!
 //! The pseudo-values are estimated, and a variance that treats them as data is
 //! the one `geese` gives and `eventglm` gives for pseudo-values made by
 //! the jackknife. It is consistent when the pseudo-values come from
@@ -58,9 +69,10 @@
 //!   not positive for the log link and not in `(0, 1)` for complementary
 //!   log-log, has no start and is an error.
 //! - `eventglm` reports for one time the covariance of `sandwich::vcovHC` at
-//!   its default type, HC3, which divides each score by one less its leverage. The
-//!   covariance here is HC0, which is what `geese` gives and `vcovHC(type =
-//!   "HC0")` gives for a `glm`.
+//!   its default type, HC3, and for several times that of `geese`, which has no
+//!   leverage correction. The default here is HC0, which is what `geese` gives
+//!   and `vcovHC(type = "HC0")` gives for a `glm`, so that one time and several
+//!   are the same estimator. [`Covariance::Hc3`] is `eventglm`'s for one time.
 //!
 //! # References
 //!
@@ -71,6 +83,9 @@
 //!    Ann Stat 45: 1988-2015.
 //! 3. Liang K.-Y., Zeger S. L. (1986) Longitudinal data analysis using
 //!    generalized linear models, Biometrika 73: 13-22.
+//! 4. MacKinnon J. G., White H. (1985) Some heteroskedasticity-consistent
+//!    covariance matrix estimators with improved finite sample properties,
+//!    J Econometrics 29: 305-325.
 
 use epistat_glm::{Family, Glm};
 use epistat_inference::Clusters;
@@ -110,11 +125,26 @@ impl Link {
     }
 }
 
+/// The covariance of the coefficients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Covariance {
+    /// The sandwich of Liang and Zeger with no small-sample correction, the one
+    /// of `geese`.
+    #[default]
+    Hc0,
+    /// Each score divided by one less the leverage of its observation, as
+    /// `sandwich::vcovHC(type = "HC3")`. It needs one observation in each
+    /// cluster.
+    Hc3,
+}
+
 /// What [`fit`] does besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeeOptions {
     /// The link. It has no default.
     pub link: Link,
+    /// The covariance. The default is [`Covariance::Hc0`].
+    pub covariance: Covariance,
     /// A step of Fisher scoring smaller than this, relative to the larger of 1
     /// and the largest coefficient, ends the iteration.
     pub tolerance: f64,
@@ -129,6 +159,7 @@ impl GeeOptions {
     pub const fn new(link: Link) -> Self {
         Self {
             link,
+            covariance: Covariance::Hc0,
             tolerance: 1e-8,
             max_iterations: 25,
         }
@@ -160,6 +191,9 @@ pub struct GeeFit {
     /// Coefficients lose about this many times the rounding unit to the
     /// solve.
     pub information_condition: f64,
+    /// The leverage of each observation, `w mu'^2 x' A^-1 x`, when the
+    /// covariance is [`Covariance::Hc3`], which divides each score by one less it.
+    pub leverage: Option<Vec<f64>>,
 }
 
 impl GeeFit {
@@ -188,7 +222,9 @@ impl GeeFit {
 /// the offset are not finite, a weight is negative, there are fewer rows than
 /// columns, the tolerance is not positive and finite, no iteration is allowed, the mean of `y` is
 /// outside the range of the link and no start is given, the design is rank
-/// deficient, or the iteration leaves the range of the link and cannot return.
+/// deficient, the iteration leaves the range of the link and cannot return, or
+/// [`Covariance::Hc3`] is asked with a cluster of more than one observation or an
+/// observation of leverage 1.
 pub fn fit(
     x: MatRef<'_, f64>,
     y: &[f64],
@@ -324,13 +360,53 @@ pub fn fit(
         .map_err(|e| Error::input(format!("the information could not be formed: {e}")))?;
     let scored = Mat::from_fn(n, p, |i, j| w[i] * derivative[i] * x[(i, j)]);
     let clusters = Clusters::from_sorted_labels(cluster);
-    let m = meat(scored.as_ref(), |i| y[i] - fitted[i], Some(&clusters))
-        .map_err(|e| Error::input(format!("the sandwich could not be formed: {e}")))?;
-    let covariance = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
     let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)
         .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?
         .x;
+    // The factor of each score: 1, or 1 / (1 - h) with h the leverage.
+    let (factor, leverage): (Vec<f64>, Option<Vec<f64>>) = match opts.covariance {
+        Covariance::Hc0 => (vec![1.0; n], None),
+        Covariance::Hc3 => {
+            if clusters.count() != n {
+                return Err(Error::input(
+                    "HC3 is defined for one observation in each cluster",
+                ));
+            }
+            let leverage: Vec<f64> = (0..n)
+                .map(|i| {
+                    let mut quad = 0.0f64;
+                    for r in 0..p {
+                        let mut inner = 0.0f64;
+                        for c in 0..p {
+                            inner += a_inverse[(r, c)] * x[(i, c)];
+                        }
+                        quad += x[(i, r)] * inner;
+                    }
+                    weight[i] * quad
+                })
+                .collect();
+            let factor = leverage
+                .iter()
+                .enumerate()
+                .map(|(i, &h)| {
+                    if h < 1.0 {
+                        Ok(1.0 / (1.0 - h))
+                    } else {
+                        Err(Error::input(format!("observation {i} has leverage 1")))
+                    }
+                })
+                .collect::<Result<_>>()?;
+            (factor, Some(leverage))
+        }
+    };
+    let m = meat(
+        scored.as_ref(),
+        |i| factor[i] * (y[i] - fitted[i]),
+        Some(&clusters),
+    )
+    .map_err(|e| Error::input(format!("the sandwich could not be formed: {e}")))?;
+    let covariance = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)
+        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
     let one_norm = |m: &Mat<f64>| {
         (0..p)
             .map(|j| (0..p).map(|i| m[(i, j)].abs()).sum::<f64>())
@@ -352,6 +428,7 @@ pub fn fit(
         n_clusters: clusters.count(),
         link,
         information_condition: one_norm(&a) * one_norm(&a_inverse),
+        leverage,
         information: row_major(&a),
     })
 }

@@ -53,8 +53,7 @@
 //! infinitesimal one the one `survival` offers. `eventglm`'s default,
 //! `model.censoring = "independent"`, is the exact jackknife of the whole sample,
 //! and `"stratified"` is the exact jackknife within strata, which a stratum column
-//! gives here. Its weighted constructions, with a Cox model of the censoring, are
-//! not provided.
+//! gives here.
 //!
 //! *Cost.* The infinitesimal jackknife of the survival probability, the
 //! restricted mean and the hazards is in closed form, `O(rows log events + rows
@@ -130,6 +129,9 @@
 //! 3. Overgaard M., Parner E. T., Pedersen J. (2017) Asymptotic theory of
 //!    generalized estimating equations based on jack-knife pseudo-observations,
 //!    Ann Stat 45: 1988-2015.
+//! 4. Sachs M. C., Gabriel E. E. (2022) Event history regression with
+//!    pseudo-observations: computation and an implementation in R, J Stat Softw
+//!    102(9).
 
 mod engine;
 mod hazard;
@@ -147,7 +149,7 @@ use crate::multistate::check_ascending;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
-pub use regression::{GeeFit, GeeOptions, Link};
+pub use regression::{Covariance, GeeFit, GeeOptions, Link};
 pub use states::{StateEstimate, StateOptions, StatePseudo, StateTarget, pseudo_states};
 
 /// What is estimated at each time.
