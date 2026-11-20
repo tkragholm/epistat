@@ -492,6 +492,49 @@ fn propensity_estimation_and_matching() {
 }
 
 #[test]
+fn reestimated_propensity_and_nearest_matching() {
+    use epistat_matching::{CommonSupport, NearestSelection};
+    let (anchors, candidates) = balance_inputs(600, 2_400, 4);
+    let config = PropensityScoreConfig::builder()
+        .reestimate(true)
+        .encoding(
+            CovariateEncodingConfig::builder()
+                .include_intercept(true)
+                .missing_value_policy(MissingValuePolicy::Impute)
+                .build(),
+        )
+        .build();
+    for policy in [
+        CommonSupport::Treated,
+        CommonSupport::Control,
+        CommonSupport::Both,
+    ] {
+        assert_same_on_pools(&POOLS, || {
+            let mut d = Digest::default();
+            let criteria = MatchingCriteria::builder()
+                .match_ratio(2)
+                .common_support(policy)
+                .build();
+            let matched = estimate_propensity_and_match(
+                &anchors,
+                &candidates,
+                &criteria,
+                NearestSelection::new(3),
+                &[],
+                &(),
+                &config,
+            )
+            .unwrap();
+            assert!(!matched.outcome.pairs.is_empty());
+            d.outcome(&matched.outcome);
+            d.weights(&matched.outcome);
+            d.estimate(&matched.propensity);
+            d.0
+        });
+    }
+}
+
+#[test]
 fn mahalanobis_preparation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 5);
     for strategy in [

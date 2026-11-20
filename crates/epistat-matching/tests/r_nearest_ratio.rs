@@ -273,7 +273,10 @@ fn pairs_follow_the_loop_always_and_matchit_where_it_is_well_defined() {
             defects += 1;
             if run.matchit_counts_ok == Some(false) {
                 let smallest = expected(&run.matchit).iter().map(Vec::len).min();
-                assert!(smallest < Some(minimum), "{label}: matchit under the minimum");
+                assert!(
+                    smallest < Some(minimum),
+                    "{label}: matchit under the minimum"
+                );
             }
             continue;
         }

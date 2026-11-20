@@ -22,7 +22,9 @@ pub use distance::{
     IdMapMahalanobisDistance, IdMapPropensityScoreDistance, MahalanobisDistance, MahalanobisError,
     PropensityScoreDistance,
 };
-pub use engine::{StandardMatchRequest, match_standard};
+pub use engine::{
+    DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
+};
 pub use estimation::{
     CovariateEncodingConfig, CovariateMatrix, CrossValidation, ElasticNetCvConfig,
     ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,

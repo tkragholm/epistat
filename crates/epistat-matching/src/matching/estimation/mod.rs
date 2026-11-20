@@ -13,7 +13,9 @@ pub use encoding::CovariateMatrix;
 
 use super::constraints::ConstraintGroup;
 use super::distance::DistanceConfig;
-use super::engine::{StandardMatchRequest, match_standard};
+use super::engine::{
+    DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
+};
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
 use crate::types::{CommonSupport, DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
@@ -577,10 +579,12 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
 
 /// Run matching with propensity scores estimated internally from covariates.
 ///
-/// With `propensity_config.reestimate`, the model is refitted on the units that
-/// `criteria.common_support` keeps, and the matching then trims to common
-/// support again on the refitted scores, which can remove further units. The
-/// scores themselves are MatchIt's.
+/// With `propensity_config.reestimate`, the units that `criteria.common_support`
+/// removes are found once, from the first fit, and the model is fitted again
+/// on the others. The matching uses those units and the refitted scores and
+/// does not trim again, so it keeps the units `matchit()` keeps. Without
+/// `reestimate`, the matching trims to common support on the scores of the one
+/// fit. The scores themselves are MatchIt's.
 ///
 /// # Errors
 ///
@@ -604,17 +608,32 @@ pub fn estimate_propensity_and_match<
         propensity_config,
         criteria.common_support,
     )?;
-    let outcome = match_standard(
-        anchors,
-        candidates,
-        StandardMatchRequest {
-            criteria,
-            strategy,
-            constraints: extra_constraints,
-            ratio_fallback,
-            distance_config: Some(&prepared.distance_config),
-        },
-    );
+    let request = StandardMatchRequest {
+        criteria,
+        strategy,
+        constraints: extra_constraints,
+        ratio_fallback,
+        distance_config: Some(&prepared.distance_config),
+    };
+    let outcome = if propensity_config.reestimate {
+        let discarded = DiscardedUnits {
+            anchors: prepared
+                .estimate
+                .discarded_anchors
+                .iter()
+                .cloned()
+                .collect(),
+            candidates: prepared
+                .estimate
+                .discarded_candidates
+                .iter()
+                .cloned()
+                .collect(),
+        };
+        match_standard_with_discard(anchors, candidates, request, Some(&discarded))
+    } else {
+        match_standard(anchors, candidates, request)
+    };
 
     Ok(PropensityMatchedOutcome {
         outcome,
