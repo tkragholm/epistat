@@ -82,6 +82,7 @@ for (s in specs) {
       n_risk = rowSums(fit$n.risk[rows, , drop = FALSE]),
       n_at_risk = rowSums(unweighted$n.risk[rows, , drop = FALSE]),
       n_event = rowSums(fit$n.event[rows, , drop = FALSE]),
+      n_event_cause = columns(fit$n.event[rows, 2:4, drop = FALSE]),
       event_free = ps[, 1],
       cif = columns(ps[, 2:4, drop = FALSE])
     )

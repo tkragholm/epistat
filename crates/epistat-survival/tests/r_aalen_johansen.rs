@@ -48,6 +48,7 @@ struct RGroup {
     n_risk: Vec<f64>,
     n_at_risk: Vec<f64>,
     n_event: Vec<f64>,
+    n_event_cause: Vec<Vec<f64>>,
     event_free: Vec<f64>,
     cif: Vec<Vec<f64>>,
     etm_time: Option<Vec<f64>>,
@@ -187,6 +188,7 @@ fn curves_match_r() {
         "etm cif",
         "cmprsk cif",
         "prodlim cif",
+        "n_event per cause",
     ]
     .into_iter()
     .map(|name| (name, Worst::default()))
@@ -245,6 +247,29 @@ fn curves_match_r() {
                     dev = dev.max((a - b).abs());
                 }
                 worst[index].1.see(&name, dev, weight_bound);
+            }
+            // Each cause's events are a sum over the same rows as the total,
+            // so they carry the same bound.
+            assert_eq!(
+                got.n_event_cause.len(),
+                r.n_event_cause.len(),
+                "{name}: causes"
+            );
+            for (i, &total) in got.n_event.iter().enumerate() {
+                let summed = got.n_event_cause.iter().fold(0.0, |s, c| s + c[i]);
+                assert_eq!(
+                    summed.to_bits(),
+                    total.to_bits(),
+                    "{name}: causes sum to n_event"
+                );
+            }
+            for (ours, theirs) in got.n_event_cause.iter().zip(&r.n_event_cause) {
+                let ours = pick(ours);
+                let mut dev = 0.0f64;
+                for (a, b) in ours.iter().zip(theirs) {
+                    dev = dev.max((a - b).abs());
+                }
+                worst[10].1.see(&name, dev, weight_bound);
             }
             let people = pick(&got.n_at_risk);
             assert_eq!(people, r.n_at_risk, "{name}: individuals at risk");

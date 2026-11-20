@@ -188,6 +188,10 @@ pub struct Curves {
     pub n_at_risk: Vec<f64>,
     /// Weighted events of every cause.
     pub n_event: Vec<f64>,
+    /// Weighted events of each cause, one column per cause in the order of
+    /// `causes`. The columns sum to `n_event` at each time, added in cause
+    /// order.
+    pub n_event_cause: Vec<Vec<f64>>,
     /// `S(t)`.
     pub event_free: Vec<f64>,
     /// `F_k(t)`, one column per cause in the order of `causes`.
@@ -282,6 +286,7 @@ fn curves_checked(
 
     let mut out = Curves {
         cif: vec![Vec::new(); k],
+        n_event_cause: vec![Vec::new(); k],
         causes,
         ..Curves::default()
     };
@@ -299,6 +304,9 @@ fn curves_checked(
             out.n_risk.push(at_risk);
             out.n_at_risk.push(people);
             out.n_event.push(d_any);
+            for (column, &d) in out.n_event_cause.iter_mut().zip(&block.d) {
+                column.push(d);
+            }
             out.event_free.push(survival);
             for (column, &value) in out.cif.iter_mut().zip(&incidence) {
                 column.push(value);
