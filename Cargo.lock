@@ -388,7 +388,6 @@ dependencies = [
  "epistat-rng",
  "epistat-stats",
  "epistat-testkit",
- "faer",
  "rayon",
  "serde",
  "thiserror 2.0.21",
