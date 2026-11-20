@@ -35,6 +35,13 @@ impl Fingerprint {
         self.u64(value.to_bits())
     }
 
+    /// Mixes in `value`, or [`absent`](crate::absent) for `None`, so that an
+    /// undefined value differs from every defined one.
+    #[must_use]
+    pub fn option_f64(self, value: Option<f64>) -> Self {
+        self.f64(crate::absent(value))
+    }
+
     /// Mixes in each of `values` in order.
     #[must_use]
     pub fn f64s(self, values: &[f64]) -> Self {
@@ -56,6 +63,15 @@ mod tests {
     fn the_hash_is_fnv1a_over_little_endian_bytes() {
         // FNV-1a 64 of eight zero bytes.
         assert_eq!(Fingerprint::new().u64(0).finish(), 0xA8C7_F832_281A_39C5);
+    }
+
+    #[test]
+    fn none_differs_from_every_number() {
+        let none = Fingerprint::new().option_f64(None).finish();
+        for v in [0.0, -0.0, 1.0, f64::NAN, f64::INFINITY] {
+            assert_ne!(none, Fingerprint::new().option_f64(Some(v)).finish());
+        }
+        assert_eq!(none, Fingerprint::new().u64(0x7ff8_0000_dead_beef).finish());
     }
 
     #[test]

@@ -1,5 +1,11 @@
 use rayon::ThreadPoolBuilder;
 
+/// The pool sizes a thread-independence test runs on: one thread, an even and
+/// an odd small count, and a count that does not divide typical input sizes.
+///
+/// Pass it to [`assert_same_on_pools`] or [`on_threads`].
+pub const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
+
 /// Runs `f` once inside a rayon pool of each of `thread_counts` threads and
 /// returns the results in that order.
 ///
@@ -71,6 +77,12 @@ mod tests {
     #[test]
     fn pools_have_the_requested_size() {
         assert_eq!(on_threads(&[1, 3], rayon::current_num_threads), [1, 3]);
+    }
+
+    #[test]
+    fn the_standard_pools_start_with_one_thread() {
+        assert_eq!(POOLS, [1, 2, 3, 4, 8]);
+        assert_same_on_pools(&POOLS, || vec![1.0]);
     }
 
     #[test]
