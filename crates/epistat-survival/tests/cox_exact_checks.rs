@@ -1,10 +1,10 @@
 //! Exact ties checked against enumeration of the subsets of the risk sets, the
 //! cases `coxph` refuses, and `clogit`'s input rules.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
 use epistat_survival::cox::{CoxOptions, Ties, fit, score_residuals};
-use faer::Mat;
 
 /// The log partial likelihood at `beta` by listing every subset of the risk
 /// set at each event time, which shares no code with the recursion.

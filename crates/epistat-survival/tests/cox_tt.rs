@@ -2,9 +2,9 @@
 //! identity transform leaves the model unchanged, the forms of a transform
 //! agree, and the refusals.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, TimeTransform, TtColumn, TtOptions, fit, fit_tt};
-use faer::Mat;
 
 struct Rows {
     stop: Vec<f64>,

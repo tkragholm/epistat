@@ -10,10 +10,10 @@
 
 use std::collections::HashMap;
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, TimeTransform, TtColumn, TtOptions, fit_tt};
 use epistat_testkit::{NanRule, load_json, worst_deviation};
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

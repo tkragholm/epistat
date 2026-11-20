@@ -53,13 +53,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use epistat_linalg::{Mat, Side};
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
     ConfType, CurveType, FittedModel, NewData, PathData, SurvfitOptions, survfit, survfit_paths,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined_each};
-use faer::{Mat, Side};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

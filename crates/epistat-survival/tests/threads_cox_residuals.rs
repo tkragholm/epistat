@@ -6,6 +6,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
@@ -13,7 +14,6 @@ use epistat_survival::cox::{
     residuals, zph,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
-use faer::Mat;
 
 #[test]
 fn residuals_and_zph() {

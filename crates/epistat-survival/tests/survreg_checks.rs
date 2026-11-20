@@ -1,9 +1,9 @@
 //! Interval-censored input, the refusals of `survreg::fit` and the handling of
 //! rows of weight zero.
 
+use epistat_linalg::Mat;
 use epistat_survival::survreg::{Distribution, SurvregOptions, fit};
 use epistat_survival::{IntervalKind, Outcome, SurvData};
-use faer::Mat;
 
 const INF: f64 = f64::INFINITY;
 

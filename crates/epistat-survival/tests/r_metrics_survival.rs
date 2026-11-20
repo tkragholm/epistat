@@ -42,13 +42,13 @@
 
 use std::collections::BTreeMap;
 
+use epistat_linalg::Mat;
 use epistat_survival::cox::predict::{FittedModel, NewData, SurvfitOptions, survfit};
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::metrics::brier::{self, BrierOptions};
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
 use epistat_survival::{SurvData, timefix::TimeFix};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

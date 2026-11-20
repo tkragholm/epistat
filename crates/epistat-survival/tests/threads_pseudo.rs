@@ -12,11 +12,11 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::pseudo::{GeeOptions, Link, Method, Pseudo, PseudoOptions, Target, pseudo};
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 struct Sample {
     start: Vec<f64>,

@@ -46,13 +46,13 @@
     reason = "the fields are the flags the R script writes for each fit"
 )]
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, PredictOptions, PredictType, ResidualKind, SurvregOptions,
     TermsReference, fit,
 };
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
-use faer::Mat;
 use serde::Deserialize;
 use std::collections::HashMap;
 

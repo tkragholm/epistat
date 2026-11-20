@@ -15,10 +15,10 @@
     reason = "counts and grid values are far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::pseudo::{GeeOptions, Link, Method, PseudoOptions, Target, pseudo};
-use faer::Mat;
 
 const EPS: f64 = f64::EPSILON;
 

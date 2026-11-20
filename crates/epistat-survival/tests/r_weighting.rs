@@ -31,12 +31,12 @@
 //! and from the plain central differences, which is an upper bound for the
 //! extrapolated one.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties};
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 const EPS: f64 = f64::EPSILON;

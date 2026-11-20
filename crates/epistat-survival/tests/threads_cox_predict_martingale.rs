@@ -6,12 +6,12 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{FittedModel, predict_expected_martingale};
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 #[test]
 fn martingale_form_is_the_same_on_every_pool() {

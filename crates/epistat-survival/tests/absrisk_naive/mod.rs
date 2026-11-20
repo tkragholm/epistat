@@ -13,10 +13,10 @@
     reason = "a plain transcription of the formulas; event times are compared exactly"
 )]
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{BaselineOptions, Centring, FittedModel, basehaz};
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, score_residuals};
-use faer::Mat;
 
 /// One cause-specific model as the influence function needs it.
 pub struct NModel {

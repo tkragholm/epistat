@@ -20,11 +20,11 @@
 //! difference between the finite differences with and without Richardson
 //! extrapolation, which bounds the error of the reference.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{KmOptions, estimate, estimate_known};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 const EPS: f64 = f64::EPSILON;

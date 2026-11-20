@@ -16,11 +16,11 @@
 //! `|L|` times that, plus `4 eps`. For Kaplan-Meier there is no coefficient and
 //! the bound is `4 n eps |L|`. The `L` is read from the weight of R.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::Ties;
 use epistat_survival::weighting::ipcw::{CensoringModel, IpcwOptions, fit};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 const EPS: f64 = f64::EPSILON;

@@ -16,6 +16,7 @@
               the new ones have their own thread checks per module"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
     ArmColumns, Draw, RowWindows, advance, bootstrap_arm_incidence, curves,
@@ -29,7 +30,6 @@ use epistat_survival::multistate::{
     Intervals, bootstrap_state_occupation, integrate, state_occupation_curve,
 };
 use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
-use faer::Mat;
 
 /// Rows of a competing-risks sample: exit time on a grid of tenths so that
 /// times tie, cause 0 to 2, weights, groups and entry times.

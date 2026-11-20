@@ -2,12 +2,12 @@
 //! counterpart for: rows of weight zero, invalid options, and fits without an
 //! estimate.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
     Collapse, CoxModelFit, CoxOptions, ResidualKind, ResidualOptions, ZphOptions, ZphTransform,
     fit, residuals, zph,
 };
-use faer::Mat;
 
 const STOP: [f64; 12] = [1., 2., 2., 3., 4., 4., 5., 6., 7., 7., 8., 9.];
 const STATUS: [i32; 12] = [1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1];

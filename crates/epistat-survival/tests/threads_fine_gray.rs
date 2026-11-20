@@ -12,6 +12,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
@@ -20,7 +21,6 @@ use epistat_survival::fine_gray::{
 };
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
-use faer::Mat;
 
 struct Sample {
     time: Vec<f64>,

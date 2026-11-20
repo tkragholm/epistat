@@ -1,9 +1,9 @@
 //! What `cox::anova` accepts and refuses, and the cases R has no counterpart for.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::anova::{anova, anova_terms};
 use epistat_survival::cox::{CoxModelFit, CoxOptions, fit};
-use faer::Mat;
 
 fn data() -> (Vec<f64>, Vec<i32>, Mat<f64>) {
     let stop: Vec<f64> = (0..40).map(|i| 1.0 + f64::from(i) * 0.37).collect();

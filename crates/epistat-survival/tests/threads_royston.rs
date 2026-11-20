@@ -13,6 +13,7 @@
     reason = "the grid values are far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
@@ -21,7 +22,6 @@ use epistat_survival::metrics::royston::{
     Adjustment, FitOptions, RoystonOptions, estimate, from_fit,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
-use faer::Mat;
 
 #[test]
 fn royston_does_not_depend_on_the_number_of_threads() {

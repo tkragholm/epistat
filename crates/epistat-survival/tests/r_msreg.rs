@@ -34,13 +34,13 @@
 //!
 //! The worst deviation in units of its bound is printed for each output.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::Ties;
 use epistat_survival::msreg::{
     MsBaseline, MsOptions, MsTerm, MsTerms, ProbTransOptions, fit, probtrans,
 };
 use epistat_testkit::{NanRule, load_json, worst_deviation};
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -309,7 +309,7 @@ fn predictions_match_mstate() {
             let v = Mat::from_fn(init.len(), init.len(), |i, j| {
                 r.vcov[at(i)][at(j)] / (r.vcov[at(i)][at(i)] * r.vcov[at(j)][at(j)]).sqrt()
             });
-            let eig = v.self_adjoint_eigen(faer::Side::Lower).unwrap();
+            let eig = v.self_adjoint_eigen(epistat_linalg::Side::Lower).unwrap();
             let values: Vec<f64> = eig.S().column_vector().iter().copied().collect();
             values.iter().copied().fold(f64::MIN, f64::max)
                 / values.iter().copied().fold(f64::MAX, f64::min)

@@ -1,9 +1,9 @@
 //! Offsets, starting values, iteration limits and tests of `cox::fit`: input
 //! checks, undefined cases and identities that need no reference.
 
+use epistat_linalg::Mat;
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::{Error, SurvData};
-use faer::Mat;
 
 const STOP: [f64; 10] = [1., 2., 2., 3., 4., 5., 6., 7., 8., 9.];
 const STATUS: [i32; 10] = [1, 1, 1, 0, 1, 1, 0, 1, 1, 0];

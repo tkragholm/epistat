@@ -6,12 +6,12 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
-use faer::Mat;
 
 fn summary(model: &epistat_survival::cox::CoxModelFit) -> Vec<f64> {
     let mut out = absent_all(&model.coefficients);

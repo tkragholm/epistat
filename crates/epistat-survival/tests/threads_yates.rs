@@ -7,11 +7,11 @@
     reason = "the inputs are a few thousand rows"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::standardise::Counterfactual;
 use epistat_survival::standardise::yates::{InverseLink, Test, YatesLevel, YatesOptions, yates};
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 #[test]
 fn population_means_are_the_same_on_every_pool() {

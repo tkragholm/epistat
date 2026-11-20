@@ -3,6 +3,7 @@
 //! weight 0 change nothing, an offset is a change of reference, and the input
 //! checks.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::HazardType;
 use epistat_survival::msreg::{
@@ -11,7 +12,6 @@ use epistat_survival::msreg::{
 };
 use epistat_survival::multistate::{Options, estimate};
 use epistat_survival::timefix::TimeFix;
-use faer::Mat;
 
 /// Illness-death data for `n` subjects with two covariates: rows with `start`,
 /// `stop`, the status, the state the row starts in and the subject.

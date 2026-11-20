@@ -2,11 +2,11 @@
 //! dfbeta residuals and the term predictions of `survreg`, and the cases the
 //! reference comparison does not reach.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, PredictOptions, PredictType, SurvregOptions, TermsReference, fit,
 };
-use faer::Mat;
 
 fn message<T>(result: epistat_survival::Result<T>) -> String {
     match result {

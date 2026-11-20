@@ -50,6 +50,7 @@
 
 use std::collections::BTreeMap;
 
+use epistat_linalg::Mat;
 use epistat_survival::cox::predict::{FittedModel, PredictOptions, PredictType, predict};
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::metrics::royston::{
@@ -57,7 +58,6 @@ use epistat_survival::metrics::royston::{
 };
 use epistat_survival::{SurvData, timefix::TimeFix};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

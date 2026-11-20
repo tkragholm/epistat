@@ -7,13 +7,13 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
     BaselineOptions, Centring, ConfType, FittedModel, HazardType, NewData, PredictOptions,
     PredictType, Reference, SurvfitOptions, Variance, basehaz, predict, predict_terms, survfit,
 };
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit};
-use faer::Mat;
 
 fn with_coefficients(mut model: CoxModelFit, beta: &[f64], variance: &[f64]) -> CoxModelFit {
     model.coefficients = beta.iter().copied().map(Some).collect();

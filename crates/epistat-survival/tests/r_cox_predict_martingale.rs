@@ -15,13 +15,13 @@
 //! `max(|value|, 1)`, where `xb` is the largest `sum_a 2 |x_a beta_a|` plus the
 //! largest offset. It is not changed after a run.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
     FittedModel, PredictOptions, PredictType, predict, predict_expected_martingale,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

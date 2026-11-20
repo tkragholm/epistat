@@ -8,6 +8,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions};
@@ -17,7 +18,6 @@ use epistat_survival::standardise::{
     standardise_cause_specific, standardise_cox,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 fn flat(out: &Standardised) -> Vec<f64> {
     let mut all: Vec<f64> = out.risk.iter().map(|v| v.unwrap_or(-1.0)).collect();

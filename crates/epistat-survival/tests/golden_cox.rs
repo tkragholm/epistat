@@ -15,10 +15,10 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::cox::{CoxDesign, CoxModelFit, Ties, cox_score_residuals, fit_cox};
 use epistat_testkit::Fingerprint;
-use faer::Mat;
 
 fn opts(hash: Fingerprint, values: &[Option<f64>]) -> Fingerprint {
     values

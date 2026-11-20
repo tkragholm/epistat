@@ -6,11 +6,11 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, fit, score_residuals};
 use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
-use faer::Mat;
 
 /// Strata, delayed entry, case weights with zeros, clusters, tied times, three
 /// event codes and a design of four columns of which one is aliased.

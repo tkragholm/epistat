@@ -7,11 +7,11 @@
     reason = "the inputs are a few hundred rows and the weights are 1 or 2"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{self, CoxOptions, Ties};
 use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
-use faer::Mat;
 
 fn sim(n: usize) -> (Vec<f64>, Vec<i32>, Mat<f64>) {
     let mut rng = Stream::seeded(3);

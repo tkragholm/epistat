@@ -1,9 +1,9 @@
 //! Cox fits on a design matrix checked against R 4.6.2's `survival::coxph`.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit, score_residuals};
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

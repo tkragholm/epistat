@@ -11,13 +11,13 @@
     reason = "the inputs have a few dozen rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
-use faer::Mat;
 
 fn design(n: usize) -> (Mat<f64>, Vec<bool>) {
     let z = Mat::from_fn(n, 2, |i, j| {

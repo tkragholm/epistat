@@ -6,6 +6,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
@@ -14,7 +15,6 @@ use epistat_survival::cox::predict::{
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 fn options(value: Option<Vec<Option<f64>>>) -> Vec<f64> {
     value.map_or_else(Vec::new, |v| {

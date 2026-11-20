@@ -35,9 +35,9 @@
 //! `(32 kappa (n + p) eps + 8 tc) sqrt(V_ii V_jj)`, with `tc` the allowance
 //! of the coefficients.
 
+use epistat_linalg::Mat;
 use epistat_survival::pseudo::regression::{GeeOptions, Link, fit};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 const EPS: f64 = f64::EPSILON;

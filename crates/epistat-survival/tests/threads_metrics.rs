@@ -11,6 +11,7 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::metrics::brier::{self, BrierOptions};
@@ -20,7 +21,6 @@ use epistat_survival::metrics::score::{
     ControlSet, HorizonRule, ScoreOptions, auc, brier as score_brier, ipa, null_brier,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
-use faer::Mat;
 
 struct Sample {
     time: Vec<f64>,

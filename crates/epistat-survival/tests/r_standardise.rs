@@ -32,6 +32,7 @@
     reason = "row counts and codes are small, and times are compared exactly with the times asked for"
 )]
 
+use epistat_linalg::{Mat, Side};
 use epistat_survival::SurvData;
 use epistat_survival::absrisk::CscOptions;
 use epistat_survival::cox::{self, CoxModelFit, CoxOptions, Ties};
@@ -40,7 +41,6 @@ use epistat_survival::standardise::{
     standardise_cause_specific, standardise_cox,
 };
 use epistat_testkit::load_json;
-use faer::{Mat, Side};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

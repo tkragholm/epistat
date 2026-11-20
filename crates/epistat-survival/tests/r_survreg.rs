@@ -13,12 +13,12 @@
 )]
 #![expect(clippy::type_complexity, reason = "a local table of names and numbers")]
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     Distribution, PredictOptions, PredictType, ResidualKind, SurvregFit, SurvregOptions, fit,
 };
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
-use faer::Mat;
 use serde::Deserialize;
 use std::collections::HashMap;
 

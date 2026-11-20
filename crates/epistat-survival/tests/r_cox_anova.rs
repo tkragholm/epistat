@@ -14,11 +14,11 @@
 //! p-value has the absolute bound `0.5` times the statistic's. Neither bound
 //! is changed after a run. The worst deviation in units of its bound is printed.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::anova::{AnovaTable, anova, anova_terms};
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

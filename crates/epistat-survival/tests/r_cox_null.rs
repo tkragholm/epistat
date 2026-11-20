@@ -19,6 +19,7 @@
 //! The bounds are not changed after a run. The worst deviation in units of its
 //! bound is printed for each output.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
     BaselineOptions, FittedModel, HazardType, NewData, PredictOptions, PredictType, SurvfitOptions,
@@ -26,7 +27,6 @@ use epistat_survival::cox::predict::{
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined};
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

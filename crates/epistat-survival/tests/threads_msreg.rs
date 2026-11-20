@@ -11,13 +11,13 @@
     reason = "the counts and grid values are far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::msreg::{
     MsBaseline, MsFitOptions, MsModel, MsOptions, MsTerms, ProbTransOptions, fit, probtrans,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 fn push(out: &mut Vec<f64>, values: &[Option<f64>]) {
     out.extend(values.iter().map(|v| v.unwrap_or(f64::NAN)));

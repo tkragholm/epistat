@@ -52,6 +52,7 @@
 mod absrisk_naive;
 
 use absrisk_naive::{NCase, NModel, model_pieces, naive_se};
+use epistat_linalg::{Mat, Side};
 use epistat_stats::normal;
 use epistat_survival::absrisk::{
     CauseSpecificCox, CscOptions, InfluenceForm, NewRows, RiskLimits, RiskOptions, SurvType,
@@ -59,7 +60,6 @@ use epistat_survival::absrisk::{
 use epistat_survival::cox::{CoxOptions, Ties};
 use epistat_survival::{SurvBuf, SurvData};
 use epistat_testkit::load_json;
-use faer::{Mat, Side};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

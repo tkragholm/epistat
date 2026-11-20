@@ -8,13 +8,13 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::cox::{
     CoxDesign, CoxOptions, Ties, cox_score_residuals, fit, fit_cox, score_residuals,
 };
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{Error, SurvData};
-use faer::Mat;
 
 struct Sample {
     x: Mat<f64>,

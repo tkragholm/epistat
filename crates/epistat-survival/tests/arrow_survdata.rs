@@ -16,13 +16,13 @@ use arrow_array::{
     Array, ArrayRef, DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array,
     RecordBatch, UInt8Array, UInt32Array,
 };
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{self, AalenJohansenOptions};
 use epistat_survival::arrow::{column, follow_up, interval, interval_status};
 use epistat_survival::cox::{self, CoxOptions};
 use epistat_survival::survfit::{self, SurvfitOptions};
 use epistat_survival::{Error, SurvData};
-use faer::Mat;
 
 const N: usize = 300;
 

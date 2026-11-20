@@ -28,6 +28,7 @@
     reason = "the inputs are a few hundred rows"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
@@ -36,7 +37,6 @@ use epistat_survival::standardise::{
     Counterfactual, InfluenceForm, Level, StandardiseOptions, standardise_cause_specific,
     standardise_cox,
 };
-use faer::Mat;
 
 struct Sim {
     stop: Vec<f64>,

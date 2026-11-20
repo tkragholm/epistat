@@ -8,6 +8,7 @@
 //! definition. The sums have at most `n` terms, so the tolerance is
 //! `4 n eps` times the largest term, which is at most 1.
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::metrics::brier::{self, BrierOptions};
 use epistat_survival::metrics::calibration::{self, CalibrationOptions, Groups};
@@ -17,7 +18,6 @@ use epistat_survival::metrics::score::{
     null_brier,
 };
 use epistat_survival::survfit::{SurvfitOptions, estimate as km};
-use faer::Mat;
 
 const EPS: f64 = f64::EPSILON;
 

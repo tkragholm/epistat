@@ -61,6 +61,7 @@
 
 use std::collections::HashMap;
 
+use epistat_linalg::Mat;
 use epistat_stats::gamma::chi_square_sf;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
@@ -68,7 +69,6 @@ use epistat_survival::cox::{
     ZphOptions, ZphTransform, fit, residuals, zph,
 };
 use epistat_testkit::{load_json, na_f64_vec};
-use faer::Mat;
 use serde::Deserialize;
 
 type Matrix = Vec<Vec<Option<f64>>>;

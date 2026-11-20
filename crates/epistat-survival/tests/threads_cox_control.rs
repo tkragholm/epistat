@@ -6,11 +6,11 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{ChiSquareTest, CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
-use faer::Mat;
 
 fn test(value: Option<ChiSquareTest>) -> [f64; 3] {
     value.map_or([absent(None); 3], |t| [t.statistic, t.df as f64, t.p_value])

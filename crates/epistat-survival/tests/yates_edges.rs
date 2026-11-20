@@ -9,13 +9,13 @@
     reason = "small counts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{self, CoxOptions};
 use epistat_survival::standardise::yates::{
     InverseLink, Test, YatesLevel, YatesOptions, wald_tests, yates,
 };
 use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
-use faer::Mat;
 
 fn design() -> Mat<f64> {
     Mat::from_fn(6, 3, |i, j| match j {

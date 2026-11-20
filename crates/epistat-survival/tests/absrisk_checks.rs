@@ -8,13 +8,13 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::absrisk::{
     CauseSpecificCox, CscOptions, NewRows, RiskLimits, RiskOptions, SurvType,
 };
 use epistat_survival::cox::Ties;
-use faer::Mat;
 
 struct Sim {
     stop: Vec<f64>,

@@ -1,13 +1,13 @@
 //! `survreg::fit`, `predict` and `residuals` give identical bits in rayon pools
 //! of 1, 2, 3, 4 and 8 threads.
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     Distribution, PredictOptions, PredictType, ResidualKind, SurvregOptions, fit,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 /// Interval-censored times with strata, case weights and a duplicated column.
 #[test]

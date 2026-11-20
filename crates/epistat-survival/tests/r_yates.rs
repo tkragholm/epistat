@@ -46,10 +46,10 @@
     reason = "counts are small, degrees of freedom are whole numbers, and the bounds index several tables by the same level and coefficient"
 )]
 
+use epistat_linalg::Mat;
 use epistat_survival::standardise::Counterfactual;
 use epistat_survival::standardise::yates::{InverseLink, Test, YatesLevel, YatesOptions, yates};
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -111,7 +111,9 @@ fn condition(m: &[Vec<f64>]) -> f64 {
         return 1.0;
     }
     let mat = Mat::from_fn(k, k, |i, j| m[i][j]);
-    let e = mat.self_adjoint_eigenvalues(faer::Side::Lower).unwrap();
+    let e = mat
+        .self_adjoint_eigenvalues(epistat_linalg::Side::Lower)
+        .unwrap();
     e[k - 1] / e[0]
 }
 

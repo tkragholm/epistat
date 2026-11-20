@@ -8,6 +8,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
@@ -16,7 +17,6 @@ use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use faer::Mat;
 
 struct Simulated {
     z: Mat<f64>,
