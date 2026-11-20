@@ -10,6 +10,11 @@
     clippy::cast_possible_wrap,
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
+#![allow(
+    deprecated,
+    reason = "the deprecated entry points stay checked until they are removed; \
+              the new ones have their own thread checks per module"
+)]
 
 use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
