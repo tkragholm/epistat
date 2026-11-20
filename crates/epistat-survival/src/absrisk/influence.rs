@@ -38,6 +38,10 @@ pub(crate) struct StratumGrid {
 
 pub(crate) struct ModelGrid {
     pub(crate) beta: Vec<f64>,
+    /// The mean offset of the fit, which the baseline is measured from, 0
+    /// without an offset. The risk score of a person with offset `o` is
+    /// `exp(x' beta + o - offset_centre)`.
+    pub(crate) offset_centre: f64,
     pub(crate) strata: Vec<StratumGrid>,
 }
 
@@ -57,6 +61,7 @@ impl Baselines {
         let first = &models[0].data;
         let n_strata = first.n_strata().max(1);
         let mut bases = Vec::with_capacity(models.len());
+        let mut offset_centres = Vec::with_capacity(models.len());
         for (m, model) in models.iter().enumerate() {
             if model.fit.coefficients.iter().any(Option::is_none) {
                 return Err(Error::input(format!(
@@ -75,6 +80,11 @@ impl Baselines {
                 ..BaselineOptions::default()
             };
             bases.push(basehaz(&fitted, &opts)?);
+            offset_centres.push(if model.options.offset.is_some() {
+                reference_offset(&fitted)?
+            } else {
+                0.0
+            });
         }
         let mut grid: Vec<f64> = bases
             .iter()
@@ -109,7 +119,11 @@ impl Baselines {
                 }
                 strata.push(StratumGrid { lam, cum, jumps });
             }
-            out.push(ModelGrid { beta, strata });
+            out.push(ModelGrid {
+                beta,
+                offset_centre: offset_centres[m],
+                strata,
+            });
         }
         let surv = first.followup()?;
         let mut last_time = vec![f64::NEG_INFINITY; n_strata];
@@ -158,10 +172,6 @@ pub(crate) struct TrainModel {
     /// The number of event times of the model, in the stratum of the row, at
     /// or before the entry time of the row, 0 without entry times.
     pub(crate) rank_q0: Vec<usize>,
-    /// The derivative of the mean offset of the fit with respect to the case
-    /// weight of the row, `(o_i - mean offset) / total weight`; empty without
-    /// an offset.
-    pub(crate) d_offset: Vec<f64>,
     pub(crate) strata: Vec<StratumSums>,
 }
 
@@ -254,16 +264,7 @@ fn train_model(
     };
     // The baseline of `basehaz` is at the mean offset of the fit, so the risk
     // scores are measured from it and a new row has the mean offset.
-    let mean_offset = if model.options.offset.is_some() {
-        reference_offset(&FittedModel {
-            data: &model.data,
-            x,
-            fit: model.fit,
-            options: &model.options,
-        })?
-    } else {
-        0.0
-    };
+    let mean_offset = grid_model.offset_centre;
     let risk: Vec<f64> = rows
         .iter()
         .map(|&i| {
@@ -277,15 +278,6 @@ fn train_model(
             eta.exp()
         })
         .collect();
-    let d_offset: Vec<f64> = match model.options.offset {
-        Some(offset) => {
-            let total: f64 = weight.iter().sum();
-            rows.iter()
-                .map(|&i| (offset[i] - mean_offset) / total)
-                .collect()
-        }
-        None => Vec::new(),
-    };
     let weighted_risk: Vec<f64> = risk.iter().zip(weight).map(|(r, w)| r * w).collect();
     if risk.iter().any(|v| !v.is_finite() || *v <= 0.0) {
         return Err(Error::input(format!(
@@ -388,7 +380,6 @@ fn train_model(
         event,
         rank_q,
         rank_q0,
-        d_offset,
         strata: sums,
     })
 }

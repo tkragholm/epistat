@@ -1,7 +1,7 @@
 //! The standardised risks and standard errors with case weights, entry times,
-//! an offset and `surv.type = "survival"` give identical bits in rayon pools of
+//! an offset in every model and `surv.type = "survival"` give identical bits in rayon pools of
 //! 1, 2, 3, 4 and 8 threads, on more rows than one block of the sums holds. The
-//! absolute risk's standard error with weights and entry times does as well.
+//! absolute risk's standard error with weights, entry times and an offset does as well.
 
 #![expect(
     clippy::cast_possible_truncation,
@@ -98,24 +98,8 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
     let pairs = [pair(&[(0, 0.0)]), pair(&[(0, 1.0)])];
     let designs = [x.as_ref(), x.as_ref()];
     assert_same_on_pools(&POOLS, || {
-        let csc = CscOptions::default();
-        let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
-        let out = standardise_cause_specific(
-            &data,
-            &designs,
-            model.fits(),
-            1,
-            &csc,
-            &pairs,
-            &times,
-            &std_err,
-        )
-        .unwrap();
-        flat(&out)
-    });
-    assert_same_on_pools(&POOLS, || {
         let csc = CscOptions {
-            surv_type: SurvType::Survival { cause: 1 },
+            offset: Some(&offset),
             ..CscOptions::default()
         };
         let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
@@ -133,16 +117,41 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
         flat(&out)
     });
     assert_same_on_pools(&POOLS, || {
-        let csc = CscOptions::default();
+        let csc = CscOptions {
+            surv_type: SurvType::Survival { cause: 1 },
+            offset: Some(&offset),
+            ..CscOptions::default()
+        };
+        let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
+        let out = standardise_cause_specific(
+            &data,
+            &designs,
+            model.fits(),
+            1,
+            &csc,
+            &pairs,
+            &times,
+            &std_err,
+        )
+        .unwrap();
+        flat(&out)
+    });
+    assert_same_on_pools(&POOLS, || {
+        let csc = CscOptions {
+            offset: Some(&offset),
+            ..CscOptions::default()
+        };
         let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
         let new1 = Mat::from_fn(3, 2, |i, j| [[1.0, 0.2], [0.0, -0.5], [1.0, 1.1]][i][j]);
         let rows = [0u32, 1, 2];
+        let new_offset = [0.3, -0.2, 0.0];
         let new_designs = [new1.as_ref(), new1.as_ref()];
         let out = model
             .predict(
                 &NewRows {
                     designs: &new_designs,
                     stratum: Some(&rows),
+                    offset: Some(&new_offset),
                 },
                 &times,
                 1,

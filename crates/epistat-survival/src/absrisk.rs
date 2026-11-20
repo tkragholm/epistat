@@ -116,7 +116,9 @@
 //! `sum w_i^2 d_i^2` where the repeated rows give `sum w_i d_i^2`, with `d_i`
 //! the derivative. The fit of the coefficients with tied times is the Efron one
 //! when the options say so, and the influence function is that of the Breslow
-//! likelihood, as in riskRegression. The models of this module have no offset.
+//! likelihood, as in riskRegression. An offset enters the risk score of the rows of the fit and
+//! of each new row ([`NewRows::offset`]), measured from the mean offset of the
+//! fit that the baseline is at.
 //!
 //! # Confidence limits
 //!
@@ -207,7 +209,7 @@ pub enum SurvType {
 
 /// The options of [`CauseSpecificCox::fit`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CscOptions {
+pub struct CscOptions<'a> {
     /// How tied events enter the partial likelihood, and which baseline
     /// hazard follows. `Efron`, as in `coxph`, which `CSC` calls.
     pub ties: Ties,
@@ -216,14 +218,20 @@ pub struct CscOptions {
     pub timefix: TimeFix,
     /// What the models are, `surv.type`. `Hazard`, as in `CSC`.
     pub surv_type: SurvType,
+    /// A term added to the linear predictor of every row of the data in every
+    /// model, as `offset()` in the formulas of `CSC`; one value per row of the
+    /// data. The default is no offset. A new row predicted for has the offset
+    /// of [`NewRows::offset`].
+    pub offset: Option<&'a [f64]>,
 }
 
-impl Default for CscOptions {
+impl Default for CscOptions<'_> {
     fn default() -> Self {
         Self {
             ties: Ties::Efron,
             timefix: TimeFix::default(),
             surv_type: SurvType::Hazard,
+            offset: None,
         }
     }
 }
@@ -253,6 +261,10 @@ pub struct NewRows<'a> {
     /// The caller's stratum code of each row, required when the data has
     /// strata and not read otherwise.
     pub stratum: Option<&'a [u32]>,
+    /// The offset of each new row, in every model, as `offset()` of the formula
+    /// has it for new data. Zero when absent. It is an error for models fitted
+    /// without an offset.
+    pub offset: Option<&'a [f64]>,
 }
 
 /// The options of [`CauseSpecificCox::predict`].
@@ -327,7 +339,7 @@ impl<'a> CauseSpecificCox<'a> {
     pub fn fit(
         data: &SurvData<'a>,
         designs: &[MatRef<'a, f64>],
-        opts: &CscOptions,
+        opts: &CscOptions<'a>,
     ) -> Result<Self> {
         let plan = Plan::new(data, designs, opts)?;
         let mut fits = Vec::with_capacity(plan.options.len());
@@ -356,7 +368,7 @@ impl<'a> CauseSpecificCox<'a> {
         data: &SurvData<'a>,
         designs: &[MatRef<'a, f64>],
         fits: Vec<CoxModelFit>,
-        opts: &CscOptions,
+        opts: &CscOptions<'a>,
     ) -> Result<Self> {
         let plan = Plan::new(data, designs, opts)?;
         check_lengths(&[("designs", designs.len()), ("fits", fits.len())])?;
@@ -441,7 +453,11 @@ struct Plan<'a> {
 }
 
 impl<'a> Plan<'a> {
-    fn new(data: &SurvData<'a>, designs: &[MatRef<'a, f64>], opts: &CscOptions) -> Result<Self> {
+    fn new(
+        data: &SurvData<'a>,
+        designs: &[MatRef<'a, f64>],
+        opts: &CscOptions<'a>,
+    ) -> Result<Self> {
         let fixed = data.clone().with_timefix(opts.timefix)?;
         let n_codes = fixed.followup()?.n_codes();
         if n_codes < 2 {
@@ -461,9 +477,13 @@ impl<'a> Plan<'a> {
             }
         };
         check_lengths(&[("models", expected), ("designs", designs.len())])?;
+        if let Some(offset) = opts.offset {
+            check_lengths(&[("data", fixed.n_rows()), ("offset", offset.len())])?;
+        }
         let base = CoxOptions {
             ties: opts.ties,
             timefix: opts.timefix,
+            offset: opts.offset,
             ..CoxOptions::default()
         };
         let (overall, options) = match opts.surv_type {
@@ -660,12 +680,24 @@ impl CauseSpecificCox<'_> {
                 .collect::<Result<Vec<usize>>>()?,
             _ => vec![0; rows],
         };
+        if let Some(offset) = new.offset {
+            check_lengths(&[("new designs", rows), ("new offset", offset.len())])?;
+            refuse_non_finite(offset, "new offset")?;
+            if self.options[0].offset.is_none() {
+                return Err(Error::input(
+                    "new offset: the models were fitted without an offset",
+                ));
+            }
+        }
         let mut theta = Vec::with_capacity(rows * base.models.len());
         for r in 0..rows {
             for (m, model) in base.models.iter().enumerate() {
                 let mut eta = 0.0;
                 for (a, b) in model.beta.iter().enumerate() {
                     eta += new.designs[m][(r, a)] * b;
+                }
+                if self.options[0].offset.is_some() {
+                    eta += new.offset.map_or(0.0, |o| o[r]) - model.offset_centre;
                 }
                 let value = eta.exp();
                 if !value.is_finite() {

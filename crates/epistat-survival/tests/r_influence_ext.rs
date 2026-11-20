@@ -1,4 +1,5 @@
-//! `ate` of riskRegression (g-formula) for data with entry times and for
+//! `ate` of riskRegression (g-formula) for data with entry times, for models
+//! with an offset (each person predicted with their own) and for
 //! cause-specific Cox models with `surv.type = "survival"`, against
 //! [`epistat_survival::standardise`]. The reference is `tests/data/influence_ext.R`.
 //!
@@ -101,6 +102,7 @@ struct Case {
     kind: String,
     cause: Option<u32>,
     start: Vec<f64>,
+    offset: Option<Vec<f64>>,
     product_limit: Option<bool>,
     time: Vec<f64>,
     status: Vec<i32>,
@@ -167,6 +169,7 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
     for (m, design) in refs.iter().enumerate() {
         let options = CoxOptions {
             ties: Ties::Efron,
+            offset: case.offset.as_deref(),
             cause: match (case.kind.as_str(), m) {
                 ("csc", m) => Some(m as u32 + 1),
                 ("cox", _) | ("csc_survival", 0) => Some(1),
@@ -206,6 +209,7 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
     if case.kind == "cox" {
         let options = CoxOptions {
             cause: Some(1),
+            offset: case.offset.as_deref(),
             ..CoxOptions::default()
         };
         standardise_cox(
@@ -232,6 +236,7 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
                 } else {
                     SurvType::Hazard
                 },
+                offset: case.offset.as_deref(),
                 ..CscOptions::default()
             },
             &levels,

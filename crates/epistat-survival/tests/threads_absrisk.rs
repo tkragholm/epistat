@@ -80,6 +80,7 @@ fn risk_standard_error_and_limits() {
                 let new = NewRows {
                     designs: &new_designs,
                     stratum: Some(&new_stratum),
+                    offset: None,
                 };
                 let out = model
                     .predict(

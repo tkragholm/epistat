@@ -80,6 +80,9 @@ impl Csc<'_> {
             for (a, b) in self.base.models[m].beta.iter().enumerate() {
                 eta += buf.xs[m][a] * b;
             }
+            if let Some(offset) = model.options.offset {
+                eta += offset[row] - self.base.models[m].offset_centre;
+            }
             let value = f64::exp(eta);
             if !value.is_finite() {
                 return Err(Error::input(format!(

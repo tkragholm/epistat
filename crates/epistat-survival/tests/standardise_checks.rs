@@ -393,6 +393,7 @@ fn absrisk_standard_error_is_the_derivative() {
     let new = NewRows {
         designs: &new_designs,
         stratum: Some(&stratum_row),
+        offset: None,
     };
     let x2 = Mat::from_fn(n, 2, |i, j| s.design[(i, j)]);
     let designs = [s.design.as_ref(), x2.as_ref()];
@@ -519,6 +520,7 @@ fn one_profile_is_one_prediction() {
     let new = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     let levels = [Level {
         designs: vec![

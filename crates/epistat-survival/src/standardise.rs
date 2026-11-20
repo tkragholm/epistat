@@ -72,20 +72,10 @@
 //! average.
 //!
 //! With an offset, the baseline of the model is that of `basehaz`, at the mean
-//! offset of the fit, and the risk of every person is that of a person with the
-//! mean offset: the covariates of a level carry no offset. The mean offset
-//! depends on the case weights, which the influence function takes into
-//! account. `ate` of riskRegression predicts with the offset of each person.
-//!
-//! For cause-specific models with the product limit the influence function is
-//! that of the product-limit survival itself, as described in
-//! [`absrisk`](crate::absrisk) ([`InfluenceForm::Exact`], the default).
-//! riskRegression takes the derivative of the exponential form instead, a
-//! first-order approximation. [`InfluenceForm::Exponential`] gives its numbers:
-//! on the cause-specific cases of the reference its standard errors are off by
-//! up to 0.5 per cent from the exact ones, and by up to 4 per cent on the
-//! simulated data of the tests, where the numerical derivative of the estimate
-//! with respect to the case weight of each person agrees with the exact form.
+//! offset of the fit, and the risk of each person is that of the person's own
+//! offset, as in `ate` of riskRegression: the exposure changes the covariates
+//! and the offset stays. The mean offset cancels from the risk, so the
+//! influence function has no term for it.
 //!
 //! # Where this differs from riskRegression
 //!
@@ -424,7 +414,7 @@ pub fn standardise_cause_specific<'a>(
     designs: &[MatRef<'a, f64>],
     fits: &'a [CoxModelFit],
     cause: u32,
-    csc: &CscOptions,
+    csc: &CscOptions<'a>,
     levels: &[Level<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
@@ -441,9 +431,13 @@ pub fn standardise_cause_specific<'a>(
             "cause {cause} is outside 1..={n_codes}"
         )));
     }
+    if let Some(offset) = csc.offset {
+        check_lengths(&[("data", fixed.n_rows()), ("offset", offset.len())])?;
+    }
     let base = CoxOptions {
         ties: csc.ties,
         timefix: csc.timefix,
+        offset: csc.offset,
         ..CoxOptions::default()
     };
     match csc.surv_type {

@@ -71,7 +71,7 @@ scales <- function(models, d) {
 }
 
 common <- function(name, kind, d, fit_models, a, times, extra) {
-  c(list(name = name, kind = kind, time = d$time, start = d$start, status = as.integer(d$st),
+  c(list(name = name, kind = kind, time = d$time, start = d$start, offset = d$o, status = as.integer(d$st),
          designs = unname(lapply(fit_models, function(m) num(m$x))),
          coefficients = unname(lapply(fit_models, function(m) I(as.numeric(coef(m))))),
          var = unname(lapply(fit_models, function(m) num(m$var))),
@@ -134,8 +134,9 @@ numeric_se <- function(d, times, strata) {
        tol = num(apply(tol, c(2, 3), function(v) sqrt(sum(v^2)))))
 }
 
-cox_case <- function(name, d, times, strata = FALSE) {
+cox_case <- function(name, d, times, strata = FALSE, offset = FALSE) {
   rhs <- "A + x1 + x2"
+  if (offset) rhs <- paste(rhs, "+ offset(o)")
   if (strata) rhs <- paste(rhs, "+ strata(s)")
   f <- coxph(as.formula(paste("Surv(start, time, st == 1) ~", rhs)), data = d, x = TRUE, y = TRUE)
   a <- ate(f, data = d, treatment = "A", times = times, se = TRUE, verbose = FALSE, B = 0,
@@ -145,11 +146,12 @@ cox_case <- function(name, d, times, strata = FALSE) {
               numeric = numeric_se(d, times, strata)))
 }
 
-csc_case <- function(name, d, times, cause, pl, surv_type = "hazard") {
+csc_case <- function(name, d, times, cause, pl, surv_type = "hazard", offset = FALSE) {
   ent <- if (any(d$start > 0)) ", entry = start" else ""
+  off <- if (offset) " + offset(o)" else ""
   # ate re-evaluates the call of CSC, so the formulas live in the global scope.
-  assign("f1", as.formula(paste0("Hist(time, st", ent, ") ~ A + x1 + x2")), envir = globalenv())
-  assign("f2", as.formula(paste0("Hist(time, st", ent, ") ~ A + x1")), envir = globalenv())
+  assign("f1", as.formula(paste0("Hist(time, st", ent, ") ~ A + x1 + x2", off)), envir = globalenv())
+  assign("f2", as.formula(paste0("Hist(time, st", ent, ") ~ A + x1", off)), envir = globalenv())
   # `cause` of CSC puts the cause of interest first, which only the survival
   # type needs.
   fit <- if (surv_type == "hazard") CSC(list(f1, f2), data = d) else
@@ -179,6 +181,20 @@ for (entry in c(FALSE, TRUE)) {
     k <- k + 1
   }
 }
+
+# Offsets: each person is predicted with their own offset by ate. Times
+# continuous, no entry times, so the standard errors are comparable.
+d5 <- make_data(1500, entry = FALSE)
+d5$o <- 0.3 * rnorm(1500)
+cases[[k]] <- cox_case("cox_offset", d5, c(1, 3, 6, 10), offset = TRUE)
+k <- k + 1
+for (cause in 1:2) for (pl in c(TRUE, FALSE)) {
+  cases[[k]] <- csc_case(paste0("csc_offset_cause", cause, "_pl", pl), d5, c(1, 2.5, 4, 6), cause, pl,
+                         offset = TRUE)
+  k <- k + 1
+}
+cases[[k]] <- csc_case("csc_survival_offset_plTRUE", d5, c(1, 2.5, 4, 6), 1, TRUE, surv_type = "survival",
+                       offset = TRUE)
 
 vers <- list(r = R.version.string,
              riskRegression = as.character(packageVersion("riskRegression")),

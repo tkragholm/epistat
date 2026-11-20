@@ -263,6 +263,7 @@ fn absolute_risk_matches_r() {
         let new = NewRows {
             designs: &new_refs,
             stratum: case.new_stratum.as_deref(),
+            offset: None,
         };
 
         // The bounds.

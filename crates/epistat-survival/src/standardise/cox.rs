@@ -22,8 +22,6 @@ struct Acc {
     a: Vec<f64>,
     /// `sum S theta (L x - int E dL)`, `p` values.
     g: Vec<f64>,
-    /// `sum S theta L`, the derivative with respect to the log risk score.
-    d: f64,
 }
 
 impl CoxEval<'_> {
@@ -32,6 +30,11 @@ impl CoxEval<'_> {
         let mut eta = 0.0;
         for (a, b) in self.base.models[0].beta.iter().enumerate() {
             eta += x[a] * b;
+        }
+        // The person's own offset, measured from the mean offset the baseline
+        // is at.
+        if let Some(offset) = self.model.options.offset {
+            eta += offset[row] - self.base.models[0].offset_centre;
         }
         let value = f64::exp(eta);
         if value.is_finite() {
@@ -66,7 +69,6 @@ impl CoxEval<'_> {
                             fbar: 0.0,
                             a: vec![0.0; n_strata],
                             g: vec![0.0; if infl.is_some() { p } else { 0 }],
-                            d: 0.0,
                         };
                         let mut x = vec![0.0; p];
                         for i in range {
@@ -79,7 +81,6 @@ impl CoxEval<'_> {
                             if let Some(infl) = infl {
                                 let st = wt * surv * theta;
                                 acc.a[s] += st;
-                                acc.d += st * cum;
                                 let sums = &infl.models[0].strata[s];
                                 for (a, g) in acc.g.iter_mut().enumerate() {
                                     *g += st * (cum * x[a] - sums.cum_e_lam[(c - 1) * p + a]);
@@ -92,7 +93,6 @@ impl CoxEval<'_> {
                         a.fbar += b.fbar;
                         add(&mut a.a, &b.a);
                         add(&mut a.g, &b.g);
-                        a.d += b.d;
                     },
                 )?;
                 risk[l * n_needed + u] = Some(acc.fbar);
@@ -146,9 +146,6 @@ impl CoxEval<'_> {
                                 -train.risk[i] * acc.a[s] * (cum_at(q.min(c)) - cum_at(q0.min(c)));
                             if train.event[i] && q <= c {
                                 value += acc.a[s] * train.event_over_s0[i];
-                            }
-                            if !train.d_offset.is_empty() {
-                                value += train.d_offset[i] * acc.d;
                             }
                             own[l] = beta_part + w_train * value + wt * (f_i - acc.fbar);
                         }

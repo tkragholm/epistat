@@ -82,6 +82,7 @@ fn refusals() {
     let new = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     let ok = model.predict(&new, &[1.0, 5.0], 1, &risk_opts(true));
     assert!(ok.is_ok());
@@ -101,7 +102,8 @@ fn refusals() {
             .predict(
                 &NewRows {
                     designs: &one,
-                    stratum: None
+                    stratum: None,
+                    offset: None,
                 },
                 &[1.0],
                 1,
@@ -115,7 +117,8 @@ fn refusals() {
             .predict(
                 &NewRows {
                     designs: &swapped,
-                    stratum: None
+                    stratum: None,
+                    offset: None,
                 },
                 &[1.0],
                 1,
@@ -165,6 +168,7 @@ fn strata_are_required_and_known() {
     let missing = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     assert!(
         model
@@ -176,12 +180,14 @@ fn strata_are_required_and_known() {
     let wrong = NewRows {
         designs: &new_designs,
         stratum: Some(&dense),
+        offset: None,
     };
     assert!(model.predict(&wrong, &[3.0], 1, &risk_opts(false)).is_err());
     let codes = [7u32, 8];
     let right = NewRows {
         designs: &new_designs,
         stratum: Some(&codes),
+        offset: None,
     };
     let out = model.predict(&right, &[3.0], 1, &risk_opts(true)).unwrap();
     assert!(out.risk.iter().all(Option::is_some));
@@ -197,6 +203,7 @@ fn strata_are_required_and_known() {
             &NewRows {
                 designs: &refs,
                 stratum: Some(&swapped),
+                offset: None,
             },
             &[3.0],
             1,
@@ -223,6 +230,7 @@ fn the_standard_error_with_weights_and_entry_times() {
     let new = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     let weighted = SurvData::builder(&s.stop, &s.status)
         .n_codes(2)
@@ -280,6 +288,7 @@ fn undefined_where_the_data_end_or_the_survival_is_not_a_probability() {
     let new = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     let times = [0.0, first_event * 0.5, first_event, last, last + 1.0];
     let out = model.predict(&new, &times, 1, &risk_opts(true)).unwrap();
@@ -332,6 +341,7 @@ fn the_order_of_the_times_does_not_matter() {
     let new = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     let sorted = [1.0, 3.0, 3.0, 7.5, 12.0];
     let shuffled = [7.5, 1.0, 12.0, 3.0, 3.0];
@@ -417,6 +427,7 @@ fn case_weights_are_row_repeats() {
     let new = NewRows {
         designs: &new_designs,
         stratum: None,
+        offset: None,
     };
     let times = [2.0, 5.0, 9.0];
     let wa = a.predict(&new, &times, 1, &risk_opts(false)).unwrap();

@@ -159,6 +159,11 @@ fn data_of<'a>(s: &'a Sim, w: &'a [f64], cfg: Cfg, n_codes: u32) -> SurvData<'a>
     builder.build().unwrap()
 }
 
+/// The offset of the configuration.
+fn off(s: &Sim, cfg: Cfg) -> Option<&[f64]> {
+    cfg.offset.then_some(s.offset.as_slice())
+}
+
 fn precise(cause: Option<u32>, offset: Option<&[f64]>) -> CoxOptions<'_> {
     CoxOptions {
         ties: Ties::Breslow,
@@ -313,7 +318,7 @@ fn csc_run(
     let x2 = Mat::from_fn(s.design.nrows(), 2, |i, j| s.design[(i, j)]);
     let designs = [s.design.as_ref(), x2.as_ref()];
     let fits: Vec<CoxModelFit> = (0..2)
-        .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1), None)).unwrap())
+        .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1), off(s, cfg))).unwrap())
         .collect();
     let level = |set: &'static [(usize, f64)]| Level {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
@@ -325,6 +330,7 @@ fn csc_run(
         cause,
         &CscOptions {
             ties: Ties::Breslow,
+            offset: off(s, cfg),
             ..CscOptions::default()
         },
         &[level(&SET0), level(&SET1)],
@@ -344,7 +350,7 @@ fn cause_specific_standard_error_is_the_derivative() {
     let n = 80;
     let s = sim(n, 9, 2);
     let times = [1.0, 2.5, 4.0, 5.0];
-    for (name, cfg) in CONFIGS.iter().filter(|(_, c)| !c.offset) {
+    for (name, cfg) in &CONFIGS {
         let w0 = if cfg.weight {
             weights(n, 6)
         } else {
@@ -436,12 +442,15 @@ fn predict_run(
     let designs = [s.design.as_ref(), x2.as_ref()];
     let opts = CscOptions {
         ties: Ties::Breslow,
+        offset: off(s, cfg),
         surv_type,
         ..CscOptions::default()
     };
     let fits: Vec<CoxModelFit> = match surv_type {
         SurvType::Hazard => (0..2)
-            .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1), None)).unwrap())
+            .map(|m| {
+                cox::fit(&data, designs[m], &precise(Some(m as u32 + 1), off(s, cfg))).unwrap()
+            })
             .collect(),
         SurvType::Survival { cause } => {
             let any = {
@@ -453,10 +462,10 @@ fn predict_run(
                     builder = builder.start(&s.start);
                 }
                 let d = builder.build().unwrap();
-                cox::fit(&d, designs[1], &precise(None, None)).unwrap()
+                cox::fit(&d, designs[1], &precise(None, off(s, cfg))).unwrap()
             };
             vec![
-                cox::fit(&data, designs[0], &precise(Some(cause), None)).unwrap(),
+                cox::fit(&data, designs[0], &precise(Some(cause), off(s, cfg))).unwrap(),
                 any,
             ]
         }
@@ -469,6 +478,7 @@ fn predict_run(
     let new = NewRows {
         designs: &new_designs,
         stratum: Some(&rows),
+        offset: cfg.offset.then_some(&[0.3, -0.2]),
     };
     let out = model
         .predict(
@@ -496,7 +506,7 @@ fn absolute_risk_standard_error_is_the_derivative() {
     let n = 80;
     let s = sim(n, 13, 2);
     let times = [1.0, 2.5, 4.0, 5.0];
-    for (name, cfg) in CONFIGS.iter().filter(|(_, c)| !c.offset) {
+    for (name, cfg) in &CONFIGS {
         let w0 = if cfg.weight {
             weights(n, 7)
         } else {
@@ -614,8 +624,8 @@ fn survival_type_run(
     let x2 = Mat::from_fn(n, 2, |i, j| s.design[(i, j)]);
     let designs = [s.design.as_ref(), x2.as_ref()];
     let fits = vec![
-        cox::fit(&data, designs[0], &precise(Some(1), None)).unwrap(),
-        cox::fit(&any, designs[1], &precise(None, None)).unwrap(),
+        cox::fit(&data, designs[0], &precise(Some(1), off(s, cfg))).unwrap(),
+        cox::fit(&any, designs[1], &precise(None, off(s, cfg))).unwrap(),
     ];
     let level = |set: &'static [(usize, f64)]| Level {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
@@ -627,6 +637,7 @@ fn survival_type_run(
         1,
         &CscOptions {
             ties: Ties::Breslow,
+            offset: off(s, cfg),
             surv_type: SurvType::Survival { cause: 1 },
             ..CscOptions::default()
         },
@@ -646,7 +657,7 @@ fn survival_type_standard_error_is_the_derivative() {
     let n = 80;
     let s = sim(n, 9, 2);
     let times = [1.0, 2.5, 4.0, 5.0];
-    for (name, cfg) in CONFIGS.iter().filter(|(_, c)| !c.offset) {
+    for (name, cfg) in &CONFIGS {
         let w0 = if cfg.weight {
             weights(n, 6)
         } else {
@@ -669,6 +680,61 @@ fn survival_type_standard_error_is_the_derivative() {
                 &num,
                 &vec![1.0; n],
             );
+        }
+    }
+}
+
+/// Cause-specific models with an offset: integer weights and repeated rows give
+/// the same estimates.
+#[test]
+fn integer_weights_are_repeated_rows_cause_specific() {
+    let n = 60;
+    let s = sim(n, 32, 2);
+    let mut rng = Stream::seeded(78);
+    let w0: Vec<f64> = (0..n).map(|_| f64::from(1 + rng.below(3) as u8)).collect();
+    let cfg = Cfg {
+        weight: true,
+        entry: true,
+        offset: true,
+    };
+    let times = [1.0, 2.5, 4.0];
+    let index: Vec<usize> = (0..n)
+        .flat_map(|i| std::iter::repeat_n(i, w0[i] as usize))
+        .collect();
+    let rep = Sim {
+        stop: index.iter().map(|&i| s.stop[i]).collect(),
+        start: index.iter().map(|&i| s.start[i]).collect(),
+        status: index.iter().map(|&i| s.status[i]).collect(),
+        stratum: index.iter().map(|&i| s.stratum[i]).collect(),
+        offset: index.iter().map(|&i| s.offset[i]).collect(),
+        design: Mat::from_fn(index.len(), 3, |r, j| s.design[(index[r], j)]),
+    };
+    let ones = vec![1.0; index.len()];
+    let tol = 16.0 * (6 * index.len() + 80) as f64 * f64::EPSILON;
+    for cause in [1, 2] {
+        let a = csc_run(
+            &s,
+            &w0,
+            cfg,
+            true,
+            InfluenceForm::Exact,
+            &times,
+            false,
+            cause,
+        );
+        let b = csc_run(
+            &rep,
+            &ones,
+            cfg,
+            true,
+            InfluenceForm::Exact,
+            &times,
+            false,
+            cause,
+        );
+        for (x, y) in a.risk.iter().zip(&b.risk) {
+            let (x, y) = (x.unwrap(), y.unwrap());
+            assert!((x - y).abs() <= tol * x.abs().max(1e-3), "{x} {y}");
         }
     }
 }
