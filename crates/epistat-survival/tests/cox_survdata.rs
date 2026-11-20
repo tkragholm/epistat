@@ -253,13 +253,25 @@ fn the_design_must_fit_the_data() {
     let short = Mat::from_fn(n - 1, 1, |i, _| s.x[(i, 0)]);
     let empty = Mat::<f64>::zeros(n, 0);
     let nan = Mat::from_fn(n, 1, |i, _| if i == 3 { f64::NAN } else { 1.0 });
-    for x in [short.as_ref(), empty.as_ref(), nan.as_ref()] {
+    for x in [short.as_ref(), nan.as_ref()] {
         assert!(matches!(fit(&data, x, &NO_FIX), Err(Error::Input(_))));
         assert!(matches!(
             score_residuals(&data, x, &[Some(0.0)], &NO_FIX),
             Err(Error::Input(_))
         ));
     }
+    // A design without columns is the null model, as coxph(~ 1); a coefficient
+    // given for it is still the wrong length.
+    let null = fit(&data, empty.as_ref(), &NO_FIX).unwrap();
+    assert!(null.coefficients.is_empty() && null.rank == 0);
+    assert_eq!(
+        null.log_partial_likelihood,
+        null.null_log_partial_likelihood
+    );
+    assert!(matches!(
+        score_residuals(&data, empty.as_ref(), &[Some(0.0)], &NO_FIX),
+        Err(Error::Input(_))
+    ));
     let x = Mat::from_fn(n, 1, |i, _| s.x[(i, 0)]);
     assert!(score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &NO_FIX).is_err());
 }
