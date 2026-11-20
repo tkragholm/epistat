@@ -20,6 +20,7 @@
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
 //!   product integral, and their clustered bootstrap.
 //! - [`markov`]: the landmark test of the Markov property.
+//! - [`SurvData`]: the checked input type that the estimators will share.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -38,6 +39,8 @@ mod error;
 pub mod fine_gray;
 pub mod markov;
 pub mod multistate;
+pub mod surv;
 pub mod timefix;
 
 pub use error::{Error, Result};
+pub use surv::{Outcome, Surv, SurvBuf, SurvBufBuilder, SurvData, SurvDataBuilder};

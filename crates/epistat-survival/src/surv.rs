@@ -1,0 +1,607 @@
+//! The survival data every estimator takes: follow-up intervals with an
+//! event status, and optional weights, strata, clusters, subject ids and
+//! initial states.
+//!
+//! [`SurvData`] is the Rust counterpart of R's `Surv()` object plus the
+//! columns a model formula adds around it (`strata()`, `cluster()`, `id`,
+//! case weights). It borrows its columns, so building one copies nothing
+//! unless a code column has to be recoded. [`SurvBuf`] owns the same columns
+//! for callers that keep data between calls.
+//!
+//! # What a row means
+//!
+//! Row `i` says that subject `id[i]` was at risk during the interval
+//! `(start[i], stop[i]]`. At `stop[i]` the status is `status[i]`: 0 means the
+//! row ended without an event, and a code `k` in `1..=n_codes` means that
+//! event, cause or state `k` happened. With `start` absent, every row is at
+//! risk from the beginning of follow-up, with no delayed entry.
+//!
+//! # Mapping to R
+//!
+//! | `Surv()` type | `start` | `n_codes` | `id`, `istate` |
+//! |---|---|---|---|
+//! | `right` | absent | 1 | not used |
+//! | `counting` | present | 1 | `id` optional |
+//! | `mright` | absent | number of states or causes | `istate` optional |
+//! | `mcounting` | present | number of states or causes | `id` and `istate` usual |
+//!
+//! Competing risks are `n_codes > 1` with the cause as status. R's factor
+//! status for `mright` has the censoring level first and the events after it,
+//! which is the same numbering. A binary status of 0 and 1 is `n_codes = 1`.
+//! Left and interval censoring are not represented yet. [`Outcome`] is the
+//! place they will go, so the follow-up case is read through
+//! [`SurvData::followup`].
+//!
+//! # Checks at build time
+//!
+//! All checks run once, when the builder's `build` is called, so an estimator
+//! and the loops around it never repeat them. Each is an error, never a
+//! repair, and names the count of offending rows and the first row number
+//! (from 0).
+//!
+//! - Columns of different lengths, since rows would not line up.
+//! - More rows than `u32::MAX`, since row indices are `u32` downstream.
+//! - `n_codes` of 0, which leaves no code for an event.
+//! - A start, stop or weight that is NaN or infinite. An infinite stop has no
+//!   use in an estimator, and a missing start is expressed by leaving the
+//!   column out, so neither needs an infinity. Missing values must be dropped
+//!   or resolved by the caller.
+//! - A negative weight. Weight 0 is allowed: the row stays in
+//!   [`n_rows`](SurvData::n_rows) and not in [`n_used`](SurvData::n_used), and
+//!   a fit drops it.
+//! - A status below 0 or above `n_codes`.
+//! - An initial state above `n_codes`. 0 means unknown.
+//! - A row with `start >= stop`. Such an interval has no time at risk.
+//!   Whether two stops count as the same time is a question for the tie
+//!   policy and is not decided here.
+//!
+//! # What is not checked here
+//!
+//! Relations between rows are not checked: overlapping intervals of one id,
+//! gaps, a state that does not continue from the previous row's status, or an
+//! initial state that contradicts the row before. Those are the structural
+//! checks of R's `survcheck()` and come later, with the tie policy of
+//! `aeqSurv()`. Times are used as given.
+//!
+//! # Strata, clusters and ids
+//!
+//! Stratum, cluster and id take any `u32` codes. At build time each is
+//! recoded to dense codes `0..k` in sorted order of the original codes, so a
+//! sum over levels runs in code order whatever the caller's numbering. A
+//! column that is already exactly `0..k` is used as given, detected in one
+//! pass. A column that is not is recoded into an owned `Vec<u32>`, 4 bytes
+//! per row, which is 40 MB per column at 10^7 rows. While recoding, a lookup
+//! table of up to as many entries is held, so the peak is about 80 MB per
+//! sparse column. [`SurvData::n_strata`] and its two siblings give `k`, and 0
+//! when the column is absent. The recoded codes are what the accessors
+//! return, so the original codes cannot be recovered from them. `istate` is
+//! a state, not a grouping, and is not recoded.
+//!
+//! # Borrowed or owned times
+//!
+//! The follow-up times are held as copy-on-write slices, so a later step that
+//! has to change times, as the tie policy does, can replace them without
+//! copying status, weights or the codes. Nothing in this module modifies
+//! them.
+
+use std::borrow::Cow;
+
+use crate::check::{check_lengths, check_row_count};
+use crate::error::Result;
+
+mod checks;
+mod dense;
+
+use dense::Dense;
+
+/// Follow-up intervals with an event status.
+///
+/// Built only through [`SurvData`], which checks the columns. See the
+/// [module documentation](self) for what the columns mean.
+#[derive(Debug, Clone)]
+pub struct Surv<'a> {
+    start: Option<Cow<'a, [f64]>>,
+    stop: Cow<'a, [f64]>,
+    status: &'a [i32],
+    n_codes: u32,
+}
+
+impl<'a> Surv<'a> {
+    /// Start of each risk interval, or `None` when every row is at risk from
+    /// the beginning of follow-up.
+    #[must_use]
+    pub fn start(&self) -> Option<&[f64]> {
+        self.start.as_deref()
+    }
+
+    /// End of each risk interval, where the status applies.
+    #[must_use]
+    pub fn stop(&self) -> &[f64] {
+        &self.stop
+    }
+
+    /// 0 for censored, `k` in `1..=n_codes` for the event, cause or state
+    /// entered.
+    #[must_use]
+    pub fn status(&self) -> &'a [i32] {
+        self.status
+    }
+
+    /// The number of event codes. 1 is a binary status.
+    #[must_use]
+    pub fn n_codes(&self) -> u32 {
+        self.n_codes
+    }
+
+    /// The number of rows.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.stop.len()
+    }
+
+    /// Whether there are no rows.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.stop.is_empty()
+    }
+}
+
+/// The outcome of a survival dataset.
+///
+/// Only follow-up data exists today. The enum is non-exhaustive so that left
+/// and interval censoring can be added without breaking a caller's `match`.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Outcome<'a> {
+    /// Risk intervals with an event status, as R's `right`, `counting`,
+    /// `mright` and `mcounting` types.
+    Followup(Surv<'a>),
+}
+
+/// Survival data: an outcome and the columns that go with it.
+///
+/// Build one with [`SurvData::builder`]. The columns are borrowed for `'a`.
+#[derive(Debug, Clone)]
+pub struct SurvData<'a> {
+    outcome: Outcome<'a>,
+    weight: Option<&'a [f64]>,
+    stratum: Option<Dense<'a>>,
+    cluster: Option<Dense<'a>>,
+    id: Option<Dense<'a>>,
+    istate: Option<&'a [u32]>,
+    n_rows: usize,
+    n_used: usize,
+}
+
+impl<'a> SurvData<'a> {
+    /// Start a builder from the two required columns.
+    pub fn builder(stop: &'a [f64], status: &'a [i32]) -> SurvDataBuilder<'a> {
+        SurvDataBuilder {
+            columns: Columns {
+                start: None,
+                stop,
+                status,
+                n_codes: 1,
+                weight: None,
+                stratum: None,
+                cluster: None,
+                id: None,
+                istate: None,
+            },
+        }
+    }
+
+    /// The outcome, for code that handles every kind.
+    #[must_use]
+    pub fn outcome(&self) -> &Outcome<'a> {
+        &self.outcome
+    }
+
+    /// The follow-up outcome.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`](crate::Error::Input) when the outcome is not follow-up data. Not possible
+    /// yet, since no other kind exists.
+    pub fn followup(&self) -> Result<&Surv<'a>> {
+        match &self.outcome {
+            Outcome::Followup(surv) => Ok(surv),
+        }
+    }
+
+    /// Case weights, or `None` when every row has weight 1.
+    #[must_use]
+    pub fn weight(&self) -> Option<&[f64]> {
+        self.weight
+    }
+
+    /// Dense stratum codes `0..n_strata`, in sorted order of the given codes.
+    #[must_use]
+    pub fn stratum(&self) -> Option<&[u32]> {
+        self.stratum.as_ref().map(|dense| &*dense.codes)
+    }
+
+    /// Dense cluster codes `0..n_clusters`, in sorted order of the given codes.
+    #[must_use]
+    pub fn cluster(&self) -> Option<&[u32]> {
+        self.cluster.as_ref().map(|dense| &*dense.codes)
+    }
+
+    /// Dense subject codes `0..n_ids`, in sorted order of the given ids.
+    #[must_use]
+    pub fn id(&self) -> Option<&[u32]> {
+        self.id.as_ref().map(|dense| &*dense.codes)
+    }
+
+    /// The state at the start of each row, `1..=n_codes`, 0 for unknown.
+    #[must_use]
+    pub fn istate(&self) -> Option<&[u32]> {
+        self.istate
+    }
+
+    /// The number of strata, 0 when there is no stratum column.
+    #[must_use]
+    pub fn n_strata(&self) -> usize {
+        self.stratum.as_ref().map_or(0, |dense| dense.levels)
+    }
+
+    /// The number of clusters, 0 when there is no cluster column.
+    #[must_use]
+    pub fn n_clusters(&self) -> usize {
+        self.cluster.as_ref().map_or(0, |dense| dense.levels)
+    }
+
+    /// The number of distinct ids, 0 when there is no id column.
+    #[must_use]
+    pub fn n_ids(&self) -> usize {
+        self.id.as_ref().map_or(0, |dense| dense.levels)
+    }
+
+    /// The number of rows, including rows of weight 0.
+    #[must_use]
+    pub fn n_rows(&self) -> usize {
+        self.n_rows
+    }
+
+    /// The number of rows with positive weight, which is all rows when there
+    /// are no weights.
+    #[must_use]
+    pub fn n_used(&self) -> usize {
+        self.n_used
+    }
+}
+
+/// The columns as given, before any check.
+#[derive(Clone, Copy)]
+struct Columns<'a> {
+    start: Option<&'a [f64]>,
+    stop: &'a [f64],
+    status: &'a [i32],
+    n_codes: u32,
+    weight: Option<&'a [f64]>,
+    stratum: Option<&'a [u32]>,
+    cluster: Option<&'a [u32]>,
+    id: Option<&'a [u32]>,
+    istate: Option<&'a [u32]>,
+}
+
+/// What a successful check leaves behind.
+struct Checked<'a> {
+    n_rows: usize,
+    n_used: usize,
+    stratum: Option<Dense<'a>>,
+    cluster: Option<Dense<'a>>,
+    id: Option<Dense<'a>>,
+}
+
+impl<'a> Columns<'a> {
+    /// Run every rule once and recode the grouping columns.
+    ///
+    /// Cheap structural rules (lengths, row count, `n_codes`) run first, so
+    /// the later rules can index every column by row.
+    fn check(&self) -> Result<Checked<'a>> {
+        let mut lengths = vec![("stop", self.stop.len()), ("status", self.status.len())];
+        let optional = [
+            ("start", self.start.map(<[f64]>::len)),
+            ("weight", self.weight.map(<[f64]>::len)),
+            ("stratum", self.stratum.map(<[u32]>::len)),
+            ("cluster", self.cluster.map(<[u32]>::len)),
+            ("id", self.id.map(<[u32]>::len)),
+            ("istate", self.istate.map(<[u32]>::len)),
+        ];
+        lengths.extend(
+            optional
+                .into_iter()
+                .filter_map(|(name, len)| Some((name, len?))),
+        );
+        check_lengths(&lengths)?;
+        check_row_count(self.stop.len())?;
+        checks::check_n_codes(self.n_codes)?;
+        if let Some(start) = self.start {
+            checks::check_finite(start, "start")?;
+        }
+        checks::check_finite(self.stop, "stop")?;
+        if let Some(weight) = self.weight {
+            checks::check_finite(weight, "weight")?;
+            checks::check_weights(weight)?;
+        }
+        checks::check_status(self.status, self.n_codes)?;
+        if let Some(istate) = self.istate {
+            checks::check_istate(istate, self.n_codes)?;
+        }
+        if let Some(start) = self.start {
+            checks::check_intervals(start, self.stop)?;
+        }
+        let n_rows = self.stop.len();
+        let n_used = self
+            .weight
+            .map_or(n_rows, |weight| weight.iter().filter(|&&w| w > 0.0).count());
+        Ok(Checked {
+            n_rows,
+            n_used,
+            stratum: self.stratum.map(Dense::new),
+            cluster: self.cluster.map(Dense::new),
+            id: self.id.map(Dense::new),
+        })
+    }
+}
+
+/// Collects the columns of a [`SurvData`] and checks them in
+/// [`build`](Self::build).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct SurvDataBuilder<'a> {
+    columns: Columns<'a>,
+}
+
+impl std::fmt::Debug for Columns<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Columns")
+            .field("rows", &self.stop.len())
+            .field("n_codes", &self.n_codes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> SurvDataBuilder<'a> {
+    /// The start of each risk interval. Leave it out for no delayed entry.
+    pub fn start(mut self, start: &'a [f64]) -> Self {
+        self.columns.start = Some(start);
+        self
+    }
+
+    /// The number of event codes in status. The default is 1.
+    pub fn n_codes(mut self, n_codes: u32) -> Self {
+        self.columns.n_codes = n_codes;
+        self
+    }
+
+    /// Case weights. Leave them out for weight 1 on every row.
+    pub fn weight(mut self, weight: &'a [f64]) -> Self {
+        self.columns.weight = Some(weight);
+        self
+    }
+
+    /// Stratum codes, any `u32` values.
+    pub fn stratum(mut self, stratum: &'a [u32]) -> Self {
+        self.columns.stratum = Some(stratum);
+        self
+    }
+
+    /// Cluster codes, any `u32` values.
+    pub fn cluster(mut self, cluster: &'a [u32]) -> Self {
+        self.columns.cluster = Some(cluster);
+        self
+    }
+
+    /// Subject codes, any `u32` values.
+    pub fn id(mut self, id: &'a [u32]) -> Self {
+        self.columns.id = Some(id);
+        self
+    }
+
+    /// The state at the start of each row, `1..=n_codes`, 0 for unknown.
+    pub fn istate(mut self, istate: &'a [u32]) -> Self {
+        self.columns.istate = Some(istate);
+        self
+    }
+
+    /// Check the columns and recode stratum, cluster and id.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`](crate::Error::Input) for the first rule that fails, in the order of the
+    /// list in the [module documentation](self).
+    pub fn build(self) -> Result<SurvData<'a>> {
+        let c = self.columns;
+        let checked = c.check()?;
+        Ok(SurvData {
+            outcome: Outcome::Followup(Surv {
+                start: c.start.map(Cow::Borrowed),
+                stop: Cow::Borrowed(c.stop),
+                status: c.status,
+                n_codes: c.n_codes,
+            }),
+            weight: c.weight,
+            stratum: checked.stratum,
+            cluster: checked.cluster,
+            id: checked.id,
+            istate: c.istate,
+            n_rows: checked.n_rows,
+            n_used: checked.n_used,
+        })
+    }
+}
+
+/// Survival data that owns its columns.
+///
+/// Built with [`SurvBuf::builder`], which runs the same checks as
+/// [`SurvData::builder`], so [`as_data`](Self::as_data) cannot fail and costs
+/// no copy or check. The grouping columns are stored already recoded.
+#[derive(Debug, Clone)]
+pub struct SurvBuf {
+    start: Option<Vec<f64>>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    n_codes: u32,
+    weight: Option<Vec<f64>>,
+    stratum: Option<(Vec<u32>, usize)>,
+    cluster: Option<(Vec<u32>, usize)>,
+    id: Option<(Vec<u32>, usize)>,
+    istate: Option<Vec<u32>>,
+    n_used: usize,
+}
+
+impl SurvBuf {
+    /// Start a builder from the two required columns.
+    pub fn builder(stop: Vec<f64>, status: Vec<i32>) -> SurvBufBuilder {
+        SurvBufBuilder {
+            start: None,
+            stop,
+            status,
+            n_codes: 1,
+            weight: None,
+            stratum: None,
+            cluster: None,
+            id: None,
+            istate: None,
+        }
+    }
+
+    /// A borrowed view of the data. The checks ran when the buffer was built.
+    #[must_use]
+    pub fn as_data(&self) -> SurvData<'_> {
+        SurvData {
+            outcome: Outcome::Followup(Surv {
+                start: self.start.as_deref().map(Cow::Borrowed),
+                stop: Cow::Borrowed(&self.stop),
+                status: &self.status,
+                n_codes: self.n_codes,
+            }),
+            weight: self.weight.as_deref(),
+            stratum: borrow_dense(self.stratum.as_ref()),
+            cluster: borrow_dense(self.cluster.as_ref()),
+            id: borrow_dense(self.id.as_ref()),
+            istate: self.istate.as_deref(),
+            n_rows: self.stop.len(),
+            n_used: self.n_used,
+        }
+    }
+}
+
+fn borrow_dense(column: Option<&(Vec<u32>, usize)>) -> Option<Dense<'_>> {
+    column.map(|(codes, levels)| Dense {
+        codes: Cow::Borrowed(codes.as_slice()),
+        levels: *levels,
+    })
+}
+
+/// Collects the columns of a [`SurvBuf`] and checks them in
+/// [`build`](Self::build).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct SurvBufBuilder {
+    start: Option<Vec<f64>>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    n_codes: u32,
+    weight: Option<Vec<f64>>,
+    stratum: Option<Vec<u32>>,
+    cluster: Option<Vec<u32>>,
+    id: Option<Vec<u32>>,
+    istate: Option<Vec<u32>>,
+}
+
+impl SurvBufBuilder {
+    /// The start of each risk interval. Leave it out for no delayed entry.
+    pub fn start(mut self, start: Vec<f64>) -> Self {
+        self.start = Some(start);
+        self
+    }
+
+    /// The number of event codes in status. The default is 1.
+    pub fn n_codes(mut self, n_codes: u32) -> Self {
+        self.n_codes = n_codes;
+        self
+    }
+
+    /// Case weights. Leave them out for weight 1 on every row.
+    pub fn weight(mut self, weight: Vec<f64>) -> Self {
+        self.weight = Some(weight);
+        self
+    }
+
+    /// Stratum codes, any `u32` values.
+    pub fn stratum(mut self, stratum: Vec<u32>) -> Self {
+        self.stratum = Some(stratum);
+        self
+    }
+
+    /// Cluster codes, any `u32` values.
+    pub fn cluster(mut self, cluster: Vec<u32>) -> Self {
+        self.cluster = Some(cluster);
+        self
+    }
+
+    /// Subject codes, any `u32` values.
+    pub fn id(mut self, id: Vec<u32>) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// The state at the start of each row, `1..=n_codes`, 0 for unknown.
+    pub fn istate(mut self, istate: Vec<u32>) -> Self {
+        self.istate = Some(istate);
+        self
+    }
+
+    /// Check the columns, recode stratum, cluster and id, and keep them.
+    ///
+    /// A grouping column that was already dense is kept as given, without a
+    /// copy.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`](crate::Error::Input) for the first rule that fails, as for
+    /// [`SurvDataBuilder::build`].
+    pub fn build(self) -> Result<SurvBuf> {
+        let columns = Columns {
+            start: self.start.as_deref(),
+            stop: &self.stop,
+            status: &self.status,
+            n_codes: self.n_codes,
+            weight: self.weight.as_deref(),
+            stratum: self.stratum.as_deref(),
+            cluster: self.cluster.as_deref(),
+            id: self.id.as_deref(),
+            istate: self.istate.as_deref(),
+        };
+        let checked = columns.check()?;
+        let n_used = checked.n_used;
+        let recode = |dense: Option<Dense<'_>>| dense.map(Dense::into_recoded);
+        let stratum = recode(checked.stratum);
+        let cluster = recode(checked.cluster);
+        let id = recode(checked.id);
+        let keep = |recoded: Option<(Option<Vec<u32>>, usize)>, raw: Option<Vec<u32>>| {
+            let (recoded, levels) = recoded?;
+            // A column without a recoding was dense and is kept as given.
+            let codes = recoded.or(raw)?;
+            Some((codes, levels))
+        };
+        Ok(SurvBuf {
+            stratum: keep(stratum, self.stratum),
+            cluster: keep(cluster, self.cluster),
+            id: keep(id, self.id),
+            start: self.start,
+            stop: self.stop,
+            status: self.status,
+            n_codes: self.n_codes,
+            weight: self.weight,
+            istate: self.istate,
+            n_used,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests;
