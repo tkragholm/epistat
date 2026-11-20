@@ -1,6 +1,7 @@
 //! Cox fits on a design matrix checked against R 4.6.2's `survival::coxph`.
 
-use epistat_survival::cox::{CoxDesign, CoxModelFit, Ties, cox_score_residuals, fit_cox};
+use epistat_survival::SurvData;
+use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit, score_residuals};
 use epistat_testkit::{load_json, na_f64_vec};
 use faer::Mat;
 use serde::Deserialize;
@@ -95,39 +96,33 @@ fn fit_of(reference: &Reference, r: &RFit) -> (CoxModelFit, Vec<Option<Vec<f64>>
         .collect();
     let rows = reference.stop.len();
     let x = Mat::from_fn(rows, indices.len(), |i, j| reference.columns[i][indices[j]]);
-    let is_event: Vec<bool> = reference.event.iter().map(|&e| e == 1).collect();
-    let start = if r.use_start {
-        reference.start.clone()
-    } else {
-        vec![f64::NEG_INFINITY; rows]
-    };
-    let stratum = if r.use_strata {
-        reference.stratum.clone()
-    } else {
-        vec![0; rows]
-    };
-    let weight = if r.use_weights {
-        reference.weight.clone()
-    } else {
-        vec![1.0; rows]
-    };
-    let design = CoxDesign {
-        x: x.as_ref(),
-        is_event: &is_event,
-        start: &start,
-        stop: &reference.stop,
-        weight: &weight,
-        stratum: &stratum,
+    let status: Vec<i32> = reference.event.iter().map(|&e| i32::from(e)).collect();
+    let mut builder = SurvData::builder(&reference.stop, &status);
+    if r.use_start {
+        builder = builder.start(&reference.start);
+    }
+    if r.use_strata {
+        builder = builder.stratum(&reference.stratum);
+    }
+    if r.use_weights {
+        builder = builder.weight(&reference.weight);
+    }
+    if r.use_cluster {
+        builder = builder.cluster(&reference.id);
+    }
+    let data = builder.build().unwrap();
+    let opts = CoxOptions {
         ties: if r.ties == "efron" {
             Ties::Efron
         } else {
             Ties::Breslow
         },
-        cluster: r.use_cluster.then_some(reference.id.as_slice()),
+        ..CoxOptions::default()
     };
-    let fit = fit_cox(&design).unwrap();
-    let residuals = cox_score_residuals(&design, &fit.coefficients).unwrap();
-    (fit, residuals)
+    let model = fit(&data, x.as_ref(), &opts).unwrap();
+    assert_eq!(model.n_rows, rows, "{}", r.name);
+    let residuals = score_residuals(&data, x.as_ref(), &model.coefficients, &opts).unwrap();
+    (model, residuals)
 }
 
 /// The largest deviation of a covariance matrix from R's, in units of
