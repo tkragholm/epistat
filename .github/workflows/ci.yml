@@ -28,6 +28,9 @@ jobs:
           components: clippy, rustfmt
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   # The committed lock is ignored: a fresh resolution is what a consumer gets.
   # Rust 1.89 is only for `epistat-linalg`'s `nightly` feature, which makes
