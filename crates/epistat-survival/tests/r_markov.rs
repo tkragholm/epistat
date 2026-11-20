@@ -1,4 +1,4 @@
-//! The Titman-Putter test checked against `MarkovTest` of mstate 0.3.3 (R
+//! `markov::test`, the Titman-Putter test, checked against `MarkovTest` of mstate 0.3.3 (R
 //! 4.6.2), the function its author wrote, on a four-state process with
 //! re-entries and tied exit times. `tests/data/markov.R` makes the data and
 //! the reference, and records the versions.
@@ -27,7 +27,8 @@
 //! normalised trace, the variance and the events after each landmark, and the
 //! occupancy counts come from a plain loop in the script.
 
-use epistat_survival::markov::{Stays, markov_test};
+use epistat_survival::SurvData;
+use epistat_survival::markov::{Options, test};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -73,6 +74,53 @@ struct Case {
     n_at_risk: usize,
 }
 
+/// The stays as follow-up data. The reference gives the state of each stay as
+/// its position among the qualifying states, so position `j` is the status
+/// code `j + 1`, and the code `q + 1` is the one state that is not
+/// qualifying, which the tested transition may end in. A stay ends in the state of the
+/// next stay of its person, and in the target when it is the last and the
+/// reference marks an event. The target is the state that the stays at risk
+/// move to.
+struct Follow {
+    start: Vec<f64>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    istate: Vec<u32>,
+    person: Vec<u32>,
+    target: u32,
+}
+
+fn follow(stays: &RStays, q: usize) -> Follow {
+    let n = stays.person.len();
+    let other = u32::try_from(q).unwrap() + 1;
+    let code = |row: usize| stays.state[row] + 1;
+    let next = |row: usize| {
+        (row + 1 < n && stays.person[row + 1] == stays.person[row]).then(|| code(row + 1))
+    };
+    let mut targets: Vec<u32> = (0..n)
+        .filter(|&row| stays.state[row] == 0 && stays.event[row] == 1.0)
+        .map(|row| next(row).unwrap_or(other))
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    assert_eq!(targets.len(), 1, "the stays at risk end in one target");
+    let target = targets[0];
+    let status = (0..n)
+        .map(|row| {
+            let reached = next(row).unwrap_or(if stays.event[row] == 1.0 { target } else { 0 });
+            i32::try_from(reached).unwrap()
+        })
+        .collect();
+    Follow {
+        start: stays.start.clone(),
+        stop: stays.stop.clone(),
+        status,
+        istate: (0..n).map(code).collect(),
+        person: stays.person.clone(),
+        target,
+    }
+}
+
 /// Unit roundoff of a double.
 const U: f64 = f64::EPSILON / 2.0;
 
@@ -102,8 +150,35 @@ fn markov_test_matches_mstate() {
         let k = case.grid.len();
         let q = case.qualset.len();
         let s = &case.stays;
-        let stays = Stays::new(&s.person, &s.start, &s.stop, &s.state, &s.event).unwrap();
-        let out = markov_test(&stays, &case.grid, q, &seeds).unwrap();
+        let f = follow(s, q);
+        let data = SurvData::builder(&f.stop, &f.status)
+            .start(&f.start)
+            .n_codes(u32::try_from(q).unwrap() + 1)
+            .id(&f.person)
+            .istate(&f.istate)
+            .build()
+            .unwrap();
+        let qualifying: Vec<u32> = (1..=u32::try_from(q).unwrap()).collect();
+        let out = test(
+            &data,
+            &qualifying,
+            f.target,
+            &case.grid,
+            &seeds,
+            &Options::default(),
+        )
+        .unwrap();
+        assert_eq!(out.n_rows, s.person.len(), "{name}");
+        assert_eq!(out.n_used, s.person.len(), "{name}");
+        // The events that the status gives are the reference's, at the stays
+        // at risk.
+        for row in (0..s.person.len()).filter(|&row| s.state[row] == 0) {
+            assert_eq!(
+                f64::from(u8::from(u32::try_from(f.status[row]).unwrap() == f.target)),
+                s.event[row],
+                "{name}: event of stay {row}"
+            );
+        }
 
         // Deterministic outputs are compared in the order of the Rust states.
         let by_code = |m: &Vec<Vec<f64>>, landmark: usize, code: usize| {

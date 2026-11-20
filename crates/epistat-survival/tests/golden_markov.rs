@@ -9,7 +9,17 @@
 //! and landmarks, tied exit times, delayed entry, sparse person codes, stays
 //! in states that do not qualify, stays of one person that overlap, slots of
 //! zero variance, no stays at risk, no replicates and the refusals.
+//!
+//! The bits depend on the platform's `ln` and `exp`, which come from its maths
+//! library, so the test runs only on the target it was recorded on, aarch64
+//! macOS. CI's macOS runner is that target. Thread-count independence, which
+//! does not depend on the platform, is checked everywhere by the thread tests.
 
+#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#![expect(
+    deprecated,
+    reason = "the deprecated functions are what this test pins"
+)]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"

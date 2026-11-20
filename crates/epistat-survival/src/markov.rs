@@ -42,6 +42,28 @@
 //! landmarks. With `B` replicates, the p-value is `(1 + #{replicates at or above
 //! the observed statistic}) / (B + 1)`.
 //!
+//! # Input
+//!
+//! [`fn@test`] reads a [`SurvData`]. A row is a stay of the subject given by its
+//! id. The state of the stay is its `istate`, as resolved by
+//! [`survcheck`], and it occupies the qualifying
+//! state at its position in the list `qualifying`. A stay in a state that is
+//! not in the list occupies no qualifying state, so it is never at risk and
+//! never counted as occupied. The stays of `qualifying[0]` are the ones at
+//! risk, and the event of a stay is `status == target`. The data need an id
+//! and a start column and the starting state of every row. The rows are
+//! checked with `survcheck` and the policy for multi-state data, after the tie
+//! rule of [`TimeFix`] (`survival::aeqSurv` by default), so overlaps, jumps
+//! and teleports are errors and gaps are allowed.
+//!
+//! The test is unweighted. A weight is 0, which leaves the row out, or 1. The
+//! result reports `n_rows`, all rows, and `n_used`, the rows of weight 1.
+//!
+//! [`Stays`] and [`markov_test`] take the same columns as slices, with the
+//! state already mapped to its index among the qualifying states, and are
+//! deprecated. They run the same code, with exact ties and without the
+//! structural checks, and give the same bits as before.
+//!
 //! # Arithmetic
 //!
 //! The sums of traces, variances and scores are compensated. The cumulative
@@ -96,7 +118,7 @@
 
 #![expect(
     clippy::cast_possible_truncation,
-    reason = "the constructor of Stays checks that the row count fits in u32"
+    reason = "the row count is checked to fit in u32 before the rows are read"
 )]
 
 use std::collections::HashMap;
@@ -107,6 +129,9 @@ use rayon::prelude::*;
 
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::error::{Error, Result};
+use crate::surv::SurvData;
+use crate::survcheck::{Policy, survcheck};
+use crate::timefix::TimeFix;
 
 /// For each query time, the sum of `values` over the risk set `entry < t <= exit`.
 ///
@@ -245,15 +270,13 @@ const NOT_QUALIFYING: u32 = u32::MAX;
 
 /// The interval data the test reads: every stay of every individual, in input
 /// order.
+#[deprecated(since = "0.3.0", note = "use `markov::test` with a `SurvData`")]
 #[derive(Debug, Clone, Copy)]
 pub struct Stays<'a> {
-    person: &'a [u32],
-    start: &'a [f64],
-    stop: &'a [f64],
-    state: &'a [u32],
-    event: &'a [f64],
+    rows: Rows<'a>,
 }
 
+#[expect(deprecated, reason = "the methods of the deprecated type itself")]
 impl<'a> Stays<'a> {
     /// The stays, one entry per stay. `person` is the dense code of the
     /// individual. `state` is the index of the state occupied during the stay
@@ -284,13 +307,28 @@ impl<'a> Stays<'a> {
         refuse_non_finite(start, "start")?;
         refuse_non_finite(stop, "stop")?;
         Ok(Self {
-            person,
-            start,
-            stop,
-            state,
-            event,
+            rows: Rows {
+                person,
+                start,
+                stop,
+                state,
+                event,
+            },
         })
     }
+}
+
+/// The stays as five columns of the same length. The state is the index among
+/// the qualifying states, and a value at or above their count is a state that
+/// does not qualify. The deprecated entry point and the one that reads a
+/// [`SurvData`] end in the code that reads this.
+#[derive(Debug, Clone, Copy)]
+struct Rows<'a> {
+    person: &'a [u32],
+    start: &'a [f64],
+    stop: &'a [f64],
+    state: &'a [u32],
+    event: &'a [f64],
 }
 
 /// One byte per (stay at risk, landmark, qualifying state): whether the stay's
@@ -301,7 +339,7 @@ impl<'a> Stays<'a> {
 /// indicator records where the individual was before entering the origin. When
 /// several stays of one individual cover a landmark, the last in input order
 /// counts.
-fn occupancy(stays: &Stays<'_>, at_risk: &[usize], grid: &[f64], qualifying: usize) -> Vec<u8> {
+fn occupancy(stays: &Rows<'_>, at_risk: &[usize], grid: &[f64], qualifying: usize) -> Vec<u8> {
     let n_people = stays
         .person
         .iter()
@@ -349,7 +387,7 @@ pub struct MarkovTest {
 
 /// The observed traces, their variance, the summary statistic and the p-value,
 /// with one wild-bootstrap replicate per seed.
-fn titman_putter(stays: &Stays<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> MarkovTest {
+fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> MarkovTest {
     let at_risk: Vec<usize> = (0..stays.state.len())
         .filter(|&row| stays.state[row] == 0)
         .collect();
@@ -518,12 +556,19 @@ fn titman_putter(stays: &Stays<'_>, grid: &[f64], qualifying: usize, seeds: &[u6
 /// # Errors
 ///
 /// [`Error::Input`] when there is no qualifying state or no landmark.
+#[deprecated(since = "0.3.0", note = "use `markov::test` with a `SurvData`")]
+#[expect(deprecated, reason = "takes the deprecated `Stays`")]
 pub fn markov_test(
     stays: &Stays<'_>,
     grid: &[f64],
     qualifying: usize,
     seeds: &[u64],
 ) -> Result<MarkovTest> {
+    run(&stays.rows, grid, qualifying, seeds)
+}
+
+/// The test of [`markov_test`], on the stays as columns.
+fn run(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> Result<MarkovTest> {
     if qualifying == 0 || grid.is_empty() {
         return Err(Error::input(
             "the test needs at least one qualifying state and one landmark",
@@ -532,7 +577,169 @@ pub fn markov_test(
     Ok(titman_putter(stays, grid, qualifying, seeds))
 }
 
+/// Settings of [`fn@test`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Options {
+    /// How times that differ by rounding error are treated before the test.
+    /// `survival::aeqSurv` by default.
+    pub timefix: TimeFix,
+}
+
+/// The result of [`fn@test`]. Per-landmark-and-state values are flattened
+/// `landmark * qualifying + state`, where state `j` is the status code
+/// `qualifying[j]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Test {
+    /// The trace `Z_j(s)`, `grid * qualifying` values.
+    pub trace: Vec<f64>,
+    /// The variance estimate `V_j(s)`, `grid * qualifying` values.
+    pub variance: Vec<f64>,
+    /// Stays at risk whose individual occupied the state at the landmark,
+    /// `grid * qualifying` values.
+    pub n_occupied: Vec<f64>,
+    /// Transitions under test after each landmark, `grid` values.
+    pub n_events_after: Vec<f64>,
+    /// The statistic of each qualifying state, `qualifying` values.
+    pub statistic: Vec<f64>,
+    /// The wild-bootstrap p-value of each qualifying state, `qualifying` values,
+    /// `None` without replicates.
+    pub p_value: Vec<Option<f64>>,
+    /// The qualifying states as the caller gave them, which label the columns
+    /// of the values above. The first is the origin of the transition.
+    pub qualifying: Vec<u32>,
+    /// The number of rows of the data, including rows of weight 0.
+    pub n_rows: usize,
+    /// The number of rows used, which are the rows of weight 1.
+    pub n_used: usize,
+}
+
+/// The Titman-Putter test of the transition from `qualifying[0]` to `target`,
+/// for follow-up data with several states.
+///
+/// `qualifying` lists the states a person may have occupied at a landmark, the
+/// origin of the transition first, as status codes in `1..=n_codes` without
+/// repeats. `target` is the status code that the transition ends in. `grid` holds
+/// the landmarks, and there is one wild-bootstrap replicate per entry of
+/// `seeds`, whose multipliers come from the seed. See [`Test`] for what comes
+/// back and the module documentation for the method and for what the data
+/// supply.
+///
+/// A landmark and state whose variance is not positive adds 0 to the statistic
+/// and to every replicate, which drops the slot from the sum. The mean is still
+/// taken over all landmarks.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the data have no id or start column, when a row has no
+/// starting state, when the rows of a subject overlap or jump or teleport
+/// between states, when the tie rule fails, when a weight is neither 0 nor 1,
+/// when no row has weight 1, when `qualifying` is empty, has a repeat or a code
+/// outside `1..=n_codes`, when `target` is outside `1..=n_codes`, or when the
+/// grid is empty.
+#[expect(clippy::float_cmp, reason = "a weight of 0 or 1 is exact")]
+pub fn test(
+    data: &SurvData<'_>,
+    qualifying: &[u32],
+    target: u32,
+    grid: &[f64],
+    seeds: &[u64],
+    opts: &Options,
+) -> Result<Test> {
+    let data = data.clone().with_timefix(opts.timefix)?;
+    let check = survcheck(&data)?;
+    check.enforce(Policy::for_data(&data))?;
+    let surv = data.followup()?;
+    let n_codes = surv.n_codes();
+    if qualifying.is_empty() || grid.is_empty() {
+        return Err(Error::input(
+            "the test needs at least one qualifying state and one landmark",
+        ));
+    }
+    if let Some(&code) = qualifying.iter().find(|&&code| code == 0 || code > n_codes) {
+        return Err(Error::input(format!(
+            "qualifying state {code} is outside 1..={n_codes}"
+        )));
+    }
+    if target == 0 || target > n_codes {
+        return Err(Error::input(format!(
+            "the target state {target} is outside 1..={n_codes}"
+        )));
+    }
+    // Each code with its position among the qualifying states, by code.
+    let mut positions: Vec<(u32, u32)> = qualifying.iter().copied().zip(0_u32..).collect();
+    positions.sort_unstable();
+    if positions.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(Error::input("the qualifying states must be distinct"));
+    }
+    let start = surv.start().ok_or_else(|| {
+        Error::input("the test needs the start of each interval, the start column")
+    })?;
+    let ids = data.id().ok_or_else(|| {
+        Error::input("the test needs an id column to know which rows belong together")
+    })?;
+    if let Some(weight) = data.weight() {
+        if weight.iter().any(|&w| w != 0.0 && w != 1.0) {
+            return Err(Error::input(
+                "the test is unweighted: a weight is 0, to leave the row out, or 1",
+            ));
+        }
+    }
+    if data.n_used() == 0 {
+        return Err(Error::input(
+            "no row has weight 1, so there is nothing to test",
+        ));
+    }
+
+    let status = surv.status();
+    let used = data.n_used();
+    let mut person = Vec::with_capacity(used);
+    let mut starts = Vec::with_capacity(used);
+    let mut stops = Vec::with_capacity(used);
+    let mut state = Vec::with_capacity(used);
+    let mut event = Vec::with_capacity(used);
+    for row in data.used_rows() {
+        let row = row as usize;
+        let code = check.istate[row];
+        if code == 0 {
+            return Err(Error::input(format!(
+                "row {row} has no starting state: give istate, or drop the row"
+            )));
+        }
+        person.push(ids[row]);
+        starts.push(start[row]);
+        stops.push(surv.stop()[row]);
+        state.push(
+            positions
+                .binary_search_by_key(&code, |&(code, _)| code)
+                .map_or(NOT_QUALIFYING, |at| positions[at].1),
+        );
+        event.push(f64::from(u8::from(
+            u32::try_from(status[row]).is_ok_and(|reached| reached == target),
+        )));
+    }
+    let stays = Rows {
+        person: &person,
+        start: &starts,
+        stop: &stops,
+        state: &state,
+        event: &event,
+    };
+    let done = run(&stays, grid, qualifying.len(), seeds)?;
+    Ok(Test {
+        trace: done.trace,
+        variance: done.variance,
+        n_occupied: done.n_occupied,
+        n_events_after: done.n_events_after,
+        statistic: done.statistic,
+        p_value: done.p_value,
+        qualifying: qualifying.to_vec(),
+        n_rows: data.n_rows(),
+        n_used: data.n_used(),
+    })
+}
+
 #[cfg(test)]
+#[expect(deprecated, reason = "the tests of the deprecated functions")]
 mod tests {
     use super::{Stays, markov_test, risk_set_sums, titman_putter};
 
@@ -575,7 +782,7 @@ mod tests {
         let state: Vec<u32> = FIXTURE.iter().map(|row| row.3).collect();
         let (start, stop, event) = (column(|r| r.1), column(|r| r.2), column(|r| r.4));
         let stays = Stays::new(&person, &start, &stop, &state, &event).unwrap();
-        let out = titman_putter(&stays, &[1.0, 2.0, 3.0], 2, &[]);
+        let out = titman_putter(&stays.rows, &[1.0, 2.0, 3.0], 2, &[]);
 
         let zbar = [
             [-1.110_223_024_625_16e-16, 0.0],
@@ -609,7 +816,7 @@ mod tests {
     fn occupancy_reads_the_stay_covering_the_landmark() {
         // Person 0 is in state 1 on (0, 2] and in the origin on (2, 5].
         let stays = Stays::new(&[0, 0], &[0.0, 2.0], &[2.0, 5.0], &[1, 0], &[0.0, 1.0]).unwrap();
-        let indicators = super::occupancy(&stays, &[1], &[2.0, 3.0], 2);
+        let indicators = super::occupancy(&stays.rows, &[1], &[2.0, 3.0], 2);
         // At 2 the first stay covers it (start < 2 <= stop); at 3 the second.
         assert_eq!(indicators, vec![0, 1, 1, 0]);
     }
