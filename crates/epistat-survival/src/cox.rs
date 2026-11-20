@@ -151,6 +151,14 @@ pub enum Ties {
     /// `survival::coxph`: the `k`-th of `d` tied events has the risk set less
     /// `k / d` of the weight of the tied events.
     Efron,
+    /// The exact partial likelihood, the discrete-time conditional logistic
+    /// likelihood: the `d` tied events at a time are one of the equally
+    /// likely sets of `d` rows from the risk set, each weighted by the product
+    /// of its risk scores. It is available in [`fit`] only, for case weights
+    /// of 1, without clusters, and without score residuals, as in `coxph`.
+    /// The cost at a time with `d` tied events among `n` at risk is
+    /// proportional to `d * n` times the square of the number of covariates.
+    Exact,
 }
 
 /// One Cox fit. See [`fit_cox_single_covariate`] for when it is degenerate.
@@ -445,10 +453,12 @@ impl Stratum {
                 self.dying_n[position],
                 self.dying_w[position] / f64::from(self.dying_n[position]),
             ),
+            Ties::Exact => unreachable!("exact ties are refused before the sweep"),
         };
         let spread = match ties {
             Ties::Breslow => 0.0,
             Ties::Efron => 1.0 / f64::from(count),
+            Ties::Exact => unreachable!("exact ties are refused before the sweep"),
         };
         (0..count).map(move |k| (weight, f64::from(k) * spread))
     }
@@ -562,8 +572,14 @@ impl Stratum {
 ///
 /// # Errors
 ///
-/// [`Error::Input`](crate::Error::Input) when the slices differ in length.
+/// [`Error::Input`](crate::Error::Input) when the slices differ in length or the
+/// ties are [`Ties::Exact`].
 pub fn fit_cox_single_covariate(data: &CoxData<'_>) -> Result<CoxFit> {
+    if data.ties == Ties::Exact {
+        return Err(crate::error::Error::input(
+            "ties: exact ties are fitted by `cox::fit`",
+        ));
+    }
     check_lengths(&[
         ("x", data.x.len()),
         ("is_event", data.is_event.len()),

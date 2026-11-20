@@ -1,5 +1,5 @@
-//! Cox regression on a design matrix, with Breslow or Efron ties, delayed
-//! entry, strata, case weights and a cluster-robust variance.
+//! Cox regression on a design matrix, with Breslow, Efron or exact ties,
+//! delayed entry, strata, case weights and a cluster-robust variance.
 //!
 //! The fit follows `survival::coxph` step by step: the same standardisation of
 //! the covariates, the same factorisation of the information matrix, the same
@@ -82,8 +82,65 @@
 //!
 //! Strata add their terms. A stratum with no event adds nothing.
 //!
-//! # Newton-Raphson with step halving
+//! # Exact ties
 //!
+//! `Ties::Exact` is the exact partial likelihood of `coxph(ties = "exact")`,
+//! the discrete-time conditional logistic likelihood \[6\]. At an event time
+//! the `d` tied events are taken to be one set of `d` rows out of the risk set
+//! `R(t)` of size `n`, each set `S` having the probability proportional to
+//! the product of its risk scores. With `r_j = exp(beta' x_j + o_j)`:
+//!
+//! ```text
+//! D_0 = sum over sets S of size d in R(t) of  prod over S of r_j
+//! D_1 = sum over sets S                       (sum over S of x_j) prod over S of r_j
+//! D_2 = sum over sets S                       (sum over S of x_j)(sum over S of x_j)' prod over S of r_j
+//! l(beta) = sum over t of [ sum over D(t) of beta' x + o  -  log D_0 ]
+//! U(beta) = sum over t of [ sum over D(t) of x  -  D_1 / D_0 ]
+//! I(beta) = sum over t of [ D_2 / D_0  -  (D_1 / D_0)(D_1 / D_0)' ].
+//! ```
+//!
+//! The sums over sets are not enumerated. They follow the recursion of Gail,
+//! Lubin and Rubinstein \[6\] over the rows of the risk set `j = 1, ..., n`,
+//! with `D_r(m, j)` the sum over the sets of size `m` among the first `j` rows,
+//! `D_0(0, j) = 1` and `D_1(0, j) = D_2(0, j) = 0`:
+//!
+//! ```text
+//! D_0(m, j) = D_0(m, j-1) + r_j D_0(m-1, j-1)
+//! D_1(m, j) = D_1(m, j-1) + r_j [ D_1(m-1, j-1) + x_j D_0(m-1, j-1) ]
+//! D_2(m, j) = D_2(m, j-1) + r_j [ D_2(m-1, j-1) + x_j D_1(m-1, j-1)'
+//!                                 + D_1(m-1, j-1) x_j' + x_j x_j' D_0(m-1, j-1) ]
+//! ```
+//!
+//! The risk set is scanned once for each such time, and only the `m` of the
+//! last row of the recursion is kept, so the memory is `d p^2` and the time
+//! `d n p^2` for a time with `d` tied events among `n` at risk and `p`
+//! columns. A time with one event costs the same as in a Breslow fit and is
+//! computed as one. The cost of a fit with exact ties is therefore the sum over
+//! the event times with ties of `d n p^2`, which is small for matched sets
+//! and large for a stratum of many thousand rows with ties of many events. R
+//! refuses only when its working array overflows an `int`, which this
+//! algorithm does not need, so no limit is imposed here. For data with entry
+//! times R does not use the recursion but lists every subset of the risk set,
+//! which is of the order of `n` choose `d` per time, and so cannot fit a time
+//! with ten events among thirty at risk in reasonable time. A caller who
+//! expects large tied sets should expect the time, which is not reported.
+//!
+//! `coxph` supports exact ties for data with and without entry times, strata
+//! and offsets. It does not support case weights other than 1, which is an
+//! error here, a cluster-robust variance, which needs score residuals, or score
+//! and Schoenfeld residuals, all of which are errors here. The iteration
+//! follows `coxexact.fit` for data without entry times and `agexact.fit` for
+//! data with them, which differ from `coxph.fit` and `agreg.fit`: the
+//! halving goes half way back each time, no convergence is accepted during
+//! halving, and on running out of iterations `coxexact.fit` goes back to the
+//! last accepted point where `agexact.fit` keeps the last trial point. Both
+//! flag a coefficient as possibly infinite when the Newton step at the end
+//! exceeds both `eps` and `sqrt(eps)` times the coefficient, on the scaled
+//! covariates here, on the scale of the columns in R for data with entry times,
+//! so the flag can differ in a borderline case.
+//!
+//! # Newton-Raphson with step halving
+//!//!
 //! The covariates are centred at their weighted mean and divided by their
 //! weighted mean absolute deviation, as `coxph` does, and the iteration runs on
 //! these. A column that is constant over the rows is set to zero. Starting at
@@ -314,6 +371,9 @@
 //!    doi:10.1080/01621459.1989.10478874
 //! 5. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
 //!    model. New York: Springer; 2000.
+//! 6. Gail MH, Lubin JH, Rubinstein LV. Likelihood calculations for matched
+//!    case-control studies and survival studies with tied death times.
+//!    Biometrika 1981;68(3):703-7. doi:10.1093/biomet/68.3.703
 
 // Rows and clusters are counted in `u32`; the entry point refuses more rows
 // than that.
@@ -511,6 +571,11 @@ enum Stepping {
     RightCensored,
     /// `agreg.fit`, which `coxph` calls for data with entry times.
     Counting,
+    /// `coxexact.fit`, which `coxph` calls for exact ties without entry times:
+    /// half way back at each halving, no convergence during halving, and the
+    /// last accepted point on running out of iterations after the first.
+    /// `agexact.fit`, for data with entry times, is the legacy rule.
+    ExactRight,
     /// The rule of the deprecated entry points: half way back at each halving,
     /// the last trial point kept on running out of iterations, and no
     /// convergence during halving.
@@ -602,6 +667,9 @@ fn with_input<R>(
     }
     check_finite_matrix(x)?;
     check_control(opts, data.n_rows(), x.ncols())?;
+    if opts.ties == Ties::Exact {
+        check_exact(data)?;
+    }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let code = match (opts.cause, surv.n_codes()) {
@@ -639,12 +707,31 @@ fn with_input<R>(
         init: opts.init,
         iter_max: opts.iter_max,
         eps: opts.eps,
-        stepping: if surv.start().is_some() {
-            Stepping::Counting
-        } else {
-            Stepping::RightCensored
+        stepping: match (surv.start().is_some(), opts.ties) {
+            (true, Ties::Exact) => Stepping::Legacy,
+            (false, Ties::Exact) => Stepping::ExactRight,
+            (true, _) => Stepping::Counting,
+            (false, _) => Stepping::RightCensored,
         },
     }))
+}
+
+/// What `coxph` refuses with exact ties: case weights other than 1 on the rows
+/// that are used, and clusters, which need score residuals.
+fn check_exact(data: &SurvData<'_>) -> Result<()> {
+    if data.cluster().is_some() {
+        return Err(Error::input(
+            "ties: the exact method has no cluster-robust variance",
+        ));
+    }
+    if let Some(weight) = data.weight() {
+        if weight.iter().any(|&w| w > 0.0 && w - 1.0 != 0.0) {
+            return Err(Error::input(
+                "weight: the exact method supports case weights of 1 only",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The checks on the offset, the starting values and the convergence limit.
@@ -736,6 +823,9 @@ fn check_design(data: &CoxDesign<'_>) -> Result<()> {
         ("cluster", data.cluster.map_or(rows, <[u32]>::len)),
     ])?;
     check_row_count(rows)?;
+    if data.ties == Ties::Exact {
+        return Err(Error::input("ties: exact ties are fitted by `cox::fit`"));
+    }
     if data.x.ncols() == 0 {
         return Err(Error::input("x has no columns"));
     }
@@ -887,10 +977,70 @@ impl Stratum {
             .map(|&row| self.weight[row as usize])
             .sum();
         let (terms, weight, spread) = match ties {
-            Ties::Breslow => (1, total, 0.0),
+            // A single exact event has the Breslow term; sets of more are
+            // computed by `ExactScratch` before the terms are asked for.
+            Ties::Breslow | Ties::Exact => (1, total, 0.0),
             Ties::Efron => (count, total / count as f64, 1.0 / count as f64),
         };
         (0..terms).map(move |k| (weight, k as f64 * spread))
+    }
+}
+
+/// Working arrays of the recursion for the exact partial likelihood.
+#[derive(Default)]
+struct ExactScratch {
+    /// `D_0(m)` for `m = 0..=d`.
+    d0: Vec<f64>,
+    /// `D_1(m)`, `p` per `m`.
+    d1: Vec<f64>,
+    /// `D_2(m)`, the lower triangle of `p` by `p` per `m`.
+    d2: Vec<f64>,
+}
+
+impl ExactScratch {
+    /// The sums `D_0`, `D_1` and `D_2` of the module documentation over the
+    /// sets of each size up to `d` among `rows`, with risk scores `risk` and
+    /// covariates `x` (`p` per row). The sums for size `m` are updated from
+    /// size `m - 1`, downwards in `m`, so one pass over the rows needs the
+    /// arrays of one `j` only.
+    fn run(
+        &mut self,
+        d: usize,
+        p: usize,
+        rows: impl Iterator<Item = usize>,
+        risk: &[f64],
+        x: &[f64],
+    ) {
+        self.d0.clear();
+        self.d0.resize(d + 1, 0.0);
+        self.d0[0] = 1.0;
+        self.d1.clear();
+        self.d1.resize((d + 1) * p, 0.0);
+        self.d2.clear();
+        self.d2.resize((d + 1) * p * p, 0.0);
+        let mut seen = 0usize;
+        for j in rows {
+            seen += 1;
+            let r = risk[j];
+            let xj = &x[j * p..(j + 1) * p];
+            for m in (1..=seen.min(d)).rev() {
+                let (lo, hi) = (m - 1, m);
+                for a in 0..p {
+                    for b in 0..=a {
+                        let t = self.d2[lo * p * p + a * p + b]
+                            + xj[a] * self.d1[lo * p + b]
+                            + xj[b] * self.d1[lo * p + a]
+                            + xj[a] * xj[b] * self.d0[lo];
+                        self.d2[hi * p * p + a * p + b] += r * t;
+                    }
+                }
+                for (a, &xa) in xj.iter().enumerate() {
+                    let t = self.d1[lo * p + a] + xa * self.d0[lo];
+                    self.d1[hi * p + a] += r * t;
+                }
+                self.d0[hi] += r * self.d0[lo];
+            }
+        }
     }
 }
 
@@ -946,17 +1096,50 @@ impl Model {
             dying: Moments::new(p),
         };
         let mut d1 = vec![0.0f64; p];
+        let mut scratch = ExactScratch::default();
         for stratum in &self.strata {
             let (eta, risk) = Self::row_risk(stratum, p, beta)?;
             let mut failed = false;
             stratum.sweep(p, &risk, &mut active, &mut sums, |position, at| {
                 let range = stratum.dying_offset[position]..stratum.dying_offset[position + 1];
+                let tied = range.len();
                 for &row in &stratum.dying_rows[range] {
                     let row = row as usize;
                     loglik += stratum.weight[row] * eta[row];
                     for (total, x) in score.iter_mut().zip(&stratum.x[row * p..(row + 1) * p]) {
                         *total += stratum.weight[row] * x;
                     }
+                }
+                if self.ties == Ties::Exact && tied >= 2 {
+                    // The risk set is the rows that have not left before this
+                    // time, which are a prefix of the descending exit order,
+                    // and have entered before it.
+                    let time = stratum.event_times[position];
+                    let end = stratum.stop.partition_point(|&s| s >= time);
+                    scratch.run(
+                        tied,
+                        p,
+                        (0..end).filter(|&j| stratum.start[j] < time),
+                        &risk,
+                        &stratum.x,
+                    );
+                    let d0 = scratch.d0[tied];
+                    if d0 <= 0.0 || !d0.is_finite() {
+                        failed = true;
+                        return;
+                    }
+                    loglik -= d0.ln();
+                    for a in 0..p {
+                        d1[a] = scratch.d1[tied * p + a] / d0;
+                        score[a] -= d1[a];
+                    }
+                    for a in 0..p {
+                        for b in 0..=a {
+                            let d2 = scratch.d2[tied * p * p + a * p + b];
+                            information[a * p + b] += d2 / d0 - d1[a] * d1[b];
+                        }
+                    }
+                    return;
                 }
                 for (u, fraction) in stratum.terms(position, self.ties) {
                     let d0 = at.risk.m0 - fraction * at.dying.m0;
@@ -1506,6 +1689,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
             let keep_trial = match (&evaluation, stepping) {
                 (None, _) => false,
                 (Some(_), Stepping::Legacy) => true,
+                (Some(_), Stepping::ExactRight) => input.iter_max == 1,
                 (Some(e), Stepping::Counting) => {
                     input.iter_max == 1
                         || (e.loglik - accepted_loglik) / accepted_loglik.abs() >= -input.eps
@@ -1540,7 +1724,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
             // larger share of the way back to the last accepted point, as
             // `coxph` does. The first fits kept half way back each time.
             halvings += 1;
-            let h = if stepping == Stepping::Legacy {
+            let h = if matches!(stepping, Stepping::Legacy | Stepping::ExactRight) {
                 1.0
             } else {
                 f64::from(halvings)
@@ -1573,7 +1757,19 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     // likelihood has stopped changing is not finite.
     let mut newton = last.score.clone();
     solve_factor(&final_matrix, p, &mut newton);
-    let monotone_columns: Vec<usize> = if converged {
+    let monotone_columns: Vec<usize> = if converged && input.ties == Ties::Exact {
+        // The rule of `coxexact.fit` and `agexact.fit`, with `toler.inf` its
+        // default `sqrt(eps)`, and no check for `iter.max` of 1 or less.
+        (0..p)
+            .filter(|&a| {
+                let step = newton[a].abs();
+                input.iter_max > 1
+                    && !aliased(a)
+                    && step > input.eps
+                    && step > input.eps.sqrt() * trial[a].abs()
+            })
+            .collect()
+    } else if converged {
         (0..p)
             .filter(|&a| !aliased(a) && newton[a].abs() > input.eps + input.eps.sqrt())
             .collect()
@@ -1732,6 +1928,11 @@ pub fn score_residuals(
     coefficients: &[Option<f64>],
     opts: &CoxOptions<'_>,
 ) -> Result<Vec<Option<Vec<f64>>>> {
+    if opts.ties == Ties::Exact {
+        return Err(Error::input(
+            "ties: score residuals are not available for the exact method",
+        ));
+    }
     with_input(data, x, opts, |input| {
         score_residuals_checked(input, coefficients)
     })?
