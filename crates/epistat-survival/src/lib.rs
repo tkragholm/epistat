@@ -56,6 +56,9 @@
 //!   the one-sample test, as R's `survdiff`.
 //! - [`split`], [`tmerge`], [`condense`]: the data tools `survSplit`, `tmerge` and
 //!   `survcondense`, which return rows and the row of the input each came from.
+//! - [`lexis`]: follow-up split on several time scales at once, as `Epi::splitLexis` and
+//!   `popEpi::splitMulti`, summing pieces into cells, and Poisson models for rates on them with
+//!   `ci.lin` and `ci.exp` limits.
 //! - [`surv2`]: timeline data (one row per observation) turned into counting-process
 //!   intervals, as `Surv2` and `fromtimeline`.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
@@ -77,6 +80,7 @@ pub mod condense;
 pub mod cox;
 mod error;
 pub mod fine_gray;
+pub mod lexis;
 pub mod markov;
 pub mod msreg;
 pub mod multistate;

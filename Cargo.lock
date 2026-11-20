@@ -260,6 +260,7 @@ dependencies = [
 name = "epistat-survival"
 version = "0.2.3"
 dependencies = [
+ "epistat-glm",
  "epistat-inference",
  "epistat-rng",
  "epistat-stats",

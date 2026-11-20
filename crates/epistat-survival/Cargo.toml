@@ -15,6 +15,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+epistat-glm = { path = "../epistat-glm", version = "0.1.1" }
 epistat-inference = { path = "../epistat-inference", version = "0.3.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.1" }
 epistat-stats = { path = "../epistat-stats", version = "0.2.0" }
