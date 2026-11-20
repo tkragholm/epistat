@@ -365,6 +365,15 @@ pub fn truncated_quantile(p: f64, lower: f64, upper: f64) -> Option<f64> {
     Some(z.clamp(lower, upper))
 }
 
+/// The critical value of a two-sided interval of confidence `level`, the
+/// `1 - (1 - level) / 2` quantile of the standard normal: 1.96 for 0.95.
+/// `NaN` for a `level` that is `NaN`, and the limits of [`quantile`] outside
+/// `(0, 1)`.
+#[must_use]
+pub fn two_sided_z(level: f64) -> f64 {
+    quantile(1.0 - (1.0 - level) / 2.0)
+}
+
 /// The `p` quantile of `|Z + mu|` for a standard normal `Z`, by bisection on
 /// its distribution function `cdf(q - |mu|) + cdf(q + |mu|) - 1` to the
 /// precision of an `f64`. `None` when `p` is outside `[0, 1)`.
@@ -481,6 +490,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_two_sided_critical_value_is_the_upper_quantile_of_half_the_tail() {
+        // qnorm(0.975) in R.
+        assert!((two_sided_z(0.95) - 1.959_963_984_540_054).abs() < 4.5e-16);
+        assert_eq!(two_sided_z(0.9).to_bits(), quantile(0.95).to_bits());
+        assert!(two_sided_z(f64::NAN).is_nan());
+    }
 
     #[test]
     fn the_approximations_stay_within_their_published_errors() {

@@ -241,7 +241,7 @@ pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
             tau
         }
     };
-    let z = epistat_stats::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+    let z = epistat_stats::normal::two_sided_z(opts.conf_level);
     let group0 = group_rmst(curve0, tau, z)?;
     let group1 = group_rmst(curve1, tau, z)?;
     let (v0, v1) = (group0.se * group0.se, group1.se * group1.se);
