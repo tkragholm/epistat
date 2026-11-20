@@ -24,5 +24,6 @@ mod prepare;
 
 pub mod brier;
 pub mod calibration;
+pub mod royston;
 pub mod rttright;
 pub mod score;

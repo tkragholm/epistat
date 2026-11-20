@@ -40,6 +40,8 @@
 //!   Brier score and index of prediction accuracy, the time-dependent AUC and
 //!   calibration by risk group, as `rttright`, `brier`, `riskRegression::Score`
 //!   and `timeROC`.
+//!   Royston and Sauerbrei's D with the measures of Kent and O'Quigley and of
+//!   Gonen and Heller, as `royston`.
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
 //!   standard errors, confidence limits, quantiles and restricted means, read at chosen
 //!   times as `summary.survfit(times = )` with the starting point of `survfit0`.
