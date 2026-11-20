@@ -240,13 +240,13 @@ mod tests {
         assert_eq!(out.assignments["a2"], 1);
         assert_eq!(out.assignments["a4"], 2);
         assert_eq!(out.assignments["c5"], 2);
-        assert_eq!(out.att_weights["a1"], 1.0);
+        assert!((out.att_weights["a1"] - 1.0).abs() < 1e-12);
         assert!((out.att_weights["c1"] - 2.0).abs() < 1e-12);
         assert!((out.att_weights["c3"] - 1.0 / 3.0).abs() < 1e-12);
         assert!((out.ate_weights["a2"] - 4.0).abs() < 1e-12);
         assert!((out.ate_weights["c2"] - 4.0 / 3.0).abs() < 1e-12);
         assert!((out.atc_weights["a1"] - 0.5).abs() < 1e-12);
-        assert_eq!(out.atc_weights["c1"], 1.0);
+        assert!((out.atc_weights["c1"] - 1.0).abs() < 1e-12);
     }
 
     #[test]
