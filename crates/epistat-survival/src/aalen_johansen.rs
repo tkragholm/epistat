@@ -32,7 +32,31 @@
 //!
 //! Rows are ordered by group and time with a stable sort, so rows tied on both
 //! are summed in input order and the result does not depend on the number of
-//! threads. Times are compared for exact equality.
+//! threads. Times are compared for exact equality once the tie rule below has
+//! been applied.
+//!
+//! # Input
+//!
+//! [`estimate`] and [`bootstrap`] take a [`SurvData`]. It supplies the exit
+//! time (`stop`), the status, the optional entry time (`start`), the weight and
+//! the groups, which are its strata, with the caller's stratum codes carried
+//! into the output. Status 0 is censoring and a code from 1 to `n_codes` is a
+//! cause. The estimate has a column for every code, observed or not, as
+//! `survfit` has a level for every level of a factor status. The tie rule of
+//! `survival::aeqSurv` is applied to the times first and is the default, as in
+//! `survfit`. [`AalenJohansenOptions::timefix`] and [`BootstrapOptions::timefix`]
+//! change it, and `TimeFix::Exact` compares times exactly.
+//!
+//! Rows of weight 0 are not used. [`Curves::n_rows`] counts every row,
+//! as `n` of `survfit` does, and [`Curves::n_used`] those of positive weight. A
+//! time carried only by rows of weight 0 does not appear in the output.
+//!
+//! The deprecated [`curves`], [`bootstrap_arm_incidence`] and [`ArmColumns`]
+//! behave as before. Times are compared exactly, every row is used and weights
+//! of 0 count as rows at risk, the causes listed are those observed, and the
+//! family codes are taken as given. They run the same code on their slices
+//! rather than on a [`SurvData`], which would refuse some input they accept,
+//! such as a weight of NaN or an entry time not before the exit time.
 //!
 //! # Agreement with R
 //!
@@ -48,7 +72,7 @@
 //!
 //! # The bootstrap
 //!
-//! [`bootstrap_arm_incidence`] repeats the estimate for the exposed and the
+//! [`bootstrap`] repeats the estimate for the exposed and the
 //! comparator arm of many cells, each a subset of the rows, under random
 //! cluster weights. A replicate draws one `Exp(1)` variate per cluster, scales
 //! the variates to sum to the number of clusters, which is the Bayesian
@@ -64,6 +88,10 @@
 //!   replicate `r` of a cell come from the seed `replicate_seed(cell_seed, r)`,
 //!   so the output does not depend on the number of threads.
 //!
+//! The clusters are the cluster column of the [`SurvData`], and the arm of each
+//! row is a separate argument, since it is not part of the survival data. The
+//! cells stay a [`RowWindows`] over the rows of the data.
+//!
 //! Seeds are supplied per cell, so the caller decides where a seed comes from.
 //! The output holds the incidence of each arm, not their difference, so a
 //! caller can form a difference, a ratio or per-arm bands from the same draws.
@@ -74,7 +102,7 @@
 //! block of the output is zero. An age before the first event time takes the
 //! incidence so far, which is zero. An age after the last takes the final
 //! incidence. Everyone is at risk from a common origin in the bootstrap, which
-//! takes no entry times.
+//! takes no entry times, so data with a start column is refused.
 //!
 //! # References
 //!
@@ -91,6 +119,7 @@
     reason = "the entry points check that the row count fits in u32"
 )]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use epistat_rng::{dirichlet_weights, replicate_seed};
@@ -98,6 +127,8 @@ use rayon::prelude::*;
 
 use crate::check::{check_lengths, check_row_count};
 use crate::error::{Error, Result};
+use crate::surv::SurvData;
+use crate::timefix::TimeFix;
 
 const CENSORED: i32 = 0;
 
@@ -118,7 +149,7 @@ const CENSORED: i32 = 0;
 /// too. The shorter of `incidence` and `d_causes` decides how many causes
 /// are advanced.
 ///
-/// This is the step [`curves`] and the bootstrap use, so a caller that
+/// This is the step [`estimate`] and the bootstrap use, so a caller that
 /// accumulates the same sums itself, for example for reweighted data, gets the
 /// same bits by calling it.
 #[inline]
@@ -143,9 +174,11 @@ pub fn advance(
 /// `cif` holds one column per cause, in the order of `causes`.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Curves {
-    /// The causes observed, ascending.
+    /// The causes, ascending. [`estimate`] lists every code from 1 to
+    /// `n_codes`, observed or not. The deprecated [`curves`] lists the causes
+    /// observed.
     pub causes: Vec<i32>,
-    /// The group of each row.
+    /// The group of each row. [`estimate`] gives the caller's stratum codes.
     pub group: Vec<u32>,
     /// The distinct exit time of each row.
     pub time: Vec<f64>,
@@ -159,6 +192,12 @@ pub struct Curves {
     pub event_free: Vec<f64>,
     /// `F_k(t)`, one column per cause in the order of `causes`.
     pub cif: Vec<Vec<f64>>,
+    /// The number of rows given.
+    pub n_rows: usize,
+    /// The number of rows the estimate is built from. [`estimate`] leaves out
+    /// the rows of weight 0, so this is [`SurvData::n_used`]. The deprecated
+    /// [`curves`] uses every row, so it equals `n_rows`.
+    pub n_used: usize,
 }
 
 /// One group's rows at one distinct exit time.
@@ -171,8 +210,9 @@ struct Block {
 
 /// The weighted Aalen-Johansen estimate per group, on checked input.
 ///
-/// Rows are ordered by group and time with a stable sort. `entry`, when given,
-/// is the delayed-entry time: a row is at risk on `(entry, time]`. Every exit
+/// Rows are ordered by group and time with a stable sort. `causes` is the
+/// ascending list of codes that get a column, and every nonzero event is in it.
+/// `entry`, when given, is the delayed-entry time: a row is at risk on `(entry, time]`. Every exit
 /// time appears, including times with censoring only, which leave the
 /// probabilities unchanged.
 // `==` on times is exact on purpose, as in `Arm::build`: rows share a time or
@@ -184,10 +224,8 @@ fn curves_checked(
     weight: &[f64],
     group: &[u32],
     entry: Option<&[f64]>,
+    causes: Vec<i32>,
 ) -> Curves {
-    let mut causes: Vec<i32> = event.iter().copied().filter(|&e| e != CENSORED).collect();
-    causes.sort_unstable();
-    causes.dedup();
     let k = causes.len();
 
     let mut order: Vec<u32> = (0..time.len() as u32).collect();
@@ -339,6 +377,86 @@ fn risk_with_entry(
     (risk, people)
 }
 
+/// The causes observed in `event`, ascending.
+fn observed_causes(event: &[i32]) -> Vec<i32> {
+    let mut causes: Vec<i32> = event.iter().copied().filter(|&e| e != CENSORED).collect();
+    causes.sort_unstable();
+    causes.dedup();
+    causes
+}
+
+/// What [`estimate`] and [`bootstrap`] do besides the data.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AalenJohansenOptions {
+    /// How near-equal times are treated. The default is `survival`'s rule,
+    /// see [`TimeFix`].
+    pub timefix: TimeFix,
+}
+
+/// The weighted Aalen-Johansen estimate for every stratum of `data`.
+///
+/// Status 0 is censoring and a code `k` in `1..=n_codes` is an event of cause
+/// `k`. The strata are the groups, and the result carries the caller's stratum
+/// codes. Without a stratum column there is one group, coded 0. A start time
+/// is the delayed-entry time: a row is at risk on `(start, stop]`. The tie rule
+/// of `opts` is applied to the times first, `survival`'s by default. Rows of
+/// weight 0 are not used. They are counted in `n_rows` and not in `n_used`, and
+/// a time that only they carry does not appear.
+///
+/// Every cause from 1 to `n_codes` has a column in [`Curves::cif`], whether it
+/// is observed or not, as `survfit` reports every level of a factor status. A
+/// cause that is never observed has an incidence of 0.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the tie rule fails, see
+/// [`SurvData::with_timefix`], or `n_codes` does not fit an `i32`.
+pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curves> {
+    let data = data.clone().with_timefix(opts.timefix)?;
+    let surv = data.followup()?;
+    let n_codes = i32::try_from(surv.n_codes())
+        .map_err(|_| Error::input("n_codes must fit an i32 status"))?;
+    let used = data.used_index();
+    let index = used.as_deref();
+    let time = pick(surv.stop(), index);
+    let event = pick(surv.status(), index);
+    let entry = surv.start().map(|start| pick(start, index));
+    let weight = data.weight().map_or_else(
+        || Cow::Owned(vec![1.0; data.n_used()]),
+        |weight| pick(weight, index),
+    );
+    let group = data.stratum().map_or_else(
+        || Cow::Owned(vec![0u32; data.n_used()]),
+        |stratum| pick(stratum, index),
+    );
+    let mut out = curves_checked(
+        &time,
+        &event,
+        &weight,
+        &group,
+        entry.as_deref(),
+        (1..=n_codes).collect(),
+    );
+    if let Some(levels) = data.stratum_levels() {
+        let codes = levels.to_vec();
+        for g in &mut out.group {
+            *g = codes[*g as usize];
+        }
+    }
+    out.n_rows = data.n_rows();
+    out.n_used = data.n_used();
+    Ok(out)
+}
+
+/// The values of a column at `index`, or the column itself when `index` is
+/// `None` because every row is used.
+fn pick<'a, T: Copy>(column: &'a [T], index: Option<&[u32]>) -> Cow<'a, [T]> {
+    match index {
+        None => Cow::Borrowed(column),
+        Some(index) => Cow::Owned(index.iter().map(|&i| column[i as usize]).collect()),
+    }
+}
+
 /// The weighted Aalen-Johansen estimate for every group.
 ///
 /// `event` is the cause code of each row, with 0 for censoring. `group` is a
@@ -347,9 +465,14 @@ fn risk_with_entry(
 /// Returns one row per group and distinct exit time, ordered by both. See
 /// [`Curves`] for the columns.
 ///
+/// Times are compared exactly, and every row is used, rows of weight 0
+/// included. The causes listed are those observed. It accepts weights and times
+/// that [`SurvData`] refuses, so its numbers stay what they were.
+///
 /// # Errors
 ///
 /// [`Error::Input`] when the slices differ in length or a time or entry is NaN.
+#[deprecated(since = "0.3.0", note = "use `estimate` with a `SurvData`")]
 pub fn curves(
     time: &[f64],
     event: &[i32],
@@ -373,7 +496,10 @@ pub fn curves(
     {
         return Err(Error::input("time and entry must not be NaN"));
     }
-    Ok(curves_checked(time, event, weight, group, entry))
+    let mut out = curves_checked(time, event, weight, group, entry, observed_causes(event));
+    out.n_rows = n;
+    out.n_used = n;
+    Ok(out)
 }
 
 /// How the cluster weights of a replicate are drawn for the cells of a
@@ -418,6 +544,7 @@ impl Cell {
         family: &[u32],
         exposed: &[bool],
         draw: Draw,
+        skip_unused: bool,
     ) -> Option<Self> {
         let mut cell_time = Vec::with_capacity(rows.len());
         let mut cell_event = Vec::with_capacity(rows.len());
@@ -429,6 +556,11 @@ impl Cell {
 
         for &row in rows {
             let i = row as usize;
+            // A row of weight 0 is not used, and a cluster it alone belongs to
+            // is not a cluster of the cell.
+            if skip_unused && weight[i] <= 0.0 {
+                continue;
+            }
             let position = cell_time.len() as u32;
             cell_time.push(time[i]);
             cell_event.push(event[i]);
@@ -603,6 +735,10 @@ impl Scratch {
 }
 
 /// Every row of a bootstrapped frame: the columns both arms are read from.
+///
+/// Superseded by a [`SurvData`] with a cluster column and the arm indicator
+/// passed to [`bootstrap`].
+#[deprecated(since = "0.3.0", note = "use a `SurvData` with `bootstrap`")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArmColumns {
     time: Vec<f64>,
@@ -612,6 +748,7 @@ pub struct ArmColumns {
     exposed: Vec<bool>,
 }
 
+#[expect(deprecated, reason = "the methods of the deprecated type")]
 impl ArmColumns {
     /// The rows: exit `time`, cause code `event` (0 for censoring), `weight`,
     /// dense cluster code `family` and whether the row is in the exposed arm.
@@ -726,9 +863,114 @@ impl RowWindows {
     }
 }
 
-/// `(exposed, comparator, estimable)`, as [`bootstrap_arm_incidence`]
-/// returns them.
+/// `(exposed, comparator, estimable)`, as [`bootstrap`] returns them.
 pub type ArmDraws = (Vec<f64>, Vec<f64>, Vec<bool>);
+
+/// What [`bootstrap`] does besides the data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BootstrapOptions {
+    /// The number of replicates. The default is 1000.
+    pub n_replicates: usize,
+    /// How the cluster weights are drawn for the cells. The default is
+    /// [`Draw::PerCell`].
+    pub draw: Draw,
+    /// How near-equal times are treated. The default is `survival`'s rule,
+    /// see [`TimeFix`].
+    pub timefix: TimeFix,
+}
+
+impl Default for BootstrapOptions {
+    fn default() -> Self {
+        Self {
+            n_replicates: 1000,
+            draw: Draw::PerCell,
+            timefix: TimeFix::default(),
+        }
+    }
+}
+
+/// Bootstrap each arm's cumulative incidence at each age, for every cell.
+///
+/// The clusters are the cluster column of `data`, which is required, and the
+/// arm of each row is `exposed`. Cell `c` owns the rows `cells.get(c)`, indexed
+/// in `data`. A row may appear in several cells, for example when the cells
+/// are several partitions of the same cohort. The weights of replicate `r` of a
+/// cell are drawn from `replicate_seed(cell_seeds[c], r)`. The event is status
+/// `cause`, and every other nonzero status is a competing event.
+///
+/// Returns `(exposed, comparator, estimable)`. The two arms are of shape
+/// `(cells, ages, n_replicates)`, row-major, with the ages sorted.
+/// `estimable[c]` is false for a cell with an empty arm, which has no draws:
+/// its block is zero and is not an estimate. `opts.draw` selects how the
+/// cluster weights are drawn; see [`Draw`].
+///
+/// The tie rule of `opts` is applied to the times first. Rows of weight 0 are
+/// not used, and a cluster that only they belong to is not a cluster of a
+/// cell. Under [`Draw::Shared`] the weight vector still covers every cluster of
+/// `data`. The bootstrap takes no delayed entry, since everyone is at risk from
+/// a common origin, so `data` must have no start column.
+///
+/// Given the same rows, clusters, seeds and cluster codes `0..k`, the draws
+/// are those of the deprecated [`bootstrap_arm_incidence`], to the bit.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the tie rule fails, `data` has no cluster column or
+/// has a start column, `cause` is outside `1..=n_codes`, `exposed` does not
+/// have one value per row, `cell_seeds` does not hold one seed per cell, or
+/// `cells` was built for a frame of another size than `data`.
+pub fn bootstrap(
+    data: &SurvData<'_>,
+    exposed: &[bool],
+    cells: &RowWindows,
+    cell_seeds: &[u64],
+    ages: &[f64],
+    cause: u32,
+    opts: &BootstrapOptions,
+) -> Result<ArmDraws> {
+    let data = data.clone().with_timefix(opts.timefix)?;
+    let code = i32::try_from(data.cause(cause)?.code())
+        .map_err(|_| Error::input("the cause must fit an i32 status"))?;
+    let surv = data.followup()?;
+    if surv.start().is_some() {
+        return Err(Error::input(
+            "the bootstrap takes no start times, everyone is at risk from a common origin",
+        ));
+    }
+    let Some(cluster) = data.cluster() else {
+        return Err(Error::input("the bootstrap needs a cluster column"));
+    };
+    check_lengths(&[("stop", data.n_rows()), ("exposed", exposed.len())])?;
+    let weight = data
+        .weight()
+        .map_or_else(|| Cow::Owned(vec![1.0; data.n_rows()]), Cow::Borrowed);
+    bootstrap_core(
+        &Frame {
+            time: surv.stop(),
+            event: surv.status(),
+            weight: &weight,
+            family: cluster,
+            exposed,
+        },
+        data.n_clusters(),
+        true,
+        cells,
+        cell_seeds,
+        ages.to_vec(),
+        code,
+        opts.n_replicates,
+        opts.draw,
+    )
+}
+
+/// The columns of a frame, one value per row.
+struct Frame<'a> {
+    time: &'a [f64],
+    event: &'a [i32],
+    weight: &'a [f64],
+    family: &'a [u32],
+    exposed: &'a [bool],
+}
 
 /// Bootstrap each arm's cumulative incidence at each age, for every cell.
 ///
@@ -743,10 +985,15 @@ pub type ArmDraws = (Vec<f64>, Vec<f64>, Vec<bool>);
 /// its block is zero and is not an estimate. `draw` selects how the cluster
 /// weights are drawn; see [`Draw`].
 ///
+/// Times are compared exactly and every row is used, rows of weight 0
+/// included. The family codes are taken as the caller numbered them.
+///
 /// # Errors
 ///
 /// [`Error::Input`] when `cell_seeds` does not hold one seed per cell, or
 /// `cells` was built for a frame of another size than `columns`.
+#[deprecated(since = "0.3.0", note = "use `bootstrap` with a `SurvData`")]
+#[expect(deprecated, reason = "the argument is the deprecated type")]
 pub fn bootstrap_arm_incidence(
     columns: &ArmColumns,
     cells: &RowWindows,
@@ -763,6 +1010,46 @@ pub fn bootstrap_arm_incidence(
         family,
         exposed,
     } = columns;
+    let n_families = family.iter().copied().max().map_or(0, |m| m as usize + 1);
+    bootstrap_core(
+        &Frame {
+            time,
+            event,
+            weight,
+            family,
+            exposed,
+        },
+        n_families,
+        false,
+        cells,
+        cell_seeds,
+        ages,
+        cause,
+        n_replicates,
+        draw,
+    )
+}
+
+/// The bootstrap of both entry points. `n_families` is the size of the weight
+/// vector under [`Draw::Shared`], and `skip_unused` leaves out rows of weight 0.
+fn bootstrap_core(
+    frame: &Frame<'_>,
+    n_families: usize,
+    skip_unused: bool,
+    cells: &RowWindows,
+    cell_seeds: &[u64],
+    ages: Vec<f64>,
+    cause: i32,
+    n_replicates: usize,
+    draw: Draw,
+) -> Result<ArmDraws> {
+    let Frame {
+        time,
+        event,
+        weight,
+        family,
+        exposed,
+    } = *frame;
     let n_cells = cells.len();
     if cells.frame_rows() != time.len() {
         return Err(Error::input(
@@ -784,7 +1071,18 @@ pub fn bootstrap_arm_incidence(
 
     let gathered: Vec<Option<Cell>> = (0..n_cells)
         .into_par_iter()
-        .map(|c| Cell::gather(cells.get(c), time, event, weight, family, exposed, draw))
+        .map(|c| {
+            Cell::gather(
+                cells.get(c),
+                time,
+                event,
+                weight,
+                family,
+                exposed,
+                draw,
+                skip_unused,
+            )
+        })
         .collect();
     let estimable: Vec<bool> = gathered.iter().map(Option::is_some).collect();
     let mut exposed_out = vec![0.0f64; n_cells * block];
@@ -834,7 +1132,6 @@ pub fn bootstrap_arm_incidence(
         // holding one weight vector per replicate, which is `G` by
         // replicates and gigabytes at cohort scale.
         Draw::Shared => {
-            let n_families = family.iter().copied().max().map_or(0, |m| m as usize + 1);
             let seed = cell_seeds[0];
             let per_replicate: Vec<Vec<Option<ArmLevels>>> = (0..n_replicates)
                 .into_par_iter()
@@ -902,6 +1199,7 @@ fn scatter(by_age: &[f64], replicate: usize, n_replicates: usize, block: &mut [f
 }
 
 #[cfg(test)]
+#[expect(deprecated, reason = "these tests are of the deprecated function")]
 mod curve_tests {
     use super::curves;
 
@@ -1029,6 +1327,7 @@ mod curve_tests {
 }
 
 #[cfg(test)]
+#[expect(deprecated, reason = "these tests are of the deprecated functions")]
 mod tests {
     use super::{
         ArmColumns, Cell, Draw, Error, RowWindows, Scratch, advance, bootstrap_arm_incidence,
@@ -1064,8 +1363,17 @@ mod tests {
     fn cell(time: &[f64], event: &[i32], exposed: &[bool], family: &[u32]) -> Cell {
         let weight = vec![1.0; time.len()];
         let rows: Vec<u32> = (0..time.len() as u32).collect();
-        Cell::gather(&rows, time, event, &weight, family, exposed, Draw::PerCell)
-            .expect("both arms present")
+        Cell::gather(
+            &rows,
+            time,
+            event,
+            &weight,
+            family,
+            exposed,
+            Draw::PerCell,
+            false,
+        )
+        .expect("both arms present")
     }
 
     /// Worked by hand.
@@ -1137,6 +1445,7 @@ mod tests {
             &family,
             &exposed,
             Draw::PerCell,
+            false,
         )
         .expect("both arms present");
 
@@ -1161,7 +1470,8 @@ mod tests {
                 &weight,
                 &family,
                 &exposed,
-                Draw::PerCell
+                Draw::PerCell,
+                false
             )
             .is_none()
         );
@@ -1256,5 +1566,280 @@ mod tests {
         let (exposed, _, estimable) =
             bootstrap_arm_incidence(&columns, &none, &[], vec![1.0], 1, 2, Draw::Shared).unwrap();
         assert!(exposed.is_empty() && estimable.is_empty());
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    deprecated,
+    reason = "the new entry points are compared with the deprecated ones"
+)]
+mod estimate_tests {
+    use super::{
+        AalenJohansenOptions, ArmColumns, BootstrapOptions, Curves, Draw, RowWindows, bootstrap,
+        bootstrap_arm_incidence, curves, estimate,
+    };
+    use crate::surv::SurvData;
+    use crate::timefix::TimeFix;
+
+    const EXACT: AalenJohansenOptions = AalenJohansenOptions {
+        timefix: TimeFix::Exact,
+    };
+
+    fn bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|v| v.to_bits()).collect()
+    }
+
+    fn same(a: &Curves, b: &Curves) {
+        assert_eq!(a.causes, b.causes);
+        assert_eq!(a.group, b.group);
+        for (x, y) in [
+            (&a.time, &b.time),
+            (&a.n_risk, &b.n_risk),
+            (&a.n_at_risk, &b.n_at_risk),
+            (&a.n_event, &b.n_event),
+            (&a.event_free, &b.event_free),
+        ] {
+            assert_eq!(bits(x), bits(y));
+        }
+        for (x, y) in a.cif.iter().zip(&b.cif) {
+            assert_eq!(bits(x), bits(y));
+        }
+    }
+
+    const TIME: [f64; 8] = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0];
+    const EVENT: [i32; 8] = [1, 2, 0, 1, 1, 2, 0, 1];
+    const WEIGHT: [f64; 8] = [1.0, 0.5, 2.0, 1.5, 0.25, 1.0, 1.0, 3.0];
+    const START: [f64; 8] = [0.0, 0.5, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0];
+    const GROUP: [u32; 8] = [0, 1, 0, 1, 0, 1, 0, 1];
+
+    #[test]
+    fn the_estimate_is_that_of_the_old_function_on_the_same_rows() {
+        let data = SurvData::builder(&TIME, &EVENT)
+            .start(&START)
+            .n_codes(2)
+            .weight(&WEIGHT)
+            .stratum(&GROUP)
+            .build()
+            .unwrap();
+        let new = estimate(&data, &EXACT).unwrap();
+        let old = curves(&TIME, &EVENT, &WEIGHT, &GROUP, Some(&START)).unwrap();
+        same(&new, &old);
+        assert_eq!((new.n_rows, new.n_used), (8, 8));
+    }
+
+    #[test]
+    fn strata_come_back_as_the_callers_codes() {
+        let strata: Vec<u32> = GROUP.iter().map(|&g| 10 + 20 * g).collect();
+        let data = SurvData::builder(&TIME, &EVENT)
+            .n_codes(2)
+            .stratum(&strata)
+            .build()
+            .unwrap();
+        let new = estimate(&data, &EXACT).unwrap();
+        let old = curves(&TIME, &EVENT, &[1.0; 8], &GROUP, None).unwrap();
+        assert!(new.group.iter().all(|g| [10, 30].contains(g)));
+        let relabelled: Vec<u32> = old.group.iter().map(|&g| 10 + 20 * g).collect();
+        assert_eq!(new.group, relabelled);
+        assert_eq!(bits(&new.event_free), bits(&old.event_free));
+    }
+
+    #[test]
+    fn rows_of_weight_zero_are_not_used_and_are_counted() {
+        let weight = [1.0, 0.0, 2.0, 1.5, 0.0, 1.0, 1.0, 3.0];
+        let data = SurvData::builder(&TIME, &EVENT)
+            .n_codes(2)
+            .weight(&weight)
+            .stratum(&GROUP)
+            .build()
+            .unwrap();
+        let new = estimate(&data, &EXACT).unwrap();
+        let keep = [0usize, 2, 3, 5, 6, 7];
+        let pick = |c: &[f64]| keep.iter().map(|&i| c[i]).collect::<Vec<_>>();
+        let old = curves(
+            &pick(&TIME),
+            &keep.iter().map(|&i| EVENT[i]).collect::<Vec<_>>(),
+            &pick(&weight),
+            &keep.iter().map(|&i| GROUP[i]).collect::<Vec<_>>(),
+            None,
+        )
+        .unwrap();
+        same(&new, &old);
+        assert_eq!((new.n_rows, new.n_used), (8, 6));
+    }
+
+    #[test]
+    fn every_code_is_a_cause_whether_observed_or_not() {
+        let data = SurvData::builder(&TIME, &EVENT).n_codes(4).build().unwrap();
+        let new = estimate(&data, &EXACT).unwrap();
+        assert_eq!(new.causes, vec![1, 2, 3, 4]);
+        assert_eq!(new.cif.len(), 4);
+        assert!(new.cif[2].iter().chain(&new.cif[3]).all(|&v| v == 0.0));
+        let old = curves(&TIME, &EVENT, &[1.0; 8], &[0; 8], None).unwrap();
+        assert_eq!(old.causes, vec![1, 2]);
+    }
+
+    #[test]
+    fn the_default_tie_rule_merges_times_that_differ_by_rounding() {
+        let time = [1.0, 1.0 + 1e-12, 2.0];
+        let status = [1, 0, 1];
+        let data = SurvData::builder(&time, &status).build().unwrap();
+        let fixed = estimate(&data, &AalenJohansenOptions::default()).unwrap();
+        assert_eq!(fixed.time, vec![1.0, 2.0]);
+        assert_eq!(fixed.n_at_risk, vec![3.0, 1.0]);
+        let exact = estimate(&data, &EXACT).unwrap();
+        assert_eq!(exact.time.len(), 3);
+    }
+
+    #[test]
+    fn nothing_used_gives_no_rows() {
+        let data = SurvData::builder(&TIME, &EVENT)
+            .weight(&[0.0; 8])
+            .n_codes(2)
+            .build()
+            .unwrap();
+        let new = estimate(&data, &EXACT).unwrap();
+        assert!(new.time.is_empty() && new.group.is_empty());
+        assert_eq!((new.n_rows, new.n_used), (8, 0));
+        assert_eq!(new.cif.len(), 2);
+    }
+
+    struct Fixture {
+        time: Vec<f64>,
+        event: Vec<i32>,
+        weight: Vec<f64>,
+        family: Vec<u32>,
+        exposed: Vec<bool>,
+        cells: RowWindows,
+    }
+
+    fn frame() -> Fixture {
+        let n = 60;
+        let mut rows = Vec::new();
+        let mut offsets = vec![0u32];
+        for (start, len) in [(0usize, 40usize), (10, 30), (20, 40)] {
+            rows.extend((start..start + len).map(|i| i as u32));
+            offsets.push(rows.len() as u32);
+        }
+        Fixture {
+            time: (0..n).map(|i| 1.0 + ((i * 7) % 11) as f64).collect(),
+            event: (0..n).map(|i| [0, 1, 2, 1][i % 4]).collect(),
+            weight: (0..n).map(|i| 0.5 + (i % 3) as f64).collect(),
+            family: (0..n).map(|i| ((i * 5) % 9) as u32).collect(),
+            exposed: (0..n).map(|i| i % 3 != 0).collect(),
+            cells: RowWindows::new(rows, offsets, n, "cell").unwrap(),
+        }
+    }
+
+    #[test]
+    fn the_bootstrap_draws_are_those_of_the_old_function() {
+        let Fixture {
+            time,
+            event,
+            weight,
+            family,
+            exposed,
+            cells,
+        } = frame();
+        let seeds = [3, 5, 8];
+        let ages = [0.5, 6.0, 3.0, 30.0];
+        let data = SurvData::builder(&time, &event)
+            .n_codes(2)
+            .weight(&weight)
+            .cluster(&family)
+            .build()
+            .unwrap();
+        let columns = ArmColumns::new(
+            time.clone(),
+            event.clone(),
+            weight.clone(),
+            family.clone(),
+            exposed.clone(),
+        )
+        .unwrap();
+        for draw in [Draw::PerCell, Draw::Shared] {
+            let opts = BootstrapOptions {
+                n_replicates: 7,
+                draw,
+                timefix: TimeFix::Exact,
+            };
+            let new = bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &opts).unwrap();
+            let old = bootstrap_arm_incidence(&columns, &cells, &seeds, ages.to_vec(), 1, 7, draw)
+                .unwrap();
+            assert_eq!(bits(&new.0), bits(&old.0));
+            assert_eq!(bits(&new.1), bits(&old.1));
+            assert_eq!(new.2, old.2);
+        }
+    }
+
+    /// A row of weight 0 and the cluster it alone belongs to are not in the cell.
+    #[test]
+    fn the_bootstrap_leaves_out_rows_of_weight_zero() {
+        let time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let event = [1, 0, 2, 1, 0, 1];
+        let weight = [1.0, 1.0, 2.0, 1.0, 0.5, 0.0];
+        let family = [0, 1, 2, 0, 1, 3];
+        let exposed = [true, true, true, false, false, false];
+        let data = SurvData::builder(&time, &event)
+            .n_codes(2)
+            .weight(&weight)
+            .cluster(&family)
+            .build()
+            .unwrap();
+        let all = RowWindows::new((0..6).collect(), vec![0, 6], 6, "cell").unwrap();
+        let opts = BootstrapOptions {
+            n_replicates: 5,
+            draw: Draw::PerCell,
+            timefix: TimeFix::Exact,
+        };
+        let new = bootstrap(&data, &exposed, &all, &[9], &[2.0, 6.0], 1, &opts).unwrap();
+        let columns = ArmColumns::new(
+            time[..5].to_vec(),
+            event[..5].to_vec(),
+            weight[..5].to_vec(),
+            family[..5].to_vec(),
+            exposed[..5].to_vec(),
+        )
+        .unwrap();
+        let first = RowWindows::new((0..5).collect(), vec![0, 5], 5, "cell").unwrap();
+        let old =
+            bootstrap_arm_incidence(&columns, &first, &[9], vec![2.0, 6.0], 1, 5, Draw::PerCell)
+                .unwrap();
+        assert_eq!(bits(&new.0), bits(&old.0));
+        assert_eq!(bits(&new.1), bits(&old.1));
+    }
+
+    #[test]
+    fn the_bootstrap_refuses_what_it_cannot_read() {
+        let Fixture {
+            time,
+            event,
+            family,
+            exposed,
+            cells,
+            ..
+        } = frame();
+        let run = |data: &SurvData<'_>, exposed: &[bool], cause: u32| {
+            bootstrap(
+                data,
+                exposed,
+                &cells,
+                &[1, 2, 3],
+                &[1.0],
+                cause,
+                &BootstrapOptions::default(),
+            )
+        };
+        let build = || SurvData::builder(&time, &event).n_codes(2);
+        let with = build().cluster(&family).build().unwrap();
+        assert!(run(&with, &exposed, 1).is_ok());
+        assert!(run(&with, &exposed[1..], 1).is_err(), "exposed length");
+        assert!(run(&with, &exposed, 0).is_err(), "censoring is no cause");
+        assert!(run(&with, &exposed, 3).is_err(), "cause above n_codes");
+        let without = build().build().unwrap();
+        assert!(run(&without, &exposed, 1).is_err(), "no cluster column");
+        let start = vec![0.0; time.len()];
+        let entry = build().cluster(&family).start(&start).build().unwrap();
+        assert!(run(&entry, &exposed, 1).is_err(), "delayed entry");
     }
 }
