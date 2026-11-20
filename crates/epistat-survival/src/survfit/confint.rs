@@ -4,7 +4,7 @@ use super::{ConfLower, ConfType};
 
 /// Which scale a standard error is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Scale {
+pub(crate) enum Scale {
     /// The standard error of `log S`, which is what Greenwood's variance and
     /// the variance of the cumulative hazard give.
     Log,
@@ -32,7 +32,8 @@ fn min(a: f64, b: f64) -> f64 {
     }
 }
 
-/// The two limits for one time. NaN stands for an undefined limit and becomes
+/// The two limits for one time, shared by the survival and the Cox curves.
+/// NaN stands for an undefined limit and becomes
 /// `None` at the edge of the module.
 ///
 /// `p` is the survival probability, `se` its standard error on `scale` and
@@ -40,7 +41,7 @@ fn min(a: f64, b: f64) -> f64 {
 /// standard error of the lower limit, on the same scale as `se`, as the Peto
 /// and modified lower limits do.
 #[expect(clippy::float_cmp, reason = "R's rules at exact zero and one")]
-pub(super) fn limits(
+pub(crate) fn limits(
     kind: ConfType,
     z: f64,
     p: f64,

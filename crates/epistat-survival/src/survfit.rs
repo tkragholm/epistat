@@ -157,7 +157,7 @@
 //!    data, Commun Stat A 13: 2469-86.
 //! 9. Therneau T. M., Grambsch P. M. (2000) Modeling Survival Data, Springer.
 
-mod confint;
+pub(crate) mod confint;
 mod group;
 mod jackknife;
 mod quantile;

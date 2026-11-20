@@ -218,6 +218,7 @@ use super::{CoxModelFit, CoxOptions, Ties};
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
+use crate::survfit::confint::{self, Scale};
 
 /// The fit with the data and the design it was fitted on.
 ///
@@ -1555,6 +1556,10 @@ pub fn predict_terms(
 
 /// The limits of one curve point, `None` where undefined. The standard error
 /// is that of `log S`.
+#[expect(
+    clippy::float_cmp,
+    reason = "exact one is a probability the curve reaches"
+)]
 fn limits(kind: ConfType, s: f64, se: f64, z: f64) -> (Option<f64>, Option<f64>) {
     let keep = |v: f64| v.is_finite().then_some(v);
     // An undefined standard error gives undefined limits. Without this the
@@ -1566,53 +1571,19 @@ fn limits(kind: ConfType, s: f64, se: f64, z: f64) -> (Option<f64>, Option<f64>)
     if se == 0.0 && kind != ConfType::Arcsin && kind != ConfType::Plain {
         return (Some(s), Some(s));
     }
-    match kind {
-        ConfType::None => (None, None),
-        ConfType::Plain => {
-            let width = se * s * z;
-            (keep((s - width).max(0.0)), keep((s + width).min(1.0)))
-        }
-        ConfType::Log => {
-            if s == 0.0 {
-                return (None, None);
-            }
-            let l = s.ln();
-            (keep((l - z * se).exp()), keep((l + z * se).exp().min(1.0)))
-        }
-        ConfType::LogLog => {
-            if s <= 0.0 || s >= 1.0 {
-                return (None, None);
-            }
-            let spread = z * se / s.ln();
-            let l = (-s.ln()).ln();
-            (
-                keep((-(l - spread).exp()).exp()),
-                keep((-(l + spread).exp()).exp()),
-            )
-        }
-        ConfType::Logit => {
-            if s == 0.0 {
-                return (None, None);
-            }
-            let spread = z * se * (1.0 + s / (1.0 - s));
-            let l = (s / (1.0 - s)).ln();
-            (
-                keep(1.0 - 1.0 / (1.0 + (l - spread).exp())),
-                keep(1.0 - 1.0 / (1.0 + (l + spread).exp())),
-            )
-        }
-        ConfType::Arcsin => {
-            if s == 0.0 {
-                return (None, None);
-            }
-            let spread = 0.5 * z * se * (s / (1.0 - s)).sqrt();
-            let a = s.sqrt().asin();
-            (
-                keep((a - spread).max(0.0).sin().powi(2)),
-                keep((a + spread).min(std::f64::consts::FRAC_PI_2).sin().powi(2)),
-            )
-        }
+    if kind == ConfType::Arcsin && s == 1.0 && se == 0.0 {
+        // The spread is 0 * infinity here, and the clamps below drop that
+        // undefined value, which leaves the whole interval.
+        return (Some(0.0), Some(1.0));
     }
+    if s == 0.0 && matches!(kind, ConfType::Log | ConfType::Logit | ConfType::Arcsin) {
+        return (None, None);
+    }
+    if (s <= 0.0 || s >= 1.0) && kind == ConfType::LogLog {
+        return (None, None);
+    }
+    let (lower, upper) = confint::limits(kind, z, s, se, Scale::Log, None);
+    (keep(lower), keep(upper))
 }
 
 type Band = Option<Vec<Option<f64>>>;
@@ -1817,6 +1788,23 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
 #[cfg(test)]
 mod tests {
     use super::{ConfType, limits, log_product_limit};
+
+    #[test]
+    fn a_curve_at_one_without_variance_keeps_the_whole_arcsin_interval() {
+        assert_eq!(
+            limits(ConfType::Arcsin, 1.0, 0.0, 1.96),
+            (Some(0.0), Some(1.0))
+        );
+        for kind in [
+            ConfType::Plain,
+            ConfType::Log,
+            ConfType::LogLog,
+            ConfType::Logit,
+        ] {
+            let (lo, hi) = limits(kind, 0.5, 0.0, 1.96);
+            assert_eq!((lo, hi), (Some(0.5), Some(0.5)), "{kind:?}");
+        }
+    }
 
     #[test]
     fn an_undefined_standard_error_has_no_limits() {
