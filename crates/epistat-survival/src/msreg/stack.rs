@@ -185,12 +185,10 @@ pub(super) fn fit(
         .sum();
     check_row_count(n_stacked)?;
 
-    // Without a term the design is one column of +1 and -1, alternating by row,
-    // whose coefficient is held at 0 by taking no step. The fit is then the
-    // baseline hazards only, and the column is not part of the model.
-    let dummy_column = terms.is_empty();
-    let p = terms.len().max(1);
-    if dummy_column && opts.init.is_some() {
+    // Without a term the design has no column and the fit is the baseline
+    // hazards only.
+    let p = terms.len();
+    if p == 0 && opts.init.is_some() {
         return Err(Error::input("init: the model has no coefficient"));
     }
     let mut design = Mat::<f64>::zeros(n_stacked, p);
@@ -238,9 +236,6 @@ pub(super) fn fit(
             for &(t, column) in &columns {
                 design[(out, t)] = column.map_or(1.0, |c| x[(i, c)]);
             }
-            if dummy_column {
-                design[(out, 0)] = if out % 2 == 0 { 1.0 } else { -1.0 };
-            }
             out += 1;
         }
     }
@@ -262,12 +257,8 @@ pub(super) fn fit(
         timefix: TimeFix::Exact,
         cause: None,
         offset: offset.as_deref(),
-        init: if dummy_column {
-            Some(&[0.0])
-        } else {
-            opts.init
-        },
-        iter_max: if dummy_column { 0 } else { opts.iter_max },
+        init: opts.init,
+        iter_max: opts.iter_max,
         eps: opts.eps,
     };
     let mut fit = cox::fit(&stacked.as_data(), design.as_ref(), &cox_options)?;
@@ -286,7 +277,7 @@ pub(super) fn fit(
     let n_ids = data.n_ids();
     Ok(MsModel {
         transitions,
-        terms: if dummy_column { Vec::new() } else { terms },
+        terms,
         n_states,
         fit,
         n_stacked,
@@ -297,6 +288,5 @@ pub(super) fn fit(
         offset,
         ties: opts.ties,
         last_time,
-        dummy_column,
     })
 }

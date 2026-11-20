@@ -662,9 +662,6 @@ fn with_input<R>(
     f: impl FnOnce(&Input<'_>) -> R,
 ) -> Result<R> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
-    if x.ncols() == 0 {
-        return Err(Error::input("x has no columns"));
-    }
     check_finite_matrix(x)?;
     check_control(opts, data.n_rows(), x.ncols())?;
     if opts.ties == Ties::Exact {
@@ -767,9 +764,18 @@ fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<(
 /// codes. See the module documentation for the method, the robust variance,
 /// aliased columns and diverging coefficients.
 ///
+/// A design with no column is the model without covariates, `coxph(y ~ 1)`, or
+/// `coxph(y ~ offset(o))` with an offset. It has no coefficients, an empty
+/// covariance, rank 0 and no tests, since there is nothing to test. Its log
+/// partial likelihood is the null one, at the offset, and it takes no
+/// iteration. Strata, weights, entry times, ties and clusters are honoured, so
+/// the likelihood is right in each case. The predictions of
+/// [`basehaz`](crate::cox::basehaz), [`predict`](fn@crate::cox::predict) and
+/// [`survfit`](crate::cox::survfit) accept such a fit.
+///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` has no column, has a number of rows other than
+/// [`Error::Input`] when `x` has a number of rows other than
 /// `data`, or holds a value that is not finite, when `opts.cause` is missing
 /// for a status with several codes or outside the codes, when the rule for
 /// the times finds an interval of length zero, when `opts.offset` has another
@@ -1633,6 +1639,27 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         Some(start.loglik)
     }
     .filter(|v| v.is_finite());
+    if p == 0 {
+        // The model without covariates is its null model: nothing is iterated
+        // or tested.
+        return Ok(CoxModelFit {
+            coefficients: Vec::new(),
+            standard_errors: Vec::new(),
+            covariance: Vec::new(),
+            robust_standard_errors: with_clusters.then(Vec::new),
+            robust_covariance: with_clusters.then(Vec::new),
+            log_partial_likelihood: Some(start.loglik),
+            null_log_partial_likelihood: null_loglik,
+            tests: CoxTests::default(),
+            n_events,
+            n_rows,
+            n_used: n_rows,
+            rank: 0,
+            iterations: 0,
+            converged: true,
+            monotone_columns: Vec::new(),
+        });
+    }
     let initial_loglik = start.loglik;
     let mut accepted_loglik = start.loglik;
     let mut matrix = start.information.clone();

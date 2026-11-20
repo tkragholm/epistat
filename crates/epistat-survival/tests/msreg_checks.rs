@@ -103,6 +103,8 @@ fn the_model_without_covariates_is_the_aalen_johansen_estimate() {
     let x = Mat::<f64>::zeros(d.stop.len(), 0);
     let model = fit(&data, x.as_ref(), &MsOptions::default()).unwrap();
     assert!(model.terms.is_empty() && model.coefficients().is_empty());
+    assert_eq!(model.fit.coefficients.len() + model.fit.covariance.len(), 0);
+    assert_eq!(model.fit.rank, 0);
     let h = model
         .msfit(
             &[],

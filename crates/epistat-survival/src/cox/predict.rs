@@ -642,9 +642,6 @@ impl<'a> Model<'a> {
         check_lengths(&[("data", rows), ("x", m.x.nrows())])?;
         let p = m.x.ncols();
         check_lengths(&[("x columns", p), ("coefficients", m.fit.coefficients.len())])?;
-        if p == 0 {
-            return Err(Error::input("x has no columns"));
-        }
         for j in 0..p {
             for i in 0..rows {
                 if !m.x[(i, j)].is_finite() {
@@ -652,7 +649,7 @@ impl<'a> Model<'a> {
                 }
             }
         }
-        if m.fit.coefficients.iter().all(Option::is_none) {
+        if p > 0 && m.fit.coefficients.iter().all(Option::is_none) {
             return Err(Error::input(
                 "fit: the model has no estimate, so there is nothing to predict from",
             ));

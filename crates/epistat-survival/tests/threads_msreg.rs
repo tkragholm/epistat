@@ -104,4 +104,10 @@ fn msreg_does_not_depend_on_the_number_of_threads() {
             bits_of(&model, &[1.0, 1.0])
         });
     }
+    // The model without covariates is a fit of a design with no column.
+    let none = Mat::<f64>::zeros(covariates.len(), 0);
+    assert_same_on_pools(&POOLS, || {
+        let model = fit(&data, none.as_ref(), &MsOptions::default()).unwrap();
+        bits_of(&model, &[])
+    });
 }

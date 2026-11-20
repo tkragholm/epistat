@@ -143,11 +143,7 @@ impl MsModel {
             .iter()
             .map(|b| b.unwrap_or(0.0))
             .collect();
-        let v = if self.dummy_column {
-            vec![0.0; p * p]
-        } else {
-            covariance_matrix(&self.fit, opts.variance)?
-        };
+        let v = covariance_matrix(&self.fit, opts.variance)?;
         let k_n = self.transitions.len();
 
         // The baseline of each transition and its relative risk and covariate
@@ -160,11 +156,9 @@ impl MsModel {
                 .map_err(|_| Error::input("more baselines than a u32 counts"))?;
             strata.push(baseline.strata.iter().find(|s| s.code == Some(code)));
             let mut row = vec![0.0; p];
-            if !self.dummy_column {
-                for (t, term) in self.terms.iter().enumerate() {
-                    if term.transitions.contains(&k) {
-                        row[t] = term.column.map_or(1.0, |c| profile[c]);
-                    }
+            for (t, term) in self.terms.iter().enumerate() {
+                if term.transitions.contains(&k) {
+                    row[t] = term.column.map_or(1.0, |c| profile[c]);
                 }
             }
             for (r, c) in row.iter_mut().zip(&baseline.centre) {

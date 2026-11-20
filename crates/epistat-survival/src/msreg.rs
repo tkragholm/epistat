@@ -305,18 +305,13 @@ pub struct MsModel {
     offset: Option<Vec<f64>>,
     ties: Ties,
     last_time: f64,
-    dummy_column: bool,
 }
 
 impl MsModel {
     /// The coefficients of the terms, `None` for an aliased term, one per term.
     #[must_use]
     pub fn coefficients(&self) -> &[Option<f64>] {
-        if self.dummy_column {
-            &[]
-        } else {
-            &self.fit.coefficients
-        }
+        &self.fit.coefficients
     }
 
     /// The number of covariate columns the profile of a prediction has.
@@ -365,9 +360,8 @@ fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, V
 /// Without covariates and without terms, which is `x` with no column and
 /// [`MsTerms::Separate`] or [`MsTerms::Common`], the model is the baseline
 /// hazards only, and the predictions are the Nelson-Aalen type estimates of
-/// each transition. [`MsModel::coefficients`] is then empty, and `fit` is the fit
-/// of one column of alternating signs with its coefficient held at 0, which is
-/// not part of the model.
+/// each transition. [`MsModel::coefficients`] is then empty, and `fit` is the
+/// [`crate::cox::fit`] of a design without columns.
 ///
 /// # Errors
 ///
