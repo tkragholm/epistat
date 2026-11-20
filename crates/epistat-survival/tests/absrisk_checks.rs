@@ -212,7 +212,7 @@ fn strata_are_required_and_known() {
 }
 
 #[test]
-fn what_the_standard_error_needs() {
+fn the_standard_error_with_weights_and_entry_times() {
     let s = sim(120, 3);
     let weight: Vec<f64> = (0..s.stop.len()).map(|i| 1.0 + (i % 2) as f64).collect();
     let start: Vec<f64> = vec![0.0; s.stop.len()];
@@ -224,23 +224,37 @@ fn what_the_standard_error_needs() {
         designs: &new_designs,
         stratum: None,
     };
-    // Case weights and entry times are refused for the standard error only.
     let weighted = SurvData::builder(&s.stop, &s.status)
         .n_codes(2)
         .weight(&weight)
         .build()
         .unwrap();
     let model = CauseSpecificCox::fit(&weighted, &designs, &CscOptions::default()).unwrap();
-    assert!(model.predict(&new, &[3.0], 1, &risk_opts(true)).is_err());
-    assert!(model.predict(&new, &[3.0], 1, &risk_opts(false)).is_ok());
+    let out = model.predict(&new, &[3.0], 1, &risk_opts(true)).unwrap();
+    assert!(out.std_err.unwrap()[0].is_some_and(|v| v > 0.0));
+    // Entry times of zero change nothing.
+    let plain = SurvData::builder(&s.stop, &s.status)
+        .n_codes(2)
+        .build()
+        .unwrap();
     let entry = SurvData::builder(&s.stop, &s.status)
         .n_codes(2)
         .start(&start)
         .build()
         .unwrap();
-    let model = CauseSpecificCox::fit(&entry, &designs, &CscOptions::default()).unwrap();
-    assert!(model.predict(&new, &[3.0], 1, &risk_opts(true)).is_err());
-    assert!(model.predict(&new, &[3.0], 1, &risk_opts(false)).is_ok());
+    let a = CauseSpecificCox::fit(&plain, &designs, &CscOptions::default())
+        .unwrap()
+        .predict(&new, &[3.0], 1, &risk_opts(true))
+        .unwrap();
+    let b = CauseSpecificCox::fit(&entry, &designs, &CscOptions::default())
+        .unwrap()
+        .predict(&new, &[3.0], 1, &risk_opts(true))
+        .unwrap();
+    let (x, y) = (
+        a.std_err.unwrap()[0].unwrap(),
+        b.std_err.unwrap()[0].unwrap(),
+    );
+    assert!((x - y).abs() <= 1e-13 * x, "{x} against {y}");
 }
 
 #[test]

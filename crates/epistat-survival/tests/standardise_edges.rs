@@ -139,11 +139,12 @@ fn case_weights_act_as_repeated_rows() {
         let (u, v) = (a.risk[k].unwrap(), b.risk[k].unwrap());
         assert!((u - v).abs() <= bound * u, "{u} against {v}");
     }
-    // The standard error describes unit weights only.
-    let refused = standardise_cox(
+    // The standard error is defined for case weights.
+    let fitted = cox::fit(&weighted, x.as_ref(), &options).unwrap();
+    let out = standardise_cox(
         &weighted,
         x.as_ref(),
-        &cox::fit(&weighted, x.as_ref(), &options).unwrap(),
+        &fitted,
         &options,
         &level,
         &times,
@@ -151,6 +152,12 @@ fn case_weights_act_as_repeated_rows() {
             std_err: true,
             ..StandardiseOptions::default()
         },
+    )
+    .unwrap();
+    assert!(
+        out.std_err
+            .unwrap()
+            .iter()
+            .all(|v| v.is_some_and(|v| v > 0.0))
     );
-    assert!(refused.is_err());
 }

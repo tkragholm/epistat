@@ -10,8 +10,9 @@
 //! and the position of `T_i` itself, when it is a grid time, is `q_i - 1`.
 
 use epistat_linalg::MatRef;
+use epistat_stats::sum::Compensated;
 
-use crate::cox::predict::{BaselineOptions, Centring, FittedModel, basehaz};
+use crate::cox::predict::{BaselineOptions, Centring, FittedModel, basehaz, reference_offset};
 use crate::cox::{CoxModelFit, CoxOptions, Ties, score_residuals};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
@@ -154,6 +155,13 @@ pub(crate) struct TrainModel {
     /// are before the exit time of the row. For a row with the event of the
     /// model, the last of them is the event.
     pub(crate) rank_q: Vec<usize>,
+    /// The number of event times of the model, in the stratum of the row, at
+    /// or before the entry time of the row, 0 without entry times.
+    pub(crate) rank_q0: Vec<usize>,
+    /// The derivative of the mean offset of the fit with respect to the case
+    /// weight of the row, `(o_i - mean offset) / total weight`; empty without
+    /// an offset.
+    pub(crate) d_offset: Vec<f64>,
     pub(crate) strata: Vec<StratumSums>,
 }
 
@@ -162,6 +170,11 @@ pub(crate) struct TrainModel {
 pub(crate) struct Influence {
     /// `q_i` of every training row.
     pub(crate) count_le: Vec<usize>,
+    /// The number of grid times at or before the entry time of every training
+    /// row, 0 without entry times.
+    pub(crate) count_le0: Vec<usize>,
+    /// The case weight of every training row.
+    pub(crate) weight: Vec<f64>,
     pub(crate) stratum: Vec<usize>,
     pub(crate) models: Vec<TrainModel>,
 }
@@ -169,24 +182,6 @@ pub(crate) struct Influence {
 impl Influence {
     pub(crate) fn new(models: &[ModelInput<'_>], base: &Baselines) -> Result<Self> {
         let data = &models[0].data;
-        if data.followup()?.start().is_some() {
-            return Err(Error::input(
-                "std_err: the influence function is for data without entry times",
-            ));
-        }
-        if data
-            .weight()
-            .is_some_and(|w| w.iter().any(|&w| w > 0.0 && w - 1.0 != 0.0))
-        {
-            return Err(Error::input(
-                "std_err: the influence function is for case weights of 1",
-            ));
-        }
-        if models.iter().any(|m| m.options.offset.is_some()) {
-            return Err(Error::input(
-                "std_err: the influence function is for models without an offset",
-            ));
-        }
         let rows: Vec<usize> = data.used_rows().map(|i| i as usize).collect();
         let stop = data.followup()?.stop();
         let stratum: Vec<usize> = rows
@@ -196,6 +191,17 @@ impl Influence {
         let count_le: Vec<usize> = rows
             .iter()
             .map(|&i| base.grid.partition_point(|&g| g <= stop[i]))
+            .collect();
+        let count_le0: Vec<usize> = match data.followup()?.start() {
+            Some(start) => rows
+                .iter()
+                .map(|&i| base.grid.partition_point(|&g| g <= start[i]))
+                .collect(),
+            None => vec![0; rows.len()],
+        };
+        let weight: Vec<f64> = rows
+            .iter()
+            .map(|&i| data.weight().map_or(1.0, |w| w[i]))
             .collect();
         let mut trained = Vec::with_capacity(models.len());
         for (m, model) in models.iter().enumerate() {
@@ -207,11 +213,15 @@ impl Influence {
                 &rows,
                 &stratum,
                 &count_le,
+                &count_le0,
+                &weight,
                 stop,
             )?);
         }
         Ok(Self {
             count_le,
+            count_le0,
+            weight,
             stratum,
             models: trained,
         })
@@ -226,6 +236,8 @@ fn train_model(
     rows: &[usize],
     stratum: &[usize],
     count_le: &[usize],
+    count_le0: &[usize],
+    weight: &[f64],
     stop: &[f64],
 ) -> Result<TrainModel> {
     let x = model.x;
@@ -240,6 +252,18 @@ fn train_model(
             .map(|&i| i64::from(status[i]) == i64::from(code))
             .collect()
     };
+    // The baseline of `basehaz` is at the mean offset of the fit, so the risk
+    // scores are measured from it and a new row has the mean offset.
+    let mean_offset = if model.options.offset.is_some() {
+        reference_offset(&FittedModel {
+            data: &model.data,
+            x,
+            fit: model.fit,
+            options: &model.options,
+        })?
+    } else {
+        0.0
+    };
     let risk: Vec<f64> = rows
         .iter()
         .map(|&i| {
@@ -247,9 +271,22 @@ fn train_model(
             for (a, b) in beta.iter().enumerate() {
                 eta += x[(i, a)] * b;
             }
+            if let Some(offset) = model.options.offset {
+                eta += offset[i] - mean_offset;
+            }
             eta.exp()
         })
         .collect();
+    let d_offset: Vec<f64> = match model.options.offset {
+        Some(offset) => {
+            let total: f64 = weight.iter().sum();
+            rows.iter()
+                .map(|&i| (offset[i] - mean_offset) / total)
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    let weighted_risk: Vec<f64> = risk.iter().zip(weight).map(|(r, w)| r * w).collect();
     if risk.iter().any(|v| !v.is_finite() || *v <= 0.0) {
         return Err(Error::input(format!(
             "model {m}: a risk score of the fit is not finite"
@@ -280,15 +317,15 @@ fn train_model(
         let jumps = &grid_stratum.jumps;
         let lam = &grid_stratum.lam;
         let (s0, e) = risk_sets(
+            &model.data,
             rows,
             stratum,
             s,
-            stop,
-            &risk,
+            &weighted_risk,
             x,
             p,
             jumps.iter().map(|&j| base.grid[j]),
-        );
+        )?;
         let mut lam_over_s0 = vec![0.0; n_grid];
         let mut e_lam = vec![0.0; n_grid * p];
         for (l, &j) in jumps.iter().enumerate() {
@@ -336,6 +373,13 @@ fn train_model(
                 .partition_point(|&j| j < count_le[i])
         })
         .collect();
+    let rank_q0: Vec<usize> = (0..n)
+        .map(|i| {
+            grid_model.strata[stratum[i]]
+                .jumps
+                .partition_point(|&j| j < count_le0[i])
+        })
+        .collect();
     Ok(TrainModel {
         p,
         risk,
@@ -343,6 +387,8 @@ fn train_model(
         event_over_s0,
         event,
         rank_q,
+        rank_q0,
+        d_offset,
         strata: sums,
     })
 }
@@ -368,46 +414,70 @@ fn covariance(model: &ModelInput<'_>, m: usize) -> Result<Vec<f64>> {
 }
 
 /// `S0` and `E` of the rows of stratum `s` at the event times, which are
-/// ascending: the sum of the risk scores of the rows with exit time at or after
-/// the time, and the risk-score weighted mean of their covariates. The rows are
-/// added from the latest exit time down.
+/// ascending: the sum of `weighted_risk`, the case weight times the risk score,
+/// over the rows at risk at the time, those with entry time before it and exit
+/// time at or after it, and the mean of their covariates with those weights.
+/// The rows are added from the latest exit time down, and with entry times the
+/// rows not yet entered are taken out again, in compensated sums.
 #[expect(
     clippy::too_many_arguments,
     reason = "the columns of one risk-set pass"
 )]
 fn risk_sets(
+    data: &SurvData<'_>,
     rows: &[usize],
     stratum: &[usize],
     s: usize,
-    stop: &[f64],
-    risk: &[f64],
+    weighted_risk: &[f64],
     x: MatRef<'_, f64>,
     p: usize,
     times: impl DoubleEndedIterator<Item = f64> + ExactSizeIterator,
-) -> (Vec<f64>, Vec<f64>) {
+) -> Result<(Vec<f64>, Vec<f64>)> {
+    let surv = data.followup()?;
+    let stop = surv.stop();
+    let start = surv.start();
     let mut order: Vec<usize> = (0..rows.len()).filter(|&i| stratum[i] == s).collect();
     order.sort_by(|&a, &b| stop[rows[a]].total_cmp(&stop[rows[b]]));
+    let mut by_start: Vec<usize> = if start.is_some() {
+        order.clone()
+    } else {
+        Vec::new()
+    };
+    if let Some(start) = start {
+        by_start.sort_by(|&a, &b| start[rows[a]].total_cmp(&start[rows[b]]));
+    }
     let n_times = times.len();
     let mut s0 = vec![0.0; n_times];
     let mut e = vec![0.0; n_times * p];
-    let mut s1 = vec![0.0; p];
-    let mut acc = 0.0;
+    let mut acc = Compensated::new();
+    let mut s1 = vec![Compensated::new(); p];
     let mut ptr = order.len();
+    let mut out = by_start.len();
     for (l, t) in times.enumerate().rev() {
         while ptr > 0 && stop[rows[order[ptr - 1]]] >= t {
             ptr -= 1;
             let i = order[ptr];
-            acc += risk[i];
+            acc.add(weighted_risk[i]);
             for a in 0..p {
-                s1[a] += risk[i] * x[(rows[i], a)];
+                s1[a].add(weighted_risk[i] * x[(rows[i], a)]);
             }
         }
-        s0[l] = acc;
+        if let Some(start) = start {
+            while out > 0 && start[rows[by_start[out - 1]]] >= t {
+                out -= 1;
+                let i = by_start[out];
+                acc.add(-weighted_risk[i]);
+                for a in 0..p {
+                    s1[a].add(-(weighted_risk[i] * x[(rows[i], a)]));
+                }
+            }
+        }
+        s0[l] = acc.value();
         for a in 0..p {
-            e[l * p + a] = s1[a] / acc;
+            e[l * p + a] = s1[a].value() / s0[l];
         }
     }
-    (s0, e)
+    Ok((s0, e))
 }
 
 /// How the influence function treats the product-limit survival of the
@@ -814,40 +884,46 @@ impl<'a> Shape<'a> {
     }
 
     /// The influence of the models on the risk at the `u`-th needed count, for
-    /// the training row `i`.
+    /// the training row `i`: the case weight of the row times the derivative of
+    /// the risk with respect to it.
     pub(crate) fn model_part(&self, acc: &Acc, i: usize, u: usize) -> f64 {
         let k = self.cause_model;
         let jt = self.needed[u];
         let q = self.infl.count_le[i];
+        let q0 = self.infl.count_le0[i];
         let s = self.infl.stratum[i];
-        let mut value = 0.0;
+        // The coefficients' part carries the case weight in the score
+        // residual already.
+        let mut beta_part = 0.0;
+        let mut rest = 0.0;
         for (train, g) in self.infl.models.iter().zip(&acc.g) {
             let p = train.p;
             let row = &train.if_beta[i * p..(i + 1) * p];
             let coefficient = &g[jt * p..(jt + 1) * p];
             for (r, c) in row.iter().zip(coefficient) {
-                value += r * c;
+                beta_part += r * c;
             }
         }
         let sa = &acc.strata[s];
         if sa.hk.is_empty() {
-            return value;
+            return beta_part;
         }
         let tk = &self.infl.models[k];
-        value -= tk.risk[i] * sa.hk[jt.min(q)];
+        rest -= tk.risk[i] * (sa.hk[jt.min(q)] - sa.hk[jt.min(q0)]);
         if tk.event[i] && q <= jt {
-            value += sa.w[q - 1] * tk.event_over_s0[i];
+            rest += sa.w[q - 1] * tk.event_over_s0[i];
         }
         for &m in self.survival {
             let train = &self.infl.models[m];
             let width = self.base.models[m].strata[s].jumps.len() + 1;
             let at = u * width;
             let rank = train.rank_q[i].min(self.rank_jt[m][s][u]);
-            value += train.risk[i] * sa.prefix[m][at + rank];
+            let rank0 = train.rank_q0[i].min(self.rank_jt[m][s][u]);
+            rest += train.risk[i] * (sa.prefix[m][at + rank] - sa.prefix[m][at + rank0]);
             if train.event[i] && q <= jt {
-                value -= train.event_over_s0[i] * sa.mat[m][at + train.rank_q[i] - 1];
+                rest -= train.event_over_s0[i] * sa.mat[m][at + train.rank_q[i] - 1];
             }
         }
-        value
+        beta_part + self.infl.weight[i] * rest
     }
 }

@@ -21,6 +21,8 @@ pub(super) struct Csc<'a> {
     pub(super) models: &'a [ModelInput<'a>],
     pub(super) base: &'a Baselines,
     pub(super) cause_model: usize,
+    /// The models that form the event-free survival.
+    pub(super) survival: &'a [usize],
     pub(super) product_limit: bool,
     pub(super) form: InfluenceForm,
     /// The rows of positive weight, their strata and weights divided by the
@@ -100,17 +102,17 @@ impl Csc<'_> {
         let top = needed.last().copied().unwrap_or(0);
         let n_needed = needed.len();
         let n = self.rows.len();
-        let survival: Vec<usize> = (0..self.models.len()).collect();
+        let survival = self.survival;
         let shape = infl
             .filter(|_| n_needed > 0)
-            .map(|infl| Shape::new(self.base, infl, self.cause_model, &survival, needed));
+            .map(|infl| Shape::new(self.base, infl, self.cause_model, survival, needed));
         let exact = infl.is_some() && self.form == InfluenceForm::Exact;
         let path_of = |buf: &RowBuf, s: usize, exact: bool| {
             self.base.path(
                 &buf.theta,
                 s,
                 top,
-                &survival,
+                survival,
                 self.cause_model,
                 self.product_limit,
                 exact,

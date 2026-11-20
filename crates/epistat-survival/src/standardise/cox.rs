@@ -22,6 +22,8 @@ struct Acc {
     a: Vec<f64>,
     /// `sum S theta (L x - int E dL)`, `p` values.
     g: Vec<f64>,
+    /// `sum S theta L`, the derivative with respect to the log risk score.
+    d: f64,
 }
 
 impl CoxEval<'_> {
@@ -64,6 +66,7 @@ impl CoxEval<'_> {
                             fbar: 0.0,
                             a: vec![0.0; n_strata],
                             g: vec![0.0; if infl.is_some() { p } else { 0 }],
+                            d: 0.0,
                         };
                         let mut x = vec![0.0; p];
                         for i in range {
@@ -76,6 +79,7 @@ impl CoxEval<'_> {
                             if let Some(infl) = infl {
                                 let st = wt * surv * theta;
                                 acc.a[s] += st;
+                                acc.d += st * cum;
                                 let sums = &infl.models[0].strata[s];
                                 for (a, g) in acc.g.iter_mut().enumerate() {
                                     *g += st * (cum * x[a] - sums.cum_e_lam[(c - 1) * p + a]);
@@ -88,6 +92,7 @@ impl CoxEval<'_> {
                         a.fbar += b.fbar;
                         add(&mut a.a, &b.a);
                         add(&mut a.g, &b.g);
+                        a.d += b.d;
                     },
                 )?;
                 risk[l * n_needed + u] = Some(acc.fbar);
@@ -113,6 +118,8 @@ impl CoxEval<'_> {
                 for i in range {
                     let s = infl.stratum[i];
                     let q = infl.count_le[i];
+                    let q0 = infl.count_le0[i];
+                    let w_train = infl.weight[i];
                     let train = &infl.models[0];
                     let sums = &train.strata[s];
                     let wt = self.weight[i];
@@ -122,21 +129,28 @@ impl CoxEval<'_> {
                             let theta = self.theta(level, self.rows[i], &mut x)?;
                             let cum = self.base.models[0].strata[s].cum[c - 1];
                             let f_i = 1.0 - (-theta * cum).exp();
-                            let mut value = 0.0;
+                            // The coefficients' part has the case weight in the
+                            // score residual already.
+                            let mut beta_part = 0.0;
                             for (r, g) in train.if_beta[i * p..(i + 1) * p].iter().zip(&acc.g) {
-                                value += r * g;
+                                beta_part += r * g;
                             }
-                            let m = q.min(c);
-                            let cum_a = if m >= 1 {
-                                sums.cum_lam_over_s0[m - 1]
-                            } else {
-                                0.0
+                            let cum_at = |m: usize| {
+                                if m >= 1 {
+                                    sums.cum_lam_over_s0[m - 1]
+                                } else {
+                                    0.0
+                                }
                             };
-                            value -= train.risk[i] * acc.a[s] * cum_a;
+                            let mut value =
+                                -train.risk[i] * acc.a[s] * (cum_at(q.min(c)) - cum_at(q0.min(c)));
                             if train.event[i] && q <= c {
                                 value += acc.a[s] * train.event_over_s0[i];
                             }
-                            own[l] = value + wt * (f_i - acc.fbar);
+                            if !train.d_offset.is_empty() {
+                                value += train.d_offset[i] * acc.d;
+                            }
+                            own[l] = beta_part + w_train * value + wt * (f_i - acc.fbar);
                         }
                         let base = u * n_levels * n_levels;
                         for a in 0..n_levels {

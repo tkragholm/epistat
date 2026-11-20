@@ -32,11 +32,11 @@
 //!
 //! The estimate depends on the data twice: through the outcome model and
 //! through the empirical distribution of the covariates over which the risks
-//! are averaged. With `n` persons of weight one and the same persons as the
-//! population, the influence function of `F_a(t)` for person `i` is
+//! are averaged. With the same persons as the population and `W` the sum of
+//! the case weights, the influence function of `F_a(t)` for person `i` is
 //!
 //! ```text
-//! IF_i = (1/n) sum over l of IF_i( F(t | x_l(a)) )  +  (F(t | x_i(a)) - F_a(t)) / n,
+//! IF_i = (1/W) sum over l of w_l IF_i( F(t | x_l(a)) )  +  w_i (F(t | x_i(a)) - F_a(t)) / W,
 //! ```
 //!
 //! where the first term is the influence function of the risk of one covariate
@@ -63,10 +63,19 @@
 //! order, so that the bits do not depend on the number of threads.
 //!
 //! The influence functions of the outcome models are those of
-//! [`absrisk`](crate::absrisk): for data without entry times, case weights of 1
-//! and no offset, with the score residuals of the Breslow likelihood and the
-//! baseline form of the fit, so that the standard errors differ from
-//! riskRegression's with tied event times in the way described there.
+//! [`absrisk`](crate::absrisk), with case weights, entry times and, for
+//! [`standardise_cox`], an offset, with the score residuals of the Breslow
+//! likelihood and the baseline form of the fit, so that the standard errors
+//! differ from riskRegression's with tied event times in the way described
+//! there. The case weight of a person enters the influence function as the
+//! weight of the person in the models and as the weight of the person in the
+//! average.
+//!
+//! With an offset, the baseline of the model is that of `basehaz`, at the mean
+//! offset of the fit, and the risk of every person is that of a person with the
+//! mean offset: the covariates of a level carry no offset. The mean offset
+//! depends on the case weights, which the influence function takes into
+//! account. `ate` of riskRegression predicts with the offset of each person.
 //!
 //! For cause-specific models with the product limit the influence function is
 //! that of the product-limit survival itself, as described in
@@ -91,9 +100,13 @@
 //! - With the product limit the standard error is that of the exact derivative
 //!   of the estimate, not riskRegression's first-order one, unless
 //!   [`InfluenceForm::Exponential`] is chosen.
-//! - Case weights enter the estimate as weights of the persons averaged,
-//!   `ate` has none. The standard error refuses them.
-//! - Cause-specific models with `surv.type = "survival"` are not provided.
+//! - Case weights enter the estimate as weights of the persons averaged and
+//!   the standard error takes them into account, `ate` has none.
+//! - With entry times riskRegression's standard error is not the derivative of
+//!   the estimate, see [`absrisk`](crate::absrisk). The one here is.
+//! - Cause-specific models with `surv.type = "survival"` are standardised as
+//!   `ate` does: the overall model gives the event-free survival, as in
+//!   [`SurvType::Survival`].
 //!
 //! # References
 //!
@@ -112,12 +125,13 @@ use std::ops::Range;
 use epistat_linalg::MatRef;
 use epistat_stats::normal;
 
-use crate::absrisk::{CscOptions, SurvType};
+use crate::absrisk::{CscOptions, SurvType, overall_data};
 use crate::check::{check_lengths, refuse_non_finite};
 use crate::cox::{CoxModelFit, CoxOptions};
 use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
+use crate::timefix::TimeFix;
 
 mod cox;
 mod csc;
@@ -157,8 +171,8 @@ impl<'a> Level<'a> {
 /// The options of [`standardise_cox`] and [`standardise_cause_specific`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StandardiseOptions {
-    /// Whether to give standard errors and limits. It is an error for data with
-    /// case weights other than 1, entry times or an offset.
+    /// Whether to give standard errors and limits. It is an error for a
+    /// covariance of a model that is not defined.
     pub std_err: bool,
     /// The confidence level of the limits, in `(0, 1)`.
     pub conf_level: f64,
@@ -366,9 +380,8 @@ fn inference(estimate: &[Option<f64>], se: &[Option<f64>], null: f64, z: f64) ->
 /// [`Error::Input`] for no level, a level that does not match the design, a
 /// value that is not finite, a time that is not finite, a coefficient that is
 /// `None`, a risk score that is not finite, a `conf_level` outside `(0, 1)`, no
-/// row of positive weight, and with `std_err` for the data the influence
-/// function does not describe: entry times, case weights other than 1, an
-/// offset, a covariance that is not defined.
+/// row of positive weight, and with `std_err` for a covariance that is not
+/// defined.
 pub fn standardise_cox<'a>(
     data: &SurvData<'a>,
     design: MatRef<'a, f64>,
@@ -393,14 +406,15 @@ pub fn standardise_cox<'a>(
 /// [`CauseSpecificCox::predict`](crate::absrisk::CauseSpecificCox::predict).
 ///
 /// `data`, `designs`, `fits` and `csc` are those of
-/// [`CauseSpecificCox::from_fits`](crate::absrisk::CauseSpecificCox::from_fits),
-/// with `SurvType::Hazard`.
+/// [`CauseSpecificCox::from_fits`](crate::absrisk::CauseSpecificCox::from_fits).
+/// With `SurvType::Survival` the designs and fits are those of the cause and
+/// of the time to any event, and `cause` is the cause of the fit.
 ///
 /// # Errors
 ///
 /// [`Error::Input`] as for [`standardise_cox`], for designs and fits that do
-/// not match the event codes of the data, for a cause outside the codes, and for
-/// `SurvType::Survival`.
+/// not match the event codes of the data, and for a cause outside the codes or,
+/// with `SurvType::Survival`, not the cause of the fit.
 #[expect(
     clippy::too_many_arguments,
     reason = "the models, the levels and the options of one estimate"
@@ -415,11 +429,6 @@ pub fn standardise_cause_specific<'a>(
     times: &[f64],
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {
-    if csc.surv_type != SurvType::Hazard {
-        return Err(Error::input(
-            "surv_type: only SurvType::Hazard is provided for standardised risks",
-        ));
-    }
     let fixed = data.clone().with_timefix(csc.timefix)?;
     let n_codes = fixed.followup()?.n_codes();
     if n_codes < 2 {
@@ -432,25 +441,76 @@ pub fn standardise_cause_specific<'a>(
             "cause {cause} is outside 1..={n_codes}"
         )));
     }
-    check_lengths(&[
-        ("models", n_codes as usize),
-        ("designs", designs.len()),
-        ("fits", fits.len()),
-    ])?;
-    let models: Vec<ModelInput<'a>> = (1..=n_codes)
-        .map(|code| ModelInput {
-            data: fixed.clone(),
-            x: designs[code as usize - 1],
-            fit: &fits[code as usize - 1],
-            options: CoxOptions {
-                ties: csc.ties,
-                timefix: csc.timefix,
-                cause: Some(code),
-                ..CoxOptions::default()
-            },
-        })
-        .collect();
-    run(&models, Some(cause as usize - 1), levels, times, opts)
+    let base = CoxOptions {
+        ties: csc.ties,
+        timefix: csc.timefix,
+        ..CoxOptions::default()
+    };
+    match csc.surv_type {
+        SurvType::Hazard => {
+            check_lengths(&[
+                ("models", n_codes as usize),
+                ("designs", designs.len()),
+                ("fits", fits.len()),
+            ])?;
+            let models: Vec<ModelInput<'a>> = (1..=n_codes)
+                .map(|code| ModelInput {
+                    data: fixed.clone(),
+                    x: designs[code as usize - 1],
+                    fit: &fits[code as usize - 1],
+                    options: CoxOptions {
+                        cause: Some(code),
+                        ..base
+                    },
+                })
+                .collect();
+            let survival: Vec<usize> = (0..models.len()).collect();
+            run(
+                &models,
+                Some((cause as usize - 1, &survival)),
+                levels,
+                times,
+                opts,
+            )
+        }
+        SurvType::Survival { cause: fitted } => {
+            if cause != fitted {
+                return Err(Error::input(format!(
+                    "cause {cause}: the models were fitted for cause {fitted}"
+                )));
+            }
+            check_lengths(&[
+                ("models", 2),
+                ("designs", designs.len()),
+                ("fits", fits.len()),
+            ])?;
+            // The model of the time to any event reads the data with every
+            // event as the event; its times are fixed already.
+            let overall = overall_data(&fixed)?;
+            let models = [
+                ModelInput {
+                    data: fixed.clone(),
+                    x: designs[0],
+                    fit: &fits[0],
+                    options: CoxOptions {
+                        cause: Some(fitted),
+                        ..base
+                    },
+                },
+                ModelInput {
+                    data: overall.as_data(),
+                    x: designs[1],
+                    fit: &fits[1],
+                    options: CoxOptions {
+                        cause: None,
+                        timefix: TimeFix::Exact,
+                        ..base
+                    },
+                },
+            ];
+            run(&models, Some((0, &[1])), levels, times, opts)
+        }
+    }
 }
 
 /// The rows of a level for one model.
@@ -545,7 +605,7 @@ fn prepare<'a>(
 
 fn run(
     models: &[ModelInput<'_>],
-    cause_model: Option<usize>,
+    cause_model: Option<(usize, &[usize])>,
     levels: &[Level<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
@@ -612,10 +672,11 @@ fn run(
             weight: &weight,
         }
         .evaluate(&rows_of_levels, infl.as_ref(), &needed)?,
-        Some(k) => csc::Csc {
+        Some((k, survival)) => csc::Csc {
             models,
             base: &base,
             cause_model: k,
+            survival,
             product_limit: opts.product_limit,
             form: opts.influence,
             rows: &rows,

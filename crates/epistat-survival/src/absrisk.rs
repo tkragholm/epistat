@@ -59,19 +59,23 @@
 //! coefficients, the influence function of subject `i` is `V u_i`, with `V` the
 //! covariance of the fit (the robust one when the fit has clusters) and `u_i`
 //! the score residual of the Breslow partial likelihood at the estimate. For
-//! the baseline, with `S0(s)` and `E(s)` the risk-score sum and the risk-score
-//! weighted mean of the covariates over the risk set at `s`,
-//! `e_i = exp(x_i' beta)`, and `d_i` the event indicator of the model, the
-//! influence function of the increment of the cumulative hazard at `s` is
+//! the baseline, with `w_i` the case weight, `S0(s)` and `E(s)` the sum of
+//! `w_i e_i` and the weighted mean of the covariates with those weights over
+//! the risk set at `s`, `e_i = exp(x_i' beta)`, and `d_i` the event indicator
+//! of the model, the influence function of the increment of the cumulative
+//! hazard at `s` is
 //!
 //! ```text
 //! IF_i(dL(s)) = - IF_i(beta)' E(s) dL(s)
-//!               - e_i 1(s <= T_i) dL(s) / S0(s)
-//!               + d_i 1(T_i = s) / S0(s),
+//!               + w_i ( d_i 1(T_i = s) - e_i 1(a_i < s <= T_i) dL(s) ) / S0(s),
 //! ```
 //!
 //! and that of the cumulative hazard is the sum of these over the event times
-//! up to it. The influence function of `F_k(t | x)` follows from
+//! up to it. The risk set of a row with entry time `a_i` is the times in
+//! `(a_i, T_i]`, as in `coxph` with counting-process data, and the influence
+//! function of a row is its case weight times the derivative of the estimate
+//! with respect to the weight, as in the score residual that `IF_i(beta)` is
+//! made of. The influence function of `F_k(t | x)` follows from
 //! `F_k = sum S theta_k dL_k` by the chain rule over the coefficients and the
 //! baselines of every model, with the derivative of the event-free survival
 //! `S(s_j-)` as follows.
@@ -105,11 +109,14 @@
 //! `O(n p + J)` per model for the training rows and `O(T J)` for the sums of
 //! one row with `T` times, not the `n` by `J` matrices of riskRegression.
 //!
-//! The influence functions describe the fit with unit case weights, no entry
-//! times and no offset, so the standard error is an error for data that has
-//! them. The fit of the coefficients with tied times is the Efron one when the
-//! options say so, and the influence function is that of the Breslow
-//! likelihood, as in riskRegression.
+//! The standard error is that of case weights as sampling weights: a person of
+//! weight `w` is one unit of the influence function, `w` times the derivative
+//! of the estimate with respect to the weight. Integer weights give the
+//! estimates of repeated rows, and a standard error whose square is
+//! `sum w_i^2 d_i^2` where the repeated rows give `sum w_i d_i^2`, with `d_i`
+//! the derivative. The fit of the coefficients with tied times is the Efron one
+//! when the options say so, and the influence function is that of the Breslow
+//! likelihood, as in riskRegression. The models of this module have no offset.
 //!
 //! # Confidence limits
 //!
@@ -132,7 +139,12 @@
 //!   not riskRegression's first-order one. [`InfluenceForm::Exponential`]
 //!   gives riskRegression's number, and the tests against R use it.
 //! - riskRegression's `predictCox` refuses case weights. Here the baselines
-//!   take them as `basehaz` does, and only the standard error refuses them.
+//!   and the standard error take them.
+//! - With entry times (counting-process data) riskRegression's standard error
+//!   is not the derivative of the estimate: it differs by up to 30 per cent at
+//!   early times on the test data (`tests/data/influence_ext.R`), shrinking
+//!   later. The standard error here is the derivative, checked against refitted
+//!   numerical derivatives, and its risks agree with `predictCox`.
 //! - A model with no covariate has no fit here (`cox::fit` needs a column).
 //!   riskRegression then extrapolates the risk beyond the last follow-up time
 //!   when the last row is an event, and here the risk is `None` there.
@@ -250,8 +262,8 @@ pub struct RiskOptions {
     /// hazard, as `product.limit` of `predict.CauseSpecificCox`, whose default
     /// this is, or the exponential of minus the cumulative hazard.
     pub product_limit: bool,
-    /// Whether to give standard errors, `se`. It is an error for data with
-    /// case weights, entry times or an offset, see the module documentation.
+    /// Whether to give standard errors, `se`, from the influence functions of
+    /// the models, see the module documentation.
     pub std_err: bool,
     /// How the standard error takes the derivative of the product limit.
     /// `Exact`, the derivative of the estimate. `InfluenceForm::Exponential`
@@ -372,9 +384,8 @@ impl<'a> CauseSpecificCox<'a> {
     /// number or in columns, when a new stratum is not one of the data or is
     /// missing for data with strata, when a model has a coefficient that is
     /// `None` (drop the aliased column), when a risk score is not finite, when
-    /// `conf_level` is not in `(0, 1)`, and with `std_err` for data with case
-    /// weights other than 1, entry times or an offset, or a covariance that is
-    /// not defined.
+    /// `conf_level` is not in `(0, 1)`, and with `std_err` for a covariance
+    /// that is not defined.
     pub fn predict(
         &self,
         new: &NewRows<'_>,
@@ -511,7 +522,7 @@ impl<'a> Plan<'a> {
 
 /// The data with every event as the event, for the model of the time to any
 /// event.
-fn overall_data(data: &SurvData<'_>) -> Result<SurvBuf> {
+pub(crate) fn overall_data(data: &SurvData<'_>) -> Result<SurvBuf> {
     let surv = data.followup()?;
     let status: Vec<i32> = surv.status().iter().map(|&s| i32::from(s != 0)).collect();
     let mut builder = SurvBuf::builder(surv.stop().to_vec(), status);
