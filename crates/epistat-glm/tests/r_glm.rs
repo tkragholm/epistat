@@ -1,8 +1,8 @@
 //! Fits checked against R 4.6.2's `glm()`.
 
 use epistat_glm::{Family, Glm, Link};
+use epistat_linalg::Mat;
 use epistat_testkit::{Tolerance, assert_close, load_json};
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

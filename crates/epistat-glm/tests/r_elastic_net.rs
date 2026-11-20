@@ -1,8 +1,8 @@
 //! Elastic-net fits checked against R 4.6.2 with glmnet 5.2 (`glmnet.R`).
 
 use epistat_glm::{ElasticNet, Family, ResponseScaling};
+use epistat_linalg::Mat;
 use epistat_testkit::load_json;
-use faer::Mat;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
