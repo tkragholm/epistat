@@ -42,6 +42,26 @@ pub(crate) fn try_ordered_reduce<T: Send, E: Send>(
     }
 }
 
+/// [`try_ordered_reduce`] for a `make` that cannot fail.
+pub(crate) fn ordered_reduce<T: Send>(
+    n: usize,
+    block: usize,
+    wave: usize,
+    make: impl Fn(Range<usize>) -> T + Sync,
+    merge: impl Fn(&mut T, T),
+) -> T {
+    match try_ordered_reduce(
+        n,
+        block,
+        wave,
+        |range| Ok::<T, std::convert::Infallible>(make(range)),
+        merge,
+    ) {
+        Ok(total) => total,
+        Err(never) => match never {},
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

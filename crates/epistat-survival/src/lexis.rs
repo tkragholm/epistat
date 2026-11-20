@@ -131,10 +131,13 @@
 pub mod cells;
 pub mod rates;
 
+use std::ops::Range;
+
 use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 use crate::lexis::cells::{CellKey, Cells};
+use crate::par;
 use crate::surv::SurvData;
 
 /// Rows per parallel chunk. A constant, so the work is the same on any pool.
@@ -471,14 +474,14 @@ pub fn split_cells(
     }
     let size = possible;
 
-    let block = |b: usize| -> Table {
+    let make = |rows: Range<usize>| -> Table {
         let mut t = Table {
             length: vec![0.0; size],
             events: vec![0.0; size],
             count: vec![0; size],
         };
         let mut state = State::new(s);
-        for i in b * CHUNK..((b + 1) * CHUNK).min(n) {
+        for i in rows {
             let base: usize = keys
                 .iter()
                 .enumerate()
@@ -493,23 +496,17 @@ pub fn split_cells(
         }
         t
     };
-    let mut length = vec![0.0; size];
-    let mut events = vec![0.0; size];
-    let mut count = vec![0_u64; size];
-    let blocks = n.div_ceil(CHUNK);
-    let mut first = 0;
-    while first < blocks {
-        let last = (first + WAVE).min(blocks);
-        let tables: Vec<Table> = (first..last).into_par_iter().map(block).collect();
-        for t in &tables {
-            for cell in 0..size {
-                length[cell] += t.length[cell];
-                events[cell] += t.events[cell];
-                count[cell] += t.count[cell];
-            }
+    let Table {
+        length,
+        events,
+        count,
+    } = par::ordered_reduce(n, CHUNK, WAVE, make, |total, part| {
+        for cell in 0..size {
+            total.length[cell] += part.length[cell];
+            total.events[cell] += part.events[cell];
+            total.count[cell] += part.count[cell];
         }
-        first = last;
-    }
+    });
     let mut ids = Vec::new();
     let (mut l, mut e, mut c) = (Vec::new(), Vec::new(), Vec::new());
     let mut pieces = 0_u64;
