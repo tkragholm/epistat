@@ -23,6 +23,8 @@
 //! - [`SurvData`]: the checked input type that the estimators will share.
 //! - [`survcheck`]: structural checks of follow-up with several rows per subject, as
 //!   R's `survcheck`.
+//! - [`survdiff`]: the log-rank and G-rho tests of equal hazards, with strata, and
+//!   the one-sample test, as R's `survdiff`.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -43,6 +45,7 @@ pub mod markov;
 pub mod multistate;
 pub mod surv;
 pub mod survcheck;
+pub mod survdiff;
 pub mod timefix;
 
 pub use error::{Error, Result};
