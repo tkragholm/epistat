@@ -20,6 +20,8 @@
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
 //!   product integral, and their clustered bootstrap.
 //! - [`markov`]: the landmark test of the Markov property.
+//! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
+//!   up to rounding error equal.
 //!
 //! # Arithmetic
 //!
@@ -36,5 +38,6 @@ mod error;
 pub mod fine_gray;
 pub mod markov;
 pub mod multistate;
+pub mod timefix;
 
 pub use error::{Error, Result};
