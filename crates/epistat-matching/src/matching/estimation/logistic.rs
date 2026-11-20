@@ -134,8 +134,8 @@ pub(super) struct NetProblem {
     /// weights exact.
     pub(super) weights: Option<Vec<f64>>,
     pub(super) scale: Vec<f64>,
-    n_rows: usize,
-    n_cols: usize,
+    pub(super) n_rows: usize,
+    pub(super) n_cols: usize,
 }
 
 impl NetProblem {

@@ -143,8 +143,8 @@ pub use matching::{
     RoleIndexedRecord, SelectionStrategy, StandardMatchRequest, StrataExactConstraint,
     SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationOutcome,
     UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable, UsedControlsVec,
-    effective_sample_size, estimate_propensity_and_match, match_standard, match_weights_from_pairs,
-    pair_weights_from_pairs, prepare_mahalanobis_distance_config,
+    cross_validation_folds, effective_sample_size, estimate_propensity_and_match, match_standard,
+    match_weights_from_pairs, pair_weights_from_pairs, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
     reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
@@ -212,11 +212,12 @@ pub mod prelude {
         UniqueValueId, UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable,
         ValidatedMatchingCriteria, balance_diagnostics, balance_report,
         balance_report_with_options, balance_threshold_summary, build_projected_balance_rows,
-        categorical_max_abs_diff, effective_sample_size, estimate_propensity_and_match,
-        match_standard, match_transition, match_weights_from_pairs, pair_weights_from_pairs,
-        prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
-        prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs,
-        smd_numeric_from_values, subclassify_by_propensity_score_map,
+        categorical_max_abs_diff, cross_validation_folds, effective_sample_size,
+        estimate_propensity_and_match, match_standard, match_transition, match_weights_from_pairs,
+        pair_weights_from_pairs, prepare_mahalanobis_distance_config,
+        prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
+        reconstruct_case_control_pairs, smd_numeric_from_values,
+        subclassify_by_propensity_score_map,
     };
 
     pub mod constraints {

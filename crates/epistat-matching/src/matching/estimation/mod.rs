@@ -8,7 +8,7 @@ mod linalg;
 mod logistic;
 
 pub use config::*;
-pub use cross_validation::CrossValidation;
+pub use cross_validation::{CrossValidation, cross_validation_folds};
 pub use encoding::CovariateMatrix;
 
 use super::constraints::ConstraintGroup;
