@@ -76,6 +76,8 @@
 //! - [`weighting`]: inverse probability of treatment and censoring weights, and Cox
 //!   and Kaplan-Meier estimates with a variance that accounts for the estimated
 //!   weights.
+//! - `arrow` (feature `arrow`): [`SurvData`] built from Apache Arrow arrays and record batches
+//!   without copying the columns.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -89,6 +91,8 @@
 
 pub mod aalen_johansen;
 pub mod absrisk;
+#[cfg(feature = "arrow")]
+pub mod arrow;
 mod check;
 pub mod clogit;
 pub mod concordance;

@@ -14,7 +14,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Build `SurvData` from Apache Arrow arrays without copying, see `epistat_survival::arrow`.
+arrow = ["dep:arrow-array"]
+
 [dependencies]
+arrow-array = { version = "60", optional = true, default-features = false }
 epistat-glm = { path = "../epistat-glm", version = "0.1.1" }
 epistat-inference = { path = "../epistat-inference", version = "0.3.1" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }
