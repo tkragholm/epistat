@@ -494,6 +494,18 @@ pub struct ChiSquareTest {
     pub p_value: f64,
 }
 
+impl ChiSquareTest {
+    /// The test of a statistic with `df` degrees of freedom, or `None` when
+    /// the statistic is negative or not finite.
+    pub(crate) fn new(statistic: f64, df: usize) -> Option<Self> {
+        (statistic.is_finite() && statistic >= 0.0).then(|| Self {
+            statistic,
+            df,
+            p_value: chi_square_sf(statistic, df as f64),
+        })
+    }
+}
+
 /// The tests of `summary.coxph` that all coefficients equal their starting
 /// values, which are zero by default. Each is `None` where it is undefined.
 ///
@@ -1482,13 +1494,11 @@ fn quadratic_form(a: &[f64], p: usize, y: &[f64]) -> Option<(f64, usize)> {
 /// of freedom are not those of the fit, the statistic is negative or it is not
 /// finite.
 fn chi_square(statistic: f64, df: usize, expected_df: usize) -> Option<ChiSquareTest> {
-    (df == expected_df && df > 0 && statistic.is_finite() && statistic >= 0.0).then(|| {
-        ChiSquareTest {
-            statistic,
-            df,
-            p_value: chi_square_sf(statistic, df as f64),
-        }
-    })
+    if df == expected_df && df > 0 {
+        ChiSquareTest::new(statistic, df)
+    } else {
+        None
+    }
 }
 
 /// The score tests at the starting coefficients `beta0`, scaled. `score` and

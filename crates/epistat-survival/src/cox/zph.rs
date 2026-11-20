@@ -80,7 +80,6 @@
 //! 2. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
 //!    model. New York: Springer; 2000. Section 6.2.
 
-use epistat_stats::gamma::chi_square_sf;
 use epistat_stats::sum::compensated;
 use faer::MatRef;
 
@@ -324,14 +323,6 @@ impl Factor {
     }
 }
 
-fn chi_square(statistic: f64, df: usize) -> Option<ChiSquareTest> {
-    (statistic.is_finite() && statistic >= 0.0).then(|| ChiSquareTest {
-        statistic,
-        df,
-        p_value: chi_square_sf(statistic, df as f64),
-    })
-}
-
 /// The terms as positions among the kept columns, and as columns of the design.
 type Terms = (Vec<Vec<usize>>, Vec<Vec<usize>>);
 
@@ -557,14 +548,14 @@ pub fn zph(
                             coefficient[cols[r]] * block[r * cols.len() + c] * coefficient[cols[c]];
                     }
                 }
-                chi_square(t1 * t1 * quad, 1)
+                ChiSquareTest::new(t1 * t1 * quad, 1)
             } else {
-                chi_square(quadratic(cols)?, cols.len())
+                ChiSquareTest::new(quadratic(cols)?, cols.len())
             }
         })
         .collect();
     let all: Vec<usize> = (0..p).collect();
-    let global = quadratic(&all).and_then(|s| chi_square(s, p));
+    let global = quadratic(&all).and_then(|s| ChiSquareTest::new(s, p));
 
     // Scaled residuals.
     let rows = schoenfeld_rows(&prep)?;
