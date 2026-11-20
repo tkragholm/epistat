@@ -13,6 +13,12 @@ pub(super) fn standardised_difference(difference: f64, variance: Option<f64>) ->
     Some(difference / variance.sqrt()).filter(|value| value.is_finite())
 }
 
+/// The standard deviation for a variance, `None` when the variance is not
+/// positive and finite.
+pub(super) fn standard_deviation(variance: f64) -> Option<f64> {
+    (variance.is_finite() && variance > 0.0).then(|| variance.sqrt())
+}
+
 /// The eCDF distance summary (mean and maximum absolute difference) between two
 /// weighted groups, `None` when a group has no positive weight.
 ///
@@ -86,12 +92,25 @@ pub(super) fn ecdf_distance_stats(
     balance::ecdf_distance(case_values, control_values)
 }
 
+/// Weighted eQQ distance summary as `summary.matchit()` reports it, `None`
+/// when a group has no unit of positive weight. See
+/// [`epistat_stats::balance::eqq_distance_weighted`].
+pub(super) fn eqq_distance_weighted(
+    case_values: &[f64],
+    case_weights: &[f64],
+    control_values: &[f64],
+    control_weights: &[f64],
+) -> Option<(f64, f64)> {
+    balance::eqq_distance_weighted(case_values, case_weights, control_values, control_weights)
+}
+
 /// eQQ distance summary (mean and max absolute quantile distance), `None`
 /// when a group has no finite value.
 ///
 /// Reference:
 /// - Ho DE, Imai K, King G, Stuart EA. `MatchIt`: Nonparametric preprocessing for
 ///   parametric causal inference. *J Stat Softw*. 2011.
+#[cfg(any(test, feature = "bench-internals"))]
 pub(super) fn eqq_distance_stats(
     case_values: &[f64],
     control_values: &[f64],
@@ -104,8 +123,15 @@ pub(super) fn eqq_distance_stats(
 /// References:
 /// - Cramér H. *Mathematical Methods of Statistics*. 1946.
 /// - Agresti A. *Categorical Data Analysis*, 3rd ed. 2013.
+#[cfg(test)]
 pub(super) fn cramers_v(case_counts: &[usize], control_counts: &[usize]) -> Option<f64> {
     balance::cramers_v(case_counts, control_counts)
+}
+
+/// Cramér's V computed from 2xK table of weights, `None` when it does not
+/// exist. There is no R reference for it.
+pub(super) fn cramers_v_weighted(case_weights: &[f64], control_weights: &[f64]) -> Option<f64> {
+    balance::cramers_v_weighted(case_weights, control_weights)
 }
 
 #[cfg(test)]
