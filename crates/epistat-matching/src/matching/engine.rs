@@ -662,17 +662,16 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                     local_diagnostics.matched_anchors = 1;
                 }
                 local_diagnostics.pairs_selected = local_pairs.len();
-                local_diagnostics.total_anchors_evaluated = 1;
 
                 Some((local_pairs, local_diagnostics))
             })
             .collect();
 
+        // Every anchor that was not trimmed has an entry, matched or not.
+        let eligible_anchors = results.len();
         let mut all_pairs = Vec::new();
-        let mut eligible_anchors = 0usize;
         for (mut pairs, diag) in results {
             all_pairs.append(&mut pairs);
-            eligible_anchors += diag.total_anchors_evaluated;
             diagnostics.merge(diag);
         }
 
