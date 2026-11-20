@@ -175,3 +175,112 @@ fn cipoisson_limits() {
     }
     println!("worst relative deviation from cipoisson: {worst:e}");
 }
+
+mod student_values {
+    include!("data/student.rs");
+}
+
+/// The relative deviation allowed in `I_x(a, b)`. It is a continued fraction,
+/// whose error is a few eps, times a prefactor `exp(a ln x + b ln y - ln B)`
+/// formed on the log scale. The sum of the magnitudes of the exponent's terms,
+/// times eps, is the relative error in the probability. R's own routine carries
+/// an error of the same kind, so the coefficient is 8, plus 64 eps for the
+/// fraction.
+fn beta_bound(a: f64, b: f64, x: f64, y: f64) -> f64 {
+    use epistat_stats::gamma::ln_gamma;
+    let terms = (a * x.ln()).abs()
+        + (b * y.ln()).abs()
+        + ln_gamma(a).abs()
+        + ln_gamma(b).abs()
+        + ln_gamma(a + b).abs();
+    8.0 * f64::EPSILON * terms + 64.0 * f64::EPSILON
+}
+
+/// The bound on the tail of the t distribution at `z`, the beta bound with
+/// `x = nu / (nu + z^2)`.
+fn t_bound(z: f64, nu: f64) -> f64 {
+    let q = nu + z * z;
+    beta_bound(0.5 * nu, 0.5, nu / q, z * z / q)
+}
+
+#[test]
+fn pt_qt_and_pbeta() {
+    use epistat_stats::student::{regularised_beta, t_cdf_sf, t_ln_density, t_quantile};
+    let mut worst = 0.0_f64;
+    let mut check = |name: &str, got: f64, want: f64, bound: f64| {
+        if want == 0.0 {
+            assert_eq!(got.to_bits(), 0.0_f64.to_bits(), "{name}");
+            return;
+        }
+        let deviation = ((got - want) / want).abs();
+        worst = worst.max(deviation / bound);
+        assert!(
+            deviation <= bound,
+            "{name} = {got:e}, R {want:e}, bound {bound:e}"
+        );
+    };
+    for &(z, nu, lower, upper) in student_values::PT {
+        let (z, nu) = (f64::from_bits(z), f64::from_bits(nu));
+        let (cdf, sf) = t_cdf_sf(z, nu);
+        // The larger tail is one minus the smaller, with an absolute error of
+        // the smaller's bound.
+        let bound = t_bound(z, nu);
+        let (small, big) = if z > 0.0 { (sf, cdf) } else { (cdf, sf) };
+        let (want_small, want_big) = if z > 0.0 {
+            (f64::from_bits(upper), f64::from_bits(lower))
+        } else {
+            (f64::from_bits(lower), f64::from_bits(upper))
+        };
+        if z == 0.0 {
+            assert_eq!(cdf.to_bits(), 0.5_f64.to_bits());
+            continue;
+        }
+        check(
+            &format!("pt({z}, {nu}) small tail"),
+            small,
+            want_small,
+            bound,
+        );
+        check(
+            &format!("pt({z}, {nu}) large tail"),
+            big,
+            want_big,
+            bound * want_small / want_big + 4.0 * f64::EPSILON,
+        );
+    }
+    for &(p, nu, q) in student_values::QT {
+        let (p, nu, want) = (f64::from_bits(p), f64::from_bits(nu), f64::from_bits(q));
+        let got = t_quantile(p, nu).unwrap();
+        if p.to_bits() == 0.5_f64.to_bits() {
+            assert_eq!(got.to_bits(), 0.0_f64.to_bits());
+            continue;
+        }
+        // A relative error d in the tail moves the quantile by
+        // d tail / (t f(t)) in relative terms.
+        let tail = p.min(1.0 - p);
+        let density = t_ln_density(want, nu).exp();
+        let mut bound = t_bound(want, nu) * tail / (want.abs() * density) + 16.0 * f64::EPSILON;
+        if nu < 1.0 {
+            // R's qt finds the root for fewer than one degree of freedom by a
+            // search that stops at a relative step of 1e-11. Ours inverts the
+            // distribution function to the bound above, which
+            // the unit tests check.
+            bound = bound.max(1e-11);
+        }
+        check(&format!("qt({p}, {nu})"), got, want, bound);
+    }
+    for &(x, a, b, want) in student_values::PBETA {
+        let (x, a, b, want) = (
+            f64::from_bits(x),
+            f64::from_bits(a),
+            f64::from_bits(b),
+            f64::from_bits(want),
+        );
+        let y = 1.0 - x;
+        let got = regularised_beta(a, b, x, y);
+        // y is rounded, so a relative error eps / y in it enters through b ln y.
+        let bound = beta_bound(a, b, x, y) + b * f64::EPSILON / y;
+        check(&format!("pbeta({x}, {a}, {b})"), got, want, bound);
+    }
+    println!("worst deviation from pt, qt and pbeta, in units of its bound: {worst:e}");
+}
