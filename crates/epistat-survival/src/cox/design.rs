@@ -73,6 +73,16 @@
 //! the inverse of `I` over the other columns, with `1 / sqrt` of the scale
 //! undone, so they are on the scale of the columns given.
 //!
+//! # Covariance matrices
+//!
+//! `covariance` is the whole inverse `V`, not only its diagonal, on the scale
+//! of the columns given: entry `(a, b)` is `V_ab f_a f_b` with `f` the factor
+//! that undoes the scaling of the columns. Row-major, `p * p` entries, and
+//! `None` in every entry whose row or column is an aliased coefficient, as the
+//! standard errors are. It is exactly symmetric. The standard errors are
+//! computed as `sqrt(V_aa) f_a`, which differs from the square root of the
+//! diagonal entry in the last bits.
+//!
 //! # Cluster-robust variance
 //!
 //! With cluster codes the robust variance is the grouped sandwich estimate of
@@ -91,7 +101,17 @@
 //! where `h_t` is the sum of `u / D_0` over the terms at `t` and `c_t` the sum
 //! of `u D_1 / D_0^2`. Under Efron's approximation a tied event is at risk in
 //! only part of the terms of its own time, and a final correction adds that
-//! back \[5\]. The residuals add up to the score.
+//! back \[5\]. The residuals add up to the score. The sum of the
+//! cross-products `U_g U_g'` is the meat of the sandwich. It is formed by
+//! `epistat_inference::sandwich::meat` from the matrix with one row `U_g` per
+//! cluster, and `V M V` is then formed here, in a fixed order and averaged with
+//! its transpose, since `V` has zero rows for aliased columns and is not the
+//! inverse of a matrix that `epistat-inference` could factorise. The
+//! covariance of `epistat_inference::influence` is not used: it multiplies by
+//! `G / (G - 1)` and divides by `n^2`, which `coxph` does not. With a
+//! cluster code that no row carries, the cluster has no row and adds nothing.
+//! `robust_covariance` is the whole matrix `V M V` on the scale of the columns
+//! given, laid out as `covariance`.
 //!
 //! # Results that are not numbers
 //!
@@ -128,13 +148,16 @@
 //!
 //! # Agreement with R
 //!
-//! The tests compare coefficients, both standard errors, the log partial
-//! likelihood and the iteration count with `survival::coxph` for Breslow and
-//! Efron ties, delayed entry, strata, weights, clusters, aliased columns and a
-//! diverging coefficient. Two implementations of one Newton iteration that
-//! take the same steps differ by the error of the solve, which is about the
-//! condition number of the information matrix on the scaled covariates times
-//! the machine epsilon. The tolerance is 8 times that.
+//! The tests compare coefficients, both standard errors, both covariance
+//! matrices, the log partial likelihood and the iteration count with `survival::coxph` for
+//! Breslow and Efron ties, delayed entry, strata, weights, clusters, aliased
+//! columns and a diverging coefficient. Two implementations of one Newton
+//! iteration that take the same steps differ by the error of the solve, which
+//! is about the condition number of the information matrix on the scaled
+//! covariates times the machine epsilon. The tolerance is 8 times that for a
+//! coefficient and a standard error. The covariance tolerance is `p` times
+//! that, since each entry of a row of an inverse carries it, and the robust
+//! covariance twice as much again, since the error of `V` enters twice.
 //!
 //! # References
 //!
@@ -157,7 +180,8 @@
     reason = "the entry point checks that the row count fits in u32"
 )]
 
-use faer::MatRef;
+use epistat_inference::sandwich::meat;
+use faer::{Mat, MatRef};
 
 use super::Ties;
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
@@ -207,9 +231,17 @@ pub struct CoxModelFit {
     pub coefficients: Vec<Option<f64>>,
     /// The model-based standard errors, `None` where the coefficient is.
     pub standard_errors: Vec<Option<f64>>,
+    /// The model-based covariance matrix of the coefficients, row-major with
+    /// `p * p` entries on the scale of the columns given. An entry is `None`
+    /// where its row or its column is a coefficient that is `None`.
+    pub covariance: Vec<Option<f64>>,
     /// Standard errors from the cluster-robust variance. `None` when no
     /// cluster was given or there are fewer than two clusters.
     pub robust_standard_errors: Option<Vec<Option<f64>>>,
+    /// The cluster-robust covariance matrix, laid out as `covariance`. `None`
+    /// exactly when `robust_standard_errors` is, and with every entry `None`
+    /// when clusters were given and the fit has no robust variance.
+    pub robust_covariance: Option<Vec<Option<f64>>>,
     /// The log partial likelihood at the estimate, `None` when there is no
     /// estimate.
     pub log_partial_likelihood: Option<f64>,
@@ -237,7 +269,9 @@ impl CoxModelFit {
         Self {
             coefficients: vec![None; p],
             standard_errors: vec![None; p],
+            covariance: vec![None; p * p],
             robust_standard_errors: with_clusters.then(|| vec![None; p]),
+            robust_covariance: with_clusters.then(|| vec![None; p * p]),
             log_partial_likelihood: None,
             null_log_partial_likelihood: None,
             n_events,
@@ -263,6 +297,12 @@ impl CoxModelFit {
 /// negative, an entry time is NaN or not before its exit time, or there are
 /// more rows than a `u32` addresses.
 pub fn fit_cox(data: &CoxDesign<'_>) -> Result<CoxModelFit> {
+    check_design(data)?;
+    Ok(fit_checked(data))
+}
+
+/// The checks every entry point makes on a design.
+fn check_design(data: &CoxDesign<'_>) -> Result<()> {
     let rows = data.x.nrows();
     check_lengths(&[
         ("x", rows),
@@ -298,7 +338,7 @@ pub fn fit_cox(data: &CoxDesign<'_>) -> Result<CoxModelFit> {
             )));
         }
     }
-    Ok(fit_checked(data))
+    Ok(())
 }
 
 /// One stratum's rows in descending exit order.
@@ -526,6 +566,29 @@ impl Model {
     fn cluster_scores(&self, beta: &[f64]) -> Option<Vec<f64>> {
         let p = self.p;
         let mut totals = vec![0.0f64; self.n_clusters * p];
+        self.score_rows(beta, |stratum, j, residual| {
+            let cluster = stratum.cluster[j] as usize;
+            for (total, r) in totals[cluster * p..(cluster + 1) * p]
+                .iter_mut()
+                .zip(residual)
+            {
+                *total += r;
+            }
+        })?;
+        Some(totals)
+    }
+
+    /// Hand the score residual of every row to `emit`, as the stratum, the
+    /// position in it and the `p` values, in stratum order and then in the
+    /// order of the stratum. `None` when a risk score or a denominator is not
+    /// finite or not positive.
+    fn score_rows(
+        &self,
+        beta: &[f64],
+        mut emit: impl FnMut(&Stratum, usize, &[f64]),
+    ) -> Option<()> {
+        let p = self.p;
+        let mut residual = vec![0.0f64; p];
         let mut active = Vec::new();
         let mut sums = Sums {
             risk: Moments::new(p),
@@ -588,22 +651,21 @@ impl Model {
                     .event_times
                     .partition_point(|&t| t > stratum.start[j]);
                 let span = hazard_sum[last] - hazard_sum[first];
-                let cluster = stratum.cluster[j] as usize;
                 for a in 0..p {
                     let around = centre_sum[last * p + a] - centre_sum[first * p + a];
-                    let mut residual = -risk_j * (x[a] * span - around);
+                    let mut value = -risk_j * (x[a] * span - around);
                     if stratum.is_event[j] {
                         // The row has its event at `stop`, an event time of the
                         // stratum.
-                        residual += stratum.weight[j] * (x[a] - mean[first * p + a]);
-                        residual +=
-                            risk_j * (x[a] * late_hazard[first] - late_centre[first * p + a]);
+                        value += stratum.weight[j] * (x[a] - mean[first * p + a]);
+                        value += risk_j * (x[a] * late_hazard[first] - late_centre[first * p + a]);
                     }
-                    totals[cluster * p + a] += residual;
+                    residual[a] = value;
                 }
+                emit(stratum, j, &residual);
             }
         }
-        Some(totals)
+        Some(())
     }
 }
 
@@ -690,25 +752,18 @@ fn inverse_factor(a: &[f64], p: usize) -> Vec<f64> {
     inverse
 }
 
-fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
-    let p = input.x.ncols();
-    let with_clusters = input.cluster.is_some();
-    let kept: Vec<usize> = (0..input.x.nrows())
-        .filter(|&i| input.weight[i] > 0.0)
-        .collect();
-    if kept.is_empty() {
-        return CoxModelFit::degenerate(p, 0.0, 0, with_clusters);
-    }
-    let n_rows = kept.len();
-    let n_events: f64 = kept
-        .iter()
-        .filter(|&&i| input.is_event[i])
-        .map(|&i| input.weight[i])
-        .sum();
-    if !kept.iter().any(|&i| input.is_event[i]) {
-        return CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
-    }
+/// The model on the scaled covariates, and the factor that scales each
+/// column: a column's coefficient on the scale given is its coefficient on the
+/// scaled column times the factor, and a column without variation has factor 0.
+struct Prepared {
+    model: Model,
+    factor: Vec<f64>,
+}
 
+/// Centre and scale the covariates of the rows `kept`, which are not empty,
+/// and sort them into strata.
+fn prepare(input: &CoxDesign<'_>, kept: &[usize]) -> Prepared {
+    let p = input.x.ncols();
     // Centre and scale as coxph does.
     let total_weight: f64 = kept.iter().map(|&i| input.weight[i]).sum();
     let mut centre = vec![0.0f64; p];
@@ -737,7 +792,7 @@ fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
         };
     }
 
-    let mut order = kept.clone();
+    let mut order = kept.to_vec();
     order.sort_by_key(|&i| input.stratum[i]);
     let mut strata = Vec::new();
     let mut begin = 0;
@@ -815,12 +870,38 @@ fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
             .max()
             .unwrap_or(0)
     });
-    let model = Model {
-        p,
-        ties: input.ties,
-        strata,
-        n_clusters,
-    };
+    Prepared {
+        model: Model {
+            p,
+            ties: input.ties,
+            strata,
+            n_clusters,
+        },
+        factor,
+    }
+}
+
+fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
+    let p = input.x.ncols();
+    let with_clusters = input.cluster.is_some();
+    let kept: Vec<usize> = (0..input.x.nrows())
+        .filter(|&i| input.weight[i] > 0.0)
+        .collect();
+    if kept.is_empty() {
+        return CoxModelFit::degenerate(p, 0.0, 0, with_clusters);
+    }
+    let n_rows = kept.len();
+    let n_events: f64 = kept
+        .iter()
+        .filter(|&&i| input.is_event[i])
+        .map(|&i| input.weight[i])
+        .sum();
+    if !kept.iter().any(|&i| input.is_event[i]) {
+        return CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
+    }
+
+    let Prepared { model, factor } = prepare(input, &kept);
+    let n_clusters = model.n_clusters;
     let undefined = || CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
 
     let mut beta = vec![0.0f64; p];
@@ -926,8 +1007,9 @@ fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
     let standard_errors: Vec<Option<f64>> = (0..p)
         .map(|a| (!aliased(a)).then(|| variance[a * p + a].sqrt() * factor[a]))
         .collect();
+    let covariance = on_input_scale(&variance, &factor, &aliased);
 
-    let robust_standard_errors = input.cluster.and_then(|cluster| {
+    let robust = input.cluster.and_then(|cluster| {
         let mut present = vec![false; n_clusters];
         for &i in &kept {
             present[cluster[i] as usize] = true;
@@ -936,33 +1018,31 @@ fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
             return None;
         }
         let totals = model.cluster_scores(&trial)?;
-        let mut sandwich = vec![0.0f64; p * p];
-        for g in 0..n_clusters {
-            let u = &totals[g * p..(g + 1) * p];
-            let influence: Vec<f64> = (0..p)
-                .map(|a| (0..p).map(|b| variance[a * p + b] * u[b]).sum())
-                .collect();
-            for a in 0..p {
-                for b in 0..=a {
-                    sandwich[a * p + b] += influence[a] * influence[b];
-                }
-            }
-        }
-        Some(
+        let sums = Mat::from_fn(n_clusters, p, |g, a| totals[g * p + a]);
+        // Every cluster is a row of `sums` already, so the meat is the plain
+        // cross-product of the rows, `sum_g U_g U_g'`.
+        let meat = meat(sums.as_ref(), |_| 1.0, None)
+            .expect("the meat of rows without clusters has no error to report");
+        let sandwich = sandwich(&variance, &meat, p);
+        Some((
             (0..p)
                 .map(|a| (!aliased(a)).then(|| sandwich[a * p + a].sqrt() * factor[a]))
                 .collect::<Vec<_>>(),
-        )
+            on_input_scale(&sandwich, &factor, &aliased),
+        ))
     });
-    let robust_standard_errors = match (with_clusters, robust_standard_errors) {
-        (true, None) => Some(vec![None; p]),
-        (_, robust) => robust,
+    let (robust_standard_errors, robust_covariance) = match (with_clusters, robust) {
+        (true, None) => (Some(vec![None; p]), Some(vec![None; p * p])),
+        (_, Some((se, covariance))) => (Some(se), Some(covariance)),
+        (false, None) => (None, None),
     };
 
     CoxModelFit {
         coefficients,
         standard_errors,
+        covariance,
         robust_standard_errors,
+        robust_covariance,
         log_partial_likelihood: Some(last.loglik),
         null_log_partial_likelihood: null_loglik.is_finite().then_some(null_loglik),
         n_events,
@@ -972,6 +1052,46 @@ fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
         converged,
         monotone_columns,
     }
+}
+
+/// `V M V'` for the symmetric `p` by `p` matrices `variance` and `meat`, in a
+/// fixed order, averaged with its transpose so that it is exactly symmetric.
+fn sandwich(variance: &[f64], meat: &Mat<f64>, p: usize) -> Vec<f64> {
+    let mut left = vec![0.0f64; p * p];
+    for a in 0..p {
+        for b in 0..p {
+            left[a * p + b] = (0..p).map(|c| variance[a * p + c] * meat[(c, b)]).sum();
+        }
+    }
+    let mut full = vec![0.0f64; p * p];
+    for a in 0..p {
+        for b in 0..p {
+            full[a * p + b] = (0..p).map(|c| left[a * p + c] * variance[c * p + b]).sum();
+        }
+    }
+    let mut symmetric = vec![0.0f64; p * p];
+    for a in 0..p {
+        for b in 0..p {
+            symmetric[a * p + b] = full[a * p + b].midpoint(full[b * p + a]);
+        }
+    }
+    symmetric
+}
+
+/// A covariance matrix of the scaled coefficients on the scale of the columns
+/// given, `None` in the rows and columns of an aliased column.
+fn on_input_scale(
+    scaled: &[f64],
+    factor: &[f64],
+    aliased: &impl Fn(usize) -> bool,
+) -> Vec<Option<f64>> {
+    let p = factor.len();
+    (0..p * p)
+        .map(|k| {
+            let (a, b) = (k / p, k % p);
+            (!aliased(a) && !aliased(b)).then(|| scaled[k] * (factor[a] * factor[b]))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1083,5 +1203,43 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.to_string().starts_with("start: row 2"));
+    }
+
+    #[test]
+    fn covariance_matrices_are_symmetric_and_hold_the_standard_errors() {
+        let x = Mat::from_fn(8, 3, |i, j| match j {
+            0 => [0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3][i],
+            1 => [1.0, 0.0, 2.0, 1.0, 0.0, 3.0, 1.0, 0.5][i],
+            _ => 0.1,
+        });
+        let fit = design(&x, Some(&[0, 0, 1, 1, 2, 2, 3, 3])).unwrap();
+        let robust = fit.robust_covariance.as_ref().unwrap();
+        let robust_se = fit.robust_standard_errors.as_ref().unwrap();
+        for a in 0..3 {
+            for b in 0..3 {
+                assert_eq!(fit.covariance[a * 3 + b], fit.covariance[b * 3 + a]);
+                assert_eq!(robust[a * 3 + b], robust[b * 3 + a]);
+                assert_eq!(
+                    fit.covariance[a * 3 + b].is_none(),
+                    a == 2 || b == 2,
+                    "the constant column is aliased"
+                );
+            }
+            if let (Some(variance), Some(se)) = (fit.covariance[a * 3 + a], fit.standard_errors[a])
+            {
+                assert!((variance.sqrt() - se).abs() <= 4.0 * f64::EPSILON * se);
+            }
+            if let (Some(variance), Some(se)) = (robust[a * 3 + a], robust_se[a]) {
+                assert!((variance.sqrt() - se).abs() <= 4.0 * f64::EPSILON * se);
+            }
+        }
+    }
+
+    #[test]
+    fn one_cluster_has_no_robust_covariance() {
+        let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
+        let fit = design(&x, Some(&[0; 8])).unwrap();
+        assert_eq!(fit.robust_covariance, Some(vec![None]));
+        assert!(design(&x, None).unwrap().robust_covariance.is_none());
     }
 }
