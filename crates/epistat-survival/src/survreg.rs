@@ -1,8 +1,8 @@
 //! Accelerated failure time models, as R's `survival::survreg`: a
 //! location-scale model for the log of a survival time, fitted by maximum
 //! likelihood to exact, right-, left- and interval-censored times, with
-//! case weights, a scale for each stratum or a fixed scale, and predictions
-//! and residuals.
+//! case weights, offsets, a scale for each stratum or a fixed scale, the
+//! model-based and the robust variance, and predictions and residuals.
 //!
 //! # The model
 //!
@@ -25,6 +25,7 @@
 //! | `LogNormal` | normal | `ln T` |
 //! | `Gaussian` | normal | no |
 //! | `LogLogistic` | logistic | `ln T` |
+//! | `StudentT` | Student t with `df` degrees of freedom | no |
 //! | `Logistic` | logistic | no |
 //!
 //! With density `f`, distribution function `F` and `S = 1 - F` of `W`,
@@ -114,10 +115,78 @@
 //! over the coefficients and then the log scales. It is `None` entirely when
 //! the information is not positive semi-definite there.
 //!
+//! # Offsets
+//!
+//! [`SurvregOptions::offset`] gives each row a term added to its linear
+//! predictor, `eta = x'beta + o`, on the scale of the model, as `offset()` in
+//! a `survreg` formula does. The null model, the starting values, the
+//! iteration, the linear predictors of the fit and with them every residual
+//! use it. A prediction for new rows takes its offsets from
+//! [`PredictOptions::offset`] and is zero without them.
+//!
+//! # The t distribution
+//!
+//! [`Distribution::StudentT`] is a Student t error on `T` itself, with the
+//! degrees of freedom of [`SurvregOptions::df`], which must exceed 2 so that
+//! the variance of the error exists (the starting scale divides the variance
+//! of the times by `nu / (nu - 2)`). `survreg` has the default 4; here there is
+//! none. The distribution function is a regularised incomplete beta function by
+//! its continued fraction, and the quantile its root.
+//!
+//! # The robust variance
+//!
+//! With [`SurvregOptions::robust`], or with clusters in the data,
+//! [`SurvregFit::robust_variance`] is `sum over clusters of s_g s_g'`, where
+//! `s_g` is the sum over the rows of the cluster of `w_i u_i' V`, `u_i` the
+//! score of row `i` for the coefficients and log scales and `V` the
+//! model-based variance. Without clusters each row is its own. These are the
+//! weighted dfbeta residuals summed by cluster, `crossprod(dfbeta)` of
+//! `survreg`, with no small-sample factor. `epistat-inference`'s clustered
+//! covariance multiplies by `G / (G - 1)` and divides by `n^2`, and its
+//! sandwich solves with the information, which `survreg` does not, so neither
+//! is used.
+//! [`SurvregFit::variance`] stays the model-based variance, which the
+//! residuals use, as they use `naive.var` in `survreg`.
+//!
+//! # Residuals and terms
+//!
+//! [`SurvregFit::dfbeta`] gives the dfbeta and dfbetas residuals, weighted and
+//! summed by group as `residuals.survreg` does. [`PredictType::Terms`] gives
+//! the part of the linear predictor of each group of columns with its standard
+//! error. Both are described with their types.
+//!
+//! # Where this differs from `survival`
+//!
+//! Results of `survival` 3.8-12 that do not follow from their definitions and
+//! are not copied. Each is shown in `tests/data/survreg_extra.R` and the tests
+//! compare with the value computed from R's own pieces.
+//!
+//! - `residuals.survreg` has the wrong sign for the derivative in the log scale
+//!   of an interval-censored row. Besides the displacements it reaches the
+//!   dfbeta residuals, and so the robust variance and the standard errors from
+//!   it, when the scale is estimated.
+//! - `predict.survreg` takes the offset of new data as 0 for a linear
+//!   predictor and a response, and leaves it out of a quantile, where for the
+//!   fitted data it is part of all three. Here an offset given is used in all
+//!   of them.
+//! - The standard error of a term from `predict.survreg` is
+//!   `(x * beta) V (x * beta)'`, with the coefficients inside, which depends on
+//!   the units of the covariate. The delta method gives `x V x'`, which is
+//!   used here.
+//! - The deviance function of the t distribution is wrong for an
+//!   interval-censored row: the log of a negative number as the saturated log
+//!   likelihood, and a centre that averages the status column in. The
+//!   saturated log likelihood is `log(2 F(width / 2) - 1)` and the centre the
+//!   midpoint here.
+//! - The aliased columns of the dfbeta residuals are 0 in `survreg` and `None`
+//!   here.
+//!
 //! # Results that are errors
 //!
 //! A design with other than one row per data row, without columns, or with a
-//! value that is not finite; no row of positive weight; a fixed scale that is
+//! value that is not finite; an offset that is not finite or has another
+//! length than the data; degrees of freedom missing or not above 2 for the t
+//! distribution, or given for another; no row of positive weight; a fixed scale that is
 //! not positive, or given with a distribution that has its own, or with more
 //! than one stratum; a time that does not suit a transformed distribution;
 //! a stratum without a row of positive weight; and a log likelihood or
@@ -153,12 +222,16 @@
 mod dist;
 mod newton;
 mod predict;
+mod robust;
+mod tdist;
 
 use dist::Base;
 use faer::MatRef;
 use newton::{Control, Problem, factorise, inverse_factor, newton, solve_factor};
 
-pub use predict::{PredictOptions, PredictType, Prediction, ResidualKind};
+pub use predict::{
+    Dfbeta, DfbetaOptions, PredictOptions, PredictType, Prediction, ResidualKind, TermsReference,
+};
 
 use crate::error::{Error, Result};
 use crate::surv::{IntervalKind, Outcome, SurvData};
@@ -184,11 +257,15 @@ pub enum Distribution {
     LogNormal,
     /// Logistic on `ln T`.
     LogLogistic,
+    /// Student t on `T` itself, with the degrees of freedom of
+    /// [`SurvregOptions::df`], which must exceed 2.
+    StudentT,
 }
 
 impl Distribution {
-    fn base(self) -> Base {
+    fn base(self, df: Option<f64>) -> Base {
         match self {
+            Self::StudentT => Base::StudentT(df.expect("checked with the options")),
             Self::Weibull | Self::Exponential | Self::Rayleigh | Self::ExtremeValue => {
                 Base::ExtremeValue
             }
@@ -200,7 +277,10 @@ impl Distribution {
     /// Whether the model is for `ln T`.
     #[must_use]
     pub fn is_log(self) -> bool {
-        !matches!(self, Self::ExtremeValue | Self::Gaussian | Self::Logistic)
+        !matches!(
+            self,
+            Self::ExtremeValue | Self::Gaussian | Self::Logistic | Self::StudentT
+        )
     }
 
     /// The scale that the distribution fixes, if it does.
@@ -216,9 +296,24 @@ impl Distribution {
 
 /// The settings of [`fit`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SurvregOptions {
+pub struct SurvregOptions<'a> {
     /// The distribution. Weibull.
     pub distribution: Distribution,
+    /// The degrees of freedom of the t distribution, `parms` of `survreg`.
+    /// Required, and greater than 2, for [`Distribution::StudentT`], and not
+    /// allowed with another distribution. `survreg` defaults to 4, which has
+    /// no more reason than any other value, so there is no default here.
+    pub df: Option<f64>,
+    /// An offset for each row of the data, added to the linear predictor
+    /// `x'beta` as the `offset()` term of `survreg` does, on the scale of the
+    /// model (the log of the time for a transformed distribution). `None` is
+    /// no offset.
+    pub offset: Option<&'a [f64]>,
+    /// Whether to compute the robust variance, `robust = TRUE` of `survreg`.
+    /// It is computed too when the data have clusters, as `survreg` does for
+    /// a `cluster()` term, and then sums by cluster. See
+    /// [`SurvregFit::robust_variance`].
+    pub robust: bool,
     /// A fixed scale, as `scale` of `survreg`. `None` estimates one scale for
     /// each stratum. Not allowed with the exponential and Rayleigh
     /// distributions, which fix their own, nor with more than one stratum.
@@ -233,10 +328,13 @@ pub struct SurvregOptions {
     pub toler_chol: f64,
 }
 
-impl Default for SurvregOptions {
+impl Default for SurvregOptions<'_> {
     fn default() -> Self {
         Self {
             distribution: Distribution::Weibull,
+            df: None,
+            offset: None,
+            robust: false,
             scale: None,
             max_iterations: 30,
             rel_tolerance: 1e-9,
@@ -262,6 +360,17 @@ pub struct SurvregFit {
     /// in the row and column of an aliased coefficient, and in every entry when
     /// the information matrix at the estimate is not positive semi-definite.
     pub variance: Vec<Option<f64>>,
+    /// The robust (sandwich) variance, laid out as `variance`: the sum over
+    /// the clusters of the products of the cluster totals of the weighted
+    /// dfbeta residuals, which is `var` of `survreg(robust = TRUE)`. `None`
+    /// unless [`SurvregOptions::robust`] was set or the data had clusters.
+    /// `variance` stays the model-based one, `naive.var` of `survreg`, and is
+    /// the one the residuals use. All entries are `None` when the model-based
+    /// variance is not defined.
+    pub robust_variance: Option<Vec<Option<f64>>>,
+    /// The number of clusters of the robust variance: those of the data, or
+    /// the rows used when there are none. `None` without a robust variance.
+    pub n_clusters: Option<usize>,
     /// The log likelihood at the estimate, in the density of the times.
     pub loglik: f64,
     /// The log likelihood of the model with an intercept only and the same
@@ -275,9 +384,15 @@ pub struct SurvregFit {
     pub outer_product_steps: u32,
     /// The columns that are not aliased.
     pub rank: usize,
-    /// The linear predictor `x'beta` of every row of the data, rows of weight
-    /// 0 included. Aliased columns are left out.
+    /// The linear predictor `x'beta` plus the offset of every row of the
+    /// data, rows of weight 0 included. Aliased columns are left out.
     pub linear_predictors: Vec<f64>,
+    /// The unweighted mean of each design column over every row of the data,
+    /// `means` of `survreg`, which `type = "terms"` centres on.
+    pub column_means: Vec<f64>,
+    /// The degrees of freedom of the t distribution, when that is the
+    /// distribution.
+    pub t_df: Option<f64>,
     /// The rows of the data.
     pub n_rows: usize,
     /// The rows fitted: those with a weight above zero.
@@ -483,10 +598,29 @@ fn design_of(x: MatRef<'_, f64>, used: &[usize]) -> Design {
 pub fn fit(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    options: &SurvregOptions,
+    options: &SurvregOptions<'_>,
 ) -> Result<SurvregFit> {
     let dist = options.distribution;
-    let base = dist.base();
+    match (dist, options.df) {
+        (Distribution::StudentT, None) => {
+            return Err(Error::input(
+                "the t distribution needs its degrees of freedom (df)".to_owned(),
+            ));
+        }
+        (Distribution::StudentT, Some(df)) if !(df.is_finite() && df > 2.0) => {
+            return Err(Error::input(
+                "the degrees of freedom of the t distribution must be greater than 2".to_owned(),
+            ));
+        }
+        (Distribution::StudentT, Some(_)) => {}
+        (_, Some(_)) => {
+            return Err(Error::input(
+                "df applies to the t distribution only".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    let base = dist.base(options.df);
     let n_all = data.n_rows();
     let p = x.ncols();
     if x.nrows() != n_all {
@@ -503,6 +637,17 @@ pub fn fit(
             return Err(Error::input(format!(
                 "design column {col} has a value that is not finite"
             )));
+        }
+    }
+    if let Some(offset) = options.offset {
+        if offset.len() != n_all {
+            return Err(Error::input(format!(
+                "the offset has {} values against {n_all} rows of data",
+                offset.len()
+            )));
+        }
+        if offset.iter().any(|v| !v.is_finite()) {
+            return Err(Error::input("an offset is not finite".to_owned()));
         }
     }
     if options.max_iterations == 0 {
@@ -554,6 +699,9 @@ pub fn fit(
     let y1: Vec<f64> = used.iter().map(|&row| times.y1[row]).collect();
     let y2: Vec<f64> = used.iter().map(|&row| times.y2[row]).collect();
     let status: Vec<u8> = used.iter().map(|&row| times.status[row]).collect();
+    let offset: Option<Vec<f64>> = options
+        .offset
+        .map(|o| used.iter().map(|&row| o[row]).collect());
     let weight: Vec<f64> = match data.weight() {
         Some(w) => used.iter().map(|&row| w[row]).collect(),
         None => vec![1.0; used.len()],
@@ -601,6 +749,7 @@ pub fn fit(
         stratum: stratum.as_deref(),
         x: &ones,
         p: 1,
+        offset: offset.as_deref(),
         n_scale,
         fixed_ls,
     };
@@ -643,7 +792,8 @@ pub fn fit(
                 ls[if ls.len() == 1 { 0 } else { s }],
             );
             let wt = -d.g_ee * weight[i];
-            let target = wt * centre_of_row(i) + weight[i] * d.g_eta;
+            let eta_i = centre_of_row(i) - offset.as_ref().map_or(0.0, |o| o[i]);
+            let target = wt * eta_i + weight[i] * d.g_eta;
             if !(wt.is_finite() && target.is_finite()) {
                 return Err(Error::input(
                     "the starting values are not finite; check the times against the \
@@ -705,6 +855,7 @@ pub fn fit(
         stratum: stratum.as_deref(),
         x: &design.x,
         p: design.p,
+        offset: offset.as_deref(),
         n_scale,
         fixed_ls,
     };
@@ -783,6 +934,9 @@ pub fn fit(
                 };
                 eta += fitted.beta[j] * value;
             }
+            if let Some(offset) = options.offset {
+                eta += offset[row];
+            }
             eta
         })
         .collect();
@@ -793,6 +947,99 @@ pub fn fit(
     };
     let null_loglik = null_fit.map_or(fitted.loglik, |f| f.loglik) + log_correction;
     let rank = aliased.iter().filter(|&&a| !a).count();
+
+    // The robust variance: the cluster totals of the weighted dfbeta rows,
+    // `score' V` with `V` the model-based variance, and their cross-products.
+    let clusters: Option<Vec<usize>> = data
+        .cluster()
+        .map(|codes| used.iter().map(|&row| codes[row] as usize).collect());
+    let robust_variance = (options.robust || clusters.is_some()).then(|| {
+        let sums_of = scaled_variance.as_ref().and_then(|_| {
+            let v: Vec<f64> = variance_out.iter().map(|e| e.unwrap_or(0.0)).collect();
+            let groups = clusters.as_ref().map_or(0, |_| data.n_clusters());
+            let mut totals = vec![0.0_f64; groups * q];
+            let mut cross = vec![0.0_f64; q * q];
+            let mut x_row = vec![0.0_f64; p];
+            let mut dfbeta = vec![0.0_f64; q];
+            for k in 0..n {
+                let row = used[k];
+                for (j, value) in x_row.iter_mut().enumerate() {
+                    *value = x[(row, j)];
+                }
+                let stratum_k = stratum.as_ref().map_or(0, |c| c[k] as usize);
+                robust::dfbeta_row(
+                    &robust::RowInput {
+                        base,
+                        status: status[k],
+                        y1: y1[k],
+                        y2: y2[k],
+                        eta: linear_predictors[row],
+                        ls: log_scale[stratum_k],
+                        stratum: stratum_k,
+                        x: &x_row,
+                        n_scale,
+                    },
+                    &v,
+                    &mut dfbeta,
+                );
+                for d in &mut dfbeta {
+                    *d *= weight[k];
+                }
+                if dfbeta.iter().any(|d| !d.is_finite()) {
+                    return None;
+                }
+                match &clusters {
+                    Some(c) => {
+                        for (t, d) in totals[c[k] * q..(c[k] + 1) * q].iter_mut().zip(&dfbeta) {
+                            *t += d;
+                        }
+                    }
+                    None => {
+                        for a in 0..q {
+                            for b in 0..=a {
+                                cross[a * q + b] += dfbeta[a] * dfbeta[b];
+                            }
+                        }
+                    }
+                }
+            }
+            for total in totals.chunks_exact(q) {
+                for a in 0..q {
+                    for b in 0..=a {
+                        cross[a * q + b] += total[a] * total[b];
+                    }
+                }
+            }
+            for a in 0..q {
+                for b in 0..a {
+                    cross[b * q + a] = cross[a * q + b];
+                }
+            }
+            Some(cross)
+        });
+        let dead = |i: usize| i < p && aliased[i];
+        (0..q * q)
+            .map(|k| {
+                let (a, b) = (k / q, k % q);
+                sums_of
+                    .as_ref()
+                    .filter(|_| !dead(a) && !dead(b))
+                    .map(|m| m[k])
+            })
+            .collect::<Vec<Option<f64>>>()
+    });
+    let n_clusters = robust_variance
+        .as_ref()
+        .map(|_| clusters.as_ref().map_or(n, |_| data.n_clusters()));
+    let column_means: Vec<f64> = (0..p)
+        .map(|j| {
+            let mut sum = 0.0;
+            for row in 0..n_all {
+                sum += x[(row, j)];
+            }
+            sum / n_all as f64
+        })
+        .collect();
     Ok(SurvregFit {
         coefficients: coefficient
             .iter()
@@ -802,6 +1049,8 @@ pub fn fit(
         log_scale,
         scale_estimated: n_scale > 0,
         variance: variance_out,
+        robust_variance,
+        n_clusters,
         loglik: fitted.loglik + log_correction,
         loglik_null: null_loglik,
         iterations: fitted.iterations,
@@ -809,6 +1058,8 @@ pub fn fit(
         outer_product_steps: fitted.outer_product_steps,
         rank,
         linear_predictors,
+        column_means,
+        t_df: options.df,
         n_rows: n_all,
         n_used: n,
         distribution: dist,

@@ -42,7 +42,8 @@
 //! - [`SurvData`]: the checked input type that the estimators share, for
 //!   follow-up data and for interval-censored times.
 //! - [`survreg`]: accelerated failure time models for right, left and interval
-//!   censored times, with their predictions and residuals, as R's `survreg`.
+//!   censored times, with offsets, the t distribution, robust variance, their
+//!   predictions and residuals, as R's `survreg`.
 //! - [`survcheck`]: structural checks of follow-up with several rows per subject, as
 //!   R's `survcheck`.
 //! - [`survdiff`]: the log-rank and G-rho tests of equal hazards, with strata, and

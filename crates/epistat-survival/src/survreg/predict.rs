@@ -4,14 +4,16 @@
 use faer::MatRef;
 
 use super::dist::row_derivs;
+use super::robust::{RowInput, dfbeta_row};
 use super::{SurvregFit, times_of};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 
 /// What [`SurvregFit::predict`] returns for each row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum PredictType {
     /// The linear predictor `x'beta`, the location of `ln T` or of `T`.
+    #[default]
     LinearPredictor,
     /// The linear predictor on the scale of the time: `exp(x'beta)` for a
     /// transformed distribution, the linear predictor otherwise. The scale of
@@ -24,10 +26,33 @@ pub enum PredictType {
         /// The probabilities.
         p: Vec<f64>,
     },
+    /// The part of the linear predictor from each group of columns, as
+    /// `type = "terms"`: for group `g` the sum of `(x_a - r_a) beta_a` over
+    /// its columns, with `r` the reference. Aliased columns are left out of a
+    /// group. The offset is not part of a term. One value per group and row.
+    Terms {
+        /// The column indices of each term.
+        groups: Vec<Vec<usize>>,
+        /// What the columns are measured from.
+        reference: TermsReference,
+    },
+}
+
+/// The point `type = "terms"` measures the columns from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TermsReference {
+    /// The unweighted mean of each column over the rows the model was fitted
+    /// on, `means` of `survreg`, which `predict.survreg` subtracts when the
+    /// model has an intercept. A constant column centred on its mean
+    /// contributes nothing to a term.
+    #[default]
+    Sample,
+    /// Zero, as `predict.survreg` does for a model without an intercept.
+    Zero,
 }
 
 /// The options of [`SurvregFit::predict`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PredictOptions {
     /// What to predict.
     pub kind: PredictType,
@@ -40,6 +65,15 @@ pub struct PredictOptions {
     /// gives the scale of a quantile. Needed for a quantile when the fit has
     /// more than one stratum, and not read otherwise.
     pub strata: Option<Vec<u32>>,
+    /// The offset of each row of the design, added to the linear predictor
+    /// of a linear predictor, response or quantile. `None` is zero.
+    /// `predict.survreg` leaves the offset of new data out of a quantile,
+    /// which it includes for the fitted data; here it is included.
+    pub offset: Option<Vec<f64>>,
+    /// Whether the standard errors use the robust variance of the fit instead
+    /// of the model-based one, as `predict.survreg` does for a fit with
+    /// `robust = TRUE`.
+    pub robust: bool,
 }
 
 /// Predictions, row-major: `width` values for each row of the design, that is
@@ -79,11 +113,47 @@ pub enum ResidualKind {
     LdShape,
 }
 
+/// The options of [`SurvregFit::dfbeta`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DfbetaOptions<'a> {
+    /// Divide each column by the model-based standard error of its
+    /// parameter: `type = "dfbetas"` instead of `"dfbeta"`.
+    pub standardise: bool,
+    /// Multiply each row by its case weight, `weighted` of `residuals.survreg`.
+    pub weighted: bool,
+    /// Sum the rows within groups, `collapse` of `residuals.survreg`: one code
+    /// for each row of the data, and the result has one row per distinct code,
+    /// in ascending order of the code.
+    pub collapse: Option<&'a [u32]>,
+}
+
+/// The dfbeta residuals: for each row (or group of rows), the approximate
+/// change in each parameter if the row were dropped, with the sign of
+/// `residuals.survreg`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dfbeta {
+    /// Row-major, `width` values for each output row. `None` for an aliased
+    /// column, for a row the fit gives no probability, and for a standardised
+    /// value of a parameter with no variance.
+    pub values: Vec<Option<f64>>,
+    /// The number of output rows: the rows of the data, or the groups.
+    pub n_rows: usize,
+    /// The number of columns: the coefficients, then the log scales when they
+    /// are estimated.
+    pub width: usize,
+    /// The code of each output row when the rows were collapsed.
+    pub groups: Option<Vec<u32>>,
+}
+
 impl SurvregFit {
     fn dense_variance(&self) -> Result<Vec<f64>> {
+        self.dense_of(&self.variance)
+    }
+
+    fn dense_of(&self, variance: &[Option<f64>]) -> Result<Vec<f64>> {
         let q = self.n_params();
         let mut v = vec![0.0_f64; q * q];
-        for (k, entry) in self.variance.iter().enumerate() {
+        for (k, entry) in variance.iter().enumerate() {
             let (a, b) = (k / q, k % q);
             let aliased = |i: usize| i < self.n_coef() && self.coefficients[i].is_none();
             match entry {
@@ -167,16 +237,49 @@ impl SurvregFit {
             }
             _ => vec![0; n],
         };
+        if let Some(offset) = &options.offset {
+            if offset.len() != n || offset.iter().any(|v| !v.is_finite()) {
+                return Err(Error::input(format!(
+                    "the offset needs one finite value for each of the {n} rows"
+                )));
+            }
+        }
+        let terms: &[Vec<usize>] = match &options.kind {
+            PredictType::Terms { groups, .. } => {
+                if groups.is_empty() {
+                    return Err(Error::input("terms needs at least one group".to_owned()));
+                }
+                if groups.iter().flatten().any(|&a| a >= p) {
+                    return Err(Error::input(
+                        "terms: an index is not a column of the design".to_owned(),
+                    ));
+                }
+                groups
+            }
+            _ => &[],
+        };
         let variance = if options.se_fit {
-            Some(self.dense_variance()?)
+            Some(if options.robust {
+                match &self.robust_variance {
+                    Some(v) => self.dense_of(v)?,
+                    None => {
+                        return Err(Error::input("the fit has no robust variance".to_owned()));
+                    }
+                }
+            } else {
+                self.dense_variance()?
+            })
         } else {
             None
         };
         let q = self.n_params();
         let log = self.distribution.is_log();
-        let base = self.distribution.base();
+        let base = self.distribution.base(self.t_df);
         let offsets: Vec<f64> = quantiles.iter().map(|&pr| base.quantile(pr)).collect();
-        let width = offsets.len().max(1);
+        let width = match &options.kind {
+            PredictType::Terms { groups, .. } => groups.len(),
+            _ => offsets.len().max(1),
+        };
         let mut fit = Vec::with_capacity(n * width);
         let mut se = options.se_fit.then(|| Vec::with_capacity(n * width));
         let mut row = vec![0.0_f64; p];
@@ -184,7 +287,8 @@ impl SurvregFit {
             for (j, r) in row.iter_mut().enumerate() {
                 *r = x[(i, j)];
             }
-            let eta = self.linear_predictor(&row);
+            let shift = options.offset.as_ref().map_or(0.0, |o| o[i]);
+            let eta = self.linear_predictor(&row) + shift;
             let mut t = vec![0.0_f64; q];
             for (j, tj) in t.iter_mut().enumerate().take(p) {
                 *tj = if self.coefficients[j].is_some() {
@@ -208,6 +312,33 @@ impl SurvregFit {
                 total.max(0.0).sqrt()
             };
             match &options.kind {
+                PredictType::Terms { reference, .. } => {
+                    let mut centred = row.clone();
+                    if *reference == TermsReference::Sample {
+                        for (c, m) in centred.iter_mut().zip(&self.column_means) {
+                            *c -= m;
+                        }
+                    }
+                    for group in terms {
+                        let columns: Vec<usize> = group
+                            .iter()
+                            .copied()
+                            .filter(|&a| self.coefficients[a].is_some())
+                            .collect();
+                        let mut value = 0.0;
+                        for &a in &columns {
+                            value += centred[a] * self.coefficients[a].unwrap_or(0.0);
+                        }
+                        fit.push(value);
+                        if let Some(se) = &mut se {
+                            let mut tg = vec![0.0_f64; q];
+                            for &a in &columns {
+                                tg[a] = centred[a];
+                            }
+                            se.push(quad(&tg));
+                        }
+                    }
+                }
                 PredictType::LinearPredictor | PredictType::Response => {
                     let value = if matches!(options.kind, PredictType::Response) && log {
                         eta.exp()
@@ -288,7 +419,7 @@ impl SurvregFit {
             ));
         }
         let times = times_of(data, self.distribution)?;
-        let base = self.distribution.base();
+        let base = self.distribution.base(self.t_df);
         let log = self.distribution.is_log();
         let q = self.n_params();
         let displacement = matches!(
@@ -369,5 +500,124 @@ impl SurvregFit {
             out.push(value.map(|v| v * w));
         }
         Ok(out)
+    }
+
+    /// The dfbeta (or dfbetas) residuals of the model for `data`, the rows the
+    /// model was fitted on, and the same design `x`: the score of each row
+    /// times the model-based variance. The score of a row has `g_eta x` for
+    /// the coefficients and `g_ls` for the log scale of its stratum. Where
+    /// `survreg` reports 0 for an aliased column, this gives `None`.
+    ///
+    /// The model-based variance is used also when the fit has a robust one,
+    /// as `residuals.survreg` uses `naive.var`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] for data or a design that does not match the fit, for
+    /// a `collapse` of another length than the data, and when the variance of
+    /// the fit is not defined.
+    pub fn dfbeta(
+        &self,
+        data: &SurvData<'_>,
+        x: MatRef<'_, f64>,
+        options: &DfbetaOptions<'_>,
+    ) -> Result<Dfbeta> {
+        let n = data.n_rows();
+        let p = self.n_coef();
+        if n != self.n_rows || x.nrows() != n || x.ncols() != p {
+            return Err(Error::input(format!(
+                "the data and design must be those of the fit: {} rows and {p} columns",
+                self.n_rows
+            )));
+        }
+        if data.n_strata().max(1) != self.n_strata {
+            return Err(Error::input(
+                "the strata of the data differ from those of the fit".to_owned(),
+            ));
+        }
+        if let Some(codes) = options.collapse {
+            if codes.len() != n {
+                return Err(Error::input(format!(
+                    "collapse has {} codes for {n} rows",
+                    codes.len()
+                )));
+            }
+        }
+        let v = self.dense_variance()?;
+        let q = self.n_params();
+        let times = times_of(data, self.distribution)?;
+        let base = self.distribution.base(self.t_df);
+        let n_scale = if self.scale_estimated {
+            self.n_strata
+        } else {
+            0
+        };
+        let mut rows = vec![0.0_f64; n * q];
+        let mut x_row = vec![0.0_f64; p];
+        for i in 0..n {
+            for (j, value) in x_row.iter_mut().enumerate() {
+                *value = x[(i, j)];
+            }
+            let s = data.stratum().map_or(0, |c| c[i] as usize);
+            let out = &mut rows[i * q..(i + 1) * q];
+            if times.y1[i].is_nan() {
+                out.fill(f64::NAN);
+                continue;
+            }
+            dfbeta_row(
+                &RowInput {
+                    base,
+                    status: times.status[i],
+                    y1: times.y1[i],
+                    y2: times.y2[i],
+                    eta: self.linear_predictors[i],
+                    ls: self.log_scale[s],
+                    stratum: s,
+                    x: &x_row,
+                    n_scale,
+                },
+                &v,
+                out,
+            );
+            for (b, value) in out.iter_mut().enumerate() {
+                if options.standardise {
+                    *value /= v[b * q + b].sqrt();
+                }
+                if options.weighted {
+                    if let Some(w) = data.weight() {
+                        *value *= w[i];
+                    }
+                }
+            }
+        }
+        let (rows, n_rows, groups) = match options.collapse {
+            None => (rows, n, None),
+            Some(codes) => {
+                let mut levels: Vec<u32> = codes.to_vec();
+                levels.sort_unstable();
+                levels.dedup();
+                let mut sums = vec![0.0_f64; levels.len() * q];
+                for i in 0..n {
+                    let g = levels.partition_point(|&level| level < codes[i]);
+                    for b in 0..q {
+                        sums[g * q + b] += rows[i * q + b];
+                    }
+                }
+                let count = levels.len();
+                (sums, count, Some(levels))
+            }
+        };
+        let aliased = |b: usize| b < p && self.coefficients[b].is_none();
+        let values = rows
+            .iter()
+            .enumerate()
+            .map(|(k, &value)| (value.is_finite() && !aliased(k % q)).then_some(value))
+            .collect();
+        Ok(Dfbeta {
+            values,
+            n_rows,
+            width: q,
+            groups,
+        })
     }
 }

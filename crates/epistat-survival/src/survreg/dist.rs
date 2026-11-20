@@ -1,6 +1,7 @@
-//! The three standardised error distributions of the location-scale models
+//! The four standardised error distributions of the location-scale models
 //! and the derivatives of a row's log likelihood in them.
 
+use super::tdist;
 use epistat_stats::normal;
 
 /// `ln(sqrt(2 pi))`.
@@ -9,12 +10,14 @@ const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;
 const FRAC_1_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
 
 /// The standardised error distribution: standard minimum extreme value,
-/// standard logistic, standard normal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// standard logistic, standard normal, or Student t with the degrees of
+/// freedom given.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Base {
     ExtremeValue,
     Logistic,
     Gaussian,
+    StudentT(f64),
 }
 
 /// The distribution function `F`, the survival function `S = 1 - F` computed
@@ -46,6 +49,7 @@ impl Base {
                 )
             }
             Self::Gaussian => (-0.5 * z * z - LN_SQRT_2PI, -z, -1.0),
+            Self::StudentT(nu) => tdist::log_density(z, nu),
         }
     }
 
@@ -96,6 +100,25 @@ impl Base {
                     dpdf: -z * pdf,
                 }
             }
+            Self::StudentT(nu) => {
+                let (cdf, sf) = tdist::cdf_sf(z, nu);
+                if z.is_infinite() {
+                    return Tail {
+                        cdf,
+                        sf,
+                        pdf: 0.0,
+                        dpdf: 0.0,
+                    };
+                }
+                let (h, h1, _) = tdist::log_density(z, nu);
+                let pdf = h.exp();
+                Tail {
+                    cdf,
+                    sf,
+                    pdf,
+                    dpdf: pdf * h1,
+                }
+            }
         }
     }
 
@@ -105,6 +128,7 @@ impl Base {
             Self::ExtremeValue => (-(-p).ln_1p()).ln(),
             Self::Logistic => (p / (1.0 - p)).ln(),
             Self::Gaussian => normal::quantile(p),
+            Self::StudentT(nu) => tdist::quantile(p, nu),
         }
     }
 
@@ -118,6 +142,7 @@ impl Base {
             Self::ExtremeValue => (mean + 0.572, variance / 1.64),
             Self::Logistic => (mean, variance / 3.2),
             Self::Gaussian => (mean, variance),
+            Self::StudentT(nu) => (mean, variance * (nu - 2.0) / nu),
         }
     }
 
@@ -157,6 +182,16 @@ impl Base {
                 let loglik = match status {
                     1 => -(LN_SQRT_2PI + sigma.ln()),
                     3 => (2.0 * normal::cdf(0.5 * width) - 1.0).ln(),
+                    _ => 0.0,
+                };
+                (center, loglik)
+            }
+            Self::StudentT(nu) => {
+                let width = if interval { (y2 - y1) / sigma } else { 0.0 };
+                let center = if interval { 0.5 * (y1 + y2) } else { y1 };
+                let loglik = match status {
+                    1 => -(tdist::log_density(0.0, nu).0 + sigma.ln()),
+                    3 => (2.0 * tdist::cdf_sf(0.5 * width, nu).0 - 1.0).ln(),
                     _ => 0.0,
                 };
                 (center, loglik)
@@ -286,7 +321,14 @@ mod tests {
     #[test]
     fn derivatives_match_central_differences() {
         let h = 1e-4;
-        for base in [Base::ExtremeValue, Base::Logistic, Base::Gaussian] {
+        for base in [
+            Base::ExtremeValue,
+            Base::Logistic,
+            Base::Gaussian,
+            Base::StudentT(4.0),
+            Base::StudentT(2.5),
+            Base::StudentT(30.0),
+        ] {
             for (status, y1, y2) in [
                 (1_u8, 1.3, 0.0),
                 (0, 1.3, 0.0),

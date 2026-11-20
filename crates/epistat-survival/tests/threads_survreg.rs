@@ -81,6 +81,7 @@ fn survreg_fit_predict_residuals() {
                         kind: PredictType::Quantile { p: vec![0.25, 0.5] },
                         se_fit: true,
                         strata: Some(stratum.clone()),
+                        ..PredictOptions::default()
                     },
                 )
                 .unwrap();

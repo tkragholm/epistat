@@ -16,6 +16,8 @@ pub(super) struct Problem<'a> {
     /// The design, row-major, `p` columns.
     pub x: &'a [f64],
     pub p: usize,
+    /// The offset of each row, added to the linear predictor.
+    pub offset: Option<&'a [f64]>,
     /// The number of scale parameters estimated: the number of strata, or 0
     /// when the scale is fixed.
     pub n_scale: usize,
@@ -63,6 +65,9 @@ impl Problem<'_> {
             let mut eta = 0.0;
             for (b, xv) in beta[..p].iter().zip(x) {
                 eta += b * xv;
+            }
+            if let Some(offset) = self.offset {
+                eta += offset[row];
             }
             let (ls, s) = self.scale_of(beta, row);
             let d = row_derivs(

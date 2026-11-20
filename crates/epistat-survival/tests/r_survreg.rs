@@ -328,6 +328,7 @@ fn fits_match_r() {
                         kind,
                         se_fit: true,
                         strata: r.use_strata.then(|| strata.clone()),
+                        ..PredictOptions::default()
                     },
                 )
                 .unwrap()
