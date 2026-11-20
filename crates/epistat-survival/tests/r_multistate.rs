@@ -1,18 +1,14 @@
-//! `multistate::state_occupation_curve` and `multistate::integrate` checked
+//! `multistate::estimate` and `multistate::integrate` checked
 //! against R 4.6.2's `survival::survfit(Surv(start, stop, state) ~ 1, id =,
 //! istate =)` and the restricted mean time in state of `summary(fit, rmean =)`.
 //! The bootstrap has no R counterpart and is not checked here.
 
-use epistat_survival::multistate::{Intervals, integrate, state_occupation_curve};
+use epistat_survival::SurvData;
+use epistat_survival::multistate::{Options, estimate, integrate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
 const STATES: usize = 3;
-
-/// A summed leaving rate above one by more than this is refused as malformed
-/// input. It is a bound on a check, not on a result: every rate of well-formed
-/// data is at most one up to a few units of rounding.
-const RATE_TOLERANCE: f64 = 1e-9;
 
 #[derive(Deserialize)]
 struct Reference {
@@ -44,6 +40,24 @@ struct Case {
     tau: Vec<f64>,
     rmean: Vec<Vec<f64>>,
     rmean_common: Vec<f64>,
+}
+
+/// The reference stores the rows of a subject one after the other and not the
+/// subject. A row belongs to the subject of the row before it when it starts
+/// where that one stopped, in the state it moved to.
+#[expect(clippy::float_cmp, reason = "the reference times are integers")]
+fn subject_ids(case: &Case) -> Vec<u32> {
+    let mut id = 0_u32;
+    let mut ids = Vec::with_capacity(case.start.len());
+    for row in 0..case.start.len() {
+        let continues =
+            row > 0 && case.start[row] == case.stop[row - 1] && case.from[row] == case.to[row - 1];
+        if row > 0 && !continues {
+            id += 1;
+        }
+        ids.push(id);
+    }
+    ids
 }
 
 /// The largest deviation seen, in units of its tolerance.
@@ -124,16 +138,42 @@ fn occupation_and_restricted_time_match_r() {
     let mut common_worst = Worst::default();
 
     for case in &reference.cases {
-        let intervals = Intervals::new(&case.start, &case.stop, &case.from, &case.to).unwrap();
-        let got = state_occupation_curve(
-            intervals,
-            &case.weight,
-            &case.time,
-            &case.p0,
-            STATES,
-            RATE_TOLERANCE,
-        )
+        // The states are the codes 1 to 3, the ranks plus one, and status 0 is
+        // the censoring that the reference marks as a move to state rank 3.
+        let id = subject_ids(case);
+        let status: Vec<i32> = case
+            .to
+            .iter()
+            .map(|&to| {
+                if to as usize >= STATES {
+                    0
+                } else {
+                    i32::try_from(to).unwrap() + 1
+                }
+            })
+            .collect();
+        let istate: Vec<u32> = case.from.iter().map(|&from| from + 1).collect();
+        let builder = SurvData::builder(&case.stop, &status)
+            .start(&case.start)
+            .n_codes(u32::try_from(STATES).unwrap())
+            .id(&id)
+            .istate(&istate);
+        // The cases without weights give every row the weight 1, which is
+        // the default.
+        let data = if case.weights == "none" {
+            builder
+        } else {
+            builder.weight(&case.weight)
+        }
+        .build()
         .unwrap();
+        let options = Options {
+            initial: Some(case.p0.clone()),
+            ..Options::default()
+        };
+        let got = estimate(&data, &case.time, &options).unwrap();
+        assert_eq!(got.n_rows, case.start.len(), "{}", case.name);
+        assert_eq!(got.n_used, case.start.len(), "{}", case.name);
         assert!(
             (case.p0.iter().sum::<f64>() - 1.0).abs() <= 4.0 * eps,
             "{}",

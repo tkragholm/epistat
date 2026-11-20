@@ -33,6 +33,38 @@
 //! censored interval, or a state deliberately left out, and it is counted
 //! into neither the risk set nor the transitions.
 //!
+//! # Input
+//!
+//! [`estimate`] and [`bootstrap`] read a [`SurvData`]. Its states are the
+//! codes `1..=n_codes`, so `S` is `n_codes` and state rank `r` is code `r + 1`.
+//! The state a row starts in is its `istate`, as resolved by
+//! [`survcheck`]: the given `istate`, or the state
+//! the earlier rows of the subject led to when there is none. The state it
+//! ends in is its `status`. A status of 0 is censoring, and it is the one
+//! way to say "outside the state space": a move to a state that is left out of
+//! the analysis is recorded as status 0, which counts the row at risk until
+//! its stop and as a move to nowhere. A row that starts in a left-out state is
+//! left out by the caller, since a state without a code has no rank. A row
+//! whose starting state is unknown (0) is an error, because it has no state to
+//! be at risk in.
+//!
+//! The data must have an id column and a start column, and [`bootstrap`] a
+//! cluster column. A subject's rows are checked with
+//! [`survcheck`] and the policy for multi-state
+//! data, so overlapping rows, jumps and teleports are errors, and gaps in the
+//! follow-up of a subject are allowed. The times first go through the tie rule
+//! of [`TimeFix`], `survival::aeqSurv` by default, as
+//! `survfit` applies it. Rows of weight 0 are not used. The result reports
+//! `n_rows`, all rows, and `n_used`, the rows of positive weight. The opening
+//! row of a subject is its first row in time order, by stop and then start,
+//! whatever its weight, so a subject whose first row has weight 0 adds nothing
+//! to the initial distribution.
+//!
+//! [`Intervals`], [`state_occupation_curve`] and [`bootstrap_state_occupation`]
+//! take the same quantities as separate slices, with the ranks themselves, and
+//! are deprecated. They run the same code, with exact ties and without the
+//! structural checks, and they give the same bits as before.
+//!
 //! The restricted expected time in each state up to a horizon `h` is the integral
 //! of `p` from an origin `o` to `h`. Since `p` is a step function, the integral
 //! is a sum of rectangles, and the segment from the origin to the first event
@@ -67,7 +99,7 @@
 //!
 //! # The bootstrap
 //!
-//! [`bootstrap_state_occupation`] reweights the intervals by random cluster
+//! [`bootstrap`] reweights the intervals by random cluster
 //! weights, Dirichlet(1, ..., 1) scaled to mean 1 \[3\], one weight per cluster
 //! drawn from a seed per replicate, and repeats the estimate. The point estimate
 //! and every replicate go through one function, so an interval is
@@ -100,26 +132,33 @@
     reason = "a plan is built only when the row and table counts fit in u32"
 )]
 
+use std::borrow::Cow;
+
 use epistat_rng::dirichlet_weights;
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
 use crate::check::check_lengths;
 use crate::error::{Error, Result};
+use crate::surv::SurvData;
+use crate::survcheck::{Policy, survcheck};
+use crate::timefix::TimeFix;
 
 /// The intervals of a multi-state process, one entry per row.
 ///
 /// States are ranks into the caller's own state space; a rank at or above the
 /// number of states means "outside the space". Rows are read positionally, so
 /// the four slices are the same length.
+#[deprecated(
+    since = "0.3.0",
+    note = "use `multistate::estimate` or `multistate::bootstrap` with a `SurvData`"
+)]
 #[derive(Debug, Clone, Copy)]
 pub struct Intervals<'a> {
-    starts: &'a [f64],
-    stops: &'a [f64],
-    from_states: &'a [u32],
-    to_states: &'a [u32],
+    rows: Rows<'a>,
 }
 
+#[expect(deprecated, reason = "the methods of the deprecated type itself")]
 impl<'a> Intervals<'a> {
     /// The interval `(starts[i], stops[i]]` spent in state `from_states[i]`,
     /// ending in `to_states[i]`.
@@ -140,25 +179,48 @@ impl<'a> Intervals<'a> {
             ("to_states", to_states.len()),
         ])?;
         Ok(Self {
-            starts,
-            stops,
-            from_states,
-            to_states,
+            rows: Rows {
+                starts,
+                stops,
+                from_states,
+                to_states,
+            },
         })
     }
 
     /// The number of intervals.
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.starts.len()
+        self.rows.starts.len()
     }
 
     /// Whether there are no intervals.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.starts.is_empty()
+        self.rows.starts.is_empty()
     }
 }
+
+/// The intervals as four slices of the same length, with the state ranks
+/// of the caller. A rank at or above the number of states is outside the space.
+/// Both the deprecated entry points and the ones that read a [`SurvData`] end in
+/// the code that reads this.
+#[derive(Debug, Clone, Copy)]
+struct Rows<'a> {
+    starts: &'a [f64],
+    stops: &'a [f64],
+    from_states: &'a [u32],
+    to_states: &'a [u32],
+}
+
+impl Rows<'_> {
+    const fn len(&self) -> usize {
+        self.starts.len()
+    }
+}
+
+/// The rank that stands for a state outside the space.
+const OUTSIDE: u32 = u32::MAX;
 
 /// The occupation probabilities at every event time, and the weight at risk.
 #[derive(Debug, Clone, PartialEq)]
@@ -200,7 +262,7 @@ struct MoveEntry {
 impl Plan {
     /// `None` when the times are not ascending and free of NaN, or a table
     /// would not be indexed by `u32`; the sums then run over every time.
-    fn new(intervals: Intervals<'_>, times: &[f64], states: usize) -> Option<Self> {
+    fn new(intervals: Rows<'_>, times: &[f64], states: usize) -> Option<Self> {
         if !times.windows(2).all(|pair| pair[0] <= pair[1])
             || u32::try_from(intervals.starts.len()).is_err()
             || u32::try_from(times.len() * states * states).is_err()
@@ -342,8 +404,29 @@ fn accumulate(
 /// [`Error::Input`] when `weights` does not hold one weight per interval,
 /// `initial` does not hold one entry per state, or more weight leaves a state
 /// than was at risk in it.
+#[deprecated(since = "0.3.0", note = "use `multistate::estimate` with a `SurvData`")]
+#[expect(deprecated, reason = "takes the deprecated `Intervals`")]
 pub fn state_occupation_curve(
     intervals: Intervals<'_>,
+    weights: &[f64],
+    times: &[f64],
+    initial: &[f64],
+    states: usize,
+    rate_tolerance: f64,
+) -> Result<Occupation> {
+    occupation(
+        intervals.rows,
+        weights,
+        times,
+        initial,
+        states,
+        rate_tolerance,
+    )
+}
+
+/// The curve of [`state_occupation_curve`], on the intervals as ranks.
+fn occupation(
+    intervals: Rows<'_>,
     weights: &[f64],
     times: &[f64],
     initial: &[f64],
@@ -407,7 +490,7 @@ fn initial_distribution(
 /// `with_risk` the total weight at risk at each time, otherwise an empty
 /// vector. The point estimate and every bootstrap replicate come through here.
 fn product_integral(
-    intervals: Intervals<'_>,
+    intervals: Rows<'_>,
     weights: &[f64],
     times: &[f64],
     initial: &[f64],
@@ -552,8 +635,44 @@ pub fn integrate(
 /// intervals carry no weight inside the state space (no initial distribution
 /// exists), or when more weight leaves a state than was at risk in it in some
 /// replicate.
+#[deprecated(
+    since = "0.3.0",
+    note = "use `multistate::bootstrap` with a `SurvData`"
+)]
+#[expect(deprecated, reason = "takes the deprecated `Intervals`")]
 pub fn bootstrap_state_occupation(
     intervals: Intervals<'_>,
+    base: &[f64],
+    cluster_codes: &[u32],
+    first_positions: &[u32],
+    first_states: &[i32],
+    times: &[f64],
+    horizons: &[f64],
+    origin: f64,
+    seeds: &[u64],
+    n_clusters: usize,
+    states: usize,
+    rate_tolerance: f64,
+) -> Result<Vec<f64>> {
+    bootstrap_rows(
+        intervals.rows,
+        base,
+        cluster_codes,
+        first_positions,
+        first_states,
+        times,
+        horizons,
+        origin,
+        seeds,
+        n_clusters,
+        states,
+        rate_tolerance,
+    )
+}
+
+/// The replicates of [`bootstrap_state_occupation`], on the intervals as ranks.
+fn bootstrap_rows(
+    intervals: Rows<'_>,
     base: &[f64],
     cluster_codes: &[u32],
     first_positions: &[u32],
@@ -643,7 +762,376 @@ pub fn bootstrap_state_occupation(
     Ok(per_replicate.concat())
 }
 
+/// Settings of [`estimate`] and [`bootstrap`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Options {
+    /// How times that differ by rounding error are treated before the
+    /// estimate. `survival::aeqSurv` by default, as `survfit` applies it.
+    pub timefix: TimeFix,
+    /// How far the summed leaving rate of a state may exceed 1 before the
+    /// data is refused as malformed. It bounds a check, not a result, since
+    /// the rates of well-formed data are at most 1 up to a few units of
+    /// rounding. `1e-9` by default.
+    pub rate_tolerance: f64,
+    /// The distribution over the states before the first time, `n_codes`
+    /// entries that are not negative and sum to 1. `None`, the default, takes
+    /// it from the opening rows of the subjects, weighted. [`bootstrap`]
+    /// forms it in each replicate from the replicate's weights, so it refuses
+    /// a distribution given here.
+    pub initial: Option<Vec<f64>>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            timefix: TimeFix::default(),
+            rate_tolerance: 1e-9,
+            initial: None,
+        }
+    }
+}
+
+/// The occupation probabilities at every time, with the rows behind them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Estimate {
+    /// `time * state`, row-major: the probability of each state after each
+    /// time. State `k` is status code `k + 1`.
+    pub probabilities: Vec<f64>,
+    /// The total weight at risk at each time.
+    pub at_risk: Vec<f64>,
+    /// The distribution over the states before the first time, as given or as
+    /// formed from the opening rows.
+    pub initial: Vec<f64>,
+    /// The number of states, `n_codes` of the data.
+    pub n_states: usize,
+    /// The number of rows of the data, including rows of weight 0.
+    pub n_rows: usize,
+    /// The number of rows of positive weight, which are the rows used.
+    pub n_used: usize,
+}
+
+/// The replicates of a clustered bootstrap, with the rows behind them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bootstrap {
+    /// The replicates concatenated in seed order. Without horizons each is
+    /// `time * state`, the occupation probabilities. With horizons each is
+    /// `horizon * state`, the restricted expected time in each state from the
+    /// origin to the horizon.
+    pub values: Vec<f64>,
+    /// The number of replicates, one per seed.
+    pub n_replicates: usize,
+    /// The number of states, `n_codes` of the data.
+    pub n_states: usize,
+    /// The number of rows of the data, including rows of weight 0.
+    pub n_rows: usize,
+    /// The number of rows of positive weight, which are the rows used.
+    pub n_used: usize,
+}
+
+/// What the data give the shared code, once checked: the ranks of the states,
+/// the opening row of each subject and the clusters, for the rows used.
+struct Prepared<'a> {
+    data: SurvData<'a>,
+    /// The rows used, or `None` when every row is used.
+    index: Option<Vec<u32>>,
+    from_states: Vec<u32>,
+    to_states: Vec<u32>,
+    /// Positions among the rows used, one per subject whose opening row is
+    /// used, in the order of the subjects' dense ids.
+    first_positions: Vec<u32>,
+    first_states: Vec<i32>,
+    clusters: Option<Vec<u32>>,
+    n_states: usize,
+}
+
+/// The column `values` over the rows used.
+fn gather<'a>(values: &'a [f64], index: Option<&[u32]>) -> Cow<'a, [f64]> {
+    index.map_or(Cow::Borrowed(values), |rows| {
+        Cow::Owned(rows.iter().map(|&row| values[row as usize]).collect())
+    })
+}
+
+impl<'a> Prepared<'a> {
+    /// Apply the tie rule, check the follow-up of each subject and read the
+    /// states of the rows used.
+    fn new(data: &SurvData<'a>, timefix: TimeFix, clustered: bool) -> Result<Self> {
+        let data = data.clone().with_timefix(timefix)?;
+        let check = survcheck(&data)?;
+        check.enforce(Policy::for_data(&data))?;
+        let surv = data.followup()?;
+        let stop = surv.stop();
+        let start = surv.start().ok_or_else(|| {
+            Error::input("multi-state estimates need the start of each interval, the start column")
+        })?;
+        if data.n_used() == 0 {
+            return Err(Error::input(
+                "no row has positive weight, so there is nothing to estimate",
+            ));
+        }
+        let ids = data.id().ok_or_else(|| {
+            Error::input(
+                "multi-state estimates need an id column to know which rows belong together",
+            )
+        })?;
+        let n_states = surv.n_codes() as usize;
+        let index = data.used_index();
+        let every: Vec<u32>;
+        let rows: &[u32] = if let Some(used) = &index {
+            used
+        } else {
+            every = (0..data.n_rows() as u32).collect();
+            &every
+        };
+
+        let mut from_states = Vec::with_capacity(rows.len());
+        let mut to_states = Vec::with_capacity(rows.len());
+        for &row in rows {
+            let state = check.istate[row as usize];
+            if state == 0 {
+                return Err(Error::input(format!(
+                    "row {row} has no starting state: give istate, or drop the row"
+                )));
+            }
+            from_states.push(state - 1);
+            to_states.push(match surv.status()[row as usize] {
+                0 => OUTSIDE,
+                code => u32::try_from(code - 1).expect("status is at least 1 here"),
+            });
+        }
+
+        // The opening row of a subject: the first by stop, then start, then
+        // row number, the order survcheck reads the rows in.
+        let mut opening = vec![u32::MAX; data.n_ids()];
+        for row in 0..data.n_rows() {
+            let slot = &mut opening[ids[row] as usize];
+            let earlier = *slot == u32::MAX
+                || (stop[row], start[row])
+                    .partial_cmp(&(stop[*slot as usize], start[*slot as usize]))
+                    .is_some_and(std::cmp::Ordering::is_lt);
+            if earlier {
+                *slot = row as u32;
+            }
+        }
+        let mut position = vec![u32::MAX; if index.is_some() { data.n_rows() } else { 0 }];
+        if index.is_some() {
+            for (at, &row) in rows.iter().enumerate() {
+                position[row as usize] = at as u32;
+            }
+        }
+        let mut first_positions = Vec::new();
+        let mut first_states = Vec::new();
+        for &row in &opening {
+            let at = if index.is_some() {
+                position[row as usize]
+            } else {
+                row
+            };
+            if at != u32::MAX {
+                first_positions.push(at);
+                let rank = from_states[at as usize];
+                first_states.push(i32::try_from(rank).map_err(|_| {
+                    Error::input("a state code above the largest i32 is not supported")
+                })?);
+            }
+        }
+
+        let clusters = if clustered {
+            let codes = data.cluster().ok_or_else(|| {
+                Error::input("the bootstrap resamples clusters, so the data need a cluster column")
+            })?;
+            Some(rows.iter().map(|&row| codes[row as usize]).collect())
+        } else {
+            None
+        };
+        Ok(Self {
+            data,
+            index,
+            from_states,
+            to_states,
+            first_positions,
+            first_states,
+            clusters,
+            n_states,
+        })
+    }
+
+    /// The start, stop and weight of the rows used.
+    fn columns(&self) -> Result<Columns<'_>> {
+        let surv = self.data.followup()?;
+        let start = surv
+            .start()
+            .ok_or_else(|| Error::input("multi-state estimates need a start column"))?;
+        let index = self.index.as_deref();
+        Ok(Columns {
+            starts: gather(start, index),
+            stops: gather(surv.stop(), index),
+            weights: match self.data.weight() {
+                Some(weight) => gather(weight, index),
+                None => Cow::Owned(vec![1.0; self.data.n_used()]),
+            },
+        })
+    }
+}
+
+/// The columns of the rows used.
+struct Columns<'a> {
+    starts: Cow<'a, [f64]>,
+    stops: Cow<'a, [f64]>,
+    weights: Cow<'a, [f64]>,
+}
+
+/// The occupation probabilities and the weight at risk at each of `times`, for
+/// follow-up data with several states.
+///
+/// The states are the status codes `1..=n_codes`, entered at the ends of the
+/// rows. See the module documentation for what the data supply, which rows
+/// count, and the checks that run first. `times` are the event times, usually
+/// ascending.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the data have no id or start column, a row has no
+/// starting state, no row has positive weight, the rows of a subject overlap or
+/// jump or teleport between states, the tie rule fails, `opts.initial` has the
+/// wrong length, a negative or non-finite entry or a sum that is not 1, no
+/// weight is in the opening states when the distribution is formed from the
+/// data, or more weight leaves a state than was at risk in it.
+pub fn estimate(data: &SurvData<'_>, times: &[f64], opts: &Options) -> Result<Estimate> {
+    let prepared = Prepared::new(data, opts.timefix, false)?;
+    let Columns {
+        starts,
+        stops,
+        weights,
+    } = prepared.columns()?;
+    let rows = Rows {
+        starts: &starts,
+        stops: &stops,
+        from_states: &prepared.from_states,
+        to_states: &prepared.to_states,
+    };
+    let states = prepared.n_states;
+    let initial = match &opts.initial {
+        Some(given) => {
+            check_distribution(given, states)?;
+            given.clone()
+        }
+        None => initial_distribution(
+            &prepared.first_states,
+            &prepared.first_positions,
+            &weights,
+            states,
+        )?,
+    };
+    let occupation = occupation(rows, &weights, times, &initial, states, opts.rate_tolerance)?;
+    Ok(Estimate {
+        probabilities: occupation.probabilities,
+        at_risk: occupation.at_risk,
+        initial,
+        n_states: states,
+        n_rows: prepared.data.n_rows(),
+        n_used: prepared.data.n_used(),
+    })
+}
+
+/// A given initial distribution: one entry per state, none negative or not a
+/// number, summing to 1 to within the rounding of its entries.
+fn check_distribution(initial: &[f64], states: usize) -> Result<()> {
+    if initial.len() != states {
+        return Err(Error::input(
+            "the initial distribution must have one entry per state",
+        ));
+    }
+    if initial.iter().any(|&p| !(p >= 0.0 && p.is_finite())) {
+        return Err(Error::input(
+            "the initial distribution must not hold a negative or non-finite entry",
+        ));
+    }
+    // Each entry is rounded to a double, which is off by at most half an
+    // epsilon of itself, so the total is off by at most half an epsilon per
+    // state. The sum itself is compensated.
+    let total = compensated(initial.iter().copied());
+    if (total - 1.0).abs() > states as f64 * f64::EPSILON {
+        return Err(Error::input(format!(
+            "the initial distribution must sum to 1, and sums to {total}"
+        )));
+    }
+    Ok(())
+}
+
+/// The clustered bootstrap of the occupation probabilities or of the restricted
+/// expected times, for follow-up data with several states.
+///
+/// Replicate `r` draws one weight per cluster from `seeds[r]`, multiplies the
+/// weight of each row used by the weight of its cluster, forms the opening
+/// distribution from the opening rows with those weights and repeats the
+/// estimate of [`estimate`]. The cluster column is required, and `n_clusters`
+/// of the data is the number of weights drawn, so a cluster whose rows all have
+/// weight 0 draws a weight that is not used. The estimate depends on the
+/// weights through ratios only, so this changes no result in distribution.
+///
+/// `horizons` selects what comes back. Empty returns the occupation
+/// probabilities at `times`. Non-empty returns the restricted expected times
+/// from `origin` to each horizon. See [`Bootstrap::values`] for the layout.
+///
+/// # Errors
+///
+/// As [`estimate`], and [`Error::Input`] when the data have no cluster column,
+/// when `opts.initial` is given, or when in some replicate the opening rows
+/// carry no weight.
+pub fn bootstrap(
+    data: &SurvData<'_>,
+    times: &[f64],
+    horizons: &[f64],
+    origin: f64,
+    seeds: &[u64],
+    opts: &Options,
+) -> Result<Bootstrap> {
+    if opts.initial.is_some() {
+        return Err(Error::input(
+            "the bootstrap forms the initial distribution in each replicate, so none can be given",
+        ));
+    }
+    let prepared = Prepared::new(data, opts.timefix, true)?;
+    let Columns {
+        starts,
+        stops,
+        weights,
+    } = prepared.columns()?;
+    let rows = Rows {
+        starts: &starts,
+        stops: &stops,
+        from_states: &prepared.from_states,
+        to_states: &prepared.to_states,
+    };
+    let clusters = prepared
+        .clusters
+        .as_deref()
+        .ok_or_else(|| Error::input("the bootstrap needs a cluster column"))?;
+    let values = bootstrap_rows(
+        rows,
+        &weights,
+        clusters,
+        &prepared.first_positions,
+        &prepared.first_states,
+        times,
+        horizons,
+        origin,
+        seeds,
+        prepared.data.n_clusters(),
+        prepared.n_states,
+        opts.rate_tolerance,
+    )?;
+    Ok(Bootstrap {
+        values,
+        n_replicates: seeds.len(),
+        n_states: prepared.n_states,
+        n_rows: prepared.data.n_rows(),
+        n_used: prepared.data.n_used(),
+    })
+}
+
 #[cfg(test)]
+#[expect(deprecated, reason = "the tests of the deprecated functions")]
 mod tests {
     use super::{Intervals, Plan, accumulate, bootstrap_state_occupation, state_occupation_curve};
 
@@ -684,7 +1172,7 @@ mod tests {
         let weights = [0.1, 0.7, 0.3, 1.9, 0.2];
         let times = [2.0, 3.0, 4.0, 6.0];
         let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
-        let plan = Plan::new(intervals, &times, 2).expect("ascending times");
+        let plan = Plan::new(intervals.rows, &times, 2).expect("ascending times");
         let direct = accumulate(&STARTS, &STOPS, &FROM, &TO, &weights, &times, 2, None);
         let planned = accumulate(
             &STARTS,
