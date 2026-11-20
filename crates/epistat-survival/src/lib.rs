@@ -20,6 +20,8 @@
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
 //!   product integral, and their clustered bootstrap.
 //! - [`markov`]: the landmark test of the Markov property.
+//! - [`pyears`]: person-time and event counts in the cells of factors and
+//!   time-dependent cut points such as age and calendar period.
 //! - [`SurvData`]: the checked input type that the estimators will share.
 //! - [`survcheck`]: structural checks of follow-up with several rows per subject, as
 //!   R's `survcheck`.
@@ -43,6 +45,7 @@ mod error;
 pub mod fine_gray;
 pub mod markov;
 pub mod multistate;
+pub mod pyears;
 pub mod surv;
 pub mod survcheck;
 pub mod survdiff;
