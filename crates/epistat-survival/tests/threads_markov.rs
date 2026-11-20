@@ -7,7 +7,7 @@
 //! wild-bootstrap replicates reduced by an integer sum.
 
 #![expect(
-    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 

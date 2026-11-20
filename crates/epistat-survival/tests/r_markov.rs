@@ -27,6 +27,8 @@
 //! normalised trace, the variance and the events after each landmark, and the
 //! occupancy counts come from a plain loop in the script.
 
+#![expect(clippy::float_cmp, reason = "the event column holds exactly 0 and 1")]
+
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, test};
 use epistat_testkit::load_json;

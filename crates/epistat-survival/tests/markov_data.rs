@@ -11,6 +11,7 @@
 )]
 #![expect(
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
