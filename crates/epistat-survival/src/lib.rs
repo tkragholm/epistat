@@ -17,10 +17,12 @@
 //! - [`fine_gray`]: the rows of the Fine-Gray model, the Kaplan-Meier estimate of
 //!   the censoring distribution they need, and the fit on one covariate.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
-//!   groups, weights and delayed entry, and a clustered bootstrap of the
-//!   incidence in two arms over many cells.
+//!   groups, weights and delayed entry, its infinitesimal jackknife standard
+//!   errors, and a clustered bootstrap of the incidence in two arms over many
+//!   cells.
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
-//!   product integral, and their clustered bootstrap.
+//!   product integral, their infinitesimal jackknife standard errors, and their
+//!   clustered bootstrap.
 //! - [`markov`]: the landmark test of the Markov property.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.

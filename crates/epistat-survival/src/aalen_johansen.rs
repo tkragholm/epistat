@@ -1,6 +1,7 @@
 //! The Aalen-Johansen estimator of cumulative incidence under competing risks,
-//! with weights, groups and delayed entry, and a clustered bootstrap of the
-//! incidence in two arms over many cells.
+//! with weights, groups and delayed entry, its infinitesimal jackknife standard
+//! errors, and a clustered bootstrap of the incidence in two arms over many
+//! cells.
 //!
 //! # Algorithm
 //!
@@ -70,6 +71,23 @@
 //! `prodlim::prodlim`. `prodlim` reads a case weight as a count, so it is
 //! compared only without weights.
 //!
+//! # The variance
+//!
+//! [`variance`] gives the standard errors that `survfit` reports for a fit with
+//! a factor status: of the event-free probability and the incidence of each
+//! cause (`std.err`), of the cumulative cause-specific hazards (`std.chaz`) and of
+//! the restricted time in each state (`std.auc`), by the infinitesimal jackknife
+//! \[4\]\[5\]. Each row has an influence on each of them, the derivative of the
+//! estimate with respect to its case weight times the weight. The influences are
+//! summed within a cluster, the cluster column, else the id column, else the row
+//! itself as `survfit` does without an id, and the variance is the sum of squares
+//! over the clusters. The recursion is that of `multistate::influence`, which
+//! the multi-state estimate shares, with the event-free state and one state per
+//! cause. The result lines up with the rows of [`estimate`], and can carry the
+//! influence of every cluster at chosen times, as pseudo-values need. It does
+//! not keep the influence at all times, which would be clusters by times by
+//! states values: each block of 256 clusters runs the whole recursion alone.
+//!
 //! # The bootstrap
 //!
 //! [`bootstrap`] repeats the estimate for the exposed and the
@@ -113,6 +131,11 @@
 //!    counting processes. New York: Springer; 1993.
 //! 3. Rubin DB. The Bayesian bootstrap. Ann Stat 1981;9(1):130-4.
 //!    doi:10.1214/aos/1176345338
+//! 4. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
+//!    model. New York: Springer; 2000.
+//! 5. Therneau TM. Methods of the survfit function, vignette `methods` of the
+//!    survival package, on the infinitesimal jackknife for the Aalen-Johansen
+//!    estimate.
 
 #![expect(
     clippy::cast_possible_truncation,
@@ -127,6 +150,7 @@ use rayon::prelude::*;
 
 use crate::check::{check_lengths, check_row_count};
 use crate::error::{Error, Result};
+use crate::multistate::{check_ascending, influence, snapshot_positions};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -463,6 +487,275 @@ fn pick<'a, T: Copy>(column: &'a [T], index: Option<&[u32]>) -> Cow<'a, [T]> {
         None => Cow::Borrowed(column),
         Some(index) => Cow::Owned(index.iter().map(|&i| column[i as usize]).collect()),
     }
+}
+
+/// What [`variance`] reports besides the standard errors at each time.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VarianceOptions {
+    /// Horizons at which the standard error of the restricted time in each
+    /// state, from the start of the curves, is wanted. Ascending. Empty, the
+    /// default, asks for none.
+    pub horizons: Vec<f64>,
+    /// Times at which the influence of every cluster is returned. Ascending.
+    /// The influence at a time is that after the last exit time not after it,
+    /// and zero before the first. Empty, the default, asks for none: the
+    /// influence of all clusters at all times is not kept.
+    pub influence_times: Vec<f64>,
+}
+
+/// The influence part of [`Variance`] that is not one row per time: one entry
+/// for each group.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupInfluence {
+    /// The group, as in [`Curves::group`].
+    pub group: u32,
+    /// The caller's code of each cluster of the group, ascending: the cluster
+    /// column, else the id column, else the row number of the data.
+    pub clusters: Vec<u32>,
+    /// `horizon * state`, row-major, the states being the event-free state and
+    /// then each cause: the standard error of the restricted time in the state
+    /// from the origin to each horizon.
+    pub std_rmean: Vec<f64>,
+    /// `cluster * influence time * state`, row-major: the influence of each
+    /// cluster on the event-free probability and the incidence of each cause.
+    /// The squares of a column sum to the variance.
+    pub influence: Vec<f64>,
+}
+
+/// The standard errors of the Aalen-Johansen estimate by the infinitesimal
+/// jackknife, one row per group and exit time as in [`Curves`].
+///
+/// A state is the event-free state, `0` in the vectors that say `state`, and then
+/// each cause in the order of `causes`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Variance {
+    /// The causes, as in [`Curves::causes`].
+    pub causes: Vec<i32>,
+    /// The group of each row, as in [`Curves::group`].
+    pub group: Vec<u32>,
+    /// The distinct exit time of each row, as in [`Curves::time`].
+    pub time: Vec<f64>,
+    /// `S(t)` from the recursion the errors come from, equal to
+    /// [`Curves::event_free`] up to rounding.
+    pub event_free: Vec<f64>,
+    /// `F_k(t)`, one column per cause, equal to [`Curves::cif`] up to rounding.
+    pub cif: Vec<Vec<f64>>,
+    /// The standard error of `S(t)`, `fit$std.err` of `survfit` in the column of
+    /// the event-free state.
+    pub std_event_free: Vec<f64>,
+    /// The standard error of `F_k(t)`, one column per cause.
+    pub std_cif: Vec<Vec<f64>>,
+    /// The cumulative hazard of each cause from the event-free state, one column
+    /// per cause, 0 for a cause that is not observed.
+    pub cumhaz: Vec<Vec<f64>>,
+    /// The standard error of each cumulative hazard, `fit$std.chaz`.
+    pub std_cumhaz: Vec<Vec<f64>>,
+    /// The standard error of the restricted time event-free from the origin to
+    /// each time, `fit$std.auc` of the event-free state.
+    pub std_time_event_free: Vec<f64>,
+    /// The same for the restricted time lost to each cause, one column per
+    /// cause.
+    pub std_time: Vec<Vec<f64>>,
+    /// The origin of the restricted times: the earliest start time, or without
+    /// start times the smaller of 0 and the earliest exit time, over every row
+    /// used, as `survfit` takes its `t0`.
+    pub origin: f64,
+    /// The horizons of [`VarianceOptions::horizons`].
+    pub horizons: Vec<f64>,
+    /// The times of [`VarianceOptions::influence_times`].
+    pub influence_times: Vec<f64>,
+    /// What is not one value per row, for each group in ascending order.
+    pub groups: Vec<GroupInfluence>,
+    /// The number of rows given.
+    pub n_rows: usize,
+    /// The number of rows of positive weight, which are the rows used.
+    pub n_used: usize,
+}
+
+/// The standard errors of the incidence, the event-free probability, the
+/// cumulative hazards and the restricted times of the Aalen-Johansen
+/// estimate, by the infinitesimal jackknife that `survfit` reports.
+///
+/// The influence of each row on the estimate is summed within its cluster, and
+/// the standard error at a time is the square root of the sum of squares over
+/// the clusters. A cluster is a value of the cluster column, else of the id
+/// column, and without either every row is its own. A weight enters as a case
+/// weight, and the influence of a row is its weight times the derivative of the
+/// estimate with respect to it. A start time is the delayed-entry time, as in
+/// [`estimate`]. The rows and times are those of [`estimate`], so the result
+/// lines up with [`Curves`] row by row. See the module `multistate::influence`
+/// for the recursion, and for how memory is bounded: the influence of every
+/// cluster at every time is never held, only that at
+/// [`VarianceOptions::influence_times`], and the time is
+/// `O(clusters * times * causes)`.
+///
+/// `survfit` starts the restricted times at the earliest start time over
+/// every stratum together, and so does this. Its `start.time` argument, which
+/// drops data before a time, has no counterpart.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the tie rule fails, see [`SurvData::with_timefix`],
+/// `n_codes` does not fit an `i32`, or `horizons` or `influence_times` is not
+/// ascending or holds a value that is not finite.
+pub fn variance(
+    data: &SurvData<'_>,
+    opts: &AalenJohansenOptions,
+    v: &VarianceOptions,
+) -> Result<Variance> {
+    check_ascending(&v.horizons, "horizons", false)?;
+    check_ascending(&v.influence_times, "influence_times", false)?;
+    let data = data.clone().with_timefix(opts.timefix)?;
+    let surv = data.followup()?;
+    let n_codes = i32::try_from(surv.n_codes())
+        .map_err(|_| Error::input("n_codes must fit an i32 status"))?;
+    let causes: Vec<i32> = (1..=n_codes).collect();
+    let k = causes.len();
+    let states = k + 1;
+    let used = data.used_index();
+    let index = used.as_deref();
+    let time = pick(surv.stop(), index);
+    let event = pick(surv.status(), index);
+    let entry = surv.start().map(|start| pick(start, index));
+    let weight = data.weight().map_or_else(
+        || Cow::Owned(vec![1.0; data.n_used()]),
+        |weight| pick(weight, index),
+    );
+    let group = data.stratum().map_or_else(
+        || Cow::Owned(vec![0u32; data.n_used()]),
+        |stratum| pick(stratum, index),
+    );
+    let cluster = data.cluster().or_else(|| data.id()).map(|c| pick(c, index));
+    let cluster_levels = if data.cluster().is_some() {
+        data.cluster_levels()
+    } else {
+        data.id_levels()
+    };
+    let origin = entry.as_deref().map_or_else(
+        || time.iter().fold(0.0f64, |m, &t| m.min(t)),
+        |entry| entry.iter().fold(f64::INFINITY, |m, &t| m.min(t)),
+    );
+    let n_used = data.n_used();
+    let row_number = |position: usize| index.map_or(position as u32, |rows| rows[position]);
+
+    let mut members: Vec<Vec<u32>> = vec![Vec::new(); data.n_strata().max(1)];
+    for (position, &g) in group.iter().enumerate() {
+        members[g as usize].push(position as u32);
+    }
+
+    let mut out = Variance {
+        cif: vec![Vec::new(); k],
+        std_cif: vec![Vec::new(); k],
+        cumhaz: vec![Vec::new(); k],
+        std_cumhaz: vec![Vec::new(); k],
+        std_time: vec![Vec::new(); k],
+        causes,
+        origin,
+        horizons: v.horizons.clone(),
+        influence_times: v.influence_times.clone(),
+        n_rows: data.n_rows(),
+        n_used,
+        ..Variance::default()
+    };
+    let mut p0 = vec![0.0f64; states];
+    p0[0] = 1.0;
+    for (dense, rows) in members.iter().enumerate() {
+        if rows.is_empty() {
+            continue;
+        }
+        let g_code = data
+            .stratum_levels()
+            .map_or(dense as u32, |l| l.code(dense).unwrap_or(dense as u32));
+        let mut times: Vec<f64> = rows.iter().map(|&r| time[r as usize]).collect();
+        times.sort_by(f64::total_cmp);
+        #[expect(clippy::float_cmp, reason = "rows share an exit time or they do not")]
+        times.dedup_by(|a, b| *a == *b);
+
+        let (labels, local): (Vec<u32>, Vec<u32>) = match &cluster {
+            Some(codes) => {
+                let mut present: Vec<u32> = rows.iter().map(|&r| codes[r as usize]).collect();
+                present.sort_unstable();
+                present.dedup();
+                let local = rows
+                    .iter()
+                    .map(|&r| present.partition_point(|&c| c < codes[r as usize]) as u32)
+                    .collect();
+                let labels = present
+                    .iter()
+                    .map(|&c| cluster_levels.map_or(c, |l| l.code(c as usize).unwrap_or(c)))
+                    .collect();
+                (labels, local)
+            }
+            None => (
+                rows.iter().map(|&r| row_number(r as usize)).collect(),
+                (0..rows.len() as u32).collect(),
+            ),
+        };
+        let pick_rows =
+            |values: &[f64]| -> Vec<f64> { rows.iter().map(|&r| values[r as usize]).collect() };
+        let start = entry
+            .as_deref()
+            .map_or_else(|| vec![f64::NEG_INFINITY; rows.len()], &pick_rows);
+        let stop = pick_rows(&time);
+        let weights = pick_rows(&weight);
+        let from = vec![0u32; rows.len()];
+        let to: Vec<u32> = rows
+            .iter()
+            .map(|&r| match event[r as usize] {
+                CENSORED => u32::MAX,
+                code => u32::try_from(code).unwrap_or(u32::MAX),
+            })
+            .collect();
+        let snapshots = snapshot_positions(&times, &v.influence_times);
+        let result = influence::run(
+            &influence::Process {
+                start: &start,
+                stop: &stop,
+                from: &from,
+                to: &to,
+                weight: &weights,
+                cluster: &local,
+            },
+            &influence::Request {
+                states,
+                n_clusters: labels.len(),
+                times: &times,
+                p0: &p0,
+                u0: None,
+                origin,
+                horizons: &v.horizons,
+                snapshots: &snapshots,
+            },
+        );
+        let h = result.transitions.len();
+        for (t, &time) in times.iter().enumerate() {
+            out.group.push(g_code);
+            out.time.push(time);
+            out.event_free.push(result.p[t * states]);
+            out.std_event_free.push(result.std_p[t * states]);
+            out.std_time_event_free.push(result.std_a[t * states]);
+            for c in 0..k {
+                out.cif[c].push(result.p[t * states + 1 + c]);
+                out.std_cif[c].push(result.std_p[t * states + 1 + c]);
+                out.std_time[c].push(result.std_a[t * states + 1 + c]);
+                out.cumhaz[c].push(0.0);
+                out.std_cumhaz[c].push(0.0);
+            }
+            for (jk, &(_, to)) in result.transitions.iter().enumerate() {
+                let c = to as usize - 1;
+                let last = out.cumhaz[c].len() - 1;
+                out.cumhaz[c][last] = result.cumhaz[t * h + jk];
+                out.std_cumhaz[c][last] = result.std_c[t * h + jk];
+            }
+        }
+        out.groups.push(GroupInfluence {
+            group: g_code,
+            clusters: labels,
+            std_rmean: result.std_h,
+            influence: result.influence,
+        });
+    }
+    Ok(out)
 }
 
 /// The weighted Aalen-Johansen estimate for every group.
@@ -1853,5 +2146,150 @@ mod estimate_tests {
         let start = vec![0.0; time.len()];
         let entry = build().cluster(&family).start(&start).build().unwrap();
         assert!(run(&entry, &exposed, 1).is_err(), "delayed entry");
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "the sizes in these tests are small"
+)]
+mod variance_tests {
+    use super::{AalenJohansenOptions, Error, VarianceOptions, variance};
+    use crate::surv::SurvData;
+
+    /// With no censoring and one cause the estimate is the empirical
+    /// distribution function, and the influence of a subject is
+    /// `(1[T <= t] - F(t)) / n`, so the variance is `F (1 - F) / n`. Worked by
+    /// hand at four exit times for `n = 8`, with ties.
+    #[test]
+    fn without_censoring_the_variance_is_binomial() {
+        let stop = [1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 5.0, 6.0];
+        let status = [1; 8];
+        let data = SurvData::builder(&stop, &status)
+            .n_codes(1)
+            .build()
+            .unwrap();
+        let got = variance(
+            &data,
+            &AalenJohansenOptions::default(),
+            &VarianceOptions::default(),
+        )
+        .unwrap();
+        let cumulative = [1.0, 3.0, 4.0, 5.0, 7.0, 8.0];
+        for (t, &count) in cumulative.iter().enumerate() {
+            let f = count / 8.0;
+            let expected = (f * (1.0 - f) / 8.0_f64).sqrt();
+            assert!((got.std_cif[0][t] - expected).abs() < 1e-15, "cif at {t}");
+            assert!(
+                (got.std_event_free[t] - expected).abs() < 1e-15,
+                "event free at {t}"
+            );
+            assert!((got.cif[0][t] - f).abs() < 1e-15);
+        }
+    }
+
+    /// Two rows of one id are one cluster: their influences are added before
+    /// they are squared, so a subject followed in two pieces has the variance of
+    /// the subject, which is not that of two independent rows.
+    #[test]
+    fn rows_of_one_id_are_one_cluster() {
+        // Subject 0 is at risk on (0, 2] and has an event of cause 1 on (2, 3].
+        let start = [0.0, 2.0, 0.0, 0.0];
+        let stop = [2.0, 3.0, 2.0, 3.0];
+        let status = [0, 1, 1, 0];
+        let id = [0, 0, 1, 2];
+        let whole = SurvData::builder(&stop, &status)
+            .start(&start)
+            .id(&id)
+            .n_codes(1)
+            .build()
+            .unwrap();
+        let rows = SurvData::builder(&stop, &status)
+            .start(&start)
+            .n_codes(1)
+            .build()
+            .unwrap();
+        let opts = AalenJohansenOptions::default();
+        let by_id = variance(&whole, &opts, &VarianceOptions::default()).unwrap();
+        let by_row = variance(&rows, &opts, &VarianceOptions::default()).unwrap();
+        assert_eq!(by_id.groups[0].clusters, vec![0, 1, 2]);
+        assert_eq!(by_row.groups[0].clusters, vec![0, 1, 2, 3]);
+        // the estimates are the same, the errors are not
+        assert_eq!(by_id.cif, by_row.cif);
+        assert!(
+            by_id.std_cif[0]
+                .iter()
+                .zip(&by_row.std_cif[0])
+                .any(|(a, b)| (a - b).abs() > 1e-6)
+        );
+    }
+
+    /// The influence at the times asked for squares and sums to the variance,
+    /// for more clusters than one block holds and a last block that is not full.
+    #[test]
+    fn the_influence_values_sum_to_the_variance_across_blocks() {
+        let n = 3 * super::influence::BLOCK + 17;
+        let stop: Vec<f64> = (0..n).map(|i| 1.0 + ((i * 7919) % 23) as f64).collect();
+        let outcome: Vec<i32> = (0..n).map(|i| ((i * 31) % 4) as i32).collect();
+        let weight: Vec<f64> = (0..n).map(|i| 0.5 + ((i * 13) % 5) as f64 * 0.25).collect();
+        let data = SurvData::builder(&stop, &outcome)
+            .n_codes(3)
+            .weight(&weight)
+            .build()
+            .unwrap();
+        let times: Vec<f64> = (1..=24).map(f64::from).collect();
+        let v = VarianceOptions {
+            horizons: vec![],
+            influence_times: times.clone(),
+        };
+        let got = variance(&data, &AalenJohansenOptions::default(), &v).unwrap();
+        let g = &got.groups[0];
+        assert_eq!(g.clusters.len(), n);
+        let width = 4;
+        for (t, &time) in got.time.iter().enumerate() {
+            let k = times
+                .iter()
+                .position(|&x| (x - time).abs() < 1e-12)
+                .unwrap();
+            for s in 0..width {
+                let sum: f64 = (0..n)
+                    .map(|c| g.influence[(c * times.len() + k) * width + s].powi(2))
+                    .sum();
+                let reported = if s == 0 {
+                    got.std_event_free[t]
+                } else {
+                    got.std_cif[s - 1][t]
+                };
+                assert!(
+                    (sum.sqrt() - reported).abs() <= 1e-13 * reported.max(1e-3),
+                    "t={time} s={s}: {} against {reported}",
+                    sum.sqrt()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsorted_requests_are_refused() {
+        let stop = [1.0, 2.0];
+        let status = [1, 0];
+        let data = SurvData::builder(&stop, &status)
+            .n_codes(1)
+            .build()
+            .unwrap();
+        let opts = AalenJohansenOptions::default();
+        for v in [
+            VarianceOptions {
+                horizons: vec![2.0, 1.0],
+                influence_times: vec![],
+            },
+            VarianceOptions {
+                horizons: vec![],
+                influence_times: vec![f64::NAN],
+            },
+        ] {
+            assert!(matches!(variance(&data, &opts, &v), Err(Error::Input(_))));
+        }
     }
 }
