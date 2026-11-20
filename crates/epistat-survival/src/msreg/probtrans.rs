@@ -1,7 +1,35 @@
 //! The transition probabilities of a multi-state model, `mstate::probtrans`.
 
+use rayon::prelude::*;
+
 use super::CumulativeHazards;
 use crate::error::{Error, Result};
+
+/// The form of the variance of the transition probabilities, `method` of
+/// `probtrans`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProbTransMethod {
+    /// The recursion of Andersen et al., `method = "aalen"`. It evaluates the
+    /// derivative of the product at the matrix after the step.
+    #[default]
+    Aalen,
+    /// The Greenwood form, `method = "greenwood"`, which evaluates the
+    /// derivative at the matrix before the step.
+    Greenwood,
+}
+
+/// The direction of the product, `direction` of `probtrans`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProbTransDirection {
+    /// `P(predt, t)` for the times `t` after `predt`: the probabilities of
+    /// being in each state at `t` for a subject in each state at `predt`.
+    #[default]
+    Forward,
+    /// `P(t, predt)` for the times `t` up to `predt`: the probabilities of
+    /// being in each state at the fixed horizon `predt` for a subject in each
+    /// state at `t`.
+    FixedHorizon,
+}
 
 /// The options of [`probtrans`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,32 +37,66 @@ pub struct ProbTransOptions {
     /// Whether to give the standard errors, `variance` of `probtrans`. They
     /// need the covariances of the cumulative hazards.
     pub se: bool,
+    /// The form of the variance.
+    pub method: ProbTransMethod,
+    /// The direction of the product.
+    pub direction: ProbTransDirection,
+    /// Whether to give the covariance matrix of all the transition
+    /// probabilities at each time, `covariance` of `probtrans`. As there, it
+    /// implies the standard errors.
+    pub covariance: bool,
 }
 
 impl Default for ProbTransOptions {
     fn default() -> Self {
-        Self { se: true }
+        Self {
+            se: true,
+            method: ProbTransMethod::Aalen,
+            direction: ProbTransDirection::Forward,
+            covariance: false,
+        }
     }
 }
 
-/// The transition probabilities `P(predt, t)` of every pair of states at every
-/// event time after `predt`.
+/// The transition probabilities of every pair of states at every event time
+/// on one side of `predt`.
+///
+/// For [`ProbTransDirection::Forward`] they are `P(predt, t)` at the time
+/// `predt` and the event times after it. For [`ProbTransDirection::FixedHorizon`]
+/// they are `P(t, predt)`, laid out as `mstate` does: row `k` is `P(t_k,
+/// predt)` for `t_k` the time of the row, the time 0 for the first row and the
+/// event time before the one at which the product starts for the others, and
+/// the rows after the last event time up to `predt` are the identity.
 ///
 /// States are numbered from 0 here: state index `s` is the state code `s + 1`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbTrans {
     /// The number of states.
     pub n_states: usize,
-    /// The time `predt`, then the event times after it.
+    /// The direction of the product.
+    pub direction: ProbTransDirection,
+    /// The time `predt`.
+    pub predt: f64,
+    /// The times of the rows: for a forward product `predt`, then the event
+    /// times after it.
     pub time: Vec<f64>,
-    /// `P(predt, t)` at each time, row-major by state left and state entered:
-    /// entry `t * n_states^2 + from * n_states + to`. The first time has the
-    /// identity.
+    /// The probability at each time, row-major by state left and state entered:
+    /// entry `t * n_states^2 + from * n_states + to`. For a forward product the
+    /// first time has the identity.
     pub probability: Vec<f64>,
     /// The standard error of each entry of `probability`, laid out as it is,
     /// `None` where the variance is below zero, which only rounding can cause.
     /// The outer `None` is without `se`.
     pub std_err: Option<Vec<Option<f64>>>,
+    /// The covariance of the entries of `probability` at each time, for
+    /// `covariance` in the options: `n_states^4` values for each time, the
+    /// entry `r * n_states^2 + c` of a time being the covariance of the entries
+    /// `r` and `c` of that time's matrix of probabilities, each numbered in the
+    /// order of the columns, `from + n_states * to`. The covariances are aligned
+    /// to the rows of `time`. `mstate`'s `varMatrix` of a fixed horizon holds
+    /// the matrix of row `k` in slice `k + 1`, and repeats the first one in the
+    /// first slice.
+    pub covariance: Option<Vec<f64>>,
 }
 
 impl ProbTrans {
@@ -59,6 +121,24 @@ impl ProbTrans {
     pub fn std_err_of(&self, t: usize, from: usize, to: usize) -> Option<f64> {
         let s = self.n_states;
         self.std_err.as_ref()?[t * s * s + from * s + to]
+    }
+
+    /// The covariance at time index `t` of the probabilities `(from1, to1)` and
+    /// `(from2, to2)`, `None` without `covariance`.
+    ///
+    /// # Panics
+    ///
+    /// When an index is out of range.
+    #[must_use]
+    pub fn covariance_of(
+        &self,
+        t: usize,
+        (from1, to1): (usize, usize),
+        (from2, to2): (usize, usize),
+    ) -> Option<f64> {
+        let s = self.n_states;
+        let n = s * s;
+        Some(self.covariance.as_ref()?[t * n * n + (from1 + s * to1) * n + (from2 + s * to2)])
     }
 }
 
@@ -86,6 +166,30 @@ fn transpose(a: &[f64], n: usize) -> Vec<f64> {
         }
     }
     out
+}
+
+/// The Kronecker product `x (x) y` of two square matrices of side `s`, as R's
+/// `kronecker`.
+fn kron(x: &[f64], y: &[f64], s: usize) -> Vec<f64> {
+    let n = s * s;
+    let mut out = vec![0.0; n * n];
+    for a in 0..s {
+        for c in 0..s {
+            let u = x[a * s + c];
+            for i in 0..s {
+                for j in 0..s {
+                    out[(a * s + i) * n + (c * s + j)] = u * y[i * s + j];
+                }
+            }
+        }
+    }
+    out
+}
+
+fn identity(s: usize) -> Vec<f64> {
+    (0..s * s)
+        .map(|i| f64::from(u8::from(i / s == i % s)))
+        .collect()
 }
 
 /// `K V K'`.
@@ -155,77 +259,126 @@ fn complete_diagonal(m: &mut [f64], s: usize) {
     }
 }
 
-/// The transition probabilities from `predt` on, by the product integral of
-/// the cumulative hazards, with the standard errors of `mstate`'s default.
+/// `I + dA` at time index `j` of the cumulative hazards.
+fn step_matrix(h: &CumulativeHazards, j: usize, s: usize) -> Result<Vec<f64>> {
+    let mut b = identity(s);
+    for k in 0..h.transitions.len() {
+        let before = if j == 0 {
+            0.0
+        } else {
+            h.cumulative_hazard[k][j - 1]
+        };
+        let d = h.cumulative_hazard[k][j] - before;
+        let (from, to) = (
+            h.transitions[k].0 as usize - 1,
+            h.transitions[k].1 as usize - 1,
+        );
+        b[from * s + to] = d;
+        b[from * s + from] -= d;
+    }
+    if let Some(from) = (0..s).find(|&i| b[i * s + i] < 0.0) {
+        return Err(Error::input(format!(
+            "the diagonal of I + dA for state {} is negative at time {}: the hazards are too large \
+             for the product integral",
+            from + 1,
+            h.time[j]
+        )));
+    }
+    Ok(b)
+}
+
+fn std_errs(var_p: &[f64], s: usize) -> impl Iterator<Item = Option<f64>> + '_ {
+    let n = s * s;
+    (0..n).map(move |i| {
+        // The entry (from, to) sits at from + s * to, and the layout of the
+        // output is by from and then to.
+        let (from, to) = (i / s, i % s);
+        let k = from + s * to;
+        let v = var_p[k * n + k];
+        (v >= 0.0).then(|| v.sqrt())
+    })
+}
+
+/// The transition probabilities of the cumulative hazards by the product
+/// integral, with the standard errors of `mstate`.
 ///
-/// The probabilities are those of `probtrans(msfit, predt)` of `mstate`
-/// with `direction = "forward"`, for every state at `predt`. See the
-/// [module documentation](super) for the formulas.
+/// The probabilities are those of `probtrans(msfit, predt)` of `mstate`, for
+/// every state at `predt` for the forward direction and at the earlier times
+/// for the fixed horizon. See the [module documentation](super) for the
+/// formulas.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `predt` is not finite, when `opts.se` is set and the
-/// cumulative hazards have no covariances, when no time is after `predt`, and
-/// when the diagonal of `I + dA` is negative at an event time, which is where
+/// [`Error::Input`] when `predt` is not finite, when the standard errors or
+/// the covariance are asked for and the cumulative hazards have no covariances,
+/// when no time is after `predt` (forward) or at or before it (fixed horizon),
+/// and when the diagonal of `I + dA` is negative at an event time, which is where
 /// `probtrans` warns that the estimate may not be meaningful: the hazards of
 /// the profile are too large for one step of the product integral.
 pub fn probtrans(h: &CumulativeHazards, predt: f64, opts: &ProbTransOptions) -> Result<ProbTrans> {
     if !predt.is_finite() {
         return Err(Error::input("predt: must be finite"));
     }
-    if opts.se && h.covariance.is_none() {
+    let variance = opts.se || opts.covariance;
+    if variance && h.covariance.is_none() {
         return Err(Error::input(
             "se: the cumulative hazards have no covariances; ask `msfit` for them or set `se` false",
         ));
     }
     let s = h.n_states as usize;
+    match opts.direction {
+        ProbTransDirection::Forward => forward(h, predt, *opts, s, variance),
+        ProbTransDirection::FixedHorizon => fixed_horizon(h, predt, *opts, s, variance),
+    }
+}
+
+/// [`probtrans`] for each of several sets of cumulative hazards, in the order
+/// given, evaluated in parallel with a result that does not depend on the
+/// number of threads.
+///
+/// # Errors
+///
+/// As [`probtrans`], for the first set in the order given that fails.
+pub fn probtrans_many(
+    hazards: &[CumulativeHazards],
+    predt: f64,
+    opts: &ProbTransOptions,
+) -> Result<Vec<ProbTrans>> {
+    let results: Vec<Result<ProbTrans>> = hazards
+        .par_iter()
+        .map(|h| probtrans(h, predt, opts))
+        .collect();
+    results.into_iter().collect()
+}
+
+fn forward(
+    h: &CumulativeHazards,
+    predt: f64,
+    opts: ProbTransOptions,
+    s: usize,
+    variance: bool,
+) -> Result<ProbTrans> {
     let n = s * s;
     let first = h.time.partition_point(|&t| t <= predt);
     if first == h.time.len() {
         return Err(Error::input("predt: no event time is after it"));
     }
-    let k_n = h.transitions.len();
-
     let mut time = vec![predt];
-    let mut probability: Vec<f64> = (0..n)
-        .map(|i| f64::from(u8::from(i / s == i % s)))
-        .collect();
-    let mut std_err: Option<Vec<Option<f64>>> = opts.se.then(|| vec![Some(0.0); n]);
-    let mut p: Vec<f64> = probability.clone();
+    let mut probability = identity(s);
+    let mut std_err: Option<Vec<Option<f64>>> = variance.then(|| vec![Some(0.0); n]);
+    let mut covariance: Option<Vec<f64>> = opts.covariance.then(|| vec![0.0; n * n]);
+    let mut p = probability.clone();
     let mut var_p = vec![0.0; n * n];
-    let mut cov_before = if opts.se && first > 0 {
+    let mut cov_before = if variance && first > 0 {
         cov_matrix(h, first - 1, s)
     } else {
         vec![0.0; n * n]
     };
+    let eye = identity(s);
 
     for j in first..h.time.len() {
-        // I + dA.
-        let mut b: Vec<f64> = (0..n)
-            .map(|i| f64::from(u8::from(i / s == i % s)))
-            .collect();
-        for k in 0..k_n {
-            let before = if j == 0 {
-                0.0
-            } else {
-                h.cumulative_hazard[k][j - 1]
-            };
-            let d = h.cumulative_hazard[k][j] - before;
-            let (from, to) = (
-                h.transitions[k].0 as usize - 1,
-                h.transitions[k].1 as usize - 1,
-            );
-            b[from * s + to] = d;
-            b[from * s + from] -= d;
-        }
-        if let Some(from) = (0..s).find(|&i| b[i * s + i] < 0.0) {
-            return Err(Error::input(format!(
-                "the diagonal of I + dA for state {} is negative at time {}: the hazards are too large \
-                 for the product integral",
-                from + 1,
-                h.time[j]
-            )));
-        }
+        let b = step_matrix(h, j, s)?;
+        let p_before = p.clone();
         p = matmul(&p, &b, s);
         if let Some(se) = std_err.as_mut() {
             let cov_now = cov_matrix(h, j, s);
@@ -237,27 +390,25 @@ pub fn probtrans(h: &CumulativeHazards, predt: f64, opts: &ProbTransOptions) -> 
             cov_before = cov_now;
             complete_diagonal(&mut cov_step, s);
             // vec(P B) = (B' x I) vec(P) = (I x P) vec(B), the vec in the order
-            // of the columns.
-            let mut k1 = vec![0.0; n * n];
-            let mut k2 = vec![0.0; n * n];
-            for a in 0..s {
-                for c in 0..s {
-                    for i in 0..s {
-                        k1[(a * s + i) * n + (c * s + i)] = b[c * s + a];
-                        k2[(a * s + i) * n + (a * s + c)] = p[i * s + c];
-                    }
-                }
-            }
+            // of the columns. The first form carries the variance of the matrix
+            // before the step, the second the increment of the hazards, with the
+            // matrix after the step for the Aalen form and before it for the
+            // Greenwood form.
+            let k1 = kron(&transpose(&b, s), &eye, s);
+            let at = if opts.method == ProbTransMethod::Aalen {
+                &p
+            } else {
+                &p_before
+            };
+            let k2 = kron(&eye, at, s);
             let first_part = sandwich(&k1, &var_p, n);
             let second_part = sandwich(&k2, &cov_step, n);
             for (v, (x, y)) in var_p.iter_mut().zip(first_part.iter().zip(&second_part)) {
                 *v = x + y;
             }
-            for from in 0..s {
-                for to in 0..s {
-                    let v = var_p[(from + s * to) * n + (from + s * to)];
-                    se.push((v >= 0.0).then(|| v.sqrt()));
-                }
+            se.extend(std_errs(&var_p, s));
+            if let Some(c) = covariance.as_mut() {
+                c.extend_from_slice(&var_p);
             }
         }
         time.push(h.time[j]);
@@ -265,8 +416,111 @@ pub fn probtrans(h: &CumulativeHazards, predt: f64, opts: &ProbTransOptions) -> 
     }
     Ok(ProbTrans {
         n_states: s,
+        direction: ProbTransDirection::Forward,
+        predt,
         time,
         probability,
         std_err,
+        covariance,
+    })
+}
+
+fn fixed_horizon(
+    h: &CumulativeHazards,
+    predt: f64,
+    opts: ProbTransOptions,
+    s: usize,
+    variance: bool,
+) -> Result<ProbTrans> {
+    let n = s * s;
+    let last = h.time.partition_point(|&t| t <= predt);
+    if last == 0 {
+        return Err(Error::input("predt: no event time is at or before it"));
+    }
+    let eye = identity(s);
+    let mut p = identity(s);
+    let mut var_p = vec![0.0; n * n];
+    // The rows from the last event time back to the first.
+    let mut probability_rows: Vec<Vec<f64>> = Vec::with_capacity(last);
+    let mut var_rows: Vec<Vec<f64>> = Vec::with_capacity(if variance { last } else { 0 });
+    let mut cov_now = if variance {
+        cov_matrix(h, last - 1, s)
+    } else {
+        Vec::new()
+    };
+    for j in (0..last).rev() {
+        let b = step_matrix(h, j, s)?;
+        if variance {
+            let cov_before = if j > 0 {
+                cov_matrix(h, j - 1, s)
+            } else {
+                vec![0.0; n * n]
+            };
+            let mut cov_step: Vec<f64> = cov_now
+                .iter()
+                .zip(&cov_before)
+                .map(|(new, old)| new - old)
+                .collect();
+            cov_now = cov_before;
+            complete_diagonal(&mut cov_step, s);
+            let k1 = kron(&eye, &b, s);
+            let first_part = sandwich(&k1, &var_p, n);
+            let pt = transpose(&p, s);
+            let k2 = if opts.method == ProbTransMethod::Aalen {
+                kron(&pt, &b, s)
+            } else {
+                kron(&pt, &eye, s)
+            };
+            let second_part = sandwich(&k2, &cov_step, n);
+            for (v, (x, y)) in var_p.iter_mut().zip(first_part.iter().zip(&second_part)) {
+                *v = x + y;
+            }
+            var_rows.push(var_p.clone());
+        }
+        p = matmul(&b, &p, s);
+        probability_rows.push(p.clone());
+    }
+    probability_rows.reverse();
+    var_rows.reverse();
+
+    let mut time = Vec::with_capacity(last + 2);
+    let mut probability = Vec::with_capacity((last + 2) * n);
+    let mut std_err: Option<Vec<Option<f64>>> = variance.then(Vec::new);
+    let mut covariance: Option<Vec<f64>> = opts.covariance.then(Vec::new);
+    for k in 0..last {
+        time.push(if k == 0 { 0.0 } else { h.time[k - 1] });
+        probability.extend_from_slice(&probability_rows[k]);
+        if let Some(se) = std_err.as_mut() {
+            se.extend(std_errs(&var_rows[k], s));
+        }
+        if let Some(c) = covariance.as_mut() {
+            c.extend_from_slice(&var_rows[k]);
+        }
+    }
+    // The identity at the end: at the last event time too when `predt` lies
+    // after it.
+    let mut tail = vec![predt];
+    // `predt` is an event time when it equals one exactly, as in `mstate`.
+    if h.time[last - 1].total_cmp(&predt).is_ne() {
+        tail.insert(0, h.time[last - 1]);
+    }
+    for t in tail {
+        time.push(t);
+        probability.extend_from_slice(&eye);
+        if let Some(se) = std_err.as_mut() {
+            se.extend(std::iter::repeat_n(Some(0.0), n));
+        }
+        if let Some(c) = covariance.as_mut() {
+            c.extend(std::iter::repeat_n(0.0, n * n));
+        }
+    }
+    Ok(ProbTrans {
+        n_states: s,
+        direction: ProbTransDirection::FixedHorizon,
+        predt,
+        time,
+        probability,
+        std_err,
+        covariance,
     })
 }

@@ -1,8 +1,11 @@
 //! The cumulative hazards of a covariate profile, `mstate::msfit`.
 
+use rayon::prelude::*;
+
 use super::MsModel;
 use crate::cox::predict::{
-    BaselineOptions, Centring, FittedModel, HazardType, StratumBaseline, Variance, basehaz,
+    Baseline, BaselineOptions, Centring, FittedModel, HazardType, StratumBaseline, Variance,
+    basehaz,
 };
 use crate::cox::{CoxModelFit, CoxOptions};
 use crate::error::{Error, Result};
@@ -20,6 +23,9 @@ pub struct MsFitOptions {
     pub variance: Variance,
     /// Whether to give the variances and covariances, `variance` of `msfit`.
     pub se: bool,
+    /// The form of the variance of the cumulative hazards, `vartype` of
+    /// `msfit`.
+    pub vartype: MsVarType,
     /// An offset of the profile, added to the linear predictor of every
     /// transition, as the offset of `newdata`.
     pub offset: f64,
@@ -31,9 +37,40 @@ impl Default for MsFitOptions {
             hazard: None,
             variance: Variance::Model,
             se: true,
+            vartype: MsVarType::Aalen,
             offset: 0.0,
         }
     }
+}
+
+/// The form of the variance of the cumulative hazards of [`MsModel::msfit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MsVarType {
+    /// The variance of the Cox baseline hazard and the coefficients, the
+    /// delta method of the module documentation. `vartype = "aalen"` of
+    /// `msfit`.
+    #[default]
+    Aalen,
+    /// The Greenwood form for a model without coefficients, in which each
+    /// transition has a baseline hazard of its own: the variance of the
+    /// cumulative hazard of a transition is the sum over its event times of
+    /// `(n - d) d / n^3`, and two transitions out of one state have the
+    /// covariance minus the sum of `d_a d_b / n^3` over the times at which both
+    /// happen, with `n` the number at risk and `d` the number of events.
+    /// Transitions out of different states are independent. `vartype =
+    /// "greenwood"` of `msfit`.
+    Greenwood,
+}
+
+/// The covariate values of a prediction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MsProfile<'a> {
+    /// One value for each covariate column, the same for every transition.
+    Same(&'a [f64]),
+    /// One vector of values for the covariate columns for each transition, in
+    /// the order of [`MsModel::transitions`]: the rows of the `newdata` of
+    /// `msfit`, one for each transition.
+    ByTransition(&'a [Vec<f64>]),
 }
 
 /// The cumulative hazards of every transition for one covariate profile, at
@@ -88,6 +125,14 @@ fn covariance_matrix(fit: &CoxModelFit, variance: Variance) -> Result<Vec<f64>> 
     Ok(matrix.iter().map(|v| v.unwrap_or(0.0)).collect())
 }
 
+/// What one covariance evaluation needs of the model, computed once for any
+/// number of profiles.
+struct Prepared {
+    baseline: Baseline,
+    beta: Vec<f64>,
+    v: Vec<f64>,
+}
+
 impl MsModel {
     /// The cumulative hazards of every transition for a covariate profile, the
     /// values of the covariate columns of the fit, the same for every
@@ -101,19 +146,105 @@ impl MsModel {
     ///
     /// [`Error::Input`] when `profile` is not as long as the number of covariate
     /// columns, has a value that is not finite, or `opts.offset` is not finite,
-    /// when `opts.variance` asks for a robust covariance the fit lacks, and as
-    /// [`basehaz`] for the baseline.
+    /// when `opts.variance` asks for a robust covariance the fit lacks, when
+    /// `opts.vartype` is Greenwood and the model does not allow it (see
+    /// [`MsVarType::Greenwood`]), and as [`basehaz`] for the baseline.
     pub fn msfit(&self, profile: &[f64], opts: &MsFitOptions) -> Result<CumulativeHazards> {
-        if profile.len() != self.n_covariates {
-            return Err(Error::input(format!(
-                "profile: {} values for {} covariate columns",
-                profile.len(),
-                self.n_covariates
-            )));
+        self.msfit_profile(&MsProfile::Same(profile), opts)
+    }
+
+    /// The cumulative hazards for one [`MsProfile`], which may differ between
+    /// the transitions, as the `newdata` of `msfit` with a row for each
+    /// transition.
+    ///
+    /// # Errors
+    ///
+    /// As [`msfit`](Self::msfit), and [`Error::Input`] when a profile by
+    /// transition has not one vector for each transition.
+    pub fn msfit_profile(
+        &self,
+        profile: &MsProfile<'_>,
+        opts: &MsFitOptions,
+    ) -> Result<CumulativeHazards> {
+        self.check_profile(profile, opts)?;
+        let prepared = self.prepare(opts)?;
+        self.evaluate(&prepared, profile, opts)
+    }
+
+    /// The cumulative hazards for each of several profiles, in the order given.
+    /// The baseline hazards are computed once, so this costs much less than a
+    /// call of [`msfit_profile`](Self::msfit_profile) for each profile, and the
+    /// profiles are evaluated in parallel with a result that does not depend on
+    /// the number of threads.
+    ///
+    /// # Errors
+    ///
+    /// As [`msfit_profile`](Self::msfit_profile), for the first profile in the
+    /// order given that fails.
+    pub fn msfit_many(
+        &self,
+        profiles: &[MsProfile<'_>],
+        opts: &MsFitOptions,
+    ) -> Result<Vec<CumulativeHazards>> {
+        for profile in profiles {
+            self.check_profile(profile, opts)?;
         }
-        if profile.iter().any(|v| !v.is_finite()) || !opts.offset.is_finite() {
+        let prepared = self.prepare(opts)?;
+        let results: Vec<Result<CumulativeHazards>> = profiles
+            .par_iter()
+            .map(|profile| self.evaluate(&prepared, profile, opts))
+            .collect();
+        results.into_iter().collect()
+    }
+
+    fn check_profile(&self, profile: &MsProfile<'_>, opts: &MsFitOptions) -> Result<()> {
+        let rows: Vec<&[f64]> = match profile {
+            MsProfile::Same(values) => vec![values],
+            MsProfile::ByTransition(rows) => {
+                if rows.len() != self.transitions.len() {
+                    return Err(Error::input(format!(
+                        "profile: {} vectors for {} transitions",
+                        rows.len(),
+                        self.transitions.len()
+                    )));
+                }
+                rows.iter().map(Vec::as_slice).collect()
+            }
+        };
+        for values in rows {
+            if values.len() != self.n_covariates {
+                return Err(Error::input(format!(
+                    "profile: {} values for {} covariate columns",
+                    values.len(),
+                    self.n_covariates
+                )));
+            }
+            if values.iter().any(|v| !v.is_finite()) {
+                return Err(Error::input("profile: a value is not finite"));
+            }
+        }
+        if !opts.offset.is_finite() {
             return Err(Error::input("profile: a value is not finite"));
         }
+        if opts.se && opts.vartype == MsVarType::Greenwood {
+            if !self.terms.is_empty() {
+                return Err(Error::input(
+                    "vartype: the Greenwood variance is for a model without coefficients",
+                ));
+            }
+            let mut groups: Vec<usize> = self.transitions.iter().map(|t| t.baseline).collect();
+            groups.sort_unstable();
+            if groups.windows(2).any(|w| w[0] == w[1]) {
+                return Err(Error::input(
+                    "vartype: the Greenwood variance needs a baseline hazard of its own for \
+                     each transition",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare(&self, opts: &MsFitOptions) -> Result<Prepared> {
         let cox_options = CoxOptions {
             ties: self.ties,
             timefix: TimeFix::Exact,
@@ -136,7 +267,6 @@ impl MsModel {
                 variance: opts.variance,
             },
         )?;
-        let p = self.design.ncols();
         let beta: Vec<f64> = self
             .fit
             .coefficients
@@ -144,6 +274,17 @@ impl MsModel {
             .map(|b| b.unwrap_or(0.0))
             .collect();
         let v = covariance_matrix(&self.fit, opts.variance)?;
+        Ok(Prepared { baseline, beta, v })
+    }
+
+    fn evaluate(
+        &self,
+        prepared: &Prepared,
+        profile: &MsProfile<'_>,
+        opts: &MsFitOptions,
+    ) -> Result<CumulativeHazards> {
+        let Prepared { baseline, beta, v } = prepared;
+        let p = self.design.ncols();
         let k_n = self.transitions.len();
 
         // The baseline of each transition and its relative risk and covariate
@@ -155,16 +296,20 @@ impl MsModel {
             let code = u32::try_from(transition.baseline)
                 .map_err(|_| Error::input("more baselines than a u32 counts"))?;
             strata.push(baseline.strata.iter().find(|s| s.code == Some(code)));
+            let values = match profile {
+                MsProfile::Same(values) => values,
+                MsProfile::ByTransition(rows) => rows[k].as_slice(),
+            };
             let mut row = vec![0.0; p];
             for (t, term) in self.terms.iter().enumerate() {
                 if term.transitions.contains(&k) {
-                    row[t] = term.column.map_or(1.0, |c| profile[c]);
+                    row[t] = term.column.map_or(1.0, |c| values[c]);
                 }
             }
             for (r, c) in row.iter_mut().zip(&baseline.centre) {
                 *r -= c;
             }
-            let lp: f64 = row.iter().zip(&beta).map(|(a, b)| a * b).sum();
+            let lp: f64 = row.iter().zip(beta).map(|(a, b)| a * b).sum();
             theta.push((lp + opts.offset - baseline.offset_centre).exp());
             z.push(row);
         }
@@ -182,12 +327,14 @@ impl MsModel {
         }
         let n_t = time.len();
 
+        let greenwood = opts.se && opts.vartype == MsVarType::Greenwood;
         let mut cumulative_hazard = vec![vec![0.0; n_t]; k_n];
         // The partial derivative of the cumulative hazard of each transition
         // with respect to the coefficients, at each time, and the baseline
         // variance part.
-        let mut gradient = vec![vec![0.0; n_t * p]; if opts.se { k_n } else { 0 }];
-        let mut base_var = vec![vec![0.0; n_t]; if opts.se { k_n } else { 0 }];
+        let with_gradient = opts.se && !greenwood;
+        let mut gradient = vec![vec![0.0; n_t * p]; if with_gradient { k_n } else { 0 }];
+        let mut base_var = vec![vec![0.0; n_t]; if with_gradient { k_n } else { 0 }];
         for k in 0..k_n {
             let Some(s) = strata[k] else { continue };
             let mut j = 0_usize;
@@ -200,7 +347,7 @@ impl MsModel {
                 }
                 let h = s.cumulative_hazard[j - 1];
                 cumulative_hazard[k][ti] = theta[k] * h;
-                if opts.se {
+                if with_gradient {
                     base_var[k][ti] = s.cumulative_variance[j - 1];
                     for a in 0..p {
                         gradient[k][ti * p + a] = h * z[k][a] - s.cumulative_xbar[(j - 1) * p + a];
@@ -209,37 +356,41 @@ impl MsModel {
             }
         }
 
-        let covariance = opts.se.then(|| {
-            let mut pairs = Vec::with_capacity(k_n * (k_n + 1) / 2);
-            for a in 0..k_n {
-                for b in a..k_n {
-                    let same_baseline =
-                        self.transitions[a].baseline == self.transitions[b].baseline;
-                    let scale = theta[a] * theta[b];
-                    let mut values = vec![0.0; n_t];
-                    for (ti, value) in values.iter_mut().enumerate() {
-                        let ga = &gradient[a][ti * p..(ti + 1) * p];
-                        let gb = &gradient[b][ti * p..(ti + 1) * p];
-                        let mut quad = 0.0;
-                        for i in 0..p {
-                            let mut row = 0.0;
-                            for l in 0..p {
-                                row += v[i * p + l] * gb[l];
+        let covariance = if greenwood {
+            Some(self.greenwood_covariance(&strata, &theta, &time))
+        } else {
+            opts.se.then(|| {
+                let mut pairs = Vec::with_capacity(k_n * (k_n + 1) / 2);
+                for a in 0..k_n {
+                    for b in a..k_n {
+                        let same_baseline =
+                            self.transitions[a].baseline == self.transitions[b].baseline;
+                        let scale = theta[a] * theta[b];
+                        let mut values = vec![0.0; n_t];
+                        for (ti, value) in values.iter_mut().enumerate() {
+                            let ga = &gradient[a][ti * p..(ti + 1) * p];
+                            let gb = &gradient[b][ti * p..(ti + 1) * p];
+                            let mut quad = 0.0;
+                            for i in 0..p {
+                                let mut row = 0.0;
+                                for l in 0..p {
+                                    row += v[i * p + l] * gb[l];
+                                }
+                                quad += ga[i] * row;
                             }
-                            quad += ga[i] * row;
+                            let own = if same_baseline && strata[a].is_some() {
+                                base_var[a][ti]
+                            } else {
+                                0.0
+                            };
+                            *value = scale * (quad + own);
                         }
-                        let own = if same_baseline && strata[a].is_some() {
-                            base_var[a][ti]
-                        } else {
-                            0.0
-                        };
-                        *value = scale * (quad + own);
+                        pairs.push(values);
                     }
-                    pairs.push(values);
                 }
-            }
-            pairs
-        });
+                pairs
+            })
+        };
         Ok(CumulativeHazards {
             transitions: self.transitions.iter().map(|t| (t.from, t.to)).collect(),
             n_states: self.n_states,
@@ -247,5 +398,56 @@ impl MsModel {
             cumulative_hazard,
             covariance,
         })
+    }
+
+    /// The Greenwood covariances of the cumulative hazards on the grid, by pair
+    /// of transitions in the order of [`CumulativeHazards::pair_index`].
+    fn greenwood_covariance(
+        &self,
+        strata: &[Option<&StratumBaseline>],
+        theta: &[f64],
+        time: &[f64],
+    ) -> Vec<Vec<f64>> {
+        let k_n = self.transitions.len();
+        let n_t = time.len();
+        // The events and the number at risk of each transition on the grid, 0
+        // where the transition has no event.
+        let mut events = vec![vec![0.0; n_t]; k_n];
+        let mut risk = vec![vec![0.0; n_t]; k_n];
+        for (k, stratum) in strata.iter().enumerate() {
+            let Some(s) = stratum else { continue };
+            for (j, &t) in s.time.iter().enumerate() {
+                let ti = time
+                    .binary_search_by(|g| g.total_cmp(&t))
+                    .expect("the grid holds every event time");
+                events[k][ti] = s.n_events[j];
+                risk[k][ti] = s.n_risk[j];
+            }
+        }
+        let mut pairs = Vec::with_capacity(k_n * (k_n + 1) / 2);
+        for a in 0..k_n {
+            for b in a..k_n {
+                let mut values = vec![0.0; n_t];
+                let same_state = self.transitions[a].from == self.transitions[b].from;
+                if a == b || same_state {
+                    let scale = theta[a] * theta[b];
+                    let mut sum = 0.0;
+                    for (ti, value) in values.iter_mut().enumerate() {
+                        let n = risk[a][ti];
+                        let d = events[a][ti];
+                        if d > 0.0 {
+                            sum += if a == b {
+                                (n - d) * d / (n * n * n)
+                            } else {
+                                -d * events[b][ti] / (n * n * n)
+                            };
+                        }
+                        *value = scale * sum;
+                    }
+                }
+                pairs.push(values);
+            }
+        }
+        pairs
     }
 }

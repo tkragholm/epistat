@@ -112,14 +112,83 @@
 //! with `B = I + dA_j`, `x` the Kronecker product, `var` the covariance matrix
 //! of the entries of the matrix in column order, and `var dA_j` the increment of
 //! the covariance matrix of the cumulative hazards between the event times,
-//! completed on the diagonal because the rows of `dA` sum to 0. The Greenwood
-//! form of `mstate` is not provided.
+//! completed on the diagonal because the rows of `dA` sum to 0.
+//!
+//! [`ProbTransMethod::Greenwood`] is `method = "greenwood"` of `mstate`. It takes
+//! the derivative of the product at the matrix before the step instead of after
+//! it, `(I x P_{j-1}) var dA_j (I x P_{j-1}')` in the second term.
+//!
+//! # Probabilities at a fixed horizon
+//!
+//! With [`ProbTransDirection::FixedHorizon`] the product runs from `predt`
+//! backwards over the event times up to `predt`, `P(t, predt) = prod (I + dA(u))`
+//! over `u` in `(t, predt]` in the order of the times, so that row `k` of the
+//! result is the probability of being in each state at `predt` for a subject
+//! in each state at the time `t_k` of the row. The recursion for the variance
+//! is the one of `mstate`,
+//!
+//! ```text
+//! P_j     = (I + dA_j) P_{j+1},
+//! var P_j = (I x B) var P_{j+1} (I x B')  +  (P_{j+1}' x B) var dA_j (P_{j+1} x B'),
+//! ```
+//!
+//! with `B = I + dA_j`, and `P_{j+1}' x I` in place of `P_{j+1}' x B` for the
+//! Greenwood form. [`ProbTransOptions::covariance`] gives the whole covariance
+//! matrix of the probabilities at each time. In the fixed horizon `mstate`
+//! returns that array one slice off the rows of its result, the slice `k + 1`
+//! holding the covariance of the matrix of row `k` (its standard errors in row
+//! `k` are the square roots of that slice's diagonal, which the tests assert).
+//! The covariances here are aligned to the rows.
+//!
+//! # Several profiles, and profiles that differ between transitions
+//!
+//! [`MsModel::msfit_many`] makes the cumulative hazards of several profiles with
+//! one computation of the baseline hazards, and [`probtrans_many`] the
+//! probabilities of several. A profile is [`MsProfile::Same`], the values of
+//! the covariate columns for every transition, or [`MsProfile::ByTransition`],
+//! a vector for each transition, the `newdata` of `msfit` with one row for each
+//! transition. A coefficient of a term takes the value of its column in the
+//! vector of each transition it applies to.
+//!
+//! # Time-varying covariates
+//!
+//! A covariate that changes during follow-up is given as several rows for a
+//! subject, each with the values it has in its interval. Nothing else is
+//! needed: the covariates are per row, the stacked data repeat each row for the
+//! transitions that leave its state, the risk sets of the partial likelihood
+//! are formed from the intervals, and a prediction is for a covariate profile
+//! held fixed, as in `mstate`. A covariate that is a function of time alone is
+//! not identified (every row at risk at a time has the same value), and one
+//! that does not vary among those at risk in the events of a transition is
+//! aliased with the baseline hazard, in any Cox model.
+//!
+//! # The Greenwood variance of the hazards
+//!
+//! [`MsVarType::Greenwood`] is `vartype = "greenwood"` of `mstate`'s `msfit`,
+//! which `mstate` allows only for a model with the transitions as strata and no
+//! coefficients. It is an error here for any other model, and without variances
+//! it asks for nothing.
+//!
+//! # Weights
+//!
+//! `mstate`'s `msfit` stops with "cannot (yet) compute the result for a
+//! weighted model". The model here can be weighted, the weights being those of
+//! the data, and [`MsModel::msfit`] is then the cumulative hazard and the
+//! variance of [`basehaz`](crate::cox::predict::basehaz) with the delta method
+//! above. Each transition's hazard and variance equals `survfit` of `coxph` on
+//! the stacked weighted data, with the model-based covariance of the
+//! coefficients, which is what the tests compare. No R function gives the
+//! covariances between transitions of a weighted model, and they are not
+//! checked against R: the expression is the one of the unweighted model with
+//! weighted sums, as in the cumulative hazards themselves.
 //!
 //! # Agreement with R
 //!
 //! The coefficients and covariances are those of `coxph` on the same rows, and
 //! the cumulative hazards, their variances, the probabilities and their
-//! standard errors those of `mstate` 0.3.3 on `ebmt3`. The tests give the
+//! standard errors those of `mstate` 0.3.3 on `ebmt3`, for both forms of the
+//! variance and both directions, with time-varying covariates, and the hazards
+//! of weighted models those of `survival` 3.8-12. The tests give the
 //! tolerances.
 //!
 //! # References
@@ -151,8 +220,10 @@ use crate::surv::{SurvBuf, SurvData};
 use crate::survcheck::{Policy, survcheck};
 use crate::timefix::TimeFix;
 
-pub use hazard::{CumulativeHazards, MsFitOptions};
-pub use probtrans::{ProbTrans, ProbTransOptions, probtrans};
+pub use hazard::{CumulativeHazards, MsFitOptions, MsProfile, MsVarType};
+pub use probtrans::{
+    ProbTrans, ProbTransDirection, ProbTransMethod, ProbTransOptions, probtrans, probtrans_many,
+};
 
 /// One transition of the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -115,7 +115,15 @@ fn the_model_without_covariates_is_the_aalen_johansen_estimate() {
             },
         )
         .unwrap();
-    let pt = probtrans(&h, 0.0, &ProbTransOptions { se: false }).unwrap();
+    let pt = probtrans(
+        &h,
+        0.0,
+        &ProbTransOptions {
+            se: false,
+            ..ProbTransOptions::default()
+        },
+    )
+    .unwrap();
     let aj = estimate(
         &data,
         &h.time,
