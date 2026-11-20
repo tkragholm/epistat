@@ -10,30 +10,16 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
 use epistat_survival::cox::{CoxOptions, Ties, fit};
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
 use faer::Mat;
 
-/// A value standing for `None`.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn opts(values: &[Option<f64>]) -> Vec<f64> {
-    values
-        .iter()
-        .map(|v| v.unwrap_or_else(|| f64::from_bits(ABSENT)))
-        .collect()
-}
-
 fn summary(model: &epistat_survival::cox::CoxModelFit) -> Vec<f64> {
-    let mut out = opts(&model.coefficients);
-    out.extend(opts(&model.standard_errors));
-    out.extend(opts(&model.covariance));
+    let mut out = absent_all(&model.coefficients);
+    out.extend(absent_all(&model.standard_errors));
+    out.extend(absent_all(&model.covariance));
     out.extend([
-        model
-            .log_partial_likelihood
-            .unwrap_or_else(|| f64::from_bits(ABSENT)),
-        model
-            .null_log_partial_likelihood
-            .unwrap_or_else(|| f64::from_bits(ABSENT)),
+        absent(model.log_partial_likelihood),
+        absent(model.null_log_partial_likelihood),
         model.n_events,
         model.n_rows as f64,
         model.rank as f64,

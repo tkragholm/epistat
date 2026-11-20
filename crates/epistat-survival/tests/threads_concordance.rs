@@ -9,15 +9,7 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::concordance::{ConcordanceOptions, TimeWeight, estimate};
-use epistat_testkit::{POOLS, assert_same_on_pools};
-
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn opt(v: Option<f64>) -> f64 {
-    v.unwrap_or_else(|| f64::from_bits(ABSENT))
-}
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 /// Strata, a cluster, case weights with zeros, fractional and tied times,
 /// delayed entry and a score with ties, under each time weight that allows it.
@@ -82,9 +74,9 @@ fn estimate_and_influence() {
                     c.tied_x,
                     c.tied_y,
                     c.tied_xy,
-                    opt(r.concordance),
-                    opt(r.variance),
-                    opt(r.cox_variance),
+                    absent(r.concordance),
+                    absent(r.variance),
+                    absent(r.cox_variance),
                 ];
                 out.extend(r.strata.iter().flat_map(|s| {
                     [

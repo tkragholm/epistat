@@ -19,16 +19,8 @@ use epistat_survival::fine_gray::{
     FineGrayOptions, Rows, RowsOptions, fit, float_codes, risk_rows, rows,
 };
 use epistat_survival::timefix::TimeFix;
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 use faer::Mat;
-
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn opt(value: Option<f64>) -> f64 {
-    value.unwrap_or_else(|| f64::from_bits(ABSENT))
-}
 
 struct Sample {
     time: Vec<f64>,
@@ -112,14 +104,14 @@ fn fine_gray_rows() {
 
 /// Every number of a fit, with an absent one as a marker.
 fn fit_bits(fit: &CoxModelFit) -> Vec<f64> {
-    let mut out: Vec<f64> = fit.coefficients.iter().copied().map(opt).collect();
-    out.extend(fit.standard_errors.iter().copied().map(opt));
-    out.extend(fit.covariance.iter().copied().map(opt));
+    let mut out: Vec<f64> = fit.coefficients.iter().copied().map(absent).collect();
+    out.extend(fit.standard_errors.iter().copied().map(absent));
+    out.extend(fit.covariance.iter().copied().map(absent));
     for matrix in [&fit.robust_standard_errors, &fit.robust_covariance] {
-        out.extend(matrix.iter().flatten().copied().map(opt));
+        out.extend(matrix.iter().flatten().copied().map(absent));
     }
     for value in [fit.log_partial_likelihood, fit.null_log_partial_likelihood] {
-        out.push(opt(value));
+        out.push(absent(value));
     }
     for test in [
         fit.tests.wald,
@@ -128,8 +120,8 @@ fn fit_bits(fit: &CoxModelFit) -> Vec<f64> {
         fit.tests.robust_score,
         fit.tests.likelihood_ratio,
     ] {
-        out.push(opt(test.map(|t| t.statistic)));
-        out.push(opt(test.map(|t| t.p_value)));
+        out.push(absent(test.map(|t| t.statistic)));
+        out.push(absent(test.map(|t| t.p_value)));
     }
     out.extend([
         fit.n_events,

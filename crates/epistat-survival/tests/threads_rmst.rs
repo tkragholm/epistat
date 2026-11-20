@@ -10,12 +10,9 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::rmst::{Contrast, Rmst2, RmstOptions, Tau, rmst2};
-use epistat_testkit::{POOLS, assert_same_on_pools};
-
-const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 fn flatten(r: &Rmst2, out: &mut Vec<f64>) {
-    let opt = |v: Option<f64>| v.unwrap_or(ABSENT);
     out.extend([r.tau, r.tau_largest, r.n_rows as f64, r.n_used as f64]);
     for g in [&r.group0, &r.group1] {
         out.extend([
@@ -40,7 +37,13 @@ fn flatten(r: &Rmst2, out: &mut Vec<f64>) {
             upper,
             p_value,
         } = *c;
-        out.extend([opt(estimate), opt(se), opt(lower), opt(upper), opt(p_value)]);
+        out.extend([
+            absent(estimate),
+            absent(se),
+            absent(lower),
+            absent(upper),
+            absent(p_value),
+        ]);
     }
 }
 
@@ -81,7 +84,7 @@ fn rmst2_does_not_depend_on_the_number_of_threads() {
                 let mut out = Vec::new();
                 match rmst2(&data, &RmstOptions::new(tau)) {
                     Ok(r) => flatten(&r, &mut out),
-                    Err(_) => out.push(ABSENT),
+                    Err(_) => out.push(absent(None)),
                 }
                 out
             });

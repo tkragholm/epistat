@@ -19,16 +19,8 @@ use epistat_survival::metrics::rttright::{self, RttrightOptions};
 use epistat_survival::metrics::score::{
     ControlSet, HorizonRule, ScoreOptions, auc, brier as score_brier, ipa, null_brier,
 };
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 use faer::Mat;
-
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
-
-fn opt(v: Option<f64>) -> f64 {
-    v.unwrap_or(ABSENT)
-}
 
 struct Sample {
     time: Vec<f64>,
@@ -89,12 +81,12 @@ fn score_metrics_and_calibration() {
                 let a = auc(&data, s.risk.as_ref(), &times, &opts).unwrap();
                 let mut out = Vec::new();
                 out.extend(&b.brier);
-                out.extend(b.std_err.iter().map(|&v| opt(v)));
+                out.extend(b.std_err.iter().map(|&v| absent(v)));
                 out.extend(&z.brier);
-                out.extend(p.ipa.iter().map(|&v| opt(v)));
-                out.extend(p.std_err.iter().map(|&v| opt(v)));
-                out.extend(a.auc.iter().map(|&v| opt(v)));
-                out.extend(a.std_err.iter().map(|&v| opt(v)));
+                out.extend(p.ipa.iter().map(|&v| absent(v)));
+                out.extend(p.std_err.iter().map(|&v| absent(v)));
+                out.extend(a.auc.iter().map(|&v| absent(v)));
+                out.extend(a.std_err.iter().map(|&v| absent(v)));
                 out.extend(a.n_cases.iter().map(|&v| v as f64));
                 let inf = b.influence.unwrap();
                 out.extend(
@@ -122,7 +114,13 @@ fn score_metrics_and_calibration() {
         .unwrap();
         let mut out = c.breaks.clone();
         for g in &c.groups {
-            out.extend([g.lower, g.upper, g.n as f64, g.predicted, opt(g.observed)]);
+            out.extend([
+                g.lower,
+                g.upper,
+                g.n as f64,
+                g.predicted,
+                absent(g.observed),
+            ]);
         }
         out
     });
@@ -169,7 +167,7 @@ fn rttright_and_brier() {
             out.extend((0..end.weights.nrows()).map(|i| end.weights[(i, 0)]));
             out.extend(&b.brier);
             out.extend(&b.null_brier);
-            out.extend(b.rsquared.iter().map(|&v| opt(v)));
+            out.extend(b.rsquared.iter().map(|&v| absent(v)));
             out.extend(&b.p0);
             out.extend(&b.eff_n);
             out

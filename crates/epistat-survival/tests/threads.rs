@@ -28,20 +28,8 @@ use epistat_survival::markov::{Stays, markov_test};
 use epistat_survival::multistate::{
     Intervals, bootstrap_state_occupation, integrate, state_occupation_curve,
 };
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
 use faer::Mat;
-
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn opt(value: Option<f64>) -> f64 {
-    value.unwrap_or_else(|| f64::from_bits(ABSENT))
-}
-
-fn opts(values: &[Option<f64>]) -> Vec<f64> {
-    values.iter().copied().map(opt).collect()
-}
 
 /// Rows of a competing-risks sample: exit time on a grid of tenths so that
 /// times tie, cause 0 to 2, weights, groups and entry times.
@@ -111,13 +99,13 @@ fn cox_single_covariate() {
                 .unwrap();
                 assert!(fit.converged && fit.log_hazard_ratio.is_some());
                 vec![
-                    opt(fit.log_hazard_ratio),
-                    opt(fit.standard_error),
+                    absent(fit.log_hazard_ratio),
+                    absent(fit.standard_error),
                     fit.n_events,
                     fit.n_rows as f64,
                     f64::from(fit.iterations),
                     f64::from(u8::from(fit.converged)),
-                    opt(fit.robust_standard_error),
+                    absent(fit.robust_standard_error),
                 ]
             });
         }
@@ -155,14 +143,14 @@ fn cox_design_matrix() {
                 let fit = fit_cox(&data).unwrap();
                 assert!(fit.converged && fit.coefficients[0].is_some());
                 assert!(fit.coefficients[3].is_none(), "the duplicate is aliased");
-                let mut out = opts(&fit.coefficients);
-                out.extend(opts(&fit.standard_errors));
+                let mut out = absent_all(&fit.coefficients);
+                out.extend(absent_all(&fit.standard_errors));
                 if let Some(robust) = &fit.robust_standard_errors {
-                    out.extend(opts(robust));
+                    out.extend(absent_all(robust));
                 }
                 out.extend([
-                    opt(fit.log_partial_likelihood),
-                    opt(fit.null_log_partial_likelihood),
+                    absent(fit.log_partial_likelihood),
+                    absent(fit.null_log_partial_likelihood),
                     fit.n_events,
                     fit.n_rows as f64,
                     fit.rank as f64,
@@ -170,9 +158,9 @@ fn cox_design_matrix() {
                     f64::from(u8::from(fit.converged)),
                 ]);
                 out.extend(fit.monotone_columns.iter().map(|&c| c as f64));
-                out.extend(opts(&fit.covariance));
+                out.extend(absent_all(&fit.covariance));
                 if let Some(robust) = &fit.robust_covariance {
-                    out.extend(opts(robust));
+                    out.extend(absent_all(robust));
                 }
                 for column in cox_score_residuals(&data, &fit.coefficients).unwrap() {
                     out.extend(column.unwrap_or_default());
@@ -453,13 +441,13 @@ fn fine_gray_fit_all_options() {
                 .unwrap();
                 assert!(fit.converged && fit.log_hazard_ratio.is_some());
                 vec![
-                    opt(fit.log_hazard_ratio),
-                    opt(fit.standard_error),
+                    absent(fit.log_hazard_ratio),
+                    absent(fit.standard_error),
                     fit.n_events,
                     fit.n_rows as f64,
                     f64::from(fit.iterations),
                     f64::from(u8::from(fit.converged)),
-                    opt(fit.robust_standard_error),
+                    absent(fit.robust_standard_error),
                 ]
             });
         }
@@ -489,7 +477,7 @@ fn markov_test_all_paths() {
         for column in [&t.variance, &t.n_occupied, &t.n_events_after, &t.statistic] {
             out.extend(column.iter().copied());
         }
-        out.extend(opts(&t.p_value));
+        out.extend(absent_all(&t.p_value));
         out
     });
 }

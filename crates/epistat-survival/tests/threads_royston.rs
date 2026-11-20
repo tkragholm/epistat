@@ -20,14 +20,8 @@ use epistat_survival::cox::fit;
 use epistat_survival::metrics::royston::{
     Adjustment, FitOptions, RoystonOptions, estimate, from_fit,
 };
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 use faer::Mat;
-
-const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
-
-fn opt(v: Option<f64>) -> f64 {
-    v.unwrap_or(ABSENT)
-}
 
 #[test]
 fn royston_does_not_depend_on_the_number_of_threads() {
@@ -66,7 +60,7 @@ fn royston_does_not_depend_on_the_number_of_threads() {
     let eta: Vec<f64> = (0..n).map(|i| 0.4 * x[(i, 0)] + 0.3 * x[(i, 1)]).collect();
     let pack = |r: &epistat_survival::metrics::royston::Royston| {
         [r.d, r.se_d, r.r_d, r.r_ko, r.r_n, r.c_gh, r.beta]
-            .map(opt)
+            .map(absent)
             .to_vec()
     };
     assert_same_on_pools(&POOLS, || {

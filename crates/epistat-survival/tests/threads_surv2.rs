@@ -9,9 +9,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::surv2::{Repeated, StatusKind, Timeline, TimelineOptions, counting};
-use epistat_testkit::{POOLS, assert_same_on_pools};
-
-const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 #[test]
 fn counting_does_not_depend_on_the_number_of_threads() {
@@ -82,10 +80,10 @@ fn counting_does_not_depend_on_the_number_of_threads() {
                     out.extend(c.id.iter().map(|&v| f64::from(v)));
                     out.extend(c.start.iter().flatten());
                     out.extend(&c.stop);
-                    out.extend(c.status.iter().map(|s| s.map_or(ABSENT, f64::from)));
+                    out.extend(c.status.iter().map(|s| s.map_or(absent(None), f64::from)));
                     out.extend(c.istate.iter().flatten().map(|&v| f64::from(v)));
                     for col in &c.covariates {
-                        out.extend(col.iter().map(|v| v.unwrap_or(ABSENT)));
+                        out.extend(col.iter().copied().map(absent));
                     }
                     out.extend(c.row.iter().map(|&v| f64::from(v)));
                     out.extend(c.stop_row.iter().map(|&v| f64::from(v)));

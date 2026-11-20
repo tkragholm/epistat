@@ -9,9 +9,7 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::survfit::{ReadOptions, SurvfitOptions, estimate};
-use epistat_testkit::{POOLS, assert_same_on_pools};
-
-const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 #[test]
 fn reading_does_not_depend_on_the_number_of_threads() {
@@ -47,7 +45,7 @@ fn reading_does_not_depend_on_the_number_of_threads() {
                         out.extend_from_slice(column);
                     }
                     for column in [&c.se, &c.lower, &c.upper] {
-                        out.extend(column.iter().map(|v| v.unwrap_or(ABSENT)));
+                        out.extend(column.iter().copied().map(absent));
                     }
                     for column in [&c.count_risk, &c.count_event, &c.count_censor] {
                         out.extend(column.iter().map(|&v| f64::from(v)));

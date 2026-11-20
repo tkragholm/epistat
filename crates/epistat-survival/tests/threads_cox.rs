@@ -9,19 +9,8 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, fit, score_residuals};
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
 use faer::Mat;
-
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn opts(values: &[Option<f64>]) -> Vec<f64> {
-    values
-        .iter()
-        .map(|v| v.unwrap_or_else(|| f64::from_bits(ABSENT)))
-        .collect()
-}
 
 /// Strata, delayed entry, case weights with zeros, clusters, tied times, three
 /// event codes and a design of four columns of which one is aliased.
@@ -79,16 +68,12 @@ fn cox_fit_and_residuals() {
             let model = fit(&data, x.as_ref(), &options).unwrap();
             assert!(model.converged && model.coefficients[0].is_some());
             assert!(model.coefficients[3].is_none(), "the duplicate is aliased");
-            let mut out = opts(&model.coefficients);
-            out.extend(opts(&model.standard_errors));
-            out.extend(opts(model.robust_standard_errors.as_ref().unwrap()));
+            let mut out = absent_all(&model.coefficients);
+            out.extend(absent_all(&model.standard_errors));
+            out.extend(absent_all(model.robust_standard_errors.as_ref().unwrap()));
             out.extend([
-                model
-                    .log_partial_likelihood
-                    .unwrap_or_else(|| f64::from_bits(ABSENT)),
-                model
-                    .null_log_partial_likelihood
-                    .unwrap_or_else(|| f64::from_bits(ABSENT)),
+                absent(model.log_partial_likelihood),
+                absent(model.null_log_partial_likelihood),
                 model.n_events,
                 model.n_rows as f64,
                 model.n_used as f64,
@@ -97,8 +82,8 @@ fn cox_fit_and_residuals() {
                 f64::from(u8::from(model.converged)),
             ]);
             out.extend(model.monotone_columns.iter().map(|&c| c as f64));
-            out.extend(opts(&model.covariance));
-            out.extend(opts(model.robust_covariance.as_ref().unwrap()));
+            out.extend(absent_all(&model.covariance));
+            out.extend(absent_all(model.robust_covariance.as_ref().unwrap()));
             let residuals =
                 score_residuals(&data, x.as_ref(), &model.coefficients, &options).unwrap();
             for column in residuals {

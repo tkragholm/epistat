@@ -10,10 +10,8 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::anova::anova_terms;
 use epistat_survival::cox::{CoxOptions, Ties};
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 use faer::Mat;
-
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
 
 #[test]
 fn anova_terms_is_the_same_on_every_pool() {
@@ -53,9 +51,9 @@ fn anova_terms_is_the_same_on_every_pool() {
             let mut out = Vec::new();
             for row in &table.rows {
                 for v in [row.log_likelihood, row.chisq, row.p_value] {
-                    out.push(v.unwrap_or_else(|| f64::from_bits(ABSENT)));
+                    out.push(absent(v));
                 }
-                out.push(row.df.map_or(f64::from_bits(ABSENT), |d| d as f64));
+                out.push(row.df.map_or(absent(None), |d| d as f64));
             }
             out
         });

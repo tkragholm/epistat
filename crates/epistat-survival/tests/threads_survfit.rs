@@ -16,11 +16,7 @@ use epistat_survival::SurvData;
 use epistat_survival::survfit::{
     ConfLower, ConfType, HazardType, Survfit, SurvfitOptions, SurvivalType, estimate,
 };
-use epistat_testkit::{POOLS, assert_same_on_pools};
-
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 struct Sample {
     start: Vec<f64>,
@@ -63,7 +59,6 @@ fn sample(n: usize, seed: u64) -> Sample {
 }
 
 fn flatten(fit: &Survfit, out: &mut Vec<f64>) {
-    let opt = |v: Option<f64>| v.unwrap_or(ABSENT);
     out.extend([fit.n_rows as f64, fit.n_used as f64]);
     for g in &fit.groups {
         out.extend([
@@ -86,10 +81,10 @@ fn flatten(fit: &Survfit, out: &mut Vec<f64>) {
             out.extend(column.iter().map(|&c| f64::from(c)));
         }
         for column in [&g.se, &g.lower, &g.upper] {
-            out.extend(column.iter().map(|&v| opt(v)));
+            out.extend(column.iter().map(|&v| absent(v)));
         }
         for q in g.quantiles(&[0.1, 0.25, 0.5, 0.75, 0.9]).unwrap() {
-            out.extend([opt(q.time), opt(q.lower), opt(q.upper)]);
+            out.extend([absent(q.time), absent(q.lower), absent(q.upper)]);
         }
         for tau in [0.5, 2.0, 6.0, 40.0] {
             let r = g.rmean(tau).unwrap();

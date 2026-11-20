@@ -15,9 +15,7 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, test};
 use epistat_survival::timefix::TimeFix;
-use epistat_testkit::{POOLS, assert_same_on_pools};
-
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 #[test]
 fn markov_test_does_not_depend_on_the_number_of_threads() {
@@ -73,16 +71,8 @@ fn markov_test_does_not_depend_on_the_number_of_threads() {
         for column in [&t.variance, &t.n_occupied, &t.n_events_after] {
             out.extend(column.iter().copied());
         }
-        out.extend(
-            t.statistic
-                .iter()
-                .map(|p| p.unwrap_or_else(|| f64::from_bits(ABSENT))),
-        );
-        out.extend(
-            t.p_value
-                .iter()
-                .map(|p| p.unwrap_or_else(|| f64::from_bits(ABSENT))),
-        );
+        out.extend(t.statistic.iter().copied().map(absent));
+        out.extend(t.p_value.iter().copied().map(absent));
         out.extend([t.n_rows as f64, t.n_used as f64]);
         out
     });

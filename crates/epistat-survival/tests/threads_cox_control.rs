@@ -9,21 +9,11 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{ChiSquareTest, CoxOptions, Ties, fit};
-use epistat_testkit::{POOLS, assert_same_on_pools};
+use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 use faer::Mat;
 
-/// A value standing for `None`, so that an absent number differs from any
-/// present one.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn absent(value: Option<f64>) -> f64 {
-    value.unwrap_or_else(|| f64::from_bits(ABSENT))
-}
-
 fn test(value: Option<ChiSquareTest>) -> [f64; 3] {
-    value.map_or([f64::from_bits(ABSENT); 3], |t| {
-        [t.statistic, t.df as f64, t.p_value]
-    })
+    value.map_or([absent(None); 3], |t| [t.statistic, t.df as f64, t.p_value])
 }
 
 #[test]
