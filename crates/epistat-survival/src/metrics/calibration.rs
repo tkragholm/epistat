@@ -25,10 +25,10 @@
 //!
 //! # What is left out
 //!
-//! The smoothed calibration curve by nearest neighbours (`method = "nne"`), the
-//! calibration by pseudo-values and by a regression of pseudo-values, the
-//! confidence limits of the observed risk and the calibration slope and
-//! intercept are not computed here.
+//! The confidence limits of the observed risk are not computed: neither
+//! `plotCalibration` nor `Score` gives them. The calibration by pseudo-values, the
+//! smoothed curve by nearest neighbours and the calibration slope and intercept
+//! are in [`recalibration`](super::recalibration).
 //!
 //! # Differences from `riskRegression`
 //!

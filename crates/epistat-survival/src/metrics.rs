@@ -32,6 +32,7 @@ mod prepare;
 pub mod brier;
 pub mod calibration;
 pub mod contrast;
+pub mod recalibration;
 pub mod royston;
 pub mod rttright;
 pub mod score;

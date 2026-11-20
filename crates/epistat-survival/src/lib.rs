@@ -39,7 +39,8 @@
 //! - [`metrics`]: redistribute-to-the-right weights, the Brier score, the IPCW
 //!   Brier score and index of prediction accuracy, the time-dependent AUC and
 //!   calibration by risk group, as `rttright`, `brier`, `riskRegression::Score`
-//!   and `timeROC`.
+//!   and `timeROC`, with a Cox model for the censoring times, contrasts between
+//!   models, and calibration by pseudo-values.
 //!   Royston and Sauerbrei's D with the measures of Kent and O'Quigley and of
 //!   Gonen and Heller, as `royston`.
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with

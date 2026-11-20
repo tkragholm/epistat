@@ -40,9 +40,14 @@
 //!
 //! # What is supported
 //!
-//! Right-censored data with one event code, case weights and no start column.
-//! `survival` supports counting-process data only with an id and one starting
-//! time, and that is not implemented here. Strata are not part of the score:
+//! Right-censored data with one event code and case weights. A start column
+//! is accepted with an id column, one row per subject and one common start
+//! time: the start then only says when follow-up began, and the score is that of
+//! the follow-up to the stop. `survival::brier` also accepts a subject on
+//! several rows, with an id, but takes every row for a subject, so a subject
+//! split into two rows is counted twice and the censoring distribution sees
+//! the split as a censoring. That is wrong whatever the model, the R script
+//! shows it, and such data is an error here. Strata are not part of the score:
 //! the censoring distribution is estimated over all rows, as in `brier`.
 //! `brier` can also use the Efron approximation for the baseline of a Cox
 //! model fitted with it (`efron = TRUE`), which is not offered here since the
@@ -72,6 +77,7 @@ use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
 use super::censoring::CensoringKm;
+use super::prepare::check_common_start;
 use crate::error::{Error, Result};
 use crate::order::sort_by_key;
 use crate::surv::SurvData;
@@ -153,8 +159,10 @@ fn km_risk(time: &[f64], event: &[bool], weight: &[f64], times: &[f64]) -> Vec<f
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data is interval-censored, has a start column or
-/// more than one event code, or has fewer than two distinct times; when
+/// [`Error::Input`] when the data is interval-censored, has more than one
+/// event code, has fewer than two distinct times, or has a start column without
+/// an id column, with a subject on several rows or with subjects starting at
+/// different times; when
 /// `times` is empty or has a value that is not finite; when `predicted` has
 /// another shape than rows by times or a value outside `[0, 1]`; or when
 /// `timefix` is refused as for [`SurvData::with_timefix`].
@@ -174,11 +182,7 @@ pub fn estimate(
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
-    if surv.start().is_some() {
-        return Err(Error::input(
-            "brier is not implemented for data with delayed entry; give follow-up from time 0",
-        ));
-    }
+    check_common_start(&data)?;
     if surv.n_codes() != 1 {
         return Err(Error::input(format!(
             "status has {} event codes, and the Brier score takes one; pass one cause as 0 and 1",

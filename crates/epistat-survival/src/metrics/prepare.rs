@@ -163,3 +163,37 @@ pub(super) fn check_matrix(
     }
     Ok(())
 }
+
+/// Accept a start column only for the data `survival::brier` computes sensibly
+/// with it: an id column, one row per subject and one common start. The start
+/// then only says when follow-up began, and the follow-up is the time to the
+/// stop.
+pub(super) fn check_common_start(data: &SurvData<'_>) -> Result<()> {
+    let surv = data.followup()?;
+    let Some(start) = surv.start() else {
+        return Ok(());
+    };
+    let ids = data.id().ok_or_else(|| {
+        Error::input("data with delayed entry needs an id column, as survival::brier does")
+    })?;
+    if data.istate().is_some() {
+        return Err(Error::input(
+            "the data has an istate column: only data with one starting state is supported",
+        ));
+    }
+    let mut seen = vec![false; data.n_ids()];
+    for (row, &id) in ids.iter().enumerate() {
+        if std::mem::replace(&mut seen[id as usize], true) {
+            return Err(Error::input(format!(
+                "a subject has several rows, the second at row {row}: survival::brier counts                  every row as a subject, which makes the score wrong, so one row per subject is                  required with a start column"
+            )));
+        }
+    }
+    if let Some(row) = start.iter().position(|&s| s != start[0]) {
+        return Err(Error::input(format!(
+            "subjects start at different times (row {row} starts at {}, row 0 at {}); one              common start is required",
+            start[row], start[0]
+        )));
+    }
+    Ok(())
+}
