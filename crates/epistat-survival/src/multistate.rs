@@ -165,6 +165,7 @@ use rayon::prelude::*;
 
 use crate::check::check_lengths;
 use crate::error::{Error, Result};
+use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
 use crate::survcheck::{Policy, survcheck};
 use crate::timefix::TimeFix;
@@ -1346,12 +1347,10 @@ pub fn variance(
         Cow::Borrowed,
     );
     let row_cluster: Vec<u32> = rows_used.iter().map(|&r| codes[r as usize]).collect();
-    let mut present = row_cluster.clone();
-    present.sort_unstable();
-    present.dedup();
+    let present = dense_of_present(row_cluster.iter().copied());
     let local: Vec<u32> = row_cluster
         .iter()
-        .map(|&c| present.partition_point(|&p| p < c) as u32)
+        .map(|&c| dense_index(&present, c) as u32)
         .collect();
     let n_clusters = present.len();
 

@@ -68,9 +68,7 @@ impl<'a> Dense<'a> {
     }
 
     fn by_sorting(codes: &'a [u32]) -> Self {
-        let mut distinct = codes.to_vec();
-        distinct.sort_unstable();
-        distinct.dedup();
+        let distinct = crate::order::dense_of_present(codes.iter().copied());
         let mapped = codes
             .iter()
             .map(|code| {

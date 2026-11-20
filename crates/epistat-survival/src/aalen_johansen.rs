@@ -151,6 +151,7 @@ use rayon::prelude::*;
 use crate::check::{check_lengths, check_row_count};
 use crate::error::{Error, Result};
 use crate::multistate::{check_ascending, influence, snapshot_positions};
+use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -673,12 +674,10 @@ pub fn variance(
 
         let (labels, local): (Vec<u32>, Vec<u32>) = match &cluster {
             Some(codes) => {
-                let mut present: Vec<u32> = rows.iter().map(|&r| codes[r as usize]).collect();
-                present.sort_unstable();
-                present.dedup();
+                let present = dense_of_present(rows.iter().map(|&r| codes[r as usize]));
                 let local = rows
                     .iter()
-                    .map(|&r| present.partition_point(|&c| c < codes[r as usize]) as u32)
+                    .map(|&r| dense_index(&present, codes[r as usize]) as u32)
                     .collect();
                 let labels = present
                     .iter()

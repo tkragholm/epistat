@@ -112,6 +112,7 @@ pub mod markov;
 pub mod metrics;
 pub mod msreg;
 pub mod multistate;
+mod order;
 pub mod pseudo;
 pub mod pyears;
 pub mod rmst;

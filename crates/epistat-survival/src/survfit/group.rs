@@ -3,6 +3,7 @@
 use super::confint::{Scale, limits, lower_se};
 use super::jackknife::{Rows, sum_of_squares};
 use super::{ConfLower, ConfType, GroupCurve, HazardType, SurvivalType, Variance};
+use crate::order::by_key;
 
 /// The rows of one group, with the columns the curve needs.
 pub(super) struct GroupRows {
@@ -36,13 +37,6 @@ struct Counts {
     n_risk: Vec<f64>,
     n_event: Vec<f64>,
     n_censor: Vec<f64>,
-}
-
-/// Row indices ordered by `key`, ties by row index.
-fn order_by(key: &[f64]) -> Vec<u32> {
-    let mut index: Vec<u32> = (0..u32::try_from(key.len()).expect("rows fit u32")).collect();
-    index.sort_unstable_by(|&a, &b| key[a as usize].total_cmp(&key[b as usize]).then(a.cmp(&b)));
-    index
 }
 
 /// Whether each row is the last of its subject's chain of intervals. A chain
@@ -186,8 +180,8 @@ fn carry(values: &[f64], steps: &[usize], len: usize) -> Vec<f64> {
 )]
 pub(super) fn fit(rows: &GroupRows, s: &Settings, origin: f64) -> GroupCurve {
     let n = rows.stop.len();
-    let by_stop = order_by(&rows.stop);
-    let by_start = rows.start.as_deref().map(order_by).unwrap_or_default();
+    let by_stop = by_key(&rows.stop);
+    let by_start = rows.start.as_deref().map(by_key).unwrap_or_default();
     let last = last_of_chain(rows, &by_stop);
     let counts = count(rows, &by_start, &by_stop, &last);
     let m = counts.time.len();

@@ -81,6 +81,8 @@
 
 use rayon::prelude::*;
 
+use crate::order::par_sort_by_key;
+
 /// The clusters in one block. A block is the unit of parallel work and of the
 /// order of the sums, so changing it changes the last bits of a variance.
 pub(crate) const BLOCK: usize = 256;
@@ -166,14 +168,6 @@ struct Global {
     h: Vec<Hentry>,
 }
 
-fn order_by(keys: &[f64], rows: &mut [u32]) {
-    rows.par_sort_unstable_by(|&a, &b| {
-        keys[a as usize]
-            .total_cmp(&keys[b as usize])
-            .then(a.cmp(&b))
-    });
-}
-
 /// Runs the recursion for one curve.
 pub(crate) fn run(process: &Process<'_>, req: &Request<'_>) -> Output {
     let s = req.states;
@@ -222,9 +216,9 @@ pub(crate) fn run(process: &Process<'_>, req: &Request<'_>) -> Output {
 
     // Weight at risk in each state, accumulated backwards in time.
     let mut by_start: Vec<u32> = (0..n as u32).collect();
-    order_by(process.start, &mut by_start);
+    par_sort_by_key(&mut by_start, |row| process.start[row as usize]);
     let mut by_stop: Vec<u32> = (0..n as u32).collect();
-    order_by(process.stop, &mut by_stop);
+    par_sort_by_key(&mut by_stop, |row| process.stop[row as usize]);
     let mut risk = vec![0.0f64; t_count * s];
     let mut running = vec![0.0f64; s];
     let (mut left_start, mut left_stop) = (n, n);
@@ -418,9 +412,9 @@ impl Shared<'_> {
         let rows = &self.cluster_rows[self.cluster_offset[g0]..self.cluster_offset[g1]];
         let local = |row: u32| process.cluster[row as usize] as usize - g0;
         let mut by_start = rows.to_vec();
-        order_by(process.start, &mut by_start);
+        par_sort_by_key(&mut by_start, |row| process.start[row as usize]);
         let mut by_stop = rows.to_vec();
-        order_by(process.stop, &mut by_stop);
+        par_sort_by_key(&mut by_stop, |row| process.stop[row as usize]);
         let mut by_event: Vec<u32> = rows
             .iter()
             .copied()

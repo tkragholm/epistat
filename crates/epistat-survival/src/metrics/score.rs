@@ -165,6 +165,7 @@ use super::censoring::CensoringKm;
 use super::marginal::marginal_risk;
 use super::prepare::{Kind, Sorted, check_matrix, check_times, sort_rows};
 use crate::error::{Error, Result};
+use crate::order::sort_by_key;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -740,7 +741,7 @@ fn auc_column(
     }
 
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_unstable_by(|&x, &y| marker(x).total_cmp(&marker(y)).then(x.cmp(&y)));
+    sort_by_key(&mut order, marker);
     // Weight of the controls below, or equal to, a case's marker, and of the
     // cases above, or equal to, a control's.
     let mut lc = vec![0.0; n];

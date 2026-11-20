@@ -73,6 +73,7 @@ use rayon::prelude::*;
 
 use super::censoring::CensoringKm;
 use crate::error::{Error, Result};
+use crate::order::sort_by_key;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -272,7 +273,7 @@ pub fn estimate(
     let event: Vec<bool> = rows.iter().map(|&r| status[r as usize] != 0).collect();
 
     let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_unstable_by(|&a, &b| dtime[a].total_cmp(&dtime[b]).then(a.cmp(&b)));
+    sort_by_key(&mut order, |i| dtime[i]);
     let s_time: Vec<f64> = order.iter().map(|&i| dtime[i]).collect();
     let s_cens: Vec<bool> = order.iter().map(|&i| !event[i]).collect();
     let s_weight: Vec<f64> = order.iter().map(|&i| w[i]).collect();

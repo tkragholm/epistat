@@ -87,6 +87,7 @@ use faer::{Mat, MatRef};
 use super::design::{CoxModelFit, CoxOptions, fit};
 use crate::check::{check_lengths, check_row_count};
 use crate::error::{Error, Result};
+use crate::order::sort_by_key;
 use crate::surv::{SurvBuf, SurvData};
 use crate::timefix::TimeFix;
 
@@ -455,7 +456,7 @@ fn transform_column(
 fn obrien(values: &[f64], out: &mut [f64]) {
     let m = values.len();
     let mut idx: Vec<usize> = (0..m).collect();
-    idx.sort_unstable_by(|&a, &b| values[a].total_cmp(&values[b]).then(a.cmp(&b)));
+    sort_by_key(&mut idx, |i| values[i]);
     let mut i = 0;
     while i < m {
         let mut j = i + 1;

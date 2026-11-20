@@ -7,6 +7,7 @@ use super::dist::row_derivs;
 use super::robust::{RowInput, dfbeta_row};
 use super::{SurvregFit, times_of};
 use crate::error::{Error, Result};
+use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
 
 /// What [`SurvregFit::predict`] returns for each row.
@@ -593,12 +594,10 @@ impl SurvregFit {
         let (rows, n_rows, groups) = match options.collapse {
             None => (rows, n, None),
             Some(codes) => {
-                let mut levels: Vec<u32> = codes.to_vec();
-                levels.sort_unstable();
-                levels.dedup();
+                let levels = dense_of_present(codes.iter().copied());
                 let mut sums = vec![0.0_f64; levels.len() * q];
                 for i in 0..n {
-                    let g = levels.partition_point(|&level| level < codes[i]);
+                    let g = dense_index(&levels, codes[i]);
                     for b in 0..q {
                         sums[g * q + b] += rows[i * q + b];
                     }

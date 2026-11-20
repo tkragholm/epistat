@@ -116,6 +116,7 @@ use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::cox::predict::{FittedModel, PredictOptions, PredictType, predict};
 use crate::cox::{CoxModelFit, CoxOptions, Ties, fit};
 use crate::error::{Error, Result};
+use crate::order::par_sort_by_key;
 use crate::surv::{SurvBuf, SurvData};
 use crate::timefix::TimeFix;
 use epistat_stats::normal;
@@ -431,7 +432,7 @@ fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
     let n = eta.len();
     let nf = n as f64;
     let mut order: Vec<usize> = (0..n).collect();
-    order.par_sort_unstable_by(|&a, &b| eta[a].total_cmp(&eta[b]).then(a.cmp(&b)));
+    par_sort_by_key(&mut order, |i| eta[i]);
     let score = |rank: f64| normal::quantile((rank - 0.375) / (nf + 0.25));
     let mut q = vec![0.0; n];
     let mut lo = 0;

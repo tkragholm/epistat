@@ -8,11 +8,7 @@ use super::jackknife::{Rows, sum_of_squares};
 use super::*;
 use epistat_rng::Stream;
 
-fn order(key: &[f64]) -> Vec<u32> {
-    let mut index: Vec<u32> = (0..key.len() as u32).collect();
-    index.sort_by(|&a, &b| key[a as usize].total_cmp(&key[b as usize]).then(a.cmp(&b)));
-    index
-}
+use crate::order::by_key as order;
 
 /// The sum over clusters of `phi_k(J)^2` by its definition, one cluster and one
 /// event time at a time.
