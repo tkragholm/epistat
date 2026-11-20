@@ -489,8 +489,6 @@ pub fn quantile_acklam(p: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn the_density_is_the_derivative_of_the_distribution_function() {
         assert!((pdf(0.0) - FRAC_1_SQRT_2PI).abs() < 1e-17);
