@@ -24,8 +24,12 @@
 
 use std::collections::BTreeMap;
 
+use epistat_survival::SurvData;
 use epistat_survival::cox::Ties;
-use epistat_survival::fine_gray::{FineGrayData, Rows, fine_gray_fit, float_codes};
+use epistat_survival::fine_gray::{
+    FineGrayOptions, Rows, RowsOptions, fit, float_codes, risk_rows, rows,
+};
+use epistat_survival::timefix::TimeFix;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -96,6 +100,23 @@ fn reference() -> Reference {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/fine_gray.json"
     ))
+}
+
+/// The data of a reference set with the given weights and clusters. The
+/// status is the cause code, and the largest code is the number of causes.
+fn surv<'a>(data: &'a Dataset, weight: &'a [f64], cluster: Option<&'a [u32]>) -> SurvData<'a> {
+    let n_codes = u32::try_from(data.event.iter().copied().max().unwrap()).unwrap();
+    let mut builder = SurvData::builder(&data.time, &data.event)
+        .n_codes(n_codes)
+        .weight(weight);
+    if let Some(cluster) = cluster {
+        builder = builder.cluster(cluster);
+    }
+    builder.build().unwrap()
+}
+
+fn cause_code(result: &CauseResult) -> u32 {
+    u32::try_from(result.cause).unwrap()
 }
 
 fn covariate<'a>(data: &'a Dataset, name: &str) -> &'a [f64] {
@@ -259,9 +280,13 @@ fn expansion_matches_finegray() {
         for result in &data.results {
             let label = format!("{} cause {}", data.name, result.cause);
             let events = event_times(data, result.cause);
-            let fg =
-                FineGrayData::new(&data.time, &data.event, &data.weight, result.cause).unwrap();
-            let report = compare_rows(&fg.expand(), &result.rows, &ones, &events, bound, &label);
+            let ours = rows(
+                &surv(data, &data.weight, None),
+                cause_code(result),
+                &RowsOptions::default(),
+            )
+            .unwrap();
+            let report = compare_rows(&ours, &result.rows, &ones, &events, bound, &label);
             eprintln!(
                 "{label:22} R rows {:4}  merged {:3}  rows R omits {:3}  worst weight {:.2e} of its bound",
                 report.r_rows, report.merged, report.uncovered, report.worst
@@ -270,9 +295,14 @@ fn expansion_matches_finegray() {
                 // finegray(weights =) leaves the case weights out of the
                 // censoring distribution, so its rows are the unweighted rows
                 // times the case weight.
-                let unit = FineGrayData::new(&data.time, &data.event, &ones, result.cause).unwrap();
+                let unit = rows(
+                    &surv(data, &ones, None),
+                    cause_code(result),
+                    &RowsOptions::default(),
+                )
+                .unwrap();
                 let report = compare_rows(
-                    &unit.expand(),
+                    &unit,
                     argument,
                     &data.weight,
                     &events,
@@ -319,11 +349,16 @@ fn collapsed_rows_carry_the_risk_sets_of_finegray() {
         let m = censoring_times(data);
         for result in &data.results {
             let events = event_times(data, result.cause);
-            let fg =
-                FineGrayData::new(&data.time, &data.event, &data.weight, result.cause).unwrap();
+            let weighted = surv(data, &data.weight, None);
             for name in ["bin", "x"] {
                 let levels = float_codes(covariate(data, name));
-                let ours = fg.risk_rows(&levels).unwrap();
+                let ours = risk_rows(
+                    &weighted,
+                    cause_code(result),
+                    &levels,
+                    &RowsOptions::default(),
+                )
+                .unwrap();
                 let our_levels: Vec<u32> = ours.row.iter().map(|&r| levels[r as usize]).collect();
                 let theirs = &result.rows;
                 let their_levels: Vec<u32> = theirs.orig.iter().map(|&o| levels[o - 1]).collect();
@@ -427,14 +462,14 @@ fn fits_match_coxph_on_finegray_rows() {
                 } else {
                     Ties::Breslow
                 };
-                let fit = fine_gray_fit(
-                    &data.time,
-                    &data.event,
-                    &data.weight,
+                let fit = fit(
+                    &surv(data, &data.weight, cluster),
                     x,
-                    result.cause,
-                    ties,
-                    cluster,
+                    &FineGrayOptions {
+                        cause: cause_code(result),
+                        ties,
+                        timefix: TimeFix::default(),
+                    },
                 )
                 .unwrap();
                 let label = format!(
@@ -507,14 +542,14 @@ fn coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
             let Some(crr) = &result.crr else { continue };
             for r in crr {
                 let x = covariate(data, &r.covariate);
-                let fit = fine_gray_fit(
-                    &data.time,
-                    &data.event,
-                    &data.weight,
+                let fit = fit(
+                    &surv(data, &data.weight, None),
                     x,
-                    result.cause,
-                    Ties::Breslow,
-                    None,
+                    &FineGrayOptions {
+                        cause: cause_code(result),
+                        ties: Ties::Breslow,
+                        timefix: TimeFix::default(),
+                    },
                 )
                 .unwrap();
                 let beta = fit.log_hazard_ratio.unwrap();
