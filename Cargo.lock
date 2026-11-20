@@ -536,7 +536,6 @@ dependencies = [
  "epistat-rng",
  "epistat-stats",
  "epistat-testkit",
- "faer",
  "itertools 0.14.0",
  "ordered-float",
  "proptest",

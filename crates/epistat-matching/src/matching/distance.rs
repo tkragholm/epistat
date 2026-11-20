@@ -1,7 +1,6 @@
 use super::records::MatchingRecord;
 use crate::types::DistanceCaliper;
-use faer::linalg::matmul::matmul;
-use faer::{Accum, Mat, MatMut, MatRef, get_global_parallelism};
+use epistat_linalg::{Accum, Mat, MatMut, MatRef, get_global_parallelism, matmul};
 use ordered_float::OrderedFloat;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;

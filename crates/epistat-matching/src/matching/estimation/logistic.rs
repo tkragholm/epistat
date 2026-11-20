@@ -155,7 +155,8 @@ pub(super) fn fit_elastic_net_logistic(
         return Err(EstimationError::InvalidElasticNetConfig);
     }
 
-    let design = faer::MatRef::from_row_major_slice(&matrix.values, matrix.n_rows, matrix.n_cols);
+    let design =
+        epistat_linalg::MatRef::from_row_major_slice(&matrix.values, matrix.n_rows, matrix.n_cols);
     let penalty_factor: Vec<f64> = matrix
         .column_names
         .iter()
