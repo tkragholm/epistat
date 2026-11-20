@@ -16,16 +16,21 @@
 //! with `mu' = d mu / d eta` and `w` a prior weight \[1\]\[2\]. This is the
 //! equation `geese` solves with `corstr = "independence"`, and the one of a
 //! generalised linear model with constant variance, which is how `eventglm`
-//! starts. Under the identity link it is least squares and one step solves it.
-//! The other links are solved by Fisher scoring, which is Gauss-Newton here,
-//! started from the mean of the pseudo-values as `glm.fit` starts and with the
-//! step halved while the weighted sum of squares increases by more than its
-//! rounding error. A step smaller than
-//! `tolerance` times the larger of 1 and the largest coefficient ends the
-//! iteration, after it is applied. Away from the identity link the iteration
-//! converges linearly, at a rate that grows with the size of the residuals, so
-//! the coefficients are within about the tolerance, times the rate over one less
-//! the rate, of the solution of the equation.
+//! starts. Each iteration is one step of [`epistat_glm::Glm`] with the Gaussian
+//! family, whose variance is constant, and the link: `glm.fit`'s iteratively
+//! reweighted least squares, which is Fisher scoring. The iteration starts from
+//! the mean of the pseudo-values as `glm.fit` starts: the first working response
+//! is formed at the mean, and one weighted least squares step gives the starting
+//! coefficients. Under the identity link this is least squares and one step
+//! solves it. A step smaller than `tolerance` times the larger of 1 and the
+//! largest coefficient ends the iteration, after it is applied. Away from the
+//! identity link the iteration converges linearly, at a rate that grows with the
+//! size of the residuals, so the coefficients are within about the tolerance,
+//! times the rate over one less the rate, of the solution of the equation. The
+//! stopping rule is on the step and not on the change of the deviance, as in
+//! `glm.control`, because the deviance changes with the square of the step near
+//! the solution and so stops the iteration at a step of about the square root of
+//! its tolerance.
 //!
 //! The covariance is the sandwich of Liang and Zeger \[3\],
 //!
@@ -56,8 +61,6 @@
 //!   its default type, HC3, which divides each score by one less its leverage. The
 //!   covariance here is HC0, which is what `geese` gives and `vcovHC(type =
 //!   "HC0")` gives for a `glm`.
-//! - Fisher scoring halves a step that increases the sum of squares. `geese` takes
-//!   the step.
 //!
 //! # References
 //!
@@ -69,9 +72,10 @@
 //! 3. Liang K.-Y., Zeger S. L. (1986) Longitudinal data analysis using
 //!    generalized linear models, Biometrika 73: 13-22.
 
+use epistat_glm::{Family, Glm};
 use epistat_inference::Clusters;
-use epistat_inference::sandwich::meat;
-use epistat_linalg::{Mat, MatRef};
+use epistat_inference::sandwich::{meat, sandwich};
+use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram};
 
 use crate::error::{Error, Result};
 
@@ -88,27 +92,11 @@ pub enum Link {
 }
 
 impl Link {
-    fn link(self, mu: f64) -> f64 {
+    const fn glm(self) -> epistat_glm::Link {
         match self {
-            Self::Identity => mu,
-            Self::Log => mu.ln(),
-            Self::Cloglog => (-(-mu).ln_1p()).ln(),
-        }
-    }
-
-    fn inverse(self, eta: f64) -> f64 {
-        match self {
-            Self::Identity => eta,
-            Self::Log => eta.exp(),
-            Self::Cloglog => -(-eta.exp()).exp_m1(),
-        }
-    }
-
-    fn derivative(self, eta: f64) -> f64 {
-        match self {
-            Self::Identity => 1.0,
-            Self::Log => eta.exp(),
-            Self::Cloglog => (eta - eta.exp()).exp(),
+            Self::Identity => epistat_glm::Link::Identity,
+            Self::Log => epistat_glm::Link::Log,
+            Self::Cloglog => epistat_glm::Link::Cloglog,
         }
     }
 
@@ -186,90 +174,6 @@ impl GeeFit {
     }
 }
 
-/// A square matrix factorised by Gaussian elimination with partial pivoting.
-struct Lu {
-    a: Vec<f64>,
-    pivot: Vec<usize>,
-    n: usize,
-}
-
-impl Lu {
-    fn new(matrix: &[f64], n: usize) -> Result<Self> {
-        let mut a = matrix.to_vec();
-        let scale = a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        let mut pivot = vec![0; n];
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a design has far fewer columns than 2^53"
-        )]
-        let floor = f64::EPSILON * n as f64 * scale;
-        for k in 0..n {
-            let mut best = k;
-            for i in k + 1..n {
-                if a[i * n + k].abs() > a[best * n + k].abs() {
-                    best = i;
-                }
-            }
-            let magnitude = a[best * n + k].abs();
-            if magnitude.is_nan() || magnitude <= floor {
-                return Err(Error::input(
-                    "the design is rank deficient, a column is a combination of the others",
-                ));
-            }
-            pivot[k] = best;
-            if best != k {
-                for j in 0..n {
-                    a.swap(k * n + j, best * n + j);
-                }
-            }
-            for i in k + 1..n {
-                let f = a[i * n + k] / a[k * n + k];
-                a[i * n + k] = f;
-                for j in k + 1..n {
-                    a[i * n + j] -= f * a[k * n + j];
-                }
-            }
-        }
-        Ok(Self { a, pivot, n })
-    }
-
-    fn solve(&self, b: &mut [f64]) {
-        let n = self.n;
-        for k in 0..n {
-            b.swap(k, self.pivot[k]);
-            for i in k + 1..n {
-                b[i] -= self.a[i * n + k] * b[k];
-            }
-        }
-        for k in (0..n).rev() {
-            for j in k + 1..n {
-                b[k] -= self.a[k * n + j] * b[j];
-            }
-            b[k] /= self.a[k * n + k];
-        }
-    }
-}
-
-/// `sum w mu'^2 x x'`, summed in row order.
-fn information(x: MatRef<'_, f64>, w: &[f64]) -> Vec<f64> {
-    let p = x.ncols();
-    let mut a = vec![0.0; p * p];
-    for i in 0..x.nrows() {
-        for j in 0..p {
-            let wxj = w[i] * x[(i, j)];
-            for l in j..p {
-                a[j * p + l] += wxj * x[(i, l)];
-            }
-        }
-    }
-    for j in 0..p {
-        for l in 0..j {
-            a[j * p + l] = a[l * p + j];
-        }
-    }
-    a
-}
-
 /// Fits the regression of `y` on the rows of `x`, the rows of one cluster
 /// being the observations of one subject.
 ///
@@ -282,9 +186,9 @@ fn information(x: MatRef<'_, f64>, w: &[f64]) -> Vec<f64> {
 ///
 /// [`Error::Input`] when the inputs differ in length, `y`, `x`, the weights or
 /// the offset are not finite, a weight is negative, there are fewer rows than
-/// columns, the tolerance is not positive and finite, the mean of `y` is
+/// columns, the tolerance is not positive and finite, no iteration is allowed, the mean of `y` is
 /// outside the range of the link and no start is given, the design is rank
-/// deficient, or Fisher scoring cannot reduce the sum of squares.
+/// deficient, or the iteration leaves the range of the link and cannot return.
 pub fn fit(
     x: MatRef<'_, f64>,
     y: &[f64],
@@ -322,6 +226,9 @@ pub fn fit(
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
         return Err(Error::input("the tolerance must be positive and finite"));
     }
+    if opts.max_iterations == 0 {
+        return Err(Error::input("at least one iteration must be allowed"));
+    }
     let finite = y.iter().all(|v| v.is_finite())
         && (0..n).all(|i| (0..p).all(|j| x[(i, j)].is_finite()))
         && weights.is_none_or(|w| w.iter().all(|v| v.is_finite()))
@@ -337,42 +244,19 @@ pub fn fit(
     let w: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
     let o: Vec<f64> = offset.map_or_else(|| vec![0.0; n], <[f64]>::to_vec);
     let link = opts.link;
+    let glm_link = link.glm();
     let total_weight: f64 = w.iter().sum();
     if total_weight <= 0.0 {
         return Err(Error::input("the weights sum to zero"));
     }
+    let rank_deficient =
+        || Error::input("the design is rank deficient, a column is a combination of the others");
 
-    let eta_of = |beta: &[f64]| -> Vec<f64> {
-        (0..n)
-            .map(|i| (0..p).map(|j| x[(i, j)] * beta[j]).sum::<f64>() + o[i])
-            .collect()
-    };
-    let sum_of_squares = |eta: &[f64]| -> f64 {
-        (0..n)
-            .map(|i| {
-                let r = y[i] - link.inverse(eta[i]);
-                w[i] * r * r
-            })
-            .sum()
-    };
-    // A weighted least squares step: the solution of
-    // sum w d^2 x x' b = sum w d x z for the working response z.
-    let solve_step = |scale: &[f64], z: &[f64]| -> Result<Vec<f64>> {
-        let weight: Vec<f64> = (0..n).map(|i| w[i] * scale[i] * scale[i]).collect();
-        let a = information(x, &weight);
-        let mut rhs = vec![0.0; p];
-        for i in 0..n {
-            for j in 0..p {
-                rhs[j] += weight[i] * x[(i, j)] * z[i];
-            }
-        }
-        Lu::new(&a, p)?.solve(&mut rhs);
-        Ok(rhs)
-    };
-
-    let mut beta = if let Some(start) = start {
+    let beta0: Vec<f64> = if let Some(start) = start {
         start.to_vec()
     } else {
+        // The working response of the first iteration at the mean of the
+        // pseudo-values, and one weighted least squares step on it.
         let mean = y.iter().zip(&w).map(|(v, wi)| v * wi).sum::<f64>() / total_weight;
         if !link.admits(mean) {
             return Err(Error::input(format!(
@@ -380,116 +264,94 @@ pub fn fit(
                  so there is no start; supply one"
             )));
         }
-        let eta0 = link.link(mean);
-        let derivative = link.derivative(eta0);
-        let scale = vec![derivative; n];
+        let eta0 = glm_link.link(mean);
+        let derivative = glm_link.derivative(eta0);
         let z: Vec<f64> = (0..n)
             .map(|i| eta0 - o[i] + (y[i] - mean) / derivative)
             .collect();
-        solve_step(&scale, &z)?
+        let step = Glm::new(Family::Gaussian, epistat_glm::Link::Identity)
+            .fit(x, &z, Some(&w), None, None)
+            .map_err(|e| Error::input(format!("the start could not be found: {e}")))?;
+        step.coefficients
+            .into_iter()
+            .collect::<Option<Vec<f64>>>()
+            .ok_or_else(rank_deficient)?
     };
-    let mut eta = eta_of(&beta);
-    let mut current = sum_of_squares(&eta);
-    let mut converged = false;
-    let mut iterations = 0;
+
+    // One step of Fisher scoring is one iteration of the model, which also
+    // detects an aliased column and halves a step that leaves the range of
+    // the link. The stopping rule on the step is applied here.
+    let model = Glm {
+        max_iterations: 1,
+        ..Glm::new(Family::Gaussian, glm_link)
+    };
+    let mut beta = beta0;
+    let mut solved = None;
+    let (mut converged, mut iterations) = (false, 0);
     for _ in 0..opts.max_iterations {
         iterations += 1;
-        let derivative: Vec<f64> = eta.iter().map(|&e| link.derivative(e)).collect();
-        let z: Vec<f64> = (0..n)
-            .map(|i| (y[i] - link.inverse(eta[i])) / derivative[i])
-            .collect();
-        // The Gauss-Newton step solves the same equations for the change.
-        let step = solve_step(&derivative, &z)?;
+        let step = model
+            .fit(x, y, Some(&w), Some(&o), Some(&beta))
+            .map_err(|e| Error::input(format!("the regression could not be fitted: {e}")))?;
+        let next = step
+            .coefficients
+            .iter()
+            .copied()
+            .collect::<Option<Vec<f64>>>()
+            .ok_or_else(rank_deficient)?;
         let largest = beta.iter().fold(1.0f64, |m, b| m.max(b.abs()));
-        let full_step_is_small = step.iter().all(|v| v.abs() <= opts.tolerance * largest);
-        // The sum of squares is a sum of n terms, so a rise below its rounding
-        // error is no rise.
-        #[expect(clippy::cast_precision_loss, reason = "a row count is far below 2^53")]
-        let rounding = 2.0 * (n as f64 + 2.0) * f64::EPSILON;
-        let mut factor = 1.0f64;
-        loop {
-            let candidate: Vec<f64> = beta
-                .iter()
-                .zip(&step)
-                .map(|(b, s)| b + factor * s)
-                .collect();
-            let candidate_eta = eta_of(&candidate);
-            let ss = sum_of_squares(&candidate_eta);
-            if full_step_is_small || ss <= current + rounding * current {
-                converged = full_step_is_small;
-                beta = candidate;
-                eta = candidate_eta;
-                current = ss;
-                break;
-            }
-            factor *= 0.5;
-            if factor < f64::EPSILON {
-                return Err(Error::input(
-                    "Fisher scoring cannot reduce the sum of squares from the current coefficients",
-                ));
-            }
-        }
+        converged = next
+            .iter()
+            .zip(&beta)
+            .all(|(a, b)| (a - b).abs() <= opts.tolerance * largest);
+        beta = next;
+        solved = Some(step);
         if converged {
             break;
         }
     }
-
-    let derivative: Vec<f64> = eta.iter().map(|&e| link.derivative(e)).collect();
-    let fitted: Vec<f64> = eta.iter().map(|&e| link.inverse(e)).collect();
+    let solved = solved.ok_or_else(|| Error::input("no iteration ran"))?;
+    let fitted = solved.fitted;
+    let derivative: Vec<f64> = solved
+        .linear_predictor
+        .iter()
+        .map(|&e| glm_link.derivative(e))
+        .collect();
     let weight: Vec<f64> = (0..n)
         .map(|i| w[i] * derivative[i] * derivative[i])
         .collect();
-    let a = information(x, &weight);
+    let a = weighted_gram(x, &weight)
+        .map_err(|e| Error::input(format!("the information could not be formed: {e}")))?;
     let scored = Mat::from_fn(n, p, |i, j| w[i] * derivative[i] * x[(i, j)]);
     let clusters = Clusters::from_sorted_labels(cluster);
     let m = meat(scored.as_ref(), |i| y[i] - fitted[i], Some(&clusters))
         .map_err(|e| Error::input(format!("the sandwich could not be formed: {e}")))?;
-    let lu = Lu::new(&a, p)?;
-    let norm_a = (0..p)
-        .map(|j| (0..p).map(|i| a[i * p + j].abs()).sum::<f64>())
-        .fold(0.0f64, f64::max);
-    let norm_inverse = (0..p)
-        .map(|j| {
-            let mut column = vec![0.0; p];
-            column[j] = 1.0;
-            lu.solve(&mut column);
-            column.iter().map(|v| v.abs()).sum::<f64>()
-        })
-        .fold(0.0f64, f64::max);
-    // V = A^-1 M A^-1: solve A L = M, then A R = L', and V = R'.
-    let mut left = vec![0.0; p * p];
-    for j in 0..p {
-        let mut column: Vec<f64> = (0..p).map(|i| m[(i, j)]).collect();
-        lu.solve(&mut column);
-        for i in 0..p {
-            left[i * p + j] = column[i];
-        }
-    }
-    let mut covariance = vec![0.0; p * p];
-    for i in 0..p {
-        let mut row: Vec<f64> = (0..p).map(|j| left[i * p + j]).collect();
-        lu.solve(&mut row);
-        for j in 0..p {
-            covariance[i * p + j] = row[j];
-        }
-    }
-    for i in 0..p {
-        for j in 0..i {
-            let mid = covariance[i * p + j].midpoint(covariance[j * p + i]);
-            covariance[i * p + j] = mid;
-            covariance[j * p + i] = mid;
-        }
-    }
+    let covariance = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)
+        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
+    let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)
+        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?
+        .x;
+    let one_norm = |m: &Mat<f64>| {
+        (0..p)
+            .map(|j| (0..p).map(|i| m[(i, j)].abs()).sum::<f64>())
+            .fold(0.0f64, f64::max)
+    };
+    let row_major = |m: &Mat<f64>| -> Vec<f64> {
+        (0..p)
+            .flat_map(|i| (0..p).map(move |j| (i, j)))
+            .map(|(i, j)| m[(i, j)])
+            .collect()
+    };
     Ok(GeeFit {
         coefficients: beta,
-        covariance,
+        covariance: row_major(&covariance),
         fitted,
         converged,
         iterations,
         n_obs: n,
         n_clusters: clusters.count(),
         link,
-        information_condition: norm_a * norm_inverse,
-        information: a,
+        information_condition: one_norm(&a) * one_norm(&a_inverse),
+        information: row_major(&a),
     })
 }
