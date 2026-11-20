@@ -51,6 +51,34 @@
 //! cluster codes are given, because the robust variance needs each individual's
 //! own rows.
 //!
+//! # Agreement with R
+//!
+//! `tests/r_fine_gray.rs` compares with `survival::finegray` followed by
+//! `coxph` on its rows, with weights `fgwt` and, for the robust variance, the
+//! individual as cluster, and with `cmprsk::crr`.
+//!
+//! - `survival::finegray` writes no row whose interval holds no event time of
+//!   the cause, because such a row enters no risk set. `expand` writes every
+//!   interval between censoring times. Every row of R is a row of `expand`
+//!   with the same start, stop, status and weight, and every row of `expand`
+//!   that R leaves out holds no event time of the cause.
+//! - Case weights enter the censoring distribution here, which is then the
+//!   weighted Kaplan-Meier estimate, as if each individual were repeated
+//!   `weight` times. `finegray(weights =)` estimates it without the weights
+//!   and multiplies the row weights by them afterwards, so its rows are
+//!   those of unit weights times the case weight. The weighted estimate is the
+//!   one the test compares with, through `finegray` on repeated individuals.
+//! - `crr` estimates the censoring distribution with `survfit` on the
+//!   censoring indicator, which keeps a failure at a censoring time in the risk
+//!   set of that censoring. Here, as in `finegray`, the failure is taken out
+//!   first. The two coefficients agree, to the tolerance `crr` stops at, when
+//!   no failure ties with a censoring, with Breslow's approximation for
+//!   ties among failures in both, and differ otherwise. `crr` has no Efron
+//!   option.
+//! - The standard errors of `crr` include the variance from estimating the
+//!   censoring distribution. The robust standard error here is the sandwich
+//!   of `coxph` on the rows, which treats the weights as known, and does not.
+//!
 //! # Edge cases
 //!
 //! Cause 0 is censoring and is refused as a cause of interest. An individual
@@ -66,6 +94,9 @@
 //! 2. Kaplan EL, Meier P. Nonparametric estimation from incomplete
 //!    observations. J Am Stat Assoc 1958;53(282):457-81.
 //!    doi:10.1080/01621459.1958.10501452
+//! 3. Therneau TM, Crowson C, Atkinson E. Multi-state models and competing
+//!    risks. Vignette of the R package survival.
+//! 4. Gray RJ. cmprsk: subdistribution analysis of competing risks. R package.
 
 #![expect(
     clippy::cast_possible_truncation,

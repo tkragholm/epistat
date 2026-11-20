@@ -43,7 +43,11 @@
 //!
 //! Newton-Raphson starts at `beta = 0` and steps by `U / I`. It stops when the
 //! step is below `1e-10` in absolute value, or after 50 steps, and then
-//! `converged` is false. The model-based standard error is `1 / sqrt(I)`.
+//! `converged` is false. The model-based standard error is `1 / sqrt(I)` with
+//! `I` at the iterate before the last step, so it differs from the one at the
+//! estimate by at most half the range of the covariate times the last step,
+//! relative to itself. The robust standard error uses the information at the
+//! estimate.
 //! Strata add their scores and informations. A stratum with no event adds
 //! nothing and is skipped.
 //!
