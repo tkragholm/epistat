@@ -14,7 +14,8 @@
 //! - [`cox`]: Cox regression on one covariate or a design matrix, with Breslow or
 //!   Efron ties, delayed entry, strata, case weights, offsets, starting values
 //!   and iteration limits, a cluster-robust variance, and the Wald, score and
-//!   likelihood-ratio tests of the coefficients.
+//!   likelihood-ratio tests of the coefficients, and time-transform covariates
+//!   as `coxph(tt = )` ([`cox::fit_tt`]).
 //! - [`fine_gray`]: the rows of the Fine-Gray model, the Kaplan-Meier estimate of
 //!   the censoring distribution they need, and the fit on a design matrix.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with

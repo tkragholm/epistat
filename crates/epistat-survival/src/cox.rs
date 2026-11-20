@@ -117,12 +117,14 @@ use crate::check::{check_lengths, check_row_count};
 use crate::error::Result;
 
 pub mod design;
+pub mod tt;
 pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_residuals};
 #[expect(
     deprecated,
     reason = "the deprecated names stay exported for a release"
 )]
 pub use design::{CoxDesign, cox_score_residuals, fit_cox};
+pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
 
 /// Largest number of Newton-Raphson steps.
 const MAX_ITERATIONS: u32 = 50;
