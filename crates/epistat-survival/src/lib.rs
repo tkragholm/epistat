@@ -80,6 +80,9 @@
 //!   weights.
 //! - `arrow` (feature `arrow`): [`SurvData`] built from Apache Arrow arrays and record batches
 //!   without copying the columns.
+//! - [`standardise`]: standardised risks and average treatment effects of Cox and
+//!   cause-specific Cox models by the g-formula, with influence-function standard
+//!   errors, as `riskRegression::ate`.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -111,6 +114,7 @@ pub mod pseudo;
 pub mod pyears;
 pub mod rmst;
 pub mod split;
+pub mod standardise;
 pub mod surv;
 pub mod surv2;
 pub mod survcheck;
