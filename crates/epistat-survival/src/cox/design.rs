@@ -4,7 +4,9 @@
 //! The fit follows `survival::coxph` step by step: the same standardisation of
 //! the covariates, the same factorisation of the information matrix, the same
 //! step halving and the same stopping rule, so that the iterations, and not
-//! only the limit, can be compared with R's.
+//! only the limit, can be compared with R's. It takes an offset, starting
+//! coefficients and the limits of `coxph.control`, and reports the Wald, score
+//! and likelihood-ratio tests of `summary.coxph`.
 //!
 //! # The data and the entry points
 //!
@@ -85,20 +87,52 @@
 //! The covariates are centred at their weighted mean and divided by their
 //! weighted mean absolute deviation, as `coxph` does, and the iteration runs on
 //! these. A column that is constant over the rows is set to zero. Starting at
-//! `beta = 0`, with `l_0` the log partial likelihood there:
+//! the coefficients `beta` of `CoxOptions::init`, zero by default, with `l_0`
+//! the log partial likelihood there:
 //!
 //! 1. The trial point is `beta + I^{-1} U`, with `I` and `U` taken at the last
 //!    accepted `beta`. The first trial is the first Newton step.
 //! 2. The log partial likelihood `l` at the trial point is computed. When
-//!    `|1 - l_prev / l| <= 1e-9` and the trial was not a halving, the fit has
-//!    converged at the trial point. This is `coxph.control`'s `eps`.
+//!    `|1 - l_prev / l| <= eps` the fit has converged at the trial point, with
+//!    `eps` of `CoxOptions::eps`, `1e-9` by default as in `coxph.control`.
 //! 3. Otherwise, when `l` is below the last accepted value, or is not finite,
-//!    the trial point moves half way back to the last accepted `beta` and step
-//!    2 is repeated. When it is not, the trial point is accepted, and the next
-//!    trial is a Newton step from it.
-//! 4. After 20 trial points without convergence the fit stops, with
-//!    `converged` false. This is `coxph.control`'s `iter.max`. `iterations`
-//!    counts the trial points, as `iter` does in a `coxph` fit.
+//!    the trial point moves back towards the last accepted `beta`, and step 2
+//!    is repeated. The `h`-th halving in a row sets the trial point to
+//!    `(trial + h beta) / (h + 1)`, so that the first goes half way, the second
+//!    two thirds of the way and so on. When `l` is not below the last accepted
+//!    value, the trial point is accepted, and the next trial is a Newton step
+//!    from it.
+//! 4. After `CoxOptions::iter_max` trial points without convergence, 20 by
+//!    default as `iter.max` of `coxph.control`, the fit stops, with
+//!    `converged` false. `iterations` counts the trial points.
+//!
+//! With `iter_max` 0 no trial point is computed: the model is the one at the
+//! starting coefficients, its coefficients are those, and its covariance and
+//! tests are taken there. `coxph` fits that way to get a score test.
+//!
+//! `coxph` has two fitting routines, `coxph.fit` for data without entry times
+//! and `agreg.fit` for data with them, and the steps above follow each in what
+//! it does when it meets the limit. In both, the halving is as in step 3.
+//! `agreg.fit` also does not accept convergence during halving, and treats a
+//! change of the rank of the information as a failed step. When it runs out of
+//! iterations it keeps the last trial point unless the likelihood there is
+//! lower than at the last accepted point by more than `eps`, relative, in
+//! which case it goes back to the last accepted point. `coxph.fit` accepts
+//! convergence also during halving, and when it runs out of iterations it goes
+//! back to the last accepted point if the last trial was not an improvement.
+//! `coxph.fit` reports one trial point more than the limit when it runs out of
+//! iterations, and also returns a variance matrix that is not that of the point
+//! it reports. `iterations` is the number of trial points, and the variance is
+//! that of the point reported. The deprecated entry points halve half way
+//! each time, accept no convergence during halving and keep the last trial
+//! point, as they always did.
+//!
+//! The offset enters the linear predictor of every row, `beta' x_j + o_j`, and
+//! therefore the risk score and the log partial likelihood, but not the score
+//! or the information in any other way. The mean of the offsets is taken out
+//! before the fit, as `coxph` does, to keep the exponential in range. A constant
+//! added to every offset does not change the partial likelihood, so this changes
+//! no result.
 //!
 //! The Newton step solves `I s = U` by the factorisation `I = L D L'` of
 //! `coxph`. A pivot at most `1.8e-12` (`.Machine$double.eps^0.75`, `toler.chol`)
@@ -168,6 +202,45 @@
 //! rows, and takes the coefficients as an argument, so it also gives the
 //! residuals at a point other than the estimate.
 //!
+//! # Tests of the coefficients
+//!
+//! [`CoxTests`] in `CoxModelFit::tests` holds the three tests of
+//! `summary.coxph` that all coefficients equal their starting values, which are
+//! zero unless `CoxOptions::init` says otherwise. With `d` the distance of the
+//! estimate from the starting values, `U_0` and `I_0` the score and information
+//! there, `l_0` and `l` the log partial likelihoods at the starting values and
+//! at the estimate, and `V` the covariance of the estimate:
+//!
+//! ```text
+//! likelihood ratio:  2 (l - l_0)
+//! Wald:              d' V^-1 d
+//! score (log-rank):  U_0' I_0^-1 U_0
+//! ```
+//!
+//! each with the rank of the fit as degrees of freedom, compared with the
+//! chi-square distribution. The Wald test is also given with the robust
+//! covariance (`robust_wald`, which `summary.coxph` reports as its Wald test
+//! when clusters are given). The robust score test replaces `I_0` by the sum of
+//! the cross-products of the cluster score sums at the starting values
+//! (`robust_score`, `rscore` of the `coxph` fit). `coxph` leaves the offset
+//! out of the residuals of that test, so its value is not that of the model with
+//! the offset. These tests use the offset.
+//!
+//! The model-based Wald statistic is computed as `d' I d` over the columns that
+//! are not aliased, which is the same quantity. The solves with `I_0` and with
+//! the robust covariance use the pivot rule described above, on the scaled
+//! covariates, and a test is `None` when the matrix does not have the rank of
+//! the fit, when the statistic is negative, or when it is not finite. The score
+//! tests do not need the estimate, so they are given also when a coefficient
+//! diverges. The others are `None` then, as for no estimate. The robust tests
+//! are `None` without clusters and with fewer than two.
+//!
+//! The tests are a field of the fit and not a function of it because the score
+//! tests need the score and information at the starting values, which the fit
+//! has computed already and which a function of the fit alone would have to
+//! compute again with a pass over the rows. Adding the field changes no
+//! existing field.
+//!
 //! # Results that are not numbers
 //!
 //! The estimate is `None`, with zero iterations and `converged` false, when no
@@ -215,7 +288,10 @@
 //! matrices, the score residuals with and without the case weight, the log
 //! partial likelihood and the iteration count with `survival::coxph` for
 //! Breslow and Efron ties, delayed entry, strata, weights, clusters, aliased
-//! columns and a diverging coefficient. Two implementations of one Newton
+//! columns and a diverging coefficient. A second set of fits adds offsets,
+//! starting values near and far from the estimate, `iter.max` of 0 to 3 and
+//! other values of `eps`, and checks the three tests, with the robust ones, on
+//! all of them. Two implementations of one Newton
 //! iteration that take the same steps differ by the error of the solve, which
 //! is about the condition number of the information matrix on the scaled
 //! covariates times the machine epsilon. The tolerance is 8 times that for a
@@ -249,6 +325,7 @@
 use std::borrow::Cow;
 
 use epistat_inference::sandwich::meat;
+use epistat_stats::gamma::chi_square_sf;
 use faer::{Mat, MatRef};
 
 use super::Ties;
@@ -264,8 +341,6 @@ const EPS: f64 = 1e-9;
 /// Smallest pivot of the information matrix relative to its largest diagonal
 /// element, `.Machine$double.eps^0.75`, which is `2^-39`.
 const TOLER_CHOL: f64 = 1.818_989_403_545_856_5e-12;
-/// `sqrt(EPS)`, added to `EPS` in the test for a diverging coefficient.
-const TOLER_INF: f64 = 3.162_277_660_168_379_5e-5;
 
 /// The rows of a Cox fit on a design matrix. One entry per row, all of the same
 /// length.
@@ -325,6 +400,9 @@ pub struct CoxModelFit {
     /// The log partial likelihood at zero, `None` when it is not finite or
     /// there are no events.
     pub null_log_partial_likelihood: Option<f64>,
+    /// The tests that the coefficients equal the starting coefficients, zero
+    /// unless `CoxOptions::init` says otherwise.
+    pub tests: CoxTests,
     /// The summed weight of the events among the rows fitted.
     pub n_events: f64,
     /// The rows of the input. [`fit`] counts every row, as `n` of a `coxph`
@@ -345,6 +423,44 @@ pub struct CoxModelFit {
     pub monotone_columns: Vec<usize>,
 }
 
+/// A chi-square test: the statistic, its degrees of freedom and the upper tail
+/// probability.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChiSquareTest {
+    pub statistic: f64,
+    /// The rank of the fit.
+    pub df: usize,
+    pub p_value: f64,
+}
+
+/// The tests of `summary.coxph` that all coefficients equal their starting
+/// values, which are zero by default. Each is `None` where it is undefined.
+///
+/// The tests are a field of the fit and not a function of it because the
+/// score test needs the score and the information at the starting
+/// coefficients. The fit has computed them already, and a function of the
+/// fit would have to read the data again, which is a pass over the rows. The
+/// other tests could be computed from the rest of the fit, but they are given
+/// here so that the four are in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CoxTests {
+    /// The Wald test with the model-based covariance matrix.
+    pub wald: Option<ChiSquareTest>,
+    /// The Wald test with the cluster-robust covariance matrix. `None` without
+    /// clusters, and when the robust matrix does not have the rank of the fit.
+    /// This is the test `summary.coxph` reports as the Wald test when clusters
+    /// are given.
+    pub robust_wald: Option<ChiSquareTest>,
+    /// The score (log-rank) test, defined also when a coefficient diverges.
+    pub score: Option<ChiSquareTest>,
+    /// The score test with the sum of the cross-products of the cluster score
+    /// sums in place of the information, `rscore` of a `coxph` fit.
+    pub robust_score: Option<ChiSquareTest>,
+    /// The likelihood-ratio test, twice the gain in log partial likelihood
+    /// from the starting coefficients to the estimate.
+    pub likelihood_ratio: Option<ChiSquareTest>,
+}
+
 impl CoxModelFit {
     fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
         Self {
@@ -355,6 +471,7 @@ impl CoxModelFit {
             robust_covariance: with_clusters.then(|| vec![None; p * p]),
             log_partial_likelihood: None,
             null_log_partial_likelihood: None,
+            tests: CoxTests::default(),
             n_events,
             n_rows,
             n_used: n_rows,
@@ -376,6 +493,28 @@ struct Input<'a> {
     stratum: &'a [u32],
     ties: Ties,
     cluster: Option<&'a [u32]>,
+    /// One offset per row of the data.
+    offset: Option<&'a [f64]>,
+    /// Starting coefficients on the scale of the columns given.
+    init: Option<&'a [f64]>,
+    iter_max: u32,
+    eps: f64,
+    stepping: Stepping,
+}
+
+/// Which of the fitting routines of `survival` the iteration follows. They
+/// differ in what they do when the likelihood stops changing during step
+/// halving, and when they run out of iterations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stepping {
+    /// `coxph.fit`, which `coxph` calls for data without entry times.
+    RightCensored,
+    /// `agreg.fit`, which `coxph` calls for data with entry times.
+    Counting,
+    /// The rule of the deprecated entry points: half way back at each halving,
+    /// the last trial point kept on running out of iterations, and no
+    /// convergence during halving.
+    Legacy,
 }
 
 #[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
@@ -390,13 +529,22 @@ impl<'a> From<&CoxDesign<'a>> for Input<'a> {
             stratum: data.stratum,
             ties: data.ties,
             cluster: data.cluster,
+            offset: None,
+            init: None,
+            iter_max: MAX_ITERATIONS,
+            eps: EPS,
+            stepping: Stepping::Legacy,
         }
     }
 }
 
 /// What [`fit`] and [`score_residuals`] take besides the data.
+///
+/// The offset, the starting coefficients and the two iteration limits are read
+/// by [`fit`] only. [`score_residuals`] reads the offset, which is part of the
+/// model, and takes its coefficients as an argument.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CoxOptions {
+pub struct CoxOptions<'a> {
     /// How tied events enter the partial likelihood. `Efron`, as in `coxph`.
     pub ties: Ties,
     /// The rule that makes times equal when they differ by rounding error,
@@ -408,14 +556,34 @@ pub struct CoxOptions {
     /// cause-specific, and the code is required. With one status code it is
     /// `None` or `Some(1)`.
     pub cause: Option<u32>,
+    /// A term added to the linear predictor of every row, one value per row
+    /// of the data, as `offset()` in a `coxph` formula. It has no coefficient.
+    /// The default is no offset.
+    pub offset: Option<&'a [f64]>,
+    /// The coefficients the iteration starts from, one per column of the
+    /// design on the scale of the columns given, as `init` of `coxph`. A value
+    /// for a column without variation is ignored. The default is zero.
+    pub init: Option<&'a [f64]>,
+    /// The largest number of trial points, `iter.max` of `coxph.control`. With
+    /// 0 the fit is the model at `init`: its coefficients are `init`, except
+    /// that an aliased column is `None`, and its covariance and tests are those
+    /// at that point.
+    pub iter_max: u32,
+    /// The relative change of the log partial likelihood at which the
+    /// iteration stops, `eps` of `coxph.control`. It must be positive.
+    pub eps: f64,
 }
 
-impl Default for CoxOptions {
+impl Default for CoxOptions<'_> {
     fn default() -> Self {
         Self {
             ties: Ties::Efron,
             timefix: TimeFix::default(),
             cause: None,
+            offset: None,
+            init: None,
+            iter_max: MAX_ITERATIONS,
+            eps: EPS,
         }
     }
 }
@@ -425,7 +593,7 @@ impl Default for CoxOptions {
 fn with_input<R>(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions,
+    opts: &CoxOptions<'_>,
     f: impl FnOnce(&Input<'_>) -> R,
 ) -> Result<R> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
@@ -433,6 +601,7 @@ fn with_input<R>(
         return Err(Error::input("x has no columns"));
     }
     check_finite_matrix(x)?;
+    check_control(opts, data.n_rows(), x.ncols())?;
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let code = match (opts.cause, surv.n_codes()) {
@@ -466,7 +635,39 @@ fn with_input<R>(
         stratum: &stratum,
         ties: opts.ties,
         cluster: data.cluster(),
+        offset: opts.offset,
+        init: opts.init,
+        iter_max: opts.iter_max,
+        eps: opts.eps,
+        stepping: if surv.start().is_some() {
+            Stepping::Counting
+        } else {
+            Stepping::RightCensored
+        },
     }))
+}
+
+/// The checks on the offset, the starting values and the convergence limit.
+fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<()> {
+    if !(opts.eps.is_finite() && opts.eps > 0.0) {
+        return Err(Error::input("eps: must be finite and positive"));
+    }
+    if let Some(offset) = opts.offset {
+        check_lengths(&[("data", rows), ("offset", offset.len())])?;
+        if offset
+            .iter()
+            .any(|o| !o.is_finite() || !o.exp().is_finite())
+        {
+            return Err(Error::input(
+                "offset: a value is not finite or gives a risk score that is not finite",
+            ));
+        }
+    }
+    if let Some(init) = opts.init {
+        check_lengths(&[("x columns", columns), ("init", init.len())])?;
+        refuse_non_finite(init, "init")?;
+    }
+    Ok(())
 }
 
 /// Newton-Raphson with step halving on the weighted partial likelihood of a
@@ -483,10 +684,14 @@ fn with_input<R>(
 ///
 /// [`Error::Input`] when `x` has no column, has a number of rows other than
 /// `data`, or holds a value that is not finite, when `opts.cause` is missing
-/// for a status with several codes or outside the codes, or when the rule for
-/// the times finds an interval of length zero.
-pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions) -> Result<CoxModelFit> {
-    let mut fit = with_input(data, x, opts, fit_checked)?;
+/// for a status with several codes or outside the codes, when the rule for
+/// the times finds an interval of length zero, when `opts.offset` has another
+/// length than `data` or a value whose exponential is not finite, when
+/// `opts.init` has another length than `x` has columns, has a value that is not
+/// finite or gives a risk score that is not finite, and when `opts.eps` is not
+/// positive and finite.
+pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions<'_>) -> Result<CoxModelFit> {
+    let mut fit = with_input(data, x, opts, fit_checked)??;
     fit.n_rows = data.n_rows();
     fit.n_used = data.n_used();
     Ok(fit)
@@ -514,7 +719,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions) -> Result
 #[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
 pub fn fit_cox(data: &CoxDesign<'_>) -> Result<CoxModelFit> {
     check_design(data)?;
-    Ok(fit_checked(&data.into()))
+    fit_checked(&data.into())
 }
 
 /// The checks every deprecated entry point makes on a design.
@@ -568,6 +773,8 @@ struct Stratum {
     /// Standardised covariates, `p` per row, in descending exit order.
     x: Vec<f64>,
     weight: Vec<f64>,
+    /// The offset of each row less its mean, empty without an offset.
+    offset: Vec<f64>,
     stop: Vec<f64>,
     start: Vec<f64>,
     is_event: Vec<bool>,
@@ -708,11 +915,14 @@ impl Model {
         let mut eta = Vec::with_capacity(size);
         let mut risk = Vec::with_capacity(size);
         for row in 0..size {
-            let value: f64 = stratum.x[row * p..(row + 1) * p]
+            let mut value: f64 = stratum.x[row * p..(row + 1) * p]
                 .iter()
                 .zip(beta)
                 .map(|(x, b)| x * b)
                 .sum();
+            if !stratum.offset.is_empty() {
+                value += stratum.offset[row];
+            }
             let weighted = stratum.weight[row] * value.exp();
             if !weighted.is_finite() {
                 return None;
@@ -1016,6 +1226,11 @@ fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
         };
     }
 
+    // The partial likelihood does not change when a constant is added to every
+    // offset. The mean is taken out, as `coxph` does, to keep `exp` in range.
+    let shift = input
+        .offset
+        .map(|offset| kept.iter().map(|&i| offset[i]).sum::<f64>() / kept.len() as f64);
     let mut order = kept.to_vec();
     order.sort_by_key(|&i| input.stratum[i]);
     let mut strata = Vec::new();
@@ -1075,6 +1290,10 @@ fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
             x,
             row: members.iter().map(|&i| i as u32).collect(),
             weight: members.iter().map(|&i| input.weight[i]).collect(),
+            offset: match (input.offset, shift) {
+                (Some(offset), Some(shift)) => members.iter().map(|&i| offset[i] - shift).collect(),
+                _ => Vec::new(),
+            },
             stop: members.iter().map(|&i| input.stop[i]).collect(),
             start: members.iter().map(|&i| input.start[i]).collect(),
             is_event: members.iter().map(|&i| input.is_event[i]).collect(),
@@ -1106,14 +1325,91 @@ fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
     }
 }
 
-fn fit_checked(input: &Input<'_>) -> CoxModelFit {
+/// The sum of the cross-products of the cluster score sums at `beta`, or
+/// `None` with fewer than two clusters or when a score is not finite.
+fn cluster_meat(
+    model: &Model,
+    input: &Input<'_>,
+    kept: &[usize],
+    beta: &[f64],
+) -> Option<Mat<f64>> {
+    let cluster = input.cluster?;
+    let p = model.p;
+    let mut present = vec![false; model.n_clusters];
+    for &i in kept {
+        present[cluster[i] as usize] = true;
+    }
+    if present.iter().filter(|&&seen| seen).count() < 2 {
+        return None;
+    }
+    let totals = model.cluster_scores(beta)?;
+    let sums = Mat::from_fn(model.n_clusters, p, |g, a| totals[g * p + a]);
+    // Every cluster is a row of `sums` already, so the meat is the plain
+    // cross-product of the rows, `sum_g U_g U_g'`.
+    Some(
+        meat(sums.as_ref(), |_| 1.0, None)
+            .expect("the meat of rows without clusters has no error to report"),
+    )
+}
+
+/// `y' A^- y` for the symmetric `p` by `p` matrix `a` with the pivot rule of
+/// `coxph`, and the rank of that rule, or `None` when `a` is not positive
+/// semi-definite.
+fn quadratic_form(a: &[f64], p: usize, y: &[f64]) -> Option<(f64, usize)> {
+    let mut factor = a.to_vec();
+    let rank = factorise(&mut factor, p)?;
+    let mut z = y.to_vec();
+    solve_factor(&factor, p, &mut z);
+    Some((y.iter().zip(&z).map(|(a, b)| a * b).sum(), rank))
+}
+
+/// A test statistic with `df` degrees of freedom, or `None` when the degrees
+/// of freedom are not those of the fit, the statistic is negative or it is not
+/// finite.
+fn chi_square(statistic: f64, df: usize, expected_df: usize) -> Option<ChiSquareTest> {
+    (df == expected_df && df > 0 && statistic.is_finite() && statistic >= 0.0).then(|| {
+        ChiSquareTest {
+            statistic,
+            df,
+            p_value: chi_square_sf(statistic, df as f64),
+        }
+    })
+}
+
+/// The score tests at the starting coefficients `beta0`, scaled. `score` and
+/// `solved` are the score and the solution of `I z = U` there, and `rank` the
+/// rank of the information.
+fn score_tests(
+    model: &Model,
+    input: &Input<'_>,
+    kept: &[usize],
+    beta0: &[f64],
+    score: &[f64],
+    solved: &[f64],
+    rank: usize,
+) -> (Option<ChiSquareTest>, Option<ChiSquareTest>) {
+    let p = model.p;
+    let plain = chi_square(
+        score.iter().zip(solved).map(|(a, b)| a * b).sum(),
+        rank,
+        rank,
+    );
+    let robust = cluster_meat(model, input, kept, beta0).and_then(|meat| {
+        let flat: Vec<f64> = (0..p * p).map(|k| meat[(k / p, k % p)]).collect();
+        let (statistic, df) = quadratic_form(&flat, p, score)?;
+        chi_square(statistic, df, rank)
+    });
+    (plain, robust)
+}
+
+fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     let p = input.x.ncols();
     let with_clusters = input.cluster.is_some();
     let kept: Vec<usize> = (0..input.x.nrows())
         .filter(|&i| input.weight[i] > 0.0)
         .collect();
     if kept.is_empty() {
-        return CoxModelFit::degenerate(p, 0.0, 0, with_clusters);
+        return Ok(CoxModelFit::degenerate(p, 0.0, 0, with_clusters));
     }
     let n_rows = kept.len();
     let n_events: f64 = kept
@@ -1122,87 +1418,154 @@ fn fit_checked(input: &Input<'_>) -> CoxModelFit {
         .map(|&i| input.weight[i])
         .sum();
     if !kept.iter().any(|&i| input.is_event[i]) {
-        return CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
+        return Ok(CoxModelFit::degenerate(p, n_events, n_rows, with_clusters));
     }
 
     let Prepared { model, factor } = prepare(input, &kept);
-    let n_clusters = model.n_clusters;
     let undefined = || CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
 
-    let mut beta = vec![0.0f64; p];
+    // The starting coefficients on the scaled covariates.
+    let mut beta: Vec<f64> = input.init.map_or_else(
+        || vec![0.0f64; p],
+        |init| {
+            init.iter()
+                .zip(&factor)
+                .map(|(b, &f)| if f == 0.0 { 0.0 } else { b / f })
+                .collect()
+        },
+    );
+    let beta0 = beta.clone();
     let Some(start) = model.evaluate(&beta) else {
-        return undefined();
+        if input.init.is_some() {
+            return Err(Error::input(
+                "init: the starting coefficients give a risk score or a partial \
+                 likelihood that is not finite",
+            ));
+        }
+        return Ok(undefined());
     };
-    let null_loglik = start.loglik;
-    let mut accepted_loglik = start.loglik;
-    let mut matrix = start.information;
-    let Some(rank) = factorise(&mut matrix, p) else {
-        return undefined();
-    };
-    if rank == 0 {
-        return undefined();
+    let null_loglik = if input.init.is_some() {
+        model.evaluate(&vec![0.0f64; p]).map(|e| e.loglik)
+    } else {
+        Some(start.loglik)
     }
-    let mut step = start.score;
+    .filter(|v| v.is_finite());
+    let initial_loglik = start.loglik;
+    let mut accepted_loglik = start.loglik;
+    let mut matrix = start.information.clone();
+    let Some(initial_rank) = factorise(&mut matrix, p) else {
+        return Ok(undefined());
+    };
+    if initial_rank == 0 {
+        return Ok(undefined());
+    }
+    let mut step = start.score.clone();
     solve_factor(&matrix, p, &mut step);
+    let (score_test, robust_score_test) = score_tests(
+        &model,
+        input,
+        &kept,
+        &beta0,
+        &start.score,
+        &step,
+        initial_rank,
+    );
     let mut trial: Vec<f64> = beta.iter().zip(&step).map(|(b, s)| b + s).collect();
 
-    let mut halving = false;
+    let stepping = input.stepping;
+    let mut halvings = 0u32;
     let mut iterations = 0u32;
     let mut converged = false;
     let mut last: Option<Evaluation> = None;
-    for count in 1..=MAX_ITERATIONS {
+    if input.iter_max == 0 {
+        // The model at the starting coefficients.
+        last = Some(start);
+        trial.clone_from(&beta);
+    }
+    for count in 1..=input.iter_max {
         iterations = count;
         let evaluation = model.evaluate(&trial);
+        // Counting-process data also treat a change of the rank of the
+        // information as a failed step.
+        let rank_changed = stepping == Stepping::Counting
+            && evaluation.as_ref().is_some_and(|e| {
+                let mut m = e.information.clone();
+                factorise(&mut m, p) != Some(initial_rank)
+            });
+        let halving = halvings > 0 && stepping != Stepping::RightCensored;
         if let Some(e) = &evaluation {
-            if (1.0 - accepted_loglik / e.loglik).abs() <= EPS && !halving {
+            if !halving && !rank_changed && (1.0 - accepted_loglik / e.loglik).abs() <= input.eps {
                 converged = true;
                 last = evaluation;
                 break;
             }
         }
-        if count == MAX_ITERATIONS {
-            last = evaluation;
+        let better = !rank_changed && matches!(&evaluation, Some(e) if e.loglik >= accepted_loglik);
+        if count == input.iter_max {
+            // Out of iterations.
+            let keep_trial = match (&evaluation, stepping) {
+                (None, _) => false,
+                (Some(_), Stepping::Legacy) => true,
+                (Some(e), Stepping::Counting) => {
+                    input.iter_max == 1
+                        || (e.loglik - accepted_loglik) / accepted_loglik.abs() >= -input.eps
+                }
+                (Some(_), Stepping::RightCensored) => better,
+            };
+            if keep_trial || stepping == Stepping::Legacy {
+                last = evaluation;
+            } else {
+                trial.clone_from(&beta);
+                last = model.evaluate(&beta);
+            }
             break;
         }
-        match evaluation {
-            Some(e) if e.loglik >= accepted_loglik => {
-                halving = false;
-                accepted_loglik = e.loglik;
-                beta.clone_from(&trial);
-                matrix = e.information;
-                if factorise(&mut matrix, p).is_none() {
-                    return undefined();
-                }
-                step = e.score;
-                solve_factor(&matrix, p, &mut step);
-                for (t, s) in trial.iter_mut().zip(&step) {
-                    *t += s;
-                }
+        if let (true, Some(e)) = (better, evaluation) {
+            halvings = 0;
+            accepted_loglik = e.loglik;
+            beta.clone_from(&trial);
+            matrix = e.information;
+            if factorise(&mut matrix, p).is_none() {
+                let mut fit = undefined();
+                fit.iterations = count;
+                return Ok(fit);
             }
-            _ => {
-                halving = true;
-                for (t, b) in trial.iter_mut().zip(&beta) {
-                    *t = (*t + b) / 2.0;
-                }
+            step = e.score;
+            solve_factor(&matrix, p, &mut step);
+            for (t, s) in trial.iter_mut().zip(&step) {
+                *t += s;
+            }
+        } else {
+            // Step halving. Each halving in a row takes the trial point a
+            // larger share of the way back to the last accepted point, as
+            // `coxph` does. The first fits kept half way back each time.
+            halvings += 1;
+            let h = if stepping == Stepping::Legacy {
+                1.0
+            } else {
+                f64::from(halvings)
+            };
+            for (t, b) in trial.iter_mut().zip(&beta) {
+                *t = (*t + h * b) / (h + 1.0);
             }
         }
     }
     let Some(last) = last else {
         let mut fit = undefined();
         fit.iterations = iterations;
-        return fit;
+        return Ok(fit);
     };
 
     let mut final_matrix = last.information.clone();
     let Some(rank) = factorise(&mut final_matrix, p) else {
         let mut fit = undefined();
         fit.iterations = iterations;
-        return fit;
+        return Ok(fit);
     };
     if rank == 0 {
         let mut fit = undefined();
         fit.iterations = iterations;
-        return fit;
+        return Ok(fit);
     }
     let aliased = |a: usize| final_matrix[a * p + a] == 0.0;
 
@@ -1212,7 +1575,7 @@ fn fit_checked(input: &Input<'_>) -> CoxModelFit {
     solve_factor(&final_matrix, p, &mut newton);
     let monotone_columns: Vec<usize> = if converged {
         (0..p)
-            .filter(|&a| !aliased(a) && newton[a].abs() > EPS + TOLER_INF)
+            .filter(|&a| !aliased(a) && newton[a].abs() > input.eps + input.eps.sqrt())
             .collect()
     } else {
         Vec::new()
@@ -1220,9 +1583,11 @@ fn fit_checked(input: &Input<'_>) -> CoxModelFit {
     if !monotone_columns.is_empty() {
         let mut fit = undefined();
         fit.iterations = iterations;
-        fit.null_log_partial_likelihood = null_loglik.is_finite().then_some(null_loglik);
+        fit.null_log_partial_likelihood = null_loglik;
         fit.monotone_columns = monotone_columns;
-        return fit;
+        fit.tests.score = score_test;
+        fit.tests.robust_score = robust_score_test;
+        return Ok(fit);
     }
 
     let variance = inverse_factor(&final_matrix, p);
@@ -1234,42 +1599,59 @@ fn fit_checked(input: &Input<'_>) -> CoxModelFit {
         .collect();
     let covariance = on_input_scale(&variance, &factor, &aliased);
 
-    let robust = input.cluster.and_then(|cluster| {
-        let mut present = vec![false; n_clusters];
-        for &i in &kept {
-            present[cluster[i] as usize] = true;
-        }
-        if present.iter().filter(|&&seen| seen).count() < 2 {
-            return None;
-        }
-        let totals = model.cluster_scores(&trial)?;
-        let sums = Mat::from_fn(n_clusters, p, |g, a| totals[g * p + a]);
-        // Every cluster is a row of `sums` already, so the meat is the plain
-        // cross-product of the rows, `sum_g U_g U_g'`.
-        let meat = meat(sums.as_ref(), |_| 1.0, None)
-            .expect("the meat of rows without clusters has no error to report");
+    let robust = cluster_meat(&model, input, &kept, &trial).map(|meat| {
         let sandwich = sandwich(&variance, &meat, p);
-        Some((
+        (
             (0..p)
                 .map(|a| (!aliased(a)).then(|| sandwich[a * p + a].sqrt() * factor[a]))
                 .collect::<Vec<_>>(),
             on_input_scale(&sandwich, &factor, &aliased),
-        ))
+            sandwich,
+        )
     });
+
+    // The Wald statistics are those of the distance from the starting
+    // coefficients, on the scaled covariates, over the columns that are not
+    // aliased. The model-based statistic is `d' I d` since `V` is the inverse
+    // of `I` on those columns.
+    let distance: Vec<f64> = (0..p)
+        .map(|a| if aliased(a) { 0.0 } else { trial[a] - beta0[a] })
+        .collect();
+    let mut wald = 0.0f64;
+    for a in 0..p {
+        for b in 0..p {
+            if !aliased(a) && !aliased(b) {
+                wald += distance[a] * last.information[a * p + b] * distance[b];
+            }
+        }
+    }
+    let robust_wald = robust.as_ref().and_then(|(_, _, sandwich)| {
+        let (statistic, df) = quadratic_form(sandwich, p, &distance)?;
+        chi_square(statistic, df, rank)
+    });
+    let tests = CoxTests {
+        wald: chi_square(wald, rank, rank),
+        robust_wald,
+        score: score_test,
+        robust_score: robust_score_test,
+        likelihood_ratio: chi_square(2.0 * (last.loglik - initial_loglik), rank, rank),
+    };
+
     let (robust_standard_errors, robust_covariance) = match (with_clusters, robust) {
         (true, None) => (Some(vec![None; p]), Some(vec![None; p * p])),
-        (_, Some((se, covariance))) => (Some(se), Some(covariance)),
+        (_, Some((se, covariance, _))) => (Some(se), Some(covariance)),
         (false, None) => (None, None),
     };
 
-    CoxModelFit {
+    Ok(CoxModelFit {
         coefficients,
         standard_errors,
         covariance,
         robust_standard_errors,
         robust_covariance,
         log_partial_likelihood: Some(last.loglik),
-        null_log_partial_likelihood: null_loglik.is_finite().then_some(null_loglik),
+        null_log_partial_likelihood: null_loglik,
+        tests,
         n_events,
         n_rows,
         n_used: n_rows,
@@ -1277,7 +1659,7 @@ fn fit_checked(input: &Input<'_>) -> CoxModelFit {
         iterations,
         converged,
         monotone_columns,
-    }
+    })
 }
 
 /// `V M V'` for the symmetric `p` by `p` matrices `variance` and `meat`, in a
@@ -1348,7 +1730,7 @@ pub fn score_residuals(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     coefficients: &[Option<f64>],
-    opts: &CoxOptions,
+    opts: &CoxOptions<'_>,
 ) -> Result<Vec<Option<Vec<f64>>>> {
     with_input(data, x, opts, |input| {
         score_residuals_checked(input, coefficients)

@@ -12,8 +12,9 @@
 //! - [`concordance`]: Harrell's C and its relatives for a numeric score, with weights,
 //!   strata, delayed entry, time weights and an infinitesimal jackknife variance.
 //! - [`cox`]: Cox regression on one covariate or a design matrix, with Breslow or
-//!   Efron ties, delayed entry, strata, case weights and a cluster-robust
-//!   variance.
+//!   Efron ties, delayed entry, strata, case weights, offsets, starting values
+//!   and iteration limits, a cluster-robust variance, and the Wald, score and
+//!   likelihood-ratio tests of the coefficients.
 //! - [`fine_gray`]: the rows of the Fine-Gray model, the Kaplan-Meier estimate of
 //!   the censoring distribution they need, and the fit on one covariate.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
