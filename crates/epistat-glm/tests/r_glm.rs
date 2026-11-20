@@ -308,3 +308,68 @@ fn cloglog_fits_match_r() {
         );
     }
 }
+
+#[derive(Deserialize)]
+struct ProbitReference {
+    x: Vec<Vec<f64>>,
+    yb: Vec<f64>,
+    y01: Vec<f64>,
+    binomial_weights: Vec<f64>,
+    offset: Vec<f64>,
+    fits: Vec<ProbitFit>,
+}
+
+#[derive(Deserialize)]
+struct ProbitFit {
+    name: String,
+    coefficients: Vec<f64>,
+    se: Vec<f64>,
+    deviance: f64,
+    iterations: usize,
+}
+
+/// `glm(family = binomial(link = "probit"))` with trials as prior weights, an
+/// offset, and a 0/1 response. The tolerances are those of the cloglog fits:
+/// the normal equations and R's QR agree to about 1e-11 on a design this well
+/// conditioned.
+#[test]
+fn probit_fits_match_r() {
+    let reference: ProbitReference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/glm_probit.json"
+    ));
+    let x = Mat::from_fn(reference.x.len(), reference.x[0].len(), |i, j| {
+        reference.x[i][j]
+    });
+    for r in &reference.fits {
+        let (y, weights) = if r.name == "bernoulli" {
+            (&reference.y01, None)
+        } else {
+            (&reference.yb, Some(reference.binomial_weights.as_slice()))
+        };
+        let offset = r
+            .name
+            .contains("offset")
+            .then_some(reference.offset.as_slice());
+        let fit = Glm::new(Family::Binomial, Link::Probit)
+            .fit(x.as_ref(), y, weights, offset, None)
+            .unwrap();
+        assert!(fit.converged, "{}", r.name);
+        assert_eq!(fit.iterations, r.iterations, "{}", r.name);
+        let (beta, se) = (all(&fit.coefficients), all(&fit.standard_errors()));
+        eprintln!(
+            "probit {}: worst relative deviation, coefficients {:e}, se {:e}, deviance {:e}",
+            r.name,
+            worst(&beta, &r.coefficients),
+            worst(&se, &r.se),
+            worst(&[fit.deviance], &[r.deviance]),
+        );
+        assert_close(
+            &beta,
+            &r.coefficients,
+            Tolerance::exact().rel(1e-11).abs(1e-13),
+        );
+        assert_close(&se, &r.se, Tolerance::exact().rel(1e-10));
+        assert_close(&[fit.deviance], &[r.deviance], Tolerance::exact().rel(1e-11));
+    }
+}

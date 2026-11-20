@@ -489,6 +489,18 @@ pub fn quantile_acklam(p: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn the_density_is_the_derivative_of_the_distribution_function() {
+        assert!((pdf(0.0) - FRAC_1_SQRT_2PI).abs() < 1e-17);
+        assert_eq!(pdf(f64::INFINITY), 0.0);
+        let h = 1e-5;
+        for x in [-2.0, -0.3, 0.0, 1.1, 3.0] {
+            let numeric = (cdf(x + h) - cdf(x - h)) / (2.0 * h);
+            assert!((numeric - pdf(x)).abs() < 1e-9, "{x}");
+        }
+    }
 
     #[test]
     fn a_nan_bound_has_no_truncated_quantile() {
