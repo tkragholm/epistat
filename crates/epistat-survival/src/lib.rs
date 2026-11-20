@@ -30,7 +30,8 @@
 //!   clustered bootstrap.
 //! - [`markov`]: the landmark test of the Markov property.
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
-//!   standard errors, confidence limits, quantiles and restricted means.
+//!   standard errors, confidence limits, quantiles and restricted means, read at chosen
+//!   times as `summary.survfit(times = )` with the starting point of `survfit0`.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
@@ -48,6 +49,8 @@
 //!   the one-sample test, as R's `survdiff`.
 //! - [`split`], [`tmerge`], [`condense`]: the data tools `survSplit`, `tmerge` and
 //!   `survcondense`, which return rows and the row of the input each came from.
+//! - [`surv2`]: timeline data (one row per observation) turned into counting-process
+//!   intervals, as `Surv2` and `fromtimeline`.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -72,6 +75,7 @@ pub mod multistate;
 pub mod pyears;
 pub mod split;
 pub mod surv;
+pub mod surv2;
 pub mod survcheck;
 pub mod survdiff;
 pub mod survfit;
