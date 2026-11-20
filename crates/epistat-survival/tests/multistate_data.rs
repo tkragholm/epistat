@@ -413,6 +413,19 @@ fn the_data_are_checked_before_estimating() {
         };
         assert_ne!(estimate_of(&good, &given), "ok");
     }
+    // A rate tolerance that is negative or not finite has no meaning.
+    for tolerance in [-1e-12, f64::NAN, f64::INFINITY] {
+        let given = Options {
+            rate_tolerance: Some(tolerance),
+            ..Options::default()
+        };
+        assert!(estimate_of(&good, &given).contains("rate_tolerance"));
+    }
+    let zero = Options {
+        rate_tolerance: Some(0.0),
+        ..Options::default()
+    };
+    assert_eq!(estimate_of(&good, &zero), "ok");
     // The bootstrap needs clusters and forms the distribution itself.
     let given = Options {
         initial: Some(vec![0.5, 0.5]),

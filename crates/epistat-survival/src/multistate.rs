@@ -763,16 +763,20 @@ fn bootstrap_rows(
 }
 
 /// Settings of [`estimate`] and [`bootstrap`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Options {
     /// How times that differ by rounding error are treated before the
     /// estimate. `survival::aeqSurv` by default, as `survfit` applies it.
     pub timefix: TimeFix,
     /// How far the summed leaving rate of a state may exceed 1 before the
-    /// data is refused as malformed. It bounds a check, not a result, since
-    /// the rates of well-formed data are at most 1 up to a few units of
-    /// rounding. `1e-9` by default.
-    pub rate_tolerance: f64,
+    /// data is refused as malformed. It bounds a check, not a result. `None`,
+    /// the default, derives it from the rounding of well-formed data: the
+    /// weight at risk and the weight moving are plain sums over at most `m`
+    /// rows, each within `m` units of rounding of its exact value, and the
+    /// leaving rate adds one division per state, so it exceeds 1 by at most
+    /// `(2 m + S) ε` for `S` states. `m` is taken as the number of rows used.
+    /// A given value must be finite and not negative.
+    pub rate_tolerance: Option<f64>,
     /// The distribution over the states before the first time, `n_codes`
     /// entries that are not negative and sum to 1. `None`, the default, takes
     /// it from the opening rows of the subjects, weighted. [`bootstrap`]
@@ -781,13 +785,16 @@ pub struct Options {
     pub initial: Option<Vec<f64>>,
 }
 
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            timefix: TimeFix::default(),
-            rate_tolerance: 1e-9,
-            initial: None,
-        }
+/// The tolerance of the leaving-rate check: the one given, checked, or the
+/// rounding bound of [`Options::rate_tolerance`] for `rows` rows and `states`
+/// states.
+fn rate_tolerance(opts: &Options, rows: usize, states: usize) -> Result<f64> {
+    match opts.rate_tolerance {
+        Some(tolerance) if tolerance.is_finite() && tolerance >= 0.0 => Ok(tolerance),
+        Some(tolerance) => Err(Error::input(format!(
+            "rate_tolerance must be finite and not negative, got {tolerance}"
+        ))),
+        None => Ok((2 * rows + states) as f64 * f64::EPSILON),
     }
 }
 
@@ -1022,7 +1029,8 @@ pub fn estimate(data: &SurvData<'_>, times: &[f64], opts: &Options) -> Result<Es
             states,
         )?,
     };
-    let occupation = occupation(rows, &weights, times, &initial, states, opts.rate_tolerance)?;
+    let tolerance = rate_tolerance(opts, rows.len(), states)?;
+    let occupation = occupation(rows, &weights, times, &initial, states, tolerance)?;
     Ok(Estimate {
         probabilities: occupation.probabilities,
         at_risk: occupation.at_risk,
@@ -1119,7 +1127,7 @@ pub fn bootstrap(
         seeds,
         prepared.data.n_clusters(),
         prepared.n_states,
-        opts.rate_tolerance,
+        rate_tolerance(opts, rows.len(), prepared.n_states)?,
     )?;
     Ok(Bootstrap {
         values,
