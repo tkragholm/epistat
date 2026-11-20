@@ -103,6 +103,9 @@ macro_rules! delegate_matching_record {
         fn emigration_date(&self) -> Option<chrono::NaiveDate> {
             self.$field.emigration_date()
         }
+        fn entry_date(&self) -> Option<chrono::NaiveDate> {
+            self.$field.entry_date()
+        }
     };
 }
 

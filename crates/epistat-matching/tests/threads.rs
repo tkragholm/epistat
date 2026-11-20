@@ -234,7 +234,18 @@ fn transition_matching() {
     let people = cohort(6_000, 90, 12, 31);
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
-        let recs = records(&people, Level::Municipality, true, false);
+        let mut recs = records(&people, Level::Municipality, true, false);
+        // Staggered entry: a third of the people enter between ages 1 and 5,
+        // so the entry date decides some risk sets.
+        for (idx, rec) in recs.iter_mut().enumerate() {
+            if idx % 3 == 0 {
+                let months = 12 + u32::try_from(idx % 49).expect("small");
+                rec.entry_date = rec
+                    .birth_date
+                    .checked_add_months(chrono::Months::new(months));
+            }
+        }
+        assert!(recs.iter().any(|rec| rec.entry_date.is_some()));
         let job = || {
             MatchJob::new_transition(&recs, 99)
                 .with_ratio(MatchRatio::new(3).unwrap())

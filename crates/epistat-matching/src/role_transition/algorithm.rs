@@ -28,8 +28,10 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord> {
 
     /// Whether a record is at risk (eligible as a candidate) at the case event date.
     ///
-    /// Default behavior allows candidates with no event date or with an event date
-    /// strictly after the case event date.
+    /// Default behavior allows candidates that have entered on or before the
+    /// case event date (a record without an entry date has always been at risk)
+    /// and that have no event date or an event date strictly after the case
+    /// event date.
     fn is_control_at_risk(&self, _case: &R, control: &R, case_event_date: NaiveDate) -> bool {
         default_control_is_at_risk(control, case_event_date)
     }
@@ -564,8 +566,11 @@ fn default_control_is_at_risk<R: RoleIndexedRecord>(
     case_event_date: NaiveDate,
 ) -> bool {
     control
-        .event_date()
-        .is_none_or(|event_date| event_date > case_event_date)
+        .entry_date()
+        .is_none_or(|entry| entry <= case_event_date)
+        && control
+            .event_date()
+            .is_none_or(|event_date| event_date > case_event_date)
 }
 
 #[cfg(test)]
