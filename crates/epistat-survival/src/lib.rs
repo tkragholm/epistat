@@ -43,6 +43,8 @@
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
 //!   standard errors, confidence limits, quantiles and restricted means, read at chosen
 //!   times as `summary.survfit(times = )` with the starting point of `survfit0`.
+//! - [`rmst`]: restricted mean survival time and time lost in two groups with their
+//!   difference and ratios, as `survRM2::rmst2`.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
@@ -94,6 +96,7 @@ pub mod metrics;
 pub mod msreg;
 pub mod multistate;
 pub mod pyears;
+pub mod rmst;
 pub mod split;
 pub mod surv;
 pub mod surv2;
