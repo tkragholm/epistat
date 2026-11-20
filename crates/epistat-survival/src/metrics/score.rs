@@ -158,7 +158,7 @@
     reason = "times and markers tie when they are equal, which is the definition of a tie"
 )]
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
 use super::censoring::CensoringKm;

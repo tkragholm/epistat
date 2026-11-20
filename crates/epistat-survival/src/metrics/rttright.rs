@@ -60,7 +60,7 @@
 //!    dependent censoring. Stat Med 2013;32(13):2173-84.
 //!    doi:10.1002/sim.5681
 
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use super::censoring::CensoringKm;
 use crate::error::{Error, Result};

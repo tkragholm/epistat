@@ -109,8 +109,8 @@
 
 use std::ops::Range;
 
+use epistat_linalg::MatRef;
 use epistat_stats::normal;
-use faer::MatRef;
 
 use crate::absrisk::{CscOptions, SurvType};
 use crate::check::{check_lengths, refuse_non_finite};

@@ -226,7 +226,7 @@ mod robust;
 mod tdist;
 
 use dist::Base;
-use faer::MatRef;
+use epistat_linalg::MatRef;
 use newton::{Control, Problem, factorise, newton};
 
 pub use predict::{

@@ -48,7 +48,7 @@
 //! dependent censoring using surrogate markers. In: AIDS Epidemiology,
 //! Birkhauser 1992:297-331.
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use crate::cox::{
     BaselineOptions, Centring, CoxOptions, FittedModel, Ties, Variance, basehaz, fit as cox_fit,

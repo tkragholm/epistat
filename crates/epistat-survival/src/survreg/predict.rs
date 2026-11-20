@@ -1,7 +1,7 @@
 //! Predictions and residuals of a [`SurvregFit`], as `predict.survreg` and
 //! `residuals.survreg`.
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use super::dist::row_derivs;
 use super::robust::{RowInput, dfbeta_row};

@@ -6,7 +6,7 @@
     reason = "a case weight is 0 or 1 exactly or it is refused"
 )]
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use crate::error::{Error, Result};
 use crate::surv::SurvData;

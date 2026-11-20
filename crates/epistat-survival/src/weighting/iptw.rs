@@ -33,7 +33,7 @@
 //! in the summary.
 
 use epistat_glm::{Family, Glm, Link};
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use super::summary::WeightSummary;
 use crate::error::{Error, Result};

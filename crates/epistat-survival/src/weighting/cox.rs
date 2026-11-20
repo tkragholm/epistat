@@ -66,8 +66,7 @@
 
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
-use epistat_linalg::{Attempt, inverse};
-use faer::{Mat, MatRef};
+use epistat_linalg::{Attempt, Mat, MatRef, inverse};
 
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};

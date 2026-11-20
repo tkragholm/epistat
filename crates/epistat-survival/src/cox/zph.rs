@@ -80,8 +80,8 @@
 //! 2. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
 //!    model. New York: Springer; 2000. Section 6.2.
 
+use epistat_linalg::MatRef;
 use epistat_stats::sum::compensated;
-use faer::MatRef;
 
 use super::design::{ChiSquareTest, CoxModelFit, CoxOptions};
 use super::residuals::{Prepared, Sums, prepare, schoenfeld_rows};

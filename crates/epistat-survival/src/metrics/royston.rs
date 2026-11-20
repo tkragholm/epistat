@@ -109,7 +109,7 @@
 
 use std::f64::consts::PI;
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};

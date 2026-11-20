@@ -82,7 +82,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use super::design::{CoxModelFit, CoxOptions, fit};
 use crate::check::{check_lengths, check_row_count};

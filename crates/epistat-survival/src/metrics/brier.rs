@@ -68,7 +68,7 @@
 //!    score in general survival models with right-censored event times.
 //!    Biom J 2006;48(6):1029-40. doi:10.1002/bimj.200610301
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
 use super::censoring::CensoringKm;

@@ -1,7 +1,7 @@
 //! The stacked data of a multi-state model: one copy of each row for every
 //! transition that leaves the state the row starts in.
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use super::{MsBaseline, MsModel, MsOptions, MsTerm, MsTerms, MsTransition, resolve};
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};

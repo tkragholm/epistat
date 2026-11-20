@@ -116,8 +116,8 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
+use epistat_linalg::MatRef;
 use epistat_stats::sum::compensated;
-use faer::MatRef;
 
 use super::Ties;
 use super::design::{CoxModelFit, CoxOptions, score_residuals};

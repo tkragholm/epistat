@@ -139,7 +139,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::check::{check_lengths, check_row_count};
 #[expect(
@@ -818,7 +818,7 @@ pub fn fine_gray_fit(
     reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
 )]
 mod tests {
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     use super::{
         Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, rows,

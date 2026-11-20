@@ -71,7 +71,7 @@
 
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::meat;
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::error::{Error, Result};
 

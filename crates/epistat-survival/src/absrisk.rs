@@ -160,8 +160,8 @@
 //! 4. Beyersmann J, Allignol A, Schumacher M. Competing risks and multistate
 //!    models with R. New York: Springer; 2012.
 
+use epistat_linalg::MatRef;
 use epistat_stats::normal;
-use faer::MatRef;
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, refuse_non_finite};

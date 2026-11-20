@@ -143,7 +143,7 @@ mod hazard;
 mod probtrans;
 mod stack;
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};

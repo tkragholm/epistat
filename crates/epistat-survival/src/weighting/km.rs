@@ -53,9 +53,8 @@
 //! Cole SR, Hernan MA. Adjusted survival curves with inverse probability
 //! weights. Comput Methods Programs Biomed 2004;75(1):45-49.
 
-use epistat_linalg::Factor;
+use epistat_linalg::{Factor, Mat};
 use epistat_stats::sum::Compensated;
-use faer::Mat;
 
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};

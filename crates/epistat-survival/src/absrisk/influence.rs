@@ -9,7 +9,7 @@
 //! number of grid times at or before `T_i`, so that `s_j <= T_i` is `j < q_i`
 //! and the position of `T_i` itself, when it is a grid time, is `q_i - 1`.
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use crate::cox::predict::{BaselineOptions, Centring, FittedModel, basehaz};
 use crate::cox::{CoxModelFit, CoxOptions, Ties, score_residuals};

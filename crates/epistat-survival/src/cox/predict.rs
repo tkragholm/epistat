@@ -210,9 +210,9 @@
 
 use std::borrow::Cow;
 
+use epistat_linalg::MatRef;
 use epistat_stats::normal;
 use epistat_stats::sum::compensated;
-use faer::MatRef;
 
 use super::{CoxModelFit, CoxOptions, Ties};
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};

@@ -385,8 +385,8 @@
 use std::borrow::Cow;
 
 use epistat_inference::sandwich::meat;
+use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
-use faer::{Mat, MatRef};
 
 use super::Ties;
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
@@ -1994,7 +1994,7 @@ fn score_residuals_checked(
 #[cfg(test)]
 #[expect(deprecated, reason = "the tests of the deprecated entry points")]
 mod tests {
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     use super::{CoxDesign, cox_score_residuals, fit_cox};
     use crate::cox::Ties;

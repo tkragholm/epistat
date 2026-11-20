@@ -56,8 +56,8 @@
 //!    chapters 22 to 24.
 
 use epistat_glm::{Family, Fit, Glm, Link};
+use epistat_linalg::Mat;
 use epistat_stats::normal;
-use faer::Mat;
 
 use crate::error::{Error, Result};
 

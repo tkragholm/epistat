@@ -16,8 +16,7 @@
 //! effect on the treated, `-1` for a treated subject under the effect on the
 //! controls, and 0 otherwise.
 
-use epistat_linalg::{Attempt, Method, weighted_gram};
-use faer::Mat;
+use epistat_linalg::{Attempt, Mat, Method, weighted_gram};
 
 use super::iptw::{Estimand, Iptw};
 use crate::error::{Error, Result};

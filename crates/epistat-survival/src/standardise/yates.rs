@@ -155,7 +155,7 @@ pub struct YatesLevel<'a> {
     pub population: Counterfactual<'a>,
     /// The base design of [`Counterfactual::Columns`], with one row per row
     /// of the population. Ignored for [`Counterfactual::Design`].
-    pub base: Option<faer::MatRef<'a, f64>>,
+    pub base: Option<epistat_linalg::MatRef<'a, f64>>,
     /// A weight for each row, for example the case weights of the fit. Equal
     /// weights when `None`.
     pub weights: Option<&'a [f64]>,
@@ -302,10 +302,11 @@ fn one_level(
     opts: &YatesOptions<'_>,
 ) -> Result<(f64, Vec<f64>)> {
     let p = beta.len();
-    let (rows, over, design): (usize, Option<Vec<Option<f64>>>, faer::MatRef<'_, f64>) = match (
-        &level.population,
-        level.base,
-    ) {
+    let (rows, over, design): (
+        usize,
+        Option<Vec<Option<f64>>>,
+        epistat_linalg::MatRef<'_, f64>,
+    ) = match (&level.population, level.base) {
         (Counterfactual::Design(d), _) => (d.nrows(), None, *d),
         (Counterfactual::Columns(set), Some(base)) => {
             let mut over = vec![None; p];

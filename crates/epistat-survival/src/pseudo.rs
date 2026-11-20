@@ -106,7 +106,7 @@ mod jackknife;
 pub mod regression;
 mod table;
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::error::{Error, Result};
 use crate::multistate::check_ascending;

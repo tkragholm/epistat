@@ -50,7 +50,7 @@
 //! the iteration count with `survival::clogit` on the `infert` data and on a
 //! simulated set of matched case-control data, for the four methods.
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use crate::check::check_lengths;
 use crate::cox::{CoxModelFit, CoxOptions, Ties, fit};

@@ -3,6 +3,9 @@
 //! factorisations, and products over the rows of a design matrix computed in
 //! fixed blocks, and the B-spline and polynomial bases of series estimators.
 //!
+//! [`Mat`] and [`MatRef`] are faer's matrix types, re-exported so that a crate
+//! that takes or returns them need not depend on faer itself.
+//!
 //! The modules, each with its own method notes:
 //!
 //! - [`solve`](crate::solve()) solves with a fallback sequence of
@@ -24,6 +27,7 @@ mod solve;
 
 pub use blocks::{ROW_BLOCK, matvec_into, row_scaled_gram, weighted_gram, weighted_xtz, xtv};
 pub use error::DesignError;
+pub use faer::{Mat, MatRef};
 pub use solve::{Attempt, Factor, Method, Ridge, Solution, SolveError, inverse, solve};
 
 /// Whether every entry of `matrix` is finite.
