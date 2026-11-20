@@ -34,6 +34,18 @@
 //! are summed in input order and the result does not depend on the number of
 //! threads. Times are compared for exact equality.
 //!
+//! # Agreement with R
+//!
+//! The estimate, the weight at risk, the number at risk and the number of events
+//! at each distinct exit time are those of `survival::survfit` on a factor
+//! status (`pstate`, `n.risk`, `n.event`), with case weights, groups and
+//! `Surv(entry, time, status)` where a row is at risk on `(entry, time]`, so an
+//! entry that equals another row's exit time does not put it at risk at that
+//! time. `survfit` lists the same times, censoring-only times included. The
+//! unweighted estimate also agrees with `etm::etm`, `cmprsk::cuminc` and
+//! `prodlim::prodlim`. `prodlim` reads a case weight as a count, so it is
+//! compared only without weights.
+//!
 //! # The bootstrap
 //!
 //! [`bootstrap_arm_incidence`] repeats the estimate for the exposed and the
