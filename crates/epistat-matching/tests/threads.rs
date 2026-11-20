@@ -535,6 +535,66 @@ fn reestimated_propensity_and_nearest_matching() {
 }
 
 #[test]
+fn nearest_matching_on_prepared_distances() {
+    use epistat_matching::MatchOrder;
+    let (anchors, candidates) = balance_inputs(150, 600, 9);
+    let impute = CovariateEncodingConfig::builder()
+        .missing_value_policy(MissingValuePolicy::Impute)
+        .build();
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let mahalanobis = prepare_mahalanobis_distance_config(
+            &anchors,
+            &candidates,
+            None,
+            &MahalanobisPreparationConfig::builder()
+                .encoding(impute.clone())
+                .build(),
+        )
+        .unwrap();
+        let robust = prepare_mahalanobis_distance_config(
+            &anchors,
+            &candidates,
+            None,
+            &MahalanobisPreparationConfig::builder()
+                .encoding(impute.clone())
+                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
+                .transform(MahalanobisTransform::RankTieAdjusted)
+                .build(),
+        )
+        .unwrap();
+        let euclidean = prepare_euclidean_distance_config(
+            &anchors,
+            &candidates,
+            None,
+            &EuclideanPreparationConfig::builder()
+                .encoding(impute.clone())
+                .scale(EuclideanScale::PooledWithinGroupSd)
+                .build(),
+        )
+        .unwrap();
+        for config in [
+            mahalanobis.distance_config,
+            robust.distance_config,
+            euclidean.distance_config,
+        ] {
+            for order in [MatchOrder::Data, MatchOrder::Closest, MatchOrder::Farthest] {
+                let out = MatchJob::new_standard(&anchors, &candidates, 1)
+                    .with_nearest()
+                    .with_m_order(order)
+                    .with_ratio(MatchRatio::new(2).unwrap())
+                    .with_exact_matches(["sex"])
+                    .with_distance_config(config.clone())
+                    .run();
+                assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&out);
+            }
+        }
+        d.0
+    });
+}
+
+#[test]
 fn mahalanobis_preparation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 5);
     for strategy in [
