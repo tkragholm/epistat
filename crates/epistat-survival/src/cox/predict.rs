@@ -1828,6 +1828,7 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
         }
     }
     Ok(out)
+}
 
 #[cfg(test)]
 mod tests {
