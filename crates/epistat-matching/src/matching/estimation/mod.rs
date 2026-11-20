@@ -344,7 +344,8 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
                 anchors.len(),
                 candidates.len(),
             );
-            if !(variance > 0.0) || !variance.is_finite() {
+            let valid = variance.is_finite() && variance > 0.0;
+            if !valid {
                 return Err(EstimationError::ZeroWithinGroupVariance {
                     column: matrix.column_names[col_idx].clone(),
                 });
@@ -718,7 +719,7 @@ mod tests {
             MahalanobisCovarianceStrategy::PooledWithinGroups,
         )
         .expect("pooled covariance should compute");
-        assert!((mean_of_groups[0] - (2.0 + 56.0 / 3.0) / 2.0).abs() < 1e-12);
+        assert!((mean_of_groups[0] - f64::midpoint(2.0, 56.0 / 3.0)).abs() < 1e-12);
     }
 
     #[test]

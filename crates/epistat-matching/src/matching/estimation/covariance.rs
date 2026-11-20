@@ -118,7 +118,9 @@ pub(super) fn pooled_within_group_variance(
 ) -> f64 {
     let value = |row_idx: usize| matrix.values[row_idx * matrix.n_cols + col_idx];
     let n = matrix.n_rows;
-    let binary = (0..n).all(|row_idx| value(row_idx) == 0.0 || value(row_idx) == 1.0);
+    let is_indicator =
+        |x: f64| x.to_bits() == 0.0_f64.to_bits() || x.to_bits() == 1.0_f64.to_bits();
+    let binary = (0..n).all(|row_idx| is_indicator(value(row_idx)));
     let groups = [(0, n_anchor), (n_anchor, n_candidate)];
     let mut total = 0.0_f64;
     for (start, len) in groups {
@@ -157,7 +159,8 @@ pub(super) fn rescale_rank_covariance(
     let mut multiplier = Vec::with_capacity(n_cols);
     for col in 0..n_cols {
         let variance = covariance[col * n_cols + col];
-        if !(variance > 0.0) || !variance.is_finite() {
+        let valid = variance.is_finite() && variance > 0.0;
+        if !valid {
             return Err(EstimationError::InvalidCovarianceMatrix);
         }
         multiplier.push(untied / variance.sqrt());
