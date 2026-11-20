@@ -50,8 +50,11 @@
 //! jackknife is `n` times the estimate less `n - 1` times the one with the
 //! subject deleted, and the infinitesimal one is `n` times the derivative. The
 //! exact jackknife is the one of the theory of the regression \[3\], and the
-//! infinitesimal one the one `survival` offers. `eventglm` uses neither, but a
-//! censoring-weighted construction, which is not done here.
+//! infinitesimal one the one `survival` offers. `eventglm`'s default,
+//! `model.censoring = "independent"`, is the exact jackknife of the whole sample,
+//! and `"stratified"` is the exact jackknife within strata, which a stratum column
+//! gives here. Its weighted constructions, with a Cox model of the censoring, are
+//! not provided.
 //!
 //! *Cost.* The infinitesimal jackknife of the survival probability, the
 //! restricted mean and the hazards is in closed form, `O(rows log events + rows
@@ -90,6 +93,26 @@
 //! last value. [`GroupEstimate::beyond`] says which times that applies to, as
 //! `pseudo` warns.
 //!
+//! # Multi-state processes
+//!
+//! [`pseudo_states`] makes pseudo-observations for a multi-state process read as
+//! [`multistate`](crate::multistate) reads it, with intervals `(start, stop]` in a
+//! state, an id for each subject and a stratum column for one curve for each
+//! stratum, as `survival::pseudo` does on a multi-state `survfit`. The targets
+//! are the occupation probability of each state, the expected time in each
+//! state from the origin of the curves and the cumulative hazard of each
+//! transition. The occupation and the time in state take the influence of every
+//! cluster from [`multistate::variance`](crate::multistate::variance), including
+//! that of the initial distribution when it is formed from the opening rows, and
+//! the time in state integrates it in chunks as above. The hazard of a transition
+//! is in closed form, the Nelson-Aalen estimate with the weight at risk in the
+//! state the transition leaves. The origin, `fit$t0` of `survfit`, is an argument,
+//! since `survfit` takes it from the data in ways that depend on the initial
+//! states. Only the infinitesimal jackknife is offered. The initial distribution
+//! is the weighted one of the opening rows of all subjects, so with delayed entry
+//! it differs from the one `survfit` forms from the subjects at risk at its
+//! starting time, and a distribution can be given instead.
+//!
 //! # Regression
 //!
 //! [`Pseudo::regress`] fits the regression of the pseudo-values on covariates
@@ -113,6 +136,7 @@ mod hazard;
 mod infinitesimal;
 mod jackknife;
 pub mod regression;
+mod states;
 mod steps;
 mod table;
 
@@ -124,6 +148,7 @@ use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 pub use regression::{GeeFit, GeeOptions, Link};
+pub use states::{StateEstimate, StateOptions, StatePseudo, StateTarget, pseudo_states};
 
 /// What is estimated at each time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
