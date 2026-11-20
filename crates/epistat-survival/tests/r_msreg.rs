@@ -39,7 +39,7 @@ use epistat_survival::cox::Ties;
 use epistat_survival::msreg::{
     MsBaseline, MsOptions, MsTerm, MsTerms, ProbTransOptions, fit, probtrans,
 };
-use epistat_testkit::load_json;
+use epistat_testkit::{NanRule, load_json, worst_deviation};
 use faer::Mat;
 use serde::Deserialize;
 
@@ -146,15 +146,6 @@ fn design(d: &RData) -> Mat<f64> {
     Mat::from_fn(d.x.len(), 3, |i, j| d.x[i][j])
 }
 
-/// The largest `|got - expected|` in units of `bound * max(|expected|, 1)`.
-fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len());
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| (g - e).abs() / (bound * e.abs().max(1.0)))
-        .fold(0.0, f64::max)
-}
-
 /// The largest deviation of a covariance matrix in units of
 /// `bound * sqrt(e_aa e_bb)`.
 fn covariance_deviation(got: &[Option<f64>], expected: &[Vec<f64>], bound: f64) -> f64 {
@@ -217,7 +208,13 @@ fn fits_match_coxph() {
         let p = r.coefficients.len() as f64;
         let bound = 8.0 * r.information_condition * f64::EPSILON;
         let coefficients: Vec<f64> = model.fit.coefficients.iter().map(|c| c.unwrap()).collect();
-        let coefficient = deviation(&coefficients, &r.coefficients, bound);
+        let coefficient = worst_deviation(
+            &coefficients,
+            &r.coefficients,
+            bound,
+            1.0,
+            NanRule::Unchecked,
+        );
         // `coxph` adds and removes rows from a running risk-set sum without
         // compensation, which leaves a relative error of up to `m eps` in the
         // sum of `m` operations, and each of the `D` events takes the logarithm

@@ -5,7 +5,7 @@
 use epistat_stats::gamma::chi_square_sf;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{ChiSquareTest, CoxModelFit, CoxOptions, Ties, fit};
-use epistat_testkit::{load_json, na_f64_vec};
+use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use faer::Mat;
 use serde::Deserialize;
 
@@ -71,28 +71,6 @@ struct RFit {
     kappa_path: Vec<f64>,
     kappa_meat: Option<f64>,
     kappa_robust: Option<f64>,
-}
-
-fn flat(values: &[Option<f64>]) -> Vec<f64> {
-    values.iter().map(|v| v.unwrap_or(f64::NAN)).collect()
-}
-
-/// The largest deviation of `got` from `expected` in units of
-/// `bound * max(|expected|, 1)`, and a check that `None` and NA coincide.
-fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len());
-    let mut worst = 0.0f64;
-    for (g, e) in got.iter().zip(expected) {
-        assert_eq!(
-            g.is_nan(),
-            e.is_nan(),
-            "aliased columns differ: {got:?} {expected:?}"
-        );
-        if !e.is_nan() {
-            worst = worst.max((g - e).abs() / (bound * e.abs().max(1.0)));
-        }
-    }
-    worst
 }
 
 /// Deviation of a covariance matrix in units of `bound * sqrt(e_aa e_bb)`.
@@ -254,7 +232,7 @@ fn fits_match_r() {
             // estimate. So the tolerance of a coefficient is relative to the
             // largest of its value, its starting value and 1.
             let coefficient = {
-                let got = flat(&model.coefficients);
+                let got = none_as_nan(&model.coefficients);
                 let mut worst = 0.0f64;
                 for (a, (g, e)) in got.iter().zip(&r.coefficients).enumerate() {
                     assert_eq!(g.is_nan(), e.is_nan(), "{name}");
@@ -265,23 +243,39 @@ fn fits_match_r() {
                 }
                 worst
             };
-            let se = deviation(&flat(&model.standard_errors), &r.se, bound);
+            let se = worst_deviation(
+                &none_as_nan(&model.standard_errors),
+                &r.se,
+                bound,
+                1.0,
+                NanRule::Coincide,
+            );
             let covariance = covariance_deviation(&model.covariance, &r.vcov, p * bound);
             let robust = if r.use_cluster {
-                deviation(
-                    &flat(model.robust_standard_errors.as_ref().unwrap()),
+                worst_deviation(
+                    &none_as_nan(model.robust_standard_errors.as_ref().unwrap()),
                     &r.robust_se,
                     bound,
+                    1.0,
+                    NanRule::Coincide,
                 )
             } else {
                 0.0
             };
-            let loglik = deviation(&[model.log_partial_likelihood.unwrap()], &[r.loglik], bound);
+            let loglik = worst_deviation(
+                &[model.log_partial_likelihood.unwrap()],
+                &[r.loglik],
+                bound,
+                1.0,
+                NanRule::Coincide,
+            );
             let null = if r.init.is_empty() {
-                deviation(
+                worst_deviation(
                     &[model.null_log_partial_likelihood.unwrap()],
                     &[r.loglik_init],
                     bound,
+                    1.0,
+                    NanRule::Coincide,
                 )
             } else {
                 0.0

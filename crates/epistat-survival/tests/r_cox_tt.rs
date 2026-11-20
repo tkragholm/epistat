@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, TimeTransform, TtColumn, TtOptions, fit_tt};
-use epistat_testkit::load_json;
+use epistat_testkit::{NanRule, load_json, worst_deviation};
 use faer::Mat;
 use serde::Deserialize;
 
@@ -59,16 +59,6 @@ struct Reference {
     versions: Versions,
     datasets: HashMap<String, Dataset>,
     fits: Vec<RFit>,
-}
-
-/// The largest deviation of `got` from `expected` in units of
-/// `bound * max(|expected|, 1)`.
-fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len());
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| (g - e).abs() / (bound * e.abs().max(1.0)))
-        .fold(0.0, f64::max)
 }
 
 /// The two fits take the same Newton steps on the same expanded data, so they
@@ -156,20 +146,36 @@ fn fits_match_r() {
         assert_eq!(model.iterations, r.iterations, "{name}");
         let bound = 8.0 * r.kappa * f64::EPSILON + got.n_expanded as f64 * f64::EPSILON;
         let flat = |v: &[Option<f64>]| v.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
-        let coefficient = deviation(&flat(&model.coefficients), &r.coefficients, bound);
-        let se = deviation(&flat(&model.standard_errors), &r.se, bound);
+        let coefficient = worst_deviation(
+            &flat(&model.coefficients),
+            &r.coefficients,
+            bound,
+            1.0,
+            NanRule::Unchecked,
+        );
+        let se = worst_deviation(
+            &flat(&model.standard_errors),
+            &r.se,
+            bound,
+            1.0,
+            NanRule::Unchecked,
+        );
         let robust = match (&model.robust_standard_errors, &r.robust_se) {
-            (Some(got), Some(expected)) => deviation(&flat(got), expected, bound),
+            (Some(got), Some(expected)) => {
+                worst_deviation(&flat(got), expected, bound, 1.0, NanRule::Unchecked)
+            }
             (None, None) => 0.0,
             _ => panic!("{name}: robust standard errors"),
         };
-        let loglik = deviation(
+        let loglik = worst_deviation(
             &[
                 model.null_log_partial_likelihood.unwrap(),
                 model.log_partial_likelihood.unwrap(),
             ],
             &r.loglik,
             bound,
+            1.0,
+            NanRule::Unchecked,
         );
         eprintln!(
             "{name:30} rows {:6}  coefficient {coefficient:.2e}  se {se:.2e}  robust {robust:.2e}  loglik {loglik:.2e}",

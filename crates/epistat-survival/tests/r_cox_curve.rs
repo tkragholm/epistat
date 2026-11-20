@@ -58,7 +58,7 @@ use epistat_survival::cox::predict::{
     ConfType, CurveType, FittedModel, NewData, PathData, SurvfitOptions, survfit, survfit_paths,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
-use epistat_testkit::load_json;
+use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined_each};
 use faer::{Mat, Side};
 use serde::Deserialize;
 
@@ -197,33 +197,6 @@ fn flatten(m: &[Vec<f64>]) -> Vec<Option<f64>> {
     m.iter().flatten().copied().map(Some).collect()
 }
 
-/// The largest deviation of `got` from `expected` in units of
-/// `bound * max(|expected|, floor)`.
-fn deviation(got: &[f64], expected: &[f64], bound: f64, floor: f64) -> f64 {
-    assert_eq!(got.len(), expected.len(), "lengths");
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| {
-            assert!(g.is_finite() && e.is_finite(), "not finite: {g} {e}");
-            (g - e).abs() / (bound * e.abs().max(floor))
-        })
-        .fold(0.0, f64::max)
-}
-
-/// The largest deviation in units of an allowance per element.
-fn deviation_each(got: &[Option<f64>], expected: &[Option<f64>], allowed: &[f64]) -> f64 {
-    assert_eq!(got.len(), expected.len(), "lengths");
-    got.iter()
-        .zip(expected)
-        .zip(allowed)
-        .map(|((g, e), a)| match (g, e) {
-            (Some(g), Some(e)) => (g - e).abs() / a,
-            (None, None) => 0.0,
-            _ => panic!("limits differ in being defined: {g:?} {e:?}"),
-        })
-        .fold(0.0, f64::max)
-}
-
 /// The root `a` in (0, 1) of `sum w r / (1 - a^r) = s0` by bisection.
 fn product_limit_root(w: &[f64], r: &[f64], s0: f64) -> f64 {
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
@@ -331,25 +304,31 @@ fn compare(
     assert_eq!(got.time, want.time, "{tag}: times");
     note(
         &what("n_risk"),
-        deviation(&got.n_risk, &want.n_risk, 8.0 * eps * b.n, 0.0),
+        worst_deviation(
+            &got.n_risk,
+            &want.n_risk,
+            8.0 * eps * b.n,
+            0.0,
+            NanRule::Finite,
+        ),
     );
     note(
         &what("n_event"),
-        deviation(&got.n_event, &want.n_event, b.b_sum, 0.0),
+        worst_deviation(&got.n_event, &want.n_event, b.b_sum, 0.0, NanRule::Finite),
     );
     note(
         &what("n_censor"),
-        deviation(&got.n_censor, &want.n_censor, b.b_sum, 0.0),
+        worst_deviation(&got.n_censor, &want.n_censor, b.b_sum, 0.0, NanRule::Finite),
     );
     note(
         &what("cumhaz"),
-        deviation(&got.cumhaz, &want.cumhaz, b.b_sum, 0.0),
+        worst_deviation(&got.cumhaz, &want.cumhaz, b.b_sum, 0.0, NanRule::Finite),
     );
     let b_se = if stype == 1 { b.b_se_kp } else { b.b_se };
     if exact_se {
         note(
             &what("std_err"),
-            deviation(&got.std_err, &want.std_err, b_se, 0.0),
+            worst_deviation(&got.std_err, &want.std_err, b_se, 0.0, NanRule::Finite),
         );
     }
     let len = got.time.len();
@@ -419,11 +398,9 @@ fn compare(
                 b_se + extra
             })
             .collect();
-        let dev = deviation_each(&lo[..cut], &rl.lower[..cut], &allowed).max(deviation_each(
-            &hi[..cut],
-            &rl.upper[..cut],
-            &allowed,
-        ));
+        let dev = worst_deviation_defined_each(&lo[..cut], &rl.lower[..cut], &allowed).max(
+            worst_deviation_defined_each(&hi[..cut], &rl.upper[..cut], &allowed),
+        );
         note(&what(&format!("limits {key}")), dev);
     }
 }
@@ -697,7 +674,7 @@ fn curves_match_r() {
                     );
                     note(
                         "std_err against direct sums",
-                        deviation(&got.std_err, &own, bounds.b_se_kp, 0.0),
+                        worst_deviation(&got.std_err, &own, bounds.b_se_kp, 0.0, NanRule::Finite),
                     );
                     if !r.zero {
                         differs = differs.max(

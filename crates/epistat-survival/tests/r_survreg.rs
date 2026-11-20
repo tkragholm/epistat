@@ -17,7 +17,7 @@ use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     Distribution, PredictOptions, PredictType, ResidualKind, SurvregFit, SurvregOptions, fit,
 };
-use epistat_testkit::{load_json, na_f64_vec};
+use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use faer::Mat;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -211,20 +211,6 @@ fn design(r: &RFit) -> Mat<f64> {
     Mat::from_fn(r.x.len(), r.x[0].len(), |i, j| r.x[i][j])
 }
 
-/// The largest deviation of `got` from `expected` in units of
-/// `bound * max(|expected|, 1)`.
-fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len());
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| (g - e).abs() / (bound * e.abs().max(1.0)))
-        .fold(0.0, f64::max)
-}
-
-fn flat(values: &[Option<f64>]) -> Vec<f64> {
-    values.iter().map(|v| v.unwrap_or(f64::NAN)).collect()
-}
-
 #[test]
 fn fits_match_r() {
     let reference: Reference = load_json(concat!(
@@ -283,8 +269,14 @@ fn fits_match_r() {
         for (a, b) in r.coefficients.iter().zip(&f.coefficients) {
             assert_eq!(a.is_none(), b.is_none(), "{} aliased", r.name);
         }
-        let coefficient = deviation(&flat(&f.coefficients), &flat(&r.coefficients), bound);
-        let log_scale = deviation(&f.log_scale, &r.log_scale, bound);
+        let coefficient = worst_deviation(
+            &none_as_nan(&f.coefficients),
+            &none_as_nan(&r.coefficients),
+            bound,
+            1.0,
+            NanRule::Unchecked,
+        );
+        let log_scale = worst_deviation(&f.log_scale, &r.log_scale, bound, 1.0, NanRule::Unchecked);
         let variance_r: Vec<Vec<f64>> = r.variance.clone();
         assert_eq!(variance_r.len(), q, "{}", r.name);
         let mut variance = 0.0f64;
@@ -304,9 +296,21 @@ fn fits_match_r() {
         }
         // A sum of n terms, each with a few ulps of error.
         let ll_bound = 4.0 * n * f64::EPSILON;
-        let loglik = deviation(&[f.loglik], &[r.loglik], ll_bound);
-        let null = deviation(&[f.loglik_null], &[r.loglik_null], ll_bound);
-        let lp = deviation(&f.linear_predictors, &r.linear_predictors, bound * p as f64);
+        let loglik = worst_deviation(&[f.loglik], &[r.loglik], ll_bound, 1.0, NanRule::Unchecked);
+        let null = worst_deviation(
+            &[f.loglik_null],
+            &[r.loglik_null],
+            ll_bound,
+            1.0,
+            NanRule::Unchecked,
+        );
+        let lp = worst_deviation(
+            &f.linear_predictors,
+            &r.linear_predictors,
+            bound * p as f64,
+            1.0,
+            NanRule::Unchecked,
+        );
         let mut worst = vec![
             ("coefficient", coefficient * bound),
             ("log scale", log_scale * bound),
@@ -349,7 +353,7 @@ fn fits_match_r() {
                 ("quantile", &quant.fit, &eq),
                 ("quantile se", quant.se.as_ref().unwrap(), &eqs),
             ] {
-                let u = deviation(got, want, pb);
+                let u = worst_deviation(got, want, pb, 1.0, NanRule::Unchecked);
                 worst.push((what, u * pb));
                 units.push(u);
             }
@@ -408,12 +412,12 @@ fn fits_match_r() {
             let pick = |v: &[Option<f64>]| -> Vec<f64> {
                 keep.iter()
                     .map(|&i| {
-                        let value = flat(v)[i];
+                        let value = none_as_nan(v)[i];
                         if squared { value * value.abs() } else { value }
                     })
                     .collect()
             };
-            let u = deviation(&pick(&got), &pick(want), rb);
+            let u = worst_deviation(&pick(&got), &pick(want), rb, 1.0, NanRule::Unchecked);
             worst.push((what, u * rb));
             units.push(u);
         }

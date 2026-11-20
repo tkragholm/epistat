@@ -25,7 +25,7 @@ use epistat_survival::cox::predict::{
     basehaz, predict, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
-use epistat_testkit::load_json;
+use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined};
 use faer::Mat;
 use serde::Deserialize;
 
@@ -100,29 +100,6 @@ struct RAlt {
     std_err: Vec<f64>,
     lower: Vec<Option<f64>>,
     upper: Vec<Option<f64>>,
-}
-
-fn deviation(got: &[f64], expected: &[f64], bound: f64, floor: f64) -> f64 {
-    assert_eq!(got.len(), expected.len(), "lengths");
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| {
-            assert!(g.is_finite() && e.is_finite(), "not finite: {g} {e}");
-            (g - e).abs() / (bound * e.abs().max(floor))
-        })
-        .fold(0.0, f64::max)
-}
-
-fn deviation_option(got: &[Option<f64>], expected: &[Option<f64>], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len(), "lengths");
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| match (g, e) {
-            (Some(g), Some(e)) => (g - e).abs() / bound,
-            (None, None) => 0.0,
-            _ => panic!("limits differ in being defined: {g:?} {e:?}"),
-        })
-        .fold(0.0, f64::max)
 }
 
 #[test]
@@ -206,7 +183,10 @@ fn null_cox_matches_r() {
         );
         let ll = model.log_partial_likelihood.unwrap();
         assert_eq!(model.null_log_partial_likelihood, Some(ll));
-        note("loglik", deviation(&[ll], &[r.loglik], b_ll, 1.0));
+        note(
+            "loglik",
+            worst_deviation(&[ll], &[r.loglik], b_ll, 1.0, NanRule::Finite),
+        );
 
         let fitted = FittedModel {
             data: &data,
@@ -226,11 +206,12 @@ fn null_cox_matches_r() {
         assert_eq!(cat(&|s| s.time.clone()), r.basehaz.time, "{name}: times");
         note(
             "basehaz",
-            deviation(
+            worst_deviation(
                 &cat(&|s| s.cumulative_hazard.clone()),
                 &r.basehaz.hazard,
                 b_sum,
                 0.0,
+                NanRule::Finite,
             ),
         );
 
@@ -252,16 +233,34 @@ fn null_cox_matches_r() {
             let rel = |v: &[f64]| v.iter().map(|x| x - v[0]).collect::<Vec<f64>>();
             note(
                 "lp",
-                deviation(&rel(&lp.fit), &rel(&r.lp), b_sum * 2.0, 1.0),
+                worst_deviation(
+                    &rel(&lp.fit),
+                    &rel(&r.lp),
+                    b_sum * 2.0,
+                    1.0,
+                    NanRule::Finite,
+                ),
             );
             let ratio = |v: &[f64]| v.iter().map(|x| x / v[0]).collect::<Vec<f64>>();
             note(
                 "risk",
-                deviation(&ratio(&risk.fit), &ratio(&r.risk), b_sum * 2.0, 0.0),
+                worst_deviation(
+                    &ratio(&risk.fit),
+                    &ratio(&r.risk),
+                    b_sum * 2.0,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
         } else {
-            note("lp", deviation(&lp.fit, &r.lp, b_sum, 1.0));
-            note("risk", deviation(&risk.fit, &r.risk, b_sum, 0.0));
+            note(
+                "lp",
+                worst_deviation(&lp.fit, &r.lp, b_sum, 1.0, NanRule::Finite),
+            );
+            note(
+                "risk",
+                worst_deviation(&risk.fit, &r.risk, b_sum, 0.0, NanRule::Finite),
+            );
         }
         for kind in [PredictType::LinearPredictor, PredictType::Risk] {
             let with_se = predict(&fitted, kind, None, &se_opts).unwrap();
@@ -289,7 +288,10 @@ fn null_cox_matches_r() {
         assert!(keep.len() >= 30, "{name}: too few rows compared");
         let got: Vec<f64> = keep.iter().map(|&i| ex.fit[i]).collect();
         let want: Vec<f64> = keep.iter().map(|&i| r.expected[i]).collect();
-        note("expected", deviation(&got, &want, b_sum, 0.0));
+        note(
+            "expected",
+            worst_deviation(&got, &want, b_sum, 0.0, NanRule::Finite),
+        );
         let se = ex.se.as_ref().unwrap();
         assert!(se.iter().all(|s| s.is_finite() && *s >= 0.0));
         if !r.entry && !r.strata && !r.offset {
@@ -305,7 +307,10 @@ fn null_cox_matches_r() {
                     if k == 0 { 0.0 } else { rs.std_err[k - 1] }
                 })
                 .collect();
-            note("expected se", deviation(se, &want, b_sum, 0.0));
+            note(
+                "expected se",
+                worst_deviation(se, &want, b_sum, 0.0, NanRule::Finite),
+            );
         }
 
         // survfit at the reference, one row of new data per stratum.
@@ -364,63 +369,102 @@ fn null_cox_matches_r() {
             let rs = &r.survfit;
             note(
                 "n_risk",
-                deviation(
+                worst_deviation(
                     &times.n_risk,
                     &rs.n_risk[sl.clone()],
                     8.0 * eps * n as f64,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
             note(
                 "n_event",
-                deviation(&times.n_event, &rs.n_event[sl.clone()], b_sum, 0.0),
+                worst_deviation(
+                    &times.n_event,
+                    &rs.n_event[sl.clone()],
+                    b_sum,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "cumhaz",
-                deviation(&c.cumulative_hazard, &rs.cumhaz[sl.clone()], b_sum, 0.0),
+                worst_deviation(
+                    &c.cumulative_hazard,
+                    &rs.cumhaz[sl.clone()],
+                    b_sum,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "surv",
-                deviation(&c.survival, &rs.surv[sl.clone()], b_sum, 1.0),
+                worst_deviation(
+                    &c.survival,
+                    &rs.surv[sl.clone()],
+                    b_sum,
+                    1.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "std_err",
-                deviation(
+                worst_deviation(
                     c.std_err.as_ref().unwrap(),
                     &rs.std_err[sl.clone()],
                     b_sum,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
             note(
                 "limits",
-                deviation_option(c.lower.as_ref().unwrap(), &rs.lower[sl.clone()], b_sum).max(
-                    deviation_option(c.upper.as_ref().unwrap(), &rs.upper[sl.clone()], b_sum),
-                ),
+                worst_deviation_defined(c.lower.as_ref().unwrap(), &rs.lower[sl.clone()], b_sum)
+                    .max(worst_deviation_defined(
+                        c.upper.as_ref().unwrap(),
+                        &rs.upper[sl.clone()],
+                        b_sum,
+                    )),
             );
             let (a, ra) = (&alt.curves[k], &r.survfit_alt);
             note(
                 "alt cumhaz",
-                deviation(&a.cumulative_hazard, &ra.cumhaz[sl.clone()], b_sum, 0.0),
+                worst_deviation(
+                    &a.cumulative_hazard,
+                    &ra.cumhaz[sl.clone()],
+                    b_sum,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "alt surv",
-                deviation(&a.survival, &ra.surv[sl.clone()], b_sum, 1.0),
+                worst_deviation(
+                    &a.survival,
+                    &ra.surv[sl.clone()],
+                    b_sum,
+                    1.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "alt std_err",
-                deviation(
+                worst_deviation(
                     a.std_err.as_ref().unwrap(),
                     &ra.std_err[sl.clone()],
                     b_sum,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
             note(
                 "alt limits",
-                deviation_option(a.lower.as_ref().unwrap(), &ra.lower[sl.clone()], b_sum).max(
-                    deviation_option(a.upper.as_ref().unwrap(), &ra.upper[sl.clone()], b_sum),
-                ),
+                worst_deviation_defined(a.lower.as_ref().unwrap(), &ra.lower[sl.clone()], b_sum)
+                    .max(worst_deviation_defined(
+                        a.upper.as_ref().unwrap(),
+                        &ra.upper[sl.clone()],
+                        b_sum,
+                    )),
             );
         }
     }

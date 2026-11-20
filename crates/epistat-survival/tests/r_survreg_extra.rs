@@ -51,7 +51,7 @@ use epistat_survival::survreg::{
     DfbetaOptions, Distribution, PredictOptions, PredictType, ResidualKind, SurvregOptions,
     TermsReference, fit,
 };
-use epistat_testkit::{load_json, na_f64_vec};
+use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use faer::Mat;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -282,16 +282,6 @@ fn deviation_with(got: &[f64], expected: &[f64], bound: f64, scale: impl Fn(usiz
         .fold(0.0, f64::max)
 }
 
-/// The largest deviation of `got` from `expected` in units of
-/// `bound * max(|expected|, 1)`.
-fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
-    deviation_with(got, expected, bound, |i| expected[i].abs().max(1.0))
-}
-
-fn flat(values: &[Option<f64>]) -> Vec<f64> {
-    values.iter().map(|v| v.unwrap_or(f64::NAN)).collect()
-}
-
 /// The columns of a row-major result that are not aliased, as a flat vector
 /// of the entries of `want` (rows of R) and `got` (row-major, `width` wide).
 fn pairs(
@@ -378,9 +368,18 @@ fn extra_options_match_r() {
         };
         note(
             "coefficient",
-            deviation(&flat(&f.coefficients), &flat(&r.coefficients), bound),
+            worst_deviation(
+                &none_as_nan(&f.coefficients),
+                &none_as_nan(&r.coefficients),
+                bound,
+                1.0,
+                NanRule::Unchecked,
+            ),
         );
-        note("log scale", deviation(&f.log_scale, &r.log_scale, bound));
+        note(
+            "log scale",
+            worst_deviation(&f.log_scale, &r.log_scale, bound, 1.0, NanRule::Unchecked),
+        );
         let variance_units = |got: &[Option<f64>], want: &[Vec<f64>], factor: f64| -> f64 {
             assert_eq!(want.len(), q, "{}", r.name);
             let mut worst = 0.0f64;
@@ -404,14 +403,29 @@ fn extra_options_match_r() {
             variance_units(&f.variance, &dense(&r.variance), q as f64),
         );
         let ll_bound = 4.0 * n * f64::EPSILON;
-        note("loglik", deviation(&[f.loglik], &[r.loglik], ll_bound));
+        note(
+            "loglik",
+            worst_deviation(&[f.loglik], &[r.loglik], ll_bound, 1.0, NanRule::Unchecked),
+        );
         note(
             "null loglik",
-            deviation(&[f.loglik_null], &[r.loglik_null], ll_bound),
+            worst_deviation(
+                &[f.loglik_null],
+                &[r.loglik_null],
+                ll_bound,
+                1.0,
+                NanRule::Unchecked,
+            ),
         );
         note(
             "linear predictor",
-            deviation(&f.linear_predictors, &r.linear_predictors, bound * p as f64),
+            worst_deviation(
+                &f.linear_predictors,
+                &r.linear_predictors,
+                bound * p as f64,
+                1.0,
+                NanRule::Unchecked,
+            ),
         );
 
         // Robust variance.
@@ -498,8 +512,15 @@ fn extra_options_match_r() {
                 checks.push(("quantile se", quant.se.as_ref().unwrap(), &eqs, qb));
             }
             for (what, got, want, b) in checks {
-                note(what, deviation(got, want, b) * b);
-                assert!(deviation(got, want, b) <= 1.0, "{} {what}", r.name);
+                note(
+                    what,
+                    worst_deviation(got, want, b, 1.0, NanRule::Unchecked) * b,
+                );
+                assert!(
+                    worst_deviation(got, want, b, 1.0, NanRule::Unchecked) <= 1.0,
+                    "{} {what}",
+                    r.name
+                );
             }
             if let (Some(lp_new), Some(quantile_new)) = (&r.lp_new, &r.quantile_new) {
                 let lp_new: Vec<f64> = lp_new.iter().map(|v| v.unwrap()).collect();
@@ -513,8 +534,8 @@ fn extra_options_match_r() {
                     false,
                 );
                 let flat_q: Vec<f64> = quantile_new.iter().flatten().copied().collect();
-                let u1 = deviation(&lp0.fit, &lp_new, pb);
-                let u2 = deviation(&q0.fit, &flat_q, qb);
+                let u1 = worst_deviation(&lp0.fit, &lp_new, pb, 1.0, NanRule::Unchecked);
+                let u2 = worst_deviation(&q0.fit, &flat_q, qb, 1.0, NanRule::Unchecked);
                 assert!(u1 <= 1.0 && u2 <= 1.0, "{}: no-offset predictions", r.name);
                 let gap = lp_new
                     .iter()
@@ -585,7 +606,7 @@ fn extra_options_match_r() {
             let pick = |v: &[Option<f64>]| -> Vec<f64> {
                 keep.iter()
                     .map(|&i| {
-                        let value = flat(v)[i];
+                        let value = none_as_nan(v)[i];
                         if squared { value * value.abs() } else { value }
                     })
                     .collect()
@@ -783,10 +804,22 @@ fn extra_options_match_r() {
             let want: Vec<f64> = dense(&t.fit).into_iter().flatten().collect();
             let se_delta: Vec<f64> = dense(&t.se_delta).into_iter().flatten().collect();
             let se_r: Vec<f64> = dense(&t.se_r).into_iter().flatten().collect();
-            let means = deviation(&f.column_means, &t.means, f64::EPSILON * n);
+            let means = worst_deviation(
+                &f.column_means,
+                &t.means,
+                f64::EPSILON * n,
+                1.0,
+                NanRule::Unchecked,
+            );
             note("column means", means * f64::EPSILON * n);
-            let u = deviation(&pred.fit, &want, pb);
-            let us = deviation(pred.se.as_ref().unwrap(), &se_delta, pb);
+            let u = worst_deviation(&pred.fit, &want, pb, 1.0, NanRule::Unchecked);
+            let us = worst_deviation(
+                pred.se.as_ref().unwrap(),
+                &se_delta,
+                pb,
+                1.0,
+                NanRule::Unchecked,
+            );
             assert!(u <= 1.0 && us <= 1.0 && means <= 1.0, "{} terms", r.name);
             note("terms", u * pb);
             note("terms se (delta method)", us * pb);

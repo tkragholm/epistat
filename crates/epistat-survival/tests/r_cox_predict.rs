@@ -42,7 +42,7 @@ use epistat_survival::cox::predict::{
     reference_offset, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
-use epistat_testkit::load_json;
+use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined};
 use faer::{Mat, Side};
 use serde::Deserialize;
 
@@ -185,31 +185,6 @@ struct RMeans {
     strata: Vec<usize>,
 }
 
-/// The largest deviation of `got` from `expected` in units of
-/// `bound * max(|expected|, floor)`.
-fn deviation(got: &[f64], expected: &[f64], bound: f64, floor: f64) -> f64 {
-    assert_eq!(got.len(), expected.len(), "lengths");
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| {
-            assert!(g.is_finite() && e.is_finite(), "not finite: {g} {e}");
-            (g - e).abs() / (bound * e.abs().max(floor))
-        })
-        .fold(0.0, f64::max)
-}
-
-fn deviation_option(got: &[Option<f64>], expected: &[Option<f64>], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len(), "lengths");
-    got.iter()
-        .zip(expected)
-        .map(|(g, e)| match (g, e) {
-            (Some(g), Some(e)) => (g - e).abs() / bound,
-            (None, None) => 0.0,
-            _ => panic!("limits differ in being defined: {g:?} {e:?}"),
-        })
-        .fold(0.0, f64::max)
-}
-
 fn flatten(m: &[Vec<f64>]) -> Vec<Option<f64>> {
     m.iter().flatten().copied().map(Some).collect()
 }
@@ -326,7 +301,13 @@ fn predictions_match_r() {
         let means = reference_means(&fitted, Centring::Coxph).unwrap();
         note(
             "means",
-            deviation(&means, &r.means, 8.0 * eps * (n as f64), 1.0),
+            worst_deviation(
+                &means,
+                &r.means,
+                8.0 * eps * (n as f64),
+                1.0,
+                NanRule::Finite,
+            ),
         );
 
         // basehaz.
@@ -339,29 +320,32 @@ fn predictions_match_r() {
         assert_eq!(cat(&|s| s.time.clone()), r.basehaz.time, "{name}: times");
         note(
             "basehaz n_event",
-            deviation(
+            worst_deviation(
                 &cat(&|s| s.n_events.clone()),
                 &r.basehaz.n_event,
                 b_sum,
                 0.0,
+                NanRule::Finite,
             ),
         );
         note(
             "basehaz n_risk",
-            deviation(
+            worst_deviation(
                 &cat(&|s| s.n_risk.clone()),
                 &r.basehaz.n_risk,
                 8.0 * eps * (n as f64),
                 0.0,
+                NanRule::Finite,
             ),
         );
         note(
             "basehaz centered",
-            deviation(
+            worst_deviation(
                 &cat(&|s| s.cumulative_hazard.clone()),
                 &r.basehaz.centered,
                 b_sum,
                 0.0,
+                NanRule::Finite,
             ),
         );
         let uncentered: Vec<f64> = cat(&|s| s.cumulative_hazard.clone())
@@ -370,7 +354,13 @@ fn predictions_match_r() {
             .collect();
         note(
             "basehaz uncentered",
-            deviation(&uncentered, &r.basehaz.uncentered, b_sum, 0.0),
+            worst_deviation(
+                &uncentered,
+                &r.basehaz.uncentered,
+                b_sum,
+                0.0,
+                NanRule::Finite,
+            ),
         );
 
         // predict, lp and risk.
@@ -402,22 +392,27 @@ fn predictions_match_r() {
                 };
                 note(
                     &format!("{key} {label}"),
-                    deviation(&on.fit, &rp.fit, bound, floor).max(deviation(
-                        &off.fit,
-                        &rp.new_fit,
-                        bound,
-                        floor,
-                    )),
+                    worst_deviation(&on.fit, &rp.fit, bound, floor, NanRule::Finite).max(
+                        worst_deviation(&off.fit, &rp.new_fit, bound, floor, NanRule::Finite),
+                    ),
                 );
                 let lp_se = &r.predict[&format!("lp_{label}")];
                 if key == "lp" {
                     note(
                         &format!("lp se {label}"),
-                        deviation(on.se.as_ref().unwrap(), &rp.se, b_se, 0.0).max(deviation(
+                        worst_deviation(
+                            on.se.as_ref().unwrap(),
+                            &rp.se,
+                            b_se,
+                            0.0,
+                            NanRule::Finite,
+                        )
+                        .max(worst_deviation(
                             off.se.as_ref().unwrap(),
                             &rp.new_se,
                             b_se,
                             0.0,
+                            NanRule::Finite,
                         )),
                     );
                 } else {
@@ -431,7 +426,7 @@ fn predictions_match_r() {
                         .collect();
                     note(
                         "risk se, survival's own form",
-                        deviation(&quirk, &rp.se, b_lin, 0.0),
+                        worst_deviation(&quirk, &rp.se, b_lin, 0.0, NanRule::Finite),
                     );
                     let delta: Vec<f64> = lp_se
                         .se
@@ -447,11 +442,19 @@ fn predictions_match_r() {
                         .collect();
                     note(
                         &format!("risk se {label}"),
-                        deviation(on.se.as_ref().unwrap(), &delta, b_se, 0.0).max(deviation(
+                        worst_deviation(
+                            on.se.as_ref().unwrap(),
+                            &delta,
+                            b_se,
+                            0.0,
+                            NanRule::Finite,
+                        )
+                        .max(worst_deviation(
                             off.se.as_ref().unwrap(),
                             &delta_new,
                             b_se,
                             0.0,
+                            NanRule::Finite,
                         )),
                     );
                 }
@@ -473,7 +476,13 @@ fn predictions_match_r() {
         // event at a time shared with other events under Efron ties.
         note(
             "expected",
-            deviation(&ex.fit, &r.expected.fit_definition, b_sum, 0.0),
+            worst_deviation(
+                &ex.fit,
+                &r.expected.fit_definition,
+                b_sum,
+                0.0,
+                NanRule::Finite,
+            ),
         );
         let mut tied = std::collections::BTreeMap::<(u32, u64), usize>::new();
         for i in 0..n {
@@ -504,7 +513,7 @@ fn predictions_match_r() {
         );
         note(
             "expected (survival's fitted form)",
-            deviation(&got, &want, b_sum, 0.0),
+            worst_deviation(&got, &want, b_sum, 0.0, NanRule::Finite),
         );
         let differs = (0..n).any(|i| (ex.fit[i] - r.expected.fit[i]).abs() > 1e-6);
         assert_eq!(
@@ -516,11 +525,12 @@ fn predictions_match_r() {
         // its parts: the cumulative variance and `g`.
         note(
             "expected se (definition)",
-            deviation(
+            worst_deviation(
                 ex.se.as_ref().unwrap(),
                 &r.expected.se_definition,
                 b_se,
                 0.0,
+                NanRule::Finite,
             ),
         );
         if r.entry {
@@ -539,7 +549,13 @@ fn predictions_match_r() {
         } else {
             note(
                 "expected se (survival)",
-                deviation(ex.se.as_ref().unwrap(), &r.expected.se_r, b_se, 0.0),
+                worst_deviation(
+                    ex.se.as_ref().unwrap(),
+                    &r.expected.se_r,
+                    b_se,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
         }
         let sv = predict(&fitted, PredictType::Survival, None, &opts_e).unwrap();
@@ -560,23 +576,39 @@ fn predictions_match_r() {
             .zip(&from_definition)
             .map(|(s, v)| s * v)
             .collect();
-        note("survival", deviation(&sv.fit, &from_definition, b_sum, 1.0));
+        note(
+            "survival",
+            worst_deviation(&sv.fit, &from_definition, b_sum, 1.0, NanRule::Finite),
+        );
         note(
             "survival se",
-            deviation(sv.se.as_ref().unwrap(), &se_from_definition, b_se, 0.0),
+            worst_deviation(
+                sv.se.as_ref().unwrap(),
+                &se_from_definition,
+                b_se,
+                0.0,
+                NanRule::Finite,
+            ),
         );
         if !r.entry {
             note(
                 "survival (survival's fitted form)",
-                deviation(&pick(&sv.fit), &pick(&r.expected.survival), b_sum, 1.0),
+                worst_deviation(
+                    &pick(&sv.fit),
+                    &pick(&r.expected.survival),
+                    b_sum,
+                    1.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "survival se (survival's fitted form)",
-                deviation(
+                worst_deviation(
                     &pick(sv.se.as_ref().unwrap()),
                     &pick(&r.expected.survival_se),
                     b_se,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
         }
@@ -587,25 +619,33 @@ fn predictions_match_r() {
             let en = predict(&fitted, PredictType::Expected, Some(&new_e), &opts_e).unwrap();
             note(
                 "expected new",
-                deviation(&en.fit, r.expected.new_fit.as_ref().unwrap(), b_sum, 0.0),
+                worst_deviation(
+                    &en.fit,
+                    r.expected.new_fit.as_ref().unwrap(),
+                    b_sum,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "expected new se (definition)",
-                deviation(
+                worst_deviation(
                     en.se.as_ref().unwrap(),
                     r.expected.new_se_definition.as_ref().unwrap(),
                     b_se,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
             if !r.entry {
                 note(
                     "expected new se (survival)",
-                    deviation(
+                    worst_deviation(
                         en.se.as_ref().unwrap(),
                         r.expected.new_se_r.as_ref().unwrap(),
                         b_se,
                         0.0,
+                        NanRule::Finite,
                     ),
                 );
             }
@@ -618,25 +658,42 @@ fn predictions_match_r() {
         let flat = |m: &[Vec<f64>]| m.iter().flatten().copied().collect::<Vec<f64>>();
         note(
             "terms",
-            deviation(&tm.fit, &flat(&r.terms.fit), b_lin, 1.0).max(deviation(
-                &tn.fit,
-                &flat(&r.terms.new_fit),
-                b_lin,
-                1.0,
-            )),
+            worst_deviation(&tm.fit, &flat(&r.terms.fit), b_lin, 1.0, NanRule::Finite).max(
+                worst_deviation(
+                    &tn.fit,
+                    &flat(&r.terms.new_fit),
+                    b_lin,
+                    1.0,
+                    NanRule::Finite,
+                ),
+            ),
         );
         note(
             "terms se",
-            deviation(tm.se.as_ref().unwrap(), &flat(&r.terms.se), b_se, 0.0).max(deviation(
+            worst_deviation(
+                tm.se.as_ref().unwrap(),
+                &flat(&r.terms.se),
+                b_se,
+                0.0,
+                NanRule::Finite,
+            )
+            .max(worst_deviation(
                 tn.se.as_ref().unwrap(),
                 &flat(&r.terms.new_se),
                 b_se,
                 0.0,
+                NanRule::Finite,
             )),
         );
         note(
             "terms constant",
-            deviation(&[tm.constant], &[r.terms.constant], b_lin, 1.0),
+            worst_deviation(
+                &[tm.constant],
+                &[r.terms.constant],
+                b_lin,
+                1.0,
+                NanRule::Finite,
+            ),
         );
 
         // survfit.
@@ -655,20 +712,41 @@ fn predictions_match_r() {
             assert_eq!(times.time, rc.time, "{name}: curve {i} times");
             note(
                 "curve n_risk",
-                deviation(&times.n_risk, &rc.n_risk, 8.0 * eps * n as f64, 0.0),
+                worst_deviation(
+                    &times.n_risk,
+                    &rc.n_risk,
+                    8.0 * eps * n as f64,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "curve n_event",
-                deviation(&times.n_event, &rc.n_event, b_sum, 0.0),
+                worst_deviation(&times.n_event, &rc.n_event, b_sum, 0.0, NanRule::Finite),
             );
             note(
                 "curve cumhaz",
-                deviation(&c.cumulative_hazard, &rc.cumhaz, b_sum, 0.0),
+                worst_deviation(
+                    &c.cumulative_hazard,
+                    &rc.cumhaz,
+                    b_sum,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
-            note("curve surv", deviation(&c.survival, &rc.surv, b_sum, 1.0));
+            note(
+                "curve surv",
+                worst_deviation(&c.survival, &rc.surv, b_sum, 1.0, NanRule::Finite),
+            );
             note(
                 "curve std_err",
-                deviation(c.std_err.as_ref().unwrap(), &rc.std_err, b_se, 0.0),
+                worst_deviation(
+                    c.std_err.as_ref().unwrap(),
+                    &rc.std_err,
+                    b_se,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             for (key, kind) in kinds {
                 let o = SurvfitOptions {
@@ -679,9 +757,12 @@ fn predictions_match_r() {
                 let rl = &rc.ci[key];
                 note(
                     &format!("limits {key}"),
-                    deviation_option(cc.curves[i].lower.as_ref().unwrap(), &rl.lower, b_se).max(
-                        deviation_option(cc.curves[i].upper.as_ref().unwrap(), &rl.upper, b_se),
-                    ),
+                    worst_deviation_defined(cc.curves[i].lower.as_ref().unwrap(), &rl.lower, b_se)
+                        .max(worst_deviation_defined(
+                            cc.curves[i].upper.as_ref().unwrap(),
+                            &rl.upper,
+                            b_se,
+                        )),
                 );
             }
             let o90 = SurvfitOptions {
@@ -691,9 +772,16 @@ fn predictions_match_r() {
             let c90 = survfit(&fitted, &new, &o90).unwrap();
             note(
                 "limits level 0.9",
-                deviation_option(c90.curves[i].lower.as_ref().unwrap(), &rc.ci90.lower, b_se).max(
-                    deviation_option(c90.curves[i].upper.as_ref().unwrap(), &rc.ci90.upper, b_se),
-                ),
+                worst_deviation_defined(
+                    c90.curves[i].lower.as_ref().unwrap(),
+                    &rc.ci90.lower,
+                    b_se,
+                )
+                .max(worst_deviation_defined(
+                    c90.curves[i].upper.as_ref().unwrap(),
+                    &rc.ci90.upper,
+                    b_se,
+                )),
             );
         }
         // The other hazard type.
@@ -716,20 +804,33 @@ fn predictions_match_r() {
             assert_eq!(alt.strata[c.stratum].time, rc.time);
             note(
                 "alt cumhaz",
-                deviation(&c.cumulative_hazard, &rc.cumhaz, b_sum, 0.0),
+                worst_deviation(
+                    &c.cumulative_hazard,
+                    &rc.cumhaz,
+                    b_sum,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
-            note("alt surv", deviation(&c.survival, &rc.surv, b_sum, 1.0));
+            note(
+                "alt surv",
+                worst_deviation(&c.survival, &rc.surv, b_sum, 1.0, NanRule::Finite),
+            );
             note(
                 "alt std_err",
-                deviation(c.std_err.as_ref().unwrap(), &rc.std_err, b_se, 0.0),
+                worst_deviation(
+                    c.std_err.as_ref().unwrap(),
+                    &rc.std_err,
+                    b_se,
+                    0.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "alt limits",
-                deviation_option(c.lower.as_ref().unwrap(), &rc.lower, b_se).max(deviation_option(
-                    c.upper.as_ref().unwrap(),
-                    &rc.upper,
-                    b_se,
-                )),
+                worst_deviation_defined(c.lower.as_ref().unwrap(), &rc.lower, b_se).max(
+                    worst_deviation_defined(c.upper.as_ref().unwrap(), &rc.upper, b_se),
+                ),
             );
         }
         // The curve at the means, in every stratum.
@@ -774,34 +875,42 @@ fn predictions_match_r() {
             assert_eq!(cm.strata[c.stratum].time, r.survfit_means.time[sl.clone()]);
             note(
                 "means curve cumhaz",
-                deviation(
+                worst_deviation(
                     &c.cumulative_hazard,
                     &r.survfit_means.cumhaz[sl.clone()],
                     b_sum,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
             note(
                 "means curve surv",
-                deviation(&c.survival, &r.survfit_means.surv[sl.clone()], b_sum, 1.0),
+                worst_deviation(
+                    &c.survival,
+                    &r.survfit_means.surv[sl.clone()],
+                    b_sum,
+                    1.0,
+                    NanRule::Finite,
+                ),
             );
             note(
                 "means curve std_err",
-                deviation(
+                worst_deviation(
                     c.std_err.as_ref().unwrap(),
                     &r.survfit_means.std_err[sl.clone()],
                     b_se,
                     0.0,
+                    NanRule::Finite,
                 ),
             );
             note(
                 "means curve limits",
-                deviation_option(
+                worst_deviation_defined(
                     c.lower.as_ref().unwrap(),
                     &r.survfit_means.lower[sl.clone()],
                     b_se,
                 )
-                .max(deviation_option(
+                .max(worst_deviation_defined(
                     c.upper.as_ref().unwrap(),
                     &r.survfit_means.upper[sl.clone()],
                     b_se,

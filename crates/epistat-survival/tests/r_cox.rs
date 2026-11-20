@@ -2,7 +2,7 @@
 
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit, score_residuals};
-use epistat_testkit::{load_json, na_f64_vec};
+use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use faer::Mat;
 use serde::Deserialize;
 
@@ -65,28 +65,6 @@ struct RFit {
 }
 
 /// The values, with NaN where the fit has `None`.
-fn flat(values: &[Option<f64>]) -> Vec<f64> {
-    values.iter().map(|v| v.unwrap_or(f64::NAN)).collect()
-}
-
-/// The largest deviation of `got` from `expected` in units of the tolerance
-/// `bound * max(|expected|, 1)`, and a check that `None` and NA coincide.
-fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
-    assert_eq!(got.len(), expected.len());
-    let mut worst = 0.0f64;
-    for (g, e) in got.iter().zip(expected) {
-        assert_eq!(
-            g.is_nan(),
-            e.is_nan(),
-            "aliased columns differ: {got:?} {expected:?}"
-        );
-        if !e.is_nan() {
-            worst = worst.max((g - e).abs() / (bound * e.abs().max(1.0)));
-        }
-    }
-    worst
-}
-
 /// The fit and the score residuals at its coefficients, one vector per column.
 fn fit_of(reference: &Reference, r: &RFit) -> (CoxModelFit, Vec<Option<Vec<f64>>>) {
     let indices: Vec<usize> = r
@@ -244,23 +222,45 @@ fn fits_match_r() {
         );
         assert_eq!(fit.rank, r.rank, "{}", r.name);
         assert_eq!(fit.iterations, r.iterations, "{}", r.name);
-        let coefficient = deviation(&flat(&fit.coefficients), &r.coefficients, bound);
-        let se = deviation(&flat(&fit.standard_errors), &r.se, bound);
+        let coefficient = worst_deviation(
+            &none_as_nan(&fit.coefficients),
+            &r.coefficients,
+            bound,
+            1.0,
+            NanRule::Coincide,
+        );
+        let se = worst_deviation(
+            &none_as_nan(&fit.standard_errors),
+            &r.se,
+            bound,
+            1.0,
+            NanRule::Coincide,
+        );
         let robust = if r.use_cluster {
-            deviation(
-                &flat(fit.robust_standard_errors.as_ref().unwrap()),
+            worst_deviation(
+                &none_as_nan(fit.robust_standard_errors.as_ref().unwrap()),
                 &r.robust_se,
                 bound,
+                1.0,
+                NanRule::Coincide,
             )
         } else {
             assert!(fit.robust_standard_errors.is_none());
             0.0
         };
-        let loglik = deviation(&[fit.log_partial_likelihood.unwrap()], &[r.loglik], bound);
-        let null = deviation(
+        let loglik = worst_deviation(
+            &[fit.log_partial_likelihood.unwrap()],
+            &[r.loglik],
+            bound,
+            1.0,
+            NanRule::Coincide,
+        );
+        let null = worst_deviation(
             &[fit.null_log_partial_likelihood.unwrap()],
             &[r.loglik_null],
             bound,
+            1.0,
+            NanRule::Coincide,
         );
         // The deviations in absolute terms, relative to the value or to 1.
         let p = r.columns.len() as f64;
