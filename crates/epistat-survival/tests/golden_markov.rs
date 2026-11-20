@@ -27,6 +27,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::markov::{MarkovTest, Stays, markov_test};
+use epistat_testkit::{Fingerprint, absent_all};
 
 /// `(name, length, digest)` of each recorded field.
 const EXPECTED: &[(&str, usize, u64)] = &[
@@ -155,19 +156,8 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("one stay/p_value", 1, 0xaab1_6932_29ba_1db8),
 ];
 
-/// A value standing for `None`, so that an absent p-value differs from any
-/// present one.
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
 fn digest(values: &[f64]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for value in values {
-        for byte in value.to_bits().to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-    hash
+    Fingerprint::new().f64s(values).finish()
 }
 
 #[track_caller]
@@ -205,12 +195,7 @@ fn check_test(name: &str, t: &MarkovTest) {
     check(&format!("{name}/n_occupied"), &t.n_occupied);
     check(&format!("{name}/n_events_after"), &t.n_events_after);
     check(&format!("{name}/statistic"), &t.statistic);
-    let p: Vec<f64> = t
-        .p_value
-        .iter()
-        .map(|p| p.unwrap_or_else(|| f64::from_bits(ABSENT)))
-        .collect();
-    check(&format!("{name}/p_value"), &p);
+    check(&format!("{name}/p_value"), &absent_all(&t.p_value));
 }
 
 struct Columns {

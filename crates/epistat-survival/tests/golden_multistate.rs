@@ -32,6 +32,7 @@ use epistat_rng::Stream;
 use epistat_survival::multistate::{
     Intervals, bootstrap_state_occupation, integrate, state_occupation_curve,
 };
+use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded field.
 const EXPECTED: &[(&str, usize, u64)] = &[
@@ -138,14 +139,7 @@ const EXPECTED: &[(&str, usize, u64)] = &[
 ];
 
 fn digest(values: &[f64]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for value in values {
-        for byte in value.to_bits().to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-    hash
+    Fingerprint::new().f64s(values).finish()
 }
 
 #[track_caller]

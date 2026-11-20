@@ -29,6 +29,7 @@ use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
     ArmColumns, Draw, RowWindows, bootstrap_arm_incidence, curves,
 };
+use epistat_testkit::bits;
 
 mod golden_values;
 
@@ -67,10 +68,6 @@ fn input(n: usize, seed: u64, causes: usize, zero_weights: bool) -> Input {
         s.group.push(rng.below(4) as u32 * 3);
     }
     s
-}
-
-fn bits(values: &[f64]) -> Vec<u64> {
-    values.iter().map(|v| v.to_bits()).collect()
 }
 
 fn push_curves(

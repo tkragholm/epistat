@@ -23,6 +23,7 @@ use epistat_survival::multistate::{
     Intervals, Options, bootstrap, bootstrap_state_occupation, estimate, state_occupation_curve,
 };
 use epistat_survival::timefix::TimeFix;
+use epistat_testkit::bits;
 
 struct Process {
     start: Vec<f64>,
@@ -109,10 +110,6 @@ fn event_times(p: &Process) -> Vec<f64> {
     times.sort_by(f64::total_cmp);
     times.dedup();
     times
-}
-
-fn bits(values: &[f64]) -> Vec<u64> {
-    values.iter().map(|v| v.to_bits()).collect()
 }
 
 struct Columns {

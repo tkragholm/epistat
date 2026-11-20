@@ -20,19 +20,10 @@ use epistat_survival::cox::{CoxDesign, CoxModelFit, Ties, cox_score_residuals, f
 use epistat_testkit::Fingerprint;
 use faer::Mat;
 
-const ABSENT: u64 = 0x7ff8_0000_dead_beef;
-
-fn opt(hash: Fingerprint, value: Option<f64>) -> Fingerprint {
-    match value {
-        Some(v) => hash.f64(v),
-        None => hash.u64(ABSENT),
-    }
-}
-
 fn opts(hash: Fingerprint, values: &[Option<f64>]) -> Fingerprint {
     values
         .iter()
-        .fold(hash.u64(values.len() as u64), |h, &v| opt(h, v))
+        .fold(hash.u64(values.len() as u64), |h, &v| h.option_f64(v))
 }
 
 fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
@@ -48,8 +39,8 @@ fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
         Some(v) => opts(h.u64(1), v),
         None => h.u64(0),
     };
-    h = opt(h, fit.log_partial_likelihood);
-    h = opt(h, fit.null_log_partial_likelihood);
+    h = h.option_f64(fit.log_partial_likelihood);
+    h = h.option_f64(fit.null_log_partial_likelihood);
     h = h
         .f64(fit.n_events)
         .u64(fit.n_rows as u64)

@@ -18,6 +18,7 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, Stays, markov_test, test};
+use epistat_testkit::bits;
 
 struct Process {
     start: Vec<f64>,
@@ -68,10 +69,6 @@ fn process(people: usize, seed: u64) -> Process {
         }
     }
     p
-}
-
-fn bits(values: &[f64]) -> Vec<u64> {
-    values.iter().map(|v| v.to_bits()).collect()
 }
 
 #[test]

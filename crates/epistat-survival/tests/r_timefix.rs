@@ -2,7 +2,7 @@
 //! outputs are values taken from the input, so the two must agree exactly.
 
 use epistat_survival::timefix::{TimeFix, fix_times};
-use epistat_testkit::{assert_same_on_pools, load_json};
+use epistat_testkit::{assert_same_on_pools, bits, load_json};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -28,10 +28,6 @@ struct Case {
 #[derive(Deserialize)]
 struct Infinite {
     right_censored_output: Vec<String>,
-}
-
-fn bits(values: &[f64]) -> Vec<u64> {
-    values.iter().map(|v| v.to_bits()).collect()
 }
 
 fn reference() -> Reference {

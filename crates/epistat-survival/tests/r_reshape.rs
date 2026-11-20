@@ -7,7 +7,7 @@ use epistat_survival::condense::{CondenseOptions, condense};
 use epistat_survival::split::{SplitOptions, split};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::tmerge::{Counts, Observations, Spans, Tmerge, TmergeOptions};
-use epistat_testkit::{load_json, na_f64_vec};
+use epistat_testkit::{bits, load_json, na_f64_vec};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -24,10 +24,6 @@ fn reference() -> Reference {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/reshape.json"
     ))
-}
-
-fn bits(values: &[f64]) -> Vec<u64> {
-    values.iter().map(|v| v.to_bits()).collect()
 }
 
 fn opt_bits(values: &[Option<f64>]) -> Vec<Option<u64>> {
