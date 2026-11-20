@@ -1,8 +1,7 @@
 //! Dense solves and inversions, with a ridge added when the system is singular.
 
 use super::{EstimationError, RidgeReport};
-use epistat_linalg::{Attempt, Method, Ridge, inverse, solve};
-use faer::{Mat, MatRef};
+use epistat_linalg::{Attempt, Mat, MatRef, Method, Ridge, inverse, solve};
 
 /// A pivot at most this in absolute value makes a factorisation count as failed.
 const MIN_PIVOT: f64 = 1e-14;
