@@ -17,9 +17,7 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::multistate::{Options, VarianceOptions, variance};
 use epistat_survival::timefix::TimeFix;
-use epistat_testkit::assert_same_on_pools;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
+use epistat_testkit::{POOLS, assert_same_on_pools};
 
 struct Process {
     start: Vec<f64>,

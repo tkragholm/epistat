@@ -13,10 +13,8 @@ use epistat_survival::cox::predict::{
     SurvfitOptions, basehaz, predict, predict_terms, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 fn options(value: Option<Vec<Option<f64>>>) -> Vec<f64> {
     value.map_or_else(Vec::new, |v| {

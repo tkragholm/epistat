@@ -9,10 +9,8 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{ChiSquareTest, CoxOptions, Ties, fit};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 /// A value standing for `None`, so that an absent number differs from any
 /// present one.

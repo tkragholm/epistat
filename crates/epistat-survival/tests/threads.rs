@@ -28,10 +28,8 @@ use epistat_survival::markov::{Stays, markov_test};
 use epistat_survival::multistate::{
     Intervals, bootstrap_state_occupation, integrate, state_occupation_curve,
 };
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 /// A value standing for `None`, so that an absent number differs from any
 /// present one.

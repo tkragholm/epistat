@@ -14,9 +14,7 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::survcheck::{Flagged, survcheck};
-use epistat_testkit::assert_same_on_pools;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
+use epistat_testkit::{POOLS, assert_same_on_pools};
 
 fn push_flag(out: &mut Vec<f64>, flag: &Flagged) {
     out.push(flag.count() as f64);

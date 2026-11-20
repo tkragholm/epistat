@@ -14,9 +14,7 @@ use epistat_survival::SurvData;
 use epistat_survival::lexis::cells::{CellKey, aggregate};
 use epistat_survival::lexis::rates::{RateOptions, fit_rates};
 use epistat_survival::lexis::{LexisOptions, TimeScale, split_cells, split_lexis};
-use epistat_testkit::assert_same_on_pools;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
+use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
 fn lexis_does_not_depend_on_the_number_of_threads() {

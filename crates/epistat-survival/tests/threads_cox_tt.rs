@@ -9,10 +9,8 @@
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, TimeTransform, TtColumn, TtOptions, fit_tt};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 #[test]
 fn fit_tt_is_the_same_on_every_pool() {

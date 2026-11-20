@@ -16,10 +16,8 @@ use epistat_survival::standardise::{
     Counterfactual, InfluenceForm, Level, StandardiseOptions, Standardised,
     standardise_cause_specific, standardise_cox,
 };
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 fn flat(out: &Standardised) -> Vec<f64> {
     let mut all: Vec<f64> = out.risk.iter().map(|v| v.unwrap_or(-1.0)).collect();

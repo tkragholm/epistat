@@ -15,10 +15,8 @@ use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 struct Simulated {
     z: Mat<f64>,

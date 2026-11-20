@@ -15,9 +15,8 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, test};
 use epistat_survival::timefix::TimeFix;
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 const ABSENT: u64 = 0x7ff8_0000_dead_beef;
 
 #[test]

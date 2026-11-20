@@ -11,10 +11,8 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{
     CauseSpecificCox, CscOptions, InfluenceForm, NewRows, RiskOptions, SurvType,
 };
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 fn flat(values: &[Option<f64>]) -> impl Iterator<Item = f64> + '_ {
     values.iter().map(|v| v.unwrap_or(-1.0))

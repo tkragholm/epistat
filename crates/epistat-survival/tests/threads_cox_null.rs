@@ -14,10 +14,8 @@ use epistat_survival::cox::predict::{
     basehaz, predict, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 #[test]
 fn model_without_covariates() {

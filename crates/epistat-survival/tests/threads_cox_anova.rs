@@ -10,10 +10,9 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::anova::anova_terms;
 use epistat_survival::cox::{CoxOptions, Ties};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
 
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 const ABSENT: u64 = 0x7ff8_0000_dead_beef;
 
 #[test]

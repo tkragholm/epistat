@@ -7,10 +7,8 @@ use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, PredictOptions, PredictType, SurvregOptions, TermsReference, fit,
 };
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 use faer::Mat;
-
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 
 #[test]
 fn survreg_extra_options() {

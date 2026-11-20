@@ -9,9 +9,8 @@
 
 use epistat_rng::Stream;
 use epistat_survival::surv2::{Repeated, StatusKind, Timeline, TimelineOptions, counting};
-use epistat_testkit::assert_same_on_pools;
+use epistat_testkit::{POOLS, assert_same_on_pools};
 
-const POOLS: [usize; 5] = [1, 2, 3, 4, 8];
 const ABSENT: f64 = f64::from_bits(0x7ff8_0000_dead_beef);
 
 #[test]
