@@ -76,9 +76,8 @@
 //!
 //! # Ids
 //!
-//! The ids in a report are the dense codes of [`SurvData::id`], which are
-//! the position of each original id in sorted order. The original codes are
-//! not kept by [`SurvData`].
+//! The ids in a report are the caller's own id codes, read back through
+//! [`SurvData::id_levels`]. They are listed in ascending order of code.
 //!
 //! # Rows of weight 0
 //!
@@ -106,9 +105,10 @@ pub struct Flagged {
     /// Row numbers from 0 in the order of the input, ascending. The row is
     /// the one that starts the interval compared with the one before it.
     pub rows: Vec<u32>,
-    /// The dense id codes of the subjects with a flagged row, ascending.
+    /// The id codes of the subjects with a flagged row, as the caller gave
+    /// them, ascending.
     pub ids: Vec<u32>,
-    /// The dense id code of the subject of the first row.
+    /// The id code of the subject of the first row, as the caller gave it.
     first_id: u32,
 }
 
@@ -321,6 +321,21 @@ pub fn survcheck(data: &SurvData<'_>) -> Result<SurvCheck> {
             if bits >> slot & 1 == 1 {
                 flag.ids
                     .push(u32::try_from(id).expect("the builder limits ids to u32::MAX"));
+            }
+        }
+    }
+    // The dense level of an id is its rank among the caller's codes, so the
+    // mapping keeps every list ascending.
+    if let Some(levels) = data.id_levels() {
+        let original = |level: u32| {
+            levels
+                .code(level as usize)
+                .expect("every dense id is a level of the id column")
+        };
+        for flag in &mut flags {
+            flag.first_id = original(flag.first_id);
+            for id in &mut flag.ids {
+                *id = original(*id);
             }
         }
     }

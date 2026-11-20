@@ -74,7 +74,7 @@ fn each_flag_is_found_on_its_own_row_in_input_order() {
     assert_eq!(rows(&check.teleport), [2]);
     assert_eq!(rows(&check.jump), [0]);
     assert_eq!(rows(&check.overlap), [4]);
-    assert_eq!(check.overlap.ids, [0]);
+    assert_eq!(check.overlap.ids, [7], "the caller's own id code");
     assert_eq!(check.istate, [1, 1, 1, 1, 1, 1]);
 }
 
@@ -157,7 +157,7 @@ fn policy_follows_the_number_of_codes_and_names_the_first_row() {
         .unwrap_err()
         .to_string();
     assert!(
-        message.contains("overlap") && message.contains("row 1") && message.contains("id code 0"),
+        message.contains("overlap") && message.contains("row 1") && message.contains("id code 4"),
         "{message}"
     );
 }
