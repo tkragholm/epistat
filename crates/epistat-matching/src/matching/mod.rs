@@ -35,7 +35,7 @@ pub use estimation::{
     prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
-pub use nearest::{MatchOrder, NearestSelection};
+pub use nearest::{MatchOrder, NearestSelection, VariableRatio, VariableRatioError};
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
     ReconstructedMatchingOutput, ReconstructedMatchingTier, reconstruct_case_control_pairs,

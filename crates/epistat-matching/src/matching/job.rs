@@ -372,6 +372,17 @@ where
         self
     }
 
+    /// Match a variable number of controls to each anchor, between the
+    /// ratio's minimum and maximum, with the ratio's average as the mean
+    /// (`ratio`, `min.controls` and `max.controls`). The job's own ratio is
+    /// not used. See [`VariableRatio`](crate::VariableRatio). It cannot be
+    /// combined with ratio fallbacks.
+    #[must_use]
+    pub fn with_variable_ratio(mut self, ratio: crate::VariableRatio) -> Self {
+        self.strategy = self.strategy.with_variable_ratio(ratio);
+        self
+    }
+
     /// Rank candidates by this distance and use the job's distance as a
     /// caliper and for the order of anchors (`mahvars`).
     #[must_use]
