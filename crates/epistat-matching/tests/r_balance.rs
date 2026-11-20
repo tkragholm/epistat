@@ -20,12 +20,17 @@
 //! Compared: weighted means, standardised mean difference, variance ratio, eCDF
 //! mean and maximum, and the sample sizes with the effective sample size, for
 //! every covariate and each level of a factor, before and after matching, with
-//! `interactions = TRUE` and `addlvariables`. The eQQ distances are compared
-//! where the two definitions coincide: binary variables, and continuous ones
-//! when the groups have equal size. For groups of unequal size MatchIt reads the
-//! larger group at the smaller group's cumulative weights as a step function and
-//! this crate interpolates linearly (R's type 7), so those values differ and are
-//! not compared. Cramér's V is in neither MatchIt nor cobalt.
+//! `interactions = TRUE` (the terms of numeric covariates) and `addlvariables`.
+//! The eQQ distances are compared for binary variables, and for continuous ones
+//! when the groups have equal size. For groups of unequal size the larger
+//! group is read at the smaller group's cumulative weights as a step function,
+//! and where a cumulative weight of one group equals one of the other the
+//! result depends on the last bit of the weights. The weights derived here from
+//! pair counts are not R's bit for bit, so those values are compared in
+//! `r_balance_weights.rs` on R's own weights. That file also covers
+//! subclassification, the exact method, no matching, sampling weights, discarded
+//! units, the pair distance, the improvement and interactions with factor
+//! dummies. Cramér's V is in neither MatchIt nor cobalt.
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
@@ -550,12 +555,11 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
 }
 
 /// `interactions = TRUE`: the squares and pairwise products of the numeric
-/// covariates. MatchIt's squares and products also include the dummy columns of
-/// factors, which this crate does not build, so only the terms that involve
-/// numeric covariates alone are compared, and every term this crate reports
-/// must be one MatchIt reports. MatchIt drops a term that is zero everywhere or
-/// equal to one of its factors, such as the square of a binary variable, and so
-/// does this crate.
+/// covariates. Only the terms that involve numeric covariates alone are compared
+/// here, and every term this crate reports must be one MatchIt reports. Terms
+/// with the dummy columns of factors are compared in `r_balance_weights.rs`.
+/// MatchIt drops a term that is zero everywhere or equal to its first factor,
+/// such as the square of a binary variable, and so does this crate.
 #[test]
 fn squares_and_interactions_agree_with_matchit() {
     let reference = load();

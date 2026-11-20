@@ -50,7 +50,9 @@ impl BalanceDiagnostics {
 /// sample before matching, chosen by the realised estimand as in
 /// [`balance_report`](crate::balance_report). A binary variable has no variance
 /// ratio, and its eCDF and eQQ distances are the absolute difference in
-/// proportions.
+/// proportions. The eQQ distances read the larger group at the smaller group's
+/// cumulative weights as a step function, as `summary()` of MatchIt does with
+/// `standardize = FALSE`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NumericBalance {
     /// Covariate name.
@@ -140,6 +142,113 @@ pub struct BalanceReport {
     pub categorical: Vec<CategoricalBalance>,
 }
 
+/// Sample sizes of one group, as in the sample size table of MatchIt's
+/// `summary()`.
+///
+/// Weights are the matching weights multiplied by the sampling weights, so a
+/// unit is matched when that product is positive. The effective sample size of
+/// a set of weights is `sum(w)^2 / sum(w^2)`, `None` when no weight is positive.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GroupSampleSizes {
+    /// Units in the group before matching.
+    pub all: usize,
+    /// Effective sample size of the group before matching. It differs from
+    /// `all` only with sampling weights.
+    pub all_ess: Option<f64>,
+    /// Units with a positive weight.
+    pub matched: usize,
+    /// Effective sample size of the weights after matching.
+    pub matched_ess: Option<f64>,
+    /// Units that were not discarded and have no weight.
+    pub unmatched: usize,
+    /// Units discarded before matching, for example by common support.
+    pub discarded: usize,
+}
+
+/// The sample size table of a balance summary: one column per group.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SampleSizeTable {
+    /// The anchors (treated units).
+    pub cases: GroupSampleSizes,
+    /// The candidates (control units).
+    pub controls: GroupSampleSizes,
+}
+
+/// Mean absolute difference between the members of matched pairs, for one
+/// covariate or one level of a categorical covariate.
+///
+/// A unit that is in several pairs contributes one difference per pair. Pairs in
+/// which either unit lacks the covariate are left out. Sampling weights do not
+/// enter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PairDistance {
+    /// Covariate name; a level of a categorical covariate is the covariate
+    /// name followed by the level.
+    pub name: String,
+    /// Mean absolute difference on the scale of the covariate. `None` without
+    /// a pair that has the covariate on both sides.
+    pub raw: Option<f64>,
+    /// The mean absolute difference divided by the standard deviation that
+    /// standardises the mean difference. `None` when either is undefined.
+    pub standardised: Option<f64>,
+}
+
+/// A balance report with the sample size table and pair distances.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BalanceSummary {
+    /// Covariate balance before and after matching.
+    pub report: BalanceReport,
+    /// Sample sizes before and after matching.
+    pub sample_sizes: SampleSizeTable,
+    /// Pair distances of the numeric covariates and then of each level of the
+    /// categorical covariates, in the order of the report. Empty when no pairs
+    /// were given.
+    pub pair_distances: Vec<PairDistance>,
+}
+
+/// Percent balance improvement of one numeric covariate.
+///
+/// Each value is `100 (|before| - |after|) / |before|`, and for the variance
+/// ratio the same on the absolute logarithm of the ratio. It is `None` when
+/// the statistic before matching is 0 or either value is undefined.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NumericImprovement {
+    /// Covariate name.
+    pub name: String,
+    /// Improvement in the standardised mean difference.
+    pub smd: Option<f64>,
+    /// Improvement in the variance ratio.
+    pub var_ratio: Option<f64>,
+    /// Improvement in the mean eCDF distance.
+    pub ecdf_mean: Option<f64>,
+    /// Improvement in the maximum eCDF distance.
+    pub ecdf_max: Option<f64>,
+    /// Improvement in the mean eQQ distance.
+    pub eqq_mean: Option<f64>,
+    /// Improvement in the maximum eQQ distance.
+    pub eqq_max: Option<f64>,
+}
+
+/// Percent balance improvement of one level of a categorical covariate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LevelImprovement {
+    /// Covariate name.
+    pub name: String,
+    /// Level name.
+    pub level: String,
+    /// Improvement in the standardised mean difference.
+    pub smd: Option<f64>,
+}
+
+/// Percent balance improvement for a balance report.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BalanceImprovement {
+    /// Numeric covariates in the order of the report.
+    pub numeric: Vec<NumericImprovement>,
+    /// Levels of categorical covariates in the order of the report.
+    pub categorical: Vec<LevelImprovement>,
+}
+
 /// Optional transformed numeric covariates included in balance summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NumericBalanceTransform {
@@ -149,6 +258,15 @@ pub enum NumericBalanceTransform {
     /// Include squared numeric terms (for example `age^2`).
     Squares,
     /// Include squared terms and pairwise interactions (for example `age * income`).
+    ///
+    /// As with `interactions = TRUE` in MatchIt, the columns are the numeric
+    /// covariates and one indicator per level of each categorical covariate,
+    /// in the order of the covariate names, and a level is named by the
+    /// covariate name followed by the level. Each column's square and its
+    /// products with the later columns follow the covariates in that order. A
+    /// term that is zero everywhere or equal to its first factor, such as the
+    /// square of an indicator or the product of two levels of one covariate, is
+    /// left out.
     SquaresAndPairwiseInteractions,
 }
 

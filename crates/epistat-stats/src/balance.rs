@@ -35,6 +35,11 @@
 //! with expected counts `row * n_group / n`. With two groups the usual divisor
 //! `min(rows - 1, columns - 1)` is 1. Categories absent from both groups are
 //! skipped, and an expected count is floored at `1e-12` in the denominator.
+//! [`cramers_v_weighted`] is the same on weights, which are scale free.
+//!
+//! [`eqq_distance_weighted`] is the weighted quantile distance of MatchIt's
+//! `summary()`: the larger group is read at the smaller group's cumulative
+//! weights as a step function, where [`eqq_distance`] interpolates.
 //!
 //! # References
 //!
@@ -130,6 +135,228 @@ pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
     Some((gaps.iter().sum::<f64>() / gaps.len() as f64, max))
 }
 
+/// The mean and the maximum absolute difference between the two weighted
+/// empirical quantile functions, as `summary()` of MatchIt reports them.
+///
+/// Each group is given as its values and a non-negative weight per value.
+/// Units of weight zero and non-finite values carry no mass. The weights of a
+/// group are scaled to sum to one.
+///
+/// Both groups are compared at the cumulative weights of the group with fewer
+/// units of positive weight. The other group is read there as a step function:
+/// at a cumulative weight `p` it returns the value of the last unit whose
+/// cumulative weight is at most `p`, or its smallest value when there is none.
+/// If both groups have the same number of units of positive weight their
+/// order statistics are compared in pairs. When the two groups together take at
+/// most five distinct values, counting those of units without weight, the
+/// larger group is read at the cumulative weights of its distinct values
+/// instead. A value counts for the cumulative weight at which it is
+/// reached, so a `p` equal to the weight of the smaller values returns the next
+/// value.
+///
+/// At `p = 1` the step function returns the largest value of the larger group
+/// with positive weight. MatchIt's few-valued branch returns the largest value
+/// of the pooled sample there, which differs when the larger group does not
+/// reach it. That is a defect in `MatchIt` 4.8.2, and this function does not
+/// reproduce it.
+///
+/// `None` when a group has no unit of positive weight, or the lengths of a
+/// group's values and weights differ, or a weight is negative or not finite.
+#[must_use]
+#[expect(
+    clippy::float_cmp,
+    reason = "values are compared for being the same sample value"
+)]
+pub fn eqq_distance_weighted(
+    a: &[f64],
+    weights_a: &[f64],
+    b: &[f64],
+    weights_b: &[f64],
+) -> Option<(f64, f64)> {
+    let group_a = QuantileGroup::new(a, weights_a)?;
+    let group_b = QuantileGroup::new(b, weights_b)?;
+    if group_a.values.is_empty() || group_b.values.is_empty() {
+        return None;
+    }
+    let mut pooled: Vec<f64> = group_a
+        .all_values
+        .iter()
+        .chain(&group_b.all_values)
+        .copied()
+        .collect();
+    pooled.sort_by(|p, q| p.partial_cmp(q).unwrap_or(std::cmp::Ordering::Equal));
+    pooled.dedup_by(|x, y| *x == *y);
+    let few_values = pooled.len() <= 5;
+
+    let (small, large) = if group_a.values.len() <= group_b.values.len() {
+        (&group_a, &group_b)
+    } else {
+        (&group_b, &group_a)
+    };
+    let gaps: Vec<f64> = if small.values.len() == large.values.len() {
+        small
+            .values
+            .iter()
+            .zip(&large.values)
+            .map(|(x, y)| (x - y).abs())
+            .collect()
+    } else {
+        let probabilities = cumulative_probabilities(&small.weights);
+        let read = if few_values {
+            large.read_at_distinct_values(&pooled, &probabilities)
+        } else {
+            large.read_as_steps(&probabilities)
+        };
+        small
+            .values
+            .iter()
+            .zip(&read)
+            .map(|(x, y)| (x - y).abs())
+            .collect()
+    };
+    let max = gaps.iter().fold(0.0_f64, |m, &g| m.max(g));
+    Some((gaps.iter().sum::<f64>() / gaps.len() as f64, max))
+}
+
+/// Cumulative sums of the weights scaled to end at one.
+fn cumulative_probabilities(weights: &[f64]) -> Vec<f64> {
+    let mut running = 0.0_f64;
+    let sums: Vec<f64> = weights
+        .iter()
+        .map(|w| {
+            running += w;
+            running
+        })
+        .collect();
+    let last = running;
+    sums.into_iter().map(|s| s / last).collect()
+}
+
+/// One group's units of positive weight in ascending order of value, with
+/// weights scaled to sum to one over the whole group.
+struct QuantileGroup {
+    all_values: Vec<f64>,
+    values: Vec<f64>,
+    weights: Vec<f64>,
+}
+
+impl QuantileGroup {
+    fn new(values: &[f64], weights: &[f64]) -> Option<Self> {
+        if values.len() != weights.len() || weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
+            return None;
+        }
+        let mut units: Vec<(f64, f64)> = values
+            .iter()
+            .copied()
+            .zip(weights.iter().copied())
+            .filter(|(x, _)| x.is_finite())
+            .collect();
+        // The total is summed in the order given, before sorting.
+        let total: f64 = units.iter().map(|u| u.1).sum();
+        // Negative and positive zero are one value, so units that tie keep
+        // their given order.
+        units.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap_or(std::cmp::Ordering::Equal));
+        let all_values = units.iter().map(|u| u.0).collect();
+        let positive: Vec<(f64, f64)> = units.into_iter().filter(|u| u.1 > 0.0).collect();
+        Some(Self {
+            all_values,
+            values: positive.iter().map(|u| u.0).collect(),
+            weights: positive.iter().map(|u| u.1 / total).collect(),
+        })
+    }
+
+    /// The value of the last unit whose cumulative weight is at most each
+    /// probability, or the smallest value when there is none.
+    fn read_as_steps(&self, probabilities: &[f64]) -> Vec<f64> {
+        let cumulative = cumulative_probabilities(&self.weights);
+        probabilities
+            .iter()
+            .map(|&p| {
+                let reached = cumulative.partition_point(|&c| c <= p);
+                self.values[reached.saturating_sub(1)]
+            })
+            .collect()
+    }
+
+    #[expect(
+        clippy::float_cmp,
+        reason = "values are compared for being the same sample value"
+    )]
+    /// The distinct value at each probability, where the distinct values of
+    /// `pooled` in ascending order take the share of the group's weight that
+    /// their units have.
+    fn read_at_distinct_values(&self, pooled: &[f64], probabilities: &[f64]) -> Vec<f64> {
+        let total: f64 = self.weights.iter().sum();
+        let mass: Vec<f64> = pooled
+            .iter()
+            .map(|&value| {
+                let at_value: f64 = self
+                    .values
+                    .iter()
+                    .zip(&self.weights)
+                    .filter(|(x, _)| **x == value)
+                    .map(|(_, w)| *w)
+                    .sum();
+                at_value / total
+            })
+            .collect();
+        let mut edges = vec![0.0_f64];
+        edges.extend(cumulative_probabilities(&mass));
+        let top = self.values[self.values.len() - 1];
+        probabilities
+            .iter()
+            .map(|&p| {
+                let reached = edges.partition_point(|&e| e <= p);
+                if p >= edges[edges.len() - 1] {
+                    top
+                } else {
+                    pooled[reached.max(1) - 1]
+                }
+            })
+            .collect()
+    }
+}
+
+/// Cramér's V of a categorical variable across two groups from the weight of
+/// each category in each group.
+///
+/// With weights of one it is [`cramers_v`] on counts, and it does not depend
+/// on the scale of the weights. Categories without weight in both groups are
+/// skipped. `None` when the total weight is not positive, or a weight is
+/// negative or not finite, or the slices differ in length.
+///
+/// MatchIt and cobalt have no Cramér's V, so there is no R reference. The
+/// weighted form treats the weights as counts.
+#[must_use]
+pub fn cramers_v_weighted(weights_a: &[f64], weights_b: &[f64]) -> Option<f64> {
+    if weights_a.len() != weights_b.len()
+        || weights_a
+            .iter()
+            .chain(weights_b)
+            .any(|w| !w.is_finite() || *w < 0.0)
+    {
+        return None;
+    }
+    let total_a: f64 = weights_a.iter().sum();
+    let total_b: f64 = weights_b.iter().sum();
+    let n = total_a + total_b;
+    if n <= 0.0 {
+        return None;
+    }
+    let mut chi2 = 0.0;
+    for (&ca, &cb) in weights_a.iter().zip(weights_b) {
+        let row = ca + cb;
+        if row == 0.0 {
+            continue;
+        }
+        let expected_a = row * total_a / n;
+        let expected_b = row * total_b / n;
+        chi2 += (ca - expected_a).powi(2) / expected_a.max(1e-12);
+        chi2 += (cb - expected_b).powi(2) / expected_b.max(1e-12);
+    }
+    Some((chi2 / n).sqrt())
+}
+
 /// Cramér's V of a categorical variable across two groups, from the count of
 /// each category in each group.
 ///
@@ -204,5 +431,75 @@ mod tests {
         assert!(mean > 0.0 && max <= 2.0 + 1e-12);
         // Perfect association between group and category.
         assert!((cramers_v(&[10, 0], &[0, 10]).unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_eqq_with_equal_counts_compares_order_statistics() {
+        let a = [3.0, 1.0, 2.0];
+        let b = [2.5, 4.0, 0.0];
+        let weights = [1.0, 2.0, 5.0];
+        // Sorted: 1, 2, 3 against 0, 2.5, 4 whatever the positive weights.
+        let (mean, max) = eqq_distance_weighted(&a, &weights, &b, &weights).unwrap();
+        assert!((mean - (1.0 + 0.5 + 1.0) / 3.0).abs() < 1e-15);
+        assert!((max - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn weighted_eqq_reads_the_larger_group_as_a_step_function() {
+        // Six distinct values, so the step branch applies. The smaller group
+        // has cumulative weights 0.5 and 1. The larger group has cumulative
+        // weights 0.25, 0.5, 0.75 and 1 at 10, 20, 30 and 40, so it reads 20
+        // at 0.5 (the last unit not above it) and 40 at 1.
+        let small = [11.0, 45.0];
+        let large = [10.0, 20.0, 30.0, 40.0];
+        let (mean, max) = eqq_distance_weighted(&small, &[1.0, 1.0], &large, &[1.0; 4]).unwrap();
+        assert!((mean - 7.0).abs() < 1e-15);
+        assert!((max - 9.0).abs() < 1e-15);
+        // Zero weights remove units from the comparison but not their values
+        // from the count of distinct values.
+        let with_zero =
+            eqq_distance_weighted(&[11.0, 45.0, 99.0], &[1.0, 1.0, 0.0], &large, &[1.0; 4])
+                .unwrap();
+        assert_eq!(with_zero, (mean, max));
+    }
+
+    #[test]
+    fn weighted_eqq_few_values_read_the_largest_value_of_the_larger_group() {
+        // Larger group: 1 1 1 2. Smaller group: 2 3. At p = 0.5 the larger
+        // group reads 1 and at p = 1 its own maximum, 2, so the gaps are 1 and 1.
+        let (mean, max) =
+            eqq_distance_weighted(&[2.0, 3.0], &[1.0, 1.0], &[1.0, 1.0, 1.0, 2.0], &[1.0; 4])
+                .unwrap();
+        assert!((mean - 1.0).abs() < 1e-15);
+        assert!((max - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn weighted_eqq_is_undefined_without_weight_in_a_group() {
+        assert_eq!(
+            eqq_distance_weighted(&[1.0, 2.0], &[0.0, 0.0], &[1.0], &[1.0]),
+            None
+        );
+        assert_eq!(eqq_distance_weighted(&[1.0], &[-1.0], &[1.0], &[1.0]), None);
+        assert_eq!(
+            eqq_distance_weighted(&[1.0], &[1.0, 1.0], &[1.0], &[1.0]),
+            None
+        );
+    }
+
+    #[test]
+    fn weighted_cramers_v_matches_a_hand_computation() {
+        // Weights 2 and 1 against 1 and 2: n = 6, every expected weight is
+        // 1.5, chi-square = 4 * 0.25 / 1.5 = 2/3 and V = sqrt(2/3 / 6) = 1/3.
+        let v = cramers_v_weighted(&[2.0, 1.0], &[1.0, 2.0]).unwrap();
+        assert!((v - 1.0 / 3.0).abs() < 1e-15);
+        let scaled = cramers_v_weighted(&[5.0, 2.5], &[2.5, 5.0]).unwrap();
+        assert!((scaled - v).abs() < 1e-15);
+        // Weights of one are the counts.
+        let counts = cramers_v(&[3, 5, 0], &[6, 2, 0]).unwrap();
+        let weights = cramers_v_weighted(&[3.0, 5.0, 0.0], &[6.0, 2.0, 0.0]).unwrap();
+        assert_eq!(counts.to_bits(), weights.to_bits());
+        assert_eq!(cramers_v_weighted(&[0.0], &[0.0]), None);
+        assert_eq!(cramers_v_weighted(&[1.0], &[-1.0]), None);
     }
 }

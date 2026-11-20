@@ -128,6 +128,10 @@ pub use test_utils::{date, record, test_outcome};
 pub use rapidhash::RapidHashMap;
 
 pub use balance::{
+    BalanceInputError, BalanceWeights, balance_improvement, balance_report_on_weights,
+    balance_summary,
+};
+pub use balance::{
     CategoricalCovariateSpec, NumericCovariateSpec, ProjectedBalanceRow, balance_diagnostics,
     balance_report, balance_report_with_options, balance_threshold_summary,
     build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values, variance,
@@ -171,6 +175,10 @@ pub use types::{
     MatchedPair, MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck,
     NumericBalanceTransform, RoleTransitionOptions, RoleTransitionRecord,
     SupplementalBalanceCovariates, UniqueValueId, ValidatedMatchingCriteria,
+};
+pub use types::{
+    BalanceImprovement, BalanceSummary, GroupSampleSizes, LevelImprovement, NumericImprovement,
+    PairDistance, SampleSizeTable,
 };
 
 pub use output::{
@@ -250,6 +258,11 @@ pub mod prelude {
         prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
         prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs, run_spec,
         smd_numeric_from_values, subclassify_by_propensity_score_map,
+    };
+    pub use crate::{
+        BalanceImprovement, BalanceInputError, BalanceSummary, BalanceWeights, GroupSampleSizes,
+        LevelImprovement, NumericImprovement, PairDistance, SampleSizeTable, balance_improvement,
+        balance_report_on_weights, balance_summary,
     };
 
     pub mod constraints {
