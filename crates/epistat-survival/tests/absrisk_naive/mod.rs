@@ -41,6 +41,9 @@ pub struct NCase {
     pub cause_model: usize,
     pub survival_models: Vec<usize>,
     pub product_limit: bool,
+    /// Whether the derivative of the product limit is the exact one, else the
+    /// first-order one of the exponential form.
+    pub exact: bool,
 }
 
 /// The baselines of one model at zero covariates on a grid, per stratum, and
@@ -165,14 +168,32 @@ pub fn naive_se(
             (-cum).exp()
         };
     }
-    let cum_lam = |m: usize, u: usize| -> f64 { case.models[m].lam[s][..=u].iter().sum() };
+    // The weight of the hazard increment at each position in the derivative of
+    // the survival: 1 for the exponential form, 1 / (1 - h) for the exact
+    // derivative of the product limit.
+    let rw: Vec<f64> = (0..big_j)
+        .map(|l| {
+            if case.product_limit && case.exact {
+                let hz: f64 = case
+                    .survival_models
+                    .iter()
+                    .map(|&m| theta[m] * case.models[m].lam[s][l])
+                    .sum();
+                1.0 / (1.0 - hz)
+            } else {
+                1.0
+            }
+        })
+        .collect();
+    let cum_lam =
+        |m: usize, u: usize| -> f64 { (0..=u).map(|l| rw[l] * case.models[m].lam[s][l]).sum() };
     let cum_e_lam = |m: usize, u: usize| -> Vec<f64> {
         let md = &case.models[m];
         let mut out = vec![0.0; md.p];
         for j in 0..=u {
             for a in 0..md.p {
                 if md.lam[s][j] > 0.0 {
-                    out[a] += e[m][j][a] * md.lam[s][j];
+                    out[a] += rw[j] * e[m][j][a] * md.lam[s][j];
                 }
             }
         }
@@ -233,7 +254,7 @@ pub fn naive_se(
                             let mut a_sum = 0.0;
                             for l in 0..=u {
                                 if md.lam[s][l] > 0.0 && case.grid[l] <= ti {
-                                    a_sum += md.lam[s][l] / s0[m][l];
+                                    a_sum += rw[l] * md.lam[s][l] / s0[m][l];
                                 }
                             }
                             put(-risk[m][i] * a_sum);
@@ -241,7 +262,7 @@ pub fn naive_se(
                                 let l = (0..big_j)
                                     .find(|&l| case.grid[l] == ti)
                                     .expect("an event time is on the grid");
-                                put(1.0 / s0[m][l]);
+                                put(rw[l] / s0[m][l]);
                             }
                         }
                         put(dot(&xr[m], &md.if_beta[i]) * cum_lam(m, u));

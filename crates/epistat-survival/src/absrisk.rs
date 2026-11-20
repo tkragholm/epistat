@@ -52,35 +52,58 @@
 //!
 //! # The standard error
 //!
-//! With `std_err` the standard error is that of riskRegression's influence
-//! function. Every model contributes the influence function of its coefficients
-//! and of its baseline hazard. For the coefficients, the influence function of
-//! subject `i` is `V u_i`, with `V` the covariance of the fit (the robust one
-//! when the fit has clusters) and `u_i` the score residual of the Breslow
-//! partial likelihood at the estimate. For the baseline, with `S0(s)` and
-//! `E(s)` the risk-score sum and the risk-score weighted mean of the
-//! covariates over the risk set at `s`, `e_i = exp(x_i' beta)`, and `d_i` the
-//! event indicator of the model, the influence function of the cumulative
-//! hazard at `u` is
+//! With `std_err` the standard error is the square root of the sum of the
+//! squares of the influence function of the estimate over the subjects of the
+//! fit, the infinitesimal-jackknife variance. Every model contributes the
+//! influence function of its coefficients and of its baseline hazard. For the
+//! coefficients, the influence function of subject `i` is `V u_i`, with `V` the
+//! covariance of the fit (the robust one when the fit has clusters) and `u_i`
+//! the score residual of the Breslow partial likelihood at the estimate. For
+//! the baseline, with `S0(s)` and `E(s)` the risk-score sum and the risk-score
+//! weighted mean of the covariates over the risk set at `s`,
+//! `e_i = exp(x_i' beta)`, and `d_i` the event indicator of the model, the
+//! influence function of the increment of the cumulative hazard at `s` is
 //!
 //! ```text
-//! IF_i(L(u)) = - IF_i(beta)' sum over s <= u of E(s) dL(s)
-//!              - e_i sum over s <= min(u, T_i) of dL(s) / S0(s)
-//!              + d_i 1(T_i <= u) / S0(T_i),
+//! IF_i(dL(s)) = - IF_i(beta)' E(s) dL(s)
+//!               - e_i 1(s <= T_i) dL(s) / S0(s)
+//!               + d_i 1(T_i = s) / S0(s),
 //! ```
 //!
-//! with the same without the sum over `s <= u` for the hazard at one time. The
-//! influence function of `F_k(t | x)` for subject `i` follows from
+//! and that of the cumulative hazard is the sum of these over the event times
+//! up to it. The influence function of `F_k(t | x)` follows from
 //! `F_k = sum S theta_k dL_k` by the chain rule over the coefficients and the
-//! baselines of every model, with the derivative of `S` taken as that of the
-//! exponential form, `-S theta_m` per unit of `L_m`, for the product limit as
-//! well, as riskRegression does. The standard error is the square root of the
-//! sum of the squares of the influence functions over the subjects of the fit,
-//! which is the infinitesimal-jackknife variance of the estimate. The
-//! influence function is evaluated by prefix sums over the event times: the
-//! cost for one new row is `n` per distinct time of the result plus `J` for
-//! the `J` event times, and the memory is `O(n p + J)` per model, not the
-//! `n` by `J` matrices of riskRegression.
+//! baselines of every model, with the derivative of the event-free survival
+//! `S(s_j-)` as follows.
+//!
+//! With the product limit, `S(s_j-) = product over l < j of (1 - h_l)` with
+//! `h_l = sum over m of theta_m dL_m(s_l)`, and the derivative is
+//!
+//! ```text
+//! d log S(s_j-) = - sum over l < j of d h_l / (1 - h_l),
+//! ```
+//!
+//! so that every hazard increment of the subject enters with the weight
+//! `1 / (1 - h_l)`. This is the derivative of the estimate, and it is the
+//! default ([`InfluenceForm::Exact`]). Without the product limit
+//! `S = exp(-sum theta_m L_m)`, the weights are 1, and that is exact. riskRegression
+//! uses the weights 1 for the product limit as well, which is the derivative of
+//! the exponential form and a first-order approximation of the exact one
+//! ([`InfluenceForm::Exponential`]). The two differ by the order of the total
+//! hazard `h_l`: on the test data, the standard errors of the exponential form
+//! are off by up to 2 per cent relative to the exact ones at the times tested
+//! and by up to 4 per cent on the simulated data of the standardise tests, as
+//! the numerical derivative of the estimate with respect to the case weight of
+//! each subject shows (`tests/standardise_checks.rs`). The exact derivative
+//! is undefined where a factor `1 - h_l` is 0, and the standard error is
+//! then `None` from the time after it.
+//!
+//! The influence function is evaluated by prefix sums over the event times, in
+//! shared sums that [`standardise`](crate::standardise) uses as well: the cost for one new row is `n` per distinct time
+//! of the result plus, for each model, the number of event times of the model
+//! per distinct time of the result for the weights above, and the memory is
+//! `O(n p + J)` per model for the training rows and `O(T J)` for the sums of
+//! one row with `T` times, not the `n` by `J` matrices of riskRegression.
 //!
 //! The influence functions describe the fit with unit case weights, no entry
 //! times and no offset, so the standard error is an error for data that has
@@ -105,6 +128,9 @@
 //!   `tests/data/absrisk.R`). The score residual is used here, so the
 //!   standard errors agree with riskRegression's without tied times and
 //!   differ with them.
+//! - With the product limit the standard error is that of the exact derivative,
+//!   not riskRegression's first-order one. [`InfluenceForm::Exponential`]
+//!   gives riskRegression's number, and the tests against R use it.
 //! - riskRegression's `predictCox` refuses case weights. Here the baselines
 //!   take them as `basehaz` does, and only the standard error refuses them.
 //! - A model with no covariate has no fit here (`cox::fit` needs a column).
@@ -139,15 +165,16 @@ use faer::MatRef;
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, refuse_non_finite};
-use crate::cox::predict::{BaselineOptions, Centring, FittedModel, basehaz};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
 use crate::surv::{SurvBuf, SurvData};
 use crate::timefix::TimeFix;
 
+pub(crate) mod influence;
 mod limits;
-mod variance;
 
+pub use influence::InfluenceForm;
+use influence::{Baselines, Influence, ModelInput, Path, Shape};
 pub use limits::RiskLimits;
 
 /// What the second model of `CSC` is, `surv.type`.
@@ -226,6 +253,11 @@ pub struct RiskOptions {
     /// Whether to give standard errors, `se`. It is an error for data with
     /// case weights, entry times or an offset, see the module documentation.
     pub std_err: bool,
+    /// How the standard error takes the derivative of the product limit.
+    /// `Exact`, the derivative of the estimate. `InfluenceForm::Exponential`
+    /// is riskRegression's, see the module documentation. It is not read
+    /// without `product_limit` or `std_err`.
+    pub influence: InfluenceForm,
     /// The scale of the confidence limits, which exist with `std_err`.
     pub limits: RiskLimits,
     /// The confidence level, in `(0, 1)`.
@@ -237,6 +269,7 @@ impl Default for RiskOptions {
         Self {
             product_limit: true,
             std_err: false,
+            influence: InfluenceForm::Exact,
             limits: RiskLimits::LogLog,
             conf_level: 0.95,
         }
@@ -353,7 +386,7 @@ impl<'a> CauseSpecificCox<'a> {
         let n_rows = new.designs[0].nrows();
         let n_times = times.len();
         let influence = if opts.std_err {
-            Some(variance::Influence::new(self, &ctx)?)
+            Some(Influence::new(&self.inputs(), &ctx.base)?)
         } else {
             None
         };
@@ -497,37 +530,18 @@ fn overall_data(data: &SurvData<'_>) -> Result<SurvBuf> {
     builder.build()
 }
 
-/// The baseline of one model in one stratum, on the grid of event times of all
-/// models.
-struct StratumGrid {
-    /// The hazard increment at each grid time, zero at a time without an event
-    /// of the model in the stratum.
-    lam: Vec<f64>,
-    /// The cumulative hazard at each grid time, the running sum of `lam`.
-    cum: Vec<f64>,
-    /// The grid positions of the event times of the model in the stratum.
-    jumps: Vec<usize>,
-}
-
-struct ModelGrid {
-    beta: Vec<f64>,
-    strata: Vec<StratumGrid>,
-}
-
 /// Everything the prediction of the rows reads.
 struct Context {
-    grid: Vec<f64>,
-    models: Vec<ModelGrid>,
+    base: Baselines,
     /// Which model is the cause, and the models that form the survival.
     cause_model: usize,
     survival_models: Vec<usize>,
-    /// The last follow-up time of every stratum.
-    last_time: Vec<f64>,
     /// The dense stratum of each new row.
     row_stratum: Vec<usize>,
     /// The risk score of each new row in each model, row-major.
     theta: Vec<f64>,
     product_limit: bool,
+    form: InfluenceForm,
 }
 
 /// One new row: the risks and the standard errors at the times given.
@@ -542,6 +556,18 @@ impl CauseSpecificCox<'_> {
             (Some(buf), 1) => buf.as_data(),
             _ => self.data.clone(),
         }
+    }
+
+    /// The models as the baselines and the influence functions read them.
+    fn inputs(&self) -> Vec<ModelInput<'_>> {
+        (0..self.fits.len())
+            .map(|m| ModelInput {
+                data: self.model_data(m),
+                x: self.designs[m],
+                fit: &self.fits[m],
+                options: self.options[m],
+            })
+            .collect()
     }
 
     fn context(
@@ -599,7 +625,6 @@ impl CauseSpecificCox<'_> {
                 }
             }
         }
-        let n_strata = self.data.n_strata().max(1);
         let levels = self.data.stratum_levels().map(|l| l.to_vec());
         if levels.is_some() {
             match new.stratum {
@@ -612,64 +637,7 @@ impl CauseSpecificCox<'_> {
             }
         }
         // The baselines at zero covariates, as predictCox(centered = FALSE).
-        let mut bases = Vec::with_capacity(self.fits.len());
-        for m in 0..self.fits.len() {
-            let p = self.designs[m].ncols();
-            if self.fits[m].coefficients.iter().any(Option::is_none) {
-                return Err(Error::input(format!(
-                    "model {m}: a coefficient is not defined; drop the aliased column"
-                )));
-            }
-            let data = self.model_data(m);
-            let fitted = FittedModel {
-                data: &data,
-                x: self.designs[m],
-                fit: &self.fits[m],
-                options: &self.options[m],
-            };
-            let zero = vec![0.0; p];
-            let opts = BaselineOptions {
-                centring: Centring::Given(&zero),
-                ..BaselineOptions::default()
-            };
-            bases.push(basehaz(&fitted, &opts)?);
-        }
-        let mut grid: Vec<f64> = bases
-            .iter()
-            .flat_map(|b| b.strata.iter().flat_map(|s| s.time.iter().copied()))
-            .collect();
-        grid.sort_by(f64::total_cmp);
-        grid.dedup();
-        let position = |t: f64| grid.binary_search_by(|g| g.total_cmp(&t));
-        let mut models = Vec::with_capacity(bases.len());
-        for (m, base) in bases.iter().enumerate() {
-            let beta: Vec<f64> = self.fits[m]
-                .coefficients
-                .iter()
-                .map(|c| c.unwrap_or(0.0))
-                .collect();
-            let mut strata = Vec::with_capacity(n_strata);
-            for b in &base.strata {
-                let mut lam = vec![0.0; grid.len()];
-                let mut jumps = Vec::with_capacity(b.time.len());
-                for (t, h) in b.time.iter().zip(&b.hazard) {
-                    let j = position(*t).map_err(|_| {
-                        Error::input("internal: an event time is missing from the grid")
-                    })?;
-                    lam[j] = *h;
-                    jumps.push(j);
-                }
-                let mut cum = Vec::with_capacity(grid.len());
-                let mut running = 0.0;
-                for &h in &lam {
-                    running += h;
-                    cum.push(running);
-                }
-                strata.push(StratumGrid { lam, cum, jumps });
-            }
-            models.push(ModelGrid { beta, strata });
-        }
-        let last_time = self.last_times(n_strata)?;
+        let base = Baselines::new(&self.inputs())?;
         let row_stratum = match (&levels, new.stratum) {
             (Some(levels), Some(codes)) => codes
                 .iter()
@@ -681,9 +649,9 @@ impl CauseSpecificCox<'_> {
                 .collect::<Result<Vec<usize>>>()?,
             _ => vec![0; rows],
         };
-        let mut theta = Vec::with_capacity(rows * models.len());
+        let mut theta = Vec::with_capacity(rows * base.models.len());
         for r in 0..rows {
-            for (m, model) in models.iter().enumerate() {
+            for (m, model) in base.models.iter().enumerate() {
                 let mut eta = 0.0;
                 for (a, b) in model.beta.iter().enumerate() {
                     eta += new.designs[m][(r, a)] * b;
@@ -698,85 +666,24 @@ impl CauseSpecificCox<'_> {
             }
         }
         Ok(Context {
-            grid,
-            models,
+            base,
             cause_model,
             survival_models,
-            last_time,
             row_stratum,
             theta,
             product_limit: opts.product_limit,
+            form: opts.influence,
         })
     }
-
-    /// The largest exit time among the rows of positive weight, per stratum.
-    fn last_times(&self, n_strata: usize) -> Result<Vec<f64>> {
-        let surv = self.data.followup()?;
-        let mut last = vec![f64::NEG_INFINITY; n_strata];
-        let stratum = self.data.stratum();
-        for i in self.data.used_rows() {
-            let i = i as usize;
-            let s = stratum.map_or(0, |c| c[i] as usize);
-            last[s] = last[s].max(surv.stop()[i]);
-        }
-        Ok(last)
-    }
-}
-
-/// The event-free survival and the absolute risk along the grid for one row.
-struct Path {
-    /// `S(s_j-)` at every grid position, valid below `valid`.
-    surv: Vec<f64>,
-    /// The risk after the jump at every grid position, valid below `valid`.
-    cif: Vec<f64>,
-    /// The first grid position at which the survival is not a probability.
-    valid: usize,
 }
 
 impl Context {
     fn n_models(&self) -> usize {
-        self.models.len()
+        self.base.models.len()
     }
 
     fn theta_of(&self, r: usize) -> &[f64] {
         &self.theta[r * self.n_models()..(r + 1) * self.n_models()]
-    }
-
-    fn path(&self, r: usize) -> Path {
-        let s = self.row_stratum[r];
-        let theta = self.theta_of(r);
-        let n = self.grid.len();
-        let k = self.cause_model;
-        let hazard_k = &self.models[k].strata[s].lam;
-        let mut surv = Vec::with_capacity(n);
-        let mut cif = Vec::with_capacity(n);
-        let mut valid = n;
-        let mut s_j = 1.0;
-        let mut total = 0.0;
-        for (j, &increment) in hazard_k.iter().enumerate() {
-            if j > 0 {
-                s_j = if self.product_limit {
-                    let mut hazard = 0.0;
-                    for &m in &self.survival_models {
-                        hazard += theta[m] * self.models[m].strata[s].lam[j - 1];
-                    }
-                    s_j * (1.0 - hazard)
-                } else {
-                    let mut cumulative = 0.0;
-                    for &m in &self.survival_models {
-                        cumulative += self.models[m].strata[s].cum[j - 1] * theta[m];
-                    }
-                    (-cumulative).exp()
-                };
-            }
-            if valid == n && (s_j.is_nan() || s_j < 0.0) {
-                valid = j;
-            }
-            total += s_j * (increment * theta[k]);
-            surv.push(s_j);
-            cif.push(total);
-        }
-        Path { surv, cif, valid }
     }
 
     fn row(
@@ -784,13 +691,22 @@ impl Context {
         r: usize,
         new: &NewRows<'_>,
         times: &[f64],
-        influence: Option<&variance::Influence>,
+        influence: Option<&Influence>,
     ) -> Row {
         let s = self.row_stratum[r];
-        let path = self.path(r);
+        let grid = &self.base.grid;
+        let path = self.base.path(
+            self.theta_of(r),
+            s,
+            grid.len(),
+            &self.survival_models,
+            self.cause_model,
+            self.product_limit,
+            influence.is_some() && self.form == InfluenceForm::Exact,
+        );
         let counts: Vec<Option<usize>> = times
             .iter()
-            .map(|&t| (t <= self.last_time[s]).then(|| self.grid.partition_point(|&g| g <= t)))
+            .map(|&t| (t <= self.base.last_time[s]).then(|| grid.partition_point(|&g| g <= t)))
             .collect();
         let risk: Vec<Option<f64>> = counts
             .iter()
@@ -810,16 +726,16 @@ impl Context {
                 .iter()
                 .flatten()
                 .copied()
-                .filter(|&c| c > 0 && c <= path.valid)
+                .filter(|&c| c > 0 && c <= path.std_valid)
                 .collect();
             needed.sort_unstable();
             needed.dedup();
-            let values = inf.row_std_err(self, s, self.theta_of(r), &x, &path, &needed);
+            let values = self.row_std_err(inf, s, self.theta_of(r), &x, &path, &needed);
             counts
                 .iter()
                 .map(|c| match *c {
                     Some(0) => Some(0.0),
-                    Some(count) if count <= path.valid => {
+                    Some(count) if count <= path.std_valid => {
                         needed.binary_search(&count).ok().map(|i| values[i])
                     }
                     _ => None,
@@ -827,5 +743,43 @@ impl Context {
                 .collect()
         });
         Row { risk, std_err }
+    }
+
+    /// The standard error of the risk of the row at each of the positive
+    /// counts `needed` of grid times, sorted: the square root of the sum of the
+    /// squares of the influence function over the training rows.
+    fn row_std_err(
+        &self,
+        inf: &Influence,
+        s: usize,
+        theta: &[f64],
+        x: &[Vec<f64>],
+        path: &Path,
+        needed: &[usize],
+    ) -> Vec<f64> {
+        if needed.is_empty() {
+            return Vec::new();
+        }
+        let shape = Shape::new(
+            &self.base,
+            inf,
+            self.cause_model,
+            &self.survival_models,
+            needed,
+        );
+        let mut acc = shape.new_acc();
+        let mut scratch = shape.new_scratch();
+        shape.add_row(&mut acc, 1.0, s, path, theta, x, &mut scratch);
+        shape.finish(&mut acc);
+        (0..needed.len())
+            .map(|u| {
+                let mut total = 0.0;
+                for i in 0..inf.count_le.len() {
+                    let value = shape.model_part(&acc, i, u);
+                    total += value * value;
+                }
+                total.sqrt()
+            })
+            .collect()
     }
 }

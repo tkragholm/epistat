@@ -13,8 +13,8 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions};
 use epistat_survival::cox::{self, CoxOptions};
 use epistat_survival::standardise::{
-    Counterfactual, Level, StandardiseOptions, Standardised, standardise_cause_specific,
-    standardise_cox,
+    Counterfactual, InfluenceForm, Level, StandardiseOptions, Standardised,
+    standardise_cause_specific, standardise_cox,
 };
 use epistat_testkit::assert_same_on_pools;
 use faer::Mat;
@@ -92,7 +92,11 @@ fn standardised_risks_are_the_same_on_every_pool() {
         .unwrap();
         flat(&out)
     });
-    for product_limit in [true, false] {
+    for (product_limit, influence) in [
+        (true, InfluenceForm::Exact),
+        (true, InfluenceForm::Exponential),
+        (false, InfluenceForm::Exact),
+    ] {
         assert_same_on_pools(&POOLS, || {
             let designs = [x.as_ref(), x.as_ref()];
             let csc = CscOptions::default();
@@ -116,6 +120,7 @@ fn standardised_risks_are_the_same_on_every_pool() {
                 &StandardiseOptions {
                     std_err: true,
                     product_limit,
+                    influence,
                     ..StandardiseOptions::default()
                 },
             )

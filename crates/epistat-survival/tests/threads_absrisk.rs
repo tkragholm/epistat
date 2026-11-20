@@ -8,7 +8,9 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions, SurvType};
+use epistat_survival::absrisk::{
+    CauseSpecificCox, CscOptions, InfluenceForm, NewRows, RiskOptions, SurvType,
+};
 use epistat_testkit::assert_same_on_pools;
 use faer::Mat;
 
@@ -60,7 +62,11 @@ fn risk_standard_error_and_limits() {
         .build()
         .unwrap();
     for surv_type in [SurvType::Hazard, SurvType::Survival { cause: 1 }] {
-        for product_limit in [true, false] {
+        for (product_limit, influence) in [
+            (true, InfluenceForm::Exact),
+            (true, InfluenceForm::Exponential),
+            (false, InfluenceForm::Exact),
+        ] {
             assert_same_on_pools(&POOLS, || {
                 let designs = [x1.as_ref(), x2.as_ref()];
                 let model = CauseSpecificCox::fit(
@@ -84,6 +90,7 @@ fn risk_standard_error_and_limits() {
                         1,
                         &RiskOptions {
                             product_limit,
+                            influence,
                             std_err: true,
                             ..RiskOptions::default()
                         },

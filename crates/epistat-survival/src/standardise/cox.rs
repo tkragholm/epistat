@@ -3,8 +3,8 @@
 //! documentation of [`standardise`](super) for the formulas.
 
 use super::csc::{Evaluated, add};
-use super::model::{Baselines, Influence, ModelInput};
 use super::{LevelRows, ordered_reduce};
+use crate::absrisk::influence::{Baselines, Influence, ModelInput};
 use crate::error::{Error, Result};
 
 pub(super) struct CoxEval<'a> {
@@ -31,7 +31,7 @@ impl CoxEval<'_> {
         for (a, b) in self.base.models[0].beta.iter().enumerate() {
             eta += x[a] * b;
         }
-        let value = eta.exp();
+        let value = f64::exp(eta);
         if value.is_finite() {
             Ok(value)
         } else {
@@ -96,7 +96,12 @@ impl CoxEval<'_> {
             accs.push(per_count);
         }
         let Some(infl) = infl else {
-            return Ok(Evaluated { risk, gram: None });
+            let std_ok = vec![true; risk.len()];
+            return Ok(Evaluated {
+                risk,
+                std_ok,
+                gram: None,
+            });
         };
         let size = n_needed * n_levels * n_levels;
         let gram = ordered_reduce(
@@ -145,8 +150,10 @@ impl CoxEval<'_> {
             },
             |a, b| add(a, &b),
         )?;
+        let std_ok = vec![true; risk.len()];
         Ok(Evaluated {
             risk,
+            std_ok,
             gram: Some(gram),
         })
     }

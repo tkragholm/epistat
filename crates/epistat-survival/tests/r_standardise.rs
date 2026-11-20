@@ -36,8 +36,8 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::CscOptions;
 use epistat_survival::cox::{self, CoxModelFit, CoxOptions, Ties};
 use epistat_survival::standardise::{
-    Counterfactual, Level, StandardiseOptions, Standardised, standardise_cause_specific,
-    standardise_cox,
+    Counterfactual, InfluenceForm, Level, StandardiseOptions, Standardised,
+    standardise_cause_specific, standardise_cox,
 };
 use epistat_testkit::load_json;
 use faer::{Mat, Side};
@@ -152,7 +152,13 @@ impl Worst {
     }
 }
 
-fn run_case(case: &Case, ties: Ties, std_err: bool, worst: &mut Worst) -> Standardised {
+fn run_case(
+    case: &Case,
+    ties: Ties,
+    std_err: bool,
+    influence: InfluenceForm,
+    worst: &mut Worst,
+) -> Standardised {
     let n = case.time.len();
     let n_codes = *case.status.iter().max().unwrap() as u32;
     let mut builder = SurvData::builder(&case.time, &case.status).n_codes(n_codes);
@@ -191,6 +197,7 @@ fn run_case(case: &Case, ties: Ties, std_err: bool, worst: &mut Worst) -> Standa
     let opts = StandardiseOptions {
         std_err,
         product_limit: case.product_limit.unwrap_or(true),
+        influence,
         ..StandardiseOptions::default()
     };
     let out = if case.kind == "cox" {
@@ -250,7 +257,49 @@ fn standardised_risks_match_r() {
         let name = &case.name;
         let tied = name.contains("tied");
         let n = case.time.len() as f64;
-        let out = run_case(case, Ties::Efron, true, &mut worst);
+        // riskRegression's first-order form, which the reference has.
+        let out = run_case(
+            case,
+            Ties::Efron,
+            true,
+            InfluenceForm::Exponential,
+            &mut worst,
+        );
+        {
+            let exact = run_case(case, Ties::Efron, true, InfluenceForm::Exact, &mut worst);
+            let (mut gap, mut gap_cov) = (0.0f64, 0.0f64);
+            for (a, b) in out
+                .std_err
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(exact.std_err.as_ref().unwrap())
+            {
+                let (a, b) = (a.unwrap(), b.unwrap());
+                if a > 0.0 {
+                    gap = gap.max((a - b).abs() / a);
+                }
+            }
+            for (a, b) in out
+                .covariance
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(exact.covariance.as_ref().unwrap())
+            {
+                let (a, b) = (a.unwrap(), b.unwrap());
+                if a != 0.0 {
+                    gap_cov = gap_cov.max((a - b).abs() / a.abs());
+                }
+            }
+            assert_eq!(
+                out.risk, exact.risk,
+                "{name}: the form does not move the risk"
+            );
+            eprintln!(
+                "{name}: exact against first-order standard error, up to {gap:.3e} relative, covariance {gap_cov:.3e}"
+            );
+        }
         let p_max = case.coefficients.iter().map(Vec::len).max().unwrap() as f64;
         let mut xb = 0.0f64;
         for (m, d) in case.designs.iter().enumerate() {

@@ -53,9 +53,12 @@
 //! of event times whose coefficients depend on the row only through its
 //! risk path and covariates. The average over the rows is taken on those sums,
 //! once per level, so that the influence function of the `n` persons is formed
-//! from them in a second pass without an `n` by `n` product. The cost is `O(n J p)`
-//! for the risk paths of the persons, done twice, and `O(n p)` per distinct
-//! time and level for the influence; the memory is `O(J p)` per level, not
+//! from them in a second pass without an `n` by `n` product. For
+//! cause-specific models the cost is `O(n J p)` for the risk paths of the
+//! persons, done twice, and `O(n T J_m)` for the weights of the baseline
+//! increments, with `T` the number of distinct times and `J_m` the number of
+//! event times of a model, plus `O(n p)` per distinct time and level for the
+//! influence; the memory is `O(J p + T J_m)` per level and stratum, not
 //! `O(n J)`. Sums over persons are formed in blocks of a fixed size and added in
 //! order, so that the bits do not depend on the number of threads.
 //!
@@ -65,12 +68,15 @@
 //! baseline form of the fit, so that the standard errors differ from
 //! riskRegression's with tied event times in the way described there.
 //!
-//! For cause-specific models with the product limit the influence function takes
-//! the derivative of the event-free survival as that of the exponential form,
-//! as riskRegression does, so that the standard error is that approximation,
-//! which is the exact derivative without the product limit. The tests check
-//! the exact case against the derivative of the estimate with respect to the case
-//! weight of each person, and the approximate one against riskRegression.
+//! For cause-specific models with the product limit the influence function is
+//! that of the product-limit survival itself, as described in
+//! [`absrisk`](crate::absrisk) ([`InfluenceForm::Exact`], the default).
+//! riskRegression takes the derivative of the exponential form instead, a
+//! first-order approximation. [`InfluenceForm::Exponential`] gives its numbers:
+//! on the cause-specific cases of the reference its standard errors are off by
+//! up to 0.5 per cent from the exact ones, and by up to 4 per cent on the
+//! simulated data of the tests, where the numerical derivative of the estimate
+//! with respect to the case weight of each person agrees with the exact form.
 //!
 //! # Where this differs from riskRegression
 //!
@@ -82,6 +88,9 @@
 //! - Only the g-formula estimator is provided, with the population of the
 //!   fitted data. Inverse probability weighting and augmented estimators are
 //!   in [`weighting`](crate::weighting).
+//! - With the product limit the standard error is that of the exact derivative
+//!   of the estimate, not riskRegression's first-order one, unless
+//!   [`InfluenceForm::Exponential`] is chosen.
 //! - Case weights enter the estimate as weights of the persons averaged,
 //!   `ate` has none. The standard error refuses them.
 //! - Cause-specific models with `surv.type = "survival"` are not provided.
@@ -112,10 +121,10 @@ use crate::surv::SurvData;
 
 mod cox;
 mod csc;
-mod model;
 pub mod yates;
 
-use model::{Baselines, Influence, ModelInput};
+pub use crate::absrisk::InfluenceForm;
+use crate::absrisk::influence::{Baselines, Influence, ModelInput};
 
 /// The covariates of one model with the exposure set to one level.
 #[derive(Debug, Clone, Copy)]
@@ -157,6 +166,10 @@ pub struct StandardiseOptions {
     /// limit, as `product.limit` of `predict.CauseSpecificCox`, or the
     /// exponential of minus the cumulative hazard. Not read for one Cox model.
     pub product_limit: bool,
+    /// How the standard error takes the derivative of the product limit of
+    /// cause-specific models, see [`InfluenceForm`]. Not read for one Cox model
+    /// or without `product_limit`.
+    pub influence: InfluenceForm,
 }
 
 impl Default for StandardiseOptions {
@@ -165,6 +178,7 @@ impl Default for StandardiseOptions {
             std_err: false,
             conf_level: 0.95,
             product_limit: true,
+            influence: InfluenceForm::Exact,
         }
     }
 }
@@ -603,6 +617,7 @@ fn run(
             base: &base,
             cause_model: k,
             product_limit: opts.product_limit,
+            form: opts.influence,
             rows: &rows,
             stratum: &stratum,
             weight: &weight,
@@ -644,9 +659,7 @@ fn run(
         if let (Some(cov), Some(gram)) = (covariance.as_mut(), evaluated.gram.as_ref()) {
             for a in 0..n_levels {
                 for b in 0..n_levels {
-                    if evaluated.risk[a * n_needed + u].is_some()
-                        && evaluated.risk[b * n_needed + u].is_some()
-                    {
+                    if evaluated.std_ok[a * n_needed + u] && evaluated.std_ok[b * n_needed + u] {
                         cov[k * n_levels * n_levels + a * n_levels + b] =
                             Some(gram[u * n_levels * n_levels + a * n_levels + b]);
                     }

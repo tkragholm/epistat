@@ -54,7 +54,7 @@ mod absrisk_naive;
 use absrisk_naive::{NCase, NModel, model_pieces, naive_se};
 use epistat_stats::normal;
 use epistat_survival::absrisk::{
-    CauseSpecificCox, CscOptions, NewRows, RiskLimits, RiskOptions, SurvType,
+    CauseSpecificCox, CscOptions, InfluenceForm, NewRows, RiskLimits, RiskOptions, SurvType,
 };
 use epistat_survival::cox::{CoxOptions, Ties};
 use epistat_survival::{SurvBuf, SurvData};
@@ -398,18 +398,36 @@ fn absolute_risk_matches_r() {
             cause_model,
             survival_models,
             product_limit: true,
+            exact: false,
         };
 
         for res in &case.results {
             let ropts = RiskOptions {
                 product_limit: res.product_limit,
                 std_err: true,
+                // riskRegression's first-order form, which the reference has.
+                influence: InfluenceForm::Exponential,
                 limits: RiskLimits::LogLog,
                 conf_level: 0.95,
             };
             let got = model
                 .predict(&new, &case.times, case.cause, &ropts)
                 .unwrap();
+            let exact = model
+                .predict(
+                    &new,
+                    &case.times,
+                    case.cause,
+                    &RiskOptions {
+                        influence: InfluenceForm::Exact,
+                        ..ropts
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                exact.risk, got.risk,
+                "{name}: the form does not move the risk"
+            );
             let plain = model
                 .predict(
                     &new,
@@ -467,8 +485,12 @@ fn absolute_risk_matches_r() {
                     .map(|&t| grid.partition_point(|&g| g <= t))
                     .collect();
                 let want_counts: Vec<usize> = counts.iter().copied().filter(|&c| c > 0).collect();
+                naive_case.exact = false;
                 let naive = naive_se(&naive_case, s, &theta, &xr, &want_counts);
+                naive_case.exact = true;
+                let naive_exact = naive_se(&naive_case, s, &theta, &xr, &want_counts);
                 let mut naive_iter = naive.iter();
+                let mut naive_exact_iter = naive_exact.iter();
                 for (t_idx, &t) in case.times.iter().enumerate() {
                     let at = r * n_times + t_idx;
                     let expect_risk = res.absrisk[r][t_idx];
@@ -502,6 +524,30 @@ fn absolute_risk_matches_r() {
                         );
                         worst.put("se against the direct evaluation", dev);
                         cond = (se_abs / se_naive).max(1.0);
+                        // The exact form against its own direct evaluation.
+                        let (se_x, se_x_abs) = *naive_exact_iter.next().unwrap();
+                        let gx = exact.std_err.as_ref().unwrap()[at].unwrap();
+                        let fast_bound_x = b_row[r]
+                            * (p_max * kappa).max(1.0)
+                            * (se_x_abs / se_x).max(1.0)
+                            * se_x.max(f64::MIN_POSITIVE);
+                        let dev = ratio((gx - se_x).abs(), fast_bound_x);
+                        assert!(
+                            dev <= 1.0,
+                            "{name} exact se vs direct [{r},{t_idx}]: {gx} {se_x}"
+                        );
+                        worst.put("exact se against the direct evaluation", dev);
+                        if res.product_limit {
+                            worst.put(
+                                "exact se against the first-order se, relative",
+                                (gx - g).abs() / g,
+                            );
+                        } else {
+                            worst.put(
+                                "exact se without the product limit against the first-order se, relative",
+                                (gx - g).abs() / g,
+                            );
+                        }
                     }
                     match (sum, expect_se) {
                         (Some(g), Some(e)) => {

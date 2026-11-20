@@ -33,7 +33,8 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
 use epistat_survival::cox::{self, CoxModelFit, CoxOptions, Ties};
 use epistat_survival::standardise::{
-    Counterfactual, Level, StandardiseOptions, standardise_cause_specific, standardise_cox,
+    Counterfactual, InfluenceForm, Level, StandardiseOptions, standardise_cause_specific,
+    standardise_cox,
 };
 use faer::Mat;
 
@@ -212,6 +213,7 @@ fn csc_run(
     s: &Sim,
     w: Option<&[f64]>,
     product_limit: bool,
+    influence: InfluenceForm,
     times: &[f64],
     std_err: bool,
     cause: u32,
@@ -256,6 +258,7 @@ fn csc_run(
         &StandardiseOptions {
             std_err,
             product_limit,
+            influence,
             ..StandardiseOptions::default()
         },
     )
@@ -267,25 +270,225 @@ fn influence_cause_specific_tied_strata() {
     let n = 90;
     let s = sim(n, 9, true, 2);
     let times = [1.0, 2.5, 4.0, 5.0];
-    // The influence function treats the survival as `exp(-sum theta L)`, for the
-    // product limit too, as riskRegression's does, so it is the derivative of
-    // the estimate for that form only.
-    let product_limit = false;
-    for cause in [1, 2] {
-        let estimator = |w: &[f64]| -> Vec<f64> {
-            csc_run(&s, Some(w), product_limit, &times, false, cause)
+    // The exact form is the derivative of the estimate, with the product limit
+    // and without it.
+    for product_limit in [false, true] {
+        for cause in [1, 2] {
+            let estimator = |w: &[f64]| -> Vec<f64> {
+                csc_run(
+                    &s,
+                    Some(w),
+                    product_limit,
+                    InfluenceForm::Exact,
+                    &times,
+                    false,
+                    cause,
+                )
                 .risk
                 .iter()
                 .map(|r| r.unwrap())
                 .collect()
-        };
-        let unit = csc_run(&s, None, product_limit, &times, true, cause);
-        check(
-            &format!("csc cause {cause}"),
-            n,
-            6 * n + 80,
-            &estimator,
-            &unit,
+            };
+            let unit = csc_run(
+                &s,
+                None,
+                product_limit,
+                InfluenceForm::Exact,
+                &times,
+                true,
+                cause,
+            );
+            check(
+                &format!("csc cause {cause}, product limit {product_limit}"),
+                n,
+                6 * n + 80,
+                &estimator,
+                &unit,
+            );
+        }
+    }
+}
+
+/// The first-order form is not the derivative of the product limit: its
+/// standard errors differ from the exact ones, by the order of the total
+/// hazard, and agree without the product limit, where the two forms are the
+/// same function.
+#[test]
+fn first_order_form_differs_from_exact_under_the_product_limit() {
+    let n = 90;
+    let s = sim(n, 9, true, 2);
+    let times = [1.0, 2.5, 4.0, 5.0];
+    for product_limit in [true, false] {
+        let mut gap = 0.0f64;
+        for cause in [1, 2] {
+            let exact = csc_run(
+                &s,
+                None,
+                product_limit,
+                InfluenceForm::Exact,
+                &times,
+                true,
+                cause,
+            );
+            let first = csc_run(
+                &s,
+                None,
+                product_limit,
+                InfluenceForm::Exponential,
+                &times,
+                true,
+                cause,
+            );
+            for (a, b) in exact
+                .std_err
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(first.std_err.as_ref().unwrap())
+            {
+                let (a, b) = (a.unwrap(), b.unwrap());
+                gap = gap.max((a - b).abs() / a);
+            }
+        }
+        eprintln!(
+            "first-order against exact standard error, product limit {product_limit}: up to {gap:.3e} relative"
+        );
+        if product_limit {
+            assert!(gap > 1e-3, "the two forms should differ, by {gap}");
+        } else {
+            assert!(gap <= 8.0 * (n as f64) * f64::EPSILON, "{gap}");
+        }
+    }
+}
+
+fn build<'a>(s: &'a Sim, w: Option<&'a [f64]>) -> SurvData<'a> {
+    let mut builder = SurvData::builder(&s.stop, &s.status)
+        .n_codes(2)
+        .stratum(&s.stratum);
+    if let Some(w) = w {
+        builder = builder.weight(w);
+    }
+    builder.build().unwrap()
+}
+
+/// The standard error of one prediction of
+/// [`CauseSpecificCox::predict`](epistat_survival::absrisk::CauseSpecificCox::predict)
+/// against the square root of the sum of squares of the numerical derivatives
+/// of the risk with respect to the case weight of each person. The tolerance of
+/// the derivative of a person is that of [`check`], and that of the square root
+/// of a sum of squares is `sum (2 |d_i| tol_i + tol_i^2)` divided by the larger
+/// of the two standard errors.
+#[test]
+fn absrisk_standard_error_is_the_derivative() {
+    let n = 90;
+    let s = sim(n, 13, true, 2);
+    let times = [1.0, 2.5, 4.0, 5.0];
+    let eps = f64::EPSILON;
+    let profile1 = [1.0, 0.4, 1.0];
+    let profile2 = [1.0, 0.4];
+    let new1 = Mat::from_fn(1, 3, |_, j| profile1[j]);
+    let new2 = Mat::from_fn(1, 2, |_, j| profile2[j]);
+    let new_designs = [new1.as_ref(), new2.as_ref()];
+    let stratum_row = [1u32];
+    let new = NewRows {
+        designs: &new_designs,
+        stratum: Some(&stratum_row),
+    };
+    let x2 = Mat::from_fn(n, 2, |i, j| s.design[(i, j)]);
+    let designs = [s.design.as_ref(), x2.as_ref()];
+    let predict = |w: Option<&[f64]>, product_limit: bool, form: InfluenceForm, se: bool| {
+        let data = build(&s, w);
+        let fits: Vec<CoxModelFit> = (0..2)
+            .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1))).unwrap())
+            .collect();
+        let model = CauseSpecificCox::from_fits(
+            &data,
+            &designs,
+            fits,
+            &CscOptions {
+                ties: Ties::Breslow,
+                ..CscOptions::default()
+            },
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        for cause in [1, 2] {
+            out.push(
+                model
+                    .predict(
+                        &new,
+                        &times,
+                        cause,
+                        &RiskOptions {
+                            product_limit,
+                            std_err: se,
+                            influence: form,
+                            ..RiskOptions::default()
+                        },
+                    )
+                    .unwrap(),
+            );
+        }
+        out
+    };
+    let h = 1e-4;
+    for product_limit in [true, false] {
+        let unit = predict(None, product_limit, InfluenceForm::Exact, true);
+        let first = predict(None, product_limit, InfluenceForm::Exponential, true);
+        // The numerical influence function of each cause at each time.
+        let mut influence = vec![vec![vec![0.0; n]; times.len()]; 2];
+        let mut tol = vec![vec![vec![0.0; n]; times.len()]; 2];
+        for i in 0..n {
+            let mut d = [vec![], vec![]];
+            for (kk, step) in [h, h / 2.0].into_iter().enumerate() {
+                let mut w = vec![1.0; n];
+                w[i] = 1.0 + step;
+                let up = predict(Some(&w), product_limit, InfluenceForm::Exact, false);
+                w[i] = 1.0 - step;
+                let down = predict(Some(&w), product_limit, InfluenceForm::Exact, false);
+                d[kk] = (0..2)
+                    .map(|c| {
+                        (0..times.len())
+                            .map(|t| {
+                                (up[c].risk[t].unwrap() - down[c].risk[t].unwrap()) / (2.0 * step)
+                            })
+                            .collect::<Vec<f64>>()
+                    })
+                    .collect::<Vec<_>>();
+            }
+            for c in 0..2 {
+                for t in 0..times.len() {
+                    influence[c][t][i] = (4.0 * d[1][c][t] - d[0][c][t]) / 3.0;
+                    let f = unit[c].risk[t].unwrap();
+                    tol[c][t][i] = 2.0 * (d[0][c][t] - d[1][c][t]).abs()
+                        + 4.0 * (6 * n + 80) as f64 * eps * f.abs() / (h / 2.0);
+                }
+            }
+        }
+        let mut worst = 0.0f64;
+        let mut gap_first = 0.0f64;
+        for c in 0..2 {
+            for t in 0..times.len() {
+                let direct = influence[c][t].iter().map(|v| v * v).sum::<f64>().sqrt();
+                let bound_sq: f64 = (0..n)
+                    .map(|i| {
+                        2.0 * influence[c][t][i].abs() * tol[c][t][i] + tol[c][t][i] * tol[c][t][i]
+                    })
+                    .sum();
+                let got = unit[c].std_err.as_ref().unwrap()[t].unwrap();
+                let bound = bound_sq / got.max(direct);
+                worst = worst.max((got - direct).abs() / bound);
+                assert!(
+                    (got - direct).abs() <= bound,
+                    "product limit {product_limit}, cause {}, time {t}: {got} against {direct}, bound {bound}",
+                    c + 1
+                );
+                let f = first[c].std_err.as_ref().unwrap()[t].unwrap();
+                gap_first = gap_first.max((f - direct).abs() / direct);
+            }
+        }
+        eprintln!(
+            "absrisk, product limit {product_limit}: worst deviation {worst:.3} of its bound; the first-order standard error is off by up to {gap_first:.3e} relative"
         );
     }
 }
