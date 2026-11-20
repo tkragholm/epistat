@@ -59,6 +59,7 @@
 //! identity   μ             η                         1
 //! log        ln μ          max(exp η, ε)             max(exp η, ε)
 //! logit      ln(μ/(1-μ))   e / (1 + e)               exp η / (1 + exp η)²
+//! cloglog    ln(-ln(1-μ))  1 - exp(-exp η)           exp(η - exp η)
 //! ```
 //!
 //! with `ε = f64::EPSILON`. For the logit inverse, `e = exp η` for
@@ -90,6 +91,8 @@ pub enum Link {
     Log,
     /// `eta = ln(mu / (1 - mu))`.
     Logit,
+    /// `eta = ln(-ln(1 - mu))`, with `mu` in `(0, 1)`.
+    Cloglog,
 }
 
 /// The distribution of the response.
@@ -114,19 +117,24 @@ pub enum Family {
 
 const EPS: f64 = f64::EPSILON;
 const THRESHOLD: f64 = 30.0;
+const CLOGLOG_ETA_CAP: f64 = 700.0;
 
 impl Link {
-    pub(crate) fn link(self, mu: f64) -> f64 {
+    /// The linear predictor `g(mu)` at the mean `mu`.
+    #[must_use]
+    pub fn link(self, mu: f64) -> f64 {
         match self {
             Self::Identity => mu,
             Self::Log => mu.ln(),
             Self::Logit => (mu / (1.0 - mu)).ln(),
+            Self::Cloglog => (-(-mu).ln_1p()).ln(),
         }
     }
 
-    /// The mean at `eta`. The log and logit inverses keep the mean off 0 and
+    /// The mean `g^-1(eta)` at `eta`. The inverses keep the mean off 0 and
     /// 1 by machine epsilon, as R's do.
-    pub(crate) fn inverse(self, eta: f64) -> f64 {
+    #[must_use]
+    pub fn inverse(self, eta: f64) -> f64 {
         match self {
             Self::Identity => eta,
             Self::Log => eta.exp().max(EPS),
@@ -140,11 +148,13 @@ impl Link {
                 };
                 e / (1.0 + e)
             }
+            Self::Cloglog => (-(-eta.exp()).exp_m1()).clamp(EPS, 1.0 - EPS),
         }
     }
 
     /// `d mu / d eta` at `eta`.
-    pub(crate) fn derivative(self, eta: f64) -> f64 {
+    #[must_use]
+    pub fn derivative(self, eta: f64) -> f64 {
         match self {
             Self::Identity => 1.0,
             Self::Log => eta.exp().max(EPS),
@@ -155,6 +165,10 @@ impl Link {
                     let e = eta.exp();
                     e / ((1.0 + e) * (1.0 + e))
                 }
+            }
+            Self::Cloglog => {
+                let e = eta.min(CLOGLOG_ETA_CAP);
+                (e - e.exp()).exp().max(EPS)
             }
         }
     }
@@ -258,5 +272,24 @@ impl Family {
     /// Whether the dispersion is fixed at 1 rather than estimated.
     pub(crate) const fn fixed_dispersion(self) -> bool {
         matches!(self, Self::Binomial | Self::Poisson)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cloglog_inverse_undoes_the_link_and_stays_inside_the_unit_interval() {
+        for mu in [1e-6, 0.05, 0.5, 0.9, 1.0 - 1e-9] {
+            let back = Link::Cloglog.inverse(Link::Cloglog.link(mu));
+            assert!((back - mu).abs() <= 1e-14 * mu.max(1e-3), "{mu}: {back}");
+        }
+        assert_eq!(Link::Cloglog.inverse(800.0), 1.0 - EPS);
+        assert_eq!(Link::Cloglog.inverse(-800.0), EPS);
+        assert_eq!(Link::Cloglog.derivative(800.0), EPS);
+        let h = 1e-6;
+        let numeric = (Link::Cloglog.inverse(0.3 + h) - Link::Cloglog.inverse(0.3 - h)) / (2.0 * h);
+        assert!((numeric - Link::Cloglog.derivative(0.3)).abs() < 1e-9);
     }
 }
