@@ -3,6 +3,7 @@
 
 use super::dist::{Base, row_derivs};
 use crate::error::{Error, Result};
+use crate::ldl;
 
 /// The rows of a fit, one entry per row used, in order.
 pub(super) struct Problem<'a> {
@@ -114,88 +115,10 @@ impl Problem<'_> {
     }
 }
 
-/// The `L D L'` factorisation of a symmetric matrix, in place, as `coxph` and
-/// `survreg` factorise an information matrix.
-///
-/// A pivot below `tolerance` times the largest diagonal element is set to zero
-/// together with the column of `L` under it, and the column is left out of
-/// every solve. Returns whether no pivot is clearly negative, that is below
-/// minus 8 times the floor, or not finite.
+/// Whether the information matrix is positive semi-definite, after
+/// factorising it in place as `coxph` does.
 pub(super) fn factorise(a: &mut [f64], q: usize, tolerance: f64) -> bool {
-    let largest = (0..q).map(|i| a[i * q + i]).fold(0.0_f64, f64::max);
-    let floor = if largest == 0.0 {
-        tolerance
-    } else {
-        largest * tolerance
-    };
-    let mut nonneg = true;
-    for i in 0..q {
-        let pivot = a[i * q + i];
-        if !pivot.is_finite() || pivot < floor {
-            if !pivot.is_finite() || pivot < -8.0 * floor {
-                nonneg = false;
-            }
-            a[i * q + i] = 0.0;
-            for j in i + 1..q {
-                a[j * q + i] = 0.0;
-            }
-        } else {
-            for j in i + 1..q {
-                let t = a[j * q + i] / pivot;
-                a[j * q + i] = t;
-                a[j * q + j] -= t * t * pivot;
-                for k in j + 1..q {
-                    a[k * q + j] -= t * a[k * q + i];
-                }
-            }
-        }
-    }
-    nonneg
-}
-
-/// Solve `L D L' z = y` in place, with zero where `D` is zero.
-pub(super) fn solve_factor(a: &[f64], q: usize, y: &mut [f64]) {
-    for i in 0..q {
-        let mut t = y[i];
-        for j in 0..i {
-            t -= y[j] * a[i * q + j];
-        }
-        y[i] = t;
-    }
-    for i in (0..q).rev() {
-        if a[i * q + i] == 0.0 {
-            y[i] = 0.0;
-        } else {
-            let mut t = y[i] / a[i * q + i];
-            for j in i + 1..q {
-                t -= y[j] * a[j * q + i];
-            }
-            y[i] = t;
-        }
-    }
-}
-
-/// The inverse over the kept columns, zero rows and columns for the others,
-/// exactly symmetric.
-pub(super) fn inverse_factor(a: &[f64], q: usize) -> Vec<f64> {
-    let mut inverse = vec![0.0_f64; q * q];
-    for k in 0..q {
-        if a[k * q + k] == 0.0 {
-            continue;
-        }
-        let mut column = vec![0.0_f64; q];
-        column[k] = 1.0;
-        solve_factor(a, q, &mut column);
-        for (i, value) in column.iter().enumerate() {
-            inverse[i * q + k] = *value;
-        }
-    }
-    for i in 0..q {
-        for j in 0..i {
-            inverse[j * q + i] = inverse[i * q + j];
-        }
-    }
-    inverse
+    ldl::factorise(a, q, tolerance).clean
 }
 
 /// The settings of the iteration.
@@ -242,7 +165,7 @@ fn step(eval: &Eval, q: usize, toler: f64, outer: &mut u32) -> Result<Vec<f64>> 
         }
     }
     let mut s = eval.u.clone();
-    solve_factor(&a, q, &mut s);
+    ldl::solve(&a, q, &mut s);
     Ok(s)
 }
 

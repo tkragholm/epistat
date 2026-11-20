@@ -227,13 +227,14 @@ mod tdist;
 
 use dist::Base;
 use faer::MatRef;
-use newton::{Control, Problem, factorise, inverse_factor, newton, solve_factor};
+use newton::{Control, Problem, factorise, newton};
 
 pub use predict::{
     Dfbeta, DfbetaOptions, PredictOptions, PredictType, Prediction, ResidualKind, TermsReference,
 };
 
 use crate::error::{Error, Result};
+use crate::ldl;
 use crate::surv::{IntervalKind, Outcome, SurvData};
 
 /// The distribution of the error term, and with it the transformation of the
@@ -817,7 +818,7 @@ pub fn fit(
         // The matrix is not necessarily positive definite away from the
         // maximum, so a column with no usable pivot is left at zero.
         factorise(&mut a, pp, options.toler_chol);
-        solve_factor(&a, pp, &mut b);
+        ldl::solve(&a, pp, &mut b);
         Ok(b)
     };
     let (null_fit, start) = if meanonly {
@@ -866,7 +867,7 @@ pub fn fit(
     let mut factor = fitted.imat.clone();
     let nonneg = factorise(&mut factor, q, options.toler_chol);
     let aliased: Vec<bool> = (0..p).map(|j| factor[j * q + j] == 0.0).collect();
-    let scaled_variance = nonneg.then(|| inverse_factor(&factor, q));
+    let scaled_variance = nonneg.then(|| ldl::inverse(&factor, q));
 
     // Back to the scale of the columns given.
     let mut coefficient: Vec<f64> = fitted.beta[..p].to_vec();

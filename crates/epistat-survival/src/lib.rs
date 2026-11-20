@@ -106,6 +106,7 @@ pub mod condense;
 pub mod cox;
 mod error;
 pub mod fine_gray;
+mod ldl;
 pub mod lexis;
 pub mod markov;
 pub mod metrics;

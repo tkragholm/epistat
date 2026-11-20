@@ -391,6 +391,7 @@ use faer::{Mat, MatRef};
 use super::Ties;
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::error::{Error, Result};
+use crate::ldl;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -1292,87 +1293,12 @@ impl Model {
     }
 }
 
-/// The `L D L'` factorisation of `coxph`, in place on a symmetric matrix.
-///
-/// A pivot below `TOLER_CHOL` times the largest diagonal element is set to
-/// zero together with the column of `L` under it. Returns the number of
-/// pivots kept, or `None` when a pivot is not finite or is clearly negative.
+/// The `L D L'` factorisation of `coxph` with its tolerance. `None` when a
+/// pivot is not finite or is clearly negative, otherwise the number of pivots
+/// kept.
 fn factorise(a: &mut [f64], p: usize) -> Option<usize> {
-    let largest = (0..p).map(|i| a[i * p + i]).fold(0.0f64, f64::max);
-    let floor = if largest == 0.0 {
-        TOLER_CHOL
-    } else {
-        largest * TOLER_CHOL
-    };
-    let mut rank = 0;
-    for i in 0..p {
-        let pivot = a[i * p + i];
-        if !pivot.is_finite() || pivot < -8.0 * floor {
-            return None;
-        }
-        if pivot < floor {
-            a[i * p + i] = 0.0;
-            for j in i + 1..p {
-                a[j * p + i] = 0.0;
-            }
-        } else {
-            rank += 1;
-            for j in i + 1..p {
-                let t = a[j * p + i] / pivot;
-                a[j * p + i] = t;
-                a[j * p + j] -= t * t * pivot;
-                for k in j + 1..p {
-                    a[k * p + j] -= t * a[k * p + i];
-                }
-            }
-        }
-    }
-    Some(rank)
-}
-
-/// Solve `L D L' z = y` in place, with zero where `D` is zero.
-fn solve_factor(a: &[f64], p: usize, y: &mut [f64]) {
-    for i in 0..p {
-        let mut t = y[i];
-        for j in 0..i {
-            t -= y[j] * a[i * p + j];
-        }
-        y[i] = t;
-    }
-    for i in (0..p).rev() {
-        if a[i * p + i] == 0.0 {
-            y[i] = 0.0;
-        } else {
-            let mut t = y[i] / a[i * p + i];
-            for j in i + 1..p {
-                t -= y[j] * a[j * p + i];
-            }
-            y[i] = t;
-        }
-    }
-}
-
-/// The inverse of the factorised matrix over its kept columns, with zero rows
-/// and columns for the others, symmetric.
-fn inverse_factor(a: &[f64], p: usize) -> Vec<f64> {
-    let mut inverse = vec![0.0f64; p * p];
-    for k in 0..p {
-        if a[k * p + k] == 0.0 {
-            continue;
-        }
-        let mut column = vec![0.0f64; p];
-        column[k] = 1.0;
-        solve_factor(a, p, &mut column);
-        for (i, value) in column.iter().enumerate() {
-            inverse[i * p + k] = *value;
-        }
-    }
-    for i in 0..p {
-        for j in 0..i {
-            inverse[j * p + i] = inverse[i * p + j];
-        }
-    }
-    inverse
+    let pivots = ldl::factorise(a, p, TOLER_CHOL);
+    pivots.clean.then_some(pivots.rank)
 }
 
 /// The model on the scaled covariates, and the factor that scales each
@@ -1548,7 +1474,7 @@ fn quadratic_form(a: &[f64], p: usize, y: &[f64]) -> Option<(f64, usize)> {
     let mut factor = a.to_vec();
     let rank = factorise(&mut factor, p)?;
     let mut z = y.to_vec();
-    solve_factor(&factor, p, &mut z);
+    ldl::solve(&factor, p, &mut z);
     Some((y.iter().zip(&z).map(|(a, b)| a * b).sum(), rank))
 }
 
@@ -1670,7 +1596,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         return Ok(undefined());
     }
     let mut step = start.score.clone();
-    solve_factor(&matrix, p, &mut step);
+    ldl::solve(&matrix, p, &mut step);
     let (score_test, robust_score_test) = score_tests(
         &model,
         input,
@@ -1742,7 +1668,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
                 return Ok(fit);
             }
             step = e.score;
-            solve_factor(&matrix, p, &mut step);
+            ldl::solve(&matrix, p, &mut step);
             for (t, s) in trial.iter_mut().zip(&step) {
                 *t += s;
             }
@@ -1783,7 +1709,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     // The coefficient of a column whose Newton step is still large when the
     // likelihood has stopped changing is not finite.
     let mut newton = last.score.clone();
-    solve_factor(&final_matrix, p, &mut newton);
+    ldl::solve(&final_matrix, p, &mut newton);
     let monotone_columns: Vec<usize> = if converged && input.ties == Ties::Exact {
         // The rule of `coxexact.fit` and `agexact.fit`, with `toler.inf` its
         // default `sqrt(eps)`, and no check for `iter.max` of 1 or less.
@@ -1813,7 +1739,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         return Ok(fit);
     }
 
-    let variance = inverse_factor(&final_matrix, p);
+    let variance = ldl::inverse(&final_matrix, p);
     let coefficients: Vec<Option<f64>> = (0..p)
         .map(|a| (!aliased(a)).then(|| trial[a] * factor[a]))
         .collect();
