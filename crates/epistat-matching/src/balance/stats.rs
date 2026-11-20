@@ -1,23 +1,64 @@
 use crate::matching::to_f64;
 use epistat_stats::balance;
 
-/// Convert a count to a proportion, `None` when the group is empty.
-pub(super) fn proportion(count: usize, total: usize) -> Option<f64> {
-    (total > 0).then(|| to_f64(count) / to_f64(total))
+/// Standardised difference `difference / sqrt(variance)`, `None` when the
+/// variance is not positive and finite or the difference is not finite.
+///
+/// The variance is the one the caller chose as the standardisation reference.
+/// MatchIt documents the choice: the treated variance for the ATT, the control
+/// variance for the ATC and the mean of the two for the ATE, always from the
+/// sample before matching.
+pub(super) fn standardised_difference(difference: f64, variance: Option<f64>) -> Option<f64> {
+    let variance = variance.filter(|value| value.is_finite() && *value > 0.0)?;
+    Some(difference / variance.sqrt()).filter(|value| value.is_finite())
 }
 
-/// Standardized mean difference for continuous variables, `None` when the
-/// pooled variance is not positive and finite.
+/// The eCDF distance summary (mean and maximum absolute difference) between two
+/// weighted groups, `None` when a group has no positive weight.
 ///
-/// Reference:
-/// - Cohen J. *Statistical Power Analysis for the Behavioral Sciences*, 2nd ed. 1988.
-pub(super) fn smd_numeric(
-    mean_case: f64,
-    mean_control: f64,
-    var_case: f64,
-    var_control: f64,
-) -> Option<f64> {
-    balance::smd(mean_case, mean_control, var_case, var_control).filter(|value| value.is_finite())
+/// Each point is a value, whether it belongs to the case group, and a
+/// non-negative weight. The two empirical distribution functions are evaluated
+/// at every distinct value among all points, units of weight zero included, and
+/// each group's weights are scaled to sum to one. A point of weight zero adds an
+/// evaluation point and no mass. Negative and positive zero are one value. This is the definition in the documentation of
+/// MatchIt's `summary.matchit()`.
+pub(super) fn weighted_ecdf_distance(points: &[(f64, bool, f64)]) -> Option<(f64, f64)> {
+    let total = |case: bool| {
+        points
+            .iter()
+            .filter(|(_, is_case, _)| *is_case == case)
+            .map(|(_, _, weight)| *weight)
+            .sum::<f64>()
+    };
+    let (total_case, total_control) = (total(true), total(false));
+    if !(total_case > 0.0 && total_control > 0.0) {
+        return None;
+    }
+    let mut order = (0..points.len()).collect::<Vec<_>>();
+    order.sort_by(|&left, &right| points[left].0.total_cmp(&points[right].0));
+
+    let (mut cumulative_case, mut cumulative_control) = (0.0_f64, 0.0_f64);
+    let (mut sum, mut max, mut distinct) = (0.0_f64, 0.0_f64, 0usize);
+    let mut idx = 0;
+    while idx < order.len() {
+        let value = points[order[idx]].0;
+        while idx < order.len()
+            && points[order[idx]].0.partial_cmp(&value) == Some(std::cmp::Ordering::Equal)
+        {
+            let (_, is_case, weight) = points[order[idx]];
+            if is_case {
+                cumulative_case += weight;
+            } else {
+                cumulative_control += weight;
+            }
+            idx += 1;
+        }
+        let gap = (cumulative_case / total_case - cumulative_control / total_control).abs();
+        sum += gap;
+        max = max.max(gap);
+        distinct += 1;
+    }
+    Some((sum / to_f64(distinct), max))
 }
 
 /// Variance ratio (`var_case / var_control`), `None` when either variance is not finite,
@@ -31,12 +72,13 @@ pub(super) fn variance_ratio(var_case: f64, var_control: f64) -> Option<f64> {
     balance::variance_ratio(var_case, var_control)
 }
 
-/// eCDF distance summary (mean and max absolute difference), `None` when a
-/// group has no finite value.
+/// Unweighted eCDF distance summary (mean and max absolute difference), `None`
+/// when a group has no finite value.
 ///
 /// Reference:
 /// - Rosenbaum PR, Rubin DB. The central role of the propensity score in observational studies.
 ///   *Biometrika*. 1983.
+#[cfg(any(test, feature = "bench-internals"))]
 pub(super) fn ecdf_distance_stats(
     case_values: &[f64],
     control_values: &[f64],
@@ -55,16 +97,6 @@ pub(super) fn eqq_distance_stats(
     control_values: &[f64],
 ) -> Option<(f64, f64)> {
     balance::eqq_distance(case_values, control_values)
-}
-
-/// Standardized mean difference for binary proportions, `None` when either
-/// proportion is missing or the pooled variance is not positive.
-///
-/// Reference:
-/// - Austin PC. Balance diagnostics for comparing the distribution of baseline
-///   covariates between treatment groups in propensity-score matched samples. *Stat Med*. 2009.
-pub(super) fn smd_proportion(p_case: Option<f64>, p_control: Option<f64>) -> Option<f64> {
-    balance::smd_proportion(p_case?, p_control?).filter(|value| value.is_finite())
 }
 
 /// Cramér's V computed from 2xK contingency counts, `None` when it does not exist.
@@ -185,17 +217,6 @@ mod tests {
 
     proptest! {
         #[test]
-        fn proportion_is_invariant_to_permutation(mut values in prop::collection::vec(0..2u8, 1..100)) {
-            let n = values.iter().map(|&value| usize::from(value == 1)).sum::<usize>();
-            let total = values.len();
-            let p1 = proportion(n, total).unwrap();
-            values.reverse();
-            let n2 = values.iter().map(|&value| usize::from(value == 1)).sum::<usize>();
-            let p2 = proportion(n2, total).unwrap();
-            prop_assert_eq!(p1.to_bits(), p2.to_bits());
-        }
-
-        #[test]
         fn ecdf_distance_is_invariant_to_permutation(
             mut case in prop::collection::vec(-100.0..100.0f64, 1..50),
             mut control in prop::collection::vec(-100.0..100.0f64, 1..50)
@@ -223,24 +244,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case(3, 0, None)]
-    #[case(2, 8, Some(0.25))]
-    fn test_proportion(#[case] n: usize, #[case] total: usize, #[case] expected: Option<f64>) {
-        assert_eq!(proportion(n, total), expected);
-    }
-
-    #[rstest]
-    #[case(1.0, 3.0, 0.0, 0.0, None)]
-    #[case(2.0, 1.0, 1.0, 1.0, Some(1.0))]
-    #[case(2.0, 1.0, f64::NAN, 1.0, None)]
-    fn test_smd_numeric(
-        #[case] m1: f64,
-        #[case] m2: f64,
-        #[case] v1: f64,
-        #[case] v2: f64,
+    #[case(1.0, Some(4.0), Some(0.5))]
+    #[case(1.0, Some(0.0), None)]
+    #[case(1.0, None, None)]
+    #[case(f64::NAN, Some(1.0), None)]
+    fn test_standardised_difference(
+        #[case] difference: f64,
+        #[case] variance: Option<f64>,
         #[case] expected: Option<f64>,
     ) {
-        assert_eq!(smd_numeric(m1, m2, v1, v2), expected);
+        assert_eq!(standardised_difference(difference, variance), expected);
     }
 
     #[rstest]
@@ -252,12 +265,37 @@ mod tests {
     }
 
     #[test]
-    fn smd_proportion_handles_degenerate_case() {
-        assert_eq!(smd_proportion(Some(0.0), Some(0.0)), None);
-        assert_eq!(smd_proportion(None, Some(0.5)), None);
-        let value = smd_proportion(Some(0.5), Some(0.25)).unwrap();
-        assert!(value.is_finite());
-        assert!(value > 0.0);
+    fn weighted_ecdf_with_unit_weights_matches_the_unweighted_distance() {
+        let case = [1.0, 2.0, 2.0, 5.0];
+        let control = [0.5, 2.0, 4.0];
+        let points = case
+            .iter()
+            .map(|value| (*value, true, 1.0))
+            .chain(control.iter().map(|value| (*value, false, 1.0)))
+            .collect_vec();
+        let weighted = weighted_ecdf_distance(&points).unwrap();
+        let plain = ecdf_distance_stats(&case, &control).unwrap();
+        assert!((weighted.0 - plain.0).abs() < 1e-15);
+        assert!((weighted.1 - plain.1).abs() < 1e-15);
+    }
+
+    #[test]
+    fn weighted_ecdf_counts_zero_weight_points_as_evaluation_points() {
+        // The point at 9 carries no mass but is an evaluation point where the
+        // two distribution functions already agree at one, so the mean gap is a third.
+        let points = [(1.0, true, 1.0), (2.0, false, 1.0), (9.0, false, 0.0)];
+        let (mean, max) = weighted_ecdf_distance(&points).unwrap();
+        assert!((max - 1.0).abs() < 1e-15);
+        assert!((mean - 1.0 / 3.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn weighted_ecdf_is_undefined_without_mass_in_a_group() {
+        assert_eq!(weighted_ecdf_distance(&[(1.0, true, 1.0)]), None);
+        assert_eq!(
+            weighted_ecdf_distance(&[(1.0, true, 1.0), (2.0, false, 0.0)]),
+            None
+        );
     }
 
     #[test]
