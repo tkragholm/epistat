@@ -86,9 +86,9 @@
 //! 3. Therneau TM. Population contrasts. Vignette of the survival package,
 //!    version 3.8.
 
+use epistat_linalg::eigen::pinv_quadratic_form;
 use epistat_stats::gamma::chi_square_sf;
 use epistat_stats::normal;
-use faer::{Mat, Side};
 
 use super::{Counterfactual, ordered_reduce};
 use crate::error::{Error, Result};
@@ -472,7 +472,7 @@ fn wald(label: String, c: &[Vec<f64>], estimate: &[f64], cov: &[f64]) -> WaldTes
         .iter()
         .map(|row| row.iter().zip(estimate).map(|(a, b)| a * b).sum())
         .collect();
-    let mut csc = Mat::<f64>::zeros(k, k);
+    let mut csc = vec![0.0; k * k];
     for a in 0..k {
         for b in 0..k {
             let mut total = 0.0;
@@ -483,7 +483,7 @@ fn wald(label: String, c: &[Vec<f64>], estimate: &[f64], cov: &[f64]) -> WaldTes
                 }
                 total += c[a][i] * inner;
             }
-            csc[(a, b)] = total;
+            csc[a * k + b] = total;
         }
     }
     let (chi_square, df) = quadratic_form(&csc, &cm);
@@ -495,28 +495,9 @@ fn wald(label: String, c: &[Vec<f64>], estimate: &[f64], cov: &[f64]) -> WaldTes
     }
 }
 
-/// `b' M^+ b` for a symmetric `M`, with the eigenvalues not above `sqrt(eps)`
-/// times the largest dropped, and the number kept.
-fn quadratic_form(m: &Mat<f64>, b: &[f64]) -> (f64, usize) {
-    let k = b.len();
-    let Ok(eigen) = m.self_adjoint_eigen(Side::Lower) else {
-        return (f64::NAN, 0);
-    };
-    let values: Vec<f64> = (0..k).map(|i| eigen.S().column_vector()[i]).collect();
-    let top = values.iter().copied().fold(0.0, f64::max);
-    let threshold = top * f64::EPSILON.sqrt();
-    let u = eigen.U();
-    let mut total = 0.0;
-    let mut kept = 0;
-    for (j, &d) in values.iter().enumerate() {
-        if d > threshold && d > 0.0 {
-            kept += 1;
-            let mut proj = 0.0;
-            for (i, bi) in b.iter().enumerate() {
-                proj += u[(i, j)] * bi;
-            }
-            total += proj * proj / d;
-        }
-    }
-    (total, kept)
+/// `b' M^+ b` for a symmetric `M` of order `b.len()`, row-major, with the
+/// eigenvalues not above `sqrt(eps)` times the largest dropped, and the
+/// number kept. A zero matrix gives 0 and 0.
+fn quadratic_form(m: &[f64], b: &[f64]) -> (f64, usize) {
+    pinv_quadratic_form(m, b, |top| top * f64::EPSILON.sqrt()).unwrap_or((0.0, 0))
 }
