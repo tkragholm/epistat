@@ -4,6 +4,7 @@ mod engine;
 mod estimation;
 mod index;
 pub mod job;
+mod nearest;
 pub mod ratio;
 mod reconstructed;
 mod records;
@@ -29,13 +30,15 @@ pub use estimation::{
     estimate_propensity_and_match, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config,
 };
+pub use nearest::{MatchOrder, NearestSelection};
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
     ReconstructedMatchingOutput, ReconstructedMatchingTier, reconstruct_case_control_pairs,
 };
 pub use records::{CovariateRecord, MatchingRecord, ResidentAtIndexRecord, RoleIndexedRecord};
 pub use selection::{
-    DeterministicSelection, NearestBirthDateSelection, RandomSelection, SelectionStrategy,
+    Assignment, DeterministicSelection, NearestBirthDateSelection, RandomSelection, Rounds,
+    SelectionStrategy,
 };
 pub use subclassification::{
     SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationOutcome,

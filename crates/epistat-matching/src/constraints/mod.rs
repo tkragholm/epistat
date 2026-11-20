@@ -55,6 +55,103 @@ impl<R: MatchingRecord> Constraint<R> for GenderMatch {
     }
 }
 
+/// Constraint that refuses a pair whose units have the same value of a field.
+///
+/// This is `antiexact` in `matchit()`: two units with the same value of the
+/// variable are not paired. The field is a categorical value in the strata map
+/// ([`Self::on_key`]) or a named numeric field ([`Self::on_numeric`]). A unit
+/// that has no value for the field shares it with nobody, so a pair is refused
+/// only when both units have a value and the values are equal. Numeric values
+/// are equal when they are the same number.
+///
+/// Same family is the case `on_key("family_id")`.
+pub struct AntiExact {
+    field: AntiExactField,
+}
+
+enum AntiExactField {
+    Key(String),
+    Numeric(String),
+}
+
+impl AntiExact {
+    /// Units must differ on this key of the strata map.
+    #[must_use]
+    pub fn on_key(key: impl Into<String>) -> Self {
+        Self {
+            field: AntiExactField::Key(key.into()),
+        }
+    }
+
+    /// Units must differ on this numeric field.
+    #[must_use]
+    pub fn on_numeric(field: impl Into<String>) -> Self {
+        Self {
+            field: AntiExactField::Numeric(field.into()),
+        }
+    }
+}
+
+impl<R: MatchingRecord> Constraint<R> for AntiExact {
+    fn reason(&self) -> &'static str {
+        "antiexact"
+    }
+
+    fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
+        match &self.field {
+            AntiExactField::Key(key) => match (case.strata().get(key), control.strata().get(key)) {
+                (Some(left), Some(right)) => left != right,
+                _ => true,
+            },
+            AntiExactField::Numeric(name) => match (case.numeric(name), control.numeric(name)) {
+                (Some(left), Some(right)) => left != right,
+                _ => true,
+            },
+        }
+    }
+}
+
+/// The sample standard deviation of a numeric field over two groups together.
+///
+/// This is the scale `matchit()` uses for a caliper in standard deviation
+/// units (`std.caliper = TRUE`): the standard deviation of the variable over
+/// all units in the data, before matching, with `n - 1` in the denominator.
+/// Units without a finite value are left out. `None` when fewer than two units
+/// have a value.
+///
+/// A caliper of `k` standard deviations on the field is
+/// `caliper_on_field(field, k * sd)`. Units that common-support trimming
+/// removes should be left out of `anchors` and `candidates` first, as
+/// `matchit()` leaves out discarded units.
+#[must_use]
+pub fn numeric_field_sd<R: MatchingRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    field: &str,
+) -> Option<f64> {
+    let values: Vec<f64> = anchors
+        .iter()
+        .chain(candidates)
+        .filter_map(|record| record.numeric(field))
+        .filter(|value| value.is_finite())
+        .collect();
+    sample_sd(&values)
+}
+
+/// The sample standard deviation, two-pass, or `None` for fewer than two values.
+pub(crate) fn sample_sd(values: &[f64]) -> Option<f64> {
+    if values.len() < 2 {
+        return None;
+    }
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let sum_sq: f64 = values
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum();
+    Some((sum_sq / (n - 1.0)).sqrt())
+}
+
 /// Constraint that ensures a numeric field is within a certain caliper window.
 ///
 /// This is a generic version of [`DateWindow`] that works on any numeric value.

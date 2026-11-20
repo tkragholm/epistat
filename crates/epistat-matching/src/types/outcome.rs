@@ -51,6 +51,7 @@ pub enum ConstraintReason {
     DateWindowExceeded,
     ParentDateMismatch,
     SameFamily,
+    AntiExact,
     ControlAlreadyUsedInPrimaryTier,
     NotAliveAtIndex,
     NotResidentAtIndex,
@@ -71,6 +72,7 @@ impl ConstraintReason {
             "date_window_exceeded" => Self::DateWindowExceeded,
             "parent_date_mismatch" => Self::ParentDateMismatch,
             "same_family" => Self::SameFamily,
+            "antiexact" => Self::AntiExact,
             "control_already_used_in_primary_tier" => Self::ControlAlreadyUsedInPrimaryTier,
             "not_alive_at_index" => Self::NotAliveAtIndex,
             "not_resident_at_index" => Self::NotResidentAtIndex,
@@ -92,6 +94,7 @@ impl Display for ConstraintReason {
             Self::DateWindowExceeded => "date_window_exceeded",
             Self::ParentDateMismatch => "parent_date_mismatch",
             Self::SameFamily => "same_family",
+            Self::AntiExact => "antiexact",
             Self::ControlAlreadyUsedInPrimaryTier => "control_already_used_in_primary_tier",
             Self::NotAliveAtIndex => "not_alive_at_index",
             Self::NotResidentAtIndex => "not_resident_at_index",
@@ -134,6 +137,8 @@ pub enum InvalidCriteriaReason {
     NegativeBirthDateWindow,
     ZeroMatchRatio,
     StudyOptions,
+    /// The nearest-neighbour options contradict each other or the distance.
+    NearestOptions,
 }
 
 impl Display for InvalidCriteriaReason {
@@ -142,6 +147,7 @@ impl Display for InvalidCriteriaReason {
             Self::NegativeBirthDateWindow => "negative_birth_date_window",
             Self::ZeroMatchRatio => "zero_match_ratio",
             Self::StudyOptions => "study_options",
+            Self::NearestOptions => "nearest_options",
         };
         f.write_str(key)
     }

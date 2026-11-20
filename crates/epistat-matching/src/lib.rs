@@ -127,19 +127,19 @@ pub use balance::{
     build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values, variance,
 };
 pub use matching::{
-    CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
+    Assignment, CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
     CovariateEncodingConfig, CovariateMatrix, CovariateRecord, DateDistance,
     DeterministicSelection, DistanceChannel, DistanceConfig, DistanceMetric,
     ElasticNetLogisticConfig, EstimationError, ExactMatchConstraint, IdMapMahalanobisDistance,
     IdMapPropensityScoreDistance, LogisticRegressionConfig, MahalanobisCovarianceStrategy,
     MahalanobisDistance, MahalanobisDistancePreparation, MahalanobisError,
-    MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchWeightMethod,
-    MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, PairWeight, PairWeightRow,
-    PairWeightSet, PairWeightTable, PropensityDistancePreparation, PropensityEstimator,
-    PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
+    MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder, MatchWeightMethod,
+    MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection, PairWeight,
+    PairWeightRow, PairWeightSet, PairWeightTable, PropensityDistancePreparation,
+    PropensityEstimator, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
     PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection, ReconstructedEpisode,
     ReconstructedMatchedPair, ReconstructedMatchingOptions, ReconstructedMatchingOutput,
-    ReconstructedMatchingTier, ResidentAtIndexRecord, RidgeReport, RoleIndexedRecord,
+    ReconstructedMatchingTier, ResidentAtIndexRecord, RidgeReport, RoleIndexedRecord, Rounds,
     SelectionStrategy, StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup,
     SubclassSummary, SubclassificationConfig, SubclassificationOutcome, UnitRole, UnitWeightRow,
     UnitWeightSet, UnitWeightTable, UsedControlsVec, effective_sample_size,
@@ -220,8 +220,8 @@ pub mod prelude {
 
     pub mod constraints {
         pub use crate::constraints::{
-            Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive, MustBeResident,
-            caliper_on_field,
+            AntiExact, Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive,
+            MustBeResident, caliper_on_field, numeric_field_sd,
         };
     }
 }
