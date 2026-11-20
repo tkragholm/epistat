@@ -38,6 +38,19 @@
 //! is a sum of rectangles, and the segment from the origin to the first event
 //! time after it uses the starting distribution.
 //!
+//! # Agreement with R
+//!
+//! The probabilities and the weight at risk agree with `survival::survfit` on
+//! `Surv(start, stop, state)` with `id` and `istate`, given the initial
+//! distribution `survfit` reports as `p0`. [`integrate`] agrees with the
+//! restricted mean time in state of `summary(fit, rmean = tau)`, which sums the
+//! probability at each event time times the time to the next, from the starting
+//! time to `tau`. A time exactly at `tau` adds nothing, and a `tau` past the last
+//! event time holds the last probabilities. `survfit` starts at time 0 when
+//! everyone begins in one state or `start.time` is given, and otherwise at the
+//! first transition time, so `origin` must be the starting time `survfit` used
+//! (`fit$t0`) to get the same totals.
+//!
 //! # Summation order
 //!
 //! The accumulations of `Y` and `n` run over the intervals in input order, one
