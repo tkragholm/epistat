@@ -869,21 +869,25 @@ pub type ArmDraws = (Vec<f64>, Vec<f64>, Vec<bool>);
 /// What [`bootstrap`] does besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BootstrapOptions {
-    /// The number of replicates. The default is 1000.
+    /// The number of replicates.
     pub n_replicates: usize,
-    /// How the cluster weights are drawn for the cells. The default is
-    /// [`Draw::PerCell`].
+    /// How the cluster weights are drawn for the cells.
     pub draw: Draw,
     /// How near-equal times are treated. The default is `survival`'s rule,
     /// see [`TimeFix`].
     pub timefix: TimeFix,
 }
 
-impl Default for BootstrapOptions {
-    fn default() -> Self {
+impl BootstrapOptions {
+    /// Options with the given number of replicates and draw, and `survival`'s
+    /// tie rule. Neither the number of replicates nor the draw has a default:
+    /// the first sets the Monte Carlo error and the second what is resampled,
+    /// so the caller states both.
+    #[must_use]
+    pub fn new(n_replicates: usize, draw: Draw) -> Self {
         Self {
-            n_replicates: 1000,
-            draw: Draw::PerCell,
+            n_replicates,
+            draw,
             timefix: TimeFix::default(),
         }
     }
@@ -1827,7 +1831,7 @@ mod estimate_tests {
                 &[1, 2, 3],
                 &[1.0],
                 cause,
-                &BootstrapOptions::default(),
+                &BootstrapOptions::new(10, Draw::PerCell),
             )
         };
         let build = || SurvData::builder(&time, &event).n_codes(2);

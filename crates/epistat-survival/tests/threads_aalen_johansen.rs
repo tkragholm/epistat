@@ -125,11 +125,7 @@ fn bootstrap_does_not_depend_on_the_number_of_threads() {
     let seeds: Vec<u64> = (0..cells.len() as u64).map(|c| 1000 + 7919 * c).collect();
     let ages = [3.0, 0.5, 1.0, 2.2, 4.4, 6.0];
     for draw in [Draw::PerCell, Draw::Shared] {
-        let opts = BootstrapOptions {
-            n_replicates: 37,
-            draw,
-            ..BootstrapOptions::default()
-        };
+        let opts = BootstrapOptions::new(37, draw);
         assert_same_on_pools(&POOLS, || {
             let (a, b, estimable) =
                 bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &opts).unwrap();
