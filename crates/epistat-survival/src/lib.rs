@@ -28,6 +28,10 @@
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
 //!   product integral, their infinitesimal jackknife standard errors, and their
 //!   clustered bootstrap.
+//! - [`msreg`]: Cox regression for a multi-state process, a hazard for each transition with
+//!   coefficients specific to a transition or shared, as `coxph` with a multi-state outcome,
+//!   and the cumulative hazards and transition probabilities of a covariate profile, as
+//!   `msfit` and `probtrans` of `mstate`.
 //! - [`markov`]: the landmark test of the Markov property.
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
 //!   standard errors, confidence limits, quantiles and restricted means, read at chosen
@@ -74,6 +78,7 @@ pub mod cox;
 mod error;
 pub mod fine_gray;
 pub mod markov;
+pub mod msreg;
 pub mod multistate;
 pub mod pyears;
 pub mod split;
