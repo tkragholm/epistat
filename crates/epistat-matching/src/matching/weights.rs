@@ -188,28 +188,32 @@ impl UnitWeightSet {
         }
     }
 
-    /// Effective sample size for anchor weights.
+    /// Effective sample size for anchor weights, summed in the order of the
+    /// unit identifiers.
     #[must_use]
     pub fn anchor_effective_sample_size(&self) -> f64 {
-        effective_sample_size(self.anchor.values().copied())
+        effective_sample_size(in_id_order(&self.anchor))
     }
 
-    /// Effective sample size for candidate weights.
+    /// Effective sample size for candidate weights, summed in the order of the
+    /// unit identifiers.
     #[must_use]
     pub fn candidate_effective_sample_size(&self) -> f64 {
-        effective_sample_size(self.candidate.values().copied())
+        effective_sample_size(in_id_order(&self.candidate))
     }
 
-    /// Sum of all anchor-side unit weights.
+    /// Sum of all anchor-side unit weights, in the order of the unit
+    /// identifiers.
     #[must_use]
     pub fn anchor_total_weight(&self) -> f64 {
-        self.anchor.values().sum()
+        in_id_order(&self.anchor).into_iter().sum()
     }
 
-    /// Sum of all candidate-side unit weights.
+    /// Sum of all candidate-side unit weights, in the order of the unit
+    /// identifiers.
     #[must_use]
     pub fn candidate_total_weight(&self) -> f64 {
-        self.candidate.values().sum()
+        in_id_order(&self.candidate).into_iter().sum()
     }
 
     /// Combined anchor + candidate total weight.
@@ -473,6 +477,15 @@ fn candidate_unit_anchor_fractional_weights(pairs: &[MatchedPair]) -> UnitWeight
     }
 
     UnitWeightSet { anchor, candidate }
+}
+
+/// The weights of a group in the order of their unit identifiers. Each
+/// `RapidHashMap` is seeded at random, so a sum over its iteration order
+/// would differ from run to run in the last bits.
+fn in_id_order(group: &RapidHashMap<String, f64>) -> Vec<f64> {
+    let mut entries: Vec<(&String, f64)> = group.iter().map(|(id, w)| (id, *w)).collect();
+    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    entries.into_iter().map(|(_, weight)| weight).collect()
 }
 
 fn normalize_group(group: &RapidHashMap<String, f64>) -> RapidHashMap<String, f64> {
