@@ -97,6 +97,10 @@ impl<R: MatchingRecord> Constraint<R> for AntiExact {
         "antiexact"
     }
 
+    #[expect(
+        clippy::float_cmp,
+        reason = "a numeric antiexact field is categorical: equal means the same number"
+    )]
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
         match &self.field {
             AntiExactField::Key(key) => match (case.strata().get(key), control.strata().get(key)) {

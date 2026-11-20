@@ -601,3 +601,105 @@ fn reconstructed_pairs() {
         d.0
     });
 }
+
+#[test]
+fn nearest_matching_in_every_order() {
+    use epistat_matching::constraints::caliper_on_field;
+    use epistat_matching::{Assignment, MatchOrder, RapidHashMap};
+    let (mut anchors, mut candidates) = base_pair(300, 1_200, 21);
+    let mut rng = common::Lcg::new(77);
+    let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
+    let mut vectors: RapidHashMap<String, Vec<f64>> = RapidHashMap::default();
+    for record in anchors.iter_mut().chain(candidates.iter_mut()) {
+        // Scores on a grid, so that many candidates share a distance.
+        let score = rng.below(400) as f64 / 400.0;
+        scores.insert(record.id.clone(), score);
+        vectors.insert(
+            record.id.clone(),
+            vec![
+                score + rng.below(100) as f64 / 500.0,
+                rng.below(1000) as f64 / 100.0,
+            ],
+        );
+        record
+            .numerics
+            .insert("age".to_string(), rng.below(60) as f64);
+        record
+            .strata
+            .insert("fam".to_string(), format!("f{}", rng.below(40)));
+    }
+    let maha = || {
+        DistanceConfig::mahalanobis_map(vectors.clone(), vec![1.0, 0.0, 0.0, 1.0], 2, None).unwrap()
+    };
+    let orders = [
+        MatchOrder::Largest,
+        MatchOrder::Smallest,
+        MatchOrder::Data,
+        MatchOrder::Random,
+        MatchOrder::Closest,
+        MatchOrder::Farthest,
+    ];
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        for order in orders {
+            for (replace, ratio, assignment) in [
+                (false, 1, Assignment::Rounds),
+                (false, 3, Assignment::Rounds),
+                (true, 2, Assignment::Rounds),
+            ] {
+                let caliper = DistanceCaliper::new(0.3);
+                let job = MatchJob::new_standard(&anchors, &candidates, 5)
+                    .with_nearest()
+                    .with_m_order(order)
+                    .with_assignment(assignment)
+                    .with_std_caliper(true)
+                    .with_ratio(MatchRatio::new(ratio).unwrap())
+                    .with_replacement(replace)
+                    .with_exact_matches(["sex", "region"])
+                    .with_distance_config(DistanceConfig::propensity_score_map(
+                        scores.clone(),
+                        caliper,
+                    ))
+                    .with_constraints(vec![caliper_on_field::<BaseRecord>("age", 20.0)]);
+                let out = job.with_antiexact("fam").run();
+                assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&out);
+                d.weights(&out);
+            }
+            let out = MatchJob::new_standard(&anchors, &candidates, 5)
+                .with_nearest()
+                .with_m_order(order)
+                .with_ratio(MatchRatio::new(2).unwrap())
+                .with_exact_matches(["sex"])
+                .with_distance_config(DistanceConfig::propensity_score_map(
+                    scores.clone(),
+                    DistanceCaliper::new(0.2),
+                ))
+                .with_mahvars(maha())
+                .run();
+            assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+            d.outcome(&out);
+        }
+        for order in [MatchOrder::Data, MatchOrder::Closest, MatchOrder::Farthest] {
+            let out = MatchJob::new_standard(&anchors, &candidates[..300], 5)
+                .with_nearest()
+                .with_m_order(order)
+                .with_ratio(MatchRatio::new(2).unwrap())
+                .with_exact_matches(["sex", "region"])
+                .with_distance_config(maha())
+                .run();
+            assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+            d.outcome(&out);
+        }
+        let out = MatchJob::new_standard(&anchors, &candidates, 5)
+            .with_strategy(DeterministicSelection)
+            .with_round_assignment()
+            .with_ratio(MatchRatio::new(3).unwrap())
+            .with_birth_window(BirthDateWindowDays::new(45).unwrap())
+            .with_exact_matches(["sex", "region"])
+            .run();
+        assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+        d.outcome(&out);
+        d.0
+    });
+}

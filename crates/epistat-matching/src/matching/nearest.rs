@@ -11,7 +11,9 @@
 //!   of two scores (a propensity score on either scale, or any numeric score),
 //!   the absolute difference of two birth dates, or the Mahalanobis distance.
 //! * **Ties.** Candidates at the same distance are ranked by their position in
-//!   the candidate slice, lowest first. `matchit()` documents the same rule.
+//!   the candidate slice, lowest first. `matchit()` documents the same rule
+//!   but does not follow it where candidates at the same distance lie on the
+//!   same side of the anchor's score; see `tests/r_nearest.rs`.
 //! * **Calipers.** A caliper on the distance is inclusive. With
 //!   [`NearestSelection::with_std_caliper`] its width is in standard deviation
 //!   units of the distance variable, computed over all anchors and candidates
@@ -249,7 +251,7 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
         return None;
     }
 
-    let scale = if nearest.std_caliper {
+    let scale = if nearest.std_caliper && order_config.caliper().is_some() {
         let lookup = order_lookup?;
         let values: Vec<f64> = request
             .anchors
@@ -267,10 +269,7 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
             )
             .filter_map(|record| lookup.value(record))
             .collect();
-        match order_config.caliper() {
-            None => 1.0,
-            Some(_) => sample_sd(&values)?,
-        }
+        sample_sd(&values)?
     } else {
         1.0
     };
@@ -451,8 +450,8 @@ impl Pool {
         candidate_indices: &[usize],
     ) -> Self {
         let lookup = match &env.plan.rank {
-            Rank::Scalar { lookup, .. } => Some(*lookup),
-            Rank::Pairs {
+            Rank::Scalar { lookup, .. }
+            | Rank::Pairs {
                 gate: Some((lookup, _)),
                 ..
             } => Some(*lookup),
@@ -591,15 +590,18 @@ impl Pool {
         let mut position = self.avail.at_or_after(low);
         while position < high {
             let candidate_idx = self.candidate[position];
-            if probe.admits(candidate_idx)
-                && let Some(distance) = DistanceMetric::<R>::distance(
+            let distance = if probe.admits(candidate_idx) {
+                DistanceMetric::<R>::distance(
                     metric,
                     probe.anchor,
                     &probe.env.candidates[candidate_idx],
                 )
-                && distance.is_finite()
-                && caliper.is_none_or(|width| distance <= width)
-            {
+                .filter(|distance| distance.is_finite())
+                .filter(|distance| caliper.is_none_or(|width| *distance <= width))
+            } else {
+                None
+            };
+            if let Some(distance) = distance {
                 let at = best.partition_point(|entry| {
                     cmp_f64(entry.0, distance)
                         .then(entry.1.cmp(&candidate_idx))
@@ -647,7 +649,7 @@ struct Stratum<'e, 'a, R: MatchingRecord, G: ?Sized> {
     touched: FxHashSet<usize>,
 }
 
-impl<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, 'a, R, G> {
+impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
     /// The nearest `k` available candidates of the anchor in `slot`.
     fn search(&mut self, slot: usize, k: usize) -> Vec<(usize, f64)> {
         let env = self.env;
@@ -695,12 +697,12 @@ impl<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, 'a, R, G
             self.used.insert(ControlIdx::new(candidate_idx));
             self.assigned.push(candidate_idx);
         }
-        if criteria.unique_by_key.is_some()
-            && let Some(value) = unique_value(&self.env.candidates[candidate_idx], criteria)
-        {
-            self.state
-                .used_unique
-                .insert(intern_unique(&mut self.state.interner, value));
+        if criteria.unique_by_key.is_some() {
+            if let Some(value) = unique_value(&self.env.candidates[candidate_idx], criteria) {
+                self.state
+                    .used_unique
+                    .insert(intern_unique(&mut self.state.interner, value));
+            }
         }
     }
 
@@ -893,16 +895,16 @@ fn anchor_key<R: MatchingRecord>(plan: &Plan<'_>, anchor: &R) -> Option<f64> {
     }
 }
 
+/// Rows grouped by their exact-match values: each key with its row indices.
+type Groups<'a> = Vec<(Vec<Option<&'a str>>, Vec<usize>)>;
+
 /// Group row indices by their values of the exact-match keys, in order of
 /// first appearance, skipping the trimmed rows.
 fn group_rows<'a, R: MatchingRecord>(
     rows: &'a [R],
     values: &StrataValues<'a>,
     trimmed: Option<&std::collections::HashSet<usize>>,
-) -> (
-    Vec<(Vec<Option<&'a str>>, Vec<usize>)>,
-    FxHashMap<Vec<Option<&'a str>>, usize>,
-) {
+) -> (Groups<'a>, FxHashMap<Vec<Option<&'a str>>, usize>) {
     let mut index: FxHashMap<Vec<Option<&str>>, usize> = FxHashMap::default();
     let mut groups: Vec<(Vec<Option<&str>>, Vec<usize>)> = Vec::new();
     for idx in 0..rows.len() {
@@ -1009,4 +1011,53 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         distinct,
         diagnostics,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn availability_skips_removed_positions_in_both_directions() {
+        let mut avail = Availability::new(6);
+        for position in [1, 2, 4] {
+            avail.remove(position);
+        }
+        assert_eq!(avail.at_or_after(1), 3);
+        assert_eq!(avail.at_or_after(4), 5);
+        assert_eq!(avail.at_or_after(6), 6);
+        assert_eq!(avail.at_or_before(2), Some(0));
+        assert_eq!(avail.at_or_before(4), Some(3));
+        avail.remove(0);
+        assert_eq!(avail.at_or_before(2), None);
+        assert_eq!(avail.remaining, 2);
+    }
+
+    #[test]
+    fn std_caliper_without_a_score_distance_is_invalid() {
+        use crate::types::BaseRecord;
+        use rapidhash::RapidHashMap;
+        let anchors = vec![BaseRecord::new("a", crate::date(2010, 1, 1))];
+        let candidates = vec![BaseRecord::new("c", crate::date(2010, 1, 1))];
+        let config = DistanceConfig::mahalanobis_map(
+            RapidHashMap::default(),
+            vec![1.0],
+            1,
+            crate::types::DistanceCaliper::new(1.0),
+        )
+        .expect("valid");
+        let outcome = crate::MatchJob::new_standard(&anchors, &candidates, 0)
+            .with_nearest()
+            .with_std_caliper(true)
+            .with_distance_config(config)
+            .run();
+        assert_eq!(outcome.matched_cases, 0);
+        assert!(
+            outcome
+                .diagnostics
+                .exclusion_counts
+                .keys()
+                .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+        );
+    }
 }

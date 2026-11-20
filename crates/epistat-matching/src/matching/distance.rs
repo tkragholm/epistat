@@ -195,7 +195,7 @@ pub(crate) enum ScalarLookup<'a> {
 
 impl ScalarLookup<'_> {
     /// The record's number, or `None` when it has none or it is not finite.
-    pub(crate) fn value<R: MatchingRecord>(&self, record: &R) -> Option<f64> {
+    pub(crate) fn value<R: MatchingRecord>(self, record: &R) -> Option<f64> {
         use chrono::Datelike;
         match self {
             Self::BirthDate => Some(f64::from(record.birth_date().num_days_from_ce())),
