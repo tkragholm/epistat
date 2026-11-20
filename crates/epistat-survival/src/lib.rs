@@ -73,6 +73,9 @@
 //!   `ci.lin` and `ci.exp` limits.
 //! - [`surv2`]: timeline data (one row per observation) turned into counting-process
 //!   intervals, as `Surv2` and `fromtimeline`.
+//! - [`weighting`]: inverse probability of treatment and censoring weights, and Cox
+//!   and Kaplan-Meier estimates with a variance that accounts for the estimated
+//!   weights.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -110,6 +113,7 @@ pub mod survfit;
 pub mod survreg;
 pub mod timefix;
 pub mod tmerge;
+pub mod weighting;
 
 pub use error::{Error, Result};
 pub use surv::{
