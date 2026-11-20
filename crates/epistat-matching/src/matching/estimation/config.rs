@@ -178,8 +178,8 @@ pub struct MahalanobisPreparationConfig {
     /// Covariate encoding options.
     #[builder(default)]
     pub encoding: CovariateEncodingConfig,
-    /// Covariance estimation strategy.
-    #[builder(default = MahalanobisCovarianceStrategy::PooledWithinGroups)]
+    /// Covariance estimation strategy. The default is MatchIt's.
+    #[builder(default = MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom)]
     pub covariance_strategy: MahalanobisCovarianceStrategy,
     /// Optional covariate transformation before covariance estimation.
     #[builder(default = MahalanobisTransform::Raw)]
@@ -196,7 +196,7 @@ impl Default for MahalanobisPreparationConfig {
     fn default() -> Self {
         Self {
             encoding: CovariateEncodingConfig::default(),
-            covariance_strategy: MahalanobisCovarianceStrategy::PooledWithinGroups,
+            covariance_strategy: MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom,
             transform: MahalanobisTransform::Raw,
             ridge: 1e-8,
             max_ridge_attempts: 8,
