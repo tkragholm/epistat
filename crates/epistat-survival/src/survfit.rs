@@ -88,6 +88,53 @@
 //! - The median of `print.survfit` is not computed. It differs from
 //!   `quantile` only where the curve ends exactly at one half.
 //!
+//! # Reading a curve at chosen times
+//!
+//! [`GroupCurve::at`] and [`Survfit::at`] read the curves at chosen times as
+//! `summary.survfit(times = )` does, and [`GroupCurve::with_start`] adds the
+//! starting point as `survfit0`. [`CurveIndex`] does the same for any step curve
+//! held in slices, such as those of the Aalen-Johansen and multi-state
+//! estimators. //!
+//!
+//! ## Rules
+//!
+//! These are the rules of `summary.survfit(times = )` and `survfit0`. A step
+//! curve has the times `t_1 < ... < t_m`, and its value at `t_j` is the value
+//! just after the step at `t_j`.
+//!
+//! - The value at a chosen time `t` is the value at the last curve time `<= t`.
+//!   Before the first time of the curve it is the value of the first row, which
+//!   is the starting point when the curve has one.
+//! - The number at risk at `t` is the number at risk at the first curve time
+//!   `>= t`, since that is who is still being followed. After the last curve
+//!   time nobody is, so it is 0.
+//! - Events and censorings are summed over the curve times in `(t_prev, t]`,
+//!   where `t_prev` is the previous chosen time, and from the start of the
+//!   curve for the first chosen time. This needs strictly increasing times, and
+//!   `survfit` does it exactly then. Otherwise the chosen times are lookups
+//!   and the counts are those of the one curve time at or before `t`, again the
+//!   first row before the first time.
+//! - A chosen time after the last curve time is dropped, unless `extend` is
+//!   set, in which case the last value is carried forward, no one is at risk
+//!   and the counts are sums to the end of the curve.
+//! - A curve starts at its origin, the smaller of 0 and the times of the data.
+//!   When its first time is not the origin, [`GroupCurve::with_start`] adds a
+//!   row there, with survival 1, cumulative hazard 0, standard error 0, limits
+//!   1, no events or censorings and the number at risk of the first time.
+//!
+//! ## Differences from survfit (reading)
+//!
+//! - `survfit0` takes the origin as the smaller of 0 and the reporting times
+//!   of the curves. The origin here also includes the entry times, so that the
+//!   starting row is before every interval. The two differ only for negative
+//!   entry times.
+//! - A group none of whose chosen times is kept gives empty columns. `survfit`
+//!   gives an error for a single curve and empty columns for several.
+//! - The sums of weights are formed directly over the interval between two
+//!   chosen times. `summary.survfit` takes differences of a running sum, which
+//!   differ in rounding only. Counts of rows are the same.
+//! - Chosen times are checked: a missing value is an error, as in `survfit`.
+//!
 //! # References
 //!
 //! 1. Greenwood M. (1926) The natural duration of cancer, Reports on Public
@@ -115,12 +162,14 @@ mod group;
 mod jackknife;
 mod quantile;
 mod rmean;
+mod times;
 
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 pub use rmean::RestrictedMean;
+pub use times::{CurveAt, CurveIndex, ReadOptions};
 
 /// The estimator of the survival curve, `stype` in `survfit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
