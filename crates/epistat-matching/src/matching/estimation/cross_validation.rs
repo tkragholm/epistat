@@ -179,15 +179,12 @@ fn glmnet_path(
     // The path starts where the null model's gradient first allows a nonzero
     // penalised coefficient.
     let mut lambda_max = 0.0_f64;
-    for col in 0..p {
-        if penalty[col] <= 0.0 {
-            continue;
-        }
+    for (col, factor) in penalty.iter().enumerate().filter(|(_, f)| **f > 0.0) {
         let gradient = (0..n)
             .map(|row| weight(row) * problem.values[row * p + col] * (problem.y[row] - y_bar))
             .sum::<f64>()
             / total;
-        lambda_max = lambda_max.max(gradient.abs() / penalty[col]);
+        lambda_max = lambda_max.max(gradient.abs() / factor);
     }
     lambda_max /= config.alpha.max(1e-3);
     if !(lambda_max.is_finite() && lambda_max > 0.0) {
@@ -355,15 +352,17 @@ pub(super) fn fit_elastic_net_cv(
     let mut deviance = Vec::with_capacity(lambda.len());
     let mut deviance_se = Vec::with_capacity(lambda.len());
     for k in 0..lambda.len() {
-        let mean = (0..config.nfolds)
-            .map(|f| fold_weight[f] * fold_deviance[f][k])
+        let by_fold: Vec<f64> = fold_deviance.iter().map(|curve| curve[k]).collect();
+        let mean = by_fold
+            .iter()
+            .zip(&fold_weight)
+            .map(|(d, w)| w * d)
             .sum::<f64>()
             / fold_total;
-        let spread = (0..config.nfolds)
-            .map(|f| {
-                let d = fold_deviance[f][k] - mean;
-                fold_weight[f] * d * d
-            })
+        let spread = by_fold
+            .iter()
+            .zip(&fold_weight)
+            .map(|(d, w)| w * (d - mean) * (d - mean))
             .sum::<f64>()
             / fold_total;
         deviance.push(mean);

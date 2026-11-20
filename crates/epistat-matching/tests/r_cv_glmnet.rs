@@ -163,7 +163,7 @@ fn write_folds() {
 /// Rust fit draws.
 #[test]
 fn folds_are_the_ones_the_reference_used() {
-    let folds: Folds = load_json(&folds_path());
+    let folds: Folds = load_json(folds_path());
     assert_eq!(folds.cases.len(), CASES.len());
     for (case, &(name, n, _, nfolds, seed, _, _)) in folds.cases.iter().zip(&CASES) {
         assert_eq!(case.name, name);
@@ -205,7 +205,7 @@ fn cross_validation_matches_cv_glmnet() {
         "{} / glmnet {}",
         reference.versions.r, reference.versions.glmnet
     );
-    let folds: Folds = load_json(&folds_path());
+    let folds: Folds = load_json(folds_path());
     for case in &reference.cases {
         let given = folds
             .cases
