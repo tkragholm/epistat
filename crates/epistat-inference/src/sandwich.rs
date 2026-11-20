@@ -39,6 +39,9 @@
 //! is exactly symmetric, its diagonal equals that of `R'` to the bit, and its
 //! off-diagonal entries differ from `R'` in the last bits.
 //!
+//! [`sandwich_with_inverse`] forms the same `V = A^-1 M A^-T` from an inverse
+//! the caller already has, by two products, for a symmetric `A`.
+//!
 //! [`standard_errors`] is `sqrt(max(V_ii, 0))`. A negative diagonal entry,
 //! which rounding can produce when `V` is near singular, is read as zero.
 //!
@@ -129,6 +132,35 @@ pub fn sandwich(
     }))
 }
 
+/// `V M V'` for a symmetric inverse `V = A^-1` already in hand and a symmetric
+/// meat `M`, averaged with its transpose so that the result is exactly
+/// symmetric.
+///
+/// Use it where the inverse is formed anyway, for the model-based covariance.
+/// Each entry is a sum over the shared index in ascending order, first `V M`
+/// and then `(V M) V`, and entry `(i, j)` of the result is the midpoint of
+/// entries `(i, j)` and `(j, i)` of that product. [`sandwich`] solves instead
+/// of multiplying and rounds differently.
+///
+/// # Panics
+///
+/// If `inverse` or `meat` is not square of the same side.
+#[must_use]
+pub fn sandwich_with_inverse(inverse: MatRef<'_, f64>, meat: MatRef<'_, f64>) -> Mat<f64> {
+    let p = inverse.nrows();
+    assert!(
+        inverse.ncols() == p && meat.nrows() == p && meat.ncols() == p,
+        "the inverse and the meat must be square of the same side"
+    );
+    let left = Mat::from_fn(p, p, |a, b| {
+        (0..p).map(|c| inverse[(a, c)] * meat[(c, b)]).sum::<f64>()
+    });
+    let full = Mat::from_fn(p, p, |a, b| {
+        (0..p).map(|c| left[(a, c)] * inverse[(c, b)]).sum::<f64>()
+    });
+    Mat::from_fn(p, p, |a, b| full[(a, b)].midpoint(full[(b, a)]))
+}
+
 /// The square roots of the diagonal, with negative variances read as zero.
 #[must_use]
 pub fn standard_errors(covariance: MatRef<'_, f64>) -> Vec<f64> {
@@ -191,6 +223,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_inverse_form_is_symmetric_and_matches_the_solving_form() {
+        let a = mat![[2.0, 0.3, 0.1], [0.3, 1.5, 0.2], [0.1, 0.2, 3.0]];
+        let x = Mat::from_fn(9, 3, |i, j| ((i * 3 + j) % 5) as f64 - 1.7);
+        let m = meat(x.as_ref(), |i| 0.3 * i as f64 - 1.0, None).unwrap();
+        let inverse = Factor::new(a.as_ref(), &Attempt::SYMMETRIC)
+            .unwrap()
+            .solve(Mat::<f64>::identity(3, 3).as_ref())
+            .unwrap();
+        let v = sandwich_with_inverse(inverse.as_ref(), m.as_ref());
+        let solved = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        let scale = (0..3).map(|i| v[(i, i)].abs()).fold(0.0, f64::max);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_eq!(v[(i, j)].to_bits(), v[(j, i)].to_bits());
+                // Both forms are within a few n kappa(A) eps of the exact value.
+                let err = (v[(i, j)] - solved[(i, j)]).abs();
+                assert!(
+                    err <= 64.0 * 10.0 * f64::EPSILON * scale,
+                    "({i},{j}): {err:e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_inverse_form_sums_in_ascending_order_of_the_shared_index() {
+        // With a diagonal inverse every sum has one nonzero term, so the
+        // result is d_i m_ij d_j exactly, then the midpoint with its mirror.
+        let d = [0.5, 3.0];
+        let inverse = Mat::from_fn(2, 2, |i, j| if i == j { d[i] } else { 0.0 });
+        let m = mat![[1.0, 0.25], [0.75, 2.0]];
+        let v = sandwich_with_inverse(inverse.as_ref(), m.as_ref());
+        let off = (d[0] * 0.25 * d[1]).midpoint(d[1] * 0.75 * d[0]);
+        assert_eq!(v[(0, 1)].to_bits(), off.to_bits());
+        assert_eq!(v[(1, 0)].to_bits(), off.to_bits());
+        assert_eq!(v[(0, 0)].to_bits(), (d[0] * 1.0 * d[0]).to_bits());
+    }
+
+    #[test]
+    #[should_panic(expected = "square of the same side")]
+    fn the_inverse_form_refuses_matrices_of_different_sides() {
+        let _ = sandwich_with_inverse(
+            Mat::<f64>::identity(2, 2).as_ref(),
+            Mat::<f64>::identity(3, 3).as_ref(),
+        );
     }
 
     #[test]

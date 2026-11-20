@@ -384,7 +384,7 @@
 
 use std::borrow::Cow;
 
-use epistat_inference::sandwich::meat;
+use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
 
@@ -1821,28 +1821,12 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     })
 }
 
-/// `V M V'` for the symmetric `p` by `p` matrices `variance` and `meat`, in a
-/// fixed order, averaged with its transpose so that it is exactly symmetric.
+/// `V M V'` for the symmetric `p` by `p` matrices `variance` and `meat`, as a
+/// row-major vector.
 fn sandwich(variance: &[f64], meat: &Mat<f64>, p: usize) -> Vec<f64> {
-    let mut left = vec![0.0f64; p * p];
-    for a in 0..p {
-        for b in 0..p {
-            left[a * p + b] = (0..p).map(|c| variance[a * p + c] * meat[(c, b)]).sum();
-        }
-    }
-    let mut full = vec![0.0f64; p * p];
-    for a in 0..p {
-        for b in 0..p {
-            full[a * p + b] = (0..p).map(|c| left[a * p + c] * variance[c * p + b]).sum();
-        }
-    }
-    let mut symmetric = vec![0.0f64; p * p];
-    for a in 0..p {
-        for b in 0..p {
-            symmetric[a * p + b] = full[a * p + b].midpoint(full[b * p + a]);
-        }
-    }
-    symmetric
+    let inverse = Mat::from_fn(p, p, |a, b| variance[a * p + b]);
+    let v = sandwich_with_inverse(inverse.as_ref(), meat.as_ref());
+    (0..p * p).map(|k| v[(k / p, k % p)]).collect()
 }
 
 /// A covariance matrix of the scaled coefficients on the scale of the columns
