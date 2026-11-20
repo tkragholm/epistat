@@ -492,6 +492,112 @@ fn propensity_estimation_and_matching() {
 }
 
 #[test]
+fn reestimated_propensity_and_nearest_matching() {
+    use epistat_matching::{CommonSupport, NearestSelection};
+    let (anchors, candidates) = balance_inputs(600, 2_400, 4);
+    let config = PropensityScoreConfig::builder()
+        .reestimate(true)
+        .encoding(
+            CovariateEncodingConfig::builder()
+                .include_intercept(true)
+                .missing_value_policy(MissingValuePolicy::Impute)
+                .build(),
+        )
+        .build();
+    for policy in [
+        CommonSupport::Treated,
+        CommonSupport::Control,
+        CommonSupport::Both,
+    ] {
+        assert_same_on_pools(&POOLS, || {
+            let mut d = Digest::default();
+            let criteria = MatchingCriteria::builder()
+                .match_ratio(2)
+                .common_support(policy)
+                .build();
+            let matched = estimate_propensity_and_match(
+                &anchors,
+                &candidates,
+                &criteria,
+                NearestSelection::new(3),
+                &[],
+                &(),
+                &config,
+            )
+            .unwrap();
+            assert!(
+                !matched.outcome.pairs.is_empty(),
+                "no output, test is vacuous"
+            );
+            d.outcome(&matched.outcome);
+            d.weights(&matched.outcome);
+            d.estimate(&matched.propensity);
+            d.0
+        });
+    }
+}
+
+#[test]
+fn nearest_matching_on_prepared_distances() {
+    use epistat_matching::MatchOrder;
+    let (anchors, candidates) = balance_inputs(150, 600, 9);
+    let impute = CovariateEncodingConfig::builder()
+        .missing_value_policy(MissingValuePolicy::Impute)
+        .build();
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let mahalanobis = prepare_mahalanobis_distance_config(
+            &anchors,
+            &candidates,
+            None,
+            &MahalanobisPreparationConfig::builder()
+                .encoding(impute.clone())
+                .build(),
+        )
+        .unwrap();
+        let robust = prepare_mahalanobis_distance_config(
+            &anchors,
+            &candidates,
+            None,
+            &MahalanobisPreparationConfig::builder()
+                .encoding(impute.clone())
+                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
+                .transform(MahalanobisTransform::RankTieAdjusted)
+                .build(),
+        )
+        .unwrap();
+        let euclidean = prepare_euclidean_distance_config(
+            &anchors,
+            &candidates,
+            None,
+            &EuclideanPreparationConfig::builder()
+                .encoding(impute.clone())
+                .scale(EuclideanScale::PooledWithinGroupSd)
+                .build(),
+        )
+        .unwrap();
+        for config in [
+            mahalanobis.distance_config,
+            robust.distance_config,
+            euclidean.distance_config,
+        ] {
+            for order in [MatchOrder::Data, MatchOrder::Closest, MatchOrder::Farthest] {
+                let out = MatchJob::new_standard(&anchors, &candidates, 1)
+                    .with_nearest()
+                    .with_m_order(order)
+                    .with_ratio(MatchRatio::new(2).unwrap())
+                    .with_exact_matches(["sex"])
+                    .with_distance_config(config.clone())
+                    .run();
+                assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&out);
+            }
+        }
+        d.0
+    });
+}
+
+#[test]
 fn mahalanobis_preparation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 5);
     for strategy in [
@@ -704,7 +810,7 @@ fn reconstructed_pairs() {
 #[test]
 fn nearest_matching_in_every_order() {
     use epistat_matching::constraints::caliper_on_field;
-    use epistat_matching::{Assignment, MatchOrder, RapidHashMap};
+    use epistat_matching::{Assignment, MatchOrder, RapidHashMap, VariableRatio};
     let (mut anchors, mut candidates) = base_pair(300, 1_200, 21);
     let mut rng = common::Lcg::new(77);
     let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
@@ -778,6 +884,23 @@ fn nearest_matching_in_every_order() {
                 .run();
             assert!(!out.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&out);
+            for replace in [false, true] {
+                let out = MatchJob::new_standard(&anchors, &candidates, 5)
+                    .with_nearest()
+                    .with_m_order(order)
+                    .with_variable_ratio(VariableRatio::new(2.5, 1, 5).unwrap())
+                    .with_replacement(replace)
+                    .with_exact_matches(["sex"])
+                    .with_distance_config(DistanceConfig::propensity_score_map(
+                        scores.clone(),
+                        DistanceCaliper::new(0.4),
+                    ))
+                    .with_std_caliper(true)
+                    .run();
+                assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&out);
+                d.weights(&out);
+            }
         }
         for order in [MatchOrder::Data, MatchOrder::Closest, MatchOrder::Farthest] {
             let out = MatchJob::new_standard(&anchors, &candidates[..300], 5)

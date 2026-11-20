@@ -135,8 +135,8 @@ pub use balance::{
 pub use matching::{
     Assignment, CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
     CovariateEncodingConfig, CovariateMatrix, CovariateRecord, CrossValidation, DateDistance,
-    DeterministicSelection, DistanceChannel, DistanceConfig, DistanceMetric, ElasticNetCvConfig,
-    ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,
+    DeterministicSelection, DiscardedUnits, DistanceChannel, DistanceConfig, DistanceMetric,
+    ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,
     EuclideanPreparationConfig, EuclideanScale, ExactMatchConstraint, IdMapEuclideanDistance,
     IdMapMahalanobisDistance, IdMapPropensityScoreDistance, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisDistance, MahalanobisDistancePreparation,
@@ -150,12 +150,12 @@ pub use matching::{
     ResidentAtIndexRecord, RidgeReport, RoleIndexedRecord, Rounds, SelectionStrategy,
     StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup, SubclassSummary,
     SubclassificationConfig, SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet,
-    UnitWeightTable, UsedControlsVec, cross_validation_folds, effective_sample_size,
-    estimate_propensity_and_match, match_standard, match_weights_from_pairs,
-    pair_weights_from_pairs, prepare_euclidean_distance_config,
-    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
-    prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs,
-    subclassify_by_propensity_score_map,
+    UnitWeightTable, UsedControlsVec, VariableRatio, VariableRatioError, cross_validation_folds,
+    effective_sample_size, estimate_propensity_and_match, match_standard,
+    match_standard_with_discard, match_weights_from_pairs, pair_weights_from_pairs,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
+    reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use role_transition::{
@@ -245,11 +245,11 @@ pub mod prelude {
         balance_report_with_options, balance_threshold_summary, build_projected_balance_rows,
         categorical_max_abs_diff, cross_validation_folds, effective_sample_size,
         estimate_propensity_and_match, get_matches, match_data, match_matrix, match_standard,
-        match_transition, match_weights_from_pairs, pair_weights_from_pairs,
-        prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
-        prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
-        reconstruct_case_control_pairs, run_spec, smd_numeric_from_values,
-        subclassify_by_propensity_score_map,
+        match_standard_with_discard, match_transition, match_weights_from_pairs,
+        pair_weights_from_pairs, prepare_euclidean_distance_config,
+        prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+        prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs, run_spec,
+        smd_numeric_from_values, subclassify_by_propensity_score_map,
     };
 
     pub mod constraints {

@@ -27,6 +27,20 @@
 //! * **Assignment.** Without replacement and with a ratio above 1, every
 //!   anchor takes a first control before any takes a second, and so on, unless
 //!   [`Assignment::Sequential`] is asked for.
+//! * **Variable ratio.** [`VariableRatio`] sets the number of controls of each
+//!   anchor from its score before matching, as `min.controls` and
+//!   `max.controls` do in `matchit()`. It needs a score distance.
+//! * **Calipers on a covariate distance.** `matchit()` accepts calipers only
+//!   on named covariates when the distance is Mahalanobis or Euclidean. A
+//!   caliper in standard deviation units of such a distance has no score to
+//!   take the deviation of, and the outcome is invalid. A caliper in the
+//!   distance's own units is accepted.
+//! * **Ratio fallbacks.** Fallback ratios choose a smaller ratio for a stratum
+//!   that cannot reach the full one. Ranking by distance in rounds gives every
+//!   anchor its controls one at a time and leaves an anchor with fewer when
+//!   the candidates run out, and a variable ratio sets each anchor's number
+//!   itself, so a tier has nothing left to decide. A job that sets fallback
+//!   ratios with the nearest mode returns an invalid outcome (`nearest_options`).
 //! * **Exact strata.** Anchors and candidates are split by the exact-match
 //!   keys first, and the strata are matched in parallel. Within a stratum the
 //!   matching is sequential, since each assignment depends on the last.
@@ -107,6 +121,163 @@ pub struct NearestSelection {
     assignment: Assignment,
     std_caliper: bool,
     mahvars: Option<DistanceConfig>,
+    variable_ratio: Option<VariableRatio>,
+}
+
+/// Why a variable ratio is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariableRatioError {
+    /// The average is not a finite number above 1.
+    AverageNotAboveOne,
+    /// The minimum is below 1.
+    MinimumBelowOne,
+    /// The minimum is not below the average.
+    MinimumNotBelowAverage,
+    /// The maximum is not above the average.
+    MaximumNotAboveAverage,
+}
+
+impl std::fmt::Display for VariableRatioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::AverageNotAboveOne => "the average ratio must be a number above 1",
+            Self::MinimumBelowOne => "the minimum number of controls must be at least 1",
+            Self::MinimumNotBelowAverage => {
+                "the minimum number of controls must be below the average ratio"
+            }
+            Self::MaximumNotAboveAverage => {
+                "the maximum number of controls must be above the average ratio"
+            }
+        })
+    }
+}
+
+impl std::error::Error for VariableRatioError {}
+
+/// Extremal variable ratio matching (Ming and Rosenbaum, 2000), the
+/// `min.controls` and `max.controls` of `matchit()`.
+///
+/// Anchors take between `min` and `max` controls, and in total
+/// `round(average * anchors)` controls are asked for (halves rounded to even,
+/// as in R), as many as fixed ratio matching at the average would ask for. The
+/// numbers are set before matching, from the scores alone and without regard to
+/// calipers or trimming: as many anchors as possible get `max`, one anchor
+/// gets the number in between that makes the total, never below `min`, and the
+/// others get `min`. `matchit()` gives that one anchor fewer than `min` for
+/// some totals when `min` is above 1, which the minimum forbids; the numbers
+/// agree otherwise. The anchors are ranked by score. When the anchors' mean score is
+/// above the candidates', the anchors with the highest scores, those furthest
+/// from the candidates, get the fewest controls, and otherwise the anchors with
+/// the lowest. Equal scores rank by position in the anchor slice. The ranking
+/// covers every anchor of the slice, trimmed to common support or not, as the
+/// mean does with the candidates.
+///
+/// Used with [`NearestSelection::with_variable_ratio`], it replaces the job's
+/// ratio. It needs a score distance, a propensity score or any numeric score,
+/// possibly with `mahvars`, and the job must not set fallback ratios.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VariableRatio {
+    average: f64,
+    min: usize,
+    max: usize,
+}
+
+impl VariableRatio {
+    /// A variable ratio with the average (`ratio`) and the least and most
+    /// controls per anchor (`min.controls`, `max.controls`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`VariableRatioError`] unless `1 <= min < average < max`.
+    pub fn new(average: f64, min: usize, max: usize) -> Result<Self, VariableRatioError> {
+        if !(average.is_finite() && average > 1.0) {
+            return Err(VariableRatioError::AverageNotAboveOne);
+        }
+        if min < 1 {
+            return Err(VariableRatioError::MinimumBelowOne);
+        }
+        #[expect(clippy::cast_precision_loss, reason = "control counts are small")]
+        let (low, high) = (min as f64, max as f64);
+        if low >= average {
+            return Err(VariableRatioError::MinimumNotBelowAverage);
+        }
+        if high <= average {
+            return Err(VariableRatioError::MaximumNotAboveAverage);
+        }
+        Ok(Self { average, min, max })
+    }
+
+    /// The numbers of controls of `anchors` anchors, in the order of the
+    /// ranking by score (fewest first), or `None` when no assignment of the
+    /// total exists within the bounds.
+    fn counts(&self, anchors: usize) -> Option<Vec<usize>> {
+        let n = i64::try_from(anchors).ok()?;
+        if n == 0 {
+            return None;
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            reason = "the total is a count of units"
+        )]
+        let total = (self.average * anchors as f64).round_ties_even() as i64;
+        let low = i64::try_from(self.min).ok()?;
+        let high = i64::try_from(self.max).ok()?;
+        // `at_max` anchors get the maximum and `at_min` the minimum, and one
+        // anchor `between` the two, so that the numbers add up to the total:
+        // at_max is the most anchors the maximum can be given to while every
+        // other anchor still gets at least the minimum.
+        let at_max = (total - low * n).div_euclid(high - low);
+        let at_min = n - at_max - 1;
+        if at_min < 0 || at_max < 0 {
+            return None;
+        }
+        let between = total - (low * at_min + high * at_max);
+        std::iter::repeat_n(low, usize::try_from(at_min).ok()?)
+            .chain(std::iter::once(between))
+            .chain(std::iter::repeat_n(high, usize::try_from(at_max).ok()?))
+            .map(|count| usize::try_from(count).ok())
+            .collect()
+    }
+
+    /// The number of controls of every anchor, by position in the slice.
+    fn per_anchor<R: MatchingRecord>(
+        &self,
+        anchors: &[R],
+        candidates: &[R],
+        lookup: ScalarLookup<'_>,
+    ) -> Option<Vec<usize>> {
+        let counts = self.counts(anchors.len())?;
+        let anchor_scores: Vec<f64> = anchors
+            .iter()
+            .map(|record| lookup.value(record).filter(|value| value.is_finite()))
+            .collect::<Option<_>>()?;
+        let mut candidate_sum = 0.0;
+        for record in candidates {
+            candidate_sum += lookup.value(record).filter(|value| value.is_finite())?;
+        }
+        let mut anchor_sum = 0.0;
+        for value in &anchor_scores {
+            anchor_sum += value;
+        }
+        #[expect(clippy::cast_precision_loss, reason = "counts of units")]
+        let anchors_above =
+            anchor_sum / anchors.len() as f64 > candidate_sum / candidates.len() as f64;
+        let mut ranked: Vec<usize> = (0..anchors.len()).collect();
+        ranked.sort_by(|&a, &b| {
+            let by_score = if anchors_above {
+                cmp_f64(anchor_scores[b], anchor_scores[a])
+            } else {
+                cmp_f64(anchor_scores[a], anchor_scores[b])
+            };
+            by_score.then(a.cmp(&b))
+        });
+        let mut per_anchor = vec![0_usize; anchors.len()];
+        for (position, anchor) in ranked.into_iter().enumerate() {
+            per_anchor[anchor] = counts[position];
+        }
+        Some(per_anchor)
+    }
 }
 
 impl NearestSelection {
@@ -120,6 +291,7 @@ impl NearestSelection {
             assignment: Assignment::Rounds,
             std_caliper: false,
             mahvars: None,
+            variable_ratio: None,
         }
     }
 
@@ -142,6 +314,14 @@ impl NearestSelection {
     #[must_use]
     pub const fn with_std_caliper(mut self, std_caliper: bool) -> Self {
         self.std_caliper = std_caliper;
+        self
+    }
+
+    /// Match a variable number of controls to each anchor instead of the
+    /// job's ratio. See [`VariableRatio`].
+    #[must_use]
+    pub const fn with_variable_ratio(mut self, ratio: VariableRatio) -> Self {
+        self.variable_ratio = Some(ratio);
         self
     }
 
@@ -214,6 +394,11 @@ struct Plan<'a> {
     assignment: Assignment,
     order_lookup: Option<ScalarLookup<'a>>,
     rank: Rank<'a>,
+    /// The number of controls of each anchor by position in the anchor slice,
+    /// where the ratio is variable.
+    ratios: Option<Vec<usize>>,
+    /// The most controls any anchor takes.
+    max_ratio: usize,
 }
 
 fn invalid(anchors: usize) -> MatchOutcome {
@@ -300,11 +485,23 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
         }
     };
 
+    let ratios = match &nearest.variable_ratio {
+        None => None,
+        Some(variable) => {
+            Some(variable.per_anchor(request.anchors, request.candidates, order_lookup?)?)
+        }
+    };
+    let max_ratio = ratios.as_ref().map_or(criteria.match_ratio, |ratios| {
+        ratios.iter().copied().max().unwrap_or(0)
+    });
+
     Some(Plan {
         order,
         assignment: nearest.assignment,
         order_lookup,
         rank,
+        ratios,
+        max_ratio,
     })
 }
 
@@ -686,6 +883,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         }
     }
 
+    /// The number of controls the anchor in `slot` is to get.
+    fn ratio_of(&self, slot: usize) -> usize {
+        self.env
+            .plan
+            .ratios
+            .as_ref()
+            .map_or(self.env.criteria.match_ratio, |ratios| {
+                ratios[self.usable[slot]]
+            })
+    }
+
     /// Give the anchor in `slot` the candidate at `position`.
     fn assign(&mut self, slot: usize, position: usize) {
         let criteria = self.env.criteria;
@@ -708,8 +916,8 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
 
     /// Every anchor, in turn, takes all its controls.
     fn take_all_in_turn(&mut self, order: &[usize]) {
-        let ratio = self.env.criteria.match_ratio;
         for &slot in order {
+            let ratio = self.ratio_of(slot);
             for (position, _) in self.search(slot, ratio) {
                 self.assign(slot, position);
             }
@@ -718,9 +926,12 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
 
     /// Every anchor takes one control per round, in the same order each round.
     fn take_in_rounds(&mut self, order: &[usize]) {
-        let ratio = self.env.criteria.match_ratio;
-        let mut active = order.to_vec();
-        for _ in 0..ratio {
+        let mut active: Vec<usize> = order
+            .iter()
+            .copied()
+            .filter(|&slot| self.ratio_of(slot) > 0)
+            .collect();
+        for _ in 0..self.env.plan.max_ratio {
             if self.pool.avail.remaining == 0 || active.is_empty() {
                 break;
             }
@@ -728,7 +939,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             for &slot in &active {
                 if let Some(&(position, _)) = self.search(slot, 1).first() {
                     self.assign(slot, position);
-                    if self.controls_of[slot].len() < ratio {
+                    if self.controls_of[slot].len() < self.ratio_of(slot) {
                         next.push(slot);
                     }
                 }
@@ -739,15 +950,18 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
 
     /// Rounds in which the pairs are taken in order of their distance.
     fn take_by_pair_distance(&mut self, order: &[usize], closest: bool) {
-        let ratio = self.env.criteria.match_ratio;
         let key = |distance: f64, entry: usize| -> QueueItem {
             (
                 OrderedFloat(if closest { -distance } else { distance }),
                 Reverse(entry),
             )
         };
-        let mut active = order.to_vec();
-        for _ in 0..ratio {
+        let mut active: Vec<usize> = order
+            .iter()
+            .copied()
+            .filter(|&slot| self.ratio_of(slot) > 0)
+            .collect();
+        for _ in 0..self.env.plan.max_ratio {
             if self.pool.avail.remaining == 0 || active.is_empty() {
                 break;
             }
@@ -773,7 +987,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                     queue.push(key(distance, entry));
                 }
             }
-            matched_now.retain(|&slot| self.controls_of[slot].len() < ratio);
+            matched_now.retain(|&slot| self.controls_of[slot].len() < self.ratio_of(slot));
             matched_now.sort_unstable();
             active = matched_now;
         }
@@ -787,7 +1001,6 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     candidate_indices: &[usize],
 ) -> StratumResult {
     let criteria = env.criteria;
-    let ratio = criteria.match_ratio;
     let plan = &env.plan;
     let anchors: &'a [R] = env.anchors;
 
@@ -873,7 +1086,7 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         if controls.is_empty() {
             result.unmatched += 1;
         } else {
-            if controls.len() < ratio {
+            if controls.len() < stratum.ratio_of(slot) {
                 result.below_ratio += 1;
             }
             result.matched.push((stratum.usable[slot], controls));
@@ -1059,5 +1272,54 @@ mod tests {
                 .keys()
                 .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
         );
+    }
+
+    #[test]
+    fn ratio_fallbacks_with_the_nearest_mode_are_invalid() {
+        use crate::types::{BaseRecord, MatchRatio};
+        let anchors = vec![BaseRecord::new("a", crate::date(2010, 1, 1))];
+        let candidates = vec![BaseRecord::new("c", crate::date(2010, 1, 1))];
+        for variable in [false, true] {
+            let mut job = crate::MatchJob::new_standard(&anchors, &candidates, 0)
+                .with_nearest()
+                .with_ratio_fallback(vec![MatchRatio::new(1).expect("ratio")]);
+            if variable {
+                job = job.with_variable_ratio(VariableRatio::new(2.0, 1, 3).expect("valid"));
+            }
+            let outcome = job.run();
+            assert_eq!(outcome.matched_cases, 0);
+            assert!(
+                outcome
+                    .diagnostics
+                    .exclusion_counts
+                    .keys()
+                    .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+            );
+        }
+    }
+
+    #[test]
+    fn variable_ratio_numbers_add_up_and_keep_to_the_bounds() {
+        for (n, average, min, max) in [
+            (60, 2.0, 1, 4),
+            (60, 2.5, 2, 5),
+            (139, 2.5, 2, 5),
+            (7, 1.5, 1, 2),
+            (50, 3.0, 2, 12),
+        ] {
+            let ratio = VariableRatio::new(average, min, max).expect("valid");
+            let counts = ratio.counts(n).expect("counts");
+            assert_eq!(counts.len(), n);
+            assert!(counts.iter().all(|c| (min..=max).contains(c)));
+            assert!(counts.windows(2).all(|w| w[0] <= w[1]));
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "small positive numbers"
+            )]
+            let total = (average * n as f64).round_ties_even() as usize;
+            assert_eq!(counts.iter().sum::<usize>(), total, "{n} {average}");
+        }
     }
 }

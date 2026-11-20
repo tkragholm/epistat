@@ -768,6 +768,20 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
     }
 }
 
+/// Units left out of a standard match, given by id.
+///
+/// This is `matchit()`'s `discard` as a list: the caller decides which units
+/// go, for instance from a first propensity fit, and matches the others on a
+/// distance fitted again. Ids that belong to no anchor or candidate are
+/// ignored.
+#[derive(Debug, Clone, Default)]
+pub struct DiscardedUnits {
+    /// Ids of the anchors to leave out.
+    pub anchors: HashSet<String>,
+    /// Ids of the candidates to leave out.
+    pub candidates: HashSet<String>,
+}
+
 /// Run anchor/candidate matching with an explicit control selection strategy.
 #[must_use]
 pub fn match_standard<
@@ -778,6 +792,25 @@ pub fn match_standard<
     anchors: &[R],
     candidates: &[R],
     request: StandardMatchRequest<'_, S, G>,
+) -> MatchOutcome {
+    match_standard_with_discard(anchors, candidates, request, None)
+}
+
+/// As [`match_standard`], leaving out the units in `discarded`.
+///
+/// The listed units take the place of common-support trimming: the criteria's
+/// common-support policy is not applied again, and the distance need not be a
+/// propensity score. They are counted as trimmed in the diagnostics.
+#[must_use]
+pub fn match_standard_with_discard<
+    R: MatchingRecord,
+    S: SelectionStrategy<R> + Clone + Send + Sync,
+    G: ConstraintGroup<R> + ?Sized,
+>(
+    anchors: &[R],
+    candidates: &[R],
+    request: StandardMatchRequest<'_, S, G>,
+    discarded: Option<&DiscardedUnits>,
 ) -> MatchOutcome {
     let validated = match request.criteria.validate() {
         Ok(validated) => validated,
@@ -790,7 +823,25 @@ pub fn match_standard<
     let ratio_policy = RatioPolicy::from_fallback(validated.match_ratio, request.ratio_fallback);
     let mut diagnostics =
         initial_diagnostics(anchors.len(), criteria.estimand, criteria.common_support);
+    let listed = discarded.map(|units| {
+        let indices = |rows: &[R], ids: &HashSet<String>| -> HashSet<usize> {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| ids.contains(row.id()))
+                .map(|(idx, _)| idx)
+                .collect()
+        };
+        (
+            indices(anchors, &units.anchors),
+            indices(candidates, &units.candidates),
+        )
+    });
+    if let Some((trimmed_anchors, trimmed_candidates)) = &listed {
+        diagnostics.common_support_trimmed_anchors = trimmed_anchors.len();
+        diagnostics.common_support_trimmed_candidates = trimmed_candidates.len();
+    }
     let support = match criteria.common_support {
+        _ if listed.is_some() => None,
         None => None,
         Some(policy) => {
             let Some(scores) = request
@@ -811,9 +862,15 @@ pub fn match_standard<
             }
         }
     };
-    let trimmed = TrimmedIndexConfig {
-        anchors: support.as_ref().map(|support| &support.anchors),
-        candidates: support.as_ref().map(|support| &support.candidates),
+    let trimmed = match &listed {
+        Some((trimmed_anchors, trimmed_candidates)) => TrimmedIndexConfig {
+            anchors: Some(trimmed_anchors),
+            candidates: Some(trimmed_candidates),
+        },
+        None => TrimmedIndexConfig {
+            anchors: support.as_ref().map(|support| &support.anchors),
+            candidates: support.as_ref().map(|support| &support.candidates),
+        },
     };
 
     if let Some(nearest) = engine.selector.nearest() {
