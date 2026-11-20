@@ -76,7 +76,7 @@ impl Default for LogisticRegressionConfig {
 /// unpenalised and the covariates used as given, not standardised. This is the
 /// objective of R's `glmnet(family = "binomial", standardize = FALSE)`, and the
 /// coefficients agree with it to about 1e-7
-/// (`tests/glmnet_reference.rs`). `glmnet`'s default `standardize = TRUE`
+/// (`tests/r_glmnet.rs`). `glmnet`'s default `standardize = TRUE`
 /// penalises the standardised coefficients and gives different estimates.
 ///
 /// The optimiser is IRLS with cyclic coordinate descent on the penalised

@@ -1,7 +1,7 @@
 # Reference fits for the elastic-net logistic estimator, from R's glmnet.
 #
 # Run from the crate root:
-#   PATH=/opt/homebrew/opt/r/bin:$PATH Rscript tests/glmnet_reference.R
+#   PATH=/opt/homebrew/opt/r/bin:$PATH Rscript tests/data/glmnet.R
 #
 # glmnet minimises, per observation,
 #   -loglik / n + lambda * (alpha * ||b||_1 + (1 - alpha) / 2 * ||b||_2^2)
@@ -75,4 +75,4 @@ for (d in designs) {
 
 out <- list(glmnet_version = as.character(packageVersion("glmnet")),
             r_version = R.version.string, designs = design_out, fits = fits)
-write_json(out, "tests/glmnet_reference.json", digits = NA, auto_unbox = TRUE)
+write_json(out, "tests/data/glmnet.json", digits = NA, auto_unbox = TRUE)

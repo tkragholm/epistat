@@ -716,8 +716,33 @@ pub fn match_standard<
     let criteria = validated.as_ref();
     let engine = MatchEngine::new(candidates, criteria, request.strategy);
     let ratio_policy = RatioPolicy::from_fallback(validated.match_ratio, request.ratio_fallback);
-    let diagnostics =
+    let mut diagnostics =
         initial_diagnostics(anchors.len(), criteria.estimand, criteria.common_support);
+    let support = match criteria.common_support {
+        None => None,
+        Some(policy) => {
+            let Some(scores) = request
+                .distance_config
+                .and_then(DistanceConfig::propensity_scores)
+            else {
+                return invalid_common_support_outcome(
+                    anchors.len(),
+                    CommonSupportFailureReason::RequiresPropensityScoreMap,
+                );
+            };
+            match standard_common_support(anchors, candidates, policy, scores) {
+                Ok(support) => {
+                    support.record_in(&mut diagnostics);
+                    Some(support)
+                }
+                Err(reason) => return invalid_common_support_outcome(anchors.len(), reason),
+            }
+        }
+    };
+    let trimmed = TrimmedIndexConfig {
+        anchors: support.as_ref().map(|support| &support.anchors),
+        candidates: support.as_ref().map(|support| &support.candidates),
+    };
 
     // The unconfigured path is the common one, so it keeps the concrete date
     // metric rather than paying `ConfiguredMetric`'s match on every candidate.
@@ -732,7 +757,7 @@ pub fn match_standard<
             },
             request.constraints,
             &ratio_policy,
-            TrimmedIndexConfig::default(),
+            trimmed,
             diagnostics,
         ),
         Some(config) => engine.run_anchor_matching_with_distance_internal(
@@ -745,10 +770,97 @@ pub fn match_standard<
             },
             request.constraints,
             &ratio_policy,
-            TrimmedIndexConfig::default(),
+            trimmed,
             diagnostics,
         ),
     }
+}
+
+/// The units that common-support trimming removes from a standard match.
+struct StandardCommonSupport {
+    anchors: HashSet<usize>,
+    candidates: HashSet<usize>,
+    overlap: (f64, f64),
+    anchor_bounds: (f64, f64),
+    candidate_bounds: (f64, f64),
+}
+
+impl StandardCommonSupport {
+    fn record_in(&self, diagnostics: &mut MatchDiagnostics) {
+        diagnostics.common_support_trimmed_anchors = self.anchors.len();
+        diagnostics.common_support_trimmed_candidates = self.candidates.len();
+        diagnostics.common_support_overlap = Some(self.overlap);
+        diagnostics.common_support_anchor_score_bounds = Some(self.anchor_bounds);
+        diagnostics.common_support_candidate_score_bounds = Some(self.candidate_bounds);
+    }
+}
+
+/// The smallest and largest finite score among `rows`, or `None` when no row
+/// has one.
+fn finite_score_bounds<R: MatchingRecord>(
+    rows: &[R],
+    scores: &RapidHashMap<String, f64>,
+) -> Option<(f64, f64)> {
+    rows.iter()
+        .filter_map(|row| scores.get(row.id()).copied())
+        .filter(|score| score.is_finite())
+        .fold(None, |bounds, score| match bounds {
+            None => Some((score, score)),
+            Some((low, high)) => Some((low.min(score), high.max(score))),
+        })
+}
+
+/// Trim to the region where the anchors' and the candidates' scores overlap.
+///
+/// The region is the interval from the larger of the two minima to the smaller
+/// of the two maxima, with its ends inside. `Treated` removes the anchors and
+/// `Control` the candidates outside it, which for each group is the same as
+/// removing the units outside the other group's range. `Both` removes both.
+/// A unit without a finite score lies outside the region. This is MatchIt's
+/// documented `discard` rule: a unit is discarded when its distance is outside
+/// the range of the other group's distances, so a unit equal to an end of that
+/// range is kept.
+fn standard_common_support<R: MatchingRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    policy: CommonSupport,
+    scores: &RapidHashMap<String, f64>,
+) -> Result<StandardCommonSupport, CommonSupportFailureReason> {
+    let anchor_bounds =
+        finite_score_bounds(anchors, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;
+    let candidate_bounds =
+        finite_score_bounds(candidates, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;
+    let lower = anchor_bounds.0.max(candidate_bounds.0);
+    let upper = anchor_bounds.1.min(candidate_bounds.1);
+    if lower > upper {
+        return Err(CommonSupportFailureReason::NoOverlap);
+    }
+    let outside = |rows: &[R]| -> HashSet<usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                !scores
+                    .get(row.id())
+                    .is_some_and(|score| score.is_finite() && *score >= lower && *score <= upper)
+            })
+            .map(|(idx, _)| idx)
+            .collect()
+    };
+    Ok(StandardCommonSupport {
+        anchors: if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+            outside(anchors)
+        } else {
+            HashSet::new()
+        },
+        candidates: if matches!(policy, CommonSupport::Control | CommonSupport::Both) {
+            outside(candidates)
+        } else {
+            HashSet::new()
+        },
+        overlap: (lower, upper),
+        anchor_bounds,
+        candidate_bounds,
+    })
 }
 
 /// Partition `anchors` by strata key, returning one `Vec<usize>` of anchor indices per group.
