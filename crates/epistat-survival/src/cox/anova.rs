@@ -15,7 +15,7 @@
 //! the model with the extra terms against the one without \[1\]. [`anova`]
 //! takes the fits and tests them in the order given. [`anova_terms`] is the form
 //! of `anova.coxph` for one model: it fits the design with its term groups added
-//! one at a time, in order, with [`fit`](super::fit), and the first row is the
+//! one at a time, in order, with [`fit`], and the first row is the
 //! null model, the log partial likelihood at zero coefficients.
 //!
 //! # What is checked
