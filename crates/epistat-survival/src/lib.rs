@@ -50,7 +50,7 @@
 //!   means from the infinitesimal or the exact jackknife, as `survival::pseudo` and the
 //!   `pseudo` package, and generalised estimating equations on them.
 //! - [`rmst`]: restricted mean survival time and time lost in two groups with their
-//!   difference and ratios, as `survRM2::rmst2`.
+//!   difference and ratios, and their regression on covariates, as `survRM2::rmst2`.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
