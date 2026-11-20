@@ -1,6 +1,6 @@
 //! Cox fits on a design matrix checked against R 4.6.2's `survival::coxph`.
 
-use epistat_survival::cox::{CoxDesign, CoxModelFit, Ties, fit_cox};
+use epistat_survival::cox::{CoxDesign, CoxModelFit, Ties, cox_score_residuals, fit_cox};
 use epistat_testkit::{load_json, na_f64_vec};
 use faer::Mat;
 use serde::Deserialize;
@@ -56,6 +56,11 @@ struct RFit {
     vcov: Vec<Vec<Option<f64>>>,
     /// Cluster-robust covariance matrix, empty without a cluster.
     vcov_robust: Vec<Vec<Option<f64>>>,
+    /// `residuals(fit, "score")`, which leaves the case weight out. One row per
+    /// observation, null in an aliased column.
+    score_residuals: Vec<Vec<Option<f64>>>,
+    /// `residuals(fit, "score", weighted = TRUE)`, which sum to the score.
+    score_residuals_weighted: Vec<Vec<Option<f64>>>,
 }
 
 /// The values, with NaN where the fit has `None`.
@@ -81,7 +86,8 @@ fn deviation(got: &[f64], expected: &[f64], bound: f64) -> f64 {
     worst
 }
 
-fn fit_of(reference: &Reference, r: &RFit) -> CoxModelFit {
+/// The fit and the score residuals at its coefficients, one vector per column.
+fn fit_of(reference: &Reference, r: &RFit) -> (CoxModelFit, Vec<Option<Vec<f64>>>) {
     let indices: Vec<usize> = r
         .columns
         .iter()
@@ -119,7 +125,9 @@ fn fit_of(reference: &Reference, r: &RFit) -> CoxModelFit {
         },
         cluster: r.use_cluster.then_some(reference.id.as_slice()),
     };
-    fit_cox(&design).unwrap()
+    let fit = fit_cox(&design).unwrap();
+    let residuals = cox_score_residuals(&design, &fit.coefficients).unwrap();
+    (fit, residuals)
 }
 
 /// The largest deviation of a covariance matrix from R's, in units of
@@ -146,6 +154,45 @@ fn covariance_deviation(got: &[Option<f64>], expected: &[Vec<Option<f64>>], boun
     worst
 }
 
+/// The largest deviation of the score residuals from R's in units of
+/// `bound * max_i |e_ia|` for column `a`, with a check that `None` and NA
+/// coincide. `expected` has one row per observation, and the residuals are
+/// divided by `divisor` row by row before they are compared.
+///
+/// The residual of a row is a smooth function of the coefficients, with a
+/// derivative of the size of the residuals themselves, and the coefficients of
+/// the two fits differ by `bound` relative to their scale. A residual then
+/// differs by `bound` times the largest residual of its column, once for each
+/// of the `p` coefficients. The residual is also a difference of running sums
+/// over the event times, as in R, each of at most `rows` terms, and a running
+/// sum of `m` terms is off by at most `m` times the machine epsilon times its
+/// size, which is the size of the residuals. The `bound` passed in is the sum
+/// of the two.
+fn residual_deviation(
+    got: &[Option<Vec<f64>>],
+    expected: &[Vec<Option<f64>>],
+    bound: f64,
+    divisor: &[f64],
+) -> f64 {
+    let mut worst = 0.0f64;
+    for (a, column) in got.iter().enumerate() {
+        match column {
+            None => assert!(expected.iter().all(|row| row[a].is_none())),
+            Some(values) => {
+                assert_eq!(values.len(), expected.len());
+                let scale = expected
+                    .iter()
+                    .map(|row| row[a].unwrap().abs())
+                    .fold(0.0f64, f64::max);
+                for ((g, row), d) in values.iter().zip(expected).zip(divisor) {
+                    worst = worst.max((g / d - row[a].unwrap()).abs() / (bound * scale));
+                }
+            }
+        }
+    }
+    worst
+}
+
 /// Two implementations of one Newton iteration that take the same steps differ
 /// by the error of the solve, about the condition number of the information
 /// matrix on the scaled covariates times the machine epsilon. The bound is 8
@@ -154,7 +201,8 @@ fn covariance_deviation(got: &[Option<f64>], expected: &[Vec<Option<f64>>], boun
 /// A covariance matrix is the inverse of the information matrix, and each of
 /// the `p` entries of a row of the inverse carries that error, so its
 /// tolerance is `p` times the bound. The robust matrix is `V M V` with the
-/// error of `V` entering twice, so its tolerance is twice that.
+/// error of `V` entering twice, so its tolerance is twice that. The score
+/// residuals are described at `residual_deviation`.
 #[test]
 fn fits_match_r() {
     let reference: Reference = load_json(concat!(
@@ -168,7 +216,7 @@ fn fits_match_r() {
     let mut report = Vec::new();
     let mut worst = Vec::new();
     for r in &reference.fits {
-        let fit = fit_of(&reference, r);
+        let (fit, residuals) = fit_of(&reference, r);
         let bound = 8.0 * r.information_condition * f64::EPSILON;
         if !r.monotone_columns.is_empty() {
             // R reports a finite coefficient with a warning; the fit reports
@@ -227,9 +275,27 @@ fn fits_match_r() {
             assert!(fit.robust_covariance.is_none() && r.vcov_robust.is_empty());
             0.0
         };
+        let ones = vec![1.0; reference.stop.len()];
+        let residual_bound = p * bound + reference.stop.len() as f64 * f64::EPSILON;
+        let weights = if r.use_weights {
+            &reference.weight
+        } else {
+            &ones
+        };
+        // Weighted, and divided by the case weight as `residuals()` does by
+        // default.
+        let score_weighted = residual_deviation(
+            &residuals,
+            &r.score_residuals_weighted,
+            residual_bound,
+            &ones,
+        );
+        let score_default =
+            residual_deviation(&residuals, &r.score_residuals, residual_bound, weights);
+        let score = score_weighted.max(score_default);
         let raw = [coefficient, se, robust, loglik, null].map(|value| value * bound);
         report.push((r.name.clone(), r.information_condition, raw));
-        worst.push((r.name.clone(), [covariance, robust_covariance]));
+        worst.push((r.name.clone(), [covariance, robust_covariance, score]));
         for (what, value) in [
             ("coefficient", coefficient),
             ("se", se),
@@ -238,6 +304,7 @@ fn fits_match_r() {
             ("null loglik", null),
             ("covariance", covariance),
             ("robust covariance", robust_covariance),
+            ("score residuals", score),
         ] {
             assert!(
                 value <= 1.0,
@@ -253,9 +320,9 @@ fn fits_match_r() {
             "{name:24} kappa {kappa:9.3e}  coef {c:.2e}  se {s:.2e}  robust {rb:.2e}  loglik {l:.2e}  null {n:.2e}"
         );
     }
-    for (name, [covariance, robust]) in &worst {
+    for (name, [covariance, robust, score]) in &worst {
         eprintln!(
-            "{name:24} in units of the bound: covariance {covariance:.2e}  robust covariance {robust:.2e}"
+            "{name:24} in units of the bound: covariance {covariance:.2e}  robust covariance {robust:.2e}  score residuals {score:.2e}"
         );
     }
 }

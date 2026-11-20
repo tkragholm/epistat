@@ -93,15 +93,7 @@
 //! ```
 //!
 //! with no small-sample factor, as `coxph` computes it. `U_g` is the sum within
-//! cluster `g` of the score residuals. The score residual of row `j` is the
-//! derivative of the log partial likelihood with respect to `beta` through the
-//! weight of `j`. A row with an event contributes `w_j (x_j - m)` with `m` the
-//! mean over the terms at its time of `D_1 / D_0`. Every row contributes
-//! `-w_j theta_j sum_t (x_j h_t - c_t)` over the event times it is at risk at,
-//! where `h_t` is the sum of `u / D_0` over the terms at `t` and `c_t` the sum
-//! of `u D_1 / D_0^2`. Under Efron's approximation a tied event is at risk in
-//! only part of the terms of its own time, and a final correction adds that
-//! back \[5\]. The residuals add up to the score. The sum of the
+//! cluster `g` of the score residuals, which are defined below. The sum of the
 //! cross-products `U_g U_g'` is the meat of the sandwich. It is formed by
 //! `epistat_inference::sandwich::meat` from the matrix with one row `U_g` per
 //! cluster, and `V M V` is then formed here, in a fixed order and averaged with
@@ -112,6 +104,33 @@
 //! cluster code that no row carries, the cluster has no row and adds nothing.
 //! `robust_covariance` is the whole matrix `V M V` on the scale of the columns
 //! given, laid out as `covariance`.
+//!
+//! # Score residuals
+//!
+//! [`cox_score_residuals`] returns, for every row, the derivative of the log
+//! partial likelihood with respect to each coefficient through the case weight
+//! of the row, on the scale of the columns given. A row with an event
+//! contributes `w_j (x_j - m)` with `m` the mean over the terms at its time of
+//! `D_1 / D_0`. Every row contributes `-w_j theta_j sum_t (x_j h_t - c_t)` over
+//! the event times it is at risk at, where `h_t` is the sum of `u / D_0` over
+//! the terms at `t` and `c_t` the sum of `u D_1 / D_0^2`. The sums over the
+//! event times are differences of running sums over the times of the stratum.
+//! Under Efron's approximation a tied event is at risk in only part of the
+//! terms of its own time, and a final correction adds that back \[5\]. The
+//! residuals add up to the score, so at the estimate their sum is zero up to
+//! the stopping rule. They contain the case weight. `residuals(fit, "score")`
+//! of `survival` leaves it out by default, and `weighted = TRUE` puts it in,
+//! so that column divided by the weights of the rows is R's default. The
+//! residual of a row whose weight is zero, and of a row in a stratum without
+//! events, is zero.
+//!
+//! The residuals are a separate function and not a field of the fit because
+//! they are `rows * p` numbers, which at `10^7` rows is `80` MB per column,
+//! and most fits do not need them. The robust variance does not hold them
+//! either: it sums them by cluster as they are produced. The function repeats
+//! the sort of the rows by stratum and exit time, which costs a sort of the
+//! rows, and takes the coefficients as an argument, so it also gives the
+//! residuals at a point other than the estimate.
 //!
 //! # Results that are not numbers
 //!
@@ -149,7 +168,8 @@
 //! # Agreement with R
 //!
 //! The tests compare coefficients, both standard errors, both covariance
-//! matrices, the log partial likelihood and the iteration count with `survival::coxph` for
+//! matrices, the score residuals with and without the case weight, the log
+//! partial likelihood and the iteration count with `survival::coxph` for
 //! Breslow and Efron ties, delayed entry, strata, weights, clusters, aliased
 //! columns and a diverging coefficient. Two implementations of one Newton
 //! iteration that take the same steps differ by the error of the solve, which
@@ -157,7 +177,9 @@
 //! covariates times the machine epsilon. The tolerance is 8 times that for a
 //! coefficient and a standard error. The covariance tolerance is `p` times
 //! that, since each entry of a row of an inverse carries it, and the robust
-//! covariance twice as much again, since the error of `V` enters twice.
+//! covariance twice as much again, since the error of `V` enters twice. The
+//! tolerance of a residual adds `n` times the machine epsilon, the error of a
+//! running sum over at most `n` event times, to `p` times the 8 above.
 //!
 //! # References
 //!
@@ -349,6 +371,8 @@ struct Stratum {
     stop: Vec<f64>,
     start: Vec<f64>,
     is_event: Vec<bool>,
+    /// Index in the input of each row.
+    row: Vec<u32>,
     /// Cluster code of each row, empty without clusters.
     cluster: Vec<u32>,
     /// Positions in descending entry order, and the entry times in that order.
@@ -849,6 +873,7 @@ fn prepare(input: &CoxDesign<'_>, kept: &[usize]) -> Prepared {
         }
         strata.push(Stratum {
             x,
+            row: members.iter().map(|&i| i as u32).collect(),
             weight: members.iter().map(|&i| input.weight[i]).collect(),
             stop: members.iter().map(|&i| input.stop[i]).collect(),
             start: members.iter().map(|&i| input.start[i]).collect(),
@@ -1094,11 +1119,87 @@ fn on_input_scale(
         .collect()
 }
 
+/// The score residual of every row at `coefficients`, one vector of `rows`
+/// values per column, as `residuals(fit, type = "score")` of `survival`.
+///
+/// Row `i` of column `j` is the derivative of the log partial likelihood with
+/// respect to the coefficient of column `j` through the case weight of row
+/// `i`, on the scale of the columns given. The rows are in the order of the
+/// input. A row whose weight is zero, and a row in a stratum without events,
+/// has residuals of zero. A column whose coefficient is `None`, such as one
+/// that is aliased, is `None`.
+///
+/// `coefficients` is normally `CoxModelFit::coefficients`. Any other value is
+/// the residual at that point, with a column left out where it is `None`. The
+/// `cluster` of `data` is not used.
+///
+/// The residuals contain the case weight; see the module documentation for
+/// how they relate to `residuals(fit, "score")` of `survival`.
+///
+/// # Errors
+///
+/// [`Error::Input`] for the invalid input of [`fit_cox`], for `coefficients`
+/// of another length than the design has columns, for a coefficient that is
+/// not finite, and for coefficients at which a risk score or the denominator
+/// of a partial-likelihood term is not finite and positive.
+pub fn cox_score_residuals(
+    data: &CoxDesign<'_>,
+    coefficients: &[Option<f64>],
+) -> Result<Vec<Option<Vec<f64>>>> {
+    check_design(data)?;
+    let (rows, p) = (data.x.nrows(), data.x.ncols());
+    if coefficients.len() != p {
+        return Err(Error::input(format!(
+            "coefficients: {} values for {p} columns",
+            coefficients.len()
+        )));
+    }
+    if coefficients.iter().flatten().any(|c| !c.is_finite()) {
+        return Err(Error::input("coefficients: a value is not finite"));
+    }
+    let mut columns: Vec<Option<Vec<f64>>> = coefficients
+        .iter()
+        .map(|c| c.map(|_| vec![0.0f64; rows]))
+        .collect();
+    let kept: Vec<usize> = (0..rows).filter(|&i| data.weight[i] > 0.0).collect();
+    if kept.is_empty() {
+        return Ok(columns);
+    }
+    let Prepared { model, factor } = prepare(data, &kept);
+    // A column without variation has a scaled column of zeros and a residual
+    // of zero whatever its coefficient.
+    let beta: Vec<f64> = coefficients
+        .iter()
+        .zip(&factor)
+        .map(|(c, &f)| if f == 0.0 { 0.0 } else { c.unwrap_or(0.0) / f })
+        .collect();
+    model
+        .score_rows(&beta, |stratum, j, residual| {
+            let row = stratum.row[j] as usize;
+            for (a, column) in columns.iter_mut().enumerate() {
+                if let Some(column) = column {
+                    column[row] = if factor[a] == 0.0 {
+                        0.0
+                    } else {
+                        residual[a] / factor[a]
+                    };
+                }
+            }
+        })
+        .ok_or_else(|| {
+            Error::input(
+                "coefficients: a risk score or a denominator of the partial likelihood \
+                 is not finite and positive at these values",
+            )
+        })?;
+    Ok(columns)
+}
+
 #[cfg(test)]
 mod tests {
     use faer::Mat;
 
-    use super::{CoxDesign, fit_cox};
+    use super::{CoxDesign, cox_score_residuals, fit_cox};
     use crate::cox::Ties;
 
     const STOP: [f64; 8] = [1., 2., 2., 3., 4., 5., 6., 7.];
@@ -1241,5 +1342,72 @@ mod tests {
         let fit = design(&x, Some(&[0; 8])).unwrap();
         assert_eq!(fit.robust_covariance, Some(vec![None]));
         assert!(design(&x, None).unwrap().robust_covariance.is_none());
+    }
+
+    #[test]
+    fn score_residuals_add_up_to_the_score() {
+        let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
+        let fit = design(&x, None).unwrap();
+        // At the estimate the score is zero, and at zero it is the sum of the
+        // residuals there, which is the first Newton step times the information.
+        let at_estimate = cox_score_residuals(&data(&x), &fit.coefficients).unwrap();
+        let sum: f64 = at_estimate[0].as_ref().unwrap().iter().sum();
+        assert!(sum.abs() < 1e-8, "{sum}");
+        let at_zero = cox_score_residuals(&data(&x), &[Some(0.0)]).unwrap();
+        let sum: f64 = at_zero[0].as_ref().unwrap().iter().sum();
+        assert!(sum.abs() > 0.1);
+    }
+
+    #[test]
+    fn score_residuals_of_dropped_columns_and_rows() {
+        let x = Mat::from_fn(8, 2, |i, j| {
+            if j == 0 {
+                [0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3][i]
+            } else {
+                0.1
+            }
+        });
+        let fit = design(&x, None).unwrap();
+        let mut weight = [1.0; 8];
+        weight[4] = 0.0;
+        let residuals = cox_score_residuals(
+            &CoxDesign {
+                weight: &weight,
+                ..data(&x)
+            },
+            &fit.coefficients,
+        )
+        .unwrap();
+        assert!(residuals[1].is_none());
+        assert_eq!(
+            residuals[0].as_ref().unwrap()[4].to_bits(),
+            0.0f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn score_residuals_refuse_invalid_coefficients() {
+        let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
+        let wrong = cox_score_residuals(&data(&x), &[Some(0.1), Some(0.2)]).unwrap_err();
+        assert_eq!(wrong.to_string(), "coefficients: 2 values for 1 columns");
+        let nan = cox_score_residuals(&data(&x), &[Some(f64::NAN)]).unwrap_err();
+        assert_eq!(nan.to_string(), "coefficients: a value is not finite");
+        let huge = cox_score_residuals(&data(&x), &[Some(1e4)]).unwrap_err();
+        assert!(huge.to_string().starts_with("coefficients: a risk score"));
+        let none = cox_score_residuals(&data(&x), &[None]).unwrap();
+        assert_eq!(none, vec![None]);
+    }
+
+    fn data(x: &Mat<f64>) -> CoxDesign<'_> {
+        CoxDesign {
+            x: x.as_ref(),
+            is_event: &EVENT,
+            start: &[f64::NEG_INFINITY; 8],
+            stop: &STOP,
+            weight: &[1.0; 8],
+            stratum: &[0; 8],
+            ties: Ties::Efron,
+            cluster: None,
+        }
     }
 }
