@@ -29,6 +29,8 @@
 //!   R's `survcheck`.
 //! - [`survdiff`]: the log-rank and G-rho tests of equal hazards, with strata, and
 //!   the one-sample test, as R's `survdiff`.
+//! - [`split`], [`tmerge`], [`condense`]: the data tools `survSplit`, `tmerge` and
+//!   `survcondense`, which return rows and the row of the input each came from.
 //! - [`timefix`]: the tie policy of `survival::aeqSurv`, which makes times equal
 //!   up to rounding error equal.
 //!
@@ -43,16 +45,19 @@
 pub mod aalen_johansen;
 mod check;
 pub mod concordance;
+pub mod condense;
 pub mod cox;
 mod error;
 pub mod fine_gray;
 pub mod markov;
 pub mod multistate;
 pub mod pyears;
+pub mod split;
 pub mod surv;
 pub mod survcheck;
 pub mod survdiff;
 pub mod timefix;
+pub mod tmerge;
 
 pub use error::{Error, Result};
 pub use surv::{
