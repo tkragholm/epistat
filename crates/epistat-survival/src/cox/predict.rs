@@ -1572,9 +1572,10 @@ fn limits(kind: ConfType, s: f64, se: f64, z: f64) -> (Option<f64>, Option<f64>)
         return (Some(s), Some(s));
     }
     if kind == ConfType::Arcsin && s == 1.0 && se == 0.0 {
-        // The spread is 0 * infinity here, and the clamps below drop that
-        // undefined value, which leaves the whole interval.
-        return (Some(0.0), Some(1.0));
+        // The arcsin spread is 0 * infinity here, which is undefined, as
+        // survfit's NaN shows; an interval of [0, 1] around a certain 1 would
+        // be a number for it.
+        return (None, None);
     }
     if s == 0.0 && matches!(kind, ConfType::Log | ConfType::Logit | ConfType::Arcsin) {
         return (None, None);
@@ -1790,11 +1791,8 @@ mod tests {
     use super::{ConfType, limits, log_product_limit};
 
     #[test]
-    fn a_curve_at_one_without_variance_keeps_the_whole_arcsin_interval() {
-        assert_eq!(
-            limits(ConfType::Arcsin, 1.0, 0.0, 1.96),
-            (Some(0.0), Some(1.0))
-        );
+    fn a_curve_at_one_without_variance_has_no_arcsin_limits() {
+        assert_eq!(limits(ConfType::Arcsin, 1.0, 0.0, 1.96), (None, None));
         for kind in [
             ConfType::Plain,
             ConfType::Log,
