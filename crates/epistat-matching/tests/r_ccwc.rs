@@ -107,6 +107,7 @@ fn id(row: usize) -> String {
     format!("p{row:03}")
 }
 
+/// The cohort with no entry date set, for the route through a risk-set policy.
 fn records(people: &People) -> Vec<Rec> {
     (0..people.sex.len())
         .map(|i| {
@@ -124,9 +125,18 @@ fn records(people: &People) -> Vec<Rec> {
         .collect()
 }
 
-/// Calendar scale: a control is at risk when it has entered on or before the
-/// case's index date. Leaving through death, emigration or an event is
-/// handled by the engine's own rules.
+/// The cohort with each person's entry date on the record.
+fn records_with_entry(people: &People) -> Vec<Rec> {
+    let mut recs = records(people);
+    for (rec, entry) in recs.iter_mut().zip(&people.entry) {
+        rec.entry_date = Some(day(*entry));
+    }
+    recs
+}
+
+/// Calendar scale through a policy: a control is at risk when it has entered on
+/// or before the case's index date. Leaving through death, emigration or an
+/// event is handled by the engine's own rules.
 struct EntryPolicy {
     entry: HashMap<String, NaiveDate>,
 }
@@ -203,7 +213,32 @@ fn by_case(outcome: &MatchOutcome) -> BTreeMap<String, Vec<String>> {
     map
 }
 
+/// Calendar scale with the entry date on the records, no policy.
 fn run_calendar(
+    reference: &Reference,
+    recs: &[Rec],
+    k: usize,
+    replacement: bool,
+    seed: Option<u64>,
+) -> MatchOutcome {
+    let job = MatchJob::new_transition(recs, seed.unwrap_or(0))
+        .with_ratio(ratio(k))
+        .with_birth_window(window())
+        .with_age_limit(age_limit(reference))
+        .with_exact_matches(["sex", "area"])
+        .with_replacement(replacement)
+        .with_alive_check()
+        .with_resident_check();
+    if seed.is_some() {
+        job.run()
+    } else {
+        job.with_strategy(DeterministicSelection).run()
+    }
+}
+
+/// Calendar scale with the entry date in a risk-set policy and none on the
+/// records.
+fn run_calendar_policy(
     reference: &Reference,
     recs: &[Rec],
     k: usize,
@@ -283,11 +318,13 @@ fn versions_are_recorded() {
 
 /// With a ratio above every risk set and replacement, the engine returns each
 /// case's whole risk set. Those sets equal the ones `ccwc` returns when asked
-/// for more controls than there are, on the calendar scale.
+/// for more controls than there are, on the calendar scale, with the entry
+/// date on the records. The data has people who enter on a case's failure day,
+/// who are in the set, as `entry <= t` in `ccwc` says.
 #[test]
 fn calendar_risk_sets_equal_ccwc() {
     let reference = reference();
-    let recs = records(&reference.people);
+    let recs = records_with_entry(&reference.people);
     let outcome = run_calendar(&reference, &recs, 10_000, true, None);
     assert_eq!(
         outcome.diagnostics.total_anchors_evaluated,
@@ -295,6 +332,33 @@ fn calendar_risk_sets_equal_ccwc() {
         "the cases the age limit leaves"
     );
     assert_same_sets(&outcome, &reference.calendar, "calendar");
+}
+
+/// The risk-set policy route to the same sets gives the same pairs as the
+/// entry date on the records, and a cohort without entry dates differs from
+/// both, so the entry date is doing the work.
+#[test]
+fn entry_policy_and_entry_date_give_the_same_risk_sets() {
+    let reference = reference();
+    let plain = records(&reference.people);
+    let with_entry = records_with_entry(&reference.people);
+    for (k, replacement, seed) in [
+        (10_000, true, None),
+        (2, false, Some(5)),
+        (1, true, Some(9)),
+    ] {
+        let native = run_calendar(&reference, &with_entry, k, replacement, seed);
+        let policy = run_calendar_policy(&reference, &plain, k, replacement, seed);
+        assert_eq!(
+            native.pairs, policy.pairs,
+            "k={k} replacement={replacement}"
+        );
+        assert_eq!(native.matched_cases, policy.matched_cases);
+        assert_eq!(native.unmatched_cases, policy.unmatched_cases);
+    }
+    let ignored = run_calendar(&reference, &plain, 10_000, true, None);
+    let native = run_calendar(&reference, &with_entry, 10_000, true, None);
+    assert_ne!(ignored.pairs, native.pairs);
 }
 
 /// The same on the age scale (`origin = date of birth` in `ccwc`), through a
@@ -338,7 +402,7 @@ fn age_limit_selects_the_cases_ccwc_gets_as_failures() {
 #[test]
 fn ccwc_keeps_people_who_leave_on_the_failure_day() {
     let reference = reference();
-    let recs = records(&reference.people);
+    let recs = records_with_entry(&reference.people);
     let outcome = run_calendar(&reference, &recs, 10_000, true, None);
     let got = by_case(&outcome);
     let mut differing = 0;
@@ -381,7 +445,7 @@ fn count_warning(warnings: &[String], tail: &str) -> usize {
 #[test]
 fn shortfall_counts_follow_ccwc_for_cases_alone_at_their_time() {
     let reference = reference();
-    let recs = records(&reference.people);
+    let recs = records_with_entry(&reference.people);
     let k = reference.k_small;
     let scale = &reference.calendar;
     let sizes: Vec<usize> = scale.risk_set.iter().map(Vec::len).collect();
@@ -466,7 +530,7 @@ fn uses(outcome: &MatchOutcome) -> HashMap<&str, usize> {
 #[test]
 fn replacement_and_future_cases() {
     let reference = reference();
-    let recs = records(&reference.people);
+    let recs = records_with_entry(&reference.people);
     let k = reference.k_small;
     assert!(reference.calendar.k4_controls_in_several_sets > 0);
     assert!(reference.calendar.k4_future_cases_as_controls > 0);
@@ -500,7 +564,7 @@ fn replacement_and_future_cases() {
 #[test]
 fn tied_cases() {
     let reference = reference();
-    let recs = records(&reference.people);
+    let recs = records_with_entry(&reference.people);
     let scale = &reference.calendar;
     let p = &reference.people;
     let tied: Vec<usize> = (0..scale.cases.len())
@@ -611,7 +675,7 @@ fn assert_uniform(counts_by_case: &[(usize, Vec<usize>)], label: &str) {
 #[test]
 fn draws_are_uniform_over_the_risk_set_in_both() {
     let reference = reference();
-    let recs = records(&reference.people);
+    let recs = records_with_entry(&reference.people);
     assert_eq!(reference.draws.len(), reference.r_chi_square.len());
 
     let r_counts: Vec<(usize, Vec<usize>)> = reference

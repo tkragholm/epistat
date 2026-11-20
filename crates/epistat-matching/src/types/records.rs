@@ -39,6 +39,10 @@ pub struct BaseRecord {
     /// Optional emigration date (used to derive residency at index).
     #[serde(default)]
     pub emigration_date: Option<NaiveDate>,
+    /// Optional entry date into the population at risk, read by risk-set
+    /// matching (see [`MatchingRecord::entry_date`](crate::MatchingRecord::entry_date)).
+    #[serde(default)]
+    pub entry_date: Option<NaiveDate>,
 }
 
 impl BaseRecord {
@@ -53,6 +57,7 @@ impl BaseRecord {
             unique_key: None,
             death_date: None,
             emigration_date: None,
+            entry_date: None,
         }
     }
 
@@ -67,6 +72,13 @@ impl BaseRecord {
     #[must_use]
     pub const fn with_death_date(mut self, date: NaiveDate) -> Self {
         self.death_date = Some(date);
+        self
+    }
+
+    /// Set the date from which the record is in the population at risk.
+    #[must_use]
+    pub const fn with_entry_date(mut self, date: NaiveDate) -> Self {
+        self.entry_date = Some(date);
         self
     }
 

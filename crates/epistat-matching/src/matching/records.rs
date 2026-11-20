@@ -42,6 +42,18 @@ pub trait MatchingRecord: Send + Sync {
     fn emigration_date(&self) -> Option<NaiveDate> {
         None
     }
+    /// Optional date from which the record is in the population at risk.
+    ///
+    /// Risk-set matching ([`MatchJob::new_transition`](crate::MatchJob::new_transition))
+    /// takes a record into the risk set of a case only when its entry date is
+    /// on or before the case's index date, so a record that enters on the
+    /// index day is in the set, as in `Epi::ccwc` (`entry <= t`). Leaving is
+    /// the opposite: a record that dies, emigrates or has its event on the
+    /// index day is already out. With no entry date the record has been at risk
+    /// from the start. Standard matching does not read this field.
+    fn entry_date(&self) -> Option<NaiveDate> {
+        None
+    }
 }
 
 pub trait RoleIndexedRecord: MatchingRecord {
@@ -85,6 +97,10 @@ impl MatchingRecord for BaseRecord {
     fn emigration_date(&self) -> Option<NaiveDate> {
         self.emigration_date
     }
+
+    fn entry_date(&self) -> Option<NaiveDate> {
+        self.entry_date
+    }
 }
 
 impl MatchingRecord for BalanceRecord {
@@ -114,6 +130,10 @@ impl MatchingRecord for BalanceRecord {
 
     fn emigration_date(&self) -> Option<NaiveDate> {
         self.core.emigration_date
+    }
+
+    fn entry_date(&self) -> Option<NaiveDate> {
+        self.core.entry_date
     }
 }
 
@@ -150,6 +170,10 @@ impl<R: MatchingRecord> MatchingRecord for RoleTransitionRecord<R> {
 
     fn emigration_date(&self) -> Option<NaiveDate> {
         self.record.emigration_date()
+    }
+
+    fn entry_date(&self) -> Option<NaiveDate> {
+        self.record.entry_date()
     }
 }
 
@@ -244,7 +268,8 @@ mod tests {
         let inner = BaseRecord::new("r1", date(2010, 3, 4))
             .with_numeric("mother_birth_year", 1980.0)
             .with_death_date(date(2030, 1, 1))
-            .with_emigration_date(date(2025, 6, 1));
+            .with_emigration_date(date(2025, 6, 1))
+            .with_entry_date(date(2011, 2, 3));
         let mut inner = inner;
         inner.strata.insert("sex".to_owned(), "F".to_owned());
         inner.unique_key = Some("family".to_owned());
@@ -258,6 +283,7 @@ mod tests {
         assert_eq!(wrapped.unique_key(), Some("family"));
         assert_eq!(wrapped.death_date(), Some(date(2030, 1, 1)));
         assert_eq!(wrapped.emigration_date(), Some(date(2025, 6, 1)));
+        assert_eq!(wrapped.entry_date(), Some(date(2011, 2, 3)));
         assert_eq!(wrapped.numeric("mother_birth_year"), Some(1980.0));
         assert_eq!(wrapped.numeric("absent"), None);
     }

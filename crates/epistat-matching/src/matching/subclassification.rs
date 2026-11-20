@@ -411,7 +411,7 @@ fn valid_subclasses(anchor_counts: &[usize], candidate_counts: &[usize]) -> Vec<
         .collect()
 }
 
-fn build_subclass_summaries(
+pub(super) fn build_subclass_summaries(
     anchor_counts: &[usize],
     candidate_counts: &[usize],
 ) -> Vec<SubclassSummary> {
@@ -437,7 +437,11 @@ fn build_subclass_summaries(
         .collect()
 }
 
-fn subclass_weight_for_estimand(estimand: Estimand, propensity: f64, is_anchor_unit: bool) -> f64 {
+pub(super) fn subclass_weight_for_estimand(
+    estimand: Estimand,
+    propensity: f64,
+    is_anchor_unit: bool,
+) -> f64 {
     match estimand {
         Estimand::Att => {
             if is_anchor_unit {
