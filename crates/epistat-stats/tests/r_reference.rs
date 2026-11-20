@@ -89,3 +89,89 @@ fn pchisq_and_lgamma() {
         );
     }
 }
+
+mod cipoisson_values {
+    include!("data/cipoisson.rs");
+}
+
+/// The relative deviation allowed in a gamma quantile `x` with shape `a` and
+/// tail probability `t = min(p, 1 - p)`.
+///
+/// The incomplete gamma function is computed as a series or continued
+/// fraction times `exp((a - 1) ln x + ... - x - lnGamma(a))`, so the sum of
+/// the magnitudes of the exponent's terms times `eps` is the relative error in
+/// the probability. A relative error `d` in the tail moves the quantile by
+/// `d t / (x f(x))` in relative terms, `f` the density. Both the Rust and the R
+/// quantile carry this error, so the coefficient is 8, plus eight units in the
+/// last place for the Newton stopping rule.
+fn qgamma_tolerance(x: f64, shape: f64, t: f64) -> f64 {
+    let ln_norm = epistat_stats::gamma::ln_gamma(shape);
+    let exponent = ((shape - 1.0) * x.ln()).abs() + x + ln_norm.abs();
+    let density = ((shape - 1.0) * x.ln() - x - ln_norm).exp();
+    8.0 * f64::EPSILON * exponent * t / (x * density) + 8.0 * f64::EPSILON
+}
+
+#[test]
+fn qgamma_quantiles() {
+    use epistat_stats::poisson::gamma_quantile;
+    let mut worst = 0.0_f64;
+    for &(p, shape, q) in cipoisson_values::QGAMMA {
+        let (p, shape, expected) = (f64::from_bits(p), f64::from_bits(shape), f64::from_bits(q));
+        let got = gamma_quantile(p, shape).unwrap();
+        let deviation = ((got - expected) / expected).abs();
+        let bound = qgamma_tolerance(expected, shape, p.min(1.0 - p));
+        worst = worst.max(deviation / bound);
+        assert!(
+            deviation <= bound,
+            "qgamma({p}, {shape}) = {got:e}, R gives {expected:e}, bound {bound:e}"
+        );
+    }
+    println!("worst deviation from qgamma, in units of its bound: {worst:e}");
+}
+
+/// Relative deviation allowed in a limit. The shapes are at most 1001 and the
+/// tails 0.005 to 0.05, where `qgamma_tolerance` is below 1e-13. Anscombe's
+/// limits are a square root and a square of a normal quantile, a few units in
+/// the last place. The bound is 1e-13 for both.
+const CIPOISSON_REL: f64 = 1e-13;
+
+#[test]
+fn cipoisson_limits() {
+    use epistat_stats::poisson::{Method, cipoisson};
+    let mut worst = 0.0_f64;
+    for (method, rows) in [
+        (Method::Exact, cipoisson_values::CIPOISSON_EXACT),
+        (Method::Anscombe, cipoisson_values::CIPOISSON_ANSCOMBE),
+    ] {
+        for &(k, time, level, lower, upper) in rows {
+            let (k, time, level) = (
+                f64::from_bits(k),
+                f64::from_bits(time),
+                f64::from_bits(level),
+            );
+            let got = cipoisson(k, time, level, method).unwrap();
+            for (name, got, bits) in [("lower", got.lower, lower), ("upper", got.upper, upper)] {
+                let expected = f64::from_bits(bits);
+                match got {
+                    None => assert!(
+                        expected.is_nan(),
+                        "{method:?} k={k} time={time} level={level}: {name} is None, R gives {expected}"
+                    ),
+                    Some(value) => {
+                        let deviation = if expected == 0.0 {
+                            value.abs()
+                        } else {
+                            ((value - expected) / expected).abs()
+                        };
+                        worst = worst.max(deviation);
+                        assert!(
+                            deviation <= CIPOISSON_REL,
+                            "{method:?} k={k} time={time} level={level}: {name} {value:e}, R gives {expected:e}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    println!("worst relative deviation from cipoisson: {worst:e}");
+}
