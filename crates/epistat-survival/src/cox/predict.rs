@@ -58,9 +58,43 @@
 //! [`basehaz`] returns the baseline at the event times of each stratum, with
 //! these partial sums, and its `centered = FALSE` form is the hazard
 //! multiplied by `exp(-c' beta)`. A stratum with no event has no time and a
-//! hazard of zero everywhere. The curves are at the event times only, where
-//! `survfit` returns every distinct exit time and `censor = FALSE` the event
-//! times.
+//! hazard of zero everywhere. The curves are at the event times by default,
+//! as `survfit` with `censor = FALSE`. With `censor_times` they are at every
+//! distinct exit time, as `censor = TRUE`, and `n_censor` is the sum of the
+//! case weights of the rows that leave at the time without the event.
+//!
+//! # The product-limit curve
+//!
+//! `survfit.coxph` with `stype = 1` is the Kalbfleisch-Prentice estimate \[5\].
+//! At each event time its factor `a` solves
+//!
+//! ```text
+//! sum over the events j of  w_j theta_j / (1 - a^theta_j)  =  S_0(t),
+//! ```
+//!
+//! the risk-set sum, which for one event is `a = (1 - w theta / S_0)^(1/theta)`
+//! and for zero coefficients with unit weights is Kaplan-Meier. The curve of a
+//! subject with relative risk `theta` is `S(t) = prod a(s)^theta`, here formed
+//! as `exp(theta sum of ln a(s))`. `survfit` finds the root of tied events by
+//! bisection on `ln a` to the spacing of doubles, where it stops after 35
+//! steps from 0.5, which leaves up to `2^-36` in `a`. A time at which the risk
+//! set is the set of events has the factor 0 and the curve is 0 from there.
+//!
+//! The cumulative hazard reported with this curve is the Breslow one. The
+//! variance is that of the Breslow cumulative hazard with the increment
+//! `W / (S_0 (S_0 - W))`, or `W / S_0^2` when `W >= S_0`, which is what
+//! `survfit.coxph` gives, and the standard error is that of `ln S` in the same
+//! way. `W` is a sum of case weights and `S_0` a sum of case weights times risk,
+//! so the two have the same unit only when the risks are 1. The choice of
+//! hazard form does not apply and is refused.
+//!
+//! # Curves from a start time
+//!
+//! With `start_time`, as `start.time` of `survfit`, the rows that leave before
+//! it are left out and the curve begins at 1 at that time, with the counts,
+//! the variance and the covariance of the coefficients part restarted. Rows
+//! that leave at the time itself are kept. It is an error when no event is at
+//! or after it.
 //!
 //! # The means
 //!
@@ -126,8 +160,8 @@
 //! every other row. The tests show both.
 //!
 //! Rows of weight zero are dropped from the baseline, where `survival` keeps
-//! them in the count of events at a time and in the times of the curve. The
-//! curves have no `n.censor`.
+//! them in the count of events at a time and in the times of the curve.
+//! Curves for a covariate path are in [`survfit_paths`].
 //!
 //! # Agreement with R
 //!
@@ -148,6 +182,8 @@
 //!    1981;9(1):93-108. doi:10.1214/aos/1176345335
 //! 4. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
 //!    model. New York: Springer; 2000.
+//! 5. Kalbfleisch JD, Prentice RL. The statistical analysis of failure time
+//!    data. New York: Wiley; 1980.
 
 // Rows and strata are counted in `u32`; `FittedModel` refuses more rows than
 // that.
@@ -333,6 +369,18 @@ pub enum ConfType {
     Arcsin,
 }
 
+/// The survival estimate of a curve, `stype` of `survfit.coxph`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CurveType {
+    /// `exp(-H(t))` of the cumulative hazard, `stype = 2`.
+    #[default]
+    ExpCumulativeHazard,
+    /// The Kalbfleisch-Prentice product-limit estimate, `stype = 1`. It takes
+    /// the Breslow hazard for the cumulative hazard and for the variance, so
+    /// `hazard` must be `None`.
+    KalbfleischPrentice,
+}
+
 /// The options of [`survfit`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurvfitOptions<'a> {
@@ -349,6 +397,17 @@ pub struct SurvfitOptions<'a> {
     pub conf_type: ConfType,
     /// The confidence level, `conf.int`, in `(0, 1)`.
     pub conf_level: f64,
+    /// The survival estimate, `stype`.
+    pub curve_type: CurveType,
+    /// Curves conditional on survival to this time, `start.time`: the rows
+    /// that leave before it are not used, so the curves start at 1 at this time.
+    /// An error when no event is at or after it. Rows that leave at the time
+    /// itself are kept.
+    pub start_time: Option<f64>,
+    /// Whether the curves are given at every distinct exit time of the
+    /// stratum, `censor = TRUE` of `survfit`, with `n_censor` at the times
+    /// without an event. Otherwise at the event times only.
+    pub censor_times: bool,
 }
 
 impl Default for SurvfitOptions<'_> {
@@ -360,6 +419,9 @@ impl Default for SurvfitOptions<'_> {
             se_fit: true,
             conf_type: ConfType::Log,
             conf_level: 0.95,
+            curve_type: CurveType::ExpCumulativeHazard,
+            start_time: None,
+            censor_times: false,
         }
     }
 }
@@ -384,6 +446,16 @@ pub struct StratumBaseline {
     pub cumulative_variance: Vec<f64>,
     /// The sum of `xbar(s)` up to each time, `p` values per time.
     pub cumulative_xbar: Vec<f64>,
+    /// The sum of the case weights of the rows that leave the risk set at each
+    /// time without the event, the rows of other causes included.
+    pub n_censor: Vec<f64>,
+    // The increments behind the cumulative sums, for curves that add them
+    // over a covariate path, and the Kalbfleisch-Prentice log increments
+    // (empty unless that curve was asked for).
+    variance_increment: Vec<f64>,
+    xbar_increment: Vec<f64>,
+    log_km: Vec<f64>,
+    cumulative_log_km: Vec<f64>,
 }
 
 impl StratumBaseline {
@@ -449,6 +521,8 @@ pub struct CurveTimes {
     pub n_risk: Vec<f64>,
     /// The sum of the case weights of the events.
     pub n_event: Vec<f64>,
+    /// The sum of the case weights of the rows that leave without the event.
+    pub n_censor: Vec<f64>,
 }
 
 /// The curve of one row of new data.
@@ -458,7 +532,8 @@ pub struct Curve {
     pub stratum: usize,
     /// The cumulative hazard `theta H(t)` at the times of the stratum.
     pub cumulative_hazard: Vec<f64>,
-    /// `exp(-cumulative_hazard)`.
+    /// `exp(-cumulative_hazard)`, or the Kalbfleisch-Prentice estimate
+    /// `exp(theta sum of l)` of [`CurveType::KalbfleischPrentice`].
     pub survival: Vec<f64>,
     /// The standard error of the cumulative hazard, that is of `log S`.
     pub std_err: Option<Vec<f64>>,
@@ -476,6 +551,9 @@ pub struct SurvCurves {
     /// One curve per row of new data, in order.
     pub curves: Vec<Curve>,
 }
+
+mod paths;
+pub use paths::{PathCurve, PathCurves, PathData, survfit_paths};
 
 // -- sums
 
@@ -837,13 +915,99 @@ fn increment(
     }
 }
 
+/// What a baseline is built for.
+#[derive(Clone, Copy)]
+struct BuildSpec {
+    kind: HazardType,
+    /// The Kalbfleisch-Prentice increments are formed besides the hazard, and
+    /// the variance increments are those of that curve.
+    product_limit: bool,
+    /// Every distinct exit time is a time of the baseline, not only the
+    /// event times.
+    all_times: bool,
+    /// Rows that leave before this time are not used.
+    start_time: Option<f64>,
+}
+
+impl BuildSpec {
+    fn events_only(kind: HazardType) -> Self {
+        Self {
+            kind,
+            product_limit: false,
+            all_times: false,
+            start_time: None,
+        }
+    }
+}
+
+/// The log of the Kalbfleisch-Prentice survival increment at one time: the
+/// `l` with `sum over the events of w_j theta_j / (1 - exp(theta_j l)) = s0`.
+///
+/// `w` and `theta` are the case weight and the relative risk of each event and
+/// `s0` the risk-set sum `sum of w theta`. One event has the closed form
+/// `ln(1 - w theta / s0) / theta`. With ties the left side increases from
+/// `sum of w theta` at `l = -infinity` to infinity at 0, and the root is found
+/// by bisection down to the spacing of doubles. When `s0` is no more than the
+/// sum of `w theta` of the events the root is `-infinity`.
+fn log_product_limit(w: &[f64], theta: &[f64], s0: f64) -> f64 {
+    if let ([w], [theta]) = (w, theta) {
+        return (-(w * theta) / s0).ln_1p() / theta;
+    }
+    let mut floor = 0.0;
+    for (w, t) in w.iter().zip(theta) {
+        floor += w * t;
+    }
+    if s0 <= floor {
+        return f64::NEG_INFINITY;
+    }
+    let g = |l: f64| {
+        let mut total = 0.0;
+        for (w, t) in w.iter().zip(theta) {
+            total += w * t / -(t * l).exp_m1();
+        }
+        total
+    };
+    // Bracket: g(lo) < s0 <= g(hi) with hi close to 0.
+    let mut hi = -f64::MIN_POSITIVE;
+    let mut lo = -1.0;
+    let mut width = 1.0;
+    while g(lo) >= s0 {
+        hi = lo;
+        width *= 2.0;
+        lo -= width;
+        if lo < -1.0e6 {
+            return f64::NEG_INFINITY;
+        }
+    }
+    for _ in 0..2200 {
+        let mid = lo + (hi - lo) / 2.0;
+        if mid <= lo || mid >= hi {
+            break;
+        }
+        if g(mid) < s0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if hi - lo <= 2.0 * f64::EPSILON * mid.abs() {
+            break;
+        }
+    }
+    lo + (hi - lo) / 2.0
+}
+
 /// The baseline of every stratum with `centre` and `offset_centre`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sweep over the risk sets with the options of every curve"
+)]
 fn build_baseline(
     model: &Model<'_>,
     centre: Vec<f64>,
     offset_centre: f64,
-    kind: HazardType,
+    spec: BuildSpec,
 ) -> Result<Baseline> {
+    let kind = spec.kind;
     let p = model.p;
     let rows = model.rows;
     let stop = model.stop();
@@ -851,6 +1015,7 @@ fn build_baseline(
     // The risk score of every row of positive weight, w * theta.
     let mut z = vec![0.0; p];
     let mut risk = vec![0.0; rows];
+    let mut relative = vec![0.0; if spec.product_limit { rows } else { 0 }];
     for i in 0..rows {
         if model.weight[i] > 0.0 {
             centred_row(model.x, i, &centre, &mut z);
@@ -862,12 +1027,24 @@ fn build_baseline(
                 ));
             }
             risk[i] = model.weight[i] * theta;
+            if spec.product_limit {
+                relative[i] = theta;
+            }
+        }
+    }
+    if let Some(from) = spec.start_time {
+        let any_event =
+            (0..rows).any(|i| model.weight[i] > 0.0 && model.is_event[i] && stop[i] >= from);
+        if !any_event {
+            return Err(Error::input(
+                "start_time: no event is at or after it, so there is no curve",
+            ));
         }
     }
     let levels = model.levels();
     let mut members: Vec<Vec<u32>> = vec![Vec::new(); model.n_strata];
     for i in 0..rows {
-        if model.weight[i] > 0.0 {
+        if model.weight[i] > 0.0 && spec.start_time.is_none_or(|from| stop[i] >= from) {
             members[model.stratum[i] as usize].push(i as u32);
         }
     }
@@ -890,9 +1067,11 @@ fn build_baseline(
         let mut time = Vec::new();
         let mut n_events = Vec::new();
         let mut n_risk = Vec::new();
+        let mut n_censor = Vec::new();
         let mut hazard = Vec::new();
         let mut variance = Vec::new();
         let mut xbar: Vec<f64> = Vec::new();
+        let mut log_km = Vec::new();
         let mut position = 0;
         while position < len {
             let t = stop[order[position] as usize];
@@ -900,11 +1079,12 @@ fn build_baseline(
             while end < len && stop[order[end] as usize].total_cmp(&t).is_eq() {
                 end += 1;
             }
+            let (group_start, group_end) = (position, end);
             let events: Vec<usize> = (position..end)
                 .filter(|&k| model.is_event[order[k] as usize])
                 .collect();
             position = end;
-            if events.is_empty() {
+            if events.is_empty() && !spec.all_times {
                 continue;
             }
             while entering < len && stop[order[entering] as usize] >= t {
@@ -942,10 +1122,46 @@ fn build_baseline(
                 }
             }
             let sums1: Vec<f64> = s1.iter().map(|v| v.value()).collect();
-            let inc = increment(kind, weight, events.len(), s0.value(), &sums1, e0, &e1)?;
+            let mut inc = if events.is_empty() {
+                Increment {
+                    hazard: 0.0,
+                    variance: 0.0,
+                    xbar: vec![0.0; p],
+                }
+            } else {
+                increment(kind, weight, events.len(), s0.value(), &sums1, e0, &e1)?
+            };
+            if spec.product_limit && !events.is_empty() {
+                // The product-limit curve takes the Breslow hazard and a
+                // Greenwood-type variance.
+                let at_risk = s0.value();
+                inc.variance = if weight >= at_risk {
+                    weight / (at_risk * at_risk)
+                } else {
+                    weight / (at_risk * (at_risk - weight))
+                };
+                let w: Vec<f64> = events
+                    .iter()
+                    .map(|&k| model.weight[order[k] as usize])
+                    .collect();
+                let theta: Vec<f64> = events
+                    .iter()
+                    .map(|&k| relative[order[k] as usize])
+                    .collect();
+                log_km.push(log_product_limit(&w, &theta, at_risk));
+            } else if spec.product_limit {
+                log_km.push(0.0);
+            }
+            let mut censored = 0.0;
+            for &row in &order[group_start..group_end] {
+                if !model.is_event[row as usize] {
+                    censored += model.weight[row as usize];
+                }
+            }
             time.push(t);
             n_events.push(weight);
             n_risk.push(count.value());
+            n_censor.push(censored);
             hazard.push(inc.hazard);
             variance.push(inc.variance);
             xbar.extend(inc.xbar);
@@ -954,8 +1170,10 @@ fn build_baseline(
         time.reverse();
         n_events.reverse();
         n_risk.reverse();
+        n_censor.reverse();
         hazard.reverse();
         variance.reverse();
+        log_km.reverse();
         let events = time.len();
         let mut reversed = vec![0.0; xbar.len()];
         for k in 0..events {
@@ -965,7 +1183,8 @@ fn build_baseline(
         let mut cumulative_hazard = Vec::with_capacity(events);
         let mut cumulative_variance = Vec::with_capacity(events);
         let mut cumulative_xbar = Vec::with_capacity(events * p);
-        let (mut h, mut v) = (0.0, 0.0);
+        let mut cumulative_log_km = Vec::with_capacity(log_km.len());
+        let (mut h, mut v, mut l) = (0.0, 0.0, 0.0);
         let mut x_sum = vec![0.0; p];
         for k in 0..events {
             h += hazard[k];
@@ -976,6 +1195,10 @@ fn build_baseline(
                 x_sum[a] += reversed[k * p + a];
             }
             cumulative_xbar.extend_from_slice(&x_sum);
+            if spec.product_limit {
+                l += log_km[k];
+                cumulative_log_km.push(l);
+            }
         }
         strata.push(StratumBaseline {
             code,
@@ -986,6 +1209,11 @@ fn build_baseline(
             cumulative_hazard,
             cumulative_variance,
             cumulative_xbar,
+            n_censor,
+            variance_increment: variance,
+            xbar_increment: reversed,
+            log_km,
+            cumulative_log_km,
         });
     }
     let shift = model.dot_beta(&centre);
@@ -1011,7 +1239,7 @@ fn baseline_of(
         model,
         centre,
         model.weighted_offset_mean(),
-        model.hazard_type(hazard),
+        BuildSpec::events_only(model.hazard_type(hazard)),
     )
 }
 
@@ -1387,17 +1615,72 @@ fn limits(kind: ConfType, s: f64, se: f64, z: f64) -> (Option<f64>, Option<f64>)
     }
 }
 
+type Band = Option<Vec<Option<f64>>>;
+
+/// The lower and upper limits of a curve, `None` without a standard error or
+/// with no limits asked for.
+fn bands(kind: ConfType, survival: &[f64], se: Option<&[f64]>, z: f64) -> (Band, Band) {
+    match se {
+        Some(se) if kind != ConfType::None => {
+            let pairs: Vec<(Option<f64>, Option<f64>)> = survival
+                .iter()
+                .zip(se)
+                .map(|(&s, &e)| limits(kind, s, e, z))
+                .collect();
+            (
+                Some(pairs.iter().map(|q| q.0).collect()),
+                Some(pairs.iter().map(|q| q.1).collect()),
+            )
+        }
+        _ => (None, None),
+    }
+}
+
+/// The baseline a curve is read from, for the options of [`survfit`].
+fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> {
+    let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
+    if product_limit && opts.hazard.is_some() {
+        return Err(Error::input(
+            "hazard: the Kalbfleisch-Prentice curve has no choice of hazard form",
+        ));
+    }
+    if let Some(from) = opts.start_time {
+        if !from.is_finite() {
+            return Err(Error::input("start_time: must be finite"));
+        }
+    }
+    let centre = m.means(opts.centring)?;
+    build_baseline(
+        m,
+        centre,
+        m.weighted_offset_mean(),
+        BuildSpec {
+            kind: if product_limit {
+                HazardType::Breslow
+            } else {
+                m.hazard_type(opts.hazard)
+            },
+            product_limit,
+            all_times: opts.censor_times,
+            start_time: opts.start_time,
+        },
+    )
+}
+
 /// Predicted survival curves for new covariate rows, as `survfit.coxph` with
 /// `newdata`, at the event times of the stratum of each row.
 ///
 /// `newdata.stratum` is required when the fit has strata, and the curve is
 /// that of the row's stratum. For the curve of the average subject, pass the
-/// row [`reference_means`] returns and the offset [`reference_offset`] returns. `newdata.start` and `stop` are not read.
+/// row [`reference_means`] returns and the offset [`reference_offset`] returns.
+/// `newdata.start` and `stop` are not read. The curve type, the start time and
+/// the times of the curves are chosen in [`SurvfitOptions`].
 ///
 /// # Errors
 ///
 /// [`Error::Input`] as for [`predict`], and when `conf_level` is not in
-/// `(0, 1)`.
+/// `(0, 1)`, `start_time` is not finite or leaves no event, or `hazard` is set
+/// for the Kalbfleisch-Prentice curve.
 pub fn survfit(
     model: &FittedModel<'_>,
     newdata: &NewData<'_>,
@@ -1409,7 +1692,8 @@ pub fn survfit(
     let m = Model::new(model, opts.variance)?;
     m.check_new(newdata)?;
     let strata = m.new_strata(newdata)?;
-    let baseline = baseline_of(&m, opts.centring, opts.hazard)?;
+    let baseline = curve_baseline(&m, opts)?;
+    let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     let p = m.p;
     let z_value = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
     let mut z = vec![0.0; p];
@@ -1426,7 +1710,14 @@ pub fn survfit(
         let n = base.time.len();
         let cumulative_hazard: Vec<f64> =
             base.cumulative_hazard.iter().map(|h| h * theta).collect();
-        let survival: Vec<f64> = cumulative_hazard.iter().map(|h| (-h).exp()).collect();
+        let survival: Vec<f64> = if product_limit {
+            base.cumulative_log_km
+                .iter()
+                .map(|l| (theta * l).exp())
+                .collect()
+        } else {
+            cumulative_hazard.iter().map(|h| (-h).exp()).collect()
+        };
         let std_err = opts.se_fit.then(|| {
             (0..n)
                 .map(|k| {
@@ -1438,18 +1729,7 @@ pub fn survfit(
                 })
                 .collect::<Vec<f64>>()
         });
-        let (lower, upper) = match (&std_err, opts.conf_type) {
-            (Some(se), kind) if kind != ConfType::None => {
-                let pairs: Vec<(Option<f64>, Option<f64>)> = (0..n)
-                    .map(|k| limits(kind, survival[k], se[k], z_value))
-                    .collect();
-                (
-                    Some(pairs.iter().map(|q| q.0).collect()),
-                    Some(pairs.iter().map(|q| q.1).collect()),
-                )
-            }
-            _ => (None, None),
-        };
+        let (lower, upper) = bands(opts.conf_type, &survival, std_err.as_deref(), z_value);
         curves.push(Curve {
             stratum: s,
             cumulative_hazard,
@@ -1468,6 +1748,7 @@ pub fn survfit(
                 time: s.time,
                 n_risk: s.n_risk,
                 n_event: s.n_events,
+                n_censor: s.n_censor,
             })
             .collect(),
         curves,
@@ -1531,4 +1812,53 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
         }
     }
     Ok(out)
+
+#[cfg(test)]
+mod tests {
+    use super::log_product_limit;
+
+    fn minus_infinity(x: f64) -> bool {
+        x.is_infinite() && x < 0.0
+    }
+
+    #[test]
+    fn single_event_is_closed_form() {
+        let l = log_product_limit(&[2.0], &[0.5], 8.0);
+        assert!((l - (1.0f64 - 0.125).ln() / 0.5).abs() < 1e-15);
+        assert!(minus_infinity(log_product_limit(&[1.0], &[3.0], 3.0)));
+    }
+
+    #[test]
+    fn tied_events_solve_the_equation() {
+        let cases: [(&[f64], &[f64], f64); 4] = [
+            (&[1.0, 1.0], &[1.0, 1.0], 10.0),
+            (&[1.0, 2.5, 1.0], &[0.2, 3.0, 1.5], 12.0),
+            (&[1.0, 1.0], &[1.0, 1.0], 2.000_001),
+            (&[3.0, 1.0], &[4.0, 0.01], 1.0e6),
+        ];
+        for (w, r, s0) in cases {
+            let l = log_product_limit(w, r, s0);
+            assert!(l < 0.0 && l.is_finite());
+            let f: f64 = w
+                .iter()
+                .zip(r)
+                .map(|(w, r)| w * r / -(r * l).exp_m1())
+                .sum();
+            assert!((f - s0).abs() <= 1e-12 * s0, "{f} against {s0}");
+        }
+    }
+
+    #[test]
+    fn exhausted_risk_set_has_no_root() {
+        assert!(minus_infinity(log_product_limit(
+            &[1.0, 1.0],
+            &[1.0, 2.0],
+            3.0
+        )));
+        assert!(minus_infinity(log_product_limit(
+            &[1.0, 1.0],
+            &[1.0, 2.0],
+            2.0
+        )));
+    }
 }

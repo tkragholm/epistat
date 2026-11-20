@@ -37,10 +37,10 @@ pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_re
 pub use design::{CoxDesign, cox_score_residuals, fit_cox};
 pub use predict::predict_expected_martingale;
 pub use predict::{
-    Baseline, BaselineOptions, Centring, ConfType, Curve, CurveTimes, FittedModel, HazardType,
-    NewData, PredictOptions, PredictType, Prediction, Reference, StratumBaseline, SurvCurves,
-    SurvfitOptions, TermsPrediction, Variance, basehaz, predict, predict_terms, reference_means,
-    reference_offset, survfit,
+    Baseline, BaselineOptions, Centring, ConfType, Curve, CurveTimes, CurveType, FittedModel,
+    HazardType, NewData, PathCurve, PathCurves, PathData, PredictOptions, PredictType, Prediction,
+    Reference, StratumBaseline, SurvCurves, SurvfitOptions, TermsPrediction, Variance, basehaz,
+    predict, predict_terms, reference_means, reference_offset, survfit, survfit_paths,
 };
 pub use residuals::{Collapse, CoxResiduals, ResidualKind, ResidualOptions, residuals};
 #[expect(

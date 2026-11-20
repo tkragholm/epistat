@@ -36,7 +36,9 @@
 //!   time-dependent cut points such as age and calendar period.
 //! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
 //!   number of events, terms and predicted survival curves of a Cox fit, as
-//!   `basehaz`, `predict.coxph` and `survfit.coxph`.
+//!   `basehaz`, `predict.coxph` and `survfit.coxph`, including the
+//!   Kalbfleisch-Prentice curve, `start.time` and curves for covariates that
+//!   change over time.
 //! - [`cox::anova`](mod@cox::anova): likelihood-ratio tests between nested Cox models, as
 //!   `anova.coxph`.
 //! - [`SurvData`]: the checked input type that the estimators share, for
