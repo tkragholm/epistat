@@ -53,7 +53,8 @@
 //! infinitesimal one the one `survival` offers. `eventglm`'s default,
 //! `model.censoring = "independent"`, is the exact jackknife of the whole sample,
 //! and `"stratified"` is the exact jackknife within strata, which a stratum column
-//! gives here.
+//! gives here. Its weighted constructions, with a Cox model of the censoring, are
+//! [`pseudo_ipcw`].
 //!
 //! *Cost.* The infinitesimal jackknife of the survival probability, the
 //! restricted mean and the hazards is in closed form, `O(rows log events + rows
@@ -112,6 +113,33 @@
 //! it differs from the one `survfit` forms from the subjects at risk at its
 //! starting time, and a distribution can be given instead.
 //!
+//! # Inverse probability of censoring weighting
+//!
+//! [`pseudo_ipcw`] makes the pseudo-observations of `eventglm` with
+//! `model.censoring = "coxph"` \[4\]. For a subject with time `T`, status `D`
+//! (0 for censored) and censoring covariates `z`, and a time `t`, the outcome
+//! `V` is 1 less the indicator of an event before `t` for the survival, that
+//! indicator for the incidence of a cause, `min(T, t)` for the restricted mean and
+//! `(t - min(T, t))` for the time lost to a cause, and it is observed when
+//! `I = 1(T >= t or D > 0)`. With `G = G(min(T, t) | z)` the probability of not
+//! being censored from the Cox model of the censoring, fitted to `(T, 1(D = 0))`
+//! on `z` as [`cox::predict::survfit`](crate::cox::predict::survfit) gives its survival function,
+//! and `X = I V / G`, the pseudo-observation is
+//!
+//! ```text
+//! Binder (eventglm's default)   X, the weighted outcome, whose mean is the estimate,
+//! Hajek                         n theta - (n - 1) theta(-i),  theta = sum X / sum (I / G).
+//! ```
+//!
+//! Every row is a subject. `eventglm`'s default `"independent"` is the exact
+//! jackknife of the whole sample, and `"stratified"` the exact jackknife within the
+//! strata of the censoring covariates: both are [`Method::Jackknife`], the second
+//! with a stratum column. They are checked against `eventglm`. `"aareg"` is not
+//! provided. For a time before every exit time `eventglm` takes `G` at the first
+//! exit time, below 1 where someone is censored there, and the survival
+//! pseudo-observation then differs from 1 with no one at risk of censoring; here
+//! `G` is 1 before the first censoring.
+//!
 //! # Regression
 //!
 //! [`Pseudo::regress`] fits the regression of the pseudo-values on covariates
@@ -136,6 +164,7 @@
 mod engine;
 mod hazard;
 mod infinitesimal;
+mod ipcw;
 mod jackknife;
 pub mod regression;
 mod states;
@@ -149,6 +178,7 @@ use crate::multistate::check_ascending;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
+pub use ipcw::{IpcwMethod, IpcwOptions, pseudo_ipcw};
 pub use regression::{Covariance, GeeFit, GeeOptions, Link};
 pub use states::{StateEstimate, StateOptions, StatePseudo, StateTarget, pseudo_states};
 

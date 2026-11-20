@@ -46,9 +46,12 @@
 //! - [`survfit`]: Kaplan-Meier and Nelson-Aalen curves for single-event data with
 //!   standard errors, confidence limits, quantiles and restricted means, read at chosen
 //!   times as `summary.survfit(times = )` with the starting point of `survfit0`.
-//! - [`pseudo`]: pseudo-observations of survival, cumulative incidence and restricted
-//!   means from the infinitesimal or the exact jackknife, as `survival::pseudo` and the
-//!   `pseudo` package, and generalised estimating equations on them.
+//! - [`pseudo`]: pseudo-observations of survival, cumulative incidence, restricted
+//!   means and cumulative hazards from the infinitesimal or the exact jackknife, as
+//!   `survival::pseudo` and the `pseudo` package, of a multi-state process (state
+//!   occupation, time in state, transition hazards), by inverse probability of
+//!   censoring weighting with a Cox model of the censoring, as `eventglm`, and
+//!   generalised estimating equations on them.
 //! - [`rmst`]: restricted mean survival time and time lost in two groups with their
 //!   difference and ratios, and their regression on covariates, as `survRM2::rmst2`.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
