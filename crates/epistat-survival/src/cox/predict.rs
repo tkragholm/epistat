@@ -1473,3 +1473,62 @@ pub fn survfit(
         curves,
     })
 }
+
+/// The expected number of events of the fitted data in the form of
+/// `predict.coxph(type = "expected")`: the status less the martingale residual.
+///
+/// [`predict`] gives `(H(stop) - H(start)) theta` for the fitted data, as it
+/// does for new data, so that a row's expected number does not depend on
+/// whether it is predicted as fitted or as new. For an event at a time shared
+/// with other events under Efron ties the martingale form is the hazard before
+/// the time plus the part `1 - j / d` of the hazard at it for the `j`-th of `d`
+/// tied events, and the two forms differ there. They agree for every other row
+/// and for Breslow ties. Choose this function when the numbers must be those
+/// of `survival`, for instance to form `observed - expected` as
+/// `residuals(type = "martingale")` does.
+///
+/// Rows of weight zero are not in the fit and have no martingale residual, so
+/// they have the value [`predict`] gives. The case weights do not enter, as
+/// they do not in `residuals.coxph`.
+///
+/// # Errors
+///
+/// [`Error::Input`] as for [`predict`] and [`residuals`](super::residuals::residuals).
+pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> {
+    use super::residuals::{ResidualKind, ResidualOptions, residuals};
+    let defined = predict(
+        model,
+        PredictType::Expected,
+        None,
+        &PredictOptions::default(),
+    )?;
+    let m = residuals(
+        model.data,
+        model.x,
+        model.fit,
+        &ResidualOptions::new(ResidualKind::Martingale, *model.options),
+    )?;
+    let data = model.data.clone().with_timefix(model.options.timefix)?;
+    let code = match (model.options.cause, data.followup()?.n_codes()) {
+        (None, 1) => 1,
+        (Some(code), _) => code,
+        (None, _) => {
+            return Err(Error::input(
+                "cause: the status has several codes, so the event code is required",
+            ));
+        }
+    };
+    let is_event: Vec<bool> = data.cause(code)?.iter().collect();
+    let column = m.columns[0]
+        .as_ref()
+        .ok_or_else(|| Error::input("the fit has no estimate"))?;
+    let mut out = defined.fit;
+    for (value, &row) in column.iter().zip(&m.rows) {
+        let i = row as usize;
+        let weight = model.data.weight().map_or(1.0, |w| w[i]);
+        if weight > 0.0 {
+            out[i] = f64::from(u8::from(is_event[i])) - value;
+        }
+    }
+    Ok(out)
+}

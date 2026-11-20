@@ -35,6 +35,7 @@ pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_re
     reason = "the deprecated names stay exported for a release"
 )]
 pub use design::{CoxDesign, cox_score_residuals, fit_cox};
+pub use predict::predict_expected_martingale;
 pub use predict::{
     Baseline, BaselineOptions, Centring, ConfType, Curve, CurveTimes, FittedModel, HazardType,
     NewData, PredictOptions, PredictType, Prediction, Reference, StratumBaseline, SurvCurves,
