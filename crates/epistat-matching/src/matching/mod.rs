@@ -16,18 +16,20 @@ pub use constraints::{
     ExactMatchConstraint, StrataExactConstraint, UsedControlsVec,
 };
 pub use distance::{
-    DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, IdMapMahalanobisDistance,
-    IdMapPropensityScoreDistance, MahalanobisDistance, MahalanobisError, PropensityScoreDistance,
+    DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
+    IdMapMahalanobisDistance, IdMapPropensityScoreDistance, MahalanobisDistance, MahalanobisError,
+    PropensityScoreDistance,
 };
 pub use engine::{StandardMatchRequest, match_standard};
 pub use estimation::{
     CovariateEncodingConfig, CovariateMatrix, ElasticNetLogisticConfig, EstimationError,
+    EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
     LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisDistancePreparation,
     MahalanobisPreparationConfig, MahalanobisTransform, MissingValuePolicy,
     PropensityDistancePreparation, PropensityEstimator, PropensityMatchedOutcome,
     PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale, RidgeReport,
-    estimate_propensity_and_match, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config,
+    estimate_propensity_and_match, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
 };
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,

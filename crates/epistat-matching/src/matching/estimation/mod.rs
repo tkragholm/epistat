@@ -15,10 +15,10 @@ use super::engine::{StandardMatchRequest, match_standard};
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
 use crate::types::{DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
-use covariance::{covariance_matrix, rank_transform_columns};
-use encoding::build_covariate_matrix;
+use covariance::{covariance_matrix, rank_transform_columns, rescale_rank_covariance};
+use encoding::{build_covariate_matrix, build_covariate_matrix_marked};
 use itertools::Itertools;
-use linalg::invert_matrix_with_ridge;
+use linalg::{invert_matrix_with_ridge, pseudo_inverse};
 use logistic::{fit_elastic_net_logistic, fit_logistic_regression};
 use rapidhash::RapidHashMap;
 
@@ -93,6 +93,25 @@ pub struct MahalanobisDistancePreparation {
     pub column_names: Vec<String>,
     /// The ridge added to the covariance matrix before inversion.
     pub ridge: RidgeReport,
+    /// The rank of the inverse: `dimension` for an ordinary inverse, fewer
+    /// when [`MahalanobisTransform::RankTieAdjusted`] gives a singular
+    /// covariance and the generalised inverse drops directions.
+    pub covariance_rank: usize,
+}
+
+/// Euclidean distance preprocessing result.
+#[derive(Debug, Clone)]
+pub struct EuclideanDistancePreparation {
+    /// Prepared distance config for matching APIs.
+    pub distance_config: DistanceConfig,
+    /// Encoded, and if asked scaled, vectors by id.
+    pub vectors: RapidHashMap<String, Vec<f64>>,
+    /// Vector dimension.
+    pub dimension: usize,
+    /// Encoded vector column names.
+    pub column_names: Vec<String>,
+    /// The divisor of each column, all 1 without scaling.
+    pub divisors: Vec<f64>,
 }
 
 /// Matched output combined with in-crate propensity estimation details.
@@ -126,6 +145,11 @@ pub enum EstimationError {
     LinearSystemSolveFailed,
     InvalidCovarianceMatrix,
     MahalanobisConfigBuildFailed,
+    /// A column varies, but not within either group, so it has no pooled
+    /// within-group standard deviation to scale by.
+    ZeroWithinGroupVariance {
+        column: String,
+    },
 }
 
 /// Build propensity-score distance config directly from covariate records.
@@ -210,21 +234,39 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
         return Err(EstimationError::EmptyInput);
     }
 
+    let tie_adjusted = matches!(config.transform, MahalanobisTransform::RankTieAdjusted);
     let mut encoding = config.encoding.clone();
     encoding.include_intercept = false;
+    if tie_adjusted {
+        encoding.drop_first_categorical_level = false;
+    }
     let records = anchors.iter().chain(candidates.iter()).collect_vec();
     let mut matrix = build_covariate_matrix(&records, &encoding)?;
-    if matches!(config.transform, MahalanobisTransform::Rank) {
+    if matches!(
+        config.transform,
+        MahalanobisTransform::Rank | MahalanobisTransform::RankTieAdjusted
+    ) {
         rank_transform_columns(&mut matrix);
     }
-    let covariance = covariance_matrix(
+    let mut covariance = covariance_matrix(
         &matrix,
         anchors.len(),
         candidates.len(),
         config.covariance_strategy,
     )?;
-    let (inverse_covariance, ridge) =
-        invert_matrix_with_ridge(&covariance, config.ridge, config.max_ridge_attempts)?;
+    let (inverse_covariance, ridge, covariance_rank) = if tie_adjusted {
+        rescale_rank_covariance(&mut covariance, matrix.n_cols, matrix.n_rows)?;
+        let (inverse, rank) = pseudo_inverse(&covariance, GENERALISED_INVERSE_TOLERANCE)?;
+        let report = RidgeReport {
+            ridge: 0.0,
+            singular_without_ridge: rank < matrix.n_cols,
+        };
+        (inverse, report, rank)
+    } else {
+        let (inverse, report) =
+            invert_matrix_with_ridge(&covariance, config.ridge, config.max_ridge_attempts)?;
+        (inverse, report, matrix.n_cols)
+    };
 
     let vectors = matrix
         .row_ids
@@ -248,6 +290,90 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
         dimension,
         column_names: matrix.column_names,
         ridge,
+        covariance_rank,
+    })
+}
+
+/// Eigenvalues of the covariance of the ranks at most this fraction of the
+/// largest count as zero when the generalised inverse is formed.
+const GENERALISED_INVERSE_TOLERANCE: f64 = 1e-8;
+
+/// Prepare Euclidean vectors directly from covariates.
+///
+/// Anchors are the first group and candidates the second, which matters only
+/// for [`EuclideanScale::PooledWithinGroupSd`]. The covariates of units left
+/// out of the matching, for instance trimmed to common support, should not be
+/// passed: they would enter the standard deviations.
+///
+/// # Errors
+///
+/// Returns [`EstimationError`] when encoding fails, or when a scaled column
+/// has no variance within either group.
+pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    caliper: Option<DistanceCaliper>,
+    config: &EuclideanPreparationConfig,
+) -> Result<EuclideanDistancePreparation, EstimationError> {
+    if anchors.is_empty() || candidates.is_empty() {
+        return Err(EstimationError::EmptyInput);
+    }
+
+    let mut encoding = config.encoding.clone();
+    encoding.include_intercept = false;
+    encoding.drop_first_categorical_level = false;
+    let records = anchors.iter().chain(candidates.iter()).collect_vec();
+    let (mut matrix, indicator) = build_covariate_matrix_marked(&records, &encoding)?;
+    for row_idx in 0..matrix.n_rows {
+        for (col_idx, is_indicator) in indicator.iter().enumerate() {
+            if *is_indicator {
+                matrix.values[row_idx * matrix.n_cols + col_idx] *= std::f64::consts::FRAC_1_SQRT_2;
+            }
+        }
+    }
+
+    let mut divisors = vec![1.0_f64; matrix.n_cols];
+    if config.scale == EuclideanScale::PooledWithinGroupSd {
+        if matrix.n_rows <= 2 {
+            return Err(EstimationError::EmptyInput);
+        }
+        for (col_idx, divisor) in divisors.iter_mut().enumerate() {
+            let variance = covariance::pooled_within_group_variance(
+                &matrix,
+                col_idx,
+                anchors.len(),
+                candidates.len(),
+            );
+            if !(variance > 0.0) || !variance.is_finite() {
+                return Err(EstimationError::ZeroWithinGroupVariance {
+                    column: matrix.column_names[col_idx].clone(),
+                });
+            }
+            *divisor = variance.sqrt();
+        }
+        for row_idx in 0..matrix.n_rows {
+            for (col_idx, divisor) in divisors.iter().enumerate() {
+                matrix.values[row_idx * matrix.n_cols + col_idx] /= divisor;
+            }
+        }
+    }
+
+    let vectors = matrix
+        .row_ids
+        .iter()
+        .enumerate()
+        .map(|(row_idx, id)| (id.clone(), matrix.row(row_idx).to_vec()))
+        .collect::<RapidHashMap<_, _>>();
+    let dimension = matrix.n_cols;
+    let distance_config = DistanceConfig::euclidean_map(vectors.clone(), dimension, caliper)
+        .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+
+    Ok(EuclideanDistancePreparation {
+        distance_config,
+        vectors,
+        dimension,
+        column_names: matrix.column_names,
+        divisors,
     })
 }
 
@@ -532,6 +658,67 @@ mod tests {
                 .iter()
                 .all(|value| value.is_finite())
         );
+    }
+
+    #[test]
+    fn euclidean_config_restricts_candidates_as_a_caliper() {
+        let anchors = [record("a1", date(2010, 1, 1), 10.0, "x")];
+        let candidates = [
+            record("c1", date(2010, 1, 1), 11.0, "x"),
+            record("c2", date(2010, 1, 1), 14.0, "x"),
+            record("c3", date(2010, 1, 1), 40.0, "x"),
+        ];
+        let matched = |caliper: f64| {
+            let prepared = prepare_euclidean_distance_config(
+                &anchors,
+                &candidates,
+                Some(DistanceCaliper::new(caliper).expect("valid positive caliper")),
+                &EuclideanPreparationConfig::default(),
+            )
+            .expect("euclidean preparation should succeed");
+            // The region column is constant, so the distance is the age gap.
+            assert_eq!(prepared.column_names, ["age"]);
+            let outcome = crate::MatchJob::new_standard(&anchors, &candidates, 1)
+                .with_ratio(MatchRatio::new(3).expect("ratio"))
+                .with_distance_config(prepared.distance_config)
+                .run();
+            let mut ids: Vec<_> = outcome.pairs.into_iter().map(|p| p.control_id).collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(matched(5.0), ["c1", "c2"]);
+        assert_eq!(matched(2.0), ["c1"]);
+    }
+
+    #[test]
+    fn pooled_covariance_by_degrees_of_freedom_weights_groups_by_size() {
+        let matrix = CovariateMatrix {
+            row_ids: ["a1", "a2", "c1", "c2", "c3", "c4"]
+                .map(str::to_string)
+                .to_vec(),
+            column_names: vec!["x".to_string()],
+            values: vec![0.0, 2.0, 10.0, 12.0, 14.0, 20.0],
+            n_rows: 6,
+            n_cols: 1,
+        };
+        // Group means 1 and 14, sums of squares 2 and 56, over 6 - 2 units.
+        let pooled = covariance_matrix(
+            &matrix,
+            2,
+            4,
+            MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom,
+        )
+        .expect("pooled covariance should compute");
+        assert!((pooled[0] - 14.5).abs() < 1e-12);
+        // The mean of the two group variances, 2 and 56 / 3, differs.
+        let mean_of_groups = covariance_matrix(
+            &matrix,
+            2,
+            4,
+            MahalanobisCovarianceStrategy::PooledWithinGroups,
+        )
+        .expect("pooled covariance should compute");
+        assert!((mean_of_groups[0] - (2.0 + 56.0 / 3.0) / 2.0).abs() < 1e-12);
     }
 
     #[test]

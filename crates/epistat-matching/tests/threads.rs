@@ -17,9 +17,9 @@ use epistat_matching::prelude::*;
 use epistat_matching::{
     DeterministicSelection, NearestBirthDateSelection, ReconstructedEpisode,
     ReconstructedMatchingOptions, SubclassificationConfig, balance_report_with_options,
-    estimate_propensity_and_match, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config, reconstruct_case_control_pairs,
-    subclassify_by_propensity_score_map,
+    estimate_propensity_and_match, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 use std::collections::HashMap;
@@ -450,9 +450,14 @@ fn mahalanobis_preparation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 5);
     for strategy in [
         MahalanobisCovarianceStrategy::PooledWithinGroups,
+        MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom,
         MahalanobisCovarianceStrategy::FullSample,
     ] {
-        for transform in [MahalanobisTransform::Raw, MahalanobisTransform::Rank] {
+        for transform in [
+            MahalanobisTransform::Raw,
+            MahalanobisTransform::Rank,
+            MahalanobisTransform::RankTieAdjusted,
+        ] {
             let config = MahalanobisPreparationConfig::builder()
                 .covariance_strategy(strategy)
                 .transform(transform)
@@ -479,6 +484,7 @@ fn mahalanobis_preparation_and_matching() {
                     d.float(*v);
                 }
                 d.int(prepared.dimension);
+                d.int(prepared.covariance_rank);
                 d.debug(&prepared.column_names);
                 d.debug(&prepared.ridge);
                 let outcome = MatchJob::new_standard(&anchors, &candidates, 8)
@@ -492,6 +498,53 @@ fn mahalanobis_preparation_and_matching() {
                 d.0
             });
         }
+    }
+}
+
+#[test]
+fn euclidean_preparation_and_matching() {
+    let (anchors, candidates) = balance_inputs(600, 2_400, 5);
+    for scale in [EuclideanScale::None, EuclideanScale::PooledWithinGroupSd] {
+        let config = EuclideanPreparationConfig::builder()
+            .scale(scale)
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .missing_value_policy(MissingValuePolicy::Impute)
+                    .build(),
+            )
+            .build();
+        assert_same_on_pools(&POOLS, || {
+            let mut d = Digest::default();
+            let prepared = prepare_euclidean_distance_config(
+                &anchors,
+                &candidates,
+                Some(DistanceCaliper::new(2.0).unwrap()),
+                &config,
+            )
+            .unwrap();
+            let mut vectors: Vec<_> = prepared.vectors.iter().collect();
+            vectors.sort_by(|a, b| a.0.cmp(b.0));
+            for (id, vector) in vectors {
+                d.text(id);
+                for v in vector {
+                    d.float(*v);
+                }
+            }
+            for v in &prepared.divisors {
+                d.float(*v);
+            }
+            d.int(prepared.dimension);
+            d.debug(&prepared.column_names);
+            let outcome = MatchJob::new_standard(&anchors, &candidates, 8)
+                .with_ratio(MatchRatio::new(2).unwrap())
+                .with_birth_window(BirthDateWindowDays::new(45).unwrap())
+                .with_exact_matches(["sex", "region"])
+                .with_distance_config(prepared.distance_config)
+                .run();
+            assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
+            d.outcome(&outcome);
+            d.0
+        });
     }
 }
 
