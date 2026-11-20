@@ -69,27 +69,61 @@
 //! 2. Shewchuk JR. Adaptive precision floating-point arithmetic and fast robust
 //!    geometric predicates. Discrete and Computational Geometry 1997;18:305-363.
 
+/// A running Neumaier compensated sum, for terms that arrive one at a time.
+///
+/// [`compensated`] is the sum of an iterator by this accumulator, so a sum
+/// built with [`add`](Self::add) and read with [`value`](Self::value) has the
+/// bits of [`compensated`] over the same terms.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Compensated {
+    total: f64,
+    compensation: f64,
+}
+
+impl Compensated {
+    /// An empty sum, 0.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            total: 0.0,
+            compensation: 0.0,
+        }
+    }
+
+    /// Adds `value`.
+    pub fn add(&mut self, value: f64) {
+        let candidate = self.total + value;
+        if self.total.abs() >= value.abs() {
+            self.compensation += (self.total - candidate) + value;
+        } else {
+            self.compensation += (value - candidate) + self.total;
+        }
+        self.total = candidate;
+    }
+
+    /// The sum so far, with the compensation added only when it is finite and
+    /// non-zero.
+    #[must_use]
+    pub fn value(&self) -> f64 {
+        if self.compensation != 0.0 && self.compensation.is_finite() {
+            self.total + self.compensation
+        } else {
+            self.total
+        }
+    }
+}
+
 /// Neumaier's compensated sum, in the order of operations of Python's
 /// built-in `sum()` over floats (Python 3.12 and later).
 ///
 /// The compensation is added only when it is finite and non-zero, so a sum
 /// with an infinite term stays infinite rather than becoming NaN.
 pub fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
-    let mut total = 0.0_f64;
-    let mut compensation = 0.0_f64;
+    let mut sum = Compensated::new();
     for value in values {
-        let candidate = total + value;
-        if total.abs() >= value.abs() {
-            compensation += (total - candidate) + value;
-        } else {
-            compensation += (value - candidate) + total;
-        }
-        total = candidate;
+        sum.add(value);
     }
-    if compensation != 0.0 && compensation.is_finite() {
-        total += compensation;
-    }
-    total
+    sum.value()
 }
 
 /// The correctly rounded sum of finite `values`, whatever their order, by
@@ -194,6 +228,22 @@ fn blocked_pairwise(values: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_running_sum_has_the_bits_of_the_iterator_sum() {
+        let terms = [1e16, 1.0, -1e16, 0.1, 0.2, 0.3, f64::INFINITY, 1.0];
+        for n in 0..=terms.len() {
+            let mut sum = Compensated::new();
+            for &t in &terms[..n] {
+                sum.add(t);
+            }
+            assert_eq!(
+                sum.value().to_bits(),
+                compensated(terms[..n].iter().copied()).to_bits()
+            );
+        }
+        assert_eq!(Compensated::new().value().to_bits(), 0.0_f64.to_bits());
+    }
 
     // Each expected value is what Python 3.12 returns.
     #[test]

@@ -54,6 +54,7 @@
 //! weights. Comput Methods Programs Biomed 2004;75(1):45-49.
 
 use epistat_linalg::Factor;
+use epistat_stats::sum::Compensated;
 use faer::Mat;
 
 use super::iptw::Iptw;
@@ -296,45 +297,44 @@ fn curves(
         let mut above_start = vec![0.0; m];
         {
             // Sum of weights with stop >= t_l, by sweeping rows from the back.
-            let (mut acc, mut comp) = (0.0f64, 0.0f64);
+            let mut acc = Compensated::new();
             let mut j = by_stop.len();
             for l in (0..m).rev() {
                 while j > 0 && stop[by_stop[j - 1] as usize] >= events[l] {
-                    neumaier(&mut acc, &mut comp, weight[by_stop[j - 1] as usize]);
+                    acc.add(weight[by_stop[j - 1] as usize]);
                     j -= 1;
                 }
-                above_stop[l] = acc + comp;
+                above_stop[l] = acc.value();
             }
             if let Some(start) = start {
                 let mut by_start: Vec<u32> = rows.clone();
                 by_start.sort_unstable_by(|&a, &b| start[a as usize].total_cmp(&start[b as usize]));
-                let (mut acc, mut comp) = (0.0f64, 0.0f64);
+                let mut acc = Compensated::new();
                 let mut j = by_start.len();
                 for l in (0..m).rev() {
                     while j > 0 && start[by_start[j - 1] as usize] >= events[l] {
-                        neumaier(&mut acc, &mut comp, weight[by_start[j - 1] as usize]);
+                        acc.add(weight[by_start[j - 1] as usize]);
                         j -= 1;
                     }
-                    above_start[l] = acc + comp;
+                    above_start[l] = acc.value();
                 }
             }
             let mut l = 0;
-            let (mut acc, mut comp) = (0.0f64, 0.0f64);
+            let mut acc = Compensated::new();
             for &r in &by_stop {
                 let r = r as usize;
                 if !is_event(r) {
                     continue;
                 }
                 while events[l] < stop[r] {
-                    d[l] = acc + comp;
-                    acc = 0.0;
-                    comp = 0.0;
+                    d[l] = acc.value();
+                    acc = Compensated::new();
                     l += 1;
                 }
-                neumaier(&mut acc, &mut comp, weight[r]);
+                acc.add(weight[r]);
             }
             if m > 0 {
-                d[l] = acc + comp;
+                d[l] = acc.value();
             }
         }
         let y: Vec<f64> = (0..m).map(|l| above_stop[l] - above_start[l]).collect();
@@ -473,14 +473,4 @@ fn curves(
         covariance: cov,
         covariance_known: cov_known,
     })
-}
-
-fn neumaier(acc: &mut f64, comp: &mut f64, x: f64) {
-    let t = *acc + x;
-    if acc.abs() >= x.abs() {
-        *comp += (*acc - t) + x;
-    } else {
-        *comp += (x - t) + *acc;
-    }
-    *acc = t;
 }
