@@ -60,7 +60,13 @@
 //! log        ln μ          max(exp η, ε)             max(exp η, ε)
 //! logit      ln(μ/(1-μ))   e / (1 + e)               exp η / (1 + exp η)²
 //! cloglog    ln(-ln(1-μ))  1 - exp(-exp η)           exp(η - exp η)
+//! probit     Φ⁻¹(μ)        Φ(η)                      φ(η)
 //! ```
+//!
+//! with `Φ` and `φ` the standard normal distribution function and density of
+//! `epistat-stats`. The probit inverse clamps `η` to `±T`, with
+//! `T = -Φ⁻¹(ε)`, and its derivative is at least `ε`, as R's
+//! `binomial("probit")` does.
 //!
 //! with `ε = f64::EPSILON`. For the logit inverse, `e = exp η` for
 //! `|η| <= 30`, `e = ε` for `η < -30` and `e = 1/ε` for `η > 30`. The derivative
@@ -93,6 +99,9 @@ pub enum Link {
     Logit,
     /// `eta = ln(-ln(1 - mu))`, with `mu` in `(0, 1)`.
     Cloglog,
+    /// `eta = Phi^-1(mu)`, with `Phi` the standard normal distribution
+    /// function and `mu` in `(0, 1)`.
+    Probit,
 }
 
 /// The distribution of the response.
@@ -128,6 +137,7 @@ impl Link {
             Self::Log => mu.ln(),
             Self::Logit => (mu / (1.0 - mu)).ln(),
             Self::Cloglog => (-(-mu).ln_1p()).ln(),
+            Self::Probit => epistat_stats::normal::quantile(mu),
         }
     }
 
@@ -149,6 +159,10 @@ impl Link {
                 e / (1.0 + e)
             }
             Self::Cloglog => (-(-eta.exp()).exp_m1()).clamp(EPS, 1.0 - EPS),
+            Self::Probit => {
+                let bound = -epistat_stats::normal::quantile(EPS);
+                epistat_stats::normal::cdf(eta.clamp(-bound, bound)).clamp(EPS, 1.0 - EPS)
+            }
         }
     }
 
@@ -170,6 +184,7 @@ impl Link {
                 let e = eta.min(CLOGLOG_ETA_CAP);
                 (e - e.exp()).exp().max(EPS)
             }
+            Self::Probit => epistat_stats::normal::pdf(eta).max(EPS),
         }
     }
 }
@@ -278,6 +293,22 @@ impl Family {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_probit_inverse_undoes_the_link_and_stays_inside_the_unit_interval() {
+        for mu in [1e-6, 0.05, 0.5, 0.9, 1.0 - 1e-9] {
+            let back = Link::Probit.inverse(Link::Probit.link(mu));
+            assert!((back - mu).abs() <= 1e-13 * mu.max(1e-3), "{mu}: {back}");
+        }
+        // The bound is the quantile at EPS, so the end values are EPS up to the
+        // rounding of the quantile and the distribution function.
+        assert!((Link::Probit.inverse(40.0) - (1.0 - EPS)).abs() <= EPS);
+        assert!((Link::Probit.inverse(-40.0) - EPS).abs() <= 1e-14 * EPS);
+        assert_eq!(Link::Probit.derivative(40.0), EPS);
+        let h = 1e-6;
+        let numeric = (Link::Probit.inverse(0.3 + h) - Link::Probit.inverse(0.3 - h)) / (2.0 * h);
+        assert!((numeric - Link::Probit.derivative(0.3)).abs() < 1e-9);
+    }
 
     #[test]
     fn the_cloglog_inverse_undoes_the_link_and_stays_inside_the_unit_interval() {

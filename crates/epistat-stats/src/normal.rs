@@ -142,6 +142,14 @@ use std::f64::consts::SQRT_2;
 /// `1 / sqrt(2 pi)`.
 const FRAC_1_SQRT_2PI: f64 = 0.398_942_280_401_432_677_939_946_059_934;
 
+/// The standard normal density `exp(-x^2 / 2) / sqrt(2 pi)`.
+///
+/// Returns NaN for NaN and 0 for infinite `x`.
+#[must_use]
+pub fn pdf(x: f64) -> f64 {
+    FRAC_1_SQRT_2PI * (-0.5 * x * x).exp()
+}
+
 /// `P(Z <= x)` for a standard normal `Z`.
 #[must_use]
 pub fn cdf(x: f64) -> f64 {
