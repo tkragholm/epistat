@@ -9,6 +9,8 @@
 //!
 //! # Contents
 //!
+//! - [`concordance`]: Harrell's C and its relatives for a numeric score, with weights,
+//!   strata, delayed entry, time weights and an infinitesimal jackknife variance.
 //! - [`cox`]: Cox regression on one covariate or a design matrix, with Breslow or
 //!   Efron ties, delayed entry, strata, case weights and a cluster-robust
 //!   variance.
@@ -40,6 +42,7 @@
 
 pub mod aalen_johansen;
 mod check;
+pub mod concordance;
 pub mod cox;
 mod error;
 pub mod fine_gray;
