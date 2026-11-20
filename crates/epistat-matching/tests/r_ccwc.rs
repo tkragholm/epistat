@@ -342,10 +342,17 @@ fn entry_policy_and_entry_date_give_the_same_risk_sets() {
     let reference = reference();
     let plain = records(&reference.people);
     let with_entry = records_with_entry(&reference.people);
-    for (k, replacement, seed) in [(10_000, true, None), (2, false, Some(5)), (1, true, Some(9))] {
+    for (k, replacement, seed) in [
+        (10_000, true, None),
+        (2, false, Some(5)),
+        (1, true, Some(9)),
+    ] {
         let native = run_calendar(&reference, &with_entry, k, replacement, seed);
         let policy = run_calendar_policy(&reference, &plain, k, replacement, seed);
-        assert_eq!(native.pairs, policy.pairs, "k={k} replacement={replacement}");
+        assert_eq!(
+            native.pairs, policy.pairs,
+            "k={k} replacement={replacement}"
+        );
         assert_eq!(native.matched_cases, policy.matched_cases);
         assert_eq!(native.unmatched_cases, policy.unmatched_cases);
     }

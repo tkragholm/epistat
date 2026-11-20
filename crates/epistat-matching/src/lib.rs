@@ -151,6 +151,7 @@ pub use matching::{
     prepare_propensity_distance_config, reconstruct_case_control_pairs,
     subclassify_by_propensity_score_map,
 };
+pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
 };
@@ -186,6 +187,7 @@ pub fn benchmark_eqq_distance_stats(
 
 /// Common imports for consumers of this crate.
 pub mod prelude {
+    pub use crate::matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
     pub use crate::{
         AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
         BalanceReport, BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds,

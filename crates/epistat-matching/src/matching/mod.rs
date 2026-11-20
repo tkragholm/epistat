@@ -2,6 +2,7 @@ mod constraints;
 mod distance;
 mod engine;
 mod estimation;
+mod exact;
 mod index;
 pub mod job;
 pub mod ratio;
@@ -29,6 +30,7 @@ pub use estimation::{
     estimate_propensity_and_match, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config,
 };
+pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
     ReconstructedMatchingOutput, ReconstructedMatchingTier, reconstruct_case_control_pairs,
