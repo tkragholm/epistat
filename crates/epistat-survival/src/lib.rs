@@ -27,7 +27,10 @@
 //! - [`markov`]: the landmark test of the Markov property.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
-//! - [`SurvData`]: the checked input type that the estimators will share.
+//! - [`SurvData`]: the checked input type that the estimators share, for
+//!   follow-up data and for interval-censored times.
+//! - [`survreg`]: accelerated failure time models for right, left and interval
+//!   censored times, with their predictions and residuals, as R's `survreg`.
 //! - [`survcheck`]: structural checks of follow-up with several rows per subject, as
 //!   R's `survcheck`.
 //! - [`survdiff`]: the log-rank and G-rho tests of equal hazards, with strata, and
@@ -59,10 +62,12 @@ pub mod split;
 pub mod surv;
 pub mod survcheck;
 pub mod survdiff;
+pub mod survreg;
 pub mod timefix;
 pub mod tmerge;
 
 pub use error::{Error, Result};
 pub use surv::{
-    Cause, Levels, Outcome, Surv, SurvBuf, SurvBufBuilder, SurvData, SurvDataBuilder, UsedRows,
+    Cause, IntervalDataBuilder, IntervalKind, IntervalSurv, Levels, Outcome, Surv, SurvBuf,
+    SurvBufBuilder, SurvData, SurvDataBuilder, UsedRows,
 };

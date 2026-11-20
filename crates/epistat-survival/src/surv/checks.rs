@@ -93,3 +93,65 @@ pub(super) fn check_intervals(start: &[f64], stop: &[f64]) -> Result<()> {
         None => Ok(()),
     }
 }
+
+/// Refuse interval bounds that cannot describe an observation.
+///
+/// A bound is NaN never. A lower bound may be `-inf` (left-censored) and an
+/// upper bound `+inf` (right-censored), and no other infinity is allowed. A
+/// row with both infinite says nothing about the time. A lower bound above its
+/// upper bound is reversed. The slices have the same length.
+pub(super) fn check_interval_bounds(lower: &[f64], upper: &[f64]) -> Result<()> {
+    if let Some(found) = count_and_first(lower.len(), |row| {
+        lower[row].is_nan() || upper[row].is_nan()
+    }) {
+        return Err(refuse(
+            "lower and upper",
+            "are NaN; a missing bound is written -inf for lower and +inf for upper",
+            found,
+        ));
+    }
+    if let Some(found) = count_and_first(lower.len(), |row| {
+        lower[row] == f64::INFINITY || upper[row] == f64::NEG_INFINITY
+    }) {
+        return Err(refuse(
+            "lower and upper",
+            "are infinite on the wrong side; only lower may be -inf and only upper +inf",
+            found,
+        ));
+    }
+    if let Some(found) = count_and_first(lower.len(), |row| {
+        lower[row] == f64::NEG_INFINITY && upper[row] == f64::INFINITY
+    }) {
+        return Err(refuse(
+            "lower and upper",
+            "are both infinite, which says nothing about the time",
+            found,
+        ));
+    }
+    match count_and_first(lower.len(), |row| lower[row] > upper[row]) {
+        Some(found) => Err(refuse("lower", "are above their upper", found)),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a typed interval row whose times cannot be used: a time that is not
+/// finite, and for status 3 an upper time that is not finite or not above the
+/// lower. The upper time of the other statuses is not read.
+pub(super) fn check_interval_times(time: &[f64], time2: &[f64], status: &[i32]) -> Result<()> {
+    check_finite(time, "time")?;
+    if let Some(found) = count_and_first(time.len(), |row| {
+        status[row] == 3 && !time2[row].is_finite()
+    }) {
+        return Err(refuse("time2", "are not finite on rows of status 3", found));
+    }
+    match count_and_first(time.len(), |row| {
+        status[row] == 3 && time[row] >= time2[row]
+    }) {
+        Some(found) => Err(refuse(
+            "time",
+            "are not below their time2 on rows of status 3",
+            found,
+        )),
+        None => Ok(()),
+    }
+}

@@ -28,9 +28,11 @@
 //! Competing risks are `n_codes > 1` with the cause as status. R's factor
 //! status for `mright` has the censoring level first and the events after it,
 //! which is the same numbering. A binary status of 0 and 1 is `n_codes = 1`.
-//! Left and interval censoring are not represented yet. [`Outcome`] is the
-//! place they will go, so the follow-up case is read through
-//! [`SurvData::followup`].
+//! Left and interval censoring are the other kind of outcome,
+//! [`Outcome::Interval`], built by [`SurvData::interval_builder`] and
+//! [`SurvData::interval_status_builder`] and described in [`IntervalSurv`].
+//! The follow-up case is read through [`SurvData::followup`], which refuses
+//! interval-censored data, so an estimator of follow-up data cannot take it.
 //!
 //! # Checks at build time
 //!
@@ -119,11 +121,13 @@ use crate::timefix::{TimeFix, fix_times};
 mod cause;
 mod checks;
 mod dense;
+mod interval;
 mod levels;
 mod rows;
 
 pub use cause::Cause;
 use dense::{Dense, RecodedParts};
+pub use interval::{IntervalDataBuilder, IntervalKind, IntervalSurv};
 pub use levels::Levels;
 pub use rows::UsedRows;
 
@@ -204,14 +208,17 @@ impl<'a> Surv<'a> {
 }
 /// The outcome of a survival dataset.
 ///
-/// Only follow-up data exists today. The enum is non-exhaustive so that left
-/// and interval censoring can be added without breaking a caller's `match`.
+/// The enum is non-exhaustive so that a further kind of outcome can be added
+/// without breaking a caller's `match`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Outcome<'a> {
     /// Risk intervals with an event status, as R's `right`, `counting`,
     /// `mright` and `mcounting` types.
     Followup(Surv<'a>),
+    /// Exact, right-, left- and interval-censored times, as R's `interval`
+    /// and `interval2` types.
+    Interval(IntervalSurv<'a>),
 }
 
 /// Survival data: an outcome and the columns that go with it.
@@ -257,11 +264,31 @@ impl<'a> SurvData<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the outcome is not follow-up data. Not possible
-    /// yet, since no other kind exists.
+    /// [`Error::Input`] when the outcome is interval-censored data, which a
+    /// follow-up estimator has no use for.
     pub fn followup(&self) -> Result<&Surv<'a>> {
         match &self.outcome {
             Outcome::Followup(surv) => Ok(surv),
+            Outcome::Interval(_) => Err(Error::input(
+                "the outcome is interval-censored; this estimator needs follow-up data \
+                 (stop and status)"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// The interval-censored outcome.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when the outcome is follow-up data.
+    pub fn interval(&self) -> Result<&IntervalSurv<'a>> {
+        match &self.outcome {
+            Outcome::Interval(surv) => Ok(surv),
+            Outcome::Followup(_) => Err(Error::input(
+                "the outcome is follow-up data; this estimator needs interval-censored data"
+                    .to_owned(),
+            )),
         }
     }
 
@@ -360,7 +387,8 @@ impl<'a> SurvData<'a> {
     /// moved through untouched. The data is taken by value so that nothing
     /// is cloned. Clone first to keep the original.
     ///
-    /// [`TimeFix::Exact`] and a tolerance of zero return the data unchanged.
+    /// [`TimeFix::Exact`] and a tolerance of zero return the data unchanged,
+    /// also for interval-censored data, to which no other policy applies.
     /// The policy applied is recorded, see [`timefix`](Self::timefix), and
     /// the same policy applied again returns at once without searching. A
     /// different policy is applied to the times as they now stand.
@@ -371,11 +399,21 @@ impl<'a> SurvData<'a> {
     ///
     /// [`Error::Input`] as for [`fix_times`]: a negative or non-finite
     /// tolerance, a sum of absolute times that overflows, or a row whose
-    /// start and stop become equal. The data is consumed whether or not the
-    /// call succeeds.
+    /// start and stop become equal. Also when the outcome is
+    /// interval-censored and the policy is not [`TimeFix::Exact`]. The data
+    /// is consumed whether or not the call succeeds.
     pub fn with_timefix(mut self, policy: TimeFix) -> Result<Self> {
-        let Outcome::Followup(surv) = &mut self.outcome;
-        surv.apply_timefix(policy)?;
+        match &mut self.outcome {
+            Outcome::Followup(surv) => surv.apply_timefix(policy)?,
+            Outcome::Interval(_) => {
+                if !matches!(policy, TimeFix::Exact | TimeFix::Aeq { tolerance: 0.0 }) {
+                    return Err(Error::input(
+                        "a tie policy applies to follow-up times, not to interval-censored data"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
         Ok(self)
     }
 
