@@ -21,12 +21,14 @@
     reason = "the entry point checks that the row count fits in u32"
 )]
 
+pub mod anova;
 pub mod design;
 pub mod predict;
 pub mod residuals;
 mod single;
 pub mod tt;
 pub mod zph;
+pub use anova::{AnovaRow, AnovaTable, anova, anova_terms};
 pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_residuals};
 #[expect(
     deprecated,
