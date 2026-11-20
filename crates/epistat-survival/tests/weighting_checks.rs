@@ -14,6 +14,7 @@
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
+use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use faer::Mat;
@@ -169,4 +170,46 @@ fn a_curve_at_zero_has_no_variance() {
     assert_eq!(curves.surv[2], 0.0);
     assert!(curves.standard_error(0, 2).is_none());
     assert!(curves.standard_error_known(0, 2).is_none());
+}
+
+#[test]
+fn censoring_weights_edge_cases() {
+    // No censoring: the censoring survival is 1 and every weight is 1.
+    let stop: Vec<f64> = (1..=10).map(f64::from).collect();
+    let status = vec![1; 10];
+    let data = SurvData::builder(&stop, &status).build().unwrap();
+    let w = ipcw::fit(&data, CensoringModel::KaplanMeier, &IpcwOptions::default()).unwrap();
+    assert!(w.weight_at_stop.iter().all(|&x| x == 1.0));
+    assert!(w.weight_at_start.iter().all(|&x| x == 1.0));
+    assert!(w.censored.iter().all(|&c| !c));
+    // One censoring at 4 of 10: the weight after it is 1 / (1 - 1/7)... for the rows at risk.
+    let mut status = vec![1; 10];
+    status[3] = 0;
+    let data = SurvData::builder(&stop, &status).build().unwrap();
+    let w = ipcw::fit(&data, CensoringModel::KaplanMeier, &IpcwOptions::default()).unwrap();
+    // 7 rows at risk at time 4, one censored: G(t) = 6 / 7 after 4.
+    for (i, (&t, &got)) in stop.iter().zip(&w.weight_at_stop).enumerate() {
+        let expected = if t > 4.0 { 7.0 / 6.0 } else { 1.0 };
+        assert!(
+            (got - expected).abs() <= 8.0 * f64::EPSILON * expected,
+            "row {i}"
+        );
+    }
+    // A subject with two rows at the same stop is refused.
+    let id = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4];
+    let dup = SurvData::builder(&stop, &status).id(&id).build().unwrap();
+    assert!(ipcw::fit(&dup, CensoringModel::KaplanMeier, &IpcwOptions::default()).is_ok());
+    let same = vec![1.0; 10];
+    let tied = SurvData::builder(&same, &status).id(&id).build().unwrap();
+    assert!(ipcw::fit(&tied, CensoringModel::KaplanMeier, &IpcwOptions::default()).is_err());
+    // A design with another number of rows.
+    let x = Mat::from_fn(9, 1, |_, _| 0.5);
+    assert!(
+        ipcw::fit(
+            &data,
+            CensoringModel::Cox { x: x.as_ref() },
+            &IpcwOptions::default()
+        )
+        .is_err()
+    );
 }

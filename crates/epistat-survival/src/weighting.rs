@@ -5,6 +5,9 @@
 //!   the weights of the average treatment effect, of the treated or of the
 //!   controls, unstabilised or stabilised, as `WeightIt::weightit(method =
 //!   "glm")`, with the summary of the weights that `summary.weightit` gives.
+//! - [`ipcw`] gives inverse probability of censoring weights for time-to-event
+//!   data from a Kaplan-Meier or Cox model of the censoring hazard, with
+//!   counting-process rows and covariates that change over time.
 //! - [`cox`] fits a weighted Cox model on estimated treatment weights and
 //!   gives the variance that accounts for the estimation of the weights, with
 //!   the variance that ignores it for comparison.
@@ -69,6 +72,7 @@
 )]
 
 pub mod cox;
+pub mod ipcw;
 pub mod iptw;
 pub mod km;
 mod stack;

@@ -12,6 +12,7 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
+use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_testkit::assert_same_on_pools;
@@ -147,6 +148,36 @@ fn weighting_is_the_same_on_every_pool() {
                     .iter()
                     .map(|v| v.unwrap_or(f64::NAN)),
             );
+            out
+        });
+    }
+}
+
+#[test]
+fn censoring_weights_are_the_same_on_every_pool() {
+    let s = simulate();
+    let rows = s.stop.len();
+    let x = Mat::from_fn(rows, 2, |i, j| s.z[(s.subject[i] as usize, j + 1)]);
+    let data = SurvData::builder(&s.stop, &s.status)
+        .start(&s.start)
+        .id(&s.subject)
+        .build()
+        .unwrap();
+    for stabilise in [false, true] {
+        let opts = IpcwOptions {
+            stabilise,
+            ..IpcwOptions::default()
+        };
+        assert_same_on_pools(&POOLS, || {
+            let mut out = Vec::new();
+            for model in [
+                CensoringModel::KaplanMeier,
+                CensoringModel::Cox { x: x.as_ref() },
+            ] {
+                let w = ipcw::fit(&data, model, &opts).unwrap();
+                out.extend(&w.weight_at_stop);
+                out.extend(&w.weight_at_start);
+            }
             out
         });
     }
