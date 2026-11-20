@@ -34,7 +34,8 @@ pub(super) struct CensoringKm {
 
 impl CensoringKm {
     /// Build from rows sorted by ascending time. `weight` is the case weight
-    /// of each row, `censored` says whether it was censored.
+    /// of each row, `censored` says whether it was censored. With the event in
+    /// place of the censoring, the curve is the product limit of the events.
     pub(super) fn new(time: &[f64], censored: &[bool], weight: &[f64], deaths_first: bool) -> Self {
         let n = time.len();
         // Weight of the rows from each position to the end, summed from the

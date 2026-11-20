@@ -140,38 +140,12 @@ pub fn event_times(data: &SurvData<'_>, timefix: TimeFix) -> Result<Vec<f64>> {
 }
 
 /// One minus the weighted Kaplan-Meier estimate at each of `times`, with
-/// events before censorings at a tied time. `time` is ascending.
+/// events before censorings at a tied time. `time` is ascending. The estimate
+/// is the product limit of the events, which [`CensoringKm`] computes for the
+/// flag it is given, here the event.
 fn km_risk(time: &[f64], event: &[bool], weight: &[f64], times: &[f64]) -> Vec<f64> {
-    let n = time.len();
-    let mut suffix = vec![0.0; n + 1];
-    for i in (0..n).rev() {
-        suffix[i] = suffix[i + 1] + weight[i];
-    }
-    let mut steps: Vec<(f64, f64)> = Vec::new();
-    let mut surv = 1.0;
-    let mut i = 0;
-    while i < n {
-        let mut j = i;
-        let mut deaths = 0.0;
-        while j < n && time[j].total_cmp(&time[i]).is_eq() {
-            if event[j] {
-                deaths += weight[j];
-            }
-            j += 1;
-        }
-        if deaths > 0.0 {
-            surv *= 1.0 - deaths / suffix[i];
-            steps.push((time[i], surv));
-        }
-        i = j;
-    }
-    times
-        .iter()
-        .map(|&t| {
-            let k = steps.partition_point(|&(u, _)| u <= t);
-            1.0 - if k == 0 { 1.0 } else { steps[k - 1].1 }
-        })
-        .collect()
+    let km = CensoringKm::new(time, event, weight, false);
+    times.iter().map(|&t| 1.0 - km.at(t)).collect()
 }
 
 /// The Brier score at `times`. `predicted` has one row per row of the data and
