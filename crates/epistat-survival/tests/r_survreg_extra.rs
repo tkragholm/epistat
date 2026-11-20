@@ -373,12 +373,12 @@ fn extra_options_match_r() {
                 &none_as_nan(&r.coefficients),
                 bound,
                 1.0,
-                NanRule::Unchecked,
+                NanRule::Coincide,
             ),
         );
         note(
             "log scale",
-            worst_deviation(&f.log_scale, &r.log_scale, bound, 1.0, NanRule::Unchecked),
+            worst_deviation(&f.log_scale, &r.log_scale, bound, 1.0, NanRule::Coincide),
         );
         let variance_units = |got: &[Option<f64>], want: &[Vec<f64>], factor: f64| -> f64 {
             assert_eq!(want.len(), q, "{}", r.name);
@@ -405,7 +405,7 @@ fn extra_options_match_r() {
         let ll_bound = 4.0 * n * f64::EPSILON;
         note(
             "loglik",
-            worst_deviation(&[f.loglik], &[r.loglik], ll_bound, 1.0, NanRule::Unchecked),
+            worst_deviation(&[f.loglik], &[r.loglik], ll_bound, 1.0, NanRule::Coincide),
         );
         note(
             "null loglik",
@@ -414,7 +414,7 @@ fn extra_options_match_r() {
                 &[r.loglik_null],
                 ll_bound,
                 1.0,
-                NanRule::Unchecked,
+                NanRule::Coincide,
             ),
         );
         note(
@@ -424,7 +424,7 @@ fn extra_options_match_r() {
                 &r.linear_predictors,
                 bound * p as f64,
                 1.0,
-                NanRule::Unchecked,
+                NanRule::Coincide,
             ),
         );
 
@@ -514,10 +514,10 @@ fn extra_options_match_r() {
             for (what, got, want, b) in checks {
                 note(
                     what,
-                    worst_deviation(got, want, b, 1.0, NanRule::Unchecked) * b,
+                    worst_deviation(got, want, b, 1.0, NanRule::Coincide) * b,
                 );
                 assert!(
-                    worst_deviation(got, want, b, 1.0, NanRule::Unchecked) <= 1.0,
+                    worst_deviation(got, want, b, 1.0, NanRule::Coincide) <= 1.0,
                     "{} {what}",
                     r.name
                 );
@@ -534,8 +534,8 @@ fn extra_options_match_r() {
                     false,
                 );
                 let flat_q: Vec<f64> = quantile_new.iter().flatten().copied().collect();
-                let u1 = worst_deviation(&lp0.fit, &lp_new, pb, 1.0, NanRule::Unchecked);
-                let u2 = worst_deviation(&q0.fit, &flat_q, qb, 1.0, NanRule::Unchecked);
+                let u1 = worst_deviation(&lp0.fit, &lp_new, pb, 1.0, NanRule::Coincide);
+                let u2 = worst_deviation(&q0.fit, &flat_q, qb, 1.0, NanRule::Coincide);
                 assert!(u1 <= 1.0 && u2 <= 1.0, "{}: no-offset predictions", r.name);
                 let gap = lp_new
                     .iter()
@@ -809,16 +809,16 @@ fn extra_options_match_r() {
                 &t.means,
                 f64::EPSILON * n,
                 1.0,
-                NanRule::Unchecked,
+                NanRule::Coincide,
             );
             note("column means", means * f64::EPSILON * n);
-            let u = worst_deviation(&pred.fit, &want, pb, 1.0, NanRule::Unchecked);
+            let u = worst_deviation(&pred.fit, &want, pb, 1.0, NanRule::Coincide);
             let us = worst_deviation(
                 pred.se.as_ref().unwrap(),
                 &se_delta,
                 pb,
                 1.0,
-                NanRule::Unchecked,
+                NanRule::Coincide,
             );
             assert!(u <= 1.0 && us <= 1.0 && means <= 1.0, "{} terms", r.name);
             note("terms", u * pb);

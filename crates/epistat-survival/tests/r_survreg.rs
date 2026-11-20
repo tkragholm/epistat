@@ -274,9 +274,9 @@ fn fits_match_r() {
             &none_as_nan(&r.coefficients),
             bound,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
-        let log_scale = worst_deviation(&f.log_scale, &r.log_scale, bound, 1.0, NanRule::Unchecked);
+        let log_scale = worst_deviation(&f.log_scale, &r.log_scale, bound, 1.0, NanRule::Coincide);
         let variance_r: Vec<Vec<f64>> = r.variance.clone();
         assert_eq!(variance_r.len(), q, "{}", r.name);
         let mut variance = 0.0f64;
@@ -296,20 +296,20 @@ fn fits_match_r() {
         }
         // A sum of n terms, each with a few ulps of error.
         let ll_bound = 4.0 * n * f64::EPSILON;
-        let loglik = worst_deviation(&[f.loglik], &[r.loglik], ll_bound, 1.0, NanRule::Unchecked);
+        let loglik = worst_deviation(&[f.loglik], &[r.loglik], ll_bound, 1.0, NanRule::Coincide);
         let null = worst_deviation(
             &[f.loglik_null],
             &[r.loglik_null],
             ll_bound,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
         let lp = worst_deviation(
             &f.linear_predictors,
             &r.linear_predictors,
             bound * p as f64,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
         let mut worst = vec![
             ("coefficient", coefficient * bound),
@@ -353,7 +353,7 @@ fn fits_match_r() {
                 ("quantile", &quant.fit, &eq),
                 ("quantile se", quant.se.as_ref().unwrap(), &eqs),
             ] {
-                let u = worst_deviation(got, want, pb, 1.0, NanRule::Unchecked);
+                let u = worst_deviation(got, want, pb, 1.0, NanRule::Coincide);
                 worst.push((what, u * pb));
                 units.push(u);
             }
@@ -417,7 +417,7 @@ fn fits_match_r() {
                     })
                     .collect()
             };
-            let u = worst_deviation(&pick(&got), &pick(want), rb, 1.0, NanRule::Unchecked);
+            let u = worst_deviation(&pick(&got), &pick(want), rb, 1.0, NanRule::Coincide);
             worst.push((what, u * rb));
             units.push(u);
         }

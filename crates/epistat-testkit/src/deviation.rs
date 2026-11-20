@@ -7,10 +7,6 @@ pub enum NanRule {
     /// that are NaN in both are skipped. For aliased coefficients, which
     /// the fit reports as `None` and R as `NA`.
     Coincide,
-    /// No check. A NaN ratio is dropped by `f64::max`, so a NaN in `got`
-    /// against a number in `expected` goes unnoticed. Kept for tests whose
-    /// data never holds NaN, so that they compare what they compared before.
-    Unchecked,
 }
 
 /// The largest ratio of `|got - expected|` to `bound * max(|expected|, floor)`
@@ -50,7 +46,6 @@ pub fn worst_deviation(
                     continue;
                 }
             }
-            NanRule::Unchecked => {}
         }
         worst = worst.max((g - e).abs() / (bound * e.abs().max(floor)));
     }
@@ -152,15 +147,9 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_drops_a_nan_ratio() {
-        let worst = worst_deviation(&[f64::NAN, 3.0], &[1.0, 1.0], 1.0, 1.0, NanRule::Unchecked);
-        assert!((worst - 2.0).abs() < 1e-15);
-    }
-
-    #[test]
     #[should_panic(expected = "lengths")]
     fn lengths_must_agree() {
-        let _ = worst_deviation(&[1.0], &[], 1.0, 1.0, NanRule::Unchecked);
+        let _ = worst_deviation(&[1.0], &[], 1.0, 1.0, NanRule::Finite);
     }
 
     #[test]

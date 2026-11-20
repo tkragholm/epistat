@@ -151,18 +151,18 @@ fn fits_match_r() {
             &r.coefficients,
             bound,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
         let se = worst_deviation(
             &flat(&model.standard_errors),
             &r.se,
             bound,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
         let robust = match (&model.robust_standard_errors, &r.robust_se) {
             (Some(got), Some(expected)) => {
-                worst_deviation(&flat(got), expected, bound, 1.0, NanRule::Unchecked)
+                worst_deviation(&flat(got), expected, bound, 1.0, NanRule::Coincide)
             }
             (None, None) => 0.0,
             _ => panic!("{name}: robust standard errors"),
@@ -175,7 +175,7 @@ fn fits_match_r() {
             &r.loglik,
             bound,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
         eprintln!(
             "{name:30} rows {:6}  coefficient {coefficient:.2e}  se {se:.2e}  robust {robust:.2e}  loglik {loglik:.2e}",

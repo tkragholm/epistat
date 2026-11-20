@@ -213,7 +213,7 @@ fn fits_match_coxph() {
             &r.coefficients,
             bound,
             1.0,
-            NanRule::Unchecked,
+            NanRule::Coincide,
         );
         // `coxph` adds and removes rows from a running risk-set sum without
         // compensation, which leaves a relative error of up to `m eps` in the
