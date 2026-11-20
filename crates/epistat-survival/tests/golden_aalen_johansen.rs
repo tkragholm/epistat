@@ -14,6 +14,10 @@
     clippy::cast_possible_wrap,
     reason = "the grid values and counts are far below the limits of the casts"
 )]
+#![expect(
+    deprecated,
+    reason = "the test is of the deprecated functions, whose numbers must not move"
+)]
 
 use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
