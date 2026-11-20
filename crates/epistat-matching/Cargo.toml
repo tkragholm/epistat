@@ -1,0 +1,65 @@
+[package]
+name = "epistat-matching"
+description = "Cohort matching for register studies: nearest-neighbour matching under calipers and constraints, and risk-set matching, with results that do not depend on the number of threads"
+keywords = ["matching", "epidemiology", "cohort", "statistics", "propensity"]
+categories = ["algorithms", "science"]
+readme = "README.md"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["test-utils"]
+reporting = []
+bench-internals = []
+test-utils = []
+# faer's runtime-dispatched AVX-512 kernels, as in epistat-linalg.
+nightly = ["epistat-linalg/nightly", "faer/nightly"]
+
+[dependencies]
+epistat-glm = { path = "../epistat-glm", version = "0.1.1" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }
+epistat-register = { path = "../epistat-register", version = "0.1.1" }
+epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
+epistat-stats = { path = "../epistat-stats", version = "0.2.3" }
+bon = "3"
+chrono = { version = "0.4", features = ["serde"] }
+faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
+itertools = "0.14"
+ordered-float = "5"
+rapidhash = "4"
+rayon = "1.11.0"
+rustc-hash = "2"
+serde = { version = "1.0.228", features = ["derive"] }
+
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+criterion = { version = "0.8.2", default-features = false }
+proptest = "1.6.0"
+rstest = "0.26"
+serde_json = "1"
+trybuild = "1.0.112"
+
+[[bench]]
+name = "distance_channels"
+harness = false
+required-features = ["test-utils"]
+
+[[bench]]
+name = "balance_stats"
+harness = false
+required-features = ["bench-internals", "test-utils"]
+
+[[bench]]
+name = "transition_strata"
+harness = false
+
+[lints]
+workspace = true
