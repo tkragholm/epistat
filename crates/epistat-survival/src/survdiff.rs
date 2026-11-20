@@ -72,6 +72,7 @@
 
 use rayon::prelude::*;
 
+use epistat_linalg::eigen::pinv_quadratic_form;
 use epistat_stats::gamma::chi_square_sf;
 
 use crate::check::check_lengths;
@@ -439,80 +440,11 @@ fn one_stratum(
 #[expect(clippy::cast_precision_loss, reason = "counts are far below 2^53")]
 fn quadratic_form(v: &[f64], d: &[f64], event_times: usize) -> (Option<f64>, usize) {
     let k = d.len();
-    let (values, vectors) = jacobi(v, k);
-    let largest = values.iter().copied().fold(0.0_f64, f64::max);
-    if largest <= 0.0 {
-        return (None, 0);
+    let rank_tolerance = |largest: f64| 4.0 * (event_times + k) as f64 * f64::EPSILON * largest;
+    match pinv_quadratic_form(v, d, rank_tolerance) {
+        Some((statistic, rank)) => (Some(statistic), rank),
+        None => (None, 0),
     }
-    let tolerance = 4.0 * (event_times + k) as f64 * f64::EPSILON * largest;
-    let mut rank = 0;
-    let mut statistic = 0.0;
-    for (i, &lambda) in values.iter().enumerate() {
-        if lambda > tolerance {
-            rank += 1;
-            let mut projection = 0.0;
-            for g in 0..k {
-                projection += vectors[g * k + i] * d[g];
-            }
-            statistic += projection * projection / lambda;
-        }
-    }
-    (Some(statistic), rank)
-}
-
-/// Eigenvalues and eigenvectors (columns, row-major) of the symmetric matrix
-/// `a` of order `k` by cyclic Jacobi rotations, in a fixed order.
-fn jacobi(a: &[f64], k: usize) -> (Vec<f64>, Vec<f64>) {
-    let mut a = a.to_vec();
-    let mut u = vec![0.0; k * k];
-    for i in 0..k {
-        u[i * k + i] = 1.0;
-    }
-    for _ in 0..64 {
-        let mut off = 0.0;
-        let mut all = 0.0;
-        for i in 0..k {
-            for j in 0..k {
-                let x = a[i * k + j] * a[i * k + j];
-                all += x;
-                if i != j {
-                    off += x;
-                }
-            }
-        }
-        if off <= all * f64::EPSILON * f64::EPSILON * 1e-4 {
-            break;
-        }
-        for p in 0..k {
-            for q in p + 1..k {
-                let apq = a[p * k + q];
-                if apq == 0.0 {
-                    continue;
-                }
-                let theta = (a[q * k + q] - a[p * k + p]) / (2.0 * apq);
-                let t = theta.signum() / (theta.abs() + theta.hypot(1.0));
-                let t = if theta == 0.0 { 1.0 } else { t };
-                let c = 1.0 / t.hypot(1.0);
-                let s = t * c;
-                for r in 0..k {
-                    let (x, y) = (a[r * k + p], a[r * k + q]);
-                    a[r * k + p] = c * x - s * y;
-                    a[r * k + q] = s * x + c * y;
-                }
-                for r in 0..k {
-                    let (x, y) = (a[p * k + r], a[q * k + r]);
-                    a[p * k + r] = c * x - s * y;
-                    a[q * k + r] = s * x + c * y;
-                }
-                for r in 0..k {
-                    let (x, y) = (u[r * k + p], u[r * k + q]);
-                    u[r * k + p] = c * x - s * y;
-                    u[r * k + q] = s * x + c * y;
-                }
-            }
-        }
-    }
-    ((0..k).map(|i| a[i * k + i]).collect(), u)
 }
 
 /// The one-sample test of the observed events against the survival that a

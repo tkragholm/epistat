@@ -12,10 +12,13 @@
 //! - [`design`] finds linearly independent columns and selects rows and
 //!   columns.
 //! - [`basis`] holds the polynomial and B-spline bases.
+//! - [`eigen`] holds a Jacobi eigendecomposition of a small symmetric matrix and
+//!   the quadratic form of its generalised inverse.
 
 pub mod basis;
 mod blocks;
 pub mod design;
+pub mod eigen;
 mod error;
 mod solve;
 
