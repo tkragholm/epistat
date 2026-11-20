@@ -142,7 +142,12 @@ use std::collections::HashMap;
 use faer::{Mat, MatRef};
 
 use crate::check::{check_lengths, check_row_count};
-use crate::cox::{CoxData, CoxFit, CoxModelFit, CoxOptions, Ties, fit_cox_single_covariate};
+#[expect(
+    deprecated,
+    reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
+)]
+use crate::cox::{CoxData, CoxFit, fit_cox_single_covariate};
+use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -499,6 +504,10 @@ fn row_codes(x: MatRef<'_, f64>) -> Vec<u32> {
 /// `x` and `cluster` hold one value per individual of the expansion. Without
 /// `cluster` the fit is on the collapsed rows, and with it on the expanded
 /// rows, because the robust variance needs each individual's own rows.
+#[expect(
+    deprecated,
+    reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
+)]
 fn fit_expansion(
     expansion: &Expansion<'_>,
     x: &[f64],
@@ -802,6 +811,10 @@ impl<'a> FineGrayData<'a> {
 ///
 /// [`Error::Input`] when the slices differ in length or `cause` is 0.
 #[deprecated(since = "0.3.0", note = "use `fine_gray::fit` with a `SurvData`")]
+#[expect(
+    deprecated,
+    reason = "it returns the deprecated single-covariate fit's result"
+)]
 pub fn fine_gray_fit(
     time: &[f64],
     event: &[i32],
@@ -821,6 +834,10 @@ pub fn fine_gray_fit(
 }
 
 #[cfg(test)]
+#[expect(
+    deprecated,
+    reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
+)]
 mod tests {
     use faer::Mat;
 
