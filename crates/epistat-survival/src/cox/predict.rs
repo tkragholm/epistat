@@ -1557,7 +1557,10 @@ pub fn predict_terms(
 /// is that of `log S`.
 fn limits(kind: ConfType, s: f64, se: f64, z: f64) -> (Option<f64>, Option<f64>) {
     let keep = |v: f64| v.is_finite().then_some(v);
-    if kind == ConfType::None {
+    // An undefined standard error gives undefined limits. Without this the
+    // clamps below would turn a NaN into a limit of exactly 0 or 1, since
+    // `max` and `min` drop a NaN operand.
+    if kind == ConfType::None || !se.is_finite() || !s.is_finite() {
         return (None, None);
     }
     if se == 0.0 && kind != ConfType::Arcsin && kind != ConfType::Plain {
@@ -1813,7 +1816,21 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
 
 #[cfg(test)]
 mod tests {
-    use super::log_product_limit;
+    use super::{ConfType, limits, log_product_limit};
+
+    #[test]
+    fn an_undefined_standard_error_has_no_limits() {
+        for kind in [
+            ConfType::Plain,
+            ConfType::Log,
+            ConfType::LogLog,
+            ConfType::Logit,
+            ConfType::Arcsin,
+        ] {
+            assert_eq!(limits(kind, 0.7, f64::NAN, 1.96), (None, None), "{kind:?}");
+            assert_eq!(limits(kind, f64::NAN, 0.1, 1.96), (None, None), "{kind:?}");
+        }
+    }
 
     fn minus_infinity(x: f64) -> bool {
         x.is_infinite() && x < 0.0
