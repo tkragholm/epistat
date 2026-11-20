@@ -32,8 +32,11 @@
 //!   the stratum weights of `estimand = "ATE"`, which nearest neighbour
 //!   matching itself refuses, and agrees with them once both are normalized
 //!   when every anchor has the same number of controls.
-//! * `match.matrix`, `subclass` and `get_matches()` carry the same information
-//!   as the pairs: each is rebuilt from the crate's pairs and compared.
+//! * `match.matrix`, `get_matches()` and `match_data()` are the crate's
+//!   `match_matrix`, `get_matches` and `match_data` of its pairs, and are
+//!   compared with MatchIt's: the rows and columns of the matrix, the units,
+//!   subclasses and weights of the long table, and the weights and subclass of
+//!   the matched data, with and without rescaling.
 //!
 //! Weights in the file are rounded to 12 decimals, so they are compared to an
 //! absolute 1e-12 (half a unit in the last place is 5e-13, and the crate's
@@ -176,18 +179,30 @@ fn run_ours(run: &Run, anchors: &[BaseRecord], candidates: &[BaseRecord]) -> Mat
         .run()
 }
 
-/// The controls of each anchor in order of assignment, by anchor row.
-fn rows_of(outcome: &MatchOutcome, focal_idx: &[usize]) -> Vec<Vec<usize>> {
-    let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
-    for pair in &outcome.pairs {
-        by_anchor
-            .entry(pair.anchor_id().parse().expect("row number"))
-            .or_default()
-            .push(pair.comparator_id().parse().expect("row number"));
-    }
-    focal_idx
-        .iter()
-        .map(|idx| by_anchor.remove(idx).unwrap_or_default())
+/// The units of a run in row order, with the focal group as anchors.
+fn units_of(scenario: &Scenario, focal_value: u8) -> Units {
+    Units::new(
+        (1..=scenario.treat.len())
+            .map(|row| row.to_string())
+            .collect(),
+        scenario.treat.iter().map(|t| *t == focal_value).collect(),
+    )
+    .expect("row numbers are unique")
+}
+
+/// The controls of each anchor in order of assignment, by anchor row, read
+/// from the crate's match matrix.
+fn rows_of(outcome: &MatchOutcome, units: &Units, ratio: usize) -> Vec<Vec<usize>> {
+    let matrix = match_matrix(outcome, units, ratio).expect("pairs are among the units");
+    assert_eq!(matrix.ncol(), ratio.max(matrix.ncol()));
+    (0..matrix.nrow())
+        .map(|row| {
+            matrix
+                .controls_of_row(row)
+                .into_iter()
+                .map(|id| id.parse().expect("row number"))
+                .collect()
+        })
         .collect()
 }
 
@@ -250,47 +265,22 @@ fn normalized_by_group(expected: &HashMap<usize, f64>, treat: &[u8]) -> HashMap<
     out
 }
 
-/// The `get_matches()` rows rebuilt from the crate's pairs: for each matched
-/// anchor in row order a subclass number from 1, the anchor with weight 1 and
-/// each of its controls with the pair weight, then sorted by subclass and, in
-/// each subclass, with the treated unit first. MatchIt does not keep the
-/// order of assignment among the controls of one subclass in this table, so
-/// within a subclass the controls are ordered by row number here and in the
-/// comparison.
-fn long_rows(
-    outcome: &MatchOutcome,
-    focal_idx: &[usize],
-    rows: &[Vec<usize>],
-    treat: &[u8],
-) -> Vec<(usize, usize, f64)> {
-    let pair_weights = outcome.pair_weights(MatchWeightMethod::AnchorUnitCandidateFractional);
-    let weight_by_pair: HashMap<(usize, usize), f64> = pair_weights
-        .pairs
-        .iter()
-        .map(|entry| {
+/// The crate's `get_matches` as (unit, subclass, weight), sorted by subclass
+/// and in each subclass with the treated unit first and then by row number,
+/// as the reference is. MatchIt does not keep the order of assignment among
+/// the controls of one subclass in this table.
+fn long_rows(outcome: &MatchOutcome, units: &Units, treat: &[u8]) -> Vec<(usize, usize, f64)> {
+    let long = get_matches(outcome, units, false).expect("pairs are among the units");
+    let mut out: Vec<(usize, usize, f64)> = (0..long.len())
+        .map(|row| {
             (
-                (
-                    entry.pair.anchor_id().parse().expect("row"),
-                    entry.pair.comparator_id().parse().expect("row"),
-                ),
-                entry.weight,
+                long.id[row].parse().expect("row number"),
+                long.pair_id[row].expect("matched rows only"),
+                long.weight[row],
             )
         })
         .collect();
-    let mut out = Vec::new();
-    let mut subclass = 0;
-    for (anchor, controls) in focal_idx.iter().zip(rows) {
-        if controls.is_empty() {
-            continue;
-        }
-        subclass += 1;
-        let mut block = vec![(*anchor, subclass, 1.0)];
-        for control in controls {
-            block.push((*control, subclass, weight_by_pair[&(*anchor, *control)]));
-        }
-        block.sort_by_key(|(unit, _, _)| (std::cmp::Reverse(treat[*unit - 1]), *unit));
-        out.extend(block);
-    }
+    out.sort_by_key(|(unit, subclass, _)| (*subclass, std::cmp::Reverse(treat[*unit - 1]), *unit));
     out
 }
 
@@ -324,7 +314,8 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             run.scenario, run.estimand, run.exact, run.caliper, run.replace, run.ratio
         );
         let outcome = run_ours(run, &anchors, &candidates);
-        let rows = rows_of(&outcome, &focal_idx);
+        let units = units_of(scenario, focal_value);
+        let rows = rows_of(&outcome, &units, run.ratio);
         tally.runs += 1;
 
         // The order of assignment, and which block of the reference the crate
@@ -445,39 +436,100 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             }
         }
 
-        // match.matrix, subclass: the pairs carry the same information. Rows
-        // with no controls are the NA rows of match.matrix.
+        // match.matrix: one row per anchor, NA for an anchor with no control.
         assert_eq!(
             expected.rows.len(),
             focal_idx.len(),
             "{label}: one row per anchor"
         );
-        if let (Some(subclass_idx), Some(subclass), false) =
-            (&expected.subclass_idx, &expected.subclass, run.replace)
-        {
-            let mut derived: HashMap<usize, usize> = HashMap::new();
-            let mut number = 0;
-            for (anchor, controls) in focal_idx.iter().zip(&rows) {
-                if controls.is_empty() {
-                    continue;
-                }
-                number += 1;
-                derived.insert(*anchor, number);
-                for control in controls {
-                    derived.insert(*control, number);
-                }
-            }
-            let reference_subclass: HashMap<usize, usize> = subclass_idx
+        let matrix = match_matrix(&outcome, &units, run.ratio).expect("matrix");
+        assert_eq!(matrix.ncol(), run.ratio, "{label}: columns");
+        assert_eq!(
+            matrix
+                .anchor_id
+                .iter()
+                .map(|id| id.parse::<usize>().expect("row"))
+                .collect::<Vec<_>>(),
+            focal_idx,
+            "{label}: anchors in input order"
+        );
+
+        // match_data(): the matched units with their weights and subclass.
+        for normalize in [false, true] {
+            let data = match_data(
+                &outcome,
+                &units,
+                MatchDataOptions {
+                    normalize,
+                    replacement: run.replace,
+                    ..MatchDataOptions::default()
+                },
+            )
+            .expect("match data");
+            let wanted = if normalize {
+                &expected.norm
+            } else {
+                &expected.raw
+            };
+            let reference: HashMap<usize, f64> = expected
+                .idx
                 .iter()
                 .copied()
-                .zip(subclass.iter().copied())
+                .zip(wanted.iter().copied())
+                .filter(|(_, weight)| *weight > 0.0)
                 .collect();
-            assert_eq!(derived, reference_subclass, "{label}: subclass");
+            let units_in_order: Vec<usize> =
+                data.id.iter().map(|id| id.parse().expect("row")).collect();
+            assert!(
+                units_in_order.windows(2).all(|pair| pair[0] < pair[1]),
+                "{label}: match_data keeps the order of the data"
+            );
+            assert_eq!(
+                units_in_order.iter().copied().collect::<HashSet<_>>(),
+                reference.keys().copied().collect::<HashSet<_>>(),
+                "{label}: units of match_data"
+            );
+            for (row, unit) in units_in_order.iter().enumerate() {
+                assert!(
+                    WEIGHT_TOLERANCE.accepts(data.weight[row], reference[unit]),
+                    "{label}: match_data weight of unit {unit}"
+                );
+                let expected_role = if scenario.treat[*unit - 1] == focal_value {
+                    UnitRole::Anchor
+                } else {
+                    UnitRole::Candidate
+                };
+                assert_eq!(data.role[row], expected_role, "{label}: role");
+            }
+            if run.replace {
+                assert!(
+                    data.subclass.iter().all(Option::is_none),
+                    "{label}: no subclass with replacement"
+                );
+            }
+            if let (Some(subclass_idx), Some(subclass)) =
+                (&expected.subclass_idx, &expected.subclass)
+            {
+                let reference_subclass: HashMap<usize, usize> = subclass_idx
+                    .iter()
+                    .copied()
+                    .zip(subclass.iter().copied())
+                    .collect();
+                for (row, unit) in units_in_order.iter().enumerate() {
+                    // MatchIt gives no subclass with replacement.
+                    let want = if run.replace {
+                        None
+                    } else {
+                        reference_subclass.get(unit).copied()
+                    };
+                    assert_eq!(data.subclass[row], want, "{label}: subclass of unit {unit}");
+                }
+            }
         }
 
         // get_matches(): rebuilt from the pairs when the pairs are MatchIt's.
         if let (Some(long), None) = (&run.get_matches, &run.sequential) {
-            let rebuilt = long_rows(&outcome, &focal_idx, &rows, &scenario.treat);
+            let rebuilt = long_rows(&outcome, &units, &scenario.treat);
             let mut theirs: Vec<(usize, usize, f64)> = (0..long.id.len())
                 .map(|row| (long.id[row], long.subclass[row], long.weights[row]))
                 .collect();
