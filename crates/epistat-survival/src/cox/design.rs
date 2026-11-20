@@ -6,6 +6,42 @@
 //! step halving and the same stopping rule, so that the iterations, and not
 //! only the limit, can be compared with R's.
 //!
+//! # The data and the entry points
+//!
+//! [`fit`] and [`score_residuals`] take a [`SurvData`], which holds the exit
+//! time, the optional entry time, the status, the case weight, the strata and
+//! the clusters, a design matrix with one row per row of the data, and a
+//! [`CoxOptions`]. The data type checks its columns once when it is built. The
+//! entry points check the design matrix, which must have a column and finite
+//! values.
+//!
+//! The times are first passed through the rule of `survival::aeqSurv`, as
+//! `coxph` does: times that differ by no more than `sqrt(eps)`, absolutely or
+//! relative to their mean, are made equal. `CoxOptions::timefix` sets the rule,
+//! and `TimeFix::Exact` compares the times as they are. A missing entry time
+//! means that every row is at risk from the beginning.
+//!
+//! The event is the status `CoxOptions::cause`. With one status code that is 1
+//! and the option may stay `None`. With several codes the option names the one
+//! to model, the other codes are censored, and the fit is cause-specific. A
+//! status code is never read as a transition between states; that is a model
+//! of its own.
+//!
+//! Rows of weight zero are left out of the fit, as before. `n_rows` of the
+//! result counts every row of the data, as `n` of a `coxph` fit does, and
+//! `n_used` the rows with a weight above zero. Strata and clusters are the
+//! dense codes of the data, which are in the order of the codes the caller
+//! gave, so the strata are summed in that order. A cluster whose rows all have
+//! weight zero adds a row of zeros to the sum of cluster scores, as a code that
+//! no row carries did for the deprecated entry points. Cluster codes that skip
+//! values can change the order of the additions of that sum, and with it the
+//! last bits of the robust variance, against the deprecated entry points.
+//!
+//! [`fit_cox`], [`cox_score_residuals`] and [`CoxDesign`] are deprecated. They
+//! take the same columns as slices, compare times exactly, and give the bits
+//! they gave before the data type. Their `n_rows` counts the rows fitted, so it
+//! equals `n_used`.
+//!
 //! # Algorithm
 //!
 //! Row `i` has a covariate vector `x_i` of length `p`, a case weight `w_i > 0`,
@@ -158,16 +194,24 @@
 //!
 //! # Invalid input
 //!
-//! Columns of different lengths, a covariate, weight or exit time that is not
-//! finite, a negative weight, an entry time that is NaN or not before the exit
-//! time, a design without columns, and more rows than a `u32` addresses are
-//! errors. Rows with a weight of zero are dropped before anything else, so
-//! `n_rows` counts the rows fitted. Without delayed entry, pass negative
-//! infinity as every entry time.
+//! A design matrix whose number of rows differs from the data's, a design
+//! without columns, a covariate that is not finite, an event code that is
+//! missing for a status with several codes or outside the codes, and an
+//! interval that the tie rule collapses to length zero are errors. The data
+//! type refuses the rest when it is built: columns of different lengths, a
+//! time or weight that is not finite, a negative weight, an entry time that is
+//! not before the exit time, and more rows than a `u32` addresses.
+//!
+//! The deprecated entry points refuse columns of different lengths, a
+//! covariate, weight or exit time that is not finite, a negative weight, an
+//! entry time that is NaN or not before the exit time on a row of positive
+//! weight, a design without columns, and more rows than a `u32` addresses.
+//! Without delayed entry they take negative infinity as every entry time.
 //!
 //! # Agreement with R
 //!
-//! The tests compare coefficients, both standard errors, both covariance
+//! The tests run [`fit`] and [`score_residuals`] with the default tie rule, as
+//! `coxph` has it, and compare coefficients, both standard errors, both covariance
 //! matrices, the score residuals with and without the case weight, the log
 //! partial likelihood and the iteration count with `survival::coxph` for
 //! Breslow and Efron ties, delayed entry, strata, weights, clusters, aliased
@@ -202,12 +246,16 @@
     reason = "the entry point checks that the row count fits in u32"
 )]
 
+use std::borrow::Cow;
+
 use epistat_inference::sandwich::meat;
 use faer::{Mat, MatRef};
 
 use super::Ties;
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::error::{Error, Result};
+use crate::surv::SurvData;
+use crate::timefix::TimeFix;
 
 /// Largest number of trial points, `iter.max` of `coxph.control`.
 const MAX_ITERATIONS: u32 = 20;
@@ -221,6 +269,13 @@ const TOLER_INF: f64 = 3.162_277_660_168_379_5e-5;
 
 /// The rows of a Cox fit on a design matrix. One entry per row, all of the same
 /// length.
+///
+/// Superseded by [`SurvData`] and [`fit`], which take the same
+/// columns and apply the tie rule of `survival`.
+#[deprecated(
+    since = "0.3.0",
+    note = "build a `SurvData` and call `cox::fit` with a `CoxOptions`"
+)]
 #[derive(Debug, Clone, Copy)]
 pub struct CoxDesign<'a> {
     /// The covariates, one row per observation and one column per covariate.
@@ -272,8 +327,12 @@ pub struct CoxModelFit {
     pub null_log_partial_likelihood: Option<f64>,
     /// The summed weight of the events among the rows fitted.
     pub n_events: f64,
-    /// The rows fitted, after dropping rows whose weight is zero.
+    /// The rows of the input. [`fit`] counts every row, as `n` of a `coxph`
+    /// fit does. The deprecated [`fit_cox`] counts only the rows it fitted,
+    /// after dropping rows whose weight is zero, so there it equals `n_used`.
     pub n_rows: usize,
+    /// The rows fitted: those with a weight above zero.
+    pub n_used: usize,
     /// The columns that are not aliased, 0 when there is no estimate.
     pub rank: usize,
     /// The trial points computed, as `iter` in a `coxph` fit.
@@ -298,6 +357,7 @@ impl CoxModelFit {
             null_log_partial_likelihood: None,
             n_events,
             n_rows,
+            n_used: n_rows,
             rank: 0,
             iterations: 0,
             converged: false,
@@ -306,8 +366,137 @@ impl CoxModelFit {
     }
 }
 
+/// The columns the fit works on, after the checks of either entry point.
+struct Input<'a> {
+    x: MatRef<'a, f64>,
+    is_event: &'a [bool],
+    start: &'a [f64],
+    stop: &'a [f64],
+    weight: &'a [f64],
+    stratum: &'a [u32],
+    ties: Ties,
+    cluster: Option<&'a [u32]>,
+}
+
+#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
+impl<'a> From<&CoxDesign<'a>> for Input<'a> {
+    fn from(data: &CoxDesign<'a>) -> Self {
+        Self {
+            x: data.x,
+            is_event: data.is_event,
+            start: data.start,
+            stop: data.stop,
+            weight: data.weight,
+            stratum: data.stratum,
+            ties: data.ties,
+            cluster: data.cluster,
+        }
+    }
+}
+
+/// What [`fit`] and [`score_residuals`] take besides the data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoxOptions {
+    /// How tied events enter the partial likelihood. `Efron`, as in `coxph`.
+    pub ties: Ties,
+    /// The rule that makes times equal when they differ by rounding error,
+    /// applied to the data before the fit. The default is the rule of
+    /// `survival::aeqSurv`, which `coxph` applies.
+    pub timefix: TimeFix,
+    /// The event code to model. With more than one status code the rows with
+    /// this status have the event and the others are censored, so the model is
+    /// cause-specific, and the code is required. With one status code it is
+    /// `None` or `Some(1)`.
+    pub cause: Option<u32>,
+}
+
+impl Default for CoxOptions {
+    fn default() -> Self {
+        Self {
+            ties: Ties::Efron,
+            timefix: TimeFix::default(),
+            cause: None,
+        }
+    }
+}
+
+/// Check `x` against `data`, apply the options to the data, and call `f` on the
+/// columns the fit reads. The vectors that `f` borrows live only for the call.
+fn with_input<R>(
+    data: &SurvData<'_>,
+    x: MatRef<'_, f64>,
+    opts: &CoxOptions,
+    f: impl FnOnce(&Input<'_>) -> R,
+) -> Result<R> {
+    check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
+    if x.ncols() == 0 {
+        return Err(Error::input("x has no columns"));
+    }
+    check_finite_matrix(x)?;
+    let data = data.clone().with_timefix(opts.timefix)?;
+    let surv = data.followup()?;
+    let code = match (opts.cause, surv.n_codes()) {
+        (None, 1) => 1,
+        (Some(code), _) => code,
+        (None, _) => {
+            return Err(Error::input(
+                "cause: the status has several codes, so the event code is required",
+            ));
+        }
+    };
+    let is_event: Vec<bool> = data.cause(code)?.iter().collect();
+    let rows = data.n_rows();
+    // A missing start is at risk from the beginning, which is what an entry
+    // time of minus infinity says.
+    let start = surv
+        .start()
+        .map_or_else(|| Cow::Owned(vec![f64::NEG_INFINITY; rows]), Cow::Borrowed);
+    let weight = data
+        .weight()
+        .map_or_else(|| Cow::Owned(vec![1.0; rows]), Cow::Borrowed);
+    let stratum = data
+        .stratum()
+        .map_or_else(|| Cow::Owned(vec![0; rows]), Cow::Borrowed);
+    Ok(f(&Input {
+        x,
+        is_event: &is_event,
+        start: &start,
+        stop: surv.stop(),
+        weight: &weight,
+        stratum: &stratum,
+        ties: opts.ties,
+        cluster: data.cluster(),
+    }))
+}
+
 /// Newton-Raphson with step halving on the weighted partial likelihood of a
 /// design matrix, Breslow or Efron, as `survival::coxph` fits it.
+///
+/// `data` supplies the exit and entry times, the status, the weights, the
+/// strata and the clusters, and `x` the covariates, one row per row of `data`.
+/// The rule `opts.timefix` is applied to the times first, and rows of weight
+/// zero are left out of the fit. Strata are summed in the order of their
+/// codes. See the module documentation for the method, the robust variance,
+/// aliased columns and diverging coefficients.
+///
+/// # Errors
+///
+/// [`Error::Input`] when `x` has no column, has a number of rows other than
+/// `data`, or holds a value that is not finite, when `opts.cause` is missing
+/// for a status with several codes or outside the codes, or when the rule for
+/// the times finds an interval of length zero.
+pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions) -> Result<CoxModelFit> {
+    let mut fit = with_input(data, x, opts, fit_checked)?;
+    fit.n_rows = data.n_rows();
+    fit.n_used = data.n_used();
+    Ok(fit)
+}
+
+/// Newton-Raphson with step halving on the weighted partial likelihood of a
+/// design matrix, Breslow or Efron, as `survival::coxph` fits it.
+///
+/// This is the form that takes no tie rule: times are compared exactly, which
+/// gives the numbers of 0.2. Use [`fit`].
 ///
 /// See the module documentation for the method, the robust variance, aliased
 /// columns and diverging coefficients.
@@ -318,12 +507,18 @@ impl CoxModelFit {
 /// column, a covariate, weight or exit time is not finite, a weight is
 /// negative, an entry time is NaN or not before its exit time, or there are
 /// more rows than a `u32` addresses.
+#[deprecated(
+    since = "0.3.0",
+    note = "build a `SurvData` and call `cox::fit` with a `CoxOptions`"
+)]
+#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
 pub fn fit_cox(data: &CoxDesign<'_>) -> Result<CoxModelFit> {
     check_design(data)?;
-    Ok(fit_checked(data))
+    Ok(fit_checked(&data.into()))
 }
 
-/// The checks every entry point makes on a design.
+/// The checks every deprecated entry point makes on a design.
+#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
 fn check_design(data: &CoxDesign<'_>) -> Result<()> {
     let rows = data.x.nrows();
     check_lengths(&[
@@ -344,21 +539,26 @@ fn check_design(data: &CoxDesign<'_>) -> Result<()> {
     if let Some(index) = data.weight.iter().position(|&w| w < 0.0) {
         return Err(Error::input(format!("weight: row {index} is negative")));
     }
-    let non_finite = (0..rows)
-        .flat_map(|i| (0..data.x.ncols()).map(move |j| (i, j)))
-        .filter(|&(i, j)| !data.x[(i, j)].is_finite())
-        .count();
-    if non_finite > 0 {
-        return Err(Error::input(format!(
-            "x: {non_finite} non-finite values; drop or resolve them before estimating"
-        )));
-    }
+    check_finite_matrix(data.x)?;
     for i in 0..rows {
         if data.weight[i] > 0.0 && (data.start[i].is_nan() || data.start[i] >= data.stop[i]) {
             return Err(Error::input(format!(
                 "start: row {i} has an entry time that is NaN or not before its exit time"
             )));
         }
+    }
+    Ok(())
+}
+
+fn check_finite_matrix(x: MatRef<'_, f64>) -> Result<()> {
+    let non_finite = (0..x.nrows())
+        .flat_map(|i| (0..x.ncols()).map(move |j| (i, j)))
+        .filter(|&(i, j)| !x[(i, j)].is_finite())
+        .count();
+    if non_finite > 0 {
+        return Err(Error::input(format!(
+            "x: {non_finite} non-finite values; drop or resolve them before estimating"
+        )));
     }
     Ok(())
 }
@@ -786,7 +986,7 @@ struct Prepared {
 
 /// Centre and scale the covariates of the rows `kept`, which are not empty,
 /// and sort them into strata.
-fn prepare(input: &CoxDesign<'_>, kept: &[usize]) -> Prepared {
+fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
     let p = input.x.ncols();
     // Centre and scale as coxph does.
     let total_weight: f64 = kept.iter().map(|&i| input.weight[i]).sum();
@@ -906,7 +1106,7 @@ fn prepare(input: &CoxDesign<'_>, kept: &[usize]) -> Prepared {
     }
 }
 
-fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
+fn fit_checked(input: &Input<'_>) -> CoxModelFit {
     let p = input.x.ncols();
     let with_clusters = input.cluster.is_some();
     let kept: Vec<usize> = (0..input.x.nrows())
@@ -1072,6 +1272,7 @@ fn fit_checked(input: &CoxDesign<'_>) -> CoxModelFit {
         null_log_partial_likelihood: null_loglik.is_finite().then_some(null_loglik),
         n_events,
         n_rows,
+        n_used: n_rows,
         rank,
         iterations,
         converged,
@@ -1131,10 +1332,47 @@ fn on_input_scale(
 ///
 /// `coefficients` is normally `CoxModelFit::coefficients`. Any other value is
 /// the residual at that point, with a column left out where it is `None`. The
-/// `cluster` of `data` is not used.
+/// clusters of `data` are not used. `data`, `x` and `opts` are read as in
+/// [`fit`], so the residuals are those of the model that `fit` estimates.
 ///
 /// The residuals contain the case weight; see the module documentation for
 /// how they relate to `residuals(fit, "score")` of `survival`.
+///
+/// # Errors
+///
+/// [`Error::Input`] for the invalid input of [`fit`], for `coefficients` of
+/// another length than `x` has columns, for a coefficient that is not finite,
+/// and for coefficients at which a risk score or the denominator of a
+/// partial-likelihood term is not finite and positive.
+pub fn score_residuals(
+    data: &SurvData<'_>,
+    x: MatRef<'_, f64>,
+    coefficients: &[Option<f64>],
+    opts: &CoxOptions,
+) -> Result<Vec<Option<Vec<f64>>>> {
+    with_input(data, x, opts, |input| {
+        score_residuals_checked(input, coefficients)
+    })?
+}
+
+/// The score residual of every row at `coefficients`, one vector of `rows`
+/// values per column, as `residuals(fit, type = "score")` of `survival`.
+///
+/// Row `i` of column `j` is the derivative of the log partial likelihood with
+/// respect to the coefficient of column `j` through the case weight of row
+/// `i`, on the scale of the columns given. The rows are in the order of the
+/// input. A row whose weight is zero, and a row in a stratum without events,
+/// has residuals of zero. A column whose coefficient is `None`, such as one
+/// that is aliased, is `None`.
+///
+/// `coefficients` is normally `CoxModelFit::coefficients`. Any other value is
+/// the residual at that point, with a column left out where it is `None`. The
+/// `cluster` of `data` is not used.
+///
+/// The residuals contain the case weight; see the module documentation for
+/// how they relate to `residuals(fit, "score")` of `survival`. Times are
+/// compared exactly, which gives the numbers of 0.2; [`score_residuals`] is the
+/// form that applies the tie rule.
 ///
 /// # Errors
 ///
@@ -1142,11 +1380,23 @@ fn on_input_scale(
 /// of another length than the design has columns, for a coefficient that is
 /// not finite, and for coefficients at which a risk score or the denominator
 /// of a partial-likelihood term is not finite and positive.
+#[deprecated(
+    since = "0.3.0",
+    note = "build a `SurvData` and call `cox::score_residuals` with a `CoxOptions`"
+)]
+#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
 pub fn cox_score_residuals(
     data: &CoxDesign<'_>,
     coefficients: &[Option<f64>],
 ) -> Result<Vec<Option<Vec<f64>>>> {
     check_design(data)?;
+    score_residuals_checked(&data.into(), coefficients)
+}
+
+fn score_residuals_checked(
+    data: &Input<'_>,
+    coefficients: &[Option<f64>],
+) -> Result<Vec<Option<Vec<f64>>>> {
     let (rows, p) = (data.x.nrows(), data.x.ncols());
     if coefficients.len() != p {
         return Err(Error::input(format!(
@@ -1196,6 +1446,7 @@ pub fn cox_score_residuals(
 }
 
 #[cfg(test)]
+#[expect(deprecated, reason = "the tests of the deprecated entry points")]
 mod tests {
     use faer::Mat;
 

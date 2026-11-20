@@ -5,6 +5,7 @@
 //!
 //! Hashes depend on the platform's libm, so they are pinned on one target.
 
+#![expect(deprecated, reason = "pins the deprecated entry points")]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"

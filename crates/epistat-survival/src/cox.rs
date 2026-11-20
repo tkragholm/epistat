@@ -4,10 +4,12 @@
 //! This module fits one covariate with [`fit_cox_single_covariate`] and
 //! [`CoxData`]. With one covariate the score and the information are scalars,
 //! which keeps the Newton step and the sweep over the risk sets simple. A design
-//! matrix is fitted by [`fit_cox`] and [`CoxDesign`], which follow
-//! `survival::coxph` in their iteration and are documented in the
-//! [`design`] module. The two stop by different rules, so a fit of one column
-//! by either can differ in the last digits.
+//! matrix is fitted by [`fit`] on a [`SurvData`](crate::SurvData), which
+//! follows `survival::coxph` in its iteration, applies its tie rule to the
+//! times and is documented in the [`design`] module. The two stop by different
+//! rules, so a fit of one column by either can differ in the last digits.
+//! [`fit_cox_single_covariate`] and [`CoxData`] keep
+//! their form for now. [`fit_cox`] and [`CoxDesign`] are deprecated.
 //!
 //! # Algorithm
 //!
@@ -84,7 +86,8 @@
 //! zero iterations and `converged` false, when no row is left, there is no
 //! event, the covariate takes one value among the rows kept, `exp(beta x)`
 //! overflows because the covariate separates the events, or the information is
-//! not positive. The estimate and both standard errors are then `None`. Without delayed entry, pass negative infinity as every entry time.
+//! not positive. The estimate and both standard errors are then `None`. Without
+//! delayed entry, pass negative infinity as every entry time.
 //! Times are compared with `total_cmp`, so a NaN time sorts after every number.
 //!
 //! # References
@@ -114,7 +117,12 @@ use crate::check::{check_lengths, check_row_count};
 use crate::error::Result;
 
 pub mod design;
-pub use design::{CoxDesign, CoxModelFit, cox_score_residuals, fit_cox};
+#[expect(
+    deprecated,
+    reason = "the deprecated names stay exported for a release"
+)]
+pub use design::{CoxDesign, cox_score_residuals, fit_cox};
+pub use design::{CoxModelFit, CoxOptions, fit, score_residuals};
 
 /// Largest number of Newton-Raphson steps.
 const MAX_ITERATIONS: u32 = 50;
