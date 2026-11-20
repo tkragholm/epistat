@@ -4,6 +4,9 @@ description = "Cox regression, Fine-Gray, Aalen-Johansen, multi-state occupation
 keywords = ["statistics", "survival", "cox", "competing-risks", "multi-state"]
 categories = ["mathematics", "science"]
 readme = "README.md"
+# The R references are 20 MB of JSON that only this repository's tests read;
+# the R scripts that write them stay in the package as their provenance.
+exclude = ["tests/data/*.json"]
 version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
