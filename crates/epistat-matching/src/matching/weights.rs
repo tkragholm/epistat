@@ -411,7 +411,7 @@ where
         .into_iter()
         .filter(|weight| weight.is_finite() && *weight > 0.0)
         .fold((0.0_f64, 0.0_f64), |(sum, sum_sq), weight| {
-            (sum + weight, weight.mul_add(weight, sum_sq))
+            (sum + weight, sum_sq + weight * weight)
         });
 
     if sum_sq <= f64::EPSILON {

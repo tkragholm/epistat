@@ -45,6 +45,12 @@ impl BalanceDiagnostics {
 /// empty group, a standardized mean difference or variance ratio whose variances are
 /// not usable, a distance with an empty group, Cramér's V with no observations.
 /// Serialized as `null`; the CSV reports write `NA`.
+///
+/// The standardized mean differences divide by a standard deviation from the
+/// sample before matching, chosen by the realised estimand as in
+/// [`balance_report`](crate::balance_report). A binary variable has no variance
+/// ratio, and its eCDF and eQQ distances are the absolute difference in
+/// proportions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NumericBalance {
     /// Covariate name.
