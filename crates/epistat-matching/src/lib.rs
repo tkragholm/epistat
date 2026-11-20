@@ -111,10 +111,13 @@ macro_rules! delegate_matching_record {
 
 mod balance;
 pub mod constraints;
+mod errors;
 mod matching;
+pub mod output;
 #[cfg(feature = "reporting")]
 pub mod reporting;
 mod role_transition;
+pub mod spec;
 mod types;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -170,6 +173,17 @@ pub use types::{
     SupplementalBalanceCovariates, UniqueValueId, ValidatedMatchingCriteria,
 };
 
+pub use output::{
+    LongMatches, MatchData, MatchDataOptions, MatchMatrix, OutputError, Units, get_matches,
+    match_data, match_matrix,
+};
+pub use spec::{
+    AssignmentSpec, CovarianceSpec, CovariatesSpec, DistanceSpec, EstimatorSpec, LambdaSpec,
+    LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec,
+    ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec,
+    run_spec,
+};
+
 #[cfg(feature = "bench-internals")]
 #[must_use]
 pub fn benchmark_ecdf_distance_stats(
@@ -190,43 +204,52 @@ pub fn benchmark_eqq_distance_stats(
 
 /// Common imports for consumers of this crate.
 pub mod prelude {
-    pub use crate::matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
+    pub use crate::constraints::{AntiExact, GenderMatch};
+    pub use crate::matching::{
+        Assignment, DeterministicSelection, ExactMatchError, ExactMatchOutcome, MatchOrder,
+        NearestBirthDateSelection, NearestSelection, RandomSelection, Rounds, SelectionStrategy,
+        exact_match_subclasses,
+    };
     pub use crate::{
-        AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
-        BalanceReport, BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds,
-        BaseRecord, BirthDateWindowDays, CaliperConstraint, CandidateRecord, CategoricalBalance,
-        CategoricalCovariateSpec, CategoricalLevelBalance, Chained, CommonSupport,
-        CommonSupportFailureReason, Constraint, ConstraintContext, ConstraintGroup,
-        ConstraintReason, ControlIdx, CovariateEncodingConfig, CovariateMatrix, CovariateRecord,
-        CovariateValue, CriteriaValidationError, CrossValidation, DateDistance,
-        DefaultRiskSetPolicy, DistanceCaliper, DistanceCaliperReason, DistanceChannel,
-        DistanceConfig, DistanceMetric, ElasticNetCvConfig, ElasticNetLogisticConfig, Estimand,
-        EstimandDriftReason, EstimationError, EuclideanDistancePreparation,
-        EuclideanPreparationConfig, EuclideanScale, ExactMatchConstraint, ExclusionReason,
-        IdMapEuclideanDistance, IdMapMahalanobisDistance, IdMapPropensityScoreDistance,
-        InvalidCriteriaReason, LambdaRule, LogisticRegressionConfig, MahalanobisCovarianceStrategy,
-        MahalanobisDistance, MahalanobisDistancePreparation, MahalanobisError,
-        MahalanobisPreparationConfig, MahalanobisTransform, MatchDiagnostics, MatchJob,
-        MatchOutcome, MatchRatio, MatchWeightMethod, MatchedPair, MatchingCriteria, MatchingRecord,
-        MissingValuePolicy, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
-        NumericCovariateSpec, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable,
-        ProjectedBalanceRow, PropensityDistancePreparation, PropensityEstimator, PropensityLink,
-        PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
+        AgeLimitYears, AnchorRecord, AssignmentSpec, BalanceDiagnostics, BalanceRecord,
+        BalanceRecordBuilder, BalanceReport, BalanceReportOptions, BalanceThresholdSummary,
+        BalanceThresholds, BaseRecord, BirthDateWindowDays, CaliperConstraint, CandidateRecord,
+        CategoricalBalance, CategoricalCovariateSpec, CategoricalLevelBalance, Chained,
+        CommonSupport, CommonSupportFailureReason, Constraint, ConstraintContext, ConstraintGroup,
+        ConstraintReason, ControlIdx, CovarianceSpec, CovariateEncodingConfig, CovariateMatrix,
+        CovariateRecord, CovariateValue, CovariatesSpec, CriteriaValidationError, CrossValidation,
+        DateDistance, DefaultRiskSetPolicy, DistanceCaliper, DistanceCaliperReason,
+        DistanceChannel, DistanceConfig, DistanceMetric, DistanceSpec, ElasticNetCvConfig,
+        ElasticNetLogisticConfig, Estimand, EstimandDriftReason, EstimationError, EstimatorSpec,
+        EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
+        ExactMatchConstraint, ExclusionReason, IdMapEuclideanDistance, IdMapMahalanobisDistance,
+        IdMapPropensityScoreDistance, InvalidCriteriaReason, LambdaRule, LambdaSpec, LinkSpec,
+        LogisticRegressionConfig, LongMatches, MahalanobisCovarianceStrategy, MahalanobisDistance,
+        MahalanobisDistancePreparation, MahalanobisError, MahalanobisPreparationConfig,
+        MahalanobisTransform, MatchData, MatchDataOptions, MatchDiagnostics, MatchJob, MatchMatrix,
+        MatchMethod, MatchMode, MatchOutcome, MatchRatio, MatchSpec, MatchWeightMethod,
+        MatchedPair, MatchingCriteria, MatchingRecord, MissingSpec, MissingValuePolicy,
+        NearestSpec, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
+        NumericCovariateSpec, OrderSpec, OutputError, PairWeight, PairWeightRow, PairWeightSet,
+        PairWeightTable, ProjectedBalanceRow, PropensityDistancePreparation, PropensityEstimator,
+        PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
         PropensityScoreEstimate, PropensityScoreOutputScale, ReconstructedEpisode,
         ReconstructedMatchedPair, ReconstructedMatchingOptions, ReconstructedMatchingOutput,
-        ReconstructedMatchingTier, ResidentAtIndexRecord, RidgeReport, RiskSetPolicy,
-        RoleIndexedRecord, RoleTransitionOptions, RoleTransitionRecord, StandardMatchRequest,
-        StrataExactConstraint, SubclassReferenceGroup, SubclassSummary, SubclassificationConfig,
-        SubclassificationOutcome, SupplementalBalanceCovariates, TransitionMatchRequest,
-        UniqueValueId, UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable,
-        ValidatedMatchingCriteria, balance_diagnostics, balance_report,
+        ReconstructedMatchingTier, ReferenceSpec, ResidentAtIndexRecord, RidgeReport,
+        RiskSetPolicy, RoleIndexedRecord, RoleTransitionOptions, RoleTransitionRecord, ScaleSpec,
+        SpecError, SpecInput, SpecOutput, StandardMatchRequest, StrataExactConstraint,
+        SubclassReferenceGroup, SubclassSpec, SubclassSummary, SubclassificationConfig,
+        SubclassificationOutcome, SupplementalBalanceCovariates, TransformSpec,
+        TransitionMatchRequest, UniqueValueId, UnitRole, UnitWeightRow, UnitWeightSet,
+        UnitWeightTable, Units, ValidatedMatchingCriteria, balance_diagnostics, balance_report,
         balance_report_with_options, balance_threshold_summary, build_projected_balance_rows,
         categorical_max_abs_diff, cross_validation_folds, effective_sample_size,
-        estimate_propensity_and_match, match_standard, match_transition, match_weights_from_pairs,
-        pair_weights_from_pairs, prepare_euclidean_distance_config,
-        prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
-        prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs,
-        smd_numeric_from_values, subclassify_by_propensity_score_map,
+        estimate_propensity_and_match, get_matches, match_data, match_matrix, match_standard,
+        match_transition, match_weights_from_pairs, pair_weights_from_pairs,
+        prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+        prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
+        reconstruct_case_control_pairs, run_spec, smd_numeric_from_values,
+        subclassify_by_propensity_score_map,
     };
 
     pub mod constraints {
