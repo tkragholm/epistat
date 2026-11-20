@@ -922,6 +922,57 @@ mod tests {
     }
 
     #[test]
+    fn separated_data_is_flagged_and_a_short_fit_reports_non_convergence() {
+        let anchors = (0..6)
+            .map(|i| {
+                record(
+                    &format!("a{i}"),
+                    date(2010, 1, 1),
+                    10.0 + f64::from(i),
+                    "north",
+                )
+            })
+            .collect::<Vec<_>>();
+        let candidates = (0..6)
+            .map(|i| record(&format!("c{i}"), date(2010, 1, 2), f64::from(i), "north"))
+            .collect::<Vec<_>>();
+        let prepared = prepare_propensity_distance_config(
+            &anchors,
+            &candidates,
+            &PropensityScoreConfig::default(),
+        )
+        .expect("a separated fit is returned and flagged");
+        assert!(prepared.estimate.fitted_at_boundary);
+
+        let (anchors, candidates) = collinear_groups();
+        let short = PropensityScoreConfig::builder()
+            .logistic(LogisticRegressionConfig::builder().max_iter(1).build())
+            .build();
+        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &short)
+            .expect("a short fit is returned");
+        assert!(!prepared.estimate.converged);
+        assert!(!prepared.estimate.fitted_at_boundary);
+    }
+
+    #[test]
+    fn invalid_glm_settings_and_reestimate_without_a_policy_are_errors() {
+        let (anchors, candidates) = collinear_groups();
+        for logistic in [
+            LogisticRegressionConfig::builder().max_iter(0).build(),
+            LogisticRegressionConfig::builder().tolerance(0.0).build(),
+        ] {
+            let config = PropensityScoreConfig::builder().logistic(logistic).build();
+            let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
+                .expect_err("invalid settings are refused");
+            assert!(matches!(err, EstimationError::InvalidGlmConfig));
+        }
+        let config = PropensityScoreConfig::builder().reestimate(true).build();
+        let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
+            .expect_err("reestimate needs a policy");
+        assert!(matches!(err, EstimationError::ReestimateWithoutDiscard));
+    }
+
+    #[test]
     fn collinear_covariates_are_reported_by_the_mahalanobis_inverse() {
         let (anchors, candidates) = collinear_groups();
         let prepared = prepare_mahalanobis_distance_config(
