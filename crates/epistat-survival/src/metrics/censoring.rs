@@ -6,6 +6,8 @@
     reason = "times tie when they are equal, which is the definition of a tie"
 )]
 
+use crate::step::Steps;
+
 /// The censoring distribution `G(t) = P(C > t)` as a step function.
 ///
 /// The risk set at a censoring time `c` is the rows censored at `c` and the
@@ -18,10 +20,9 @@
 /// what `survfit(Surv(time, 1 - status) ~ 1)` gives.
 #[derive(Debug, Clone)]
 pub(super) struct CensoringKm {
-    /// The distinct censoring times, ascending.
-    pub time: Vec<f64>,
-    /// `G` just after each time.
-    pub surv: Vec<f64>,
+    /// `G` just after each distinct censoring time, ascending, and 1 before
+    /// the first.
+    pub curve: Steps,
     /// The weight at risk at each time, as the estimate itself counts it.
     pub at_risk: Vec<f64>,
     /// The weight of every row with a time at or after each time, deaths at
@@ -43,8 +44,11 @@ impl CensoringKm {
             suffix[i] = suffix[i + 1] + weight[i];
         }
         let mut out = Self {
-            time: Vec::new(),
-            surv: Vec::new(),
+            curve: Steps {
+                time: Vec::new(),
+                first: 1.0,
+                value: Vec::new(),
+            },
             at_risk: Vec::new(),
             at_risk_plain: Vec::new(),
             n_censored: Vec::new(),
@@ -70,8 +74,8 @@ impl CensoringKm {
                     suffix[i]
                 };
                 g *= 1.0 - cens / risk;
-                out.time.push(time[i]);
-                out.surv.push(g);
+                out.curve.time.push(time[i]);
+                out.curve.value.push(g);
                 out.at_risk.push(risk);
                 out.at_risk_plain.push(suffix[i]);
                 out.n_censored.push(cens);
@@ -83,13 +87,11 @@ impl CensoringKm {
 
     /// `G(t)`: the censorings at or before `t` are counted.
     pub(super) fn at(&self, t: f64) -> f64 {
-        let k = self.time.partition_point(|&u| u <= t);
-        if k == 0 { 1.0 } else { self.surv[k - 1] }
+        self.curve.at(t)
     }
 
     /// `G(t-)`: only the censorings before `t` are counted.
     pub(super) fn before(&self, t: f64) -> f64 {
-        let k = self.time.partition_point(|&u| u < t);
-        if k == 0 { 1.0 } else { self.surv[k - 1] }
+        self.curve.before(t)
     }
 }

@@ -411,10 +411,10 @@ impl<'a> Core<'a> {
             suffix[i] = suffix[i + 1] + g[i];
         }
         let tail: f64 = g[through..n].iter().sum();
-        let m = km.time.len();
+        let m = km.curve.time.len();
         let mut a = Vec::with_capacity(m);
         let mut cumulative = vec![0.0; m + 1];
-        for (index, &u) in km.time.iter().enumerate() {
+        for (index, &u) in km.curve.time.iter().enumerate() {
             let first_after = sorted.time.partition_point(|&x| x <= u);
             let before_t = if first_after < through {
                 suffix[first_after]
@@ -429,10 +429,10 @@ impl<'a> Core<'a> {
         (0..n)
             .map(|k| {
                 if sorted.kind[k] == Kind::Censored {
-                    let index = km.time.partition_point(|&u| u < sorted.time[k]);
+                    let index = km.curve.time.partition_point(|&u| u < sorted.time[k]);
                     a[index] / km.at_risk_plain[index] - cumulative[index + 1]
                 } else {
-                    let index = km.time.partition_point(|&u| u <= sorted.time[k]);
+                    let index = km.curve.time.partition_point(|&u| u <= sorted.time[k]);
                     -cumulative[index]
                 }
             })

@@ -54,6 +54,7 @@ use crate::cox::{
     BaselineOptions, Centring, CoxOptions, FittedModel, Ties, Variance, basehaz, fit as cox_fit,
 };
 use crate::error::{Error, Result};
+use crate::step::Steps;
 use crate::surv::{SurvBuf, SurvData};
 use crate::survfit::{self, SurvfitOptions};
 use crate::timefix::TimeFix;
@@ -107,33 +108,6 @@ pub struct Ipcw {
     /// The coefficients of the Cox model of censoring, `None` for the
     /// Kaplan-Meier model and for an aliased column.
     pub coefficients: Option<Vec<Option<f64>>>,
-}
-
-/// A step function read from the left and from the right.
-struct Steps {
-    time: Vec<f64>,
-    /// The value before the first time is `first`, then `value[i]` from
-    /// `time[i]` on.
-    first: f64,
-    value: Vec<f64>,
-}
-
-impl Steps {
-    /// The value at `t`, including a step at `t`.
-    fn at(&self, t: f64) -> f64 {
-        match self.time.partition_point(|&s| s <= t) {
-            0 => self.first,
-            k => self.value[k - 1],
-        }
-    }
-
-    /// The value just before `t`.
-    fn before(&self, t: f64) -> f64 {
-        match self.time.partition_point(|&s| s < t) {
-            0 => self.first,
-            k => self.value[k - 1],
-        }
-    }
 }
 
 /// The censoring weights of the rows of `data` from `model`.

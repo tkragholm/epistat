@@ -149,6 +149,7 @@ use crate::check::{check_lengths, check_row_count};
 use crate::cox::{CoxData, CoxFit, fit_cox_single_covariate};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
+use crate::step::Steps;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -160,86 +161,64 @@ use crate::timefix::TimeFix;
 /// after `t` plus the weight censored at `t`, so a failure and a censoring at
 /// the same time are ordered failure first. Using `time >= t` would add every
 /// tied failure to the risk set and change every weight derived from `G`.
-struct CensoringCurve {
-    /// Censoring times, ascending. They are also the times the Fine-Gray
-    /// weights change, so the rows are split here.
-    times: Vec<f64>,
-    /// `G` from each of `times` onward.
-    survival: Vec<f64>,
-}
+///
+/// The curve is 1 before the first censoring. Its times are also the times the
+/// Fine-Gray weights change, so the rows are split there.
+// Exact `==` groups rows that share a time.
+#[expect(clippy::float_cmp, reason = "rows that share a time are grouped")]
+fn censoring_curve(time: &[f64], event: &[i32], weight: &[f64]) -> Steps {
+    let mut order: Vec<usize> = (0..time.len()).collect();
+    order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
 
-impl CensoringCurve {
-    // Exact `==` groups rows that share a time.
-    #[expect(clippy::float_cmp, reason = "rows that share a time are grouped")]
-    fn estimate(time: &[f64], event: &[i32], weight: &[f64]) -> Self {
-        let mut order: Vec<usize> = (0..time.len()).collect();
-        order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-
-        // Per distinct time: its value, total weight, censored weight, and
-        // whether anyone was censored there.
-        let mut blocks: Vec<(f64, f64, f64, bool)> = Vec::new();
-        for &i in &order {
-            let censored = event[i] == 0;
-            match blocks.last_mut() {
-                Some(block) if block.0 == time[i] => {
-                    block.1 += weight[i];
-                    if censored {
-                        block.2 += weight[i];
-                        block.3 = true;
-                    }
+    // Per distinct time: its value, total weight, censored weight, and
+    // whether anyone was censored there.
+    let mut blocks: Vec<(f64, f64, f64, bool)> = Vec::new();
+    for &i in &order {
+        let censored = event[i] == 0;
+        match blocks.last_mut() {
+            Some(block) if block.0 == time[i] => {
+                block.1 += weight[i];
+                if censored {
+                    block.2 += weight[i];
+                    block.3 = true;
                 }
-                _ => blocks.push((
-                    time[i],
-                    weight[i],
-                    if censored { weight[i] } else { 0.0 },
-                    censored,
-                )),
             }
-        }
-
-        // Weight strictly after each block, as a suffix total.
-        let mut after = vec![0.0f64; blocks.len()];
-        let mut running = 0.0f64;
-        for (slot, block) in after.iter_mut().zip(&blocks).rev() {
-            *slot = running;
-            running += block.1;
-        }
-
-        let mut survival = 1.0f64;
-        let mut times = Vec::new();
-        let mut steps = Vec::new();
-        for (block, &later) in blocks.iter().zip(&after) {
-            let (t, _, censored_here, any_censored) = *block;
-            if !any_censored {
-                continue;
-            }
-            let at_risk = later + censored_here;
-            if at_risk > 0.0 && censored_here > 0.0 {
-                survival *= 1.0 - censored_here / at_risk;
-            }
-            times.push(t);
-            steps.push(survival);
-        }
-        Self {
-            times,
-            survival: steps,
+            _ => blocks.push((
+                time[i],
+                weight[i],
+                if censored { weight[i] } else { 0.0 },
+                censored,
+            )),
         }
     }
 
-    /// `G` at `t`, after any censoring at `t`. 1 before the first censoring.
-    fn at(&self, t: f64) -> f64 {
-        match self.times.partition_point(|&c| c <= t) {
-            0 => 1.0,
-            index => self.survival[index - 1],
-        }
+    // Weight strictly after each block, as a suffix total.
+    let mut after = vec![0.0f64; blocks.len()];
+    let mut running = 0.0f64;
+    for (slot, block) in after.iter_mut().zip(&blocks).rev() {
+        *slot = running;
+        running += block.1;
     }
 
-    /// `G` just before `t`, so without any censoring at `t`.
-    fn before(&self, t: f64) -> f64 {
-        match self.times.partition_point(|&c| c < t) {
-            0 => 1.0,
-            index => self.survival[index - 1],
+    let mut survival = 1.0f64;
+    let mut times = Vec::new();
+    let mut steps = Vec::new();
+    for (block, &later) in blocks.iter().zip(&after) {
+        let (t, _, censored_here, any_censored) = *block;
+        if !any_censored {
+            continue;
         }
+        let at_risk = later + censored_here;
+        if at_risk > 0.0 && censored_here > 0.0 {
+            survival *= 1.0 - censored_here / at_risk;
+        }
+        times.push(t);
+        steps.push(survival);
+    }
+    Steps {
+        time: times,
+        first: 1.0,
+        value: steps,
     }
 }
 
@@ -285,7 +264,7 @@ struct Expansion<'a> {
     event: &'a [i32],
     weight: &'a [f64],
     cause: i32,
-    curve: CensoringCurve,
+    curve: Steps,
     horizon: f64,
 }
 
@@ -307,7 +286,7 @@ impl<'a> Expansion<'a> {
             return Err(Error::input("cause 0 is censoring, not a cause"));
         }
         Ok(Self {
-            curve: CensoringCurve::estimate(time, event, weight),
+            curve: censoring_curve(time, event, weight),
             horizon: time.iter().copied().fold(f64::NEG_INFINITY, f64::max),
             time,
             event,
@@ -364,9 +343,9 @@ impl<'a> Expansion<'a> {
                     0.0
                 }
             };
-            let first = self.curve.times.partition_point(|&c| c < t);
+            let first = self.curve.time.partition_point(|&c| c < t);
             let mut previous = 0.0f64;
-            for &boundary in &self.curve.times[first..] {
+            for &boundary in &self.curve.time[first..] {
                 let weight_here = weight_from(previous);
                 if weight_here > 0.0 {
                     rows.push(i, previous, boundary, false, weight_here);
@@ -422,7 +401,7 @@ impl<'a> Expansion<'a> {
             ));
         }
 
-        let censoring = &self.curve.times;
+        let censoring = &self.curve.time;
         for (representative, mut entries) in by_level {
             entries.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
             let event_times: Vec<f64> = entries.iter().map(|entry| entry.0).collect();
@@ -842,7 +821,7 @@ mod tests {
     use faer::Mat;
 
     use super::{
-        CensoringCurve, Expansion, FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows,
+        Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, rows,
     };
     use crate::cox::{CoxData, CoxFit, Ties, fit_cox_single_covariate};
     use crate::surv::SurvData;
@@ -953,9 +932,8 @@ mod tests {
     /// times, and G falls by a factor 2/3. At 3 two are at risk and G halves.
     #[test]
     fn censoring_curve_orders_failures_before_tied_censoring() {
-        let curve =
-            CensoringCurve::estimate(&[1.0, 2.0, 2.0, 3.0, 4.0], &[0, 0, 1, 0, 1], &[1.0; 5]);
-        assert_eq!(curve.times, [1.0, 2.0, 3.0]);
+        let curve = censoring_curve(&[1.0, 2.0, 2.0, 3.0, 4.0], &[0, 0, 1, 0, 1], &[1.0; 5]);
+        assert_eq!(curve.time, [1.0, 2.0, 3.0]);
         assert!(close(curve.at(0.5), 1.0, 1e-15));
         assert!(close(curve.at(1.0), 0.8, 1e-15));
         assert!(close(curve.at(2.5), 0.8 * (1.0 - 1.0 / 3.0), 1e-15));
