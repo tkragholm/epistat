@@ -90,6 +90,30 @@ pub trait CovariateRecord: MatchingRecord {
     fn covariate_names(&self) -> impl Iterator<Item = &str> {
         self.covariates().keys().map(String::as_str)
     }
+    /// Names the table of columns the record's covariates are read from, for
+    /// records that are rows of a shared table. Two records that return the
+    /// same number have their covariates at the same slots.
+    ///
+    /// A model that reads one covariate of many records finds the slot of
+    /// its name once for every table, through
+    /// [`covariate_slot`](Self::covariate_slot), and then reads each record
+    /// with [`covariate_in_slot`](Self::covariate_in_slot). The default,
+    /// `None`, has it read every record by name.
+    fn covariate_table(&self) -> Option<usize> {
+        None
+    }
+    /// The slot of the covariate `name` in the record's table, `None` when the
+    /// table has no such covariate. Only called when
+    /// [`covariate_table`](Self::covariate_table) is `Some`.
+    fn covariate_slot(&self, _name: &str) -> Option<usize> {
+        None
+    }
+    /// The record's covariate at `slot`, which [`covariate_slot`](Self::covariate_slot)
+    /// returned for a record of the same table. Only called when
+    /// [`covariate_table`](Self::covariate_table) is `Some`.
+    fn covariate_in_slot(&self, _slot: usize) -> CovariateRef<'_> {
+        CovariateRef::Missing
+    }
 }
 
 impl MatchingRecord for BaseRecord {
