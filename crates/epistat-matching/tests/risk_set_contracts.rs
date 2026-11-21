@@ -353,9 +353,9 @@ fn run_trials(
     options: &TrialOptions,
     replacement: bool,
 ) -> TrialOutcome {
-    match_trials(panel, options, |period, cohort| {
+    match_trials(panel, options, |pool| {
         Ok::<_, std::convert::Infallible>(
-            MatchJob::new_transition(cohort, trial_seed(1, period))
+            pool.job(trial_seed(1, pool.period()))
                 .with_ratio(MatchRatio::new(1).unwrap())
                 .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
                 .with_age_limit(AgeLimitYears::new(100).unwrap())

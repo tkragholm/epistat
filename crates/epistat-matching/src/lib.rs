@@ -224,7 +224,8 @@ pub use role_transition::{
 };
 pub use trials::{
     ControlReuse, ExpandedRow, TrialInputError, TrialMember, TrialOptions, TrialOutcome,
-    TrialPeriod, TrialPerson, TrialResult, TrialsError, expand_trials, match_trials, trial_seed,
+    TrialPeriod, TrialPerson, TrialPool, TrialResult, TrialsError, expand_trials, match_trials,
+    trial_seed,
 };
 pub use types::{
     AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
@@ -348,7 +349,7 @@ pub mod prelude {
 
     pub use crate::{
         ControlReuse, ExpandedRow, TrialInputError, TrialMember, TrialOptions, TrialOutcome,
-        TrialPeriod, TrialPerson, TrialResult, TrialsError, expand_trials, match_trials,
+        TrialPeriod, TrialPerson, TrialPool, TrialResult, TrialsError, expand_trials, match_trials,
         trial_seed,
     };
 

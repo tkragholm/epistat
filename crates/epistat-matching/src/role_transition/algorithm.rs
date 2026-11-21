@@ -1,3 +1,4 @@
+use super::IdOrder;
 use super::sweep::{RiskSetSweep, SwapRemovePool};
 use crate::matching::{
     CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
@@ -148,6 +149,22 @@ pub fn match_transition<
     cohort: &[R],
     request: TransitionMatchRequest<'_, S, G, P>,
 ) -> MatchOutcome {
+    match_transition_ordered(cohort, request, None)
+}
+
+/// [`match_transition`] with the order of the cohort's ids, when the caller
+/// has it. An order of another length is not used.
+pub(crate) fn match_transition_ordered<
+    R: RoleIndexedRecord,
+    S: SelectionStrategy<R> + Clone + Send + Sync,
+    G: ConstraintGroup<R> + ?Sized,
+    P: RiskSetPolicy<R>,
+>(
+    cohort: &[R],
+    request: TransitionMatchRequest<'_, S, G, P>,
+    id_order: Option<&IdOrder>,
+) -> MatchOutcome {
+    let id_order = id_order.filter(|order| order.len() == cohort.len());
     // Without a configuration the date metric runs off the birth-date index and
     // the criteria's own window. That path is the common one, so it keeps the
     // concrete metric rather than paying `ConfiguredMetric`'s match on every
@@ -160,6 +177,7 @@ pub fn match_transition<
             DistanceChannel::new(&DateDistance, caliper),
             true,
             None,
+            id_order,
         );
     };
     let scores = config.propensity_scores();
@@ -176,6 +194,7 @@ pub fn match_transition<
         DistanceChannel::new(&metric, config.typed_caliper()).with_reason(config.reason()),
         false,
         scores,
+        id_order,
     )
 }
 
@@ -191,6 +210,7 @@ fn match_with_distance_channel<
     distance_channel: DistanceChannel<'_, R, D>,
     use_birth_date_index: bool,
     common_support_scores: Option<&RapidHashMap<String, f64>>,
+    id_order: Option<&IdOrder>,
 ) -> MatchOutcome {
     match_with_role_indexing_with_channel_internal(
         cohort,
@@ -204,6 +224,7 @@ fn match_with_distance_channel<
             use_birth_date_index,
             common_support_scores,
             risk_set_policy: request.risk_set_policy,
+            id_order,
         },
     )
 }
@@ -224,6 +245,8 @@ struct RoleIndexingConfig<
     use_birth_date_index: bool,
     common_support_scores: Option<&'a RapidHashMap<String, f64>>,
     risk_set_policy: &'a P,
+    /// The order of the cohort's ids, when the caller has it.
+    id_order: Option<&'a IdOrder>,
 }
 
 #[derive(Default)]
@@ -521,8 +544,16 @@ fn match_with_role_indexing_with_channel_internal<
         }
     };
 
+    let computed_order;
+    let id_order = if let Some(order) = config.id_order {
+        Some(order)
+    } else {
+        computed_order = IdOrder::of(cohort);
+        computed_order.as_ref()
+    };
+
     if config.risk_set_policy.default_at_risk_rule().is_some() {
-        if let Some(reason) = invalid_record(cohort) {
+        if let Some(reason) = invalid_record(cohort, id_order) {
             return invalid_cohort_outcome(cohort.len(), reason);
         }
     }
@@ -534,8 +565,12 @@ fn match_with_role_indexing_with_channel_internal<
         );
     }
     let ratio_policy = RatioPolicy::from_fallback(validated.match_ratio, config.ratio_fallback);
-    let case_indices =
-        eligible_case_indices(cohort, config.age_limit_years, config.risk_set_policy);
+    let case_indices = eligible_case_indices(
+        cohort,
+        config.age_limit_years,
+        config.risk_set_policy,
+        id_order,
+    );
     let common_support_filters = match resolve_transition_common_support(
         cohort,
         &case_indices,
@@ -551,6 +586,9 @@ fn match_with_role_indexing_with_channel_internal<
     };
 
     let mut engine = MatchEngine::new(cohort, validated.as_ref(), strategy);
+    if let Some(order) = id_order {
+        engine.use_id_order(order);
+    }
 
     let mut run_state = TransitionRunState::new(cohort.len());
     run_state.diagnostics = transition_initial_diagnostics(
@@ -567,6 +605,7 @@ fn match_with_role_indexing_with_channel_internal<
             validated: validated.as_ref(),
             ratio_policy: &ratio_policy,
             common_support_filters: &common_support_filters,
+            id_order,
         },
         &mut engine,
         &mut run_state,
@@ -632,6 +671,7 @@ struct TransitionLoopConfig<
     validated: &'a MatchingCriteria,
     ratio_policy: &'a RatioPolicy,
     common_support_filters: &'a TransitionCommonSupportFilters,
+    id_order: Option<&'a IdOrder>,
 }
 
 fn run_transition_case_loop<
@@ -765,7 +805,12 @@ fn risk_set_sweep<
     if !config.extra_constraints.status_rules(&mut rules) {
         return None;
     }
-    RiskSetSweep::new(loop_config.cohort, &engine.candidate_index, &rules)
+    RiskSetSweep::new(
+        loop_config.cohort,
+        &engine.candidate_index,
+        &rules,
+        loop_config.id_order?,
+    )
 }
 
 /// The case loop of [`run_transition_case_loop`] with the risk sets of a
@@ -900,8 +945,35 @@ fn run_swept_case_loop<
 }
 
 /// The first record, in cohort order, that the default policy refuses: an id
-/// that occurs twice, or a case whose event is before its birth.
-fn invalid_record<R: RoleIndexedRecord>(cohort: &[R]) -> Option<ExclusionReason> {
+/// that occurs twice, or a case whose event is before its birth. A record that
+/// is both is reported for its id.
+fn invalid_record<R: RoleIndexedRecord>(
+    cohort: &[R],
+    id_order: Option<&IdOrder>,
+) -> Option<ExclusionReason> {
+    let Some(order) = id_order else {
+        return invalid_record_by_hashing(cohort);
+    };
+    let repeat = order.first_repeat(cohort);
+    let before_birth = cohort.iter().position(|row| {
+        row.event_date()
+            .is_some_and(|event| event < row.birth_date())
+    });
+    match (repeat, before_birth) {
+        (Some(repeat), Some(before)) if before < repeat => Some(ExclusionReason::EventBeforeBirth(
+            cohort[before].id().to_owned(),
+        )),
+        (Some(repeat), _) => Some(ExclusionReason::DuplicateId(cohort[repeat].id().to_owned())),
+        (None, Some(before)) => Some(ExclusionReason::EventBeforeBirth(
+            cohort[before].id().to_owned(),
+        )),
+        (None, None) => None,
+    }
+}
+
+/// [`invalid_record`] by a set of the ids seen so far, for a cohort too large
+/// for an [`IdOrder`].
+fn invalid_record_by_hashing<R: RoleIndexedRecord>(cohort: &[R]) -> Option<ExclusionReason> {
     let mut seen: HashSet<&str> = HashSet::with_capacity(cohort.len());
     for row in cohort {
         if !seen.insert(row.id()) {
@@ -917,21 +989,40 @@ fn invalid_record<R: RoleIndexedRecord>(cohort: &[R]) -> Option<ExclusionReason>
     None
 }
 
+/// The cases, by event date and then by id, records with equal ids in cohort
+/// order.
 fn eligible_case_indices<R: RoleIndexedRecord, P: RiskSetPolicy<R> + ?Sized>(
     cohort: &[R],
     age_limit_years: u8,
     risk_set_policy: &P,
+    id_order: Option<&IdOrder>,
 ) -> Vec<usize> {
-    cohort
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, row)| {
-            if risk_set_policy.is_case_eligible(row, age_limit_years) {
-                Some(idx)
-            } else {
-                None
-            }
-        })
+    let cases = cohort.iter().enumerate().filter_map(|(idx, row)| {
+        if risk_set_policy.is_case_eligible(row, age_limit_years) {
+            Some(idx)
+        } else {
+            None
+        }
+    });
+    let Some(order) = id_order else {
+        return cases_by_comparing_ids(cohort, cases);
+    };
+    // A rank orders records by id and then by index, so the order of
+    // `(event date, rank)` is that of a stable sort by `(event date, id)`.
+    let mut keyed: Vec<(Option<NaiveDate>, u32, usize)> = cases
+        .map(|idx| (cohort[idx].event_date(), order.rank(idx), idx))
+        .collect();
+    keyed.sort_unstable_by_key(|&(event, rank, _)| (event, rank));
+    keyed.into_iter().map(|(_, _, idx)| idx).collect()
+}
+
+/// [`eligible_case_indices`] by comparing ids, for a cohort too large for an
+/// [`IdOrder`].
+fn cases_by_comparing_ids<R: RoleIndexedRecord>(
+    cohort: &[R],
+    cases: impl Iterator<Item = usize>,
+) -> Vec<usize> {
+    cases
         .sorted_by(|left_idx, right_idx| {
             let left = &cohort[*left_idx];
             let right = &cohort[*right_idx];
@@ -1436,5 +1527,65 @@ mod tests {
         );
         assert_eq!(outcome.diagnostics.requested_estimand, Estimand::Att);
         assert_eq!(outcome.diagnostics.realized_estimand, Estimand::Atm);
+    }
+
+    /// Records with repeated ids, cases before their birth and tied event
+    /// dates, in an order unrelated to the ids.
+    fn tangled_cohort(seed: u64, n: usize) -> Vec<RoleTransitionRecord<BaseRecord>> {
+        let mut state = seed;
+        let mut next = |bound: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % bound
+        };
+        (0..n)
+            .map(|_| {
+                let birth = date(2000, 1, 1) + chrono::Days::new(next(400));
+                let id = format!("{}", next(n as u64 * 4));
+                let event = match next(10) {
+                    0 => Some(birth - chrono::Days::new(1 + next(30))),
+                    1..=4 => Some(date(2001, 1, 1) + chrono::Days::new(next(5) * 30)),
+                    _ => None,
+                };
+                RoleTransitionRecord::from_record(BaseRecord::new(id, birth), event)
+            })
+            .collect()
+    }
+
+    /// The validation and the order of the cases read from the job's id
+    /// order equal those found by hashing and comparing the ids.
+    #[test]
+    fn the_id_order_validates_and_orders_cases_as_comparing_ids_does() {
+        let mut reported = 0;
+        for seed in 0..200_u64 {
+            let n = [1, 2, 5, 30, 200][usize::try_from(seed % 5).expect("small")];
+            let mut cohort = tangled_cohort(seed, n);
+            if seed % 3 == 0 {
+                // Without repeats or cases before birth, so that a case
+                // order exists to compare with nothing reported.
+                for (i, row) in cohort.iter_mut().enumerate() {
+                    row.record.id = format!("u{}", (i * 7919) % 100_003);
+                    if row.event_date().is_some_and(|e| e < row.record.birth_date) {
+                        row.transition_date = None;
+                    }
+                }
+            }
+            let order = IdOrder::of(&cohort).expect("fits");
+            let by_order = invalid_record(&cohort, Some(&order));
+            assert_eq!(by_order, invalid_record_by_hashing(&cohort), "seed {seed}");
+            reported += usize::from(by_order.is_some());
+            for limit in [1_u8, 6] {
+                assert_eq!(
+                    eligible_case_indices(&cohort, limit, &DefaultRiskSetPolicy, Some(&order)),
+                    cases_by_comparing_ids(
+                        &cohort,
+                        (0..cohort.len()).filter(|&i| is_case_before_age_limit(&cohort[i], limit))
+                    ),
+                    "seed {seed}"
+                );
+            }
+        }
+        assert!(reported > 50, "{reported}");
     }
 }

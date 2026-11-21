@@ -36,6 +36,7 @@ use crate::matching::{
     prepare_propensity_distance_config, quick_match_subclasses,
     subclassify_by_propensity_score_map,
 };
+use crate::role_transition::IdOrder;
 use crate::role_transition::{ExposureDensityOutcome, exposure_density_sets};
 use crate::trials::{
     TrialOptions, TrialOutcome, TrialPerson, TrialsError, match_trials, trial_seed,
@@ -2259,7 +2260,7 @@ where
                 candidates,
             },
         ) => run_standard(spec, anchors, candidates),
-        (MatchMode::RiskSet, SpecInput::RiskSet { cohort }) => run_risk_set(spec, cohort),
+        (MatchMode::RiskSet, SpecInput::RiskSet { cohort }) => run_risk_set(spec, cohort, None),
         (MatchMode::ExposureDensity, SpecInput::RiskSet { cohort }) => {
             run_exposure_density(spec, cohort)
         }
@@ -2571,7 +2572,7 @@ fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
 ) -> Result<SpecOutput, SpecError> {
-    let SpecOutput::Pairs { outcome, .. } = run_risk_set(spec, cohort)? else {
+    let SpecOutput::Pairs { outcome, .. } = run_risk_set(spec, cohort, None)? else {
         unreachable!("risk-set matching returns pairs")
     };
     let sets = exposure_density_sets(cohort, *outcome)
@@ -2583,13 +2584,13 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     panel: &[TrialPerson<R>],
 ) -> Result<SpecOutput, SpecError> {
-    let outcome = match_trials(panel, &spec.trials, |period, cohort| {
+    let outcome = match_trials(panel, &spec.trials, |pool| {
         let in_trial = MatchSpec {
-            seed: trial_seed(spec.seed, period),
+            seed: trial_seed(spec.seed, pool.period()),
             mode: MatchMode::RiskSet,
             ..spec.clone()
         };
-        match run_risk_set(&in_trial, cohort)? {
+        match run_risk_set(&in_trial, pool.records(), pool.id_order())? {
             SpecOutput::Pairs { outcome, .. } => Ok(*outcome),
             _ => unreachable!("risk-set matching returns pairs"),
         }
@@ -2604,6 +2605,7 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
 fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
+    id_order: Option<&IdOrder>,
 ) -> Result<SpecOutput, SpecError> {
     check_scores_cover(&spec.distance, cohort.iter().map(MatchingRecord::id))?;
     let distance = match &spec.distance {
@@ -2662,6 +2664,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     };
 
     let mut job = MatchJob::new_transition(cohort, spec.seed)
+        .with_id_order(id_order)
         .with_common_support(spec.discard.map(Into::into))
         .with_ratio(typed_ratio(spec)?)
         .with_birth_window(typed_window(spec)?)

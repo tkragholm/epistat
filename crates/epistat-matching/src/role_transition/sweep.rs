@@ -54,6 +54,7 @@
 //!   efficient wavelet tree for large alphabets. Information Systems 47,
 //!   15-32.
 
+use super::IdOrder;
 use super::order_statistics::{Fenwick, WaveletMatrix};
 use crate::matching::{CandidateIndex, RoleIndexedRecord, StatusRule, StatusRuleKind};
 use chrono::{Datelike, NaiveDate};
@@ -156,15 +157,20 @@ pub(super) struct RiskSetSweep {
 
 impl RiskSetSweep {
     /// The sweep of `cohort` with the strata of `index`, which holds every
-    /// record, and the date constraints of `rules`. Every record is out of
-    /// the risk set until the first call of [`Self::advance`].
+    /// record, the date constraints of `rules` and the order of the ids,
+    /// which must be distinct. Every record is out of the risk set until the
+    /// first call of [`Self::advance`].
     pub(super) fn new<R: RoleIndexedRecord>(
         cohort: &[R],
         index: &CandidateIndex<'_>,
         rules: &[StatusRule<'_, R>],
+        id_order: &IdOrder,
     ) -> Option<Self> {
         let n = cohort.len();
         u32::try_from(n).ok()?;
+        if !id_order.distinct() || id_order.len() != n {
+            return None;
+        }
         let mut reasons: Vec<&'static str> = Vec::new();
         let mut refusal_slot = Vec::with_capacity(rules.len());
         let mut refusal_dates = Vec::with_capacity(rules.len());
@@ -200,23 +206,33 @@ impl RiskSetSweep {
             };
             n
         ];
-        let mut strata = Vec::with_capacity(index.strata().len());
         for (number, entries) in index.strata().iter().enumerate() {
+            let stratum = u32::try_from(number).expect("stratum number fits u32");
+            for (position, &(_, idx)) in entries.iter().enumerate() {
+                let unit = &mut units[idx];
+                unit.stratum = stratum;
+                unit.birth_position = u32::try_from(position).expect("position fits u32");
+            }
+        }
+        // The controls of each stratum in id order, read off the order of the
+        // whole cohort.
+        let mut by_id_of: Vec<Vec<u32>> = index
+            .strata()
+            .iter()
+            .map(|entries| Vec::with_capacity(entries.len()))
+            .collect();
+        for &idx in id_order.by_id() {
+            let unit = &mut units[idx as usize];
+            let members = &mut by_id_of[unit.stratum as usize];
+            unit.id_rank = u32::try_from(members.len()).expect("rank fits u32");
+            members.push(idx);
+        }
+        let mut strata = Vec::with_capacity(index.strata().len());
+        for (entries, by_id) in index.strata().iter().zip(by_id_of) {
             let by_birth: Vec<u32> = entries
                 .iter()
                 .map(|&(_, idx)| u32::try_from(idx).expect("record index fits u32"))
                 .collect();
-            let mut by_id = by_birth.clone();
-            by_id.sort_unstable_by(|&a, &b| cohort[a as usize].id().cmp(cohort[b as usize].id()));
-            let stratum = u32::try_from(number).expect("stratum number fits u32");
-            for (rank, &idx) in by_id.iter().enumerate() {
-                units[idx as usize].id_rank = u32::try_from(rank).expect("rank fits u32");
-            }
-            for (position, &idx) in by_birth.iter().enumerate() {
-                let unit = &mut units[idx as usize];
-                unit.stratum = stratum;
-                unit.birth_position = u32::try_from(position).expect("position fits u32");
-            }
             let id_rank_by_birth = by_birth
                 .iter()
                 .map(|&idx| units[idx as usize].id_rank)

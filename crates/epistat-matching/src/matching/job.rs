@@ -6,7 +6,7 @@ use crate::matching::{
     SelectionStrategy,
 };
 use crate::role_transition::{
-    DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
+    DefaultRiskSetPolicy, IdOrder, RiskSetPolicy, TransitionMatchRequest, match_transition_ordered,
 };
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, Estimand, MatchOutcome, MatchRatio, MatchingCriteria,
@@ -29,6 +29,7 @@ pub struct TransitionMode<'a, R: RoleIndexedRecord> {
     options: RoleTransitionOptions,
     distance_config: Option<DistanceConfig>,
     birth_window_set: bool,
+    id_order: Option<&'a IdOrder>,
 }
 
 /// A job mode that remembers whether the birth window was set by the caller.
@@ -109,6 +110,7 @@ impl<'a, R: RoleIndexedRecord>
                 options: RoleTransitionOptions::default(),
                 distance_config: None,
                 birth_window_set: false,
+                id_order: None,
             },
             criteria: MatchingCriteria::default(),
             strategy: RandomSelection::seeded(seed),
@@ -538,6 +540,14 @@ where
         self
     }
 
+    /// Use `order`, the order of the cohort's ids, instead of sorting the
+    /// ids again.
+    #[must_use]
+    pub(crate) const fn with_id_order(mut self, order: Option<&'a IdOrder>) -> Self {
+        self.mode.id_order = order;
+        self
+    }
+
     /// Set a custom risk-set policy.
     #[must_use]
     pub fn with_risk_set_policy<P2>(
@@ -564,7 +574,7 @@ where
             (self.mode.birth_window_set && self.mode.distance_config.is_some())
                 .then_some(self.criteria.birth_date_window_days),
         );
-        match_transition(
+        match_transition_ordered(
             self.mode.cohort,
             TransitionMatchRequest {
                 criteria: &self.criteria,
@@ -574,6 +584,7 @@ where
                 distance_config: self.mode.distance_config.as_ref(),
                 risk_set_policy: &self.risk_set_policy,
             },
+            self.mode.id_order,
         )
     }
 

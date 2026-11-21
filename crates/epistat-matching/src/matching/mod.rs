@@ -98,6 +98,6 @@ pub use engine::{build_outcome, invalid_cohort_outcome, invalid_criteria_outcome
 pub(crate) use index::CandidateIndex;
 
 pub use engine::CandidatePoolRequest;
-pub(crate) use engine::intern_unique;
 pub use engine::{MatchEngine, finalize_estimand_diagnostics, invalid_common_support_outcome};
+pub(crate) use engine::{id_prefix, intern_unique};
 pub use job::MatchJob;

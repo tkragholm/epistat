@@ -8,6 +8,7 @@ use super::index::{CandidateIndex, StrataValues};
 use super::ratio::RatioPolicy;
 use super::records::MatchingRecord;
 use super::selection::SelectionStrategy;
+use crate::role_transition::IdOrder;
 use crate::types::{
     CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, DistanceCaliper,
     DistanceCaliperReason, Estimand, EstimandDriftReason, ExclusionReason, InvalidCriteriaReason,
@@ -517,6 +518,16 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             tally.eligible.push(idx);
         }
         tally
+    }
+
+    /// Take the id ranks of the controls from `order`, the order of their ids,
+    /// instead of sorting the ids again. Does nothing once the ranks are known.
+    pub(crate) fn use_id_order(&self, order: &IdOrder) {
+        debug_assert_eq!(order.len(), self.controls.len());
+        let _ = self.id_ranks.set(order.distinct().then(|| IdRanks {
+            rank: order.ranks().to_vec(),
+            by_rank: order.by_id().to_vec(),
+        }));
     }
 
     /// Id ranks of the controls, or `None` when two controls share an id.
@@ -1229,7 +1240,7 @@ pub(crate) fn intern_unique(
 ///
 /// For two ids, the order of these integers is the order of the ids whenever
 /// the integers differ, so a comparison only reads the ids when they agree.
-fn id_prefix(id: &str) -> u64 {
+pub(crate) fn id_prefix(id: &str) -> u64 {
     let bytes = id.as_bytes();
     let mut word = [0_u8; 8];
     let len = bytes.len().min(8);
