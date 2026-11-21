@@ -447,7 +447,8 @@ impl<'a> WalshSearch<'a> {
             // one when the draws keep landing on `high`.
             let mut pivot = least;
             for _ in 0..4 {
-                let mut draw = (self.next_random() % active as u64) as usize;
+                let bound = u64::try_from(active).unwrap_or(u64::MAX);
+                let mut draw = usize::try_from(self.next_random() % bound).unwrap_or(0);
                 let mut row = 0;
                 while draw >= self.end[row].saturating_sub(self.first[row]) {
                     draw -= self.end[row].saturating_sub(self.first[row]);
@@ -693,7 +694,6 @@ pub fn matched_sets_bounds(
 mod tests {
     use super::*;
 
-
     /// The bounds from all the Walsh averages, sorted, bisected one by one.
     fn reference(differences: &[f64], gammas: &[f64]) -> Vec<HodgesLehmannBounds> {
         let shifted = |tau: f64| -> f64 {
@@ -788,7 +788,11 @@ mod tests {
                     // Halves and negative zeros.
                     2 => {
                         let v = (rng.next() % 7) as f64 / 2.0 - 1.5;
-                        if v == 0.0 && rng.next() % 2 == 0 { -0.0 } else { v }
+                        if v == 0.0 && rng.next() % 2 == 0 {
+                            -0.0
+                        } else {
+                            v
+                        }
                     }
                     // Mostly positive.
                     _ => (rng.next() % 100) as f64 / 10.0 - 1.0,
