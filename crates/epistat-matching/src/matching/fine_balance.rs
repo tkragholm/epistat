@@ -911,9 +911,9 @@ impl Block {
                 }
             });
         }
-        for u in 0..self.nodes() {
+        for (u, slot) in out.iter_mut().enumerate() {
             if search.dist[u] == i64::MAX {
-                out[u] = self.pi[u] + shift.unwrap_or(0);
+                *slot = self.pi[u] + shift.unwrap_or(0);
             }
         }
         out
