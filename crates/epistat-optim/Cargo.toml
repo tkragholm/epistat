@@ -1,6 +1,6 @@
 [package]
 name = "epistat-optim"
-description = "BFGS with a More-Thuente line search, Nelder-Mead and a dense simplex method for small statistical problems"
+description = "BFGS, Nelder-Mead, simplex methods, branch and bound and minimum-cost flow for small statistical problems"
 keywords = ["optimization", "bfgs", "simplex", "nelder-mead", "statistics"]
 categories = ["mathematics", "science"]
 readme = "README.md"

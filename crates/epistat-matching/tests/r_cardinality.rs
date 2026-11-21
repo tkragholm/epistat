@@ -25,7 +25,13 @@
 //!    units, gives MatchIt's weights, and applied to ours gives ours. Where the
 //!    selected set is the same as MatchIt's the weights are the same. How often
 //!    the sets are the same is printed: the optimum is not unique when several
-//!    units are interchangeable.
+//!    units are interchangeable. The weights themselves are compared on a
+//!    stratified case whose weights do not depend on which optimal subset is
+//!    chosen: in a stratum with equally many treated units and controls MatchIt
+//!    takes the reference group from the order of the data, so its weights
+//!    differ between two orders of the same data, which the test asserts as
+//!    well. Ours do not depend on the order, and equal MatchIt's with the
+//!    controls first.
 //! 4. The pairing after selection, on MatchIt's own selected units, has the
 //!    total Mahalanobis distance of `optmatch::pairmatch`'s pairs, measured in
 //!    MatchIt's transformed coordinates.
@@ -69,6 +75,21 @@ struct Reference {
     versions: Versions,
     datasets: HashMap<String, Dataset>,
     cases: Vec<Case>,
+    tie: Tie,
+}
+
+/// Two exact strata, one with equally many treated units and controls, run
+/// with MatchIt with the treated units first in the data and with the controls
+/// first. Both weight vectors are in the row order of the treated-first data.
+#[derive(Deserialize)]
+struct Tie {
+    treat: Vec<u8>,
+    x: Vec<f64>,
+    exact: Vec<u64>,
+    ratio: f64,
+    tol: f64,
+    weights_treated_first: Vec<f64>,
+    weights_controls_first: Vec<f64>,
 }
 
 #[derive(Deserialize)]
@@ -148,7 +169,8 @@ fn request<'a>(case: &'a Case, data: &'a Dataset, treated: &'a [bool]) -> Cardin
     request.sampling_weights = case.s_weights.as_deref();
     // A node limit, not a time limit, so the result does not depend on the
     // machine: 4000 relaxations per stratum in an optimised build, and 1000 in a
-    // debug build, where the cases that do not close would take minutes.
+    // debug build, where the cases that do not close would take minutes. The
+    // debug limit closes fewer cases, so `required_closed` is lower there.
     // `CARD_NODES` sets it.
     let nodes = std::env::var("CARD_NODES")
         .ok()
@@ -487,7 +509,17 @@ fn selection_sizes_and_balance_agree_with_matchit() {
         "{compared} cases, {optimal_cases} where HiGHS proved its optimum, {proven_cases} of them \
          proved by us, the others {deficit} units short in all and {not_found} with none found; same selected set in {identical}; worst balance excess ours {worst_ours:.2e}, MatchIt's {worst_theirs:.2e}"
     );
-    assert!(proven_cases >= 18, "only {proven_cases} cases closed");
+    // At the 4000-node limit of an optimised build 20 of the cases that HiGHS
+    // closes are closed by us as well. A debug build has a quarter of the
+    // nodes, and 18 close there. A different `CARD_NODES` or `CARD_CASE` checks
+    // sizes only.
+    if std::env::var("CARD_NODES").is_err() && std::env::var("CARD_CASE").is_err() {
+        let required_closed = if cfg!(debug_assertions) { 18 } else { 20 };
+        assert!(
+            proven_cases >= required_closed,
+            "only {proven_cases} cases closed, {required_closed} expected"
+        );
+    }
 }
 
 #[test]
@@ -539,15 +571,19 @@ fn pairing_matches_pairmatch_on_matchits_selection() {
             }
         }
         let theirs = case.pair_total.unwrap();
-        // Both are optima of the same assignment problem. Ours is on costs
-        // rounded to 2^-30 of the largest distance, so the totals agree to that
-        // times the number of pairs.
-        let n_pairs = selected
-            .iter()
-            .zip(&treated)
-            .filter(|(s, t)| **s && **t)
-            .count();
-        let slack = 2.0_f64.powi(-30) * 20.0 * n_pairs as f64 * 100.0 + 1e-9 * theirs;
+        // Both are optima of the same assignment problem on rounded costs, so
+        // the totals differ by the two roundings. Ours rounds each distance to a
+        // multiple of `u = 2^(ceil(log2 d_max) - 30)`, at most `2 d_max 2^-30`,
+        // so the true total of our pairs exceeds the least true total by at
+        // most `u` for each pair that is matched, and the least by the same
+        // against ours. `optmatch::pairmatch` with its default `tol` of 0.001
+        // documents that its total is within `tol` times the number of subjects
+        // matched of the optimum. The bound is the sum of the two, plus
+        // `1e-9 theirs` for the summation of the R total in decimal digits.
+        let n_subjects = selected.iter().filter(|s| **s).count();
+        let d_max = pair_max_distance(z, &treated, &selected);
+        let ours_rounding = 2.0 * d_max * 2.0_f64.powi(-30) * n_subjects as f64;
+        let slack = ours_rounding + 1e-3 * n_subjects as f64 + 1e-9 * theirs;
         assert!(
             (total - theirs).abs() <= slack,
             "{}: total distance {total} vs {theirs}",
@@ -556,6 +592,86 @@ fn pairing_matches_pairmatch_on_matchits_selection() {
         checked += 1;
     }
     assert!(checked >= 3);
+}
+
+/// The largest distance between a selected treated unit and a selected control
+/// in MatchIt's coordinates, over all strata, which bounds the largest cost.
+fn pair_max_distance(z: &[Vec<f64>], treated: &[bool], selected: &[bool]) -> f64 {
+    let units: Vec<usize> = (0..treated.len()).filter(|&i| selected[i]).collect();
+    let mut largest = 0.0_f64;
+    for &a in units.iter().filter(|&&i| treated[i]) {
+        for &b in units.iter().filter(|&&i| !treated[i]) {
+            let d = z
+                .iter()
+                .map(|col| (col[a] - col[b]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            largest = largest.max(d);
+        }
+    }
+    largest
+}
+
+/// The distinct positive weights of each group in each stratum, sorted, to
+/// 1e-12.
+fn weights_by_stratum(tie: &Tie, weights: &[f64]) -> BTreeMap<(u64, u8), Vec<f64>> {
+    let mut out: BTreeMap<(u64, u8), Vec<f64>> = BTreeMap::new();
+    for (i, &w) in weights.iter().enumerate() {
+        if w > 0.0 {
+            out.entry((tie.exact[i], tie.treat[i])).or_default().push(w);
+        }
+    }
+    for values in out.values_mut() {
+        values.sort_by(f64::total_cmp);
+        values.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+    }
+    out
+}
+
+/// In a stratum with equally many treated units and controls MatchIt's weights
+/// depend on the order of the data, an R defect. Ours do not, and equal
+/// MatchIt's with the controls first. The weights are compared by stratum and
+/// group, since which units are selected is not unique here: the tolerance
+/// binds nothing, so only the counts matter, and they are fixed by the ratio.
+#[test]
+fn weights_on_a_size_tie_do_not_depend_on_the_order_of_the_data() {
+    let tie = load().tie;
+    let theirs_a = weights_by_stratum(&tie, &tie.weights_treated_first);
+    let theirs_b = weights_by_stratum(&tie, &tie.weights_controls_first);
+    assert_ne!(
+        theirs_a, theirs_b,
+        "MatchIt's weights are expected to differ between the two orders"
+    );
+    let treated: Vec<bool> = tie.treat.iter().map(|&t| t == 1).collect();
+    let run = |order: &[usize]| {
+        let t: Vec<bool> = order.iter().map(|&i| treated[i]).collect();
+        let x = vec![order.iter().map(|&i| tie.x[i]).collect::<Vec<f64>>()];
+        let exact: Vec<u64> = order.iter().map(|&i| tie.exact[i]).collect();
+        let mut r = CardinalityRequest::new(&t, &x);
+        r.ratio = Some(tie.ratio);
+        r.tols = vec![tie.tol];
+        r.std_tols = vec![false];
+        r.exact = Some(&exact);
+        let out = match_cardinality(&r).expect("feasible");
+        // Back to the row order of the treated-first data.
+        let mut weights = vec![0.0; order.len()];
+        for (k, &i) in order.iter().enumerate() {
+            weights[i] = out.weights[k];
+        }
+        weights
+    };
+    let forward: Vec<usize> = (0..treated.len()).collect();
+    let backward: Vec<usize> = forward.iter().rev().copied().collect();
+    let ours_a = weights_by_stratum(&tie, &run(&forward));
+    let ours_b = weights_by_stratum(&tie, &run(&backward));
+    assert_eq!(
+        ours_a, ours_b,
+        "our weights depend on the order of the data"
+    );
+    assert_eq!(
+        ours_a, theirs_b,
+        "ours differ from MatchIt's with the controls first"
+    );
 }
 
 #[test]
@@ -591,6 +707,8 @@ fn impossible_tolerances_are_infeasible() {
     );
 }
 
+/// A search stopped at one relaxation on a case that does not close at the root
+/// reports that it is not proven, and its bound is above its subset.
 #[test]
 fn a_node_limit_is_reported_as_not_proven() {
     let reference = load();
@@ -608,11 +726,13 @@ fn a_node_limit_is_reported_as_not_proven() {
     };
     match match_cardinality(&r) {
         Ok(outcome) => {
-            // The root relaxation was integral, or the limit left a gap.
             let report = &outcome.strata[0];
+            let size = (report.selected_treated + report.selected_control) as f64;
+            assert!(!report.proven_optimal, "proven at one node: {report:?}");
             assert!(
-                report.proven_optimal
-                    || report.bound >= (report.selected_treated + report.selected_control) as f64
+                report.bound > size,
+                "bound {} not above {size}",
+                report.bound
             );
         }
         Err(CardinalityError::NoSolutionInTime { .. }) => {}

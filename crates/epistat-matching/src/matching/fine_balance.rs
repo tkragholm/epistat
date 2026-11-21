@@ -75,6 +75,8 @@ pub enum BalanceMode {
     Near,
     /// Require fine balance on every level. When it cannot be met the result is
     /// [`OptimalError::Infeasible`], and its message gives the least deviation.
+    /// Fine balance matches one set of anchors, so the stratum in that error is
+    /// always 0.
     Exact,
 }
 

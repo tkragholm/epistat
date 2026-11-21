@@ -367,6 +367,14 @@ pub enum PairDistanceMatrixError {
         /// Column of the value.
         candidate: usize,
     },
+    /// A value is negative. Optimal and fine-balance matching need distances of
+    /// at least 0.
+    Negative {
+        /// Row of the value.
+        anchor: usize,
+        /// Column of the value.
+        candidate: usize,
+    },
 }
 
 impl std::fmt::Display for PairDistanceMatrixError {
@@ -383,6 +391,10 @@ impl std::fmt::Display for PairDistanceMatrixError {
                 f,
                 "the distance matrix has no number at row {anchor}, column {candidate}; \
                  use an infinite value to forbid a pair"
+            ),
+            Self::Negative { anchor, candidate } => write!(
+                f,
+                "the distance matrix has a negative distance at row {anchor}, column {candidate}"
             ),
         }
     }
@@ -411,7 +423,7 @@ impl PairDistanceMatrix {
     /// # Errors
     ///
     /// [`PairDistanceMatrixError`] when a group is empty, the values do not
-    /// fill the table, an id repeats, or a value is not a number.
+    /// fill the table, an id repeats, a value is not a number, or a value is negative.
     pub fn new(
         anchor_ids: Vec<String>,
         candidate_ids: Vec<String>,
@@ -429,6 +441,12 @@ impl PairDistanceMatrix {
         }
         if let Some(at) = values.iter().position(|value| value.is_nan()) {
             return Err(PairDistanceMatrixError::NotANumber {
+                anchor: at / candidate_ids.len(),
+                candidate: at % candidate_ids.len(),
+            });
+        }
+        if let Some(at) = values.iter().position(|value| *value < 0.0) {
+            return Err(PairDistanceMatrixError::Negative {
                 anchor: at / candidate_ids.len(),
                 candidate: at % candidate_ids.len(),
             });

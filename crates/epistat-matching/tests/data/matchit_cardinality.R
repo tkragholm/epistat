@@ -14,6 +14,13 @@
 # transformed mahvars, the Euclidean distance of which is the Mahalanobis
 # distance), the pairs it makes, and the total distance of its pairs.
 #
+# The file also holds "tie": two exact strata, one with as many treated units
+# as controls, with tolerances that bind nothing, run twice with MatchIt, with
+# the treated units first in the data and with the controls first. MatchIt
+# takes the reference group of a stratum from the order of the data when the
+# groups are equally large, and its weights differ between the two orders. Both
+# weight vectors are stored in the row order of the treated-first data.
+#
 # Data: lalonde, and a simulated cohort of 1000 units with six covariates.
 suppressMessages({
   library(MatchIt)
@@ -145,13 +152,35 @@ add_case("sim_att_pairs", sim, sf, tols = .1, mahvars = ~x1 + x2 + x3)
 add_case("sim_ate_profile_sw", sim, sf, tols = .1, estimand = "ATE", ratio = NA,
          s.weights = sim$sw)
 
+# A stratum with as many treated units as controls (A: 10 and 10) and one
+# with more controls (B: 6 and 20), ratio 2, tolerances that bind nothing.
+tie_data <- local({
+  mk <- function(nt, nc, s) data.frame(treat = c(rep(1, nt), rep(0, nc)), x = rnorm(nt + nc), s = s)
+  rbind(mk(10, 10, "A"), mk(6, 20, "B"))
+})
+tie_run <- function(d) {
+  m <- matchit(treat ~ x, data = d, method = "cardinality", ratio = 2, exact = ~s,
+               tols = 10, std.tols = FALSE, solver = "highs")
+  as.numeric(m$weights)
+}
+tie <- list(
+  treat = as.integer(tie_data$treat),
+  x = as.numeric(tie_data$x),
+  exact = as.integer(factor(tie_data$s)),
+  ratio = 2,
+  tol = 10,
+  weights_treated_first = tie_run(tie_data),
+  weights_controls_first = rev(tie_run(tie_data[nrow(tie_data):1, ]))
+)
+
 out <- list(
   versions = list(r = R.version.string,
                   matchit = as.character(packageVersion("MatchIt")),
                   highs = as.character(packageVersion("highs")),
                   optmatch = as.character(packageVersion("optmatch"))),
   datasets = datasets,
-  cases = cases
+  cases = cases,
+  tie = tie
 )
 write(toJSON(out, auto_unbox = TRUE, digits = NA, null = "null", na = "null"),
       "tests/data/matchit_cardinality.json")

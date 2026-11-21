@@ -354,4 +354,29 @@ fn invalid_matrices_are_refused() {
             candidate: 0
         }
     );
+    // A negative distance is refused, with its cell named.
+    assert_eq!(
+        PairDistanceMatrix::new(
+            ids(&["a", "b"]),
+            ids(&["x", "y"]),
+            vec![-5.0, 0.0, 0.0, 1.0]
+        )
+        .unwrap_err(),
+        PairDistanceMatrixError::Negative {
+            anchor: 0,
+            candidate: 0
+        }
+    );
+    assert_eq!(
+        PairDistanceMatrix::new(
+            ids(&["a", "b"]),
+            ids(&["x", "y"]),
+            vec![1.0, 2.0, 3.0, f64::NEG_INFINITY]
+        )
+        .unwrap_err(),
+        PairDistanceMatrixError::Negative {
+            anchor: 1,
+            candidate: 1
+        }
+    );
 }

@@ -56,8 +56,9 @@
 //!   `r_j` points to, a whole column with `|r_j| > L - z` takes the value `b_j`
 //!   in every solution of value at least `z`. This is applied with the root's
 //!   duals at the level, and with each node's own at the node, for its subtree.
-//! - **Reduction.** On a program with at most 20000 whole columns, or when
-//!   the fixing leaves at most half of them free, the level is solved as a
+//! - **Reduction.** When the fixing leaves at most half of the open whole
+//!   columns free, or, in a program that is not itself already a reduction,
+//!   at most 20000 of them, the level is solved as a
 //!   program of its own on the free columns, the fixed ones moved into the row
 //!   bounds, with the row `z ≤ c'x ≤ z` (or `z ≤ c'x` when improving), and with
 //!   its own root, cuts and fixing.
@@ -126,10 +127,11 @@
 //! The rounded point is checked against every row with the row's own tolerance
 //! plus the movement the rounding caused, `Σ_j |a_ij| |x_j - round(x_j)|`.
 //! Objective values are compared to `1e-9 max(1, |z|)`. A cut is lowered by
-//! `1e-9` times the sum of the magnitudes of its terms at the column bounds, for
-//! the rounding of the tableau; its coefficients below `1e-7` times the largest
-//! are dropped with the bound moved by their largest effect, and it is kept
-//! only when its coefficients span at most `10^6` and the relaxation's point is
+//! `1e-9` times the sum of the magnitudes of its terms at the column bounds. The
+//! cut is a combination of rows that the simplex holds to a relative `1e-9` of
+//! such a sum, so the combination holds to the same relative amount. Its
+//! coefficients below `1e-7` times the largest are dropped with the bound moved
+//! by their largest effect, and it is kept only when its coefficients span at most `10^6` and the relaxation's point is
 //! at least `10^-4` times their norm from it.
 //!
 //! # Example
@@ -308,7 +310,9 @@ impl fmt::Display for MipError {
                 write!(f, "NoSolution after {status:?}, bound {bound}")
             }
             Self::Lp(e) => write!(f, "the relaxation failed: {e}"),
-            Self::Numerical => f.write_str("Numerical"),
+            Self::Numerical => {
+                f.write_str("an integer solution broke a row by more than rounding explains")
+            }
         }
     }
 }
@@ -1010,6 +1014,8 @@ fn gomory_cuts(
             }
             size += c.abs() * lo.abs().max(hi.abs());
         }
+        // The rows the cut is made from hold to a relative 1e-9 of the sum of the
+        // magnitudes of their terms, so the cut holds to that much of `size`.
         lower -= 1e-9 * size;
         // A cut whose coefficients span more than CUT_RANGE makes the basis
         // ill-conditioned, and one that the relaxation's point barely breaks

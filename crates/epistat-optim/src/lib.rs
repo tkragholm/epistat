@@ -1,5 +1,5 @@
-//! Optimisers for the small problems of statistical estimation, without
-//! dependencies.
+//! Optimisers for the small problems of statistical estimation. The only
+//! dependency is `rayon`, and it is optional.
 //!
 //! - [`bfgs`]: BFGS with the line search of Moré and Thuente, for smooth
 //!   functions with a gradient.
@@ -7,9 +7,8 @@
 //!   only.
 //! - [`simplex`]: a dense primal simplex method for linear programs
 //!   `max c'x  s.t.  A x = g, x ≥ 0`, with warm starts when only `c` changes.
-//!
-//! - [`bounded_simplex`]: a bounded-variable dual simplex method for programs with
-//!   few rows, inequality rows and up to a million bounded columns.
+//! - [`bounded_simplex`]: a bounded-variable dual simplex method for programs
+//!   with few rows, inequality rows and up to a million bounded columns.
 //! - [`branch_and_bound`]: branch and bound for programs with binary columns,
 //!   on the bounded simplex.
 //! - [`min_cost_flow`]: minimum-cost flow with integer data by the network
