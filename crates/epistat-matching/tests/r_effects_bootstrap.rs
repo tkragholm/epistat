@@ -46,7 +46,7 @@ struct Draws {
     replicates: usize,
     seed: u64,
     pairs: usize,
-    draws: Vec<Vec<usize>>,
+    resamples: Vec<Vec<usize>>,
 }
 
 fn data_path(name: &str) -> String {
@@ -61,7 +61,7 @@ fn write_bootstrap_draws() {
         replicates: REPLICATES,
         seed: SEED,
         pairs: PAIRS,
-        draws: cluster_resamples(PAIRS, REPLICATES, SEED),
+        resamples: cluster_resamples(PAIRS, REPLICATES, SEED),
     };
     let text = serde_json::to_string(&draws).unwrap();
     std::fs::write(data_path("effects_boot_draws.json"), text).unwrap();
@@ -237,7 +237,7 @@ fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
 fn bootstrap_agrees_with_boot() {
     let draws: Draws = load_json(data_path("effects_boot_draws.json"));
     assert_eq!(
-        draws.draws,
+        draws.resamples,
         cluster_resamples(draws.pairs, draws.replicates, draws.seed),
         "the committed draws are not what the code draws; run write_bootstrap_draws and the R script"
     );

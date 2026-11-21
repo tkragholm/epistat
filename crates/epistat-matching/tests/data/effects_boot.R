@@ -67,13 +67,13 @@ for (cs in matches$cases[matches$cases$name %in% c("nearest", "replace_ratio2"),
   members <- lapply(pairs, function(p) which(d$pair == p))
   for (outcome in c("continuous", "binary")) {
     t0 <- stat_fn(d, outcome)
-    ts <- do.call(rbind, lapply(draws$draws, function(draw) {
+    ts <- do.call(rbind, lapply(draws$resamples, function(draw) {
       idx <- unlist(members[unlist(draw) + 1])
       stat_fn(d[idx, ], outcome)
     }))
     run <- list(case = cs, outcome = outcome)
     for (nm in names(t0)) {
-      run[[nm]] <- summarise(unname(t0[nm]), ts[, nm], length(draws$draws))
+      run[[nm]] <- summarise(unname(t0[nm]), ts[, nm], length(draws$resamples))
     }
     runs[[length(runs) + 1]] <- run
   }
