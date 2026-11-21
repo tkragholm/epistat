@@ -182,6 +182,10 @@ pub use matching::{
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use matching::{
+    BalanceMeasure, GeneticError, GeneticFit, GeneticLoss, GeneticMatchOptions, GeneticMatches,
+    GeneticOutcome, GeneticProblem, GeneticSearch, KsTest, LossRule, ks_limit_upper, ks_two_sample,
+};
+pub use matching::{
     FullMatchConfig, FullMatchOutcome, OptimalError, OptimalRequest, QuickMatchError,
     QuickMatchOptions, QuickMatchOutcome, Retain, SeedMethod, match_full, match_optimal,
     quick_clusters, quick_match_subclasses,

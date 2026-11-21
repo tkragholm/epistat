@@ -5,6 +5,7 @@ mod engine;
 mod estimation;
 mod exact;
 mod fine_balance;
+mod genetic;
 mod index;
 pub mod job;
 mod nearest;
@@ -44,6 +45,10 @@ pub use estimation::{
     cross_validation_folds, estimate_propensity_and_match, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     prepare_propensity_distance_config_with_discard,
+};
+pub use genetic::{
+    BalanceMeasure, GeneticError, GeneticFit, GeneticLoss, GeneticMatchOptions, GeneticMatches,
+    GeneticOutcome, GeneticProblem, GeneticSearch, KsTest, LossRule, ks_limit_upper, ks_two_sample,
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use fine_balance::{
