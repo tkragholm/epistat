@@ -127,6 +127,7 @@ pub mod output;
 pub mod reporting;
 mod role_transition;
 pub mod spec;
+mod trials;
 mod types;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -190,6 +191,10 @@ pub use role_transition::{
 pub use role_transition::{
     ExposedPerson, ExposureDensityControl, ExposureDensityError, ExposureDensityOutcome,
     exposure_density_sets, match_exposure_density,
+};
+pub use trials::{
+    ControlReuse, ExpandedRow, TrialInputError, TrialMember, TrialOptions, TrialOutcome,
+    TrialPeriod, TrialPerson, TrialResult, TrialsError, expand_trials, match_trials, trial_seed,
 };
 pub use types::{
     AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
@@ -306,6 +311,12 @@ pub mod prelude {
     pub use crate::{
         ExposedPerson, ExposureDensityControl, ExposureDensityError, ExposureDensityOutcome,
         exposure_density_sets, match_exposure_density,
+    };
+
+    pub use crate::{
+        ControlReuse, ExpandedRow, TrialInputError, TrialMember, TrialOptions, TrialOutcome,
+        TrialPeriod, TrialPerson, TrialResult, TrialsError, expand_trials, match_trials,
+        trial_seed,
     };
 
     pub mod constraints {
