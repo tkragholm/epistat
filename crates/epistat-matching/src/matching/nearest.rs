@@ -1024,7 +1024,9 @@ struct Stratum<'e, 'a, R: MatchingRecord, G: ?Sized> {
     usable: Vec<usize>,
     case_strata: Option<Vec<Option<&'a str>>>,
     pool: Pool,
-    state: UseState,
+    /// The unique-key values taken so far. With a unique key it is shared by
+    /// every stratum of the match.
+    state: &'e mut UseState,
     /// The controls of each usable anchor, in order of assignment.
     controls_of: Vec<Vec<usize>>,
     /// Candidates marked used in `used`, to be cleared at the end.
@@ -1042,7 +1044,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             anchor,
             case_strata: self.case_strata.as_deref(),
             used: self.used,
-            state: &self.state,
+            state: &*self.state,
         };
         match &env.plan.rank {
             Rank::Scalar { lookup, caliper } => {
@@ -1107,6 +1109,22 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             })
     }
 
+    /// Whether the unique value of the candidate at `position` has been taken.
+    fn unique_value_taken(&self, position: usize) -> bool {
+        let criteria = self.env.criteria;
+        criteria.unique_by_key.is_some()
+            && unique_value(
+                &self.env.candidates[self.pool.candidate[position]],
+                criteria,
+            )
+            .is_some_and(|value| {
+                self.state
+                    .interner
+                    .get(value)
+                    .is_some_and(|id| self.state.used_unique.contains(id))
+            })
+    }
+
     /// Give the anchor in `slot` the candidate at `position`.
     fn assign(&mut self, slot: usize, position: usize) {
         let criteria = self.env.criteria;
@@ -1131,8 +1149,19 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
     fn take_all_in_turn(&mut self, order: &[usize]) {
         for &slot in order {
             let ratio = self.ratio_of(slot);
-            for (position, _) in self.search(slot, ratio) {
-                self.assign(slot, position);
+            if self.env.criteria.unique_by_key.is_some() {
+                // Each control taken closes its unique value to the anchor's
+                // next one, so the controls are taken one at a time.
+                for _ in 0..ratio {
+                    let Some(&(position, _)) = self.search(slot, 1).first() else {
+                        break;
+                    };
+                    self.assign(slot, position);
+                }
+            } else {
+                for (position, _) in self.search(slot, ratio) {
+                    self.assign(slot, position);
+                }
             }
         }
     }
@@ -1192,7 +1221,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                     break;
                 }
                 let (slot, position) = entries[entry];
-                if self.pool.avail.available[position] {
+                if self.pool.avail.available[position] && !self.unique_value_taken(position) {
                     self.assign(slot, position);
                     matched_now.push(slot);
                 } else if let Some(&(next_position, distance)) = self.search(slot, 1).first() {
@@ -1210,6 +1239,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
 fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     env: &Env<'a, R, G>,
     used: &mut UsedControlsVec,
+    state: &mut UseState,
     anchor_indices: &[usize],
     candidate_indices: &[usize],
 ) -> StratumResult {
@@ -1276,7 +1306,7 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         usable,
         case_strata,
         pool: Pool::build(env, candidate_indices),
-        state: UseState::default(),
+        state,
         assigned: Vec::new(),
         touched: FxHashSet::default(),
     };
@@ -1412,18 +1442,40 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         candidate_rows,
     };
 
-    let results: Vec<StratumResult> = anchor_groups
-        .par_iter()
-        .map_init(
-            || UsedControlsVec::with_capacity(request.candidates.len()),
-            |used, (key, anchor_indices)| {
-                let candidate_indices: &[usize] = candidate_index
-                    .get(key)
-                    .map_or(&[], |&group| candidate_groups[group].1.as_slice());
-                run_stratum(&env, used, anchor_indices, candidate_indices)
-            },
-        )
-        .collect();
+    let candidates_of = |key: &Vec<Option<&str>>| -> &[usize] {
+        candidate_index
+            .get(key)
+            .map_or(&[], |&group| candidate_groups[group].1.as_slice())
+    };
+    let results: Vec<StratumResult> = if criteria.unique_by_key.is_some() {
+        // A unique value is used once in the whole match, so the strata share
+        // what has been taken and run in order.
+        let mut used = UsedControlsVec::with_capacity(request.candidates.len());
+        let mut state = UseState::default();
+        anchor_groups
+            .iter()
+            .map(|(key, anchor_indices)| {
+                run_stratum(
+                    &env,
+                    &mut used,
+                    &mut state,
+                    anchor_indices,
+                    candidates_of(key),
+                )
+            })
+            .collect()
+    } else {
+        anchor_groups
+            .par_iter()
+            .map_init(
+                || UsedControlsVec::with_capacity(request.candidates.len()),
+                |used, (key, anchor_indices)| {
+                    let mut state = UseState::default();
+                    run_stratum(&env, used, &mut state, anchor_indices, candidates_of(key))
+                },
+            )
+            .collect()
+    };
 
     let mut pairs = Vec::new();
     let mut matched_anchors = 0_usize;

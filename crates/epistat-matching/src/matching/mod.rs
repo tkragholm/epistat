@@ -3,6 +3,7 @@ mod cem;
 mod constraints;
 mod distance;
 mod engine;
+pub(crate) use engine::standard_common_support;
 mod estimation;
 mod exact;
 mod fine_balance;
@@ -70,8 +71,9 @@ pub use quick::{
     cholesky_lower, quick_clusters, quick_match_subclasses,
 };
 pub use reconstructed::{
-    ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
-    ReconstructedMatchingOutput, ReconstructedMatchingTier, reconstruct_case_control_pairs,
+    ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingError,
+    ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
+    reconstruct_case_control_pairs,
 };
 pub use records::{CovariateRecord, MatchingRecord, ResidentAtIndexRecord, RoleIndexedRecord};
 pub use selection::{
@@ -83,13 +85,13 @@ pub use subclassification::{
     SubclassificationOutcome, subclassify_by_propensity_score_map,
 };
 pub use weights::{
-    MatchWeightMethod, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable, UnitRole,
-    UnitWeightRow, UnitWeightSet, UnitWeightTable, effective_sample_size, match_weights_from_pairs,
-    pair_weights_from_pairs,
+    InvalidWeightError, MatchWeightMethod, PairWeight, PairWeightRow, PairWeightSet,
+    PairWeightTable, UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable,
+    effective_sample_size, match_weights_from_pairs, pair_weights_from_pairs,
 };
 
 pub use constraints::unique_value;
-pub use engine::{build_outcome, invalid_criteria_outcome, to_f64};
+pub use engine::{build_outcome, invalid_cohort_outcome, invalid_criteria_outcome, to_f64};
 
 pub use engine::CandidatePoolRequest;
 pub(crate) use engine::intern_unique;

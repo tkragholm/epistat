@@ -2036,7 +2036,10 @@ fn reject_invalid(outcome: MatchOutcome) -> Result<MatchOutcome, SpecError> {
         .find(|reason| {
             matches!(
                 reason,
-                ExclusionReason::InvalidCriteria(_) | ExclusionReason::CommonSupportFailure(_)
+                ExclusionReason::InvalidCriteria(_)
+                    | ExclusionReason::CommonSupportFailure(_)
+                    | ExclusionReason::EventBeforeBirth(_)
+                    | ExclusionReason::DuplicateId(_)
             )
         })
         .cloned();
@@ -2092,55 +2095,30 @@ fn field_calipers<R: MatchingRecord>(
 }
 
 /// The anchors and candidates that common-support trimming leaves, by the
-/// rule of [`CommonSupport`]: a unit is trimmed when its score is not inside
-/// the interval where the two groups' score ranges overlap. When the ranges do
-/// not overlap, or a group has no finite score, nothing is trimmed here, and
-/// the matcher reports the failure.
+/// engine's own rule (`standard_common_support`), so the units a field caliper
+/// is scaled over are the units the matcher keeps. When the ranges do not
+/// overlap, or a group has no finite score, nothing is trimmed here, and the
+/// matcher reports the failure.
 fn units_after_trimming<'a, R: MatchingRecord>(
     anchors: &'a [R],
     candidates: &'a [R],
     policy: CommonSupport,
     scores: &RapidHashMap<String, f64>,
 ) -> (Vec<&'a R>, Vec<&'a R>) {
-    let bounds = |rows: &[R]| {
-        rows.iter()
-            .filter_map(|row| scores.get(row.id()).copied())
-            .filter(|score| score.is_finite())
-            .fold(None, |acc: Option<(f64, f64)>, score| match acc {
-                None => Some((score, score)),
-                Some((low, high)) => Some((low.min(score), high.max(score))),
-            })
-    };
-    let (Some(anchor_bounds), Some(candidate_bounds)) = (bounds(anchors), bounds(candidates))
+    let Ok(trimmed) = crate::matching::standard_common_support(anchors, candidates, policy, scores)
     else {
         return (anchors.iter().collect(), candidates.iter().collect());
     };
-    let lower = anchor_bounds.0.max(candidate_bounds.0);
-    let upper = anchor_bounds.1.min(candidate_bounds.1);
-    if lower > upper {
-        return (anchors.iter().collect(), candidates.iter().collect());
-    }
-    let inside = |row: &&R| {
-        scores
-            .get(row.id())
-            .is_some_and(|score| score.is_finite() && *score >= lower && *score <= upper)
-    };
-    let keep = |rows: &'a [R], trimmed: bool| -> Vec<&'a R> {
-        if trimmed {
-            rows.iter().filter(inside).collect()
-        } else {
-            rows.iter().collect()
-        }
+    let keep = |rows: &'a [R], out: &std::collections::HashSet<usize>| -> Vec<&'a R> {
+        rows.iter()
+            .enumerate()
+            .filter(|(idx, _)| !out.contains(idx))
+            .map(|(_, row)| row)
+            .collect()
     };
     (
-        keep(
-            anchors,
-            matches!(policy, CommonSupport::Treated | CommonSupport::Both),
-        ),
-        keep(
-            candidates,
-            matches!(policy, CommonSupport::Control | CommonSupport::Both),
-        ),
+        keep(anchors, &trimmed.anchors),
+        keep(candidates, &trimmed.candidates),
     )
 }
 

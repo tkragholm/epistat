@@ -8,9 +8,7 @@ use std::marker::PhantomData;
 
 /// Compact used-control tracking backed by a flat `Vec<bool>`.
 ///
-/// Indexed by raw control index; `contains(idx)` is a single array lookup
-/// instead of a hash probe, which gives better cache behaviour when the
-/// control pool is large (2 M+ entries).
+/// Indexed by raw control index, so `contains` is one array lookup.
 pub struct UsedControlsVec {
     bits: Vec<bool>,
     count: usize,
@@ -356,6 +354,31 @@ impl<R: MatchingRecord> Constraint<R> for ExactMatchConstraint {
 }
 
 pub type StrataExactConstraint = ExactMatchConstraint;
+
+/// The birth-date window of the criteria, as a constraint, for a job whose
+/// distance is not the birth date. With no window it allows every pair.
+pub struct BirthWindowConstraint {
+    days: Option<i64>,
+}
+
+impl BirthWindowConstraint {
+    pub(crate) fn new(days: Option<i32>) -> Self {
+        Self {
+            days: days.map(i64::from),
+        }
+    }
+}
+
+impl<R: MatchingRecord> Constraint<R> for BirthWindowConstraint {
+    fn reason(&self) -> &'static str {
+        "date_window_mismatch"
+    }
+
+    fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
+        self.days
+            .is_none_or(|days| (control.birth_date() - case.birth_date()).num_days().abs() <= days)
+    }
+}
 
 pub struct UniqueKeyConstraint;
 

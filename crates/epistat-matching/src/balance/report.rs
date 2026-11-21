@@ -183,8 +183,9 @@ fn compute_summary(
 fn sample_sizes(sample: &BalanceSample<'_>, weights: &BalanceWeights) -> SampleSizeTable {
     let group = |records: &[BalanceRecord], unit_weights: &[UnitWeights]| {
         let ess = |values: Vec<f64>| {
-            let size = effective_sample_size(values.iter().copied());
-            (size > 0.0).then_some(size)
+            // The weights have been validated, so only a size that is
+            // undefined, with no positive weight, is left as `None`.
+            effective_sample_size(values.iter().copied()).ok().flatten()
         };
         GroupSampleSizes {
             all: records.len(),

@@ -258,17 +258,17 @@ fn hash_is_sensitive_to_order() {
     let _: HashMap<u8, NaiveDate> = HashMap::new();
 }
 
-const E_TP_PASS1: (u64, u64) = (0xee31aaebf1bb5c12, 0xdd3cae180802aa97);
-const E_TP_PASS2: (u64, u64) = (0xc717387d1ac33158, 0x5b75e8704106f046);
-const E_TPC_PASS1: (u64, u64) = (0x7e96b6aef084d994, 0x5f8f31fa3dec24a2);
-const E_TPC_PASS2: (u64, u64) = (0x716210bb04273b15, 0xe45d7368193b77b4);
-const E_SPARSE_PASS1: (u64, u64) = (0x491c79dd6ad46c85, 0x575f103ff72776a8);
-const E_SPARSE_PASS2: (u64, u64) = (0x540e91d20bf2fbb6, 0x823bcd921dd1d19f);
-const E_NEAREST: (u64, u64) = (0x959f7432847ef008, 0x585c1833c1e022cf);
-const E_UNIQUE_FAMILY: (u64, u64) = (0x65b45674334aeb7e, 0x9e58c677dd7580ca);
-const E_NO_STRATA: (u64, u64) = (0x3ccfb32824266e76, 0x1107c990cf13157d);
-const E_MISSING_KEY: (u64, u64) = (0xc2b13bb16547f35a, 0x03f832b6063ce40b);
-const E_STD_NOREPL: (u64, u64) = (0x54babf39ce9e9dba, 0x7e322fddce9b9854);
-const E_STD_REPL: (u64, u64) = (0x19c9eab8807cd43f, 0x45fb7072aa50bd57);
-const E_STD_UNIQUE: (u64, u64) = (0xd90cf67cee081244, 0x0ad234b2f7937bb0);
-const E_STD_NOSTRATA: (u64, u64) = (0xfbe1e86e4ad4936d, 0x1a8b1221f7c395a3);
+const E_TP_PASS1: (u64, u64) = (0x15e2a97a8d69ee7e, 0xdd3cae180802aa97);
+const E_TP_PASS2: (u64, u64) = (0x16f669ea1886b27a, 0x5b75e8704106f046);
+const E_TPC_PASS1: (u64, u64) = (0xc91b4e69c91901f0, 0x5f8f31fa3dec24a2);
+const E_TPC_PASS2: (u64, u64) = (0xfb58ee843d306870, 0xe45d7368193b77b4);
+const E_SPARSE_PASS1: (u64, u64) = (0xc42b726953ea7ac5, 0x575f103ff72776a8);
+const E_SPARSE_PASS2: (u64, u64) = (0x0e96bab138f1a3af, 0x823bcd921dd1d19f);
+const E_NEAREST: (u64, u64) = (0x2c4ad6fd67c312f7, 0x585c1833c1e022cf);
+const E_UNIQUE_FAMILY: (u64, u64) = (0x2bbae3fb40e82c17, 0x790c1ec42bf6ecb7);
+const E_NO_STRATA: (u64, u64) = (0x221a44141ea81811, 0x1107c990cf13157d);
+const E_MISSING_KEY: (u64, u64) = (0x36455d19a2015f43, 0x03f832b6063ce40b);
+const E_STD_NOREPL: (u64, u64) = (0x1520dffbb17aef3e, 0x08198f3ecb4ed043);
+const E_STD_REPL: (u64, u64) = (0xc088ea6cbef91878, 0x74d78bbc0371530c);
+const E_STD_UNIQUE: (u64, u64) = (0x0182c20be256ce19, 0x4a4e53faf807cda6);
+const E_STD_NOSTRATA: (u64, u64) = (0xd72f85f8c74df990, 0x1a8b1221f7c395a3);

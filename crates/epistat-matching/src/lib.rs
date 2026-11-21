@@ -160,7 +160,7 @@ pub use matching::{
     DistanceChannel, DistanceConfig, DistanceMetric, ElasticNetCvConfig, ElasticNetLogisticConfig,
     EstimationError, EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
     ExactMatchConstraint, IdMapEuclideanDistance, IdMapMahalanobisDistance,
-    IdMapPropensityScoreDistance, LambdaRule, LogisticRegressionConfig,
+    IdMapPropensityScoreDistance, InvalidWeightError, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisDistance, MahalanobisDistancePreparation,
     MahalanobisError, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder,
     MatchWeightMethod, MatchingRecord, MatrixDistance, MissingValuePolicy,
@@ -168,12 +168,12 @@ pub use matching::{
     PairWeight, PairWeightRow, PairWeightSet, PairWeightTable, PropensityDistancePreparation,
     PropensityEstimator, PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig,
     PropensityScoreDistance, PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection,
-    ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
-    ReconstructedMatchingOutput, ReconstructedMatchingTier, ResidentAtIndexRecord,
-    RoleIndexedRecord, Rounds, SelectionStrategy, StandardMatchRequest, StrataExactConstraint,
-    SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationError,
-    SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable,
-    UsedControlsVec, VariableRatio, VariableRatioError, cross_validation_folds,
+    ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingError,
+    ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
+    ResidentAtIndexRecord, RoleIndexedRecord, Rounds, SelectionStrategy, StandardMatchRequest,
+    StrataExactConstraint, SubclassReferenceGroup, SubclassSummary, SubclassificationConfig,
+    SubclassificationError, SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet,
+    UnitWeightTable, UsedControlsVec, VariableRatio, VariableRatioError, cross_validation_folds,
     effective_sample_size, estimate_propensity_and_match, match_standard,
     match_standard_with_discard, match_weights_from_pairs, pair_weights_from_pairs,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
@@ -200,7 +200,8 @@ pub use matching::{
     quick_clusters, quick_match_subclasses,
 };
 pub use role_transition::{
-    DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
+    DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
+    match_transition,
 };
 pub use role_transition::{
     ExposedPerson, ExposureDensityControl, ExposureDensityError, ExposureDensityOutcome,

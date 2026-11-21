@@ -168,9 +168,8 @@ impl BalanceRecordBuilder {
         self
     }
 
-    /// Add a categorical covariate with a specific domain-specified ordering.
-    ///
-    /// Currently, the ordering is treated as a hint for reporting tools.
+    /// Add a categorical covariate. The ordering is not stored, so the covariate
+    /// is the same as one added with `categorical`.
     #[must_use]
     pub fn categorical_ordered(
         self,
@@ -178,8 +177,8 @@ impl BalanceRecordBuilder {
         value: impl Into<Option<String>>,
         _ordering: Vec<String>,
     ) -> Self {
-        // For now, we reuse categorical logic. In a future update, we can store
-        // ordering metadata in the BalanceRecord if needed.
+        // An ordinal covariate is stored as a categorical one and the ordering is
+        // not kept.
         self.categorical(name, value)
     }
 

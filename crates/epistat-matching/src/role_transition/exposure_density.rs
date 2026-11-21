@@ -9,9 +9,9 @@
 //!
 //! The sampling is risk-set matching: the exposure date is the transition
 //! date, and the risk set of an exposed person is the people with no exposure
-//! on or before the index date who are in the cohort, alive and resident on
-//! it. This module adds the output an analysis needs, which risk-set matching
-//! does not keep: the index date of each set and the date on which each control
+//! on or before the index date who are in the cohort and, when the job has the
+//! alive and resident checks, alive and resident on it. This module adds the
+//! output an analysis needs, which risk-set matching does not keep: the index date of each set and the date on which each control
 //! is later exposed.
 //!
 //! Drawing with replacement gives the sampling of the paper, in which the sets
@@ -49,8 +49,10 @@ pub struct ExposureDensityControl {
     pub control_id: String,
     /// The index date of the set, which is the control's start of follow-up.
     pub index_date: NaiveDate,
-    /// The day the control becomes exposed, if ever. Always after the index
-    /// date. An analysis censors the control from this day.
+    /// The day the control becomes exposed, if ever. After the index date
+    /// under the default risk-set policy, which admits a control only if its
+    /// exposure is later than the index date. A policy of the caller's may
+    /// admit others. An analysis censors the control from this day.
     pub exposure_date: Option<NaiveDate>,
 }
 
@@ -118,6 +120,8 @@ impl Error for ExposureDensityError {}
 /// # Errors
 ///
 /// [`ExposureDensityError::DuplicateId`] when two units share an id.
+/// [`ExposureDensityError::InconsistentPair`] when a pair names a unit that is
+/// not in the cohort, or an exposed person without an exposure date.
 pub fn exposure_density_sets<R: RoleIndexedRecord>(
     cohort: &[R],
     outcome: MatchOutcome,
@@ -184,7 +188,7 @@ pub fn exposure_density_sets<R: RoleIndexedRecord>(
 ///
 /// # Errors
 ///
-/// [`ExposureDensityError::DuplicateId`] when two units share an id.
+/// As [`exposure_density_sets`].
 pub fn match_exposure_density<
     R: RoleIndexedRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,

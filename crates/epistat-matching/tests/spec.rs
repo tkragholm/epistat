@@ -140,7 +140,7 @@ fn spec_reproduces_golden_standard_without_replacement_with_fallback() {
         .with_exact_matches(["sex", "municipality"])
         .run();
     same(&by_spec, &by_hand);
-    assert_eq!(hashes(&by_spec), (0x54babf39ce9e9dba, 0x7e322fddce9b9854));
+    assert_eq!(hashes(&by_spec), (0x1520dffbb17aef3e, 0x08198f3ecb4ed043));
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn spec_reproduces_golden_standard_with_replacement() {
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
-    assert_eq!(hashes(&by_spec), (0x19c9eab8807cd43f, 0x45fb7072aa50bd57));
+    assert_eq!(hashes(&by_spec), (0xc088ea6cbef91878, 0x74d78bbc0371530c));
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn spec_reproduces_golden_standard_unique_by_key() {
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
-    assert_eq!(hashes(&by_spec), (0xd90cf67cee081244, 0x0ad234b2f7937bb0));
+    assert_eq!(hashes(&by_spec), (0x0182c20be256ce19, 0x4a4e53faf807cda6));
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn spec_reproduces_golden_lowest_index() {
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
-    assert_eq!(hashes(&by_spec), (0xfbe1e86e4ad4936d, 0x1a8b1221f7c395a3));
+    assert_eq!(hashes(&by_spec), (0xd72f85f8c74df990, 0x1a8b1221f7c395a3));
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn spec_reproduces_golden_risk_set_nearest_birth_date() {
         .with_strategy(NearestBirthDateSelection)
         .run();
     same(&outcome, &by_hand);
-    assert_eq!(hashes(&outcome), (0x959f7432847ef008, 0x585c1833c1e022cf));
+    assert_eq!(hashes(&outcome), (0x2c4ad6fd67c312f7, 0x585c1833c1e022cf));
 }
 
 #[test]
@@ -249,7 +249,7 @@ fn spec_reproduces_golden_risk_set_unique_by_family() {
     let SpecOutput::Pairs { outcome, .. } = output else {
         panic!("expected pairs");
     };
-    assert_eq!(hashes(&outcome), (0x65b45674334aeb7e, 0x9e58c677dd7580ca));
+    assert_eq!(hashes(&outcome), (0x2bbae3fb40e82c17, 0x790c1ec42bf6ecb7));
 }
 
 #[test]

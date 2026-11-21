@@ -412,14 +412,11 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 .or_insert(0) += count;
         }
 
-        // Determinism: the candidate pool's order is otherwise inherited from the
-        // upstream control array, whose order is NOT stable across processes (it is
-        // built through hash-backed collections, so std's per-process hash seed
-        // shuffles it). The seeded selector draws a *position* into this Vec, so a
-        // varying order -> different controls picked for the same seed. Sorting by
-        // the stable control IDENTITY (person id) makes the pool order reproducible
-        // regardless of the array order (and gives a stable tie-break for
-        // distance-based selection) without changing which candidates are eligible.
+        // The pool is ordered by control id. The seeded selector draws a position
+        // into it, so the order must not depend on the order of the control slice,
+        // which callers may build through hash-backed collections. The sort also
+        // gives distance-based selection a stable tie-break and does not change
+        // which candidates are eligible.
         match (scan, self.id_ranks()) {
             // A wide scan has ordered the pool already.
             (PoolScan::Wide, Some(_)) => {}
@@ -571,170 +568,212 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             );
         }
 
-        // Group anchors by strata key so each group can run independently in parallel.
-        // Controls in different strata groups are never interchangeable (the CandidateIndex
-        // guarantees strata-exact matching), so `used_controls` is strata-local.
-        // `used_unique` (family_id) is also tracked per strata group; cross-strata family_id
-        // conflicts are rare in practice since strata differ by parity/birth_type.
+        // Anchors are grouped by strata key. Controls in different groups are never
+        // interchangeable, since matching is exact on the strata, so the groups run
+        // independently in parallel and `used_controls` is local to a group. A unique
+        // value is used once in the whole match, so with a unique key the groups share
+        // `used_unique` and run in order.
         let n_controls = self.controls.len();
         let strata_groups =
             group_anchors_by_strata(anchors, &self.criteria.required_strata, &trimmed_indices);
 
-        let group_results: Vec<GroupResult> = strata_groups
-            .into_par_iter()
-            .map(|anchor_indices| {
-                let mut used_controls = UsedControlsVec::with_capacity(n_controls);
-                let mut used_unique = FxHashSet::<UniqueValueId>::default();
-                let mut unique_interner = RapidHashMap::<String, UniqueValueId>::default();
-                let mut pairs = Vec::new();
-                let mut matched_cases = 0usize;
-                let mut eligible_anchors = 0usize;
-                let mut local_diagnostics = MatchDiagnostics::default();
-                let mut local_selector = self.selector.clone();
+        let run_group = |group_index: usize,
+                         anchor_indices: Vec<usize>,
+                         used_unique: &mut FxHashSet<UniqueValueId>,
+                         unique_interner: &mut RapidHashMap<String, UniqueValueId>|
+         -> GroupResult {
+            let mut used_controls = UsedControlsVec::with_capacity(n_controls);
+            let mut distinct_used = FxHashSet::<usize>::default();
+            let mut pairs = Vec::new();
+            let mut matched_cases = 0usize;
+            let mut eligible_anchors = 0usize;
+            let mut local_diagnostics = MatchDiagnostics::default();
+            let mut local_selector = self.selector.for_unit(group_index);
 
-                if self.selector.assignment() == super::selection::Assignment::Rounds {
-                    // Every anchor takes a first control before any takes a
-                    // second. The ratio is the criteria's own: a fallback tier
-                    // is a property of one anchor's pool, and the pool changes
-                    // between rounds.
-                    let ratio = self.criteria.match_ratio;
-                    let mut taken: Vec<Vec<usize>> = vec![Vec::new(); anchor_indices.len()];
-                    let mut alive = vec![true; anchor_indices.len()];
-                    eligible_anchors += anchor_indices.len();
-                    for _ in 0..ratio {
-                        for (slot, &anchor_idx) in anchor_indices.iter().enumerate() {
-                            if !alive[slot] {
-                                continue;
-                            }
-                            let case = &anchors[anchor_idx];
-                            let mut candidates = self
-                                .candidate_pool_with_distance_and_constraint_group(
-                                    case,
-                                    &CandidatePoolConfig {
-                                        used_controls: &used_controls,
-                                        used_unique: &used_unique,
-                                        unique_interner: &unique_interner,
-                                        distance_metric: distance_config.distance_metric,
-                                        distance_caliper: distance_config.distance_caliper,
-                                        use_birth_date_index: distance_config.use_birth_date_index,
-                                        caliper_reason: distance_config.caliper_reason,
-                                    },
-                                    extra_constraints,
-                                    |idx, _control| {
-                                        !trimmed_indices
-                                            .candidates
-                                            .is_some_and(|trimmed| trimmed.contains(&idx))
-                                    },
-                                    &mut local_diagnostics,
-                                );
-                            let Some(pos) =
-                                local_selector.select_position(case, self.controls, &candidates)
-                            else {
-                                alive[slot] = false;
-                                continue;
-                            };
-                            let raw_idx = candidates.swap_remove(pos);
-                            let control = &self.controls[raw_idx];
-                            used_controls.insert(ControlIdx::new(raw_idx));
-                            if let Some(value) = unique_value(control, self.criteria) {
-                                used_unique.insert(intern_unique(&mut unique_interner, value));
-                            }
-                            taken[slot].push(raw_idx);
-                        }
-                    }
-                    for (slot, controls) in taken.into_iter().enumerate() {
-                        let case = &anchors[anchor_indices[slot]];
-                        if controls.is_empty() {
-                            local_diagnostics.anchors_with_no_candidates += 1;
+            if self.selector.assignment() == super::selection::Assignment::Rounds {
+                // Every anchor takes a first control before any takes a
+                // second. The ratio is the criteria's own: a fallback tier
+                // is a property of one anchor's pool, and the pool changes
+                // between rounds.
+                let ratio = self.criteria.match_ratio;
+                let mut taken: Vec<Vec<usize>> = vec![Vec::new(); anchor_indices.len()];
+                let mut alive = vec![true; anchor_indices.len()];
+                eligible_anchors += anchor_indices.len();
+                for _ in 0..ratio {
+                    for (slot, &anchor_idx) in anchor_indices.iter().enumerate() {
+                        if !alive[slot] {
                             continue;
                         }
-                        if controls.len() < ratio {
-                            local_diagnostics.anchors_below_required_ratio += 1;
-                        }
-                        matched_cases += 1;
-                        for raw_idx in controls {
-                            pairs.push(MatchedPair::new(case.id(), self.controls[raw_idx].id()));
-                        }
-                    }
-                    return GroupResult {
-                        pairs,
-                        matched_cases,
-                        eligible_anchors,
-                        used_controls_count: used_controls.len(),
-                        diagnostics: local_diagnostics,
-                    };
-                }
-
-                for anchor_idx in anchor_indices {
-                    let case = &anchors[anchor_idx];
-                    eligible_anchors += 1;
-
-                    let mut candidates = self.candidate_pool_with_distance_and_constraint_group(
-                        case,
-                        &CandidatePoolConfig {
-                            used_controls: &used_controls,
-                            used_unique: &used_unique,
-                            unique_interner: &unique_interner,
-                            distance_metric: distance_config.distance_metric,
-                            distance_caliper: distance_config.distance_caliper,
-                            use_birth_date_index: distance_config.use_birth_date_index,
-                            caliper_reason: distance_config.caliper_reason,
-                        },
-                        extra_constraints,
-                        |idx, _control| {
-                            !trimmed_indices
-                                .candidates
-                                .is_some_and(|trimmed| trimmed.contains(&idx))
-                        },
-                        &mut local_diagnostics,
-                    );
-                    if candidates.is_empty() {
-                        local_diagnostics.anchors_with_no_candidates += 1;
-                        continue;
-                    }
-
-                    let Some(target_ratio) = ratio_policy.target_ratio(candidates.len()) else {
-                        local_diagnostics.anchors_below_required_ratio += 1;
-                        continue;
-                    };
-                    if ratio_policy.is_shortfall(candidates.len()) {
-                        local_diagnostics.anchors_below_required_ratio += 1;
-                    }
-
-                    let mut local_matches = 0usize;
-                    for _ in 0..target_ratio {
+                        let case = &anchors[anchor_idx];
+                        let mut candidates = self
+                            .candidate_pool_with_distance_and_constraint_group(
+                                case,
+                                &CandidatePoolConfig {
+                                    used_controls: &used_controls,
+                                    used_unique,
+                                    unique_interner,
+                                    distance_metric: distance_config.distance_metric,
+                                    distance_caliper: distance_config.distance_caliper,
+                                    use_birth_date_index: distance_config.use_birth_date_index,
+                                    caliper_reason: distance_config.caliper_reason,
+                                },
+                                extra_constraints,
+                                |idx, _control| {
+                                    !trimmed_indices
+                                        .candidates
+                                        .is_some_and(|trimmed| trimmed.contains(&idx))
+                                },
+                                &mut local_diagnostics,
+                            );
                         let Some(pos) =
                             local_selector.select_position(case, self.controls, &candidates)
                         else {
-                            break;
+                            alive[slot] = false;
+                            continue;
                         };
                         let raw_idx = candidates.swap_remove(pos);
-                        let selected = ControlIdx::new(raw_idx);
                         let control = &self.controls[raw_idx];
-                        pairs.push(MatchedPair::new(case.id(), control.id()));
-                        local_matches += 1;
-
-                        if !self.criteria.allow_replacement {
-                            used_controls.insert(selected);
-                        }
+                        used_controls.insert(ControlIdx::new(raw_idx));
+                        distinct_used.insert(raw_idx);
                         if let Some(value) = unique_value(control, self.criteria) {
-                            used_unique.insert(intern_unique(&mut unique_interner, value));
+                            used_unique.insert(intern_unique(&mut *unique_interner, value));
                         }
-                    }
-                    if local_matches > 0 {
-                        matched_cases += 1;
+                        taken[slot].push(raw_idx);
                     }
                 }
-
-                GroupResult {
+                for (slot, controls) in taken.into_iter().enumerate() {
+                    let case = &anchors[anchor_indices[slot]];
+                    if controls.is_empty() {
+                        local_diagnostics.anchors_with_no_candidates += 1;
+                        continue;
+                    }
+                    if controls.len() < ratio {
+                        local_diagnostics.anchors_below_required_ratio += 1;
+                    }
+                    matched_cases += 1;
+                    for raw_idx in controls {
+                        pairs.push(MatchedPair::new(case.id(), self.controls[raw_idx].id()));
+                    }
+                }
+                return GroupResult {
                     pairs,
                     matched_cases,
                     eligible_anchors,
-                    used_controls_count: used_controls.len(),
+                    used_controls_count: distinct_used.len(),
                     diagnostics: local_diagnostics,
+                };
+            }
+
+            for anchor_idx in anchor_indices {
+                let case = &anchors[anchor_idx];
+                eligible_anchors += 1;
+
+                let mut candidates = self.candidate_pool_with_distance_and_constraint_group(
+                    case,
+                    &CandidatePoolConfig {
+                        used_controls: &used_controls,
+                        used_unique,
+                        unique_interner,
+                        distance_metric: distance_config.distance_metric,
+                        distance_caliper: distance_config.distance_caliper,
+                        use_birth_date_index: distance_config.use_birth_date_index,
+                        caliper_reason: distance_config.caliper_reason,
+                    },
+                    extra_constraints,
+                    |idx, _control| {
+                        !trimmed_indices
+                            .candidates
+                            .is_some_and(|trimmed| trimmed.contains(&idx))
+                    },
+                    &mut local_diagnostics,
+                );
+                if candidates.is_empty() {
+                    local_diagnostics.anchors_with_no_candidates += 1;
+                    continue;
                 }
-            })
-            .collect();
+
+                let Some(target_ratio) = ratio_policy.target_ratio(candidates.len()) else {
+                    local_diagnostics.anchors_below_required_ratio += 1;
+                    continue;
+                };
+                if ratio_policy.is_shortfall(candidates.len()) {
+                    local_diagnostics.anchors_below_required_ratio += 1;
+                }
+                if ratio_policy.is_lower_tier(candidates.len()) {
+                    local_diagnostics.anchors_on_lower_tier += 1;
+                }
+
+                let mut local_matches = 0usize;
+                for _ in 0..target_ratio {
+                    let Some(pos) =
+                        local_selector.select_position(case, self.controls, &candidates)
+                    else {
+                        break;
+                    };
+                    let raw_idx = candidates.swap_remove(pos);
+                    let selected = ControlIdx::new(raw_idx);
+                    let control = &self.controls[raw_idx];
+                    pairs.push(MatchedPair::new(case.id(), control.id()));
+                    local_matches += 1;
+                    distinct_used.insert(raw_idx);
+
+                    if !self.criteria.allow_replacement {
+                        used_controls.insert(selected);
+                    }
+                    if let Some(value) = unique_value(control, self.criteria) {
+                        used_unique.insert(intern_unique(&mut *unique_interner, value));
+                        // The anchor's other candidates of this value are closed.
+                        if self.criteria.unique_by_key.is_some() {
+                            candidates.retain(|&other| {
+                                unique_value(&self.controls[other], self.criteria) != Some(value)
+                            });
+                        }
+                    }
+                }
+                if local_matches > 0 {
+                    matched_cases += 1;
+                }
+            }
+
+            GroupResult {
+                pairs,
+                matched_cases,
+                eligible_anchors,
+                used_controls_count: distinct_used.len(),
+                diagnostics: local_diagnostics,
+            }
+        };
+        let group_results: Vec<GroupResult> = if self.criteria.unique_by_key.is_some() {
+            let mut used_unique = FxHashSet::<UniqueValueId>::default();
+            let mut unique_interner = RapidHashMap::<String, UniqueValueId>::default();
+            strata_groups
+                .into_iter()
+                .enumerate()
+                .map(|(group_index, anchor_indices)| {
+                    run_group(
+                        group_index,
+                        anchor_indices,
+                        &mut used_unique,
+                        &mut unique_interner,
+                    )
+                })
+                .collect()
+        } else {
+            strata_groups
+                .into_par_iter()
+                .enumerate()
+                .map(|(group_index, anchor_indices)| {
+                    let mut used_unique = FxHashSet::<UniqueValueId>::default();
+                    let mut unique_interner = RapidHashMap::<String, UniqueValueId>::default();
+                    run_group(
+                        group_index,
+                        anchor_indices,
+                        &mut used_unique,
+                        &mut unique_interner,
+                    )
+                })
+                .collect()
+        };
 
         let mut pairs = Vec::new();
         let mut matched_cases = 0usize;
@@ -785,7 +824,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         let empty_unique = FxHashSet::<UniqueValueId>::default();
         let empty_interner = RapidHashMap::<String, UniqueValueId>::default();
 
-        let results: Vec<(Vec<MatchedPair>, MatchDiagnostics)> = anchors
+        let results: Vec<(Vec<MatchedPair>, Vec<usize>, MatchDiagnostics)> = anchors
             .par_iter()
             .enumerate()
             .filter_map(|(anchor_idx, case)| {
@@ -797,7 +836,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 }
 
                 let mut local_diagnostics = MatchDiagnostics::default();
-                let mut local_selector = self.selector.clone();
+                let mut local_selector = self.selector.for_unit(anchor_idx);
 
                 let mut candidates = self.candidate_pool_with_distance_and_constraint_group(
                     case,
@@ -821,18 +860,22 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
 
                 if candidates.is_empty() {
                     local_diagnostics.anchors_with_no_candidates += 1;
-                    return Some((Vec::new(), local_diagnostics));
+                    return Some((Vec::new(), Vec::new(), local_diagnostics));
                 }
 
                 let Some(target_ratio) = ratio_policy.target_ratio(candidates.len()) else {
                     local_diagnostics.anchors_below_required_ratio += 1;
-                    return Some((Vec::new(), local_diagnostics));
+                    return Some((Vec::new(), Vec::new(), local_diagnostics));
                 };
                 if ratio_policy.is_shortfall(candidates.len()) {
                     local_diagnostics.anchors_below_required_ratio += 1;
                 }
+                if ratio_policy.is_lower_tier(candidates.len()) {
+                    local_diagnostics.anchors_on_lower_tier += 1;
+                }
 
                 let mut local_pairs = Vec::new();
+                let mut local_controls = Vec::new();
                 for _ in 0..target_ratio {
                     let Some(selected_idx) =
                         local_selector.select_position(case, self.controls, &candidates)
@@ -842,6 +885,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                     let control_idx = candidates[selected_idx];
                     let control = &self.controls[control_idx];
                     local_pairs.push(MatchedPair::new(case.id(), control.id()));
+                    local_controls.push(control_idx);
                     candidates.remove(selected_idx);
                 }
 
@@ -850,15 +894,17 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 }
                 local_diagnostics.pairs_selected = local_pairs.len();
 
-                Some((local_pairs, local_diagnostics))
+                Some((local_pairs, local_controls, local_diagnostics))
             })
             .collect();
 
         // Every anchor that was not trimmed has an entry, matched or not.
         let eligible_anchors = results.len();
         let mut all_pairs = Vec::new();
-        for (mut pairs, diag) in results {
+        let mut distinct_controls = FxHashSet::<usize>::default();
+        for (mut pairs, controls, diag) in results {
             all_pairs.append(&mut pairs);
+            distinct_controls.extend(controls);
             diagnostics.merge(diag);
         }
 
@@ -876,7 +922,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             all_pairs,
             diagnostics.matched_anchors,
             eligible_anchors,
-            0, // with replacement, unique candidates is 0 by convention or not tracked
+            distinct_controls.len(),
             diagnostics,
         )
     }
@@ -934,6 +980,12 @@ pub fn match_standard_with_discard<
     };
     let criteria = validated.as_ref();
     let engine = MatchEngine::new(candidates, criteria, request.strategy);
+    if RatioPolicy::fallback_above_primary(validated.match_ratio, request.ratio_fallback) {
+        return invalid_criteria_outcome(
+            anchors.len(),
+            InvalidCriteriaReason::FallbackRatioAbovePrimary,
+        );
+    }
     let ratio_policy = RatioPolicy::from_fallback(validated.match_ratio, request.ratio_fallback);
     let mut diagnostics =
         initial_diagnostics(anchors.len(), criteria.estimand, criteria.common_support);
@@ -1043,9 +1095,9 @@ pub fn match_standard_with_discard<
 }
 
 /// The units that common-support trimming removes from a standard match.
-struct StandardCommonSupport {
-    anchors: HashSet<usize>,
-    candidates: HashSet<usize>,
+pub(crate) struct StandardCommonSupport {
+    pub(crate) anchors: HashSet<usize>,
+    pub(crate) candidates: HashSet<usize>,
     overlap: (f64, f64),
     anchor_bounds: (f64, f64),
     candidate_bounds: (f64, f64),
@@ -1086,7 +1138,7 @@ fn finite_score_bounds<R: MatchingRecord>(
 /// documented `discard` rule: a unit is discarded when its distance is outside
 /// the range of the other group's distances, so a unit equal to an end of that
 /// range is kept.
-fn standard_common_support<R: MatchingRecord>(
+pub(crate) fn standard_common_support<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     policy: CommonSupport,
@@ -1136,12 +1188,10 @@ fn group_anchors_by_strata<R: MatchingRecord>(
     required_strata: &[String],
     trimmed_indices: &TrimmedIndexConfig<'_>,
 ) -> Vec<Vec<usize>> {
-    // Groups come back in first-appearance order, which is the anchors' own order,
-    // so the order of the pairs is a function of the input order and does not
-    // change between runs. A hasher seeded per process would make a caller's
-    // bootstrap, which draws in the order rows arrive, differ from run to run.
-    // The key needs no ordering this way, and the caller can make the input order
-    // canonical.
+    // Groups come back in the order of their first anchor, so the order of the
+    // pairs is a function of the input order and of nothing else, in every
+    // process. Sorting the keys would need an order on `Vec<Option<String>>`
+    // and gains nothing.
     let mut index_of: FxHashMap<Vec<Option<&str>>, usize> = FxHashMap::default();
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for (anchor_idx, case) in anchors.iter().enumerate() {
@@ -1412,11 +1462,7 @@ pub fn to_f64(n: usize) -> f64 {
 }
 
 fn usize_to_f64(n: usize) -> f64 {
-    // Was `f64::from(u32::try_from(n).unwrap_or(u32::MAX))`, which SATURATES:
-    // every cohort above 4,294,967,295 counted as exactly that many. No real
-    // cohort reaches it, but a count that silently stops rising is the wrong
-    // failure for a diagnostic to have. `as f64` is exact to 2^53 and agrees
-    // with the old form everywhere below the saturation point.
+    // Exact up to 2^53.
     n as f64
 }
 
@@ -1431,6 +1477,24 @@ pub fn invalid_criteria_outcome(
     diagnostics
         .exclusion_counts
         .insert(ExclusionReason::InvalidCriteria(reason), 1);
+
+    MatchOutcome {
+        pairs: Vec::new(),
+        unmatched_cases: anchor_count,
+        used_controls: 0,
+        matched_cases: 0,
+        avg_controls_per_case: 0.0,
+        diagnostics,
+    }
+}
+
+/// The outcome of a cohort refused for a record-level reason, with no pairs.
+pub fn invalid_cohort_outcome(anchor_count: usize, reason: ExclusionReason) -> MatchOutcome {
+    let mut diagnostics = MatchDiagnostics {
+        total_anchors_evaluated: anchor_count,
+        ..MatchDiagnostics::default()
+    };
+    diagnostics.exclusion_counts.insert(reason, 1);
 
     MatchOutcome {
         pairs: Vec::new(),
@@ -1479,17 +1543,9 @@ mod strata_group_order_tests {
 
     /// Strata groups come back in first-appearance order, in every process.
     ///
-    /// This was `HashMap::into_values()`, and `std`'s `RandomState` is seeded per
-    /// PROCESS -- so the group order, and with it the order of the pairs collected
-    /// from those groups, differed on every run. Downstream that moved the row
-    /// order of the matched cohort, and the clustered bootstrap draws in the order
-    /// rows arrive, so two identical pipeline runs reported different intervals.
-    ///
-    /// A single process cannot observe the old bug: its hasher seed is fixed for
-    /// its lifetime, so a test that merely ran this twice would pass either way.
-    /// So this asserts the POSITIVE property instead -- the order is the anchors'
-    /// own -- which one process can check and which a random hasher will not
-    /// satisfy by luck across three interleaved strata.
+    /// A hash-ordered grouping would differ between processes, and one process
+    /// cannot see that by running twice. The test asserts the order of the
+    /// anchors instead, with three interleaved strata.
     #[test]
     fn groups_follow_first_appearance_of_their_strata() {
         // Interleaved on purpose: first appearances are b, a, c.

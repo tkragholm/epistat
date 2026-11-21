@@ -97,22 +97,29 @@ cell <- paste(sex, area)
 
 # Ties: three cases in cell "1 A", two in "2 B", two in different cells, and
 # a person over the age limit who fails on the day of a case in "1 B".
-tie_to <- function(rows) {
+# The first candidate keeps its event day. The next candidates born before that
+# day take it too, up to k rows in all, so that nobody has an event before
+# their own birth.
+tie_to <- function(candidates, k) {
+  first <- candidates[1]
+  later <- candidates[-1]
+  later <- later[birth[later] < event[first]]
+  rows <- c(first, later)[seq_len(k)]
+  stopifnot(!anyNA(rows))
   event[rows[-1]] <<- event[rows[1]]
   entry[rows] <<- pmin(entry[rows], event[rows[1]] - 1L)
 }
 lim <- limit_day(birth)
 in_age <- !is.na(event) & event < lim
 over_age <- !is.na(event) & event >= lim
-pick <- function(idx, k) idx[seq_len(k)]
-tie_to(pick(which(in_age & cell == "1 A"), 3))
-tie_to(pick(which(in_age & cell == "2 B"), 2))
+tie_to(which(in_age & cell == "1 A"), 3)
+tie_to(which(in_age & cell == "2 B"), 2)
 a <- which(in_age & cell == "1 B")
 b <- which(in_age & cell == "2 A")
-tie_to(c(a[3], b[3]))
+tie_to(c(a[3], b[3:length(b)]), 2)
 x <- which(in_age & cell == "1 B")[4]
-y <- which(over_age & cell == "1 B")[1]
-tie_to(c(x, y))
+y <- which(over_age & cell == "1 B")
+tie_to(c(x, y), 2)
 # After tying, a case's age status can have changed; recompute.
 lim <- limit_day(birth)
 in_age <- !is.na(event) & event < lim

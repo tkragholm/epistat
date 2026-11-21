@@ -85,14 +85,21 @@ cell <- paste(sex, area)
 lim <- limit_day(birth)
 in_age <- !is.na(expo) & expo < lim
 over_age <- !is.na(expo) & expo >= lim
-tie_to <- function(rows) {
+# The first candidate keeps its exposure day. The next candidates born before
+# that day take it too, up to k rows in all, so that nobody is exposed before
+# their own birth.
+tie_to <- function(candidates, k) {
+  first <- candidates[1]
+  later <- candidates[-1]
+  later <- later[birth[later] < expo[first]]
+  rows <- c(first, later)[seq_len(k)]
+  stopifnot(!anyNA(rows))
   expo[rows[-1]] <<- expo[rows[1]]
   entry[rows] <<- pmin(entry[rows], expo[rows[1]] - 1L)
 }
-pick <- function(idx, k) idx[seq_len(k)]
-tie_to(pick(which(in_age & cell == "1 A"), 3))
-tie_to(pick(which(in_age & cell == "2 B"), 2))
-tie_to(c(which(in_age & cell == "1 B")[1], which(over_age & cell == "1 B")[1]))
+tie_to(which(in_age & cell == "1 A"), 3)
+tie_to(which(in_age & cell == "2 B"), 2)
+tie_to(c(which(in_age & cell == "1 B")[1], which(over_age & cell == "1 B")), 2)
 # The entry and the exit of a person must stay in order after a tie moved an
 # exposure: a person who dies or emigrates stays out of the risk set from the
 # exposure day onward, so a death on or before the new exposure day is moved.

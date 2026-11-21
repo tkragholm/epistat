@@ -330,7 +330,8 @@ fn sequential_trials() {
             let mut periods = Vec::new();
             for p in 0..8_usize {
                 let date = start + chrono::Days::new(180 * p as u64);
-                let gone = row.record.death_date.is_some_and(|d| d <= date)
+                let gone = row.record.birth_date > date
+                    || row.record.death_date.is_some_and(|d| d <= date)
                     || row.record.emigration_date.is_some_and(|d| d <= date)
                     || row.record.entry_date.is_some_and(|d| d > date);
                 if gone {
@@ -917,14 +918,15 @@ fn reconstructed_pairs() {
         .collect();
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
-        for (max_ratio, caliper) in [(1, 0), (3, 30), (5, 90)] {
+        for (max_ratio, caliper) in [(1, None), (3, Some(30)), (5, Some(90))] {
             let out = reconstruct_case_control_pairs(
                 &rows,
                 ReconstructedMatchingOptions {
                     max_ratio,
                     match_caliper_days: caliper,
                 },
-            );
+            )
+            .unwrap();
             assert!(!out.matched_pairs.is_empty(), "no output, test is vacuous");
             for set in [
                 &out.eligible_case_ids,
