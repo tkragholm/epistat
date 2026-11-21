@@ -216,12 +216,13 @@ pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
     if variables.is_empty() {
         return Err(ExactMatchError::NoVariables);
     }
-    let (numbers, count) = stratum_numbers(anchors, candidates, variables).map_err(
-        |(position, variable)| ExactMatchError::MissingValue {
-            id: unit_at(anchors, candidates, position).id().to_string(),
-            variable: variables[variable].as_ref().to_string(),
-        },
-    )?;
+    let (numbers, count) =
+        stratum_numbers(anchors, candidates, variables).map_err(|(position, variable)| {
+            ExactMatchError::MissingValue {
+                id: unit_at(anchors, candidates, position).id().to_string(),
+                variable: variables[variable].as_ref().to_string(),
+            }
+        })?;
     subclasses_of_strata(anchors, candidates, &numbers, count)
 }
 
@@ -448,11 +449,18 @@ pub(super) mod reference {
     pub fn assert_same(new: &SubclassedUnits, old: &Maps, context: &str) {
         assert_eq!(new.subclasses, old.subclasses, "{context}: summaries");
         assert_eq!(
-            new.dropped_ids().into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            new.dropped_ids()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
             old.dropped_ids,
             "{context}: dropped ids"
         );
-        assert_eq!(new.assignments().count(), old.assignments.len(), "{context}");
+        assert_eq!(
+            new.assignments().count(),
+            old.assignments.len(),
+            "{context}"
+        );
         for (id, subclass) in new.assignments() {
             assert_eq!(old.assignments.get(id), Some(&subclass), "{context}: {id}");
         }
@@ -463,25 +471,25 @@ pub(super) mod reference {
         ] {
             let column = new.weights(estimand).expect("weights");
             for (position, id) in new.ids.iter().enumerate() {
-                match map.get(id) {
-                    Some(weight) => {
-                        assert_eq!(column[position].to_bits(), weight.to_bits(), "{context}");
-                        assert_eq!(
-                            new.weight(estimand, position).map(f64::to_bits),
-                            Some(weight.to_bits())
-                        );
-                    }
-                    None => {
-                        assert_eq!(column[position].to_bits(), 0.0_f64.to_bits(), "{context}");
-                        assert_eq!(new.weight(estimand, position), None);
-                    }
+                if let Some(weight) = map.get(id) {
+                    assert_eq!(column[position].to_bits(), weight.to_bits(), "{context}");
+                    assert_eq!(
+                        new.weight(estimand, position).map(f64::to_bits),
+                        Some(weight.to_bits())
+                    );
+                } else {
+                    assert_eq!(column[position].to_bits(), 0.0_f64.to_bits(), "{context}");
+                    assert_eq!(new.weight(estimand, position), None);
                 }
             }
         }
     }
 
     /// Every subclass number and weight of an outcome, for comparing runs.
-    #[expect(clippy::cast_precision_loss, reason = "test subclass numbers are small")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test subclass numbers are small"
+    )]
     pub fn numbers(out: &SubclassedUnits) -> Vec<f64> {
         let mut values: Vec<f64> = out
             .subclass
@@ -527,7 +535,9 @@ pub(super) mod reference {
                     );
                     let missing = |rng: &mut Lcg| holes && rng.below(60) == 0;
                     if !missing(&mut rng) {
-                        record.strata.insert("sex".into(), format!("s{}", rng.below(2)));
+                        record
+                            .strata
+                            .insert("sex".into(), format!("s{}", rng.below(2)));
                     }
                     if !missing(&mut rng) {
                         record
@@ -535,12 +545,15 @@ pub(super) mod reference {
                             .insert("area".into(), format!("a{}", rng.below(areas + skew)));
                     }
                     if !missing(&mut rng) {
-                        record.strata.insert("region".into(), format!("r{}", rng.below(3)));
+                        record
+                            .strata
+                            .insert("region".into(), format!("r{}", rng.below(3)));
                     }
                     if !missing(&mut rng) {
-                        record
-                            .numerics
-                            .insert("x".into(), f64::from(u32::try_from(rng.below(12)).unwrap()) * 0.5);
+                        record.numerics.insert(
+                            "x".into(),
+                            f64::from(u32::try_from(rng.below(12)).unwrap()) * 0.5,
+                        );
                     }
                     record
                 })
@@ -556,8 +569,8 @@ pub(super) mod reference {
 mod tests {
     use super::*;
     use crate::types::BaseRecord;
-    use std::collections::HashMap;
     use chrono::NaiveDate;
+    use std::collections::HashMap;
 
     fn record(id: &str, sex: &str, area: &str) -> BaseRecord {
         let mut record = BaseRecord::new(

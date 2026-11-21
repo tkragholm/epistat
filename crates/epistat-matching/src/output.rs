@@ -12,7 +12,7 @@
 //! the crate in the order of their keys.
 
 use crate::matching::{
-    MatchWeightMethod, PropensityScoreEstimate, SubclassificationOutcome, SubclassedUnits,
+    MatchWeightMethod, PropensityScoreEstimate, SubclassedUnits, SubclassificationOutcome,
     UnitRole, UnitWeightSet,
 };
 use crate::types::{Estimand, MatchOutcome};
@@ -816,22 +816,19 @@ impl SubclassedUnits {
     /// The weights for the effect in the anchors, sorted by id.
     #[must_use]
     pub fn att_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        self.weights_sorted(Estimand::Att)
-            .unwrap_or_default()
+        self.weights_sorted(Estimand::Att).unwrap_or_default()
     }
 
     /// The weights for the effect in the candidates, sorted by id.
     #[must_use]
     pub fn atc_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        self.weights_sorted(Estimand::Atc)
-            .unwrap_or_default()
+        self.weights_sorted(Estimand::Atc).unwrap_or_default()
     }
 
     /// The weights for the effect in the whole population, sorted by id.
     #[must_use]
     pub fn ate_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        self.weights_sorted(Estimand::Ate)
-            .unwrap_or_default()
+        self.weights_sorted(Estimand::Ate).unwrap_or_default()
     }
 }
 
@@ -891,9 +888,11 @@ impl SubclassificationOutcome {
     /// The weight of each retained unit, sorted by id.
     #[must_use]
     pub fn weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_pairs(self.ids.iter().enumerate().filter_map(|(position, id)| {
-            self.weight(position).map(|weight| (id.as_str(), weight))
-        }))
+        sorted_pairs(
+            self.ids.iter().enumerate().filter_map(|(position, id)| {
+                self.weight(position).map(|weight| (id.as_str(), weight))
+            }),
+        )
     }
 }
 
@@ -1200,10 +1199,7 @@ mod tests {
         };
         let data = units.match_data(Estimand::Att, options).unwrap().unwrap();
         assert_eq!(data.id, ["a1", "a2", "c1", "c2", "c3"]);
-        assert_eq!(
-            data.subclass,
-            [Some(1), Some(1), Some(1), Some(1), Some(2)]
-        );
+        assert_eq!(data.subclass, [Some(1), Some(1), Some(1), Some(1), Some(2)]);
         assert_eq!(data.weight, [1.0, 1.0, 1.0, 1.0, 1.0]);
         assert!(units.match_data(Estimand::Atm, options).unwrap().is_none());
     }

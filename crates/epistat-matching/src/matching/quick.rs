@@ -994,7 +994,8 @@ where
         }
         let slot = &mut number[*key as usize];
         if *slot == NONE {
-            *slot = u32::try_from(anchor_counts.len()).map_err(|_| QuickMatchError::TooManyUnits)?;
+            *slot =
+                u32::try_from(anchor_counts.len()).map_err(|_| QuickMatchError::TooManyUnits)?;
             anchor_counts.push(0);
             candidate_counts.push(0);
         }
@@ -1119,7 +1120,6 @@ mod tests {
         use std::collections::HashMap;
 
         /// Doc comments of the original are not repeated.
-        #[allow(clippy::pedantic, clippy::nursery, clippy::too_many_lines)]
         pub fn quick_by_maps<'c, R, V, F>(
             anchors: &[R],
             candidates: &[R],
@@ -1148,11 +1148,12 @@ mod tests {
                     let key: Vec<&str> = exact
                         .iter()
                         .map(|variable| {
-                            row.stratum(variable.as_ref())
-                                .ok_or_else(|| QuickMatchError::MissingValue {
+                            row.stratum(variable.as_ref()).ok_or_else(|| {
+                                QuickMatchError::MissingValue {
                                     id: row.id().to_string(),
                                     variable: variable.as_ref().to_string(),
-                                })
+                                }
+                            })
                         })
                         .collect::<Result<_, _>>()?;
                     let next = seen.len();
@@ -1317,9 +1318,8 @@ mod tests {
                 },
             ] {
                 let context = format!("seed {seed} {exact:?} {options:?}");
-                let lookup = |row: &crate::types::BaseRecord| {
-                    vectors.get(row.id()).map(Vec::as_slice)
-                };
+                let lookup =
+                    |row: &crate::types::BaseRecord| vectors.get(row.id()).map(Vec::as_slice);
                 let new = quick_match_subclasses(&a, &c, lookup, dim, &exact, &options);
                 let old = reference::quick_by_maps(&a, &c, lookup, dim, &exact, &options);
                 match (new, old) {

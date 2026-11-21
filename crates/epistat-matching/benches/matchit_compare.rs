@@ -607,12 +607,7 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(u64, u64)>, &'static str) {
             lines.sort_unstable();
             (outcome.matched_cases, lines, "anchor,control")
         }
-        SpecOutput::Exact(o) => (
-            o.retained_units(),
-            subclass_lines(o.assignments()),
-            "id,subclass",
-        ),
-        SpecOutput::Quick(o) => (
+        SpecOutput::Exact(o) | SpecOutput::Quick(o) => (
             o.retained_units(),
             subclass_lines(o.assignments()),
             "id,subclass",

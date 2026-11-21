@@ -305,7 +305,8 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
 
     let mut subclass = vec![None; scores.len()];
     for unit in &units {
-        if valid_subclasses[unit.subclass] && subclasses[unit.subclass].subclass_propensity.is_some()
+        if valid_subclasses[unit.subclass]
+            && subclasses[unit.subclass].subclass_propensity.is_some()
         {
             subclass[unit.position] = Some(unit.subclass);
         }
@@ -414,7 +415,9 @@ fn renumber_present_subclasses(units: &mut [ScoredUnit], intervals: usize) -> us
         *slot = count;
         count += usize::from(present);
     }
-    units.par_iter_mut().for_each(|unit| unit.subclass = rank[unit.subclass]);
+    units
+        .par_iter_mut()
+        .for_each(|unit| unit.subclass = rank[unit.subclass]);
     count
 }
 
@@ -690,7 +693,11 @@ mod tests {
             let mut ids = Vec::new();
             for (rows, is_anchor) in [(anchors, true), (candidates, false)] {
                 for row in rows {
-                    match scores.get(row.id()).copied().filter(|score| score.is_finite()) {
+                    match scores
+                        .get(row.id())
+                        .copied()
+                        .filter(|score| score.is_finite())
+                    {
                         Some(score) => {
                             units.push(ScoredUnit {
                                 position: ids.len(),
@@ -770,7 +777,9 @@ mod tests {
         ] {
             let mut rng = Lcg(seed);
             let make = |prefix: &str, count: usize| -> Vec<BaseRecord> {
-                (0..count).map(|i| record(&format!("{prefix}{i}"))).collect()
+                (0..count)
+                    .map(|i| record(&format!("{prefix}{i}")))
+                    .collect()
             };
             let a = make("a", anchors);
             let c = make("c", candidates);
@@ -814,15 +823,25 @@ mod tests {
                             assert_eq!(new.realized_subclasses, old.realized, "{context}");
                             assert_eq!(new.subclasses, old.subclasses, "{context}");
                             assert_eq!(
-                                new.quantile_cuts.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
-                                old.quantile_cuts.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                                new.quantile_cuts
+                                    .iter()
+                                    .map(|v| v.to_bits())
+                                    .collect::<Vec<_>>(),
+                                old.quantile_cuts
+                                    .iter()
+                                    .map(|v| v.to_bits())
+                                    .collect::<Vec<_>>(),
                                 "{context}"
                             );
                             assert_eq!(assigned(&new), old.assignments, "{context}");
                             let new_weights = weights(&new);
                             assert_eq!(new_weights.len(), old.weights.len(), "{context}");
                             for (id, weight) in &old.weights {
-                                assert_eq!(new_weights[id].to_bits(), weight.to_bits(), "{context}");
+                                assert_eq!(
+                                    new_weights[id].to_bits(),
+                                    weight.to_bits(),
+                                    "{context}"
+                                );
                             }
                             // The dropped units come in position order, where the
                             // per-unit version listed those without a score first.
@@ -898,7 +917,11 @@ mod tests {
 
         assert_eq!(outcome.realized_subclasses, 2);
         assert_eq!(outcome.retained_units(), 4);
-        assert!(outcome.dropped_ids().is_empty(), "{:?}", outcome.dropped_ids());
+        assert!(
+            outcome.dropped_ids().is_empty(),
+            "{:?}",
+            outcome.dropped_ids()
+        );
         assert_close(*weights(&outcome).get("a1").expect("anchor weight"), 1.0);
         assert_close(*weights(&outcome).get("c1").expect("candidate weight"), 1.0);
     }
@@ -1036,7 +1059,11 @@ mod tests {
         assert_eq!(assigned(&outcome)["c1"], 0);
         assert_eq!(assigned(&outcome)["c3"], 2);
         assert_eq!(outcome.realized_subclasses, 3);
-        assert!(outcome.dropped_ids().is_empty(), "{:?}", outcome.dropped_ids());
+        assert!(
+            outcome.dropped_ids().is_empty(),
+            "{:?}",
+            outcome.dropped_ids()
+        );
     }
 
     #[test]

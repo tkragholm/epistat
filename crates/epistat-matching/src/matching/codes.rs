@@ -126,7 +126,7 @@ mod tests {
         let codes = keys
             .iter()
             .map(|key| {
-                let next = seen.len() as u32;
+                let next = u32::try_from(seen.len()).unwrap();
                 *seen.entry(*key).or_insert(next)
             })
             .collect();
@@ -135,8 +135,16 @@ mod tests {
 
     #[test]
     fn numbers_by_first_appearance_across_chunks() {
-        for (n, modulus) in [(0_usize, 3_u64), (5, 3), (CHUNK, 7), (3 * CHUNK + 11, 1000), (50_000, 49_999)] {
-            let keys: Vec<u64> = (0..n as u64).map(|i| (i * 2_654_435_761) % modulus).collect();
+        for (n, modulus) in [
+            (0_usize, 3_u64),
+            (5, 3),
+            (CHUNK, 7),
+            (3 * CHUNK + 11, 1000),
+            (50_000, 49_999),
+        ] {
+            let keys: Vec<u64> = (0..n as u64)
+                .map(|i| (i * 2_654_435_761) % modulus)
+                .collect();
             assert_eq!(first_appearance_codes(&keys), reference(&keys), "n {n}");
         }
     }
@@ -147,7 +155,9 @@ mod tests {
         let a: Vec<u32> = (0..n).map(|i| ((i * 7919) % 13) as u32 + 100).collect();
         let b: Vec<u32> = (0..n).map(|i| ((i * 104_729) % 5) as u32).collect();
         let c: Vec<u32> = (0..n).map(|i| (i % 2) as u32 * 9).collect();
-        let tuples: Vec<(u32, u32, u32)> = (0..n as usize).map(|i| (a[i], b[i], c[i])).collect();
+        let tuples: Vec<(u32, u32, u32)> = (0..usize::try_from(n).unwrap())
+            .map(|i| (a[i], b[i], c[i]))
+            .collect();
         assert_eq!(
             combine_codes(&[a.clone(), b.clone(), c]),
             reference(&tuples)

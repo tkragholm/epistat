@@ -47,10 +47,10 @@
 //! distance of every anchor to every candidate of its stratum, so a stratum
 //! of `a` anchors and `c` candidates costs `a * c` distances.
 
+use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::distance::DistanceConfig;
 use super::distance::DistanceMetric;
 use super::engine::{build_outcome, finalize_estimand_diagnostics};
-use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::exact::{ExactMatchError, ExactMatchOutcome, subclasses_of_strata, unit_at};
 use super::nearest::MatchOrder;
 use super::records::MatchingRecord;
@@ -451,8 +451,8 @@ fn coarsen<R: MatchingRecord>(
                     return Err(missing(position));
                 }
                 let values: Vec<f64> = found.into_iter().flatten().collect();
-                match cutpoints(name, binning, &values)? {
-                    Some(points) => columns.push(
+                if let Some(points) = cutpoints(name, binning, &values)? {
+                    columns.push(
                         values
                             .par_iter()
                             .map(|value| {
@@ -460,15 +460,14 @@ fn coarsen<R: MatchingRecord>(
                                     .expect("fewer than 2^32 cut points")
                             })
                             .collect(),
-                    ),
-                    None => {
-                        let keys: Vec<u64> = values
-                            .par_iter()
-                            // Zero has two representations that are equal.
-                            .map(|value| if *value == 0.0 { 0.0 } else { *value }.to_bits())
-                            .collect();
-                        columns.push(first_appearance_codes(&keys).0);
-                    }
+                    );
+                } else {
+                    let keys: Vec<u64> = values
+                        .par_iter()
+                        // Zero has two representations that are equal.
+                        .map(|value| if *value == 0.0 { 0.0 } else { *value }.to_bits())
+                        .collect();
+                    columns.push(first_appearance_codes(&keys).0);
                 }
             }
             CemKind::Categorical(groups) => {
@@ -520,7 +519,8 @@ fn group_codes(
             *slot = position;
         }
     }
-    let mut renamed_codes: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut renamed_codes: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     let renamed: Vec<u32> = first_unit
         .iter()
         .map(|position| {
@@ -748,8 +748,8 @@ mod tests {
     /// The coarsening that kept one cell per unit and variable, with owned
     /// strings for categorical values, and numbered strata with a map of cells.
     mod reference {
-        use crate::matching::exact::reference::Maps;
         use super::*;
+        use crate::matching::exact::reference::Maps;
         use std::collections::HashMap;
 
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -858,7 +858,10 @@ mod tests {
                 vec!["s1".to_string(), "s9".to_string()],
             ];
             for variables in [
-                vec![CemVariable::numeric("x", CemBinning::Rule(CemRule::Sturges))],
+                vec![CemVariable::numeric(
+                    "x",
+                    CemBinning::Rule(CemRule::Sturges),
+                )],
                 vec![
                     CemVariable::numeric("x", CemBinning::Bins(4)),
                     CemVariable::categorical("area", vec![]),
@@ -868,7 +871,10 @@ mod tests {
                     CemVariable::categorical("sex", merged.clone()),
                     CemVariable::categorical(
                         "area",
-                        vec![vec!["a0".into(), "a1".into()], vec!["a2".into(), "a0".into()]],
+                        vec![
+                            vec!["a0".into(), "a1".into()],
+                            vec!["a2".into(), "a0".into()],
+                        ],
                     ),
                 ],
                 vec![
