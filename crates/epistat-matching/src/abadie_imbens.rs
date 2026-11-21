@@ -26,6 +26,14 @@
 //! counts over the units `j` is a match for, and `KK_j` the sum of their
 //! squares.
 //!
+//! The neighbours, for the matches and for the conditional variance, are
+//! found on a k-d tree over each group ([`crate::kdtree`]) when the group is
+//! large enough and the covariates few enough for one to pay: the `M`-th
+//! nearest distance first, then every unit within the tolerance of it. That
+//! is an expected `O(log n)` per unit in few covariates where a scan of the
+//! other group costs `O(n)`, and it finds the units the scan finds, ties
+//! included. Smaller groups are scanned.
+//!
 //! # Estimate
 //!
 //! With `Y_i(0)` replaced by the mean outcome over `J(i)` for a treated unit
@@ -110,6 +118,7 @@ use epistat_linalg::{Attempt, Factor, Mat, Method, solve, weighted_gram, weighte
 use rayon::prelude::*;
 
 use crate::effects::{Target, UnitData};
+use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 
 /// The distance the matches are found with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -393,7 +402,7 @@ pub fn abadie_imbens(
     data: &AbadieImbensData,
     spec: &AbadieImbensSpec,
 ) -> Result<AbadieImbensEstimate, AbadieImbensError> {
-    Estimator::new(data, spec)?.run()
+    Estimator::new(data, spec, true)?.run()
 }
 
 struct Estimator<'a> {
@@ -406,6 +415,9 @@ struct Estimator<'a> {
     /// `k` per unit.
     coords: Vec<f64>,
     k: usize,
+    /// The k-d tree over the units without and with the role of the
+    /// treated, keyed by unit, where the group is worth one.
+    trees: [Option<KdTree>; 2],
 }
 
 /// One anchor with its matches.
@@ -415,9 +427,12 @@ struct Anchor {
 }
 
 impl<'a> Estimator<'a> {
+    /// The estimator, with the neighbours found on k-d trees when
+    /// `use_trees` is set and by a scan of the pool otherwise.
     fn new(
         data: &'a AbadieImbensData,
         spec: &'a AbadieImbensSpec,
+        use_trees: bool,
     ) -> Result<Self, AbadieImbensError> {
         if spec.matches == 0 {
             return Err(AbadieImbensError::NoMatches);
@@ -455,12 +470,27 @@ impl<'a> Estimator<'a> {
             });
         }
         let (coords, k) = standardised_coordinates(&data.covariates, spec.weight)?;
+        let trees = if use_trees && sums_are_finite(&coords, k) {
+            [false, true].map(|with_role| {
+                let keys: Vec<usize> = (0..n).filter(|&i| role[i] == with_role).collect();
+                worth_a_tree(keys.len(), k).then(|| {
+                    let mut points = Vec::with_capacity(keys.len() * k);
+                    for &i in &keys {
+                        points.extend_from_slice(&coords[i * k..(i + 1) * k]);
+                    }
+                    KdTree::new(k, &points, &keys, n)
+                })
+            })
+        } else {
+            [None, None]
+        };
         Ok(Self {
             data,
             spec,
             role,
             coords,
             k,
+            trees,
         })
     }
 
@@ -489,6 +519,25 @@ impl<'a> Estimator<'a> {
             .collect()
     }
 
+    /// As [`Self::nearest`] for the pool of the units whose role is
+    /// `with_role`, less `unit` itself, on that group's tree when it has one.
+    /// The tree gives the `count`-th smallest distance and then every unit
+    /// within the tolerance of it, which are the units the scan keeps.
+    fn nearest_in(&self, unit: usize, with_role: bool, pool: &[usize], count: usize) -> Vec<usize> {
+        if let Some(tree) = &self.trees[usize::from(with_role)] {
+            let query = &self.coords[unit * self.k..(unit + 1) * self.k];
+            let found = tree.nearest(&Euclidean, query, count, None, &mut |j| j != unit);
+            if let Some(&(last, _)) = found.get(count - 1) {
+                let limit = last + self.spec.distance_tolerance;
+                let mut near = tree.within(&Euclidean, query, limit);
+                near.retain(|&j| j != unit);
+                near.sort_unstable();
+                return near;
+            }
+        }
+        self.nearest(unit, pool, count)
+    }
+
     fn run(&self) -> Result<AbadieImbensEstimate, AbadieImbensError> {
         let n = self.data.len();
         let all = matches!(self.spec.target, Target::Ate);
@@ -510,7 +559,7 @@ impl<'a> Estimator<'a> {
                 };
                 Anchor {
                     unit,
-                    matches: self.nearest(unit, pool, m),
+                    matches: self.nearest_in(unit, !self.role[unit], pool, m),
                 }
             })
             .collect();
@@ -660,8 +709,12 @@ impl<'a> Estimator<'a> {
             .into_par_iter()
             .map(|i| {
                 let group = &groups[usize::from(treated[i])];
-                let pool: Vec<usize> = group.iter().copied().filter(|&u| u != i).collect();
-                let near = self.nearest(i, &pool, j);
+                let near = if self.trees[usize::from(self.role[i])].is_some() {
+                    self.nearest_in(i, self.role[i], &[], j)
+                } else {
+                    let pool: Vec<usize> = group.iter().copied().filter(|&u| u != i).collect();
+                    self.nearest(i, &pool, j)
+                };
                 let count = near.len() + 1;
                 let mut total = y[i];
                 for &u in &near {
@@ -715,6 +768,27 @@ impl<'a> Estimator<'a> {
             .map_err(|_| AbadieImbensError::SingularRegression)?;
         Ok((1..p).map(|c| solution.x[(c, 0)]).collect())
     }
+}
+
+/// Whether every sum of squared differences of two points of `coords`, `k`
+/// coordinates each, is finite. None exceeds the sum over the coordinates of
+/// the squared range, the largest value less the smallest, in floating point
+/// too.
+fn sums_are_finite(coords: &[f64], k: usize) -> bool {
+    if coords.iter().any(|value| !value.is_finite()) {
+        return false;
+    }
+    let mut largest = 0.0_f64;
+    for c in 0..k {
+        let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+        for value in coords.iter().skip(c).step_by(k) {
+            low = low.min(*value);
+            high = high.max(*value);
+        }
+        let range = high - low;
+        largest += range * range;
+    }
+    largest.is_finite()
 }
 
 fn sum(values: &[f64]) -> f64 {
@@ -831,6 +905,61 @@ mod tests {
         };
         let e = abadie_imbens(&tiny(), &spec).unwrap();
         assert!((e.estimate - 1.0 / 3.0).abs() < 1e-14);
+    }
+
+    /// The k-d trees give the estimate of the scan of every unit, to the bit:
+    /// on covariates with few values, so that many distances tie and the
+    /// tolerance takes in several matches, for the three targets, one and
+    /// three matches, the conditional variance from two neighbours, bias
+    /// adjustment and both distances.
+    #[test]
+    fn the_trees_give_the_estimate_of_the_scan() {
+        let n = 3_600;
+        let mut state = 7_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let treated: Vec<bool> = (0..n).map(|_| next() % 3 == 0).collect();
+        let covariates: Vec<Vec<f64>> = (0..3)
+            .map(|c| {
+                (0..n)
+                    .map(|_| (next() % if c == 2 { 2 } else { 6 }) as f64)
+                    .collect()
+            })
+            .collect();
+        let outcome: Vec<f64> = (0..n)
+            .map(|i| (next() % 100) as f64 / 10.0 + covariates[0][i])
+            .collect();
+        let data = AbadieImbensData::new(treated, outcome, covariates).unwrap();
+        for target in [Target::Att, Target::Atc, Target::Ate] {
+            for (matches, var_calc, bias_adjust, weight) in [
+                (1, 0, false, DistanceWeight::Diagonal),
+                (3, 2, true, DistanceWeight::Diagonal),
+                (1, 2, true, DistanceWeight::Mahalanobis),
+            ] {
+                let spec = AbadieImbensSpec {
+                    target,
+                    matches,
+                    bias_adjust,
+                    var_calc,
+                    weight,
+                    ..AbadieImbensSpec::new()
+                };
+                let on_trees = Estimator::new(&data, &spec, true).unwrap();
+                assert!(on_trees.trees.iter().all(Option::is_some));
+                let by_scan = Estimator::new(&data, &spec, false).unwrap();
+                assert!(by_scan.trees.iter().all(Option::is_none));
+                assert_eq!(
+                    format!("{:?}", on_trees.run()),
+                    format!("{:?}", by_scan.run()),
+                    "{target:?}, {matches} matches, var_calc {var_calc}, {weight:?}"
+                );
+            }
+        }
     }
 
     #[test]
