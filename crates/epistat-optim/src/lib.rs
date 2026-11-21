@@ -8,6 +8,9 @@
 //! - [`simplex`]: a dense primal simplex method for linear programs
 //!   `max c'x  s.t.  A x = g, x ≥ 0`, with warm starts when only `c` changes.
 //!
+//! - [`min_cost_flow`]: minimum-cost flow with integer data by the network
+//!   simplex method, for assignment and matching problems of thousands of
+//!   nodes.
 //! - [`multistart`]: independent restarts of a fit, run in parallel under the
 //!   `rayon` feature, with a selection that does not depend on thread count.
 //!
@@ -15,6 +18,7 @@
 //! its references.
 
 pub mod bfgs;
+pub mod min_cost_flow;
 pub mod multistart;
 pub mod nelder_mead;
 pub mod simplex;

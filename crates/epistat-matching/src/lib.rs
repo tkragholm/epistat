@@ -168,8 +168,9 @@ pub use matching::{
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use matching::{
-    QuickMatchError, QuickMatchOptions, QuickMatchOutcome, SeedMethod, quick_clusters,
-    quick_match_subclasses,
+    FullMatchConfig, FullMatchOutcome, OptimalError, OptimalRequest, QuickMatchError,
+    QuickMatchOptions, QuickMatchOutcome, Retain, SeedMethod, match_full, match_optimal,
+    quick_clusters, quick_match_subclasses,
 };
 pub use role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
@@ -196,9 +197,10 @@ pub use output::{
 };
 pub use spec::{
     AssignmentSpec, BinRuleSpec, BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec,
-    CovariatesSpec, DistanceSpec, EstimatorSpec, K2kSpec, LambdaSpec, LinkSpec, MatchMethod,
-    MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec, ReferenceSpec, ScaleSpec,
-    SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec, run_spec,
+    CovariatesSpec, DistanceSpec, EstimatorSpec, FullSpec, K2kSpec, LambdaSpec, LinkSpec,
+    MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec,
+    ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec,
+    run_spec,
 };
 
 #[cfg(feature = "bench-internals")]
@@ -223,9 +225,10 @@ pub fn benchmark_eqq_distance_stats(
 pub mod prelude {
     pub use crate::constraints::{AntiExact, GenderMatch};
     pub use crate::matching::{
-        Assignment, DeterministicSelection, ExactMatchError, ExactMatchOutcome, MatchOrder,
-        NearestBirthDateSelection, NearestSelection, RandomSelection, Rounds, SelectionStrategy,
-        exact_match_subclasses,
+        Assignment, DeterministicSelection, ExactMatchError, ExactMatchOutcome, FullMatchConfig,
+        FullMatchOutcome, MatchOrder, NearestBirthDateSelection, NearestSelection, OptimalError,
+        OptimalRequest, RandomSelection, Retain, Rounds, SelectionStrategy, exact_match_subclasses,
+        match_full, match_optimal,
     };
     pub use crate::{
         AgeLimitYears, AnchorRecord, AssignmentSpec, BalanceDiagnostics, BalanceRecord,
@@ -239,17 +242,18 @@ pub mod prelude {
         DistanceChannel, DistanceConfig, DistanceMetric, DistanceSpec, ElasticNetCvConfig,
         ElasticNetLogisticConfig, Estimand, EstimandDriftReason, EstimationError, EstimatorSpec,
         EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
-        ExactMatchConstraint, ExclusionReason, IdMapEuclideanDistance, IdMapMahalanobisDistance,
-        IdMapPropensityScoreDistance, InvalidCriteriaReason, LambdaRule, LambdaSpec, LinkSpec,
-        LogisticRegressionConfig, LongMatches, MahalanobisCovarianceStrategy, MahalanobisDistance,
-        MahalanobisDistancePreparation, MahalanobisError, MahalanobisPreparationConfig,
-        MahalanobisTransform, MatchData, MatchDataOptions, MatchDiagnostics, MatchJob, MatchMatrix,
-        MatchMethod, MatchMode, MatchOutcome, MatchRatio, MatchSpec, MatchWeightMethod,
-        MatchedPair, MatchingCriteria, MatchingRecord, MissingSpec, MissingValuePolicy,
-        NearestSpec, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
-        NumericCovariateSpec, OrderSpec, OutputError, PairWeight, PairWeightRow, PairWeightSet,
-        PairWeightTable, ProjectedBalanceRow, PropensityDistancePreparation, PropensityEstimator,
-        PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
+        ExactMatchConstraint, ExclusionReason, FullSpec, IdMapEuclideanDistance,
+        IdMapMahalanobisDistance, IdMapPropensityScoreDistance, InvalidCriteriaReason, LambdaRule,
+        LambdaSpec, LinkSpec, LogisticRegressionConfig, LongMatches, MahalanobisCovarianceStrategy,
+        MahalanobisDistance, MahalanobisDistancePreparation, MahalanobisError,
+        MahalanobisPreparationConfig, MahalanobisTransform, MatchData, MatchDataOptions,
+        MatchDiagnostics, MatchJob, MatchMatrix, MatchMethod, MatchMode, MatchOutcome, MatchRatio,
+        MatchSpec, MatchWeightMethod, MatchedPair, MatchingCriteria, MatchingRecord, MissingSpec,
+        MissingValuePolicy, NearestSpec, NumericBalance, NumericBalanceThresholdCheck,
+        NumericBalanceTransform, NumericCovariateSpec, OrderSpec, OutputError, PairWeight,
+        PairWeightRow, PairWeightSet, PairWeightTable, ProjectedBalanceRow,
+        PropensityDistancePreparation, PropensityEstimator, PropensityLink,
+        PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
         PropensityScoreEstimate, PropensityScoreOutputScale, ReconstructedEpisode,
         ReconstructedMatchedPair, ReconstructedMatchingOptions, ReconstructedMatchingOutput,
         ReconstructedMatchingTier, ReferenceSpec, ResidentAtIndexRecord, RidgeReport,

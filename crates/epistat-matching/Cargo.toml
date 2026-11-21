@@ -26,6 +26,7 @@ nightly = ["epistat-linalg/nightly"]
 [dependencies]
 epistat-glm = { path = "../epistat-glm", version = "0.1.1" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }
+epistat-optim = { path = "../epistat-optim", version = "0.1.0" }
 epistat-register = { path = "../epistat-register", version = "0.1.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
 epistat-stats = { path = "../epistat-stats", version = "0.2.3" }

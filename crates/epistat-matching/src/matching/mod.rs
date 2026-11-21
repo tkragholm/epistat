@@ -7,6 +7,7 @@ mod exact;
 mod index;
 pub mod job;
 mod nearest;
+mod optimal;
 mod quick;
 pub mod ratio;
 mod reconstructed;
@@ -44,6 +45,10 @@ pub use estimation::{
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use nearest::{MatchOrder, NearestSelection, VariableRatio, VariableRatioError};
+pub use optimal::{
+    FullMatchConfig, FullMatchOutcome, OptimalError, OptimalRequest, Retain, match_full,
+    match_optimal,
+};
 pub use quick::{
     QuickMatchError, QuickMatchOptions, QuickMatchOutcome, SeedMethod, apply_transposed,
     cholesky_lower, quick_clusters, quick_match_subclasses,

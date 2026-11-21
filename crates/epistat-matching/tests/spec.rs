@@ -1387,3 +1387,106 @@ fn cem_and_matrix_specs_round_trip_through_json() {
     let again: MatchSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
     assert_eq!(spec, again);
 }
+
+/// A spec for the optimal and full methods gives what the typed calls give on
+/// the same distance, and refuses options the methods do not use.
+#[test]
+fn optimal_and_full_specs_equal_the_typed_calls() {
+    use epistat_matching::{FullMatchConfig, OptimalRequest, match_full, match_optimal};
+
+    let (anchors, candidates) = covariate_inputs();
+    let distance = DistanceSpec::Propensity {
+        covariates: covariates(&["age", "income"]),
+        link: LinkSpec::Logit,
+        estimator: EstimatorSpec::Glm,
+        scale: ScaleSpec::Probability,
+        sampling_weights: None,
+        caliper: None,
+    };
+    let prepared = prepare_propensity_distance_config(
+        &anchors,
+        &candidates,
+        &PropensityScoreConfig::builder()
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .covariate_keys(vec!["age".into(), "income".into()])
+                    .include_intercept(true)
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap();
+    let input = SpecInput::Standard {
+        anchors: &anchors,
+        candidates: &candidates,
+    };
+    let base = MatchSpec {
+        distance,
+        birth_window_days: 36_500,
+        ..MatchSpec::default()
+    };
+    let criteria = MatchingCriteria::builder()
+        .birth_date_window_days(36_500)
+        .match_ratio(2)
+        .build();
+    let request =
+        OptimalRequest::new(&criteria, &()).with_distance_config(&prepared.distance_config);
+
+    let spec = MatchSpec {
+        method: MatchMethod::Optimal,
+        ratio: 2,
+        ..base.clone()
+    };
+    let SpecOutput::Pairs { outcome, .. } = run_spec(&spec, input.clone()).expect("valid spec")
+    else {
+        panic!("expected pairs");
+    };
+    let by_hand = match_optimal(&anchors, &candidates, &request).expect("feasible");
+    assert_eq!(outcome.pairs, by_hand.pairs);
+
+    let spec = MatchSpec {
+        method: MatchMethod::Full,
+        full: FullSpec {
+            min_controls: 1.0,
+            max_controls: Some(4.0),
+            ..FullSpec::default()
+        },
+        ..base.clone()
+    };
+    let SpecOutput::Full(outcome) = run_spec(&spec, input.clone()).expect("valid spec") else {
+        panic!("expected full output");
+    };
+    let config = FullMatchConfig {
+        min_controls: 1.0,
+        max_controls: 4.0,
+        ..FullMatchConfig::default()
+    };
+    let by_hand = match_full(&anchors, &candidates, &request, &config).expect("feasible");
+    assert_eq!(outcome.assignments, by_hand.assignments);
+
+    for bad in [
+        MatchSpec {
+            method: MatchMethod::Full,
+            ratio: 2,
+            ..base.clone()
+        },
+        MatchSpec {
+            method: MatchMethod::Optimal,
+            replace: true,
+            ..base.clone()
+        },
+        MatchSpec {
+            method: MatchMethod::Optimal,
+            full: FullSpec {
+                min_controls: 1.0,
+                ..FullSpec::default()
+            },
+            ..base.clone()
+        },
+    ] {
+        assert!(matches!(
+            run_spec(&bad, input.clone()),
+            Err(SpecError::Option { .. })
+        ));
+    }
+}

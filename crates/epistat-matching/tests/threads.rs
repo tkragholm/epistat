@@ -1135,3 +1135,70 @@ fn generalised_full_matching() {
         d.0
     });
 }
+
+/// Optimal pair and full matching solve each exact stratum on its own and
+/// join the strata in order, so the result is the same in every pool.
+#[test]
+fn optimal_and_full_matching() {
+    use epistat_matching::{
+        FullMatchConfig, OptimalRequest, RapidHashMap, match_full, match_optimal,
+    };
+
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut draw = move || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    let birth = date(0);
+    let mut anchors = Vec::new();
+    let mut candidates = Vec::new();
+    let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
+    for (rows, prefix, count, shift) in [
+        (&mut anchors, "a", 400, 0.2),
+        (&mut candidates, "c", 1_200, 0.0),
+    ] {
+        for index in 0..count {
+            let id = format!("{prefix}{index}");
+            let mut record = BaseRecord::new(id.clone(), birth);
+            record
+                .strata
+                .insert("g".to_string(), (draw() * 8.0).floor().to_string());
+            scores.insert(id, draw() + shift);
+            rows.push(record);
+        }
+    }
+    let distance = DistanceConfig::propensity_score_map(scores, None);
+    let criteria = MatchingCriteria::builder()
+        .match_ratio(2)
+        .required_strata(vec!["g".to_string()])
+        .build();
+    let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let pairs = match_optimal(&anchors, &candidates, &request).unwrap();
+        assert_ne!(pairs.pairs.len(), 0);
+        d.outcome(&pairs);
+        d.weights(&pairs);
+        for config in [
+            FullMatchConfig::default(),
+            FullMatchConfig {
+                min_controls: 1.0,
+                max_controls: 5.0,
+                ..FullMatchConfig::default()
+            },
+        ] {
+            let out = match_full(&anchors, &candidates, &request, &config).unwrap();
+            let mut assignments: Vec<_> = out.assignments.iter().collect();
+            assignments.sort();
+            d.debug(&assignments);
+            d.floats(&out.att_weights);
+            d.floats(&out.atc_weights);
+            d.floats(&out.ate_weights);
+            d.debug(&out.dropped_ids);
+            d.debug(&out.subclasses);
+        }
+        d.0
+    });
+}
