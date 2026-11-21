@@ -218,7 +218,7 @@ fn sets_carry_index_dates_and_later_exposure() {
         .map(|(i, id)| (id.as_str(), i))
         .collect();
     let sets = run(&reference, &recs, 3, true, 5);
-    assert!(!sets.controls.is_empty());
+    assert_ne!(sets.controls.len(), 0);
     let (mut later, mut never) = (0, 0);
     for control in &sets.controls {
         let exposed = position[control.exposed_id.as_str()];
@@ -347,7 +347,7 @@ fn spec_mode_matches_the_job() {
         .with_strategy(DeterministicSelection)
         .run();
     assert_eq!(direct.outcome.pairs, job.pairs);
-    assert!(!direct.controls.is_empty());
+    assert_ne!(direct.controls.len(), 0);
 }
 
 /// A cohort with two units of one id has pairs that name no single unit.
