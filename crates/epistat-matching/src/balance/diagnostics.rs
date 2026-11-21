@@ -24,7 +24,7 @@ pub fn balance_diagnostics<R: MatchingRecord>(
     for pair in &outcome.pairs {
         if let Some(case) = case_map.get(pair.case_id.as_str()) {
             for key in strata_keys {
-                if let Some(value) = case.strata().get(key) {
+                if let Some(value) = case.stratum(key) {
                     let entry = strata_counts
                         .entry(format!("anchor:{key}={value}"))
                         .or_insert((0, 0));
@@ -34,7 +34,7 @@ pub fn balance_diagnostics<R: MatchingRecord>(
         }
         if let Some(control) = control_map.get(pair.control_id.as_str()) {
             for key in strata_keys {
-                if let Some(value) = control.strata().get(key) {
+                if let Some(value) = control.stratum(key) {
                     let entry = strata_counts
                         .entry(format!("candidate:{key}={value}"))
                         .or_insert((0, 0));

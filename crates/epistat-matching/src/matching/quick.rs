@@ -918,9 +918,7 @@ where
             let key: Vec<&str> = exact
                 .iter()
                 .map(|variable| {
-                    row.strata()
-                        .get(variable.as_ref())
-                        .map(String::as_str)
+                    row.stratum(variable.as_ref())
                         .ok_or_else(|| QuickMatchError::MissingValue {
                             id: row.id().to_string(),
                             variable: variable.as_ref().to_string(),

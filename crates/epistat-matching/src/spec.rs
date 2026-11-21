@@ -2248,7 +2248,7 @@ where
 /// when exact matching cannot run.
 pub fn run_spec<R>(spec: &MatchSpec, input: SpecInput<'_, R>) -> Result<SpecOutput, SpecError>
 where
-    R: MatchingRecord + CovariateRecord + Clone,
+    R: MatchingRecord + CovariateRecord,
 {
     spec.validate()?;
     match (spec.mode, input) {
@@ -2579,7 +2579,7 @@ fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
     Ok(SpecOutput::ExposureDensity(Box::new(sets)))
 }
 
-fn run_trials<R: MatchingRecord + CovariateRecord + Clone>(
+fn run_trials<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     panel: &[TrialPerson<R>],
 ) -> Result<SpecOutput, SpecError> {

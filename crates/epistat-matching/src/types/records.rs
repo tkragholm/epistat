@@ -16,6 +16,43 @@ pub enum CovariateValue {
     Missing,
 }
 
+/// A covariate value read from a record without copying it.
+///
+/// [`CovariateRecord::covariate`](crate::CovariateRecord::covariate) returns it, so a record that keeps its
+/// covariates in columns, as a [`Cohort`](crate::Cohort) row does, can answer
+/// without building a [`CovariateValue`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CovariateRef<'a> {
+    /// Continuous covariate.
+    Numeric(f64),
+    /// String-valued covariate.
+    Categorical(&'a str),
+    /// Explicit missing marker.
+    Missing,
+}
+
+impl<'a> From<&'a CovariateValue> for CovariateRef<'a> {
+    fn from(value: &'a CovariateValue) -> Self {
+        match value {
+            CovariateValue::Numeric(value) => Self::Numeric(*value),
+            CovariateValue::Categorical(value) => Self::Categorical(value),
+            CovariateValue::Missing => Self::Missing,
+        }
+    }
+}
+
+impl CovariateRef<'_> {
+    /// The owned value.
+    #[must_use]
+    pub fn to_value(self) -> CovariateValue {
+        match self {
+            Self::Numeric(value) => CovariateValue::Numeric(value),
+            Self::Categorical(value) => CovariateValue::Categorical(value.to_string()),
+            Self::Missing => CovariateValue::Missing,
+        }
+    }
+}
+
 /// Generic matching record with minimal core fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseRecord {

@@ -4,7 +4,6 @@ use crate::types::{ControlIdx, MatchingCriteria, UniqueValueId};
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
 use rustc_hash::FxHashSet;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 
 /// Compact used-control tracking backed by a flat `Vec<bool>`.
@@ -545,18 +544,16 @@ pub fn unique_value<'a, R: MatchingRecord>(
     criteria
         .unique_by_key
         .as_ref()
-        .and_then(|key| record.strata().get(key).map(String::as_str))
+        .and_then(|key| record.stratum(key))
         .or_else(|| record.unique_key())
 }
 
-pub fn build_strata_values<'a>(
-    strata: &'a HashMap<String, String>,
+/// The values of the `required` strata of `record`, in their order.
+pub fn build_strata_values<'a, R: MatchingRecord>(
+    record: &'a R,
     required: &[String],
 ) -> Vec<Option<&'a str>> {
-    required
-        .iter()
-        .map(|key| strata.get(key).map(String::as_str))
-        .collect()
+    required.iter().map(|key| record.stratum(key)).collect()
 }
 
 pub(super) fn strata_match_fast<R: MatchingRecord>(
@@ -588,7 +585,7 @@ pub(super) fn strata_match_fast<R: MatchingRecord>(
 fn strata_match<R: MatchingRecord>(case: &R, control: &R, required: &[String]) -> bool {
     required
         .iter()
-        .all(|key| case.strata().get(key) == control.strata().get(key))
+        .all(|key| case.stratum(key) == control.stratum(key))
 }
 
 #[cfg(test)]
@@ -706,8 +703,8 @@ mod tests {
         );
         assert!(!ExactMatchConstraint.allows(&case, &control, &ctx));
 
-        let case_vals = build_strata_values(&case.strata, &criteria.required_strata);
-        let control_vals = build_strata_values(&case.strata, &criteria.required_strata);
+        let case_vals = build_strata_values(&case, &criteria.required_strata);
+        let control_vals = build_strata_values(&case, &criteria.required_strata);
         let ctx = context(
             &criteria,
             &empty_controls,

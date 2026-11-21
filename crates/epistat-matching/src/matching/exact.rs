@@ -116,12 +116,12 @@ pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
         variables
             .iter()
             .map(|variable| {
-                row.strata().get(variable.as_ref()).cloned().ok_or_else(|| {
-                    ExactMatchError::MissingValue {
+                row.stratum(variable.as_ref())
+                    .map(str::to_owned)
+                    .ok_or_else(|| ExactMatchError::MissingValue {
                         id: row.id().to_string(),
                         variable: variable.as_ref().to_string(),
-                    }
-                })
+                    })
             })
             .collect()
     };

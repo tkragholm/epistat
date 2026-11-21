@@ -13,6 +13,13 @@
 //! frames are made, and the records are exactly those of the same values
 //! given to [`BaseRecord::new`] and its setters.
 //!
+//! [`ArrowRecords::cohort`] reads the same columns into a [`Cohort`], which
+//! holds them as columns and costs a few tens of bytes per row where the
+//! records cost about two kilobytes. Its rows are records too, the same ones
+//! [`balance_records`](ArrowRecords::balance_records) makes, and
+//! [`Cohort::risk_set_rows`] gives those of
+//! [`risk_set_records`](ArrowRecords::risk_set_records).
+//!
 //! # Columns and types
 //!
 //! | column | Arrow type |
@@ -91,6 +98,7 @@ use arrow_array::{
 };
 use chrono::{Days, NaiveDate};
 
+use crate::cohort::{Cohort, CohortBuilder, CohortError};
 use crate::types::{BalanceRecord, BaseRecord, CovariateValue, RoleTransitionRecord};
 
 /// Why records could not be built from Arrow arrays.
@@ -136,6 +144,9 @@ pub enum ArrowInputError {
         /// The row, counted from 0.
         row: usize,
     },
+    /// The columns do not make a [`Cohort`], as when two strata have one
+    /// name.
+    Cohort(CohortError),
 }
 
 impl fmt::Display for ArrowInputError {
@@ -170,6 +181,7 @@ impl fmt::Display for ArrowInputError {
             Self::DateOutOfRange { column, row } => {
                 write!(f, "column {column} has a date at row {row} out of range")
             }
+            Self::Cohort(error) => error.fmt(f),
         }
     }
 }
@@ -552,6 +564,104 @@ impl<'a> ArrowRecords<'a> {
             };
             Ok(RoleTransitionRecord::from_record(core, transition))
         })
+    }
+
+    /// One [`Cohort`] holding every column, with the event date when it is
+    /// given. Its rows are the records of
+    /// [`balance_records`](Self::balance_records), and its
+    /// [`risk_set_rows`](Cohort::risk_set_rows) those of
+    /// [`risk_set_records`](Self::risk_set_records). A numeric field and a
+    /// numeric covariate of the same name given the same array share one
+    /// column.
+    ///
+    /// # Errors
+    ///
+    /// As [`balance_records`](Self::balance_records), and
+    /// [`ArrowInputError::Cohort`] when two strata, two numeric fields or two
+    /// covariates have one name.
+    pub fn cohort(&self) -> Result<Cohort> {
+        let len = self.id.len();
+        let ids = Ids::new(self.id)?;
+        if let Some(row) = (0..len).find(|&row| self.id.is_null(row)) {
+            return Err(ArrowInputError::NullValue {
+                column: "id".to_string(),
+                row,
+            });
+        }
+        let birth = Dates::new("birth_date", self.birth_date, len)?;
+        let birth = (0..len)
+            .map(|row| birth.required(row))
+            .collect::<Result<Vec<_>>>()?;
+        let optional_date = |name, array: Option<&'a dyn Array>| -> Result<_> {
+            array
+                .map(|array| {
+                    let dates = Dates::new(name, array, len)?;
+                    (0..len)
+                        .map(|row| dates.get(row))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()
+        };
+        let death = optional_date("death_date", self.death_date)?;
+        let emigration = optional_date("emigration_date", self.emigration_date)?;
+        let entry = optional_date("entry_date", self.entry_date)?;
+        let event = optional_date("event_date", self.event_date)?;
+
+        let mut builder =
+            Cohort::builder((0..len).map(|row| ids.get(row).unwrap_or_default()), birth);
+        for (name, array) in &self.strata {
+            let text = texts(name, *array, len)?;
+            builder = builder.stratum(name.clone(), (0..len).map(|row| text.get(row)));
+        }
+        let shared = |name: &str, array: &dyn Array| {
+            self.covariates.iter().any(|(other, values, numeric)| {
+                *numeric && other == name && std::ptr::addr_eq(*values, array)
+            })
+        };
+        for (name, array) in &self.numerics {
+            let values = floats(name, *array, len)?;
+            let column = (0..len).map(|row| (!values.is_null(row)).then(|| values.value(row)));
+            builder = if shared(name, *array) {
+                builder.numeric_field_and_covariate(name.clone(), column)
+            } else {
+                builder.numeric(name.clone(), column)
+            };
+        }
+        for (name, array, numeric) in &self.covariates {
+            if *numeric {
+                let is_field = self
+                    .numerics
+                    .iter()
+                    .any(|(other, values)| other == name && std::ptr::addr_eq(*values, *array));
+                if is_field {
+                    continue;
+                }
+                let values = floats(name, *array, len)?;
+                builder = builder.numeric_covariate(
+                    name.clone(),
+                    (0..len).map(|row| (!values.is_null(row)).then(|| values.value(row))),
+                );
+            } else {
+                let text = texts(name, *array, len)?;
+                builder =
+                    builder.categorical_covariate(name.clone(), (0..len).map(|row| text.get(row)));
+            }
+        }
+        if let Some(array) = self.unique_key {
+            let text = texts("unique_key", array, len)?;
+            builder = builder.unique_key((0..len).map(|row| text.get(row)));
+        }
+        for (dates, set) in [
+            (death, CohortBuilder::death_date as fn(_, _) -> _),
+            (emigration, CohortBuilder::emigration_date),
+            (entry, CohortBuilder::entry_date),
+            (event, CohortBuilder::event_date),
+        ] {
+            if let Some(dates) = dates {
+                builder = set(builder, dates);
+            }
+        }
+        builder.build().map_err(ArrowInputError::Cohort)
     }
 
     fn build<T>(&self, finish: impl Fn(BaseRecord, usize) -> Result<T>) -> Result<Vec<T>> {

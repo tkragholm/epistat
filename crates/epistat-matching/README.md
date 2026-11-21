@@ -39,5 +39,11 @@ let risk_sets = MatchJob::new_transition(&cohort, 42)
     .run();
 ```
 
-The `arrow` feature builds records from Apache Arrow arrays. The `reporting`
-feature writes the matching summary and the balance tables as CSV.
+The matchers take any record type that implements the crate's traits. A
+`Cohort` holds the units as columns, about a hundred bytes per unit, and its
+rows are records that give the same results as owned ones, so ten million
+units fit in memory.
+
+The `arrow` feature builds records or a `Cohort` from Apache Arrow arrays.
+The `reporting` feature writes the matching summary and the balance tables as
+CSV.

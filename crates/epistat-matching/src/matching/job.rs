@@ -578,10 +578,10 @@ where
     }
 
     /// Execute role-transition matching and compute balance diagnostics in one call.
-    pub fn run_with_balance(
+    pub fn run_with_balance<B: crate::CovariateRecord>(
         self,
-        cases: &[crate::types::BalanceRecord],
-        controls: &[crate::types::BalanceRecord],
+        cases: &[B],
+        controls: &[B],
     ) -> (MatchOutcome, crate::types::BalanceReport)
     where
         S: SelectionStrategy<R> + Clone + Send + Sync,
@@ -646,10 +646,10 @@ where
     }
 
     /// Execute standard matching and compute balance diagnostics in one call.
-    pub fn run_with_balance(
+    pub fn run_with_balance<B: crate::CovariateRecord>(
         self,
-        cases: &[crate::types::BalanceRecord],
-        controls: &[crate::types::BalanceRecord],
+        cases: &[B],
+        controls: &[B],
     ) -> (MatchOutcome, crate::types::BalanceReport)
     where
         S: SelectionStrategy<R> + Clone + Send + Sync,

@@ -3,13 +3,13 @@ use super::stats::{
     cramers_v_weighted, eqq_distance_weighted, standard_deviation, standardised_difference,
     variance_ratio, weighted_ecdf_distance,
 };
-use crate::matching::effective_sample_size;
+use crate::matching::{CovariateRecord, effective_sample_size};
 use crate::types::{
-    BalanceImprovement, BalanceRecord, BalanceReport, BalanceReportOptions, BalanceSummary,
+    BalanceImprovement, BalanceReport, BalanceReportOptions, BalanceSummary,
     BalanceThresholdSummary, BalanceThresholds, CategoricalBalance, CategoricalLevelBalance,
-    CovariateValue, Estimand, GroupSampleSizes, LevelImprovement, MatchOutcome, MatchedPair,
-    NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform, NumericImprovement,
-    PairDistance, SampleSizeTable,
+    CovariateRef, CovariateValue, Estimand, GroupSampleSizes, LevelImprovement, MatchOutcome,
+    MatchedPair, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
+    NumericImprovement, PairDistance, SampleSizeTable,
 };
 use epistat_stats::weighted;
 use itertools::Itertools;
@@ -42,9 +42,9 @@ use std::sync::Arc;
 /// (see [`epistat_stats::balance::eqq_distance_weighted`]). Cramér's V uses the
 /// weights as counts.
 #[must_use]
-pub fn balance_report(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+pub fn balance_report<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     outcome: &MatchOutcome,
 ) -> BalanceReport {
     balance_report_with_options(cases, controls, outcome, &BalanceReportOptions::default())
@@ -52,9 +52,9 @@ pub fn balance_report(
 
 /// Compute pre- and post-match covariate balance summaries with report options.
 #[must_use]
-pub fn balance_report_with_options(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+pub fn balance_report_with_options<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     outcome: &MatchOutcome,
     options: &BalanceReportOptions,
 ) -> BalanceReport {
@@ -77,9 +77,9 @@ pub fn balance_report_with_options(
 ///
 /// [`BalanceInputError::InvalidWeight`] for a weight that is negative or not
 /// finite.
-pub fn balance_report_on_weights(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+pub fn balance_report_on_weights<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     weights: &BalanceWeights,
     options: &BalanceReportOptions,
 ) -> Result<BalanceReport, BalanceInputError> {
@@ -95,9 +95,9 @@ pub fn balance_report_on_weights(
 ///
 /// [`BalanceInputError::InvalidWeight`] for a weight that is negative or not
 /// finite.
-pub fn balance_summary(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+pub fn balance_summary<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     weights: &BalanceWeights,
     options: &BalanceReportOptions,
 ) -> Result<BalanceSummary, BalanceInputError> {
@@ -105,9 +105,9 @@ pub fn balance_summary(
     Ok(compute_summary(cases, controls, weights, options, true))
 }
 
-fn compute_summary(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+fn compute_summary<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     weights: &BalanceWeights,
     options: &BalanceReportOptions,
     with_pair_distances: bool,
@@ -180,8 +180,11 @@ fn compute_summary(
 
 /// The sample size table: counts and effective sample sizes before and after
 /// matching, from the weights of each unit.
-fn sample_sizes(sample: &BalanceSample<'_>, weights: &BalanceWeights) -> SampleSizeTable {
-    let group = |records: &[BalanceRecord], unit_weights: &[UnitWeights]| {
+fn sample_sizes<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
+    weights: &BalanceWeights,
+) -> SampleSizeTable {
+    let group = |records: &[R], unit_weights: &[UnitWeights]| {
         let ess = |values: Vec<f64>| {
             // The weights have been validated, so only a size that is
             // undefined, with no positive weight, is left as `None`.
@@ -196,12 +199,12 @@ fn sample_sizes(sample: &BalanceSample<'_>, weights: &BalanceWeights) -> SampleS
                 .iter()
                 .zip(unit_weights)
                 .filter(|(record, unit)| {
-                    unit.post == 0.0 && !weights.discarded.contains(record.core.id.as_str())
+                    unit.post == 0.0 && !weights.discarded.contains(record.id())
                 })
                 .count(),
             discarded: records
                 .iter()
-                .filter(|record| weights.discarded.contains(record.core.id.as_str()))
+                .filter(|record| weights.discarded.contains(record.id()))
                 .count(),
         }
     };
@@ -323,6 +326,15 @@ enum CovariateKind {
     Categorical,
 }
 
+/// A numeric value makes a numeric covariate; anything else, a missing value
+/// included, a categorical one.
+const fn kind_of(value: Option<CovariateRef<'_>>) -> CovariateKind {
+    match value {
+        Some(CovariateRef::Numeric(_)) => CovariateKind::Numeric,
+        _ => CovariateKind::Categorical,
+    }
+}
+
 /// One column of the covariate matrix: a numeric covariate, or the indicator of
 /// one level of a categorical covariate. `known` lists every level of the
 /// covariate, and a unit whose level is not among them has no value.
@@ -345,9 +357,9 @@ impl Column {
         }
     }
 
-    fn value(
+    fn value<R: CovariateRecord>(
         &self,
-        record: &BalanceRecord,
+        record: &R,
         supplemental: &SupplementalCovariateMap,
     ) -> Option<f64> {
         match self {
@@ -393,9 +405,9 @@ impl NumericFeature {
         }
     }
 
-    fn value(
+    fn value<R: CovariateRecord>(
         &self,
-        record: &BalanceRecord,
+        record: &R,
         supplemental: &SupplementalCovariateMap,
     ) -> Option<f64> {
         match self {
@@ -408,20 +420,18 @@ impl NumericFeature {
     }
 }
 
-fn collect_covariate_keys(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+fn collect_covariate_keys<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     case_supplemental: &SupplementalCovariateMap,
     control_supplemental: &SupplementalCovariateMap,
 ) -> Vec<String> {
-    cases
-        .iter()
-        .flat_map(|record| record.covariates.keys().cloned())
-        .chain(
-            controls
-                .iter()
-                .flat_map(|record| record.covariates.keys().cloned()),
-        )
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for record in cases.iter().chain(controls) {
+        seen.extend(record.covariate_names());
+    }
+    seen.into_iter()
+        .map(str::to_owned)
         .chain(
             case_supplemental
                 .values()
@@ -437,9 +447,9 @@ fn collect_covariate_keys(
         .collect_vec()
 }
 
-fn split_covariate_keys_by_kind(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+fn split_covariate_keys_by_kind<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     case_supplemental: &SupplementalCovariateMap,
     control_supplemental: &SupplementalCovariateMap,
 ) -> (Vec<String>, Vec<String>) {
@@ -451,17 +461,20 @@ fn split_covariate_keys_by_kind(
         for record in records {
             // The record's own covariates, then those the supplemental map
             // adds for this id, in the order `covariate_value` reads them.
-            let supplemental_for_record = supplemental.get(record.core.id.as_str());
-            let keys = record.covariates.iter().chain(
-                supplemental_for_record
-                    .into_iter()
-                    .flat_map(|values| values.iter()),
-            );
-            for (key, value) in keys {
-                kinds.entry(key.as_str()).or_insert(match value {
-                    CovariateValue::Numeric(_) => CovariateKind::Numeric,
-                    _ => CovariateKind::Categorical,
-                });
+            let supplemental_for_record = supplemental.get(record.id());
+            for key in record.covariate_names() {
+                if !kinds.contains_key(key) {
+                    let value = record.covariate(key);
+                    kinds.insert(key, kind_of(value));
+                }
+            }
+            for (key, value) in supplemental_for_record
+                .into_iter()
+                .flat_map(|values| values.iter())
+            {
+                kinds
+                    .entry(key.as_str())
+                    .or_insert_with(|| kind_of(Some(CovariateRef::from(value))));
             }
         }
     }
@@ -494,15 +507,15 @@ struct UnitWeights {
     post: f64,
 }
 
-fn unit_weights(
-    records: &[BalanceRecord],
+fn unit_weights<R: CovariateRecord>(
+    records: &[R],
     matching: &rapidhash::RapidHashMap<String, f64>,
     sampling: Option<&HashMap<String, f64>>,
 ) -> Vec<UnitWeights> {
     records
         .iter()
         .map(|record| {
-            let id = record.core.id.as_str();
+            let id = record.id();
             let matching = matching.get(id).copied().unwrap_or(0.0);
             match sampling {
                 None => UnitWeights {
@@ -522,9 +535,9 @@ fn unit_weights(
 }
 
 /// The records of one balance report and the weight of each.
-struct BalanceSample<'a> {
-    cases: &'a [BalanceRecord],
-    controls: &'a [BalanceRecord],
+struct BalanceSample<'a, R> {
+    cases: &'a [R],
+    controls: &'a [R],
     case_weights: Vec<UnitWeights>,
     control_weights: Vec<UnitWeights>,
     /// Whether sampling weights were given.
@@ -587,8 +600,8 @@ struct GroupMoments {
 
 type LevelTable = HashMap<String, Arc<[String]>>;
 
-fn build_numeric_balance(
-    sample: &BalanceSample<'_>,
+fn build_numeric_balance<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     numeric_keys: &[String],
     levels: &LevelTable,
@@ -609,8 +622,8 @@ fn build_numeric_balance(
     clippy::float_cmp,
     reason = "redundancy is exact, so a covariate on a small scale is never mistaken for it"
 )]
-fn is_redundant_term(
-    sample: &BalanceSample<'_>,
+fn is_redundant_term<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
 ) -> bool {
@@ -641,8 +654,8 @@ fn is_redundant_term(
 /// The records of both groups with their value of the feature, pre-match order,
 /// cases first. A record without a finite value is left out. The second element
 /// is the record's identifier.
-fn feature_units<'a>(
-    sample: &BalanceSample<'a>,
+fn feature_units<'a, R: CovariateRecord>(
+    sample: &BalanceSample<'a, R>,
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
 ) -> Vec<(Unit<f64>, &'a str)> {
@@ -669,7 +682,7 @@ fn feature_units<'a>(
                         is_case,
                         weights: *weights,
                     },
-                    record.core.id.as_str(),
+                    record.id(),
                 ));
             }
         }
@@ -715,8 +728,8 @@ fn group_moments(units: &[Unit<f64>], is_case: bool, stage: Stage, binary: bool)
     GroupMoments { mean, variance }
 }
 
-fn summarize_numeric_feature(
-    sample: &BalanceSample<'_>,
+fn summarize_numeric_feature<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
 ) -> (NumericBalance, PairDistance) {
@@ -827,8 +840,8 @@ fn standardiser_scale(reference: Option<f64>) -> Option<f64> {
 
 /// Mean absolute difference over the matched pairs in which both units have a
 /// value, summed in the order of the pairs.
-fn pair_distance(
-    sample: &BalanceSample<'_>,
+fn pair_distance<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     name: &str,
     units: &[(Unit<f64>, &str)],
     scale: Option<f64>,
@@ -861,8 +874,8 @@ fn mean_gap(name: &str, gaps: impl Iterator<Item = f64>, scale: Option<f64>) -> 
     }
 }
 
-fn build_categorical_balance(
-    sample: &BalanceSample<'_>,
+fn build_categorical_balance<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     categorical_keys: &[String],
     levels: &LevelTable,
@@ -895,8 +908,8 @@ fn level_shares(mass: &[f64]) -> Option<Vec<f64>> {
     (total > 0.0).then(|| mass.iter().map(|value| value / total).collect())
 }
 
-fn summarize_categorical_feature(
-    sample: &BalanceSample<'_>,
+fn summarize_categorical_feature<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     key: &str,
     levels: &[String],
@@ -930,7 +943,7 @@ fn summarize_categorical_feature(
                         is_case,
                         weights: *weights,
                     },
-                    record.core.id.as_str(),
+                    record.id(),
                 ));
             }
         }
@@ -1078,13 +1091,13 @@ fn numeric_feature_specs(
     specs
 }
 
-fn numeric_covariate(
-    record: &BalanceRecord,
+fn numeric_covariate<R: CovariateRecord>(
+    record: &R,
     key: &str,
     supplemental: &SupplementalCovariateMap,
 ) -> Option<f64> {
     match covariate_value(record, key, supplemental) {
-        Some(CovariateValue::Numeric(value)) if value.is_finite() => Some(*value),
+        Some(CovariateRef::Numeric(value)) if value.is_finite() => Some(value),
         _ => None,
     }
 }
@@ -1093,9 +1106,9 @@ fn split_pair(pair: Option<(f64, f64)>) -> (Option<f64>, Option<f64>) {
     (pair.map(|(first, _)| first), pair.map(|(_, second)| second))
 }
 
-fn collect_levels(
-    cases: &[BalanceRecord],
-    controls: &[BalanceRecord],
+fn collect_levels<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
     case_supplemental: &SupplementalCovariateMap,
     control_supplemental: &SupplementalCovariateMap,
     key: &str,
@@ -1120,27 +1133,28 @@ fn collect_levels(
     }
 }
 
-fn map_covariate_to_level(value: &CovariateValue) -> String {
+fn map_covariate_to_level(value: CovariateRef<'_>) -> String {
     match value {
-        CovariateValue::Categorical(value) => value.clone(),
-        CovariateValue::Numeric(_) => "numeric".to_string(),
-        CovariateValue::Missing => "missing".to_string(),
+        CovariateRef::Categorical(value) => value.to_owned(),
+        CovariateRef::Numeric(_) => "numeric".to_string(),
+        CovariateRef::Missing => "missing".to_string(),
     }
 }
 
-fn map_optional_covariate_to_level(value: Option<&CovariateValue>) -> String {
+fn map_optional_covariate_to_level(value: Option<CovariateRef<'_>>) -> String {
     value.map_or_else(|| "missing".to_string(), map_covariate_to_level)
 }
 
-fn covariate_value<'a>(
-    record: &'a BalanceRecord,
+fn covariate_value<'a, R: CovariateRecord>(
+    record: &'a R,
     key: &str,
     supplemental: &'a SupplementalCovariateMap,
-) -> Option<&'a CovariateValue> {
-    record.covariates.get(key).or_else(|| {
+) -> Option<CovariateRef<'a>> {
+    record.covariate(key).or_else(|| {
         supplemental
-            .get(record.core.id.as_str())
+            .get(record.id())
             .and_then(|values| values.get(key))
+            .map(CovariateRef::from)
     })
 }
 

@@ -50,8 +50,8 @@ impl<R: MatchingRecord> Constraint<R> for GenderMatch {
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
-        let case_val = case.strata().get(&self.key);
-        let control_val = control.strata().get(&self.key);
+        let case_val = case.stratum(&self.key);
+        let control_val = control.stratum(&self.key);
         match (case_val, control_val) {
             (Some(c), Some(ctrl)) => c == ctrl,
             _ => self.allow_unknown,
@@ -107,7 +107,7 @@ impl<R: MatchingRecord> Constraint<R> for AntiExact {
     )]
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
         match &self.field {
-            AntiExactField::Key(key) => match (case.strata().get(key), control.strata().get(key)) {
+            AntiExactField::Key(key) => match (case.stratum(key), control.stratum(key)) {
                 (Some(left), Some(right)) => left != right,
                 _ => true,
             },

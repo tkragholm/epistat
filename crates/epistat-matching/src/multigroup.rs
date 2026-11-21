@@ -73,7 +73,9 @@ use epistat_glm::{Multinom, MultinomError};
 use epistat_linalg::Mat;
 use epistat_stats::cluster::{KMeansAlgorithm, KMeansError, kmeans};
 
-use crate::matching::{CovariateEncodingConfig, EstimationError, encode_covariates};
+use crate::matching::{
+    CovariateEncodingConfig, CovariateRecord, EstimationError, MatchingRecord, encode_covariates,
+};
 use crate::types::{
     BalanceRecord, DistanceCaliper, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
 };
@@ -250,8 +252,8 @@ fn check_groups(groups: &[usize], n_groups: usize, n: usize) -> Result<(), Multi
 /// # Errors
 ///
 /// See [`MultigroupError`].
-pub fn generalised_propensity_score(
-    records: &[BalanceRecord],
+pub fn generalised_propensity_score<R: CovariateRecord>(
+    records: &[R],
     groups: &[usize],
     n_groups: usize,
     config: &GpsConfig,
@@ -505,8 +507,8 @@ fn inside_support(gps: &GeneralisedPropensityScore, groups: &[usize]) -> Vec<boo
 /// # Errors
 ///
 /// See [`MultigroupError`].
-pub fn vector_match(
-    records: &[BalanceRecord],
+pub fn vector_match<R: CovariateRecord>(
+    records: &[R],
     groups: &[usize],
     n_groups: usize,
     spec: &VectorMatchSpec,
@@ -532,8 +534,7 @@ pub fn vector_match(
             }
         }
         if spec.refit && keep.len() < records.len() {
-            let kept_records: Vec<BalanceRecord> =
-                keep.iter().map(|&i| records[i].clone()).collect();
+            let kept_records: Vec<&R> = keep.iter().map(|&i| &records[i]).collect();
             let kept_groups: Vec<usize> = keep.iter().map(|&i| groups[i]).collect();
             gps = generalised_propensity_score(&kept_records, &kept_groups, n_groups, &spec.gps)?;
         } else {
@@ -547,14 +548,14 @@ pub fn vector_match(
             gps.probabilities = probabilities;
         }
     }
-    let kept_ids: Vec<String> = keep.iter().map(|&i| records[i].core.id.clone()).collect();
+    let kept_ids: Vec<String> = keep.iter().map(|&i| records[i].id().to_owned()).collect();
     let mut kept = vec![false; records.len()];
     for &i in &keep {
         kept[i] = true;
     }
     let discarded: Vec<String> = (0..records.len())
         .filter(|&i| !kept[i])
-        .map(|i| records[i].core.id.clone())
+        .map(|i| records[i].id().to_owned())
         .collect();
     let kept_groups: Vec<usize> = keep.iter().map(|&i| groups[i]).collect();
     let n = keep.len();
@@ -672,29 +673,29 @@ fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
 /// # Errors
 ///
 /// [`BalanceInputError`] for a weight that is not valid.
-pub fn balance_by_group(
-    records: &[BalanceRecord],
+pub fn balance_by_group<R: CovariateRecord>(
+    records: &[R],
     groups: &[usize],
     focal: usize,
     outcome: &VectorMatchOutcome,
     options: &BalanceReportOptions,
 ) -> Result<Vec<(usize, BalanceReport)>, BalanceInputError> {
     let kept: HashSet<&str> = outcome.kept.iter().map(String::as_str).collect();
-    let focal_records: Vec<BalanceRecord> = records
+    let focal_records: Vec<&R> = records
         .iter()
         .zip(groups)
-        .filter(|(r, g)| **g == focal && kept.contains(r.core.id.as_str()))
-        .map(|(r, _)| r.clone())
+        .filter(|(r, g)| **g == focal && kept.contains(r.id()))
+        .map(|(r, _)| r)
         .collect();
     outcome
         .comparisons
         .iter()
         .map(|comparison| {
-            let others: Vec<BalanceRecord> = records
+            let others: Vec<&R> = records
                 .iter()
                 .zip(groups)
-                .filter(|(r, g)| **g == comparison.group && kept.contains(r.core.id.as_str()))
-                .map(|(r, _)| r.clone())
+                .filter(|(r, g)| **g == comparison.group && kept.contains(r.id()))
+                .map(|(r, _)| r)
                 .collect();
             let weights = BalanceWeights::from_outcome(&comparison.outcome);
             balance_report_on_weights(&focal_records, &others, &weights, options)

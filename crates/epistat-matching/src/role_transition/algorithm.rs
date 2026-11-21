@@ -812,7 +812,7 @@ fn run_swept_case_loop<
         sweep.advance(case_event_date);
 
         let case_strata_values =
-            (!required.is_empty()).then(|| build_strata_values(case.strata(), required));
+            (!required.is_empty()).then(|| build_strata_values(case, required));
         let place = engine
             .candidate_index
             .stratum_of(case_strata_values.as_deref())

@@ -25,7 +25,9 @@ use chrono::NaiveDate;
 use common::{Level, Person, Rec, cohort, records};
 use epistat_matching::arrow::{ArrowInputError, ArrowRecords, column};
 use epistat_matching::prelude::*;
-use epistat_matching::{CovariateValue, NearestBirthDateSelection};
+use epistat_matching::{
+    Cohort, CohortError, CovariateRef, CovariateValue, NearestBirthDateSelection,
+};
 
 fn epoch() -> NaiveDate {
     NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
@@ -200,6 +202,132 @@ fn balance_records_equal_the_builder() {
         got[2].covariates["region"],
         CovariateValue::Categorical("S".into())
     );
+}
+
+/// Every row of `cohort` reads as `records` do: id, dates, every stratum,
+/// numeric field and covariate the record has, and none it does not.
+fn rows_equal_records(cohort: &Cohort, records: &[BalanceRecord], names: &[&str]) {
+    assert_eq!(cohort.len(), records.len());
+    for (row, record) in cohort.rows().zip(records) {
+        assert_eq!(row.id(), record.id());
+        assert_eq!(row.birth_date(), record.birth_date());
+        assert_eq!(row.unique_key(), record.unique_key());
+        assert_eq!(row.death_date(), record.death_date());
+        assert_eq!(row.emigration_date(), record.emigration_date());
+        assert_eq!(row.entry_date(), record.entry_date());
+        for name in names {
+            assert_eq!(row.stratum(name), record.stratum(name), "{name}");
+            assert_eq!(
+                row.numeric(name).map(f64::to_bits),
+                record.numeric(name).map(f64::to_bits),
+                "{name}"
+            );
+            match (row.covariate(name), record.covariate(name)) {
+                (Some(CovariateRef::Numeric(a)), Some(CovariateRef::Numeric(b))) => {
+                    assert_eq!(a.to_bits(), b.to_bits(), "{name}");
+                }
+                (a, b) => assert_eq!(a, b, "{name}"),
+            }
+        }
+        let mut row_names: Vec<&str> = row.covariate_names().collect();
+        let mut record_names: Vec<&str> = record.covariate_names().collect();
+        row_names.sort_unstable();
+        record_names.sort_unstable();
+        assert_eq!(row_names, record_names);
+    }
+    assert!(!cohort.has_built_record_maps());
+}
+
+#[test]
+fn a_cohort_holds_the_balance_records() {
+    let birth = NaiveDate::from_ymd_opt(2001, 5, 6).unwrap();
+    let before_epoch = NaiveDate::from_ymd_opt(1960, 2, 29).unwrap();
+    let id = Int64Array::from(vec![7, 8, 9]);
+    let born = dates([Some(birth), Some(before_epoch), Some(birth)].into_iter());
+    let key = strings([Some("k"), None, Some("k")].into_iter());
+    let sex = strings([Some("1"), Some("2"), None].into_iter());
+    let death = dates([None, Some(birth), None].into_iter());
+    let emigration = dates([Some(before_epoch), None, None].into_iter());
+    let entry = dates([Some(birth), Some(birth), None].into_iter());
+    let event = dates([None, None, Some(birth)].into_iter());
+    let age = Float64Array::from(vec![Some(3.5), None, Some(f64::NAN)]);
+    let other = Float64Array::from(vec![Some(f64::INFINITY), Some(2.0), Some(-0.0)]);
+    let region: ArrayRef = Arc::new(
+        [Some("N"), None, Some("S")]
+            .into_iter()
+            .collect::<DictionaryArray<Int8Type>>(),
+    );
+    let columns = ArrowRecords::new(&id, &*born)
+        .strata("sex", &*sex)
+        .numeric("age", &age)
+        .numeric_covariate("age", &age)
+        .numeric("other", &other)
+        .numeric_covariate("inf", &other)
+        .categorical_covariate("region", &*region)
+        .unique_key(&*key)
+        .death_date(&*death)
+        .emigration_date(&*emigration)
+        .entry_date(&*entry)
+        .event_date(&*event);
+    let records = columns.balance_records().unwrap();
+    let cohort = columns.cohort().unwrap();
+    rows_equal_records(
+        &cohort,
+        &records,
+        &["sex", "age", "other", "inf", "region", "absent"],
+    );
+    assert_eq!(cohort.numeric_names(), ["age", "other"]);
+    let risk = cohort.risk_set_rows();
+    let direct = columns.risk_set_records().unwrap();
+    for (a, b) in risk.iter().zip(&direct) {
+        assert_eq!(a.transition_date, b.transition_date);
+    }
+    // Two strata of one name are an error naming it.
+    let twice = ArrowRecords::new(&id, &*born)
+        .strata("sex", &*sex)
+        .strata("sex", &*key)
+        .cohort();
+    assert!(matches!(
+        twice,
+        Err(ArrowInputError::Cohort(CohortError::DuplicateName { column })) if column == "sex"
+    ));
+    // A null id is an error, as for the records.
+    let ids = strings([Some("a"), None, Some("c")].into_iter());
+    assert_eq!(
+        failure(ArrowRecords::new(&*ids, &*born).cohort()),
+        ArrowInputError::NullValue {
+            column: "id".into(),
+            row: 1
+        }
+    );
+}
+
+#[test]
+fn a_match_on_cohort_rows_is_bit_identical() {
+    let people = cohort(4_000, 100, 10, 15);
+    let c = columns(&people);
+    let built = ArrowRecords::new(&*c.id, &*c.birth)
+        .strata("sex", &*c.sex)
+        .strata("municipality", &*c.municipality)
+        .numeric("parent_year", &*c.parent_year)
+        .death_date(&*c.death)
+        .emigration_date(&*c.emigration)
+        .event_date(&*c.event)
+        .cohort()
+        .unwrap();
+    let rows = built.risk_set_rows();
+    let direct = records(&people, Level::Municipality, false, true);
+    let on_rows = MatchJob::new_transition(&rows, 99)
+        .with_ratio(MatchRatio::new(3).unwrap())
+        .with_birth_window(BirthDateWindowDays::new(60).unwrap())
+        .with_age_limit(AgeLimitYears::new(6).unwrap())
+        .with_exact_matches(["sex", "municipality"])
+        .with_alive_check()
+        .with_strategy(NearestBirthDateSelection)
+        .run();
+    assert_ne!(on_rows.matched_cases, 0);
+    assert_eq!(format!("{:?}", run(&direct)), format!("{on_rows:?}"));
+    assert!(!built.has_built_record_maps());
 }
 
 #[test]

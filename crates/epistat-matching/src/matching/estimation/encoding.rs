@@ -3,7 +3,7 @@
 use super::EstimationError;
 use super::config::{CovariateEncodingConfig, MissingValuePolicy};
 use crate::matching::{CovariateRecord, to_f64};
-use crate::types::CovariateValue;
+use crate::types::CovariateRef;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 
@@ -154,12 +154,15 @@ fn resolve_covariate_keys<R: CovariateRecord>(records: &[&R], requested: &[Strin
         return requested.to_vec();
     }
 
-    records
-        .iter()
-        .flat_map(|record| record.covariates().keys().cloned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect_vec()
+    let mut keys = BTreeSet::new();
+    for record in records {
+        for name in record.covariate_names() {
+            if !keys.contains(name) {
+                keys.insert(name.to_owned());
+            }
+        }
+    }
+    keys.into_iter().collect_vec()
 }
 
 fn build_schema_for_key<R: CovariateRecord>(
@@ -175,8 +178,8 @@ fn build_schema_for_key<R: CovariateRecord>(
     let mut saw_missing = false;
 
     for record in records {
-        match record.covariates().get(key) {
-            Some(CovariateValue::Numeric(value)) => {
+        match record.covariate(key) {
+            Some(CovariateRef::Numeric(value)) => {
                 if !value.is_finite() {
                     return Err(EstimationError::NonFiniteNumericCovariate {
                         record_id: record.id().to_string(),
@@ -184,14 +187,16 @@ fn build_schema_for_key<R: CovariateRecord>(
                     });
                 }
                 observed_numeric = true;
-                numeric_sum += *value;
+                numeric_sum += value;
                 numeric_count += 1;
             }
-            Some(CovariateValue::Categorical(value)) => {
+            Some(CovariateRef::Categorical(value)) => {
                 observed_categorical = true;
-                categorical_levels.insert(value.clone());
+                if !categorical_levels.contains(value) {
+                    categorical_levels.insert(value.to_owned());
+                }
             }
-            Some(CovariateValue::Missing) | None => {
+            Some(CovariateRef::Missing) | None => {
                 saw_missing = true;
             }
         }
@@ -261,20 +266,20 @@ fn encode_numeric_value<R: CovariateRecord>(
     mean: f64,
     policy: MissingValuePolicy,
 ) -> Result<f64, EstimationError> {
-    match record.covariates().get(key) {
-        Some(CovariateValue::Numeric(value)) => {
+    match record.covariate(key) {
+        Some(CovariateRef::Numeric(value)) => {
             if !value.is_finite() {
                 return Err(EstimationError::NonFiniteNumericCovariate {
                     record_id: record.id().to_string(),
                     covariate: key.to_string(),
                 });
             }
-            Ok(*value)
+            Ok(value)
         }
-        Some(CovariateValue::Categorical(_)) => Err(EstimationError::MixedCovariateType {
+        Some(CovariateRef::Categorical(_)) => Err(EstimationError::MixedCovariateType {
             covariate: key.to_string(),
         }),
-        Some(CovariateValue::Missing) | None => match policy {
+        Some(CovariateRef::Missing) | None => match policy {
             MissingValuePolicy::Error => Err(EstimationError::MissingValuesNotAllowed {
                 covariate: key.to_string(),
             }),
@@ -288,12 +293,12 @@ fn encode_categorical_level<R: CovariateRecord>(
     key: &str,
     policy: MissingValuePolicy,
 ) -> Result<String, EstimationError> {
-    match record.covariates().get(key) {
-        Some(CovariateValue::Categorical(value)) => Ok(value.clone()),
-        Some(CovariateValue::Numeric(_)) => Err(EstimationError::MixedCovariateType {
+    match record.covariate(key) {
+        Some(CovariateRef::Categorical(value)) => Ok(value.to_owned()),
+        Some(CovariateRef::Numeric(_)) => Err(EstimationError::MixedCovariateType {
             covariate: key.to_string(),
         }),
-        Some(CovariateValue::Missing) | None => match policy {
+        Some(CovariateRef::Missing) | None => match policy {
             MissingValuePolicy::Error => Err(EstimationError::MissingValuesNotAllowed {
                 covariate: key.to_string(),
             }),

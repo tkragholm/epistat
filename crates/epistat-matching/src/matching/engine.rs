@@ -300,7 +300,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         F: Fn(usize, &R) -> bool + Sync,
     {
         let case_strata_values = (!self.criteria.required_strata.is_empty())
-            .then(|| build_strata_values(case.strata(), &self.criteria.required_strata));
+            .then(|| build_strata_values(case, &self.criteria.required_strata));
 
         let mut candidate_indices = if pool_config.use_birth_date_index {
             let window_days = self
@@ -1201,10 +1201,7 @@ fn group_anchors_by_strata<R: MatchingRecord>(
         {
             continue;
         }
-        let key: Vec<Option<&str>> = required_strata
-            .iter()
-            .map(|k| case.strata().get(k).map(String::as_str))
-            .collect();
+        let key: Vec<Option<&str>> = required_strata.iter().map(|k| case.stratum(k)).collect();
         if let Some(&position) = index_of.get(&key) {
             groups[position].push(anchor_idx);
         } else {
@@ -1704,7 +1701,7 @@ mod pool_scan_tests {
         diagnostics: &mut MatchDiagnostics,
     ) -> Vec<usize> {
         let case_strata_values = (!engine.criteria.required_strata.is_empty())
-            .then(|| build_strata_values(case.strata(), &engine.criteria.required_strata));
+            .then(|| build_strata_values(case, &engine.criteria.required_strata));
         let window_days = engine
             .criteria
             .typed_birth_date_window()

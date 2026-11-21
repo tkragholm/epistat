@@ -13,6 +13,10 @@
 //!   one of the methods below.
 //! * `REPS`: timed repetitions, default 3. The median is reported.
 //! * `OUT`: directory for the results, default `SCRATCH/out`.
+//! * `RECORDS`: `owned` builds a `BalanceRecord` per unit, with its strata,
+//!   numeric fields and covariates in hash maps. Any other value, or none,
+//!   builds one columnar `Cohort` and matches its rows. Both give the same
+//!   results.
 //!
 //! The cohort is simulated from a fixed seed by `gen` and written to
 //! `SCRATCH/cohort_N.csv`. Every later run, in Rust and in R, reads that file,
@@ -39,6 +43,7 @@ use epistat_matching::sensitivity::{
     MScore, WilcoxonDistribution, hodges_lehmann_bounds, m_statistic_bounds, matched_sets,
     wilcoxon_bounds,
 };
+use epistat_matching::{Cohort, CohortRow};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufRead, Write as _};
@@ -228,15 +233,80 @@ fn record(row: &Row) -> BalanceRecord {
     r
 }
 
-/// The two groups of a standard match, built from the rows, which are
-/// consumed. `y` is the outcome of the unit with id `i + 1`.
-struct Inputs {
-    anchors: Vec<BalanceRecord>,
-    candidates: Vec<BalanceRecord>,
+/// Whether the records are owned `BalanceRecord`s rather than rows of a
+/// columnar `Cohort`.
+fn owned_records() -> bool {
+    std::env::var("RECORDS").is_ok_and(|v| v == "owned")
+}
+
+const STRATA: [&str; 5] = ["s", "g", "x3", "x5", "fam"];
+
+fn stratum_value(row: &Row, key: &str) -> String {
+    match key {
+        "s" => format!("s{}", row.s),
+        "g" => format!("g{}", row.g),
+        "x3" => format!("{}", row.x[2]),
+        "x5" => format!("{}", row.x[4]),
+        _ => format!("f{}", row.fam),
+    }
+}
+
+/// The units of `rows` as one columnar cohort holding what [`record`] puts in
+/// each record, with `x` in place of the rows' covariates when given. With
+/// `dates`, the death and case dates of [`cohort_of`] too.
+fn columns(rows: &[Row], x: Option<&[[f64; 5]]>, dates: bool) -> Cohort {
+    let mut builder = Cohort::builder(
+        rows.iter().map(|row| row.id.to_string()),
+        vec![origin(); rows.len()],
+    );
+    for (k, name) in COVARIATES.iter().enumerate() {
+        let values: Vec<Option<f64>> = match x {
+            Some(x) => x.iter().map(|x| Some(x[k])).collect(),
+            None => rows.iter().map(|row| Some(row.x[k])).collect(),
+        };
+        builder = builder.numeric_field_and_covariate(*name, values);
+    }
+    for key in STRATA {
+        builder = builder.stratum(key, rows.iter().map(|row| Some(stratum_value(row, key))));
+    }
+    if dates {
+        let day = |d: Option<u32>| d.map(|d| origin() + Days::new(u64::from(d)));
+        builder = builder
+            .death_date(rows.iter().map(|row| day(row.t_death)).collect())
+            .event_date(rows.iter().map(|row| day(row.t_case)).collect());
+    }
+    builder.build().expect("valid cohort")
+}
+
+/// The two groups of a standard match. `y` is the outcome of the unit with id
+/// `i + 1`.
+struct Inputs<R> {
+    anchors: Vec<R>,
+    candidates: Vec<R>,
     y: Vec<f64>,
 }
 
-fn standard_inputs(rows: Vec<Row>, hard: bool) -> Inputs {
+/// The two groups as rows of `cohort`, which holds the units of `rows` in
+/// order.
+fn standard_rows<'a>(rows: &[Row], hard: bool, cohort: &'a Cohort) -> Inputs<CohortRow<'a>> {
+    let mut anchors = Vec::new();
+    let mut candidates = Vec::new();
+    for (row, unit) in rows.iter().zip(cohort.rows()) {
+        if if hard { row.ctreat } else { row.treat } {
+            anchors.push(unit);
+        } else {
+            candidates.push(unit);
+        }
+    }
+    Inputs {
+        anchors,
+        candidates,
+        y: rows.iter().map(|row| row.y).collect(),
+    }
+}
+
+/// The two groups as owned records, built from the rows, which are consumed.
+fn standard_inputs(rows: Vec<Row>, hard: bool) -> Inputs<BalanceRecord> {
     let mut y = Vec::with_capacity(rows.len());
     let mut anchors = Vec::new();
     let mut candidates = Vec::new();
@@ -604,7 +674,12 @@ fn time_reps<T>(reps: usize, mut f: impl FnMut() -> T) -> (Vec<f64>, T) {
     (times, last.expect("one repetition"))
 }
 
-fn run_standard(method: &str, spec: &MatchSpec, input: &Inputs, reps: usize) -> Timed {
+fn run_standard<R: CovariateRecord>(
+    method: &str,
+    spec: &MatchSpec,
+    input: &Inputs<R>,
+    reps: usize,
+) -> Timed {
     let (times, out) = time_reps(reps, || {
         run_spec(
             spec,
@@ -650,12 +725,26 @@ fn risk_set_spec(mode: MatchMode, replace: bool) -> MatchSpec {
 }
 
 fn run_risk_set(rows: Vec<Row>, reps: usize, mode: MatchMode, replace: bool) -> Timed {
-    let cohort = cohort_of(&rows);
-    drop(rows);
+    if owned_records() {
+        let cohort = cohort_of(&rows);
+        drop(rows);
+        run_risk_set_on(&cohort, reps, mode, replace)
+    } else {
+        let columns = columns(&rows, None, true);
+        drop(rows);
+        run_risk_set_on(&columns.risk_set_rows(), reps, mode, replace)
+    }
+}
+
+fn run_risk_set_on<R: CovariateRecord>(
+    cohort: &[RoleTransitionRecord<R>],
+    reps: usize,
+    mode: MatchMode,
+    replace: bool,
+) -> Timed {
     let spec = risk_set_spec(mode, replace);
     let (times, out) = time_reps(reps, || {
-        run_spec(&spec, SpecInput::RiskSet { cohort: &cohort })
-            .unwrap_or_else(|e| panic!("risk set: {e}"))
+        run_spec(&spec, SpecInput::RiskSet { cohort }).unwrap_or_else(|e| panic!("risk set: {e}"))
     });
     let (matched, lines, header) = output_lines(&out);
     Timed {
@@ -669,11 +758,14 @@ fn run_risk_set(rows: Vec<Row>, reps: usize, mode: MatchMode, replace: bool) -> 
 /// People observed in six periods; a person who starts treatment does so in
 /// the period `g mod 6`, is eligible until then, and the outcome falls in the
 /// period of the case date.
-fn trial_panel(rows: &[Row]) -> Vec<TrialPerson<BalanceRecord>> {
+fn trial_panel<R>(
+    rows: &[Row],
+    mut record_of: impl FnMut(usize, &Row) -> R,
+) -> Vec<TrialPerson<R>> {
     rows.iter()
-        .map(|row| {
-            let mut r = record(row);
-            r.core.death_date = row.t_death.map(|d| origin() + Days::new(u64::from(d)));
+        .enumerate()
+        .map(|(i, row)| {
+            let r = record_of(i, row);
             let start = (row.g as usize) % TRIAL_PERIODS;
             let event_period = row
                 .t_case
@@ -693,8 +785,24 @@ fn trial_panel(rows: &[Row]) -> Vec<TrialPerson<BalanceRecord>> {
 }
 
 fn run_trials(rows: Vec<Row>, reps: usize) -> Timed {
-    let panel = trial_panel(&rows);
-    drop(rows);
+    if owned_records() {
+        let panel = trial_panel(&rows, |_, row| {
+            let mut r = record(row);
+            r.core.death_date = row.t_death.map(|d| origin() + Days::new(u64::from(d)));
+            r
+        });
+        drop(rows);
+        run_trials_on(&panel, reps)
+    } else {
+        let columns = columns(&rows, None, true);
+        let panel = trial_panel(&rows, |i, _| columns.row(i).expect("row"));
+        drop(rows);
+        run_trials_on(&panel, reps)
+    }
+}
+
+/// The cohort's case dates are not read: the panel's periods set the trials.
+fn run_trials_on<R: CovariateRecord>(panel: &[TrialPerson<R>], reps: usize) -> Timed {
     let spec = MatchSpec {
         mode: MatchMode::SequentialTrials,
         method: MatchMethod::Random,
@@ -706,8 +814,7 @@ fn run_trials(rows: Vec<Row>, reps: usize) -> Timed {
         ..MatchSpec::default()
     };
     let (times, out) = time_reps(reps, || {
-        run_spec(&spec, SpecInput::Trials { panel: &panel })
-            .unwrap_or_else(|e| panic!("trials: {e}"))
+        run_spec(&spec, SpecInput::Trials { panel }).unwrap_or_else(|e| panic!("trials: {e}"))
     });
     let (matched, lines, header) = output_lines(&out);
     Timed {
@@ -718,12 +825,12 @@ fn run_trials(rows: Vec<Row>, reps: usize) -> Timed {
     }
 }
 
-fn units_of(input: &Inputs) -> Units {
+fn units_of<R: MatchingRecord>(input: &Inputs<R>) -> Units {
     let ids = input
         .anchors
         .iter()
         .chain(&input.candidates)
-        .map(|r| r.core.id.clone())
+        .map(|r| r.id().to_owned())
         .collect();
     let anchor = (0..input.anchors.len() + input.candidates.len())
         .map(|i| i < input.anchors.len())
@@ -731,22 +838,24 @@ fn units_of(input: &Inputs) -> Units {
     Units::new(ids, anchor).expect("distinct ids")
 }
 
-fn unit_data_of(input: &Inputs, y: &[f64]) -> UnitData {
+fn unit_data_of<R: MatchingRecord>(input: &Inputs<R>, y: &[f64]) -> UnitData {
     let all = || input.anchors.iter().chain(&input.candidates);
-    let ids: Vec<String> = all().map(|r| r.core.id.clone()).collect();
+    let ids: Vec<String> = all().map(|r| r.id().to_owned()).collect();
     let treated: Vec<bool> = (0..ids.len()).map(|i| i < input.anchors.len()).collect();
     let outcome: Vec<f64> = all()
-        .map(|r| y[usize::try_from(id_number(&r.core.id)).expect("id") - 1])
+        .map(|r| y[usize::try_from(id_number(r.id())).expect("id") - 1])
         .collect();
     let mut data = UnitData::new(ids, treated, outcome).expect("unit data");
     for name in ["x1", "x2"] {
-        let column = all().map(|r| r.core.numerics[name]).collect();
+        let column = all()
+            .map(|r| r.numeric(name).expect("numeric field"))
+            .collect();
         data = data.with_covariate(name, column).expect("covariate");
     }
     data
 }
 
-fn nearest_pairs(input: &Inputs) -> MatchOutcome {
+fn nearest_pairs<R: CovariateRecord>(input: &Inputs<R>) -> MatchOutcome {
     let spec = spec_for("nn_ps").expect("spec");
     match run_spec(
         &spec,
@@ -775,7 +884,11 @@ fn fit_config(link: PropensityLink, estimator: PropensityEstimator) -> Propensit
         .build()
 }
 
-fn run_fit(input: &Inputs, reps: usize, config: &PropensityScoreConfig) -> Timed {
+fn run_fit<R: CovariateRecord>(
+    input: &Inputs<R>,
+    reps: usize,
+    config: &PropensityScoreConfig,
+) -> Timed {
     let (times, prepared) = time_reps(reps, || {
         prepare_propensity_distance_config(&input.anchors, &input.candidates, config)
             .unwrap_or_else(|e| panic!("fit: {e}"))
@@ -788,7 +901,7 @@ fn run_fit(input: &Inputs, reps: usize, config: &PropensityScoreConfig) -> Timed
     }
 }
 
-fn run_balance(input: &Inputs, reps: usize) -> (Timed, String) {
+fn run_balance<R: CovariateRecord>(input: &Inputs<R>, reps: usize) -> (Timed, String) {
     let outcome = nearest_pairs(input);
     let mut smd = String::new();
     let (times, report) = time_reps(reps, || {
@@ -817,7 +930,7 @@ fn run_balance(input: &Inputs, reps: usize) -> (Timed, String) {
     )
 }
 
-fn run_effects(input: &Inputs, reps: usize, boot: bool) -> Timed {
+fn run_effects<R: CovariateRecord>(input: &Inputs<R>, reps: usize, boot: bool) -> Timed {
     let outcome = nearest_pairs(input);
     let units = units_of(input);
     let data = unit_data_of(input, &input.y);
@@ -841,7 +954,7 @@ fn run_effects(input: &Inputs, reps: usize, boot: bool) -> Timed {
     }
 }
 
-fn run_abadie(input: &Inputs, reps: usize) -> Timed {
+fn run_abadie<R: MatchingRecord>(input: &Inputs<R>, reps: usize) -> Timed {
     let data = unit_data_of(input, &input.y);
     let mut spec = AbadieImbensSpec::new();
     spec.bias_adjust = true;
@@ -858,7 +971,7 @@ fn run_abadie(input: &Inputs, reps: usize) -> Timed {
     }
 }
 
-fn run_sensitivity(input: &Inputs, reps: usize, which: &str) -> Timed {
+fn run_sensitivity<R: CovariateRecord>(input: &Inputs<R>, reps: usize, which: &str) -> Timed {
     let outcome = nearest_pairs(input);
     let units = units_of(input);
     let data = unit_data_of(input, &input.y);
@@ -892,43 +1005,76 @@ fn run_sensitivity(input: &Inputs, reps: usize, which: &str) -> Timed {
     }
 }
 
+/// The covariates of each imputed data set: its own jitter on x1 and x2, as
+/// imputed values differ.
+fn imputed_covariates(rows: &[Row]) -> Vec<Vec<[f64; 5]>> {
+    (0..IMPUTED_SETS)
+        .map(|m| {
+            let mut jitter = Rng(SEED ^ (m as u64 + 1));
+            rows.iter()
+                .map(|row| {
+                    let mut x = row.x;
+                    for value in &mut x[..2] {
+                        *value += 0.05 * jitter.normal();
+                    }
+                    x
+                })
+                .collect()
+        })
+        .collect()
+}
+
 fn run_impute(rows: Vec<Row>, reps: usize) -> Timed {
     let y: Vec<f64> = rows.iter().map(|r| r.y).collect();
-    // Each data set has its own jitter on x1 and x2, as imputed values differ.
-    let mut sets_data: Vec<Inputs> = Vec::new();
-    for m in 0..IMPUTED_SETS {
-        let mut jitter = Rng(SEED ^ (m as u64 + 1));
-        let mut anchors = Vec::new();
-        let mut candidates = Vec::new();
-        for row in &rows {
-            let mut r = record(row);
-            for name in ["x1", "x2"] {
-                let v = r.core.numerics[name] + 0.05 * jitter.normal();
-                r.core.numerics.insert(name.to_string(), v);
-                r.covariates
-                    .insert(name.to_string(), CovariateValue::Numeric(v));
-            }
-            if row.treat {
-                anchors.push(r);
-            } else {
-                candidates.push(r);
-            }
-        }
-        sets_data.push(Inputs {
-            anchors,
-            candidates,
-            y: Vec::new(),
-        });
+    let xs = imputed_covariates(&rows);
+    if owned_records() {
+        let sets_data: Vec<Inputs<BalanceRecord>> = xs
+            .iter()
+            .map(|x| {
+                let mut anchors = Vec::new();
+                let mut candidates = Vec::new();
+                for (row, x) in rows.iter().zip(x) {
+                    let mut r = record(row);
+                    for (name, v) in ["x1", "x2"].into_iter().zip(x) {
+                        r.core.numerics.insert(name.to_string(), *v);
+                        r.covariates
+                            .insert(name.to_string(), CovariateValue::Numeric(*v));
+                    }
+                    if row.treat {
+                        anchors.push(r);
+                    } else {
+                        candidates.push(r);
+                    }
+                }
+                Inputs {
+                    anchors,
+                    candidates,
+                    y: Vec::new(),
+                }
+            })
+            .collect();
+        drop(rows);
+        run_impute_on(&sets_data, &y, reps)
+    } else {
+        let cohorts: Vec<Cohort> = xs.iter().map(|x| columns(&rows, Some(x), false)).collect();
+        let sets_data: Vec<Inputs<CohortRow<'_>>> = cohorts
+            .iter()
+            .map(|cohort| standard_rows(&rows, false, cohort))
+            .collect();
+        drop(rows);
+        run_impute_on(&sets_data, &y, reps)
     }
-    drop(rows);
-    let sets: Vec<ImputedSet<'_, BalanceRecord>> = sets_data
+}
+
+fn run_impute_on<R: CovariateRecord>(sets_data: &[Inputs<R>], y: &[f64], reps: usize) -> Timed {
+    let sets: Vec<ImputedSet<'_, R>> = sets_data
         .iter()
         .map(|s| ImputedSet {
             anchors: &s.anchors,
             candidates: &s.candidates,
         })
         .collect();
-    let data: Vec<UnitData> = sets_data.iter().map(|s| unit_data_of(s, &y)).collect();
+    let data: Vec<UnitData> = sets_data.iter().map(|s| unit_data_of(s, y)).collect();
     let criteria = MatchingCriteria::builder().match_ratio(1).build();
     let config = PropensityScoreConfig::default();
     let effect = EffectSpec::new(OutcomeModel::Linear);
@@ -956,17 +1102,98 @@ fn run_impute(rows: Vec<Row>, reps: usize) -> Timed {
 
 fn run_multigroup(rows: Vec<Row>, reps: usize) -> Timed {
     let groups: Vec<usize> = rows.iter().map(|r| usize::from(r.grp)).collect();
-    let records: Vec<BalanceRecord> = rows.iter().map(record).collect();
-    drop(rows);
+    if owned_records() {
+        let records: Vec<BalanceRecord> = rows.iter().map(record).collect();
+        drop(rows);
+        run_multigroup_on(&records, &groups, reps)
+    } else {
+        let cohort = columns(&rows, None, false);
+        drop(rows);
+        let records: Vec<CohortRow<'_>> = cohort.rows().collect();
+        run_multigroup_on(&records, &groups, reps)
+    }
+}
+
+fn run_multigroup_on<R: CovariateRecord>(records: &[R], groups: &[usize], reps: usize) -> Timed {
     let spec = VectorMatchSpec::new(0, 5);
     let (times, out) = time_reps(reps, || {
-        vector_match(&records, &groups, 3, &spec).unwrap_or_else(|e| panic!("vector: {e}"))
+        vector_match(records, groups, 3, &spec).unwrap_or_else(|e| panic!("vector: {e}"))
     });
     Timed {
         times,
         matched: out.matched_focal.len(),
         lines: Vec::new(),
         header: "",
+    }
+}
+
+/// Runs a method of standard matching on the two groups, or on the units for
+/// the methods that take one sample.
+fn run_on_groups<R: CovariateRecord>(
+    m: &str,
+    input: &Inputs<R>,
+    reps: usize,
+) -> (Timed, Option<String>) {
+    let timed = match m {
+        "cardinality" | "profile" => run_standard(m, &spec_for(m).expect("spec"), input, reps),
+        "balance" => {
+            let (timed, table) = run_balance(input, reps);
+            return (timed, Some(table));
+        }
+        "fit_logit" => run_fit(
+            input,
+            reps,
+            &fit_config(PropensityLink::Logit, PropensityEstimator::GlmLogit),
+        ),
+        "fit_probit" => run_fit(
+            input,
+            reps,
+            &fit_config(PropensityLink::Probit, PropensityEstimator::GlmLogit),
+        ),
+        "fit_enet_cv" => run_fit(
+            input,
+            reps,
+            &fit_config(
+                PropensityLink::Logit,
+                PropensityEstimator::ElasticNetCv(
+                    ElasticNetCvConfig::builder().seed(3).alpha(1.0).build(),
+                ),
+            ),
+        ),
+        "fit_cbps" => run_fit(
+            input,
+            reps,
+            &fit_config(
+                PropensityLink::Logit,
+                PropensityEstimator::Cbps(CbpsConfig::default()),
+            ),
+        ),
+        "effects" => run_effects(input, reps, false),
+        "effects_boot" => run_effects(input, reps, true),
+        "abadie" => run_abadie(input, reps),
+        "sens_sets" | "sens_wilcoxon" | "sens_hl" | "sens_mscore" => {
+            run_sensitivity(input, reps, m)
+        }
+        name => {
+            let spec = spec_for(name).unwrap_or_else(|| panic!("unknown method {name}"));
+            run_standard(name, &spec, input, reps)
+        }
+    };
+    (timed, None)
+}
+
+/// Builds the two groups of a standard match from the rows, which are
+/// consumed, and runs `m` on them.
+fn run_standard_method(m: &str, rows: Vec<Row>, reps: usize) -> (Timed, Option<String>) {
+    let hard = m == "cardinality" || m == "profile";
+    if owned_records() {
+        let input = standard_inputs(rows, hard);
+        run_on_groups(m, &input, reps)
+    } else {
+        let cohort = columns(&rows, None, false);
+        let input = standard_rows(&rows, hard, &cohort);
+        drop(rows);
+        run_on_groups(m, &input, reps)
     }
 }
 
@@ -993,12 +1220,16 @@ fn main() {
     let mut balance_table = None;
     let result = match m {
         "load" => {
-            let input = standard_inputs(rows, false);
-            println!(
-                "loaded {} treated, {} others",
-                input.anchors.len(),
-                input.candidates.len()
-            );
+            let (treated, others) = if owned_records() {
+                let input = standard_inputs(rows, false);
+                (input.anchors.len(), input.candidates.len())
+            } else {
+                let cohort = columns(&rows, None, false);
+                let input = standard_rows(&rows, false, &cohort);
+                drop(rows);
+                (input.anchors.len(), input.candidates.len())
+            };
+            println!("loaded {treated} treated, {others} others");
             return;
         }
         "riskset" | "riskset_replace" => {
@@ -1008,57 +1239,10 @@ fn main() {
         "trials" => run_trials(rows, reps),
         "impute" => run_impute(rows, reps),
         "multigroup" => run_multigroup(rows, reps),
-        "cardinality" | "profile" => {
-            let input = standard_inputs(rows, true);
-            run_standard(m, &spec_for(m).expect("spec"), &input, reps)
-        }
         _ => {
-            let input = standard_inputs(rows, false);
-            match m {
-                "balance" => {
-                    let (timed, table) = run_balance(&input, reps);
-                    balance_table = Some(table);
-                    timed
-                }
-                "fit_logit" => run_fit(
-                    &input,
-                    reps,
-                    &fit_config(PropensityLink::Logit, PropensityEstimator::GlmLogit),
-                ),
-                "fit_probit" => run_fit(
-                    &input,
-                    reps,
-                    &fit_config(PropensityLink::Probit, PropensityEstimator::GlmLogit),
-                ),
-                "fit_enet_cv" => run_fit(
-                    &input,
-                    reps,
-                    &fit_config(
-                        PropensityLink::Logit,
-                        PropensityEstimator::ElasticNetCv(
-                            ElasticNetCvConfig::builder().seed(3).alpha(1.0).build(),
-                        ),
-                    ),
-                ),
-                "fit_cbps" => run_fit(
-                    &input,
-                    reps,
-                    &fit_config(
-                        PropensityLink::Logit,
-                        PropensityEstimator::Cbps(CbpsConfig::default()),
-                    ),
-                ),
-                "effects" => run_effects(&input, reps, false),
-                "effects_boot" => run_effects(&input, reps, true),
-                "abadie" => run_abadie(&input, reps),
-                "sens_sets" | "sens_wilcoxon" | "sens_hl" | "sens_mscore" => {
-                    run_sensitivity(&input, reps, m)
-                }
-                name => {
-                    let spec = spec_for(name).unwrap_or_else(|| panic!("unknown method {name}"));
-                    run_standard(name, &spec, &input, reps)
-                }
-            }
+            let (timed, table) = run_standard_method(m, rows, reps);
+            balance_table = table;
+            timed
         }
     };
     if let Some(table) = balance_table {

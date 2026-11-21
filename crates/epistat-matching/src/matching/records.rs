@@ -1,4 +1,4 @@
-use crate::types::{BalanceRecord, BaseRecord, CovariateValue, RoleTransitionRecord};
+use crate::types::{BalanceRecord, BaseRecord, CovariateRef, CovariateValue, RoleTransitionRecord};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
@@ -8,7 +8,17 @@ pub trait MatchingRecord: Send + Sync {
     /// The individual's birth date (used for caliper matching).
     fn birth_date(&self) -> NaiveDate;
     /// Map of categorical values used for exact strata matching.
+    ///
+    /// The matchers read one value at a time through [`stratum`](Self::stratum).
     fn strata(&self) -> &HashMap<String, String>;
+    /// The value of the stratum `key`, `None` when the record has none.
+    ///
+    /// The default reads [`strata`](Self::strata). A record that keeps its
+    /// strata elsewhere, as a [`Cohort`](crate::Cohort) row keeps them in
+    /// columns, overrides it, and the matchers then never build the map.
+    fn stratum(&self, key: &str) -> Option<&str> {
+        self.strata().get(key).map(String::as_str)
+    }
     /// A named numeric field, for [`crate::constraints::Caliper`] constraints.
     ///
     /// `strata()` carries categorical values for exact matching. This carries
@@ -62,7 +72,24 @@ pub trait ResidentAtIndexRecord: RoleIndexedRecord {
 }
 
 pub trait CovariateRecord: MatchingRecord {
+    /// Map of the covariates of the record.
+    ///
+    /// The propensity models and balance reports read one covariate at a time
+    /// through [`covariate`](Self::covariate) and
+    /// [`covariate_names`](Self::covariate_names).
     fn covariates(&self) -> &HashMap<String, CovariateValue>;
+    /// The covariate `name`, `None` when the record does not carry it.
+    ///
+    /// The default reads [`covariates`](Self::covariates).
+    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
+        self.covariates().get(name).map(CovariateRef::from)
+    }
+    /// The names of the covariates the record carries, in no particular order.
+    ///
+    /// The default reads [`covariates`](Self::covariates).
+    fn covariate_names(&self) -> impl Iterator<Item = &str> {
+        self.covariates().keys().map(String::as_str)
+    }
 }
 
 impl MatchingRecord for BaseRecord {
@@ -152,6 +179,10 @@ impl<R: MatchingRecord> MatchingRecord for RoleTransitionRecord<R> {
         self.record.strata()
     }
 
+    fn stratum(&self, key: &str) -> Option<&str> {
+        self.record.stratum(key)
+    }
+
     fn numeric(&self, name: &str) -> Option<f64> {
         self.record.numeric(name)
     }
@@ -194,6 +225,81 @@ impl<R: MatchingRecord> ResidentAtIndexRecord for RoleTransitionRecord<R> {
 impl<R: CovariateRecord> CovariateRecord for RoleTransitionRecord<R> {
     fn covariates(&self) -> &HashMap<String, CovariateValue> {
         self.record.covariates()
+    }
+
+    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
+        self.record.covariate(name)
+    }
+
+    fn covariate_names(&self) -> impl Iterator<Item = &str> {
+        self.record.covariate_names()
+    }
+}
+
+/// A shared reference is a record of the same kind, so a matcher can take
+/// `&R` in place of `R` and work on records it does not own, as sequential
+/// trials do with the people of a panel.
+impl<R: MatchingRecord + ?Sized> MatchingRecord for &R {
+    fn id(&self) -> &str {
+        (**self).id()
+    }
+
+    fn birth_date(&self) -> NaiveDate {
+        (**self).birth_date()
+    }
+
+    fn strata(&self) -> &HashMap<String, String> {
+        (**self).strata()
+    }
+
+    fn stratum(&self, key: &str) -> Option<&str> {
+        (**self).stratum(key)
+    }
+
+    fn numeric(&self, name: &str) -> Option<f64> {
+        (**self).numeric(name)
+    }
+
+    fn unique_key(&self) -> Option<&str> {
+        (**self).unique_key()
+    }
+
+    fn death_date(&self) -> Option<NaiveDate> {
+        (**self).death_date()
+    }
+
+    fn emigration_date(&self) -> Option<NaiveDate> {
+        (**self).emigration_date()
+    }
+
+    fn entry_date(&self) -> Option<NaiveDate> {
+        (**self).entry_date()
+    }
+}
+
+impl<R: RoleIndexedRecord + ?Sized> RoleIndexedRecord for &R {
+    fn event_date(&self) -> Option<NaiveDate> {
+        (**self).event_date()
+    }
+}
+
+impl<R: ResidentAtIndexRecord + ?Sized> ResidentAtIndexRecord for &R {
+    fn is_resident_at(&self, index_date: NaiveDate) -> bool {
+        (**self).is_resident_at(index_date)
+    }
+}
+
+impl<R: CovariateRecord + ?Sized> CovariateRecord for &R {
+    fn covariates(&self) -> &HashMap<String, CovariateValue> {
+        (**self).covariates()
+    }
+
+    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
+        (**self).covariate(name)
+    }
+
+    fn covariate_names(&self) -> impl Iterator<Item = &str> {
+        (**self).covariate_names()
     }
 }
 
