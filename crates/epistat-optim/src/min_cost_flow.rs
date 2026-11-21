@@ -348,6 +348,10 @@ struct Solver {
     pivots: u64,
     stack: Vec<u32>,
     path: Vec<u32>,
+    /// The arcs above the nodes of `path` before a re-hang, and their
+    /// directions.
+    old_pred: Vec<u32>,
+    old_up: Vec<bool>,
     /// Whether every artificial arc leaves the root.
     from_root: bool,
 }
@@ -488,6 +492,8 @@ impl Solver {
             pivots: 0,
             stack: Vec::new(),
             path: Vec::new(),
+            old_pred: Vec::new(),
+            old_up: Vec::new(),
             from_root: false,
         })
     }
@@ -919,8 +925,12 @@ impl Solver {
             node = self.parent[node as usize];
         }
         let path = std::mem::take(&mut self.path);
-        let old_pred: Vec<u32> = path.iter().map(|v| self.pred[*v as usize]).collect();
-        let old_up: Vec<bool> = path.iter().map(|v| self.up[*v as usize]).collect();
+        let mut old_pred = std::mem::take(&mut self.old_pred);
+        let mut old_up = std::mem::take(&mut self.old_up);
+        old_pred.clear();
+        old_up.clear();
+        old_pred.extend(path.iter().map(|v| self.pred[*v as usize]));
+        old_up.extend(path.iter().map(|v| self.up[*v as usize]));
         for v in &path {
             self.remove_child(*v);
         }
@@ -934,6 +944,8 @@ impl Solver {
             self.up[child as usize] = !old_up[t];
         }
         self.path = path;
+        self.old_pred = old_pred;
+        self.old_up = old_up;
 
         // Potentials and depths below `inside`, by a walk of the subtree.
         self.stack.clear();
