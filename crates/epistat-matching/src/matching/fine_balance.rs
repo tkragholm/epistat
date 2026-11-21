@@ -726,9 +726,8 @@ impl Network<'_> {
             }
         }
         for (level, data) in self.levels.iter().enumerate() {
-            for category in 0..data.categories.len() {
+            for (category, &here) in count[level].iter().enumerate() {
                 let target = self.ratio * data.anchors[category];
-                let here = count[level][category];
                 let cheap = here.min(target);
                 if target > 0 {
                     values.push(to_i64(cheap));
