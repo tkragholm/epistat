@@ -43,13 +43,28 @@
 //!   ratios with the nearest mode returns an invalid outcome (`nearest_options`).
 //! * **Exact strata.** Anchors and candidates are split by the exact-match
 //!   keys first, and the strata are matched in parallel. Within a stratum the
-//!   matching is sequential, since each assignment depends on the last.
+//!   matching is sequential, since each assignment depends on the last. With
+//!   replacement and no unique key an assignment changes nothing another
+//!   anchor reads, so the anchors of a stratum of at least 4096 are searched
+//!   on the rayon pool and their controls given out in the anchors' order.
 //!
 //! # Cost
 //!
 //! With a score distance, a stratum's candidates are sorted once, and an anchor
 //! finds its nearest by walking out from its own score. Candidates already used
-//! are skipped in near-constant time. The walk stops at the caliper, so a
+//! are skipped in near-constant time.
+//!
+//! The scores are read by position. A [`ScoreTable`](super::distance::ScoreTable)
+//! made for the units in the order they are given is borrowed as it is, after
+//! one comparison of each unit's id with the table's; a table for other units,
+//! or in another order, costs one lookup by id for each unit and no more. The
+//! sort is on an integer that orders as the score does, with the candidate's
+//! position as the tie-break, so it is a total order and its result does not
+//! depend on the algorithm or the number of threads: `O(c log c)` for `c`
+//! candidates, on the rayon pool from 65536. The positions already used
+//! are skipped through two forests of positions (union-find with path halving,
+//! Tarjan and van Leeuwen 1984), so a walk costs the unused positions it
+//! passes plus an inverse-Ackermann factor for each used run. The walk stops at the caliper, so a
 //! caliper bounds the work per anchor. Without one, an anchor whose nearest
 //! candidates are all refused by a constraint walks as far as it must.
 //!
