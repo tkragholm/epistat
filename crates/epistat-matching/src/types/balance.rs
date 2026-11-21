@@ -7,8 +7,8 @@ use std::collections::HashMap;
 /// Cohort-level balance diagnostics from match results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceDiagnostics {
-    /// Proportion of anchors matched.
-    pub match_rate: f64,
+    /// Proportion of anchors matched, `None` when there are no anchors.
+    pub match_rate: Option<f64>,
     /// Number of matched anchors.
     pub matched_cases: usize,
     /// Number of unmatched anchors.

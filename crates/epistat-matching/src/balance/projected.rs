@@ -50,11 +50,11 @@ impl<R> CategoricalCovariateSpec<R> {
     }
 }
 
-/// Sample variance around a supplied mean.
+/// Sample variance around a supplied mean, `None` for fewer than two values.
 #[must_use]
-pub fn variance(vals: &[f64], mean: f64) -> f64 {
+pub fn variance(vals: &[f64], mean: f64) -> Option<f64> {
     if vals.len() < 2 {
-        return 0.0;
+        return None;
     }
     let sum_squares = vals
         .iter()
@@ -63,22 +63,26 @@ pub fn variance(vals: &[f64], mean: f64) -> f64 {
             delta * delta
         })
         .sum::<f64>();
-    sum_squares / to_f64(vals.len().saturating_sub(1))
+    Some(sum_squares / to_f64(vals.len().saturating_sub(1)))
 }
 
-/// Standardized mean difference from raw value vectors, `None` when a group is
-/// empty or the pooled variance is not positive and finite.
+/// Standardized mean difference from raw value vectors, `None` when a group
+/// has fewer than two values, the pooled variance is not positive and finite,
+/// or the difference is not finite.
 #[must_use]
 pub fn smd_numeric_from_values(case_vals: &[f64], control_vals: &[f64]) -> Option<f64> {
-    if case_vals.is_empty() || control_vals.is_empty() {
+    if case_vals.len() < 2 || control_vals.len() < 2 {
         return None;
     }
     let mean_case = case_vals.iter().sum::<f64>() / to_f64(case_vals.len());
     let mean_control = control_vals.iter().sum::<f64>() / to_f64(control_vals.len());
-    let var_case = variance(case_vals, mean_case);
-    let var_control = variance(control_vals, mean_control);
+    let var_case = variance(case_vals, mean_case)?;
+    let var_control = variance(control_vals, mean_control)?;
     let pooled_sd = f64::midpoint(var_case, var_control).sqrt();
-    (pooled_sd > 0.0 && pooled_sd.is_finite()).then(|| (mean_case - mean_control) / pooled_sd)
+    if !(pooled_sd > 0.0 && pooled_sd.is_finite()) {
+        return None;
+    }
+    Some((mean_case - mean_control) / pooled_sd).filter(|value| value.is_finite())
 }
 
 /// Maximum absolute difference in category proportions, `None` when a group is empty.
@@ -226,7 +230,13 @@ mod tests {
 
     #[test]
     fn numeric_smd_is_undefined_for_empty_groups_and_zero_variance() {
-        assert_eq!(smd_numeric_from_values(&[], &[1.0]), None);
+        assert_eq!(smd_numeric_from_values(&[], &[1.0, 2.0]), None);
+        assert_eq!(smd_numeric_from_values(&[1.0], &[0.0, 2.0, 4.0, 6.0]), None);
+        assert_eq!(smd_numeric_from_values(&[0.0, 2.0, 4.0, 6.0], &[1.0]), None);
+        assert_eq!(
+            smd_numeric_from_values(&[f64::MAX, -f64::MAX], &[1.0, 2.0]),
+            None
+        );
         assert_eq!(smd_numeric_from_values(&[1.0], &[]), None);
         assert_eq!(smd_numeric_from_values(&[2.0, 2.0], &[2.0, 2.0]), None);
         assert!(smd_numeric_from_values(&[1.0, 3.0], &[2.0, 6.0]).is_some());

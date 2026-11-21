@@ -442,21 +442,14 @@ fn split_covariate_keys_by_kind(
     case_supplemental: &SupplementalCovariateMap,
     control_supplemental: &SupplementalCovariateMap,
 ) -> (Vec<String>, Vec<String>) {
-    // One sweep of the records rather than one per key. `covariate_kind`
-    // returns on the first record carrying the key, so this was cheap for a
-    // key the first record has and a full two-list scan for one that only
-    // appears late -- or, for a supplemental key no BalanceRecord carries at
-    // all, every time.
-    //
-    // First-wins in the same order preserves the answer exactly: cases before
-    // controls, and within each the record order, which is what the per-key
-    // search did.
+    // One sweep of the records. The kind of a key is taken from the first
+    // record that carries it: cases before controls, and within each group the
+    // record order.
     let mut kinds: HashMap<&str, CovariateKind> = HashMap::new();
     for (records, supplemental) in [(cases, case_supplemental), (controls, control_supplemental)] {
         for record in records {
-            // The record's own covariates, then whatever the supplemental map
-            // adds for this id -- the two places `covariate_value` looks, in
-            // the order it looks in them.
+            // The record's own covariates, then those the supplemental map
+            // adds for this id, in the order `covariate_value` reads them.
             let supplemental_for_record = supplemental.get(record.core.id.as_str());
             let keys = record.covariates.iter().chain(
                 supplemental_for_record
@@ -607,10 +600,14 @@ fn build_numeric_balance(
         .unzip()
 }
 
-/// A squared or product term that is zero everywhere or equal to its first
-/// factor everywhere adds nothing to the covariates it is built from, as for
+/// A squared or product term that is exactly zero everywhere or exactly equal
+/// to its first factor everywhere adds nothing to the covariates it is built from, as for
 /// the square of a binary variable. MatchIt drops these from `interactions =
 /// TRUE`.
+#[expect(
+    clippy::float_cmp,
+    reason = "redundancy is exact, so a covariate on a small scale is never mistaken for it"
+)]
 fn is_redundant_term(
     sample: &BalanceSample<'_>,
     context: BalanceCovariateContext<'_>,
@@ -619,7 +616,6 @@ fn is_redundant_term(
     let NumericFeature::Product { left, right } = feature else {
         return false;
     };
-    let tolerance = f64::EPSILON.sqrt();
     let mut all_zero = true;
     let mut equals_left = true;
     for (records, supplemental) in [
@@ -634,8 +630,8 @@ fn is_redundant_term(
                 continue;
             };
             let product = first * second;
-            all_zero &= product.abs() < tolerance;
-            equals_left &= (product - first).abs() < tolerance;
+            all_zero &= product == 0.0;
+            equals_left &= product == first;
         }
     }
     all_zero || equals_left
@@ -1845,5 +1841,30 @@ mod tests {
             names,
             vec!["age", "age^2", "age * regionnorth", "age * regionsouth"]
         );
+    }
+
+    #[test]
+    fn square_of_a_small_scale_covariate_is_kept() {
+        let make = |prefix: &str, offset: f64| -> Vec<BalanceRecord> {
+            (0..6)
+                .map(|i| {
+                    let mut r = participant(&format!("{prefix}{i}"));
+                    r.covariates.insert(
+                        "x".to_string(),
+                        CovariateValue::Numeric(1e-6 * (f64::from(i) + offset)),
+                    );
+                    r
+                })
+                .collect()
+        };
+        let cases = make("c", 1.0);
+        let controls = make("k", 2.0);
+        let weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::Squares,
+            ..BalanceReportOptions::default()
+        };
+        let report = balance_report_on_weights(&cases, &controls, &weights, &options).unwrap();
+        assert!(report.numeric.iter().any(|row| row.name == "x^2"));
     }
 }
