@@ -143,9 +143,16 @@ fn fit_ours(
     prepare_propensity_distance_config(&anchors, &candidates, &config).expect("the fit succeeds")
 }
 
-/// The values of `map` in the order of the data rows.
-fn in_row_order(map: &rapidhash::RapidHashMap<String, f64>, n: usize) -> Vec<f64> {
-    (0..n).map(|idx| map[&id(idx)]).collect()
+/// The values of `column`, which is aligned with the ids of `estimate`, in the
+/// order of the data rows.
+fn in_row_order(
+    estimate: &epistat_matching::PropensityScoreEstimate,
+    column: &[f64],
+    n: usize,
+) -> Vec<f64> {
+    (0..n)
+        .map(|idx| column[estimate.position(&id(idx)).expect("a unit")])
+        .collect()
 }
 
 fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
@@ -251,7 +258,7 @@ fn cbps_matches_the_minimum_and_cbps() {
                 diag.gradient_norm + fit.grad_star,
                 diag.balance_residual_norm,
             );
-            let theta = in_row_order(&estimate.linear_predictor, n);
+            let theta = in_row_order(estimate, &estimate.linear_predictor, n);
             let to_star = max_abs_diff(&theta, &fit.star_linear);
             assert!(
                 to_star <= ours_distance,
@@ -313,7 +320,7 @@ fn cbps_matches_the_minimum_and_cbps() {
             );
 
             // The balance moments, against the moments at the minimum.
-            let p = in_row_order(&estimate.probabilities, n);
+            let p = in_row_order(estimate, &estimate.probabilities, n);
             let balance = balance_of(data, fit, &p);
             let bound = balance_bound(data, fit, &p, ours_distance);
             for ((got, want), tol) in balance.iter().zip(&fit.balance_star).zip(&bound) {
@@ -426,8 +433,8 @@ fn the_linear_scale_distance_is_the_linear_predictor() {
         for fit in &data.fits {
             let label = format!("{} {} {}", data.name, fit.estimand, fit.method);
             let ours = fit_ours(data, fit, PropensityScoreOutputScale::LinearPredictor);
-            let scores = in_row_order(&ours.estimate.distance_scores, n);
-            let theta = in_row_order(&ours.estimate.linear_predictor, n);
+            let scores = in_row_order(&ours.estimate, &ours.estimate.distance_scores, n);
+            let theta = in_row_order(&ours.estimate, &ours.estimate.linear_predictor, n);
             assert_eq!(scores, theta, "{label}");
         }
     }
@@ -478,8 +485,13 @@ fn equal_sampling_weights_change_nothing_and_bad_settings_are_errors() {
     let mut weighted = cbps(CbpsConfig::default());
     weighted.sampling_weights = Some((0..data.treat.len()).map(|idx| (id(idx), 3.0)).collect());
     let weighted = fit(weighted).expect("fits");
-    for (key, want) in &plain.estimate.linear_predictor {
-        let got = weighted.estimate.linear_predictor[key];
+    for (key, want) in plain
+        .estimate
+        .ids
+        .iter()
+        .zip(&plain.estimate.linear_predictor)
+    {
+        let got = weighted.estimate.linear_predictor_of(key).expect("a unit");
         assert!((got - want).abs() <= 3e-7, "{key}: {got} against {want}");
     }
 

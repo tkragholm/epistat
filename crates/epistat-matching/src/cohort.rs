@@ -432,7 +432,11 @@ impl Cohort {
     }
 
     fn covariate(&self, row: usize, name: &str) -> Option<CovariateRef<'_>> {
-        let value = match &self.covariates[self.covariate_names.find(name)?] {
+        Some(self.covariate_in_slot(row, self.covariate_names.find(name)?))
+    }
+
+    fn covariate_in_slot(&self, row: usize, slot: usize) -> CovariateRef<'_> {
+        match &self.covariates[slot] {
             Covariate::Numeric(column) => match self.numbers[*column].get(row) {
                 Some(value) if value.is_finite() => CovariateRef::Numeric(value),
                 _ => CovariateRef::Missing,
@@ -440,8 +444,7 @@ impl Cohort {
             Covariate::Categorical(text) => text
                 .get(row)
                 .map_or(CovariateRef::Missing, CovariateRef::Categorical),
-        };
-        Some(value)
+        }
     }
 
     fn date(column: Option<&Vec<Option<NaiveDate>>>, row: usize) -> Option<NaiveDate> {
@@ -757,6 +760,18 @@ impl CovariateRecord for CohortRow<'_> {
 
     fn covariate_names(&self) -> impl Iterator<Item = &str> {
         self.cohort.covariate_names.names.iter().map(String::as_str)
+    }
+
+    fn covariate_table(&self) -> Option<usize> {
+        Some(std::ptr::from_ref(self.cohort) as usize)
+    }
+
+    fn covariate_slot(&self, name: &str) -> Option<usize> {
+        self.cohort.covariate_names.find(name)
+    }
+
+    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
+        self.cohort.covariate_in_slot(self.row, slot)
     }
 }
 

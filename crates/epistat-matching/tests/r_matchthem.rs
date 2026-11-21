@@ -181,7 +181,10 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
                 assert_eq!(by_anchor[t], *c, "{label}: control of {t}");
             }
             for (row, want) in rs.distance.iter().enumerate() {
-                let got = ours.propensity.distance_scores[&(row + 1).to_string()];
+                let got = ours
+                    .propensity
+                    .distance_score(&(row + 1).to_string())
+                    .unwrap();
                 worst_score = worst_score.max((got - want).abs());
             }
         }

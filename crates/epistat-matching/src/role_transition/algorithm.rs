@@ -2,7 +2,7 @@ use super::sweep::{RiskSetSweep, SwapRemovePool};
 use crate::matching::{
     CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
     DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
-    SelectionStrategy, UsedControlsVec, build_outcome, build_strata_values,
+    ScoreTable, SelectionStrategy, UsedControlsVec, build_outcome, build_strata_values,
     finalize_estimand_diagnostics, intern_unique, invalid_cohort_outcome,
     invalid_common_support_outcome, invalid_criteria_outcome, ratio::RatioPolicy, unique_value,
 };
@@ -190,7 +190,7 @@ fn match_with_distance_channel<
     request: TransitionMatchRequest<'_, S, G, P>,
     distance_channel: DistanceChannel<'_, R, D>,
     use_birth_date_index: bool,
-    common_support_scores: Option<&RapidHashMap<String, f64>>,
+    common_support_scores: Option<&ScoreTable>,
 ) -> MatchOutcome {
     match_with_role_indexing_with_channel_internal(
         cohort,
@@ -222,7 +222,7 @@ struct RoleIndexingConfig<
     extra_constraints: &'a G,
     distance_channel: DistanceChannel<'a, R, D>,
     use_birth_date_index: bool,
-    common_support_scores: Option<&'a RapidHashMap<String, f64>>,
+    common_support_scores: Option<&'a ScoreTable>,
     risk_set_policy: &'a P,
 }
 
@@ -239,7 +239,7 @@ struct TransitionCommonSupportFilters {
 fn score_bounds_for_indices<R: RoleIndexedRecord>(
     cohort: &[R],
     indices: &[usize],
-    scores: &RapidHashMap<String, f64>,
+    scores: &ScoreTable,
 ) -> Option<(f64, f64)> {
     let mut min_score = f64::INFINITY;
     let mut max_score = f64::NEG_INFINITY;
@@ -272,7 +272,7 @@ fn support_interval(left: (f64, f64), right: (f64, f64)) -> Option<(f64, f64)> {
 
 fn score_inside_interval<R: RoleIndexedRecord>(
     row: &R,
-    scores: &RapidHashMap<String, f64>,
+    scores: &ScoreTable,
     interval: (f64, f64),
 ) -> bool {
     scores
@@ -302,7 +302,7 @@ fn at_risk_score_ranges<
 >(
     cohort: &[R],
     case_indices: &[usize],
-    scores: &RapidHashMap<String, f64>,
+    scores: &ScoreTable,
     policy: &P,
     constraints: &G,
 ) -> Vec<Option<(f64, f64)>> {
@@ -409,7 +409,7 @@ fn transition_common_support_filters<
     cohort: &[R],
     case_indices: &[usize],
     policy: CommonSupport,
-    scores: &RapidHashMap<String, f64>,
+    scores: &ScoreTable,
     risk_set_policy: &P,
     constraints: &G,
 ) -> Option<TransitionCommonSupportFilters> {
@@ -461,7 +461,7 @@ fn resolve_transition_common_support<
     cohort: &[R],
     case_indices: &[usize],
     criteria: &MatchingCriteria,
-    scores: Option<&RapidHashMap<String, f64>>,
+    scores: Option<&ScoreTable>,
     risk_set_policy: &P,
     constraints: &G,
 ) -> Result<TransitionCommonSupportFilters, CommonSupportFailureReason> {

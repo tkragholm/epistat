@@ -48,20 +48,21 @@
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 use rayon::prelude::*;
 
 use epistat_inference::InferenceError;
 use epistat_inference::pooling::{Pooled, rubin};
 
-use crate::RapidHashMap;
 use crate::effects::{
     Effect, EffectError, EffectEstimates, EffectSpec, MatchedSample, UnitData, estimate_effects,
 };
 use crate::matching::{
     ConstraintGroup, CovariateRecord, DistanceConfig, EstimationError, MatchingRecord,
-    PropensityMatchedOutcome, PropensityScoreConfig, SelectionStrategy, StandardMatchRequest,
-    estimate_propensity_and_match, match_standard, prepare_propensity_distance_config,
+    PropensityMatchedOutcome, PropensityScoreConfig, ScoreTable, SelectionStrategy,
+    StandardMatchRequest, estimate_propensity_and_match, match_standard,
+    prepare_propensity_distance_config,
 };
 use crate::output::{MatchDataOptions, OutputError, Units, match_data};
 use crate::types::{MatchRatio, MatchingCriteria};
@@ -262,7 +263,7 @@ where
             )?;
             let averaged = average_scores(&estimates, sets)?;
             let distance_config =
-                DistanceConfig::propensity_score_map(averaged.clone(), config.caliper);
+                DistanceConfig::propensity_score_table(averaged.clone(), config.caliper);
             let matched = sets
                 .par_iter()
                 .zip(estimates)
@@ -275,7 +276,7 @@ where
                         distance_config: Some(&distance_config),
                     };
                     let outcome = match_standard(set.anchors, set.candidates, request);
-                    estimate.distance_scores.clone_from(&averaged);
+                    estimate.set_distance_scores(&averaged);
                     PropensityMatchedOutcome {
                         outcome,
                         propensity: estimate,
@@ -291,28 +292,34 @@ where
 }
 
 /// The mean over the sets of each unit's score, summed in the order of the
-/// sets.
+/// sets, for the units of the first set in its order.
 fn average_scores<R: MatchingRecord>(
     estimates: &[crate::PropensityScoreEstimate],
     sets: &[ImputedSet<'_, R>],
-) -> Result<RapidHashMap<String, f64>, ImputationError> {
-    let first = &estimates[0].distance_scores;
-    let mut total: RapidHashMap<String, f64> = first.clone();
+) -> Result<ScoreTable, ImputationError> {
+    let first = &estimates[0];
+    let mut total: Vec<f64> = first.distance_scores.to_vec();
     for (index, estimate) in estimates.iter().enumerate().skip(1) {
-        if estimate.distance_scores.len() != first.len() {
+        let same_order = estimate.ids == first.ids;
+        if estimate.distance_scores.len() != first.distance_scores.len() {
             let id = sets[index]
                 .anchors
                 .iter()
                 .chain(sets[index].candidates)
                 .map(MatchingRecord::id)
-                .find(|id| !first.contains_key(*id))
+                .find(|id| first.position(id).is_none())
                 .unwrap_or("")
                 .to_string();
             return Err(ImputationError::UnitsDiffer { set: index, id });
         }
-        for (id, score) in &estimate.distance_scores {
-            match total.get_mut(id) {
-                Some(sum) => *sum += score,
+        for (position, id) in estimate.ids.iter().enumerate() {
+            let at = if same_order {
+                Some(position)
+            } else {
+                first.position(id)
+            };
+            match at {
+                Some(at) => total[at] += estimate.distance_scores[position],
                 None => {
                     return Err(ImputationError::UnitsDiffer {
                         set: index,
@@ -323,10 +330,10 @@ fn average_scores<R: MatchingRecord>(
         }
     }
     let m = estimates.len() as f64;
-    for value in total.values_mut() {
+    for value in &mut total {
         *value /= m;
     }
-    Ok(total)
+    Ok(ScoreTable::new(Arc::clone(&first.ids), total.into()))
 }
 
 /// The effects of a treatment pooled over the imputed data sets.

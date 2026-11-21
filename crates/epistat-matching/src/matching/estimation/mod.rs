@@ -14,7 +14,7 @@ pub use cross_validation::{CrossValidation, cross_validation_folds};
 pub use encoding::CovariateMatrix;
 
 use super::constraints::ConstraintGroup;
-use super::distance::DistanceConfig;
+use super::distance::{DistanceConfig, ScoreTable};
 use super::engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
 };
@@ -29,16 +29,25 @@ use itertools::Itertools;
 use linalg::invert_or_generalise;
 use logistic::{any_fitted_at_boundary, fit_elastic_net_logistic, fit_glm};
 use rapidhash::RapidHashMap;
+use std::sync::{Arc, OnceLock};
 
 /// Propensity-score estimation output.
 #[derive(Debug, Clone)]
 pub struct PropensityScoreEstimate {
-    /// Probability-scale propensity scores by id.
-    pub probabilities: RapidHashMap<String, f64>,
-    /// Linear predictor values by id.
-    pub linear_predictor: RapidHashMap<String, f64>,
-    /// Distance-scale scores (selected by [`PropensityScoreOutputScale`]).
-    pub distance_scores: RapidHashMap<String, f64>,
+    /// The ids of the units, the anchors first and then the candidates, each
+    /// in the order it was given. The three score columns below are in this
+    /// order.
+    pub ids: Arc<[String]>,
+    /// Probability-scale propensity scores, by position in `ids`.
+    pub probabilities: Vec<f64>,
+    /// Linear predictor values, by position in `ids`.
+    pub linear_predictor: Vec<f64>,
+    /// Distance-scale scores (selected by [`PropensityScoreOutputScale`]), by
+    /// position in `ids`.
+    pub distance_scores: Arc<[f64]>,
+    /// Finds the position of an id; built by the first call of
+    /// [`Self::position`].
+    index: Arc<OnceLock<RapidHashMap<String, usize>>>,
     /// Fitted coefficients aligned with `column_names`. `None` for a column
     /// the generalised linear model could not identify, which R reports as
     /// `NA`; the names are in `aliased_columns`.
@@ -76,6 +85,70 @@ pub struct PropensityScoreEstimate {
     pub discarded_anchors: Vec<String>,
     /// Candidate ids discarded by common-support trimming before the refit.
     pub discarded_candidates: Vec<String>,
+}
+
+impl PropensityScoreEstimate {
+    /// The position of the unit `id` in the score columns, `None` when it
+    /// was not among the units. The first call builds a lookup of every id.
+    #[must_use]
+    pub fn position(&self, id: &str) -> Option<usize> {
+        self.index
+            .get_or_init(|| {
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(position, id)| (id.clone(), position))
+                    .collect()
+            })
+            .get(id)
+            .copied()
+    }
+
+    /// The probability-scale score of the unit `id`.
+    #[must_use]
+    pub fn probability(&self, id: &str) -> Option<f64> {
+        self.position(id)
+            .map(|position| self.probabilities[position])
+    }
+
+    /// The linear predictor of the unit `id`.
+    #[must_use]
+    pub fn linear_predictor_of(&self, id: &str) -> Option<f64> {
+        self.position(id)
+            .map(|position| self.linear_predictor[position])
+    }
+
+    /// The distance-scale score of the unit `id`.
+    #[must_use]
+    pub fn distance_score(&self, id: &str) -> Option<f64> {
+        self.position(id)
+            .map(|position| self.distance_scores[position])
+    }
+
+    /// Replace the distance-scale scores by those of `scores`, which must
+    /// have a score for every unit of the estimate.
+    pub(crate) fn set_distance_scores(&mut self, scores: &ScoreTable) {
+        if *scores.ids() == *self.ids {
+            self.distance_scores = Arc::from(scores.values());
+        } else {
+            self.distance_scores = self
+                .ids
+                .iter()
+                .map(|id| scores.get(id).copied().unwrap_or(f64::NAN))
+                .collect();
+        }
+    }
+
+    /// The distance-scale scores as a [`ScoreTable`] that shares this
+    /// estimate's ids and scores.
+    #[must_use]
+    pub fn score_table(&self) -> ScoreTable {
+        ScoreTable::with_shared_index(
+            Arc::clone(&self.ids),
+            Arc::clone(&self.distance_scores),
+            Arc::clone(&self.index),
+        )
+    }
 }
 
 /// Combined propensity output and distance config.
@@ -256,10 +329,7 @@ fn select_rows(matrix: &CovariateMatrix, rows: &[usize]) -> CovariateMatrix {
         values.extend_from_slice(matrix.row(row));
     }
     CovariateMatrix {
-        row_ids: rows
-            .iter()
-            .map(|&row| matrix.row_ids[row].clone())
-            .collect(),
+        row_ids: Vec::new(),
         column_names: matrix.column_names.clone(),
         values,
         n_rows: rows.len(),
@@ -403,19 +473,13 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
     }
 
     let fitted_at_boundary = any_fitted_at_boundary(&fit.probabilities) || fit.at_boundary;
-    let to_map = |values: &[f64]| {
-        matrix
-            .row_ids
-            .iter()
-            .cloned()
-            .zip(values.iter().copied())
-            .collect::<RapidHashMap<_, _>>()
-    };
-    let distance_scores = to_map(&distance);
+    let distance_scores: Arc<[f64]> = distance.into();
     let estimate = PropensityScoreEstimate {
-        probabilities: to_map(&probabilities),
-        linear_predictor: to_map(&linear_predictor),
-        distance_scores: distance_scores.clone(),
+        ids: matrix.row_ids.into(),
+        probabilities,
+        linear_predictor,
+        distance_scores: Arc::clone(&distance_scores),
+        index: Arc::new(OnceLock::new()),
         coefficients: fit.coefficients,
         dropped_columns: matrix.dropped_columns,
         column_names: matrix.column_names,
@@ -430,7 +494,8 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
         discarded_anchors,
         discarded_candidates,
     };
-    let distance_config = DistanceConfig::propensity_score_map(distance_scores, config.caliper);
+    let distance_config =
+        DistanceConfig::propensity_score_table(estimate.score_table(), config.caliper);
 
     Ok(PropensityDistancePreparation {
         distance_config,
@@ -724,17 +789,17 @@ mod tests {
             prepared
                 .estimate
                 .distance_scores
-                .values()
+                .iter()
                 .all(|value| value.is_finite())
         );
 
         let anchor_mean = f64::midpoint(
-            prepared.estimate.probabilities["a1"],
-            prepared.estimate.probabilities["a2"],
+            prepared.estimate.probability("a1").unwrap(),
+            prepared.estimate.probability("a2").unwrap(),
         );
         let candidate_mean = f64::midpoint(
-            prepared.estimate.probabilities["c1"],
-            prepared.estimate.probabilities["c2"],
+            prepared.estimate.probability("c1").unwrap(),
+            prepared.estimate.probability("c2").unwrap(),
         );
         assert!(anchor_mean > candidate_mean);
     }
@@ -815,9 +880,14 @@ mod tests {
         )
         .expect("elastic-net propensity estimation should succeed");
         assert_eq!(prepared.estimate.estimator, "elastic_net_logit");
-        for (id, score) in &prepared.estimate.distance_scores {
+        for (id, score) in prepared
+            .estimate
+            .ids
+            .iter()
+            .zip(prepared.estimate.distance_scores.iter())
+        {
             assert!(
-                (*score - prepared.estimate.linear_predictor[id]).abs() < 1e-12,
+                (*score - prepared.estimate.linear_predictor_of(id).unwrap()).abs() < 1e-12,
                 "distance score should equal linear predictor for {id}"
             );
         }
@@ -1145,7 +1215,7 @@ mod tests {
             prepared
                 .estimate
                 .distance_scores
-                .values()
+                .iter()
                 .all(|score| score.is_finite())
         );
     }
@@ -1283,9 +1353,11 @@ mod tests {
                 diagnostics: MatchDiagnostics::default(),
             },
             propensity: PropensityScoreEstimate {
-                probabilities: RapidHashMap::default(),
-                linear_predictor: RapidHashMap::default(),
-                distance_scores: RapidHashMap::default(),
+                ids: Arc::from(Vec::<String>::new()),
+                probabilities: Vec::new(),
+                linear_predictor: Vec::new(),
+                distance_scores: Arc::from(Vec::<f64>::new()),
+                index: Arc::new(OnceLock::new()),
                 coefficients: Vec::new(),
                 column_names: Vec::new(),
                 dropped_columns: Vec::new(),

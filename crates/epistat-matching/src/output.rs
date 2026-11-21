@@ -828,19 +828,19 @@ impl PropensityScoreEstimate {
     /// The scores matching used, sorted by id.
     #[must_use]
     pub fn distance_scores_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.distance_scores.iter())
+        sorted_by_key(self.ids.iter().zip(self.distance_scores.iter()))
     }
 
     /// The fitted probabilities, sorted by id.
     #[must_use]
     pub fn probabilities_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.probabilities.iter())
+        sorted_by_key(self.ids.iter().zip(self.probabilities.iter()))
     }
 
     /// The fitted linear predictors, sorted by id.
     #[must_use]
     pub fn linear_predictor_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.linear_predictor.iter())
+        sorted_by_key(self.ids.iter().zip(self.linear_predictor.iter()))
     }
 }
 

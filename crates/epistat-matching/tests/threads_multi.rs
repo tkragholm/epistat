@@ -207,16 +207,18 @@ fn within_imputation_matches_each_set_as_a_single_set() {
                 "{:?}",
                 alone
                     .propensity
-                    .distance_scores
+                    .ids
                     .iter()
+                    .zip(alone.propensity.distance_scores.iter())
                     .collect::<BTreeMap<_, _>>()
             ),
             format!(
                 "{:?}",
                 together
                     .propensity
-                    .distance_scores
+                    .ids
                     .iter()
+                    .zip(together.propensity.distance_scores.iter())
                     .collect::<BTreeMap<_, _>>()
             )
         );

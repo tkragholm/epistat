@@ -75,9 +75,7 @@ fn fit(alpha: f64, standardize: bool) -> Vec<f64> {
     out.extend(&cv.deviance_se);
     out.push(cv.index_chosen as f64);
     out.extend(estimate.coefficients.iter().map(|c| c.expect("fitted")));
-    let mut probabilities: Vec<_> = estimate.probabilities.iter().collect();
-    probabilities.sort_by(|a, b| a.0.cmp(b.0));
-    out.extend(probabilities.into_iter().map(|(_, p)| *p));
+    out.extend(&estimate.probabilities);
     out
 }
 

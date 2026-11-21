@@ -531,7 +531,7 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
         .map(|scores| {
             ids.iter()
                 .map(|id| {
-                    scores.get(*id).copied().ok_or_else(|| {
+                    scores.get(id).copied().ok_or_else(|| {
                         SpecError::option("distance", format!("the unit {id} has no score"))
                     })
                 })

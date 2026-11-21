@@ -36,6 +36,7 @@ pub use distance::{
     DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
     IdMapMahalanobisDistance, IdMapPropensityScoreDistance, MahalanobisDistance, MahalanobisError,
     MatrixDistance, PairDistanceMatrix, PairDistanceMatrixError, PropensityScoreDistance,
+    ScoreTable,
 };
 pub use engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,

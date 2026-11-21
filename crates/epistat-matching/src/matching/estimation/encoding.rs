@@ -34,6 +34,40 @@ impl CovariateMatrix {
     }
 }
 
+/// Reads one covariate from a run of records.
+///
+/// A record that says which table of columns it reads from has the column
+/// found once for every table, so a covariate is then read by position and
+/// not by name.
+struct ColumnReader<'k> {
+    key: &'k str,
+    resolved: Option<(usize, Option<usize>)>,
+}
+
+impl<'k> ColumnReader<'k> {
+    const fn new(key: &'k str) -> Self {
+        Self {
+            key,
+            resolved: None,
+        }
+    }
+
+    fn read<'r, R: CovariateRecord>(&mut self, record: &'r R) -> Option<CovariateRef<'r>> {
+        let Some(table) = record.covariate_table() else {
+            return record.covariate(self.key);
+        };
+        let slot = match self.resolved {
+            Some((known, slot)) if known == table => slot,
+            _ => {
+                let slot = record.covariate_slot(self.key);
+                self.resolved = Some((table, slot));
+                slot
+            }
+        };
+        slot.map(|slot| record.covariate_in_slot(slot))
+    }
+}
+
 #[derive(Debug, Clone)]
 enum CovariateSchema {
     Numeric {
@@ -106,6 +140,14 @@ pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
         .map(|record| record.id().to_string())
         .collect_vec();
 
+    let mut readers = schemas
+        .iter()
+        .map(|schema| match schema {
+            CovariateSchema::Numeric { key, .. } | CovariateSchema::Categorical { key, .. } => {
+                ColumnReader::new(key)
+            }
+        })
+        .collect_vec();
     for (row_idx, record_ref) in records.iter().enumerate() {
         let record = *record_ref;
         let mut col_idx = 0usize;
@@ -114,11 +156,16 @@ pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
             col_idx += 1;
         }
 
-        for schema in &schemas {
+        for (schema, reader) in schemas.iter().zip(&mut readers) {
             match schema {
                 CovariateSchema::Numeric { key, mean } => {
-                    let value =
-                        encode_numeric_value(record, key, *mean, config.missing_value_policy)?;
+                    let value = encode_numeric_value(
+                        record,
+                        reader.read(record),
+                        key,
+                        *mean,
+                        config.missing_value_policy,
+                    )?;
                     values[row_idx * n_cols + col_idx] = value;
                     col_idx += 1;
                 }
@@ -126,7 +173,11 @@ pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
                     key,
                     emitted_levels,
                 } => {
-                    let level = encode_categorical_level(record, key, config.missing_value_policy)?;
+                    let level = encode_categorical_level(
+                        reader.read(record),
+                        key,
+                        config.missing_value_policy,
+                    )?;
                     for emitted in emitted_levels {
                         values[row_idx * n_cols + col_idx] =
                             if level == emitted.as_str() { 1.0 } else { 0.0 };
@@ -177,8 +228,9 @@ fn build_schema_for_key<R: CovariateRecord>(
     let mut observed_categorical = false;
     let mut saw_missing = false;
 
+    let mut reader = ColumnReader::new(key);
     for record in records {
-        match record.covariate(key) {
+        match reader.read(record) {
             Some(CovariateRef::Numeric(value)) => {
                 if !value.is_finite() {
                     return Err(EstimationError::NonFiniteNumericCovariate {
@@ -262,11 +314,12 @@ fn build_schema_for_key<R: CovariateRecord>(
 
 fn encode_numeric_value<R: CovariateRecord>(
     record: &R,
+    value: Option<CovariateRef<'_>>,
     key: &str,
     mean: f64,
     policy: MissingValuePolicy,
 ) -> Result<f64, EstimationError> {
-    match record.covariate(key) {
+    match value {
         Some(CovariateRef::Numeric(value)) => {
             if !value.is_finite() {
                 return Err(EstimationError::NonFiniteNumericCovariate {
@@ -288,13 +341,13 @@ fn encode_numeric_value<R: CovariateRecord>(
     }
 }
 
-fn encode_categorical_level<R: CovariateRecord>(
-    record: &R,
+fn encode_categorical_level<'r>(
+    value: Option<CovariateRef<'r>>,
     key: &str,
     policy: MissingValuePolicy,
-) -> Result<String, EstimationError> {
-    match record.covariate(key) {
-        Some(CovariateRef::Categorical(value)) => Ok(value.to_owned()),
+) -> Result<&'r str, EstimationError> {
+    match value {
+        Some(CovariateRef::Categorical(value)) => Ok(value),
         Some(CovariateRef::Numeric(_)) => Err(EstimationError::MixedCovariateType {
             covariate: key.to_string(),
         }),
@@ -302,7 +355,7 @@ fn encode_categorical_level<R: CovariateRecord>(
             MissingValuePolicy::Error => Err(EstimationError::MissingValuesNotAllowed {
                 covariate: key.to_string(),
             }),
-            MissingValuePolicy::Impute => Ok(MISSING_LEVEL.to_string()),
+            MissingValuePolicy::Impute => Ok(MISSING_LEVEL),
         },
     }
 }
@@ -361,4 +414,106 @@ fn drop_constant_columns(
     matrix.values = reduced;
     matrix.n_cols = matrix.column_names.len();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::date;
+    use crate::types::{BalanceRecord, CovariateValue};
+    use crate::{Cohort, CohortRow};
+
+    /// A deterministic mix of numeric and categorical covariates with
+    /// missing values, as owned records and as two cohorts whose columns are
+    /// in different orders.
+    fn units(n: usize) -> (Vec<BalanceRecord>, Cohort, Cohort) {
+        let mut state = 12345_u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        let mut owned = Vec::new();
+        let mut ids = Vec::new();
+        let mut age = Vec::new();
+        let mut region = Vec::new();
+        let mut income = Vec::new();
+        for i in 0..n {
+            let id = format!("u{i}");
+            let a = (next() % 60) as f64;
+            let r = match next() % 4 {
+                0 => None,
+                k => Some(["n", "s", "e"][k % 3]),
+            };
+            let inc = (next() % 5 != 0).then(|| (next() % 1000) as f64 / 7.0);
+            let mut row = BalanceRecord::new(&id, date(2010, 1, 1));
+            row.covariates
+                .insert("age".to_string(), CovariateValue::Numeric(a));
+            row.covariates.insert(
+                "region".to_string(),
+                r.map_or(CovariateValue::Missing, |r| {
+                    CovariateValue::Categorical(r.to_string())
+                }),
+            );
+            row.covariates.insert(
+                "income".to_string(),
+                inc.map_or(CovariateValue::Missing, CovariateValue::Numeric),
+            );
+            owned.push(row);
+            ids.push(id);
+            age.push(Some(a));
+            region.push(r);
+            income.push(inc);
+        }
+        let first_half = n / 2;
+        let birth = vec![date(2010, 1, 1); n];
+        let build = |range: std::ops::Range<usize>, reversed: bool| {
+            let builder =
+                Cohort::builder(ids[range.clone()].to_vec(), birth[range.clone()].to_vec());
+            let age = age[range.clone()].to_vec();
+            let region = region[range.clone()].to_vec();
+            let income = income[range].to_vec();
+            if reversed {
+                builder
+                    .numeric_covariate("income", income)
+                    .categorical_covariate("region", region)
+                    .numeric_covariate("age", age)
+            } else {
+                builder
+                    .numeric_covariate("age", age)
+                    .categorical_covariate("region", region)
+                    .numeric_covariate("income", income)
+            }
+            .build()
+            .expect("valid cohort")
+        };
+        (
+            owned,
+            build(0..first_half, false),
+            build(first_half..n, true),
+        )
+    }
+
+    #[test]
+    fn rows_read_by_slot_encode_as_owned_records_read_by_name() {
+        let (owned, first, second) = units(300);
+        let mixed: Vec<CohortRow<'_>> = first.rows().chain(second.rows()).collect();
+        let owned_refs: Vec<&BalanceRecord> = owned.iter().collect();
+        let mixed_refs: Vec<&CohortRow<'_>> = mixed.iter().collect();
+        let config = CovariateEncodingConfig {
+            missing_value_policy: MissingValuePolicy::Impute,
+            ..CovariateEncodingConfig::default()
+        };
+        let by_name = build_covariate_matrix(&owned_refs, &config).expect("owned");
+        let by_slot = build_covariate_matrix(&mixed_refs, &config).expect("rows");
+        assert_eq!(by_name.column_names, by_slot.column_names);
+        assert_eq!(by_name.row_ids, by_slot.row_ids);
+        let same = by_name
+            .values
+            .iter()
+            .zip(&by_slot.values)
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+        assert!(same, "design matrices differ");
+    }
 }

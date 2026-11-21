@@ -43,13 +43,28 @@
 //!   ratios with the nearest mode returns an invalid outcome (`nearest_options`).
 //! * **Exact strata.** Anchors and candidates are split by the exact-match
 //!   keys first, and the strata are matched in parallel. Within a stratum the
-//!   matching is sequential, since each assignment depends on the last.
+//!   matching is sequential, since each assignment depends on the last. With
+//!   replacement and no unique key an assignment changes nothing another
+//!   anchor reads, so the anchors of a stratum of at least 4096 are searched
+//!   on the rayon pool and their controls given out in the anchors' order.
 //!
 //! # Cost
 //!
 //! With a score distance, a stratum's candidates are sorted once, and an anchor
 //! finds its nearest by walking out from its own score. Candidates already used
-//! are skipped in near-constant time. The walk stops at the caliper, so a
+//! are skipped in near-constant time.
+//!
+//! The scores are read by position. A [`ScoreTable`](super::distance::ScoreTable)
+//! made for the units in the order they are given is borrowed as it is, after
+//! one comparison of each unit's id with the table's; a table for other units,
+//! or in another order, costs one lookup by id for each unit and no more. The
+//! sort is on an integer that orders as the score does, with the candidate's
+//! position as the tie-break, so it is a total order and its result does not
+//! depend on the algorithm or the number of threads: `O(c log c)` for `c`
+//! candidates, on the rayon pool from 65536. The positions already used
+//! are skipped through two forests of positions (union-find with path halving,
+//! Tarjan and van Leeuwen 1984), so a walk costs the unused positions it
+//! passes plus an inverse-Ackermann factor for each used run. The walk stops at the caliper, so a
 //! caliper bounds the work per anchor. Without one, an anchor whose nearest
 //! candidates are all refused by a constraint walks as far as it must.
 //!
@@ -71,7 +86,7 @@
 use super::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec, unique_value};
 use super::distance::{
     ConfiguredMetric, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
-    IdMapMahalanobisDistance, ScalarLookup,
+    IdMapMahalanobisDistance,
 };
 use super::engine::{
     TrimmedIndexConfig, build_outcome, finalize_estimand_diagnostics, intern_unique,
@@ -91,6 +106,7 @@ use ordered_float::OrderedFloat;
 use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -254,29 +270,24 @@ impl VariableRatio {
     }
 
     /// The number of controls of every anchor, by position in the slice.
-    fn per_anchor<R: MatchingRecord>(
-        &self,
-        anchors: &[R],
-        candidates: &[R],
-        lookup: ScalarLookup<'_>,
-    ) -> Option<Vec<usize>> {
-        let counts = self.counts(anchors.len())?;
-        let anchor_scores: Vec<f64> = anchors
-            .iter()
-            .map(|record| lookup.value(record).filter(|value| value.is_finite()))
+    fn per_anchor(&self, keys: &ScalarKeys<'_>) -> Option<Vec<usize>> {
+        let anchors = keys.anchors.len();
+        let candidates = keys.candidates.len();
+        let counts = self.counts(anchors)?;
+        let anchor_scores: Vec<f64> = (0..anchors)
+            .map(|idx| keys.anchor(idx))
             .collect::<Option<_>>()?;
         let mut candidate_sum = 0.0;
-        for record in candidates {
-            candidate_sum += lookup.value(record).filter(|value| value.is_finite())?;
+        for idx in 0..candidates {
+            candidate_sum += keys.candidate(idx)?;
         }
         let mut anchor_sum = 0.0;
         for value in &anchor_scores {
             anchor_sum += value;
         }
         #[expect(clippy::cast_precision_loss, reason = "counts of units")]
-        let anchors_above =
-            anchor_sum / anchors.len() as f64 > candidate_sum / candidates.len() as f64;
-        let mut ranked: Vec<usize> = (0..anchors.len()).collect();
+        let anchors_above = anchor_sum / anchors as f64 > candidate_sum / candidates as f64;
+        let mut ranked: Vec<usize> = (0..anchors).collect();
         ranked.sort_by(|&a, &b| {
             let by_score = if anchors_above {
                 cmp_f64(anchor_scores[b], anchor_scores[a])
@@ -285,7 +296,7 @@ impl VariableRatio {
             };
             by_score.then(a.cmp(&b))
         });
-        let mut per_anchor = vec![0_usize; anchors.len()];
+        let mut per_anchor = vec![0_usize; anchors];
         for (position, anchor) in ranked.into_iter().enumerate() {
             per_anchor[anchor] = counts[position];
         }
@@ -389,23 +400,41 @@ pub(crate) struct NearestRequest<'a, R: MatchingRecord, G: ?Sized> {
 enum Rank<'a> {
     /// The distance is the absolute difference of one number per record, so
     /// candidates are sorted on it.
-    Scalar {
-        lookup: ScalarLookup<'a>,
-        caliper: Option<f64>,
-    },
+    Scalar { caliper: Option<f64> },
     /// Distances are computed pair by pair. A caliper on one number per record
-    /// narrows the candidates first.
+    /// narrows the candidates first; its width is the gate.
     Pairs {
-        gate: Option<(ScalarLookup<'a>, f64)>,
+        gate: Option<f64>,
         metric: ConfiguredMetric<'a>,
         caliper: Option<f64>,
     },
 }
 
+/// One number for each anchor and each candidate, by position in its slice,
+/// `NaN` for a unit without one.
+struct ScalarKeys<'a> {
+    anchors: Cow<'a, [f64]>,
+    candidates: Cow<'a, [f64]>,
+}
+
+impl ScalarKeys<'_> {
+    /// The anchor's number, `None` when it has none or it is not finite.
+    fn anchor(&self, idx: usize) -> Option<f64> {
+        Some(self.anchors[idx]).filter(|value| value.is_finite())
+    }
+
+    /// The candidate's number, `None` when it has none or it is not finite.
+    fn candidate(&self, idx: usize) -> Option<f64> {
+        Some(self.candidates[idx]).filter(|value| value.is_finite())
+    }
+}
+
 struct Plan<'a> {
     order: MatchOrder,
     assignment: Assignment,
-    order_lookup: Option<ScalarLookup<'a>>,
+    /// The numbers of the order distance, where it has them: the score, or the
+    /// birth date.
+    order_keys: Option<ScalarKeys<'a>>,
     rank: Rank<'a>,
     /// The number of controls of each anchor by position in the anchor slice,
     /// where the ratio is variable.
@@ -425,7 +454,13 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
     order_config: &'a DistanceConfig,
 ) -> Option<Plan<'a>> {
     let criteria = request.criteria;
-    let order_lookup = order_config.scalar();
+    let order_keys = order_config.scalar().map(|lookup| {
+        let (anchors, candidates) = lookup.of_units(request.anchors, request.candidates);
+        ScalarKeys {
+            anchors,
+            candidates,
+        }
+    });
 
     let default_order = if matches!(order_config, DistanceConfig::PropensityScoreMap { .. }) {
         if criteria.estimand == Estimand::Atc {
@@ -437,7 +472,7 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
         MatchOrder::Data
     };
     let mut order = nearest.order.unwrap_or(default_order);
-    if matches!(order, MatchOrder::Largest | MatchOrder::Smallest) && order_lookup.is_none() {
+    if matches!(order, MatchOrder::Largest | MatchOrder::Smallest) && order_keys.is_none() {
         return None;
     }
     if criteria.allow_replacement && matches!(order, MatchOrder::Closest | MatchOrder::Farthest) {
@@ -450,22 +485,15 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
     }
 
     let scale = if nearest.std_caliper && order_config.caliper().is_some() {
-        let lookup = order_lookup?;
-        let values: Vec<f64> = request
-            .anchors
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| !is_trimmed(request.trimmed.anchors, *idx))
-            .map(|(_, record)| record)
+        let keys = order_keys.as_ref()?;
+        let values: Vec<f64> = (0..request.anchors.len())
+            .filter(|&idx| !is_trimmed(request.trimmed.anchors, idx))
+            .filter_map(|idx| keys.anchor(idx))
             .chain(
-                request
-                    .candidates
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| !is_trimmed(request.trimmed.candidates, *idx))
-                    .map(|(_, record)| record),
+                (0..request.candidates.len())
+                    .filter(|&idx| !is_trimmed(request.trimmed.candidates, idx))
+                    .filter_map(|idx| keys.candidate(idx)),
             )
-            .filter_map(|record| lookup.value(record))
             .collect();
         sample_sd(&values)?
     } else {
@@ -473,9 +501,8 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
     };
 
     let rank = match &nearest.mahvars {
-        None => match order_lookup {
-            Some(lookup) => Rank::Scalar {
-                lookup,
+        None => match &order_keys {
+            Some(_) => Rank::Scalar {
                 caliper: order_config.caliper().map(|width| width * scale),
             },
             None => Rank::Pairs {
@@ -485,9 +512,9 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
             },
         },
         Some(ranking) => {
-            let gate = match (order_config.caliper(), order_lookup) {
+            let gate = match (order_config.caliper(), &order_keys) {
                 (None, _) => None,
-                (Some(width), Some(lookup)) => Some((lookup, width * scale)),
+                (Some(width), Some(_)) => Some(width * scale),
                 (Some(_), None) => return None,
             };
             Rank::Pairs {
@@ -500,9 +527,7 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
 
     let ratios = match &nearest.variable_ratio {
         None => None,
-        Some(variable) => {
-            Some(variable.per_anchor(request.anchors, request.candidates, order_lookup?)?)
-        }
+        Some(variable) => Some(variable.per_anchor(order_keys.as_ref()?)?),
     };
     let max_ratio = ratios.as_ref().map_or(criteria.match_ratio, |ratios| {
         ratios.iter().copied().max().unwrap_or(0)
@@ -511,7 +536,7 @@ fn resolve_plan<'a, R: MatchingRecord, G: ?Sized>(
     Some(Plan {
         order,
         assignment: nearest.assignment,
-        order_lookup,
+        order_keys,
         rank,
         ratios,
         max_ratio,
@@ -584,6 +609,60 @@ enum TreeState {
     Unused,
 }
 
+/// What a walk along sorted positions needs to know about which are still
+/// available.
+trait Walkable {
+    fn at_or_after(&mut self, position: usize) -> usize;
+    fn at_or_before(&mut self, position: usize) -> Option<usize>;
+}
+
+impl Walkable for Availability {
+    fn at_or_after(&mut self, position: usize) -> usize {
+        Self::at_or_after(self, position)
+    }
+
+    fn at_or_before(&mut self, position: usize) -> Option<usize> {
+        Self::at_or_before(self, position)
+    }
+}
+
+/// Every position available, as when candidates are used with replacement.
+struct AllAvailable;
+
+impl Walkable for AllAvailable {
+    fn at_or_after(&mut self, position: usize) -> usize {
+        position
+    }
+
+    fn at_or_before(&mut self, position: usize) -> Option<usize> {
+        Some(position)
+    }
+}
+
+/// A set of positions below a bound, one bit each.
+struct Marks {
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl Marks {
+    fn new(positions: usize) -> Self {
+        Self {
+            bits: vec![0; positions.div_ceil(64)],
+            count: 0,
+        }
+    }
+
+    fn mark(&mut self, position: usize) {
+        let word = &mut self.bits[position / 64];
+        let bit = 1_u64 << (position % 64);
+        if *word & bit == 0 {
+            *word |= bit;
+            self.count += 1;
+        }
+    }
+}
+
 /// The units used so far in one stratum, as the constraints read them.
 #[derive(Default)]
 struct UseState {
@@ -596,27 +675,30 @@ struct UseState {
 /// halving, so skipping a run of used positions costs near-constant time.
 struct Availability {
     /// `right[i]`: the smallest available position at or after `i`, or `n`.
-    right: Vec<usize>,
+    right: Vec<u32>,
     /// `left[i]`: one more than the largest available position below `i`, or 0.
-    left: Vec<usize>,
+    left: Vec<u32>,
     remaining: usize,
     available: Vec<bool>,
 }
 
 impl Availability {
     fn new(n: usize) -> Self {
+        let end = narrow(n);
         Self {
-            right: (0..=n).collect(),
-            left: (0..=n).collect(),
+            right: (0..=end).collect(),
+            left: (0..=end).collect(),
             remaining: n,
             available: vec![true; n],
         }
     }
 
-    fn root(parent: &mut [usize], mut node: usize) -> usize {
-        while parent[node] != node {
-            parent[node] = parent[parent[node]];
-            node = parent[node];
+    fn root(parent: &mut [u32], position: usize) -> usize {
+        let mut node = position;
+        while parent[node] as usize != node {
+            let grand = parent[parent[node] as usize];
+            parent[node] = grand;
+            node = grand as usize;
         }
         node
     }
@@ -636,8 +718,8 @@ impl Availability {
         if self.available[position] {
             self.available[position] = false;
             self.remaining -= 1;
-            self.right[position] = position + 1;
-            self.left[position + 1] = position;
+            self.right[position] = narrow(position + 1);
+            self.left[position + 1] = narrow(position);
         }
     }
 }
@@ -713,20 +795,116 @@ fn cmp_f64(left: f64, right: f64) -> std::cmp::Ordering {
         .unwrap_or(std::cmp::Ordering::Equal)
 }
 
+/// The walk of [`Pool::nearest_by_key`]: out from `x` in both directions along
+/// the sorted `keys`, over the positions `avail` says are available.
+fn walk_by_key<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
+    keys: &[f64],
+    candidate: &[usize],
+    avail: &mut impl Walkable,
+    x: f64,
+    caliper: Option<f64>,
+    k: usize,
+    probe: &Probe<'_, R, G>,
+) -> Vec<(usize, f64)> {
+    let n = candidate.len();
+    let split = keys.partition_point(|&key| key < x);
+    let mut left = if split == 0 {
+        None
+    } else {
+        avail.at_or_before(split - 1)
+    };
+    let mut right = {
+        let position = avail.at_or_after(split);
+        (position < n).then_some(position)
+    };
+    let mut found: Vec<(f64, usize, usize)> = Vec::new();
+    let mut cutoff: Option<f64> = None;
+    loop {
+        let left_distance = left.map(|position| x - keys[position]);
+        let right_distance = right.map(|position| keys[position] - x);
+        let (take_left, distance) = match (left_distance, right_distance) {
+            (None, None) => break,
+            (Some(distance), None) => (true, distance),
+            (None, Some(distance)) => (false, distance),
+            (Some(l), Some(r)) => {
+                if l <= r {
+                    (true, l)
+                } else {
+                    (false, r)
+                }
+            }
+        };
+        if caliper.is_some_and(|width| distance > width) {
+            break;
+        }
+        if cutoff.is_some_and(|limit| distance > limit) {
+            break;
+        }
+        let position = if take_left {
+            left.unwrap_or(0)
+        } else {
+            right.unwrap_or(0)
+        };
+        if take_left {
+            left = if position == 0 {
+                None
+            } else {
+                avail.at_or_before(position - 1)
+            };
+        } else {
+            let next = avail.at_or_after(position + 1);
+            right = (next < n).then_some(next);
+        }
+        let candidate_idx = candidate[position];
+        if !probe.admits(candidate_idx) {
+            continue;
+        }
+        found.push((distance, candidate_idx, position));
+        if cutoff.is_none() && found.len() >= k {
+            cutoff = Some(distance);
+        }
+    }
+    found.sort_by(|a, b| cmp_f64(a.0, b.0).then(a.1.cmp(&b.1)));
+    found.truncate(k);
+    found
+        .into_iter()
+        .map(|(distance, _, position)| (position, distance))
+        .collect()
+}
+
+/// Strata of at least this many anchors search them on the rayon pool when the
+/// searches are independent.
+const PAR_ANCHORS_FROM: usize = 1 << 12;
+
+/// Pools of at least this many candidates are sorted on the rayon pool.
+const PAR_SORT_FROM: usize = 1 << 16;
+
+/// The number as an integer that orders as the number does, with `-0.0` and
+/// `0.0` equal, for a finite number.
+fn order_bits(value: f64) -> u64 {
+    let bits = (value + 0.0).to_bits();
+    if bits >> 63 == 1 {
+        !bits
+    } else {
+        bits | (1 << 63)
+    }
+}
+
+/// A position or index as the `u32` the pools store.
+fn narrow(idx: usize) -> u32 {
+    u32::try_from(idx).expect("a unit index fits in 32 bits")
+}
+
 impl Pool {
     fn build<R: MatchingRecord, G: ?Sized>(
         env: &Env<'_, R, G>,
         candidate_indices: &[usize],
     ) -> Self {
-        let lookup = match &env.plan.rank {
-            Rank::Scalar { lookup, .. }
-            | Rank::Pairs {
-                gate: Some((lookup, _)),
-                ..
-            } => Some(*lookup),
-            Rank::Pairs { gate: None, .. } => None,
-        };
-        let Some(lookup) = lookup else {
+        let sorted_on_keys = matches!(
+            env.plan.rank,
+            Rank::Scalar { .. } | Rank::Pairs { gate: Some(_), .. }
+        );
+        let Some(keys) = env.plan.order_keys.as_ref().filter(|_| sorted_on_keys) else {
             return Self {
                 candidate: candidate_indices.to_vec(),
                 keys: Vec::new(),
@@ -735,15 +913,24 @@ impl Pool {
                 tree: TreeState::Unbuilt,
             };
         };
-        let mut entries: Vec<(f64, usize)> = candidate_indices
+        let mut entries: Vec<(u64, u32)> = candidate_indices
             .iter()
-            .filter_map(|&idx| lookup.value(&env.candidates[idx]).map(|value| (value, idx)))
+            .filter_map(|&idx| {
+                keys.candidate(idx)
+                    .map(|value| (order_bits(value), narrow(idx)))
+            })
             .collect();
-        entries.sort_unstable_by(|left, right| cmp_f64(left.0, right.0).then(left.1.cmp(&right.1)));
+        if entries.len() >= PAR_SORT_FROM {
+            entries.par_sort_unstable();
+        } else {
+            entries.sort_unstable();
+        }
+        let candidate: Vec<usize> = entries.iter().map(|entry| entry.1 as usize).collect();
+        let sorted_keys: Vec<f64> = candidate.iter().map(|&idx| keys.candidates[idx]).collect();
         Self {
-            avail: Availability::new(entries.len()),
-            keys: entries.iter().map(|entry| entry.0).collect(),
-            candidate: entries.into_iter().map(|entry| entry.1).collect(),
+            avail: Availability::new(candidate.len()),
+            keys: sorted_keys,
+            candidate,
             whitened: None,
             tree: TreeState::Unbuilt,
         }
@@ -796,70 +983,35 @@ impl Pool {
         k: usize,
         probe: &Probe<'_, R, G>,
     ) -> Vec<(usize, f64)> {
-        let n = self.candidate.len();
-        let split = self.keys.partition_point(|&key| key < x);
-        let mut left = if split == 0 {
-            None
-        } else {
-            self.avail.at_or_before(split - 1)
-        };
-        let mut right = {
-            let position = self.avail.at_or_after(split);
-            (position < n).then_some(position)
-        };
-        let mut found: Vec<(f64, usize, usize)> = Vec::new();
-        let mut cutoff: Option<f64> = None;
-        loop {
-            let left_distance = left.map(|position| x - self.keys[position]);
-            let right_distance = right.map(|position| self.keys[position] - x);
-            let (take_left, distance) = match (left_distance, right_distance) {
-                (None, None) => break,
-                (Some(distance), None) => (true, distance),
-                (None, Some(distance)) => (false, distance),
-                (Some(l), Some(r)) => {
-                    if l <= r {
-                        (true, l)
-                    } else {
-                        (false, r)
-                    }
-                }
-            };
-            if caliper.is_some_and(|width| distance > width) {
-                break;
-            }
-            if cutoff.is_some_and(|limit| distance > limit) {
-                break;
-            }
-            let position = if take_left {
-                left.unwrap_or(0)
-            } else {
-                right.unwrap_or(0)
-            };
-            if take_left {
-                left = if position == 0 {
-                    None
-                } else {
-                    self.avail.at_or_before(position - 1)
-                };
-            } else {
-                let next = self.avail.at_or_after(position + 1);
-                right = (next < n).then_some(next);
-            }
-            let candidate_idx = self.candidate[position];
-            if !probe.admits(candidate_idx) {
-                continue;
-            }
-            found.push((distance, candidate_idx, position));
-            if cutoff.is_none() && found.len() >= k {
-                cutoff = Some(distance);
-            }
-        }
-        found.sort_by(|a, b| cmp_f64(a.0, b.0).then(a.1.cmp(&b.1)));
-        found.truncate(k);
-        found
-            .into_iter()
-            .map(|(distance, _, position)| (position, distance))
-            .collect()
+        walk_by_key(
+            &self.keys,
+            &self.candidate,
+            &mut self.avail,
+            x,
+            caliper,
+            k,
+            probe,
+        )
+    }
+
+    /// As [`Self::nearest_by_key`] where no candidate has been taken out of
+    /// the pool, which reads the pool and changes nothing.
+    fn nearest_by_key_unused<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
+        &self,
+        x: f64,
+        caliper: Option<f64>,
+        k: usize,
+        probe: &Probe<'_, R, G>,
+    ) -> Vec<(usize, f64)> {
+        walk_by_key(
+            &self.keys,
+            &self.candidate,
+            &mut AllAvailable,
+            x,
+            caliper,
+            k,
+            probe,
+        )
     }
 
     /// The positions `low..high` whose keys lie within the gate, or all
@@ -1140,7 +1292,8 @@ struct Stratum<'e, 'a, R: MatchingRecord, G: ?Sized> {
     controls_of: Vec<Vec<usize>>,
     /// Candidates marked used in `used`, to be cleared at the end.
     assigned: Vec<usize>,
-    touched: FxHashSet<usize>,
+    /// The pool positions given to some anchor.
+    touched: Marks,
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
@@ -1156,8 +1309,13 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             state: &*self.state,
         };
         match &env.plan.rank {
-            Rank::Scalar { lookup, caliper } => {
-                let Some(x) = lookup.value(anchor) else {
+            Rank::Scalar { caliper } => {
+                let Some(x) = env
+                    .plan
+                    .order_keys
+                    .as_ref()
+                    .and_then(|keys| keys.anchor(self.usable[slot]))
+                else {
                     return Vec::new();
                 };
                 self.pool.nearest_by_key(x, *caliper, k, &probe)
@@ -1169,10 +1327,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             } => {
                 let gate = match gate {
                     None => None,
-                    Some((lookup, width)) => match lookup.value(anchor) {
-                        Some(x) => Some((x, *width)),
-                        None => return Vec::new(),
-                    },
+                    Some(width) => {
+                        match env
+                            .plan
+                            .order_keys
+                            .as_ref()
+                            .and_then(|keys| keys.anchor(self.usable[slot]))
+                        {
+                            Some(x) => Some((x, *width)),
+                            None => return Vec::new(),
+                        }
+                    }
                 };
                 #[cfg(test)]
                 let mode = SEARCH_FOR_TESTS.load(std::sync::atomic::Ordering::Relaxed);
@@ -1199,6 +1364,34 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                 }
             }
         }
+    }
+
+    /// The nearest `k` candidates of the anchor in `slot` where the ranking
+    /// is by a score and no candidate has been taken out of the pool, which
+    /// reads the stratum and changes nothing, so anchors can be searched at
+    /// the same time.
+    fn search_unused(&self, slot: usize, k: usize) -> Vec<(usize, f64)> {
+        let env = self.env;
+        let Rank::Scalar { caliper } = &env.plan.rank else {
+            return Vec::new();
+        };
+        let idx = self.usable[slot];
+        let Some(x) = env
+            .plan
+            .order_keys
+            .as_ref()
+            .and_then(|keys| keys.anchor(idx))
+        else {
+            return Vec::new();
+        };
+        let probe = Probe {
+            env,
+            anchor: &env.anchors[idx],
+            case_strata: self.case_strata.as_deref(),
+            used: self.used,
+            state: &*self.state,
+        };
+        self.pool.nearest_by_key_unused(x, *caliper, k, &probe)
     }
 
     /// The number of controls the anchor in `slot` is to get.
@@ -1233,7 +1426,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         let criteria = self.env.criteria;
         let candidate_idx = self.pool.candidate[position];
         self.controls_of[slot].push(candidate_idx);
-        self.touched.insert(position);
+        self.touched.mark(position);
         if !criteria.allow_replacement {
             self.pool.remove(position);
             self.used.insert(ControlIdx::new(candidate_idx));
@@ -1250,6 +1443,26 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
 
     /// Every anchor, in turn, takes all its controls.
     fn take_all_in_turn(&mut self, order: &[usize]) {
+        // With replacement and no unique key, taking a control changes nothing
+        // another anchor's search reads, so the searches are independent and
+        // run together. The controls are then given out in the order of the
+        // anchors.
+        let independent = self.env.criteria.allow_replacement
+            && self.env.criteria.unique_by_key.is_none()
+            && matches!(self.env.plan.rank, Rank::Scalar { .. })
+            && order.len() >= PAR_ANCHORS_FROM;
+        if independent {
+            let found: Vec<Vec<(usize, f64)>> = order
+                .par_iter()
+                .map(|&slot| self.search_unused(slot, self.ratio_of(slot)))
+                .collect();
+            for (&slot, positions) in order.iter().zip(found) {
+                for (position, _) in positions {
+                    self.assign(slot, position);
+                }
+            }
+            return;
+        }
         for &slot in order {
             let ratio = self.ratio_of(slot);
             if self.env.criteria.unique_by_key.is_some() {
@@ -1354,12 +1567,13 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     let usable: Vec<usize> = anchor_indices
         .iter()
         .copied()
-        .filter(|&idx| anchor_key(plan, &anchors[idx]).is_some())
+        .filter(|&idx| anchor_key(plan, idx).is_some())
         .filter(|&idx| {
             !matches!(plan.order, MatchOrder::Largest | MatchOrder::Smallest)
                 || plan
-                    .order_lookup
-                    .is_some_and(|lookup| lookup.value(&anchors[idx]).is_some())
+                    .order_keys
+                    .as_ref()
+                    .is_some_and(|keys| keys.anchor(idx).is_some())
         })
         .collect();
     let mut result = StratumResult {
@@ -1377,8 +1591,9 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             let values: Vec<f64> = usable
                 .iter()
                 .map(|&idx| {
-                    plan.order_lookup
-                        .and_then(|lookup| lookup.value(&anchors[idx]))
+                    plan.order_keys
+                        .as_ref()
+                        .and_then(|keys| keys.anchor(idx))
                         .unwrap_or(f64::NAN)
                 })
                 .collect();
@@ -1402,16 +1617,17 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             .map(|key| anchors[usable[0]].stratum(key))
             .collect::<Vec<_>>()
     });
+    let pool = Pool::build(env, candidate_indices);
     let mut stratum = Stratum {
         env,
         used,
         controls_of: vec![Vec::new(); usable.len()],
         usable,
         case_strata,
-        pool: Pool::build(env, candidate_indices),
+        touched: Marks::new(pool.candidate.len()),
+        pool,
         state,
         assigned: Vec::new(),
-        touched: FxHashSet::default(),
     };
 
     let in_rounds = !criteria.allow_replacement && plan.assignment == Assignment::Rounds;
@@ -1426,7 +1642,7 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     for &candidate_idx in &stratum.assigned {
         stratum.used.remove(ControlIdx::new(candidate_idx));
     }
-    result.distinct_candidates = stratum.touched.len();
+    result.distinct_candidates = stratum.touched.count;
     for slot in order {
         let controls = std::mem::take(&mut stratum.controls_of[slot]);
         if controls.is_empty() {
@@ -1441,15 +1657,13 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     result
 }
 
-/// The number a record is searched by: its score, or nothing where candidates
-/// are searched in full.
-fn anchor_key<R: MatchingRecord>(plan: &Plan<'_>, anchor: &R) -> Option<f64> {
+/// The number the anchor at `idx` is searched by: its score, or nothing
+/// where candidates are searched in full.
+fn anchor_key(plan: &Plan<'_>, idx: usize) -> Option<f64> {
     match &plan.rank {
-        Rank::Scalar { lookup, .. }
-        | Rank::Pairs {
-            gate: Some((lookup, _)),
-            ..
-        } => lookup.value(anchor),
+        Rank::Scalar { .. } | Rank::Pairs { gate: Some(_), .. } => {
+            plan.order_keys.as_ref()?.anchor(idx)
+        }
         Rank::Pairs { gate: None, .. } => Some(0.0),
     }
 }

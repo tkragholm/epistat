@@ -2,7 +2,7 @@ use chrono::Duration;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use epistat_matching::{
     BaseRecord, DateDistance, DistanceMetric, IdMapMahalanobisDistance,
-    IdMapPropensityScoreDistance, date,
+    IdMapPropensityScoreDistance, ScoreTable, date,
 };
 use rapidhash::RapidHashMap;
 use std::hint::black_box;
@@ -106,7 +106,7 @@ fn bench_distance_channels(c: &mut Criterion) {
         b.iter(|| black_box(pairwise_distance_sum(&records, &pairs, &date_metric)));
     });
 
-    let propensity_scores = synthetic_scores(&records);
+    let propensity_scores = ScoreTable::from(synthetic_scores(&records));
     let propensity_metric = IdMapPropensityScoreDistance::new(&propensity_scores);
     group.bench_function("propensity_map", |b| {
         b.iter(|| black_box(pairwise_distance_sum(&records, &pairs, &propensity_metric)));

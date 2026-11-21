@@ -67,6 +67,17 @@ impl Digest {
         }
     }
 
+    /// Folds the values of a column by id, sorted by id.
+    fn columns(&mut self, ids: &[String], values: &[f64]) {
+        let mut entries: Vec<_> = ids.iter().zip(values).collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        self.int(entries.len());
+        for (key, value) in entries {
+            self.text(key);
+            self.float(*value);
+        }
+    }
+
     fn outcome(&mut self, outcome: &MatchOutcome) {
         self.debug(outcome);
         self.int(outcome.pairs.len());
@@ -95,9 +106,9 @@ impl Digest {
     }
 
     fn estimate(&mut self, estimate: &PropensityScoreEstimate) {
-        self.floats(&estimate.probabilities);
-        self.floats(&estimate.linear_predictor);
-        self.floats(&estimate.distance_scores);
+        self.columns(&estimate.ids, &estimate.probabilities);
+        self.columns(&estimate.ids, &estimate.linear_predictor);
+        self.columns(&estimate.ids, &estimate.distance_scores);
         self.debug(&estimate.coefficients);
         self.debug(&estimate.column_names);
         self.text(estimate.estimator);
@@ -856,8 +867,9 @@ fn subclassification() {
     .unwrap();
     let scores: HashMap<String, f64> = prepared
         .estimate
-        .probabilities
+        .ids
         .iter()
+        .zip(&prepared.estimate.probabilities)
         .map(|(k, v)| (k.clone(), *v))
         .collect();
     assert_same_on_pools(&POOLS, || {
