@@ -521,7 +521,7 @@ fn main() {
             run_standard(name, &spec, &anchors, &candidates, reps)
         }
     };
-    if !result.header.is_empty() && method != "riskset" && method != "riskset_replace" {
+    if !result.header.is_empty() {
         write_lines(
             &dir.join(format!("out/rust_{method}_{n}.csv")),
             result.header,
