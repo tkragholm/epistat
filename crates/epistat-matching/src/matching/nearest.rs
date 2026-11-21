@@ -60,7 +60,9 @@
 //! `a` anchors and `c` candidates costs `a * c` distances.
 
 use super::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec, unique_value};
-use super::distance::{ConfiguredMetric, DistanceConfig, DistanceMetric, ScalarLookup};
+use super::distance::{
+    ConfiguredMetric, DistanceConfig, DistanceMetric, IdMapMahalanobisDistance, ScalarLookup,
+};
 use super::engine::{
     TrimmedIndexConfig, build_outcome, finalize_estimand_diagnostics, intern_unique,
     invalid_criteria_outcome,
@@ -518,7 +520,13 @@ struct Env<'a, R: MatchingRecord, G: ?Sized> {
     plan: Plan<'a>,
     candidate_strata: Option<StrataValues<'a>>,
     random_rank: Option<Vec<usize>>,
+    /// For a Mahalanobis ranking, the row of each candidate's transformed
+    /// vector by position in the candidate slice, `NO_ROW` where it has none.
+    candidate_rows: Option<Vec<usize>>,
 }
+
+/// Marks a candidate with no transformed vector.
+const NO_ROW: usize = usize::MAX;
 
 /// The units used so far in one stratum, as the constraints read them.
 #[derive(Default)]
@@ -755,6 +763,7 @@ impl Pool {
         &mut self,
         gate: Option<(f64, f64)>,
         metric: &ConfiguredMetric<'_>,
+        rows: Option<(&IdMapMahalanobisDistance<'_>, usize, &[usize])>,
         caliper: Option<f64>,
         k: usize,
         probe: &Probe<'_, R, G>,
@@ -788,11 +797,19 @@ impl Pool {
         while position < high {
             let candidate_idx = self.candidate[position];
             let distance = if probe.admits(candidate_idx) {
-                DistanceMetric::<R>::distance(
-                    metric,
-                    probe.anchor,
-                    &probe.env.candidates[candidate_idx],
-                )
+                match rows {
+                    Some((mahalanobis, anchor_row, candidate_rows)) => {
+                        match candidate_rows[candidate_idx] {
+                            NO_ROW => None,
+                            row => mahalanobis.row_distance(anchor_row, row),
+                        }
+                    }
+                    None => DistanceMetric::<R>::distance(
+                        metric,
+                        probe.anchor,
+                        &probe.env.candidates[candidate_idx],
+                    ),
+                }
                 .filter(|distance| distance.is_finite())
                 .filter(|distance| caliper.is_none_or(|width| *distance <= width))
             } else {
@@ -877,8 +894,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                         None => return Vec::new(),
                     },
                 };
+                let rows = match (metric, &env.candidate_rows) {
+                    (ConfiguredMetric::Mahalanobis(metric), Some(rows)) => {
+                        match metric.row(anchor.id()) {
+                            Some(anchor_row) => Some((metric, anchor_row, rows.as_slice())),
+                            None => return Vec::new(),
+                        }
+                    }
+                    _ => None,
+                };
                 self.pool
-                    .nearest_by_pairs(gate, metric, *caliper, k, &probe)
+                    .nearest_by_pairs(gate, metric, rows, *caliper, k, &probe)
             }
         }
     }
@@ -1173,6 +1199,21 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         rank
     });
 
+    let candidate_rows = match &plan.rank {
+        Rank::Pairs {
+            metric: ConfiguredMetric::Mahalanobis(metric),
+            ..
+        } => {
+            let rows: Vec<usize> = request
+                .candidates
+                .iter()
+                .map(|candidate| metric.row(candidate.id()).unwrap_or(NO_ROW))
+                .collect();
+            rows.iter().any(|row| *row != NO_ROW).then_some(rows)
+        }
+        _ => None,
+    };
+
     let env = Env {
         anchors: request.anchors,
         candidates: request.candidates,
@@ -1181,6 +1222,7 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         plan,
         candidate_strata: (!required.is_empty()).then_some(candidate_strata),
         random_rank,
+        candidate_rows,
     };
 
     let results: Vec<StratumResult> = anchor_groups
