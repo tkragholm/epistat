@@ -33,8 +33,34 @@
 //! these. The upper bound is the smallest `tau` with `T(tau)` at most the
 //! lower expectation, and the lower bound the largest `tau` with `T(tau)` at
 //! least the upper one. `T` is a step function that changes only at Walsh
-//! averages, so the bounds are Walsh averages found by bisection over them.
-//! Zero differences stay in, at the lowest ranks.
+//! averages, so the bounds are Walsh averages. Zero differences stay in, at the
+//! lowest ranks.
+//!
+//! ## Algorithm
+//!
+//! The Walsh averages are never listed. With the differences sorted, the
+//! averages form a matrix `w[i][j] = (d_i + d_j) / 2`, `i <= j`, whose rows and
+//! columns do not decrease. A bound is the first Walsh average `v` for which
+//! `T` evaluated just above `v` (halfway to the next larger average) has
+//! crossed its threshold. `T` does not increase in `tau`, so the crossing is
+//! found as a quickselect does it, in the manner of Johnson and Mizoguchi
+//! \[3\] and Monahan \[4\]. Two values bracket the answer, and per row the
+//! columns whose averages lie between them. A random average between them is
+//! drawn, the number of averages at most it in each row is found by a pointer
+//! that only moves one way along the sorted differences, `T` is evaluated just
+//! above it, and the bracket narrows to one side. One step costs `O(n)`: the
+//! row pointers, the next larger average (the least entry just past the pointer
+//! of each row), and `T` itself, which is a merge of the shifted differences
+//! below and above `tau`, already in order of their absolute values. The
+//! expected number of steps is `O(log n)` because the number of averages in
+//! the bracket falls by a constant factor in expectation, so a bound at one
+//! `gamma` costs expected `O(n log n)` time, after one `O(n log n)` sort, and
+//! `O(n)` memory. The number of pairs is not limited. The random draws come
+//! from a fixed generator, so a call gives the same result every time.
+//!
+//! `T` is a sum of ranks that are multiples of one half, which is exact in
+//! floating point while `n (n + 1) / 2` is below `2^52`, so the order in which
+//! ranks are added does not matter.
 //!
 //! # Matched sets: m-statistics
 //!
@@ -81,6 +107,11 @@
 //! 2. Rosenbaum PR. Sensitivity analysis for m-estimates, tests, and
 //!    confidence intervals in matched observational studies. Biometrics.
 //!    2007;63(2):456-64.
+//! 3. Johnson DB, Mizoguchi T. Selecting the K-th element in X + Y and
+//!    X1 + X2 + ... + Xm. SIAM Journal on Computing. 1978;7(2):147-53.
+//! 4. Monahan JF. Algorithm 616: fast computation of the Hodges-Lehmann
+//!    location estimator. ACM Transactions on Mathematical Software.
+//!    1984;10(3):265-70.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -88,10 +119,6 @@ use std::fmt::{Display, Formatter};
 use crate::normal;
 use crate::quantile::type7_unsorted;
 use crate::signed_rank::{self, SignedRankError, average_ranks};
-
-/// The largest number of pairs the Hodges-Lehmann bounds take, since they
-/// sort all `n (n + 1) / 2` Walsh averages.
-pub const MAX_HL_PAIRS: usize = 5000;
 
 /// What goes wrong in a sensitivity analysis.
 #[derive(Debug, Clone, PartialEq)]
@@ -112,8 +139,6 @@ pub enum SensitivityError {
     Parameter(&'static str),
     /// The variance of the statistic is zero.
     ZeroVariance,
-    /// More pairs than [`MAX_HL_PAIRS`].
-    TooManyPairs,
     /// From the exact signed rank distribution.
     SignedRank(SignedRankError),
 }
@@ -131,7 +156,6 @@ impl Display for SensitivityError {
             ),
             Self::Parameter(what) => write!(f, "{what} is out of range"),
             Self::ZeroVariance => write!(f, "the variance of the statistic is zero"),
-            Self::TooManyPairs => write!(f, "more than {MAX_HL_PAIRS} pairs"),
             Self::SignedRank(e) => write!(f, "{e}"),
         }
     }
@@ -223,19 +247,48 @@ pub fn wilcoxon_bounds(
     })
 }
 
-/// The signed rank statistic of the differences shifted by `tau`, over all
-/// the differences with the zeros at the lowest ranks. A shifted difference
-/// that overflows is an error.
-fn shifted_statistic(differences: &[f64], tau: f64) -> Result<f64, SensitivityError> {
-    let shifted: Vec<f64> = differences.iter().map(|d| d - tau).collect();
-    let absolute: Vec<f64> = shifted.iter().map(|d| d.abs()).collect();
-    let ranks = average_ranks(&absolute)?;
-    Ok(ranks
-        .iter()
-        .zip(&shifted)
-        .filter(|(_, d)| **d > 0.0)
-        .map(|(r, _)| *r)
-        .sum())
+/// The signed rank statistic of the sorted differences shifted by `tau`, with
+/// the zeros at the lowest ranks and tied absolute values at their average
+/// rank. The shifted differences below `tau` and above it are each in order of
+/// their absolute values, so the ranks come from one merge.
+#[expect(clippy::float_cmp, reason = "tied values are equal")]
+fn shifted_statistic(sorted: &[f64], tau: f64) -> f64 {
+    let n = sorted.len();
+    let below = sorted.partition_point(|d| d - tau < 0.0);
+    let zeros = sorted[below..].partition_point(|d| d - tau == 0.0);
+    let mut negative = below;
+    let mut positive = below + zeros;
+    let mut used = zeros;
+    let mut statistic = 0.0;
+    while negative > 0 || positive < n {
+        let low = if negative > 0 {
+            (sorted[negative - 1] - tau).abs()
+        } else {
+            f64::INFINITY
+        };
+        let high = if positive < n {
+            sorted[positive] - tau
+        } else {
+            f64::INFINITY
+        };
+        let value = low.min(high);
+        let mut from_below = 0;
+        while negative > 0 && (sorted[negative - 1] - tau).abs() == value {
+            negative -= 1;
+            from_below += 1;
+        }
+        let mut from_above = 0;
+        while positive < n && sorted[positive] - tau == value {
+            positive += 1;
+            from_above += 1;
+        }
+        let group = from_below + from_above;
+        // The group takes ranks used + 1 ..= used + group.
+        let mean = (2 * used + 1 + group) as f64 / 2.0;
+        statistic += from_above as f64 * mean;
+        used += group;
+    }
+    statistic
 }
 
 /// The bounds of the Hodges-Lehmann estimate of the shift at one `gamma`.
@@ -255,9 +308,9 @@ pub struct HodgesLehmannBounds {
 /// # Errors
 ///
 /// [`SensitivityError::Gamma`], [`SensitivityError::NotFinite`],
-/// [`SensitivityError::NoInformation`] for no pairs and
-/// [`SensitivityError::TooManyPairs`], and [`SensitivityError::SignedRank`]
-/// when a shifted difference is not finite.
+/// [`SensitivityError::NoInformation`] for no pairs, and
+/// [`SensitivityError::SignedRank`] when the range of the differences is not
+/// finite, since a shifted difference could then overflow.
 pub fn hodges_lehmann_bounds(
     differences: &[f64],
     gammas: &[f64],
@@ -272,63 +325,157 @@ pub fn hodges_lehmann_bounds(
     if n == 0 {
         return Err(SensitivityError::NoInformation);
     }
-    if n > MAX_HL_PAIRS {
-        return Err(SensitivityError::TooManyPairs);
+    let mut sorted = differences.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    // Every shift tried lies between the smallest and the largest difference.
+    if !(sorted[n - 1] - sorted[0]).is_finite() {
+        return Err(SensitivityError::SignedRank(SignedRankError::NotFinite));
     }
-    let mut walsh = Vec::with_capacity(n * (n + 1) / 2);
-    for i in 0..n {
-        for j in i..n {
-            walsh.push(differences[i].midpoint(differences[j]));
-        }
-    }
-    walsh.sort_by(f64::total_cmp);
-    walsh.dedup();
-    let k = walsh.len();
-    // Interval m (0..=k) lies between walsh[m - 1] and walsh[m]; the end
-    // intervals are open.
-    let representative = |m: usize| -> f64 {
-        if m == 0 {
-            walsh[0] - 1.0
-        } else if m == k {
-            walsh[k - 1] + 1.0
-        } else {
-            walsh[m - 1] + (walsh[m] - walsh[m - 1]) / 2.0
-        }
-    };
+    let negative_zero = sorted.iter().any(|d| *d == 0.0 && d.is_sign_negative());
     let total = (n * (n + 1)) as f64 / 2.0;
+    let mut walsh = WalshSearch::new(&sorted);
     let mut out = Vec::with_capacity(gammas.len());
     for &gamma in gammas {
         let t_low = total / (1.0 + gamma);
         let t_high = total * gamma / (1.0 + gamma);
-        // Upper bound: the first interval where T is at most t_low.
-        let (mut lo, mut hi) = (0, k);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if shifted_statistic(differences, representative(mid))? <= t_low {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        let upper = if lo == 0 { walsh[0] } else { walsh[lo - 1] };
-        // Lower bound: the last interval where T is at least t_high.
-        let (mut lo, mut hi) = (0, k);
-        while lo < hi {
-            let mid = lo + (hi - lo).div_ceil(2);
-            if shifted_statistic(differences, representative(mid))? >= t_high {
-                lo = mid;
-            } else {
-                hi = mid - 1;
-            }
-        }
-        let lower = if lo == k { walsh[k - 1] } else { walsh[lo] };
+        // Upper bound: the first average above which T is at most t_low.
+        let upper = walsh.first_crossing(|tau| shifted_statistic(&sorted, tau) <= t_low);
+        // Lower bound: the first average above which T is below t_high.
+        let lower = walsh.first_crossing(|tau| shifted_statistic(&sorted, tau) < t_high);
+        // A zero average is -0.0 when a difference is.
+        let sign = |v: f64| if v == 0.0 && negative_zero { -0.0 } else { v };
         out.push(HodgesLehmannBounds {
             gamma,
-            lower,
-            upper,
+            lower: sign(lower),
+            upper: sign(upper),
         });
     }
     Ok(out)
+}
+
+/// Search among the Walsh averages `(d_i + d_j) / 2`, `i <= j`, of sorted
+/// differences, without listing them.
+struct WalshSearch<'a> {
+    sorted: &'a [f64],
+    /// Per row, the first column of the averages still possible.
+    first: Vec<usize>,
+    /// Per row, one past the last column of those.
+    end: Vec<usize>,
+    /// Per row, the first column whose average is above the value last tried.
+    cut: Vec<usize>,
+    state: u64,
+}
+
+impl<'a> WalshSearch<'a> {
+    fn new(sorted: &'a [f64]) -> Self {
+        let n = sorted.len();
+        Self {
+            sorted,
+            first: Vec::with_capacity(n),
+            end: Vec::with_capacity(n),
+            cut: vec![0; n],
+            state: 0x9e37_79b9_7f4a_7c15,
+        }
+    }
+
+    fn average(&self, row: usize, column: usize) -> f64 {
+        self.sorted[row].midpoint(self.sorted[column])
+    }
+
+    fn next_random(&mut self) -> u64 {
+        // SplitMix64.
+        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// Fill `cut` with, per row, the first column from the diagonal on whose
+    /// average is above `value`, and return the smallest average above `value`
+    /// anywhere, or `None` when there is none.
+    fn cut_above(&mut self, value: f64) -> Option<f64> {
+        let n = self.sorted.len();
+        let mut columns = n;
+        let mut next: Option<f64> = None;
+        for row in 0..n {
+            while columns > 0 && self.average(row, columns - 1) > value {
+                columns -= 1;
+            }
+            let cut = columns.max(row);
+            self.cut[row] = cut;
+            if cut < n {
+                let candidate = self.average(row, cut);
+                if next.is_none_or(|best| candidate < best) {
+                    next = Some(candidate);
+                }
+            }
+        }
+        next
+    }
+
+    /// The smallest average `v` such that `above(tau)` holds for `tau` halfway
+    /// between `v` and the next larger average, or `v + 1` when there is none.
+    /// `above` must go from false to true as `tau` increases, and be true above
+    /// every average.
+    fn first_crossing(&mut self, above: impl Fn(f64) -> bool) -> f64 {
+        let n = self.sorted.len();
+        self.first.clear();
+        self.first.extend(0..n);
+        self.end.clear();
+        self.end.resize(n, n);
+        // The answer is in (low, high]: `high` is known to cross, and every
+        // average up to `low` is known not to.
+        let mut high = self.sorted[n - 1];
+        loop {
+            let mut active = 0_usize;
+            let mut least: Option<f64> = None;
+            for row in 0..n {
+                if self.first[row] < self.end[row] {
+                    active += self.end[row] - self.first[row];
+                    let candidate = self.average(row, self.first[row]);
+                    if least.is_none_or(|best| candidate < best) {
+                        least = Some(candidate);
+                    }
+                }
+            }
+            let Some(least) = least else { return high };
+            if least >= high {
+                return high;
+            }
+            // A random average of the active ones below `high`; the least
+            // one when the draws keep landing on `high`.
+            let mut pivot = least;
+            for _ in 0..4 {
+                let mut draw = (self.next_random() % active as u64) as usize;
+                let mut row = 0;
+                while draw >= self.end[row].saturating_sub(self.first[row]) {
+                    draw -= self.end[row].saturating_sub(self.first[row]);
+                    row += 1;
+                }
+                let candidate = self.average(row, self.first[row] + draw);
+                if candidate < high {
+                    pivot = candidate;
+                    break;
+                }
+            }
+            let next = self.cut_above(pivot);
+            let tau = match next {
+                Some(next) => pivot + (next - pivot) / 2.0,
+                None => pivot + 1.0,
+            };
+            if above(tau) {
+                high = pivot;
+                for row in 0..n {
+                    self.end[row] = self.end[row].min(self.cut[row]);
+                }
+            } else {
+                for row in 0..n {
+                    self.first[row] = self.first[row].max(self.cut[row]);
+                }
+            }
+        }
+    }
 }
 
 /// The scores of an m-statistic over matched sets.
@@ -545,6 +692,127 @@ pub fn matched_sets_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// The bounds from all the Walsh averages, sorted, bisected one by one.
+    fn reference(differences: &[f64], gammas: &[f64]) -> Vec<HodgesLehmannBounds> {
+        let shifted = |tau: f64| -> f64 {
+            let s: Vec<f64> = differences.iter().map(|d| d - tau).collect();
+            let a: Vec<f64> = s.iter().map(|d| d.abs()).collect();
+            let ranks = average_ranks(&a).unwrap();
+            ranks
+                .iter()
+                .zip(&s)
+                .filter(|(_, d)| **d > 0.0)
+                .map(|(r, _)| *r)
+                .sum()
+        };
+        let n = differences.len();
+        let mut walsh = Vec::new();
+        for i in 0..n {
+            for j in i..n {
+                walsh.push(differences[i].midpoint(differences[j]));
+            }
+        }
+        walsh.sort_by(f64::total_cmp);
+        walsh.dedup();
+        let k = walsh.len();
+        let representative = |m: usize| -> f64 {
+            if m == 0 {
+                walsh[0] - 1.0
+            } else if m == k {
+                walsh[k - 1] + 1.0
+            } else {
+                walsh[m - 1] + (walsh[m] - walsh[m - 1]) / 2.0
+            }
+        };
+        let total = (n * (n + 1)) as f64 / 2.0;
+        let mut out = Vec::new();
+        for &gamma in gammas {
+            let t_low = total / (1.0 + gamma);
+            let t_high = total * gamma / (1.0 + gamma);
+            let (mut lo, mut hi) = (0, k);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if shifted(representative(mid)) <= t_low {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            let upper = if lo == 0 { walsh[0] } else { walsh[lo - 1] };
+            let (mut lo, mut hi) = (0, k);
+            while lo < hi {
+                let mid = lo + (hi - lo).div_ceil(2);
+                if shifted(representative(mid)) >= t_high {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            let lower = if lo == k { walsh[k - 1] } else { walsh[lo] };
+            out.push(HodgesLehmannBounds {
+                gamma,
+                lower,
+                upper,
+            });
+        }
+        out
+    }
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+    }
+
+    #[test]
+    fn hodges_lehmann_equals_the_listing_of_all_averages_to_the_bit() {
+        let gammas = [1.0, 1.1, 1.5, 2.0, 3.7, 9.0];
+        let mut rng = Lcg(12345);
+        for case in 0..400 {
+            let n = 1 + (rng.next() % 120) as usize;
+            let kind = case % 4;
+            let d: Vec<f64> = (0..n)
+                .map(|_| match kind {
+                    // Continuous.
+                    0 => (rng.next() % 1_000_000) as f64 / 1000.0 - 400.0,
+                    // Small integers, many ties and zeros.
+                    1 => (rng.next() % 9) as f64 - 3.0,
+                    // Halves and negative zeros.
+                    2 => {
+                        let v = (rng.next() % 7) as f64 / 2.0 - 1.5;
+                        if v == 0.0 && rng.next() % 2 == 0 { -0.0 } else { v }
+                    }
+                    // Mostly positive.
+                    _ => (rng.next() % 100) as f64 / 10.0 - 1.0,
+                })
+                .collect();
+            let want = reference(&d, &gammas);
+            let got = hodges_lehmann_bounds(&d, &gammas).unwrap();
+            for (w, g) in want.iter().zip(&got) {
+                assert_eq!(w.lower.to_bits(), g.lower.to_bits(), "case {case} lower");
+                assert_eq!(w.upper.to_bits(), g.upper.to_bits(), "case {case} upper");
+            }
+        }
+    }
+
+    #[test]
+    fn hodges_lehmann_takes_more_than_five_thousand_pairs() {
+        let mut rng = Lcg(7);
+        let d: Vec<f64> = (0..40_000)
+            .map(|_| (rng.next() % 2_000_001) as f64 / 1000.0 - 900.0)
+            .collect();
+        let b = hodges_lehmann_bounds(&d, &[1.0, 2.0]).unwrap();
+        assert!(b[0].lower <= b[0].upper);
+        assert!(b[1].lower <= b[0].lower && b[0].upper <= b[1].upper);
+    }
 
     #[test]
     fn gamma_one_signed_rank_bounds_coincide() {
