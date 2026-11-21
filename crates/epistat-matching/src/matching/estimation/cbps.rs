@@ -240,8 +240,8 @@ impl Orthogonal {
         let mut standardised = vec![0.0; k];
         for (row, entry) in standardised.iter_mut().enumerate() {
             let mut sum = 0.0;
-            for col in 0..k {
-                sum += self.v[row * k + col] / self.d[col] * g[col];
+            for (col, (d, g)) in self.d.iter().zip(g).enumerate() {
+                sum += self.v[row * k + col] / d * g;
             }
             *entry = sum;
         }
@@ -449,6 +449,10 @@ impl Problem<'_> {
 /// Brent's one-dimensional minimiser on `[a, b]`: golden section steps and
 /// parabolic interpolation \[2\], stopping when the interval is within `tol` of
 /// the best point in the sense of the original algorithm.
+#[expect(
+    clippy::float_cmp,
+    reason = "Brent's algorithm tests whether a trial point is exactly one of the stored points"
+)]
 fn brent_minimum(mut f: impl FnMut(f64) -> f64, a: f64, b: f64, tol: f64) -> f64 {
     let golden = (3.0 - 5.0_f64.sqrt()) * 0.5;
     let eps = f64::EPSILON.sqrt();
@@ -462,7 +466,7 @@ fn brent_minimum(mut f: impl FnMut(f64) -> f64, a: f64, b: f64, tol: f64) -> f64
     let mut fw = fx;
     let tol3 = tol / 3.0;
     loop {
-        let xm = (a + b) * 0.5;
+        let xm = f64::midpoint(a, b);
         let tol1 = eps * x.abs() + tol3;
         let t2 = tol1 * 2.0;
         if (x - xm).abs() <= t2 - (b - a) * 0.5 {
@@ -482,7 +486,6 @@ fn brent_minimum(mut f: impl FnMut(f64) -> f64, a: f64, b: f64, tol: f64) -> f64
             r = e;
             e = d;
         }
-        let u;
         if p.abs() >= (q * 0.5 * r).abs() || p <= q * (a - x) || p >= q * (b - x) {
             e = if x < xm { b - x } else { a - x };
             d = golden * e;
@@ -493,13 +496,13 @@ fn brent_minimum(mut f: impl FnMut(f64) -> f64, a: f64, b: f64, tol: f64) -> f64
                 d = if x < xm { tol1 } else { -tol1 };
             }
         }
-        if d.abs() >= tol1 {
-            u = x + d;
+        let u = if d.abs() >= tol1 {
+            x + d
         } else if d > 0.0 {
-            u = x + tol1;
+            x + tol1
         } else {
-            u = x - tol1;
-        }
+            x - tol1
+        };
         let fu = f(u);
         if fu <= fx {
             if u < x {
