@@ -460,7 +460,7 @@ fn strata_values<R: MatchingRecord>(
         .iter()
         .chain(candidates)
         .map(|record| {
-            record.strata().get(key).cloned().ok_or_else(|| {
+            record.stratum(key).map(str::to_owned).ok_or_else(|| {
                 SpecError::option(
                     option,
                     format!("the unit {} has no value for the key {key}", record.id()),

@@ -234,7 +234,7 @@ fn level_data<R: MatchingRecord>(
 ) -> Result<LevelData, OptimalError> {
     let key_of = |record: &R| -> Key {
         keys.iter()
-            .map(|key| record.strata().get(key).cloned())
+            .map(|key| record.stratum(key).map(str::to_owned))
             .collect()
     };
     let unit_keys: Vec<Key> = anchors

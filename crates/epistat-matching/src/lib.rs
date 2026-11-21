@@ -33,11 +33,19 @@
 //! method does not read, a score that is missing or not finite, and any other
 //! invalid option are errors that name the option or the unit.
 //!
+//! ## Large cohorts
+//!
+//! The matchers take any type that implements [`MatchingRecord`], and the
+//! covariate methods [`CovariateRecord`]. [`BalanceRecord`] owns its values
+//! in hash maps, about 2 KiB per unit. A [`Cohort`] holds the same values as
+//! columns, a few tens of bytes per unit, and its rows are records that give
+//! the same results, so ten million units fit in memory.
+//!
 //! ## Arrow input
 //!
-//! With the cargo feature `arrow`, the module `arrow` builds the records from
-//! Apache Arrow arrays, so a cohort held in columns, in Arrow or Polars, needs
-//! no per-row structs of its own.
+//! With the cargo feature `arrow`, the module `arrow` builds the records or a
+//! [`Cohort`] from Apache Arrow arrays, so a cohort held in columns, in Arrow
+//! or Polars, needs no per-row structs of its own.
 
 // ---------------------------------------------------------------------------
 // Shared builder-setter macros, which remove identical 3-line setter bodies
@@ -100,6 +108,9 @@ macro_rules! delegate_matching_record {
         fn strata(&self) -> &std::collections::HashMap<String, String> {
             self.$field.strata()
         }
+        fn stratum(&self, key: &str) -> Option<&str> {
+            self.$field.stratum(key)
+        }
         fn numeric(&self, name: &str) -> Option<f64> {
             self.$field.numeric(name)
         }
@@ -122,6 +133,7 @@ pub mod abadie_imbens;
 #[cfg(feature = "arrow")]
 pub mod arrow;
 mod balance;
+mod cohort;
 pub mod constraints;
 pub mod effects;
 mod errors;
@@ -144,6 +156,8 @@ pub mod test_utils;
 pub use test_utils::{date, record, test_outcome};
 
 pub use rapidhash::RapidHashMap;
+
+pub use cohort::{Cohort, CohortBuilder, CohortError, CohortRow};
 
 pub use balance::{
     BalanceInputError, BalanceWeights, balance_improvement, balance_report_on_weights,
@@ -216,10 +230,10 @@ pub use types::{
     AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
     BalanceReport, BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds, BaseRecord,
     BirthDateWindowDays, CandidateRecord, CategoricalBalance, CategoricalLevelBalance,
-    CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, CovariateValue,
-    CriteriaValidationError, DistanceCaliper, DistanceCaliperReason, Estimand, EstimandDriftReason,
-    ExclusionReason, InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchRatio,
-    MatchedPair, MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck,
+    CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, CovariateRef,
+    CovariateValue, CriteriaValidationError, DistanceCaliper, DistanceCaliperReason, Estimand,
+    EstimandDriftReason, ExclusionReason, InvalidCriteriaReason, MatchDiagnostics, MatchOutcome,
+    MatchRatio, MatchedPair, MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck,
     NumericBalanceTransform, RoleTransitionOptions, RoleTransitionRecord,
     SupplementalBalanceCovariates, UniqueValueId, ValidatedMatchingCriteria,
 };
@@ -275,12 +289,13 @@ pub mod prelude {
         CardinalityMatch, CardinalitySpec, CategoricalBalance, CategoricalCovariateSpec,
         CategoricalLevelBalance, Chained, CommonSupport, CommonSupportFailureReason, Constraint,
         ConstraintContext, ConstraintGroup, ConstraintReason, ControlIdx, CovarianceSpec,
-        CovariateEncodingConfig, CovariateMatrix, CovariateRecord, CovariateValue, CovariatesSpec,
-        CriteriaValidationError, CrossValidation, DateDistance, DefaultRiskSetPolicy,
-        DistanceCaliper, DistanceCaliperReason, DistanceChannel, DistanceConfig, DistanceMetric,
-        DistanceSpec, ElasticNetCvConfig, ElasticNetLogisticConfig, Estimand, EstimandDriftReason,
-        EstimationError, EstimatorSpec, EuclideanDistancePreparation, EuclideanPreparationConfig,
-        EuclideanScale, ExactMatchConstraint, ExclusionReason, FitFuncSpec, FullSpec, GeneticSpec,
+        CovariateEncodingConfig, CovariateMatrix, CovariateRecord, CovariateRef, CovariateValue,
+        CovariatesSpec, CriteriaValidationError, CrossValidation, DateDistance,
+        DefaultRiskSetPolicy, DistanceCaliper, DistanceCaliperReason, DistanceChannel,
+        DistanceConfig, DistanceMetric, DistanceSpec, ElasticNetCvConfig, ElasticNetLogisticConfig,
+        Estimand, EstimandDriftReason, EstimationError, EstimatorSpec,
+        EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
+        ExactMatchConstraint, ExclusionReason, FitFuncSpec, FullSpec, GeneticSpec,
         IdMapEuclideanDistance, IdMapMahalanobisDistance, IdMapPropensityScoreDistance,
         InvalidCriteriaReason, LambdaRule, LambdaSpec, LinkSpec, LogisticRegressionConfig,
         LongMatches, LossSpec, MahalanobisCovarianceStrategy, MahalanobisDistance,

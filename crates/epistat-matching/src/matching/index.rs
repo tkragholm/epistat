@@ -20,12 +20,7 @@ impl<'a> StrataValues<'a> {
         let width = required.len();
         let mut flat = Vec::with_capacity(controls.len() * width);
         for control in controls {
-            let strata = control.strata();
-            flat.extend(
-                required
-                    .iter()
-                    .map(|key| strata.get(key).map(String::as_str)),
-            );
+            flat.extend(required.iter().map(|key| control.stratum(key)));
         }
         Self { width, flat }
     }

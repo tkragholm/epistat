@@ -471,9 +471,8 @@ fn coarsen<R: MatchingRecord>(
             CemKind::Categorical(groups) => {
                 for (row, unit) in cells.iter_mut().zip(&units) {
                     let mut value = unit
-                        .strata()
-                        .get(&variable.name)
-                        .cloned()
+                        .stratum(&variable.name)
+                        .map(str::to_owned)
                         .ok_or_else(|| missing(unit))?;
                     for group in groups {
                         match group.first() {

@@ -1,5 +1,6 @@
+use crate::matching::MatchingRecord;
 use crate::matching::UnitWeightSet;
-use crate::types::{BalanceRecord, Estimand, MatchOutcome, MatchedPair};
+use crate::types::{Estimand, MatchOutcome, MatchedPair};
 use std::collections::{HashMap, HashSet};
 
 /// The weights a balance summary is computed on.
@@ -71,15 +72,11 @@ impl BalanceWeights {
     /// No matching: every unit has weight one, so the statistics after
     /// matching equal those before.
     #[must_use]
-    pub fn unmatched(
-        cases: &[BalanceRecord],
-        controls: &[BalanceRecord],
-        estimand: Estimand,
-    ) -> Self {
-        let ones = |records: &[BalanceRecord]| {
+    pub fn unmatched<R: MatchingRecord>(cases: &[R], controls: &[R], estimand: Estimand) -> Self {
+        let ones = |records: &[R]| {
             records
                 .iter()
-                .map(|record| (record.core.id.clone(), 1.0))
+                .map(|record| (record.id().to_owned(), 1.0))
                 .collect()
         };
         Self::new(
@@ -107,19 +104,19 @@ impl BalanceWeights {
     /// give them, split into the two groups. Units without a weight are
     /// unmatched.
     #[must_use]
-    pub fn from_unit_weights(
-        cases: &[BalanceRecord],
-        controls: &[BalanceRecord],
+    pub fn from_unit_weights<R: MatchingRecord>(
+        cases: &[R],
+        controls: &[R],
         weights: &HashMap<String, f64>,
         estimand: Estimand,
     ) -> Self {
-        let pick = |records: &[BalanceRecord]| {
+        let pick = |records: &[R]| {
             records
                 .iter()
                 .filter_map(|record| {
                     weights
-                        .get(record.core.id.as_str())
-                        .map(|weight| (record.core.id.clone(), *weight))
+                        .get(record.id())
+                        .map(|weight| (record.id().to_owned(), *weight))
                 })
                 .collect()
         };

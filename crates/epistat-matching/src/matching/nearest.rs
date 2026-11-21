@@ -1399,7 +1399,7 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         criteria
             .required_strata
             .iter()
-            .map(|key| anchors[usable[0]].strata().get(key).map(String::as_str))
+            .map(|key| anchors[usable[0]].stratum(key))
             .collect::<Vec<_>>()
     });
     let mut stratum = Stratum {
