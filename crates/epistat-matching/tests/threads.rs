@@ -15,9 +15,9 @@ use chrono::NaiveDate;
 use common::{Level, cohort, records, two_pass};
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    DeterministicSelection, NearestBirthDateSelection, ReconstructedEpisode,
-    ReconstructedMatchingOptions, SubclassificationConfig, balance_report_with_options,
-    estimate_propensity_and_match, prepare_euclidean_distance_config,
+    CbpsConfig, CbpsEstimand, CbpsMethod, DeterministicSelection, NearestBirthDateSelection,
+    ReconstructedEpisode, ReconstructedMatchingOptions, SubclassificationConfig,
+    balance_report_with_options, estimate_propensity_and_match, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
@@ -107,6 +107,7 @@ impl Digest {
         self.int(usize::from(estimate.fitted_at_boundary));
         self.debug(&estimate.lambda);
         self.debug(&estimate.cross_validation);
+        self.debug(&estimate.cbps);
     }
 }
 
@@ -553,6 +554,23 @@ fn propensity_estimation_and_matching() {
             PropensityEstimator::GlmLogit,
             PropensityScoreOutputScale::LinearPredictor,
             PropensityLink::Cloglog,
+        ),
+        (
+            "cbps_over_att",
+            PropensityEstimator::Cbps(CbpsConfig::default()),
+            PropensityScoreOutputScale::Probability,
+            logit,
+        ),
+        (
+            "cbps_exact_ate",
+            PropensityEstimator::Cbps(
+                CbpsConfig::builder()
+                    .estimand(CbpsEstimand::Ate)
+                    .method(CbpsMethod::Exact)
+                    .build(),
+            ),
+            PropensityScoreOutputScale::LinearPredictor,
+            logit,
         ),
         (
             "elastic",

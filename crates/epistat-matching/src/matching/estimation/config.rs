@@ -201,6 +201,70 @@ pub struct ElasticNetCvConfig {
     pub probability_clip: f64,
 }
 
+/// The estimand whose balance conditions a covariate balancing propensity
+/// score satisfies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CbpsEstimand {
+    /// The average treatment effect in the treated: the controls, weighted by
+    /// the odds of treatment, are balanced to the treated. MatchIt's default.
+    #[default]
+    Att,
+    /// The average treatment effect: both groups, weighted by the inverse of
+    /// the probability of their own treatment, are balanced to the sample.
+    Ate,
+}
+
+/// The estimator of a covariate balancing propensity score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CbpsMethod {
+    /// Score and balance conditions together, weighted by the inverse
+    /// covariance of the moments: CBPS's `method = "over"`.
+    #[default]
+    Over,
+    /// The balance conditions alone, which hold exactly at the fit: CBPS's
+    /// `method = "exact"`.
+    Exact,
+}
+
+/// Settings of the covariate balancing propensity score of Imai and Ratkovic
+/// (2014), as MatchIt's `distance = "cbps"` fits it with `CBPS::CBPS()`.
+///
+/// The fit is the two-step generalised method of moments estimator, which is
+/// the default of CBPS (`twostep = TRUE`). It is described in the module
+/// documentation of the implementation. The design must have an `intercept`
+/// column.
+///
+/// Each optimisation stops when the gradient norm of the loss is below
+/// `gradient_tolerance`, or when the loss changes by less than four times its
+/// estimated rounding error at the start of the search, `eps = f64::EPSILON`. The default
+/// gradient tolerance is `eps^(2/3)`, about 3.7e-11. The loss is in the
+/// orthogonalised coordinates, in which every column of the design has unit
+/// length, and a point with gradient norm `g` is within `g / lambda` of the
+/// minimum, with `lambda` the smallest eigenvalue of the Hessian of the loss.
+/// The reference fits have `lambda` between 3e-4 and 3e-3, so the default
+/// puts the linear predictor within about 1e-7 of the minimum.
+#[derive(bon::Builder, Debug, Clone, Copy)]
+pub struct CbpsConfig {
+    /// The estimand.
+    #[builder(default)]
+    pub estimand: CbpsEstimand,
+    /// Over-identified or exact.
+    #[builder(default)]
+    pub method: CbpsMethod,
+    /// Maximum BFGS iterations of each optimisation, CBPS's `iterations`.
+    #[builder(default = 1000_usize)]
+    pub max_iter: usize,
+    /// Gradient norm at which an optimisation has converged.
+    #[builder(default = f64::EPSILON.powf(2.0 / 3.0))]
+    pub gradient_tolerance: f64,
+}
+
+impl Default for CbpsConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 /// In-crate propensity estimator selection.
 #[derive(Debug, Clone, Default)]
 pub enum PropensityEstimator {
@@ -214,6 +278,8 @@ pub enum PropensityEstimator {
     /// Elastic-net penalized logistic regression with `lambda` chosen by
     /// cross-validation.
     ElasticNetCv(ElasticNetCvConfig),
+    /// The covariate balancing propensity score.
+    Cbps(CbpsConfig),
 }
 
 /// Output scale used for propensity-score distance values.

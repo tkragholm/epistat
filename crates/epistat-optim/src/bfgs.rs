@@ -39,9 +39,12 @@
 //!    norm. The result is converged. This also holds at iteration 0.
 //! 2. After the step, `|f_old - f_new| < cost_tolerance`, an absolute change.
 //!    The result is converged.
+//!    This holds also for a step whose value is above the current one by less
+//!    than `cost_tolerance`: the cost has stopped changing beyond rounding, and
+//!    the result is the current point.
 //! 3. A step whose value is not finite, whose gradient is not finite, or whose
-//!    value is above the current one ends the search at the current point,
-//!    which is not converged.
+//!    value is above the current one by `cost_tolerance` or more ends the
+//!    search at the current point, which is not converged.
 //! 4. After `max_iterations` iterations the loop ends. The result is converged
 //!    only if the gradient at the last point has norm below
 //!    `gradient_tolerance`.
@@ -304,6 +307,18 @@ impl Bfgs {
                 .zip(&grad)
                 .map(|(a, b)| a - b)
                 .collect();
+            // A step that raises the cost by less than the cost tolerance is a
+            // change of the cost within its rounding: the search has
+            // converged, at the current point, which is the best.
+            if step.value.is_finite()
+                && step.gradient.iter().all(|g| g.is_finite())
+                && (cost - step.value).abs() < self.cost_tolerance
+                && step.value > cost
+            {
+                best.iterations = iteration;
+                best.converged = true;
+                return Ok(best);
+            }
             // A step that leaves the finite region or does not decrease the
             // cost ends the search at the current point, which is the best.
             if step.value.is_nan()
@@ -647,6 +662,28 @@ mod tests {
             200.0 * (y - x * x),
         ];
         (value, gradient)
+    }
+
+    #[test]
+    fn a_rise_of_the_cost_within_its_tolerance_is_convergence() {
+        // Every point but the start has a cost 1e-12 above x'x, as if the
+        // cost were rounded up. No step lowers the cost, and the rise is below
+        // the cost tolerance, so the search has converged at the start.
+        let start = [1e-8, 1e-8];
+        let rounded_up = |p: &[f64]| {
+            let bump = if p == start { 0.0 } else { 1e-12 };
+            let value: f64 = p.iter().map(|x| x * x).sum::<f64>() + bump;
+            let gradient = p.iter().map(|x| 2.0 * x).collect();
+            (value, gradient)
+        };
+        let solver = Bfgs {
+            gradient_tolerance: 1e-30,
+            cost_tolerance: 1e-9,
+            ..Bfgs::default()
+        };
+        let minimum = solver.minimize(&start, rounded_up, None).unwrap();
+        assert!(minimum.converged);
+        assert_eq!(minimum.x, start);
     }
 
     #[test]

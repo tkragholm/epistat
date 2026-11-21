@@ -34,15 +34,16 @@ pub use engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
 };
 pub use estimation::{
-    CovariateEncodingConfig, CovariateMatrix, CrossValidation, ElasticNetCvConfig,
-    ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,
-    EuclideanPreparationConfig, EuclideanScale, LambdaRule, LogisticRegressionConfig,
-    MahalanobisCovarianceStrategy, MahalanobisDistancePreparation, MahalanobisPreparationConfig,
-    MahalanobisTransform, MissingValuePolicy, PropensityDistancePreparation, PropensityEstimator,
-    PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, RidgeReport, cross_validation_folds, estimate_propensity_and_match,
-    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
+    CbpsConfig, CbpsEstimand, CbpsFit, CbpsMethod, CovariateEncodingConfig, CovariateMatrix,
+    CrossValidation, ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError,
+    EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale, LambdaRule,
+    LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisDistancePreparation,
+    MahalanobisPreparationConfig, MahalanobisTransform, MissingValuePolicy,
+    PropensityDistancePreparation, PropensityEstimator, PropensityLink, PropensityMatchedOutcome,
+    PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale, RidgeReport,
+    cross_validation_folds, estimate_propensity_and_match, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    prepare_propensity_distance_config_with_discard,
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use fine_balance::{

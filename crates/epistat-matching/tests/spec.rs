@@ -19,7 +19,10 @@ mod common;
 
 use common::{Level, Person, cohort, records};
 use epistat_matching::prelude::*;
-use epistat_matching::{QuickMatchOptions, quick_match_subclasses};
+use epistat_matching::{
+    CbpsConfig, CbpsEstimand, CbpsEstimandSpec, CbpsMethod, QuickMatchOptions,
+    quick_match_subclasses,
+};
 use std::collections::BTreeMap;
 
 fn fnv(text: &str) -> u64 {
@@ -1773,6 +1776,86 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
         paths.push(format!("{:?}", propensity.expect("reported").probabilities));
     }
     assert_ne!(paths[0], paths[1], "the penalty ratio changes the fit");
+}
+
+#[test]
+fn spec_cbps_matches_the_typed_job() {
+    let (anchors, candidates) = covariate_inputs();
+    for (over, estimand, method, cbps_estimand) in [
+        (
+            true,
+            CbpsEstimandSpec::Att,
+            CbpsMethod::Over,
+            CbpsEstimand::Att,
+        ),
+        (
+            false,
+            CbpsEstimandSpec::Ate,
+            CbpsMethod::Exact,
+            CbpsEstimand::Ate,
+        ),
+    ] {
+        let spec = MatchSpec {
+            method: MatchMethod::Nearest,
+            distance: DistanceSpec::Propensity {
+                covariates: covariates(&["age", "income"]),
+                link: LinkSpec::Logit,
+                estimator: EstimatorSpec::Cbps { estimand, over },
+                scale: ScaleSpec::Probability,
+                sampling_weights: None,
+                caliper: None,
+            },
+            birth_window_days: wide_window(),
+            seed: 5,
+            ..MatchSpec::default()
+        };
+        let SpecOutput::Pairs {
+            outcome,
+            propensity,
+        } = run_spec(
+            &spec,
+            SpecInput::Standard {
+                anchors: &anchors,
+                candidates: &candidates,
+            },
+        )
+        .expect("valid spec")
+        else {
+            panic!("expected pairs");
+        };
+        let config = PropensityScoreConfig::builder()
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .covariate_keys(vec!["age".into(), "income".into()])
+                    .include_intercept(true)
+                    .build(),
+            )
+            .estimator(PropensityEstimator::Cbps(
+                CbpsConfig::builder()
+                    .estimand(cbps_estimand)
+                    .method(method)
+                    .build(),
+            ))
+            .build();
+        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+        let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
+            .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
+            .with_distance_config(prepared.distance_config)
+            .with_nearest()
+            .run();
+        same(&outcome, &by_hand);
+        let reported = propensity.expect("reported");
+        assert!(reported.converged);
+        assert!(reported.cbps.is_some());
+    }
+    let json = r#"{"kind": "cbps"}"#;
+    assert_eq!(
+        serde_json::from_str::<EstimatorSpec>(json).unwrap(),
+        EstimatorSpec::Cbps {
+            estimand: CbpsEstimandSpec::Att,
+            over: true
+        }
+    );
 }
 
 #[test]
