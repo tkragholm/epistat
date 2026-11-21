@@ -103,7 +103,7 @@ impl Floats {
 struct Run {
     scenario: String,
     estimand: String,
-    ratio: f64,
+    ratio: usize,
     exact: bool,
     error: bool,
     focal: Option<Ints>,
@@ -118,7 +118,7 @@ struct Run {
 struct CaliperRun {
     scenario: String,
     caliper: f64,
-    ratio: f64,
+    ratio: usize,
     error: bool,
     focal: Option<Ints>,
     other: Option<Ints>,
@@ -300,7 +300,7 @@ fn pairs_totals_and_weights_match_matchit() {
         );
         let focal = u8::from(run.estimand == "ATT");
         let built = setup(&run.scenario, scenario, focal, None);
-        let ratio = run.ratio as usize;
+        let ratio = run.ratio;
         let got = run_ours(&built, ratio, run.exact);
         if run.error {
             assert!(
@@ -370,7 +370,7 @@ fn calipers_forbid_pairs_as_optmatch_does() {
             run.scenario, run.caliper, run.ratio
         );
         let built = setup(&run.scenario, scenario, 1, Some(run.caliper));
-        let ratio = run.ratio as usize;
+        let ratio = run.ratio;
         let got = run_ours(&built, ratio, false);
         if run.error {
             assert!(

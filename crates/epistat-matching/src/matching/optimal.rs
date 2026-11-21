@@ -579,7 +579,6 @@ fn full_match_stratum(
 
 /// The connected components of the matched pairs. Each is a matched set.
 fn connected_groups(matched: &[(usize, usize)], rows: usize, cols: usize) -> Vec<Group> {
-    let mut parent: Vec<usize> = (0..rows + cols).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
             parent[node] = parent[parent[node]];
@@ -587,6 +586,7 @@ fn connected_groups(matched: &[(usize, usize)], rows: usize, cols: usize) -> Vec
         }
         node
     }
+    let mut parent: Vec<usize> = (0..rows + cols).collect();
     for (row, col) in matched {
         let a = find(&mut parent, *row);
         let b = find(&mut parent, rows + *col);
@@ -691,6 +691,18 @@ struct PairBuilder<'a, R: MatchingRecord, G: ?Sized> {
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
+    /// The distance of an anchor and a candidate, by their positions in the
+    /// anchor and candidate slices, or `None` when the pair has none. Every
+    /// cost of the network is read here.
+    fn pair_distance(
+        &self,
+        anchor_idx: usize,
+        candidate_idx: usize,
+        metric: &impl DistanceMetric<R>,
+    ) -> Option<f64> {
+        metric.distance(&self.anchors[anchor_idx], &self.candidates[candidate_idx])
+    }
+
     /// Every admissible pair of the stratum, sorted by row and then column.
     fn edges(&self, stratum: &Stratum) -> Vec<Edge> {
         let used = UsedControlsVec::with_capacity(0);
@@ -767,7 +779,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
                 {
                     continue;
                 }
-                let Some(distance) = metric.distance(anchor, candidate) else {
+                let Some(distance) = self.pair_distance(*anchor_idx, candidate_idx, &metric) else {
                     continue;
                 };
                 if !distance.is_finite() || self.caliper.is_some_and(|width| distance > width) {
@@ -815,6 +827,10 @@ fn exact_strata<R: MatchingRecord>(
     strata
 }
 
+/// Solves one stratum from its numbers of anchors and candidates and its pairs.
+type StratumSolver<'a> =
+    dyn Fn(usize, usize, &[Edge]) -> Result<Vec<Group>, StratumError> + Sync + 'a;
+
 /// A solved stratum: its matched sets by position in the anchor and candidate
 /// slices.
 type Solved = Vec<Vec<(usize, usize)>>;
@@ -823,7 +839,7 @@ fn solve_strata<R, G>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-    solve: &(dyn Fn(usize, usize, &[Edge]) -> Result<Vec<Group>, StratumError> + Sync),
+    solve: &StratumSolver<'_>,
 ) -> Result<Solved, OptimalError>
 where
     R: MatchingRecord,
@@ -1153,22 +1169,22 @@ where
         }
     }
     let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
-    let mut att_weights = HashMap::new();
-    let mut atc_weights = HashMap::new();
-    let mut ate_weights = HashMap::new();
+    let mut anchor_effect = HashMap::new();
+    let mut candidate_effect = HashMap::new();
+    let mut population_effect = HashMap::new();
     for (id, is_anchor, subclass) in anchor_flags {
         let Some(share) = subclasses[subclass].subclass_propensity else {
             continue;
         };
-        att_weights.insert(
+        anchor_effect.insert(
             id.clone(),
             subclass_weight_for_estimand(Estimand::Att, share, is_anchor),
         );
-        atc_weights.insert(
+        candidate_effect.insert(
             id.clone(),
             subclass_weight_for_estimand(Estimand::Atc, share, is_anchor),
         );
-        ate_weights.insert(
+        population_effect.insert(
             id.clone(),
             subclass_weight_for_estimand(Estimand::Ate, share, is_anchor),
         );
@@ -1186,9 +1202,9 @@ where
         assignments,
         dropped_ids,
         subclasses,
-        att_weights,
-        atc_weights,
-        ate_weights,
+        att_weights: anchor_effect,
+        atc_weights: candidate_effect,
+        ate_weights: population_effect,
     })
 }
 
@@ -1354,6 +1370,11 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "small non-negative draws"
+    )]
     fn pair_matching_agrees_with_brute_force_on_random_costs() {
         let mut state = 17_u64;
         let mut draw = || {

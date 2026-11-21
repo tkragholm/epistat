@@ -16,15 +16,17 @@ use crate::constraints::{
     AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field, numeric_field_sd,
 };
 use crate::matching::{
-    Assignment, CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
-    ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig,
-    EuclideanScale, ExactMatchError, ExactMatchOutcome, LambdaRule, LogisticRegressionConfig,
+    Assignment, Chained, CovariateEncodingConfig, CovariateRecord, DeterministicSelection,
+    DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError,
+    EuclideanPreparationConfig, EuclideanScale, ExactMatchError, ExactMatchOutcome,
+    FullMatchConfig, FullMatchOutcome, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
     MatchOrder, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection,
-    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, RandomSelection, RoleIndexedRecord, SelectionStrategy,
-    SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
-    exact_match_subclasses, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    OptimalError, OptimalRequest, PropensityEstimator, PropensityLink, PropensityScoreConfig,
+    PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection, Retain,
+    RoleIndexedRecord, SelectionStrategy, SubclassReferenceGroup, SubclassificationConfig,
+    SubclassificationOutcome, exact_match_subclasses, match_full, match_optimal,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, subclassify_by_propensity_score_map,
 };
 use crate::types::{
@@ -72,6 +74,14 @@ pub enum MatchMethod {
     /// Subclasses of the propensity score or another score, as
     /// `matchit(method = "subclass")`. Standard mode only.
     Subclass,
+    /// Pairs that minimise the total distance, as
+    /// `matchit(method = "optimal")`. Standard mode only. The anchors are the
+    /// focal group.
+    Optimal,
+    /// Subclasses of one anchor with several candidates or the reverse that
+    /// minimise the total distance, as `matchit(method = "full")`. Standard
+    /// mode only. The anchors are the focal group.
+    Full,
 }
 
 /// The order in which anchors take their controls.
@@ -441,6 +451,8 @@ pub struct MatchSpec {
     pub nearest: NearestSpec,
     /// Options of the subclass method.
     pub subclass: SubclassSpec,
+    /// Options of the full method.
+    pub full: FullSpec,
     /// How anchors share the candidates when each takes more than one. The
     /// default is sequential, and rounds for the nearest method as in
     /// `matchit()`. Risk-set matching is always sequential.
@@ -495,6 +507,7 @@ impl Default for MatchSpec {
             distance: DistanceSpec::default(),
             nearest: NearestSpec::default(),
             subclass: SubclassSpec::default(),
+            full: FullSpec::default(),
             assignment: None,
             ratio: criteria.match_ratio,
             ratio_fallback: Vec::new(),
@@ -512,6 +525,33 @@ impl Default for MatchSpec {
             require_resident: false,
             estimand: criteria.estimand,
             seed: 0,
+        }
+    }
+}
+
+/// Options of the full method, those of `optmatch::fullmatch()`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FullSpec {
+    /// Fewest candidates per anchor in a subclass. A number below 1 allows
+    /// several anchors per candidate.
+    pub min_controls: f64,
+    /// Most candidates per anchor in a subclass. Absent for no limit.
+    pub max_controls: Option<f64>,
+    /// Fraction of the candidates (positive) or anchors (negative) to leave
+    /// out. Not with `mean_controls`.
+    pub omit_fraction: Option<f64>,
+    /// Candidates per anchor to use on average. Not with `omit_fraction`.
+    pub mean_controls: Option<f64>,
+}
+
+impl Default for FullSpec {
+    fn default() -> Self {
+        Self {
+            min_controls: 0.0,
+            max_controls: None,
+            omit_fraction: None,
+            mean_controls: None,
         }
     }
 }
@@ -545,6 +585,8 @@ pub enum SpecOutput {
     },
     /// Strata with weights, from the exact method.
     Exact(Box<ExactMatchOutcome>),
+    /// Subclasses with the weights of each estimand, from the full method.
+    Full(Box<FullMatchOutcome>),
     /// Subclasses with weights, from the subclass method.
     Subclass {
         /// The subclasses and their weights.
@@ -575,6 +617,8 @@ pub enum SpecError {
     Distance(EstimationError),
     /// Exact matching could not run.
     Exact(ExactMatchError),
+    /// Optimal matching could not run.
+    Optimal(OptimalError),
     /// The matcher refused the configuration.
     Rejected(ExclusionReason),
 }
@@ -605,6 +649,7 @@ impl Display for SpecError {
             },
             Self::Distance(error) => write!(f, "the distance could not be built: {error}"),
             Self::Exact(error) => write!(f, "exact matching could not run: {error}"),
+            Self::Optimal(error) => write!(f, "optimal matching could not run: {error}"),
             Self::Rejected(reason) => write!(
                 f,
                 "the matcher refused the configuration ({reason}); \
@@ -620,6 +665,7 @@ impl Error for SpecError {
             Self::Criteria(error) => Some(error),
             Self::Distance(error) => Some(error),
             Self::Exact(error) => Some(error),
+            Self::Optimal(error) => Some(error),
             Self::Option { .. } | Self::InputMode { .. } | Self::Rejected(_) => None,
         }
     }
@@ -640,6 +686,12 @@ impl From<EstimationError> for SpecError {
 impl From<ExactMatchError> for SpecError {
     fn from(error: ExactMatchError) -> Self {
         Self::Exact(error)
+    }
+}
+
+impl From<OptimalError> for SpecError {
+    fn from(error: OptimalError) -> Self {
+        Self::Optimal(error)
     }
 }
 
@@ -725,6 +777,13 @@ impl MatchSpec {
             ));
         }
 
+        if self.full != FullSpec::default() && self.method != MatchMethod::Full {
+            return Err(SpecError::option(
+                "full",
+                "min_controls, max_controls, omit_fraction and mean_controls belong to the \
+                 full method; set the method to full or drop them",
+            ));
+        }
         let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper;
         if nearest_options && self.method != MatchMethod::Nearest {
             return Err(SpecError::option(
@@ -736,6 +795,7 @@ impl MatchSpec {
         match self.method {
             MatchMethod::Exact => self.validate_exact()?,
             MatchMethod::Subclass => self.validate_subclass()?,
+            MatchMethod::Optimal | MatchMethod::Full => self.validate_optimal()?,
             MatchMethod::Nearest => self.validate_nearest()?,
             MatchMethod::Random | MatchMethod::LowestIndex | MatchMethod::NearestBirthDate => {
                 if self.assignment == Some(AssignmentSpec::Rounds)
@@ -808,6 +868,40 @@ impl MatchSpec {
                 "std_caliper",
                 "a caliper in standard deviations needs a score distance; \
                  give the caliper in the units of the distance",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_optimal(&self) -> Result<(), SpecError> {
+        let name = if self.method == MatchMethod::Full {
+            "full"
+        } else {
+            "optimal"
+        };
+        let conflicts: [(&'static str, bool); 4] = [
+            ("replace", self.replace),
+            ("ratio_fallback", !self.ratio_fallback.is_empty()),
+            ("unique_by_key", self.unique_by_key.is_some()),
+            ("assignment", self.assignment.is_some()),
+        ];
+        if let Some((option, _)) = conflicts.iter().find(|(_, set)| *set) {
+            return Err(SpecError::option(
+                option,
+                format!("the {name} method does not use it; drop it"),
+            ));
+        }
+        if self.method == MatchMethod::Full && self.ratio != 1 {
+            return Err(SpecError::option(
+                "ratio",
+                "the full method sizes its subclasses by min_controls and max_controls; \
+                 drop the ratio",
+            ));
+        }
+        if self.full.omit_fraction.is_some() && self.full.mean_controls.is_some() {
+            return Err(SpecError::option(
+                "full",
+                "omit_fraction and mean_controls cannot both be set",
             ));
         }
         Ok(())
@@ -1285,6 +1379,55 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
                 propensity: built.propensity.map(Box::new),
             });
         }
+        MatchMethod::Optimal | MatchMethod::Full => {
+            let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+            let calipers = field_calipers(spec, anchors, candidates)?;
+            let sex: Vec<GenderMatch> = if spec.match_sex {
+                vec![GenderMatch::on_key(spec.sex_key.clone())]
+            } else {
+                Vec::new()
+            };
+            let anti: Vec<AntiExact> = spec
+                .antiexact
+                .iter()
+                .map(|key| AntiExact::on_key(key.clone()))
+                .collect();
+            let calipers: Vec<_> = calipers
+                .iter()
+                .map(|(field, width)| caliper_on_field::<R>(field, *width))
+                .collect();
+            let constraints = Chained {
+                first: Chained {
+                    first: sex,
+                    second: anti,
+                },
+                second: calipers,
+            };
+            let criteria = spec.criteria();
+            let mut request = OptimalRequest::new(&criteria, &constraints);
+            if let Some(config) = built.config.as_ref() {
+                request = request.with_distance_config(config);
+            }
+            if spec.method == MatchMethod::Full {
+                let retain = match (spec.full.omit_fraction, spec.full.mean_controls) {
+                    (Some(fraction), _) => Retain::OmitFraction(fraction),
+                    (None, Some(mean)) => Retain::MeanControls(mean),
+                    (None, None) => Retain::All,
+                };
+                let config = FullMatchConfig {
+                    min_controls: spec.full.min_controls,
+                    max_controls: spec.full.max_controls.unwrap_or(f64::INFINITY),
+                    retain,
+                };
+                let outcome = match_full(anchors, candidates, &request, &config)?;
+                return Ok(SpecOutput::Full(Box::new(outcome)));
+            }
+            let outcome = match_optimal(anchors, candidates, &request)?;
+            return Ok(SpecOutput::Pairs {
+                outcome: Box::new(outcome),
+                propensity: built.propensity.map(Box::new),
+            });
+        }
         MatchMethod::Random
         | MatchMethod::LowestIndex
         | MatchMethod::NearestBirthDate
@@ -1324,7 +1467,9 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             }
             run_standard_with(plan(false), strategy)?
         }
-        MatchMethod::Exact | MatchMethod::Subclass => unreachable!("handled above"),
+        MatchMethod::Exact | MatchMethod::Subclass | MatchMethod::Optimal | MatchMethod::Full => {
+            unreachable!("handled above")
+        }
     };
     Ok(SpecOutput::Pairs {
         outcome: Box::new(outcome),
@@ -1421,7 +1566,11 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         MatchMethod::Random => job.with_strategy(RandomSelection::seeded(spec.seed)).run(),
         MatchMethod::LowestIndex => job.with_strategy(DeterministicSelection).run(),
         MatchMethod::NearestBirthDate => job.with_strategy(NearestBirthDateSelection).run(),
-        MatchMethod::Nearest | MatchMethod::Exact | MatchMethod::Subclass => {
+        MatchMethod::Nearest
+        | MatchMethod::Exact
+        | MatchMethod::Subclass
+        | MatchMethod::Optimal
+        | MatchMethod::Full => {
             unreachable!("rejected by validation")
         }
     };
