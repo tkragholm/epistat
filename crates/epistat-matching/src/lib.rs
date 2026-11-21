@@ -177,6 +177,10 @@ pub use matching::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
 };
 pub use matching::{
+    CardinalityError, CardinalityLimits, CardinalityOutcome, CardinalityRequest, StratumReport,
+    match_cardinality, pair_units,
+};
+pub use matching::{
     CemBinning, CemError, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata,
     cem_subclasses,
 };
