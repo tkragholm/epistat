@@ -528,6 +528,7 @@ dependencies = [
 name = "epistat-matching"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
  "bon",
  "chrono",
  "criterion",
