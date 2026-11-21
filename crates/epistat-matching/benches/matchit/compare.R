@@ -16,7 +16,7 @@ suppressMessages(library(data.table))
 args <- commandArgs(TRUE)
 n <- args[1]
 scratch <- args[2]
-out <- file.path(scratch, "out")
+out <- Sys.getenv("OUT", file.path(scratch, "out"))
 rd <- function(impl, method) {
   p <- file.path(out, sprintf("%s_%s_%s.csv", impl, method, n))
   if (file.exists(p)) fread(p) else NULL
@@ -27,7 +27,8 @@ line <- function(method, ru, ru2, agree, detail = "") {
 }
 
 pair_methods <- c("nn_ps", "nn_ps_cal", "nn_strata", "nn_cal_strata", "nn_1to3",
-                  "nn_mahal", "optimal_cal")
+                  "nn_ps_r4", "nn_strata_r4", "nn_replace", "nn_mahal", "nn_mahal_strata",
+                  "nn_euclid", "nn_euclid_strata", "optimal_cal")
 part_methods <- c("subclass", "exact", "cem", "quick", "full_cal")
 
 d <- NULL
