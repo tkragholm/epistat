@@ -79,14 +79,22 @@ use super::order_statistics::{Fenwick, WaveletMatrix};
 use super::{AtRiskSpan, IdOrder};
 use crate::constraints::ResidenceSpell;
 use crate::matching::{
-    CandidateIndex, FieldValueSource, RoleIndexedRecord, StatusRule, StatusRuleKind,
+    CandidateIndex, RoleIndexedRecord, StatusRule, StatusRuleKind, caliper_allows,
 };
 use chrono::{Datelike, NaiveDate};
 use rustc_hash::FxHashMap;
 use std::ops::Range;
 
 /// The largest window, in controls, that a stratum lists rather than counts.
-pub(super) const LIST_LIMIT: usize = 512;
+pub(super) const LIST_LIMIT: usize = 2048;
+
+/// [`LIST_LIMIT`], or in tests the limit a test has set on its thread.
+pub(super) fn list_limit() -> usize {
+    #[cfg(test)]
+    return LIST_LIMIT_IN_TESTS.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    LIST_LIMIT
+}
 
 const NOT_AT_RISK: u8 = 0;
 const DRAWN: u8 = 1;
@@ -115,6 +123,12 @@ struct Stratum {
     by_birth: Vec<u32>,
     /// Id rank of each birth position.
     id_rank_by_birth: Vec<u32>,
+    /// State of each birth position, as in [`Unit::state`], so that a listed
+    /// window reads its states in one run of memory.
+    states: Vec<u8>,
+    /// For each value rule, in the order of the group, the value of each
+    /// birth position.
+    values: Vec<Vec<Option<f64>>>,
     trees: Option<Trees>,
 }
 
@@ -227,23 +241,27 @@ impl StatusDates {
 }
 
 /// One rule of the group, in its order.
-enum Rule<'a, R> {
+enum Rule {
     Status(StatusDates),
+    /// The value rule numbered `number` among the value rules, with the value
+    /// of every record and its window.
     Values {
-        source: &'a dyn FieldValueSource<R>,
+        number: usize,
         values: Vec<Option<f64>>,
+        window: f64,
+        match_missing: bool,
     },
 }
 
 /// The risk-set state of every record on the current case date.
-pub(super) struct RiskSetSweep<'a, R> {
+pub(super) struct RiskSetSweep {
     strata: Vec<Stratum>,
     units: Vec<Unit>,
     /// At-risk span of each record, `[from, until)`.
     spans: Vec<(i32, i32)>,
     /// The dates at which some record's state may change.
     queue: DateQueue,
-    rules: Vec<Rule<'a, R>>,
+    rules: Vec<Rule>,
     /// The reason slot of each rule.
     rule_slot: Vec<usize>,
     reasons: Vec<&'static str>,
@@ -252,16 +270,16 @@ pub(super) struct RiskSetSweep<'a, R> {
     today: i32,
 }
 
-impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
+impl RiskSetSweep {
     /// The sweep of `cohort` with the strata of `index`, which holds every
     /// record, the rules of the constraint group, the order of the ids,
     /// which must be distinct, and the at-risk span `[from, until)` of each
     /// record. Every record is out of the risk set until the first call of
     /// [`Self::advance`]; no stratum is counted until [`Self::count_strata`].
-    pub(super) fn new(
+    pub(super) fn new<R: RoleIndexedRecord>(
         cohort: &[R],
         index: &CandidateIndex<'_>,
-        rules: &[StatusRule<'a, R>],
+        rules: &[StatusRule<'_, R>],
         id_order: &IdOrder,
         spans: Vec<AtRiskSpan>,
     ) -> Option<Self> {
@@ -290,7 +308,7 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
         let mut reasons: Vec<&'static str> = Vec::new();
         let mut rule_slot = Vec::with_capacity(rules.len());
         let mut kept = Vec::with_capacity(rules.len());
-        let mut has_values = false;
+        let mut value_rules = 0_usize;
         for StatusRule(kind) in rules {
             let (reason, rule) = match kind {
                 StatusRuleKind::AllowsAll => continue,
@@ -325,19 +343,24 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
                     };
                     (*reason, Rule::Status(dates))
                 }
-                StatusRuleKind::ComparesValues { reason, source } => {
-                    has_values = true;
+                StatusRuleKind::ComparesValues {
+                    reason,
+                    source,
+                    window,
+                    match_missing,
+                } => {
                     let values = cohort
                         .iter()
                         .map(|record| source.value_of(record))
                         .collect();
-                    (
-                        *reason,
-                        Rule::Values {
-                            source: *source,
-                            values,
-                        },
-                    )
+                    let rule = Rule::Values {
+                        number: value_rules,
+                        values,
+                        window: *window,
+                        match_missing: *match_missing,
+                    };
+                    value_rules += 1;
+                    (*reason, rule)
                 }
             };
             let slot = reasons
@@ -392,10 +415,21 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
                     .iter()
                     .map(|&idx| units[idx as usize].id_rank)
                     .collect();
+                let values = kept
+                    .iter()
+                    .filter_map(|rule| match rule {
+                        Rule::Values { values, .. } => {
+                            Some(by_birth.iter().map(|&idx| values[idx as usize]).collect())
+                        }
+                        Rule::Status(_) => None,
+                    })
+                    .collect();
                 Stratum {
                     by_id,
+                    states: vec![NOT_AT_RISK; by_birth.len()],
                     by_birth,
                     id_rank_by_birth,
+                    values,
                     trees: None,
                 }
             })
@@ -409,7 +443,7 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
             rules: kept,
             rule_slot,
             reasons,
-            has_values,
+            has_values: value_rules > 0,
             today: ALWAYS,
         })
     }
@@ -488,7 +522,9 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
         if state != old {
             self.count(idx, old, -1);
             self.count(idx, state, 1);
-            self.units[idx].state = state;
+            let unit = &mut self.units[idx];
+            unit.state = state;
+            self.strata[unit.stratum as usize].states[unit.birth_position as usize] = state;
         }
     }
 
@@ -547,12 +583,11 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
         };
         let mut ranks = Vec::new();
         for position in window {
-            let idx = s.by_birth[position] as usize;
-            let state = self.units[idx].state;
+            let state = s.states[position];
             match state {
                 NOT_AT_RISK => counts.not_at_risk += 1,
                 DRAWN => counts.drawn += 1,
-                _ => match self.first_refusal(state, case_idx, idx) {
+                _ => match self.first_refusal(s, state, case_idx, position) {
                     Some(slot) => counts.refused[slot].1 += 1,
                     None => ranks.push(s.id_rank_by_birth[position]),
                 },
@@ -563,9 +598,17 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
         (counts, Pool::Listed(ranks))
     }
 
-    /// The reason slot of the first rule that refuses control `idx`, at risk
-    /// and not drawn, for case `case_idx`, or `None` when none does.
-    fn first_refusal(&self, state: u8, case_idx: usize, idx: usize) -> Option<usize> {
+    /// The reason slot of the first rule that refuses the control at birth
+    /// `position` of stratum `s`, at risk and not drawn and in `state`, for
+    /// case `case_idx`, or `None` when none does.
+    #[inline]
+    fn first_refusal(
+        &self,
+        s: &Stratum,
+        state: u8,
+        case_idx: usize,
+        position: usize,
+    ) -> Option<usize> {
         let first_status = (state >= REFUSED).then(|| usize::from(state - REFUSED));
         if !self.has_values {
             return first_status.map(|position| self.rule_slot[position]);
@@ -576,9 +619,17 @@ impl<'a, R: RoleIndexedRecord> RiskSetSweep<'a, R> {
         self.rules[..last]
             .iter()
             .position(|rule| match rule {
-                Rule::Values { source, values } => {
-                    !source.allows_values(values[case_idx], values[idx])
-                }
+                Rule::Values {
+                    number,
+                    values,
+                    window,
+                    match_missing,
+                } => !caliper_allows(
+                    values[case_idx],
+                    s.values[*number][position],
+                    *window,
+                    *match_missing,
+                ),
                 Rule::Status(_) => false,
             })
             .or(first_status)
@@ -671,6 +722,8 @@ impl SwapRemovePool {
 thread_local! {
     /// Matching runs on this thread that took the sweep.
     pub(super) static SWEPT_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The list limit of the sweeps on this thread.
+    static LIST_LIMIT_IN_TESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(LIST_LIMIT) };
 }
 
 #[cfg(test)]
@@ -806,7 +859,12 @@ mod tests {
     #[test]
     fn the_sweep_gives_what_the_scan_gives() {
         let mut checked = 0;
-        for (seed, n, birth_days) in [(1, 60, 5), (2, 300, 40), (3, 900, 400), (4, 900, 3)] {
+        // Every stratum counted, some, and none.
+        for ((seed, n, birth_days), limit) in [(1, 60, 5), (2, 300, 40), (3, 900, 400), (4, 900, 3)]
+            .into_iter()
+            .flat_map(|cohort| [0, 64, LIST_LIMIT].map(|limit| (cohort, limit)))
+        {
+            LIST_LIMIT_IN_TESTS.with(|cell| cell.set(limit));
             let people = cohort(seed, n, birth_days);
             for ratio in [1, 3] {
                 for fallback in [false, true] {
@@ -854,7 +912,8 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 300, "{checked} runs with pairs");
+        LIST_LIMIT_IN_TESTS.with(|cell| cell.set(LIST_LIMIT));
+        assert!(checked > 900, "{checked} runs with pairs");
     }
 
     /// A policy of the caller's in the shape of Study II's: a control is at
@@ -1060,7 +1119,12 @@ mod tests {
     #[test]
     fn periods_and_calipers_under_the_default_policy_sweep_as_they_scan() {
         use crate::constraints::caliper_on_field;
-        for (seed, n, birth_days) in [(31, 600, 40), (32, 1200, 5)] {
+        for (seed, n, birth_days, limit) in [
+            (31, 600, 40, 0),
+            (32, 1200, 5, 64),
+            (33, 900, 40, LIST_LIMIT),
+        ] {
+            LIST_LIMIT_IN_TESTS.with(|cell| cell.set(limit));
             let mut people = cohort(seed, n, birth_days);
             let shape = shape(seed, &mut people);
             let spells = |record: &Member| shape.spells.get(record.id()).map(Vec::as_slice);

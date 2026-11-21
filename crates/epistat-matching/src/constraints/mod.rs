@@ -1,6 +1,6 @@
 use crate::matching::{
     Constraint, ConstraintContext, FieldValueSource, MatchingRecord, RefusesFromDate,
-    ResidenceSpellSource, RoleIndexedRecord, StatusRule, StatusRuleKind,
+    ResidenceSpellSource, RoleIndexedRecord, StatusRule, StatusRuleKind, caliper_allows,
 };
 use chrono::NaiveDate;
 use std::marker::PhantomData;
@@ -253,13 +253,23 @@ where
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
-        self.allows_values((self.selector)(case), (self.selector)(control))
+        // Both missing: alike in the one respect the caliper can see, if the
+        // caller has said so. One missing and one present is refused either
+        // way, which is the comparison a caliper exists to prevent.
+        caliper_allows(
+            (self.selector)(case),
+            (self.selector)(control),
+            self.window,
+            self.missing == MissingPolicy::MatchMissing,
+        )
     }
 
     fn status_rule(&self) -> Option<StatusRule<'_, R>> {
         Some(StatusRule(StatusRuleKind::ComparesValues {
             reason: self.reason,
             source: self,
+            window: self.window,
+            match_missing: self.missing == MissingPolicy::MatchMissing,
         }))
     }
 }
@@ -270,17 +280,6 @@ where
 {
     fn value_of(&self, record: &R) -> Option<f64> {
         (self.selector)(record)
-    }
-
-    fn allows_values(&self, case: Option<f64>, control: Option<f64>) -> bool {
-        match (case, control) {
-            (Some(c), Some(ctrl)) => (c - ctrl).abs() <= self.window,
-            // Both missing: alike in the one respect the caliper can see, if the
-            // caller has said so. One missing and one present is refused either
-            // way, which is the comparison a caliper exists to prevent.
-            (None, None) => self.missing == MissingPolicy::MatchMissing,
-            _ => false,
-        }
     }
 }
 

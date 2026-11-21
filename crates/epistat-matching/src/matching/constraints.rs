@@ -102,14 +102,27 @@ pub(crate) trait ResidenceSpellSource<R>: Sync {
 }
 
 /// A constraint that compares one numeric value of the case with the same
-/// value of the control.
+/// value of the control, as [`caliper_allows`] does.
 pub(crate) trait FieldValueSource<R>: Sync {
     /// The value of the record.
     fn value_of(&self, record: &R) -> Option<f64>;
+}
 
-    /// Whether a case with value `case` and a control with value `control`
-    /// may be matched.
-    fn allows_values(&self, case: Option<f64>, control: Option<f64>) -> bool;
+/// Whether a case with value `case` and a control with value `control` are
+/// within `window` of each other. Two missing values are within it when
+/// `match_missing`, and one missing value never is.
+#[inline]
+pub(crate) fn caliper_allows(
+    case: Option<f64>,
+    control: Option<f64>,
+    window: f64,
+    match_missing: bool,
+) -> bool {
+    match (case, control) {
+        (Some(c), Some(ctrl)) => (c - ctrl).abs() <= window,
+        (None, None) => match_missing,
+        _ => false,
+    }
 }
 
 /// What a constraint decides, in a form that risk-set matching under the
@@ -134,11 +147,13 @@ pub(crate) enum StatusRuleKind<'a, R> {
         reason: &'static str,
         source: &'a dyn ResidenceSpellSource<R>,
     },
-    /// Refuses a pair, for `reason`, by comparing a value of the case with
-    /// the same value of the control, as `source` says.
+    /// Refuses a pair, for `reason`, when the values `source` gives for the
+    /// case and the control are not within `window` by [`caliper_allows`].
     ComparesValues {
         reason: &'static str,
         source: &'a dyn FieldValueSource<R>,
+        window: f64,
+        match_missing: bool,
     },
 }
 

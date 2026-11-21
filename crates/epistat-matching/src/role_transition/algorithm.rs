@@ -1,5 +1,5 @@
 use super::IdOrder;
-use super::sweep::{LIST_LIMIT, RiskSetSweep};
+use super::sweep::{RiskSetSweep, list_limit};
 use crate::matching::{
     CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
     DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
@@ -857,16 +857,15 @@ fn run_transition_case_loop<
 /// have a rule the sweep reads (see [`Constraint::status_rule`]). Every other
 /// job scans.
 fn risk_set_sweep<
-    'a,
     R: RoleIndexedRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
     D: DistanceMetric<R> + Sync,
     G: ConstraintGroup<R> + ?Sized,
     P: RiskSetPolicy<R> + ?Sized,
 >(
-    loop_config: &TransitionLoopConfig<'a, R, D, G, P>,
+    loop_config: &TransitionLoopConfig<'_, R, D, G, P>,
     engine: &mut MatchEngine<'_, R, S>,
-) -> Option<RiskSetSweep<'a, R>> {
+) -> Option<RiskSetSweep> {
     let config = loop_config.config;
     let filters = loop_config.common_support_filters;
     if !config.use_birth_date_index
@@ -933,7 +932,7 @@ fn run_swept_case_loop<
     loop_config: &TransitionLoopConfig<'_, R, D, G, P>,
     engine: &mut MatchEngine<'_, R, S>,
     state: &mut TransitionRunState,
-    sweep: &mut RiskSetSweep<'_, R>,
+    sweep: &mut RiskSetSweep,
 ) {
     #[cfg(test)]
     super::sweep::SWEPT_RUNS.with(|runs| runs.set(runs.get() + 1));
@@ -946,7 +945,8 @@ fn run_swept_case_loop<
     let drawn_reason = Constraint::<R>::reason(&ReplacementConstraint);
 
     // The stratum and window of each case. A stratum is counted with trees
-    // when some case's window in it holds more than `LIST_LIMIT` controls.
+    // when some case's window in it holds more than the list limit of
+    // controls.
     let places: Vec<Option<(usize, std::ops::Range<usize>)>> = loop_config
         .case_indices
         .iter()
@@ -964,9 +964,10 @@ fn run_swept_case_loop<
             Some((stratum, window))
         })
         .collect();
+    let limit = list_limit();
     let mut counted = vec![false; engine.candidate_index.strata().len()];
     for (stratum, window) in places.iter().flatten() {
-        counted[*stratum] |= window.len() > LIST_LIMIT;
+        counted[*stratum] |= window.len() > limit;
     }
     sweep.count_strata(&counted);
 

@@ -93,7 +93,7 @@ pub use weights::{
 pub use constraints::unique_value;
 pub(crate) use constraints::{
     FieldValueSource, RefusesFromDate, ReplacementConstraint, ResidenceSpellSource, StatusRule,
-    StatusRuleKind, build_strata_values,
+    StatusRuleKind, build_strata_values, caliper_allows,
 };
 pub use engine::{build_outcome, invalid_cohort_outcome, invalid_criteria_outcome, to_f64};
 pub(crate) use index::CandidateIndex;
