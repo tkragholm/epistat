@@ -1,6 +1,6 @@
 [package]
 name = "epistat-matching"
-description = "Cohort matching for register studies: nearest-neighbour matching under calipers and constraints, and risk-set matching, with results that do not depend on the number of threads"
+description = "Matching for cohort studies: nearest-neighbour, optimal, full, subclass, exact, coarsened exact, genetic and cardinality matching, risk-set matching, propensity scores, balance and effect estimates, with results that do not depend on the number of threads"
 keywords = ["matching", "epidemiology", "cohort", "statistics", "propensity"]
 categories = ["algorithms", "science"]
 readme = "README.md"
@@ -21,9 +21,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 # Build records from Apache Arrow arrays, see `epistat_matching::arrow`.
 arrow = ["dep:arrow-array"]
-default = ["test-utils"]
+default = []
 reporting = []
 bench-internals = []
+# Small fixtures for tests and benchmarks: `date`, `record` and `test_outcome`.
 test-utils = []
 # faer's runtime-dispatched AVX-512 kernels, through epistat-linalg.
 nightly = ["epistat-linalg/nightly"]

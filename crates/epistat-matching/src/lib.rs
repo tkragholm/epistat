@@ -1,26 +1,25 @@
 //! # `epistat_matching`
 //!
-//! Caliper-based cohort matching utilities for observational cohort studies.
+//! Matching for cohort studies, with results that do not depend on the number
+//! of threads.
 //!
-//! The crate provides a high-level, research-ready API for creating matched cohorts using
-//! both standard anchor-to-candidate matching and longitudinal role-transition (risk-set)
-//! sampling.
+//! The methods follow `MatchIt` where it has them: nearest-neighbour,
+//! optimal, full, subclass, exact, coarsened exact, quick, genetic and
+//! cardinality matching, with propensity scores, Mahalanobis and Euclidean
+//! distances, calipers, common support and `mahvars`. Longitudinal cohorts can
+//! be matched in risk sets at the time a person becomes a case, by exposure
+//! density, or across sequential trials. Balance statistics, matching
+//! weights, effect estimates and sensitivity analyses work on the output of
+//! any of them.
 //!
-//! ## Primary API: `MatchJob`
+//! ## Two ways in
 //!
-//! The [`MatchJob`] builder is the recommended entry point for configuring and executing
-//! matching. It supports:
-//!
-//! - **Standard Matching**: Fixed sets of anchors and candidates.
-//! - **Role-Transition Matching**: Risk-set sampling within a longitudinal cohort.
-//! - **Flexible Metrics**: Birth date calipers, exact match strata, Propensity Scores,
-//!   and Mahalanobis distance.
-//! - **Declarative Constraints**: Built-in constraints for gender, residency, and more.
+//! [`MatchJob`] is a typed builder for pair matching. Each strategy or
+//! constraint changes its type, which suits Rust code.
 //!
 //! ```rust,ignore
 //! use epistat_matching::prelude::*;
 //!
-//! // Standard matching example
 //! let outcome = MatchJob::new_standard(&anchors, &candidates, 42)
 //!     .with_ratio(MatchRatio::new(4).expect("non-zero ratio"))
 //!     .with_birth_window(BirthDateWindowDays::new(30).expect("non-negative birth window"))
@@ -28,16 +27,20 @@
 //!     .run();
 //! ```
 //!
+//! [`MatchSpec`] describes any of the methods as plain values with serde, and
+//! [`run_spec`] checks it and runs it. It suits a caller that reads its
+//! options at run time, such as a binding to R or Python. An option that a
+//! method does not read, a score that is missing or not finite, and any other
+//! invalid option are errors that name the option or the unit.
+//!
 //! ## Arrow input
 //!
-//! With the cargo feature `arrow`, the module `arrow` builds the records from Apache Arrow
-//! arrays, so a cohort held in columns, in Arrow or Polars, needs no per-row structs of its
-//! own.
-//!
-//! For more details, see the [GUIDE.md](https://github.com/tkragholm/epistat_matching/blob/main/GUIDE.md).
+//! With the cargo feature `arrow`, the module `arrow` builds the records from
+//! Apache Arrow arrays, so a cohort held in columns, in Arrow or Polars, needs
+//! no per-row structs of its own.
 
 // ---------------------------------------------------------------------------
-// Shared builder-setter macros — eliminates identical 3-line setter bodies
+// Shared builder-setter macros, which remove identical 3-line setter bodies
 // that arise from the builder pattern on structs with a `reason` or
 // `distance_config` field.
 // ---------------------------------------------------------------------------
@@ -317,8 +320,8 @@ pub mod prelude {
         PairDistanceMatrixError, cem_k2k_pairs, cem_strata, cem_subclasses,
     };
     pub use crate::{
-        DiscardSpec, RapidHashMap, StdCaliperEach, StdCaliperSpec, VariableRatio,
-        VariableRatioError, VariableRatioSpec,
+        DiscardSpec, FineBalance, QuickSpec, RapidHashMap, StdCaliperEach, StdCaliperSpec,
+        VariableRatio, VariableRatioError, VariableRatioSpec,
     };
 
     pub use crate::{

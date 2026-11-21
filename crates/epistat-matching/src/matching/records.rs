@@ -11,16 +11,14 @@ pub trait MatchingRecord: Send + Sync {
     fn strata(&self) -> &HashMap<String, String>;
     /// A named numeric field, for [`crate::constraints::Caliper`] constraints.
     ///
-    /// The crate has had a generic numeric caliper since 0.1, and no way to
-    /// address a field by name: `strata()` carries arbitrary CATEGORICAL values
-    /// for exact matching and there was no numeric counterpart, so a caller with
-    /// two numeric constraints had to bake the second one into its record type.
-    /// A study matching on a child's birth date and a parent's birth year is the
-    /// case that found it.
+    /// `strata()` carries categorical values for exact matching, so this is the
+    /// numeric counterpart: it lets a caller with several numeric constraints,
+    /// such as a child's birth date and a parent's birth year, name each field
+    /// instead of fixing one in its record type.
     ///
     /// `None` means "this record has no such value", and every caliper treats
     /// that as a refusal rather than a pass: an unverifiable constraint has not
-    /// been satisfied. Defaulted so existing implementors are unaffected.
+    /// been satisfied. The default returns `None`.
     ///
     /// A WRAPPER TYPE MUST FORWARD THIS, exactly as it forwards `strata()`. The
     /// default makes a missing forward compile, and the pair is then refused on
