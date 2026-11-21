@@ -532,6 +532,7 @@ dependencies = [
  "chrono",
  "criterion",
  "epistat-glm",
+ "epistat-inference",
  "epistat-linalg",
  "epistat-optim",
  "epistat-register",
