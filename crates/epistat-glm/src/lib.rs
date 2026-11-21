@@ -8,6 +8,9 @@
 //! R reports for an aliased column, which is `None` here. The [`fit`] module
 //! explains the method, with its formulas, edge cases and references.
 //!
+//! [`multinom`] fits the multinomial logit, the model of the generalised
+//! propensity score, as `nnet::multinom()` does.
+//!
 //! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
 //! variance function and the classic Park test.
@@ -15,8 +18,10 @@
 pub mod elastic_net;
 mod family;
 pub mod fit;
+pub mod multinom;
 pub mod park;
 
 pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};
 pub use family::{Family, Link};
 pub use fit::{Fit, Glm, GlmError};
+pub use multinom::{Multinom, MultinomError, MultinomFit};
