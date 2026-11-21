@@ -673,11 +673,14 @@ fn bounds_under_node_limits_hold() {
 
 /// Larger programs of the matching shape: two count rows tied to an integer
 /// size column `k` with a ratio, and balance rows with real coefficients.
+/// Enumerating up to 2^18 subsets per program is slow without optimisation,
+/// so a debug build runs the first 60 of the 400 programs.
 #[test]
 fn matching_shaped_programs_with_a_ratio_agree_with_enumeration() {
+    let trials = if cfg!(debug_assertions) { 60 } else { 400 };
     let mut rng = Rng(99);
     let mut failures = Vec::new();
-    for trial in 0..400 {
+    for trial in 0..trials {
         let nbin = 12 + trial % 7;
         let ratio = 1.0 + (trial % 3) as f64;
         let p = 1 + trial % 3;
