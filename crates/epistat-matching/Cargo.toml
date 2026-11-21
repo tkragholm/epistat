@@ -68,5 +68,9 @@ required-features = ["bench-internals", "test-utils"]
 name = "transition_strata"
 harness = false
 
+[[bench]]
+name = "matchit_compare"
+harness = false
+
 [lints]
 workspace = true
