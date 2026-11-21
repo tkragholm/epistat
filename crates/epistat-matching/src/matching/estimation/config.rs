@@ -351,12 +351,6 @@ pub struct MahalanobisPreparationConfig {
     /// Optional covariate transformation before covariance estimation.
     #[builder(default = MahalanobisTransform::Raw)]
     pub transform: MahalanobisTransform,
-    /// Initial ridge added to covariance diagonal before inversion.
-    #[builder(default = 1e-8_f64)]
-    pub ridge: f64,
-    /// Number of ridge escalation attempts.
-    #[builder(default = 8_usize)]
-    pub max_ridge_attempts: usize,
 }
 
 impl Default for MahalanobisPreparationConfig {
@@ -365,8 +359,6 @@ impl Default for MahalanobisPreparationConfig {
             encoding: CovariateEncodingConfig::default(),
             covariance_strategy: MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom,
             transform: MahalanobisTransform::Raw,
-            ridge: 1e-8,
-            max_ridge_attempts: 8,
         }
     }
 }
@@ -405,7 +397,7 @@ pub enum MahalanobisTransform {
     /// MatchIt does, so the covariance of the ranks is singular and the
     /// distance uses its generalised inverse (eigenvalues at most 1e-8 of the
     /// largest are dropped). [`MahalanobisDistancePreparation::covariance_rank`](super::MahalanobisDistancePreparation::covariance_rank)
-    /// reports the rank kept, and `ridge` is not used.
+    /// reports the rank kept.
     RankTieAdjusted,
 }
 

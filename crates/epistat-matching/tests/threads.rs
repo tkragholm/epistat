@@ -776,7 +776,6 @@ fn mahalanobis_preparation_and_matching() {
                 d.int(prepared.dimension);
                 d.int(prepared.covariance_rank);
                 d.debug(&prepared.column_names);
-                d.debug(&prepared.ridge);
                 let outcome = MatchJob::new_standard(&anchors, &candidates, 8)
                     .with_ratio(MatchRatio::new(2).unwrap())
                     .with_birth_window(BirthDateWindowDays::new(45).unwrap())
@@ -874,7 +873,7 @@ fn subclassification() {
                         reference_group: None,
                         min_n: 1,
                     },
-                );
+                ).expect("valid subclassification settings");
                 assert!(out.retained_units() > 0);
                 d.int(out.requested_subclasses);
                 d.int(out.realized_subclasses);

@@ -665,7 +665,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
             reference_group: None,
             min_n: 1,
         },
-    );
+    ).expect("valid subclassification settings");
     assert!(!by_hand.assignments.is_empty());
     assert_eq!(
         format!("{:?}", outcome.assignments_sorted()),

@@ -92,6 +92,9 @@ impl Display for EstimationError {
             Self::GlmFitFailed(error) => {
                 write!(f, "the propensity model could not be fitted: {error}")
             }
+            Self::ElasticNetFitFailed(error) => {
+                write!(f, "the elastic net could not be fitted: {error}")
+            }
             Self::CbpsNeedsIntercept => f.write_str(
                 "the covariate balancing propensity score needs an intercept column; \
                  include the intercept in the encoding",
@@ -134,6 +137,7 @@ impl Error for EstimationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::GlmFitFailed(error) => Some(error),
+            Self::ElasticNetFitFailed(error) => Some(error),
             _ => None,
         }
     }

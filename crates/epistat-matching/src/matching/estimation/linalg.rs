@@ -1,76 +1,36 @@
-//! Dense inversion, with a ridge added when the matrix is singular.
+//! Dense inversion, with a generalised inverse when the matrix is singular.
 
-use super::{EstimationError, RidgeReport};
+use super::EstimationError;
 use epistat_linalg::eigen::symmetric_eigen_jacobi;
-use epistat_linalg::{Attempt, Mat, MatRef, Method, Ridge, inverse};
+use epistat_linalg::{Attempt, Mat, MatRef, Method, inverse};
 
-/// A pivot at most this in absolute value makes a factorisation count as failed.
+/// A pivot at most this times the largest absolute entry makes a factorisation count as failed.
 const MIN_PIVOT: f64 = 1e-14;
 
-/// First ridge of the escalation: later ridges grow tenfold each.
-const FIRST_RIDGE: f64 = 1e-8;
-
-/// Inverts a row-major square `matrix` after adding `ridge` to the diagonal.
+/// Inverts a row-major symmetric square `matrix`. Returns the inverse and its
+/// rank.
 ///
-/// Up to `max_attempts` inversions are tried (at least one). A positive `ridge`
-/// is added from the first try and grows tenfold after each failure. A ridge of
-/// zero gives a plain inversion first, then 1e-8, growing tenfold.
-///
-/// Returns the inverse and a [`RidgeReport`]: the ridge that was finally added,
-/// and whether the matrix without any ridge had a pivot at most 1e-14.
-pub(super) fn invert_matrix_with_ridge(
+/// The ordinary inverse is used when the factorisation has no pivot at most
+/// `MIN_PIVOT` times the largest absolute entry. Otherwise the matrix is
+/// singular or nearly so and the generalised inverse is used, which drops the
+/// eigenvalues at most `relative_tolerance` times the largest. MatchIt's
+/// Mahalanobis distance does the same for a singular covariance. No ridge is
+/// added.
+pub(super) fn invert_or_generalise(
     matrix: &[f64],
-    ridge: f64,
-    max_attempts: usize,
-) -> Result<(Vec<f64>, RidgeReport), EstimationError> {
+    relative_tolerance: f64,
+) -> Result<(Vec<f64>, usize), EstimationError> {
     let dimension = to_dimension(matrix.len()).ok_or(EstimationError::InvalidCovarianceMatrix)?;
-    if dimension == 0 {
+    if dimension == 0 || matrix.iter().any(|value| !value.is_finite()) {
         return Err(EstimationError::InvalidCovarianceMatrix);
     }
-
-    let attempts = max_attempts.max(1);
-    let start = ridge.max(0.0);
+    let largest = matrix.iter().fold(0.0_f64, |acc, value| acc.max(value.abs()));
     let a = MatRef::from_row_major_slice(matrix, dimension, dimension);
-    let plain = [Attempt::plain(Method::PartialPivLu).with_min_pivot(MIN_PIVOT)];
-    if start > 0.0 {
-        let singular_without_ridge = inverse(a, &plain).is_err();
-        let mut current = start;
-        for _ in 0..attempts {
-            let mut adjusted = a.to_owned();
-            for idx in 0..dimension {
-                adjusted[(idx, idx)] += current;
-            }
-            if let Ok(solution) = inverse(adjusted.as_ref(), &plain) {
-                let report = RidgeReport {
-                    ridge: current,
-                    singular_without_ridge,
-                };
-                return Ok((row_major(&solution.x, dimension), report));
-            }
-            current *= 10.0;
-        }
-        return Err(EstimationError::InvalidCovarianceMatrix);
+    let plain = [Attempt::plain(Method::PartialPivLu).with_min_pivot(MIN_PIVOT * largest)];
+    match inverse(a, &plain) {
+        Ok(solution) => Ok((row_major(&solution.x, dimension), dimension)),
+        Err(_) => pseudo_inverse(matrix, relative_tolerance),
     }
-
-    let tries = u32::try_from(attempts - 1).unwrap_or(u32::MAX);
-    let attempt = Attempt::ridged(
-        Method::PartialPivLu,
-        Ridge {
-            start: FIRST_RIDGE,
-            growth: 10.0,
-            tries,
-        },
-    )
-    .with_min_pivot(MIN_PIVOT);
-    inverse(a, &[attempt])
-        .map(|solution| {
-            let report = RidgeReport {
-                ridge: solution.ridge,
-                singular_without_ridge: solution.ridge > 0.0,
-            };
-            (row_major(&solution.x, dimension), report)
-        })
-        .map_err(|_| EstimationError::InvalidCovarianceMatrix)
 }
 
 /// The generalised inverse of a symmetric non-negative row-major `matrix`: the

@@ -2177,7 +2177,8 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
                 scores,
                 spec.estimand,
                 &config,
-            );
+            )
+            .map_err(|error| SpecError::option("subclass.n", error.to_string()))?;
             return Ok(SpecOutput::Subclass {
                 outcome: Box::new(outcome),
                 propensity: built.propensity.map(Box::new),

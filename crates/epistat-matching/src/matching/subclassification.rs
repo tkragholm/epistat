@@ -109,6 +109,23 @@ struct ScoredUnit {
     subclass: usize,
 }
 
+/// Settings for which subclassification cannot run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubclassificationError {
+    /// `subclasses` is 0.
+    NoSubclasses,
+}
+
+impl std::fmt::Display for SubclassificationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSubclasses => f.write_str("the number of subclasses must be at least 1"),
+        }
+    }
+}
+
+impl std::error::Error for SubclassificationError {}
+
 /// Build propensity-score subclasses and estimand-specific subclass weights.
 ///
 /// The cutpoints are the quantiles of the reference group's scores that R's
@@ -117,20 +134,27 @@ struct ScoredUnit {
 /// the left. This is MatchIt's `method = "subclass"`. The weights are the
 /// subclass weights of MatchIt before it rescales each group to sum to its
 /// number of retained units.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`SubclassificationError::NoSubclasses`] when `config.subclasses`
+/// is 0.
 pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
     anchors: &[R],
     candidates: &[R],
     propensity_scores: &HashMap<String, f64, H>,
     estimand: Estimand,
     config: &SubclassificationConfig,
-) -> SubclassificationOutcome {
-    let requested_subclasses = config.subclasses.max(1);
+) -> Result<SubclassificationOutcome, SubclassificationError> {
+    if config.subclasses == 0 {
+        return Err(SubclassificationError::NoSubclasses);
+    }
+    let requested_subclasses = config.subclasses;
     let reference_group = resolve_reference_group(config.reference_group, estimand);
     let reference_scores =
         sorted_reference_scores(anchors, candidates, propensity_scores, reference_group);
     if reference_scores.is_empty() {
-        return dropped_only_outcome(anchors, candidates, estimand, requested_subclasses);
+        return Ok(dropped_only_outcome(anchors, candidates, estimand, requested_subclasses));
     }
 
     let quantile_cuts = quantile_cuts(&reference_scores, requested_subclasses);
@@ -162,7 +186,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
     if config.min_n > 0 && !fill_deficient_subclasses(&mut units, subclass_count, config.min_n) {
         let mut outcome = dropped_only_outcome(anchors, candidates, estimand, requested_subclasses);
         outcome.quantile_cuts = quantile_cuts;
-        return outcome;
+        return Ok(outcome);
     }
 
     let mut anchor_counts = vec![0usize; subclass_count];
@@ -197,7 +221,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
         }
     }
 
-    SubclassificationOutcome {
+    Ok(SubclassificationOutcome {
         estimand,
         requested_subclasses,
         realized_subclasses,
@@ -206,7 +230,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
         weights,
         dropped_ids,
         subclasses,
-    }
+    })
 }
 
 fn resolve_reference_group(
@@ -528,7 +552,7 @@ mod tests {
             &scores,
             Estimand::Att,
             &config,
-        );
+        ).expect("valid subclassification settings");
 
         assert_eq!(outcome.realized_subclasses, 2);
         assert_eq!(outcome.retained_units(), 4);
@@ -559,7 +583,7 @@ mod tests {
             &scores,
             Estimand::Ate,
             &config,
-        );
+        ).expect("valid subclassification settings");
 
         assert_eq!(outcome.realized_subclasses, 0);
         assert!(outcome.assignments.is_empty(), "{:?}", outcome.assignments);
@@ -590,7 +614,7 @@ mod tests {
             &scores,
             Estimand::Ate,
             &config,
-        );
+        ).expect("valid subclassification settings");
 
         assert_close(*outcome.weights.get("a1").expect("a1 weight"), 1.5);
         assert_close(*outcome.weights.get("a2").expect("a2 weight"), 1.5);
@@ -623,7 +647,7 @@ mod tests {
             &scores,
             Estimand::Ate,
             &config,
-        );
+        ).expect("valid subclassification settings");
         // The pooled median is 0.3, and both units scored 0.3 are in the upper
         // subclass.
         assert_close(outcome.quantile_cuts[1], 0.3);
@@ -657,7 +681,7 @@ mod tests {
             &scores,
             Estimand::Att,
             &config,
-        );
+        ).expect("valid subclassification settings");
         // The middle subclass holds a2 and no candidate. Candidates sit below
         // (two) and above (two) it, so it looks left and takes c2, the lower
         // candidate closest to it.
@@ -689,7 +713,7 @@ mod tests {
             &scores,
             Estimand::Att,
             &config,
-        );
+        ).expect("valid subclassification settings");
         assert!(outcome.assignments.is_empty(), "{:?}", outcome.assignments);
         assert_eq!(outcome.dropped_ids.len(), 3);
     }

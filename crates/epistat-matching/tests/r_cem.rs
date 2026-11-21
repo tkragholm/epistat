@@ -368,7 +368,6 @@ fn k2k_pairs_match_matchit() {
                     None,
                     &MahalanobisPreparationConfig::builder()
                         .encoding(encoding)
-                        .ridge(0.0)
                         .build(),
                 )
                 .expect("mahalanobis")

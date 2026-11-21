@@ -22,6 +22,8 @@ pub struct CovariateMatrix {
     pub n_rows: usize,
     /// Number of columns.
     pub n_cols: usize,
+    /// The columns left out because every row has the same value in them.
+    pub dropped_columns: Vec<String>,
 }
 
 impl CovariateMatrix {
@@ -141,8 +143,9 @@ pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
         values,
         n_rows,
         n_cols,
+        dropped_columns: Vec::new(),
     };
-    drop_near_constant_columns(&mut matrix, &mut indicator, 1e-12)?;
+    drop_constant_columns(&mut matrix, &mut indicator)?;
     Ok((matrix, indicator))
 }
 
@@ -299,10 +302,12 @@ fn encode_categorical_level<R: CovariateRecord>(
     }
 }
 
-fn drop_near_constant_columns(
+/// Removes the columns whose value is exactly the same in every row, the
+/// intercept excepted, and lists them in `dropped_columns`. A column with a
+/// small but nonzero spread is kept, since the spread depends on the unit.
+fn drop_constant_columns(
     matrix: &mut CovariateMatrix,
     indicator: &mut Vec<bool>,
-    tolerance: f64,
 ) -> Result<(), EstimationError> {
     if matrix.n_cols == 0 {
         return Err(EstimationError::NoCovariatesAvailable);
@@ -320,7 +325,7 @@ fn drop_near_constant_columns(
                 min_value = min_value.min(value);
                 max_value = max_value.max(value);
             }
-            (max_value - min_value).abs() > tolerance
+            max_value != min_value
         })
         .collect_vec();
 
@@ -339,6 +344,10 @@ fn drop_near_constant_columns(
         }
     }
 
+    matrix.dropped_columns = (0..matrix.n_cols)
+        .filter(|idx| !keep.contains(idx))
+        .map(|idx| matrix.column_names[idx].clone())
+        .collect_vec();
     *indicator = keep.iter().map(|idx| indicator[*idx]).collect_vec();
     matrix.column_names = keep
         .iter()

@@ -36,8 +36,8 @@
 //! condition number of the correlation matrix times the rounding unit. The
 //! script records that condition number, and the tolerance is 64 times the
 //! product, plus 1e-13 of the largest distance for the 15 digits of the
-//! reference file. The crate adds no ridge to these matrices: the tests set
-//! `ridge` to 0, and the plain factorisation succeeds.
+//! reference file. The crate adds no ridge to these matrices, and the plain
+//! factorisation succeeds.
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
@@ -158,7 +158,6 @@ fn mahalanobis_ratio(
     let config = MahalanobisPreparationConfig::builder()
         .covariance_strategy(strategy)
         .transform(transform)
-        .ridge(0.0)
         .build();
     let prepared = prepare_mahalanobis_distance_config(&anchors, &candidates, None, &config)
         .expect("preparation");
@@ -168,7 +167,7 @@ fn mahalanobis_ratio(
         prepared.dimension,
     );
     assert!(
-        !prepared.ridge.singular_without_ridge
+        prepared.covariance_rank == prepared.dimension
             || transform == MahalanobisTransform::RankTieAdjusted,
         "{}: the covariance was singular",
         case.name

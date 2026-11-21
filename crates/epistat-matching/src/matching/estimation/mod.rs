@@ -26,27 +26,9 @@ use covariance::{covariance_matrix, rank_transform_columns, rescale_rank_covaria
 use cross_validation::fit_elastic_net_cv;
 use encoding::{build_covariate_matrix, build_covariate_matrix_marked};
 use itertools::Itertools;
-use linalg::{invert_matrix_with_ridge, pseudo_inverse};
+use linalg::invert_or_generalise;
 use logistic::{any_fitted_at_boundary, fit_elastic_net_logistic, fit_glm};
 use rapidhash::RapidHashMap;
-
-/// Whether a linear solve needed a ridge, and how large it was.
-///
-/// The inversion adds a ridge to the diagonal when a pivot of the matrix is at
-/// most 1e-14, which happens when the covariates are collinear. The Mahalanobis
-/// covariance also adds its configured starting ridge
-/// ([`MahalanobisPreparationConfig::ridge`]) from the start, so `ridge` alone
-/// does not show collinearity, and `singular_without_ridge` is the flag to read.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct RidgeReport {
-    /// The ridge added to the covariance diagonal before the inversion, the one
-    /// used, counting the configured starting ridge. 0 when none was added.
-    pub ridge: f64,
-    /// Whether the covariance matrix, without any ridge, had a pivot at most
-    /// 1e-14. `true` means the covariates are collinear or near collinear and
-    /// the inverse depends on the ridge.
-    pub singular_without_ridge: bool,
-}
 
 /// Propensity-score estimation output.
 #[derive(Debug, Clone)]
@@ -63,6 +45,9 @@ pub struct PropensityScoreEstimate {
     pub coefficients: Vec<Option<f64>>,
     /// Design-matrix column names.
     pub column_names: Vec<String>,
+    /// Columns left out of the design because every unit has the same value
+    /// in them.
+    pub dropped_columns: Vec<String>,
     /// Estimator used for this run.
     pub estimator: &'static str,
     /// Whether the fit met its stopping rule within the iteration limit.
@@ -115,11 +100,12 @@ pub struct MahalanobisDistancePreparation {
     pub dimension: usize,
     /// Encoded vector column names.
     pub column_names: Vec<String>,
-    /// The ridge added to the covariance matrix before inversion.
-    pub ridge: RidgeReport,
+    /// Columns left out of the design because every unit has the same value
+    /// in them.
+    pub dropped_columns: Vec<String>,
     /// The rank of the inverse: `dimension` for an ordinary inverse, fewer
-    /// when [`MahalanobisTransform::RankTieAdjusted`] gives a singular
-    /// covariance and the generalised inverse drops directions.
+    /// when the covariance is singular and the generalised inverse drops
+    /// directions.
     pub covariance_rank: usize,
 }
 
@@ -134,6 +120,9 @@ pub struct EuclideanDistancePreparation {
     pub dimension: usize,
     /// Encoded vector column names.
     pub column_names: Vec<String>,
+    /// Columns left out of the design because every unit has the same value
+    /// in them.
+    pub dropped_columns: Vec<String>,
     /// The divisor of each column, all 1 without scaling.
     pub divisors: Vec<f64>,
 }
@@ -182,6 +171,8 @@ pub enum EstimationError {
     NoCommonSupport,
     /// The generalised linear model could not be fitted.
     GlmFitFailed(epistat_glm::GlmError),
+    /// The elastic net could not be fitted.
+    ElasticNetFitFailed(epistat_glm::ElasticNetError),
     /// A covariate balancing propensity score needs a column named `intercept`.
     CbpsNeedsIntercept,
     /// The design of a covariate balancing propensity score is not of full
@@ -273,6 +264,7 @@ fn select_rows(matrix: &CovariateMatrix, rows: &[usize]) -> CovariateMatrix {
         values,
         n_rows: rows.len(),
         n_cols: matrix.n_cols,
+        dropped_columns: matrix.dropped_columns.clone(),
     }
 }
 
@@ -425,6 +417,7 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
         linear_predictor: to_map(&linear_predictor),
         distance_scores: distance_scores.clone(),
         coefficients: fit.coefficients,
+        dropped_columns: matrix.dropped_columns,
         column_names: matrix.column_names,
         estimator: estimator_name,
         converged: fit.converged,
@@ -480,19 +473,11 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
         candidates.len(),
         config.covariance_strategy,
     )?;
-    let (inverse_covariance, ridge, covariance_rank) = if tie_adjusted {
+    if tie_adjusted {
         rescale_rank_covariance(&mut covariance, matrix.n_cols, matrix.n_rows)?;
-        let (inverse, rank) = pseudo_inverse(&covariance, GENERALISED_INVERSE_TOLERANCE)?;
-        let report = RidgeReport {
-            ridge: 0.0,
-            singular_without_ridge: rank < matrix.n_cols,
-        };
-        (inverse, report, rank)
-    } else {
-        let (inverse, report) =
-            invert_matrix_with_ridge(&covariance, config.ridge, config.max_ridge_attempts)?;
-        (inverse, report, matrix.n_cols)
-    };
+    }
+    let (inverse_covariance, covariance_rank) =
+        invert_or_generalise(&covariance, GENERALISED_INVERSE_TOLERANCE)?;
 
     let vectors = matrix
         .row_ids
@@ -514,8 +499,8 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
         vectors,
         inverse_covariance,
         dimension,
+        dropped_columns: matrix.dropped_columns,
         column_names: matrix.column_names,
-        ridge,
         covariance_rank,
     })
 }
@@ -599,6 +584,7 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
         distance_config,
         vectors,
         dimension,
+        dropped_columns: matrix.dropped_columns,
         column_names: matrix.column_names,
         divisors,
     })
@@ -979,6 +965,7 @@ mod tests {
             values: vec![0.0, 2.0, 10.0, 12.0, 14.0, 20.0],
             n_rows: 6,
             n_cols: 1,
+            dropped_columns: Vec::new(),
         };
         // Group means 1 and 14, sums of squares 2 and 56, over 6 - 2 units.
         let pooled = covariance_matrix(
@@ -1013,6 +1000,7 @@ mod tests {
             values: vec![0.0, 2.0, 10.0, 12.0],
             n_rows: 4,
             n_cols: 1,
+            dropped_columns: Vec::new(),
         };
 
         let pooled = covariance_matrix(
@@ -1042,6 +1030,7 @@ mod tests {
             ],
             n_rows: 3,
             n_cols: 2,
+            dropped_columns: Vec::new(),
         };
 
         rank_transform_columns(&mut matrix);
@@ -1235,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn collinear_covariates_are_reported_by_the_mahalanobis_inverse() {
+    fn collinear_covariates_lower_the_rank_of_the_mahalanobis_inverse() {
         let (anchors, candidates) = collinear_groups();
         let prepared = prepare_mahalanobis_distance_config(
             &anchors,
@@ -1243,13 +1232,12 @@ mod tests {
             None,
             &MahalanobisPreparationConfig::default(),
         )
-        .expect("a ridged inverse should succeed");
-        assert!(prepared.ridge.singular_without_ridge);
-        assert!(prepared.ridge.ridge >= 1e-8);
+        .expect("a generalised inverse should succeed");
+        assert!(prepared.covariance_rank < prepared.dimension);
     }
 
     #[test]
-    fn independent_covariates_report_only_the_configured_ridge_in_the_mahalanobis_inverse() {
+    fn independent_covariates_have_a_full_rank_mahalanobis_inverse() {
         let anchors = vec![
             record("a1", date(2010, 1, 1), 10.0, "north"),
             record("a2", date(2010, 1, 2), 12.0, "south"),
@@ -1267,8 +1255,7 @@ mod tests {
             &MahalanobisPreparationConfig::default(),
         )
         .expect("mahalanobis preparation should succeed");
-        assert!(!prepared.ridge.singular_without_ridge);
-        assert!((prepared.ridge.ridge - 1e-8).abs() < 1e-20);
+        assert_eq!(prepared.covariance_rank, prepared.dimension);
     }
 
     #[test]
@@ -1301,6 +1288,7 @@ mod tests {
                 distance_scores: RapidHashMap::default(),
                 coefficients: Vec::new(),
                 column_names: Vec::new(),
+                dropped_columns: Vec::new(),
                 estimator: "glm_logit",
                 converged: true,
                 iterations: 0,
