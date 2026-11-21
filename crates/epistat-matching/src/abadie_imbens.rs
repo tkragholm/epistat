@@ -705,6 +705,10 @@ impl<'a> Estimator<'a> {
         let rhs =
             weighted_xtz(x.as_ref(), &w, &yv).map_err(|_| AbadieImbensError::SingularRegression)?;
         let largest = (0..p).map(|c| gram[(c, c)]).fold(0.0_f64, f64::max);
+        // The threshold applies to the diagonal of the Cholesky factor, whose
+        // square is a pivot of the Gram matrix. A pivot at most machine
+        // epsilon times the largest diagonal entry is taken as zero, so the
+        // test does not depend on the scale of the covariates.
         let attempt =
             Attempt::plain(Method::Cholesky).with_min_pivot(f64::EPSILON.sqrt() * largest.sqrt());
         let solution = solve(gram.as_ref(), rhs.as_ref(), &[attempt])
@@ -763,6 +767,8 @@ fn standardised_coordinates(
                 s
             });
             let largest = (0..k).map(|c| gram[(c, c)]).fold(0.0_f64, f64::max);
+            // As for the regression: a pivot of the Gram matrix at most
+            // machine epsilon times its largest diagonal entry is zero.
             let attempt = Attempt::plain(Method::Cholesky)
                 .with_min_pivot(f64::EPSILON.sqrt() * largest.sqrt());
             let factor = Factor::new(gram.as_ref(), &[attempt])
