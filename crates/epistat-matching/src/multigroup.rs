@@ -72,6 +72,7 @@ use chrono::NaiveDate;
 use epistat_glm::{Multinom, MultinomError};
 use epistat_linalg::Mat;
 use epistat_stats::cluster::{KMeansAlgorithm, KMeansError, kmeans};
+use rayon::prelude::*;
 
 use crate::matching::{
     CovariateEncodingConfig, CovariateRecord, EstimationError, MatchingRecord, encode_covariates,
@@ -333,43 +334,49 @@ pub fn match_within_clusters(
     for (i, &c) in cluster.iter().enumerate() {
         by_cluster.entry(c).or_default().push(i);
     }
-    let mut pairs = Vec::new();
-    for members in by_cluster.values() {
-        let anchors: Vec<BalanceRecord> = members
-            .iter()
-            .filter(|&&i| is_focal[i])
-            .map(|&i| BalanceRecord::new(ids[i].clone(), dummy_date()))
-            .collect();
-        let candidates: Vec<BalanceRecord> = members
-            .iter()
-            .filter(|&&i| !is_focal[i])
-            .map(|&i| BalanceRecord::new(ids[i].clone(), dummy_date()))
-            .collect();
-        if anchors.is_empty() || candidates.is_empty() {
-            continue;
-        }
-        let scores: RapidHashMap<String, f64> = members
-            .iter()
-            .map(|&i| (ids[i].clone(), score[i]))
-            .collect();
-        // The width is a multiple of the population standard deviation of the
-        // scores in the cluster, as Matching::Match() takes it. A cluster
-        // whose scores are all equal has no caliper to apply.
-        let width = caliper.and_then(|c| {
-            let values: Vec<f64> = members.iter().map(|&i| score[i]).collect();
-            let mean = values.iter().sum::<f64>() / values.len() as f64;
-            let variance =
-                values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
-            DistanceCaliper::new(c * variance.sqrt())
-        });
-        let outcome = MatchJob::new_standard(&anchors, &candidates, 0)
-            .with_nearest()
-            .with_ratio(MatchRatio::new(1).expect("a ratio of 1"))
-            .with_replacement(true)
-            .with_distance_config(DistanceConfig::propensity_score_map(scores, width))
-            .run();
-        pairs.extend(outcome.pairs);
-    }
+    // The clusters are independent. Their pairs are joined in the order of the
+    // cluster labels.
+    let members_of: Vec<&Vec<usize>> = by_cluster.values().collect();
+    let per_cluster: Vec<Vec<MatchedPair>> = members_of
+        .par_iter()
+        .map(|members| {
+            let anchors: Vec<BalanceRecord> = members
+                .iter()
+                .filter(|&&i| is_focal[i])
+                .map(|&i| BalanceRecord::new(ids[i].clone(), dummy_date()))
+                .collect();
+            let candidates: Vec<BalanceRecord> = members
+                .iter()
+                .filter(|&&i| !is_focal[i])
+                .map(|&i| BalanceRecord::new(ids[i].clone(), dummy_date()))
+                .collect();
+            if anchors.is_empty() || candidates.is_empty() {
+                return Vec::new();
+            }
+            let scores: RapidHashMap<String, f64> = members
+                .iter()
+                .map(|&i| (ids[i].clone(), score[i]))
+                .collect();
+            // The width is a multiple of the population standard deviation of
+            // the scores in the cluster, as Matching::Match() takes it. A
+            // cluster whose scores are all equal has no caliper to apply.
+            let width = caliper.and_then(|c| {
+                let values: Vec<f64> = members.iter().map(|&i| score[i]).collect();
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                let variance = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>()
+                    / values.len() as f64;
+                DistanceCaliper::new(c * variance.sqrt())
+            });
+            MatchJob::new_standard(&anchors, &candidates, 0)
+                .with_nearest()
+                .with_ratio(MatchRatio::new(1).expect("a ratio of 1"))
+                .with_replacement(true)
+                .with_distance_config(DistanceConfig::propensity_score_map(scores, width))
+                .run()
+                .pairs
+        })
+        .collect();
+    let pairs: Vec<MatchedPair> = per_cluster.into_iter().flatten().collect();
     Ok(pairs)
 }
 
@@ -561,8 +568,11 @@ pub fn vector_match<R: CovariateRecord>(
     let n = keep.len();
     let logit = |row: usize, group: usize| gps.logit(row, group).ok_or(MultigroupError::Separated);
 
-    let mut comparisons = Vec::new();
-    for other in (0..n_groups).filter(|&g| g != spec.focal) {
+    // The comparisons with the other groups are independent. They are gathered
+    // in the order of the groups, and the first error in that order is the one
+    // returned.
+    let others: Vec<usize> = (0..n_groups).filter(|&g| g != spec.focal).collect();
+    let compare = |other: usize| -> Result<GroupMatch, MultigroupError> {
         let dims: Vec<usize> = (0..n_groups)
             .filter(|&l| l != spec.focal && l != other)
             .collect();
@@ -598,12 +608,15 @@ pub fn vector_match<R: CovariateRecord>(
             &in_pair.iter().map(|&i| cluster[i]).collect::<Vec<_>>(),
             spec.caliper,
         )?;
-        comparisons.push(GroupMatch {
+        Ok(GroupMatch {
             group: other,
             cluster,
             outcome: outcome_of(pairs, 0),
-        });
-    }
+        })
+    };
+    let compared: Vec<Result<GroupMatch, MultigroupError>> =
+        others.par_iter().map(|&other| compare(other)).collect();
+    let mut comparisons = compared.into_iter().collect::<Result<Vec<_>, _>>()?;
 
     // The focal units matched against every other group.
     let mut counts: HashMap<&str, usize> = HashMap::new();

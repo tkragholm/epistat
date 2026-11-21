@@ -115,6 +115,8 @@ pub struct KMeans {
     pub converged: bool,
 }
 
+use rayon::prelude::*;
+
 /// Clusters the rows of `points` (`n * d` values, row by row) from the rows of
 /// `start` (`k * d` values), with at most `max_iterations` passes.
 ///
@@ -203,10 +205,18 @@ pub fn kmeans(
 }
 
 /// Gives every point its nearest centre and returns how many changed.
+///
+/// The points are independent, so the nearest centres are found in parallel for
+/// many points, and the count is the same whatever the number of threads.
 fn assign(points: &[f64], d: usize, centres: &[f64], cluster: &mut [usize]) -> usize {
+    let nearest = |i: usize| nearest_centre(&points[i * d..(i + 1) * d], centres, d);
+    let found: Vec<usize> = if cluster.len() >= PARALLEL_FROM {
+        (0..cluster.len()).into_par_iter().map(nearest).collect()
+    } else {
+        (0..cluster.len()).map(nearest).collect()
+    };
     let mut changed = 0;
-    for (i, slot) in cluster.iter_mut().enumerate() {
-        let nearest = nearest_centre(&points[i * d..(i + 1) * d], centres, d);
+    for (slot, nearest) in cluster.iter_mut().zip(found) {
         if *slot != nearest {
             *slot = nearest;
             changed += 1;
@@ -214,6 +224,9 @@ fn assign(points: &[f64], d: usize, centres: &[f64], cluster: &mut [usize]) -> u
     }
     changed
 }
+
+/// Points from which the work on each point runs in parallel.
+const PARALLEL_FROM: usize = 4096;
 
 fn squared_distance(a: &[f64], b: &[f64]) -> f64 {
     let mut s = 0.0;
@@ -423,9 +436,7 @@ fn hartigan_wong(
     let n = cluster.len();
     // The nearest and second nearest centre of every point. With one centre
     // the second does not exist and the clustering is trivial.
-    let mut ic1 = vec![0; n];
-    let mut ic2 = vec![0; n];
-    for i in 0..n {
+    let two_nearest = |i: usize| {
         let x = &points[i * d..(i + 1) * d];
         let dist = |l: usize| squared_distance(x, &centres[l * d..(l + 1) * d]);
         let (mut a, mut b) = (0, 1.min(k - 1));
@@ -448,9 +459,13 @@ fn hartigan_wong(
                 }
             }
         }
-        ic1[i] = a;
-        ic2[i] = b;
-    }
+        (a, b)
+    };
+    let (ic1, ic2): (Vec<usize>, Vec<usize>) = if n >= PARALLEL_FROM {
+        (0..n).into_par_iter().map(two_nearest).unzip()
+    } else {
+        (0..n).map(two_nearest).unzip()
+    };
     centres.copy_from_slice(&means(points, d, &ic1, k)?);
     let mut size = vec![0usize; k];
     for &c in &ic1 {
@@ -567,6 +582,53 @@ mod tests {
                 kmeans(&[0.0, 1.0, 10.0, 11.0], 1, &[0.0, 10.0], algorithm, 0),
                 Err(KMeansError::NoIterations)
             );
+        }
+    }
+
+    fn scattered(n: usize) -> Vec<f64> {
+        let mut state = 99_u64;
+        (0..n * 2)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 11) as f64 / (1_u64 << 53) as f64
+            })
+            .collect()
+    }
+
+    /// The parallel assignment gives each point the centre a plain loop gives
+    /// it and counts the same changes.
+    #[test]
+    fn assignment_equals_a_plain_loop() {
+        let n = 6000;
+        let points = scattered(n);
+        let centres = [0.1, 0.2, 0.8, 0.3, 0.5, 0.9, 0.2, 0.7];
+        let mut cluster = vec![usize::MAX; n];
+        let changed = assign(&points, 2, &centres, &mut cluster);
+        assert_eq!(changed, n);
+        for (i, &c) in cluster.iter().enumerate() {
+            assert_eq!(c, nearest_centre(&points[i * 2..i * 2 + 2], &centres, 2));
+        }
+        assert_eq!(assign(&points, 2, &centres, &mut cluster), 0);
+    }
+
+    /// Both algorithms give the same clustering on pools of 1, 2, 4 and 12
+    /// threads.
+    #[test]
+    fn clustering_is_the_same_on_every_pool_size() {
+        let points = scattered(6000);
+        let start = [0.1, 0.2, 0.8, 0.3, 0.5, 0.9, 0.2, 0.7];
+        for algorithm in [KMeansAlgorithm::Lloyd, KMeansAlgorithm::HartiganWong] {
+            epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
+                let fit = kmeans(&points, 2, &start, algorithm, 100).unwrap();
+                fit.cluster
+                    .iter()
+                    .map(|&c| c as f64)
+                    .chain(fit.centres)
+                    .chain(fit.within_ss)
+                    .collect()
+            });
         }
     }
 }

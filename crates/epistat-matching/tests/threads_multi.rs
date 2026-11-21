@@ -67,9 +67,12 @@ fn vector_matching_does_not_depend_on_the_number_of_threads() {
     });
 }
 
+/// The anchors and the candidates of each imputed data set.
+type AnchorsAndCandidates = Vec<(Vec<BalanceRecord>, Vec<BalanceRecord>)>;
+
 /// The imputed data sets of `matchthem.json` as anchors and candidates, and
 /// the outcome of each set.
-fn matchthem_sets() -> (Vec<(Vec<BalanceRecord>, Vec<BalanceRecord>)>, Vec<UnitData>) {
+fn matchthem_sets() -> (AnchorsAndCandidates, Vec<UnitData>) {
     let data: Vec<BTreeMap<String, Vec<f64>>> = {
         #[derive(serde::Deserialize)]
         struct File {
