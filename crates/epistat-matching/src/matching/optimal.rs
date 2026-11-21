@@ -235,10 +235,10 @@ impl<'a, G: ?Sized> OptimalRequest<'a, G> {
 
 /// An admissible pair in a stratum, by position within the stratum.
 #[derive(Debug, Clone, Copy)]
-struct Edge {
-    row: usize,
-    col: usize,
-    distance: f64,
+pub(super) struct Edge {
+    pub(super) row: usize,
+    pub(super) col: usize,
+    pub(super) distance: f64,
 }
 
 /// A matched set: its pairs, by position within the stratum.
@@ -671,11 +671,11 @@ fn pair_match_stratum(
 }
 
 /// The groups of the stratum with their units in the order of the slices.
-struct Stratum {
+pub(super) struct Stratum {
     /// Positions in the anchor slice, in slice order.
-    anchors: Vec<usize>,
+    pub(super) anchors: Vec<usize>,
     /// Positions in the candidate slice, in slice order.
-    candidates: Vec<usize>,
+    pub(super) candidates: Vec<usize>,
 }
 
 /// What building the pairs of a stratum reads.
@@ -833,14 +833,20 @@ type StratumSolver<'a> =
 
 /// A solved stratum: its matched sets by position in the anchor and candidate
 /// slices.
-type Solved = Vec<Vec<(usize, usize)>>;
+pub(super) type Solved = Vec<Vec<(usize, usize)>>;
 
-fn solve_strata<R, G>(
+/// The exact strata of a request and the admissible pairs of each, with the
+/// request's options checked.
+pub(super) struct StrataEdges {
+    pub(super) strata: Vec<Stratum>,
+    pub(super) edges: Vec<Vec<Edge>>,
+}
+
+pub(super) fn strata_edges<R, G>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-    solve: &StratumSolver<'_>,
-) -> Result<Solved, OptimalError>
+) -> Result<StrataEdges, OptimalError>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -876,13 +882,28 @@ where
         anchor_strata: (!required.is_empty()).then_some(anchor_strata),
         candidate_strata: (!required.is_empty()).then_some(candidate_strata),
     };
+    let edges = strata
+        .par_iter()
+        .map(|stratum| builder.edges(stratum))
+        .collect();
+    Ok(StrataEdges { strata, edges })
+}
 
+fn solve_strata<R, G>(
+    anchors: &[R],
+    candidates: &[R],
+    request: &OptimalRequest<'_, G>,
+    solve: &StratumSolver<'_>,
+) -> Result<Solved, OptimalError>
+where
+    R: MatchingRecord,
+    G: ConstraintGroup<R> + ?Sized,
+{
+    let StrataEdges { strata, edges } = strata_edges(anchors, candidates, request)?;
     let results: Vec<Result<Vec<Group>, StratumError>> = strata
         .par_iter()
-        .map(|stratum| {
-            let edges = builder.edges(stratum);
-            solve(stratum.anchors.len(), stratum.candidates.len(), &edges)
-        })
+        .zip(edges.par_iter())
+        .map(|(stratum, edges)| solve(stratum.anchors.len(), stratum.candidates.len(), edges))
         .collect();
 
     let mut solved: Solved = Vec::new();
@@ -957,6 +978,23 @@ where
         pair_match_stratum(rows, cols, edges, ratio)
     })?;
 
+    Ok(pair_outcome(
+        anchors,
+        candidates,
+        ratio,
+        request.criteria.estimand,
+        sets,
+    ))
+}
+
+/// The outcome of pair matching from matched sets, by position in the slices.
+pub(super) fn pair_outcome<R: MatchingRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    ratio: usize,
+    estimand: Estimand,
+    sets: Solved,
+) -> MatchOutcome {
     let mut positions: Vec<(usize, usize)> = sets.into_iter().flatten().collect();
     positions.sort_unstable();
     let mut matched_anchors = 0_usize;
@@ -985,28 +1023,17 @@ where
     }
     let mut diagnostics = MatchDiagnostics {
         total_anchors_evaluated: anchors.len(),
-        requested_estimand: request.criteria.estimand,
-        realized_estimand: request.criteria.estimand,
+        requested_estimand: estimand,
+        realized_estimand: estimand,
         matched_anchors,
         pairs_selected: pairs.len(),
         anchors_with_no_candidates: anchors.len() - matched_anchors,
         anchors_below_required_ratio: below_ratio,
         ..MatchDiagnostics::default()
     };
-    finalize_estimand_diagnostics(
-        &mut diagnostics,
-        request.criteria.estimand,
-        anchors.len(),
-        None,
-    );
+    finalize_estimand_diagnostics(&mut diagnostics, estimand, anchors.len(), None);
     let used = pairs.len();
-    Ok(build_outcome(
-        pairs,
-        matched_anchors,
-        anchors.len(),
-        used,
-        diagnostics,
-    ))
+    build_outcome(pairs, matched_anchors, anchors.len(), used, diagnostics)
 }
 
 /// Subclasses of an optimal full match, with the weights of each estimand.

@@ -19,7 +19,7 @@ use crate::matching::{
     Assignment, CemBinning, CemError, CemRule, CemVariable, Chained, CovariateEncodingConfig,
     CovariateRecord, DeterministicSelection, DistanceConfig, ElasticNetCvConfig,
     ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig, EuclideanScale,
-    ExactMatchError, ExactMatchOutcome, FullMatchConfig, FullMatchOutcome, LambdaRule,
+    ExactMatchError, ExactMatchOutcome, FineBalance, FullMatchConfig, FullMatchOutcome, LambdaRule,
     LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisPreparationConfig,
     MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord, MissingValuePolicy,
     NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest, PairDistanceMatrix,
@@ -28,8 +28,8 @@ use crate::matching::{
     RandomSelection, Retain, RoleIndexedRecord, Rounds, SeedMethod, SelectionStrategy,
     SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome, VariableRatio,
     apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower,
-    estimate_propensity_and_match, exact_match_subclasses, match_full, match_optimal,
-    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    estimate_propensity_and_match, exact_match_subclasses, match_fine_balance, match_full,
+    match_optimal, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, quick_match_subclasses,
     subclassify_by_propensity_score_map,
 };
@@ -737,6 +737,8 @@ pub struct MatchSpec {
     pub quick: QuickSpec,
     /// Options of the full method.
     pub full: FullSpec,
+    /// Fine, near-fine or refined balance on nominal keys. Optimal method only.
+    pub fine_balance: Option<FineBalance>,
     /// How anchors share the candidates when each takes more than one. The
     /// default is sequential, and rounds for the nearest method as in
     /// `matchit()`. Risk-set matching is always sequential.
@@ -803,6 +805,7 @@ impl Default for MatchSpec {
             cem: CemSpec::default(),
             quick: QuickSpec::default(),
             full: FullSpec::default(),
+            fine_balance: None,
             assignment: None,
             ratio: criteria.match_ratio,
             ratio_fallback: Vec::new(),
@@ -1248,6 +1251,12 @@ impl MatchSpec {
                 "ratio",
                 "the full method sizes its subclasses by min_controls and max_controls; \
                  drop the ratio",
+            ));
+        }
+        if self.fine_balance.is_some() && self.method != MatchMethod::Optimal {
+            return Err(SpecError::option(
+                "fine_balance",
+                "fine balance belongs to the optimal method; set the method to optimal or drop it",
             ));
         }
         if self.full.omit_fraction.is_some() && self.full.mean_controls.is_some() {
@@ -2092,7 +2101,12 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
                 let outcome = match_full(anchors, candidates, &request, &config)?;
                 return Ok(SpecOutput::Full(Box::new(outcome)));
             }
-            let outcome = match_optimal(anchors, candidates, &request)?;
+            let outcome = match &spec.fine_balance {
+                Some(balance) => {
+                    match_fine_balance(anchors, candidates, &request, balance)?.outcome
+                }
+                None => match_optimal(anchors, candidates, &request)?,
+            };
             return Ok(SpecOutput::Pairs {
                 outcome: Box::new(outcome),
                 propensity: built.propensity.map(Box::new),

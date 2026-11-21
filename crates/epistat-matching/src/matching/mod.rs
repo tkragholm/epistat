@@ -4,6 +4,7 @@ mod distance;
 mod engine;
 mod estimation;
 mod exact;
+mod fine_balance;
 mod index;
 pub mod job;
 mod nearest;
@@ -44,6 +45,9 @@ pub use estimation::{
     prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
+pub use fine_balance::{
+    BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
+};
 pub use nearest::{MatchOrder, NearestSelection, VariableRatio, VariableRatioError};
 pub use optimal::{
     FullMatchConfig, FullMatchOutcome, OptimalError, OptimalRequest, Retain, match_full,

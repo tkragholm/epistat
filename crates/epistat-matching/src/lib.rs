@@ -164,6 +164,9 @@ pub use matching::{
     subclassify_by_propensity_score_map,
 };
 pub use matching::{
+    BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
+};
+pub use matching::{
     CemBinning, CemError, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata,
     cem_subclasses,
 };
