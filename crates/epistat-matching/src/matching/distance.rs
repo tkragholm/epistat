@@ -1,6 +1,6 @@
 use super::records::MatchingRecord;
 use crate::types::DistanceCaliper;
-use epistat_linalg::{Accum, Mat, MatMut, MatRef, get_global_parallelism, matmul};
+use epistat_linalg::{Attempt, Factor, Mat, Method};
 use ordered_float::OrderedFloat;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
@@ -611,12 +611,129 @@ impl<R: MatchingRecord> DistanceMetric<R> for IdMapPropensityScoreDistance<'_> {
     }
 }
 
+/// The quadratic form `d' M d` of a symmetric matrix `M`, evaluated without a
+/// matrix product per pair.
+///
+/// When `M` is positive definite its lower Cholesky factor `L` gives
+/// `d' M d = |L' d|^2`, so a vector can be transformed once and distances are
+/// squared Euclidean distances of the transformed vectors. A matrix that is
+/// not positive definite keeps the plain form, summed in a fixed order, and a
+/// pair whose form is clearly negative has no distance.
+#[derive(Debug, Clone)]
+struct QuadraticForm {
+    dimension: usize,
+    /// Row-major `L`, when `M` is positive definite.
+    lower: Option<Vec<f64>>,
+    /// Row-major `M`, when it is not.
+    matrix: Vec<f64>,
+}
+
+impl QuadraticForm {
+    /// `None` when `inverse_covariance` is not `dimension` squared long.
+    fn new(inverse_covariance: &[f64], dimension: usize) -> Option<Self> {
+        if inverse_covariance.len() != dimension.saturating_mul(dimension) {
+            return None;
+        }
+        let square = Mat::from_fn(dimension, dimension, |row, col| {
+            inverse_covariance[row * dimension + col]
+        });
+        let lower = Factor::new(square.as_ref(), &[Attempt::plain(Method::Cholesky)])
+            .ok()
+            .and_then(|factor| {
+                factor.cholesky_factor().map(|lower| {
+                    let mut rows = Vec::with_capacity(dimension * dimension);
+                    for row in 0..dimension {
+                        for col in 0..dimension {
+                            rows.push(lower[(row, col)]);
+                        }
+                    }
+                    rows
+                })
+            });
+        let matrix = if lower.is_some() {
+            Vec::new()
+        } else {
+            inverse_covariance.to_vec()
+        };
+        Some(Self {
+            dimension,
+            lower,
+            matrix,
+        })
+    }
+
+    /// `L' x`, summed in column order, when `M` is positive definite.
+    fn whiten_into(&self, lower: &[f64], vector: &[f64], out: &mut [f64]) {
+        let n = self.dimension;
+        for (j, slot) in out.iter_mut().enumerate() {
+            let mut sum = 0.0_f64;
+            for i in j..n {
+                sum += lower[i * n + j] * vector[i];
+            }
+            *slot = sum;
+        }
+    }
+
+    /// The distance of two vectors of this form's dimension.
+    fn pair(&self, left: &[f64], right: &[f64]) -> Option<f64> {
+        let n = self.dimension;
+        if left.len() != n || right.len() != n {
+            return None;
+        }
+        let mut stack = [0.0_f64; 2 * STACK_DIMENSION];
+        let mut heap = Vec::new();
+        let scratch = if n <= STACK_DIMENSION {
+            &mut stack[..2 * n]
+        } else {
+            heap.resize(2 * n, 0.0);
+            heap.as_mut_slice()
+        };
+        let (delta, transformed) = scratch.split_at_mut(n);
+        for ((slot, left), right) in delta.iter_mut().zip(left).zip(right) {
+            *slot = left - right;
+        }
+        let distance_sq = if let Some(lower) = &self.lower {
+            self.whiten_into(lower, delta, transformed);
+            let mut sum = 0.0_f64;
+            for value in transformed.iter() {
+                sum += value * value;
+            }
+            sum
+        } else {
+            let mut sum = 0.0_f64;
+            for (i, matrix_row) in self.matrix.chunks_exact(n).enumerate() {
+                let mut row = 0.0_f64;
+                for (m, d) in matrix_row.iter().zip(delta.iter()) {
+                    row += m * d;
+                }
+                sum += delta[i] * row;
+            }
+            sum
+        };
+        if !distance_sq.is_finite() || distance_sq < -1e-12 {
+            return None;
+        }
+        Some(distance_sq.max(0.0).sqrt())
+    }
+}
+
+/// Dimensions up to this size keep the scratch vectors on the stack.
+const STACK_DIMENSION: usize = 32;
+
 /// Mahalanobis distance keyed by [`MatchingRecord::id`].
+///
+/// With a positive definite inverse covariance matrix every vector is
+/// transformed once, on construction, and a pair costs one pass over the two
+/// transformed vectors. Sums run in a fixed order, so the value does not
+/// depend on the CPU or the number of threads.
 #[derive(Debug, Clone)]
 pub struct IdMapMahalanobisDistance<'a> {
     vectors: &'a RapidHashMap<String, Vec<f64>>,
-    inverse_covariance_valid: bool,
-    inverse_covariance_matrix: Mat<f64>,
+    form: Option<QuadraticForm>,
+    /// Position of each id's transformed vector in `whitened`, for the ids
+    /// whose vector has the right length.
+    slots: RapidHashMap<&'a str, usize>,
+    whitened: Vec<f64>,
 }
 
 impl<'a> IdMapMahalanobisDistance<'a> {
@@ -626,83 +743,60 @@ impl<'a> IdMapMahalanobisDistance<'a> {
         inverse_covariance: &'a [f64],
         dimension: usize,
     ) -> Self {
-        let inverse_covariance_valid =
-            inverse_covariance.len() == dimension.saturating_mul(dimension);
-        let inverse_covariance_matrix = if inverse_covariance_valid {
-            Mat::from_fn(dimension, dimension, |row, col| {
-                inverse_covariance[row * dimension + col]
-            })
-        } else {
-            Mat::zeros(dimension, dimension)
-        };
-
+        let form = QuadraticForm::new(inverse_covariance, dimension);
+        let mut slots = RapidHashMap::default();
+        let mut whitened = Vec::new();
+        if let Some((form, lower)) = form
+            .as_ref()
+            .and_then(|form| form.lower.as_deref().map(|lower| (form, lower)))
+        {
+            // Hash order would not matter for the values, but a sorted pass
+            // keeps the buffer layout reproducible.
+            let mut ids: Vec<&'a String> = vectors.keys().collect();
+            ids.sort_unstable();
+            slots.reserve(ids.len());
+            whitened.resize(ids.len() * dimension, 0.0);
+            let mut position = 0;
+            for id in ids {
+                let vector = &vectors[id];
+                if vector.len() != dimension {
+                    continue;
+                }
+                let out = &mut whitened[position * dimension..(position + 1) * dimension];
+                form.whiten_into(lower, vector, out);
+                slots.insert(id.as_str(), position);
+                position += 1;
+            }
+            whitened.truncate(position * dimension);
+        }
         Self {
             vectors,
-            inverse_covariance_valid,
-            inverse_covariance_matrix,
+            form,
+            slots,
+            whitened,
         }
     }
 }
 
-/// Dimensions up to this size keep the two scratch vectors on the stack.
-const STACK_DIMENSION: usize = 32;
-
-/// `delta' * M * delta` through faer's matmul, called exactly as `&Mat * &Mat`
-/// calls it: same kernel, same operand layout, `Accum::Replace`, global
-/// parallelism, but into scratch buffers rather than three new matrices. faer
-/// picks its kernel from shape, stride and the CPU's SIMD level, so the result
-/// is bit-identical to the operator form. It must stay so: any other summation
-/// order moves the last bits, and with them pairs at the caliper boundary.
-fn mahalanobis_distance_faer(
-    left: &[f64],
-    right: &[f64],
-    inverse_covariance_matrix: &Mat<f64>,
-) -> Option<f64> {
-    let dimension = inverse_covariance_matrix.nrows();
-    if left.len() != dimension || right.len() != dimension {
-        return None;
-    }
-    if inverse_covariance_matrix.ncols() != dimension {
-        return None;
+impl IdMapMahalanobisDistance<'_> {
+    /// The row of the record's transformed vector, when the matrix is positive
+    /// definite and the record has a vector of the right length.
+    pub(crate) fn row(&self, id: &str) -> Option<usize> {
+        self.slots.get(id).copied()
     }
 
-    let mut stack = [0.0_f64; 2 * STACK_DIMENSION];
-    let mut heap = Vec::new();
-    let scratch = if dimension <= STACK_DIMENSION {
-        &mut stack[..2 * dimension]
-    } else {
-        heap.resize(2 * dimension, 0.0);
-        heap.as_mut_slice()
-    };
-    let (delta, transformed) = scratch.split_at_mut(dimension);
-    for ((slot, left), right) in delta.iter_mut().zip(left).zip(right) {
-        *slot = left - right;
+    /// The distance of two rows given by [`Self::row`].
+    pub(crate) fn row_distance(&self, left: usize, right: usize) -> Option<f64> {
+        let n = self.form.as_ref()?.dimension;
+        let left = &self.whitened[left * n..(left + 1) * n];
+        let right = &self.whitened[right * n..(right + 1) * n];
+        let mut sum = 0.0_f64;
+        for (a, b) in left.iter().zip(right) {
+            let delta = a - b;
+            sum += delta * delta;
+        }
+        sum.is_finite().then(|| sum.sqrt())
     }
-    let delta = MatRef::from_column_major_slice(delta, dimension, 1);
-
-    matmul(
-        MatMut::from_column_major_slice_mut(transformed, dimension, 1),
-        Accum::Replace,
-        inverse_covariance_matrix.as_ref(),
-        delta,
-        1.0,
-        get_global_parallelism(),
-    );
-    let mut distance_sq = [0.0_f64];
-    matmul(
-        MatMut::from_column_major_slice_mut(&mut distance_sq, 1, 1),
-        Accum::Replace,
-        delta.transpose(),
-        MatRef::from_column_major_slice(transformed, dimension, 1),
-        1.0,
-        get_global_parallelism(),
-    );
-    let distance_sq = distance_sq[0];
-
-    if !distance_sq.is_finite() || distance_sq < -1e-12 {
-        return None;
-    }
-    Some(distance_sq.max(0.0).sqrt())
 }
 
 impl<R: MatchingRecord> DistanceMetric<R> for IdMapMahalanobisDistance<'_> {
@@ -711,12 +805,13 @@ impl<R: MatchingRecord> DistanceMetric<R> for IdMapMahalanobisDistance<'_> {
     }
 
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
-        let left = self.vectors.get(anchor.id())?;
-        let right = self.vectors.get(candidate.id())?;
-        if !self.inverse_covariance_valid {
-            return None;
+        let form = self.form.as_ref()?;
+        if form.lower.is_none() {
+            let left = self.vectors.get(anchor.id())?;
+            let right = self.vectors.get(candidate.id())?;
+            return form.pair(left, right);
         }
-        mahalanobis_distance_faer(left, right, &self.inverse_covariance_matrix)
+        self.row_distance(self.row(anchor.id())?, self.row(candidate.id())?)
     }
 }
 
@@ -858,7 +953,7 @@ pub enum MahalanobisError {
 #[derive(Debug, Clone)]
 pub struct MahalanobisDistance<F> {
     accessor: F,
-    inverse_covariance_matrix: Mat<f64>,
+    form: QuadraticForm,
 }
 
 impl<F> MahalanobisDistance<F> {
@@ -868,6 +963,7 @@ impl<F> MahalanobisDistance<F> {
     ///
     /// Returns [`MahalanobisError`] when `dimension` is zero or the matrix length
     /// does not equal `dimension * dimension`.
+    #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn new(
         accessor: F,
         inverse_covariance: Vec<f64>,
@@ -879,15 +975,10 @@ impl<F> MahalanobisDistance<F> {
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
             return Err(MahalanobisError::InvalidInverseCovarianceLength);
         }
-        let inverse_covariance = inverse_covariance.into_boxed_slice();
-        let inverse_covariance_matrix = Mat::from_fn(dimension, dimension, |row, col| {
-            inverse_covariance[row * dimension + col]
-        });
+        let form = QuadraticForm::new(&inverse_covariance, dimension)
+            .ok_or(MahalanobisError::InvalidInverseCovarianceLength)?;
 
-        Ok(Self {
-            accessor,
-            inverse_covariance_matrix,
-        })
+        Ok(Self { accessor, form })
     }
 }
 
@@ -902,7 +993,7 @@ where
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
         let left = (self.accessor)(anchor)?;
         let right = (self.accessor)(candidate)?;
-        mahalanobis_distance_faer(&left, &right, &self.inverse_covariance_matrix)
+        self.form.pair(&left, &right)
     }
 }
 
@@ -1049,24 +1140,8 @@ mod tests {
         assert!(metric.distance(&anchor, &candidate).is_none());
     }
 
-    #[test]
-    fn mahalanobis_faer_matches_scalar_reference() {
-        let left = vec![1.0, 3.0, -2.0];
-        let right = vec![0.5, 1.0, 2.0];
-        let inverse_covariance = vec![2.0, 0.1, 0.0, 0.1, 1.5, 0.2, 0.0, 0.2, 1.0];
-
-        let scalar = mahalanobis_distance_scalar_reference(&left, &right, &inverse_covariance, 3)
-            .expect("scalar distance should be computable");
-        let inverse_covariance_matrix =
-            Mat::from_fn(3, 3, |row, col| inverse_covariance[row * 3 + col]);
-        let faer = mahalanobis_distance_faer(&left, &right, &inverse_covariance_matrix)
-            .expect("faer distance should be computable");
-
-        assert!((scalar - faer).abs() < 1e-12);
-    }
-
-    /// The same quadratic form through faer's operators, which allocate.
-    fn mahalanobis_distance_operator_form(
+    /// The old per-pair form: two faer matrix products per distance.
+    fn mahalanobis_distance_faer_reference(
         left: &[f64],
         right: &[f64],
         inverse_covariance_matrix: &Mat<f64>,
@@ -1081,32 +1156,145 @@ mod tests {
         Some(distance_sq.max(0.0).sqrt())
     }
 
-    #[test]
-    fn mahalanobis_matches_operator_form_bit_for_bit() {
-        let mut state = 0x2545_f491_4f6c_dd1d_u64;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-            let exponent = i32::try_from(state % 7).expect("small") - 3;
-            (2.0f64.mul_add(unit, -1.0)) * 10f64.powi(exponent)
-        };
-        // Both sides of STACK_DIMENSION, so the heap path is covered too.
-        for dimension in (0..=12).chain([31, 32, 33, 40]) {
-            for _ in 0..200 {
-                let inverse = Mat::from_fn(dimension, dimension, |_, _| next());
-                let left = (0..dimension).map(|_| next()).collect::<Vec<_>>();
-                let right = (0..dimension).map(|_| next()).collect::<Vec<_>>();
-                let expected = mahalanobis_distance_operator_form(&left, &right, &inverse);
-                let actual = mahalanobis_distance_faer(&left, &right, &inverse);
-                assert_eq!(
-                    expected.map(f64::to_bits),
-                    actual.map(f64::to_bits),
-                    "dimension {dimension}"
-                );
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn unit(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1_u64 << 53) as f64
+        }
+    }
+
+    /// A positive definite matrix, row-major: `A' A + I` for a random `A`.
+    fn random_positive_definite(rng: &mut Xorshift, n: usize) -> Vec<f64> {
+        let a: Vec<f64> = (0..n * n).map(|_| rng.unit() - 0.5).collect();
+        let mut out = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                let mut sum = if i == j { 1.0 } else { 0.0 };
+                for k in 0..n {
+                    sum += a[k * n + i] * a[k * n + j];
+                }
+                out[i * n + j] = sum;
             }
         }
+        out
+    }
+
+    /// Distances through the transformed vectors agree with the matrix
+    /// products. Both sides round differently, so the tolerance is a small
+    /// multiple of the machine epsilon times the dimension, relative to the
+    /// distance or to 1 when it is smaller. The covariates are of order 1, so
+    /// the cancellation in a difference is of the order of 1 as well.
+    #[test]
+    fn whitened_distance_matches_the_matrix_form() {
+        let mut rng = Xorshift(0x2545_f491_4f6c_dd1d);
+        for dimension in [1_usize, 2, 3, 7, 12, 31, 33] {
+            let inverse = random_positive_definite(&mut rng, dimension);
+            let matrix = Mat::from_fn(dimension, dimension, |r, c| inverse[r * dimension + c]);
+            let vectors: RapidHashMap<String, Vec<f64>> = (0..30)
+                .map(|i| {
+                    (
+                        format!("r{i:02}"),
+                        (0..dimension).map(|_| 4.0 * rng.unit() - 2.0).collect(),
+                    )
+                })
+                .collect();
+            let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, dimension);
+            for (a, left) in &vectors {
+                for (b, right) in &vectors {
+                    let got = metric
+                        .distance(
+                            &BaseRecord::new(a, date(2010, 1, 1)),
+                            &BaseRecord::new(b, date(2010, 1, 1)),
+                        )
+                        .expect("distance");
+                    let want = mahalanobis_distance_faer_reference(left, right, &matrix)
+                        .expect("distance");
+                    let tolerance = 64.0 * dimension as f64 * f64::EPSILON * want.max(1.0);
+                    assert!(
+                        (got - want).abs() <= tolerance,
+                        "dimension {dimension}: {got} against {want}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The nearest candidate of every anchor is the same under the old and new
+    /// distance, on data with many exact ties (integer covariates, repeated
+    /// rows). Exact duplicates have identical transformed vectors, so their
+    /// distances are equal in both forms and a first-index tie-break agrees.
+    /// Other near ties are skipped when the gap is within rounding.
+    #[test]
+    fn nearest_candidates_agree_with_the_matrix_form() {
+        for seed in 1..=6_u64 {
+            let mut rng = Xorshift(0x9e37_79b9_7f4a_7c15 ^ seed.wrapping_mul(0x1234_5679));
+            let dimension = 4;
+            let inverse = random_positive_definite(&mut rng, dimension);
+            let matrix = Mat::from_fn(dimension, dimension, |r, c| inverse[r * dimension + c]);
+            let rows: Vec<Vec<f64>> = (0..200)
+                .map(|_| (0..dimension).map(|_| (rng.unit() * 3.0).floor()).collect())
+                .collect();
+            let vectors: RapidHashMap<String, Vec<f64>> = rows
+                .iter()
+                .enumerate()
+                .map(|(i, row)| (format!("r{i:03}"), row.clone()))
+                .collect();
+            let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, dimension);
+            let record = |i: usize| BaseRecord::new(format!("r{i:03}"), date(2010, 1, 1));
+            for anchor in 0..100 {
+                let new: Vec<f64> = (100..200)
+                    .map(|c| {
+                        metric
+                            .distance(&record(anchor), &record(c))
+                            .expect("distance")
+                    })
+                    .collect();
+                let old: Vec<f64> = (100..200)
+                    .map(|c| {
+                        mahalanobis_distance_faer_reference(&rows[anchor], &rows[c], &matrix)
+                            .expect("distance")
+                    })
+                    .collect();
+                let first = |d: &[f64]| {
+                    let best = d.iter().copied().fold(f64::INFINITY, f64::min);
+                    (
+                        best,
+                        d.iter().position(|v| *v <= best + 1e-9 * best.max(1.0)),
+                    )
+                };
+                let (best_new, pick_new) = first(&new);
+                let (best_old, pick_old) = first(&old);
+                assert!((best_new - best_old).abs() <= 1e-9 * best_old.max(1.0));
+                assert_eq!(pick_new, pick_old, "seed {seed}, anchor {anchor}");
+            }
+        }
+    }
+
+    /// A matrix that is not positive definite keeps the plain quadratic form.
+    #[test]
+    fn indefinite_matrix_uses_the_plain_form() {
+        let inverse = vec![1.0, 2.0, 2.0, 1.0];
+        let vectors: RapidHashMap<String, Vec<f64>> = [
+            ("a".to_string(), vec![0.0, 0.0]),
+            ("b".to_string(), vec![1.0, 1.0]),
+            ("c".to_string(), vec![1.0, -1.0]),
+        ]
+        .into_iter()
+        .collect();
+        let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, 2);
+        let a = BaseRecord::new("a", date(2010, 1, 1));
+        let b = BaseRecord::new("b", date(2010, 1, 1));
+        let c = BaseRecord::new("c", date(2010, 1, 1));
+        let ab = metric.distance(&a, &b).expect("positive form");
+        assert!((ab - 6.0_f64.sqrt()).abs() < 1e-12);
+        let scalar = mahalanobis_distance_scalar_reference(&[0.0, 0.0], &[1.0, 1.0], &inverse, 2)
+            .expect("positive form");
+        assert!((ab - scalar).abs() < 1e-12);
+        assert!(metric.distance(&a, &c).is_none());
     }
 
     fn mahalanobis_distance_scalar_reference(
