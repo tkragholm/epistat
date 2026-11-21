@@ -151,7 +151,7 @@ fn write_folds() {
                 seed,
                 weighted,
                 standardize,
-                foldid: cross_validation_folds(n, nfolds, seed),
+                foldid: cross_validation_folds(n, nfolds, seed).unwrap(),
             },
         )
         .collect();
@@ -169,7 +169,7 @@ fn folds_are_the_ones_the_reference_used() {
         assert_eq!(case.name, name);
         assert_eq!(
             case.foldid,
-            cross_validation_folds(n, nfolds, seed),
+            cross_validation_folds(n, nfolds, seed).unwrap(),
             "{name}"
         );
         // The folds are balanced: sizes differ by at most one.
@@ -278,7 +278,7 @@ fn cross_validation_matches_cv_glmnet() {
 /// gives other folds.
 #[test]
 fn folds_follow_the_seed() {
-    let a = cross_validation_folds(200, 10, 7);
-    assert_eq!(a, cross_validation_folds(200, 10, 7));
-    assert_ne!(a, cross_validation_folds(200, 10, 8));
+    let a = cross_validation_folds(200, 10, 7).unwrap();
+    assert_eq!(a, cross_validation_folds(200, 10, 7).unwrap());
+    assert_ne!(a, cross_validation_folds(200, 10, 8).unwrap());
 }

@@ -879,15 +879,17 @@ impl QuickMatchOutcome {
 ///
 /// `coordinates` gives the point of a unit: one number for a score, or the
 /// coordinates of a covariate distance made Euclidean, all of length
-/// `dimension`. Units that share a value of every `exact` variable are matched
-/// among themselves, as `matchit()` does with `exact`, and a stratum with one
-/// group only is dropped. Subclasses are numbered over all strata.
+/// `dimension`, which is at most 255. Units that share a value of every `exact`
+/// variable are matched among themselves, as `matchit()` does with `exact`, and
+/// a stratum with one group only is dropped. Subclasses are numbered over all strata.
 ///
 /// # Errors
 ///
 /// A [`QuickMatchError`] when a unit lacks coordinates or an exact variable,
 /// when a stratum is too small for the constraints, or when nothing can be
-/// matched.
+/// matched. A stratum in which no unit fits a subclass under the caliper loses
+/// its units, which are dropped; the call fails with
+/// [`QuickMatchError::NoSubclass`] only when no stratum has a subclass.
 pub fn quick_match_subclasses<'c, R, V, F>(
     anchors: &[R],
     candidates: &[R],
@@ -957,15 +959,19 @@ where
             points.extend_from_slice(point);
         }
         let flags: Vec<bool> = positions.iter().map(|p| units[*p].1).collect();
-        let labels =
-            quick_clusters(&points, dimension, &flags, options).map_err(|error| match error {
-                QuickMatchError::TooFewUnits { .. } if !exact.is_empty() => {
-                    QuickMatchError::TooFewUnits {
-                        stratum: Some(stratum.to_string()),
-                    }
-                }
-                other => other,
-            })?;
+        let labels = match quick_clusters(&points, dimension, &flags, options) {
+            Ok(labels) => labels,
+            // With several strata, one in which no unit fits a subclass under
+            // the caliper loses its units, which are dropped; the run fails
+            // only when no stratum has a subclass.
+            Err(QuickMatchError::NoSubclass) if !exact.is_empty() => continue,
+            Err(QuickMatchError::TooFewUnits { .. }) if !exact.is_empty() => {
+                return Err(QuickMatchError::TooFewUnits {
+                    stratum: Some(stratum.to_string()),
+                });
+            }
+            Err(error) => return Err(error),
+        };
         for (position, label) in positions.iter().zip(labels) {
             global[*position] = label.map(|label| (stratum, label));
         }
@@ -1032,9 +1038,12 @@ where
 /// of side `dimension`, so that the matrix is `L L^T`. A Mahalanobis distance
 /// under inverse covariance `S` is the Euclidean distance after `L^T` is applied
 /// to the difference, where `S = L L^T`. `None` when the matrix is not positive
-/// definite.
+/// definite or does not have `dimension * dimension` entries.
 #[must_use]
 pub fn cholesky_lower(matrix: &[f64], dimension: usize) -> Option<Vec<f64>> {
+    if matrix.len() != dimension * dimension {
+        return None;
+    }
     let mut lower = vec![0.0_f64; dimension * dimension];
     for i in 0..dimension {
         for j in 0..=i {

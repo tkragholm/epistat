@@ -9,7 +9,9 @@ use super::{GeneticError, GeneticFit, GeneticLoss, GeneticMatches, GeneticProble
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneticSearch {
     /// Individuals per generation. `pop.size`, 100 by default. 0 leaves only
-    /// the starting values, evaluated once.
+    /// the starting values, evaluated once. Otherwise at least 9, so that each
+    /// of the eight operators makes at least one of the `population - 1`
+    /// children of a generation.
     pub population: usize,
     /// Generations to run. `max.generations`, 100 by default. The limit binds
     /// only with `hard_generation_limit`; without it the search runs until
@@ -24,7 +26,8 @@ pub struct GeneticSearch {
     pub min_weight: f64,
     /// Largest weight. `max.weight`, 1000 by default.
     pub max_weight: f64,
-    /// The weights of the first individual. All ones by default.
+    /// The weights of the first individual. All ones by default, which must
+    /// then lie in `[min_weight, max_weight]`.
     pub starting_values: Option<Vec<f64>>,
     /// Two losses are equal when they differ by at most this in every entry,
     /// which is when a generation counts as no improvement. 1e-6, as
@@ -226,18 +229,20 @@ impl GeneticProblem {
     ///
     /// # Errors
     ///
-    /// When the settings are invalid: a population of 1, an empty or
-    /// reversed weight range, or starting values of the wrong length or
-    /// outside the range.
+    /// When the settings are invalid: a population of 1 to 8, an empty or
+    /// reversed weight range, starting values of the wrong length or outside
+    /// the range, or no starting values while 1 lies outside the range.
     pub fn search(
         &self,
         fit: &GeneticFit,
         search: &GeneticSearch,
     ) -> Result<GeneticOutcome, GeneticError> {
         let p = self.variables;
-        if search.population == 1 {
+        if (1..=OPERATORS.len()).contains(&search.population) {
             return Err(GeneticError::Invalid(
-                "a population of 1 cannot recombine; use 0 or at least 2".into(),
+                "a population of 1 to 8 is too small for every operator to make a child; \
+                 use 0 or at least 9"
+                    .into(),
             ));
         }
         if !(search.min_weight.is_finite()
@@ -249,20 +254,26 @@ impl GeneticProblem {
                 "the weights need 0 <= min_weight < max_weight, both finite".into(),
             ));
         }
-        let start = match &search.starting_values {
-            Some(values) => {
-                self.check_weights(values)?;
-                if values
-                    .iter()
-                    .any(|v| *v < search.min_weight || *v > search.max_weight)
-                {
-                    return Err(GeneticError::Invalid(
-                        "the starting values must lie in [min_weight, max_weight]".into(),
-                    ));
-                }
-                values.clone()
+        let start = if let Some(values) = &search.starting_values {
+            self.check_weights(values)?;
+            if values
+                .iter()
+                .any(|v| *v < search.min_weight || *v > search.max_weight)
+            {
+                return Err(GeneticError::Invalid(
+                    "the starting values must lie in [min_weight, max_weight]".into(),
+                ));
             }
-            None => vec![1.0_f64.clamp(search.min_weight, search.max_weight); p],
+            values.clone()
+        } else {
+            if !(search.min_weight..=search.max_weight).contains(&1.0) {
+                return Err(GeneticError::Invalid(
+                    "the default starting weights are 1, which lies outside \
+                         [min_weight, max_weight]; give starting values"
+                        .into(),
+                ));
+            }
+            vec![1.0; p]
         };
         let mut stream = Stream::seeded(search.seed);
         let seed_of = |generation: usize, index: usize| {

@@ -14,7 +14,7 @@
 //!
 //! The crate prepares each distance from the covariates with
 //! `prepare_mahalanobis_distance_config` (the defaults, including the
-//! pooled within-group covariance and the ridge of 1e-8 on the diagonal; the
+//! pooled within-group covariance; the
 //! full-sample covariance of tie-adjusted ranks for the robust distance) and
 //! `prepare_euclidean_distance_config` (the plain and the pooled
 //! within-group scale) and must give `matchit()`'s pairs in every run. The

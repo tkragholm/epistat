@@ -124,7 +124,12 @@ pub struct ElasticNetLogisticConfig {
     pub probability_clip: f64,
     /// Scale each penalised column to unit weighted standard deviation before
     /// fitting, as `glmnet(standardize = TRUE)` does. The coefficients are
-    /// returned on the scale of the covariates.
+    /// returned on the scale of the covariates. The default is false, unlike
+    /// that of [`ElasticNetCvConfig`] and of `glmnet`, so that the penalty
+    /// sits on the scale of the covariates as given. The fit at a fixed
+    /// `lambda` is compared with `glmnet` for false only (`tests/r_glmnet.rs`);
+    /// true is compared through the cross-validated fit
+    /// (`tests/r_cv_glmnet.rs`), which uses the same fitting code.
     #[builder(default = false)]
     pub standardize: bool,
 }
@@ -181,7 +186,7 @@ pub struct ElasticNetCvConfig {
     #[builder(default = 100_usize)]
     pub nlambda: usize,
     /// Smallest `lambda` as a fraction of the largest. `None` is `glmnet`'s
-    /// default, 1e-4 when there are more rows than covariates and 1e-2
+    /// default, 1e-2 when there are fewer rows than covariates and 1e-4
     /// otherwise.
     pub lambda_min_ratio: Option<f64>,
     /// The rule that picks `lambda` from the cross-validation curve.
@@ -351,12 +356,6 @@ pub struct MahalanobisPreparationConfig {
     /// Optional covariate transformation before covariance estimation.
     #[builder(default = MahalanobisTransform::Raw)]
     pub transform: MahalanobisTransform,
-    /// Initial ridge added to covariance diagonal before inversion.
-    #[builder(default = 1e-8_f64)]
-    pub ridge: f64,
-    /// Number of ridge escalation attempts.
-    #[builder(default = 8_usize)]
-    pub max_ridge_attempts: usize,
 }
 
 impl Default for MahalanobisPreparationConfig {
@@ -365,8 +364,6 @@ impl Default for MahalanobisPreparationConfig {
             encoding: CovariateEncodingConfig::default(),
             covariance_strategy: MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom,
             transform: MahalanobisTransform::Raw,
-            ridge: 1e-8,
-            max_ridge_attempts: 8,
         }
     }
 }
@@ -405,7 +402,7 @@ pub enum MahalanobisTransform {
     /// MatchIt does, so the covariance of the ranks is singular and the
     /// distance uses its generalised inverse (eigenvalues at most 1e-8 of the
     /// largest are dropped). [`MahalanobisDistancePreparation::covariance_rank`](super::MahalanobisDistancePreparation::covariance_rank)
-    /// reports the rank kept, and `ridge` is not used.
+    /// reports the rank kept.
     RankTieAdjusted,
 }
 

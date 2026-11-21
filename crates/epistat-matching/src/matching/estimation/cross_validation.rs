@@ -134,11 +134,21 @@ impl CrossValidation {
 /// the folds in turn and the assignment is shuffled with a stream of
 /// `epistat-rng` seeded with `seed`. The rows are those of the design matrix,
 /// the anchors first and then the candidates.
-#[must_use]
-pub fn cross_validation_folds(n: usize, nfolds: usize, seed: u64) -> Vec<usize> {
+///
+/// # Errors
+///
+/// Returns [`EstimationError::InvalidCrossValidation`] when `nfolds` is 0.
+pub fn cross_validation_folds(
+    n: usize,
+    nfolds: usize,
+    seed: u64,
+) -> Result<Vec<usize>, EstimationError> {
+    if nfolds == 0 {
+        return Err(EstimationError::InvalidCrossValidation);
+    }
     let mut folds: Vec<usize> = (0..n).map(|row| row % nfolds).collect();
     Stream::seeded(seed).shuffle(&mut folds);
-    folds
+    Ok(folds)
 }
 
 fn binomial_deviance(y: f64, eta: f64) -> f64 {
@@ -193,7 +203,7 @@ fn glmnet_path(
     let penalised = penalty.iter().filter(|f| **f > 0.0).count();
     let ratio = config
         .lambda_min_ratio
-        .unwrap_or(if n > penalised { 1e-4 } else { 1e-2 });
+        .unwrap_or(if n < penalised { 1e-2 } else { 1e-4 });
     let steps = config.nlambda - 1;
 
     let null_deviance = -2.0
@@ -307,7 +317,7 @@ pub(super) fn fit_elastic_net_cv(
     let lambda = master.lambda.clone();
     let mut unconverged = master.unconverged;
 
-    let fold_ids = cross_validation_folds(n, config.nfolds, config.seed);
+    let fold_ids = cross_validation_folds(n, config.nfolds, config.seed)?;
     // Held-out deviance, by fold and master penalty.
     let mut fold_deviance = vec![vec![0.0_f64; lambda.len()]; config.nfolds];
     let mut fold_weight = vec![0.0_f64; config.nfolds];
@@ -441,13 +451,13 @@ mod tests {
 
     #[test]
     fn folds_are_balanced_and_depend_on_the_seed() {
-        let folds = cross_validation_folds(23, 5, 3);
+        let folds = cross_validation_folds(23, 5, 3).unwrap();
         let mut sizes = [0usize; 5];
         for fold in &folds {
             sizes[*fold] += 1;
         }
         assert!(sizes.iter().all(|size| (4..=5).contains(size)));
-        assert_eq!(folds, cross_validation_folds(23, 5, 3));
-        assert_ne!(folds, cross_validation_folds(23, 5, 4));
+        assert_eq!(folds, cross_validation_folds(23, 5, 3).unwrap());
+        assert_ne!(folds, cross_validation_folds(23, 5, 4).unwrap());
     }
 }

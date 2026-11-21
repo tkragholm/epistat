@@ -515,7 +515,14 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
     }
     let mut exact = vec![false; variables.len()];
 
-    let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+    let built = build_distance(
+        &spec.distance,
+        anchors,
+        candidates,
+        spec.estimand,
+        spec.seed,
+        false,
+    )?;
     let score: Option<Vec<f64>> = built
         .config
         .as_ref()

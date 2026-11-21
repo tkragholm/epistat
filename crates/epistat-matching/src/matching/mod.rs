@@ -47,7 +47,7 @@ pub use estimation::{
     LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisDistancePreparation,
     MahalanobisPreparationConfig, MahalanobisTransform, MissingValuePolicy,
     PropensityDistancePreparation, PropensityEstimator, PropensityLink, PropensityMatchedOutcome,
-    PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale, RidgeReport,
+    PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale,
     cross_validation_folds, encode_covariates, estimate_propensity_and_match,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
@@ -79,8 +79,8 @@ pub use selection::{
     SelectionStrategy,
 };
 pub use subclassification::{
-    SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationOutcome,
-    subclassify_by_propensity_score_map,
+    SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationError,
+    SubclassificationOutcome, subclassify_by_propensity_score_map,
 };
 pub use weights::{
     MatchWeightMethod, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable, UnitRole,

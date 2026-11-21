@@ -22,7 +22,8 @@
 //! most 30 times. The Hessian is factorised by Cholesky through
 //! `epistat_linalg`, so a design that is collinear, or a class with no rows,
 //! is an error and not a repaired fit. The fit has converged when the largest
-//! step is below `tolerance * (1 + largest |b|)`. `nnet::multinom()` instead
+//! step is below `tolerance * (1 + largest |b|)`, or when no step raises the
+//! log-likelihood and the Newton step is below `sqrt(eps) * (1 + largest |b|)`. `nnet::multinom()` instead
 //! runs BFGS to a relative change of `1e-8` in its criterion, which stops with
 //! coefficients about `1e-4` from the maximum, so a comparison with its
 //! default fit is limited by R's stopping rule and not by ours. The test runs
@@ -276,8 +277,14 @@ impl Multinom {
                 scale /= 2.0;
             }
             let Some((trial, l, pr)) = accepted else {
-                // No ascent along the step: at the maximum to rounding.
-                converged = true;
+                // No ascent along the step, even halved 30 times. That is the
+                // maximum to rounding only when the full Newton step is itself
+                // negligible, at the square root of the machine epsilon
+                // relative to the coefficients, where the gain in the
+                // log-likelihood is below the rounding error of the sum.
+                let largest_step = (0..q).map(|i| step[(i, 0)].abs()).fold(0.0_f64, f64::max);
+                let largest_beta = beta.iter().map(|b| b.abs()).fold(0.0_f64, f64::max);
+                converged = largest_step <= f64::EPSILON.sqrt() * (1.0 + largest_beta);
                 break;
             };
             let mut largest_step = 0.0_f64;

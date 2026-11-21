@@ -243,7 +243,8 @@ pub enum EstimatorSpec {
         alpha: f64,
         /// Penalty strength.
         lambda: f64,
-        /// Scale the columns to unit standard deviation before fitting.
+        /// Scale the columns to unit standard deviation before fitting. False
+        /// by default, unlike the cross-validated elastic net.
         #[serde(default)]
         standardize: bool,
     },
@@ -259,41 +260,29 @@ pub enum EstimatorSpec {
         #[serde(default = "default_nlambda")]
         nlambda: usize,
         /// Smallest penalty as a fraction of the largest, `lambda.min.ratio`
-        /// of `glmnet`. The default is 1e-4 when there are more units than
-        /// covariates and 1e-2 otherwise.
+        /// of `glmnet`. The default is 1e-2 when there are fewer units than
+        /// covariates and 1e-4 otherwise.
         #[serde(default)]
         lambda_min_ratio: Option<f64>,
         /// The rule that picks the penalty.
         #[serde(default)]
         rule: LambdaSpec,
-        /// Scale the columns to unit standard deviation before fitting.
+        /// Scale the columns to unit standard deviation before fitting, as
+        /// MatchIt's `cv.glmnet` call does. True by default.
         #[serde(default = "default_true")]
         standardize: bool,
     },
     /// The covariate balancing propensity score, as MatchIt's
     /// `distance = "cbps"` with `CBPS::CBPS()`. The link of the distance is
-    /// logit, and the model needs an intercept.
+    /// logit, and the model needs an intercept. The estimand whose balance
+    /// conditions the fit satisfies is the spec's `estimand`, which must be
+    /// the ATT or the ATE.
     Cbps {
-        /// The estimand whose balance conditions the fit satisfies. MatchIt
-        /// takes it from the matching estimand and defaults to the ATT.
-        #[serde(default)]
-        estimand: CbpsEstimandSpec,
         /// Score and balance conditions together, CBPS's `method = "over"`.
         /// `false` is `method = "exact"`, the balance conditions alone.
         #[serde(default = "default_true")]
         over: bool,
     },
-}
-
-/// The estimand of a covariate balancing propensity score.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CbpsEstimandSpec {
-    /// Balance the controls to the treated.
-    #[default]
-    Att,
-    /// Balance both groups to the sample.
-    Ate,
 }
 
 const fn default_folds() -> usize {
@@ -1663,6 +1652,7 @@ impl MatchSpec {
 /// The propensity model of a propensity distance, from its spec.
 fn propensity_config(
     spec: &DistanceSpec,
+    estimand: Estimand,
     seed: u64,
     caliper: Option<DistanceCaliper>,
     reestimate: bool,
@@ -1694,11 +1684,18 @@ fn propensity_config(
                 .standardize(standardize)
                 .build(),
         ),
-        EstimatorSpec::Cbps { estimand, over } => PropensityEstimator::Cbps(
+        EstimatorSpec::Cbps { over } => PropensityEstimator::Cbps(
             CbpsConfig::builder()
                 .estimand(match estimand {
-                    CbpsEstimandSpec::Att => CbpsEstimand::Att,
-                    CbpsEstimandSpec::Ate => CbpsEstimand::Ate,
+                    Estimand::Att => CbpsEstimand::Att,
+                    Estimand::Ate => CbpsEstimand::Ate,
+                    Estimand::Atc | Estimand::Atm => {
+                        return Err(SpecError::option(
+                            "estimand",
+                            "the covariate balancing propensity score is defined for the \
+                             ATT and the ATE only",
+                        ));
+                    }
                 })
                 .method(if over {
                     CbpsMethod::Over
@@ -1765,6 +1762,7 @@ fn build_distance<R: CovariateRecord>(
     spec: &DistanceSpec,
     anchors: &[R],
     candidates: &[R],
+    estimand: Estimand,
     seed: u64,
     mahvars: bool,
 ) -> Result<BuiltDistance, SpecError> {
@@ -1792,7 +1790,7 @@ fn build_distance<R: CovariateRecord>(
             propensity: None,
         },
         DistanceSpec::Propensity { .. } => {
-            let config = propensity_config(spec, seed, caliper, false)?;
+            let config = propensity_config(spec, estimand, seed, caliper, false)?;
             let prepared = prepare_propensity_distance_config(anchors, candidates, &config)?;
             BuiltDistance {
                 config: Some(prepared.distance_config),
@@ -2054,7 +2052,7 @@ where
         .collect();
     if spec.reestimate {
         let caliper = typed_caliper("distance", spec.distance.caliper())?;
-        let config = propensity_config(&spec.distance, spec.seed, caliper, true)?;
+        let config = propensity_config(&spec.distance, spec.estimand, spec.seed, caliper, true)?;
         let constraints = Chained {
             first: Chained {
                 first: sex,
@@ -2160,7 +2158,14 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         }
         MatchMethod::Cem => return run_cem(spec, anchors, candidates),
         MatchMethod::Subclass => {
-            let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+            let built = build_distance(
+                &spec.distance,
+                anchors,
+                candidates,
+                spec.estimand,
+                spec.seed,
+                false,
+            )?;
             let scores = built
                 .config
                 .as_ref()
@@ -2177,14 +2182,22 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
                 scores,
                 spec.estimand,
                 &config,
-            );
+            )
+            .map_err(|error| SpecError::option("subclass.n", error.to_string()))?;
             return Ok(SpecOutput::Subclass {
                 outcome: Box::new(outcome),
                 propensity: built.propensity.map(Box::new),
             });
         }
         MatchMethod::Quick => {
-            let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+            let built = build_distance(
+                &spec.distance,
+                anchors,
+                candidates,
+                spec.estimand,
+                spec.seed,
+                false,
+            )?;
             let config = built
                 .config
                 .as_ref()
@@ -2202,7 +2215,14 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         MatchMethod::Genetic => return wiring::run_genetic(spec, anchors, candidates),
         MatchMethod::Cardinality => return wiring::run_cardinality(spec, anchors, candidates),
         MatchMethod::Optimal | MatchMethod::Full => {
-            let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+            let built = build_distance(
+                &spec.distance,
+                anchors,
+                candidates,
+                spec.estimand,
+                spec.seed,
+                false,
+            )?;
             let calipers = field_calipers(spec, anchors, candidates)?;
             let sex: Vec<GenderMatch> = if spec.match_sex {
                 vec![GenderMatch::on_key(spec.sex_key.clone())]
@@ -2269,7 +2289,14 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             propensity: None,
         }
     } else {
-        build_distance(&spec.distance, anchors, candidates, spec.seed, false)?
+        build_distance(
+            &spec.distance,
+            anchors,
+            candidates,
+            spec.estimand,
+            spec.seed,
+            false,
+        )?
     };
     let calipers = field_calipers(spec, anchors, candidates)?;
     let rounds = spec.assignment == Some(AssignmentSpec::Rounds);
@@ -2304,7 +2331,8 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
                 strategy = strategy.with_assignment(assignment.into());
             }
             if let Some(ranking) = &spec.nearest.mahvars {
-                let ranking = build_distance(ranking, anchors, candidates, spec.seed, true)?;
+                let ranking =
+                    build_distance(ranking, anchors, candidates, spec.estimand, spec.seed, true)?;
                 if let Some(config) = ranking.config {
                     strategy = strategy.with_mahvars(config);
                 }
@@ -2354,7 +2382,16 @@ fn run_cem<R: MatchingRecord + CovariateRecord>(
     let built = k2k
         .distance
         .as_ref()
-        .map(|distance| build_distance(distance, anchors, candidates, spec.seed, false))
+        .map(|distance| {
+            build_distance(
+                distance,
+                anchors,
+                candidates,
+                spec.estimand,
+                spec.seed,
+                false,
+            )
+        })
         .transpose()?;
     let order = k2k.m_order.map_or(MatchOrder::Data, Into::into);
     let outcome = cem_k2k_pairs(

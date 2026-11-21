@@ -103,7 +103,7 @@ pub(super) struct NetSettings {
 
 impl NetSettings {
     pub(super) fn validate(&self) -> Result<(), EstimationError> {
-        if !self.alpha.is_finite()
+        if !(0.0..=1.0).contains(&self.alpha)
             || !self.tolerance.is_finite()
             || !self.probability_clip.is_finite()
             || self.max_iter == 0
@@ -207,11 +207,7 @@ impl NetProblem {
         start: Option<&[f64]>,
     ) -> Result<epistat_glm::ElasticNetFit, EstimationError> {
         let design = MatRef::from_row_major_slice(&self.values, self.n_rows, self.n_cols);
-        let mut model = ElasticNet::new(
-            Family::Binomial,
-            lambda.max(0.0),
-            settings.alpha.clamp(0.0, 1.0),
-        );
+        let mut model = ElasticNet::new(Family::Binomial, lambda, settings.alpha);
         model.tolerance = settings.tolerance;
         model.max_iterations = settings.max_iter;
         model.probability_clip = settings.probability_clip;
@@ -224,7 +220,7 @@ impl NetProblem {
                 Some(penalty),
                 start,
             )
-            .map_err(|_| EstimationError::InvalidElasticNetConfig)
+            .map_err(EstimationError::ElasticNetFitFailed)
     }
 
     /// Coefficients on the scale of the original covariates.
@@ -242,7 +238,7 @@ impl NetProblem {
 /// standard deviation first with `standardize`. It is the objective of R's
 /// `glmnet(family = "binomial")` with `standardize` set the same way. The
 /// column named `intercept` has penalty factor 0 and every other column 1.
-/// `alpha` is clamped to `[0, 1]` and a negative `lambda` is taken as 0.
+/// `alpha` must lie in `[0, 1]` and `lambda` must be finite and not negative.
 /// `weights` are prior weights (1 when `None`).
 ///
 /// The coordinate pass stops when `max_j v_j * (change in b_j)^2` is at most
@@ -270,7 +266,7 @@ pub(super) fn fit_elastic_net_logistic(
         standardize: config.standardize,
     };
     settings.validate()?;
-    if !config.lambda.is_finite() || matrix.n_rows == 0 {
+    if !config.lambda.is_finite() || config.lambda < 0.0 || matrix.n_rows == 0 {
         return Err(EstimationError::InvalidElasticNetConfig);
     }
     let penalty = penalty_factors(matrix);
@@ -295,7 +291,7 @@ pub(super) fn fit_elastic_net_logistic(
         converged: fit.converged,
         iterations: fit.iterations,
         aliased_columns: Vec::new(),
-        lambda: Some(config.lambda.max(0.0)),
+        lambda: Some(config.lambda),
         cross_validation: None,
         cbps: None,
         at_boundary: false,
