@@ -826,7 +826,7 @@ impl Covariance<'_> {
                 }
                 let candidate = self.evaluate(&u, !done, &mut eta, &mut fitted);
                 let objective = candidate.loss + self.penalty(&u);
-                    if objective <= current + noise * current.abs().max(1.0) {
+                if objective <= current + noise * current.abs().max(1.0) {
                     current = objective;
                     evaluation = candidate;
                     accepted = true;
