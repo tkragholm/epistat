@@ -203,7 +203,7 @@ fn glmnet_path(
     let penalised = penalty.iter().filter(|f| **f > 0.0).count();
     let ratio = config
         .lambda_min_ratio
-        .unwrap_or(if n > penalised { 1e-4 } else { 1e-2 });
+        .unwrap_or(if n < penalised { 1e-2 } else { 1e-4 });
     let steps = config.nlambda - 1;
 
     let null_deviance = -2.0

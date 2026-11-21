@@ -154,7 +154,12 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
     let reference_scores =
         sorted_reference_scores(anchors, candidates, propensity_scores, reference_group);
     if reference_scores.is_empty() {
-        return Ok(dropped_only_outcome(anchors, candidates, estimand, requested_subclasses));
+        return Ok(dropped_only_outcome(
+            anchors,
+            candidates,
+            estimand,
+            requested_subclasses,
+        ));
     }
 
     let quantile_cuts = quantile_cuts(&reference_scores, requested_subclasses);
@@ -552,7 +557,8 @@ mod tests {
             &scores,
             Estimand::Att,
             &config,
-        ).expect("valid subclassification settings");
+        )
+        .expect("valid subclassification settings");
 
         assert_eq!(outcome.realized_subclasses, 2);
         assert_eq!(outcome.retained_units(), 4);
@@ -583,7 +589,8 @@ mod tests {
             &scores,
             Estimand::Ate,
             &config,
-        ).expect("valid subclassification settings");
+        )
+        .expect("valid subclassification settings");
 
         assert_eq!(outcome.realized_subclasses, 0);
         assert!(outcome.assignments.is_empty(), "{:?}", outcome.assignments);
@@ -614,7 +621,8 @@ mod tests {
             &scores,
             Estimand::Ate,
             &config,
-        ).expect("valid subclassification settings");
+        )
+        .expect("valid subclassification settings");
 
         assert_close(*outcome.weights.get("a1").expect("a1 weight"), 1.5);
         assert_close(*outcome.weights.get("a2").expect("a2 weight"), 1.5);
@@ -647,7 +655,8 @@ mod tests {
             &scores,
             Estimand::Ate,
             &config,
-        ).expect("valid subclassification settings");
+        )
+        .expect("valid subclassification settings");
         // The pooled median is 0.3, and both units scored 0.3 are in the upper
         // subclass.
         assert_close(outcome.quantile_cuts[1], 0.3);
@@ -681,7 +690,8 @@ mod tests {
             &scores,
             Estimand::Att,
             &config,
-        ).expect("valid subclassification settings");
+        )
+        .expect("valid subclassification settings");
         // The middle subclass holds a2 and no candidate. Candidates sit below
         // (two) and above (two) it, so it looks left and takes c2, the lower
         // candidate closest to it.
@@ -713,7 +723,8 @@ mod tests {
             &scores,
             Estimand::Att,
             &config,
-        ).expect("valid subclassification settings");
+        )
+        .expect("valid subclassification settings");
         assert!(outcome.assignments.is_empty(), "{:?}", outcome.assignments);
         assert_eq!(outcome.dropped_ids.len(), 3);
     }

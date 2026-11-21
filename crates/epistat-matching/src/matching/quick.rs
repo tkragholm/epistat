@@ -1038,9 +1038,12 @@ where
 /// of side `dimension`, so that the matrix is `L L^T`. A Mahalanobis distance
 /// under inverse covariance `S` is the Euclidean distance after `L^T` is applied
 /// to the difference, where `S = L L^T`. `None` when the matrix is not positive
-/// definite.
+/// definite or does not have `dimension * dimension` entries.
 #[must_use]
 pub fn cholesky_lower(matrix: &[f64], dimension: usize) -> Option<Vec<f64>> {
+    if matrix.len() != dimension * dimension {
+        return None;
+    }
     let mut lower = vec![0.0_f64; dimension * dimension];
     for i in 0..dimension {
         for j in 0..=i {

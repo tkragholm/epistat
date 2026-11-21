@@ -20,9 +20,9 @@ mod common;
 use common::{Level, Person, cohort, records};
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    CardinalityError, CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand,
-    CbpsEstimandSpec, CbpsMethod, GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch,
-    QuickMatchOptions, match_cardinality, quick_match_subclasses,
+    CardinalityError, CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand, CbpsMethod,
+    GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions,
+    match_cardinality, quick_match_subclasses,
 };
 use std::collections::BTreeMap;
 
@@ -665,7 +665,8 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
             reference_group: None,
             min_n: 1,
         },
-    ).expect("valid subclassification settings");
+    )
+    .expect("valid subclassification settings");
     assert!(!by_hand.assignments.is_empty());
     assert_eq!(
         format!("{:?}", outcome.assignments_sorted()),
@@ -1783,31 +1784,22 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
 fn spec_cbps_matches_the_typed_job() {
     let (anchors, candidates) = covariate_inputs();
     for (over, estimand, method, cbps_estimand) in [
-        (
-            true,
-            CbpsEstimandSpec::Att,
-            CbpsMethod::Over,
-            CbpsEstimand::Att,
-        ),
-        (
-            false,
-            CbpsEstimandSpec::Ate,
-            CbpsMethod::Exact,
-            CbpsEstimand::Ate,
-        ),
+        (true, Estimand::Att, CbpsMethod::Over, CbpsEstimand::Att),
+        (false, Estimand::Ate, CbpsMethod::Exact, CbpsEstimand::Ate),
     ] {
         let spec = MatchSpec {
             method: MatchMethod::Nearest,
             distance: DistanceSpec::Propensity {
                 covariates: covariates(&["age", "income"]),
                 link: LinkSpec::Logit,
-                estimator: EstimatorSpec::Cbps { estimand, over },
+                estimator: EstimatorSpec::Cbps { over },
                 scale: ScaleSpec::Probability,
                 sampling_weights: None,
                 caliper: None,
             },
             birth_window_days: wide_window(),
             seed: 5,
+            estimand,
             ..MatchSpec::default()
         };
         let SpecOutput::Pairs {
@@ -1840,6 +1832,7 @@ fn spec_cbps_matches_the_typed_job() {
             .build();
         let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
+            .with_estimand(estimand)
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
             .with_distance_config(prepared.distance_config)
             .with_nearest()
@@ -1852,11 +1845,37 @@ fn spec_cbps_matches_the_typed_job() {
     let json = r#"{"kind": "cbps"}"#;
     assert_eq!(
         serde_json::from_str::<EstimatorSpec>(json).unwrap(),
-        EstimatorSpec::Cbps {
-            estimand: CbpsEstimandSpec::Att,
-            over: true
-        }
+        EstimatorSpec::Cbps { over: true }
     );
+}
+
+/// The covariate balancing propensity score takes its estimand from the spec,
+/// and has none for the ATC or the matched sample.
+#[test]
+fn spec_cbps_refuses_an_estimand_it_does_not_define() {
+    let (anchors, candidates) = covariate_inputs();
+    let spec = MatchSpec {
+        method: MatchMethod::Nearest,
+        distance: DistanceSpec::Propensity {
+            covariates: covariates(&["age", "income"]),
+            link: LinkSpec::Logit,
+            estimator: EstimatorSpec::Cbps { over: true },
+            scale: ScaleSpec::Probability,
+            sampling_weights: None,
+            caliper: None,
+        },
+        birth_window_days: wide_window(),
+        estimand: Estimand::Atc,
+        ..MatchSpec::default()
+    };
+    let result = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    );
+    assert!(result.is_err());
 }
 
 #[test]

@@ -254,29 +254,26 @@ impl GeneticProblem {
                 "the weights need 0 <= min_weight < max_weight, both finite".into(),
             ));
         }
-        let start = match &search.starting_values {
-            Some(values) => {
-                self.check_weights(values)?;
-                if values
-                    .iter()
-                    .any(|v| *v < search.min_weight || *v > search.max_weight)
-                {
-                    return Err(GeneticError::Invalid(
-                        "the starting values must lie in [min_weight, max_weight]".into(),
-                    ));
-                }
-                values.clone()
+        let start = if let Some(values) = &search.starting_values {
+            self.check_weights(values)?;
+            if values
+                .iter()
+                .any(|v| *v < search.min_weight || *v > search.max_weight)
+            {
+                return Err(GeneticError::Invalid(
+                    "the starting values must lie in [min_weight, max_weight]".into(),
+                ));
             }
-            None => {
-                if !(search.min_weight..=search.max_weight).contains(&1.0) {
-                    return Err(GeneticError::Invalid(
-                        "the default starting weights are 1, which lies outside \
+            values.clone()
+        } else {
+            if !(search.min_weight..=search.max_weight).contains(&1.0) {
+                return Err(GeneticError::Invalid(
+                    "the default starting weights are 1, which lies outside \
                          [min_weight, max_weight]; give starting values"
-                            .into(),
-                    ));
-                }
-                vec![1.0; p]
+                        .into(),
+                ));
             }
+            vec![1.0; p]
         };
         let mut stream = Stream::seeded(search.seed);
         let seed_of = |generation: usize, index: usize| {

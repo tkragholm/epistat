@@ -24,7 +24,9 @@ pub(super) fn invert_or_generalise(
     if dimension == 0 || matrix.iter().any(|value| !value.is_finite()) {
         return Err(EstimationError::InvalidCovarianceMatrix);
     }
-    let largest = matrix.iter().fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    let largest = matrix
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
     let a = MatRef::from_row_major_slice(matrix, dimension, dimension);
     let plain = [Attempt::plain(Method::PartialPivLu).with_min_pivot(MIN_PIVOT * largest)];
     match inverse(a, &plain) {

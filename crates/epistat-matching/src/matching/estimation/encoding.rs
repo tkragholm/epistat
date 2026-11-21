@@ -325,7 +325,7 @@ fn drop_constant_columns(
                 min_value = min_value.min(value);
                 max_value = max_value.max(value);
             }
-            max_value != min_value
+            max_value > min_value
         })
         .collect_vec();
 

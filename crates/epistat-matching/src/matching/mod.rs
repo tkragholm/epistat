@@ -79,8 +79,8 @@ pub use selection::{
     SelectionStrategy,
 };
 pub use subclassification::{
-    SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationError, SubclassificationOutcome,
-    subclassify_by_propensity_score_map,
+    SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationError,
+    SubclassificationOutcome, subclassify_by_propensity_score_map,
 };
 pub use weights::{
     MatchWeightMethod, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable, UnitRole,

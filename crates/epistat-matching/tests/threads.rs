@@ -873,7 +873,8 @@ fn subclassification() {
                         reference_group: None,
                         min_n: 1,
                     },
-                ).expect("valid subclassification settings");
+                )
+                .expect("valid subclassification settings");
                 assert!(out.retained_units() > 0);
                 d.int(out.requested_subclasses);
                 d.int(out.realized_subclasses);

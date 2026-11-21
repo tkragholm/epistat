@@ -100,7 +100,8 @@ fn ours(data: &Dataset, run: &RRun) -> SubclassificationOutcome {
         &scores,
         estimand_of(&run.estimand),
         &config,
-    ).expect("valid subclassification settings")
+    )
+    .expect("valid subclassification settings")
 }
 
 /// Rescale the weights of each group to sum to the number of its units that
