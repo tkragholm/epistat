@@ -16,9 +16,8 @@
 //! [`wilcoxon_bounds`] and [`hodges_lehmann_bounds`] take matched pairs: sets
 //! with exactly one control. [`m_statistic_bounds`] takes sets with any number
 //! of controls, and sets of different sizes. All of them assume the sets are
-//! independent, which a match without replacement gives. After matching with
-//! replacement a control is in several sets and the bounds do not apply as
-//! they stand.
+//! independent, which a match without replacement gives. A unit in more than
+//! one set, as after matching with replacement, is an error.
 //!
 //! # E-values
 //!
@@ -80,6 +79,12 @@ pub enum SetsError {
         /// Its number of controls.
         controls: usize,
     },
+    /// A unit in more than one set, as after matching with replacement. The
+    /// bounds assume independent sets.
+    Reused {
+        /// The unit's id.
+        id: String,
+    },
     /// No sets.
     Empty,
 }
@@ -95,6 +100,10 @@ impl Display for SetsError {
             Self::NotAPair { pair, controls } => {
                 write!(f, "set {pair} has {controls} controls, not one")
             }
+            Self::Reused { id } => write!(
+                f,
+                "unit {id} is in more than one matched set, so the sets are not independent"
+            ),
             Self::Empty => write!(f, "there are no matched sets"),
         }
     }
@@ -118,13 +127,19 @@ impl From<EffectError> for SetsError {
 ///
 /// [`SetsError::Unit`] for a unit not in `units`, [`SetsError::NotOneTreated`]
 /// and [`SetsError::NoControl`] for a set that is not one treated unit with
-/// controls, and [`SetsError::Empty`].
+/// controls, [`SetsError::Reused`] for a unit in more than one set, and
+/// [`SetsError::Empty`].
 pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedSet>, SetsError> {
     let mut by_pair: BTreeMap<usize, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
+    let mut set_of: BTreeMap<&str, usize> = BTreeMap::new();
     for row in 0..long.len() {
         let Some(pair) = long.pair_id[row] else {
             continue;
         };
+        let id = long.id[row].as_str();
+        if *set_of.entry(id).or_insert(pair) != pair {
+            return Err(SetsError::Reused { id: id.to_owned() });
+        }
         let (treated, outcome) = units.treatment_and_outcome(&long.id[row])?;
         let entry = by_pair.entry(pair).or_default();
         if treated {

@@ -4,11 +4,13 @@
 //! output reaches the bounds with the right treated and control outcomes.
 
 use chrono::NaiveDate;
+use epistat_matching::UnitRole;
 use epistat_matching::effects::UnitData;
-use epistat_matching::output::{Units, get_matches};
+use epistat_matching::output::{LongMatches, Units, get_matches};
 use epistat_matching::prelude::*;
 use epistat_matching::sensitivity::{
-    WilcoxonDistribution, hodges_lehmann_bounds, matched_sets, pair_differences, wilcoxon_bounds,
+    SetsError, WilcoxonDistribution, hodges_lehmann_bounds, matched_sets, pair_differences,
+    wilcoxon_bounds,
 };
 
 #[test]
@@ -55,4 +57,31 @@ fn pairs_from_the_engine_give_the_bounds_of_their_differences() {
     assert!(bounds[2].p_upper > bounds[0].p_upper);
     let hl = hodges_lehmann_bounds(&sets, &[1.0, 2.0]).expect("bounds");
     assert!(hl[1].lower <= hl[0].lower && hl[0].upper <= hl[1].upper);
+}
+
+#[test]
+fn a_control_in_two_sets_is_refused() {
+    // Matching with replacement puts c1 in both sets; the bounds need
+    // independent sets.
+    let long = LongMatches {
+        id: ["t1", "c1", "t2", "c1"].map(String::from).to_vec(),
+        role: vec![
+            UnitRole::Anchor,
+            UnitRole::Candidate,
+            UnitRole::Anchor,
+            UnitRole::Candidate,
+        ],
+        pair_id: vec![Some(1), Some(1), Some(2), Some(2)],
+        weight: vec![1.0; 4],
+    };
+    let data = UnitData::new(
+        ["t1", "t2", "c1"].map(String::from).to_vec(),
+        vec![true, true, false],
+        vec![2.0, 3.0, 1.0],
+    )
+    .expect("valid units");
+    assert_eq!(
+        matched_sets(&long, &data),
+        Err(SetsError::Reused { id: "c1".into() })
+    );
 }
