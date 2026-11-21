@@ -44,6 +44,15 @@
 //! a list of forbidden pairs. A unit's weight in a pair is the reciprocal of
 //! the number of controls it was matched to.
 //!
+//! The nearest controls are found on a k-d tree over the standardised
+//! controls ([`crate::kdtree`]), built once for the problem and searched with
+//! the weighted sum of squares of each weight vector, the constraints as its
+//! admission test. Without replacement each match works on its own copy of
+//! the tree, from which the controls are removed as they are taken. The tree
+//! gives the controls a scan of every control gives, ties included. Few
+//! controls, many variables, or weights so large that a sum of squares could
+//! overflow are left to the scan.
+//!
 //! # The search
 //!
 //! The search is not checked against R step by step. `rgenoud` draws its
@@ -84,6 +93,8 @@ use std::fmt;
 use epistat_rng::Stream;
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
+
+use crate::kdtree::{KdTree, WeightedSquares, worth_a_tree};
 
 pub use balance::{BalanceMeasure, GeneticFit, GeneticLoss, LossRule};
 pub use search::{GeneticOutcome, GeneticSearch};
@@ -233,6 +244,13 @@ pub struct GeneticProblem {
     variables: usize,
     options: GeneticMatchOptions,
     tolerance: f64,
+    /// Per matching variable, the largest standardised value minus the
+    /// smallest over the used units. No difference between a focal unit and
+    /// a control is larger in floating point.
+    z_range: Vec<f64>,
+    /// The k-d tree over `z_control`, keyed by control row, when the problem
+    /// is worth one.
+    tree: Option<KdTree>,
 }
 
 /// The standard deviation `GenMatch` standardises by: divisor `n - 1`, and
@@ -443,6 +461,22 @@ impl GeneticProblem {
             })
             .collect();
 
+        let z_range: Vec<f64> = (0..p)
+            .map(|k| {
+                let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+                for value in z_focal.iter().chain(&z_control).skip(k).step_by(p) {
+                    low = low.min(*value);
+                    high = high.max(*value);
+                }
+                high - low
+            })
+            .collect();
+        let tree =
+            (worth_a_tree(n_control, p) && z_control.iter().all(|z| z.is_finite())).then(|| {
+                let keys: Vec<usize> = (0..n_control).collect();
+                KdTree::new(p, &z_control, &keys, n_control)
+            });
+
         Ok(Self {
             z_focal,
             z_control,
@@ -459,6 +493,8 @@ impl GeneticProblem {
             variables: p,
             options,
             tolerance,
+            z_range,
+            tree,
         })
     }
 
@@ -550,26 +586,13 @@ impl GeneticProblem {
         let p = self.variables;
         let ratio = self.options.ratio;
         let zf = &self.z_focal[row * p..(row + 1) * p];
-        let forbidden = &self.forbidden[row];
         for c in start..end {
             if let Some(taken) = taken {
                 if taken[c] {
                     continue;
                 }
             }
-            if self.constrained {
-                let rf = &self.raw_focal[row * p..(row + 1) * p];
-                let rc = &self.raw_control[c * p..(c + 1) * p];
-                if rf
-                    .iter()
-                    .zip(rc)
-                    .zip(&self.limits)
-                    .any(|((a, b), limit)| (a - b).abs() > *limit)
-                {
-                    continue;
-                }
-            }
-            if !forbidden.is_empty() && forbidden.binary_search(&c).is_ok() {
+            if !self.admits(row, c) {
                 continue;
             }
             let zc = &self.z_control[c * p..(c + 1) * p];
@@ -643,9 +666,96 @@ impl GeneticProblem {
         }
     }
 
+    /// Whether control `c` passes the calipers, the exact variables and the
+    /// forbidden pairs of focal unit `row`.
+    fn admits(&self, row: usize, c: usize) -> bool {
+        let p = self.variables;
+        if self.constrained {
+            let rf = &self.raw_focal[row * p..(row + 1) * p];
+            let rc = &self.raw_control[c * p..(c + 1) * p];
+            if rf
+                .iter()
+                .zip(rc)
+                .zip(&self.limits)
+                .any(|((a, b), limit)| (a - b).abs() > *limit)
+            {
+                return false;
+            }
+        }
+        let forbidden = &self.forbidden[row];
+        forbidden.is_empty() || forbidden.binary_search(&c).is_err()
+    }
+
+    /// The tree, when it gives the scan's result for the weights `w`: every
+    /// weighted sum of squares is then finite, since none exceeds the sum
+    /// over the ranges of the variables.
+    fn tree_for(&self, w: &[f64]) -> Option<&KdTree> {
+        let tree = self.tree.as_ref()?;
+        let mut largest = 0.0_f64;
+        for (range, weight) in self.z_range.iter().zip(w) {
+            largest += weight * (range * range);
+        }
+        largest.is_finite().then_some(tree)
+    }
+
+    /// As [`Self::nearest`], searched on `tree`, which holds the controls
+    /// that are not taken.
+    fn nearest_on(&self, tree: &KdTree, row: usize, w: &[f64], best: &mut Vec<(f64, usize)>) {
+        let p = self.variables;
+        let ratio = self.options.ratio;
+        let zf = &self.z_focal[row * p..(row + 1) * p];
+        *best = tree.nearest(&WeightedSquares(w), zf, ratio, None, &mut |c| {
+            self.admits(row, c)
+        });
+        if best.len() < ratio {
+            best.clear();
+        }
+    }
+
     /// The pairs as `(focal row, control row)`, in order of service and
     /// nearest first within a focal unit.
     fn pairs_by_row(&self, w: &[f64]) -> Vec<(usize, usize)> {
+        match self.tree_for(w) {
+            Some(tree) => self.pairs_on_tree(tree, w),
+            None => self.pairs_by_scan(w),
+        }
+    }
+
+    /// [`Self::pairs_by_row`] on the tree.
+    fn pairs_on_tree(&self, tree: &KdTree, w: &[f64]) -> Vec<(usize, usize)> {
+        let n_focal = self.focal_position.len();
+        if self.options.replace {
+            let per_focal: Vec<Vec<(f64, usize)>> = (0..n_focal)
+                .into_par_iter()
+                .map_init(Vec::new, |best, row| {
+                    self.nearest_on(tree, row, w, best);
+                    best.clone()
+                })
+                .collect();
+            let mut pairs = Vec::new();
+            for (row, list) in per_focal.iter().enumerate() {
+                for &(_, c) in list {
+                    pairs.push((row, c));
+                }
+            }
+            pairs
+        } else {
+            let mut tree = tree.clone();
+            let mut best = Vec::new();
+            let mut pairs = Vec::new();
+            for row in 0..n_focal {
+                self.nearest_on(&tree, row, w, &mut best);
+                for &(_, c) in &best {
+                    tree.remove(c);
+                    pairs.push((row, c));
+                }
+            }
+            pairs
+        }
+    }
+
+    /// [`Self::pairs_by_row`] by a scan of every control.
+    fn pairs_by_scan(&self, w: &[f64]) -> Vec<(usize, usize)> {
         let n_focal = self.focal_position.len();
         if self.options.replace {
             let per_focal: Vec<Vec<(f64, usize)>> = (0..n_focal)
@@ -912,6 +1022,91 @@ mod tests {
             assert_eq!(one, many, "focal unit {row}");
             assert_eq!(one.len(), 3);
         }
+    }
+
+    /// The k-d tree gives the pairs of the scan of every control: on a coarse
+    /// grid where many distances tie, in two to four variables, with ratios 1
+    /// and 3, with and without replacement, with a caliper and forbidden
+    /// pairs, and for weights that include a zero.
+    #[test]
+    fn the_tree_gives_the_pairs_of_the_scan() {
+        let n = 3_000;
+        let mut stream = Stream::seeded(17);
+        for p in 2..=4 {
+            let focal: Vec<bool> = (0..n).map(|i| i % 5 == 0).collect();
+            let columns: Vec<Vec<f64>> = (0..p)
+                .map(|_| {
+                    (0..n)
+                        .map(|_| f64::from(u8::try_from(stream.below(5)).unwrap()))
+                        .collect()
+                })
+                .collect();
+            let order: Vec<usize> = (0..n).rev().collect();
+            let forbidden: Vec<(usize, usize)> = (0..n)
+                .step_by(5)
+                .flat_map(|i| (1..n).step_by(13).map(move |j| (i, j + (i % 3))))
+                .filter(|&(_, j)| j < n && j % 5 != 0)
+                .collect();
+            for (ratio, replace, constrained) in [
+                (1, false, false),
+                (3, false, true),
+                (1, true, true),
+                (3, true, false),
+            ] {
+                let options = GeneticMatchOptions {
+                    ratio,
+                    replace,
+                    calipers: if constrained {
+                        (0..p).map(|k| (k == 0).then_some(1.0)).collect()
+                    } else {
+                        Vec::new()
+                    },
+                    exact: Vec::new(),
+                    forbidden: if constrained {
+                        forbidden.clone()
+                    } else {
+                        Vec::new()
+                    },
+                };
+                let problem =
+                    GeneticProblem::new(&focal, &columns, &columns, &order, options, 1e-8).unwrap();
+                for w in [
+                    vec![1.0; p],
+                    (0..p).map(|k| [0.0, 2.5, 7.0][k % 3]).collect(),
+                ] {
+                    let tree = problem.tree_for(&w).expect("a tree");
+                    let scan = problem.pairs_by_scan(&w);
+                    assert!(scan.len() > 100);
+                    assert_eq!(
+                        problem.pairs_on_tree(tree, &w),
+                        scan,
+                        "{p} variables, ratio {ratio}, replace {replace}, constrained {constrained}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn weights_that_could_overflow_are_left_to_the_scan() {
+        let (problem, ..) = problem(GeneticMatchOptions::default());
+        assert!(
+            problem.tree_for(&[1.0, 1.0, 1.0]).is_none(),
+            "too few controls"
+        );
+        let (focal, columns) = data(2_000);
+        let order: Vec<usize> = (0..2_000).collect();
+        let problem = GeneticProblem::new(
+            &focal,
+            &columns,
+            &columns,
+            &order,
+            GeneticMatchOptions::default(),
+            1e-8,
+        )
+        .unwrap();
+        assert!(problem.tree_for(&[1.0, 1.0, 1.0]).is_some());
+        assert!(problem.tree_for(&[1.0, f64::MAX, 1.0]).is_none());
     }
 
     #[test]

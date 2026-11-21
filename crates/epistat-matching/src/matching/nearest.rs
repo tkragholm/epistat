@@ -53,15 +53,25 @@
 //! caliper bounds the work per anchor. Without one, an anchor whose nearest
 //! candidates are all refused by a constraint walks as far as it must.
 //!
-//! With the Mahalanobis distance each anchor computes the distance to every
-//! available candidate that passes the caliper, which costs the number of
-//! such candidates per anchor and per round. A caliper on a score
-//! (`mahvars`) narrows that range by binary search. Without one, a stratum of
-//! `a` anchors and `c` candidates costs `a * c` distances.
+//! The Mahalanobis, Euclidean and scaled Euclidean distances are one search:
+//! the Mahalanobis distance is the Euclidean distance between vectors
+//! whitened once by the Cholesky factor of the inverse covariance, and the
+//! scaled Euclidean distance the Euclidean distance between vectors scaled
+//! once, so each is the Euclidean distance between stored vectors. A stratum
+//! that [`crate::kdtree::worth_a_tree`] accepts is searched on a k-d tree,
+//! built once and with used candidates removed from it: the anchor's `k`
+//! nearest candidates that the constraints admit, within the caliper, at an
+//! expected `O(log c)` nodes per search in few dimensions for `c`
+//! candidates, and at worst all `c` when the constraints refuse most near
+//! candidates. Other strata, and a ranking within a caliper on a score
+//! (`mahvars`), which narrows the candidates by binary search, are scanned:
+//! each anchor computes the distance to every available candidate in range,
+//! `a * c` distances for `a` anchors without a caliper.
 
 use super::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec, unique_value};
 use super::distance::{
-    ConfiguredMetric, DistanceConfig, DistanceMetric, IdMapMahalanobisDistance, ScalarLookup,
+    ConfiguredMetric, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
+    IdMapMahalanobisDistance, ScalarLookup,
 };
 use super::engine::{
     TrimmedIndexConfig, build_outcome, finalize_estimand_diagnostics, intern_unique,
@@ -71,6 +81,7 @@ use super::index::StrataValues;
 use super::records::MatchingRecord;
 use super::selection::{Assignment, SelectionStrategy};
 use crate::constraints::sample_sd;
+use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 use crate::types::{
     ControlIdx, Estimand, InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchedPair,
     MatchingCriteria, UniqueValueId,
@@ -520,18 +531,58 @@ struct Env<'a, R: MatchingRecord, G: ?Sized> {
     plan: Plan<'a>,
     candidate_strata: Option<StrataValues<'a>>,
     random_rank: Option<Vec<usize>>,
-    /// For a Mahalanobis ranking, the row of each candidate's transformed
-    /// vector by position in the candidate slice, `NO_ROW` where it has none.
-    candidate_rows: Option<Vec<usize>>,
 }
 
-/// Selects the pair-by-pair scan, which the tests hold the whitened scan to.
+/// How the tests make a vector distance search: 0 as in use, 1 by the
+/// pair-by-pair scan, 2 by the vector scan alone, without the k-d tree.
 #[cfg(test)]
-static USE_REFERENCE_SCAN: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static SEARCH_FOR_TESTS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-/// Marks a candidate with no transformed vector.
-const NO_ROW: usize = usize::MAX;
+/// The vectors of a vector distance, compared by the Euclidean distance: the
+/// whitened vectors of a Mahalanobis distance, or the vectors of a Euclidean
+/// distance as given.
+#[derive(Clone, Copy)]
+enum Vectors<'v> {
+    Whitened(&'v IdMapMahalanobisDistance<'v>, usize),
+    Plain(&'v IdMapEuclideanDistance<'v>),
+}
+
+impl<'v> Vectors<'v> {
+    /// The vectors of the metric, when it is a Euclidean distance or a
+    /// Mahalanobis distance with a positive definite matrix.
+    fn of(metric: &'v ConfiguredMetric<'v>) -> Option<Self> {
+        match metric {
+            ConfiguredMetric::Mahalanobis(metric) => {
+                metric.dimension().map(|n| Self::Whitened(metric, n))
+            }
+            ConfiguredMetric::Euclidean(metric) => Some(Self::Plain(metric)),
+            _ => None,
+        }
+    }
+
+    const fn dimension(self) -> usize {
+        match self {
+            Self::Whitened(_, n) => n,
+            Self::Plain(metric) => metric.dimension(),
+        }
+    }
+
+    fn vector(self, id: &str) -> Option<&'v [f64]> {
+        match self {
+            Self::Whitened(metric, _) => metric.vector(id),
+            Self::Plain(metric) => metric.vector(id),
+        }
+    }
+}
+
+/// Whether a pool has a k-d tree.
+enum TreeState {
+    /// Not yet asked for.
+    Unbuilt,
+    Built(KdTree),
+    /// The pool is searched by the scan.
+    Unused,
+}
 
 /// The units used so far in one stratum, as the constraints read them.
 #[derive(Default)]
@@ -599,10 +650,14 @@ struct Pool {
     /// empty when they are in slice order.
     keys: Vec<f64>,
     avail: Availability,
-    /// For a Mahalanobis ranking, the whitened vectors of the candidates in
-    /// position order, `dimension` numbers each and NaN for a candidate with
-    /// no vector. Filled on the first search.
+    /// For a vector distance, the vectors of the candidates in position
+    /// order, `dimension` numbers each and NaN for a candidate with no
+    /// vector, stored one coordinate after the other. Filled on the first
+    /// scan.
     whitened: Option<Vec<f64>>,
+    /// For a vector distance, the k-d tree over the candidates' vectors,
+    /// keyed by position. Built on the first search that uses it.
+    tree: TreeState,
 }
 
 /// One anchor's view of the stratum: what it may not be matched to.
@@ -677,6 +732,7 @@ impl Pool {
                 keys: Vec::new(),
                 avail: Availability::new(candidate_indices.len()),
                 whitened: None,
+                tree: TreeState::Unbuilt,
             };
         };
         let mut entries: Vec<(f64, usize)> = candidate_indices
@@ -689,7 +745,45 @@ impl Pool {
             keys: entries.iter().map(|entry| entry.0).collect(),
             candidate: entries.into_iter().map(|entry| entry.1).collect(),
             whitened: None,
+            tree: TreeState::Unbuilt,
         }
+    }
+
+    /// Take the candidate at `position` out of the pool.
+    fn remove(&mut self, position: usize) {
+        self.avail.remove(position);
+        if let TreeState::Built(tree) = &mut self.tree {
+            tree.remove(position);
+        }
+    }
+
+    /// The k-d tree over the candidates that have a vector with finite
+    /// values, keyed by position. Positions must follow the candidates'
+    /// order in the slice, so that ties by position are ties by slice
+    /// position; a pool sorted on a score is left to the scan.
+    fn build_tree<R: MatchingRecord>(&self, vectors: Vectors<'_>, candidates: &[R]) -> TreeState {
+        if !self.candidate.windows(2).all(|pair| pair[0] < pair[1]) {
+            return TreeState::Unused;
+        }
+        let dimension = vectors.dimension();
+        let n = self.candidate.len();
+        let mut coords = Vec::with_capacity(n * dimension);
+        let mut keys = Vec::with_capacity(n);
+        for (position, &idx) in self.candidate.iter().enumerate() {
+            if let Some(vector) = vectors.vector(candidates[idx].id()) {
+                if vector.iter().all(|value| value.is_finite()) {
+                    coords.extend_from_slice(vector);
+                    keys.push(position);
+                }
+            }
+        }
+        let mut tree = KdTree::new(dimension, &coords, &keys, n);
+        for (position, &available) in self.avail.available.iter().enumerate() {
+            if !available {
+                tree.remove(position);
+            }
+        }
+        TreeState::Built(tree)
     }
 
     /// The `k` available candidates nearest to `x` that the probe admits, with
@@ -797,29 +891,54 @@ impl Pool {
         }
     }
 
-    /// The Mahalanobis form of [`Self::nearest_by_pairs`]. The distance is
-    /// computed first, on whitened vectors stored one coordinate after the
-    /// other, and the constraints are tested only for a candidate that would
-    /// enter the `k` nearest, so the result is the same as testing every
-    /// candidate. A long range is scanned in chunks on the rayon pool and the
-    /// chunks' nearest sets merged under the same total order, so the result
-    /// does not depend on the number of threads.
+    /// The vector distance form of [`Self::nearest_by_pairs`]: the
+    /// Euclidean distance between the anchor's vector and the candidates'.
+    ///
+    /// Without a gate, a pool that [`worth_a_tree`] accepts is searched on a
+    /// k-d tree ([`crate::kdtree`]), with the probe as its admission test and
+    /// the caliper as its radius. A gate on a score leaves the pool sorted on
+    /// that score and is narrow by design, so it is scanned. Otherwise the pool is scanned: the distance is
+    /// computed first, on vectors stored one coordinate after the other, and
+    /// the constraints are tested only for a candidate that would enter the
+    /// `k` nearest. A long range is scanned in chunks on the rayon pool and
+    /// the chunks' nearest sets merged under the same total order, so the
+    /// result does not depend on the number of threads. Both give the result
+    /// of testing every candidate, nearest first and by slice position among
+    /// equals.
     #[expect(clippy::too_many_arguments)]
-    fn nearest_by_whitened<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
+    fn nearest_by_vectors<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         &mut self,
         gate: Option<(f64, f64)>,
-        mahalanobis: &IdMapMahalanobisDistance<'_>,
-        anchor_row: usize,
-        candidate_rows: &[usize],
+        vectors: Vectors<'_>,
+        anchor: &[f64],
         caliper: Option<f64>,
         k: usize,
         probe: &Probe<'_, R, G>,
+        allow_tree: bool,
     ) -> Vec<(usize, f64)> {
-        let Some(dimension) = mahalanobis.dimension() else {
-            return Vec::new();
-        };
         if k == 0 {
             return Vec::new();
+        }
+        let dimension = vectors.dimension();
+        let candidates = probe.env.candidates;
+        if allow_tree
+            && gate.is_none()
+            && worth_a_tree(self.candidate.len(), dimension)
+            && anchor.iter().all(|value| value.is_finite())
+        {
+            if matches!(self.tree, TreeState::Unbuilt) {
+                self.tree = self.build_tree(vectors, candidates);
+            }
+            if let TreeState::Built(tree) = &self.tree {
+                let candidate = &self.candidate;
+                return tree
+                    .nearest(&Euclidean, anchor, k, caliper, &mut |position| {
+                        probe.admits(candidate[position])
+                    })
+                    .into_iter()
+                    .map(|(distance, position)| (position, distance))
+                    .collect();
+            }
         }
         let (low, high) = self.gate_bounds(gate);
         let candidate = &self.candidate;
@@ -827,9 +946,8 @@ impl Pool {
             let n = candidate.len();
             let mut columns = vec![f64::NAN; n * dimension];
             for (position, &idx) in candidate.iter().enumerate() {
-                if candidate_rows[idx] != NO_ROW {
-                    let row = mahalanobis.whitened_row(candidate_rows[idx], dimension);
-                    for (j, value) in row.iter().enumerate() {
+                if let Some(vector) = vectors.vector(candidates[idx].id()) {
+                    for (j, value) in vector.iter().enumerate() {
                         columns[j * n + position] = *value;
                     }
                 }
@@ -838,7 +956,7 @@ impl Pool {
         });
         let scan = WhitenedScan {
             columns,
-            anchor: mahalanobis.whitened_row(anchor_row, dimension),
+            anchor,
             candidate,
             available: &self.avail.available,
             caliper,
@@ -869,7 +987,6 @@ impl Pool {
         &mut self,
         gate: Option<(f64, f64)>,
         metric: &ConfiguredMetric<'_>,
-        rows: Option<(&IdMapMahalanobisDistance<'_>, usize, &[usize])>,
         caliper: Option<f64>,
         k: usize,
         probe: &Probe<'_, R, G>,
@@ -880,19 +997,11 @@ impl Pool {
         while position < high {
             let candidate_idx = self.candidate[position];
             let distance = if probe.admits(candidate_idx) {
-                match rows {
-                    Some((mahalanobis, anchor_row, candidate_rows)) => {
-                        match candidate_rows[candidate_idx] {
-                            NO_ROW => None,
-                            row => mahalanobis.row_distance(anchor_row, row),
-                        }
-                    }
-                    None => DistanceMetric::<R>::distance(
-                        metric,
-                        probe.anchor,
-                        &probe.env.candidates[candidate_idx],
-                    ),
-                }
+                DistanceMetric::<R>::distance(
+                    metric,
+                    probe.anchor,
+                    &probe.env.candidates[candidate_idx],
+                )
                 .filter(|distance| distance.is_finite())
                 .filter(|distance| caliper.is_none_or(|width| *distance <= width))
             } else {
@@ -1065,34 +1174,28 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                         None => return Vec::new(),
                     },
                 };
-                let rows = match (metric, &env.candidate_rows) {
-                    (ConfiguredMetric::Mahalanobis(metric), Some(rows)) => {
-                        match metric.row(anchor.id()) {
-                            Some(anchor_row) => Some((metric, anchor_row, rows.as_slice())),
-                            None => return Vec::new(),
-                        }
-                    }
-                    _ => None,
-                };
                 #[cfg(test)]
-                let reference = USE_REFERENCE_SCAN.load(std::sync::atomic::Ordering::Relaxed);
+                let mode = SEARCH_FOR_TESTS.load(std::sync::atomic::Ordering::Relaxed);
                 #[cfg(not(test))]
-                let reference = false;
-                match rows {
-                    Some((mahalanobis, anchor_row, candidate_rows)) if !reference => {
-                        self.pool.nearest_by_whitened(
+                let mode = 0;
+                match Vectors::of(metric) {
+                    Some(vectors) if mode != 1 => {
+                        let Some(vector) = vectors.vector(anchor.id()) else {
+                            return Vec::new();
+                        };
+                        self.pool.nearest_by_vectors(
                             gate,
-                            mahalanobis,
-                            anchor_row,
-                            candidate_rows,
+                            vectors,
+                            vector,
                             *caliper,
                             k,
                             &probe,
+                            mode != 2,
                         )
                     }
                     _ => self
                         .pool
-                        .nearest_by_pairs(gate, metric, rows, *caliper, k, &probe),
+                        .nearest_by_pairs(gate, metric, *caliper, k, &probe),
                 }
             }
         }
@@ -1132,7 +1235,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         self.controls_of[slot].push(candidate_idx);
         self.touched.insert(position);
         if !criteria.allow_replacement {
-            self.pool.avail.remove(position);
+            self.pool.remove(position);
             self.used.insert(ControlIdx::new(candidate_idx));
             self.assigned.push(candidate_idx);
         }
@@ -1416,21 +1519,6 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         rank
     });
 
-    let candidate_rows = match &plan.rank {
-        Rank::Pairs {
-            metric: ConfiguredMetric::Mahalanobis(metric),
-            ..
-        } => {
-            let rows: Vec<usize> = request
-                .candidates
-                .iter()
-                .map(|candidate| metric.row(candidate.id()).unwrap_or(NO_ROW))
-                .collect();
-            rows.iter().any(|row| *row != NO_ROW).then_some(rows)
-        }
-        _ => None,
-    };
-
     let env = Env {
         anchors: request.anchors,
         candidates: request.candidates,
@@ -1439,7 +1527,6 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         plan,
         candidate_strata: (!required.is_empty()).then_some(candidate_strata),
         random_rank,
-        candidate_rows,
     };
 
     let candidates_of = |key: &Vec<Option<&str>>| -> &[usize] {
@@ -1527,11 +1614,15 @@ mod tests {
         assert_eq!(avail.remaining, 2);
     }
 
-    /// The whitened scan returns the pairs of the pair-by-pair scan, with
-    /// exact ties in the distances, with and without replacement, at ratios 1
-    /// and 3, with exact strata and a caliper, on one and on four threads.
+    /// The k-d tree and the vector scan return the pairs of the pair-by-pair
+    /// scan for the Mahalanobis, the Euclidean and the scaled Euclidean
+    /// distance: with exact ties in the distances, with and without
+    /// replacement, at ratios 1 and 3, with exact strata, a caliper, a birth
+    /// window that refuses some near candidates, a unique key, the closest
+    /// order, and on one and on four threads. The pools are longer than one
+    /// scan chunk, so the scan is split.
     #[test]
-    fn whitened_scan_equals_the_pair_by_pair_scan() {
+    fn vector_searches_equal_the_pair_by_pair_scan() {
         use crate::prelude::*;
         use std::sync::Mutex;
         use std::sync::atomic::Ordering;
@@ -1540,9 +1631,8 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        let birth = crate::date(2000, 1, 1);
         let names = ["x1", "x2", "x3"];
-        for seed in [1_u64, 2, 3] {
+        for seed in [2_u64, 3] {
             let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
             let mut next = move || {
                 state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -1553,8 +1643,10 @@ mod tests {
             };
             // Small integer coordinates make many pairs tie exactly. Chosen
             // so the pool is longer than one scan chunk.
-            let units: Vec<BalanceRecord> = (0..14_000)
+            let units: Vec<BalanceRecord> = (0..9_000)
                 .map(|i| {
+                    let birth = crate::date(2000, 1, 1)
+                        + chrono::Days::new(next() % if seed == 2 { 40 } else { 1 });
                     let mut r = BalanceRecord::new(format!("{i}"), birth);
                     for name in names {
                         let value = (next() % 4) as f64 + if seed == 3 { 0.5 } else { 0.0 };
@@ -1563,66 +1655,92 @@ mod tests {
                         r.core.numerics.insert(name.to_string(), value);
                     }
                     r.core.strata.insert("s".into(), format!("s{}", next() % 3));
+                    r.core
+                        .strata
+                        .insert("u".into(), format!("u{}", next() % 5_000));
                     r
                 })
                 .collect();
-            let (anchors, candidates) = units.split_at(2_000);
-            for (replace, ratio, exact, caliper) in [
-                (false, 1, false, None),
-                (false, 3, true, None),
-                (true, 1, false, Some(1.5)),
-                (true, 3, true, Some(2.0)),
-            ] {
-                let spec = MatchSpec {
-                    method: MatchMethod::Nearest,
-                    distance: DistanceSpec::Mahalanobis {
-                        covariates: CovariatesSpec {
-                            names: names.iter().map(|n| (*n).to_string()).collect(),
-                            missing: MissingSpec::Error,
+            let (anchors, candidates) = units.split_at(300);
+            let covariates = CovariatesSpec {
+                names: names.iter().map(|n| (*n).to_string()).collect(),
+                missing: MissingSpec::Error,
+            };
+            for distance in 0..3 {
+                for (replace, ratio, exact, caliper, unique, closest) in [
+                    (false, 1, false, None, false, false),
+                    (false, 3, true, None, false, false),
+                    (true, 1, false, Some(1.5), false, false),
+                    (true, 3, true, Some(2.0), false, false),
+                    (false, 2, false, Some(2.5), true, false),
+                    (false, 2, true, None, false, true),
+                ] {
+                    let distance_spec = match distance {
+                        0 => DistanceSpec::Mahalanobis {
+                            covariates: covariates.clone(),
+                            covariance: CovarianceSpec::default(),
+                            transform: TransformSpec::default(),
+                            caliper,
                         },
-                        covariance: CovarianceSpec::default(),
-                        transform: TransformSpec::default(),
-                        caliper,
-                    },
-                    exact: if exact { vec!["s".into()] } else { vec![] },
-                    birth_window_days: 36_500,
-                    replace,
-                    ratio,
-                    ..MatchSpec::default()
-                };
-                let run = |reference: bool, threads: usize| {
-                    USE_REFERENCE_SCAN.store(reference, Ordering::Relaxed);
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(threads)
-                        .build()
-                        .expect("thread pool");
-                    let out = pool.install(|| {
-                        run_spec(
-                            &spec,
-                            SpecInput::Standard {
-                                anchors,
-                                candidates,
-                            },
-                        )
-                    });
-                    USE_REFERENCE_SCAN.store(false, Ordering::Relaxed);
-                    match out.expect("match") {
-                        SpecOutput::Pairs { outcome, .. } => outcome
-                            .pairs
-                            .iter()
-                            .map(|p| (p.case_id.clone(), p.control_id.clone()))
-                            .collect::<Vec<_>>(),
-                        _ => panic!("pairs expected"),
+                        scaled => DistanceSpec::Euclidean {
+                            covariates: covariates.clone(),
+                            scaled: scaled == 2,
+                            caliper,
+                        },
+                    };
+                    let spec = MatchSpec {
+                        method: MatchMethod::Nearest,
+                        distance: distance_spec,
+                        nearest: NearestSpec {
+                            m_order: closest.then_some(OrderSpec::Closest),
+                            ..NearestSpec::default()
+                        },
+                        exact: if exact { vec!["s".into()] } else { vec![] },
+                        unique_by_key: unique.then(|| "u".to_string()),
+                        birth_window_days: if seed == 2 { 10 } else { 36_500 },
+                        replace,
+                        ratio,
+                        ..MatchSpec::default()
+                    };
+                    let run = |mode: u8, threads: usize| {
+                        SEARCH_FOR_TESTS.store(mode, Ordering::Relaxed);
+                        let pool = rayon::ThreadPoolBuilder::new()
+                            .num_threads(threads)
+                            .build()
+                            .expect("thread pool");
+                        let out = pool.install(|| {
+                            run_spec(
+                                &spec,
+                                SpecInput::Standard {
+                                    anchors,
+                                    candidates,
+                                },
+                            )
+                        });
+                        SEARCH_FOR_TESTS.store(0, Ordering::Relaxed);
+                        match out.expect("match") {
+                            SpecOutput::Pairs { outcome, .. } => (
+                                outcome
+                                    .pairs
+                                    .iter()
+                                    .map(|p| (p.case_id.clone(), p.control_id.clone()))
+                                    .collect::<Vec<_>>(),
+                                format!("{:?}", outcome.diagnostics),
+                            ),
+                            _ => panic!("pairs expected"),
+                        }
+                    };
+                    let reference = run(1, 1);
+                    assert!(reference.0.len() > 100);
+                    for (mode, threads) in [(2, 4), (0, 1), (0, 4)] {
+                        assert_eq!(
+                            run(mode, threads),
+                            reference,
+                            "seed {seed}, distance {distance}, replace {replace}, ratio {ratio}, \
+                             exact {exact}, unique {unique}, closest {closest}, mode {mode}, \
+                             {threads} threads"
+                        );
                     }
-                };
-                let reference = run(true, 1);
-                assert!(reference.len() > 100);
-                for threads in [1, 4] {
-                    assert_eq!(
-                        run(false, threads),
-                        reference,
-                        "seed {seed}, replace {replace}, ratio {ratio}, exact {exact}, {threads} threads"
-                    );
                 }
             }
         }

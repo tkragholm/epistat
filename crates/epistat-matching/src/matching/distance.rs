@@ -854,9 +854,12 @@ impl IdMapMahalanobisDistance<'_> {
         form.lower.as_ref().map(|_| form.dimension)
     }
 
-    /// The whitened vector of a row given by [`Self::row`].
-    pub(crate) fn whitened_row(&self, row: usize, dimension: usize) -> &[f64] {
-        &self.whitened[row * dimension..(row + 1) * dimension]
+    /// The record's whitened vector, in which the Euclidean distance is this
+    /// distance, when [`Self::row`] has a row for it.
+    pub(crate) fn vector(&self, id: &str) -> Option<&[f64]> {
+        let n = self.dimension()?;
+        let row = self.row(id)?;
+        Some(&self.whitened[row * n..(row + 1) * n])
     }
 
     /// The distance of two rows given by [`Self::row`].
@@ -903,6 +906,21 @@ impl<'a> IdMapEuclideanDistance<'a> {
     #[must_use]
     pub const fn new(vectors: &'a RapidHashMap<String, Vec<f64>>, dimension: usize) -> Self {
         Self { vectors, dimension }
+    }
+}
+
+impl IdMapEuclideanDistance<'_> {
+    /// The length of the vectors.
+    pub(crate) const fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// The record's vector, when it has one of the right length.
+    pub(crate) fn vector(&self, id: &str) -> Option<&[f64]> {
+        self.vectors
+            .get(id)
+            .map(Vec::as_slice)
+            .filter(|vector| vector.len() == self.dimension)
     }
 }
 

@@ -126,6 +126,7 @@ pub mod constraints;
 pub mod effects;
 mod errors;
 pub mod imputation;
+mod kdtree;
 mod matching;
 pub mod multigroup;
 pub mod output;
