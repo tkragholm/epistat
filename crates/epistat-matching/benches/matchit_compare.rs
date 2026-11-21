@@ -423,7 +423,7 @@ fn spec_for(method: &str) -> Option<MatchSpec> {
         },
         "fine_balance" => MatchSpec {
             method: MatchMethod::Optimal,
-            distance: propensity(Some(caliper_raw())),
+            distance: propensity(None),
             exact: vec!["g".into()],
             fine_balance: Some(FineBalance::on_keys(["x5"])),
             ..base
