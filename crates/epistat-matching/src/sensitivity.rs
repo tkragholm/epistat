@@ -31,6 +31,7 @@
 //! `sensitivitymw::senmw` and `EValue::evalues.RR`, `.OR`, `.HR` and `.MD` in
 //! `tests/r_sensitivity.rs`.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -131,45 +132,52 @@ impl From<EffectError> for SetsError {
 /// with a pair number, in one set or in several, and
 /// [`SetsError::Empty`].
 pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedSet>, SetsError> {
-    let mut by_pair: BTreeMap<usize, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
-    let mut set_of: BTreeMap<&str, usize> = BTreeMap::new();
+    // Each row is read once: its unit's row in `units`, which identifies the
+    // unit because `units` has no id twice, marks the unit as used.
+    let mut used = vec![false; units.treated_flags().len()];
+    let mut rows: Vec<(usize, bool, f64)> = Vec::new();
     for row in 0..long.len() {
         let Some(pair) = long.pair_id[row] else {
             continue;
         };
-        let id = long.id[row].as_str();
-        if set_of.insert(id, pair).is_some() {
-            return Err(SetsError::Reused { id: id.to_owned() });
+        let unit = units.row_of(&long.id[row])?;
+        if std::mem::replace(&mut used[unit], true) {
+            return Err(SetsError::Reused {
+                id: long.id[row].clone(),
+            });
         }
-        let (treated, outcome) = units.treatment_and_outcome(&long.id[row])?;
-        let entry = by_pair.entry(pair).or_default();
-        if treated {
-            entry.0.push(outcome);
-        } else {
-            entry.1.push(outcome);
-        }
+        let (treated, outcome) = units.treatment_and_outcome_at(unit);
+        rows.push((pair, treated, outcome));
     }
-    if by_pair.is_empty() {
+    if rows.is_empty() {
         return Err(SetsError::Empty);
     }
-    by_pair
-        .into_iter()
-        .map(|(pair, (treated, controls))| {
-            if treated.len() != 1 {
-                return Err(SetsError::NotOneTreated {
-                    pair,
-                    treated: treated.len(),
-                });
-            }
-            if controls.is_empty() {
-                return Err(SetsError::NoControl { pair });
-            }
-            Ok(MatchedSet {
-                treated: treated[0],
-                controls,
-            })
-        })
-        .collect()
+    // Stable, so the rows of a set stay in the order of `long`.
+    rows.sort_by_key(|&(pair, _, _)| pair);
+    let mut sets = Vec::new();
+    for group in rows.chunk_by(|left, right| left.0 == right.0) {
+        let pair = group[0].0;
+        let treated = group.iter().filter(|row| row.1).collect::<Vec<_>>();
+        if treated.len() != 1 {
+            return Err(SetsError::NotOneTreated {
+                pair,
+                treated: treated.len(),
+            });
+        }
+        let controls = group
+            .iter()
+            .filter(|row| !row.1)
+            .map(|row| row.2)
+            .collect::<Vec<_>>();
+        if controls.is_empty() {
+            return Err(SetsError::NoControl { pair });
+        }
+        sets.push(MatchedSet {
+            treated: treated[0].2,
+            controls,
+        });
+    }
+    Ok(sets)
 }
 
 /// The treated minus control differences of sets that are pairs.
@@ -364,5 +372,100 @@ mod tests {
             matched_sets(&long, &units()),
             Err(SetsError::Reused { id: "b".into() })
         );
+    }
+    fn matched_sets_by_map(
+        long: &LongMatches,
+        units: &UnitData,
+    ) -> Result<Vec<MatchedSet>, SetsError> {
+        let mut by_pair: BTreeMap<usize, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
+        let mut set_of: BTreeMap<&str, usize> = BTreeMap::new();
+        for row in 0..long.len() {
+            let Some(pair) = long.pair_id[row] else {
+                continue;
+            };
+            let id = long.id[row].as_str();
+            if set_of.insert(id, pair).is_some() {
+                return Err(SetsError::Reused { id: id.to_owned() });
+            }
+            let (treated, outcome) = units.treatment_and_outcome(&long.id[row])?;
+            let entry = by_pair.entry(pair).or_default();
+            if treated {
+                entry.0.push(outcome);
+            } else {
+                entry.1.push(outcome);
+            }
+        }
+        if by_pair.is_empty() {
+            return Err(SetsError::Empty);
+        }
+        by_pair
+            .into_iter()
+            .map(|(pair, (treated, controls))| {
+                if treated.len() != 1 {
+                    return Err(SetsError::NotOneTreated {
+                        pair,
+                        treated: treated.len(),
+                    });
+                }
+                if controls.is_empty() {
+                    return Err(SetsError::NoControl { pair });
+                }
+                Ok(MatchedSet {
+                    treated: treated[0],
+                    controls,
+                })
+            })
+            .collect()
+    }
+
+    /// The sets equal those of the reference that keeps the units in a map and
+    /// the pairs in a tree, and so do the errors, on rows with unused pair
+    /// numbers, rows without a pair, a unit used twice, a set with two treated
+    /// units and a set with no control.
+    #[test]
+    fn matched_sets_equal_the_reference() {
+        let ids: Vec<String> = (0..12).map(|i| format!("u{i}")).collect();
+        let treated: Vec<bool> = (0..12).map(|i| i % 3 == 0).collect();
+        let outcome: Vec<f64> = (0..12).map(|i| f64::from(i) * 1.5 - 4.0).collect();
+        let data = UnitData::new(ids.clone(), treated, outcome).unwrap();
+        let row = |id: &str, pair: Option<usize>| (id.to_string(), pair);
+        let cases: Vec<Vec<(String, Option<usize>)>> = vec![
+            // Pairs and a set of three, numbered with gaps and out of order.
+            vec![
+                row("u3", Some(7)),
+                row("u4", Some(7)),
+                row("u0", Some(2)),
+                row("u1", Some(2)),
+                row("u2", Some(2)),
+                row("u6", Some(9)),
+                row("u5", Some(9)),
+                row("u7", None),
+            ],
+            // A unit twice.
+            vec![row("u0", Some(1)), row("u1", Some(1)), row("u1", Some(2))],
+            // Two treated units in one set.
+            vec![row("u0", Some(1)), row("u3", Some(1)), row("u1", Some(1))],
+            // No control.
+            vec![row("u0", Some(1)), row("u3", Some(2)), row("u4", Some(2))],
+            // An unknown unit.
+            vec![row("u0", Some(1)), row("zz", Some(1))],
+            // An unknown unit twice, then a known one.
+            vec![row("zz", Some(1)), row("zz", Some(2))],
+            // Nothing in a set.
+            vec![row("u0", None)],
+        ];
+        for rows in cases {
+            let long = LongMatches {
+                id: rows.iter().map(|r| r.0.clone()).collect(),
+                role: rows.iter().map(|_| UnitRole::Anchor).collect(),
+                pair_id: rows.iter().map(|r| r.1).collect(),
+                weight: rows.iter().map(|_| 1.0).collect(),
+            };
+            assert_eq!(
+                format!("{:?}", matched_sets(&long, &data)),
+                format!("{:?}", matched_sets_by_map(&long, &data)),
+                "{rows:?}"
+            );
+        }
     }
 }
