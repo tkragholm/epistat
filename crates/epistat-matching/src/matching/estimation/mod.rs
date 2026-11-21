@@ -1,5 +1,6 @@
 //! Propensity scores and Mahalanobis configurations estimated from covariate records.
 
+mod cbps;
 mod config;
 mod covariance;
 mod cross_validation;
@@ -7,6 +8,7 @@ mod encoding;
 mod linalg;
 mod logistic;
 
+pub use cbps::CbpsFit;
 pub use config::*;
 pub use cross_validation::{CrossValidation, cross_validation_folds};
 pub use encoding::CovariateMatrix;
@@ -19,6 +21,7 @@ use super::engine::{
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
 use crate::types::{CommonSupport, DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
+use cbps::fit_cbps;
 use covariance::{covariance_matrix, rank_transform_columns, rescale_rank_covariance};
 use cross_validation::fit_elastic_net_cv;
 use encoding::{build_covariate_matrix, build_covariate_matrix_marked};
@@ -81,6 +84,8 @@ pub struct PropensityScoreEstimate {
     /// The cross-validation curve and the folds, for the cross-validated
     /// elastic net.
     pub cross_validation: Option<CrossValidation>,
+    /// The statistics of a covariate balancing propensity score fit.
+    pub cbps: Option<CbpsFit>,
     /// Anchor ids discarded by common-support trimming before the refit, when
     /// the model was re-estimated. Their scores are those of the first fit.
     pub discarded_anchors: Vec<String>,
@@ -177,6 +182,18 @@ pub enum EstimationError {
     NoCommonSupport,
     /// The generalised linear model could not be fitted.
     GlmFitFailed(epistat_glm::GlmError),
+    /// A covariate balancing propensity score needs a column named `intercept`.
+    CbpsNeedsIntercept,
+    /// The design of a covariate balancing propensity score is not of full
+    /// rank, or has no more rows than columns.
+    CbpsNotFullRank,
+    /// The iteration limit or tolerance of a covariate balancing propensity
+    /// score is unusable, or one treatment group has no weight.
+    InvalidCbpsConfig,
+    /// The optimiser of a covariate balancing propensity score could not start:
+    /// the objective is not finite at the start, or a direction does not
+    /// descend.
+    CbpsFitFailed(epistat_optim::bfgs::BfgsError),
     LinearSystemSolveFailed,
     InvalidCovarianceMatrix,
     MahalanobisConfigBuildFailed,
@@ -228,6 +245,15 @@ fn fit_estimator(
         PropensityEstimator::ElasticNetCv(cv) => (
             fit_elastic_net_cv(matrix, labels, weights, cv)?,
             "elastic_net_cv",
+        ),
+        PropensityEstimator::Cbps(cbps) => (
+            fit_cbps(matrix, labels, weights, cbps)?,
+            match (cbps.method, cbps.estimand) {
+                (CbpsMethod::Over, CbpsEstimand::Att) => "cbps_over_att",
+                (CbpsMethod::Over, CbpsEstimand::Ate) => "cbps_over_ate",
+                (CbpsMethod::Exact, CbpsEstimand::Att) => "cbps_exact_att",
+                (CbpsMethod::Exact, CbpsEstimand::Ate) => "cbps_exact_ate",
+            },
         ),
     })
 }
@@ -384,7 +410,7 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
         fit = refit;
     }
 
-    let fitted_at_boundary = any_fitted_at_boundary(&fit.probabilities);
+    let fitted_at_boundary = any_fitted_at_boundary(&fit.probabilities) || fit.at_boundary;
     let to_map = |values: &[f64]| {
         matrix
             .row_ids
@@ -407,6 +433,7 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
         fitted_at_boundary,
         lambda: fit.lambda,
         cross_validation: fit.cross_validation,
+        cbps: fit.cbps,
         discarded_anchors,
         discarded_candidates,
     };
@@ -1253,6 +1280,7 @@ mod tests {
                 fitted_at_boundary: false,
                 lambda: None,
                 cross_validation: None,
+                cbps: None,
                 discarded_anchors: Vec::new(),
                 discarded_candidates: Vec::new(),
             },

@@ -138,12 +138,13 @@ pub use balance::{
     build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values, variance,
 };
 pub use matching::{
-    Assignment, CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
-    CovariateEncodingConfig, CovariateMatrix, CovariateRecord, CrossValidation, DateDistance,
-    DeterministicSelection, DiscardedUnits, DistanceChannel, DistanceConfig, DistanceMetric,
-    ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError, EuclideanDistancePreparation,
-    EuclideanPreparationConfig, EuclideanScale, ExactMatchConstraint, IdMapEuclideanDistance,
-    IdMapMahalanobisDistance, IdMapPropensityScoreDistance, LambdaRule, LogisticRegressionConfig,
+    Assignment, CaliperConstraint, CbpsConfig, CbpsEstimand, CbpsFit, CbpsMethod, Chained,
+    Constraint, ConstraintContext, ConstraintGroup, CovariateEncodingConfig, CovariateMatrix,
+    CovariateRecord, CrossValidation, DateDistance, DeterministicSelection, DiscardedUnits,
+    DistanceChannel, DistanceConfig, DistanceMetric, ElasticNetCvConfig, ElasticNetLogisticConfig,
+    EstimationError, EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
+    ExactMatchConstraint, IdMapEuclideanDistance, IdMapMahalanobisDistance,
+    IdMapPropensityScoreDistance, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisDistance, MahalanobisDistancePreparation,
     MahalanobisError, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder,
     MatchWeightMethod, MatchingRecord, MatrixDistance, MissingValuePolicy,
@@ -201,11 +202,11 @@ pub use output::{
     match_data, match_matrix,
 };
 pub use spec::{
-    AssignmentSpec, BinRuleSpec, BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec,
-    CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, FullSpec, K2kSpec, LambdaSpec,
-    LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec,
-    ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, StdCaliperEach, StdCaliperSpec,
-    SubclassSpec, TransformSpec, VariableRatioSpec, run_spec,
+    AssignmentSpec, BinRuleSpec, BinningSpec, CbpsEstimandSpec, CemSpec, CemVariableSpec,
+    CovarianceSpec, CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, FullSpec, K2kSpec,
+    LambdaSpec, LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec,
+    QuickSpec, ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, StdCaliperEach,
+    StdCaliperSpec, SubclassSpec, TransformSpec, VariableRatioSpec, run_spec,
 };
 
 #[cfg(feature = "bench-internals")]

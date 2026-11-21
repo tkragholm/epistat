@@ -92,6 +92,23 @@ impl Display for EstimationError {
             Self::GlmFitFailed(error) => {
                 write!(f, "the propensity model could not be fitted: {error}")
             }
+            Self::CbpsNeedsIntercept => f.write_str(
+                "the covariate balancing propensity score needs an intercept column; \
+                 include the intercept in the encoding",
+            ),
+            Self::CbpsNotFullRank => f.write_str(
+                "the covariates are not of full rank, or there are no more units than columns; \
+                 drop collinear covariates",
+            ),
+            Self::InvalidCbpsConfig => f.write_str(
+                "the covariate balancing settings are out of range: \
+                 the iteration limit must be at least 1, the tolerance positive, \
+                 and both groups need weight",
+            ),
+            Self::CbpsFitFailed(error) => write!(
+                f,
+                "the covariate balancing propensity score could not be fitted: {error}"
+            ),
             Self::LinearSystemSolveFailed => f.write_str(
                 "a linear system in the fit could not be solved; \
                  check the covariates for perfect collinearity",

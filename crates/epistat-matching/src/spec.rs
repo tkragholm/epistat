@@ -16,18 +16,18 @@ use crate::constraints::{
     AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field, numeric_field_sd,
 };
 use crate::matching::{
-    Assignment, CemBinning, CemError, CemRule, CemVariable, Chained, CovariateEncodingConfig,
-    CovariateRecord, DeterministicSelection, DistanceConfig, ElasticNetCvConfig,
-    ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig, EuclideanScale,
-    ExactMatchError, ExactMatchOutcome, FullMatchConfig, FullMatchOutcome, LambdaRule,
-    LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisPreparationConfig,
-    MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord, MissingValuePolicy,
-    NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest, PairDistanceMatrix,
-    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions, QuickMatchOutcome,
-    RandomSelection, Retain, RoleIndexedRecord, Rounds, SeedMethod, SelectionStrategy,
-    SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome, VariableRatio,
-    apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower,
+    Assignment, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemError, CemRule, CemVariable,
+    Chained, CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
+    ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig,
+    EuclideanScale, ExactMatchError, ExactMatchOutcome, FullMatchConfig, FullMatchOutcome,
+    LambdaRule, LogisticRegressionConfig, MahalanobisCovarianceStrategy,
+    MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord,
+    MissingValuePolicy, NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest,
+    PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
+    PropensityScoreEstimate, PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions,
+    QuickMatchOutcome, RandomSelection, Retain, RoleIndexedRecord, Rounds, SeedMethod,
+    SelectionStrategy, SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
+    VariableRatio, apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower,
     estimate_propensity_and_match, exact_match_subclasses, match_full, match_optimal,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, quick_match_subclasses,
@@ -248,6 +248,30 @@ pub enum EstimatorSpec {
         #[serde(default = "default_true")]
         standardize: bool,
     },
+    /// The covariate balancing propensity score, as MatchIt's
+    /// `distance = "cbps"` with `CBPS::CBPS()`. The link of the distance is
+    /// logit, and the model needs an intercept.
+    Cbps {
+        /// The estimand whose balance conditions the fit satisfies. MatchIt
+        /// takes it from the matching estimand and defaults to the ATT.
+        #[serde(default)]
+        estimand: CbpsEstimandSpec,
+        /// Score and balance conditions together, CBPS's `method = "over"`.
+        /// `false` is `method = "exact"`, the balance conditions alone.
+        #[serde(default = "default_true")]
+        over: bool,
+    },
+}
+
+/// The estimand of a covariate balancing propensity score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CbpsEstimandSpec {
+    /// Balance the controls to the treated.
+    #[default]
+    Att,
+    /// Balance both groups to the sample.
+    Ate,
 }
 
 const fn default_folds() -> usize {
@@ -1556,6 +1580,19 @@ fn propensity_config(
                 .alpha(alpha)
                 .lambda(lambda)
                 .standardize(standardize)
+                .build(),
+        ),
+        EstimatorSpec::Cbps { estimand, over } => PropensityEstimator::Cbps(
+            CbpsConfig::builder()
+                .estimand(match estimand {
+                    CbpsEstimandSpec::Att => CbpsEstimand::Att,
+                    CbpsEstimandSpec::Ate => CbpsEstimand::Ate,
+                })
+                .method(if over {
+                    CbpsMethod::Over
+                } else {
+                    CbpsMethod::Exact
+                })
                 .build(),
         ),
         EstimatorSpec::ElasticNetCv {

@@ -21,6 +21,11 @@ pub(super) struct LogisticFit {
     /// The penalty of an elastic net fit.
     pub(super) lambda: Option<f64>,
     pub(super) cross_validation: Option<CrossValidation>,
+    /// The statistics of a covariate balancing fit.
+    pub(super) cbps: Option<super::cbps::CbpsFit>,
+    /// A score at the bound the fit applies, which fitted probabilities cannot
+    /// show.
+    pub(super) at_boundary: bool,
 }
 
 /// The binomial generalised linear model with the configured link, fitted by
@@ -70,6 +75,8 @@ pub(super) fn fit_glm(
         aliased_columns,
         lambda: None,
         cross_validation: None,
+        cbps: None,
+        at_boundary: false,
     })
 }
 
@@ -290,5 +297,7 @@ pub(super) fn fit_elastic_net_logistic(
         aliased_columns: Vec::new(),
         lambda: Some(config.lambda.max(0.0)),
         cross_validation: None,
+        cbps: None,
+        at_boundary: false,
     })
 }

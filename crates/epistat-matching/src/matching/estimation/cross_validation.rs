@@ -408,6 +408,8 @@ pub(super) fn fit_elastic_net_cv(
         iterations: fit.iterations,
         aliased_columns: Vec::new(),
         lambda: Some(chosen),
+        cbps: None,
+        at_boundary: false,
         cross_validation: Some(CrossValidation {
             fold_ids,
             lambda,
