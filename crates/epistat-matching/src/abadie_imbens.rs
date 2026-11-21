@@ -27,12 +27,13 @@
 //! squares.
 //!
 //! The neighbours, for the matches and for the conditional variance, are
-//! found on a k-d tree over each group ([`crate::kdtree`]) when the group is
-//! large enough and the covariates few enough for one to pay: the `M`-th
-//! nearest distance first, then every unit within the tolerance of it. That
-//! is an expected `O(log n)` per unit in few covariates where a scan of the
-//! other group costs `O(n)`, and it finds the units the scan finds, ties
-//! included. Smaller groups are scanned.
+//! found on a k-d tree over each group (Friedman, Bentley and Finkel, 1977)
+//! when the group is large enough and the covariates few enough for one to
+//! pay: the `M`-th nearest distance first, then every unit within the
+//! tolerance of it. That is an expected `O(log n)` per unit in few
+//! covariates where a scan of the other group costs `O(n)`, and it finds the
+//! units the scan finds, ties included, since the box bounds of the tree are
+//! never above the rounded distances they bound. Smaller groups are scanned.
 //!
 //! # Estimate
 //!
