@@ -16,9 +16,7 @@ mod wiring;
 
 pub use wiring::{CardinalityMatch, CardinalitySpec, FitFuncSpec, GeneticSpec, LossSpec};
 
-use crate::constraints::{
-    AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field, numeric_field_sd,
-};
+use crate::constraints::{AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field};
 use crate::matching::{
     Assignment, CardinalityError, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemError,
     CemRule, CemVariable, Chained, CovariateEncodingConfig, CovariateRecord,
@@ -1196,6 +1194,14 @@ impl MatchSpec {
             }
         }
         typed_caliper("distance", self.distance.caliper())?;
+        if let DistanceSpec::Scores { scores, .. } = &self.distance {
+            if let Some((id, score)) = scores.iter().find(|(_, score)| !score.is_finite()) {
+                return Err(SpecError::option(
+                    "distance",
+                    format!("the score of {id} is {score}; scores must be finite numbers"),
+                ));
+            }
+        }
         if let Some(mahvars) = &self.nearest.mahvars {
             typed_caliper("nearest.mahvars", mahvars.caliper())?;
         }
@@ -1250,6 +1256,7 @@ impl MatchSpec {
             ));
         }
         self.validate_support()?;
+        self.validate_read_by_method()?;
         match self.method {
             MatchMethod::Exact => self.validate_exact()?,
             MatchMethod::Subclass => self.validate_subclass()?,
@@ -1276,6 +1283,57 @@ impl MatchSpec {
             MatchMode::RiskSet | MatchMode::ExposureDensity | MatchMode::SequentialTrials => {
                 self.validate_risk_set()
             }
+        }
+    }
+
+    /// Options that only some methods read. A method that does not read one
+    /// would ignore it, so it is an error naming the option.
+    fn validate_read_by_method(&self) -> Result<(), SpecError> {
+        if self.trials != TrialOptions::default() && self.mode != MatchMode::SequentialTrials {
+            return Err(SpecError::option(
+                "trials",
+                "the trial options belong to sequential trial emulation; \
+                 set the mode to sequential_trials or drop them",
+            ));
+        }
+        if self.fine_balance.is_some() && self.method != MatchMethod::Optimal {
+            return Err(SpecError::option(
+                "fine_balance",
+                "fine balance belongs to the optimal method; set the method to optimal or drop it",
+            ));
+        }
+        let method = match self.method {
+            MatchMethod::Exact => "exact",
+            MatchMethod::Subclass => "subclass",
+            MatchMethod::Quick => "quick",
+            MatchMethod::Cem => "cem",
+            _ => return Ok(()),
+        };
+        let reads_estimand = self.method == MatchMethod::Subclass
+            || (self.method == MatchMethod::Cem && self.cem.k2k.is_some());
+        if self.method == MatchMethod::Subclass && self.distance.caliper().is_some() {
+            return Err(SpecError::option(
+                "distance",
+                "the subclass method cuts the score into classes and takes no caliper; \
+                 drop the caliper",
+            ));
+        }
+        let unread: [(&'static str, bool); 2] = [
+            (
+                "birth_window_days",
+                self.birth_window_days != MatchingCriteria::default().birth_date_window_days,
+            ),
+            (
+                "estimand",
+                !reads_estimand && self.estimand != MatchingCriteria::default().estimand,
+            ),
+        ];
+        match unread.iter().find(|(_, set)| *set) {
+            Some((option, _)) => Err(SpecError::option(
+                option,
+                format!("the {method} method does not use it; drop it"),
+            )),
+            None => Ok(()),
         }
     }
 
@@ -1308,6 +1366,13 @@ impl MatchSpec {
         if let Some(variable) = self.nearest.variable_ratio {
             VariableRatio::new(variable.average, variable.min, variable.max)
                 .map_err(|error| SpecError::option("nearest.variable_ratio", error.to_string()))?;
+            if !self.distance.is_score() {
+                return Err(SpecError::option(
+                    "nearest.variable_ratio",
+                    "a variable ratio is set by the scores of the units; use a propensity \
+                     score or a score of your own as the distance",
+                ));
+            }
             if self.ratio != 1 {
                 return Err(SpecError::option(
                     "ratio",
@@ -1373,12 +1438,6 @@ impl MatchSpec {
                 "ratio",
                 "the full method sizes its subclasses by min_controls and max_controls; \
                  drop the ratio",
-            ));
-        }
-        if self.fine_balance.is_some() && self.method != MatchMethod::Optimal {
-            return Err(SpecError::option(
-                "fine_balance",
-                "fine balance belongs to the optimal method; set the method to optimal or drop it",
             ));
         }
         if self.full.omit_fraction.is_some() && self.full.mean_controls.is_some() {
@@ -1551,6 +1610,19 @@ impl MatchSpec {
                     format!("{name} has no caliper in calipers; add one or drop the entry"),
                 ));
             }
+        }
+        if self.reestimate
+            && self
+                .calipers
+                .keys()
+                .any(|field| self.std_caliper.field(field))
+        {
+            return Err(SpecError::option(
+                "std_caliper",
+                "the units that discard leaves are known only after the model is fitted \
+                 again, so a caliper on a field in standard deviations cannot be combined \
+                 with reestimate; give the caliper in the units of the field",
+            ));
         }
         if self.reestimate && self.discard.is_none() {
             return Err(SpecError::option(
@@ -1977,18 +2049,37 @@ fn reject_invalid(outcome: MatchOutcome) -> Result<MatchOutcome, SpecError> {
 }
 
 /// Calipers on fields with their widths, in standard deviations if asked.
+///
+/// A caliper in standard deviations is scaled by the standard deviation of the
+/// field over the units that take part in the matching, so over the units that
+/// common-support trimming leaves, as `matchit()` does. The trimming is read
+/// from `scores`, the scores of the distance.
 fn field_calipers<R: MatchingRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
+    scores: Option<&RapidHashMap<String, f64>>,
 ) -> Result<Vec<(String, f64)>, SpecError> {
+    let kept = match (spec.discard, scores) {
+        (Some(policy), Some(scores)) => {
+            units_after_trimming(anchors, candidates, policy.into(), scores)
+        }
+        _ => (anchors.iter().collect(), candidates.iter().collect()),
+    };
     spec.calipers
         .iter()
         .map(|(field, width)| {
             if !spec.std_caliper.field(field) {
                 return Ok((field.clone(), *width));
             }
-            let sd = numeric_field_sd(anchors, candidates, field).ok_or_else(|| {
+            let values: Vec<f64> = kept
+                .0
+                .iter()
+                .chain(&kept.1)
+                .filter_map(|record| record.numeric(field))
+                .filter(|value| value.is_finite())
+                .collect();
+            let sd = crate::constraints::sample_sd(&values).ok_or_else(|| {
                 SpecError::option(
                     "std_caliper",
                     format!(
@@ -2000,6 +2091,59 @@ fn field_calipers<R: MatchingRecord>(
             Ok((field.clone(), width * sd))
         })
         .collect()
+}
+
+/// The anchors and candidates that common-support trimming leaves, by the
+/// rule of [`CommonSupport`]: a unit is trimmed when its score is not inside
+/// the interval where the two groups' score ranges overlap. When the ranges do
+/// not overlap, or a group has no finite score, nothing is trimmed here, and
+/// the matcher reports the failure.
+fn units_after_trimming<'a, R: MatchingRecord>(
+    anchors: &'a [R],
+    candidates: &'a [R],
+    policy: CommonSupport,
+    scores: &RapidHashMap<String, f64>,
+) -> (Vec<&'a R>, Vec<&'a R>) {
+    let bounds = |rows: &[R]| {
+        rows.iter()
+            .filter_map(|row| scores.get(row.id()).copied())
+            .filter(|score| score.is_finite())
+            .fold(None, |acc: Option<(f64, f64)>, score| match acc {
+                None => Some((score, score)),
+                Some((low, high)) => Some((low.min(score), high.max(score))),
+            })
+    };
+    let (Some(anchor_bounds), Some(candidate_bounds)) = (bounds(anchors), bounds(candidates))
+    else {
+        return (anchors.iter().collect(), candidates.iter().collect());
+    };
+    let lower = anchor_bounds.0.max(candidate_bounds.0);
+    let upper = anchor_bounds.1.min(candidate_bounds.1);
+    if lower > upper {
+        return (anchors.iter().collect(), candidates.iter().collect());
+    }
+    let inside = |row: &&R| {
+        scores
+            .get(row.id())
+            .is_some_and(|score| score.is_finite() && *score >= lower && *score <= upper)
+    };
+    let keep = |rows: &'a [R], trimmed: bool| -> Vec<&'a R> {
+        if trimmed {
+            rows.iter().filter(inside).collect()
+        } else {
+            rows.iter().collect()
+        }
+    };
+    (
+        keep(
+            anchors,
+            matches!(policy, CommonSupport::Treated | CommonSupport::Both),
+        ),
+        keep(
+            candidates,
+            matches!(policy, CommonSupport::Control | CommonSupport::Both),
+        ),
+    )
 }
 
 /// What a typed standard job needs beyond the units.
@@ -2148,11 +2292,34 @@ where
     }
 }
 
+/// A score of the caller's own is needed for every unit that is read. A unit
+/// without one is an error naming it, as MatchIt refuses missing scores,
+/// rather than a unit that silently drops out of the matching.
+fn check_scores_cover<'a>(
+    distance: &DistanceSpec,
+    ids: impl IntoIterator<Item = &'a str>,
+) -> Result<(), SpecError> {
+    let DistanceSpec::Scores { scores, .. } = distance else {
+        return Ok(());
+    };
+    match ids.into_iter().find(|id| !scores.contains_key(*id)) {
+        Some(id) => Err(SpecError::option(
+            "distance",
+            format!("the unit {id} has no score; give every unit a score"),
+        )),
+        None => Ok(()),
+    }
+}
+
 fn run_standard<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
 ) -> Result<SpecOutput, SpecError> {
+    check_scores_cover(
+        &spec.distance,
+        anchors.iter().chain(candidates).map(MatchingRecord::id),
+    )?;
     match spec.method {
         MatchMethod::Exact => {
             let outcome = exact_match_subclasses(anchors, candidates, &spec.exact)?;
@@ -2203,7 +2370,7 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         MatchMethod::Cardinality => return wiring::run_cardinality(spec, anchors, candidates),
         MatchMethod::Optimal | MatchMethod::Full => {
             let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
-            let calipers = field_calipers(spec, anchors, candidates)?;
+            let calipers = field_calipers(spec, anchors, candidates, None)?;
             let sex: Vec<GenderMatch> = if spec.match_sex {
                 vec![GenderMatch::on_key(spec.sex_key.clone())]
             } else {
@@ -2271,7 +2438,12 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
     } else {
         build_distance(&spec.distance, anchors, candidates, spec.seed, false)?
     };
-    let calipers = field_calipers(spec, anchors, candidates)?;
+    let calipers = field_calipers(
+        spec,
+        anchors,
+        candidates,
+        built.config.as_ref().and_then(scores_of),
+    )?;
     let rounds = spec.assignment == Some(AssignmentSpec::Rounds);
     let plan = |rounds| StandardPlan {
         anchors,
@@ -2418,6 +2590,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
 ) -> Result<SpecOutput, SpecError> {
+    check_scores_cover(&spec.distance, cohort.iter().map(MatchingRecord::id))?;
     let distance = match &spec.distance {
         DistanceSpec::Date { caliper } => {
             typed_caliper("distance", *caliper)?.map(|caliper| DistanceConfig::date(Some(caliper)))
