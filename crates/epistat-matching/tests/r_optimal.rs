@@ -36,7 +36,7 @@
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_matching::{RapidHashMap, match_optimal};
+use epistat_matching::{RapidHashMap, match_full, match_optimal};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -428,4 +428,78 @@ fn replacement_and_unique_keys_are_refused() {
             ..
         })
     ));
+}
+
+/// A matrix of the Euclidean distances, with the same arithmetic as the
+/// Euclidean distance, gives the solver the same costs, so optimal pairs and
+/// full-matching subclasses equal those on the Euclidean distance, which the
+/// tests above check against MatchIt.
+#[test]
+fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
+    let reference = reference();
+    let mut compared = 0;
+    for (name, scenario) in &reference.scenarios {
+        if !euclidean(name) {
+            continue;
+        }
+        let on_vectors = setup(name, scenario, 1, None);
+        let anchor_ids: Vec<String> = on_vectors
+            .anchors
+            .iter()
+            .map(|r| r.id().to_string())
+            .collect();
+        let candidate_ids: Vec<String> = on_vectors
+            .candidates
+            .iter()
+            .map(|r| r.id().to_string())
+            .collect();
+        let point = |id: &str| {
+            let row = row(id) - 1;
+            (scenario.x[row], scenario.x2[row])
+        };
+        let mut values = Vec::with_capacity(anchor_ids.len() * candidate_ids.len());
+        for anchor in &anchor_ids {
+            let (ax, ay) = point(anchor);
+            for candidate in &candidate_ids {
+                let (cx, cy) = point(candidate);
+                let (dx, dy) = (ax - cx, ay - cy);
+                let mut sum = 0.0_f64;
+                sum += dx * dx;
+                sum += dy * dy;
+                values.push(sum.sqrt());
+            }
+        }
+        let matrix =
+            PairDistanceMatrix::new(anchor_ids, candidate_ids, values).expect("a full table");
+        let on_matrix = Setup {
+            anchors: on_vectors.anchors.clone(),
+            candidates: on_vectors.candidates.clone(),
+            distance: DistanceConfig::matrix(matrix, None),
+        };
+        for ratio in [1, 2] {
+            let left = run_ours(&on_vectors, ratio, false);
+            let right = run_ours(&on_matrix, ratio, false);
+            match (left, right) {
+                (Ok(left), Ok(right)) => {
+                    assert_eq!(pairs_of(&left), pairs_of(&right), "{name} ratio {ratio}");
+                }
+                (Err(_), Err(_)) => {}
+                (left, right) => panic!("{name} ratio {ratio}: {left:?} against {right:?}"),
+            }
+        }
+        let criteria = MatchingCriteria::builder().match_ratio(1).build();
+        let full = |setup: &Setup| {
+            let request = OptimalRequest::new(&criteria, &()).with_distance_config(&setup.distance);
+            match_full(
+                &setup.anchors,
+                &setup.candidates,
+                &request,
+                &FullMatchConfig::default(),
+            )
+            .map(|outcome| outcome.assignments.into_iter().collect::<BTreeMap<_, _>>())
+        };
+        assert_eq!(full(&on_vectors).ok(), full(&on_matrix).ok(), "{name} full");
+        compared += 1;
+    }
+    assert!(compared > 0, "no Euclidean scenario in the reference");
 }
