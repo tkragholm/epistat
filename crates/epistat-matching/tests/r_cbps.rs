@@ -258,7 +258,7 @@ fn cbps_matches_the_minimum_and_cbps() {
                 diag.gradient_norm + fit.grad_star,
                 diag.balance_residual_norm,
             );
-            let theta = in_row_order(&estimate, &estimate.linear_predictor, n);
+            let theta = in_row_order(estimate, &estimate.linear_predictor, n);
             let to_star = max_abs_diff(&theta, &fit.star_linear);
             assert!(
                 to_star <= ours_distance,
@@ -320,7 +320,7 @@ fn cbps_matches_the_minimum_and_cbps() {
             );
 
             // The balance moments, against the moments at the minimum.
-            let p = in_row_order(&estimate, &estimate.probabilities, n);
+            let p = in_row_order(estimate, &estimate.probabilities, n);
             let balance = balance_of(data, fit, &p);
             let bound = balance_bound(data, fit, &p, ours_distance);
             for ((got, want), tol) in balance.iter().zip(&fit.balance_star).zip(&bound) {

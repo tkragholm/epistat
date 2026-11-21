@@ -110,7 +110,7 @@ fn a_table_in_the_order_of_the_units_matches_as_one_looked_up_by_id() {
             replacement,
             ratio,
         );
-        assert!(!want.is_empty());
+        assert_ne!(want.len(), 0, "the run matched nobody");
         let got = run(
             &units,
             DistanceConfig::propensity_score_table(shuffled.clone(), None),
