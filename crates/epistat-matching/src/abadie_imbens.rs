@@ -757,8 +757,8 @@ fn standardised_coordinates(
             // distance `sqrt(n) |L^-1 x|` from the origin.
             let gram = Mat::from_fn(k, k, |a, b| {
                 let mut s = 0.0;
-                for i in 0..n {
-                    s += cols[a][i] * cols[b][i];
+                for (u, v) in cols[a].iter().zip(&cols[b]) {
+                    s += u * v;
                 }
                 s
             });
