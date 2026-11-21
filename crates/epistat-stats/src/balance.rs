@@ -34,7 +34,8 @@
 //! [`cramers_v`] is `sqrt(chi² / n)` for the two-way table of group by category,
 //! with expected counts `row * n_group / n`. With two groups the usual divisor
 //! `min(rows - 1, columns - 1)` is 1. Categories absent from both groups are
-//! skipped, and an expected count is floored at `1e-12` in the denominator.
+//! skipped, and so is a group with an expected count of exactly zero, which
+//! only happens when that group is empty.
 //! [`cramers_v_weighted`] is the same on weights, which are scale free.
 //!
 //! [`eqq_distance_weighted`] is the weighted quantile distance of MatchIt's
@@ -351,8 +352,12 @@ pub fn cramers_v_weighted(weights_a: &[f64], weights_b: &[f64]) -> Option<f64> {
         }
         let expected_a = row * total_a / n;
         let expected_b = row * total_b / n;
-        chi2 += (ca - expected_a).powi(2) / expected_a.max(1e-12);
-        chi2 += (cb - expected_b).powi(2) / expected_b.max(1e-12);
+        if expected_a > 0.0 {
+            chi2 += (ca - expected_a).powi(2) / expected_a;
+        }
+        if expected_b > 0.0 {
+            chi2 += (cb - expected_b).powi(2) / expected_b;
+        }
     }
     Some((chi2 / n).sqrt())
 }
@@ -379,8 +384,12 @@ pub fn cramers_v(counts_a: &[usize], counts_b: &[usize]) -> Option<f64> {
         }
         let expected_a = row * na / n;
         let expected_b = row * nb / n;
-        chi2 += (ca as f64 - expected_a).powi(2) / expected_a.max(1e-12);
-        chi2 += (cb as f64 - expected_b).powi(2) / expected_b.max(1e-12);
+        if expected_a > 0.0 {
+            chi2 += (ca as f64 - expected_a).powi(2) / expected_a;
+        }
+        if expected_b > 0.0 {
+            chi2 += (cb as f64 - expected_b).powi(2) / expected_b;
+        }
     }
     // Two groups, so min(rows - 1, columns - 1) is 1 for two or more
     // categories.
@@ -501,5 +510,17 @@ mod tests {
         assert_eq!(counts.to_bits(), weights.to_bits());
         assert_eq!(cramers_v_weighted(&[0.0], &[0.0]), None);
         assert_eq!(cramers_v_weighted(&[1.0], &[-1.0]), None);
+    }
+
+    #[test]
+    fn weighted_cramers_v_does_not_depend_on_the_weight_scale() {
+        let a = [3.0, 1.0, 2.0];
+        let b = [1.0, 3.0, 2.0];
+        let base = cramers_v_weighted(&a, &b).unwrap();
+        let scaled_a: Vec<f64> = a.iter().map(|v| v * 1e-13).collect();
+        let scaled_b: Vec<f64> = b.iter().map(|v| v * 1e-13).collect();
+        let small = cramers_v_weighted(&scaled_a, &scaled_b).unwrap();
+        // Scaling by a power of ten changes each term by a few rounding errors.
+        assert!((base - small).abs() < 1e-12, "{base} {small}");
     }
 }

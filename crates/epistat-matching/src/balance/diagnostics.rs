@@ -45,9 +45,9 @@ pub fn balance_diagnostics<R: MatchingRecord>(
     }
 
     let match_rate = if cases.is_empty() {
-        0.0
+        None
     } else {
-        to_f64(outcome.matched_cases) / to_f64(cases.len())
+        Some(to_f64(outcome.matched_cases) / to_f64(cases.len()))
     };
 
     BalanceDiagnostics {
@@ -92,7 +92,7 @@ mod tests {
             &["municipality".to_string()],
         );
 
-        assert!((result.match_rate - 1.0).abs() < 1e-12);
+        assert!((result.match_rate.unwrap() - 1.0).abs() < 1e-12);
         assert_eq!(result.matched_cases, 2);
         assert_eq!(
             result.strata_counts.get("anchor:municipality=0101"),
@@ -116,7 +116,7 @@ mod tests {
             &test_outcome(Vec::new(), 0, 0),
             &["municipality".to_string()],
         );
-        assert!((result.match_rate - 0.0).abs() < 1e-12);
+        assert_eq!(result.match_rate, None);
         assert!(result.strata_counts.is_empty());
     }
 }

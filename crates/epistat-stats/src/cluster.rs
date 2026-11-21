@@ -87,6 +87,9 @@ pub enum KMeansError {
         /// The number of points.
         n: usize,
     },
+    /// `max_iterations` is zero, so no pass could assign the points.
+    #[error("max_iterations must be at least 1")]
+    NoIterations,
     /// A cluster has no points.
     #[error("cluster {cluster} is empty")]
     EmptyCluster {
@@ -127,6 +130,9 @@ pub fn kmeans(
 ) -> Result<KMeans, KMeansError> {
     if d == 0 || points.is_empty() {
         return Err(KMeansError::Empty);
+    }
+    if max_iterations == 0 {
+        return Err(KMeansError::NoIterations);
     }
     if points.len() % d != 0 {
         return Err(KMeansError::Shape {
@@ -552,5 +558,15 @@ mod tests {
             ),
             Err(KMeansError::EmptyCluster { cluster: 1 })
         );
+    }
+
+    #[test]
+    fn zero_iterations_is_an_error() {
+        for algorithm in [KMeansAlgorithm::Lloyd, KMeansAlgorithm::HartiganWong] {
+            assert_eq!(
+                kmeans(&[0.0, 1.0, 10.0, 11.0], 1, &[0.0, 10.0], algorithm, 0),
+                Err(KMeansError::NoIterations)
+            );
+        }
     }
 }

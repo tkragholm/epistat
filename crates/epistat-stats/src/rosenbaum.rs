@@ -224,18 +224,18 @@ pub fn wilcoxon_bounds(
 }
 
 /// The signed rank statistic of the differences shifted by `tau`, over all
-/// the differences with the zeros at the lowest ranks.
-fn shifted_statistic(differences: &[f64], tau: f64) -> f64 {
+/// the differences with the zeros at the lowest ranks. A shifted difference
+/// that overflows is an error.
+fn shifted_statistic(differences: &[f64], tau: f64) -> Result<f64, SensitivityError> {
     let shifted: Vec<f64> = differences.iter().map(|d| d - tau).collect();
     let absolute: Vec<f64> = shifted.iter().map(|d| d.abs()).collect();
-    // The inputs are finite, so ranking cannot fail.
-    let ranks = average_ranks(&absolute).unwrap_or_default();
-    ranks
+    let ranks = average_ranks(&absolute)?;
+    Ok(ranks
         .iter()
         .zip(&shifted)
         .filter(|(_, d)| **d > 0.0)
         .map(|(r, _)| *r)
-        .sum()
+        .sum())
 }
 
 /// The bounds of the Hodges-Lehmann estimate of the shift at one `gamma`.
@@ -256,7 +256,8 @@ pub struct HodgesLehmannBounds {
 ///
 /// [`SensitivityError::Gamma`], [`SensitivityError::NotFinite`],
 /// [`SensitivityError::NoInformation`] for no pairs and
-/// [`SensitivityError::TooManyPairs`].
+/// [`SensitivityError::TooManyPairs`], and [`SensitivityError::SignedRank`]
+/// when a shifted difference is not finite.
 pub fn hodges_lehmann_bounds(
     differences: &[f64],
     gammas: &[f64],
@@ -303,7 +304,7 @@ pub fn hodges_lehmann_bounds(
         let (mut lo, mut hi) = (0, k);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if shifted_statistic(differences, representative(mid)) <= t_low {
+            if shifted_statistic(differences, representative(mid))? <= t_low {
                 hi = mid;
             } else {
                 lo = mid + 1;
@@ -314,7 +315,7 @@ pub fn hodges_lehmann_bounds(
         let (mut lo, mut hi) = (0, k);
         while lo < hi {
             let mid = lo + (hi - lo).div_ceil(2);
-            if shifted_statistic(differences, representative(mid)) >= t_high {
+            if shifted_statistic(differences, representative(mid))? >= t_high {
                 lo = mid;
             } else {
                 hi = mid - 1;
@@ -592,5 +593,11 @@ mod tests {
         assert!(wilcoxon_bounds(&[0.0, 0.0], 1.0, WilcoxonDistribution::Normal).is_err());
         assert!(m_scores(&[vec![1.0]], &MScore::default()).is_err());
         assert!(m_scores(&[vec![1.0, 1.0], vec![2.0, 2.0]], &MScore::default()).is_err());
+    }
+
+    #[test]
+    fn hodges_lehmann_with_overflowing_shift_is_an_error() {
+        let d = [1.7e308, -1.7e308, 1.0e308, -1.0e308, 5.0e307];
+        assert!(hodges_lehmann_bounds(&d, &[1.0, 2.0]).is_err());
     }
 }

@@ -231,7 +231,8 @@ pub enum EffectError {
     Aliased,
     /// The fit did not converge.
     NotConverged,
-    /// The bootstrap needs at least one replicate and at least two pairs.
+    /// The bootstrap needs at least two replicates, for a standard error, and at
+    /// least two pairs.
     Bootstrap,
     /// The model of a bootstrap replicate could not be fitted.
     Replicate {
@@ -287,7 +288,7 @@ impl Display for EffectError {
             Self::NotConverged => write!(f, "the model did not converge"),
             Self::Bootstrap => write!(
                 f,
-                "the bootstrap needs at least one replicate and at least two pairs"
+                "the bootstrap needs at least two replicates and at least two pairs"
             ),
             Self::Replicate { index, reason } => {
                 write!(f, "replicate {index} could not be fitted: {reason}")
@@ -1013,7 +1014,9 @@ fn point_contrasts(sample: &MatchedSample, spec: &EffectSpec) -> Result<Contrast
 
 /// The cluster bootstrap of the effect over pairs or subclasses.
 ///
-/// Every row must have a pair. The variance settings of `spec` do not enter.
+/// Every row must have a pair. At least two replicates are needed, since the
+/// standard error is their standard deviation. The variance settings of
+/// `spec` do not enter.
 ///
 /// # Errors
 ///
@@ -1028,7 +1031,7 @@ pub fn bootstrap(
     let labels = sample.pair_labels()?;
     let clusters = Clusters::from_sorted_labels(&labels);
     let g = clusters.count();
-    if settings.replicates == 0 || g < 2 {
+    if settings.replicates < 2 || g < 2 {
         return Err(EffectError::Bootstrap);
     }
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); g];
@@ -1054,11 +1057,7 @@ pub fn bootstrap(
     let summarise = |estimate: f64, values: Vec<f64>| -> Result<BootstrapStatistic, EffectError> {
         let n = values.len() as f64;
         let mean = values.iter().sum::<f64>() / n;
-        let se = if values.len() > 1 {
-            (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0)).sqrt()
-        } else {
-            f64::NAN
-        };
+        let se = (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0)).sqrt();
         let normal = interval::normal(estimate, se, settings.alpha)?;
         let mut sorted = values.clone();
         let percentile = interval::percentile(&mut sorted, settings.alpha, Percentile::Type7)?;
@@ -1109,6 +1108,18 @@ mod tests {
             (0..16).collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_bootstrap_needs_two_replicates() {
+        let sample = pairs_sample();
+        let spec = EffectSpec::new(OutcomeModel::Linear);
+        assert_eq!(
+            bootstrap(&sample, &spec, &BootstrapSpec::new(1, 7)).unwrap_err(),
+            EffectError::Bootstrap
+        );
+        let two = bootstrap(&sample, &spec, &BootstrapSpec::new(2, 7)).unwrap();
+        assert!(two.difference.summary.se.is_finite());
     }
 
     #[test]

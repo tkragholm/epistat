@@ -468,7 +468,7 @@ fn run_with_balance_and_balance_reports() {
             &first,
             &["sex".to_string(), "region".to_string()],
         );
-        d.float(diagnostics.match_rate);
+        d.float(diagnostics.match_rate.unwrap());
         d.float(diagnostics.avg_controls_per_case);
         let mut strata: Vec<_> = diagnostics.strata_counts.iter().collect();
         strata.sort();

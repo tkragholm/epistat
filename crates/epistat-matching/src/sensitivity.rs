@@ -102,7 +102,7 @@ impl Display for SetsError {
             }
             Self::Reused { id } => write!(
                 f,
-                "unit {id} is in more than one matched set, so the sets are not independent"
+                "unit {id} has more than one row in the matched sets, so the sets are not independent"
             ),
             Self::Empty => write!(f, "there are no matched sets"),
         }
@@ -127,7 +127,8 @@ impl From<EffectError> for SetsError {
 ///
 /// [`SetsError::Unit`] for a unit not in `units`, [`SetsError::NotOneTreated`]
 /// and [`SetsError::NoControl`] for a set that is not one treated unit with
-/// controls, [`SetsError::Reused`] for a unit in more than one set, and
+/// controls, [`SetsError::Reused`] for a unit that appears in more than one row
+/// with a pair number, in one set or in several, and
 /// [`SetsError::Empty`].
 pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedSet>, SetsError> {
     let mut by_pair: BTreeMap<usize, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
@@ -137,7 +138,7 @@ pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedS
             continue;
         };
         let id = long.id[row].as_str();
-        if *set_of.entry(id).or_insert(pair) != pair {
+        if set_of.insert(id, pair).is_some() {
             return Err(SetsError::Reused { id: id.to_owned() });
         }
         let (treated, outcome) = units.treatment_and_outcome(&long.id[row])?;
@@ -348,6 +349,20 @@ mod tests {
                 pair: 1,
                 treated: 0
             })
+        );
+    }
+
+    #[test]
+    fn a_unit_twice_in_one_set_is_an_error() {
+        let long = LongMatches {
+            id: ["a", "b", "b"].map(String::from).to_vec(),
+            role: vec![UnitRole::Anchor, UnitRole::Candidate, UnitRole::Candidate],
+            pair_id: vec![Some(1), Some(1), Some(1)],
+            weight: vec![1.0, 0.5, 0.5],
+        };
+        assert_eq!(
+            matched_sets(&long, &units()),
+            Err(SetsError::Reused { id: "b".into() })
         );
     }
 }
