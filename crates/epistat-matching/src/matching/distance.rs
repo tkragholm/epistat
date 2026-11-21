@@ -785,6 +785,17 @@ impl IdMapMahalanobisDistance<'_> {
         self.slots.get(id).copied()
     }
 
+    /// The length of a whitened vector, when the matrix is positive definite.
+    pub(crate) fn dimension(&self) -> Option<usize> {
+        let form = self.form.as_ref()?;
+        form.lower.as_ref().map(|_| form.dimension)
+    }
+
+    /// The whitened vector of a row given by [`Self::row`].
+    pub(crate) fn whitened_row(&self, row: usize, dimension: usize) -> &[f64] {
+        &self.whitened[row * dimension..(row + 1) * dimension]
+    }
+
     /// The distance of two rows given by [`Self::row`].
     pub(crate) fn row_distance(&self, left: usize, right: usize) -> Option<f64> {
         let n = self.form.as_ref()?.dimension;
