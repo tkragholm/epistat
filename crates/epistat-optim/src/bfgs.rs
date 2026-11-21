@@ -665,10 +665,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::float_cmp,
-        reason = "the start is recognised by its exact value"
-    )]
     fn a_rise_of_the_cost_within_its_tolerance_is_convergence() {
         // Every point but the start has a cost 1e-12 above x'x, as if the
         // cost were rounded up. No step lowers the cost, and the rise is below
