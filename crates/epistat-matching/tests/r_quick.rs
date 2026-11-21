@@ -414,11 +414,21 @@ fn check_against_matchit(
     );
     let got = quick(data, run);
     let n = data.treat.len();
+    let assigned: HashMap<String, usize> = got
+        .assignments()
+        .map(|(id, subclass)| (id.to_owned(), subclass))
+        .collect();
+    let dropped: Vec<String> = got.dropped_ids().into_iter().map(str::to_owned).collect();
     let ours: Vec<Option<usize>> = (0..n)
-        .map(|row| got.assignments.get(&format!("u{row}")).copied())
+        .map(|row| assigned.get(&format!("u{row}")).copied())
         .collect();
     assert!(same_partition(&ours, &run.subclass), "{label}: partition");
-    let weights = got.weights(estimand_of(&run.estimand)).expect("weights");
+    let weights: HashMap<String, f64> = {
+        let (ids, values) = got
+            .weights_sorted(estimand_of(&run.estimand))
+            .expect("weights");
+        ids.into_iter().map(str::to_owned).zip(values).collect()
+    };
     let unscaled: Vec<Option<f64>> = (0..n)
         .map(|row| weights.get(&format!("u{row}")).copied())
         .collect();
@@ -435,7 +445,7 @@ fn check_against_matchit(
             "{label}: unscaled weight of {row}"
         );
         assert_eq!(
-            got.dropped_ids.contains(&format!("u{row}")),
+            dropped.contains(&format!("u{row}")),
             run.subclass[row].is_none(),
             "{label}: dropped {row}"
         );

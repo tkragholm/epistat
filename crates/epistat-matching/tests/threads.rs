@@ -57,6 +57,13 @@ impl Digest {
         self.text(&format!("{value:?}"));
     }
 
+    fn column(&mut self, values: &[f64]) {
+        self.int(values.len());
+        for value in values {
+            self.float(*value);
+        }
+    }
+
     fn floats(&mut self, values: &HashMap<String, f64, impl std::hash::BuildHasher>) {
         let mut entries: Vec<_> = values.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
@@ -891,13 +898,9 @@ fn subclassification() {
                 assert!(out.retained_units() > 0);
                 d.int(out.requested_subclasses);
                 d.int(out.realized_subclasses);
-                let mut assignments: Vec<_> = out.assignments.iter().collect();
-                assignments.sort();
-                d.debug(&assignments);
-                d.floats(&out.weights);
-                let mut dropped = out.dropped_ids.clone();
-                dropped.sort();
-                d.debug(&dropped);
+                d.debug(&out.ids);
+                d.debug(&out.subclass);
+                d.column(&out.weights());
                 d.debug(&out.subclasses);
             }
         }
@@ -1118,15 +1121,11 @@ fn coarsened_exact_matching() {
         let mut d = Digest::default();
         let out = epistat_matching::cem_subclasses(&anchors, &candidates, &variables).unwrap();
         assert!(out.retained_units() > 0, "no output, test is vacuous");
-        let mut assignments: Vec<_> = out.assignments.iter().collect();
-        assignments.sort();
-        d.debug(&assignments);
-        d.floats(&out.att_weights);
-        d.floats(&out.atc_weights);
-        d.floats(&out.ate_weights);
-        let mut dropped = out.dropped_ids.clone();
-        dropped.sort();
-        d.debug(&dropped);
+        d.debug(&out.ids);
+        d.debug(&out.subclass);
+        for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
+            d.column(&out.weights(estimand).unwrap());
+        }
         d.debug(&out.subclasses);
         let strata = cem_strata(&anchors, &candidates, &variables).unwrap();
         for order in [
@@ -1276,12 +1275,11 @@ fn generalised_full_matching() {
                 },
             )
             .unwrap();
-            let mut assignments: Vec<_> = out.assignments.iter().collect();
-            assignments.sort();
-            d.debug(&assignments);
-            d.floats(&out.att_weights);
-            d.floats(&out.atc_weights);
-            d.floats(&out.ate_weights);
+            d.debug(&out.ids);
+            d.debug(&out.subclass);
+            for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
+                d.column(&out.weights(estimand).unwrap());
+            }
             d.debug(&out.subclasses);
         }
         d.0

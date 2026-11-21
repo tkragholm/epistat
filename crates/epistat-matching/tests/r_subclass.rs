@@ -110,16 +110,19 @@ fn rescaled(data: &Dataset, outcome: &SubclassificationOutcome) -> Vec<f64> {
     let mut sum = [0.0_f64; 2];
     let mut count = [0.0_f64; 2];
     let group = |idx: usize| usize::from(data.treat[idx] < 0.5);
+    let weights: HashMap<String, f64> = {
+        let (ids, values) = outcome.weights_sorted();
+        ids.into_iter().map(str::to_owned).zip(values).collect()
+    };
     for idx in 0..data.treat.len() {
-        if let Some(w) = outcome.weights.get(&id(idx)) {
+        if let Some(w) = weights.get(&id(idx)) {
             sum[group(idx)] += w;
             count[group(idx)] += 1.0;
         }
     }
     (0..data.treat.len())
         .map(|idx| {
-            outcome
-                .weights
+            weights
                 .get(&id(idx))
                 .map_or(0.0, |w| w * count[group(idx)] / sum[group(idx)])
         })
@@ -162,8 +165,11 @@ fn subclasses_and_weights_match_matchit() {
             }
 
             let expected = run.assignment.as_ref().expect("assignment");
-            let kept: BTreeSet<usize> = got
-                .assignments
+            let assigned: HashMap<String, usize> = got
+                .assignments()
+                .map(|(id, subclass)| (id.to_owned(), subclass))
+                .collect();
+            let kept: BTreeSet<usize> = assigned
                 .keys()
                 .map(|key| key[1..].parse().expect("unit id"))
                 .collect();
@@ -176,7 +182,7 @@ fn subclasses_and_weights_match_matchit() {
             // MatchIt numbers the subclasses it keeps from 1; ours are the
             // same subclasses in the same order, numbered from 0 with a gap
             // where a dropped subclass was.
-            let present: BTreeSet<usize> = got.assignments.values().copied().collect();
+            let present: BTreeSet<usize> = assigned.values().copied().collect();
             let rank: HashMap<usize, usize> = present
                 .iter()
                 .enumerate()
@@ -184,7 +190,7 @@ fn subclasses_and_weights_match_matchit() {
                 .collect();
             for idx in &kept {
                 assert_eq!(
-                    Some(rank[&got.assignments[&id(*idx)]]),
+                    Some(rank[&assigned[&id(*idx)]]),
                     expected[*idx],
                     "subclass of unit {idx}, {label}"
                 );
@@ -254,15 +260,16 @@ fn infeasible_min_n_drops_every_unit() {
     for data in &reference.datasets {
         for run in data.runs.iter().filter(|r| r.error) {
             let got = ours(data, run);
-            assert!(
-                got.assignments.is_empty(),
+            assert_eq!(
+                got.retained_units(),
+                0,
                 "{} {} {:?}",
                 data.name,
                 run.estimand,
-                got.assignments
+                got.subclass
             );
-            assert!(got.weights.is_empty(), "{:?}", got.weights);
-            assert_eq!(got.dropped_ids.len(), data.treat.len());
+            assert!(got.weights().iter().all(|w| *w == 0.0));
+            assert_eq!(got.dropped_ids().len(), data.treat.len());
             refused += 1;
         }
     }

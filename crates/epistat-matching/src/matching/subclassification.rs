@@ -1,5 +1,7 @@
+use super::exact::unit_ids;
 use super::records::MatchingRecord;
 use crate::types::Estimand;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
@@ -55,7 +57,7 @@ impl Default for SubclassificationConfig {
 }
 
 /// Per-subclass summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubclassSummary {
     /// Subclass index.
     pub subclass: usize,
@@ -68,7 +70,13 @@ pub struct SubclassSummary {
 }
 
 /// Result of propensity-score subclassification.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// Units are numbered by position: the anchors in the order given, then the
+/// candidates in the order given. [`subclass`](Self::subclass) is indexed by
+/// that position. A unit that is dropped has no subclass and no weight. The
+/// weights are not stored; each is derived from the anchor share of the unit's
+/// subclass in [`subclasses`](Self::subclasses) when asked for.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubclassificationOutcome {
     /// Requested estimand for weighting.
     pub estimand: Estimand,
@@ -82,28 +90,102 @@ pub struct SubclassificationOutcome {
     /// largest interval also takes the units above the last quantile. With
     /// `min_n` above 0 the assignments can depart from these intervals.
     pub quantile_cuts: Vec<f64>,
-    /// Subclass assignment per retained unit id. Subclasses are numbered from
-    /// 0 in order of score, skipping any that no unit falls in.
-    pub assignments: HashMap<String, usize>,
-    /// Subclassification weights per retained unit id.
-    pub weights: HashMap<String, f64>,
-    /// Unit ids excluded due to missing/non-finite score or non-overlap subclass.
-    pub dropped_ids: Vec<String>,
+    /// The id of each unit.
+    pub ids: Vec<String>,
+    /// Number of anchors. The units before this position are anchors.
+    pub anchor_count: usize,
+    /// Subclass of each unit, `None` for a unit that is dropped because its
+    /// score is missing or not finite or because its subclass lacks a group.
+    /// Subclasses are numbered from 0 in order of score, skipping any that no
+    /// unit falls in.
+    pub subclass: Vec<Option<usize>>,
     /// Subclass summaries.
     pub subclasses: Vec<SubclassSummary>,
 }
 
 impl SubclassificationOutcome {
+    /// Number of units, kept or dropped.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether there are no units.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// The id of the unit at `position`.
+    ///
+    /// # Panics
+    ///
+    /// When `position` is not below [`len`](Self::len).
+    #[must_use]
+    pub fn id(&self, position: usize) -> &str {
+        &self.ids[position]
+    }
+
+    /// Whether the unit at `position` is an anchor.
+    #[must_use]
+    pub const fn is_anchor(&self, position: usize) -> bool {
+        position < self.anchor_count
+    }
+
     /// Number of retained units.
     #[must_use]
     pub fn retained_units(&self) -> usize {
-        self.assignments.len()
+        self.subclass.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// The retained units with their subclass, in position order.
+    pub fn assignments(&self) -> impl Iterator<Item = (&str, usize)> + '_ {
+        self.ids
+            .iter()
+            .zip(&self.subclass)
+            .filter_map(|(id, subclass)| subclass.map(|subclass| (id.as_str(), subclass)))
+    }
+
+    /// Ids of the units that were dropped, in position order.
+    #[must_use]
+    pub fn dropped_ids(&self) -> Vec<&str> {
+        self.ids
+            .iter()
+            .zip(&self.subclass)
+            .filter(|(_, subclass)| subclass.is_none())
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
+
+    /// The subclassification weight of the unit at `position`, `None` for a
+    /// dropped unit.
+    ///
+    /// # Panics
+    ///
+    /// When `position` is not below [`len`](Self::len).
+    #[must_use]
+    pub fn weight(&self, position: usize) -> Option<f64> {
+        let share = self.subclasses[self.subclass[position]?].subclass_propensity?;
+        Some(subclass_weight_for_estimand(
+            self.estimand,
+            share,
+            self.is_anchor(position),
+        ))
+    }
+
+    /// The weights of all units by position, with 0 for a dropped unit.
+    #[must_use]
+    pub fn weights(&self) -> Vec<f64> {
+        (0..self.len())
+            .into_par_iter()
+            .map(|position| self.weight(position).unwrap_or(0.0))
+            .collect()
     }
 }
 
 /// One unit with a usable score.
 struct ScoredUnit {
-    id: String,
+    position: usize,
     is_anchor: bool,
     score: f64,
     subclass: usize,
@@ -135,11 +217,20 @@ impl std::error::Error for SubclassificationError {}
 /// subclass weights of MatchIt before it rescales each group to sum to its
 /// number of retained units.
 ///
+/// # Algorithm
+///
+/// The scores of the units are read in parallel, the reference scores are
+/// sorted, the cutpoints are read off the sorted scores and each unit finds its
+/// interval by binary search among them. Intervals that hold no unit are
+/// skipped by a pass over a table of the intervals, not a sort of the units.
+/// The sort is `O(n log n)`, the rest `O(n log k)` for `k` subclasses, and the
+/// outcome holds one id and one subclass number per unit.
+///
 /// # Errors
 ///
 /// Returns [`SubclassificationError::NoSubclasses`] when `config.subclasses`
 /// is 0.
-pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
+pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + Sync>(
     anchors: &[R],
     candidates: &[R],
     propensity_scores: &HashMap<String, f64, H>,
@@ -151,8 +242,17 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
     }
     let requested_subclasses = config.subclasses;
     let reference_group = resolve_reference_group(config.reference_group, estimand);
-    let reference_scores =
-        sorted_reference_scores(anchors, candidates, propensity_scores, reference_group);
+    let scores: Vec<Option<f64>> = anchors
+        .par_iter()
+        .chain(candidates.par_iter())
+        .map(|row| {
+            propensity_scores
+                .get(row.id())
+                .copied()
+                .filter(|score| score.is_finite())
+        })
+        .collect();
+    let reference_scores = sorted_reference_scores(&scores, anchors.len(), reference_group);
     if reference_scores.is_empty() {
         return Ok(dropped_only_outcome(
             anchors,
@@ -165,28 +265,21 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
     let quantile_cuts = quantile_cuts(&reference_scores, requested_subclasses);
     let interior = &quantile_cuts[1..quantile_cuts.len() - 1];
 
-    let mut dropped_ids = Vec::new();
-    let mut units = Vec::with_capacity(anchors.len() + candidates.len());
-    for (rows, is_anchor) in [(anchors, true), (candidates, false)] {
-        for row in rows {
-            match propensity_scores
-                .get(row.id())
-                .copied()
-                .filter(|score| score.is_finite())
-            {
-                Some(score) => units.push(ScoredUnit {
-                    id: row.id().to_string(),
-                    is_anchor,
-                    score,
-                    subclass: interior.partition_point(|cut| *cut <= score),
-                }),
-                None => dropped_ids.push(row.id().to_string()),
-            }
-        }
-    }
+    let mut units: Vec<ScoredUnit> = scores
+        .par_iter()
+        .enumerate()
+        .filter_map(|(position, score)| {
+            score.map(|score| ScoredUnit {
+                position,
+                is_anchor: position < anchors.len(),
+                score,
+                subclass: interior.partition_point(|cut| *cut <= score),
+            })
+        })
+        .collect();
     // Intervals that no unit falls in, which tied quantiles produce, are not
     // subclasses.
-    let subclass_count = renumber_present_subclasses(&mut units);
+    let subclass_count = renumber_present_subclasses(&mut units, interior.len() + 1);
 
     if config.min_n > 0 && !fill_deficient_subclasses(&mut units, subclass_count, config.min_n) {
         let mut outcome = dropped_only_outcome(anchors, candidates, estimand, requested_subclasses);
@@ -210,19 +303,12 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
         .filter(|is_valid| **is_valid)
         .count();
 
-    let mut assignments = HashMap::new();
-    let mut weights = HashMap::new();
-    for unit in units {
-        let propensity = subclasses[unit.subclass].subclass_propensity;
-        match propensity.filter(|_| valid_subclasses[unit.subclass]) {
-            Some(propensity) => {
-                weights.insert(
-                    unit.id.clone(),
-                    subclass_weight_for_estimand(estimand, propensity, unit.is_anchor),
-                );
-                assignments.insert(unit.id, unit.subclass);
-            }
-            None => dropped_ids.push(unit.id),
+    let mut subclass = vec![None; scores.len()];
+    for unit in &units {
+        if valid_subclasses[unit.subclass]
+            && subclasses[unit.subclass].subclass_propensity.is_some()
+        {
+            subclass[unit.position] = Some(unit.subclass);
         }
     }
 
@@ -231,9 +317,9 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher>(
         requested_subclasses,
         realized_subclasses,
         quantile_cuts,
-        assignments,
-        weights,
-        dropped_ids,
+        ids: unit_ids(anchors, candidates),
+        anchor_count: anchors.len(),
+        subclass,
         subclasses,
     })
 }
@@ -249,33 +335,24 @@ fn resolve_reference_group(
     })
 }
 
-fn sorted_reference_scores<R: MatchingRecord, H: BuildHasher>(
-    anchors: &[R],
-    candidates: &[R],
-    propensity_scores: &HashMap<String, f64, H>,
+/// The finite scores of the reference group, sorted. `scores` holds the score
+/// of every unit by position, with `None` for a score that is missing or not
+/// finite, and the first `anchor_count` units are the anchors.
+fn sorted_reference_scores(
+    scores: &[Option<f64>],
+    anchor_count: usize,
     reference_group: SubclassReferenceGroup,
 ) -> Vec<f64> {
-    let mut scores = match reference_group {
-        SubclassReferenceGroup::Anchors => collect_finite_scores(anchors, propensity_scores),
-        SubclassReferenceGroup::Candidates => collect_finite_scores(candidates, propensity_scores),
-        SubclassReferenceGroup::Pooled => {
-            let mut pooled = collect_finite_scores(anchors, propensity_scores);
-            pooled.extend(collect_finite_scores(candidates, propensity_scores));
-            pooled
-        }
+    let (anchors, candidates) = scores.split_at(anchor_count);
+    let mut scores: Vec<f64> = match reference_group {
+        SubclassReferenceGroup::Anchors => anchors.iter().flatten().copied().collect(),
+        SubclassReferenceGroup::Candidates => candidates.iter().flatten().copied().collect(),
+        SubclassReferenceGroup::Pooled => scores.iter().flatten().copied().collect(),
     };
-    scores.sort_unstable_by(f64::total_cmp);
+    // Scores equal under the total order are the same bits, so the order among
+    // them cannot show.
+    scores.par_sort_unstable_by(f64::total_cmp);
     scores
-}
-
-fn collect_finite_scores<R: MatchingRecord, H: BuildHasher>(
-    rows: &[R],
-    propensity_scores: &HashMap<String, f64, H>,
-) -> Vec<f64> {
-    rows.iter()
-        .filter_map(|row| propensity_scores.get(row.id()).copied())
-        .filter(|score| score.is_finite())
-        .collect()
 }
 
 /// The `subclasses + 1` quantiles at probabilities `0, 1/k, ..., 1` of the
@@ -325,15 +402,23 @@ fn floor_rank(position: f64, count: usize) -> usize {
 }
 
 /// Renumber the subclasses that some unit occupies as `0..count`, keeping
-/// their order, and return `count`.
-fn renumber_present_subclasses(units: &mut [ScoredUnit]) -> usize {
-    let mut present: Vec<usize> = units.iter().map(|unit| unit.subclass).collect();
-    present.sort_unstable();
-    present.dedup();
-    for unit in units.iter_mut() {
-        unit.subclass = present.partition_point(|value| *value < unit.subclass);
+/// their order, and return `count`. `intervals` is the number of subclasses
+/// before renumbering.
+fn renumber_present_subclasses(units: &mut [ScoredUnit], intervals: usize) -> usize {
+    let mut rank = vec![0_usize; intervals];
+    for unit in units.iter() {
+        rank[unit.subclass] = 1;
     }
-    present.len()
+    let mut count = 0;
+    for slot in &mut rank {
+        let present = *slot == 1;
+        *slot = count;
+        count += usize::from(present);
+    }
+    units
+        .par_iter_mut()
+        .for_each(|unit| unit.subclass = rank[unit.subclass]);
+    count
 }
 
 /// Reassign units so that every subclass holds at least `min_n` units of each
@@ -502,16 +587,12 @@ fn dropped_only_outcome<R: MatchingRecord>(
     estimand: Estimand,
     requested_subclasses: usize,
 ) -> SubclassificationOutcome {
-    let mut dropped_ids = anchors
-        .iter()
-        .map(|row| row.id().to_string())
-        .collect::<Vec<_>>();
-    dropped_ids.extend(candidates.iter().map(|row| row.id().to_string()));
-
     SubclassificationOutcome {
         estimand,
         requested_subclasses,
-        dropped_ids,
+        ids: unit_ids(anchors, candidates),
+        anchor_count: anchors.len(),
+        subclass: vec![None; anchors.len() + candidates.len()],
         ..SubclassificationOutcome::default()
     }
 }
@@ -533,6 +614,280 @@ mod tests {
 
     fn assert_close(value: f64, expected: f64) {
         assert!((value - expected).abs() < 1e-12);
+    }
+
+    fn weights(outcome: &SubclassificationOutcome) -> HashMap<String, f64> {
+        let (ids, values) = outcome.weights_sorted();
+        ids.into_iter().map(str::to_owned).zip(values).collect()
+    }
+
+    fn assigned(outcome: &SubclassificationOutcome) -> HashMap<String, usize> {
+        outcome
+            .assignments()
+            .map(|(id, subclass)| (id.to_owned(), subclass))
+            .collect()
+    }
+
+    /// The method as it was written, with a string id on every unit, maps by
+    /// id for the outcome and a sort to find the occupied subclasses, kept to
+    /// check the columnar one against.
+    mod reference {
+        use super::*;
+
+        #[derive(Debug)]
+        pub struct Maps {
+            pub realized: usize,
+            pub quantile_cuts: Vec<f64>,
+            pub assignments: HashMap<String, usize>,
+            pub weights: HashMap<String, f64>,
+            pub dropped_ids: Vec<String>,
+            pub subclasses: Vec<SubclassSummary>,
+        }
+
+        pub fn subclassify<R: MatchingRecord>(
+            anchors: &[R],
+            candidates: &[R],
+            scores: &HashMap<String, f64>,
+            estimand: Estimand,
+            config: &SubclassificationConfig,
+        ) -> Maps {
+            let reference_group = resolve_reference_group(config.reference_group, estimand);
+            let finite = |rows: &[R]| -> Vec<f64> {
+                rows.iter()
+                    .filter_map(|row| scores.get(row.id()).copied())
+                    .filter(|score| score.is_finite())
+                    .collect()
+            };
+            let mut reference_scores = match reference_group {
+                SubclassReferenceGroup::Anchors => finite(anchors),
+                SubclassReferenceGroup::Candidates => finite(candidates),
+                SubclassReferenceGroup::Pooled => {
+                    let mut pooled = finite(anchors);
+                    pooled.extend(finite(candidates));
+                    pooled
+                }
+            };
+            reference_scores.sort_unstable_by(f64::total_cmp);
+            let everyone = |dropped: Vec<String>| Maps {
+                realized: 0,
+                quantile_cuts: Vec::new(),
+                assignments: HashMap::new(),
+                weights: HashMap::new(),
+                dropped_ids: dropped,
+                subclasses: Vec::new(),
+            };
+            let all_ids = || -> Vec<String> {
+                anchors
+                    .iter()
+                    .chain(candidates)
+                    .map(|row| row.id().to_string())
+                    .collect()
+            };
+            if reference_scores.is_empty() {
+                return everyone(all_ids());
+            }
+            let cuts = quantile_cuts(&reference_scores, config.subclasses);
+            let interior = &cuts[1..cuts.len() - 1];
+            let mut dropped_ids = Vec::new();
+            let mut units = Vec::new();
+            let mut ids = Vec::new();
+            for (rows, is_anchor) in [(anchors, true), (candidates, false)] {
+                for row in rows {
+                    match scores
+                        .get(row.id())
+                        .copied()
+                        .filter(|score| score.is_finite())
+                    {
+                        Some(score) => {
+                            units.push(ScoredUnit {
+                                position: ids.len(),
+                                is_anchor,
+                                score,
+                                subclass: interior.partition_point(|cut| *cut <= score),
+                            });
+                            ids.push(row.id().to_string());
+                        }
+                        None => dropped_ids.push(row.id().to_string()),
+                    }
+                }
+            }
+            let mut present: Vec<usize> = units.iter().map(|unit| unit.subclass).collect();
+            present.sort_unstable();
+            present.dedup();
+            for unit in &mut units {
+                unit.subclass = present.partition_point(|value| *value < unit.subclass);
+            }
+            let subclass_count = present.len();
+            if config.min_n > 0
+                && !fill_deficient_subclasses(&mut units, subclass_count, config.min_n)
+            {
+                let mut out = everyone(all_ids());
+                out.quantile_cuts = cuts;
+                return out;
+            }
+            let mut anchor_counts = vec![0usize; subclass_count];
+            let mut candidate_counts = vec![0usize; subclass_count];
+            for unit in &units {
+                if unit.is_anchor {
+                    anchor_counts[unit.subclass] += 1;
+                } else {
+                    candidate_counts[unit.subclass] += 1;
+                }
+            }
+            let valid = valid_subclasses(&anchor_counts, &candidate_counts);
+            let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
+            let realized = valid.iter().filter(|v| **v).count();
+            let mut assignments = HashMap::new();
+            let mut weights = HashMap::new();
+            for unit in units {
+                let id = ids[unit.position].clone();
+                let propensity = subclasses[unit.subclass].subclass_propensity;
+                match propensity.filter(|_| valid[unit.subclass]) {
+                    Some(propensity) => {
+                        weights.insert(
+                            id.clone(),
+                            subclass_weight_for_estimand(estimand, propensity, unit.is_anchor),
+                        );
+                        assignments.insert(id, unit.subclass);
+                    }
+                    None => dropped_ids.push(id),
+                }
+            }
+            Maps {
+                realized,
+                quantile_cuts: cuts,
+                assignments,
+                weights,
+                dropped_ids,
+                subclasses,
+            }
+        }
+    }
+
+    #[test]
+    fn the_columns_equal_the_maps_of_the_per_unit_version() {
+        use crate::matching::exact::reference::Lcg;
+        for (seed, anchors, candidates, nan_share, tied) in [
+            (1_u64, 40_usize, 90_usize, 0_u64, false),
+            (2, 500, 1500, 0, false),
+            (3, 500, 1500, 20, true),
+            (4, 20_000, 30_000, 0, false),
+            (5, 3000, 3000, 50, true),
+            (6, 5, 4, 0, false),
+        ] {
+            let mut rng = Lcg(seed);
+            let make = |prefix: &str, count: usize| -> Vec<BaseRecord> {
+                (0..count)
+                    .map(|i| record(&format!("{prefix}{i}")))
+                    .collect()
+            };
+            let a = make("a", anchors);
+            let c = make("c", candidates);
+            let mut scores = HashMap::new();
+            for row in a.iter().chain(&c) {
+                let draw = if tied {
+                    // Few values, so that quantile cuts tie and units tie.
+                    rng.below(8) as f64 / 8.0
+                } else {
+                    rng.below(1_000_000) as f64 / 1_000_000.0
+                };
+                let value = match rng.below(100) {
+                    n if n < nan_share => f64::NAN,
+                    _ => draw,
+                };
+                if rng.below(97) != 0 {
+                    scores.insert(row.id().to_string(), value);
+                }
+            }
+            for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
+                for subclasses in [1, 5, 6, 40] {
+                    for min_n in [0, 1, 3] {
+                        for reference_group in [
+                            None,
+                            Some(SubclassReferenceGroup::Candidates),
+                            Some(SubclassReferenceGroup::Pooled),
+                        ] {
+                            let config = SubclassificationConfig {
+                                subclasses,
+                                reference_group,
+                                min_n,
+                            };
+                            let context = format!(
+                                "seed {seed} {estimand:?} {subclasses} {min_n} {reference_group:?}"
+                            );
+                            let new = subclassify_by_propensity_score_map(
+                                &a, &c, &scores, estimand, &config,
+                            )
+                            .unwrap();
+                            let old = reference::subclassify(&a, &c, &scores, estimand, &config);
+                            assert_eq!(new.realized_subclasses, old.realized, "{context}");
+                            assert_eq!(new.subclasses, old.subclasses, "{context}");
+                            assert_eq!(
+                                new.quantile_cuts
+                                    .iter()
+                                    .map(|v| v.to_bits())
+                                    .collect::<Vec<_>>(),
+                                old.quantile_cuts
+                                    .iter()
+                                    .map(|v| v.to_bits())
+                                    .collect::<Vec<_>>(),
+                                "{context}"
+                            );
+                            assert_eq!(assigned(&new), old.assignments, "{context}");
+                            let new_weights = weights(&new);
+                            assert_eq!(new_weights.len(), old.weights.len(), "{context}");
+                            for (id, weight) in &old.weights {
+                                assert_eq!(
+                                    new_weights[id].to_bits(),
+                                    weight.to_bits(),
+                                    "{context}"
+                                );
+                            }
+                            // The dropped units come in position order, where the
+                            // per-unit version listed those without a score first.
+                            let mut new_dropped: Vec<String> =
+                                new.dropped_ids().into_iter().map(str::to_owned).collect();
+                            let mut old_dropped = old.dropped_ids;
+                            new_dropped.sort();
+                            old_dropped.sort();
+                            assert_eq!(new_dropped, old_dropped, "{context}");
+                            assert_eq!(new.len(), anchors + candidates);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_outcome_is_the_same_on_any_number_of_threads() {
+        use crate::matching::exact::reference::Lcg;
+        let mut rng = Lcg(3);
+        let a: Vec<BaseRecord> = (0..40_000).map(|i| record(&format!("a{i}"))).collect();
+        let c: Vec<BaseRecord> = (0..60_000).map(|i| record(&format!("c{i}"))).collect();
+        let scores: HashMap<String, f64> = a
+            .iter()
+            .chain(&c)
+            .map(|row| (row.id().to_string(), rng.below(100_000) as f64 / 100_000.0))
+            .collect();
+        epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
+            let out = subclassify_by_propensity_score_map(
+                &a,
+                &c,
+                &scores,
+                Estimand::Ate,
+                &SubclassificationConfig::default(),
+            )
+            .unwrap();
+            let mut values: Vec<f64> = out
+                .subclass
+                .iter()
+                .map(|s| s.map_or(-1.0, |s| s as f64))
+                .collect();
+            values.extend(out.weights());
+            values.extend(&out.quantile_cuts);
+            values
+        });
     }
 
     #[test]
@@ -562,9 +917,13 @@ mod tests {
 
         assert_eq!(outcome.realized_subclasses, 2);
         assert_eq!(outcome.retained_units(), 4);
-        assert!(outcome.dropped_ids.is_empty(), "{:?}", outcome.dropped_ids);
-        assert_close(*outcome.weights.get("a1").expect("anchor weight"), 1.0);
-        assert_close(*outcome.weights.get("c1").expect("candidate weight"), 1.0);
+        assert!(
+            outcome.dropped_ids().is_empty(),
+            "{:?}",
+            outcome.dropped_ids()
+        );
+        assert_close(*weights(&outcome).get("a1").expect("anchor weight"), 1.0);
+        assert_close(*weights(&outcome).get("c1").expect("candidate weight"), 1.0);
     }
 
     #[test]
@@ -593,8 +952,8 @@ mod tests {
         .expect("valid subclassification settings");
 
         assert_eq!(outcome.realized_subclasses, 0);
-        assert!(outcome.assignments.is_empty(), "{:?}", outcome.assignments);
-        assert_eq!(outcome.dropped_ids.len(), 4);
+        assert_eq!(outcome.retained_units(), 0, "{:?}", outcome.subclass);
+        assert_eq!(outcome.dropped_ids().len(), 4);
     }
 
     #[test]
@@ -624,12 +983,12 @@ mod tests {
         )
         .expect("valid subclassification settings");
 
-        assert_close(*outcome.weights.get("a1").expect("a1 weight"), 1.5);
-        assert_close(*outcome.weights.get("a2").expect("a2 weight"), 1.5);
-        assert_close(*outcome.weights.get("c1").expect("c1 weight"), 3.0);
-        assert_close(*outcome.weights.get("a3").expect("a3 weight"), 3.0);
-        assert_close(*outcome.weights.get("c2").expect("c2 weight"), 1.5);
-        assert_close(*outcome.weights.get("c3").expect("c3 weight"), 1.5);
+        assert_close(*weights(&outcome).get("a1").expect("a1 weight"), 1.5);
+        assert_close(*weights(&outcome).get("a2").expect("a2 weight"), 1.5);
+        assert_close(*weights(&outcome).get("c1").expect("c1 weight"), 3.0);
+        assert_close(*weights(&outcome).get("a3").expect("a3 weight"), 3.0);
+        assert_close(*weights(&outcome).get("c2").expect("c2 weight"), 1.5);
+        assert_close(*weights(&outcome).get("c3").expect("c3 weight"), 1.5);
     }
 
     #[test]
@@ -660,10 +1019,10 @@ mod tests {
         // The pooled median is 0.3, and both units scored 0.3 are in the upper
         // subclass.
         assert_close(outcome.quantile_cuts[1], 0.3);
-        assert_eq!(outcome.assignments["a1"], 0);
-        assert_eq!(outcome.assignments["c1"], 0);
-        assert_eq!(outcome.assignments["a2"], 1);
-        assert_eq!(outcome.assignments["c2"], 1);
+        assert_eq!(assigned(&outcome)["a1"], 0);
+        assert_eq!(assigned(&outcome)["c1"], 0);
+        assert_eq!(assigned(&outcome)["a2"], 1);
+        assert_eq!(assigned(&outcome)["c2"], 1);
     }
 
     #[test]
@@ -695,12 +1054,16 @@ mod tests {
         // The middle subclass holds a2 and no candidate. Candidates sit below
         // (two) and above (two) it, so it looks left and takes c2, the lower
         // candidate closest to it.
-        assert_eq!(outcome.assignments["a2"], 1);
-        assert_eq!(outcome.assignments["c2"], 1);
-        assert_eq!(outcome.assignments["c1"], 0);
-        assert_eq!(outcome.assignments["c3"], 2);
+        assert_eq!(assigned(&outcome)["a2"], 1);
+        assert_eq!(assigned(&outcome)["c2"], 1);
+        assert_eq!(assigned(&outcome)["c1"], 0);
+        assert_eq!(assigned(&outcome)["c3"], 2);
         assert_eq!(outcome.realized_subclasses, 3);
-        assert!(outcome.dropped_ids.is_empty(), "{:?}", outcome.dropped_ids);
+        assert!(
+            outcome.dropped_ids().is_empty(),
+            "{:?}",
+            outcome.dropped_ids()
+        );
     }
 
     #[test]
@@ -725,7 +1088,7 @@ mod tests {
             &config,
         )
         .expect("valid subclassification settings");
-        assert!(outcome.assignments.is_empty(), "{:?}", outcome.assignments);
-        assert_eq!(outcome.dropped_ids.len(), 3);
+        assert_eq!(outcome.retained_units(), 0, "{:?}", outcome.subclass);
+        assert_eq!(outcome.dropped_ids().len(), 3);
     }
 }

@@ -1,5 +1,6 @@
 mod cardinality;
 mod cem;
+mod codes;
 mod constraints;
 mod distance;
 mod engine;
@@ -54,7 +55,7 @@ pub use estimation::{
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
 };
-pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
+pub use exact::{ExactMatchError, ExactMatchOutcome, SubclassedUnits, exact_match_subclasses};
 pub use fine_balance::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
 };
