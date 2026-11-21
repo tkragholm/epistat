@@ -23,7 +23,7 @@
 # from 1), MatchIt's weights, the total distance of the pairs and whether the
 # optimum is unique, meaning that six perturbations of every entry of the
 # distance matrix by about 1e-5 standard deviations of the score give the same
-# pairs. (Absolute differences of a score on a line tie often: two treated units
+# pairs, on a Euclidean data set. (Absolute differences of a score on a line tie often: two treated units
 # on one side of two controls can swap them at the same cost.)
 #
 # `matchit()` ignores calipers with method = "optimal". The caliper runs call
@@ -218,7 +218,9 @@ for (name in names(scenarios)) {
         run$weights <- weights_of(m)
         run$total <- total_distance(D0, p)
         run$r_epsilon <- r_epsilon(D0)
-        run$unique <- unique_optimum
+        # Distances on a line tie, and a few perturbations can miss a tie, so
+        # only the Euclidean data sets claim a unique optimum.
+        run$unique <- unique_optimum && kind == "euclid"
         runs[[length(runs) + 1]] <- run
       }
     }
@@ -259,7 +261,7 @@ for (name in c("wide", "tight", "few", "euclid", "euclid_tight")) {
       run$other <- p$other
       run$total <- total_distance(D0, p)
       run$r_epsilon <- r_epsilon(D)
-      run$unique <- unique_optimum
+      run$unique <- unique_optimum && startsWith(name, "euclid")
       caliper_runs[[length(caliper_runs) + 1]] <- run
     }
   }

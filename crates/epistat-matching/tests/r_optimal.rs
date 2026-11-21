@@ -24,10 +24,9 @@
 //!   more than R's bound plus the crate's.
 //! * The number of pairs and, per anchor, the number of candidates.
 //! * Where the optimum is unique (six perturbations of every distance by 1e-5
-//!   standard deviations of the score give R's pairs each time) the pairs, and
-//!   MatchIt's weights, equal the crate's. Distances on a line tie often, so
-//!   only some of the runs on scores are unique, and every run on Euclidean
-//!   distances is.
+//!   standard deviations of the score give R's pairs each time, on a Euclidean
+//!   data set) the pairs, and MatchIt's weights, equal the crate's. Distances
+//!   on a line tie often, so those runs are compared by total only.
 //! * Where R finds no feasible matching, the crate reports
 //!   [`OptimalError::Infeasible`].
 //!
