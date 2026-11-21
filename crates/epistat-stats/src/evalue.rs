@@ -351,7 +351,10 @@ mod tests {
 
     #[test]
     fn the_null_has_evalue_one() {
-        assert_eq!(evalue_threshold(1.0, 1.0).unwrap(), 1.0);
+        assert_eq!(
+            evalue_threshold(1.0, 1.0).unwrap().to_bits(),
+            1.0_f64.to_bits()
+        );
     }
 
     #[test]

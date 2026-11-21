@@ -143,7 +143,10 @@ fn pooled_scalars_match_mice_pool_scalar() {
         if s.b == 0.0 {
             // The limit: df is the observed-data value (n-1+1)/(n-1+3)*(n-1).
             let d = dfcom.unwrap();
-            assert_eq!(p.df.unwrap(), (d + 1.0) / (d + 3.0) * d);
+            assert_eq!(
+                p.df.unwrap().to_bits(),
+                ((d + 1.0) / (d + 3.0) * d).to_bits()
+            );
         }
         eprintln!("{}", s.name);
     }
