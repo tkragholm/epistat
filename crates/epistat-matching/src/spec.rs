@@ -22,10 +22,12 @@ use crate::matching::{
     MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
     MatchOrder, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection,
     PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, RandomSelection, RoleIndexedRecord, SelectionStrategy,
-    SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
+    PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions, QuickMatchOutcome,
+    RandomSelection, RoleIndexedRecord, SeedMethod, SelectionStrategy, SubclassReferenceGroup,
+    SubclassificationConfig, SubclassificationOutcome, apply_transposed, cholesky_lower,
     exact_match_subclasses, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config, subclassify_by_propensity_score_map,
+    prepare_propensity_distance_config, quick_match_subclasses,
+    subclassify_by_propensity_score_map,
 };
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, CriteriaValidationError, DistanceCaliper, Estimand,
@@ -72,6 +74,9 @@ pub enum MatchMethod {
     /// Subclasses of the propensity score or another score, as
     /// `matchit(method = "subclass")`. Standard mode only.
     Subclass,
+    /// Generalised full matching on the distance, with weights, as
+    /// `matchit(method = "quick")`. Standard mode only.
+    Quick,
 }
 
 /// The order in which anchors take their controls.
@@ -420,6 +425,35 @@ impl From<ReferenceSpec> for SubclassReferenceGroup {
     }
 }
 
+/// The options of the quick method.
+///
+/// The caliper is the one of the distance, the widest distance between two
+/// units of a subclass.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QuickSpec {
+    /// Fewest anchors in a subclass.
+    pub min_anchors: usize,
+    /// Fewest candidates in a subclass.
+    pub min_candidates: usize,
+    /// Fewest units in a subclass. The default is the two minimums together.
+    pub size: Option<usize>,
+    /// The order in which units are tried as seeds.
+    pub seed_method: SeedMethod,
+}
+
+impl Default for QuickSpec {
+    fn default() -> Self {
+        let options = QuickMatchOptions::default();
+        Self {
+            min_anchors: options.min_anchors,
+            min_candidates: options.min_candidates,
+            size: options.size,
+            seed_method: options.seed_method,
+        }
+    }
+}
+
 /// Everything a match can be configured with.
 ///
 /// The defaults are those of [`MatchJob`]: random choice among the candidates
@@ -441,6 +475,8 @@ pub struct MatchSpec {
     pub nearest: NearestSpec,
     /// Options of the subclass method.
     pub subclass: SubclassSpec,
+    /// Options of the quick method.
+    pub quick: QuickSpec,
     /// How anchors share the candidates when each takes more than one. The
     /// default is sequential, and rounds for the nearest method as in
     /// `matchit()`. Risk-set matching is always sequential.
@@ -495,6 +531,7 @@ impl Default for MatchSpec {
             distance: DistanceSpec::default(),
             nearest: NearestSpec::default(),
             subclass: SubclassSpec::default(),
+            quick: QuickSpec::default(),
             assignment: None,
             ratio: criteria.match_ratio,
             ratio_fallback: Vec::new(),
@@ -545,6 +582,8 @@ pub enum SpecOutput {
     },
     /// Strata with weights, from the exact method.
     Exact(Box<ExactMatchOutcome>),
+    /// Subclasses with weights, from the quick method.
+    Quick(Box<QuickMatchOutcome>),
     /// Subclasses with weights, from the subclass method.
     Subclass {
         /// The subclasses and their weights.
@@ -575,6 +614,8 @@ pub enum SpecError {
     Distance(EstimationError),
     /// Exact matching could not run.
     Exact(ExactMatchError),
+    /// Generalised full matching could not run.
+    Quick(QuickMatchError),
     /// The matcher refused the configuration.
     Rejected(ExclusionReason),
 }
@@ -605,6 +646,7 @@ impl Display for SpecError {
             },
             Self::Distance(error) => write!(f, "the distance could not be built: {error}"),
             Self::Exact(error) => write!(f, "exact matching could not run: {error}"),
+            Self::Quick(error) => write!(f, "generalised full matching could not run: {error}"),
             Self::Rejected(reason) => write!(
                 f,
                 "the matcher refused the configuration ({reason}); \
@@ -620,6 +662,7 @@ impl Error for SpecError {
             Self::Criteria(error) => Some(error),
             Self::Distance(error) => Some(error),
             Self::Exact(error) => Some(error),
+            Self::Quick(error) => Some(error),
             Self::Option { .. } | Self::InputMode { .. } | Self::Rejected(_) => None,
         }
     }
@@ -640,6 +683,12 @@ impl From<EstimationError> for SpecError {
 impl From<ExactMatchError> for SpecError {
     fn from(error: ExactMatchError) -> Self {
         Self::Exact(error)
+    }
+}
+
+impl From<QuickMatchError> for SpecError {
+    fn from(error: QuickMatchError) -> Self {
+        Self::Quick(error)
     }
 }
 
@@ -725,6 +774,13 @@ impl MatchSpec {
             ));
         }
 
+        if self.quick != QuickSpec::default() && self.method != MatchMethod::Quick {
+            return Err(SpecError::option(
+                "quick",
+                "the size, minimums and seed method belong to the quick method; \
+                 set the method to quick or drop them",
+            ));
+        }
         let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper;
         if nearest_options && self.method != MatchMethod::Nearest {
             return Err(SpecError::option(
@@ -736,6 +792,7 @@ impl MatchSpec {
         match self.method {
             MatchMethod::Exact => self.validate_exact()?,
             MatchMethod::Subclass => self.validate_subclass()?,
+            MatchMethod::Quick => self.validate_quick()?,
             MatchMethod::Nearest => self.validate_nearest()?,
             MatchMethod::Random | MatchMethod::LowestIndex | MatchMethod::NearestBirthDate => {
                 if self.assignment == Some(AssignmentSpec::Rounds)
@@ -841,6 +898,23 @@ impl MatchSpec {
             ));
         }
         self.reject_pair_options("subclass")
+    }
+
+    fn validate_quick(&self) -> Result<(), SpecError> {
+        if matches!(self.distance, DistanceSpec::Date { .. }) {
+            return Err(SpecError::option(
+                "distance",
+                "the quick method needs a propensity score, a score of your own, or a \
+                 Euclidean or Mahalanobis distance; set the distance",
+            ));
+        }
+        if self.std_caliper {
+            return Err(SpecError::option(
+                "std_caliper",
+                "the quick method takes its caliper in the units of the distance; drop it",
+            ));
+        }
+        self.reject_pair_options("quick")
     }
 
     /// The options that pair formation reads, which a method that forms no
@@ -1090,6 +1164,70 @@ fn build_distance<R: CovariateRecord>(
     })
 }
 
+/// Generalised full matching on the points of a built distance. A
+/// Mahalanobis distance is made Euclidean first.
+fn run_quick<R: MatchingRecord>(
+    config: &DistanceConfig,
+    anchors: &[R],
+    candidates: &[R],
+    exact: &[String],
+    options: &QuickMatchOptions,
+) -> Result<QuickMatchOutcome, SpecError> {
+    let outcome = match config {
+        DistanceConfig::PropensityScoreMap { scores, .. } => quick_match_subclasses(
+            anchors,
+            candidates,
+            |row: &R| scores.get(row.id()).map(std::slice::from_ref),
+            1,
+            exact,
+            options,
+        ),
+        DistanceConfig::EuclideanMap {
+            vectors, dimension, ..
+        } => quick_match_subclasses(
+            anchors,
+            candidates,
+            |row: &R| vectors.get(row.id()).map(Vec::as_slice),
+            *dimension,
+            exact,
+            options,
+        ),
+        DistanceConfig::MahalanobisMap {
+            vectors,
+            inverse_covariance,
+            dimension,
+            ..
+        } => {
+            let factor = cholesky_lower(inverse_covariance, *dimension).ok_or_else(|| {
+                SpecError::option(
+                    "distance",
+                    "the inverse covariance matrix is not positive definite; \
+                     drop covariates that are collinear or constant",
+                )
+            })?;
+            let embedded: RapidHashMap<String, Vec<f64>> = vectors
+                .iter()
+                .map(|(id, vector)| (id.clone(), apply_transposed(&factor, vector, *dimension)))
+                .collect();
+            quick_match_subclasses(
+                anchors,
+                candidates,
+                |row: &R| embedded.get(row.id()).map(Vec::as_slice),
+                *dimension,
+                exact,
+                options,
+            )
+        }
+        DistanceConfig::Date { .. } => {
+            return Err(SpecError::option(
+                "distance",
+                "the quick method needs a score or a covariate distance",
+            ));
+        }
+    };
+    Ok(outcome?)
+}
+
 /// The scores of a distance for subclassification.
 fn scores_of(config: &DistanceConfig) -> Option<&RapidHashMap<String, f64>> {
     match config {
@@ -1285,6 +1423,22 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
                 propensity: built.propensity.map(Box::new),
             });
         }
+        MatchMethod::Quick => {
+            let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+            let config = built
+                .config
+                .as_ref()
+                .ok_or_else(|| SpecError::option("distance", "no distance was built"))?;
+            let options = QuickMatchOptions {
+                min_anchors: spec.quick.min_anchors,
+                min_candidates: spec.quick.min_candidates,
+                size: spec.quick.size,
+                caliper: spec.distance.caliper(),
+                seed_method: spec.quick.seed_method,
+            };
+            let outcome = run_quick(config, anchors, candidates, &spec.exact, &options)?;
+            return Ok(SpecOutput::Quick(Box::new(outcome)));
+        }
         MatchMethod::Random
         | MatchMethod::LowestIndex
         | MatchMethod::NearestBirthDate
@@ -1324,7 +1478,9 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             }
             run_standard_with(plan(false), strategy)?
         }
-        MatchMethod::Exact | MatchMethod::Subclass => unreachable!("handled above"),
+        MatchMethod::Exact | MatchMethod::Subclass | MatchMethod::Quick => {
+            unreachable!("handled above")
+        }
     };
     Ok(SpecOutput::Pairs {
         outcome: Box::new(outcome),
@@ -1421,7 +1577,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         MatchMethod::Random => job.with_strategy(RandomSelection::seeded(spec.seed)).run(),
         MatchMethod::LowestIndex => job.with_strategy(DeterministicSelection).run(),
         MatchMethod::NearestBirthDate => job.with_strategy(NearestBirthDateSelection).run(),
-        MatchMethod::Nearest | MatchMethod::Exact | MatchMethod::Subclass => {
+        MatchMethod::Nearest | MatchMethod::Exact | MatchMethod::Subclass | MatchMethod::Quick => {
             unreachable!("rejected by validation")
         }
     };

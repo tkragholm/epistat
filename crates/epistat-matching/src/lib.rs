@@ -162,6 +162,10 @@ pub use matching::{
     reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
+pub use matching::{
+    QuickMatchError, QuickMatchOptions, QuickMatchOutcome, SeedMethod, quick_clusters,
+    quick_match_subclasses,
+};
 pub use role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
 };
@@ -187,7 +191,7 @@ pub use output::{
 };
 pub use spec::{
     AssignmentSpec, CovarianceSpec, CovariatesSpec, DistanceSpec, EstimatorSpec, LambdaSpec,
-    LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec,
+    LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec,
     ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec,
     run_spec,
 };
