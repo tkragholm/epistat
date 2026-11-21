@@ -24,6 +24,16 @@ pub enum Estimand {
 }
 
 /// Common-support trimming policy.
+///
+/// A unit is trimmed when its score is strictly outside the range of the
+/// scores of the other group, so a unit equal to an end of that range is
+/// kept.
+///
+/// In standard matching the other group is all candidates for an anchor and
+/// all anchors for a candidate. In risk-set matching a case is trimmed against
+/// the scores of the records at risk on its own event date, by the risk-set
+/// rule alone and before any matching constraint, and a candidate against the
+/// scores of all cases. A case with nobody at risk is not trimmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommonSupport {
     /// Discard anchors outside the overlap region.
