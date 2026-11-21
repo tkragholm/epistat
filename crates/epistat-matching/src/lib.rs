@@ -201,10 +201,10 @@ pub use output::{
 };
 pub use spec::{
     AssignmentSpec, BinRuleSpec, BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec,
-    CovariatesSpec, DistanceSpec, EstimatorSpec, FullSpec, K2kSpec, LambdaSpec, LinkSpec,
-    MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec,
-    ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec,
-    run_spec,
+    CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, FullSpec, K2kSpec, LambdaSpec,
+    LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec,
+    ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, StdCaliperEach, StdCaliperSpec,
+    SubclassSpec, TransformSpec, VariableRatioSpec, run_spec,
 };
 
 #[cfg(feature = "bench-internals")]
@@ -285,6 +285,10 @@ pub mod prelude {
         BinRuleSpec, BinningSpec, CemBinning, CemError, CemKind, CemRule, CemSpec, CemStrata,
         CemVariable, CemVariableSpec, K2kSpec, MatrixDistance, PairDistanceMatrix,
         PairDistanceMatrixError, cem_k2k_pairs, cem_strata, cem_subclasses,
+    };
+    pub use crate::{
+        DiscardSpec, RapidHashMap, StdCaliperEach, StdCaliperSpec, VariableRatio,
+        VariableRatioError, VariableRatioSpec,
     };
 
     pub use crate::{

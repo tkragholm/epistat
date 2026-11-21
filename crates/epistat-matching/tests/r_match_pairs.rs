@@ -265,10 +265,10 @@ fn normalized_by_group(expected: &HashMap<usize, f64>, treat: &[u8]) -> HashMap<
     out
 }
 
-/// The crate's `get_matches` as (unit, subclass, weight), sorted by subclass
-/// and in each subclass with the treated unit first and then by row number,
-/// as the reference is. MatchIt does not keep the order of assignment among
-/// the controls of one subclass in this table.
+/// The crate's `get_matches` as (unit, subclass, weight), in the order of the
+/// table: by subclass, and in each subclass the treated unit first. The
+/// units of one group keep the order the crate lists them in, which is the
+/// order MatchIt lists them in.
 fn long_rows(outcome: &MatchOutcome, units: &Units, treat: &[u8]) -> Vec<(usize, usize, f64)> {
     let long = get_matches(outcome, units, false).expect("pairs are among the units");
     let mut out: Vec<(usize, usize, f64)> = (0..long.len())
@@ -280,7 +280,7 @@ fn long_rows(outcome: &MatchOutcome, units: &Units, treat: &[u8]) -> Vec<(usize,
             )
         })
         .collect();
-    out.sort_by_key(|(unit, subclass, _)| (*subclass, std::cmp::Reverse(treat[*unit - 1]), *unit));
+    out.sort_by_key(|(unit, subclass, _)| (*subclass, std::cmp::Reverse(treat[*unit - 1])));
     out
 }
 
@@ -533,17 +533,8 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             let mut theirs: Vec<(usize, usize, f64)> = (0..long.id.len())
                 .map(|row| (long.id[row], long.subclass[row], long.weights[row]))
                 .collect();
-            theirs.sort_by(|left, right| {
-                (
-                    left.1,
-                    std::cmp::Reverse(scenario.treat[left.0 - 1]),
-                    left.0,
-                )
-                    .cmp(&(
-                        right.1,
-                        std::cmp::Reverse(scenario.treat[right.0 - 1]),
-                        right.0,
-                    ))
+            theirs.sort_by_key(|(unit, subclass, _)| {
+                (*subclass, std::cmp::Reverse(scenario.treat[*unit - 1]))
             });
             assert_eq!(rebuilt.len(), theirs.len(), "{label}: get_matches length");
             for (row, ((unit, subclass, weight), (id, sub, w))) in
@@ -560,7 +551,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
                 );
             }
             // And back: the controls of each anchor from the long table, as a
-            // set, since the table does not keep the order of assignment.
+            // set, since the table lists a reused control where it first occurs.
             let mut back: BTreeMap<usize, (usize, Vec<usize>)> = BTreeMap::new();
             for row in 0..long.id.len() {
                 let entry = back.entry(long.subclass[row]).or_default();
