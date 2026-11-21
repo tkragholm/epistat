@@ -603,7 +603,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
         panic!("expected exact output");
     };
     let by_hand = exact_match_subclasses(&anchors, &candidates, &["sex", "municipality"]).unwrap();
-    assert!(!by_hand.assignments.is_empty());
+    assert!(by_hand.retained_units() > 0);
     assert_eq!(
         format!("{:?}", outcome.assignments_sorted()),
         format!("{:?}", by_hand.assignments_sorted())
@@ -612,7 +612,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
         format!("{:?}", outcome.att_weights_sorted()),
         format!("{:?}", by_hand.att_weights_sorted())
     );
-    assert_eq!(outcome.dropped_ids, by_hand.dropped_ids);
+    assert_eq!(outcome.dropped_ids(), by_hand.dropped_ids());
 
     let (anchors, candidates) = covariate_inputs();
     let spec = MatchSpec {
@@ -667,7 +667,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
         },
     )
     .expect("valid subclassification settings");
-    assert!(!by_hand.assignments.is_empty());
+    assert!(by_hand.retained_units() > 0);
     assert_eq!(
         format!("{:?}", outcome.assignments_sorted()),
         format!("{:?}", by_hand.assignments_sorted())
@@ -734,20 +734,14 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
     )
     .unwrap();
     assert!(outcome.subclasses.len() > 1);
-    let sorted = |map: &std::collections::HashMap<String, usize>| {
-        let mut rows: Vec<_> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        rows.sort();
-        rows
-    };
-    assert_eq!(sorted(&outcome.assignments), sorted(&by_hand.assignments));
-    assert_eq!(outcome.dropped_ids, by_hand.dropped_ids);
+    assert_eq!(outcome.assignments_sorted(), by_hand.assignments_sorted());
+    assert_eq!(outcome.subclass, by_hand.subclass);
+    assert_eq!(outcome.dropped_ids(), by_hand.dropped_ids());
     assert_eq!(outcome.retained_units(), anchors.len() + candidates.len());
 
-    let weights = BalanceWeights::from_unit_weights(
-        &anchors,
-        &candidates,
-        &outcome.att_weights,
+    let weights = BalanceWeights::new(
         Estimand::Att,
+        outcome.unit_weights(Estimand::Att).expect("weights"),
     );
     weights.validate().unwrap();
     let report = balance_report_on_weights(
@@ -1185,7 +1179,7 @@ fn spec_cem_matches_the_functions_it_wraps() {
         panic!("expected strata");
     };
     let by_hand = cem_subclasses(&anchors, &candidates, &by_hand_variables).unwrap();
-    assert!(!by_hand.assignments.is_empty());
+    assert!(by_hand.retained_units() > 0);
     assert_eq!(
         format!("{:?}", outcome.assignments_sorted()),
         format!("{:?}", by_hand.assignments_sorted())

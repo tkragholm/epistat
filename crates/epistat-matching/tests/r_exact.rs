@@ -25,7 +25,7 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_testkit::load_json;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Deserialize)]
 struct Reference {
@@ -181,12 +181,22 @@ fn subclasses_and_weights_match_matchit() {
             let one_based: Vec<Option<usize>> = r_subclass.clone();
             assert_eq!(by_first_row, one_based, "{label}: MatchIt numbering");
 
-            let weights = got.weights(estimand_of(&run.estimand)).expect("weights");
+            let weights: HashMap<String, f64> = {
+                let (ids, values) = got
+                    .weights_sorted(estimand_of(&run.estimand))
+                    .expect("weights");
+                ids.into_iter().map(str::to_owned).zip(values).collect()
+            };
+            let assigned: HashMap<String, usize> = got
+                .assignments()
+                .map(|(id, subclass)| (id.to_owned(), subclass))
+                .collect();
+            let dropped: Vec<String> = got.dropped_ids().into_iter().map(str::to_owned).collect();
             let unscaled: Vec<Option<f64>> =
                 (0..n).map(|idx| weights.get(&id(idx)).copied()).collect();
             let scaled = rescaled(&data.treat, &unscaled);
             for idx in 0..n {
-                let ours_subclass = got.assignments.get(&id(idx)).map(|s| s + 1);
+                let ours_subclass = assigned.get(&id(idx)).map(|s| s + 1);
                 assert_eq!(ours_subclass, by_anchors[idx], "{label}: subclass of {idx}");
                 assert_eq!(
                     ours_subclass.is_some(),
@@ -194,7 +204,7 @@ fn subclasses_and_weights_match_matchit() {
                     "{label}: kept {idx}"
                 );
                 assert_eq!(
-                    got.dropped_ids.contains(&id(idx)),
+                    dropped.contains(&id(idx)),
                     r_subclass[idx].is_none(),
                     "{label}: dropped {idx}"
                 );
@@ -209,7 +219,7 @@ fn subclasses_and_weights_match_matchit() {
                     "{label}: unscaled weight of {idx}"
                 );
             }
-            dropped_somewhere |= !got.dropped_ids.is_empty();
+            dropped_somewhere |= !dropped.is_empty();
             compared += 1;
         }
     }

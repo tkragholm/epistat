@@ -187,7 +187,7 @@ pub use matching::{
     ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
     ResidentAtIndexRecord, RoleIndexedRecord, Rounds, SelectionStrategy, StandardMatchRequest,
     StrataExactConstraint, SubclassReferenceGroup, SubclassSummary, SubclassificationConfig,
-    SubclassificationError, SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet,
+    SubclassificationError, SubclassificationOutcome, SubclassedUnits, UnitRole, UnitWeightRow, UnitWeightSet,
     UnitWeightTable, UsedControlsVec, VariableRatio, VariableRatioError, cross_validation_folds,
     effective_sample_size, estimate_propensity_and_match, match_standard,
     match_standard_with_discard, match_weights_from_pairs, pair_weights_from_pairs,

@@ -48,7 +48,7 @@ use epistat_matching::{
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Deserialize)]
 struct Reference {
@@ -283,15 +283,22 @@ fn strata_and_weights_match_matchit() {
         let r_subclass = run.subclass.as_ref().expect("subclass");
         let r_weights = run.weights.as_ref().expect("weights");
         let by_anchors = renumbered(&treat, r_subclass, group);
-        let weights = got
-            .weights(estimand_of(&run.estimand))
-            .expect("weights for the estimand");
+        let weights: HashMap<String, f64> = {
+            let (ids, values) = got
+                .weights_sorted(estimand_of(&run.estimand))
+                .expect("weights for the estimand");
+            ids.into_iter().map(str::to_owned).zip(values).collect()
+        };
+        let assigned: HashMap<String, usize> = got
+            .assignments()
+            .map(|(id, subclass)| (id.to_owned(), subclass))
+            .collect();
         let ours: Vec<Option<f64>> = (0..treat.len())
             .map(|row| weights.get(&id(row + 1)).copied())
             .collect();
         let scaled = rescaled(&treat, &ours);
         for row in 0..treat.len() {
-            let subclass = got.assignments.get(&id(row + 1)).map(|s| s + 1);
+            let subclass = assigned.get(&id(row + 1)).map(|s| s + 1);
             assert_eq!(
                 subclass,
                 by_anchors[row],

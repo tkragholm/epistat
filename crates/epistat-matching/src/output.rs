@@ -12,10 +12,10 @@
 //! the crate in the order of their keys.
 
 use crate::matching::{
-    ExactMatchOutcome, MatchWeightMethod, PropensityScoreEstimate, SubclassificationOutcome,
+    MatchWeightMethod, PropensityScoreEstimate, SubclassificationOutcome, SubclassedUnits,
     UnitRole, UnitWeightSet,
 };
-use crate::types::MatchOutcome;
+use crate::types::{Estimand, MatchOutcome};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -784,29 +784,100 @@ impl UnitWeightSet {
     }
 }
 
-impl ExactMatchOutcome {
+/// Kept units with their values, sorted by id.
+fn sorted_pairs<'a, V>(entries: impl Iterator<Item = (&'a str, V)>) -> (Vec<&'a str>, Vec<V>) {
+    let mut rows: Vec<(&str, V)> = entries.collect();
+    rows.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    rows.into_iter().unzip()
+}
+
+impl SubclassedUnits {
     /// The subclass of each kept unit, sorted by id.
     #[must_use]
     pub fn assignments_sorted(&self) -> (Vec<&str>, Vec<usize>) {
-        sorted_by_key(self.assignments.iter())
+        sorted_pairs(self.assignments())
+    }
+
+    /// The weights of the kept units for an estimand, sorted by id, or `None`
+    /// for the matched-sample effect.
+    #[must_use]
+    pub fn weights_sorted(&self, estimand: Estimand) -> Option<(Vec<&str>, Vec<f64>)> {
+        if estimand == Estimand::Atm {
+            return None;
+        }
+        Some(sorted_pairs(self.ids.iter().enumerate().filter_map(
+            |(position, id)| {
+                self.weight(estimand, position)
+                    .map(|weight| (id.as_str(), weight))
+            },
+        )))
     }
 
     /// The weights for the effect in the anchors, sorted by id.
     #[must_use]
     pub fn att_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.att_weights.iter())
+        self.weights_sorted(Estimand::Att)
+            .unwrap_or_default()
     }
 
     /// The weights for the effect in the candidates, sorted by id.
     #[must_use]
     pub fn atc_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.atc_weights.iter())
+        self.weights_sorted(Estimand::Atc)
+            .unwrap_or_default()
     }
 
     /// The weights for the effect in the whole population, sorted by id.
     #[must_use]
     pub fn ate_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.ate_weights.iter())
+        self.weights_sorted(Estimand::Ate)
+            .unwrap_or_default()
+    }
+}
+
+impl SubclassedUnits {
+    /// The weights of the kept units for an estimand as per-group maps by id,
+    /// the shape the balance functions take, or `None` for the matched-sample
+    /// effect. A dropped unit is in neither map.
+    #[must_use]
+    pub fn unit_weights(&self, estimand: Estimand) -> Option<UnitWeightSet> {
+        let weights = self.weights(estimand)?;
+        let mut set = UnitWeightSet::default();
+        for (position, id) in self.ids.iter().enumerate() {
+            if self.subclass[position].is_some() {
+                let group = if self.is_anchor(position) {
+                    &mut set.anchor
+                } else {
+                    &mut set.candidate
+                };
+                group.insert(id.clone(), weights[position]);
+            }
+        }
+        Some(set)
+    }
+
+    /// MatchIt's `match_data()` for these units: each unit with its weight for
+    /// the estimand and its subclass, in the order of the units. Subclasses are
+    /// numbered from 1. `None` for the matched-sample effect.
+    ///
+    /// # Errors
+    ///
+    /// [`OutputError::DuplicateId`] when an id occurs twice, and
+    /// [`OutputError::InvalidWeight`] for a weight that is not finite and
+    /// non-negative.
+    pub fn match_data(
+        &self,
+        estimand: Estimand,
+        options: MatchDataOptions,
+    ) -> Result<Option<MatchData>, OutputError> {
+        let Some(weights) = self.weights(estimand) else {
+            return Ok(None);
+        };
+        let units = Units::new(
+            self.ids.clone(),
+            (0..self.len()).map(|p| self.is_anchor(p)).collect(),
+        )?;
+        match_data_from_weights(&weights, &self.subclass, &units, options).map(Some)
     }
 }
 
@@ -814,13 +885,15 @@ impl SubclassificationOutcome {
     /// The subclass of each retained unit, sorted by id.
     #[must_use]
     pub fn assignments_sorted(&self) -> (Vec<&str>, Vec<usize>) {
-        sorted_by_key(self.assignments.iter())
+        sorted_pairs(self.assignments())
     }
 
     /// The weight of each retained unit, sorted by id.
     #[must_use]
     pub fn weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.weights.iter())
+        sorted_pairs(self.ids.iter().enumerate().filter_map(|(position, id)| {
+            self.weight(position).map(|weight| (id.as_str(), weight))
+        }))
     }
 }
 
@@ -1091,5 +1164,47 @@ mod tests {
         }
         // The weight of a unit that is not selected is not read.
         assert!(get_matches_from_pairs(&[None, None], &[f64::NAN, 1.0], &units, false).is_ok());
+    }
+
+    #[test]
+    fn subclassed_units_give_match_data_and_weight_maps() {
+        let units = SubclassedUnits {
+            ids: ["a1", "a2", "a3", "c1", "c2", "c3", "c4"]
+                .map(String::from)
+                .to_vec(),
+            anchor_count: 3,
+            // a3 and c4 are dropped.
+            subclass: vec![Some(0), Some(0), None, Some(0), Some(0), Some(1), None],
+            subclasses: vec![
+                crate::matching::SubclassSummary {
+                    subclass: 0,
+                    anchor_count: 2,
+                    candidate_count: 2,
+                    subclass_propensity: Some(0.5),
+                },
+                crate::matching::SubclassSummary {
+                    subclass: 1,
+                    anchor_count: 1,
+                    candidate_count: 1,
+                    subclass_propensity: Some(0.5),
+                },
+            ],
+        };
+        let weights = units.unit_weights(Estimand::Att).unwrap();
+        assert_eq!(weights.anchor.len(), 2);
+        assert_eq!(weights.candidate.len(), 3);
+        assert!(units.unit_weights(Estimand::Atm).is_none());
+        let options = MatchDataOptions {
+            normalize: false,
+            ..MatchDataOptions::default()
+        };
+        let data = units.match_data(Estimand::Att, options).unwrap().unwrap();
+        assert_eq!(data.id, ["a1", "a2", "c1", "c2", "c3"]);
+        assert_eq!(
+            data.subclass,
+            [Some(1), Some(1), Some(1), Some(1), Some(2)]
+        );
+        assert_eq!(data.weight, [1.0, 1.0, 1.0, 1.0, 1.0]);
+        assert!(units.match_data(Estimand::Atm, options).unwrap().is_none());
     }
 }

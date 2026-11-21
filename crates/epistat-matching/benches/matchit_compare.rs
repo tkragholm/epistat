@@ -585,8 +585,8 @@ fn id_number(id: &str) -> u64 {
     id.parse().expect("numeric id")
 }
 
-fn subclass_lines(map: &std::collections::HashMap<String, usize>) -> Vec<(u64, u64)> {
-    let mut v: Vec<(u64, u64)> = map.iter().map(|(k, v)| (id_number(k), *v as u64)).collect();
+fn subclass_lines<'a>(rows: impl Iterator<Item = (&'a str, usize)>) -> Vec<(u64, u64)> {
+    let mut v: Vec<(u64, u64)> = rows.map(|(k, v)| (id_number(k), v as u64)).collect();
     v.sort_unstable();
     v
 }
@@ -609,22 +609,22 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(u64, u64)>, &'static str) {
         }
         SpecOutput::Exact(o) => (
             o.retained_units(),
-            subclass_lines(&o.assignments),
+            subclass_lines(o.assignments()),
             "id,subclass",
         ),
         SpecOutput::Quick(o) => (
             o.retained_units(),
-            subclass_lines(&o.assignments),
+            subclass_lines(o.assignments()),
             "id,subclass",
         ),
         SpecOutput::Full(o) => (
             o.retained_units(),
-            subclass_lines(&o.assignments),
+            subclass_lines(o.assignments.iter().map(|(k, v)| (k.as_str(), *v))),
             "id,subclass",
         ),
         SpecOutput::Subclass { outcome, .. } => (
-            outcome.assignments.len(),
-            subclass_lines(&outcome.assignments),
+            outcome.retained_units(),
+            subclass_lines(outcome.assignments()),
             "id,subclass",
         ),
         SpecOutput::Cardinality(m) => {

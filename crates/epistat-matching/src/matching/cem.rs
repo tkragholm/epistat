@@ -50,14 +50,16 @@
 use super::distance::DistanceConfig;
 use super::distance::DistanceMetric;
 use super::engine::{build_outcome, finalize_estimand_diagnostics};
-use super::exact::{ExactMatchError, ExactMatchOutcome, subclasses_of_strata};
+use super::codes::{combine_codes, first_appearance_codes, first_missing};
+use super::exact::{ExactMatchError, ExactMatchOutcome, subclasses_of_strata, unit_at};
 use super::nearest::MatchOrder;
 use super::records::MatchingRecord;
 use crate::types::{Estimand, MatchDiagnostics, MatchOutcome, MatchedPair};
 use epistat_rng::Stream;
 use ordered_float::OrderedFloat;
+use rayon::prelude::*;
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 use std::fmt;
 
 /// A rule that gives a number of bins from the values of a variable.
@@ -201,14 +203,6 @@ impl From<ExactMatchError> for CemError {
     }
 }
 
-/// The value of a unit on one variable after coarsening.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Cell {
-    Bin(usize),
-    Raw(u64),
-    Text(String),
-}
-
 /// The stratum of every anchor and candidate, or `None` where a unit is in a
 /// stratum that lacks one of the groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,7 +300,7 @@ fn rule_bins(rule: CemRule, values: &[f64]) -> usize {
         }
         CemRule::FreedmanDiaconis => {
             let mut rounded: Vec<f64> = values.iter().map(|v| signif(*v, 5)).collect();
-            rounded.sort_by(f64::total_cmp);
+            rounded.par_sort_unstable_by(f64::total_cmp);
             let mut h = 2.0 * (quantile7(&rounded, 0.75) - quantile7(&rounded, 0.25));
             if h == 0.0 {
                 let mut tail = 0.25;
@@ -378,7 +372,7 @@ fn cutpoints(
                 ));
             }
             let mut sorted = values.to_vec();
-            sorted.sort_by(f64::total_cmp);
+            sorted.par_sort_unstable_by(f64::total_cmp);
             let step = 1.0 / *groups as f64;
             // Probabilities step / 1, ..., 1 - step in steps of `step`, as the
             // sequence from `step` to `1 - step` runs, with the last held at
@@ -436,79 +430,115 @@ fn coarsen<R: MatchingRecord>(
     if variables.is_empty() {
         return Err(CemError::NoVariables);
     }
-    let units: Vec<&R> = anchors.iter().chain(candidates.iter()).collect();
-    let mut cells: Vec<Vec<Cell>> = vec![Vec::with_capacity(variables.len()); units.len()];
+    // One code per unit and variable. Codes of one variable are equal exactly
+    // when the coarsened values are, and they need no particular order: the
+    // strata are numbered by first appearance when the columns are joined.
+    let mut columns: Vec<Vec<u32>> = Vec::with_capacity(variables.len());
     for variable in variables {
-        let missing = |unit: &R| CemError::MissingValue {
-            id: unit.id().to_string(),
+        let name = variable.name.as_str();
+        let missing = |position: usize| CemError::MissingValue {
+            id: unit_at(anchors, candidates, position).id().to_string(),
             variable: variable.name.clone(),
         };
         match &variable.kind {
             CemKind::Numeric(binning) => {
-                let mut values = Vec::with_capacity(units.len());
-                for unit in &units {
-                    values.push(
-                        unit.numeric(&variable.name)
-                            .filter(|value| value.is_finite())
-                            .ok_or_else(|| missing(unit))?,
-                    );
+                let found: Vec<Option<f64>> = anchors
+                    .par_iter()
+                    .chain(candidates.par_iter())
+                    .map(|unit| unit.numeric(name).filter(|value| value.is_finite()))
+                    .collect();
+                if let Some(position) = first_missing(&found) {
+                    return Err(missing(position));
                 }
-                match cutpoints(&variable.name, binning, &values)? {
-                    Some(points) => {
-                        for (row, value) in cells.iter_mut().zip(&values) {
-                            row.push(Cell::Bin(points.partition_point(|p| p <= value)));
-                        }
-                    }
+                let values: Vec<f64> = found.into_iter().flatten().collect();
+                match cutpoints(name, binning, &values)? {
+                    Some(points) => columns.push(
+                        values
+                            .par_iter()
+                            .map(|value| {
+                                u32::try_from(points.partition_point(|p| p <= value))
+                                    .expect("fewer than 2^32 cut points")
+                            })
+                            .collect(),
+                    ),
                     None => {
-                        for (row, value) in cells.iter_mut().zip(&values) {
+                        let keys: Vec<u64> = values
+                            .par_iter()
                             // Zero has two representations that are equal.
-                            let value = if *value == 0.0 { 0.0 } else { *value };
-                            row.push(Cell::Raw(value.to_bits()));
-                        }
+                            .map(|value| if *value == 0.0 { 0.0 } else { *value }.to_bits())
+                            .collect();
+                        columns.push(first_appearance_codes(&keys).0);
                     }
                 }
             }
             CemKind::Categorical(groups) => {
-                for (row, unit) in cells.iter_mut().zip(&units) {
-                    let mut value = unit
-                        .stratum(&variable.name)
-                        .map(str::to_owned)
-                        .ok_or_else(|| missing(unit))?;
-                    for group in groups {
-                        match group.first() {
-                            Some(first) if group.contains(&value) => value.clone_from(first),
-                            _ => {}
-                        }
-                    }
-                    row.push(Cell::Text(value));
+                let found: Vec<Option<&str>> = anchors
+                    .par_iter()
+                    .chain(candidates.par_iter())
+                    .map(|unit| unit.stratum(name))
+                    .collect();
+                if let Some(position) = first_missing(&found) {
+                    return Err(missing(position));
                 }
+                let values: Vec<&str> = found.into_iter().flatten().collect();
+                let (codes, distinct) = first_appearance_codes(&values);
+                columns.push(group_codes(&values, codes, distinct, groups));
             }
         }
     }
 
-    // Stratum numbers in order of first appearance, anchors first.
-    let mut stratum_of: HashMap<&[Cell], usize> = HashMap::new();
-    let mut numbers = Vec::with_capacity(units.len());
-    for row in &cells {
-        let next = stratum_of.len();
-        numbers.push(*stratum_of.entry(row.as_slice()).or_insert(next));
-    }
-    let (anchor_numbers, candidate_numbers) = numbers.split_at(anchors.len());
-    let outcome = subclasses_of_strata(
-        anchors,
-        candidates,
-        anchor_numbers,
-        candidate_numbers,
-        stratum_of.len(),
-    )?;
-    // The subclass of a unit is the one the weights code gave it.
-    let subclass = |unit: &R| outcome.assignments.get(unit.id()).copied();
+    let (numbers, count) = combine_codes(&columns);
+    let outcome = subclasses_of_strata(anchors, candidates, &numbers, count)?;
+    let (anchor_subclass, candidate_subclass) = outcome.subclass.split_at(anchors.len());
     let strata = CemStrata {
-        anchors: anchors.iter().map(subclass).collect(),
-        candidates: candidates.iter().map(subclass).collect(),
+        anchors: anchor_subclass.to_vec(),
+        candidates: candidate_subclass.to_vec(),
         count: outcome.subclasses.len(),
     };
     Ok((strata, outcome))
+}
+
+/// The codes of a categorical variable after its groups are applied.
+///
+/// `codes` number the `distinct` values of `values` from 0 in order of first
+/// appearance. A value is renamed by each group in turn: a group that holds
+/// the value turns it into the group's first value, so a value that one group
+/// renamed can be renamed by the next. Only the distinct values are renamed.
+fn group_codes(
+    values: &[&str],
+    codes: Vec<u32>,
+    distinct: usize,
+    groups: &[Vec<String>],
+) -> Vec<u32> {
+    if groups.is_empty() {
+        return codes;
+    }
+    let mut first_unit = vec![usize::MAX; distinct];
+    for (position, code) in codes.iter().enumerate() {
+        let slot = &mut first_unit[*code as usize];
+        if *slot == usize::MAX {
+            *slot = position;
+        }
+    }
+    let mut renamed_codes: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let renamed: Vec<u32> = first_unit
+        .iter()
+        .map(|position| {
+            let mut value = values[*position].to_owned();
+            for group in groups {
+                match group.first() {
+                    Some(first) if group.contains(&value) => value.clone_from(first),
+                    _ => {}
+                }
+            }
+            let next = u32::try_from(renamed_codes.len()).expect("fewer than 2^32 values");
+            *renamed_codes.entry(value).or_insert(next)
+        })
+        .collect();
+    codes
+        .par_iter()
+        .map(|code| renamed[*code as usize])
+        .collect()
 }
 
 /// The nearest available candidate of an anchor: the smallest distance, and
@@ -713,6 +743,156 @@ mod tests {
         .with_numeric("x", x);
         record.strata.insert("g".into(), group.into());
         record
+    }
+
+    /// The coarsening that kept one cell per unit and variable, with owned
+    /// strings for categorical values, and numbered strata with a map of cells.
+    mod reference {
+        use crate::matching::exact::reference::Maps;
+        use super::*;
+        use std::collections::HashMap;
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        enum Cell {
+            Bin(usize),
+            Raw(u64),
+            Text(String),
+        }
+
+        pub fn coarsen<R: MatchingRecord>(
+            anchors: &[R],
+            candidates: &[R],
+            variables: &[CemVariable],
+        ) -> Result<(CemStrata, Maps), CemError> {
+            if variables.is_empty() {
+                return Err(CemError::NoVariables);
+            }
+            let units: Vec<&R> = anchors.iter().chain(candidates.iter()).collect();
+            let mut cells: Vec<Vec<Cell>> = vec![Vec::with_capacity(variables.len()); units.len()];
+            for variable in variables {
+                let missing = |unit: &R| CemError::MissingValue {
+                    id: unit.id().to_string(),
+                    variable: variable.name.clone(),
+                };
+                match &variable.kind {
+                    CemKind::Numeric(binning) => {
+                        let mut values = Vec::with_capacity(units.len());
+                        for unit in &units {
+                            values.push(
+                                unit.numeric(&variable.name)
+                                    .filter(|value| value.is_finite())
+                                    .ok_or_else(|| missing(unit))?,
+                            );
+                        }
+                        match cutpoints(&variable.name, binning, &values)? {
+                            Some(points) => {
+                                for (row, value) in cells.iter_mut().zip(&values) {
+                                    row.push(Cell::Bin(points.partition_point(|p| p <= value)));
+                                }
+                            }
+                            None => {
+                                for (row, value) in cells.iter_mut().zip(&values) {
+                                    let value = if *value == 0.0 { 0.0 } else { *value };
+                                    row.push(Cell::Raw(value.to_bits()));
+                                }
+                            }
+                        }
+                    }
+                    CemKind::Categorical(groups) => {
+                        for (row, unit) in cells.iter_mut().zip(&units) {
+                            let mut value = unit
+                                .stratum(&variable.name)
+                                .map(str::to_owned)
+                                .ok_or_else(|| missing(unit))?;
+                            for group in groups {
+                                match group.first() {
+                                    Some(first) if group.contains(&value) => {
+                                        value.clone_from(first);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            row.push(Cell::Text(value));
+                        }
+                    }
+                }
+            }
+            let mut stratum_of: HashMap<&[Cell], usize> = HashMap::new();
+            let mut numbers = Vec::with_capacity(units.len());
+            for row in &cells {
+                let next = stratum_of.len();
+                numbers.push(*stratum_of.entry(row.as_slice()).or_insert(next));
+            }
+            let (anchor_numbers, candidate_numbers) = numbers.split_at(anchors.len());
+            let outcome = crate::matching::exact::reference::of_strata(
+                anchors,
+                candidates,
+                anchor_numbers,
+                candidate_numbers,
+                stratum_of.len(),
+            )?;
+            let subclass = |unit: &R| outcome.assignments.get(unit.id()).copied();
+            let strata = CemStrata {
+                anchors: anchors.iter().map(subclass).collect(),
+                candidates: candidates.iter().map(subclass).collect(),
+                count: outcome.subclasses.len(),
+            };
+            Ok((strata, outcome))
+        }
+    }
+
+    #[test]
+    fn the_columns_equal_the_cell_keyed_version() {
+        use crate::matching::exact::reference as exact;
+        let mut agreed = 0;
+        for (seed, anchors, candidates, areas, holes) in [
+            (1_u64, 40_usize, 90_usize, 3_u64, false),
+            (2, 400, 900, 5, false),
+            (3, 3000, 2000, 30, false),
+            (4, 40_000, 30_000, 9, false),
+            (5, 500, 800, 4, true),
+        ] {
+            let (a, c) = exact::records(seed, anchors, candidates, areas, holes);
+            let merged = vec![
+                vec!["s0".to_string(), "s1".to_string()],
+                vec!["s1".to_string(), "s9".to_string()],
+            ];
+            for variables in [
+                vec![CemVariable::numeric("x", CemBinning::Rule(CemRule::Sturges))],
+                vec![
+                    CemVariable::numeric("x", CemBinning::Bins(4)),
+                    CemVariable::categorical("area", vec![]),
+                ],
+                vec![
+                    CemVariable::numeric("x", CemBinning::Exact),
+                    CemVariable::categorical("sex", merged.clone()),
+                    CemVariable::categorical(
+                        "area",
+                        vec![vec!["a0".into(), "a1".into()], vec!["a2".into(), "a0".into()]],
+                    ),
+                ],
+                vec![
+                    CemVariable::numeric("x", CemBinning::Quantiles(3)),
+                    CemVariable::numeric("x", CemBinning::Cutpoints(vec![1.0, 3.0])),
+                    CemVariable::categorical("region", vec![]),
+                ],
+                vec![CemVariable::categorical("nowhere", vec![])],
+            ] {
+                let context = format!("seed {seed} {variables:?}");
+                let new = coarsen(&a, &c, &variables);
+                let old = reference::coarsen(&a, &c, &variables);
+                match (new, old) {
+                    (Ok((strata, new)), Ok((old_strata, old))) => {
+                        agreed += 1;
+                        exact::assert_same(&new, &old, &context);
+                        assert_eq!(strata, old_strata, "{context}");
+                    }
+                    (Err(new), Err(old)) => assert_eq!(new, old, "{context}"),
+                    (new, old) => panic!("{context}: {new:?} against {old:?}"),
+                }
+            }
+        }
+        assert!(agreed >= 15, "only {agreed} runs produced an outcome");
     }
 
     #[test]
