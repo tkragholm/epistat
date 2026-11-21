@@ -78,12 +78,19 @@
 //!
 //! # Checked against R
 //!
-//! The sizes of the selected subsets equal `MatchIt`'s with HiGHS wherever HiGHS
-//! proves its optimum, on `lalonde` and on simulated cohorts, and every balance
-//! constraint holds
-//! (`tests/r_cardinality.rs`). The subsets themselves can differ where the
-//! optimum is not unique. The pairing is checked against `optmatch::pairmatch`
-//! on its total distance.
+//! On `lalonde` and on simulated cohorts, the size of our subset equals the size
+//! of `MatchIt`'s with HiGHS in every case where HiGHS reports its optimum and
+//! our search closes within its node limit, and is no larger where our search
+//! stops at the limit. Every balance constraint holds for our selection. The
+//! subsets themselves can differ where the optimum is not unique. Weights are
+//! compared directly where the weights do not depend on which optimal subset is
+//! chosen. The pairing is checked against `optmatch::pairmatch` on its total
+//! distance, on `MatchIt`'s own selected units (`tests/r_cardinality.rs`).
+//!
+//! `MatchIt` scales the weights of a stratum to the total of its smaller group
+//! and, when the two groups are equally large, picks the reference group by the
+//! order of the data. Here the controls are the reference on a tie, whatever the
+//! order of the data.
 //!
 //! # References
 //!
@@ -242,7 +249,8 @@ pub enum CardinalityError {
     UnsupportedEstimand,
     /// No stratum holds both groups.
     NoCommonStratum,
-    /// The program of a stratum has no solution: relax the tolerances.
+    /// The program of a stratum has no solution, or its best solution selects
+    /// no unit of one group: relax the tolerances.
     Infeasible {
         /// The stratum.
         key: u64,
@@ -522,7 +530,10 @@ fn solve_stratum(
                 row_lo[1 + c] = f64::NEG_INFINITY;
                 row_hi[1 + p + c] = f64::INFINITY;
             }
-            hi[t] = total.floor();
+            // The largest possible size is the whole weight of the group. It is
+            // not rounded down: with sampling weights it is not a whole number,
+            // and a float sum of unit weights could fall just under the count.
+            hi[t] = if unit_weights { n_units as f64 } else { total };
             integer[t] = unit_weights;
         }
         Kind::ProfileAte => {
@@ -605,6 +616,9 @@ fn solve_stratum(
         }
     }
     let count = |g: usize| (0..nu).filter(|&i| selected[i] && group(i) == g).count();
+    if count(0) == 0 || count(1) == 0 {
+        return Err(CardinalityError::Infeasible { key });
+    }
     let report = StratumReport {
         key,
         units: nu,
@@ -759,7 +773,9 @@ pub fn match_cardinality(
         let reference = if kind == Kind::ProfileAtt {
             focal
         } else {
-            // The smaller group of the stratum by size, the first (controls) on a tie.
+            // The smaller group of the stratum by size. On a tie the controls
+            // are the reference. The rule does not depend on the order of the
+            // data.
             size(true) < size(false)
         };
         let reference_total = total(reference);
@@ -857,6 +873,31 @@ pub fn pair_units(
     sampling_weights: Option<&[f64]>,
 ) -> Result<Vec<Option<usize>>, CardinalityError> {
     let n = treated.len();
+    if selected.len() != n {
+        return Err(CardinalityError::Shape(
+            "selected must have one entry per unit".to_string(),
+        ));
+    }
+    if discarded.is_some_and(|d| d.len() != n) {
+        return Err(CardinalityError::Shape(
+            "discarded must have one entry per unit".to_string(),
+        ));
+    }
+    if sampling_weights.is_some_and(|w| w.len() != n) {
+        return Err(CardinalityError::Shape(
+            "sampling_weights must have one entry per unit".to_string(),
+        ));
+    }
+    if strata.iter().any(|units| units.iter().any(|&i| i >= n)) {
+        return Err(CardinalityError::Shape(
+            "a stratum holds a position beyond the units".to_string(),
+        ));
+    }
+    if ratio_int < 1 {
+        return Err(CardinalityError::InvalidRatio(
+            "the ratio must be at least 1".to_string(),
+        ));
+    }
     for column in pair_on {
         if column.len() != n {
             return Err(CardinalityError::Shape(
@@ -869,7 +910,9 @@ pub fn pair_units(
             ));
         }
     }
-    // Columns without variance are dropped.
+    // Columns without variance are dropped. A column is kept when its range
+    // exceeds the rounding error of its largest value, 16 units in the last
+    // place, so the test does not depend on the unit the column is in.
     let cols: Vec<&Vec<f64>> = pair_on
         .iter()
         .filter(|c| {
@@ -878,7 +921,7 @@ pub fn pair_units(
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &v| {
                     (a.min(v), b.max(v))
                 });
-            (mx - mn) >= f64::EPSILON.sqrt()
+            (mx - mn) > 16.0 * f64::EPSILON * mx.abs().max(mn.abs())
         })
         .collect();
     let d = cols.len();
