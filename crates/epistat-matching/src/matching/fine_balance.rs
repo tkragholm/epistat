@@ -934,10 +934,17 @@ struct HubArc {
 enum Step {
     None,
     /// Along a hub arc, forward or against its flow.
-    Hub { arc: usize, forward: bool },
+    Hub {
+        arc: usize,
+        forward: bool,
+    },
     /// Through a block, from the entry of one finest-level category to that of
     /// another.
-    Exchange { block: usize, from: usize, to: usize },
+    Exchange {
+        block: usize,
+        from: usize,
+        to: usize,
+    },
 }
 
 /// A node of the whole network on an augmenting path.
@@ -951,13 +958,27 @@ enum Node {
 #[derive(Clone, Copy)]
 enum Move {
     Start,
-    Hub { arc: usize, forward: bool },
+    Hub {
+        arc: usize,
+        forward: bool,
+    },
     /// From a category node into the entry of a block.
-    Enter { block: usize, entry: usize },
+    Enter {
+        block: usize,
+        entry: usize,
+    },
     /// From the entry of a block to its category node.
-    Leave { block: usize, entry: usize },
+    Leave {
+        block: usize,
+        entry: usize,
+    },
     /// Along an arc of a block.
-    Inside { block: usize, from: usize, to: usize, via: u32 },
+    Inside {
+        block: usize,
+        from: usize,
+        to: usize,
+        via: u32,
+    },
 }
 
 #[cfg(test)]
@@ -1027,7 +1048,14 @@ impl Coupled {
             if tail && a.flow < a.cap {
                 f(a.to, a.cost, Step::Hub { arc, forward: true });
             } else if !tail && a.flow > 0 {
-                f(a.from, -a.cost, Step::Hub { arc, forward: false });
+                f(
+                    a.from,
+                    -a.cost,
+                    Step::Hub {
+                        arc,
+                        forward: false,
+                    },
+                );
             }
         }
         let leaves = self.first[self.first.len() - 1];
@@ -1161,7 +1189,12 @@ impl Coupled {
                     } else {
                         self.hub[arc].from
                     };
-                    push(&mut path, &mut at, Node::Hub(head), Move::Hub { arc, forward });
+                    push(
+                        &mut path,
+                        &mut at,
+                        Node::Hub(head),
+                        Move::Hub { arc, forward },
+                    );
                 }
                 Step::Exchange { block, from, to } => {
                     let b = &self.blocks[block];
@@ -1334,9 +1367,7 @@ fn nearest(pairs: &[(usize, usize, f64)], per: usize, leaf_of: &[usize]) -> Near
             stop += 1;
         }
         group.clear();
-        group.extend(
-            (start..stop).map(|i| (leaf_of[pairs[i].1], i, pairs[i].1, pairs[i].2)),
-        );
+        group.extend((start..stop).map(|i| (leaf_of[pairs[i].1], i, pairs[i].1, pairs[i].2)));
         group.sort_unstable_by_key(|pair| pair.0);
         let mut from = 0;
         while from < group.len() {
@@ -1470,7 +1501,9 @@ impl Network<'_> {
             let (sum, count) = blocks
                 .iter()
                 .flat_map(|b| b.arcs.iter())
-                .fold((0.0_f64, 0_usize), |(s, c), pair| (s + pair.cost as f64, c + 1));
+                .fold((0.0_f64, 0_usize), |(s, c), pair| {
+                    (s + pair.cost as f64, c + 1)
+                });
             (sum / count.max(1) as f64).max(1.0)
         };
         // Prices stay well inside the penalties, so that they choose only the
@@ -1717,7 +1750,10 @@ impl Network<'_> {
                         .map(|pair| pair.k)
                         .collect();
                     let ours: Vec<usize> = found.iter().map(|pair| pair.k).collect();
-                    debug_assert_eq!(ours, all, "stratum {s}: pairs to add outside the rows listed");
+                    debug_assert_eq!(
+                        ours, all,
+                        "stratum {s}: pairs to add outside the rows listed"
+                    );
                 }
                 found
             })
@@ -1747,8 +1783,10 @@ impl Network<'_> {
                 self.every(pairs)
             }
         };
-        let (mut kept, mut bounds): (Vec<Vec<Kept>>, Vec<Bounds>) =
-            near.into_iter().map(|near| (near.pairs, near.bounds)).unzip();
+        let (mut kept, mut bounds): (Vec<Vec<Kept>>, Vec<Bounds>) = near
+            .into_iter()
+            .map(|near| (near.pairs, near.bounds))
+            .unzip();
         let mut in_network = 0;
         for pair in kept.iter().flatten() {
             selected.insert(pair.k);
@@ -2259,7 +2297,8 @@ mod tests {
                                 o.levels.iter().map(BalanceLevel::total_deviation).collect()
                             };
                             assert_eq!(deviation(&ours), deviation(full), "round {round}: balance");
-                            let (full_pairs, our_pairs) = (matched_pairs(full), matched_pairs(&ours));
+                            let (full_pairs, our_pairs) =
+                                (matched_pairs(full), matched_pairs(&ours));
                             assert_eq!(full_pairs.len(), our_pairs.len());
                             let key = |id: &str| data.scores[id];
                             let total = |pairs: &[(String, String)]| -> f64 {
@@ -2275,11 +2314,9 @@ mod tests {
                         (Err(a), Err(b)) => {
                             assert_eq!(a.to_string(), b.to_string(), "round {round}");
                         }
-                        (a, b) => panic!(
-                            "round {round}: full {:?}, ours {:?}",
-                            a.is_ok(),
-                            b.is_ok()
-                        ),
+                        (a, b) => {
+                            panic!("round {round}: full {:?}, ours {:?}", a.is_ok(), b.is_ok())
+                        }
                     }
                 }
             }
@@ -2333,7 +2370,6 @@ mod tests {
         use epistat_optim::min_cost_flow::{Basis, FlowError, MinCostFlow};
         use rayon::prelude::*;
         use std::collections::BTreeMap;
-
 
         /// Candidates kept per anchor and finest-level category at the start, as a
         /// multiple of the match ratio.
@@ -2764,9 +2800,8 @@ mod tests {
                     let solved = match &basis {
                         Some(basis) => problem.solve_from(basis),
                         None => match self.stratum_start(pairs, &costs, runs, &selected) {
-                            Some(chosen) => {
-                                problem.solve_from_flow(&self.start_values(pairs, &chosen, &used, &ids))
-                            }
+                            Some(chosen) => problem
+                                .solve_from_flow(&self.start_values(pairs, &chosen, &used, &ids)),
                             _ => problem.solve(),
                         },
                     };
@@ -2862,7 +2897,8 @@ mod tests {
 
             // Admissible pairs by position in the anchor and candidate slices, with
             // the start of each stratum's run of pairs.
-            let mut pairs: Vec<(usize, usize, f64)> = Vec::with_capacity(edges.iter().map(Vec::len).sum());
+            let mut pairs: Vec<(usize, usize, f64)> =
+                Vec::with_capacity(edges.iter().map(Vec::len).sum());
             let mut runs: Vec<std::ops::Range<usize>> = Vec::with_capacity(strata.len());
             for (stratum, stratum_edges) in strata.iter().zip(edges) {
                 let first = pairs.len();

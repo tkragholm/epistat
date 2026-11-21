@@ -861,7 +861,10 @@ where
     G: ConstraintGroup<R> + ?Sized,
 {
     with_strata_pairs(anchors, candidates, request, |strata, pairs| {
-        let edges = strata.par_iter().map(|stratum| pairs(stratum, None)).collect();
+        let edges = strata
+            .par_iter()
+            .map(|stratum| pairs(stratum, None))
+            .collect();
         Ok(StrataEdges { strata, edges })
     })
 }
