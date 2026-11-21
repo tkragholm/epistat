@@ -63,10 +63,14 @@
 //!    leaving variable becomes non-basic at that bound.
 //!
 //! `B^{-1}` is rebuilt from the basis by Gauss-Jordan elimination with partial
-//! pivoting after every 40 pivots, together with the basic values. The duals and
-//! reduced costs are recomputed from `B^{-1}` at every iteration, not
-//! updated, so they do not drift. A pivot below `1e-12` in the elimination is
-//! [`BoundedLpError::Singular`]. After a refactorisation, a non-basic column whose
+//! pivoting after every 40 pivots, counted over solves, and after a basis is
+//! restored, together with the basic values. The duals and reduced costs are
+//! recomputed from `B^{-1}` at every iteration, not updated, so they do not
+//! drift. When a pivot in the elimination is below `1e-12`, the basic column at
+//! that position is replaced by a slack, the first that makes the basis
+//! factorise, and only when none does is the solve
+//! [`BoundedLpError::Singular`]. At the start of a solve and after each
+//! refactorisation, a non-basic column whose
 //! reduced cost has the wrong sign beyond the tolerance below is flipped to its
 //! other bound, which restores dual feasibility when both bounds are finite. A
 //! slack with one infinite bound cannot flip. Its cost is shifted to make the
@@ -77,12 +81,11 @@
 //!
 //! # Degeneracy
 //!
+//! Cost perturbation ([`BoundedSimplex::perturb_costs`]) keeps ties rare.
 //! A step of length at most the dual tolerance is degenerate. After 20000 in a
 //! row, the leaving variable becomes the infeasible basic variable of lowest
 //! index and the entering column the candidate of lowest index among the minimum
 //! ratios, with no flips, for the rest of that solve, which cannot cycle \[4\].
-//! Cost perturbation ([`BoundedSimplex::perturb_costs`]) is what keeps ties rare
-//! enough that this is not reached in practice.
 //! A solve is limited to `100 (m + n) + 1000` pivots, after which it fails with
 //! [`BoundedLpError::IterationLimit`].
 //!
@@ -171,6 +174,9 @@ const BLAND_AFTER_DEGENERATE: usize = 20_000;
 const DUAL_REL_TOL: f64 = 1e-11;
 /// Relative tolerance of every other comparison, in units of the data scale.
 const REL_TOL: f64 = 1e-9;
+/// The largest cost perturbation, relative to the largest cost, see
+/// [`BoundedSimplex::perturb_costs`].
+const PERTURBATION: f64 = 1e-5;
 /// A candidate must be at least this fraction of the largest in its row.
 const REL_PIVOT: f64 = 1e-7;
 /// A pivot smaller than this in the elimination makes the basis singular.
@@ -219,6 +225,38 @@ enum Status {
     Upper,
     /// Non-basic with both bounds infinite, held at 0.
     Free,
+}
+
+/// A bound on the program from the duals of a basis, see
+/// [`BoundedSimplex::dual_bound`].
+#[derive(Debug, Clone)]
+pub struct DualBound {
+    /// An upper bound on `c'x`, with the costs as given, over every point
+    /// within the current bounds, rounding error included.
+    pub value: f64,
+    /// `r_j = c_j + a_j'y` for each structural column. For every point `x`
+    /// within the bounds, `c'x ≤ value - Σ_j |r_j| |x_j - b_j|`, where `b_j` is
+    /// the upper bound of column `j` when `r_j > 0` and the lower bound when
+    /// `r_j < 0`. A column whose `|r_j|` exceeds `value - z` therefore takes the
+    /// value `b_j` at every point with `c'x ≥ z` that moves it by its width.
+    pub reduced_costs: Vec<f64>,
+    /// A bound on the rounding error of each entry of `reduced_costs`.
+    pub reduced_cost_error: f64,
+}
+
+/// A row of the simplex tableau, see [`BoundedSimplex::tableau_row`].
+#[derive(Debug, Clone)]
+pub struct TableauRow {
+    /// The basic variable of the row: a structural column below `n`, the slack
+    /// of row `i` as `n + i`.
+    pub variable: usize,
+    /// Its value.
+    pub value: f64,
+    /// `α_j` of each structural column, 0 for a basic one. The basic variable is
+    /// `-Σ α_j x_j` over the non-basic columns and slacks.
+    pub columns: Vec<f64>,
+    /// `α` of the slack of each row, 0 for a basic one.
+    pub slacks: Vec<f64>,
 }
 
 /// A saved basis, see [`BoundedSimplex::snapshot`].
@@ -620,35 +658,60 @@ impl BoundedSimplex {
             .sum()
     }
 
-    /// Adds a small positive amount to the cost of every column that has a
-    /// nonzero cost and finite bounds, different for each column.
+    /// Adds a small amount to the cost of every column with finite bounds of one
+    /// sign, different for each column.
     ///
     /// A program whose columns share costs, as the units of a matching problem
     /// do, has many reduced costs equal to zero at once, and the dual simplex
     /// method then makes long runs of pivots of length zero. Distinct costs
     /// make such ties rare. The amount for column `j` is `ε (1/2 + h_j/2)` with
-    /// `h_j` in `[0, 1)` from a hash of `j`, and `ε = clamp(10^-1/n, 10^-7,
-    /// 10^-5)` times the largest cost, so that the perturbation is 10^4 times
-    /// the dual tolerance, `10^-11` times the largest cost, and adds at most
-    /// about `10^-1` times the largest cost per `n` columns at their upper
-    /// bound.
-    /// With a nonnegative amount on a maximisation the solved value is an upper
-    /// bound on the optimum for the costs as given, see
-    /// [`Self::relaxation_bound`]. The point returned is optimal for the
-    /// perturbed costs. Call it before the first solve.
+    /// `h_j` in `[0, 1)` from a hash of `j` and `ε = 10^-5` times the largest
+    /// cost, `10^6` times the dual tolerance, so that the differences between
+    /// the amounts of most pairs of columns are well above that tolerance. The
+    /// amount is positive for a column with `l ≥ 0` and negative for one with
+    /// `u ≤ 0`, so that it never lowers `c'x` on a maximisation, and a column
+    /// whose bounds have both signs is left alone.
+    ///
+    /// The solved value is then an upper bound on the optimum for the costs as
+    /// given, see [`Self::relaxation_bound`], and the point returned is optimal
+    /// for the perturbed costs. [`Self::dual_bound`] gives a bound with the costs
+    /// as given that does not depend on the perturbation. Call it before the
+    /// first solve.
     pub fn perturb_costs(&mut self) {
         let n = self.n;
         let c_max = self.cost.iter().fold(0.0_f64, |a, c| a.max(c.abs()));
-        let eps_max = (1e-1 / n.max(1) as f64).clamp(1e-7, 1e-5) * c_max;
+        let eps_max = PERTURBATION * c_max;
         for j in 0..n {
-            let finite = self.lo[j].is_finite() && self.hi[j].is_finite();
-            if finite && self.cost[j] != 0.0 {
-                let mut z = (j as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
-                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                z ^= z >> 31;
-                let h = (z >> 11) as f64 / (1u64 << 53) as f64;
-                self.eps[j] = eps_max * (0.5 + 0.5 * h) * self.cost[j].signum();
+            let sign = if self.lo[j] >= 0.0 && self.hi[j].is_finite() {
+                1.0
+            } else if self.hi[j] <= 0.0 && self.lo[j].is_finite() {
+                -1.0
+            } else {
+                continue;
+            };
+            let mut z = (j as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            let h = (z >> 11) as f64 / (1u64 << 53) as f64;
+            self.eps[j] = eps_max * (0.5 + 0.5 * h) * sign;
+            self.q[j] = -(self.cost[j] + self.eps[j]);
+        }
+    }
+
+    /// Multiplies the perturbation of every cost, see [`Self::perturb_costs`], by
+    /// `factor`. The next solve restores optimality from the current basis.
+    ///
+    /// The full perturbation keeps the dual simplex method away from long runs
+    /// of degenerate pivots, and the duals it ends with overstate the
+    /// optimum, through [`Self::dual_bound`], by up to the perturbation's
+    /// effect. Solving again from that basis with a small fraction of the
+    /// perturbation takes few pivots and gives a bound that is that fraction as
+    /// far from the optimum.
+    pub fn scale_perturbation(&mut self, factor: f64) {
+        for j in 0..self.n {
+            if self.eps[j] != 0.0 {
+                self.eps[j] *= factor;
                 self.q[j] = -(self.cost[j] + self.eps[j]);
             }
         }
@@ -677,6 +740,175 @@ impl BoundedSimplex {
                 })
                 .collect()
         })
+    }
+
+    /// The bound of non-basic structural column `j`: its value when it sits at
+    /// a finite bound, `None` when it is basic or free.
+    #[must_use]
+    pub fn at_bound(&self, j: usize) -> Option<f64> {
+        match self.status[j] {
+            Status::Lower => Some(self.lo[j]),
+            Status::Upper => Some(self.hi[j]),
+            Status::Basic | Status::Free => None,
+        }
+    }
+
+    /// Row `position` of the simplex tableau, for cutting planes.
+    ///
+    /// With `B` the basis, `A x - s = 0` gives `x_B = -B^{-1} N x_N`, so the
+    /// basic variable at `position` is `-Σ_{j non-basic} α_j x_j` with `α_j` the
+    /// entry at `position` of `B^{-1}` times the column of `j`: `a_j` for a
+    /// structural column and `-e_i` for the slack of row `i`. See
+    /// [`TableauRow`].
+    #[must_use]
+    pub fn tableau_row(&self, position: usize) -> TableauRow {
+        let (m, n) = (self.m, self.n);
+        let rho = &self.binv[position * m..(position + 1) * m];
+        let columns = chunked(n, |start, end| {
+            (start..end)
+                .map(|j| {
+                    if self.status[j] == Status::Basic {
+                        return 0.0;
+                    }
+                    let column = &self.a[j * m..(j + 1) * m];
+                    let mut s = 0.0;
+                    for i in 0..m {
+                        s += rho[i] * column[i];
+                    }
+                    s
+                })
+                .collect()
+        });
+        let slacks = (0..m)
+            .map(|i| {
+                if self.status[n + i] == Status::Basic {
+                    0.0
+                } else {
+                    -rho[i]
+                }
+            })
+            .collect();
+        TableauRow {
+            variable: self.basis[position],
+            value: self.xb[position],
+            columns,
+            slacks,
+        }
+    }
+
+    /// The bounds of the slack of row `i`, the activity `a_i'x`, and the bound
+    /// it sits at when it is non-basic.
+    #[must_use]
+    pub fn slack(&self, i: usize) -> (f64, f64, Option<f64>) {
+        let j = self.n + i;
+        let at = match self.status[j] {
+            Status::Lower => Some(self.lo[j]),
+            Status::Upper => Some(self.hi[j]),
+            Status::Basic | Status::Free => None,
+        };
+        (self.lo[j], self.hi[j], at)
+    }
+
+    /// An upper bound on `c'x`, with the costs as given, over every point within
+    /// the current bounds of the rows and columns, from the duals of the current
+    /// basis by weak duality. See [`DualBound`].
+    ///
+    /// For any multipliers `y` of the rows,
+    ///
+    /// ```text
+    /// c'x = Σ_j r_j x_j - y'(A x),    r_j = c_j + a_j'y,
+    /// ```
+    ///
+    /// so `c'x ≤ Σ_j max(r_j l_j, r_j u_j) + Σ_i max(-y_i r_lo_i, -y_i r_hi_i)`.
+    /// The multipliers are the duals `y = B^{-T} q_B` of the current basis, with
+    /// the perturbed costs, and a multiplier that points at an infinite row bound
+    /// is set to 0, which is again a valid choice. The bound holds whether or not
+    /// the basis is optimal, for any perturbation and any tolerance, and is
+    /// within the perturbation's effect of the optimum when the basis is
+    /// optimal. It is infinite when a column with a nonzero `r_j` has an infinite
+    /// bound on the side `r_j` points to.
+    ///
+    /// The sum of `n` terms is rounded, so [`DualBound::value`] adds the bound on
+    /// that rounding error, `k ε Σ_j |terms|` with `ε` the machine epsilon and
+    /// `k` the length of the longest chain of additions (the `m + 2` terms of
+    /// one reduced cost, a chunk of 4096 columns, and the chunk sums).
+    #[must_use]
+    pub fn dual_bound(&self) -> DualBound {
+        let (m, n) = (self.m, self.n);
+        let mut y = self.duals();
+        for (i, yi) in y.iter_mut().enumerate() {
+            let (lo, hi) = (self.lo[n + i], self.hi[n + i]);
+            // The slack term is min over s in [lo, hi] of y_i s in the
+            // minimisation form: y_i > 0 needs a finite lower bound.
+            if (*yi > 0.0 && !lo.is_finite()) || (*yi < 0.0 && !hi.is_finite()) {
+                *yi = 0.0;
+            }
+        }
+        // Per chunk: the sum of the column terms, the sum of their magnitudes
+        // for the error bound, and the largest magnitude of a reduced cost's own
+        // terms; then the reduced costs.
+        let this = self;
+        let y_ref = &y;
+        let parts: Vec<(f64, f64, f64, Vec<f64>)> = chunked(n, |start, end| {
+            let mut sum = 0.0;
+            let mut size = 0.0;
+            let mut widest = 0.0_f64;
+            let mut r = Vec::with_capacity(end - start);
+            for j in start..end {
+                let column = &this.a[j * m..(j + 1) * m];
+                let mut ay = 0.0;
+                let mut ay_abs = 0.0;
+                for i in 0..m {
+                    ay += column[i] * y_ref[i];
+                    ay_abs += (column[i] * y_ref[i]).abs();
+                }
+                let rj = this.cost[j] + ay;
+                let reach = finite_or(this.lo[j].abs(), 0.0).max(finite_or(this.hi[j].abs(), 0.0));
+                let term = if rj > 0.0 {
+                    rj * this.hi[j]
+                } else if rj < 0.0 {
+                    rj * this.lo[j]
+                } else {
+                    0.0
+                };
+                sum += term;
+                size += (this.cost[j].abs() + ay_abs) * reach;
+                widest = widest.max(this.cost[j].abs() + ay_abs);
+                r.push(rj);
+            }
+            vec![(sum, size, widest, r)]
+        });
+        let chunks = parts.len();
+        let mut value = 0.0;
+        let mut size = 0.0;
+        let mut widest = 0.0_f64;
+        let mut reduced_costs = Vec::with_capacity(n);
+        for (sum, s, w, r) in parts {
+            value += sum;
+            size += s;
+            widest = widest.max(w);
+            reduced_costs.extend(r);
+        }
+        for (i, &yi) in y.iter().enumerate() {
+            let (lo, hi) = (self.lo[n + i], self.hi[n + i]);
+            // max over s of -y_i s.
+            let term = if yi > 0.0 {
+                -yi * lo
+            } else if yi < 0.0 {
+                -yi * hi
+            } else {
+                0.0
+            };
+            value += term;
+            size += yi.abs() * finite_or(lo.abs(), 0.0).max(finite_or(hi.abs(), 0.0));
+        }
+        let chain = (m + 2 + CHUNK + chunks + m) as f64;
+        let error = chain * f64::EPSILON * size;
+        DualBound {
+            value: value + error,
+            reduced_costs,
+            reduced_cost_error: (m + 2) as f64 * f64::EPSILON * widest,
+        }
     }
 
     /// The activity `A x` of each row at the current point.
@@ -723,60 +955,109 @@ impl BoundedSimplex {
 
     /// Rebuilds `B^{-1}` from the basis by Gauss-Jordan elimination with
     /// partial pivoting, then the basic values.
+    ///
+    /// A basis whose column at some position depends on the others, to the
+    /// pivot tolerance, is repaired: the slack of the first row not in the basis
+    /// that makes it factorise takes that position, and the column leaves at the
+    /// bound nearer its value. This happens when rounding over many updates of
+    /// `B^{-1}` let a nearly dependent column in.
     fn refactor(&mut self) -> Result<(), BoundedLpError> {
-        let m = self.m;
-        if m > 0 {
-            let w = 2 * m;
-            let mut aug = vec![0.0; m * w];
-            let mut column = vec![0.0; m];
-            for (k, &j) in self.basis.iter().enumerate() {
-                self.load_column(j, &mut column);
-                for i in 0..m {
-                    aug[i * w + k] = column[i];
-                }
+        let (m, n) = (self.m, self.n);
+        let mut repairs = 0;
+        while let Err(position) = self.factorise() {
+            if repairs >= m {
+                return Err(BoundedLpError::Singular);
             }
+            repairs += 1;
+            let out = self.basis[position];
+            let value = self.xb[position];
+            let mut repaired = false;
             for i in 0..m {
-                aug[i * w + m + i] = 1.0;
-            }
-            for c in 0..m {
-                let mut p = c;
-                let mut best = aug[c * w + c].abs();
-                for i in c + 1..m {
-                    let v = aug[i * w + c].abs();
-                    if v > best {
-                        best = v;
-                        p = i;
-                    }
+                if self.status[n + i] == Status::Basic {
+                    continue;
                 }
-                if best < TOL_SINGULAR {
-                    return Err(BoundedLpError::Singular);
-                }
-                if p != c {
-                    for k in 0..w {
-                        aug.swap(c * w + k, p * w + k);
-                    }
-                }
-                let pivot = aug[c * w + c];
-                for k in 0..w {
-                    aug[c * w + k] /= pivot;
-                }
-                for i in 0..m {
-                    if i != c {
-                        let f = aug[i * w + c];
-                        if f != 0.0 {
-                            for k in 0..w {
-                                aug[i * w + k] -= f * aug[c * w + k];
-                            }
-                        }
-                    }
+                self.basis[position] = n + i;
+                if self.factorise().is_ok() {
+                    self.status[n + i] = Status::Basic;
+                    self.status[out] = if self.lo[out].is_finite()
+                        && (!self.hi[out].is_finite()
+                            || (value - self.lo[out]).abs() <= (self.hi[out] - value).abs())
+                    {
+                        Status::Lower
+                    } else if self.hi[out].is_finite() {
+                        Status::Upper
+                    } else {
+                        Status::Free
+                    };
+                    repaired = true;
+                    break;
                 }
             }
-            for i in 0..m {
-                self.binv[i * m..(i + 1) * m].copy_from_slice(&aug[i * w + m..(i + 1) * w]);
+            if !repaired {
+                self.basis[position] = out;
+                return Err(BoundedLpError::Singular);
             }
         }
         self.since_refactor = 0;
         self.recompute_basic_values();
+        Ok(())
+    }
+
+    /// Gauss-Jordan elimination of the basis into `B^{-1}`, or the position of a
+    /// basic column with no pivot above [`TOL_SINGULAR`].
+    fn factorise(&mut self) -> Result<(), usize> {
+        let m = self.m;
+        if m == 0 {
+            return Ok(());
+        }
+        let w = 2 * m;
+        let mut aug = vec![0.0; m * w];
+        let mut column = vec![0.0; m];
+        for (k, &j) in self.basis.iter().enumerate() {
+            self.load_column(j, &mut column);
+            for i in 0..m {
+                aug[i * w + k] = column[i];
+            }
+        }
+        for i in 0..m {
+            aug[i * w + m + i] = 1.0;
+        }
+        for c in 0..m {
+            let mut p = c;
+            let mut best = aug[c * w + c].abs();
+            for i in c + 1..m {
+                let v = aug[i * w + c].abs();
+                if v > best {
+                    best = v;
+                    p = i;
+                }
+            }
+            if best < TOL_SINGULAR {
+                return Err(c);
+            }
+            if p != c {
+                for k in 0..w {
+                    aug.swap(c * w + k, p * w + k);
+                }
+            }
+            let pivot = aug[c * w + c];
+            for k in 0..w {
+                aug[c * w + k] /= pivot;
+            }
+            for i in 0..m {
+                if i != c {
+                    let f = aug[i * w + c];
+                    if f != 0.0 {
+                        for k in 0..w {
+                            aug[i * w + k] -= f * aug[c * w + k];
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..m {
+            self.binv[i * m..(i + 1) * m].copy_from_slice(&aug[i * w + m..(i + 1) * w]);
+        }
         Ok(())
     }
 
@@ -1043,17 +1324,37 @@ impl BoundedSimplex {
 
     /// Solves from the current basis.
     ///
-    /// Starts with a refactorisation, so bound changes made since the last solve
-    /// take effect. `deadline`, when given, is checked once per pivot.
+    /// Starts by computing the basic values again, so bound changes made since
+    /// the last solve take effect, after a refactorisation when the basis was
+    /// restored or has had 40 pivots since the last one. `deadline`, when given,
+    /// is checked once per pivot.
     ///
     /// # Errors
     /// See [`BoundedLpError`]. After `Infeasible` the basis is dual feasible
     /// and can be reused after the bounds change back.
     pub fn solve(&mut self, deadline: Option<Instant>) -> Result<(), BoundedLpError> {
+        let limit = 100 * (self.m + self.n) + 1000;
+        self.solve_within(deadline, limit)
+    }
+
+    /// [`Self::solve`] with at most `limit` pivots.
+    ///
+    /// # Errors
+    /// As [`Self::solve`], with [`BoundedLpError::IterationLimit`] after `limit`
+    /// pivots. The basis is then dual feasible but not primal feasible, and
+    /// [`Self::dual_bound`] is still a valid bound.
+    pub fn solve_within(
+        &mut self,
+        deadline: Option<Instant>,
+        limit: usize,
+    ) -> Result<(), BoundedLpError> {
         let (m, n) = (self.m, self.n);
-        self.refactor()?;
+        if self.since_refactor >= REFACTOR_EVERY {
+            self.refactor()?;
+        } else {
+            self.recompute_basic_values();
+        }
         self.restore_dual_feasibility()?;
-        let limit = 100 * (m + n) + 1000;
         let mut pivots = 0_usize;
         let mut degenerate_run = 0_usize;
         let mut bland = false;
@@ -1370,6 +1671,67 @@ mod tests {
                 lp.objective(),
                 primal.objective()
             );
+            compared += 1;
+        }
+        assert!(compared > 100);
+    }
+
+    /// The dual bound is at least the optimum at every basis the dual simplex
+    /// passes through, with and without the perturbation, and at the optimum it
+    /// is at most the solved value, which is within the perturbation's largest
+    /// effect of the optimum. The optimum is the primal
+    /// simplex's, on random programs with equality rows as in
+    /// `agrees_with_the_primal_simplex`.
+    #[test]
+    fn dual_bound_holds_at_every_basis() {
+        use crate::simplex::DenseSimplex;
+        let mut rng = Rng(19);
+        let mut compared = 0;
+        for trial in 0..200 {
+            let m = 1 + (trial % 4);
+            let n = m + 2 + (trial % 7);
+            let columns: Vec<Vec<f64>> = (0..n)
+                .map(|_| (0..m).map(|_| rng.uniform(-1.0, 2.0)).collect())
+                .collect();
+            let x0: Vec<f64> = (0..n).map(|_| rng.uniform(0.0, 1.0)).collect();
+            let g: Vec<f64> = (0..m)
+                .map(|i| (0..n).map(|j| columns[j][i] * x0[j]).sum())
+                .collect();
+            let y: Vec<f64> = (0..m).map(|_| rng.uniform(-1.0, 1.0)).collect();
+            let cost: Vec<f64> = columns
+                .iter()
+                .map(|c| c.iter().zip(&y).map(|(a, y)| a * y).sum::<f64>() - rng.uniform(0.0, 1.0))
+                .collect();
+            let mut primal = DenseSimplex::new(&columns, &g);
+            primal.set_cost(&cost);
+            let Ok(()) = primal.solve() else { continue };
+            let optimum = primal.objective();
+            let flat: Vec<f64> = columns.iter().flatten().copied().collect();
+            for perturb in [false, true] {
+                for limit in 0..8 {
+                    let mut lp =
+                        BoundedSimplex::new(m, &flat, &cost, &vec![0.0; n], &vec![1e3; n], &g, &g)
+                            .unwrap();
+                    if perturb {
+                        lp.perturb_costs();
+                    }
+                    let finished = lp.solve_within(None, limit);
+                    let bound = lp.dual_bound().value;
+                    assert!(
+                        bound >= optimum - 1e-9,
+                        "trial {trial}: {bound} < {optimum}"
+                    );
+                    if finished.is_ok() {
+                        // The solved value with the perturbation is at most the
+                        // optimum plus the perturbation's largest effect.
+                        assert!(bound <= lp.relaxation_bound() + 1e-7, "trial {trial}");
+                        assert!(
+                            lp.relaxation_bound() <= optimum + lp.perturbation_total() + 1e-7,
+                            "trial {trial}"
+                        );
+                    }
+                }
+            }
             compared += 1;
         }
         assert!(compared > 100);
