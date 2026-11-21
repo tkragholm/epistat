@@ -20,8 +20,9 @@ mod common;
 use common::{Level, Person, cohort, records};
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    CbpsConfig, CbpsEstimand, CbpsEstimandSpec, CbpsMethod, QuickMatchOptions,
-    quick_match_subclasses,
+    CardinalityError, CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand,
+    CbpsEstimandSpec, CbpsMethod, GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch,
+    QuickMatchOptions, match_cardinality, quick_match_subclasses,
 };
 use std::collections::BTreeMap;
 
@@ -2245,4 +2246,668 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
     let error = run_spec(&propensity, SpecInput::RiskSet { cohort: &records })
         .expect_err("not available in risk-set mode");
     assert!(error.to_string().contains("discard"), "{error}");
+}
+
+fn option_named(error: &SpecError) -> &str {
+    match error {
+        SpecError::Option { option, .. } => option,
+        other => panic!("expected an option error, got {other}"),
+    }
+}
+
+fn numeric_column(anchors: &[BalanceRecord], candidates: &[BalanceRecord], key: &str) -> Vec<f64> {
+    anchors
+        .iter()
+        .chain(candidates)
+        .map(|row| match row.covariates[key] {
+            CovariateValue::Numeric(value) => value,
+            CovariateValue::Categorical(_) | CovariateValue::Missing => {
+                panic!("{key} is numeric")
+            }
+        })
+        .collect()
+}
+
+fn age_income_propensity() -> DistanceSpec {
+    DistanceSpec::Propensity {
+        covariates: covariates(&["age", "income"]),
+        link: LinkSpec::Logit,
+        estimator: EstimatorSpec::Glm,
+        scale: ScaleSpec::Probability,
+        sampling_weights: None,
+        caliper: None,
+    }
+}
+
+/// A search that stops after a few small generations, so a test runs quickly.
+fn short_genetic() -> GeneticSpec {
+    GeneticSpec {
+        covariates: covariates(&["age", "income"]),
+        pop_size: 10,
+        max_generations: 3,
+        wait_generations: 2,
+        hard_generation_limit: true,
+        ..GeneticSpec::default()
+    }
+}
+
+/// Genetic matching through the spec is the search and the pairs of
+/// `GeneticProblem` on the same variables, the score, the order and the seed.
+#[test]
+fn spec_genetic_equals_the_direct_search() {
+    let (anchors, candidates) = covariate_inputs();
+    let spec = MatchSpec {
+        method: MatchMethod::Genetic,
+        distance: age_income_propensity(),
+        genetic: short_genetic(),
+        seed: 5,
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Genetic { outcome, search } = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .expect("valid spec") else {
+        panic!("expected genetic output");
+    };
+
+    let prepared = prepare_propensity_distance_config(
+        &anchors,
+        &candidates,
+        &PropensityScoreConfig::builder()
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .covariate_keys(vec!["age".into(), "income".into()])
+                    .include_intercept(true)
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap();
+    let ids: Vec<&str> = anchors
+        .iter()
+        .chain(&candidates)
+        .map(|row| row.core.id.as_str())
+        .collect();
+    let score: Vec<f64> = ids
+        .iter()
+        .map(|id| prepared.estimate.distance_scores[*id])
+        .collect();
+    let age = numeric_column(&anchors, &candidates, "age");
+    let income = numeric_column(&anchors, &candidates, "income");
+    let focal: Vec<bool> = (0..ids.len()).map(|i| i < anchors.len()).collect();
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by(|&a, &b| score[b].total_cmp(&score[a]).then(a.cmp(&b)));
+    let problem = GeneticProblem::new(
+        &focal,
+        &[age.clone(), income.clone(), score],
+        &[age, income],
+        &order,
+        GeneticMatchOptions::default(),
+        f64::EPSILON.sqrt(),
+    )
+    .unwrap();
+    let by_hand = problem
+        .search(
+            &GeneticFit::default(),
+            &GeneticSearch {
+                population: 10,
+                max_generations: 3,
+                wait_generations: 2,
+                hard_generation_limit: true,
+                seed: 5,
+                ..GeneticSearch::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(search.weights, by_hand.weights);
+    assert_eq!(search.matches, by_hand.matches);
+    assert_eq!(search.generations, by_hand.generations);
+    let pairs: Vec<(String, String)> = by_hand
+        .matches
+        .focal
+        .iter()
+        .zip(&by_hand.matches.control)
+        .map(|(f, c)| (ids[*f].to_string(), ids[*c].to_string()))
+        .collect();
+    let from_spec: Vec<(String, String)> = outcome
+        .pairs
+        .iter()
+        .map(|pair| (pair.case_id.clone(), pair.control_id.clone()))
+        .collect();
+    assert_eq!(from_spec, pairs);
+    assert_eq!(
+        outcome.matched_cases + outcome.unmatched_cases,
+        anchors.len()
+    );
+    assert_eq!(
+        outcome.matched_cases,
+        anchors.len(),
+        "60 anchors, 240 candidates"
+    );
+
+    // A repeat run is the same, and the seed is read.
+    let again = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .unwrap();
+    let SpecOutput::Genetic { search: repeat, .. } = again else {
+        panic!("expected genetic output");
+    };
+    assert_eq!(repeat.weights, search.weights);
+}
+
+/// Exact keys, calipers on a covariate and antiexact keys reach the problem:
+/// every pair agrees on the key, differs on the other and keeps to the caliper.
+#[test]
+fn spec_genetic_constraints_hold_in_the_pairs() {
+    let (mut anchors, mut candidates) = covariate_inputs();
+    for (k, row) in anchors.iter_mut().chain(candidates.iter_mut()).enumerate() {
+        row.core.strata.insert("g".into(), format!("g{}", k % 2));
+        row.core.strata.insert("h".into(), format!("h{}", k % 5));
+    }
+    let spec = MatchSpec {
+        method: MatchMethod::Genetic,
+        genetic: short_genetic(),
+        exact: vec!["g".into()],
+        antiexact: vec!["h".into()],
+        calipers: BTreeMap::from([("age".to_string(), 6.0)]),
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Genetic { outcome, .. } = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .expect("valid spec") else {
+        panic!("expected genetic output");
+    };
+    assert!(outcome.matched_cases > 0);
+    let find = |id: &str| {
+        anchors
+            .iter()
+            .chain(&candidates)
+            .find(|row| row.core.id == id)
+            .unwrap()
+    };
+    for pair in &outcome.pairs {
+        let (a, c) = (find(&pair.case_id), find(&pair.control_id));
+        assert_eq!(a.core.strata["g"], c.core.strata["g"]);
+        assert_ne!(a.core.strata["h"], c.core.strata["h"]);
+        assert!((a.core.numerics["age"] - c.core.numerics["age"]).abs() <= 6.0);
+    }
+}
+
+#[test]
+fn spec_genetic_rejects_invalid_options() {
+    let (anchors, candidates) = covariate_inputs();
+    let input = SpecInput::Standard {
+        anchors: &anchors,
+        candidates: &candidates,
+    };
+    let base = MatchSpec {
+        method: MatchMethod::Genetic,
+        genetic: short_genetic(),
+        ..MatchSpec::default()
+    };
+    let with = |edit: &dyn Fn(&mut MatchSpec)| {
+        let mut spec = base.clone();
+        edit(&mut spec);
+        spec
+    };
+    let cases: Vec<(&str, MatchSpec)> = vec![
+        ("genetic.pop_size", with(&|s| s.genetic.pop_size = 1)),
+        (
+            "genetic.max_generations",
+            with(&|s| s.genetic.max_generations = 0),
+        ),
+        (
+            "genetic.wait_generations",
+            with(&|s| s.genetic.wait_generations = 0),
+        ),
+        ("genetic.tolerance", with(&|s| s.genetic.tolerance = 0.0)),
+        (
+            "genetic.m_order",
+            with(&|s| s.genetic.m_order = Some(OrderSpec::Largest)),
+        ),
+        (
+            "genetic.m_order",
+            with(&|s| s.genetic.m_order = Some(OrderSpec::Closest)),
+        ),
+        ("estimand", with(&|s| s.estimand = Estimand::Atc)),
+        (
+            "distance",
+            with(&|s| {
+                s.distance = DistanceSpec::Euclidean {
+                    covariates: CovariatesSpec::default(),
+                    scaled: false,
+                    caliper: None,
+                }
+            }),
+        ),
+        (
+            "unique_by_key",
+            with(&|s| s.unique_by_key = Some("k".into())),
+        ),
+        ("birth_window_days", with(&|s| s.birth_window_days = 10)),
+        ("discard", with(&|s| s.discard = Some(DiscardSpec::Both))),
+        ("method", with(&|s| s.mode = MatchMode::RiskSet)),
+        (
+            "calipers",
+            with(&|s| {
+                s.calipers.insert("region".into(), 1.0);
+            }),
+        ),
+        ("exact", with(&|s| s.exact = vec!["nokey".into()])),
+        (
+            "genetic",
+            MatchSpec {
+                method: MatchMethod::Random,
+                genetic: short_genetic(),
+                ..MatchSpec::default()
+            },
+        ),
+    ];
+    for (option, spec) in cases {
+        let error = run_spec(&spec, input.clone()).expect_err(option);
+        assert_eq!(option_named(&error), option, "{error}");
+    }
+    // Covariates that cannot be encoded are the distance's error.
+    let missing = with(&|s| s.genetic.covariates = covariates(&["nosuch"]));
+    assert!(run_spec(&missing, input).is_err());
+}
+
+/// Genetic matching through the spec reaches `estimate_effects`, and the
+/// balance report takes its pairs.
+#[test]
+fn spec_genetic_feeds_effects_and_balance() {
+    use epistat_matching::effects::{
+        EffectSpec, MatchedSample, OutcomeModel, UnitData, estimate_effects,
+    };
+    let (anchors, candidates) = covariate_inputs();
+    let spec = MatchSpec {
+        method: MatchMethod::Genetic,
+        distance: age_income_propensity(),
+        genetic: short_genetic(),
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Genetic { outcome, .. } = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .unwrap() else {
+        panic!("expected genetic output");
+    };
+    let ids: Vec<String> = anchors
+        .iter()
+        .chain(&candidates)
+        .map(|row| row.core.id.clone())
+        .collect();
+    let treated: Vec<bool> = (0..ids.len()).map(|i| i < anchors.len()).collect();
+    let units = Units::new(ids.clone(), treated.clone()).unwrap();
+    let data = match_data(&outcome, &units, MatchDataOptions::default()).unwrap();
+    assert_eq!(data.len(), 2 * anchors.len(), "60 pairs, one control each");
+    let age = numeric_column(&anchors, &candidates, "age");
+    let y: Vec<f64> = treated
+        .iter()
+        .zip(&age)
+        .map(|(t, a)| 3.0 * f64::from(u8::from(*t)) + 0.25 * a)
+        .collect();
+    let unit_data = UnitData::new(ids, treated, y)
+        .unwrap()
+        .with_covariate("age", age)
+        .unwrap();
+    let sample = MatchedSample::from_match_data(&data, &unit_data).unwrap();
+    let estimates = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear)).unwrap();
+    assert!(
+        (estimates.difference.estimate - 3.0).abs() < 1e-9,
+        "{}",
+        estimates.difference.estimate
+    );
+
+    let weights = BalanceWeights::from_outcome(&outcome);
+    weights.validate().unwrap();
+    let report = balance_report_on_weights(
+        &anchors,
+        &candidates,
+        &weights,
+        &BalanceReportOptions::default(),
+    )
+    .unwrap();
+    assert!(!report.numeric.is_empty());
+}
+
+fn cardinality_spec() -> MatchSpec {
+    MatchSpec {
+        method: MatchMethod::Cardinality,
+        cardinality: CardinalitySpec {
+            covariates: covariates(&["age", "income"]),
+            tols: vec![0.25],
+            time: None,
+            nodes: Some(2_000),
+            ..CardinalitySpec::default()
+        },
+        ..MatchSpec::default()
+    }
+}
+
+/// Cardinality matching through the spec is `match_cardinality` on the same
+/// columns and limits, in strata and without, with pairing and without.
+#[test]
+fn spec_cardinality_equals_the_direct_call() {
+    let (mut anchors, mut candidates) = covariate_inputs();
+    for (k, row) in anchors.iter_mut().chain(candidates.iter_mut()).enumerate() {
+        row.core.strata.insert("g".into(), format!("g{}", k % 2));
+    }
+    let treated: Vec<bool> = (0..anchors.len() + candidates.len())
+        .map(|i| i < anchors.len())
+        .collect();
+    let age = numeric_column(&anchors, &candidates, "age");
+    let income = numeric_column(&anchors, &candidates, "income");
+    let columns = vec![age, income];
+    let input = SpecInput::Standard {
+        anchors: &anchors,
+        candidates: &candidates,
+    };
+    let limits = CardinalityLimits {
+        time: None,
+        nodes: Some(2_000),
+    };
+
+    // One stratum, 1:1.
+    let SpecOutput::Cardinality(found) = run_spec(&cardinality_spec(), input.clone()).unwrap()
+    else {
+        panic!("expected cardinality output");
+    };
+    let mut request = CardinalityRequest::new(&treated, &columns);
+    request.tols = vec![0.25];
+    request.limits = limits;
+    let by_hand = match_cardinality(&request).unwrap();
+    assert_eq!(found.outcome.weights, by_hand.weights);
+    assert_eq!(found.outcome.selected, by_hand.selected);
+    assert_eq!(found.outcome.strata, by_hand.strata);
+    assert!(found.outcome.selected.iter().any(|s| *s));
+    assert_eq!(found.ids.len(), treated.len());
+    assert_eq!(found.anchor, treated);
+
+    // Exact strata, 1:2, for the effect in the whole sample, paired.
+    let mut spec = cardinality_spec();
+    spec.exact = vec!["g".into()];
+    spec.estimand = Estimand::Ate;
+    spec.cardinality.ratio = Some(2.0);
+    spec.cardinality.tols = vec![0.5];
+    spec.cardinality.mahvars = vec!["age".into(), "income".into()];
+    let SpecOutput::Cardinality(found) = run_spec(&spec, input.clone()).unwrap() else {
+        panic!("expected cardinality output");
+    };
+    let exact: Vec<u64> = (0..treated.len()).map(|k| (k % 2) as u64).collect();
+    let mut request = CardinalityRequest::new(&treated, &columns);
+    request.estimand = Estimand::Ate;
+    request.ratio = Some(2.0);
+    request.tols = vec![0.5];
+    request.exact = Some(&exact);
+    request.pair_on = &columns;
+    request.limits = limits;
+    let by_hand = match_cardinality(&request).unwrap();
+    assert_eq!(found.outcome.weights, by_hand.weights);
+    assert_eq!(found.outcome.pairs, by_hand.pairs);
+    assert!(found.outcome.pairs.is_some());
+    let long = found.get_matches(false).expect("a paired selection");
+    assert!(!long.is_empty());
+}
+
+/// Profile matching, sampling weights and the errors of the method.
+#[test]
+fn spec_cardinality_profile_and_errors() {
+    let (anchors, candidates) = covariate_inputs();
+    let input = SpecInput::Standard {
+        anchors: &anchors,
+        candidates: &candidates,
+    };
+    let mut profile = cardinality_spec();
+    profile.cardinality.ratio = None;
+    profile.cardinality.tols = vec![0.5];
+    profile.cardinality.sampling_weights = Some(
+        anchors
+            .iter()
+            .chain(&candidates)
+            .map(|row| (row.core.id.clone(), 1.0))
+            .collect(),
+    );
+    let SpecOutput::Cardinality(found) = run_spec(&profile, input.clone()).unwrap() else {
+        panic!("expected cardinality output");
+    };
+    // The treated are all kept for the effect in the treated.
+    let kept_anchors = found
+        .outcome
+        .selected
+        .iter()
+        .zip(&found.anchor)
+        .filter(|(selected, anchor)| **selected && **anchor)
+        .count();
+    assert_eq!(kept_anchors, anchors.len());
+    assert!(
+        found.get_matches(false).is_err(),
+        "no pairs without mahvars"
+    );
+
+    let base = cardinality_spec();
+    let with = |edit: &dyn Fn(&mut MatchSpec)| {
+        let mut spec = base.clone();
+        edit(&mut spec);
+        spec
+    };
+    let cases: Vec<(&str, MatchSpec)> = vec![
+        ("ratio", with(&|s| s.ratio = 2)),
+        ("replace", with(&|s| s.replace = true)),
+        ("estimand", with(&|s| s.estimand = Estimand::Atm)),
+        ("distance", with(&|s| s.distance = age_income_propensity())),
+        (
+            "calipers",
+            with(&|s| {
+                s.calipers.insert("age".into(), 1.0);
+            }),
+        ),
+        (
+            "cardinality.ratio",
+            with(&|s| s.cardinality.ratio = Some(-1.0)),
+        ),
+        (
+            "cardinality.tols",
+            with(&|s| s.cardinality.tols = Vec::new()),
+        ),
+        (
+            "cardinality.tols",
+            with(&|s| s.cardinality.tols = vec![-0.1]),
+        ),
+        (
+            "cardinality.std_tols",
+            with(&|s| s.cardinality.std_tols = Vec::new()),
+        ),
+        (
+            "cardinality.time",
+            with(&|s| s.cardinality.time = Some(0.0)),
+        ),
+        (
+            "cardinality.nodes",
+            with(&|s| s.cardinality.nodes = Some(0)),
+        ),
+        (
+            "cardinality.sampling_weights",
+            with(&|s| s.cardinality.sampling_weights = Some(BTreeMap::new())),
+        ),
+        (
+            "cardinality.mahvars",
+            with(&|s| {
+                s.cardinality.ratio = Some(1.5);
+                s.cardinality.mahvars = vec!["age".into()];
+            }),
+        ),
+        ("method", with(&|s| s.mode = MatchMode::RiskSet)),
+        ("exact", with(&|s| s.exact = vec!["nokey".into()])),
+        (
+            "cardinality",
+            MatchSpec {
+                cardinality: cardinality_spec().cardinality,
+                ..MatchSpec::default()
+            },
+        ),
+    ];
+    for (option, spec) in cases {
+        let error = run_spec(&spec, input.clone()).expect_err(option);
+        assert_eq!(option_named(&error), option, "{error}");
+    }
+
+    // A tolerance that no subset meets is the solver's error.
+    let mut anchors = Vec::new();
+    let mut candidates = Vec::new();
+    for (i, (value, treated)) in [(0.0, true), (0.0, true), (10.0, false), (10.0, false)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut row = BalanceRecord {
+            core: BaseRecord::new(
+                format!("u{i}"),
+                chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            ),
+            covariates: std::collections::HashMap::new(),
+        };
+        row.covariates
+            .insert("x".into(), CovariateValue::Numeric(value));
+        if treated {
+            anchors.push(row);
+        } else {
+            candidates.push(row);
+        }
+    }
+    let infeasible = MatchSpec {
+        method: MatchMethod::Cardinality,
+        estimand: Estimand::Ate,
+        cardinality: CardinalitySpec {
+            covariates: covariates(&["x"]),
+            ratio: None,
+            tols: vec![0.1],
+            std_tols: vec![false],
+            time: None,
+            ..CardinalitySpec::default()
+        },
+        ..MatchSpec::default()
+    };
+    let error = run_spec(
+        &infeasible,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .expect_err("no subset meets the tolerance");
+    assert!(
+        matches!(
+            error,
+            SpecError::Cardinality(CardinalityError::Infeasible { key: 0 })
+        ),
+        "{error}"
+    );
+}
+
+/// Cardinality matching through the spec reaches `estimate_effects` through
+/// `match_data`, and the balance report takes its weights.
+#[test]
+fn spec_cardinality_feeds_effects_and_balance() {
+    use epistat_matching::effects::{
+        Clustering, EffectSpec, MatchedSample, OutcomeModel, UnitData, estimate_effects,
+    };
+    let (anchors, candidates) = covariate_inputs();
+    let SpecOutput::Cardinality(found) = run_spec(
+        &cardinality_spec(),
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .unwrap() else {
+        panic!("expected cardinality output");
+    };
+    let data = found.match_data(MatchDataOptions::default()).unwrap();
+    let selected = found.outcome.selected.iter().filter(|s| **s).count();
+    assert_eq!(data.len(), selected);
+    assert!(data.weight.iter().all(|w| *w > 0.0));
+    let age = numeric_column(&anchors, &candidates, "age");
+    let y: Vec<f64> = found
+        .anchor
+        .iter()
+        .zip(&age)
+        .map(|(t, a)| 3.0 * f64::from(u8::from(*t)) + 0.25 * a)
+        .collect();
+    let unit_data = UnitData::new(found.ids.clone(), found.anchor.clone(), y)
+        .unwrap()
+        .with_covariate("age", age)
+        .unwrap();
+    let sample = MatchedSample::from_match_data(&data, &unit_data).unwrap();
+    // A selection that is not paired has no pairs to cluster by.
+    let effect = EffectSpec {
+        clustering: Clustering::Unit,
+        ..EffectSpec::new(OutcomeModel::Linear)
+    };
+    let estimates = estimate_effects(&sample, &effect).unwrap();
+    assert!(
+        (estimates.difference.estimate - 3.0).abs() < 1e-9,
+        "{}",
+        estimates.difference.estimate
+    );
+
+    let weights = BalanceWeights::from_unit_weights(
+        &anchors,
+        &candidates,
+        &found.unit_weights(),
+        Estimand::Att,
+    );
+    weights.validate().unwrap();
+    let report = balance_report_on_weights(
+        &anchors,
+        &candidates,
+        &weights,
+        &BalanceReportOptions::default(),
+    )
+    .unwrap();
+    assert!(!report.numeric.is_empty());
+}
+
+/// The new methods read from JSON with MatchIt's names, and an explicit null
+/// ratio is profile matching.
+#[test]
+fn genetic_and_cardinality_specs_read_from_json() {
+    let spec: MatchSpec = serde_json::from_str(
+        r#"{"method": "genetic",
+            "genetic": {"pop_size": 20, "fit_func": "qqmean.mean", "loss": "minimum"}}"#,
+    )
+    .unwrap();
+    assert_eq!(spec.method, MatchMethod::Genetic);
+    assert_eq!(spec.genetic.pop_size, 20);
+    assert_eq!(spec.genetic.fit_func, FitFuncSpec::QqMeanMean);
+    assert_eq!(spec.genetic.loss, LossSpec::Minimum);
+    assert_eq!(spec.genetic.wait_generations, 4);
+    let spec: MatchSpec = serde_json::from_str(
+        r#"{"method": "cardinality", "cardinality": {"ratio": null, "tols": [0.1, 0.2]}}"#,
+    )
+    .unwrap();
+    assert_eq!(spec.cardinality.ratio, None);
+    assert_eq!(spec.cardinality.std_tols, vec![true]);
+    assert_eq!(spec.cardinality.time, Some(120.0));
+    let text = serde_json::to_string(&spec).unwrap();
+    assert_eq!(serde_json::from_str::<MatchSpec>(&text).unwrap(), spec);
+    assert!(serde_json::from_str::<MatchSpec>(r#"{"genetic": {"popsize": 1}}"#).is_err());
 }
