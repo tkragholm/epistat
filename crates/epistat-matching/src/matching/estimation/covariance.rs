@@ -194,8 +194,7 @@ fn covariance_for_slice(matrix: &CovariateMatrix, start_row: usize, len: usize) 
         for left in 0..matrix.n_cols {
             let left_centered = row[left] - means[left];
             for right in 0..=left {
-                cov[left * matrix.n_cols + right] = left_centered
-                    .mul_add(row[right] - means[right], cov[left * matrix.n_cols + right]);
+                cov[left * matrix.n_cols + right] += left_centered * (row[right] - means[right]);
             }
         }
     }

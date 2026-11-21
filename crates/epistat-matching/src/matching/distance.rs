@@ -1234,8 +1234,8 @@ mod tests {
         }
     }
 
-    /// The nearest candidate of every anchor is the same under the old and new
-    /// distance, on data with many exact ties (integer covariates, repeated
+    /// The nearest candidate of every anchor is the same under the pairwise
+    /// distance and the matrix form, on data with many exact ties (integer covariates, repeated
     /// rows). Exact duplicates have identical transformed vectors, so their
     /// distances are equal in both forms and a first-index tie-break agrees.
     /// Other near ties are skipped when the gap is within rounding.
@@ -1327,10 +1327,10 @@ mod tests {
             for col in 0..dimension {
                 let idx = row * dimension + col;
                 let delta_col = left[col] - right[col];
-                row_dot = inverse_covariance[idx].mul_add(delta_col, row_dot);
+                row_dot += inverse_covariance[idx] * delta_col;
             }
             let delta_row = left[row] - right[row];
-            distance_sq = delta_row.mul_add(row_dot, distance_sq);
+            distance_sq += delta_row * row_dot;
         }
 
         if !distance_sq.is_finite() || distance_sq < -1e-12 {
