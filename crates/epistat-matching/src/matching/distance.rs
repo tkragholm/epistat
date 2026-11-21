@@ -65,6 +65,13 @@ pub enum DistanceConfig {
         caliper: Option<DistanceCaliper>,
         reason: &'static str,
     },
+    /// Distances between every anchor and every candidate, given by the
+    /// caller.
+    Matrix {
+        matrix: PairDistanceMatrix,
+        caliper: Option<DistanceCaliper>,
+        reason: &'static str,
+    },
 }
 
 impl DistanceConfig {
@@ -137,15 +144,51 @@ impl DistanceConfig {
         })
     }
 
+    /// A distance given as a table of anchor-by-candidate values, as a matrix
+    /// given as `distance` to `matchit()`.
+    #[must_use]
+    pub const fn matrix(matrix: PairDistanceMatrix, caliper: Option<DistanceCaliper>) -> Self {
+        Self::Matrix {
+            matrix,
+            caliper,
+            reason: "distance_matrix_caliper",
+        }
+    }
+
     #[must_use]
     pub const fn with_reason(mut self, reason: &'static str) -> Self {
         match &mut self {
             Self::Date { reason: slot, .. }
             | Self::PropensityScoreMap { reason: slot, .. }
             | Self::MahalanobisMap { reason: slot, .. }
-            | Self::EuclideanMap { reason: slot, .. } => *slot = reason,
+            | Self::EuclideanMap { reason: slot, .. }
+            | Self::Matrix { reason: slot, .. } => *slot = reason,
         }
         self
+    }
+
+    /// The table of a matrix configuration.
+    #[must_use]
+    pub const fn pair_matrix(&self) -> Option<&PairDistanceMatrix> {
+        match self {
+            Self::Matrix { matrix, .. } => Some(matrix),
+            Self::Date { .. }
+            | Self::PropensityScoreMap { .. }
+            | Self::MahalanobisMap { .. }
+            | Self::EuclideanMap { .. } => None,
+        }
+    }
+
+    /// The distance of the anchor in row `anchor` and the candidate in column
+    /// `candidate` of a matrix configuration, in the order of the matrix.
+    ///
+    /// `None` when this is not a matrix configuration, when a position is out
+    /// of range, or when the pair is forbidden by an infinite entry.
+    /// [`PairDistanceMatrix::positions_of`] maps the units of a job to these
+    /// positions.
+    #[must_use]
+    pub fn pair_distance_by_position(&self, anchor: usize, candidate: usize) -> Option<f64> {
+        self.pair_matrix()?.at(anchor, candidate)
     }
 
     #[must_use]
@@ -154,7 +197,8 @@ impl DistanceConfig {
             Self::Date { caliper, .. }
             | Self::PropensityScoreMap { caliper, .. }
             | Self::MahalanobisMap { caliper, .. }
-            | Self::EuclideanMap { caliper, .. } => match caliper {
+            | Self::EuclideanMap { caliper, .. }
+            | Self::Matrix { caliper, .. } => match caliper {
                 Some(caliper) => Some(caliper.get()),
                 None => None,
             },
@@ -167,7 +211,8 @@ impl DistanceConfig {
             Self::Date { caliper, .. }
             | Self::PropensityScoreMap { caliper, .. }
             | Self::MahalanobisMap { caliper, .. }
-            | Self::EuclideanMap { caliper, .. } => *caliper,
+            | Self::EuclideanMap { caliper, .. }
+            | Self::Matrix { caliper, .. } => *caliper,
         }
     }
 
@@ -177,7 +222,8 @@ impl DistanceConfig {
             Self::Date { reason, .. }
             | Self::PropensityScoreMap { reason, .. }
             | Self::MahalanobisMap { reason, .. }
-            | Self::EuclideanMap { reason, .. } => reason,
+            | Self::EuclideanMap { reason, .. }
+            | Self::Matrix { reason, .. } => reason,
         }
     }
 }
@@ -203,6 +249,7 @@ impl DistanceConfig {
             Self::EuclideanMap {
                 vectors, dimension, ..
             } => ConfiguredMetric::Euclidean(IdMapEuclideanDistance::new(vectors, *dimension)),
+            Self::Matrix { matrix, .. } => ConfiguredMetric::Matrix(MatrixDistance::new(matrix)),
         }
     }
 
@@ -211,7 +258,10 @@ impl DistanceConfig {
     pub(crate) const fn propensity_scores(&self) -> Option<&RapidHashMap<String, f64>> {
         match self {
             Self::PropensityScoreMap { scores, .. } => Some(scores),
-            Self::Date { .. } | Self::MahalanobisMap { .. } | Self::EuclideanMap { .. } => None,
+            Self::Date { .. }
+            | Self::MahalanobisMap { .. }
+            | Self::EuclideanMap { .. }
+            | Self::Matrix { .. } => None,
         }
     }
 }
@@ -248,7 +298,7 @@ impl DistanceConfig {
         match self {
             Self::Date { .. } => Some(ScalarLookup::BirthDate),
             Self::PropensityScoreMap { scores, .. } => Some(ScalarLookup::Scores(scores)),
-            Self::MahalanobisMap { .. } | Self::EuclideanMap { .. } => None,
+            Self::MahalanobisMap { .. } | Self::EuclideanMap { .. } | Self::Matrix { .. } => None,
         }
     }
 }
@@ -260,6 +310,7 @@ pub(crate) enum ConfiguredMetric<'a> {
     PropensityScore(IdMapPropensityScoreDistance<'a>),
     Mahalanobis(IdMapMahalanobisDistance<'a>),
     Euclidean(IdMapEuclideanDistance<'a>),
+    Matrix(MatrixDistance<'a>),
 }
 
 impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
@@ -269,6 +320,7 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
             Self::PropensityScore(metric) => DistanceMetric::<R>::channel(metric),
             Self::Mahalanobis(metric) => DistanceMetric::<R>::channel(metric),
             Self::Euclidean(metric) => DistanceMetric::<R>::channel(metric),
+            Self::Matrix(metric) => DistanceMetric::<R>::channel(metric),
         }
     }
 
@@ -278,6 +330,7 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
             Self::PropensityScore(metric) => metric.distance(anchor, candidate),
             Self::Mahalanobis(metric) => metric.distance(anchor, candidate),
             Self::Euclidean(metric) => metric.distance(anchor, candidate),
+            Self::Matrix(metric) => metric.distance(anchor, candidate),
         }
     }
 
@@ -287,7 +340,197 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
             Self::PropensityScore(metric) => metric.candidate_indices(anchor, caliper),
             Self::Mahalanobis(metric) => metric.candidate_indices(anchor, caliper),
             Self::Euclidean(metric) => metric.candidate_indices(anchor, caliper),
+            Self::Matrix(metric) => metric.candidate_indices(anchor, caliper),
         }
+    }
+}
+
+/// Why a table of pair distances is refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PairDistanceMatrixError {
+    /// There are no anchors or no candidates.
+    Empty,
+    /// The number of values is not the number of anchors times candidates.
+    Shape {
+        /// Anchors times candidates.
+        expected: usize,
+        /// Values given.
+        found: usize,
+    },
+    /// An id appears twice among the anchors or among the candidates.
+    DuplicateId(String),
+    /// A value is not a number. An infinite value is allowed and forbids the
+    /// pair.
+    NotANumber {
+        /// Row of the value.
+        anchor: usize,
+        /// Column of the value.
+        candidate: usize,
+    },
+}
+
+impl std::fmt::Display for PairDistanceMatrixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("the distance matrix has no anchors or no candidates"),
+            Self::Shape { expected, found } => write!(
+                f,
+                "the distance matrix needs {expected} values, one for each anchor and \
+                 candidate, and has {found}"
+            ),
+            Self::DuplicateId(id) => write!(f, "the id {id} appears twice in the distance matrix"),
+            Self::NotANumber { anchor, candidate } => write!(
+                f,
+                "the distance matrix has no number at row {anchor}, column {candidate}; \
+                 use an infinite value to forbid a pair"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PairDistanceMatrixError {}
+
+/// Distances between every anchor and every candidate, as the matrix a caller
+/// gives as `distance` to `matchit()`.
+///
+/// Rows are anchors and columns are candidates, named by their ids. An
+/// infinite value forbids the pair, as in `matchit()`. A pair whose anchor or
+/// candidate is not in the table has no distance and is never matched.
+#[derive(Debug, Clone)]
+pub struct PairDistanceMatrix {
+    anchor_ids: Vec<String>,
+    candidate_ids: Vec<String>,
+    values: Vec<f64>,
+    anchor_position: RapidHashMap<String, usize>,
+    candidate_position: RapidHashMap<String, usize>,
+}
+
+impl PairDistanceMatrix {
+    /// Build the table from row-major values, one row per anchor.
+    ///
+    /// # Errors
+    ///
+    /// [`PairDistanceMatrixError`] when a group is empty, the values do not
+    /// fill the table, an id repeats, or a value is not a number.
+    pub fn new(
+        anchor_ids: Vec<String>,
+        candidate_ids: Vec<String>,
+        values: Vec<f64>,
+    ) -> Result<Self, PairDistanceMatrixError> {
+        if anchor_ids.is_empty() || candidate_ids.is_empty() {
+            return Err(PairDistanceMatrixError::Empty);
+        }
+        let expected = anchor_ids.len().saturating_mul(candidate_ids.len());
+        if values.len() != expected {
+            return Err(PairDistanceMatrixError::Shape {
+                expected,
+                found: values.len(),
+            });
+        }
+        if let Some(at) = values.iter().position(|value| value.is_nan()) {
+            return Err(PairDistanceMatrixError::NotANumber {
+                anchor: at / candidate_ids.len(),
+                candidate: at % candidate_ids.len(),
+            });
+        }
+        let positions = |ids: &[String]| -> Result<RapidHashMap<String, usize>, _> {
+            let mut map = RapidHashMap::default();
+            for (position, id) in ids.iter().enumerate() {
+                if map.insert(id.clone(), position).is_some() {
+                    return Err(PairDistanceMatrixError::DuplicateId(id.clone()));
+                }
+            }
+            Ok(map)
+        };
+        Ok(Self {
+            anchor_position: positions(&anchor_ids)?,
+            candidate_position: positions(&candidate_ids)?,
+            anchor_ids,
+            candidate_ids,
+            values,
+        })
+    }
+
+    /// Ids of the rows.
+    #[must_use]
+    pub fn anchor_ids(&self) -> &[String] {
+        &self.anchor_ids
+    }
+
+    /// Ids of the columns.
+    #[must_use]
+    pub fn candidate_ids(&self) -> &[String] {
+        &self.candidate_ids
+    }
+
+    /// Row of an anchor.
+    #[must_use]
+    pub fn anchor_position(&self, id: &str) -> Option<usize> {
+        self.anchor_position.get(id).copied()
+    }
+
+    /// Column of a candidate.
+    #[must_use]
+    pub fn candidate_position(&self, id: &str) -> Option<usize> {
+        self.candidate_position.get(id).copied()
+    }
+
+    /// The value at a row and column, or `None` outside the table or where the
+    /// pair is forbidden by an infinite value.
+    #[must_use]
+    pub fn at(&self, anchor: usize, candidate: usize) -> Option<f64> {
+        if anchor >= self.anchor_ids.len() || candidate >= self.candidate_ids.len() {
+            return None;
+        }
+        let value = self.values[anchor * self.candidate_ids.len() + candidate];
+        value.is_finite().then_some(value)
+    }
+
+    /// The row of each anchor and the column of each candidate of a job, by
+    /// id. A unit not in the table has no position.
+    #[must_use]
+    pub fn positions_of<R: MatchingRecord>(
+        &self,
+        anchors: &[R],
+        candidates: &[R],
+    ) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+        (
+            anchors
+                .iter()
+                .map(|record| self.anchor_position(record.id()))
+                .collect(),
+            candidates
+                .iter()
+                .map(|record| self.candidate_position(record.id()))
+                .collect(),
+        )
+    }
+}
+
+/// The distance of a [`PairDistanceMatrix`], looked up by the ids of the two
+/// records.
+#[derive(Debug, Clone, Copy)]
+pub struct MatrixDistance<'a> {
+    matrix: &'a PairDistanceMatrix,
+}
+
+impl<'a> MatrixDistance<'a> {
+    #[must_use]
+    pub const fn new(matrix: &'a PairDistanceMatrix) -> Self {
+        Self { matrix }
+    }
+}
+
+impl<R: MatchingRecord> DistanceMetric<R> for MatrixDistance<'_> {
+    fn channel(&self) -> &'static str {
+        "distance_matrix_caliper"
+    }
+
+    fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
+        self.matrix.at(
+            self.matrix.anchor_position(anchor.id())?,
+            self.matrix.candidate_position(candidate.id())?,
+        )
     }
 }
 

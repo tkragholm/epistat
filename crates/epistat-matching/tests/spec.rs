@@ -1007,3 +1007,269 @@ fn spec_risk_set_with_resident_check_and_caliper_matches_the_typed_job() {
         .run();
     same(&outcome, &by_hand);
 }
+
+/// Covariate inputs with the region also as a strata key, which coarsened exact
+/// matching reads.
+fn cem_inputs() -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
+    let (mut anchors, mut candidates) = covariate_inputs();
+    for row in anchors.iter_mut().chain(candidates.iter_mut()) {
+        if let Some(CovariateValue::Categorical(region)) = row.covariates.get("region") {
+            let region = region.clone();
+            row.core.strata.insert("region".into(), region);
+        }
+    }
+    (anchors, candidates)
+}
+
+fn cem_variables() -> Vec<CemVariableSpec> {
+    vec![
+        CemVariableSpec::Numeric {
+            name: "age".into(),
+            binning: BinningSpec::Bins { n: 4 },
+        },
+        CemVariableSpec::Categorical {
+            name: "region".into(),
+            groups: vec![],
+        },
+    ]
+}
+
+#[test]
+fn spec_cem_matches_the_functions_it_wraps() {
+    let (anchors, candidates) = cem_inputs();
+    let input = SpecInput::Standard {
+        anchors: &anchors,
+        candidates: &candidates,
+    };
+    let by_hand_variables = [
+        CemVariable::numeric("age", CemBinning::Bins(4)),
+        CemVariable::categorical("region", vec![]),
+    ];
+
+    let spec = MatchSpec {
+        method: MatchMethod::Cem,
+        cem: CemSpec {
+            variables: cem_variables(),
+            k2k: None,
+        },
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Exact(outcome) = run_spec(&spec, input.clone()).expect("valid spec") else {
+        panic!("expected strata");
+    };
+    let by_hand = cem_subclasses(&anchors, &candidates, &by_hand_variables).unwrap();
+    assert!(!by_hand.assignments.is_empty());
+    assert_eq!(
+        format!("{:?}", outcome.assignments_sorted()),
+        format!("{:?}", by_hand.assignments_sorted())
+    );
+    assert_eq!(
+        format!("{:?}", outcome.ate_weights_sorted()),
+        format!("{:?}", by_hand.ate_weights_sorted())
+    );
+
+    let spec = MatchSpec {
+        method: MatchMethod::Cem,
+        cem: CemSpec {
+            variables: cem_variables(),
+            k2k: Some(K2kSpec {
+                distance: Some(DistanceSpec::Mahalanobis {
+                    covariates: covariates(&["age", "income"]),
+                    covariance: CovarianceSpec::default(),
+                    transform: TransformSpec::default(),
+                    caliper: None,
+                }),
+                m_order: Some(OrderSpec::Closest),
+            }),
+        },
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Pairs { outcome, .. } = run_spec(&spec, input.clone()).expect("valid spec")
+    else {
+        panic!("expected pairs");
+    };
+    let strata = cem_strata(&anchors, &candidates, &by_hand_variables).unwrap();
+    let prepared = prepare_mahalanobis_distance_config(
+        &anchors,
+        &candidates,
+        None,
+        &MahalanobisPreparationConfig::builder()
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .covariate_keys(vec!["age".into(), "income".into()])
+                    .include_intercept(false)
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap();
+    let by_hand = cem_k2k_pairs(
+        &anchors,
+        &candidates,
+        &strata,
+        Some(&prepared.distance_config),
+        MatchOrder::Closest,
+        0,
+        Estimand::Att,
+    )
+    .unwrap();
+    assert!(!by_hand.pairs.is_empty(), "no output, test is vacuous");
+    same(&outcome, &by_hand);
+}
+
+#[test]
+fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
+    let (anchors, candidates) = covariate_inputs();
+    let age = |record: &BalanceRecord| record.core.numerics["age"];
+    let rows: Vec<Vec<Option<f64>>> = anchors
+        .iter()
+        .map(|a| {
+            candidates
+                .iter()
+                .map(|c| {
+                    let distance = (age(a) - age(c)).abs();
+                    (distance < 6.0).then_some(distance)
+                })
+                .collect()
+        })
+        .collect();
+    let ids = |records: &[BalanceRecord]| records.iter().map(|r| r.core.id.clone()).collect();
+    let spec = MatchSpec {
+        method: MatchMethod::Nearest,
+        distance: DistanceSpec::Matrix {
+            anchor_ids: ids(&anchors),
+            candidate_ids: ids(&candidates),
+            values: rows.clone(),
+            caliper: Some(4.0),
+        },
+        nearest: NearestSpec {
+            m_order: Some(OrderSpec::Closest),
+            mahvars: None,
+        },
+        ratio: 2,
+        birth_window_days: wide_window(),
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Pairs { outcome, .. } = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .expect("valid spec") else {
+        panic!("expected pairs");
+    };
+    let matrix = PairDistanceMatrix::new(
+        ids(&anchors),
+        ids(&candidates),
+        rows.into_iter()
+            .flatten()
+            .map(|v| v.unwrap_or(f64::INFINITY))
+            .collect(),
+    )
+    .unwrap();
+    let by_hand = MatchJob::new_standard(&anchors, &candidates, 0)
+        .with_nearest()
+        .with_m_order(MatchOrder::Closest)
+        .with_ratio(MatchRatio::new(2).unwrap())
+        .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
+        .with_distance_config(DistanceConfig::matrix(matrix, DistanceCaliper::new(4.0)))
+        .run();
+    assert!(!by_hand.pairs.is_empty(), "no output, test is vacuous");
+    same(&outcome, &by_hand);
+}
+
+#[test]
+fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
+    let defaults = MatchSpec::default;
+    let cem = |cem: CemSpec| MatchSpec {
+        method: MatchMethod::Cem,
+        cem,
+        ..defaults()
+    };
+    assert!(message(&cem(CemSpec::default())).contains("cem.variables"));
+    assert!(
+        message(&MatchSpec {
+            cem: CemSpec {
+                variables: cem_variables(),
+                k2k: None,
+            },
+            ..defaults()
+        })
+        .contains("cem")
+    );
+    assert!(
+        message(&MatchSpec {
+            exact: vec!["sex".into()],
+            ..cem(CemSpec {
+                variables: cem_variables(),
+                k2k: None,
+            })
+        })
+        .contains("exact")
+    );
+    assert!(
+        message(&cem(CemSpec {
+            variables: cem_variables(),
+            k2k: Some(K2kSpec {
+                distance: None,
+                m_order: Some(OrderSpec::Largest),
+            }),
+        }))
+        .contains("cem.k2k.m_order")
+    );
+    assert!(
+        message(&cem(CemSpec {
+            variables: vec![CemVariableSpec::Numeric {
+                name: "age".into(),
+                binning: BinningSpec::Bins { n: 0 },
+            }],
+            k2k: None,
+        }))
+        .contains("0 bins")
+    );
+    let ragged = MatchSpec {
+        method: MatchMethod::Nearest,
+        distance: DistanceSpec::Matrix {
+            anchor_ids: vec!["a".into()],
+            candidate_ids: vec!["x".into(), "y".into()],
+            values: vec![vec![Some(1.0)]],
+            caliper: None,
+        },
+        ..defaults()
+    };
+    assert!(message(&ragged).contains("one value for each candidate"));
+    let scored = MatchSpec {
+        method: MatchMethod::Nearest,
+        distance: DistanceSpec::Matrix {
+            anchor_ids: vec!["a".into()],
+            candidate_ids: vec!["x".into()],
+            values: vec![vec![Some(1.0)]],
+            caliper: None,
+        },
+        nearest: NearestSpec {
+            m_order: Some(OrderSpec::Largest),
+            mahvars: None,
+        },
+        ..defaults()
+    };
+    assert!(message(&scored).contains("nearest.m_order"));
+}
+
+#[test]
+fn cem_and_matrix_specs_round_trip_through_json() {
+    let spec: MatchSpec = serde_json::from_str(
+        r#"{"method": "cem", "cem": {"variables": [
+              {"kind": "numeric", "name": "age", "binning": {"kind": "quantiles", "n": 4}},
+              {"kind": "categorical", "name": "region", "groups": [["r0", "r1"]]}],
+            "k2k": {"distance": {"kind": "matrix", "anchor_ids": ["a"],
+                                 "candidate_ids": ["x"], "values": [[null]]},
+                    "m_order": "farthest"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(spec.method, MatchMethod::Cem);
+    assert_eq!(spec.cem.variables.len(), 2);
+    let again: MatchSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
+    assert_eq!(spec, again);
+}

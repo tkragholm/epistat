@@ -1,3 +1,4 @@
+mod cem;
 mod constraints;
 mod distance;
 mod engine;
@@ -13,6 +14,10 @@ mod selection;
 mod subclassification;
 mod weights;
 
+pub use cem::{
+    CemBinning, CemError, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata,
+    cem_subclasses,
+};
 pub use constraints::{
     CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
     ExactMatchConstraint, StrataExactConstraint, UsedControlsVec,
@@ -20,7 +25,7 @@ pub use constraints::{
 pub use distance::{
     DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
     IdMapMahalanobisDistance, IdMapPropensityScoreDistance, MahalanobisDistance, MahalanobisError,
-    PropensityScoreDistance,
+    MatrixDistance, PairDistanceMatrix, PairDistanceMatrixError, PropensityScoreDistance,
 };
 pub use engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
