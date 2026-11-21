@@ -582,6 +582,7 @@ impl Covariance<'_> {
     ) -> Evaluation {
         let (n, p) = (self.n, self.p);
         let mut xs = [0.0_f64; COVARIANCE_MAX_COLUMNS];
+        let xs = &mut xs[..p];
         let mut loss = 0.0_f64;
         let mut moments = want.then(|| Moments {
             total: 0.0,
@@ -591,10 +592,10 @@ impl Covariance<'_> {
             second: vec![0.0; p * p],
         });
         for i in 0..n {
-            for j in 0..p {
-                xs[j] = self.x[(i, j)] - self.shift[j];
+            for (j, (cell, shift)) in xs.iter_mut().zip(&self.shift).enumerate() {
+                *cell = self.x[(i, j)] - shift;
             }
-            let linear: f64 = (0..p).map(|j| xs[j] * u[j]).sum::<f64>();
+            let linear: f64 = xs.iter().zip(u).map(|(x, b)| x * b).sum::<f64>();
             let eta = linear + self.offset[i];
             let prior = self.prior[i];
             let (weight, residual) = if self.binomial {
@@ -683,9 +684,9 @@ impl Covariance<'_> {
             g[a] = m.cross[a];
         }
         if let Some((k, constant)) = self.intercept {
-            for j in 0..p {
+            for (j, mean) in means.iter_mut().enumerate() {
                 if j != k {
-                    means[j] = m.first[j] / m.total;
+                    *mean = m.first[j] / m.total;
                 }
             }
             for a in 0..p {
