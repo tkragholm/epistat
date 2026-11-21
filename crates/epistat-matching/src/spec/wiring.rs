@@ -407,11 +407,12 @@ impl MatchSpec {
         }
         if cardinality
             .time
-            .is_some_and(|time| !(time.is_finite() && time > 0.0))
+            .is_some_and(|time| !(time > 0.0 && Duration::try_from_secs_f64(time).is_ok()))
         {
             return Err(SpecError::option(
                 "cardinality.time",
-                "the time limit must be positive and finite, or absent for none",
+                "the time limit must be a positive number of seconds that a duration can \
+                 hold, or absent for none",
             ));
         }
         if cardinality.nodes == Some(0) {
@@ -740,7 +741,16 @@ pub(super) fn run_cardinality<R: MatchingRecord + CovariateRecord>(
     request.sampling_weights = sampling.as_deref();
     request.pair_on = &pair_on;
     request.limits = CardinalityLimits {
-        time: options.time.map(Duration::from_secs_f64),
+        time: options
+            .time
+            .map(Duration::try_from_secs_f64)
+            .transpose()
+            .map_err(|_| {
+                SpecError::option(
+                    "cardinality.time",
+                    "the time limit is not a number of seconds that a duration can hold",
+                )
+            })?,
         nodes: options.nodes,
     };
     let outcome = match_cardinality(&request)?;
