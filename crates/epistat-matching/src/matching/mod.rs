@@ -46,13 +46,13 @@ pub use estimation::{
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     prepare_propensity_distance_config_with_discard,
 };
-pub use genetic::{
-    BalanceMeasure, GeneticError, GeneticFit, GeneticLoss, GeneticMatchOptions, GeneticMatches,
-    GeneticOutcome, GeneticProblem, GeneticSearch, KsTest, LossRule, ks_limit_upper, ks_two_sample,
-};
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use fine_balance::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
+};
+pub use genetic::{
+    BalanceMeasure, GeneticError, GeneticFit, GeneticLoss, GeneticMatchOptions, GeneticMatches,
+    GeneticOutcome, GeneticProblem, GeneticSearch, KsTest, LossRule, ks_limit_upper, ks_two_sample,
 };
 pub use nearest::{MatchOrder, NearestSelection, VariableRatio, VariableRatioError};
 pub use optimal::{
