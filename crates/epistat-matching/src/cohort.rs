@@ -226,7 +226,7 @@ enum Covariate {
 ///   for a missing value only when the column has one.
 ///
 /// The same five strata and five covariates then take about 90 bytes per unit,
-/// and 10^7 units fit in about 1 GB.
+/// and 10^7 units in about 1 GB, with 16 bytes more per row handle.
 ///
 /// A [`CohortRow`] is a reference to the cohort and a row number, 16 bytes,
 /// and is `Copy`. It implements [`MatchingRecord`] and [`CovariateRecord`], so
