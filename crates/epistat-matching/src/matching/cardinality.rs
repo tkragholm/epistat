@@ -93,6 +93,13 @@
 //!    and representative samples for observational studies. JAMA.
 //!    2022;327(2):173-174.
 
+#![expect(
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    reason = "indicator columns and unit weights are compared with 0 and 1 as given, and the \
+              ratio is checked to be whole before it is cast"
+)]
+
 use super::quick::cholesky_lower;
 use crate::types::Estimand;
 use epistat_optim::branch_and_bound::{
@@ -105,7 +112,7 @@ use std::time::Duration;
 
 const SD_FLOOR: f64 = 1e-10;
 
-/// A cardinality or profile matching problem. See the [module](self)
+/// A cardinality or profile matching problem. See [`match_cardinality`]
 /// documentation.
 #[derive(Debug, Clone)]
 pub struct CardinalityRequest<'a> {
@@ -404,10 +411,10 @@ fn solve_stratum(
     // size.
     let scaled: Vec<f64> = {
         let mut out: Vec<f64> = (0..nu).map(|i| input.s[input.units[i]]).collect();
-        for g in 0..2 {
+        for (g, &size) in group_size.iter().enumerate() {
             let total: f64 = (0..nu).filter(|&i| group(i) == g).map(|i| out[i]).sum();
             for i in (0..nu).filter(|&i| group(i) == g) {
-                out[i] = group_size[g] as f64 * out[i] / total;
+                out[i] = size as f64 * out[i] / total;
             }
         }
         out
@@ -429,8 +436,7 @@ fn solve_stratum(
     };
     let n_units = unit_cols.len();
     let n_extra = match input.kind {
-        Kind::Cardinality => 1,
-        Kind::ProfileAtt => 1,
+        Kind::Cardinality | Kind::ProfileAtt => 1,
         Kind::ProfileAte => 2 + usize::from(input.ratio.is_some()),
     };
     let n = n_units + n_extra;
@@ -539,10 +545,10 @@ fn solve_stratum(
                 lo[t] = 1.0;
                 hi[t] = group_size[g] as f64;
                 integer[t] = unit_weights;
-                for c in 0..p {
+                for (c, &mu) in target.iter().enumerate() {
                     let r1 = 2 + g * 2 * p + c;
-                    a[t * rows + r1] = -(target[c] + input.tols[c] / 2.0);
-                    a[t * rows + r1 + p] = -(target[c] - input.tols[c] / 2.0);
+                    a[t * rows + r1] = -(mu + input.tols[c] / 2.0);
+                    a[t * rows + r1 + p] = -(mu - input.tols[c] / 2.0);
                     row_lo[r1] = f64::NEG_INFINITY;
                     row_hi[r1 + p] = f64::INFINITY;
                 }
@@ -589,9 +595,9 @@ fn solve_stratum(
         selected[i] = solution.x[col] > 0.5;
     }
     if input.kind == Kind::ProfileAtt {
-        for i in 0..nu {
+        for (i, sel) in selected.iter_mut().enumerate() {
             if group(i) == focal_group {
-                selected[i] = true;
+                *sel = true;
             }
         }
     }
@@ -610,7 +616,7 @@ fn solve_stratum(
     Ok((selected, report))
 }
 
-/// Cardinality or profile matching. See the [module](self) documentation.
+/// Cardinality or profile matching. See [`match_cardinality`].
 ///
 /// # Errors
 /// A [`CardinalityError`] for malformed input, for a stratum whose program has no
@@ -633,16 +639,12 @@ pub fn match_cardinality(
             return Err(CardinalityError::NonFinite("a covariate".to_string()));
         }
     }
-    if let Some(e) = request.exact
-        && e.len() != n
-    {
+    if request.exact.is_some_and(|e| e.len() != n) {
         return Err(CardinalityError::Shape(
             "exact has the wrong length".to_string(),
         ));
     }
-    if let Some(d) = request.discarded
-        && d.len() != n
-    {
+    if request.discarded.is_some_and(|d| d.len() != n) {
         return Err(CardinalityError::Shape(
             "discarded has the wrong length".to_string(),
         ));
@@ -659,9 +661,7 @@ pub fn match_cardinality(
     }
     let std_tols = expand(&request.std_tols, p, "std_tols")?;
     let mut ratio = request.ratio;
-    if let Some(r) = ratio
-        && !(r.is_finite() && r > 0.0)
-    {
+    if ratio.is_some_and(|r| !(r.is_finite() && r > 0.0)) {
         return Err(CardinalityError::InvalidRatio(
             "the ratio must be positive and finite, or unset".to_string(),
         ));
@@ -934,7 +934,7 @@ pub fn pair_units(
         z
     };
 
-    let mut pair_of: Vec<Option<usize>> = vec![None; n];
+    let mut assigned: Vec<Option<usize>> = vec![None; n];
     let mut next_pair = 0_usize;
     for units in strata {
         let tr: Vec<usize> = units
@@ -998,13 +998,13 @@ pub fn pair_units(
         for a in 0..nt {
             let id = next_pair;
             next_pair += 1;
-            pair_of[tr[a]] = Some(id);
+            assigned[tr[a]] = Some(id);
             for b in 0..nc {
                 if solution.flow[a * nc + b] == 1 {
-                    pair_of[controls[b]] = Some(id);
+                    assigned[controls[b]] = Some(id);
                 }
             }
         }
     }
-    Ok(pair_of)
+    Ok(assigned)
 }

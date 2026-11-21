@@ -24,7 +24,7 @@ fn main() {
             columns[c].push(field.parse().expect("a number"));
         }
     }
-    let treated: Vec<bool> = columns[0].iter().map(|&t| t == 1.0).collect();
+    let treated: Vec<bool> = columns[0].iter().map(|&t| t > 0.5).collect();
     let covariates: Vec<Vec<f64>> = columns[1..].to_vec();
     let mut request = CardinalityRequest::new(&treated, &covariates);
     request.limits = CardinalityLimits {

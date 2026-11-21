@@ -32,6 +32,12 @@
 //! 6. Tolerances that cannot be met are `Infeasible`, and a node limit is
 //!    reported as not proven optimal.
 
+#![expect(
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    reason = "the reference holds whole-number ratios and zero-one columns"
+)]
+
 use epistat_matching::{
     CardinalityError, CardinalityLimits, CardinalityRequest, Estimand, match_cardinality,
     pair_units,
@@ -257,11 +263,11 @@ fn worst_violation(case: &Case, data: &Dataset, treated: &[bool], selected: &[bo
         let p = x.len();
         match (est, case.ratio) {
             (Estimand::Ate, ratio) => {
-                for c in 0..p {
+                for (c, tol) in case.tols.iter().enumerate().take(p) {
                     let target = wmean(units, c);
                     for g in [false, true] {
                         let sel = pick(g, true);
-                        let dev = (wmean(&sel, c) - target).abs() - case.tols[c] / 2.0;
+                        let dev = (wmean(&sel, c) - target).abs() - tol / 2.0;
                         worst = worst.max(dev);
                     }
                 }
@@ -276,17 +282,17 @@ fn worst_violation(case: &Case, data: &Dataset, treated: &[bool], selected: &[bo
             (_, Some(r)) => {
                 let (f, o) = (pick(focal, true), pick(!focal, true));
                 worst = worst.max((o.len() as f64 - r * f.len() as f64).abs());
-                for c in 0..p {
+                for (c, column) in x.iter().enumerate().take(p) {
                     let mean =
-                        |v: &[usize]| v.iter().map(|&i| x[c][i]).sum::<f64>() / v.len() as f64;
+                        |v: &[usize]| v.iter().map(|&i| column[i]).sum::<f64>() / v.len() as f64;
                     worst = worst.max((mean(&f) - mean(&o)).abs() - case.tols[c]);
                 }
             }
             (_, None) => {
                 let all_focal = pick(focal, false);
                 let o = pick(!focal, true);
-                for c in 0..p {
-                    let dev = (wmean(&o, c) - wmean(&all_focal, c)).abs() - case.tols[c];
+                for (c, tol) in case.tols.iter().enumerate().take(p) {
+                    let dev = (wmean(&o, c) - wmean(&all_focal, c)).abs() - tol;
                     worst = worst.max(dev);
                 }
             }

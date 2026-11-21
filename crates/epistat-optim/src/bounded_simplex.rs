@@ -404,27 +404,26 @@ impl BoundedSimplex {
         let mut extent = vec![0.0; m];
         for j in 0..n {
             let reach = self.lo[j].abs().max(self.hi[j].abs());
-            for i in 0..m {
-                let a = self.a[j * m + i].abs();
-                if a != 0.0 {
-                    extent[i] += a * reach;
+            for (e, a) in extent.iter_mut().zip(&self.a[j * m..(j + 1) * m]) {
+                if *a != 0.0 {
+                    *e += a.abs() * reach;
                 }
             }
         }
         self.row_extent = extent;
         let mut sq = vec![0.0; m];
-        for j in 0..n {
-            let w2 = widths[j] * widths[j];
+        for (j, width) in widths.iter().enumerate() {
+            let w2 = width * width;
             let column = &self.a[j * m..(j + 1) * m];
-            for i in 0..m {
-                sq[i] += column[i] * column[i] * w2;
+            for (s, c) in sq.iter_mut().zip(column) {
+                *s += c * c * w2;
             }
         }
         for j in 0..n {
             self.tol[j] = self.bound_tol(j);
         }
-        for i in 0..m {
-            self.tol[n + i] = REL_TOL * sq[i].sqrt().max(1.0);
+        for (i, s) in sq.iter().enumerate() {
+            self.tol[n + i] = REL_TOL * s.sqrt().max(1.0);
         }
     }
 
@@ -680,11 +679,11 @@ impl BoundedSimplex {
     pub fn row_activity(&self) -> Vec<f64> {
         let x = self.values();
         let mut out = vec![0.0; self.m];
-        for j in 0..self.n {
-            if x[j] != 0.0 {
+        for (j, &xj) in x.iter().enumerate() {
+            if xj != 0.0 {
                 let column = &self.a[j * self.m..(j + 1) * self.m];
-                for i in 0..self.m {
-                    out[i] += column[i] * x[j];
+                for (o, c) in out.iter_mut().zip(column) {
+                    *o += c * xj;
                 }
             }
         }
@@ -818,9 +817,9 @@ impl BoundedSimplex {
                 v[i] += part[i];
             }
         }
-        for i in 0..m {
+        for (i, vi) in v.iter_mut().enumerate() {
             if self.status[n + i] != Status::Basic {
-                v[i] -= self.nonbasic_value(n + i);
+                *vi -= self.nonbasic_value(n + i);
             }
         }
         for r in 0..m {
@@ -1056,9 +1055,7 @@ impl BoundedSimplex {
         let mut col = vec![0.0; m];
         let mut a_q = vec![0.0; m];
         loop {
-            if let Some(d) = deadline
-                && Instant::now() >= d
-            {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
                 return Err(BoundedLpError::TimeLimit);
             }
             if self.since_refactor >= REFACTOR_EVERY {
@@ -1195,13 +1192,13 @@ impl BoundedSimplex {
             // Pivot.
             let q = entering.j;
             self.load_column(q, &mut col);
-            for k in 0..m {
+            for (k, aq) in a_q.iter_mut().enumerate() {
                 let row = &self.binv[k * m..(k + 1) * m];
                 let mut s = 0.0;
                 for i in 0..m {
                     s += row[i] * col[i];
                 }
-                a_q[k] = s;
+                *aq = s;
             }
             let alpha_r = a_q[r];
             let from_row = if q < n {
@@ -1226,8 +1223,8 @@ impl BoundedSimplex {
             }
             let x_q0 = self.nonbasic_value(q);
             let delta_q = (self.xb[r] - target) / alpha_r;
-            for k in 0..m {
-                self.xb[k] -= a_q[k] * delta_q;
+            for (xb, aq) in self.xb.iter_mut().zip(&a_q) {
+                *xb -= aq * delta_q;
             }
             self.xb[r] = x_q0 + delta_q;
             // B^{-1} update.
@@ -1236,12 +1233,11 @@ impl BoundedSimplex {
                 self.binv[r * m + k] *= inv_pivot;
             }
             let pivot_row: Vec<f64> = self.binv[r * m..(r + 1) * m].to_vec();
-            for i in 0..m {
-                if i != r && a_q[i] != 0.0 {
-                    let f = a_q[i];
+            for (i, &f) in a_q.iter().enumerate() {
+                if i != r && f != 0.0 {
                     let row = &mut self.binv[i * m..(i + 1) * m];
-                    for k in 0..m {
-                        row[k] -= f * pivot_row[k];
+                    for (rk, pk) in row.iter_mut().zip(&pivot_row) {
+                        *rk -= f * pk;
                     }
                 }
             }

@@ -386,9 +386,7 @@ fn solve_with_deadline(
     if options.neighbourhood_search && solved.is_some() {
         rounding_dive(program, &mut lp, deadline, &mut incumbent, &mut nodes)?;
     }
-    if options.neighbourhood_search
-        && let Some(z) = solved
-    {
+    if let (true, Some(z)) = (options.neighbourhood_search, solved) {
         let target = tighten(z);
         neighbourhood_search(
             program,
@@ -445,7 +443,7 @@ fn solve_with_deadline(
                         let better = match branch {
                             None => true,
                             Some((bj, _, bk)) => {
-                                key.0 > bk.0
+                                (key.0 && !bk.0)
                                     || (key.0 == bk.0
                                         && (key.1 > bk.1 || (key.1 == bk.1 && j < bj)))
                             }
@@ -528,9 +526,7 @@ fn solve_with_deadline(
                 break 'search;
             };
             let node = stack.remove(pick);
-            if let Some(l) = options.node_limit
-                && nodes >= l
-            {
+            if options.node_limit.is_some_and(|l| nodes >= l) {
                 status = Status::NodeLimit;
                 open_bound = open_bound.max(node.parent_bound);
                 stack.push(node);
@@ -755,9 +751,9 @@ fn neighbourhood_search(
         for &j in &order[..size] {
             free[j] = true;
         }
-        for j in 0..n {
-            if !program.binary[j] {
-                free[j] = true;
+        for (f, &b) in free.iter_mut().zip(program.binary) {
+            if !b {
+                *f = true;
             }
         }
         let kept: Vec<usize> = (0..n).filter(|&j| free[j]).collect();
@@ -838,10 +834,10 @@ fn neighbourhood_search(
         if ok && incumbent.as_ref().is_none_or(|(_, v)| objective > *v) {
             *incumbent = Some((full, objective));
         }
-        if let (Some(t), Some((_, v))) = (target, incumbent.as_ref())
-            && *v >= t - 0.5
-        {
-            return;
+        if let (Some(t), Some((_, v))) = (target, incumbent.as_ref()) {
+            if *v >= t - 0.5 {
+                return;
+            }
         }
     }
 }
@@ -854,17 +850,17 @@ fn rounded_point(
     let mut x = lp.values();
     let mut moved = vec![0.0; program.rows];
     let m = program.rows;
-    for j in 0..x.len() {
+    for (j, xj) in x.iter_mut().enumerate() {
         if program.binary[j] || program.integer.get(j).copied().unwrap_or(false) {
-            let r = x[j].round();
-            let d = (x[j] - r).abs();
+            let r = xj.round();
+            let d = (*xj - r).abs();
             if d > 0.0 {
                 let column = &program.columns[j * m..(j + 1) * m];
-                for i in 0..m {
-                    moved[i] += column[i].abs() * d;
+                for (mv, c) in moved.iter_mut().zip(column) {
+                    *mv += c.abs() * d;
                 }
             }
-            x[j] = r;
+            *xj = r;
         }
     }
     let activity = activity(program, &x);
@@ -895,10 +891,8 @@ fn activity(program: &MixedBinaryProgram<'_>, x: &[f64]) -> Vec<f64> {
 fn row_violation(program: &MixedBinaryProgram<'_>, x: &[f64]) -> f64 {
     let act = activity(program, x);
     let mut worst = 0.0_f64;
-    for i in 0..program.rows {
-        worst = worst
-            .max(program.row_lo[i] - act[i])
-            .max(act[i] - program.row_hi[i]);
+    for (i, a) in act.iter().enumerate() {
+        worst = worst.max(program.row_lo[i] - a).max(a - program.row_hi[i]);
     }
     worst
 }
