@@ -4,28 +4,29 @@ use std::marker::PhantomData;
 
 /// Constraint that ensures case and control have the same value for a categorical field.
 ///
-/// By default, it uses the "gender" key in the strata map.
+/// The `same_as_case` constructors use the "sex" key of the strata map.
 pub struct GenderMatch {
     pub key: String,
     pub allow_unknown: bool,
 }
 
 impl GenderMatch {
-    /// Create a constraint that requires the same gender as the case.
-    /// Uses "gender" as the default strata key.
+    /// Create a constraint that requires the same sex as the case, read from
+    /// the "sex" strata key. A pair is refused when either unit has no value.
     #[must_use]
     pub fn same_as_case() -> Self {
         Self {
-            key: "gender".to_string(),
+            key: "sex".to_string(),
             allow_unknown: false,
         }
     }
 
-    /// Create a constraint that requires the same gender as the case or matches if unknown.
+    /// As [`Self::same_as_case`], but a pair where either unit has no value is
+    /// allowed.
     #[must_use]
     pub fn same_as_case_or_unknown() -> Self {
         Self {
-            key: "gender".to_string(),
+            key: "sex".to_string(),
             allow_unknown: true,
         }
     }
@@ -156,40 +157,32 @@ pub(crate) fn sample_sd(values: &[f64]) -> Option<f64> {
     Some((sum_sq / (n - 1.0)).sqrt())
 }
 
-/// Constraint that ensures a numeric field is within a certain caliper window.
-///
-/// This is a generic version of [`DateWindow`] that works on any numeric value.
 /// What a caliper does when a record does not carry the value.
 ///
-/// There is no universally right answer, which is why it is a choice rather
-/// than a default buried in the comparison.
+/// It is a choice of the caller, with [`Self::Refuse`] as the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MissingPolicy {
     /// Refuse the pair. An unverifiable constraint has not been satisfied.
     ///
-    /// The safe reading, and the default: a caliper is a claim about how close
-    /// two records are, and a value nobody recorded supports no such claim.
+    /// The default: a caliper is a claim about how close two records are, and
+    /// a value nobody recorded supports no such claim.
     #[default]
     Refuse,
     /// Two records both missing the value satisfy the caliper; one missing and
     /// one present does not.
     ///
-    /// For a matched-cohort design this is often the honest reading rather than
-    /// the lax one, because MISSINGNESS IS ITSELF A STRATUM. A study that
-    /// exact-matches on a categorical covariate routinely gives "unknown" its
-    /// own level, so that a record the register does not cover matches another
-    /// the register does not cover -- stricter than dropping the constraint,
-    /// and more honest than imputing a value. This is that convention for a
-    /// numeric field. Two children with no recorded father are alike in that
-    /// respect; pairing one of them with a child whose father IS recorded is
-    /// the comparison the caliper was meant to prevent, and it still is.
-    ///
-    /// It does not make missingness free: a record missing the value can only
-    /// match another missing it, so the constraint still binds, and it binds on
-    /// a smaller pool.
+    /// Missingness is then a stratum of its own, as when exact matching gives
+    /// "unknown" its own level. Two children with no recorded father are alike
+    /// in that respect, and pairing one of them with a child whose father is
+    /// recorded is the comparison the caliper is there to prevent. A record
+    /// missing the value can only match another missing it, so the constraint
+    /// still binds, on a smaller pool.
     MatchMissing,
 }
 
+/// Constraint that ensures a numeric field is within a certain caliper window.
+///
+/// This is a generic version of [`DateWindow`] that works on any numeric value.
 pub struct Caliper<R, F> {
     selector: F,
     window: f64,
@@ -231,16 +224,14 @@ where
 /// from a config file becomes a list of constraints.
 ///
 /// The field is read through [`MatchingRecord::numeric`], and a record that does
-/// not carry it refuses the pair — an unverifiable constraint has not been
+/// not carry it refuses the pair, since an unverifiable constraint has not been
 /// satisfied. [`Caliper::on_missing`] changes that when a study's convention is
 /// that unknown matches unknown.
 ///
 /// The returned caliper owns its field name, so `use<R>` states that the opaque
-/// type captures only `R`. Without it, edition 2024 captures every lifetime in
-/// scope -- including the one behind `impl Into<String>` -- and a caller passing
-/// a `&str` gets back a caliper borrowing it, which cannot be returned from the
-/// helper that built it. That helper is the whole point: matching rules that
-/// come from configuration are built somewhere and used somewhere else.
+/// type captures only `R`. Without it a caller passing a `&str` would get back
+/// a caliper borrowing it, which could not be returned from the function that
+/// built it.
 #[must_use]
 pub fn caliper_on_field<R: MatchingRecord>(
     field: &str,
@@ -265,7 +256,7 @@ where
             (Some(c), Some(ctrl)) => (c - ctrl).abs() <= self.window,
             // Both missing: alike in the one respect the caliper can see, if the
             // caller has said so. One missing and one present is refused either
-            // way -- that is the comparison a caliper exists to prevent.
+            // way, which is the comparison a caliper exists to prevent.
             (None, None) => self.missing == MissingPolicy::MatchMissing,
             _ => false,
         }
@@ -416,17 +407,13 @@ mod tests {
     fn gender_match_constraint_requires_exact_strata_match() {
         let constraint = GenderMatch::same_as_case();
         let mut case = record("case", date(2010, 1, 1));
-        case.strata.insert("gender".to_string(), "M".to_string());
+        case.strata.insert("sex".to_string(), "M".to_string());
 
         let mut control_m = record("control_m", date(2010, 1, 2));
-        control_m
-            .strata
-            .insert("gender".to_string(), "M".to_string());
+        control_m.strata.insert("sex".to_string(), "M".to_string());
 
         let mut control_f = record("control_f", date(2010, 1, 3));
-        control_f
-            .strata
-            .insert("gender".to_string(), "F".to_string());
+        control_f.strata.insert("sex".to_string(), "F".to_string());
 
         let criteria = crate::types::MatchingCriteria::default();
         let used_controls = UsedControlsVec::with_capacity(0);
@@ -451,7 +438,7 @@ mod tests {
     fn gender_match_can_allow_unknown() {
         let constraint = GenderMatch::same_as_case_or_unknown();
         let mut case = record("case", date(2010, 1, 1));
-        case.strata.insert("gender".to_string(), "M".to_string());
+        case.strata.insert("sex".to_string(), "M".to_string());
 
         let control_no_gender = record("control_none", date(2010, 1, 2));
 
@@ -645,9 +632,8 @@ mod named_caliper_tests {
 
     /// A context the caliper does not read.
     ///
-    /// `Caliper::allows` takes `_ctx` and ignores it -- the constraint is a
-    /// comparison of two records and nothing else -- but the trait's signature
-    /// requires one, so it is built rather than mocked.
+    /// `Caliper::allows` ignores its context, since the constraint compares
+    /// two records and nothing else, but the trait's signature requires one.
     fn allows_field<R: MatchingRecord>(field: &str, case: &R, control: &R, window: f64) -> bool {
         use crate::matching::UsedControlsVec;
         use crate::types::{ControlIdx, MatchingCriteria, UniqueValueId};
@@ -753,9 +739,8 @@ mod named_caliper_tests {
 
     #[test]
     fn a_record_carries_no_numerics_unless_given_one() {
-        // The field is `#[serde(default)]`, so a cohort serialised before it
-        // existed deserialises with an empty map -- and every caliper over it
-        // then refuses rather than passes, which is the safe direction.
+        // The field is `#[serde(default)]`, so a cohort serialised without it
+        // deserialises with an empty map, and every caliper over it refuses.
         let record = BaseRecord::new("a", day(2000, 1, 1));
         assert!(record.numerics.is_empty());
         assert_eq!(record.numeric("parent_birth_year"), None);

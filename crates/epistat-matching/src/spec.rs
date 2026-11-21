@@ -1966,7 +1966,10 @@ fn reject_invalid(outcome: MatchOutcome) -> Result<MatchOutcome, SpecError> {
         .find(|reason| {
             matches!(
                 reason,
-                ExclusionReason::InvalidCriteria(_) | ExclusionReason::CommonSupportFailure(_)
+                ExclusionReason::InvalidCriteria(_)
+                    | ExclusionReason::CommonSupportFailure(_)
+                    | ExclusionReason::EventBeforeBirth(_)
+                    | ExclusionReason::DuplicateId(_)
             )
         })
         .cloned();

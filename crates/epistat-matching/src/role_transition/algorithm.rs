@@ -1,12 +1,13 @@
 use crate::matching::{
     CandidatePoolRequest, ConstraintGroup, DateDistance, DistanceChannel, DistanceConfig,
     DistanceMetric, MatchEngine, RoleIndexedRecord, SelectionStrategy, UsedControlsVec,
-    build_outcome, finalize_estimand_diagnostics, intern_unique, invalid_common_support_outcome,
-    invalid_criteria_outcome, ratio::RatioPolicy, unique_value,
+    build_outcome, finalize_estimand_diagnostics, intern_unique, invalid_cohort_outcome,
+    invalid_common_support_outcome, invalid_criteria_outcome, ratio::RatioPolicy, unique_value,
 };
 use crate::types::{
-    CommonSupport, CommonSupportFailureReason, InvalidCriteriaReason, MatchDiagnostics,
-    MatchOutcome, MatchRatio, MatchedPair, MatchingCriteria, RoleTransitionOptions, UniqueValueId,
+    CommonSupport, CommonSupportFailureReason, ExclusionReason, InvalidCriteriaReason,
+    MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair, MatchingCriteria,
+    RoleTransitionOptions, UniqueValueId,
 };
 use chrono::{Datelike, NaiveDate};
 use epistat_register::{AgeRule, LeapBirthday, age_in_years};
@@ -38,23 +39,32 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
         default_control_is_at_risk(control, case_event_date)
     }
 
-    /// Whether [`Self::is_control_at_risk`] is the default rule, which reads
-    /// only the entry and event dates of the control. Common-support trimming
-    /// then finds the scores at risk on each case date in one sweep. A policy
-    /// that changes the rule leaves this `false`, and the trimming asks
-    /// [`Self::is_control_at_risk`] of every record for every case.
-    fn is_default_at_risk_rule(&self) -> bool {
-        false
+    /// `Some` when [`Self::is_control_at_risk`] is the default rule, which
+    /// reads only the entry and event dates of the control. Common-support
+    /// trimming then finds the scores at risk on each case date in one sweep.
+    ///
+    /// [`DefaultAtRiskRule`] can only be made inside this crate, so only
+    /// [`DefaultRiskSetPolicy`] answers `Some` and a policy of your own cannot
+    /// claim the sweep for a rule it has changed. Every other policy answers
+    /// `None`, and the trimming asks [`Self::is_control_at_risk`] of every
+    /// record for every case.
+    fn default_at_risk_rule(&self) -> Option<DefaultAtRiskRule> {
+        None
     }
 }
+
+/// Proof that a risk-set policy applies the default at-risk rule. Only
+/// [`DefaultRiskSetPolicy`] holds one.
+#[derive(Debug, Clone, Copy)]
+pub struct DefaultAtRiskRule(());
 
 /// Default role-transition risk-set policy used by existing APIs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRiskSetPolicy;
 
 impl<R: RoleIndexedRecord> RiskSetPolicy<R> for DefaultRiskSetPolicy {
-    fn is_default_at_risk_rule(&self) -> bool {
-        true
+    fn default_at_risk_rule(&self) -> Option<DefaultAtRiskRule> {
+        Some(DefaultAtRiskRule(()))
     }
 }
 
@@ -112,8 +122,9 @@ impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
 /// With `common_support` set in the criteria the scores of the distance
 /// configuration decide the trimming: a case whose score is strictly outside
 /// the range of the scores of the records at risk on its event date (by the
-/// risk-set rule and the alive and resident checks) is not matched, and a candidate whose score is outside the range of the cases'
-/// scores is not used. See [`CommonSupport`].
+/// risk-set rule and the alive and resident checks) is not matched, and a
+/// candidate whose score is outside the range of the cases' scores is not
+/// used. See [`CommonSupport`].
 #[must_use]
 pub fn match_transition<
     R: RoleIndexedRecord,
@@ -288,7 +299,7 @@ fn at_risk_score_ranges<
             .copied()
             .filter(|score| score.is_finite())
     };
-    if !policy.is_default_at_risk_rule() {
+    if policy.default_at_risk_rule().is_none() {
         return case_indices
             .iter()
             .map(|&case_idx| {
@@ -373,9 +384,10 @@ fn at_risk_score_ranges<
 /// records at risk on its event date. At risk means the risk-set rule and, as
 /// of the event date, the alive and resident checks when the job has them.
 /// Strata, the birth window and every other matching constraint are not read.
-/// A score equal to an end of the range is kept. A case with nobody at risk is not trimmed, since it has no range to be
-/// outside of, and is counted among the cases without candidates. A record
-/// without a finite score lies outside every range.
+/// A score equal to an end of the range is kept. A case with nobody at risk is
+/// not trimmed, since it has no range to be outside of, and is counted among
+/// the cases without candidates. A record without a finite score lies outside
+/// every range.
 fn transition_common_support_filters<
     R: RoleIndexedRecord,
     P: RiskSetPolicy<R> + ?Sized,
@@ -496,6 +508,18 @@ fn match_with_role_indexing_with_channel_internal<
         }
     };
 
+    if config.risk_set_policy.default_at_risk_rule().is_some() {
+        if let Some(reason) = invalid_record(cohort) {
+            return invalid_cohort_outcome(cohort.len(), reason);
+        }
+    }
+
+    if RatioPolicy::fallback_above_primary(validated.match_ratio, config.ratio_fallback) {
+        return invalid_criteria_outcome(
+            cohort.len(),
+            InvalidCriteriaReason::FallbackRatioAbovePrimary,
+        );
+    }
     let ratio_policy = RatioPolicy::from_fallback(validated.match_ratio, config.ratio_fallback);
     let case_indices =
         eligible_case_indices(cohort, config.age_limit_years, config.risk_set_policy);
@@ -658,6 +682,9 @@ fn run_transition_case_loop<
         if loop_config.ratio_policy.is_shortfall(candidates.len()) {
             state.diagnostics.anchors_below_required_ratio += 1;
         }
+        if loop_config.ratio_policy.is_lower_tier(candidates.len()) {
+            state.diagnostics.anchors_on_lower_tier += 1;
+        }
 
         let mut local_matches = 0usize;
         for _ in 0..target_ratio {
@@ -674,6 +701,13 @@ fn run_transition_case_loop<
             if let Some(value) = unique_value(control, loop_config.validated) {
                 let id = intern_unique(&mut state.unique_interner, value);
                 state.used_unique.insert(id);
+                if loop_config.validated.unique_by_key.is_some() {
+                    // The case's other candidates of this value are closed.
+                    candidates.retain(|&other| {
+                        unique_value(&engine.controls()[other], loop_config.validated)
+                            != Some(value)
+                    });
+                }
             }
         }
 
@@ -681,6 +715,24 @@ fn run_transition_case_loop<
             state.matched_cases += 1;
         }
     }
+}
+
+/// The first record, in cohort order, that the default policy refuses: an id
+/// that occurs twice, or a case whose event is before its birth.
+fn invalid_record<R: RoleIndexedRecord>(cohort: &[R]) -> Option<ExclusionReason> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(cohort.len());
+    for row in cohort {
+        if !seen.insert(row.id()) {
+            return Some(ExclusionReason::DuplicateId(row.id().to_owned()));
+        }
+        if row
+            .event_date()
+            .is_some_and(|event| event < row.birth_date())
+        {
+            return Some(ExclusionReason::EventBeforeBirth(row.id().to_owned()));
+        }
+    }
+    None
 }
 
 fn eligible_case_indices<R: RoleIndexedRecord, P: RiskSetPolicy<R> + ?Sized>(

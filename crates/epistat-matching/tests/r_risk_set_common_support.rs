@@ -58,7 +58,7 @@ fn day(days: i64) -> NaiveDate {
 }
 
 fn birth() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date")
+    NaiveDate::from_ymd_opt(1960, 1, 1).expect("valid date")
 }
 
 fn person(id: &str, entry: Option<i64>, event: Option<i64>) -> Rec {

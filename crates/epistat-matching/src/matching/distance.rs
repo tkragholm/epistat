@@ -99,7 +99,8 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when `dimension` is zero or matrix shape is invalid.
+    /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix shape
+    /// is invalid or the matrix is not positive semi-definite.
     pub fn mahalanobis_map(
         vectors: RapidHashMap<String, Vec<f64>>,
         inverse_covariance: Vec<f64>,
@@ -112,6 +113,7 @@ impl DistanceConfig {
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
             return Err(MahalanobisError::InvalidInverseCovarianceLength);
         }
+        check_positive_semi_definite(&inverse_covariance, dimension)?;
 
         Ok(Self::MahalanobisMap {
             vectors,
@@ -618,7 +620,9 @@ impl<R: MatchingRecord> DistanceMetric<R> for IdMapPropensityScoreDistance<'_> {
 /// `d' M d = |L' d|^2`, so a vector can be transformed once and distances are
 /// squared Euclidean distances of the transformed vectors. A matrix that is
 /// not positive definite keeps the plain form, summed in a fixed order, and a
-/// pair whose form is clearly negative has no distance.
+/// pair whose form is negative beyond rounding has no distance. The public
+/// constructors refuse a matrix with a negative eigenvalue, since its form is
+/// not a distance.
 #[derive(Debug, Clone)]
 struct QuadraticForm {
     dimension: usize,
@@ -710,11 +714,52 @@ impl QuadraticForm {
             }
             sum
         };
-        if !distance_sq.is_finite() || distance_sq < -1e-12 {
+        // The whitened form is a sum of squares and cannot be negative. The
+        // plain form of a singular matrix can come out below zero by rounding,
+        // by no more than (2n + 1) eps times the sum of the absolute terms,
+        // which bounds the error of a quadratic form summed in this order. A
+        // value below that is the form of an indefinite matrix and no distance.
+        let rounding_bound = if self.lower.is_some() {
+            0.0
+        } else {
+            let mut absolute = 0.0_f64;
+            for (i, matrix_row) in self.matrix.chunks_exact(n).enumerate() {
+                for (m, d) in matrix_row.iter().zip(delta.iter()) {
+                    absolute += m.abs() * delta[i].abs() * d.abs();
+                }
+            }
+            (2 * n + 1) as f64 * f64::EPSILON * absolute
+        };
+        if !distance_sq.is_finite() || distance_sq < -rounding_bound {
             return None;
         }
         Some(distance_sq.max(0.0).sqrt())
     }
+}
+
+/// Whether the symmetric part of `matrix`, of order `dimension`, has no
+/// eigenvalue below minus `dimension * eps` times the largest in absolute value,
+/// the size of the error of the eigenvalue computation, and every value is
+/// finite.
+fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), MahalanobisError> {
+    if matrix.iter().any(|value| !value.is_finite()) {
+        return Err(MahalanobisError::NotPositiveSemiDefinite);
+    }
+    let symmetric: Vec<f64> = (0..dimension * dimension)
+        .map(|index| {
+            let (row, col) = (index / dimension, index % dimension);
+            f64::midpoint(matrix[row * dimension + col], matrix[col * dimension + row])
+        })
+        .collect();
+    let (values, _) = epistat_linalg::eigen::symmetric_eigen_jacobi(&symmetric, dimension);
+    let largest = values
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    let floor = -(dimension as f64) * f64::EPSILON * largest;
+    if values.iter().any(|value| *value < floor) {
+        return Err(MahalanobisError::NotPositiveSemiDefinite);
+    }
+    Ok(())
 }
 
 /// Dimensions up to this size keep the scratch vectors on the stack.
@@ -956,6 +1001,11 @@ where
 pub enum MahalanobisError {
     ZeroDimension,
     InvalidInverseCovarianceLength,
+    /// The inverse covariance matrix has a negative eigenvalue or a value that
+    /// is not finite, so its quadratic form is not a distance. A generalised
+    /// inverse of a singular covariance matrix is positive semi-definite and
+    /// is accepted.
+    NotPositiveSemiDefinite,
 }
 
 /// Mahalanobis distance using a precomputed inverse covariance matrix.
@@ -972,8 +1022,9 @@ impl<F> MahalanobisDistance<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when `dimension` is zero or the matrix length
-    /// does not equal `dimension * dimension`.
+    /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix length
+    /// does not equal `dimension * dimension` or the matrix is not positive
+    /// semi-definite.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn new(
         accessor: F,
@@ -986,6 +1037,7 @@ impl<F> MahalanobisDistance<F> {
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
             return Err(MahalanobisError::InvalidInverseCovarianceLength);
         }
+        check_positive_semi_definite(&inverse_covariance, dimension)?;
         let form = QuadraticForm::new(&inverse_covariance, dimension)
             .ok_or(MahalanobisError::InvalidInverseCovarianceLength)?;
 
@@ -1137,21 +1189,20 @@ mod tests {
     }
 
     #[test]
-    fn mahalanobis_distance_rejects_non_finite_result() {
-        let anchor = DemoRecord::new("a", date(2010, 1, 1), vec![1.0, 2.0]);
-        let candidate = DemoRecord::new("c", date(2010, 1, 2), vec![4.0, 6.0]);
+    fn mahalanobis_distance_rejects_a_non_finite_matrix() {
         let invalid_inverse = vec![f64::NAN, 0.0, 0.0, 1.0];
-        let metric = MahalanobisDistance::new(
+        let result = MahalanobisDistance::new(
             |row: &DemoRecord| Some(row.numeric.clone()),
             invalid_inverse,
             2,
-        )
-        .expect("matrix shape is valid");
-
-        assert!(metric.distance(&anchor, &candidate).is_none());
+        );
+        assert!(matches!(
+            result,
+            Err(MahalanobisError::NotPositiveSemiDefinite)
+        ));
     }
 
-    /// The old per-pair form: two faer matrix products per distance.
+    /// The per-pair form: two faer matrix products per distance.
     fn mahalanobis_distance_faer_reference(
         left: &[f64],
         right: &[f64],
@@ -1161,10 +1212,10 @@ mod tests {
         let delta = Mat::from_fn(dimension, 1, |row, _| left[row] - right[row]);
         let transformed = inverse_covariance_matrix * &delta;
         let distance_sq = (delta.transpose() * transformed)[(0, 0)];
-        if !distance_sq.is_finite() || distance_sq < -1e-12 {
+        if !distance_sq.is_finite() || distance_sq < 0.0 {
             return None;
         }
-        Some(distance_sq.max(0.0).sqrt())
+        Some(distance_sq.sqrt())
     }
 
     struct Xorshift(u64);
@@ -1234,9 +1285,9 @@ mod tests {
         }
     }
 
-    /// The nearest candidate of every anchor is the same under the old and new
-    /// distance, on data with many exact ties (integer covariates, repeated
-    /// rows). Exact duplicates have identical transformed vectors, so their
+    /// The nearest candidate of every anchor is the same under the matrix
+    /// form and the whitened form of the distance, on data with many exact ties
+    /// (integer covariates, repeated rows). Exact duplicates have identical transformed vectors, so their
     /// distances are equal in both forms and a first-index tie-break agrees.
     /// Other near ties are skipped when the gap is within rounding.
     #[test]
@@ -1283,6 +1334,30 @@ mod tests {
                 assert_eq!(pick_new, pick_old, "seed {seed}, anchor {anchor}");
             }
         }
+    }
+
+    /// A matrix that is not positive definite is refused by the public
+    /// constructors.
+    #[test]
+    fn constructors_refuse_an_indefinite_matrix() {
+        let inverse = vec![1.0, 2.0, 2.0, 1.0];
+        assert!(matches!(
+            MahalanobisDistance::new(|_row: &BaseRecord| None::<Vec<f64>>, inverse.clone(), 2),
+            Err(MahalanobisError::NotPositiveSemiDefinite)
+        ));
+        assert!(matches!(
+            DistanceConfig::mahalanobis_map(RapidHashMap::default(), inverse, 2, None),
+            Err(MahalanobisError::NotPositiveSemiDefinite)
+        ));
+        // A singular positive semi-definite matrix is a distance.
+        assert!(
+            MahalanobisDistance::new(
+                |_row: &BaseRecord| None::<Vec<f64>>,
+                vec![1.0, 1.0, 1.0, 1.0],
+                2
+            )
+            .is_ok()
+        );
     }
 
     /// A matrix that is not positive definite keeps the plain quadratic form.
@@ -1333,9 +1408,9 @@ mod tests {
             distance_sq = delta_row.mul_add(row_dot, distance_sq);
         }
 
-        if !distance_sq.is_finite() || distance_sq < -1e-12 {
+        if !distance_sq.is_finite() || distance_sq < 0.0 {
             return None;
         }
-        Some(distance_sq.max(0.0).sqrt())
+        Some(distance_sq.sqrt())
     }
 }

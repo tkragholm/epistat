@@ -13,6 +13,12 @@ pub enum ExclusionReason {
     DistanceCaliper(DistanceCaliperReason),
     InvalidCriteria(InvalidCriteriaReason),
     CommonSupportFailure(CommonSupportFailureReason),
+    /// A case whose event date is before its birth date, by id. Risk-set
+    /// matching under the default policy refuses such a cohort.
+    EventBeforeBirth(String),
+    /// An id that two units of the cohort share. Risk-set matching under the
+    /// default policy refuses such a cohort.
+    DuplicateId(String),
 }
 
 /// Typed estimand drift reason recorded by matching diagnostics.
@@ -39,43 +45,50 @@ impl Display for EstimandDriftReason {
 }
 
 /// Typed constraint exclusion reason.
+///
+/// Each variant is named by the text the matching constraint of the same name
+/// reports, so [`Self::from_reason_str`] and `Display` are inverses.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ConstraintReason {
+    /// The control was already used and replacement is off.
     ReplacementDisallowed,
+    /// The control is the anchor itself.
     NoSelfMatch,
-    MissingRequiredStrata,
+    /// The control differs from the anchor on a required stratum.
+    StrataMismatch,
+    /// The control's unique value was already used.
     UniqueKeyReused,
-    DistanceCaliper,
+    /// The control's sex differs from the anchor's.
     GenderMismatch,
+    /// A numeric caliper on a field is exceeded.
     CaliperExceeded,
+    /// The birth-date window is exceeded.
     DateWindowExceeded,
-    ParentDateMismatch,
-    SameFamily,
+    /// An anti-exact field is equal.
     AntiExact,
-    ControlAlreadyUsedInPrimaryTier,
+    /// The control is dead at the index date.
     NotAliveAtIndex,
+    /// The control is not resident at the index date.
     NotResidentAtIndex,
+    /// A constraint of the caller's, by its own text.
     Custom(String),
 }
 
 impl ConstraintReason {
+    /// The typed reason for the text a constraint reports.
     #[must_use]
     pub fn from_reason_str(reason: &str) -> Self {
         match reason {
-            "replacement_disallowed" => Self::ReplacementDisallowed,
-            "no_self_match" => Self::NoSelfMatch,
-            "missing_required_strata" => Self::MissingRequiredStrata,
+            "used_control_replacement_disabled" => Self::ReplacementDisallowed,
+            "self_match" => Self::NoSelfMatch,
+            "strata_mismatch" => Self::StrataMismatch,
             "unique_key_reused" => Self::UniqueKeyReused,
-            "distance_caliper" => Self::DistanceCaliper,
             "gender_mismatch" => Self::GenderMismatch,
-            "caliper_exceeded" => Self::CaliperExceeded,
-            "date_window_exceeded" => Self::DateWindowExceeded,
-            "parent_date_mismatch" => Self::ParentDateMismatch,
-            "same_family" => Self::SameFamily,
+            "caliper_mismatch" => Self::CaliperExceeded,
+            "date_window_mismatch" => Self::DateWindowExceeded,
             "antiexact" => Self::AntiExact,
-            "control_already_used_in_primary_tier" => Self::ControlAlreadyUsedInPrimaryTier,
-            "not_alive_at_index" => Self::NotAliveAtIndex,
-            "not_resident_at_index" => Self::NotResidentAtIndex,
+            "control_not_alive_at_index_date" => Self::NotAliveAtIndex,
+            "control_non_resident_at_index_date" => Self::NotResidentAtIndex,
             _ => Self::Custom(reason.to_string()),
         }
     }
@@ -84,20 +97,16 @@ impl ConstraintReason {
 impl Display for ConstraintReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let key = match self {
-            Self::ReplacementDisallowed => "replacement_disallowed",
-            Self::NoSelfMatch => "no_self_match",
-            Self::MissingRequiredStrata => "missing_required_strata",
+            Self::ReplacementDisallowed => "used_control_replacement_disabled",
+            Self::NoSelfMatch => "self_match",
+            Self::StrataMismatch => "strata_mismatch",
             Self::UniqueKeyReused => "unique_key_reused",
-            Self::DistanceCaliper => "distance_caliper",
             Self::GenderMismatch => "gender_mismatch",
-            Self::CaliperExceeded => "caliper_exceeded",
-            Self::DateWindowExceeded => "date_window_exceeded",
-            Self::ParentDateMismatch => "parent_date_mismatch",
-            Self::SameFamily => "same_family",
+            Self::CaliperExceeded => "caliper_mismatch",
+            Self::DateWindowExceeded => "date_window_mismatch",
             Self::AntiExact => "antiexact",
-            Self::ControlAlreadyUsedInPrimaryTier => "control_already_used_in_primary_tier",
-            Self::NotAliveAtIndex => "not_alive_at_index",
-            Self::NotResidentAtIndex => "not_resident_at_index",
+            Self::NotAliveAtIndex => "control_not_alive_at_index_date",
+            Self::NotResidentAtIndex => "control_non_resident_at_index_date",
             Self::Custom(reason) => reason.as_str(),
         };
         f.write_str(key)
@@ -107,27 +116,45 @@ impl Display for ConstraintReason {
 /// Typed distance-caliper exclusion reason.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DistanceCaliperReason {
-    DistanceCaliper,
+    /// A caliper on the birth-date distance.
+    Date,
+    /// A caliper on the propensity score distance.
+    PropensityScore,
+    /// A caliper on the Mahalanobis distance.
+    Mahalanobis,
+    /// A caliper on the Euclidean distance.
+    Euclidean,
+    /// A caliper on a distance matrix.
+    DistanceMatrix,
+    /// A caliper with a name of the caller's.
     Custom(String),
 }
 
 impl DistanceCaliperReason {
+    /// The typed reason for the text a distance channel reports.
     #[must_use]
     pub fn from_reason_str(reason: &str) -> Self {
-        if reason == "distance_caliper" {
-            Self::DistanceCaliper
-        } else {
-            Self::Custom(reason.to_string())
+        match reason {
+            "date_caliper" => Self::Date,
+            "propensity_score_caliper" => Self::PropensityScore,
+            "mahalanobis_caliper" => Self::Mahalanobis,
+            "euclidean_caliper" => Self::Euclidean,
+            "distance_matrix_caliper" => Self::DistanceMatrix,
+            _ => Self::Custom(reason.to_string()),
         }
     }
 }
 
 impl Display for DistanceCaliperReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DistanceCaliper => f.write_str("distance_caliper"),
-            Self::Custom(reason) => f.write_str(reason),
-        }
+        f.write_str(match self {
+            Self::Date => "date_caliper",
+            Self::PropensityScore => "propensity_score_caliper",
+            Self::Mahalanobis => "mahalanobis_caliper",
+            Self::Euclidean => "euclidean_caliper",
+            Self::DistanceMatrix => "distance_matrix_caliper",
+            Self::Custom(reason) => reason,
+        })
     }
 }
 
@@ -139,6 +166,8 @@ pub enum InvalidCriteriaReason {
     StudyOptions,
     /// The nearest-neighbour options contradict each other or the distance.
     NearestOptions,
+    /// A fallback ratio is above the primary ratio.
+    FallbackRatioAbovePrimary,
 }
 
 impl Display for InvalidCriteriaReason {
@@ -148,6 +177,7 @@ impl Display for InvalidCriteriaReason {
             Self::ZeroMatchRatio => "zero_match_ratio",
             Self::StudyOptions => "study_options",
             Self::NearestOptions => "nearest_options",
+            Self::FallbackRatioAbovePrimary => "fallback_ratio_above_primary",
         };
         f.write_str(key)
     }
@@ -187,6 +217,8 @@ impl Display for ExclusionReason {
             Self::DistanceCaliper(reason) => Display::fmt(reason, f),
             Self::InvalidCriteria(reason) => write!(f, "invalid_criteria:{reason}"),
             Self::CommonSupportFailure(reason) => write!(f, "common_support_failure:{reason}"),
+            Self::EventBeforeBirth(id) => write!(f, "event_before_birth:{id}"),
+            Self::DuplicateId(id) => write!(f, "duplicate_id:{id}"),
         }
     }
 }
@@ -247,6 +279,7 @@ impl MatchDiagnostics {
         self.total_anchors_evaluated += other.total_anchors_evaluated;
         self.anchors_with_no_candidates += other.anchors_with_no_candidates;
         self.anchors_below_required_ratio += other.anchors_below_required_ratio;
+        self.anchors_on_lower_tier += other.anchors_on_lower_tier;
         self.matched_anchors += other.matched_anchors;
         self.pairs_selected += other.pairs_selected;
         self.common_support_trimmed_anchors += other.common_support_trimmed_anchors;
@@ -264,14 +297,23 @@ impl MatchDiagnostics {
 }
 
 /// Run diagnostics for matching.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MatchDiagnostics {
     /// Total anchors evaluated by the engine.
     pub total_anchors_evaluated: usize,
     /// Anchors with no eligible candidates after filtering.
     pub anchors_with_no_candidates: usize,
-    /// Anchors that had candidates but failed required ratio.
+    /// Anchors that did not get the ratio asked for and have no declared
+    /// fallback tier to account for it: without fallback tiers, the anchors
+    /// with some candidates but fewer than the ratio, and with them, the
+    /// anchors with fewer candidates than the lowest tier, which get none. An
+    /// anchor matched on a declared lower tier is not counted here; see
+    /// [`Self::anchors_on_lower_tier`].
     pub anchors_below_required_ratio: usize,
+    /// With declared fallback tiers, the anchors matched on a tier below the
+    /// primary ratio.
+    #[serde(default)]
+    pub anchors_on_lower_tier: usize,
     /// Matched anchor count.
     pub matched_anchors: usize,
     /// Number of selected pairs.
@@ -305,6 +347,53 @@ pub struct MatchDiagnostics {
     /// Structured machine-readable drift reasons.
     #[serde(default)]
     pub estimand_drift_reasons: Vec<EstimandDriftReason>,
+}
+
+/// The debug rendering lists every field. `anchors_on_lower_tier` is left out
+/// when it is 0, so that the rendering of a job that matches on no lower tier
+/// is the same as before the field existed and the hashes of renderings that
+/// tests pin stay valid.
+impl std::fmt::Debug for MatchDiagnostics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut out = f.debug_struct("MatchDiagnostics");
+        out.field("total_anchors_evaluated", &self.total_anchors_evaluated)
+            .field(
+                "anchors_with_no_candidates",
+                &self.anchors_with_no_candidates,
+            )
+            .field(
+                "anchors_below_required_ratio",
+                &self.anchors_below_required_ratio,
+            );
+        if self.anchors_on_lower_tier != 0 {
+            out.field("anchors_on_lower_tier", &self.anchors_on_lower_tier);
+        }
+        out.field("matched_anchors", &self.matched_anchors)
+            .field("pairs_selected", &self.pairs_selected)
+            .field("exclusion_counts", &self.exclusion_counts)
+            .field("requested_estimand", &self.requested_estimand)
+            .field("realized_estimand", &self.realized_estimand)
+            .field(
+                "common_support_trimmed_anchors",
+                &self.common_support_trimmed_anchors,
+            )
+            .field(
+                "common_support_trimmed_candidates",
+                &self.common_support_trimmed_candidates,
+            )
+            .field("common_support_overlap", &self.common_support_overlap)
+            .field("common_support_policy", &self.common_support_policy)
+            .field(
+                "common_support_anchor_score_bounds",
+                &self.common_support_anchor_score_bounds,
+            )
+            .field(
+                "common_support_candidate_score_bounds",
+                &self.common_support_candidate_score_bounds,
+            )
+            .field("estimand_drift_reasons", &self.estimand_drift_reasons)
+            .finish()
+    }
 }
 
 impl MatchOutcome {

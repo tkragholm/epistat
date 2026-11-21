@@ -28,11 +28,38 @@ pub struct ReconstructedMatchedPair {
     pub birth_date_distance_days: Option<i64>,
 }
 
+/// Options of [`reconstruct_case_control_pairs`].
 #[derive(Debug, Clone, Copy)]
 pub struct ReconstructedMatchingOptions {
+    /// Most controls one case can take. At least 1.
     pub max_ratio: usize,
-    pub match_caliper_days: i64,
+    /// Largest birth-date difference in days between a case and a control, or
+    /// `None` for no limit. Not negative. A pair with an unknown birth date
+    /// has an unknown difference and does not meet a limit.
+    pub match_caliper_days: Option<i64>,
 }
+
+/// Invalid options of [`reconstruct_case_control_pairs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconstructedMatchingError {
+    /// `max_ratio` is 0.
+    ZeroMaxRatio,
+    /// `match_caliper_days` is negative.
+    NegativeCaliper(i64),
+}
+
+impl std::fmt::Display for ReconstructedMatchingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroMaxRatio => f.write_str("max_ratio must be at least 1"),
+            Self::NegativeCaliper(days) => {
+                write!(f, "match_caliper_days is {days}, which is negative")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReconstructedMatchingError {}
 
 #[derive(Debug, Default)]
 pub struct ReconstructedMatchingOutput {
@@ -54,17 +81,29 @@ struct CaseState<'a> {
 
 type CaseGroupIndex = HashMap<(NaiveDate, i32), HashMap<String, Vec<usize>>>;
 
-#[must_use]
+/// Match each unexposed episode to an exposed one on the same index date and
+/// sex, by municipality and then by region.
+///
+/// # Errors
+///
+/// [`ReconstructedMatchingError`] for a `max_ratio` of 0 or a negative
+/// caliper.
 pub fn reconstruct_case_control_pairs(
     rows: &[ReconstructedEpisode],
     options: ReconstructedMatchingOptions,
-) -> ReconstructedMatchingOutput {
-    let max_ratio = options.max_ratio.max(1);
-    let caliper_days = options.match_caliper_days.max(0);
+) -> Result<ReconstructedMatchingOutput, ReconstructedMatchingError> {
+    if options.max_ratio == 0 {
+        return Err(ReconstructedMatchingError::ZeroMaxRatio);
+    }
+    if let Some(days) = options.match_caliper_days.filter(|days| *days < 0) {
+        return Err(ReconstructedMatchingError::NegativeCaliper(days));
+    }
+    let max_ratio = options.max_ratio;
+    let caliper_days = options.match_caliper_days;
 
     let mut case_states = dedup_case_states(rows);
     if case_states.is_empty() {
-        return ReconstructedMatchingOutput::default();
+        return Ok(ReconstructedMatchingOutput::default());
     }
 
     let (municipality_case_index, region_case_index) = build_case_indices(&case_states);
@@ -94,7 +133,7 @@ pub fn reconstruct_case_control_pairs(
         }
     }
 
-    output
+    Ok(output)
 }
 
 fn dedup_case_states(rows: &[ReconstructedEpisode]) -> Vec<CaseState<'_>> {
@@ -139,7 +178,7 @@ fn select_case_for_control(
     case_states: &[CaseState<'_>],
     municipality_case_index: &CaseGroupIndex,
     region_case_index: &CaseGroupIndex,
-    caliper_days: i64,
+    caliper_days: Option<i64>,
     max_ratio: usize,
 ) -> Option<(usize, ReconstructedMatchingTier)> {
     let sex_key = control_row.sex.unwrap_or(-1);
@@ -219,7 +258,7 @@ fn select_best_case(
     case_states: &[CaseState<'_>],
     candidate_indices: &[usize],
     control_row: &ReconstructedEpisode,
-    caliper_days: i64,
+    caliper_days: Option<i64>,
     max_ratio: usize,
 ) -> Option<usize> {
     let mut selected: Option<(usize, usize, i64, &str)> = None;
@@ -261,7 +300,7 @@ fn select_best_case(
 fn case_control_eligible(
     case_row: &ReconstructedEpisode,
     control_row: &ReconstructedEpisode,
-    caliper_days: i64,
+    caliper_days: Option<i64>,
 ) -> bool {
     if case_row.person_id == control_row.person_id {
         return false;
@@ -271,13 +310,9 @@ fn case_control_eligible(
     if case_family.is_some() && case_family == control_family {
         return false;
     }
-    if caliper_days > 0
-        && birth_date_distance_days(case_row, control_row)
-            .is_some_and(|distance_days| distance_days > caliper_days)
-    {
-        return false;
-    }
-    true
+    caliper_days.is_none_or(|caliper| {
+        birth_date_distance_days(case_row, control_row).is_some_and(|days| days <= caliper)
+    })
 }
 
 fn birth_date_distance_days(
@@ -300,13 +335,65 @@ fn normalized_group_value(value: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReconstructedEpisode, ReconstructedMatchingOptions, ReconstructedMatchingTier,
-        reconstruct_case_control_pairs,
+        ReconstructedEpisode, ReconstructedMatchingError, ReconstructedMatchingOptions,
+        ReconstructedMatchingTier, reconstruct_case_control_pairs,
     };
     use chrono::NaiveDate;
 
     fn d(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("hardcoded valid date")
+    }
+
+    #[test]
+    fn invalid_options_are_errors() {
+        let options = |max_ratio, match_caliper_days| ReconstructedMatchingOptions {
+            max_ratio,
+            match_caliper_days,
+        };
+        assert_eq!(
+            reconstruct_case_control_pairs(&[], options(0, None)).unwrap_err(),
+            ReconstructedMatchingError::ZeroMaxRatio
+        );
+        assert_eq!(
+            reconstruct_case_control_pairs(&[], options(1, Some(-1))).unwrap_err(),
+            ReconstructedMatchingError::NegativeCaliper(-1)
+        );
+    }
+
+    /// A caliper of 0 allows the same birth date only, and a pair with an
+    /// unknown birth date does not meet any caliper.
+    #[test]
+    fn a_caliper_of_zero_is_not_no_caliper() {
+        let row = |id: &str, exposed, birth: Option<NaiveDate>| ReconstructedEpisode {
+            person_id: id.to_string(),
+            index_date: d(2021, 1, 1),
+            exposed,
+            sex: Some(1),
+            municipality: Some("0101".to_string()),
+            region: Some("H".to_string()),
+            family_id: None,
+            birth_date: birth,
+        };
+        let rows = vec![
+            row("case", true, Some(d(2010, 1, 1))),
+            row("same", false, Some(d(2010, 1, 1))),
+            row("other", false, Some(d(2010, 1, 2))),
+            row("unknown", false, None),
+        ];
+        let run = |caliper| {
+            reconstruct_case_control_pairs(
+                &rows,
+                ReconstructedMatchingOptions {
+                    max_ratio: 3,
+                    match_caliper_days: caliper,
+                },
+            )
+            .unwrap()
+            .matched_control_ids
+            .len()
+        };
+        assert_eq!(run(Some(0)), 1);
+        assert_eq!(run(None), 3);
     }
 
     #[test]
@@ -347,9 +434,10 @@ mod tests {
             &rows,
             ReconstructedMatchingOptions {
                 max_ratio: 2,
-                match_caliper_days: 31,
+                match_caliper_days: Some(31),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(output.matched_pairs.len(), 2);
         assert!(
             output

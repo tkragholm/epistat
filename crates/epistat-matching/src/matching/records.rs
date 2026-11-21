@@ -11,28 +11,24 @@ pub trait MatchingRecord: Send + Sync {
     fn strata(&self) -> &HashMap<String, String>;
     /// A named numeric field, for [`crate::constraints::Caliper`] constraints.
     ///
-    /// The crate has had a generic numeric caliper since 0.1, and no way to
-    /// address a field by name: `strata()` carries arbitrary CATEGORICAL values
-    /// for exact matching and there was no numeric counterpart, so a caller with
-    /// two numeric constraints had to bake the second one into its record type.
-    /// A study matching on a child's birth date and a parent's birth year is the
-    /// case that found it.
+    /// `strata()` carries categorical values for exact matching. This carries
+    /// numeric ones, so a job with several numeric constraints, such as a
+    /// child's birth date and a parent's birth year, can address each by name.
     ///
     /// `None` means "this record has no such value", and every caliper treats
     /// that as a refusal rather than a pass: an unverifiable constraint has not
-    /// been satisfied. Defaulted so existing implementors are unaffected.
+    /// been satisfied. The default carries no numeric fields.
     ///
-    /// A WRAPPER TYPE MUST FORWARD THIS, exactly as it forwards `strata()`. The
-    /// default makes a missing forward compile, and the pair is then refused on
-    /// a field the inner record actually carries -- which looks like a caliper
-    /// that is far too tight rather than like a bug. `RoleTransitionRecord` and
-    /// `BalanceRecord` forward it, and `caliper_reads_through_*` pins that.
+    /// A wrapper type must forward this, as it forwards `strata()`. Without
+    /// the forward the code compiles and every pair is refused on a field the
+    /// inner record carries, which looks like a caliper that is far too tight.
+    /// `RoleTransitionRecord` and `BalanceRecord` forward it.
     fn numeric(&self, _name: &str) -> Option<f64> {
         None
     }
     /// Optional key for ensuring uniqueness (e.g., family ID).
     fn unique_key(&self) -> Option<&str>;
-    /// Optional death date. If provided, used by [`MustBeAlive`](crate::constraints::MustBeAlive) constraints.
+    /// Optional death date, read by [`MustBeAlive`](crate::constraints::MustBeAlive).
     fn death_date(&self) -> Option<NaiveDate> {
         None
     }

@@ -59,6 +59,24 @@ impl RatioPolicy {
         }
     }
 
+    /// Whether the anchor with this many candidates is matched on a declared
+    /// fallback tier below the primary ratio.
+    #[must_use]
+    pub fn is_lower_tier(&self, available_controls: usize) -> bool {
+        self.strict
+            && self
+                .target_ratio(available_controls)
+                .is_some_and(|target| target < self.primary_ratio)
+    }
+
+    /// Whether the fallback tiers include a ratio above the primary ratio.
+    #[must_use]
+    pub fn fallback_above_primary(primary_ratio: usize, ratio_fallback: &[MatchRatio]) -> bool {
+        ratio_fallback
+            .iter()
+            .any(|ratio| ratio.get() > primary_ratio)
+    }
+
     #[must_use]
     pub const fn is_shortfall(&self, available_controls: usize) -> bool {
         if self.strict {
@@ -79,6 +97,16 @@ mod tests {
         let policy = RatioPolicy::from_primary(3);
         assert_eq!(policy.target_ratio(1), Some(1));
         assert!(policy.is_shortfall(1));
+    }
+
+    #[test]
+    fn a_lower_tier_is_not_a_shortfall_but_is_a_lower_tier() {
+        let policy = RatioPolicy::from_fallback(4, &[MatchRatio::new(2).expect("non-zero")]);
+        assert!(!policy.is_shortfall(3));
+        assert!(policy.is_lower_tier(3));
+        assert!(!policy.is_lower_tier(4));
+        assert!(!policy.is_lower_tier(1));
+        assert!(!RatioPolicy::from_primary(4).is_lower_tier(3));
     }
 
     #[test]

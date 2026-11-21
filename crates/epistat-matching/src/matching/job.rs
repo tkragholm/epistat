@@ -1,3 +1,4 @@
+use crate::matching::constraints::BirthWindowConstraint;
 use crate::matching::engine::{StandardMatchRequest, match_standard};
 use crate::matching::{
     Assignment, Chained, Constraint, ConstraintGroup, DistanceConfig, MatchOrder, MatchingRecord,
@@ -19,6 +20,7 @@ pub struct StandardMode<'a, R: MatchingRecord> {
     candidates: &'a [R],
     ratio_fallback: Vec<MatchRatio>,
     distance_config: Option<DistanceConfig>,
+    birth_window_set: bool,
 }
 
 /// Marker and data for role-transition matching.
@@ -26,6 +28,28 @@ pub struct TransitionMode<'a, R: RoleIndexedRecord> {
     cohort: &'a [R],
     options: RoleTransitionOptions,
     distance_config: Option<DistanceConfig>,
+    birth_window_set: bool,
+}
+
+/// A job mode that remembers whether the birth window was set by the caller.
+///
+/// The window then holds under a distance configuration too. Without a
+/// configuration the window is the matching distance itself.
+pub trait BirthWindowMode {
+    #[doc(hidden)]
+    fn note_birth_window(&mut self);
+}
+
+impl<R: MatchingRecord> BirthWindowMode for StandardMode<'_, R> {
+    fn note_birth_window(&mut self) {
+        self.birth_window_set = true;
+    }
+}
+
+impl<R: RoleIndexedRecord> BirthWindowMode for TransitionMode<'_, R> {
+    fn note_birth_window(&mut self) {
+        self.birth_window_set = true;
+    }
 }
 
 type AliveSelector<R> = fn(&R) -> Option<chrono::NaiveDate>;
@@ -37,9 +61,9 @@ type WithResidentConstraint<Mode, R, S, G, P> =
 
 /// Unified entrypoint for matching jobs.
 ///
-/// `MatchJob` provides a fluent, statically-typed builder API for configuring and executing cohort matching.
-/// It uses a typestate pattern to ensure that standard matching and role-transition matching
-/// expose only their valid methods and execution paths.
+/// `MatchJob` is a builder for configuring and running cohort matching. A
+/// typestate keeps standard matching and role-transition matching to their own
+/// methods.
 ///
 /// ### Example (Standard)
 /// ```rust,ignore
@@ -84,6 +108,7 @@ impl<'a, R: RoleIndexedRecord>
                 cohort,
                 options: RoleTransitionOptions::default(),
                 distance_config: None,
+                birth_window_set: false,
             },
             criteria: MatchingCriteria::default(),
             strategy: RandomSelection::seeded(seed),
@@ -106,6 +131,7 @@ impl<'a, R: MatchingRecord>
                 candidates,
                 ratio_fallback: Vec::new(),
                 distance_config: None,
+                birth_window_set: false,
             },
             criteria: MatchingCriteria::default(),
             strategy: RandomSelection::seeded(seed),
@@ -122,12 +148,15 @@ where
 {
     /// Set the matching ratio (number of controls per case).
     ///
-    /// Without replacement, each anchor takes all its controls before the
-    /// next anchor starts. `matchit()` gives every anchor one control before
-    /// any anchor gets a second. When controls run short, the crate's order
-    /// leaves the last anchors with fewer controls or none, and `matchit()`'s
-    /// leaves every anchor with at least one for as long as controls last.
-    /// An anchor that finds fewer than the ratio gets what is available.
+    /// Without replacement, anchors take their controls one anchor at a time
+    /// by default: each takes all its controls before the next starts. When
+    /// controls run short this leaves the last anchors with fewer controls or
+    /// none. `matchit()` gives every anchor one control before any gets a
+    /// second, which leaves every anchor with at least one for as long as
+    /// controls last. That order is the default in nearest mode
+    /// (`with_nearest`) and can be chosen with
+    /// `with_round_assignment`. An anchor that finds fewer than the ratio gets
+    /// what is available.
     #[must_use]
     pub const fn with_ratio(mut self, ratio: MatchRatio) -> Self {
         self.criteria.match_ratio = ratio.get();
@@ -137,16 +166,26 @@ where
     /// Set the birth date caliper window in days.
     ///
     /// Candidates must have a birth date within `+/- days` of the case.
+    ///
+    /// The window also holds when a distance configuration is set, where it
+    /// is applied as a constraint on top of the distance. A job that never
+    /// calls this has the default window of 30 days only when it matches on
+    /// the birth date, that is, with no distance configuration.
     #[must_use]
-    pub const fn with_birth_window(mut self, days: BirthDateWindowDays) -> Self {
+    pub fn with_birth_window(mut self, days: BirthDateWindowDays) -> Self
+    where
+        Mode: BirthWindowMode,
+    {
         self.criteria.birth_date_window_days = days.get();
+        self.mode.note_birth_window();
         self
     }
 
     /// Add a required exact-match strata key.
     ///
     /// The engine will only consider candidates that have the same value for this
-    /// strata key as the case.
+    /// strata key as the case. A record with no value for the key has the
+    /// value "absent", and matches another record with none.
     #[must_use]
     pub fn with_exact_match(mut self, key: impl Into<String>) -> Self {
         self.criteria.required_strata.push(key.into());
@@ -211,7 +250,7 @@ where
     /// [`Self::with_constraint`] composes into a tuple, so the number of
     /// constraints is fixed at compile time. This takes a
     /// [`ConstraintGroup`], which `Vec<C>` implements, so a caller can decide
-    /// at run time how many constraints there are -- one per field named in a
+    /// at run time how many constraints there are, one per field named in a
     /// configuration file, say. See [`Self::with_constraints`] for the common
     /// case.
     #[must_use]
@@ -292,7 +331,8 @@ where
 
     /// Add a gender match constraint.
     ///
-    /// Convenience helper that adds a [`GenderMatch`](crate::constraints::GenderMatch) constraint using the "sex" strata key.
+    /// Adds a [`GenderMatch`](crate::constraints::GenderMatch) constraint on
+    /// the "sex" strata key.
     #[must_use]
     pub fn with_gender_match(
         self,
@@ -520,13 +560,17 @@ where
         S: SelectionStrategy<R> + Clone + Send + Sync,
         P: RiskSetPolicy<R> + Send + Sync,
     {
+        let window = BirthWindowConstraint::new(
+            (self.mode.birth_window_set && self.mode.distance_config.is_some())
+                .then_some(self.criteria.birth_date_window_days),
+        );
         match_transition(
             self.mode.cohort,
             TransitionMatchRequest {
                 criteria: &self.criteria,
                 options: &self.mode.options,
                 strategy: self.strategy,
-                constraints: &self.constraints,
+                constraints: &(&self.constraints, window),
                 distance_config: self.mode.distance_config.as_ref(),
                 risk_set_policy: &self.risk_set_policy,
             },
@@ -584,13 +628,17 @@ where
     where
         S: SelectionStrategy<R> + Clone + Send + Sync,
     {
+        let window = BirthWindowConstraint::new(
+            (self.mode.birth_window_set && self.mode.distance_config.is_some())
+                .then_some(self.criteria.birth_date_window_days),
+        );
         match_standard(
             self.mode.anchors,
             self.mode.candidates,
             StandardMatchRequest {
                 criteria: &self.criteria,
                 strategy: self.strategy,
-                constraints: &self.constraints,
+                constraints: &(&self.constraints, window),
                 ratio_fallback: &self.mode.ratio_fallback,
                 distance_config: self.mode.distance_config.as_ref(),
             },
@@ -928,9 +976,8 @@ mod tests {
     fn with_constraints_binds_a_named_caliper_during_matching() {
         use crate::constraints::caliper_on_field;
 
-        // The rule: comparators whose parents were born within one year. The
-        // far control is the one the first production run kept -- the parental
-        // window was measured after matching and never imposed during it.
+        // The rule: comparators whose parents were born within one year, imposed
+        // during matching. The far control is outside it.
         let records = vec![
             child("case", Some(date(2012, 1, 1)), 1980.0, 1978.0),
             child("far", None, 1996.0, 1978.0),

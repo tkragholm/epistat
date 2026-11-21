@@ -27,6 +27,9 @@ impl Display for MahalanobisError {
             Self::InvalidInverseCovarianceLength => f.write_str(
                 "the inverse covariance matrix is not square in the number of covariates",
             ),
+            Self::NotPositiveSemiDefinite => f.write_str(
+                "the inverse covariance matrix is not positive semi-definite, so it gives no distance",
+            ),
         }
     }
 }

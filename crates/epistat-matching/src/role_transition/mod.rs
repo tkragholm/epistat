@@ -1,7 +1,8 @@
 mod algorithm;
 
 pub use algorithm::{
-    DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
+    DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
+    match_transition,
 };
 mod exposure_density;
 

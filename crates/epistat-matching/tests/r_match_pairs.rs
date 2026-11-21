@@ -361,7 +361,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         let distinct: HashSet<usize> = rows.iter().flatten().copied().collect();
         assert_eq!(
             outcome.used_controls,
-            if run.replace { 0 } else { distinct.len() },
+            distinct.len(),
             "{label}: used_controls"
         );
 

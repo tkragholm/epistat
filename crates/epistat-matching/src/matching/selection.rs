@@ -1,6 +1,6 @@
 use super::nearest::NearestSelection;
 use super::records::MatchingRecord;
-use epistat_rng::Stream;
+use epistat_rng::{Stream, replicate_seed};
 
 /// How anchors share the candidates when each takes more than one.
 ///
@@ -39,6 +39,22 @@ pub trait SelectionStrategy<R: MatchingRecord> {
     fn nearest(&self) -> Option<&NearestSelection> {
         None
     }
+
+    /// A copy of this strategy for the work unit numbered `index` (a stratum
+    /// group or an anchor), so that units matched in parallel do not repeat
+    /// each other's draws.
+    ///
+    /// A strategy with no random state returns a plain copy. A random one
+    /// starts a stream derived from its seed and `index`, which depends on
+    /// the position of the unit in the input and on nothing else, so the
+    /// result is the same on any number of threads.
+    #[must_use]
+    fn for_unit(&self, _index: usize) -> Self
+    where
+        Self: Sized + Clone,
+    {
+        self.clone()
+    }
 }
 
 /// Wraps a strategy so that anchors take their controls in rounds.
@@ -49,7 +65,7 @@ pub trait SelectionStrategy<R: MatchingRecord> {
 #[derive(Clone)]
 pub struct Rounds<S>(pub S);
 
-impl<R: MatchingRecord, S: SelectionStrategy<R>> SelectionStrategy<R> for Rounds<S> {
+impl<R: MatchingRecord, S: SelectionStrategy<R> + Clone> SelectionStrategy<R> for Rounds<S> {
     fn select_position(
         &mut self,
         case: &R,
@@ -61,6 +77,13 @@ impl<R: MatchingRecord, S: SelectionStrategy<R>> SelectionStrategy<R> for Rounds
 
     fn assignment(&self) -> Assignment {
         Assignment::Rounds
+    }
+
+    fn for_unit(&self, index: usize) -> Self
+    where
+        Self: Sized + Clone,
+    {
+        Self(SelectionStrategy::<R>::for_unit(&self.0, index))
     }
 }
 
@@ -99,6 +122,10 @@ impl<R: MatchingRecord> SelectionStrategy<R> for RandomSelection {
         } else {
             Some(self.rng.below(candidate_indices.len()))
         }
+    }
+
+    fn for_unit(&self, index: usize) -> Self {
+        Self::seeded(replicate_seed(self.seed, index as u64))
     }
 }
 
