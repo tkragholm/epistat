@@ -1,6 +1,7 @@
 use super::distance::DistanceMetric;
 use super::records::MatchingRecord;
 use crate::types::{ControlIdx, MatchingCriteria, UniqueValueId};
+use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
 use rustc_hash::FxHashSet;
 use std::collections::HashMap;
@@ -75,6 +76,55 @@ pub trait Constraint<R: MatchingRecord>: Send + Sync {
     fn allows_at_risk(&self, _case: &R, _control: &R) -> bool {
         true
     }
+
+    /// How risk-set matching under the default policy may read this
+    /// constraint without asking it of every control, or `None` when it has
+    /// to ask. Only constraints of this crate answer `Some`.
+    #[doc(hidden)]
+    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
+        None
+    }
+}
+
+/// A constraint whose verdict on a pair is a function of the control and the
+/// case's index date alone: it refuses the control on and after a date of the
+/// control's own.
+pub(crate) trait RefusesFromDate<R>: Sync {
+    /// The first index date on which the control is refused, if any.
+    fn refused_from(&self, control: &R) -> Option<NaiveDate>;
+}
+
+/// What a constraint decides, in a form that risk-set matching under the
+/// default policy can count with a sweep over the index dates. See
+/// [`Constraint::status_rule`].
+#[doc(hidden)]
+pub struct StatusRule<'a, R>(pub(crate) StatusRuleKind<'a, R>);
+
+pub(crate) enum StatusRuleKind<'a, R> {
+    /// Allows every pair.
+    AllowsAll,
+    /// Refuses a control, for `reason`, on every index date from the date
+    /// `source` gives for it, and allows it before. A control with no date is
+    /// never refused.
+    RefusesFrom {
+        reason: &'static str,
+        source: &'a dyn RefusesFromDate<R>,
+    },
+}
+
+/// Add the rule of `constraint` to `rules`, or answer `false` when it has none.
+fn push_status_rule<'s, R: MatchingRecord, C: Constraint<R> + ?Sized>(
+    constraint: &'s C,
+    rules: &mut Vec<StatusRule<'s, R>>,
+) -> bool {
+    match constraint.status_rule() {
+        None => false,
+        Some(StatusRule(StatusRuleKind::AllowsAll)) => true,
+        Some(rule) => {
+            rules.push(rule);
+            true
+        }
+    }
 }
 
 /// Statically-dispatched collection of constraints.
@@ -94,6 +144,15 @@ pub trait ConstraintGroup<R: MatchingRecord>: Send + Sync {
     fn allows_at_risk(&self, _case: &R, _control: &R) -> bool {
         true
     }
+
+    /// Add the rules of the group's constraints to `rules`, in the order the
+    /// group asks them, and answer `true`; or answer `false` when one of them
+    /// has no rule (see [`Constraint::status_rule`]). A group of your own
+    /// answers `false`.
+    #[doc(hidden)]
+    fn status_rules<'s>(&'s self, _rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        false
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for () {
@@ -104,6 +163,10 @@ impl<R: MatchingRecord> ConstraintGroup<R> for () {
         _ctx: &ConstraintContext<'_>,
     ) -> Option<&'static str> {
         None
+    }
+
+    fn status_rules<'s>(&'s self, _rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        true
     }
 }
 
@@ -120,11 +183,19 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> ConstraintGroup<R> for &
     fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         (**self).allows_at_risk(case, control)
     }
+
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        (**self).status_rules(rules)
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for [&dyn Constraint<R>] {
     fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         self.iter().all(|c| c.allows_at_risk(case, control))
+    }
+
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        self.iter().all(|c| push_status_rule(*c, rules))
     }
 
     fn first_blocking_reason(
@@ -145,6 +216,10 @@ where
 {
     fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         self.iter().all(|c| c.allows_at_risk(case, control))
+    }
+
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        self.iter().all(|c| push_status_rule(c, rules))
     }
 
     fn first_blocking_reason(
@@ -171,6 +246,10 @@ impl<R: MatchingRecord, C: Constraint<R> + ?Sized> Constraint<R> for Box<C> {
     fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         (**self).allows_at_risk(case, control)
     }
+
+    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
+        (**self).status_rule()
+    }
 }
 
 /// A homogeneous group whose length is decided at run time.
@@ -190,6 +269,10 @@ where
 {
     fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         self.iter().all(|c| c.allows_at_risk(case, control))
+    }
+
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        self.iter().all(|c| push_status_rule(c, rules))
     }
 
     fn first_blocking_reason(
@@ -229,6 +312,10 @@ where
         self.first.allows_at_risk(case, control) && self.second.allows_at_risk(case, control)
     }
 
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        self.first.status_rules(rules) && self.second.status_rules(rules)
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -248,6 +335,10 @@ where
 {
     fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         self.0.allows_at_risk(case, control) && self.1.allows_at_risk(case, control)
+    }
+
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        self.0.status_rules(rules) && push_status_rule(&self.1, rules)
     }
 
     fn first_blocking_reason(
@@ -273,6 +364,11 @@ macro_rules! impl_constraint_group_tuple {
             fn allows_at_risk(&self, case: &R, control: &R) -> bool {
                 let ($($value,)+) = self;
                 true $(&& $value.allows_at_risk(case, control))+
+            }
+
+            fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+                let ($($value,)+) = self;
+                true $(&& push_status_rule($value, rules))+
             }
 
             fn first_blocking_reason(
@@ -377,6 +473,12 @@ impl<R: MatchingRecord> Constraint<R> for BirthWindowConstraint {
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
         self.days
             .is_none_or(|days| (control.birth_date() - case.birth_date()).num_days().abs() <= days)
+    }
+
+    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
+        self.days
+            .is_none()
+            .then_some(StatusRule(StatusRuleKind::AllowsAll))
     }
 }
 

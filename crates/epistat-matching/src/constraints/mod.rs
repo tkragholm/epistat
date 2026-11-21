@@ -1,4 +1,7 @@
-use crate::matching::{Constraint, ConstraintContext, MatchingRecord, RoleIndexedRecord};
+use crate::matching::{
+    Constraint, ConstraintContext, MatchingRecord, RefusesFromDate, RoleIndexedRecord, StatusRule,
+    StatusRuleKind,
+};
 use chrono::NaiveDate;
 use std::marker::PhantomData;
 
@@ -351,11 +354,28 @@ where
         let Some(index_date) = case.event_date() else {
             return true;
         };
-        let death_date = match self {
+        self.refused_from(control)
+            .is_none_or(|death_date| death_date > index_date)
+    }
+
+    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
+        Some(StatusRule(StatusRuleKind::RefusesFrom {
+            reason: Constraint::<R>::reason(self),
+            source: self,
+        }))
+    }
+}
+
+/// A control is refused from its death date on.
+impl<R: RoleIndexedRecord, F> RefusesFromDate<R> for MustBeAlive<F>
+where
+    F: Fn(&R) -> Option<NaiveDate> + Send + Sync,
+{
+    fn refused_from(&self, control: &R) -> Option<NaiveDate> {
+        match self {
             Self::Selector(selector) => selector(control),
             Self::RecordMethod => control.death_date(),
-        };
-        death_date.is_none_or(|d| d > index_date)
+        }
     }
 }
 

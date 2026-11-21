@@ -42,11 +42,15 @@ impl<'a> StrataValues<'a> {
 /// Strata values are interned to small integers when the index is built, so a
 /// stratum is identified by a short integer key and a lookup hashes integers
 /// rather than strings.
+///
+/// Each stratum is numbered in the order its first control appears, and its
+/// entries are `(birth day, control index)` in ascending order. Without
+/// required strata every control is in stratum 0.
 pub struct CandidateIndex<'a> {
     required_strata: &'a [String],
-    global: Vec<(i32, usize)>,
+    strata: Vec<Vec<(i32, usize)>>,
     symbols: FxHashMap<&'a str, u32>,
-    by_strata: FxHashMap<Vec<u32>, Vec<(i32, usize)>>,
+    by_strata: FxHashMap<Vec<u32>, usize>,
 }
 
 impl<'a> CandidateIndex<'a> {
@@ -65,20 +69,19 @@ impl<'a> CandidateIndex<'a> {
     ) -> Self {
         let mut index = Self {
             required_strata,
-            global: Vec::new(),
+            strata: Vec::new(),
             symbols: FxHashMap::default(),
             by_strata: FxHashMap::default(),
         };
 
         if required_strata.is_empty() {
-            index.global = controls
+            let mut global: Vec<(i32, usize)> = controls
                 .iter()
                 .enumerate()
                 .map(|(idx, control)| (control.birth_date().num_days_from_ce(), idx))
                 .collect();
-            index
-                .global
-                .sort_unstable_by_key(|entry| (entry.0, entry.1));
+            global.sort_unstable_by_key(|entry| (entry.0, entry.1));
+            index.strata.push(global);
             return index;
         }
 
@@ -95,13 +98,14 @@ impl<'a> CandidateIndex<'a> {
                 };
             }
             let entry = (control.birth_date().num_days_from_ce(), idx);
-            if let Some(entries) = index.by_strata.get_mut(key.as_slice()) {
-                entries.push(entry);
+            if let Some(&stratum) = index.by_strata.get(key.as_slice()) {
+                index.strata[stratum].push(entry);
             } else {
-                index.by_strata.insert(key.clone(), vec![entry]);
+                index.by_strata.insert(key.clone(), index.strata.len());
+                index.strata.push(vec![entry]);
             }
         }
-        for entries in index.by_strata.values_mut() {
+        for entries in &mut index.strata {
             entries.sort_unstable_by_key(|entry| (entry.0, entry.1));
         }
 
@@ -115,34 +119,54 @@ impl<'a> CandidateIndex<'a> {
         window_days: i64,
         case_strata_values: Option<&[Option<&str>]>,
     ) -> Vec<usize> {
-        let center = birth_date.num_days_from_ce();
-        let Some(window) = i32::try_from(window_days).ok() else {
+        let Some(stratum) = self.stratum_of(case_strata_values) else {
             return Vec::new();
         };
-        let lower = center.saturating_sub(window);
-        let upper = center.saturating_add(window);
-
-        let entries = if self.required_strata.is_empty() {
-            &self.global
-        } else {
-            let Some(values) = case_strata_values else {
-                return Vec::new();
-            };
-            let Some(entries) = self.stratum(values) else {
-                return Vec::new();
-            };
-            entries
+        let Some(window) = self.window(stratum, birth_date, window_days) else {
+            return Vec::new();
         };
-
-        let start = lower_bound(entries, lower);
-        let end = upper_bound(entries, upper);
-        entries[start..end].iter().map(|entry| entry.1).collect()
+        self.strata[stratum][window]
+            .iter()
+            .map(|entry| entry.1)
+            .collect()
     }
 
-    /// The entries of the stratum with these values, if any control belongs to it.
+    /// The strata, numbered as [`Self::stratum_of`] numbers them.
+    pub(crate) fn strata(&self) -> &[Vec<(i32, usize)>] {
+        &self.strata
+    }
+
+    /// The number of the stratum a case with these values is matched in, if
+    /// any control belongs to it. Without required strata it is stratum 0,
+    /// when there are controls.
+    pub(crate) fn stratum_of(&self, case_strata_values: Option<&[Option<&str>]>) -> Option<usize> {
+        if self.required_strata.is_empty() {
+            return (!self.strata.is_empty()).then_some(0);
+        }
+        self.stratum(case_strata_values?)
+    }
+
+    /// The positions in `stratum` of the controls born within `window_days`
+    /// days of `birth_date`, both ends included, or `None` for a window that
+    /// does not fit a day count.
+    pub(crate) fn window(
+        &self,
+        stratum: usize,
+        birth_date: NaiveDate,
+        window_days: i64,
+    ) -> Option<std::ops::Range<usize>> {
+        let center = birth_date.num_days_from_ce();
+        let window = i32::try_from(window_days).ok()?;
+        let lower = center.saturating_sub(window);
+        let upper = center.saturating_add(window);
+        let entries = &self.strata[stratum];
+        Some(lower_bound(entries, lower)..upper_bound(entries, upper))
+    }
+
+    /// The stratum with these values, if any control belongs to it.
     ///
     /// A value no control carries names no stratum, so it is not looked up.
-    fn stratum(&self, values: &[Option<&str>]) -> Option<&Vec<(i32, usize)>> {
+    fn stratum(&self, values: &[Option<&str>]) -> Option<usize> {
         let mut inline = [ABSENT; INLINE_KEYS];
         let mut spill = Vec::new();
         let key: &mut [u32] = if values.len() <= INLINE_KEYS {
@@ -157,7 +181,7 @@ impl<'a> CandidateIndex<'a> {
                 Some(text) => *self.symbols.get(text)?,
             };
         }
-        self.by_strata.get(&*key)
+        self.by_strata.get(&*key).copied()
     }
 }
 

@@ -1,13 +1,15 @@
+use super::sweep::{RiskSetSweep, SwapRemovePool};
 use crate::matching::{
-    CandidatePoolRequest, ConstraintGroup, DateDistance, DistanceChannel, DistanceConfig,
-    DistanceMetric, MatchEngine, RoleIndexedRecord, SelectionStrategy, UsedControlsVec,
-    build_outcome, finalize_estimand_diagnostics, intern_unique, invalid_cohort_outcome,
+    CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
+    DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
+    SelectionStrategy, UsedControlsVec, build_outcome, build_strata_values,
+    finalize_estimand_diagnostics, intern_unique, invalid_cohort_outcome,
     invalid_common_support_outcome, invalid_criteria_outcome, ratio::RatioPolicy, unique_value,
 };
 use crate::types::{
-    CommonSupport, CommonSupportFailureReason, ExclusionReason, InvalidCriteriaReason,
-    MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair, MatchingCriteria,
-    RoleTransitionOptions, UniqueValueId,
+    CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, ExclusionReason,
+    InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
+    MatchingCriteria, RoleTransitionOptions, UniqueValueId,
 };
 use chrono::{Datelike, NaiveDate};
 use epistat_register::{AgeRule, LeapBirthday, age_in_years};
@@ -41,7 +43,9 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
 
     /// `Some` when [`Self::is_control_at_risk`] is the default rule, which
     /// reads only the entry and event dates of the control. Common-support
-    /// trimming then finds the scores at risk on each case date in one sweep.
+    /// trimming then finds the scores at risk on each case date in one sweep,
+    /// and so does the matching where the job allows it (see
+    /// [`match_transition`]).
     ///
     /// [`DefaultAtRiskRule`] can only be made inside this crate, so only
     /// [`DefaultRiskSetPolicy`] answers `Some` and a policy of your own cannot
@@ -125,6 +129,15 @@ impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
 /// risk-set rule and the alive and resident checks) is not matched, and a
 /// candidate whose score is outside the range of the cases' scores is not
 /// used. See [`CommonSupport`].
+///
+/// Cases are matched in order of event date. Under [`DefaultRiskSetPolicy`],
+/// with the birth date as the distance (no distance configuration), a seeded
+/// [`RandomSelection`](crate::RandomSelection), no unique key and no
+/// constraints other than alive checks, the risk sets are kept by a sweep over
+/// the case dates rather than scanned for each case, in time close to linear
+/// in the cohort. Any other job scans the candidates of each case's stratum
+/// and birth window, in time proportional to the cases times the candidates
+/// per case. Both give the same pairs and diagnostics.
 #[must_use]
 pub fn match_transition<
     R: RoleIndexedRecord,
@@ -632,6 +645,10 @@ fn run_transition_case_loop<
     engine: &mut MatchEngine<'_, R, S>,
     state: &mut TransitionRunState,
 ) {
+    if let Some(mut sweep) = risk_set_sweep(loop_config, engine) {
+        run_swept_case_loop(loop_config, engine, state, &mut sweep);
+        return;
+    }
     for case_idx in loop_config.case_indices {
         if loop_config
             .common_support_filters
@@ -709,6 +726,171 @@ fn run_transition_case_loop<
                     });
                 }
             }
+        }
+
+        if local_matches > 0 {
+            state.matched_cases += 1;
+        }
+    }
+}
+
+/// The sweep of [`super::sweep`], when it gives what the scan of every
+/// candidate gives: the default at-risk rule, the birth-date index with the
+/// date distance (whose caliper is the birth window, so it refuses nobody the
+/// index returns), no unique key, no common-support trimming, a seeded random
+/// draw, and constraints that each allow every pair or refuse a control from
+/// a date of its own on. Every other job scans.
+fn risk_set_sweep<
+    R: RoleIndexedRecord,
+    S: SelectionStrategy<R> + Clone + Send + Sync,
+    D: DistanceMetric<R> + Sync,
+    G: ConstraintGroup<R> + ?Sized,
+    P: RiskSetPolicy<R> + ?Sized,
+>(
+    loop_config: &TransitionLoopConfig<'_, R, D, G, P>,
+    engine: &mut MatchEngine<'_, R, S>,
+) -> Option<RiskSetSweep> {
+    let config = loop_config.config;
+    let filters = loop_config.common_support_filters;
+    if config.risk_set_policy.default_at_risk_rule().is_none()
+        || !config.use_birth_date_index
+        || loop_config.validated.unique_by_key.is_some()
+        || !filters.trimmed_case_indices.is_empty()
+        || !filters.trimmed_candidate_indices.is_empty()
+        || engine.selector.as_random().is_none()
+    {
+        return None;
+    }
+    let mut rules = Vec::new();
+    if !config.extra_constraints.status_rules(&mut rules) {
+        return None;
+    }
+    RiskSetSweep::new(loop_config.cohort, &engine.candidate_index, &rules)
+}
+
+/// The case loop of [`run_transition_case_loop`] with the risk sets of a
+/// sweep. The counts, the pool length and the draws are those of the scan:
+/// the pool a scan builds is the eligible controls of the case's stratum and
+/// window in id order, and the control at a drawn position is the eligible
+/// control of that rank.
+fn run_swept_case_loop<
+    R: RoleIndexedRecord,
+    S: SelectionStrategy<R> + Clone + Send + Sync,
+    D: DistanceMetric<R> + Sync,
+    G: ConstraintGroup<R> + ?Sized,
+    P: RiskSetPolicy<R> + ?Sized,
+>(
+    loop_config: &TransitionLoopConfig<'_, R, D, G, P>,
+    engine: &mut MatchEngine<'_, R, S>,
+    state: &mut TransitionRunState,
+    sweep: &mut RiskSetSweep,
+) {
+    #[cfg(test)]
+    super::sweep::SWEPT_RUNS.with(|runs| runs.set(runs.get() + 1));
+    let validated = loop_config.validated;
+    let cohort = loop_config.cohort;
+    let window_days = validated
+        .typed_birth_date_window()
+        .map_or(0_i64, |days| i64::from(days.get()));
+    let required = &validated.required_strata;
+    let drawn_reason = Constraint::<R>::reason(&ReplacementConstraint);
+    let mut drawn_now: Vec<usize> = Vec::new();
+    for case_idx in loop_config.case_indices {
+        if loop_config
+            .common_support_filters
+            .trimmed_case_indices
+            .contains(case_idx)
+        {
+            continue;
+        }
+        state.eligible_cases += 1;
+
+        let case = &cohort[*case_idx];
+        let Some(case_event_date) = case.event_date() else {
+            continue;
+        };
+        sweep.advance(case_event_date);
+
+        let case_strata_values =
+            (!required.is_empty()).then(|| build_strata_values(case.strata(), required));
+        let place = engine
+            .candidate_index
+            .stratum_of(case_strata_values.as_deref())
+            .and_then(|stratum| {
+                engine
+                    .candidate_index
+                    .window(stratum, case.birth_date(), window_days)
+                    .map(|window| (stratum, window))
+            });
+        let counts = place
+            .as_ref()
+            .map(|(stratum, window)| sweep.counts(*stratum, window.clone()))
+            .unwrap_or_default();
+
+        let exclusions = &mut state.diagnostics.exclusion_counts;
+        if counts.not_at_risk > 0 {
+            *exclusions
+                .entry(ExclusionReason::AdditionalFilter)
+                .or_insert(0) += counts.not_at_risk;
+        }
+        for (reason, count) in std::iter::once((drawn_reason, counts.drawn)).chain(counts.refused) {
+            if count > 0 {
+                *exclusions
+                    .entry(ExclusionReason::Constraint(
+                        ConstraintReason::from_reason_str(reason),
+                    ))
+                    .or_insert(0) += count;
+            }
+        }
+
+        let eligible = counts.eligible;
+        if eligible == 0 {
+            state.diagnostics.anchors_with_no_candidates += 1;
+            continue;
+        }
+        let Some((stratum, window)) = place else {
+            continue;
+        };
+
+        let Some(target_ratio) = loop_config.ratio_policy.target_ratio(eligible) else {
+            state.diagnostics.anchors_below_required_ratio += 1;
+            continue;
+        };
+        if loop_config.ratio_policy.is_shortfall(eligible) {
+            state.diagnostics.anchors_below_required_ratio += 1;
+        }
+        if loop_config.ratio_policy.is_lower_tier(eligible) {
+            state.diagnostics.anchors_on_lower_tier += 1;
+        }
+
+        let mut pool = SwapRemovePool::new(eligible);
+        let mut local_matches = 0usize;
+        drawn_now.clear();
+        for _ in 0..target_ratio {
+            let Some(position) = engine
+                .selector
+                .as_random()
+                .and_then(|random| random.draw(pool.len()))
+            else {
+                break;
+            };
+            let rank = pool.swap_remove(position);
+            let selected_idx = sweep.nth_eligible(stratum, window.clone(), rank);
+            let control = &cohort[selected_idx];
+            state.pairs.push(MatchedPair::new(case.id(), control.id()));
+            local_matches += 1;
+
+            if !validated.allow_replacement {
+                state.used_controls.insert(ControlIdx::new(selected_idx));
+                drawn_now.push(selected_idx);
+            }
+            if let Some(value) = unique_value(control, validated) {
+                let id = intern_unique(&mut state.unique_interner, value);
+                state.used_unique.insert(id);
+            }
+        }
+        for &idx in &drawn_now {
+            sweep.mark_drawn(idx);
         }
 
         if local_matches > 0 {
