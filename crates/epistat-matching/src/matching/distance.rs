@@ -5,6 +5,7 @@ use ordered_float::OrderedFloat;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::{Arc, OnceLock};
 
 /// Distance metric used to compare an anchor and a candidate.
 ///
@@ -40,6 +41,158 @@ impl<R: MatchingRecord, D: DistanceMetric<R>> Clone for DistanceChannel<'_, R, D
     }
 }
 
+/// One score for each unit, held by the unit's position.
+///
+/// The units are listed once, in the order the scores were made in: for a
+/// propensity score, the anchors and then the candidates. A matcher that is
+/// given the same units in the same order reads the scores by position and
+/// never looks an id up. A matcher given other units, or the same ones in
+/// another order, finds each id once. Ids and scores are shared between
+/// clones.
+#[derive(Debug, Clone)]
+pub struct ScoreTable {
+    ids: Arc<[String]>,
+    values: Arc<[f64]>,
+    index: Arc<OnceLock<RapidHashMap<String, usize>>>,
+}
+
+impl ScoreTable {
+    /// The scores `values` of the units `ids`, aligned by position.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the two have different lengths.
+    #[must_use]
+    pub fn new(ids: Arc<[String]>, values: Arc<[f64]>) -> Self {
+        assert_eq!(ids.len(), values.len(), "one score for each id");
+        Self {
+            ids,
+            values,
+            index: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// As [`Self::new`], sharing the lookup of ids that `index` holds.
+    pub(crate) fn with_shared_index(
+        ids: Arc<[String]>,
+        values: Arc<[f64]>,
+        index: Arc<OnceLock<RapidHashMap<String, usize>>>,
+    ) -> Self {
+        Self { ids, values, index }
+    }
+
+    /// The scores of a map keyed by unit id, in the order of the map.
+    #[must_use]
+    pub fn from_map(scores: &RapidHashMap<String, f64>) -> Self {
+        let mut ids = Vec::with_capacity(scores.len());
+        let mut values = Vec::with_capacity(scores.len());
+        for (id, score) in scores {
+            ids.push(id.clone());
+            values.push(*score);
+        }
+        Self::new(ids.into(), values.into())
+    }
+
+    /// The scores as a map keyed by unit id.
+    #[must_use]
+    pub fn to_map(&self) -> RapidHashMap<String, f64> {
+        self.ids
+            .iter()
+            .cloned()
+            .zip(self.values.iter().copied())
+            .collect()
+    }
+
+    /// The unit ids, in order.
+    #[must_use]
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// The scores, in the order of [`Self::ids`].
+    #[must_use]
+    pub fn values(&self) -> &[f64] {
+        &self.values
+    }
+
+    /// The number of units.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether there are no units.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    fn index(&self) -> &RapidHashMap<String, usize> {
+        self.index.get_or_init(|| {
+            self.ids
+                .iter()
+                .enumerate()
+                .map(|(position, id)| (id.clone(), position))
+                .collect()
+        })
+    }
+
+    /// The position of the unit `id`, `None` when it has no score. The
+    /// first call builds a lookup of every id.
+    #[must_use]
+    pub fn position(&self, id: &str) -> Option<usize> {
+        self.index().get(id).copied()
+    }
+
+    /// The score of the unit `id`, `None` when it has none. The first call
+    /// builds a lookup of every id.
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<&f64> {
+        self.position(id).map(|position| &self.values[position])
+    }
+
+    /// The scores of `units`, by their position in the slice. A unit without
+    /// a score, or whose score is not finite, has `NaN`.
+    ///
+    /// The scores are borrowed when `units` are exactly the units of the
+    /// table, in order, and looked up by id otherwise.
+    pub(crate) fn of_units<R: MatchingRecord>(
+        &self,
+        first: &[R],
+        second: &[R],
+    ) -> (std::borrow::Cow<'_, [f64]>, std::borrow::Cow<'_, [f64]>) {
+        let split = first.len();
+        let aligned = self.len() == first.len() + second.len()
+            && first
+                .iter()
+                .chain(second)
+                .zip(self.ids.iter())
+                .all(|(record, id)| record.id() == id.as_str());
+        if aligned {
+            return (
+                std::borrow::Cow::Borrowed(&self.values[..split]),
+                std::borrow::Cow::Borrowed(&self.values[split..]),
+            );
+        }
+        let read = |units: &[R]| {
+            units
+                .iter()
+                .map(|record| self.get(record.id()).copied().unwrap_or(f64::NAN))
+                .collect::<Vec<f64>>()
+        };
+        (
+            std::borrow::Cow::Owned(read(first)),
+            std::borrow::Cow::Owned(read(second)),
+        )
+    }
+}
+
+impl From<RapidHashMap<String, f64>> for ScoreTable {
+    fn from(scores: RapidHashMap<String, f64>) -> Self {
+        Self::from_map(&scores)
+    }
+}
+
 /// Named and reusable distance setup independent of concrete record type.
 #[derive(Debug, Clone)]
 pub enum DistanceConfig {
@@ -48,7 +201,7 @@ pub enum DistanceConfig {
         reason: &'static str,
     },
     PropensityScoreMap {
-        scores: RapidHashMap<String, f64>,
+        scores: ScoreTable,
         caliper: Option<DistanceCaliper>,
         reason: &'static str,
     },
@@ -84,8 +237,18 @@ impl DistanceConfig {
     }
 
     #[must_use]
-    pub const fn propensity_score_map(
+    pub fn propensity_score_map(
         scores: RapidHashMap<String, f64>,
+        caliper: Option<DistanceCaliper>,
+    ) -> Self {
+        Self::propensity_score_table(ScoreTable::from(scores), caliper)
+    }
+
+    /// A score distance on the scores of `scores`, which a matcher reads by
+    /// position when it is given the units in the order of the table.
+    #[must_use]
+    pub const fn propensity_score_table(
+        scores: ScoreTable,
         caliper: Option<DistanceCaliper>,
     ) -> Self {
         Self::PropensityScoreMap {
@@ -257,7 +420,7 @@ impl DistanceConfig {
 
     /// The scores common-support trimming needs, which only a propensity
     /// configuration has.
-    pub(crate) const fn propensity_scores(&self) -> Option<&RapidHashMap<String, f64>> {
+    pub(crate) const fn propensity_scores(&self) -> Option<&ScoreTable> {
         match self {
             Self::PropensityScoreMap { scores, .. } => Some(scores),
             Self::Date { .. }
@@ -277,7 +440,7 @@ pub(crate) enum ScalarLookup<'a> {
     /// The birth date as a day number.
     BirthDate,
     /// A score per record id.
-    Scores(&'a RapidHashMap<String, f64>),
+    Scores(&'a ScoreTable),
 }
 
 impl ScalarLookup<'_> {
@@ -290,6 +453,33 @@ impl ScalarLookup<'_> {
                 .get(record.id())
                 .copied()
                 .filter(|score| score.is_finite()),
+        }
+    }
+}
+
+impl<'a> ScalarLookup<'a> {
+    /// The numbers of two slices of records, by position in each. A record
+    /// without a number, or with one that is not finite, has `NaN`.
+    pub(crate) fn of_units<R: MatchingRecord>(
+        self,
+        first: &[R],
+        second: &[R],
+    ) -> (std::borrow::Cow<'a, [f64]>, std::borrow::Cow<'a, [f64]>) {
+        use chrono::Datelike;
+        match self {
+            Self::BirthDate => {
+                let days = |units: &[R]| {
+                    units
+                        .iter()
+                        .map(|record| f64::from(record.birth_date().num_days_from_ce()))
+                        .collect::<Vec<f64>>()
+                };
+                (
+                    std::borrow::Cow::Owned(days(first)),
+                    std::borrow::Cow::Owned(days(second)),
+                )
+            }
+            Self::Scores(scores) => scores.of_units(first, second),
         }
     }
 }
@@ -557,13 +747,13 @@ impl<R: MatchingRecord> DistanceMetric<R> for MatrixDistance<'_> {
 /// Propensity score distance keyed by [`MatchingRecord::id`].
 #[derive(Debug, Clone)]
 pub struct IdMapPropensityScoreDistance<'a> {
-    scores: &'a RapidHashMap<String, f64>,
+    scores: &'a ScoreTable,
     index: Option<BTreeMap<OrderedFloat<f64>, Vec<usize>>>,
 }
 
 impl<'a> IdMapPropensityScoreDistance<'a> {
     #[must_use]
-    pub const fn new(scores: &'a RapidHashMap<String, f64>) -> Self {
+    pub const fn new(scores: &'a ScoreTable) -> Self {
         Self {
             scores,
             index: None,
@@ -603,7 +793,7 @@ impl<'a> IdMapPropensityScoreDistance<'a> {
     }
 
     #[must_use]
-    pub const fn scores(&self) -> &'a RapidHashMap<String, f64> {
+    pub const fn scores(&self) -> &'a ScoreTable {
         self.scores
     }
 }

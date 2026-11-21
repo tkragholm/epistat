@@ -28,7 +28,7 @@ use crate::matching::{
     MissingValuePolicy, NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest,
     PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
     PropensityScoreEstimate, PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions,
-    QuickMatchOutcome, RandomSelection, Retain, RoleIndexedRecord, Rounds, SeedMethod,
+    QuickMatchOutcome, RandomSelection, Retain, RoleIndexedRecord, Rounds, ScoreTable, SeedMethod,
     SelectionStrategy, SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
     VariableRatio, apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower,
     estimate_propensity_and_match, exact_match_subclasses, match_fine_balance, match_full,
@@ -2017,7 +2017,7 @@ fn run_quick<R: MatchingRecord>(
 }
 
 /// The scores of a distance for subclassification.
-fn scores_of(config: &DistanceConfig) -> Option<&RapidHashMap<String, f64>> {
+fn scores_of(config: &DistanceConfig) -> Option<&ScoreTable> {
     match config {
         DistanceConfig::PropensityScoreMap { scores, .. } => Some(scores),
         DistanceConfig::Date { .. }
@@ -2059,7 +2059,7 @@ fn field_calipers<R: MatchingRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-    scores: Option<&RapidHashMap<String, f64>>,
+    scores: Option<&ScoreTable>,
 ) -> Result<Vec<(String, f64)>, SpecError> {
     let kept = match (spec.discard, scores) {
         (Some(policy), Some(scores)) => {
@@ -2103,7 +2103,7 @@ fn units_after_trimming<'a, R: MatchingRecord>(
     anchors: &'a [R],
     candidates: &'a [R],
     policy: CommonSupport,
-    scores: &RapidHashMap<String, f64>,
+    scores: &ScoreTable,
 ) -> (Vec<&'a R>, Vec<&'a R>) {
     let Ok(trimmed) = crate::matching::standard_common_support(anchors, candidates, policy, scores)
     else {
@@ -2324,7 +2324,7 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             let outcome = subclassify_by_propensity_score_map(
                 anchors,
                 candidates,
-                scores,
+                &scores.to_map(),
                 spec.estimand,
                 &config,
             )

@@ -3,7 +3,7 @@ use super::constraints::{
     NoSelfMatchConstraint, ReplacementConstraint, UniqueKeyConstraint, UsedControlsVec,
     build_strata_values, unique_value,
 };
-use super::distance::{DateDistance, DistanceChannel, DistanceConfig, DistanceMetric};
+use super::distance::{DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, ScoreTable};
 use super::index::{CandidateIndex, StrataValues};
 use super::ratio::RatioPolicy;
 use super::records::MatchingRecord;
@@ -1115,10 +1115,7 @@ impl StandardCommonSupport {
 
 /// The smallest and largest finite score among `rows`, or `None` when no row
 /// has one.
-fn finite_score_bounds<R: MatchingRecord>(
-    rows: &[R],
-    scores: &RapidHashMap<String, f64>,
-) -> Option<(f64, f64)> {
+fn finite_score_bounds<R: MatchingRecord>(rows: &[R], scores: &ScoreTable) -> Option<(f64, f64)> {
     rows.iter()
         .filter_map(|row| scores.get(row.id()).copied())
         .filter(|score| score.is_finite())
@@ -1142,7 +1139,7 @@ pub(crate) fn standard_common_support<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     policy: CommonSupport,
-    scores: &RapidHashMap<String, f64>,
+    scores: &ScoreTable,
 ) -> Result<StandardCommonSupport, CommonSupportFailureReason> {
     let anchor_bounds =
         finite_score_bounds(anchors, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;

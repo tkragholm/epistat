@@ -224,7 +224,7 @@ fn compare(
         if skip[idx] {
             continue;
         }
-        let got = ours.estimate.distance_scores[&id(idx)];
+        let got = ours.estimate.distance_score(&id(idx)).unwrap();
         let deviation = (got - want).abs();
         worst = worst.max(deviation);
         assert!(
@@ -476,9 +476,12 @@ fn output_scales_are_one_fit() {
             discard: None,
         },
     );
-    for (id, eta) in &ours.estimate.linear_predictor {
-        let p = ours.estimate.probabilities[id];
+    for (position, eta) in ours.estimate.linear_predictor.iter().enumerate() {
+        let p = ours.estimate.probabilities[position];
         assert!((p - 1.0 / (1.0 + (-eta).exp())).abs() < 1e-12);
-        assert_eq!(ours.estimate.distance_scores[id].to_bits(), eta.to_bits());
+        assert_eq!(
+            ours.estimate.distance_scores[position].to_bits(),
+            eta.to_bits()
+        );
     }
 }

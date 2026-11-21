@@ -658,7 +658,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let by_hand = subclassify_by_propensity_score_map(
         &anchors,
         &candidates,
-        &prepared.estimate.distance_scores,
+        &prepared.estimate.score_table().to_map(),
         Estimand::Att,
         &SubclassificationConfig {
             subclasses: 5,
@@ -724,9 +724,8 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
         |row: &BalanceRecord| {
             prepared
                 .estimate
-                .distance_scores
-                .get(row.id())
-                .map(std::slice::from_ref)
+                .position(row.id())
+                .map(|position| std::slice::from_ref(&prepared.estimate.distance_scores[position]))
         },
         1,
         &[],
@@ -1686,8 +1685,9 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
             let propensity = propensity.expect("the refitted model is reported");
             let by_id = |estimate: &PropensityScoreEstimate| {
                 estimate
-                    .probabilities
+                    .ids
                     .iter()
+                    .zip(&estimate.probabilities)
                     .map(|(id, value)| (id.clone(), value.to_bits()))
                     .collect::<BTreeMap<_, _>>()
             };
@@ -2353,7 +2353,7 @@ fn spec_genetic_equals_the_direct_search() {
         .collect();
     let score: Vec<f64> = ids
         .iter()
-        .map(|id| prepared.estimate.distance_scores[*id])
+        .map(|id| prepared.estimate.distance_score(id).unwrap())
         .collect();
     let age = numeric_column(&anchors, &candidates, "age");
     let income = numeric_column(&anchors, &candidates, "income");
