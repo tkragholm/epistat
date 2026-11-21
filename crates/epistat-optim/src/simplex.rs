@@ -27,12 +27,14 @@
 //! d_j = c_j - a_j'y
 //! ```
 //!
-//! and the basis is optimal when no `d_j` exceeds `1e-9`.
+//! and the basis is optimal when no `d_j` exceeds `1e-9` times the largest `|c_j|`
+//! (`1e-9` in phase one, whose costs are 0 and -1).
 //!
 //! Phase one. Row `i` gets an artificial column `±e_i`, with the sign of `g_i`,
 //! so the all-artificial basis has `x_B = |g|`. Phase one maximises minus the sum
 //! of the artificials, with cost 0 on the original columns and -1 on the
-//! artificial ones. If the optimum leaves artificials with a total above `1e-8`,
+//! artificial ones. If the optimum leaves artificials with a total above `1e-8`
+//! times the largest `|g_i|`,
 //! the problem is [`LpError::Infeasible`]. Otherwise the basis is feasible for
 //! every `c`. [`DenseSimplex::prepare`] runs phase one alone, so a solver can be
 //! cloned after it and each clone solve for its own `c`.
@@ -40,11 +42,12 @@
 //! Each pivot, in either phase, does the following.
 //!
 //! 1. Pricing. Only original columns may enter. Dantzig's rule \[1\] takes the
-//!    column with the largest `d_j` above `1e-9`. If none has one, the basis is
+//!    column with the largest `d_j` above its tolerance. If none has one, the basis is
 //!    optimal and the solve ends.
 //! 2. Ratio test. With `α = B^{-1} a_q` for the entering column `q`, the leaving
 //!    row is the one with `α_i > 1e-10` that minimises `x_{B,i} / α_i`. Ratios
-//!    within `1e-12` of each other are ties, and the row whose basic column has the
+//!    within a step tolerance of `1e-12` times the largest `|g_i|` over the largest
+//!    `|A_ij|` of each other are ties, and the row whose basic column has the
 //!    lowest index wins. If no row has `α_i > 1e-10`, the problem is
 //!    [`LpError::Unbounded`]. A basic artificial in phase two sits at zero, and it
 //!    leaves at step 0 as soon as the entering column has `|α_i| > 1e-10` in its
@@ -61,10 +64,10 @@
 //!
 //! # Degeneracy
 //!
-//! A pivot with step length at most `1e-12` is degenerate. Dantzig's rule can
+//! A pivot with step length at most the step tolerance is degenerate. Dantzig's rule can
 //! cycle through degenerate bases \[3\]. After 25 degenerate pivots in a row,
 //! pricing switches to Bland's rule \[2\] for the rest of that phase: the entering
-//! column is the one of lowest index with `d_j > 1e-9`. Together with the
+//! column is the one of lowest index with `d_j` above its tolerance. Together with the
 //! tie-break of the ratio test, this cannot cycle. A pivot with a longer step
 //! resets the count, but not the switch.
 //!
@@ -108,6 +111,11 @@
 
 use std::fmt;
 
+/// Relative tolerances. Each is multiplied by the size of the quantity it
+/// judges: the largest cost for a reduced cost, the largest right-hand side
+/// for the artificials of phase one, and the largest right-hand side over the
+/// largest matrix entry for a step length. The pivot tolerance judges a ratio
+/// of matrix entries and has no unit.
 const TOL_REDUCED_COST: f64 = 1e-9;
 const TOL_PIVOT: f64 = 1e-10;
 const TOL_DEGENERATE: f64 = 1e-12;
@@ -200,6 +208,17 @@ pub struct DenseSimplex {
     memory_next: usize,
     key_scratch: Vec<usize>,
     duals_current: bool,
+    /// The largest `|g|`, and the largest `|A|`, each 1 when all are zero.
+    g_scale: f64,
+    a_scale: f64,
+    /// The largest `|c|` of the cost vector set last, 1 when all are zero.
+    cost_scale: f64,
+}
+
+/// The largest absolute value, or 1 when every value is zero.
+fn scale_of(values: &[f64]) -> f64 {
+    let largest = values.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
+    if largest > 0.0 { largest } else { 1.0 }
 }
 
 impl DenseSimplex {
@@ -238,7 +257,31 @@ impl DenseSimplex {
             memory_next: 0,
             key_scratch: vec![0; m],
             duals_current: false,
+            g_scale: 1.0,
+            a_scale: 1.0,
+            cost_scale: 1.0,
         }
+        .scaled()
+    }
+
+    fn scaled(mut self) -> Self {
+        self.g_scale = scale_of(&self.g);
+        self.a_scale = scale_of(&self.a);
+        self
+    }
+
+    /// The tolerance on a reduced cost in `phase`. Phase one has costs of 0 and
+    /// -1.
+    fn tol_reduced_cost(&self, phase: Phase) -> f64 {
+        match phase {
+            Phase::One => TOL_REDUCED_COST,
+            Phase::Two => TOL_REDUCED_COST * self.cost_scale,
+        }
+    }
+
+    /// The tolerance on a step length, in the units of `λ`.
+    fn tol_degenerate(&self) -> f64 {
+        TOL_DEGENERATE * self.g_scale / self.a_scale
     }
 
     /// Remember up to `cap` optimal bases across solves, and start each solve
@@ -262,6 +305,7 @@ impl DenseSimplex {
     pub fn set_cost(&mut self, cost: &[f64]) {
         debug_assert_eq!(cost.len(), self.n);
         self.cost.copy_from_slice(cost);
+        self.cost_scale = scale_of(cost);
     }
 
     /// `c'λ` at the last optimum.
@@ -395,6 +439,7 @@ impl DenseSimplex {
             }
         }
         let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+        let tol = TOL_REDUCED_COST * scale_of(c0);
         for j in 0..self.n {
             if self.is_basic[j] {
                 continue;
@@ -403,9 +448,9 @@ impl DenseSimplex {
             let d1 = c1[j] - dot(self.column(j), y1);
             // d0 + t d1 <= TOL
             if d1 > 0.0 {
-                hi = hi.min((TOL_REDUCED_COST - d0) / d1);
+                hi = hi.min((tol - d0) / d1);
             } else if d1 < 0.0 {
-                lo = lo.max((TOL_REDUCED_COST - d0) / d1);
+                lo = lo.max((tol - d0) / d1);
             }
         }
         (lo, hi)
@@ -498,7 +543,7 @@ impl DenseSimplex {
             .filter(|(j, _)| **j >= self.n)
             .map(|(_, x)| *x)
             .sum();
-        if infeasibility > TOL_PHASE_ONE {
+        if infeasibility > TOL_PHASE_ONE * self.g_scale {
             return Err(LpError::Infeasible);
         }
         self.has_feasible_basis = true;
@@ -577,14 +622,16 @@ impl DenseSimplex {
             // Pricing. Only original columns may enter: artificials start
             // basic and, once out, have no business coming back.
             let mut entering = None;
-            let mut best = TOL_REDUCED_COST;
+            let tol_cost = self.tol_reduced_cost(phase);
+            let tol_step = self.tol_degenerate();
+            let mut best = tol_cost;
             for j in 0..n {
                 if self.is_basic[j] {
                     continue;
                 }
                 let d = self.cost_of(j, phase) - dot(self.column(j), &self.y);
                 if bland {
-                    if d > TOL_REDUCED_COST {
+                    if d > tol_cost {
                         entering = Some(j);
                         best = d;
                         break;
@@ -619,8 +666,8 @@ impl DenseSimplex {
                     let better = match leaving {
                         None => true,
                         Some(r) => {
-                            ratio < theta - TOL_DEGENERATE
-                                || ((ratio - theta).abs() <= TOL_DEGENERATE
+                            ratio < theta - tol_step
+                                || ((ratio - theta).abs() <= tol_step
                                     && self.basis[i] < self.basis[r])
                         }
                     };
@@ -633,7 +680,7 @@ impl DenseSimplex {
             let Some(r) = leaving else {
                 return Err(LpError::Unbounded);
             };
-            if theta <= TOL_DEGENERATE {
+            if theta <= tol_step {
                 degenerate_streak += 1;
                 if degenerate_streak >= BLAND_AFTER_DEGENERATE {
                     bland = true;
