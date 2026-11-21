@@ -19,6 +19,8 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
+# Build records from Apache Arrow arrays, see `epistat_matching::arrow`.
+arrow = ["dep:arrow-array"]
 default = ["test-utils"]
 reporting = []
 bench-internals = []
@@ -27,6 +29,7 @@ test-utils = []
 nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
+arrow-array = { version = "60", optional = true, default-features = false }
 epistat-glm = { path = "../epistat-glm", version = "0.1.1" }
 epistat-inference = { path = "../epistat-inference", version = "0.3.1" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }

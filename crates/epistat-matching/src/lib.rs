@@ -28,6 +28,12 @@
 //!     .run();
 //! ```
 //!
+//! ## Arrow input
+//!
+//! With the cargo feature `arrow`, the module `arrow` builds the records from Apache Arrow
+//! arrays, so a cohort held in columns, in Arrow or Polars, needs no per-row structs of its
+//! own.
+//!
 //! For more details, see the [GUIDE.md](https://github.com/tkragholm/epistat_matching/blob/main/GUIDE.md).
 
 // ---------------------------------------------------------------------------
@@ -109,6 +115,8 @@ macro_rules! delegate_matching_record {
     };
 }
 
+#[cfg(feature = "arrow")]
+pub mod arrow;
 mod balance;
 pub mod constraints;
 pub mod effects;
