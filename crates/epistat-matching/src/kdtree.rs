@@ -399,8 +399,8 @@ fn build(
                 )
             },
         );
-        let left = append(part, left_part, index);
-        let right = append(part, right_part, index);
+        let left = append(part, &left_part, index);
+        let right = append(part, &right_part, index);
         part.nodes[index as usize].left = left;
         part.nodes[index as usize].right = right;
     } else {
@@ -414,7 +414,7 @@ fn build(
 
 /// Append a built subtree to `part`, with its indices moved up and its
 /// root's parent set, and return the root's new index.
-fn append(part: &mut Part, sub: Part, parent: u32) -> u32 {
+fn append(part: &mut Part, sub: &Part, parent: u32) -> u32 {
     let base = u32::try_from(part.nodes.len()).expect("fewer than 2^32 nodes");
     let shift = |index: u32| if index == NONE { NONE } else { index + base };
     part.nodes.extend(sub.nodes.iter().map(|node| Node {
@@ -451,12 +451,13 @@ impl KdTree {
         }
         let mut slot_of = vec![NONE; key_space];
         for (slot, &key) in keys.iter().enumerate() {
-            slot_of[key as usize] = slot as u32;
+            slot_of[key as usize] = u32::try_from(slot).expect("fewer than 2^32 points");
         }
         let mut leaf_of = vec![0; n];
         for (index, node) in part.nodes.iter().enumerate() {
             if node.is_leaf() {
-                leaf_of[node.start as usize..node.end as usize].fill(index as u32);
+                leaf_of[node.start as usize..node.end as usize]
+                    .fill(u32::try_from(index).expect("fewer than 2^32 nodes"));
             }
         }
         let counts = part
