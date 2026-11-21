@@ -7,84 +7,130 @@
 //!                           x_j ∈ {0, 1} for j in a given set
 //! ```
 //!
-//! where the other columns are continuous. Every column must have finite bounds
-//! when the starting basis is built, see [`crate::bounded_simplex`]. This is the
-//! shape of cardinality and profile matching: one binary column per unit, and a
-//! few continuous columns that carry the size of the matched sample.
+//! where further columns may have to take whole values and the others are
+//! continuous. Every column must have finite bounds when the starting basis is
+//! built, see [`crate::bounded_simplex`]. This is the shape of cardinality and
+//! profile matching: one binary column per unit, a dozen rows, and a few
+//! columns that carry the size of the matched sample.
 //!
 //! # Algorithm
 //!
 //! Branch and bound of Land and Doig \[1\] on the bounded dual simplex method of
-//! [`crate::bounded_simplex`].
+//! [`crate::bounded_simplex`], with the standard aids of an integer programming
+//! solver as Wolsey \[2\] and Achterberg \[3\] describe them, fitted to programs
+//! with few rows and many columns.
 //!
-//! 1. The relaxation, with the binary columns in `[0, 1]`, is solved. Its value
-//!    is an upper bound on the value of every integer solution in the node.
-//! 2. If no binary column is fractional, the rounded point is an integer
-//!    solution. It is checked against the rows, and it replaces the incumbent
-//!    when it is better.
-//! 3. Otherwise a fractional column is chosen: a general integer column before
-//!    a binary one, then the one furthest from a whole value, the lowest index
-//!    among ties. Two children bound it above by `floor(v)` and below by
-//!    `ceil(v)`. The child on the side the value is nearer to (up on a tie) is
-//!    solved at once and the other is kept.
-//! 4. After a node is closed, by bound, by infeasibility or as an integer
-//!    solution, the search takes the most recently kept node, for 50 times in a
-//!    row, and then the kept node with the best bound, the latest of equals.
-//!    The first finds integer solutions by diving, and the second keeps the
-//!    search from staying in a region that has none. A node whose bound cannot
-//!    beat the incumbent is dropped without branching, and a kept node is
-//!    dropped, unsolved, when its parent's bound cannot. Each solve starts from
-//!    the basis of the node it branches from: the child solved at once
-//!    continues from the parent's final basis, and a kept node reloads the basis
-//!    saved when it was put away, so a node costs a few dual pivots.
+//! 1. **Root.** The relaxation, the binary columns in `[0, 1]`, is solved with
+//!    perturbed costs ([`BoundedSimplex::perturb_costs`]), then again from that
+//!    basis with a hundredth of the perturbation, which takes few pivots.
+//! 2. **Bounds.** Every bound is the weak-duality bound
+//!    ([`BoundedSimplex::dual_bound`]) `L(y) = Σ_j max(r_j l_j, r_j u_j) +
+//!    Σ_i max(-y_i r_lo_i, -y_i r_hi_i)` with `r_j = c_j + a_j'y`, from the duals
+//!    `y` of the basis. It holds for any `y`, so it does not depend on the
+//!    perturbation or on the tolerances of the simplex method, and it includes
+//!    a bound on its own rounding error.
+//! 3. **Step of the objective.** When every whole column has an integer cost
+//!    and every other column cost zero, the value of every integer solution is
+//!    a multiple of the greatest common divisor `g` of the costs, so no
+//!    solution is above `U = g ⌊L/g⌋`.
+//! 4. **Cuts.** At the root of a program with at most 20000 whole columns,
+//!    rounds of Gomory mixed-integer cuts \[4\] from the rows of the optimal
+//!    tableau are added as rows, see `cut_rounds`, and the relaxation is solved
+//!    again. Cuts the relaxation no longer holds tight are dropped in the next
+//!    round.
+//! 5. **Primal heuristics.** A local search (see below) from the root point for
+//!    a solution of value `U`, then `U - g`, for up to 16 values, and a
+//!    neighbourhood search (see below).
+//! 6. **Levels.** With a step, the search asks, from `z = U` down: is there a
+//!    solution of value at least `z`? Every level above has been shown empty, so
+//!    the first solution found is optimal, and the bound at any time is the
+//!    level being searched. A level ends when a solution reaches it or when
+//!    every node is closed, and then the next level down is searched, until the
+//!    level is no better than the best solution of the heuristics. Without a
+//!    step, one search improves on each solution it finds.
 //!
-//! When every binary column has an integer cost and every continuous column
-//! has cost zero, the value of any integer solution is an integer, so a node is
-//! dropped unless `floor(bound) > incumbent`. This is detected from the data.
+//! The search of a level with threshold `z`:
 //!
-//! # Rounding dive and neighbourhood search
+//! - **Reduced-cost fixing** \[3, section 7.7\]. Since
+//!   `c'x ≤ L - Σ_j |r_j| |x_j - b_j|` within the bounds, with `b_j` the bound
+//!   `r_j` points to, a whole column with `|r_j| > L - z` takes the value `b_j`
+//!   in every solution of value at least `z`. This is applied with the root's
+//!   duals at the level, and with each node's own at the node, for its subtree.
+//! - **Reduction.** On a program with at most 20000 whole columns, or when
+//!   the fixing leaves at most half of them free, the level is solved as a
+//!   program of its own on the free columns, the fixed ones moved into the row
+//!   bounds, with the row `z ≤ c'x ≤ z` (or `z ≤ c'x` when improving), and with
+//!   its own root, cuts and fixing.
+//! - **Local search** from the relaxation's point, see below.
+//! - **Branch and bound.** A fractional whole column is chosen among the basic
+//!   ones: a general integer column before a binary one, then the one furthest
+//!   from a whole value, the lowest index among ties. The child on the side the
+//!   value is nearer to (up on a tie) is solved at once and the other is kept.
+//!   After a node is closed, by bound, by infeasibility or as an integer
+//!   solution, the search takes the most recently kept node, for 50 times in a
+//!   row, and then the kept node with the best bound, the latest of equals.
+//!   Each solve starts from the basis of the node it branches from, so a node
+//!   costs a few dual pivots. A node whose bound is below the threshold is
+//!   closed.
 //!
-//! Before the search starts, the root relaxation is rounded by diving: all its
-//! fractional columns are fixed to their nearest whole values at once, the
-//! relaxation is solved again, and this repeats until it is whole. When fixing
-//! all of them is infeasible, the most fractional one is fixed alone, and the
-//! dive stops when that fails too. A whole point is an integer solution.
+//! # Local search
 //!
-//! In a matching problem many units are interchangeable, and the search
-//! alone can stay a few units below the optimum for a long time. After the root
-//! relaxation, the binary columns are ordered by the size of their reduced cost,
-//! the basic ones, which include every fractional one, first. The first 64
-//! stay free and the others are fixed at the root values rounded, and the
-//! smaller program is solved by this search within 2000 relaxations. Then 256,
-//! 1024, 4096 and 16384 free columns are tried. Each solution is a solution
-//! of the whole program, so it can only raise the incumbent, and the proof of
-//! optimality, by bound, is unchanged. [`Options::neighbourhood_search`] turns it
-//! off.
+//! The binary columns of the relaxation's point are rounded, and the search
+//! moves to lower the weighted violation of the rows and of
+//! `z ≤ c'x ≤ ceiling`, each in units of its largest coefficient. A move flips
+//! one binary column, or exchanges one at 0 for one at 1 among the 32 best flips
+//! each way, whichever lowers the weighted violation most, ties to the lowest
+//! indices. After each move every other column moves to the value in its bounds
+//! that minimises the weighted violation of its rows, a whole value for a whole
+//! column. When no move helps, the weight of every broken row grows by one, as
+//! in feasibility jump \[5\]. The search stops when every row holds, or after
+//! 400 moves. Exchanges keep the count rows of matching problems, which is what
+//! a dive on single columns cannot.
+//!
+//! # Neighbourhood search
+//!
+//! In a matching problem many units are interchangeable, and a search can stay a
+//! few units below the optimum for a long time. The general integer columns of
+//! the root relaxation are first fixed in turn to their nearest whole value and
+//! the relaxation solved again. The binary columns are then ordered by the size
+//! of their reduced cost there, the basic ones, which include every fractional
+//! one, first. The first 64 stay free and the others are fixed at their values
+//! rounded, and the smaller program is searched within 250 relaxations. Then
+//! 256, 1024, 4096 and 16384 free columns are tried \[6\]. Each solution is a
+//! solution of the whole program, so it can only raise the incumbent, and the
+//! proof of optimality, by bound, is unchanged. [`Options::neighbourhood_search`]
+//! turns this and the root local searches off.
 //!
 //! # Limits and the gap
 //!
 //! The search ends when no node is left, or when the node limit or the time
-//! limit is reached. Then [`Solution::status`] says which, and
-//! [`Solution::bound`] is the best upper bound proved: the largest bound among
-//! the nodes not yet closed, and never below the incumbent's value. The gap
-//! `(bound - objective) / max(1, |objective|)` is [`Solution::gap`]. It is zero
-//! for a proven optimum, and a solution that stops at a limit says so and is
-//! not presented as optimal. The time limit makes the result depend on the
-//! machine and the load, and the node limit does not.
+//! limit is reached. Every relaxation solved counts as a node, those of the
+//! cuts and of the heuristics included. Then [`Solution::status`] says which
+//! limit, and [`Solution::bound`] is the best upper bound proved, never below
+//! the incumbent's value. The gap `(bound - objective) / max(1, |objective|)`
+//! is [`Solution::gap`]. It is zero for a proven optimum, and a solution that
+//! stops at a limit says so and is not presented as optimal. The time limit
+//! makes the result depend on the machine and the load, and the node limit
+//! does not.
 //!
 //! # Determinism
 //!
-//! Branching and node order depend only on the data, and the simplex is
-//! independent of the number of threads, so the solution is the same on any
-//! number of threads, unless the time limit ends the search.
+//! Branching, node order, cuts and the heuristics depend only on the data, and
+//! the simplex is independent of the number of threads, so the solution is the
+//! same on any number of threads, unless the time limit ends the search.
 //!
 //! # Tolerances
 //!
-//! A basic binary column is called integral when it is within `1e-8` of 0 or 1,
-//! ten times the tolerance the simplex uses for the bounds of a column. The
-//! rounded point is checked against every row with the row's own tolerance plus
-//! the movement the rounding caused, `Σ_j |a_ij| |x_j - round(x_j)|`. An
-//! objective bound is compared with the incumbent to `1e-9 max(1, |z|)`.
+//! A basic whole column is called integral when it is within `1e-8` of a whole
+//! value, ten times the tolerance the simplex uses for the bounds of a column.
+//! The rounded point is checked against every row with the row's own tolerance
+//! plus the movement the rounding caused, `Σ_j |a_ij| |x_j - round(x_j)|`.
+//! Objective values are compared to `1e-9 max(1, |z|)`. A cut is lowered by
+//! `1e-9` times the sum of the magnitudes of its terms at the column bounds, for
+//! the rounding of the tableau; its coefficients below `1e-7` times the largest
+//! are dropped with the bound moved by their largest effect, and it is kept
+//! only when its coefficients span at most `10^6` and the relaxation's point is
+//! at least `10^-4` times their norm from it.
 //!
 //! # Example
 //!
@@ -112,6 +158,15 @@
 //!
 //! 1. Land AH, Doig AG. An automatic method of solving discrete programming
 //!    problems. Econometrica. 1960;28(3):497-520.
+//! 2. Wolsey LA. Integer Programming. New York: Wiley; 1998.
+//! 3. Achterberg T. Constraint integer programming. PhD thesis, Technische
+//!    Universität Berlin; 2007.
+//! 4. Gomory RE. An algorithm for the mixed integer problem. Research
+//!    memorandum RM-2597. Santa Monica: RAND Corporation; 1960.
+//! 5. Luteberget B, Sartor G. Feasibility jump: an LP-free Lagrangian MIP
+//!    heuristic. Math Program Comput. 2023;15:365-88.
+//! 6. Danna E, Rothberg E, Le Pape C. Exploring relaxation induced
+//!    neighborhoods to improve MIP solutions. Math Program. 2005;102(1):71-90.
 
 #![expect(
     clippy::float_cmp,
@@ -120,15 +175,17 @@
 )]
 
 use std::fmt;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::bounded_simplex::{BoundedLpError, BoundedSimplex, Snapshot};
+use crate::bounded_simplex::{BoundedLpError, BoundedSimplex, DualBound, Snapshot};
 
 /// Backtracks to the latest open node before the one with the best bound is taken.
 const PLUNGE: usize = 50;
 
-/// A basic binary column within this of 0 or 1 is integral.
+/// A basic whole column within this of a whole value is integral.
 const INT_TOL: f64 = 1e-8;
+/// The relative tolerance of a comparison of objective values.
 const OBJECTIVE_TOL: f64 = 1e-9;
 
 /// The program, see the [module](self) documentation.
@@ -156,7 +213,7 @@ pub struct MixedBinaryProgram<'a> {
     pub integer: &'a [bool],
 }
 
-/// Limits on the search, and whether to run the root heuristic. `None` is no
+/// Limits on the search, and whether to run the root heuristics. `None` is no
 /// limit.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
@@ -164,9 +221,9 @@ pub struct Options {
     pub node_limit: Option<u64>,
     /// The most time to spend. The result then depends on the machine.
     pub time_limit: Option<Duration>,
-    /// Run the neighbourhood search at the root, see the [module](self)
-    /// documentation. It only ever improves the incumbent, so it changes how
-    /// fast the search ends and not the optimum it proves.
+    /// Run the local searches and the neighbourhood search at the root, see the
+    /// [module](self) documentation. They only ever improve the incumbent, so
+    /// they change how fast the search ends and not the optimum it proves.
     pub neighbourhood_search: bool,
 }
 
@@ -258,34 +315,60 @@ impl fmt::Display for MipError {
 
 impl std::error::Error for MipError {}
 
-struct Node {
-    var: usize,
-    /// The bounds of the sibling to solve.
-    lo: f64,
-    hi: f64,
-    parent_bound: f64,
-    /// The bounds fixed by the branches above it, in order.
-    path: Vec<(usize, f64, f64)>,
-    snapshot: Snapshot,
-}
-
 /// Solves the program by branch and bound.
 ///
 /// # Errors
 /// See [`MipError`].
 pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solution, MipError> {
-    solve_with_deadline(
-        program,
-        options,
-        options.time_limit.map(|d| Instant::now() + d),
-    )
+    let deadline = options.time_limit.map(|d| Instant::now() + d);
+    validate(program)?;
+    let mut budget = Budget {
+        node_limit: options.node_limit,
+        deadline,
+        nodes: 0,
+        pivots: 0,
+    };
+    let goal = Goal {
+        cutoff: f64::NEG_INFINITY,
+        ceiling: f64::INFINITY,
+        heuristics: options.neighbourhood_search,
+        cuts: true,
+        bounded: false,
+        levels: true,
+    };
+    let outcome = search_program(program, &goal, &mut budget)?;
+    match outcome.best {
+        None => {
+            if outcome.status == Status::Optimal {
+                Err(MipError::Infeasible)
+            } else {
+                Err(MipError::NoSolution {
+                    status: outcome.status,
+                    bound: outcome.bound,
+                })
+            }
+        }
+        Some((x, objective)) => {
+            let bound = if outcome.status == Status::Optimal {
+                objective
+            } else {
+                outcome.bound.max(objective)
+            };
+            let max_row_violation = row_violation(program, &x);
+            Ok(Solution {
+                x,
+                objective,
+                bound,
+                status: outcome.status,
+                nodes: budget.nodes,
+                pivots: budget.pivots,
+                max_row_violation,
+            })
+        }
+    }
 }
 
-fn solve_with_deadline(
-    program: &MixedBinaryProgram<'_>,
-    options: &Options,
-    deadline: Option<Instant>,
-) -> Result<Solution, MipError> {
+fn validate(program: &MixedBinaryProgram<'_>) -> Result<(), MipError> {
     let n = program.cost.len();
     if program.binary.len() != n {
         return Err(MipError::InvalidInput(
@@ -297,9 +380,9 @@ fn solve_with_deadline(
             "integer needs no entries or one per column".to_string(),
         ));
     }
-    let general = |j: usize| program.integer.get(j).copied().unwrap_or(false) && !program.binary[j];
     for j in 0..n {
-        if general(j) && !(program.col_lo[j].is_finite() && program.col_hi[j].is_finite()) {
+        let general = program.integer.get(j).copied().unwrap_or(false) && !program.binary[j];
+        if general && !(program.col_lo[j].is_finite() && program.col_hi[j].is_finite()) {
             return Err(MipError::InvalidInput(
                 "an integer column needs finite bounds".to_string(),
             ));
@@ -314,6 +397,152 @@ fn solve_with_deadline(
             ));
         }
     }
+    Ok(())
+}
+
+/// The limits, shared by a search and the searches it starts, and what they
+/// have used.
+struct Budget {
+    node_limit: Option<u64>,
+    deadline: Option<Instant>,
+    nodes: u64,
+    pivots: u64,
+}
+
+impl Budget {
+    fn hit(&self) -> Option<Status> {
+        if self.node_limit.is_some_and(|l| self.nodes >= l) {
+            Some(Status::NodeLimit)
+        } else if self.deadline.is_some_and(|d| Instant::now() >= d) {
+            Some(Status::TimeLimit)
+        } else {
+            None
+        }
+    }
+}
+
+/// What a search looks for.
+#[derive(Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches of one search, set together by its caller"
+)]
+struct Goal {
+    /// Only solutions of at least this value are sought.
+    cutoff: f64,
+    /// No solution has a larger value, as the caller has proved.
+    ceiling: f64,
+    /// Whether to run the neighbourhood search at the root.
+    heuristics: bool,
+    /// Whether to add cutting planes at the root.
+    cuts: bool,
+    /// Whether the program holds the row `cutoff ≤ c'x ≤ ceiling` already.
+    bounded: bool,
+    /// Whether to search by levels, see the [module](self) documentation, when
+    /// the objective has a step. Without, the search improves on each solution
+    /// it finds.
+    levels: bool,
+}
+
+/// How a search ended.
+struct Outcome {
+    /// The best solution found of value at least the cutoff.
+    best: Option<(Vec<f64>, f64)>,
+    /// No solution of value at least the cutoff has a larger value. The value
+    /// of `best` when the search closed.
+    bound: f64,
+    status: Status,
+}
+
+/// Which columns take whole values, and the step of the objective.
+struct Shape {
+    whole: Vec<bool>,
+    general: Vec<bool>,
+    /// When every whole column has an integer cost and every other column cost
+    /// zero, the value of every integer solution is a multiple of the greatest
+    /// common divisor of the costs, and this is it.
+    step: Option<f64>,
+}
+
+fn shape(program: &MixedBinaryProgram<'_>) -> Shape {
+    let n = program.cost.len();
+    let general: Vec<bool> = (0..n)
+        .map(|j| program.integer.get(j).copied().unwrap_or(false) && !program.binary[j])
+        .collect();
+    let whole: Vec<bool> = (0..n).map(|j| program.binary[j] || general[j]).collect();
+    // Integers up to 2^53 are exact in a double, and so is their divisor.
+    let exact = 2.0_f64.powi(53);
+    let mut divisor: u64 = 0;
+    let mut lattice = true;
+    for j in 0..n {
+        let c = program.cost[j];
+        if whole[j] {
+            if c != c.round() || c.abs() >= exact {
+                lattice = false;
+                break;
+            }
+            if c != 0.0 {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a whole, nonnegative value below 2^53"
+                )]
+                let whole = c.abs() as u64;
+                divisor = gcd(divisor, whole);
+            }
+        } else if c != 0.0 {
+            lattice = false;
+            break;
+        }
+    }
+    let step = lattice.then_some(if divisor == 0 { 1.0 } else { divisor as f64 });
+    Shape {
+        whole,
+        general,
+        step,
+    }
+}
+
+const fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
+}
+
+/// The largest multiple of `step` that is at most `z`, `z` itself without a
+/// step. A bound within the objective tolerance below a multiple is taken as
+/// that multiple.
+fn floor_to(z: f64, step: Option<f64>) -> f64 {
+    match step {
+        Some(g) if z.is_finite() => ((z + OBJECTIVE_TOL * z.abs().max(1.0)) / g).floor() * g,
+        _ => z,
+    }
+}
+
+/// The smallest multiple of `step` that is at least `z`, `z` itself without a
+/// step. A cutoff within the objective tolerance above a multiple is taken as
+/// that multiple.
+fn ceil_to(z: f64, step: Option<f64>) -> f64 {
+    match step {
+        Some(g) if z.is_finite() => ((z - OBJECTIVE_TOL * z.abs().max(1.0)) / g).ceil() * g,
+        _ => z,
+    }
+}
+
+/// `v ≥ t` up to the objective tolerance.
+fn reaches(v: f64, t: f64) -> bool {
+    v >= t - OBJECTIVE_TOL * t.abs().max(1.0)
+}
+
+/// Builds the relaxation, solves it, and searches.
+fn search_program(
+    program: &MixedBinaryProgram<'_>,
+    goal: &Goal,
+    budget: &mut Budget,
+) -> Result<Outcome, MipError> {
     let mut lp = BoundedSimplex::new(
         program.rows,
         program.columns,
@@ -327,522 +556,1584 @@ fn solve_with_deadline(
         BoundedLpError::InvalidInput(why) => MipError::InvalidInput(why),
         other => MipError::Lp(other),
     })?;
-
     lp.perturb_costs();
-    let integral_objective = (0..n).all(|j| {
-        if program.binary[j] || general(j) {
-            program.cost[j] == program.cost[j].round()
-        } else {
-            program.cost[j] == 0.0
-        }
-    });
-
-    let mut nodes: u64 = 0;
-    let mut incumbent: Option<(Vec<f64>, f64)> = None;
-    let mut path: Vec<(usize, f64, f64)> = Vec::new();
-    let mut local_backtracks = 0_usize;
-    let mut stack: Vec<Node> = Vec::new();
-    let mut status = Status::Optimal;
-    let root_bound;
-    // The bound of the node being processed when a limit stops the search.
-    let mut open_bound = f64::NEG_INFINITY;
-
-    let tighten = |z: f64| {
-        if integral_objective {
-            (z + OBJECTIVE_TOL * z.abs().max(1.0)).floor()
-        } else {
-            z
-        }
-    };
-    let beats = |bound: f64, incumbent: &Option<(Vec<f64>, f64)>| match incumbent {
-        None => true,
-        Some((_, value)) => {
-            if integral_objective {
-                tighten(bound) > *value + 0.5
-            } else {
-                bound > *value + OBJECTIVE_TOL * value.abs().max(1.0)
-            }
-        }
-    };
-
-    // The solved node's value, or `None` when it is infeasible.
-    let mut solved: Option<f64>;
-    match lp.solve(deadline) {
+    let result = match lp.solve(budget.deadline) {
         Ok(()) => {
-            nodes += 1;
-            solved = Some(lp.relaxation_bound());
-            root_bound = lp.relaxation_bound();
-        }
-        Err(BoundedLpError::Infeasible) => return Err(MipError::Infeasible),
-        Err(BoundedLpError::TimeLimit) => {
-            return Err(MipError::NoSolution {
-                status: Status::TimeLimit,
-                bound: f64::INFINITY,
-            });
-        }
-        Err(e) => return Err(MipError::Lp(e)),
-    }
-
-    if options.neighbourhood_search && solved.is_some() {
-        rounding_dive(program, &mut lp, deadline, &mut incumbent, &mut nodes)?;
-    }
-    if let (true, Some(z)) = (options.neighbourhood_search, solved) {
-        let target = tighten(z);
-        neighbourhood_search(
-            program,
-            &lp,
-            deadline,
-            integral_objective.then_some(target),
-            &mut incumbent,
-            &mut nodes,
-        );
-        if integral_objective && incumbent.as_ref().is_some_and(|(_, v)| *v >= target - 0.5) {
-            // Nothing better than the incumbent can exist.
-            let (x, objective) = incumbent.expect("checked above");
-            let max_row_violation = row_violation(program, &x);
-            return Ok(Solution {
-                x,
-                objective,
-                bound: objective,
-                status: Status::Optimal,
-                nodes,
-                pivots: lp.iterations(),
-                max_row_violation,
-            });
-        }
-    }
-
-    'search: loop {
-        if let Some(z) = solved {
-            let limit_hit = options
-                .node_limit
-                .is_some_and(|l| nodes >= l)
-                .then_some(Status::NodeLimit)
-                .or_else(|| {
-                    deadline
-                        .is_some_and(|d| Instant::now() >= d)
-                        .then_some(Status::TimeLimit)
-                });
-            if beats(z, &incumbent) {
-                // Fractional whole columns among the basic ones: the general
-                // integer columns first, then the furthest from a whole value,
-                // then the lowest index.
-                let mut branch: Option<(usize, f64, (bool, f64))> = None;
-                for (j, v) in lp.basic_columns() {
-                    let is_general = general(j);
-                    if !(program.binary[j] || is_general) {
-                        continue;
-                    }
-                    let (lo, hi) = lp.bounds(j);
-                    if lo == hi {
-                        continue;
-                    }
-                    let dist = (v - v.round()).abs();
-                    if dist > INT_TOL * v.abs().max(1.0) {
-                        let key = (is_general, dist);
-                        let better = match branch {
-                            None => true,
-                            Some((bj, _, bk)) => {
-                                (key.0 && !bk.0)
-                                    || (key.0 == bk.0
-                                        && (key.1 > bk.1 || (key.1 == bk.1 && j < bj)))
-                            }
-                        };
-                        if better {
-                            branch = Some((j, v, key));
-                        }
+            budget.nodes += 1;
+            let whole = (0..program.cost.len())
+                .filter(|&j| program.binary[j] || program.integer.get(j).copied().unwrap_or(false))
+                .count();
+            if goal.cuts && whole <= CUT_COLUMNS {
+                let pinned = goal.bounded && goal.cutoff == goal.ceiling;
+                match cut_rounds(program, &mut lp, pinned, budget)? {
+                    Cuts::None => search_lp(&mut lp, program, goal, budget),
+                    Cuts::Infeasible => Ok(Outcome {
+                        best: None,
+                        bound: f64::NEG_INFINITY,
+                        status: Status::Optimal,
+                    }),
+                    Cuts::Added(added) => {
+                        let (rows, mut cut_lp) = *added;
+                        let augmented = rows.program(program);
+                        let result = search_lp(&mut cut_lp, &augmented, goal, budget);
+                        budget.pivots += cut_lp.iterations();
+                        result
                     }
                 }
-                match branch {
-                    None => {
-                        let (x, objective) = rounded_point(&lp, program)?;
-                        if incumbent.as_ref().is_none_or(|(_, v)| objective > *v) {
-                            incumbent = Some((x, objective));
-                        }
-                    }
-                    Some((j, v, _)) => {
-                        if let Some(hit) = limit_hit {
-                            status = hit;
-                            open_bound = open_bound.max(z);
-                            break 'search;
-                        }
-                        let (lo, hi) = lp.bounds(j);
-                        // Down: `x <= floor(v)`. Up: `x >= ceil(v)`. The side
-                        // the value is nearer to, up on a tie, is solved first.
-                        let down = (lo, v.floor());
-                        let up = (v.ceil(), hi);
-                        let (near, far) = if v - v.floor() >= 0.5 {
-                            (up, down)
-                        } else {
-                            (down, up)
-                        };
-                        stack.push(Node {
-                            var: j,
-                            lo: far.0,
-                            hi: far.1,
-                            parent_bound: z,
-                            path: path.clone(),
-                            snapshot: lp.snapshot(),
-                        });
-                        path.push((j, near.0, near.1));
-                        lp.set_bounds(j, near.0, near.1).map_err(MipError::Lp)?;
-                        match lp.solve(deadline) {
-                            Ok(()) => {
-                                nodes += 1;
-                                solved = Some(lp.relaxation_bound());
-                                continue 'search;
-                            }
-                            Err(BoundedLpError::Infeasible) => {}
-                            Err(BoundedLpError::TimeLimit) => {
-                                status = Status::TimeLimit;
-                                open_bound = open_bound.max(z);
-                                // The node just branched on is not closed.
-                                stack.pop();
-                                break 'search;
-                            }
-                            Err(e) => return Err(MipError::Lp(e)),
-                        }
-                    }
-                }
-            }
-        }
-        // Backtrack to the open node with the best bound, the latest of equals.
-        loop {
-            stack.retain(|node| beats(node.parent_bound, &incumbent));
-            // The latest node, for `PLUNGE` backtracks in a row, then the best.
-            let mut pick: Option<usize> = None;
-            if local_backtracks < PLUNGE {
-                local_backtracks += 1;
-                pick = stack.len().checked_sub(1);
             } else {
-                local_backtracks = 0;
-                for (i, node) in stack.iter().enumerate() {
-                    if pick.is_none_or(|p| node.parent_bound >= stack[p].parent_bound) {
-                        pick = Some(i);
-                    }
-                }
-            }
-            let Some(pick) = pick else {
-                break 'search;
-            };
-            let node = stack.remove(pick);
-            if options.node_limit.is_some_and(|l| nodes >= l) {
-                status = Status::NodeLimit;
-                open_bound = open_bound.max(node.parent_bound);
-                stack.push(node);
-                break 'search;
-            }
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                status = Status::TimeLimit;
-                open_bound = open_bound.max(node.parent_bound);
-                stack.push(node);
-                break 'search;
-            }
-            for &(j, _, _) in &path {
-                lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
-                    .map_err(MipError::Lp)?;
-            }
-            for &(j, lo, hi) in &node.path {
-                lp.set_bounds(j, lo, hi).map_err(MipError::Lp)?;
-            }
-            lp.restore(&node.snapshot);
-            lp.set_bounds(node.var, node.lo, node.hi)
-                .map_err(MipError::Lp)?;
-            path.clone_from(&node.path);
-            path.push((node.var, node.lo, node.hi));
-            match lp.solve(deadline) {
-                Ok(()) => {
-                    nodes += 1;
-                    solved = Some(lp.relaxation_bound());
-                    continue 'search;
-                }
-                Err(BoundedLpError::Infeasible) => {}
-                Err(BoundedLpError::TimeLimit) => {
-                    status = Status::TimeLimit;
-                    open_bound = open_bound.max(node.parent_bound);
-                    break 'search;
-                }
-                Err(e) => return Err(MipError::Lp(e)),
+                search_lp(&mut lp, program, goal, budget)
             }
         }
-    }
+        Err(BoundedLpError::Infeasible) => Ok(Outcome {
+            best: None,
+            bound: f64::NEG_INFINITY,
+            status: Status::Optimal,
+        }),
+        Err(BoundedLpError::TimeLimit) => Ok(Outcome {
+            best: None,
+            bound: goal.ceiling,
+            status: Status::TimeLimit,
+        }),
+        Err(e) => Err(MipError::Lp(e)),
+    };
+    budget.pivots += lp.iterations();
+    result
+}
 
-    // The best bound proved: the open nodes' bounds, never below the incumbent.
-    let mut bound = open_bound;
-    for node in &stack {
-        bound = bound.max(node.parent_bound);
-    }
-    let Some((x, objective)) = incumbent else {
-        if status == Status::Optimal {
-            return Err(MipError::Infeasible);
-        }
-        return Err(MipError::NoSolution {
-            status,
-            bound: tighten(bound.min(root_bound)),
+/// The search from a solved root relaxation. See the [module](self)
+/// documentation.
+fn search_lp(
+    lp: &mut BoundedSimplex,
+    program: &MixedBinaryProgram<'_>,
+    goal: &Goal,
+    budget: &mut Budget,
+) -> Result<Outcome, MipError> {
+    let shape = shape(program);
+    let root = tight_bound(lp, budget)?;
+    let step = shape.step;
+    let upper = floor_to(root.value.min(goal.ceiling), step);
+    let cutoff = ceil_to(goal.cutoff, step);
+    if upper < cutoff {
+        return Ok(Outcome {
+            best: None,
+            bound: f64::NEG_INFINITY,
+            status: Status::Optimal,
         });
+    }
+    let mut best: Option<(Vec<f64>, f64)> = None;
+    if goal.heuristics {
+        ladder(program, &shape, lp, upper, cutoff, &mut best);
+        if best.as_ref().is_none_or(|(_, v)| !reaches(*v, upper)) {
+            neighbourhood_search(program, &shape, lp, &root, upper, cutoff, budget, &mut best)?;
+        }
+        if best.as_ref().is_some_and(|(_, v)| reaches(*v, upper)) {
+            let bound = best.as_ref().map_or(upper, |(_, v)| *v);
+            return Ok(Outcome {
+                best,
+                bound,
+                status: Status::Optimal,
+            });
+        }
+    }
+    let mut context = Context {
+        bounded: goal.bounded,
+        lp,
+        program,
+        shape: &shape,
+        root: &root,
+        budget,
     };
-    let bound = if status == Status::Optimal {
-        objective
+    if let (Some(g), true) = (step, goal.levels) {
+        // The levels, from the top: is there a solution of value at least `level`?
+        // No point within the column bounds has a smaller value than `least`.
+        let least = ceil_to(
+            (0..program.cost.len())
+                .map(|j| {
+                    let c = program.cost[j];
+                    if c > 0.0 {
+                        c * program.col_lo[j]
+                    } else if c < 0.0 {
+                        c * program.col_hi[j]
+                    } else {
+                        0.0
+                    }
+                })
+                .sum(),
+            step,
+        );
+        let lowest = best
+            .as_ref()
+            .map_or(cutoff, |(_, v)| v + g)
+            .max(cutoff)
+            .max(least);
+        let mut level = upper;
+        while reaches(level, lowest) {
+            if let Some(status) = context.budget.hit() {
+                return Ok(stopped(best, level, status));
+            }
+            match context.search(level, false, &mut best)? {
+                End::Done => {
+                    if let Some((_, v)) = best.as_ref() {
+                        if reaches(*v, level) {
+                            let bound = *v;
+                            return Ok(Outcome {
+                                best,
+                                bound,
+                                status: Status::Optimal,
+                            });
+                        }
+                    }
+                    level -= g;
+                }
+                End::Stopped { status, .. } => return Ok(stopped(best, level, status)),
+            }
+        }
+        let bound = best.as_ref().map_or(f64::NEG_INFINITY, |(_, v)| *v);
+        Ok(Outcome {
+            best,
+            bound,
+            status: Status::Optimal,
+        })
     } else {
-        tighten(bound.min(root_bound)).max(objective)
-    };
-    let max_row_violation = row_violation(program, &x);
-    Ok(Solution {
-        x,
-        objective,
+        let threshold = best
+            .as_ref()
+            .map_or(cutoff, |(_, v)| improvement(*v).max(cutoff));
+        match context.search(threshold, true, &mut best)? {
+            End::Done => {
+                let bound = best.as_ref().map_or(f64::NEG_INFINITY, |(_, v)| *v);
+                Ok(Outcome {
+                    best,
+                    bound,
+                    status: Status::Optimal,
+                })
+            }
+            End::Stopped { status, bound } => {
+                let bound = bound
+                    .min(upper)
+                    .max(best.as_ref().map_or(f64::NEG_INFINITY, |(_, v)| *v));
+                Ok(Outcome {
+                    best,
+                    bound,
+                    status,
+                })
+            }
+        }
+    }
+}
+
+fn stopped(best: Option<(Vec<f64>, f64)>, level: f64, status: Status) -> Outcome {
+    let bound = best.as_ref().map_or(level, |(_, v)| level.max(*v));
+    Outcome {
+        best,
         bound,
         status,
-        nodes,
-        pivots: lp.iterations(),
-        max_row_violation,
+    }
+}
+
+/// The least value that improves on `v` when the objective has no step.
+fn improvement(v: f64) -> f64 {
+    v + OBJECTIVE_TOL * v.abs().max(1.0)
+}
+
+/// Cutting planes are added to programs with at most this many whole columns.
+const CUT_COLUMNS: usize = 20_000;
+
+/// The most rounds of cutting planes at the root.
+const CUT_ROUNDS: usize = 8;
+
+/// A basic whole variable is cut on when its fractional part is at least this
+/// far from 0 and 1; nearer, the coefficients of the cut grow as its inverse.
+const CUT_FRACTION: f64 = 0.01;
+
+/// A cut coefficient below this times the largest is dropped, with the row bound
+/// moved so that the cut stays valid.
+const CUT_DROP: f64 = 1e-7;
+
+/// The largest ratio of the largest to the smallest coefficient of a cut.
+const CUT_RANGE: f64 = 1e6;
+
+/// The least distance of the relaxation's point from a cut, in units of the
+/// norm of its coefficients.
+const CUT_EFFICACY: f64 = 1e-4;
+
+/// The rows added by the cutting planes, on top of a program's.
+struct CutRows {
+    rows: usize,
+    columns: Vec<f64>,
+    row_lo: Vec<f64>,
+    row_hi: Vec<f64>,
+}
+
+impl CutRows {
+    fn program<'s>(&'s self, base: &MixedBinaryProgram<'s>) -> MixedBinaryProgram<'s> {
+        MixedBinaryProgram {
+            rows: self.rows,
+            columns: &self.columns,
+            cost: base.cost,
+            col_lo: base.col_lo,
+            col_hi: base.col_hi,
+            row_lo: &self.row_lo,
+            row_hi: &self.row_hi,
+            binary: base.binary,
+            integer: base.integer,
+        }
+    }
+}
+
+/// What the cut rounds did.
+enum Cuts {
+    /// No cut was added.
+    None,
+    /// The cuts leave no integer point.
+    Infeasible,
+    /// The program with the cuts, and its solved relaxation.
+    Added(Box<(CutRows, BoundedSimplex)>),
+}
+
+/// Rounds of Gomory mixed-integer cuts at the root.
+///
+/// Each round takes every row of the optimal tableau whose basic variable must
+/// be whole and has a fractional part `f0` in `[CUT_FRACTION, 1 -
+/// CUT_FRACTION]`, and adds the Gomory mixed-integer cut of that row (Gomory
+/// 1960; Wolsey, Integer Programming, section 8.7). With each non-basic
+/// variable written as its distance `y_j ≥ 0` from the bound it sits at, the
+/// row reads `x_b + Σ a_j y_j = x̄_b`, and the cut is
+///
+/// ```text
+/// Σ_{y_j whole, f_j ≤ f0} f_j/f0 y_j + Σ_{y_j whole, f_j > f0} (1-f_j)/(1-f0) y_j
+///   + Σ_{y_j other, a_j > 0} a_j/f0 y_j + Σ_{y_j other, a_j < 0} -a_j/(1-f0) y_j ≥ 1,
+/// ```
+///
+/// with `f_j` the fractional part of `a_j`. A slack is whole when its row has
+/// whole coefficients on whole columns only and whole bounds. The cut is then
+/// written in the columns, coefficients below [`CUT_DROP`] times the largest are
+/// dropped with the bound moved by their largest effect, and the bound is
+/// lowered by `10^-9 (1 + |bound| + Σ |coefficient| · |column bound|)` for the
+/// rounding of the tableau, so that no integer point the exact cut keeps is cut
+/// off. The relaxation with the cuts is solved again, and the rounds stop when
+/// a round adds no cut, after [`CUT_ROUNDS`], or when the bound falls by less
+/// than a hundredth of the objective step, or of `10^-6 max(1, |bound|)`.
+fn cut_rounds(
+    program: &MixedBinaryProgram<'_>,
+    lp: &mut BoundedSimplex,
+    pinned: bool,
+    budget: &mut Budget,
+) -> Result<Cuts, MipError> {
+    let shape = shape(program);
+    let n = program.cost.len();
+    let mut rows = CutRows {
+        rows: program.rows,
+        columns: program.columns.to_vec(),
+        row_lo: program.row_lo.to_vec(),
+        row_hi: program.row_hi.to_vec(),
+    };
+    let mut current: Option<BoundedSimplex> = None;
+    let mut bound = tight_bound(lp, budget)?.value;
+    let progress = shape.step.map_or(1e-6 * bound.abs().max(1.0), |g| 0.01 * g);
+    for _ in 0..CUT_ROUNDS {
+        if budget.hit().is_some() {
+            break;
+        }
+        let solved = current.as_ref().unwrap_or(lp);
+        let cuts = gomory_cuts(solved, &rows.program(program), &shape);
+        if cuts.is_empty() {
+            break;
+        }
+        let m = rows.rows;
+        let k = cuts.len();
+        // The program's rows, the cuts of earlier rounds that the relaxation
+        // holds tight, and the new cuts.
+        let kept: Vec<usize> = (0..m)
+            .filter(|&i| i < program.rows || solved.slack(i).2.is_some())
+            .collect();
+        let mut columns = Vec::with_capacity(n * (kept.len() + k));
+        for j in 0..n {
+            let column = &rows.columns[j * m..(j + 1) * m];
+            columns.extend(kept.iter().map(|&i| column[i]));
+            columns.extend(cuts.iter().map(|(c, _)| c[j]));
+        }
+        let mut next = CutRows {
+            rows: kept.len() + k,
+            columns,
+            row_lo: kept.iter().map(|&i| rows.row_lo[i]).collect(),
+            row_hi: kept.iter().map(|&i| rows.row_hi[i]).collect(),
+        };
+        for (_, lo) in &cuts {
+            next.row_lo.push(*lo);
+            next.row_hi.push(f64::INFINITY);
+        }
+        let mut next_lp = BoundedSimplex::new(
+            next.rows,
+            &next.columns,
+            program.cost,
+            program.col_lo,
+            program.col_hi,
+            &next.row_lo,
+            &next.row_hi,
+        )
+        .map_err(MipError::Lp)?;
+        next_lp.perturb_costs();
+        match next_lp.solve(budget.deadline) {
+            Ok(()) => budget.nodes += 1,
+            Err(BoundedLpError::Infeasible) => {
+                budget.pivots += next_lp.iterations();
+                return Ok(Cuts::Infeasible);
+            }
+            Err(BoundedLpError::TimeLimit) => {
+                budget.pivots += next_lp.iterations();
+                break;
+            }
+            Err(e) => return Err(MipError::Lp(e)),
+        }
+        let next_bound = tight_bound(&mut next_lp, budget)?.value;
+        if let Some(old) = current.replace(next_lp) {
+            budget.pivots += old.iterations();
+        }
+        rows = next;
+        let gained = bound - next_bound;
+        bound = next_bound.min(bound);
+        if gained < progress && !pinned {
+            break;
+        }
+    }
+    Ok(match current {
+        Some(cut_lp) => Cuts::Added(Box::new((rows, cut_lp))),
+        None => Cuts::None,
     })
 }
 
-/// The most relaxations a rounding dive may solve.
-const DIVE_LIMIT: u64 = 3000;
+/// The Gomory mixed-integer cuts of the optimal tableau, each as coefficients
+/// on the columns and a lower bound. See [`cut_rounds`].
+fn gomory_cuts(
+    lp: &BoundedSimplex,
+    program: &MixedBinaryProgram<'_>,
+    shape: &Shape,
+) -> Vec<(Vec<f64>, f64)> {
+    let n = program.cost.len();
+    let m = program.rows;
+    let whole_value = |v: f64| v.is_finite() && v == v.round();
+    // A slack is whole when its row has whole bounds, or none, and whole
+    // coefficients on whole columns only.
+    let whole_bound = |v: f64| !v.is_finite() || v == v.round();
+    let whole_row: Vec<bool> = (0..m)
+        .map(|i| {
+            whole_bound(program.row_lo[i])
+                && whole_bound(program.row_hi[i])
+                && (0..n).all(|j| {
+                    let a = program.columns[j * m + i];
+                    a == 0.0 || (shape.whole[j] && a == a.round())
+                })
+        })
+        .collect();
+    let gmi = |a: f64, f0: f64, whole: bool| -> f64 {
+        if whole {
+            let f = a - a.floor();
+            if f <= f0 {
+                f / f0
+            } else {
+                (1.0 - f) / (1.0 - f0)
+            }
+        } else if a >= 0.0 {
+            a / f0
+        } else {
+            -a / (1.0 - f0)
+        }
+    };
+    let mut cuts = Vec::new();
+    for position in 0..m {
+        let row = lp.tableau_row(position);
+        let b = row.variable;
+        let whole_basic = if b < n {
+            shape.whole[b]
+        } else {
+            whole_row[b - n]
+        };
+        if !whole_basic {
+            continue;
+        }
+        let f0 = row.value - row.value.floor();
+        if !(CUT_FRACTION..=1.0 - CUT_FRACTION).contains(&f0) {
+            continue;
+        }
+        let mut coef = vec![0.0; n];
+        let mut lower = 1.0;
+        for (j, (c, &alpha)) in coef.iter_mut().zip(&row.columns).enumerate() {
+            let (lo, hi) = lp.bounds(j);
+            if alpha == 0.0 || lo == hi {
+                continue;
+            }
+            let Some(at) = lp.at_bound(j) else {
+                continue;
+            };
+            let at_lower = at == lo;
+            let a = if at_lower { alpha } else { -alpha };
+            let pi = gmi(a, f0, shape.whole[j] && whole_value(at));
+            if at_lower {
+                *c += pi;
+                lower += pi * lo;
+            } else {
+                *c -= pi;
+                lower -= pi * hi;
+            }
+        }
+        for (i, (&alpha, &whole_slack)) in row.slacks.iter().zip(&whole_row).enumerate() {
+            let (lo, hi, at) = lp.slack(i);
+            if alpha == 0.0 || lo == hi {
+                continue;
+            }
+            let Some(at) = at else {
+                continue;
+            };
+            let at_lower = at == lo;
+            let a = if at_lower { alpha } else { -alpha };
+            let pi = gmi(a, f0, whole_slack);
+            let sign = if at_lower { 1.0 } else { -1.0 };
+            for (j, c) in coef.iter_mut().enumerate() {
+                *c += sign * pi * program.columns[j * m + i];
+            }
+            lower += sign * pi * at;
+        }
+        let largest = coef.iter().fold(0.0_f64, |acc, c| acc.max(c.abs()));
+        if largest == 0.0 || !largest.is_finite() || !lower.is_finite() {
+            continue;
+        }
+        let mut size = 1.0 + lower.abs();
+        for (c, (&lo, &hi)) in coef
+            .iter_mut()
+            .zip(program.col_lo.iter().zip(program.col_hi))
+        {
+            if c.abs() < CUT_DROP * largest {
+                // Dropping `c x_j` from `Σ c x ≥ lower` is valid with
+                // `lower - max(c x_j)`.
+                lower -= (*c * lo).max(*c * hi);
+                *c = 0.0;
+            }
+            size += c.abs() * lo.abs().max(hi.abs());
+        }
+        lower -= 1e-9 * size;
+        // A cut whose coefficients span more than CUT_RANGE makes the basis
+        // ill-conditioned, and one that the relaxation's point barely breaks
+        // moves nothing.
+        let largest = coef.iter().fold(0.0_f64, |acc, c| acc.max(c.abs()));
+        let smallest = coef
+            .iter()
+            .filter(|c| **c != 0.0)
+            .fold(f64::INFINITY, |acc, c| acc.min(c.abs()));
+        let x = lp.values();
+        let at_point: f64 = coef.iter().zip(&x).map(|(c, v)| c * v).sum();
+        let norm = coef.iter().map(|c| c * c).sum::<f64>().sqrt();
+        if lower.is_finite()
+            && largest > 0.0
+            && largest <= CUT_RANGE * smallest
+            && (lower - at_point) > CUT_EFFICACY * norm
+        {
+            for c in &mut coef {
+                *c /= largest;
+            }
+            cuts.push((coef, lower / largest));
+        }
+    }
+    cuts
+}
 
-/// Fractional whole columns among the basic ones, general integer columns
-/// first and then by distance from a whole value, furthest first, ties to the
-/// lowest index.
-fn fractional_columns(lp: &BoundedSimplex, program: &MixedBinaryProgram<'_>) -> Vec<(usize, f64)> {
-    let mut out: Vec<(usize, f64, bool, f64)> = Vec::new();
+/// The least value of a solution better than one of value `v`.
+fn improved(v: f64, step: Option<f64>) -> f64 {
+    match step {
+        Some(g) => v + g,
+        None => improvement(v),
+    }
+}
+
+/// The most values the ladder of local searches tries.
+const LADDER: usize = 16;
+
+/// Local searches from the root relaxation for a solution of value at least
+/// `upper`, then one step of the objective less, and so on, for [`LADDER`]
+/// values or down to `cutoff`, until one succeeds. A solution better than
+/// `best` replaces it. Without a step of the objective, one search at `upper`.
+fn ladder(
+    program: &MixedBinaryProgram<'_>,
+    shape: &Shape,
+    lp: &BoundedSimplex,
+    upper: f64,
+    cutoff: f64,
+    best: &mut Option<(Vec<f64>, f64)>,
+) {
+    let n = program.cost.len();
+    let free = (0..n)
+        .filter(|&j| shape.whole[j] && program.col_lo[j] != program.col_hi[j])
+        .count();
+    if free > SEARCH_COLUMNS {
+        return;
+    }
+    let start = lp.values();
+    let frozen = vec![false; n];
+    let tolerance: Vec<f64> = (0..program.rows).map(|i| lp.row_tolerance(i)).collect();
+    let mut target = upper;
+    for _ in 0..LADDER {
+        if !reaches(target, cutoff) || best.as_ref().is_some_and(|(_, v)| reaches(*v, target)) {
+            return;
+        }
+        if let Some(found) = local_search(
+            program,
+            shape,
+            &start,
+            &frozen,
+            target,
+            f64::INFINITY,
+            &tolerance,
+        ) {
+            if best.as_ref().is_none_or(|(_, v)| found.1 > *v) {
+                *best = Some(found);
+            }
+            return;
+        }
+        match shape.step {
+            Some(g) => target -= g,
+            None => return,
+        }
+    }
+}
+
+/// The local search runs on programs with at most this many whole columns free.
+const SEARCH_COLUMNS: usize = 200_000;
+
+/// Branch and bound runs the local search from every this many nodes.
+const SEARCH_EVERY: usize = 100;
+
+/// The most moves of the local search.
+const SEARCH_STEPS: usize = 400;
+
+/// Columns of each kind of move, adding and dropping, among which the local
+/// search tries every exchange.
+const SEARCH_PAIRS: usize = 32;
+
+/// Looks for a solution of value in `[cutoff, ceiling]` near `start` by a
+/// local search that minimises the weighted violation of the rows.
+///
+/// The rows are the program's and `cutoff ≤ c'x ≤ ceiling`. The binary columns
+/// are rounded, and every move then flips one binary column or exchanges a
+/// binary column at 0 for one at 1, the move that lowers the weighted
+/// violation most, among every flip and the exchanges between the
+/// [`SEARCH_PAIRS`] best flips each way, ties to the lowest indices. After each
+/// move every other column that is not `frozen` moves to the value in its
+/// bounds that minimises the weighted violation of its rows, a whole value for
+/// a general integer column. When no move lowers it, the weight of every
+/// broken row grows by one, as in feasibility jump (Luteberget and Sartor).
+/// A row is broken when its activity is outside its bounds by more than its
+/// `tolerance`, the cut by more than the objective tolerance, and the violation
+/// of a row is in units of its largest coefficient.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one loop of moves over shared row state"
+)]
+fn local_search(
+    program: &MixedBinaryProgram<'_>,
+    shape: &Shape,
+    start: &[f64],
+    frozen: &[bool],
+    cutoff: f64,
+    ceiling: f64,
+    tolerance: &[f64],
+) -> Option<(Vec<f64>, f64)> {
+    let n = program.cost.len();
+    let m = program.rows;
+    let rows = m + 1;
+    let coef = |j: usize, i: usize| {
+        if i < m {
+            program.columns[j * m + i]
+        } else {
+            program.cost[j]
+        }
+    };
+    let lo: Vec<f64> = (0..rows)
+        .map(|i| if i < m { program.row_lo[i] } else { cutoff })
+        .collect();
+    let hi: Vec<f64> = (0..rows)
+        .map(|i| if i < m { program.row_hi[i] } else { ceiling })
+        .collect();
+    let tol: Vec<f64> = (0..rows)
+        .map(|i| {
+            if i < m {
+                tolerance[i]
+            } else {
+                OBJECTIVE_TOL * cutoff.abs().max(1.0)
+            }
+        })
+        .collect();
+    let mut scale = vec![0.0_f64; rows];
+    for j in 0..n {
+        for (i, s) in scale.iter_mut().enumerate() {
+            *s = s.max(coef(j, i).abs());
+        }
+    }
+    for s in &mut scale {
+        *s = if *s > 0.0 { 1.0 / *s } else { 1.0 };
+    }
+    let violation = |i: usize, act: f64| -> f64 {
+        ((lo[i] - tol[i] - act).max(act - hi[i] - tol[i])).max(0.0) * scale[i]
+    };
+    let mut x: Vec<f64> = (0..n)
+        .map(|j| {
+            if program.binary[j] && !frozen[j] {
+                start[j].round()
+            } else {
+                start[j]
+            }
+        })
+        .collect();
+    let mut act = vec![0.0; rows];
+    for (j, &xj) in x.iter().enumerate() {
+        if xj != 0.0 {
+            for (i, a) in act.iter_mut().enumerate() {
+                *a += coef(j, i) * xj;
+            }
+        }
+    }
+    let mut weight = vec![1.0; rows];
+    let movable_other: Vec<usize> = (0..n)
+        .filter(|&j| !program.binary[j] && !frozen[j] && program.col_lo[j] != program.col_hi[j])
+        .collect();
+    let binaries: Vec<usize> = (0..n)
+        .filter(|&j| program.binary[j] && !frozen[j] && program.col_lo[j] != program.col_hi[j])
+        .collect();
+    // Moves every other column to its best value, one after the other.
+    let settle = |x: &mut [f64], act: &mut [f64], weight: &[f64]| {
+        for &j in &movable_other {
+            let touched: Vec<usize> = (0..rows).filter(|&i| coef(j, i) != 0.0).collect();
+            if touched.is_empty() {
+                continue;
+            }
+            let (l, u) = (program.col_lo[j], program.col_hi[j]);
+            let cost_at = |v: f64| -> f64 {
+                touched
+                    .iter()
+                    .map(|&i| weight[i] * violation(i, act[i] + coef(j, i) * (v - x[j])))
+                    .sum()
+            };
+            // The weighted violation is convex and piecewise linear in the
+            // column, with its corners where a row reaches a bound.
+            let mut candidates = vec![x[j]];
+            for &i in &touched {
+                let a = coef(j, i);
+                for b in [lo[i], hi[i]] {
+                    if b.is_finite() {
+                        candidates.push(x[j] + (b - act[i]) / a);
+                    }
+                }
+            }
+            if l.is_finite() {
+                candidates.push(l);
+            }
+            if u.is_finite() {
+                candidates.push(u);
+            }
+            let mut best_v = x[j];
+            let mut best_c = cost_at(x[j]);
+            for c in candidates {
+                let options: Vec<f64> = if shape.general[j] {
+                    vec![c.floor(), c.ceil()]
+                } else {
+                    vec![c]
+                };
+                for v in options {
+                    let v = v.clamp(l, u);
+                    if shape.general[j] && v != v.round() {
+                        continue;
+                    }
+                    let cv = cost_at(v);
+                    if cv < best_c - 1e-15 {
+                        best_c = cv;
+                        best_v = v;
+                    }
+                }
+            }
+            if best_v != x[j] {
+                let d = best_v - x[j];
+                for &i in &touched {
+                    act[i] += coef(j, i) * d;
+                }
+                x[j] = best_v;
+            }
+        }
+    };
+    settle(&mut x, &mut act, &weight);
+    for _ in 0..SEARCH_STEPS {
+        let broken: Vec<usize> = (0..rows).filter(|&i| violation(i, act[i]) > 0.0).collect();
+        if broken.is_empty() {
+            break;
+        }
+        // The change of the weighted violation for each flip.
+        let delta = |j: usize, sign: f64, act: &[f64], weight: &[f64]| -> f64 {
+            (0..rows)
+                .map(|i| {
+                    let a = coef(j, i);
+                    if a == 0.0 {
+                        0.0
+                    } else {
+                        weight[i] * (violation(i, act[i] + sign * a) - violation(i, act[i]))
+                    }
+                })
+                .sum()
+        };
+        let mut adds: Vec<(f64, usize)> = Vec::new();
+        let mut drops: Vec<(f64, usize)> = Vec::new();
+        for &j in &binaries {
+            if x[j] == 0.0 {
+                adds.push((delta(j, 1.0, &act, &weight), j));
+            } else {
+                drops.push((delta(j, -1.0, &act, &weight), j));
+            }
+        }
+        let order = |a: &(f64, usize), b: &(f64, usize)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+        adds.sort_by(order);
+        drops.sort_by(order);
+        let mut best_move: Option<(f64, Option<usize>, Option<usize>)> = None;
+        let mut consider = |d: f64, add: Option<usize>, drop: Option<usize>| {
+            if best_move.is_none_or(|(bd, _, _)| d < bd) {
+                best_move = Some((d, add, drop));
+            }
+        };
+        if let Some(&(d, j)) = adds.first() {
+            consider(d, Some(j), None);
+        }
+        if let Some(&(d, j)) = drops.first() {
+            consider(d, None, Some(j));
+        }
+        for &(_, u) in adds.iter().take(SEARCH_PAIRS) {
+            for &(_, v) in drops.iter().take(SEARCH_PAIRS) {
+                let d: f64 = (0..rows)
+                    .map(|i| {
+                        let change = coef(u, i) - coef(v, i);
+                        if change == 0.0 {
+                            0.0
+                        } else {
+                            weight[i] * (violation(i, act[i] + change) - violation(i, act[i]))
+                        }
+                    })
+                    .sum();
+                consider(d, Some(u), Some(v));
+            }
+        }
+        match best_move {
+            Some((d, add, drop)) if d < -1e-12 => {
+                for (j, value) in [(add, 1.0), (drop, 0.0)] {
+                    if let Some(j) = j {
+                        let change = value - x[j];
+                        for (i, a) in act.iter_mut().enumerate() {
+                            *a += coef(j, i) * change;
+                        }
+                        x[j] = value;
+                    }
+                }
+                settle(&mut x, &mut act, &weight);
+            }
+            _ => {
+                for &i in &broken {
+                    weight[i] += 1.0;
+                }
+            }
+        }
+    }
+    // A point is a solution when every row holds to its tolerance.
+    let act = activity(program, &x);
+    let holds = (0..m).all(|i| {
+        act[i] >= program.row_lo[i] - tolerance[i] && act[i] <= program.row_hi[i] + tolerance[i]
+    });
+    let value = objective(program, &x);
+    let whole = (0..n).all(|j| !shape.whole[j] || x[j] == x[j].round());
+    (holds && whole && reaches(value, cutoff)).then_some((x, value))
+}
+
+/// The fraction of the perturbation kept for the clean-up solve, see
+/// [`tight_bound`].
+const CLEANUP: f64 = 1e-2;
+
+/// The dual bound of the solved relaxation, after a clean-up solve with a
+/// hundredth of the cost perturbation, see
+/// [`BoundedSimplex::scale_perturbation`]. The clean-up is limited to `10 m +
+/// 100` pivots, and whatever basis it ends with gives a valid bound. The basis
+/// is then optimal for the clean-up costs, or, when the clean-up did not
+/// finish, solved again with the full perturbation.
+fn tight_bound(lp: &mut BoundedSimplex, budget: &Budget) -> Result<DualBound, MipError> {
+    let first = lp.dual_bound();
+    if lp.perturbation_total() == 0.0 {
+        return Ok(first);
+    }
+    lp.scale_perturbation(CLEANUP);
+    let finished = lp.solve_within(budget.deadline, 10 * lp.rows() + 100);
+    let second = lp.dual_bound();
+    lp.scale_perturbation(1.0 / CLEANUP);
+    if finished.is_err() {
+        match lp.solve(budget.deadline) {
+            Ok(()) | Err(BoundedLpError::TimeLimit) => {}
+            Err(e) => return Err(MipError::Lp(e)),
+        }
+    }
+    Ok(if second.value <= first.value {
+        second
+    } else {
+        first
+    })
+}
+
+/// How the search of one level ended.
+enum End {
+    /// Every node is closed, or, when not improving, a solution reached the
+    /// level.
+    Done,
+    /// A limit ended it. No solution of value at least the threshold has a
+    /// larger value than `bound`.
+    Stopped { status: Status, bound: f64 },
+}
+
+/// Bound changes from the root of a level, shared by the nodes below.
+struct Changes {
+    list: Vec<(usize, f64, f64)>,
+    parent: Option<Rc<Changes>>,
+}
+
+impl Changes {
+    /// Every change from the root, oldest first.
+    fn flatten(self: &Rc<Self>) -> Vec<(usize, f64, f64)> {
+        let mut chain: Vec<&Rc<Self>> = Vec::new();
+        let mut at = Some(self);
+        while let Some(c) = at {
+            chain.push(c);
+            at = c.parent.as_ref();
+        }
+        chain
+            .iter()
+            .rev()
+            .flat_map(|c| c.list.iter().copied())
+            .collect()
+    }
+}
+
+/// An open node: the bounds that define it, its parent's bound, and the basis
+/// to start from.
+struct Node {
+    changes: Rc<Changes>,
+    bound: f64,
+    snapshot: Snapshot,
+}
+
+/// The value a whole column must take in every solution of value at least
+/// `bound.value - gap`: the bound its reduced cost points to, when moving it
+/// from there by 1 would take the dual bound down by more than `gap`. `None`
+/// when it is fixed already or free to move.
+fn forced_value(bound: &DualBound, lo: f64, hi: f64, j: usize, gap: f64) -> Option<f64> {
+    if lo == hi {
+        return None;
+    }
+    let r = bound.reduced_costs[j];
+    (r.abs() - bound.reduced_cost_error > gap).then_some(if r > 0.0 { hi } else { lo })
+}
+
+struct Context<'s, 'p> {
+    /// Whether the program holds the row of the objective's range.
+    bounded: bool,
+    lp: &'s mut BoundedSimplex,
+    program: &'s MixedBinaryProgram<'p>,
+    shape: &'s Shape,
+    root: &'s DualBound,
+    budget: &'s mut Budget,
+}
+
+impl Context<'_, '_> {
+    /// Looks for solutions of value at least `threshold`. Without `improve`,
+    /// the first one found ends the search. With it, each one found raises the
+    /// threshold above its value.
+    fn search(
+        &mut self,
+        threshold: f64,
+        improve: bool,
+        best: &mut Option<(Vec<f64>, f64)>,
+    ) -> Result<End, MipError> {
+        let n = self.program.cost.len();
+        let gap = self.root.value - threshold;
+        let fixed: Vec<(usize, f64)> = (0..n)
+            .filter(|&j| self.shape.whole[j])
+            .filter_map(|j| {
+                let (lo, hi) = self.lp.bounds(j);
+                forced_value(self.root, lo, hi, j, gap).map(|b| (j, b))
+            })
+            .collect();
+        let open = (0..n)
+            .filter(|&j| self.shape.whole[j] && self.lp.bounds(j).0 != self.lp.bounds(j).1)
+            .count();
+        let shrinks =
+            !fixed.is_empty() && ((open - fixed.len()) as f64) <= COMPRESS_SHARE * open as f64;
+        if shrinks || (!self.bounded && open - fixed.len() <= CUT_COLUMNS) {
+            return self.search_compressed(&fixed, threshold, improve, best);
+        }
+        if open - fixed.len() <= SEARCH_COLUMNS && !improve {
+            let mut start = self.lp.values();
+            let mut frozen = vec![false; n];
+            for &(j, b) in &fixed {
+                start[j] = b;
+                frozen[j] = true;
+            }
+            let tolerance: Vec<f64> = (0..self.program.rows)
+                .map(|i| self.lp.row_tolerance(i))
+                .collect();
+            if let Some(found) = local_search(
+                self.program,
+                self.shape,
+                &start,
+                &frozen,
+                threshold,
+                threshold,
+                &tolerance,
+            ) {
+                *best = Some(found);
+                return Ok(End::Done);
+            }
+        }
+        self.search_in_place(&fixed, threshold, improve, best)
+    }
+
+    /// The search on the columns that are not fixed, as a program of its own.
+    fn search_compressed(
+        &mut self,
+        fixed: &[(usize, f64)],
+        threshold: f64,
+        improve: bool,
+        best: &mut Option<(Vec<f64>, f64)>,
+    ) -> Result<End, MipError> {
+        let n = self.program.cost.len();
+        let mut keep = vec![true; n];
+        let mut value: Vec<f64> = vec![0.0; n];
+        for j in 0..n {
+            let (lo, hi) = self.lp.bounds(j);
+            if lo == hi {
+                keep[j] = false;
+                value[j] = lo;
+            }
+        }
+        for &(j, b) in fixed {
+            keep[j] = false;
+            value[j] = b;
+        }
+        let mut sub = Reduced::new(self.program, &keep, &value);
+        let goal = Goal {
+            cutoff: threshold - sub.fixed_objective,
+            ceiling: if improve {
+                f64::INFINITY
+            } else {
+                threshold - sub.fixed_objective
+            },
+            heuristics: false,
+            cuts: true,
+            bounded: true,
+            levels: !improve,
+        };
+        let mut rows = self.program.rows;
+        if !self.bounded {
+            sub.add_objective_row(rows, goal.cutoff, goal.ceiling);
+            rows += 1;
+        }
+        let outcome = search_program(&sub.program(rows), &goal, self.budget)?;
+        if let Some((x, _)) = outcome.best {
+            let full = sub.expand(&x);
+            let objective = objective(self.program, &full);
+            if best.as_ref().is_none_or(|(_, v)| objective > *v) {
+                *best = Some((full, objective));
+            }
+        }
+        Ok(match outcome.status {
+            Status::Optimal => End::Done,
+            status => End::Stopped {
+                status,
+                bound: outcome.bound + sub.fixed_objective,
+            },
+        })
+    }
+
+    /// Branch and bound on the relaxation itself, with `fixed` as the bounds of
+    /// the level. The relaxation is put back to the root afterwards.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one loop over the nodes, whose steps share their state"
+    )]
+    fn search_in_place(
+        &mut self,
+        fixed: &[(usize, f64)],
+        mut threshold: f64,
+        improve: bool,
+        best: &mut Option<(Vec<f64>, f64)>,
+    ) -> Result<End, MipError> {
+        let n = self.program.cost.len();
+        let root_snapshot = self.lp.snapshot();
+        let mut base_lo = Vec::with_capacity(n);
+        let mut base_hi = Vec::with_capacity(n);
+        for j in 0..n {
+            let (lo, hi) = self.lp.bounds(j);
+            base_lo.push(lo);
+            base_hi.push(hi);
+        }
+        for &(j, b) in fixed {
+            self.lp.set_bounds(j, b, b).map_err(MipError::Lp)?;
+            base_lo[j] = b;
+            base_hi[j] = b;
+        }
+        let step = self.shape.step;
+        // The fixed columns may sit at their other bound in the root basis.
+        match self.lp.solve(self.budget.deadline) {
+            Ok(()) => {}
+            Err(BoundedLpError::Infeasible) => {
+                self.restore_root(&[], fixed, &root_snapshot)?;
+                return Ok(End::Done);
+            }
+            Err(BoundedLpError::TimeLimit) => {
+                self.restore_root(&[], fixed, &root_snapshot)?;
+                return Ok(End::Stopped {
+                    status: Status::TimeLimit,
+                    bound: self.root.value,
+                });
+            }
+            Err(e) => return Err(MipError::Lp(e)),
+        }
+        let mut bound = tight_bound(self.lp, self.budget)?;
+        let mut current = Rc::new(Changes {
+            list: Vec::new(),
+            parent: None,
+        });
+        let mut applied: Vec<usize> = Vec::new();
+        let mut stack: Vec<Node> = Vec::new();
+        let mut backtracks = 0_usize;
+        let mut processed = 0_usize;
+        let end = 'search: loop {
+            'node: {
+                if bound.value < threshold {
+                    break 'node;
+                }
+                // Columns the bound forces, where the relaxation has them
+                // already, so that it stays solved.
+                let mut fixings: Vec<(usize, f64, f64)> = Vec::new();
+                let gap = bound.value - threshold;
+                for j in (0..n).filter(|&j| self.shape.whole[j]) {
+                    let (lo, hi) = self.lp.bounds(j);
+                    let Some(b) = forced_value(&bound, lo, hi, j, gap) else {
+                        continue;
+                    };
+                    if self.lp.at_bound(j) == Some(b) {
+                        self.lp.set_bounds(j, b, b).map_err(MipError::Lp)?;
+                        applied.push(j);
+                        fixings.push((j, b, b));
+                    }
+                }
+                // Now and then, a local search from the node's point.
+                processed += 1;
+                if processed % SEARCH_EVERY == 0 && n <= SEARCH_COLUMNS {
+                    let start = self.lp.values();
+                    let frozen: Vec<bool> = (0..n)
+                        .map(|j| {
+                            let (lo, hi) = self.lp.bounds(j);
+                            lo == hi
+                        })
+                        .collect();
+                    let tolerance: Vec<f64> = (0..self.program.rows)
+                        .map(|i| self.lp.row_tolerance(i))
+                        .collect();
+                    let ceiling = if improve { f64::INFINITY } else { threshold };
+                    if let Some((x, value)) = local_search(
+                        self.program,
+                        self.shape,
+                        &start,
+                        &frozen,
+                        threshold,
+                        ceiling,
+                        &tolerance,
+                    ) {
+                        if best.as_ref().is_none_or(|(_, b)| value > *b) {
+                            *best = Some((x, value));
+                        }
+                        if !improve {
+                            break 'search End::Done;
+                        }
+                        threshold = improved(value, step);
+                        if bound.value < threshold {
+                            break 'node;
+                        }
+                    }
+                }
+                let Some((j, v)) = branching_column(self.lp, self.shape) else {
+                    let (x, value) = rounded_point(self.lp, self.program)?;
+                    if reaches(value, threshold) {
+                        if best.as_ref().is_none_or(|(_, b)| value > *b) {
+                            *best = Some((x, value));
+                        }
+                        if !improve {
+                            break 'search End::Done;
+                        }
+                        threshold = improved(value, step);
+                    }
+                    break 'node;
+                };
+                if let Some(status) = self.budget.hit() {
+                    break 'search End::Stopped {
+                        status,
+                        bound: open_bound(&stack, bound.value),
+                    };
+                }
+                let (lo, hi) = self.lp.bounds(j);
+                // Down: `x <= floor(v)`. Up: `x >= ceil(v)`. The side the value
+                // is nearer to, up on a tie, is solved first.
+                let down = (lo, v.floor());
+                let up = (v.ceil(), hi);
+                let (near, far) = if v - v.floor() >= 0.5 {
+                    (up, down)
+                } else {
+                    (down, up)
+                };
+                let parent = if fixings.is_empty() {
+                    current.clone()
+                } else {
+                    Rc::new(Changes {
+                        list: fixings,
+                        parent: Some(current.clone()),
+                    })
+                };
+                stack.push(Node {
+                    changes: Rc::new(Changes {
+                        list: vec![(j, far.0, far.1)],
+                        parent: Some(parent.clone()),
+                    }),
+                    bound: bound.value,
+                    snapshot: self.lp.snapshot(),
+                });
+                current = Rc::new(Changes {
+                    list: vec![(j, near.0, near.1)],
+                    parent: Some(parent),
+                });
+                self.lp
+                    .set_bounds(j, near.0, near.1)
+                    .map_err(MipError::Lp)?;
+                applied.push(j);
+                match self.lp.solve(self.budget.deadline) {
+                    Ok(()) => {
+                        self.budget.nodes += 1;
+                        bound = tight_bound(self.lp, self.budget)?;
+                        continue 'search;
+                    }
+                    Err(BoundedLpError::Infeasible) => {}
+                    Err(BoundedLpError::TimeLimit) => {
+                        break 'search End::Stopped {
+                            status: Status::TimeLimit,
+                            bound: open_bound(&stack, bound.value),
+                        };
+                    }
+                    Err(e) => return Err(MipError::Lp(e)),
+                }
+            }
+            // Backtrack: the latest open node, for `PLUNGE` times in a row, then
+            // the one with the best bound, the latest of equals.
+            loop {
+                stack.retain(|node| node.bound >= threshold);
+                let pick = if backtracks < PLUNGE {
+                    backtracks += 1;
+                    stack.len().checked_sub(1)
+                } else {
+                    backtracks = 0;
+                    let mut pick: Option<usize> = None;
+                    for (i, node) in stack.iter().enumerate() {
+                        if pick.is_none_or(|p| node.bound >= stack[p].bound) {
+                            pick = Some(i);
+                        }
+                    }
+                    pick
+                };
+                let Some(pick) = pick else {
+                    break 'search End::Done;
+                };
+                if let Some(status) = self.budget.hit() {
+                    break 'search End::Stopped {
+                        status,
+                        bound: open_bound(&stack, f64::NEG_INFINITY),
+                    };
+                }
+                let node = stack.remove(pick);
+                for &j in &applied {
+                    self.lp
+                        .set_bounds(j, base_lo[j], base_hi[j])
+                        .map_err(MipError::Lp)?;
+                }
+                applied.clear();
+                for (j, lo, hi) in node.changes.flatten() {
+                    self.lp.set_bounds(j, lo, hi).map_err(MipError::Lp)?;
+                    applied.push(j);
+                }
+                current = node.changes;
+                self.lp.restore(&node.snapshot);
+                match self.lp.solve(self.budget.deadline) {
+                    Ok(()) => {
+                        self.budget.nodes += 1;
+                        bound = tight_bound(self.lp, self.budget)?;
+                        continue 'search;
+                    }
+                    Err(BoundedLpError::Infeasible) => {}
+                    Err(BoundedLpError::TimeLimit) => {
+                        break 'search End::Stopped {
+                            status: Status::TimeLimit,
+                            bound: open_bound(&stack, node.bound),
+                        };
+                    }
+                    Err(e) => return Err(MipError::Lp(e)),
+                }
+            }
+        };
+        self.restore_root(&applied, fixed, &root_snapshot)?;
+        Ok(end)
+    }
+
+    /// Puts the bounds of the changed columns back and solves from the root
+    /// basis again.
+    fn restore_root(
+        &mut self,
+        applied: &[usize],
+        fixed: &[(usize, f64)],
+        snapshot: &Snapshot,
+    ) -> Result<(), MipError> {
+        for j in applied.iter().copied().chain(fixed.iter().map(|f| f.0)) {
+            self.lp
+                .set_bounds(j, self.program.col_lo[j], self.program.col_hi[j])
+                .map_err(MipError::Lp)?;
+        }
+        self.lp.restore(snapshot);
+        match self.lp.solve(self.budget.deadline) {
+            Ok(()) | Err(BoundedLpError::TimeLimit) => Ok(()),
+            Err(e) => Err(MipError::Lp(e)),
+        }
+    }
+}
+
+/// The largest bound among the open nodes and `current`.
+fn open_bound(stack: &[Node], current: f64) -> f64 {
+    stack.iter().fold(current, |acc, node| acc.max(node.bound))
+}
+
+/// The fractional whole column to branch on among the basic ones: a general
+/// integer column before a binary one, then the furthest from a whole value,
+/// then the lowest index.
+fn branching_column(lp: &BoundedSimplex, shape: &Shape) -> Option<(usize, f64)> {
+    let mut branch: Option<(usize, f64, bool, f64)> = None;
     for (j, v) in lp.basic_columns() {
-        let general = program.integer.get(j).copied().unwrap_or(false) && !program.binary[j];
-        if !(program.binary[j] || general) {
+        if !shape.whole[j] {
             continue;
         }
         let (lo, hi) = lp.bounds(j);
-        let dist = (v - v.round()).abs();
-        if lo != hi && dist > INT_TOL * v.abs().max(1.0) {
-            out.push((j, v, general, dist));
-        }
-    }
-    out.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.total_cmp(&a.3)).then(a.0.cmp(&b.0)));
-    out.into_iter().map(|(j, v, _, _)| (j, v)).collect()
-}
-
-/// Rounds the root relaxation to an integer solution by diving.
-///
-/// All the fractional columns of the relaxation are fixed to their nearest whole
-/// value at once and the relaxation is solved again, and this repeats until it is
-/// whole. When fixing them all makes the relaxation infeasible, only the most
-/// fractional is fixed, to its nearest value and else to the other. The dive
-/// gives up when that fails too or after [`DIVE_LIMIT`] relaxations. The bounds
-/// and the basis are put back afterwards. A whole point is a solution of the
-/// program and can only raise the incumbent.
-fn rounding_dive(
-    program: &MixedBinaryProgram<'_>,
-    lp: &mut BoundedSimplex,
-    deadline: Option<Instant>,
-    incumbent: &mut Option<(Vec<f64>, f64)>,
-    nodes: &mut u64,
-) -> Result<(), MipError> {
-    let snapshot = lp.snapshot();
-    let mut changed: Vec<usize> = Vec::new();
-    let mut solves = 0_u64;
-    'dive: while solves < DIVE_LIMIT {
-        let fractional = fractional_columns(lp, program);
-        if fractional.is_empty() {
-            let (x, objective) = rounded_point(lp, program)?;
-            if incumbent.as_ref().is_none_or(|(_, v)| objective > *v) {
-                *incumbent = Some((x, objective));
-            }
-            break;
-        }
-        let try_fix = |lp: &mut BoundedSimplex, fixes: &[(usize, f64)]| -> Result<bool, MipError> {
-            for &(j, value) in fixes {
-                lp.set_bounds(j, value, value).map_err(MipError::Lp)?;
-            }
-            match lp.solve(deadline) {
-                Ok(()) => Ok(true),
-                Err(BoundedLpError::Infeasible) => Ok(false),
-                Err(BoundedLpError::TimeLimit) => Err(MipError::NoSolution {
-                    status: Status::TimeLimit,
-                    bound: f64::INFINITY,
-                }),
-                Err(e) => Err(MipError::Lp(e)),
-            }
-        };
-        let restore = |lp: &mut BoundedSimplex, fixes: &[(usize, f64)]| -> Result<(), MipError> {
-            for &(j, _) in fixes {
-                lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
-                    .map_err(MipError::Lp)?;
-            }
-            Ok(())
-        };
-        let all: Vec<(usize, f64)> = fractional.iter().map(|&(j, v)| (j, v.round())).collect();
-        solves += 1;
-        let before = lp.snapshot();
-        let ok = match try_fix(lp, &all) {
-            Err(MipError::NoSolution { .. }) => break 'dive,
-            other => other?,
-        };
-        if ok {
-            changed.extend(all.iter().map(|&(j, _)| j));
+        if lo == hi {
             continue;
         }
-        restore(lp, &all)?;
-        lp.restore(&before);
-        let (j, v) = fractional[0];
-        for value in [v.round(), if v.round() > v { v.floor() } else { v.ceil() }] {
-            solves += 1;
-            let single = [(j, value)];
-            let r = try_fix(lp, &single);
-            if matches!(r, Ok(true)) {
-                changed.push(j);
-                continue 'dive;
-            }
-            restore(lp, &single)?;
-            lp.restore(&before);
+        let dist = (v - v.round()).abs();
+        if dist <= INT_TOL * v.abs().max(1.0) {
+            continue;
         }
-        break;
+        let general = shape.general[j];
+        let better = match branch {
+            None => true,
+            Some((bj, _, bg, bd)) => {
+                (general && !bg) || (general == bg && (dist > bd || (dist == bd && j < bj)))
+            }
+        };
+        if better {
+            branch = Some((j, v, general, dist));
+        }
     }
-    *nodes += solves;
-    for j in changed {
-        lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
-            .map_err(MipError::Lp)?;
+    branch.map(|(j, v, _, _)| (j, v))
+}
+
+/// A program on some of the columns of another, the others fixed and moved
+/// into the row bounds.
+struct Reduced {
+    kept: Vec<usize>,
+    fixed_value: Vec<f64>,
+    fixed_objective: f64,
+    columns: Vec<f64>,
+    cost: Vec<f64>,
+    col_lo: Vec<f64>,
+    col_hi: Vec<f64>,
+    row_lo: Vec<f64>,
+    row_hi: Vec<f64>,
+    binary: Vec<bool>,
+    integer: Vec<bool>,
+}
+
+impl Reduced {
+    /// Keeps the columns where `keep` is true and fixes the others at `value`.
+    fn new(program: &MixedBinaryProgram<'_>, keep: &[bool], value: &[f64]) -> Self {
+        let n = program.cost.len();
+        let m = program.rows;
+        let kept: Vec<usize> = (0..n).filter(|&j| keep[j]).collect();
+        let mut fixed_value = vec![0.0; n];
+        let mut activity = vec![0.0; m];
+        let mut fixed_objective = 0.0;
+        for j in (0..n).filter(|&j| !keep[j]) {
+            let v = value[j];
+            fixed_value[j] = v;
+            if v != 0.0 {
+                fixed_objective += program.cost[j] * v;
+                let column = &program.columns[j * m..(j + 1) * m];
+                for i in 0..m {
+                    activity[i] += column[i] * v;
+                }
+            }
+        }
+        let mut columns = Vec::with_capacity(kept.len() * m);
+        for &j in &kept {
+            columns.extend_from_slice(&program.columns[j * m..(j + 1) * m]);
+        }
+        Self {
+            fixed_value,
+            fixed_objective,
+            columns,
+            cost: kept.iter().map(|&j| program.cost[j]).collect(),
+            col_lo: kept.iter().map(|&j| program.col_lo[j]).collect(),
+            col_hi: kept.iter().map(|&j| program.col_hi[j]).collect(),
+            row_lo: (0..m).map(|i| program.row_lo[i] - activity[i]).collect(),
+            row_hi: (0..m).map(|i| program.row_hi[i] - activity[i]).collect(),
+            binary: kept.iter().map(|&j| program.binary[j]).collect(),
+            integer: kept
+                .iter()
+                .map(|&j| program.integer.get(j).copied().unwrap_or(false))
+                .collect(),
+            kept,
+        }
     }
-    lp.restore(&snapshot);
-    match lp.solve(deadline) {
-        Ok(()) | Err(BoundedLpError::TimeLimit) => Ok(()),
-        Err(e) => Err(MipError::Lp(e)),
+
+    /// Adds the row `lo ≤ c'x ≤ hi` on the kept columns, after the `rows` rows.
+    fn add_objective_row(&mut self, rows: usize, lo: f64, hi: f64) {
+        let k = self.kept.len();
+        let mut columns = Vec::with_capacity(k * (rows + 1));
+        for c in 0..k {
+            columns.extend_from_slice(&self.columns[c * rows..(c + 1) * rows]);
+            columns.push(self.cost[c]);
+        }
+        self.columns = columns;
+        self.row_lo.push(lo);
+        self.row_hi
+            .push(if hi.is_finite() { hi } else { f64::INFINITY });
+    }
+
+    fn program(&self, rows: usize) -> MixedBinaryProgram<'_> {
+        MixedBinaryProgram {
+            rows,
+            columns: &self.columns,
+            cost: &self.cost,
+            col_lo: &self.col_lo,
+            col_hi: &self.col_hi,
+            row_lo: &self.row_lo,
+            row_hi: &self.row_hi,
+            binary: &self.binary,
+            integer: &self.integer,
+        }
+    }
+
+    /// A point of the whole program from one of this.
+    fn expand(&self, x: &[f64]) -> Vec<f64> {
+        let mut full = self.fixed_value.clone();
+        for (k, &j) in self.kept.iter().enumerate() {
+            full[j] = x[k];
+        }
+        full
     }
 }
+
+/// A share of the whole columns. When the fixing of a level leaves at most this
+/// share free, the level is searched on the free columns alone.
+const COMPRESS_SHARE: f64 = 0.5;
 
 /// Sizes of the free sets of the neighbourhood search, in binary columns.
 const NEIGHBOURHOODS: [usize; 5] = [64, 256, 1024, 4096, 16384];
 
 /// The relaxations a neighbourhood's own search may solve.
-const NEIGHBOURHOOD_NODES: u64 = 2000;
+const NEIGHBOURHOOD_NODES: u64 = 250;
 
 /// Looks for integer solutions near the root relaxation.
 ///
 /// The binary columns are ordered by the size of their reduced cost at the
-/// root optimum, which is zero for the basic ones, and the `f` first are kept
-/// free while the rest are fixed to their rounded relaxation values. The
-/// program on the free columns, with the fixed ones moved to the row bounds, is
-/// solved by the same search without this step, within a node limit and a
-/// quarter of the time left. The sizes `f` grow through
-/// [`NEIGHBOURHOODS`]. The search ends when a solution reaches `target`.
+/// root, which is zero for the basic ones, so every fractional one comes first,
+/// and the `f` first are kept free while the rest are fixed to their rounded
+/// relaxation values. The program on the free columns, with the fixed ones moved
+/// to the row bounds, is searched for a solution better than the best so far,
+/// within [`NEIGHBOURHOOD_NODES`] relaxations and a quarter of the time left.
+/// The sizes `f` grow through [`NEIGHBOURHOODS`]. The search ends when a
+/// solution reaches `upper`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the program, its root and the search state, each used once"
+)]
 fn neighbourhood_search(
     program: &MixedBinaryProgram<'_>,
-    lp: &BoundedSimplex,
-    deadline: Option<Instant>,
-    target: Option<f64>,
-    incumbent: &mut Option<(Vec<f64>, f64)>,
-    nodes: &mut u64,
-) {
+    shape: &Shape,
+    lp: &mut BoundedSimplex,
+    root: &DualBound,
+    upper: f64,
+    cutoff: f64,
+    budget: &mut Budget,
+    best: &mut Option<(Vec<f64>, f64)>,
+) -> Result<(), MipError> {
     let n = program.cost.len();
     let m = program.rows;
-    let x = lp.values();
-    let d = lp.reduced_costs();
+    let Some((x, centre_bound, basic)) = centre(program, shape, lp, root, budget)? else {
+        return Ok(());
+    };
+    let r = &centre_bound.reduced_costs;
     let mut order: Vec<usize> = (0..n)
         .filter(|&j| program.binary[j] && program.col_lo[j] != program.col_hi[j])
         .collect();
-    order.sort_by(|&a, &b| d[a].abs().total_cmp(&d[b].abs()).then(a.cmp(&b)));
+    order.sort_by(|&a, &b| {
+        basic[b]
+            .cmp(&basic[a])
+            .then(r[a].abs().total_cmp(&r[b].abs()))
+            .then(a.cmp(&b))
+    });
     for &size in &NEIGHBOURHOODS {
-        if size >= order.len() {
-            break;
+        if size >= order.len() || budget.hit().is_some() {
+            return Ok(());
         }
-        if deadline.is_some_and(|dl| Instant::now() >= dl) {
-            return;
-        }
-        let mut free = vec![false; n];
+        let mut keep: Vec<bool> = program.binary.iter().map(|b| !b).collect();
         for &j in &order[..size] {
-            free[j] = true;
+            keep[j] = true;
         }
-        for (f, &b) in free.iter_mut().zip(program.binary) {
-            if !b {
-                *f = true;
-            }
-        }
-        let kept: Vec<usize> = (0..n).filter(|&j| free[j]).collect();
-        let mut fixed_activity = vec![0.0; m];
-        let mut fixed_value = vec![0.0; n];
-        for j in (0..n).filter(|&j| !free[j]) {
-            let v = if program.col_lo[j] == program.col_hi[j] {
-                program.col_lo[j]
-            } else {
-                x[j].round()
-            };
-            fixed_value[j] = v;
-            if v != 0.0 {
-                let column = &program.columns[j * m..(j + 1) * m];
-                for i in 0..m {
-                    fixed_activity[i] += column[i] * v;
+        let value: Vec<f64> = (0..n)
+            .map(|j| {
+                if program.col_lo[j] == program.col_hi[j] {
+                    program.col_lo[j]
+                } else {
+                    x[j].round()
                 }
-            }
-        }
-        let mut columns = Vec::with_capacity(kept.len() * m);
-        let mut integer = Vec::with_capacity(kept.len());
-        let (mut cost, mut col_lo, mut col_hi, mut binary) = (
-            Vec::with_capacity(kept.len()),
-            Vec::with_capacity(kept.len()),
-            Vec::with_capacity(kept.len()),
-            Vec::with_capacity(kept.len()),
-        );
-        for &j in &kept {
-            columns.extend_from_slice(&program.columns[j * m..(j + 1) * m]);
-            cost.push(program.cost[j]);
-            col_lo.push(program.col_lo[j]);
-            col_hi.push(program.col_hi[j]);
-            binary.push(program.binary[j]);
-            integer.push(program.integer.get(j).copied().unwrap_or(false));
-        }
-        let row_lo: Vec<f64> = (0..m)
-            .map(|i| program.row_lo[i] - fixed_activity[i])
+            })
             .collect();
-        let row_hi: Vec<f64> = (0..m)
-            .map(|i| program.row_hi[i] - fixed_activity[i])
-            .collect();
-        let sub = MixedBinaryProgram {
-            rows: m,
-            columns: &columns,
-            cost: &cost,
-            col_lo: &col_lo,
-            col_hi: &col_hi,
-            row_lo: &row_lo,
-            row_hi: &row_hi,
-            binary: &binary,
-            integer: &integer,
-        };
-        let sub_deadline = deadline.map(|dl| {
-            let now = Instant::now();
-            now + dl.saturating_duration_since(now) / 4
+        let sub = Reduced::new(program, &keep, &value);
+        let wanted = best.as_ref().map_or(cutoff, |(_, v)| match shape.step {
+            Some(g) => (v + g).max(cutoff),
+            None => improvement(*v).max(cutoff),
         });
-        let sub_options = Options {
-            node_limit: Some(NEIGHBOURHOOD_NODES),
-            time_limit: None,
-            neighbourhood_search: false,
+        let goal = Goal {
+            cutoff: wanted - sub.fixed_objective,
+            ceiling: upper - sub.fixed_objective,
+            heuristics: false,
+            cuts: false,
+            bounded: false,
+            levels: false,
         };
-        let Ok(solution) = solve_with_deadline(&sub, &sub_options, sub_deadline) else {
+        let remaining = budget
+            .node_limit
+            .map_or(NEIGHBOURHOOD_NODES, |l| l.saturating_sub(budget.nodes))
+            .min(NEIGHBOURHOOD_NODES);
+        let mut own = Budget {
+            node_limit: Some(remaining),
+            deadline: budget.deadline.map(|dl| {
+                let now = Instant::now();
+                now + dl.saturating_duration_since(now) / 4
+            }),
+            nodes: 0,
+            pivots: 0,
+        };
+        let outcome = search_program(&sub.program(m), &goal, &mut own);
+        budget.nodes += own.nodes;
+        budget.pivots += own.pivots;
+        let Ok(outcome) = outcome else {
             continue;
         };
-        *nodes += solution.nodes;
-        let mut full = fixed_value;
-        for (k, &j) in kept.iter().enumerate() {
-            full[j] = solution.x[k];
-        }
-        let objective: f64 = full.iter().zip(program.cost).map(|(v, c)| v * c).sum();
-        // The sub-problem's rows are the program's rows, so the point is
-        // feasible for it to the sub-problem's tolerance, checked again here.
-        let act = activity(program, &full);
-        let ok = (0..m).all(|i| {
-            let tol = lp.row_tolerance(i) * 10.0;
-            act[i] >= program.row_lo[i] - tol && act[i] <= program.row_hi[i] + tol
-        });
-        if ok && incumbent.as_ref().is_none_or(|(_, v)| objective > *v) {
-            *incumbent = Some((full, objective));
-        }
-        if let (Some(t), Some((_, v))) = (target, incumbent.as_ref()) {
-            if *v >= t - 0.5 {
-                return;
+        if let Some((xs, _)) = outcome.best {
+            let full = sub.expand(&xs);
+            // The sub-problem's rows are the program's rows moved by the fixed
+            // columns, so the point is feasible to the sub-problem's tolerance;
+            // it is checked again here with ten times the row tolerance.
+            let act = activity(program, &full);
+            let ok = (0..m).all(|i| {
+                let tol = lp.row_tolerance(i) * 10.0;
+                act[i] >= program.row_lo[i] - tol && act[i] <= program.row_hi[i] + tol
+            });
+            let value = objective(program, &full);
+            if ok && best.as_ref().is_none_or(|(_, v)| value > *v) {
+                *best = Some((full, value));
             }
         }
+        if best.as_ref().is_some_and(|(_, v)| reaches(*v, upper)) {
+            return Ok(());
+        }
     }
+    Ok(())
 }
 
-/// The LP point with its binary columns rounded, checked against the rows.
+/// The centre of the neighbourhoods: the root relaxation with its fractional
+/// general integer columns fixed in turn to their nearest whole value, or the
+/// other one when that is infeasible, and solved again. Returns its point, its
+/// dual bound and which columns are basic, with the relaxation put back to the
+/// root afterwards, or `None` when no whole values are feasible.
+#[expect(
+    clippy::type_complexity,
+    reason = "a point, its bound and its basic columns"
+)]
+fn centre(
+    program: &MixedBinaryProgram<'_>,
+    shape: &Shape,
+    lp: &mut BoundedSimplex,
+    root: &DualBound,
+    budget: &mut Budget,
+) -> Result<Option<(Vec<f64>, DualBound, Vec<bool>)>, MipError> {
+    let n = program.cost.len();
+    let snapshot = lp.snapshot();
+    let mut changed: Vec<usize> = Vec::new();
+    let mut bound = root.clone();
+    let mut feasible = true;
+    while let Some((j, v)) = lp
+        .basic_columns()
+        .filter(|&(j, v)| shape.general[j] && (v - v.round()).abs() > INT_TOL * v.abs().max(1.0))
+        .min_by_key(|&(j, _)| j)
+    {
+        let near = v.round();
+        let other = if near > v { v.floor() } else { v.ceil() };
+        let mut placed = false;
+        for value in [near, other] {
+            lp.set_bounds(j, value, value).map_err(MipError::Lp)?;
+            changed.push(j);
+            match lp.solve(budget.deadline) {
+                Ok(()) => {
+                    budget.nodes += 1;
+                    placed = true;
+                    break;
+                }
+                Err(BoundedLpError::Infeasible | BoundedLpError::TimeLimit) => {}
+                Err(e) => return Err(MipError::Lp(e)),
+            }
+        }
+        if !placed {
+            feasible = false;
+            break;
+        }
+        bound = tight_bound(lp, budget)?;
+    }
+    let result = feasible.then(|| {
+        let mut basic = vec![false; n];
+        for (j, _) in lp.basic_columns() {
+            basic[j] = true;
+        }
+        (lp.values(), bound, basic)
+    });
+    if !changed.is_empty() {
+        for &j in &changed {
+            lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
+                .map_err(MipError::Lp)?;
+        }
+        lp.restore(&snapshot);
+        match lp.solve(budget.deadline) {
+            Ok(()) | Err(BoundedLpError::TimeLimit) => {}
+            Err(e) => return Err(MipError::Lp(e)),
+        }
+    }
+    Ok(result)
+}
+
+fn objective(program: &MixedBinaryProgram<'_>, x: &[f64]) -> f64 {
+    x.iter().zip(program.cost).map(|(v, c)| v * c).sum()
+}
+
+/// The LP point with its whole columns rounded, checked against the rows.
 fn rounded_point(
     lp: &BoundedSimplex,
     program: &MixedBinaryProgram<'_>,
@@ -870,7 +2161,7 @@ fn rounded_point(
             return Err(MipError::Numerical);
         }
     }
-    let objective: f64 = x.iter().zip(program.cost).map(|(v, c)| v * c).sum();
+    let objective = objective(program, &x);
     Ok((x, objective))
 }
 
@@ -1081,43 +2372,321 @@ mod tests {
 
     #[test]
     fn node_limit_reports_a_gap_and_is_not_optimal() {
-        // A knapsack that needs branching.
-        let n = 40;
+        // A knapsack with two rows and a fractional root relaxation.
+        let n = 120;
         let mut rng = Rng(5);
-        let w: Vec<f64> = (0..n).map(|_| rng.uniform(1.0, 10.0)).collect();
-        let c: Vec<f64> = w.iter().map(|v| (v * 3.0).round()).collect();
+        let mut w = Vec::with_capacity(2 * n);
+        for _ in 0..n {
+            w.push(rng.uniform(1.0, 10.0));
+            w.push(rng.uniform(1.0, 10.0));
+        }
+        let c: Vec<f64> = (0..n)
+            .map(|j| (w[2 * j] * 3.0 + w[2 * j + 1]).round())
+            .collect();
         let program = MixedBinaryProgram {
-            rows: 1,
+            rows: 2,
             columns: &w,
             cost: &c,
             col_lo: &vec![0.0; n],
             col_hi: &vec![1.0; n],
-            row_lo: &[-INF],
-            row_hi: &[50.0],
+            row_lo: &[-INF, -INF],
+            row_hi: &[150.0, 140.0],
             binary: &vec![true; n],
             integer: &[],
         };
-        let full = solve(&program, &Options::default()).unwrap();
-        assert_eq!(full.status, Status::Optimal);
-        let cut = solve(
-            &program,
-            &Options {
-                node_limit: Some(3),
-                time_limit: None,
-                ..Options::default()
-            },
-        );
-        match cut {
-            Ok(s) => {
-                assert_eq!(s.status, Status::NodeLimit);
-                assert!(s.bound >= full.objective - 1e-9);
-                assert!(s.objective <= full.objective + 1e-9);
+        let limited = Options {
+            node_limit: Some(20_000),
+            ..Options::default()
+        };
+        let full = solve(&program, &limited).unwrap();
+        for (heuristics, nodes) in [(false, 1), (true, 2), (true, 3)] {
+            let cut = solve(
+                &program,
+                &Options {
+                    node_limit: Some(nodes),
+                    time_limit: None,
+                    neighbourhood_search: heuristics,
+                },
+            );
+            match cut {
+                Ok(s) if s.status == Status::Optimal => {
+                    assert!(heuristics, "the root relaxation is fractional");
+                    assert_eq!(s.objective, full.objective);
+                    assert_eq!(s.gap(), 0.0);
+                }
+                Ok(s) => {
+                    assert_eq!(s.status, Status::NodeLimit);
+                    assert!(s.gap() > 0.0);
+                    assert!(s.bound >= full.objective - 1e-9);
+                    assert!(s.objective <= full.bound + 1e-9);
+                }
+                Err(MipError::NoSolution { status, bound }) => {
+                    assert_eq!(status, Status::NodeLimit);
+                    assert!(bound >= full.objective - 1e-9);
+                }
+                Err(e) => panic!("{e}"),
             }
-            Err(MipError::NoSolution { status, bound }) => {
-                assert_eq!(status, Status::NodeLimit);
-                assert!(bound >= full.objective - 1e-9);
-            }
-            Err(e) => panic!("{e}"),
         }
+    }
+
+    /// A random program of the shape of profile matching: `x` binary, `t` a
+    /// whole column with `Σ x - t = 0` and, per covariate,
+    /// `Σ x v - (μ + tol) t ≤ 0` and `Σ x v - (μ - tol) t ≥ 0`.
+    struct Random {
+        m: usize,
+        nbin: usize,
+        columns: Vec<f64>,
+        cost: Vec<f64>,
+        col_lo: Vec<f64>,
+        col_hi: Vec<f64>,
+        row_lo: Vec<f64>,
+        row_hi: Vec<f64>,
+        binary: Vec<bool>,
+        integer: Vec<bool>,
+    }
+
+    impl Random {
+        fn profile(rng: &mut Rng, nbin: usize, p: usize) -> Self {
+            let m = 1 + 2 * p;
+            let n = nbin + 1;
+            let mut columns = vec![0.0; n * m];
+            for j in 0..nbin {
+                columns[j * m] = 1.0;
+            }
+            columns[nbin * m] = -1.0;
+            let mut row_lo = vec![0.0; m];
+            let mut row_hi = vec![0.0; m];
+            for c in 0..p {
+                let v: Vec<f64> = (0..nbin).map(|_| rng.uniform(-1.0, 1.0)).collect();
+                let mu = rng.uniform(-0.3, 0.3);
+                let tol = rng.uniform(0.05, 0.3);
+                for j in 0..nbin {
+                    columns[j * m + 1 + c] = v[j];
+                    columns[j * m + 1 + p + c] = v[j];
+                }
+                columns[nbin * m + 1 + c] = -(mu + tol);
+                columns[nbin * m + 1 + p + c] = -(mu - tol);
+                row_lo[1 + c] = -INF;
+                row_hi[1 + p + c] = INF;
+            }
+            let mut cost = vec![1.0; n];
+            cost[nbin] = 0.0;
+            let mut col_hi = vec![1.0; n];
+            col_hi[nbin] = nbin as f64;
+            let mut binary = vec![true; n];
+            binary[nbin] = false;
+            let mut integer = vec![false; n];
+            integer[nbin] = true;
+            Self {
+                m,
+                nbin,
+                columns,
+                cost,
+                col_lo: vec![0.0; n],
+                col_hi,
+                row_lo,
+                row_hi,
+                binary,
+                integer,
+            }
+        }
+
+        fn program(&self) -> MixedBinaryProgram<'_> {
+            MixedBinaryProgram {
+                rows: self.m,
+                columns: &self.columns,
+                cost: &self.cost,
+                col_lo: &self.col_lo,
+                col_hi: &self.col_hi,
+                row_lo: &self.row_lo,
+                row_hi: &self.row_hi,
+                binary: &self.binary,
+                integer: &self.integer,
+            }
+        }
+
+        /// Every integer point, with its value.
+        fn points(&self) -> Vec<(Vec<f64>, f64)> {
+            let (m, nbin) = (self.m, self.nbin);
+            let mut out = Vec::new();
+            for mask in 0..(1_u32 << nbin) {
+                let t = f64::from(mask.count_ones());
+                let mut x: Vec<f64> = (0..nbin).map(|j| f64::from(mask >> j & 1)).collect();
+                x.push(t);
+                let ok = (0..m).all(|i| {
+                    let a: f64 = (0..=nbin).map(|j| self.columns[j * m + i] * x[j]).sum();
+                    a >= self.row_lo[i] - 1e-12 && a <= self.row_hi[i] + 1e-12
+                });
+                if ok {
+                    out.push((x, t));
+                }
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn profile_programs_agree_with_exhaustive_search() {
+        let mut rng = Rng(77);
+        let mut solved = 0;
+        for trial in 0..300 {
+            let random = Random::profile(&mut rng, 6 + trial % 9, 1 + trial % 4);
+            let best = random
+                .points()
+                .iter()
+                .map(|p| p.1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            for heuristics in [true, false] {
+                let options = Options {
+                    neighbourhood_search: heuristics,
+                    ..Options::default()
+                };
+                match solve(&random.program(), &options) {
+                    Ok(s) => {
+                        assert_eq!(s.status, Status::Optimal, "trial {trial}");
+                        assert_eq!(s.objective, best, "trial {trial}");
+                        assert!(s.max_row_violation < 1e-7, "trial {trial}");
+                        solved += 1;
+                    }
+                    Err(MipError::Infeasible) => assert!(best.is_infinite(), "trial {trial}"),
+                    Err(e) => panic!("trial {trial}: {e}"),
+                }
+            }
+        }
+        assert!(solved > 300);
+    }
+
+    /// The rounds of Gomory cuts keep every integer point of the program.
+    #[test]
+    fn cuts_keep_every_integer_point() {
+        let mut rng = Rng(91);
+        let mut added = 0;
+        for trial in 0..200 {
+            let random = Random::profile(&mut rng, 6 + trial % 8, 1 + trial % 3);
+            let program = random.program();
+            let mut lp = BoundedSimplex::new(
+                program.rows,
+                program.columns,
+                program.cost,
+                program.col_lo,
+                program.col_hi,
+                program.row_lo,
+                program.row_hi,
+            )
+            .unwrap();
+            lp.perturb_costs();
+            if lp.solve(None).is_err() {
+                continue;
+            }
+            let mut budget = Budget {
+                node_limit: None,
+                deadline: None,
+                nodes: 0,
+                pivots: 0,
+            };
+            let points = random.points();
+            match cut_rounds(&program, &mut lp, false, &mut budget).unwrap() {
+                Cuts::None => {}
+                Cuts::Infeasible => assert!(points.is_empty(), "trial {trial}"),
+                Cuts::Added(with_cuts) => {
+                    let cut = with_cuts.0.program(&program);
+                    let m = cut.rows;
+                    for (x, _) in &points {
+                        for i in program.rows..m {
+                            let a: f64 = (0..x.len()).map(|j| cut.columns[j * m + i] * x[j]).sum();
+                            assert!(a >= cut.row_lo[i] - 1e-9, "trial {trial}: cut {i} at {a}");
+                        }
+                    }
+                    added += m - program.rows;
+                }
+            }
+        }
+        assert!(added > 50);
+    }
+
+    /// Every column the root's reduced costs force at a threshold takes the
+    /// forced value in every integer point of at least that value.
+    #[test]
+    fn reduced_cost_fixing_keeps_every_good_point() {
+        let mut rng = Rng(13);
+        let mut fixed = 0;
+        for trial in 0..200 {
+            let random = Random::profile(&mut rng, 6 + trial % 8, 1 + trial % 3);
+            let program = random.program();
+            let points = random.points();
+            let Some(best) = points.iter().map(|p| p.1).reduce(f64::max) else {
+                continue;
+            };
+            let mut lp = BoundedSimplex::new(
+                program.rows,
+                program.columns,
+                program.cost,
+                program.col_lo,
+                program.col_hi,
+                program.row_lo,
+                program.row_hi,
+            )
+            .unwrap();
+            lp.perturb_costs();
+            lp.solve(None).unwrap();
+            let bound = lp.dual_bound();
+            assert!(bound.value >= best - 1e-9, "trial {trial}");
+            for threshold in [best, best - 1.0] {
+                for j in 0..program.cost.len() {
+                    let (lo, hi) = lp.bounds(j);
+                    if let Some(b) = forced_value(&bound, lo, hi, j, bound.value - threshold) {
+                        fixed += 1;
+                        for (x, v) in &points {
+                            if *v >= threshold {
+                                assert_eq!(x[j], b, "trial {trial}: column {j}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(fixed > 100);
+    }
+
+    /// A point the local search returns satisfies the rows and the cutoff.
+    #[test]
+    fn local_search_returns_solutions() {
+        let mut rng = Rng(29);
+        let mut found = 0;
+        for trial in 0..200 {
+            let random = Random::profile(&mut rng, 8 + trial % 7, 1 + trial % 3);
+            let program = random.program();
+            let points = random.points();
+            let Some(best) = points.iter().map(|p| p.1).reduce(f64::max) else {
+                continue;
+            };
+            let mut lp = BoundedSimplex::new(
+                program.rows,
+                program.columns,
+                program.cost,
+                program.col_lo,
+                program.col_hi,
+                program.row_lo,
+                program.row_hi,
+            )
+            .unwrap();
+            lp.perturb_costs();
+            lp.solve(None).unwrap();
+            let shape = shape(&program);
+            let tolerance: Vec<f64> = (0..program.rows).map(|i| lp.row_tolerance(i)).collect();
+            let frozen = vec![false; program.cost.len()];
+            for cutoff in [best, best - 1.0] {
+                let start = lp.values();
+                if let Some((x, v)) =
+                    local_search(&program, &shape, &start, &frozen, cutoff, INF, &tolerance)
+                {
+                    assert!(v >= cutoff && v <= best, "trial {trial}");
+                    assert!(row_violation(&program, &x) < 1e-7, "trial {trial}");
+                    assert!(x.iter().all(|v| *v == v.round()), "trial {trial}");
+                    found += 1;
+                }
+            }
+        }
+        assert!(found > 50);
     }
 }
