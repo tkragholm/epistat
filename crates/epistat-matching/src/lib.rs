@@ -123,6 +123,7 @@ pub mod effects;
 mod errors;
 pub mod imputation;
 mod matching;
+pub mod multigroup;
 pub mod output;
 #[cfg(feature = "reporting")]
 pub mod reporting;

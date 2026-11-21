@@ -604,6 +604,23 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
     })
 }
 
+/// The design matrix of the records' covariates, encoded as the propensity
+/// score models encode them: numeric covariates as they are, categorical ones
+/// as indicators, an intercept column if `config.include_intercept`, in the
+/// order of `records`.
+///
+/// # Errors
+///
+/// [`EstimationError`] for no records, a missing or non-finite value the
+/// policy does not allow, or a covariate of mixed type.
+pub fn encode_covariates<R: CovariateRecord>(
+    records: &[R],
+    config: &CovariateEncodingConfig,
+) -> Result<CovariateMatrix, EstimationError> {
+    let refs = records.iter().collect_vec();
+    build_covariate_matrix(&refs, config)
+}
+
 /// Run matching with propensity scores estimated internally from covariates.
 ///
 /// With `propensity_config.reestimate`, the units that `criteria.common_support`
