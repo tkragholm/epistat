@@ -793,6 +793,10 @@ impl Covariance<'_> {
             };
         }
 
+        // The objective is a sum of `n` terms, and a recursive sum of `n` terms
+        // has a relative error of at most `n ε`. A candidate that is higher by no
+        // more than that is a tie, not a rise.
+        let noise = n as f64 * f64::EPSILON;
         let mut current = evaluation.loss + self.penalty(&u);
         let (mut converged, mut iterations, mut passes) = (false, 0, 0);
         for step in 1..=model.max_iterations {
@@ -822,7 +826,7 @@ impl Covariance<'_> {
                 }
                 let candidate = self.evaluate(&u, !done, &mut eta, &mut fitted);
                 let objective = candidate.loss + self.penalty(&u);
-                if objective <= current + 1e-14 * current.abs().max(1.0) {
+                    if objective <= current + noise * current.abs().max(1.0) {
                     current = objective;
                     evaluation = candidate;
                     accepted = true;
@@ -1369,9 +1373,10 @@ mod tests {
     /// ridge to lasso. Both stop at `thresh = 1e-20` on `max_j v_j (Δβ_j)²`, so
     /// a coefficient of a column with weighted variance `v` is determined to
     /// about `sqrt(thresh / v)`. The two differ by at most twice that, times 10
-    /// for the correlation of the columns. The prior weights lie in `[0.5, 2.5]`
-    /// and the working weights below 1/4, so `v` is at least `0.5` times the
-    /// variance of the column, which the bound uses. The linear predictor
+    /// for the correlation of the columns. The prior weights are at least 0.5
+    /// and the linear predictors stay within 1.5 of 0, so the working weights
+    /// are at least 0.1 and `v` is at least `0.05` times the variance of the
+    /// column, which the bound uses. The linear predictor
     /// differs by at most the sum over columns of the half-range times that
     /// bound. The columns have means from 0 to 1000 and ranges from 3e-3 to 100.
     #[test]
@@ -1429,7 +1434,7 @@ mod tests {
                             let mut eta_bound = 0.0;
                             for j in usize::from(intercept)..p {
                                 let spread = half(j) / 3.0_f64.sqrt();
-                                let bound = 10.0 * 2.0 * 1e-10 / (0.5 * spread * spread).sqrt();
+                                let bound = 10.0 * 2.0 * 1e-10 / (0.05 * spread * spread).sqrt();
                                 eta_bound += half(j) * bound;
                                 let dev = (a.coefficients[j] - b.coefficients[j]).abs();
                                 worst = worst.max(dev / bound);

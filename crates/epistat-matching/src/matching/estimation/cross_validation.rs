@@ -54,6 +54,12 @@
 //! `cvm + cvsd` taken at `lambda.min`. The final model is the fit on all rows at
 //! the chosen `lambda`.
 //!
+//! The fit on all rows and the fit on each fold depend on their own rows only
+//! and run at the same time, one thread each. Every result is formed by one
+//! thread in a fixed order, so the output does not depend on the number of
+//! threads. The fits themselves work from weighted moments of the design, see
+//! [`epistat_glm::elastic_net`].
+//!
 //! # References
 //!
 //! 1. Friedman J, Hastie T, Tibshirani R. Regularization paths for generalized
@@ -71,6 +77,7 @@ use super::config::{ElasticNetCvConfig, LambdaRule};
 use super::encoding::CovariateMatrix;
 use super::logistic::{LogisticFit, NetProblem, NetSettings, penalty_factors};
 use epistat_rng::Stream;
+use rayon::prelude::*;
 
 /// `glmnet.control()`'s `mnlam`: the path has at least this many values.
 const MIN_PATH: usize = 5;
@@ -165,6 +172,16 @@ struct Path {
     /// The coefficients of each fit on the problem's scaled design.
     scaled: Vec<Vec<f64>>,
     /// The number of fits that did not meet their stopping rule.
+    unconverged: usize,
+}
+
+/// A fold's path, with its coefficients on the original scale of the covariates,
+/// and the rows it was held out on.
+struct FoldPath {
+    held: Vec<usize>,
+    held_weight: f64,
+    lambda: Vec<f64>,
+    unscaled: Vec<Vec<f64>>,
     unconverged: usize,
 }
 
@@ -313,15 +330,13 @@ pub(super) fn fit_elastic_net_cv(
         &penalty,
         config.standardize,
     );
-    let master = glmnet_path(&full, &penalty, &settings, config)?;
-    let lambda = master.lambda.clone();
-    let mut unconverged = master.unconverged;
-
     let fold_ids = cross_validation_folds(n, config.nfolds, config.seed)?;
-    // Held-out deviance, by fold and master penalty.
-    let mut fold_deviance = vec![vec![0.0_f64; lambda.len()]; config.nfolds];
-    let mut fold_weight = vec![0.0_f64; config.nfolds];
-    for fold in 0..config.nfolds {
+
+    // The path of all rows and the path of each fold depend on nothing but
+    // their own rows, so they are fitted at the same time. Each result is
+    // computed by one thread, so none depends on the number of threads, and the
+    // first error in the order master, fold 0, fold 1, ... is the one returned.
+    let fit_fold = |fold: usize| -> Result<FoldPath, EstimationError> {
         let train: Vec<usize> = (0..n).filter(|&row| fold_ids[row] != fold).collect();
         let held: Vec<usize> = (0..n).filter(|&row| fold_ids[row] == fold).collect();
         let has_both = [false, true].iter().all(|&positive| {
@@ -333,7 +348,6 @@ pub(super) fn fit_elastic_net_cv(
         if !has_both || held_weight <= 0.0 {
             return Err(EstimationError::InvalidCrossValidation);
         }
-        fold_weight[fold] = held_weight;
         let problem = NetProblem::new(
             matrix,
             &train,
@@ -343,20 +357,53 @@ pub(super) fn fit_elastic_net_cv(
             config.standardize,
         );
         let path = glmnet_path(&problem, &penalty, &settings, config)?;
-        unconverged += path.unconverged;
-        let unscaled: Vec<Vec<f64>> = path.scaled.iter().map(|b| problem.unscale(b)).collect();
-        for (k, &value) in lambda.iter().enumerate() {
-            let beta = interpolate(&path.lambda, &unscaled, value);
-            let sum: f64 = held
+        let unscaled = path.scaled.iter().map(|b| problem.unscale(b)).collect();
+        Ok(FoldPath {
+            held,
+            held_weight,
+            lambda: path.lambda,
+            unscaled,
+            unconverged: path.unconverged,
+        })
+    };
+    let (master, fold_paths) = rayon::join(
+        || glmnet_path(&full, &penalty, &settings, config),
+        || {
+            (0..config.nfolds)
+                .into_par_iter()
+                .map(fit_fold)
+                .collect::<Vec<_>>()
+        },
+    );
+    let master = master?;
+    let lambda = master.lambda.clone();
+    let mut unconverged = master.unconverged;
+    let fold_paths = fold_paths.into_iter().collect::<Result<Vec<_>, _>>()?;
+    unconverged += fold_paths.iter().map(|f| f.unconverged).sum::<usize>();
+
+    // Held-out deviance, by fold and master penalty.
+    let fold_weight: Vec<f64> = fold_paths.iter().map(|f| f.held_weight).collect();
+    let fold_deviance: Vec<Vec<f64>> = fold_paths
+        .par_iter()
+        .map(|fold| {
+            lambda
                 .iter()
-                .map(|&row| {
-                    let eta: f64 = matrix.row(row).iter().zip(&beta).map(|(x, b)| x * b).sum();
-                    weight(row) * binomial_deviance(labels[row], eta)
+                .map(|&value| {
+                    let beta = interpolate(&fold.lambda, &fold.unscaled, value);
+                    let sum: f64 = fold
+                        .held
+                        .iter()
+                        .map(|&row| {
+                            let eta: f64 =
+                                matrix.row(row).iter().zip(&beta).map(|(x, b)| x * b).sum();
+                            weight(row) * binomial_deviance(labels[row], eta)
+                        })
+                        .sum();
+                    sum / fold.held_weight
                 })
-                .sum();
-            fold_deviance[fold][k] = sum / held_weight;
-        }
-    }
+                .collect()
+        })
+        .collect();
 
     let fold_total: f64 = fold_weight.iter().sum();
     let mut deviance = Vec::with_capacity(lambda.len());
