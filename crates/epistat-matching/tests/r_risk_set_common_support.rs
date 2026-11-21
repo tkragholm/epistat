@@ -26,12 +26,13 @@ struct Reference {
     versions: Versions,
     entry: Vec<i64>,
     event: Vec<Option<i64>>,
+    death: Vec<Option<i64>>,
     score: Vec<f64>,
     cases: Vec<usize>,
     set_size: Vec<usize>,
     outside: Vec<bool>,
+    outside_plain: Vec<bool>,
     case_range: Vec<f64>,
-    at_bounds: usize,
 }
 
 #[derive(Deserialize)]
@@ -61,8 +62,24 @@ fn birth() -> NaiveDate {
 }
 
 fn person(id: &str, entry: Option<i64>, event: Option<i64>) -> Rec {
-    let mut record =
-        RoleTransitionRecord::from_record(BaseRecord::new(id, birth()), event.map(day));
+    person_with(id, entry, event, None, None)
+}
+
+fn person_with(
+    id: &str,
+    entry: Option<i64>,
+    event: Option<i64>,
+    death: Option<i64>,
+    emigration: Option<i64>,
+) -> Rec {
+    let mut base = BaseRecord::new(id, birth());
+    if let Some(d) = death {
+        base = base.with_death_date(day(d));
+    }
+    if let Some(d) = emigration {
+        base = base.with_emigration_date(day(d));
+    }
+    let mut record = RoleTransitionRecord::from_record(base, event.map(day));
     record.entry_date = entry.map(day);
     record
 }
@@ -91,6 +108,33 @@ fn run<P: RiskSetPolicy<Rec> + Send + Sync>(
     (matched, outcome)
 }
 
+/// As [`run`] with the alive check, the resident check, or both.
+fn run_checked(
+    cohort: &[Rec],
+    scores: &[(String, f64)],
+    support: Option<CommonSupport>,
+    alive: bool,
+    resident: bool,
+) -> (BTreeSet<String>, MatchOutcome) {
+    let config = DistanceConfig::propensity_score_map(scores.iter().cloned().collect(), None);
+    let job = MatchJob::new_transition(cohort, 0)
+        .with_ratio(MatchRatio::new(1).expect("ratio"))
+        .with_birth_window(BirthDateWindowDays::new(30_000).expect("window"))
+        .with_age_limit(AgeLimitYears::new(100).expect("age limit"))
+        .with_replacement(true)
+        .with_distance_config(config)
+        .with_common_support(support)
+        .with_strategy(DeterministicSelection);
+    let outcome = match (alive, resident) {
+        (true, true) => job.with_alive_check().with_resident_check().run(),
+        (true, false) => job.with_alive_check().run(),
+        (false, true) => job.with_resident_check().run(),
+        (false, false) => job.run(),
+    };
+    let matched = outcome.pairs.iter().map(|p| p.case_id.clone()).collect();
+    (matched, outcome)
+}
+
 fn scores_of(ids: &[&str], values: &[f64]) -> Vec<(String, f64)> {
     ids.iter()
         .map(|id| (*id.to_string()).to_string())
@@ -103,43 +147,79 @@ fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
     let reference = reference();
     assert!(reference.versions.r.starts_with("R version"));
     assert_ne!(reference.versions.epi, "");
-    assert!(
-        reference.at_bounds > 0,
-        "the reference has no tie at a bound"
-    );
     assert!(reference.outside.iter().any(|&o| o));
+    assert!(
+        reference
+            .outside
+            .iter()
+            .zip(&reference.outside_plain)
+            .any(|(with, without)| with != without),
+        "the deaths change no case"
+    );
     assert!(reference.set_size.iter().all(|&s| s > 0));
     assert!(reference.case_range[0] < reference.case_range[1]);
 
     let n = reference.score.len();
     let id = |row: usize| format!("p{row:03}");
     let cohort: Vec<Rec> = (0..n)
-        .map(|i| person(&id(i + 1), Some(reference.entry[i]), reference.event[i]))
+        .map(|i| {
+            person_with(
+                &id(i + 1),
+                Some(reference.entry[i]),
+                reference.event[i],
+                reference.death[i],
+                None,
+            )
+        })
         .collect();
     let scores: Vec<(String, f64)> = (0..n).map(|i| (id(i + 1), reference.score[i])).collect();
+    let kept = |outside: &[bool]| -> BTreeSet<String> {
+        reference
+            .cases
+            .iter()
+            .zip(outside)
+            .filter(|(_, outside)| !**outside)
+            .map(|(row, _)| id(*row))
+            .collect()
+    };
 
-    let (matched, outcome) = run(
-        &cohort,
-        &scores,
-        Some(CommonSupport::Treated),
-        DefaultRiskSetPolicy,
-    );
-    let expected: BTreeSet<String> = reference
-        .cases
-        .iter()
-        .zip(&reference.outside)
-        .filter(|(_, outside)| !**outside)
-        .map(|(row, _)| id(*row))
-        .collect();
+    // With the alive check the risk sets are ccwc's, which stop at death.
+    let (matched, outcome) =
+        run_checked(&cohort, &scores, Some(CommonSupport::Treated), true, false);
+    let expected = kept(&reference.outside);
     assert_eq!(matched, expected);
     let trimmed = reference.outside.iter().filter(|&&o| o).count();
     assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, trimmed);
     assert_eq!(outcome.diagnostics.common_support_trimmed_candidates, 0);
 
+    // Without it the dead stay in the range.
+    let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), false, false);
+    assert_eq!(matched, kept(&reference.outside_plain));
+
     // The same cohort through a policy that states the default rule itself,
     // which takes the scan over every record instead of the sweep.
     let (scanned, _) = run(&cohort, &scores, Some(CommonSupport::Treated), SameRule);
-    assert_eq!(scanned, expected);
+    assert_eq!(scanned, kept(&reference.outside_plain));
+    let scanned_alive = MatchJob::new_transition(&cohort, 0)
+        .with_ratio(MatchRatio::new(1).expect("ratio"))
+        .with_birth_window(BirthDateWindowDays::new(30_000).expect("window"))
+        .with_age_limit(AgeLimitYears::new(100).expect("age limit"))
+        .with_replacement(true)
+        .with_distance_config(DistanceConfig::propensity_score_map(
+            scores.iter().cloned().collect(),
+            None,
+        ))
+        .with_common_support(Some(CommonSupport::Treated))
+        .with_alive_check()
+        .with_risk_set_policy(SameRule)
+        .with_strategy(DeterministicSelection)
+        .run();
+    let scanned_alive: BTreeSet<String> = scanned_alive
+        .pairs
+        .iter()
+        .map(|p| p.case_id.clone())
+        .collect();
+    assert_eq!(scanned_alive, expected);
 }
 
 /// The default at-risk rule, stated as a policy of its own.
@@ -310,4 +390,55 @@ fn trimming_does_not_depend_on_the_number_of_threads() {
         }
         digest
     });
+}
+
+#[test]
+fn the_dead_do_not_widen_the_range_of_a_risk_set() {
+    // On day 10 a and b (scores 1 and 2) are alive. d has score 50 and dies on
+    // day 5, so it widens the range of the cohort and of the risk set if death
+    // is ignored. The case c has score 5. A person who dies on the index date
+    // is not alive on it, and one who dies the day after is.
+    let cohort = vec![
+        person("a", Some(0), None),
+        person("b", Some(0), None),
+        person_with("d", Some(0), None, Some(5), None),
+        person("c", Some(0), Some(10)),
+    ];
+    let scores = scores_of(&["a", "b", "d", "c"], &[1.0, 2.0, 50.0, 5.0]);
+    let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), false, false);
+    assert_eq!(matched, ["c"].map(String::from).into());
+    let (matched, outcome) =
+        run_checked(&cohort, &scores, Some(CommonSupport::Treated), true, false);
+    assert!(matched.is_empty(), "{matched:?}");
+    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 1);
+
+    let cohort = vec![
+        person("a", Some(0), None),
+        person_with("d10", Some(0), None, Some(10), None),
+        person_with("d11", Some(0), None, Some(11), None),
+        person("c", Some(0), Some(10)),
+    ];
+    let scores = scores_of(&["a", "d10", "d11", "c"], &[1.0, 50.0, 4.0, 5.0]);
+    // Alive on day 10: a (1) and d11 (4). c with 5 is outside.
+    let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), true, false);
+    assert!(matched.is_empty());
+    // d11 has score 5 here, so c is on the end of the range and is kept.
+    let scores = scores_of(&["a", "d10", "d11", "c"], &[1.0, 50.0, 5.0, 5.0]);
+    let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), true, false);
+    assert_eq!(matched, ["c"].map(String::from).into());
+}
+
+#[test]
+fn those_who_have_left_the_country_do_not_widen_the_range() {
+    let cohort = vec![
+        person("a", Some(0), None),
+        person("b", Some(0), None),
+        person_with("e", Some(0), None, None, Some(5)),
+        person("c", Some(0), Some(10)),
+    ];
+    let scores = scores_of(&["a", "b", "e", "c"], &[1.0, 2.0, 40.0, 5.0]);
+    let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), true, false);
+    assert_eq!(matched, ["c"].map(String::from).into());
+    let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), false, true);
+    assert!(matched.is_empty(), "{matched:?}");
 }

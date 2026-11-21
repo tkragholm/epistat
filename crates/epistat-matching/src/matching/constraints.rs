@@ -69,6 +69,14 @@ impl UsedControlsVec {
 pub trait Constraint<R: MatchingRecord>: Send + Sync {
     fn reason(&self) -> &'static str;
     fn allows(&self, case: &R, control: &R, ctx: &ConstraintContext<'_>) -> bool;
+
+    /// Whether the control is in the population at risk as far as this
+    /// constraint is concerned, for a constraint that is a condition of the
+    /// control's status on the case's index date, such as being alive or
+    /// resident. Every other constraint allows.
+    fn allows_at_risk(&self, _case: &R, _control: &R) -> bool {
+        true
+    }
 }
 
 /// Statically-dispatched collection of constraints.
@@ -82,6 +90,12 @@ pub trait ConstraintGroup<R: MatchingRecord>: Send + Sync {
         control: &R,
         ctx: &ConstraintContext<'_>,
     ) -> Option<&'static str>;
+
+    /// Whether every status constraint of the group (see
+    /// [`Constraint::allows_at_risk`]) allows the control.
+    fn allows_at_risk(&self, _case: &R, _control: &R) -> bool {
+        true
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for () {
@@ -104,9 +118,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> ConstraintGroup<R> for &
     ) -> Option<&'static str> {
         (*self).first_blocking_reason(case, control, ctx)
     }
+
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        (**self).allows_at_risk(case, control)
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for [&dyn Constraint<R>] {
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        self.iter().all(|c| c.allows_at_risk(case, control))
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -123,6 +145,10 @@ impl<R: MatchingRecord, C, const N: usize> ConstraintGroup<R> for [C; N]
 where
     C: Constraint<R>,
 {
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        self.iter().all(|c| c.allows_at_risk(case, control))
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -143,6 +169,10 @@ impl<R: MatchingRecord, C: Constraint<R> + ?Sized> Constraint<R> for Box<C> {
     fn allows(&self, case: &R, control: &R, ctx: &ConstraintContext<'_>) -> bool {
         (**self).allows(case, control, ctx)
     }
+
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        (**self).allows_at_risk(case, control)
+    }
 }
 
 /// A homogeneous group whose length is decided at run time.
@@ -160,6 +190,10 @@ impl<R: MatchingRecord, C> ConstraintGroup<R> for Vec<C>
 where
     C: Constraint<R>,
 {
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        self.iter().all(|c| c.allows_at_risk(case, control))
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -193,6 +227,10 @@ where
     G1: ConstraintGroup<R>,
     G2: ConstraintGroup<R>,
 {
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        self.first.allows_at_risk(case, control) && self.second.allows_at_risk(case, control)
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -210,6 +248,10 @@ where
     G: ConstraintGroup<R>,
     C: Constraint<R>,
 {
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        self.0.allows_at_risk(case, control) && self.1.allows_at_risk(case, control)
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -230,6 +272,11 @@ macro_rules! impl_constraint_group_tuple {
         where
             $($ty: Constraint<R>,)+
         {
+            fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+                let ($($value,)+) = self;
+                true $(&& $value.allows_at_risk(case, control))+
+            }
+
             fn first_blocking_reason(
                 &self,
                 case: &R,

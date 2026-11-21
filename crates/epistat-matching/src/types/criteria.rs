@@ -31,9 +31,11 @@ pub enum Estimand {
 ///
 /// In standard matching the other group is all candidates for an anchor and
 /// all anchors for a candidate. In risk-set matching a case is trimmed against
-/// the scores of the records at risk on its own event date, by the risk-set
-/// rule alone and before any matching constraint, and a candidate against the
-/// scores of all cases. A case with nobody at risk is not trimmed.
+/// the scores of the records at risk on its own event date, and a candidate
+/// against the scores of all cases. At risk means the risk-set rule and, when
+/// the job has them, being alive and resident on that date. Strata, the birth
+/// window and the other matching constraints are not read. A case with nobody
+/// at risk is not trimmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommonSupport {
     /// Discard anchors outside the overlap region.

@@ -353,6 +353,10 @@ where
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
+        self.allows_at_risk(case, control)
+    }
+
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         let Some(index_date) = case.event_date() else {
             return true;
         };
@@ -387,6 +391,10 @@ where
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
+        self.allows_at_risk(case, control)
+    }
+
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
         let Some(index_date) = case.event_date() else {
             return true;
         };
