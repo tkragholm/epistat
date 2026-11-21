@@ -290,11 +290,25 @@ fn swap_rows(coords: &mut [f64], keys: &mut [u32], d: usize, i: usize, j: usize)
 
 /// Rearrange the rows so that row `nth` is where it would be in the order
 /// of `axis` and then key, with no later row before it and no earlier row
-/// after it. Quickselect with a median-of-three pivot.
+/// after it. Quickselect with a median-of-three pivot, expected linear. An
+/// input that defeats the pivot rule cannot make it quadratic: after 64
+/// partitions the rest of the range is sorted, which bounds the worst case
+/// by a sort and leaves the same row at `nth`, since the order is total.
 fn select_row(coords: &mut [f64], keys: &mut [u32], d: usize, axis: usize, nth: usize) {
     let mut lo = 0;
     let mut hi = keys.len() - 1;
+    let mut rounds = 0_u32;
     while lo < hi {
+        rounds += 1;
+        if rounds > 64 {
+            sort_rows_by_axis(
+                &mut coords[lo * d..(hi + 1) * d],
+                &mut keys[lo..=hi],
+                d,
+                axis,
+            );
+            return;
+        }
         let mid = lo + (hi - lo) / 2;
         // Move the median of the three to `hi` as the pivot.
         if row_before(coords, keys, d, axis, mid, lo) {
@@ -320,6 +334,24 @@ fn select_row(coords: &mut [f64], keys: &mut [u32], d: usize, axis: usize, nth: 
             std::cmp::Ordering::Less => lo = store + 1,
         }
     }
+}
+
+/// Order the rows by `axis` and then key.
+fn sort_rows_by_axis(coords: &mut [f64], keys: &mut [u32], d: usize, axis: usize) {
+    let m = keys.len();
+    let mut order: Vec<usize> = (0..m).collect();
+    order.sort_unstable_by(|&i, &j| {
+        coords[i * d + axis]
+            .total_cmp(&coords[j * d + axis])
+            .then(keys[i].cmp(&keys[j]))
+    });
+    let new_coords: Vec<f64> = order
+        .iter()
+        .flat_map(|&i| coords[i * d..(i + 1) * d].iter().copied())
+        .collect();
+    let new_keys: Vec<u32> = order.iter().map(|&i| keys[i]).collect();
+    coords.copy_from_slice(&new_coords);
+    keys.copy_from_slice(&new_keys);
 }
 
 /// Order the rows by key.
@@ -662,6 +694,41 @@ mod tests {
             z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
             z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             z ^ (z >> 31)
+        }
+    }
+
+    /// The selection puts the same row at `nth` as a full sort, with the
+    /// rows before it no later and the rows after it no earlier, on inputs
+    /// with heavy ties, already sorted, reversed, and organ-pipe shaped,
+    /// the last two being the shapes that defeat a median-of-three pivot
+    /// and send the selection to its sorting fallback.
+    #[test]
+    fn selection_agrees_with_a_sort_on_every_input_shape() {
+        let d = 2;
+        let mut mix = Mix(17);
+        for n in [1_usize, 2, 3, 7, 64, 1000, 4097] {
+            let shapes: Vec<Vec<f64>> = vec![
+                (0..n)
+                    .map(|_| f64::from(u32::try_from(mix.next() % 5).unwrap()))
+                    .collect(),
+                (0..n).map(|i| i as f64).collect(),
+                (0..n).rev().map(|i| i as f64).collect(),
+                (0..n).map(|i| (i.min(n - 1 - i)) as f64).collect(),
+            ];
+            for axis_values in shapes {
+                for nth in [0, n / 3, n / 2, n - 1] {
+                    let mut coords: Vec<f64> = axis_values.iter().flat_map(|&v| [v, -v]).collect();
+                    let mut keys: Vec<u32> = (0..u32::try_from(n).unwrap()).collect();
+                    let (mut sc, mut sk) = (coords.clone(), keys.clone());
+                    sort_rows_by_axis(&mut sc, &mut sk, d, 0);
+                    select_row(&mut coords, &mut keys, d, 0, nth);
+                    assert_eq!(keys[nth], sk[nth], "n {n}, nth {nth}");
+                    for i in 0..n {
+                        let before = row_before(&coords, &keys, d, 0, i, nth);
+                        assert_eq!(before, i < nth, "n {n}, nth {nth}, row {i}");
+                    }
+                }
+            }
         }
     }
 
