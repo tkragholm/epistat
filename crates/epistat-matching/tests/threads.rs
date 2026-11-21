@@ -925,3 +925,126 @@ fn nearest_matching_in_every_order() {
         d.0
     });
 }
+
+/// The units with their age as a numeric field, which coarsened exact matching
+/// reads.
+fn with_age_fields(rows: &mut [BalanceRecord]) {
+    for row in rows {
+        if let Some(CovariateValue::Numeric(age)) = row.covariates.get("age") {
+            let age = *age;
+            row.core.numerics.insert("age".into(), age);
+        }
+    }
+}
+
+#[test]
+fn coarsened_exact_matching() {
+    use epistat_matching::{CemBinning, CemRule, CemVariable, cem_k2k_pairs, cem_strata};
+    let (mut anchors, mut candidates) = balance_inputs(1_200, 4_000, 11);
+    with_age_fields(&mut anchors);
+    with_age_fields(&mut candidates);
+    let variables = vec![
+        CemVariable::numeric("age", CemBinning::Rule(CemRule::FreedmanDiaconis)),
+        CemVariable::categorical("sex", vec![]),
+        CemVariable::categorical("region", vec![vec!["r0".into(), "r1".into(), "r2".into()]]),
+    ];
+    let euclidean = prepare_euclidean_distance_config(
+        &anchors,
+        &candidates,
+        None,
+        &EuclideanPreparationConfig::builder()
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .missing_value_policy(MissingValuePolicy::Impute)
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap()
+    .distance_config;
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let out = epistat_matching::cem_subclasses(&anchors, &candidates, &variables).unwrap();
+        assert!(out.retained_units() > 0, "no output, test is vacuous");
+        let mut assignments: Vec<_> = out.assignments.iter().collect();
+        assignments.sort();
+        d.debug(&assignments);
+        d.floats(&out.att_weights);
+        d.floats(&out.atc_weights);
+        d.floats(&out.ate_weights);
+        let mut dropped = out.dropped_ids.clone();
+        dropped.sort();
+        d.debug(&dropped);
+        d.debug(&out.subclasses);
+        let strata = cem_strata(&anchors, &candidates, &variables).unwrap();
+        for order in [
+            MatchOrder::Data,
+            MatchOrder::Random,
+            MatchOrder::Closest,
+            MatchOrder::Farthest,
+        ] {
+            for distance in [Some(&euclidean), None] {
+                let pairs = cem_k2k_pairs(
+                    &anchors,
+                    &candidates,
+                    &strata,
+                    distance,
+                    order,
+                    9,
+                    Estimand::Att,
+                )
+                .unwrap();
+                assert!(!pairs.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&pairs);
+            }
+        }
+        d.0
+    });
+}
+
+#[test]
+fn nearest_matching_on_a_distance_matrix() {
+    let (anchors, candidates) = balance_inputs(300, 1_200, 12);
+    let age = |record: &BalanceRecord| match record.covariates.get("age") {
+        Some(CovariateValue::Numeric(age)) => *age,
+        _ => panic!("every unit has an age"),
+    };
+    let mut values = Vec::with_capacity(anchors.len() * candidates.len());
+    for (row, anchor) in anchors.iter().enumerate() {
+        for (column, candidate) in candidates.iter().enumerate() {
+            // Some pairs are forbidden.
+            values.push(if (row * 7 + column * 3) % 11 == 0 {
+                f64::INFINITY
+            } else {
+                (age(anchor) - age(candidate)).abs()
+            });
+        }
+    }
+    let matrix = PairDistanceMatrix::new(
+        anchors.iter().map(|r| r.core.id.clone()).collect(),
+        candidates.iter().map(|r| r.core.id.clone()).collect(),
+        values,
+    )
+    .unwrap();
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        for order in [MatchOrder::Data, MatchOrder::Closest, MatchOrder::Farthest] {
+            for ratio in [1, 3] {
+                let out = MatchJob::new_standard(&anchors, &candidates, 5)
+                    .with_nearest()
+                    .with_m_order(order)
+                    .with_ratio(MatchRatio::new(ratio).unwrap())
+                    .with_exact_matches(["sex"])
+                    .with_distance_config(DistanceConfig::matrix(
+                        matrix.clone(),
+                        DistanceCaliper::new(1.5),
+                    ))
+                    .run();
+                assert!(!out.pairs.is_empty(), "no output, test is vacuous");
+                d.outcome(&out);
+                d.weights(&out);
+            }
+        }
+        d.0
+    });
+}

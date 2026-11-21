@@ -145,21 +145,26 @@ pub use matching::{
     IdMapMahalanobisDistance, IdMapPropensityScoreDistance, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisDistance, MahalanobisDistancePreparation,
     MahalanobisError, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder,
-    MatchWeightMethod, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection,
-    NearestSelection, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable,
-    PropensityDistancePreparation, PropensityEstimator, PropensityLink, PropensityMatchedOutcome,
-    PropensityScoreConfig, PropensityScoreDistance, PropensityScoreEstimate,
-    PropensityScoreOutputScale, RandomSelection, ReconstructedEpisode, ReconstructedMatchedPair,
-    ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
-    ResidentAtIndexRecord, RidgeReport, RoleIndexedRecord, Rounds, SelectionStrategy,
-    StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup, SubclassSummary,
-    SubclassificationConfig, SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet,
-    UnitWeightTable, UsedControlsVec, VariableRatio, VariableRatioError, cross_validation_folds,
-    effective_sample_size, estimate_propensity_and_match, match_standard,
-    match_standard_with_discard, match_weights_from_pairs, pair_weights_from_pairs,
-    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
-    reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
+    MatchWeightMethod, MatchingRecord, MatrixDistance, MissingValuePolicy,
+    NearestBirthDateSelection, NearestSelection, PairDistanceMatrix, PairDistanceMatrixError,
+    PairWeight, PairWeightRow, PairWeightSet, PairWeightTable, PropensityDistancePreparation,
+    PropensityEstimator, PropensityLink, PropensityMatchedOutcome, PropensityScoreConfig,
+    PropensityScoreDistance, PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection,
+    ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
+    ReconstructedMatchingOutput, ReconstructedMatchingTier, ResidentAtIndexRecord, RidgeReport,
+    RoleIndexedRecord, Rounds, SelectionStrategy, StandardMatchRequest, StrataExactConstraint,
+    SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationOutcome,
+    UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable, UsedControlsVec, VariableRatio,
+    VariableRatioError, cross_validation_folds, effective_sample_size,
+    estimate_propensity_and_match, match_standard, match_standard_with_discard,
+    match_weights_from_pairs, pair_weights_from_pairs, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs,
+    subclassify_by_propensity_score_map,
+};
+pub use matching::{
+    CemBinning, CemError, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata,
+    cem_subclasses,
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use role_transition::{
@@ -186,10 +191,10 @@ pub use output::{
     match_data, match_matrix,
 };
 pub use spec::{
-    AssignmentSpec, CovarianceSpec, CovariatesSpec, DistanceSpec, EstimatorSpec, LambdaSpec,
-    LinkSpec, MatchMethod, MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec,
-    ReferenceSpec, ScaleSpec, SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec,
-    run_spec,
+    AssignmentSpec, BinRuleSpec, BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec,
+    CovariatesSpec, DistanceSpec, EstimatorSpec, K2kSpec, LambdaSpec, LinkSpec, MatchMethod,
+    MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, ReferenceSpec, ScaleSpec, SpecError,
+    SpecInput, SpecOutput, SubclassSpec, TransformSpec, run_spec,
 };
 
 #[cfg(feature = "bench-internals")]
@@ -263,6 +268,11 @@ pub mod prelude {
         BalanceImprovement, BalanceInputError, BalanceSummary, BalanceWeights, GroupSampleSizes,
         LevelImprovement, NumericImprovement, PairDistance, SampleSizeTable, balance_improvement,
         balance_report_on_weights, balance_summary,
+    };
+    pub use crate::{
+        BinRuleSpec, BinningSpec, CemBinning, CemError, CemKind, CemRule, CemSpec, CemStrata,
+        CemVariable, CemVariableSpec, K2kSpec, MatrixDistance, PairDistanceMatrix,
+        PairDistanceMatrixError, cem_k2k_pairs, cem_strata, cem_subclasses,
     };
 
     pub mod constraints {

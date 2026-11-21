@@ -16,15 +16,17 @@ use crate::constraints::{
     AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field, numeric_field_sd,
 };
 use crate::matching::{
-    Assignment, CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
-    ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig,
-    EuclideanScale, ExactMatchError, ExactMatchOutcome, LambdaRule, LogisticRegressionConfig,
+    Assignment, CemBinning, CemError, CemRule, CemVariable, CovariateEncodingConfig,
+    CovariateRecord, DeterministicSelection, DistanceConfig, ElasticNetCvConfig,
+    ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig, EuclideanScale,
+    ExactMatchError, ExactMatchOutcome, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
     MatchOrder, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection,
-    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, RandomSelection, RoleIndexedRecord, SelectionStrategy,
-    SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
-    exact_match_subclasses, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
+    PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection, RoleIndexedRecord,
+    SelectionStrategy, SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
+    cem_k2k_pairs, cem_strata, cem_subclasses, exact_match_subclasses,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, subclassify_by_propensity_score_map,
 };
 use crate::types::{
@@ -72,6 +74,10 @@ pub enum MatchMethod {
     /// Subclasses of the propensity score or another score, as
     /// `matchit(method = "subclass")`. Standard mode only.
     Subclass,
+    /// Coarsened exact matching on the variables of `cem`, with weights, or
+    /// one to one within strata when `cem.k2k` is set, as
+    /// `matchit(method = "cem")`. Standard mode only.
+    Cem,
 }
 
 /// The order in which anchors take their controls.
@@ -323,6 +329,20 @@ pub enum DistanceSpec {
         #[serde(default)]
         caliper: Option<f64>,
     },
+    /// A distance for every pair, given by the caller, as `distance` given as
+    /// a matrix in `matchit()`. Rows are anchors and columns candidates. An
+    /// entry of `None` forbids the pair, as an infinite entry does in R.
+    Matrix {
+        /// Ids of the rows.
+        anchor_ids: Vec<String>,
+        /// Ids of the columns.
+        candidate_ids: Vec<String>,
+        /// The distances, one row per anchor.
+        values: Vec<Vec<Option<f64>>>,
+        /// Widest distance.
+        #[serde(default)]
+        caliper: Option<f64>,
+    },
 }
 
 impl Default for DistanceSpec {
@@ -372,6 +392,117 @@ pub struct NearestSpec {
     /// spec's distance as a caliper and for the order of anchors, as
     /// `mahvars` does.
     pub mahvars: Option<DistanceSpec>,
+}
+
+/// How a numeric variable is cut into bins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BinningSpec {
+    /// A number of bins from a rule.
+    Rule {
+        /// The rule.
+        rule: BinRuleSpec,
+    },
+    /// This many bins of equal width between the smallest and largest value.
+    Bins {
+        /// Number of bins.
+        n: usize,
+    },
+    /// Cut points. A value on a cut point goes to the bin above.
+    Cutpoints {
+        /// The cut points.
+        values: Vec<f64>,
+    },
+    /// Groups of equal share, cut at the quantiles of all values.
+    Quantiles {
+        /// Number of groups, at least 2.
+        n: usize,
+    },
+    /// No binning: units must share the value.
+    Exact,
+}
+
+impl Default for BinningSpec {
+    fn default() -> Self {
+        Self::Rule {
+            rule: BinRuleSpec::default(),
+        }
+    }
+}
+
+impl From<&BinningSpec> for CemBinning {
+    fn from(spec: &BinningSpec) -> Self {
+        match spec {
+            BinningSpec::Rule { rule } => Self::Rule(match rule {
+                BinRuleSpec::Sturges => CemRule::Sturges,
+                BinRuleSpec::FreedmanDiaconis => CemRule::FreedmanDiaconis,
+                BinRuleSpec::Scott => CemRule::Scott,
+            }),
+            BinningSpec::Bins { n } => Self::Bins(*n),
+            BinningSpec::Cutpoints { values } => Self::Cutpoints(values.clone()),
+            BinningSpec::Quantiles { n } => Self::Quantiles(*n),
+            BinningSpec::Exact => Self::Exact,
+        }
+    }
+}
+
+/// A rule that gives a number of bins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BinRuleSpec {
+    /// Sturges.
+    #[default]
+    Sturges,
+    /// Freedman and Diaconis.
+    FreedmanDiaconis,
+    /// Scott.
+    Scott,
+}
+
+/// A variable of coarsened exact matching.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CemVariableSpec {
+    /// A numeric field of the units, binned. The units' numeric fields hold
+    /// the values.
+    Numeric {
+        /// The name of the field.
+        name: String,
+        /// How it is binned. The default is Sturges.
+        #[serde(default)]
+        binning: BinningSpec,
+    },
+    /// A strata key of the units, whose values may be merged into groups.
+    Categorical {
+        /// The strata key.
+        name: String,
+        /// Groups of values that count as the first value of the group.
+        #[serde(default)]
+        groups: Vec<Vec<String>>,
+    },
+}
+
+/// The pairing of k:k matching within the strata of coarsened exact matching.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct K2kSpec {
+    /// The distance that ranks the candidates of a stratum. Without one the
+    /// candidates are taken in an order drawn from the seed. A caliper is not
+    /// used.
+    pub distance: Option<DistanceSpec>,
+    /// The order in which anchors take their candidate. The default is the
+    /// order of the data.
+    pub m_order: Option<OrderSpec>,
+}
+
+/// The options of coarsened exact matching.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CemSpec {
+    /// The variables to match on.
+    pub variables: Vec<CemVariableSpec>,
+    /// Pair the units of each stratum one to one.
+    pub k2k: Option<K2kSpec>,
 }
 
 /// The options of the subclass method.
@@ -441,6 +572,8 @@ pub struct MatchSpec {
     pub nearest: NearestSpec,
     /// Options of the subclass method.
     pub subclass: SubclassSpec,
+    /// Options of coarsened exact matching.
+    pub cem: CemSpec,
     /// How anchors share the candidates when each takes more than one. The
     /// default is sequential, and rounds for the nearest method as in
     /// `matchit()`. Risk-set matching is always sequential.
@@ -495,6 +628,7 @@ impl Default for MatchSpec {
             distance: DistanceSpec::default(),
             nearest: NearestSpec::default(),
             subclass: SubclassSpec::default(),
+            cem: CemSpec::default(),
             assignment: None,
             ratio: criteria.match_ratio,
             ratio_fallback: Vec::new(),
@@ -543,7 +677,8 @@ pub enum SpecOutput {
         /// The propensity model, when the distance was a fitted score.
         propensity: Option<Box<PropensityScoreEstimate>>,
     },
-    /// Strata with weights, from the exact method.
+    /// Strata with weights, from the exact method and from coarsened exact
+    /// matching without k:k pairing.
     Exact(Box<ExactMatchOutcome>),
     /// Subclasses with weights, from the subclass method.
     Subclass {
@@ -575,6 +710,8 @@ pub enum SpecError {
     Distance(EstimationError),
     /// Exact matching could not run.
     Exact(ExactMatchError),
+    /// Coarsened exact matching could not run.
+    Cem(CemError),
     /// The matcher refused the configuration.
     Rejected(ExclusionReason),
 }
@@ -605,6 +742,7 @@ impl Display for SpecError {
             },
             Self::Distance(error) => write!(f, "the distance could not be built: {error}"),
             Self::Exact(error) => write!(f, "exact matching could not run: {error}"),
+            Self::Cem(error) => write!(f, "coarsened exact matching could not run: {error}"),
             Self::Rejected(reason) => write!(
                 f,
                 "the matcher refused the configuration ({reason}); \
@@ -620,6 +758,7 @@ impl Error for SpecError {
             Self::Criteria(error) => Some(error),
             Self::Distance(error) => Some(error),
             Self::Exact(error) => Some(error),
+            Self::Cem(error) => Some(error),
             Self::Option { .. } | Self::InputMode { .. } | Self::Rejected(_) => None,
         }
     }
@@ -637,6 +776,12 @@ impl From<EstimationError> for SpecError {
     }
 }
 
+impl From<CemError> for SpecError {
+    fn from(error: CemError) -> Self {
+        Self::Cem(error)
+    }
+}
+
 impl From<ExactMatchError> for SpecError {
     fn from(error: ExactMatchError) -> Self {
         Self::Exact(error)
@@ -650,7 +795,8 @@ impl DistanceSpec {
             | Self::Propensity { caliper, .. }
             | Self::Mahalanobis { caliper, .. }
             | Self::Euclidean { caliper, .. }
-            | Self::Scores { caliper, .. } => *caliper,
+            | Self::Scores { caliper, .. }
+            | Self::Matrix { caliper, .. } => *caliper,
         }
     }
 
@@ -725,6 +871,12 @@ impl MatchSpec {
             ));
         }
 
+        if self.cem != CemSpec::default() && self.method != MatchMethod::Cem {
+            return Err(SpecError::option(
+                "cem",
+                "the cem options belong to the cem method; set the method to cem or drop them",
+            ));
+        }
         let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper;
         if nearest_options && self.method != MatchMethod::Nearest {
             return Err(SpecError::option(
@@ -736,6 +888,7 @@ impl MatchSpec {
         match self.method {
             MatchMethod::Exact => self.validate_exact()?,
             MatchMethod::Subclass => self.validate_subclass()?,
+            MatchMethod::Cem => self.validate_cem()?,
             MatchMethod::Nearest => self.validate_nearest()?,
             MatchMethod::Random | MatchMethod::LowestIndex | MatchMethod::NearestBirthDate => {
                 if self.assignment == Some(AssignmentSpec::Rounds)
@@ -823,6 +976,73 @@ impl MatchSpec {
         self.reject_pair_options("exact")
     }
 
+    fn validate_cem(&self) -> Result<(), SpecError> {
+        if self.mode != MatchMode::Standard {
+            return Err(SpecError::option(
+                "method",
+                "coarsened exact matching needs anchors and candidates in standard mode",
+            ));
+        }
+        if self.cem.variables.is_empty() {
+            return Err(SpecError::option(
+                "cem.variables",
+                "coarsened exact matching needs the variables to match on; name at least one",
+            ));
+        }
+        for variable in &self.cem.variables {
+            let CemVariableSpec::Numeric { name, binning } = variable else {
+                continue;
+            };
+            let problem = match binning {
+                BinningSpec::Bins { n: 0 } => Some("0 bins; use 1 or more, or the exact binning"),
+                BinningSpec::Quantiles { n } if *n < 2 => {
+                    Some("fewer than 2 quantile groups; use 2 or more")
+                }
+                BinningSpec::Cutpoints { values }
+                    if values.is_empty() || values.iter().any(|v| !v.is_finite()) =>
+                {
+                    Some("cut points must be a non-empty list of finite numbers")
+                }
+                _ => None,
+            };
+            if let Some(problem) = problem {
+                return Err(SpecError::option(
+                    "cem.variables",
+                    format!("the binning of {name} has {problem}"),
+                ));
+            }
+        }
+        if !self.exact.is_empty() {
+            return Err(SpecError::option(
+                "exact",
+                "coarsened exact matching takes its variables from cem.variables; drop the keys",
+            ));
+        }
+        if let Some(k2k) = &self.cem.k2k {
+            if matches!(k2k.m_order, Some(OrderSpec::Largest | OrderSpec::Smallest)) {
+                return Err(SpecError::option(
+                    "cem.k2k.m_order",
+                    "largest and smallest need a score; use data, random, closest or farthest",
+                ));
+            }
+            if let Some(distance) = &k2k.distance {
+                if distance.caliper().is_some() {
+                    return Err(SpecError::option(
+                        "cem.k2k.distance",
+                        "k:k matching pairs within strata and takes no caliper; drop it",
+                    ));
+                }
+                if matches!(distance, DistanceSpec::Date { .. }) {
+                    return Err(SpecError::option(
+                        "cem.k2k.distance",
+                        "give a covariate distance, a score or a matrix",
+                    ));
+                }
+            }
+        }
+        self.reject_pair_options("cem")
+    }
+
     fn validate_subclass(&self) -> Result<(), SpecError> {
         if !matches!(
             self.distance,
@@ -866,6 +1086,12 @@ impl MatchSpec {
             return Err(SpecError::option(
                 "distance",
                 "the exact method does not use a distance; drop it",
+            ));
+        }
+        if method == "cem" && !self.distance.is_default() {
+            return Err(SpecError::option(
+                "distance",
+                "coarsened exact matching takes its distance from cem.k2k.distance; drop it",
             ));
         }
         Ok(())
@@ -1068,6 +1294,29 @@ fn build_distance<R: CovariateRecord>(
                 propensity: None,
             }
         }
+        DistanceSpec::Matrix {
+            anchor_ids,
+            candidate_ids,
+            values,
+            ..
+        } => {
+            let flat = values
+                .iter()
+                .flat_map(|row| row.iter().map(|value| value.unwrap_or(f64::INFINITY)))
+                .collect::<Vec<_>>();
+            if values.iter().any(|row| row.len() != candidate_ids.len()) {
+                return Err(SpecError::option(
+                    "distance",
+                    "every row of the distance matrix needs one value for each candidate id",
+                ));
+            }
+            let matrix = PairDistanceMatrix::new(anchor_ids.clone(), candidate_ids.clone(), flat)
+                .map_err(|error| SpecError::option("distance", error.to_string()))?;
+            BuiltDistance {
+                config: Some(DistanceConfig::matrix(matrix, caliper)),
+                propensity: None,
+            }
+        }
         DistanceSpec::Euclidean {
             covariates, scaled, ..
         } => {
@@ -1096,7 +1345,8 @@ fn scores_of(config: &DistanceConfig) -> Option<&RapidHashMap<String, f64>> {
         DistanceConfig::PropensityScoreMap { scores, .. } => Some(scores),
         DistanceConfig::Date { .. }
         | DistanceConfig::MahalanobisMap { .. }
-        | DistanceConfig::EuclideanMap { .. } => None,
+        | DistanceConfig::EuclideanMap { .. }
+        | DistanceConfig::Matrix { .. } => None,
     }
 }
 
@@ -1261,6 +1511,7 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             let outcome = exact_match_subclasses(anchors, candidates, &spec.exact)?;
             return Ok(SpecOutput::Exact(Box::new(outcome)));
         }
+        MatchMethod::Cem => return run_cem(spec, anchors, candidates),
         MatchMethod::Subclass => {
             let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
             let scores = built
@@ -1324,11 +1575,57 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             }
             run_standard_with(plan(false), strategy)?
         }
-        MatchMethod::Exact | MatchMethod::Subclass => unreachable!("handled above"),
+        MatchMethod::Exact | MatchMethod::Subclass | MatchMethod::Cem => {
+            unreachable!("handled above")
+        }
     };
     Ok(SpecOutput::Pairs {
         outcome: Box::new(outcome),
         propensity: built.propensity.map(Box::new),
+    })
+}
+
+fn run_cem<R: MatchingRecord + CovariateRecord>(
+    spec: &MatchSpec,
+    anchors: &[R],
+    candidates: &[R],
+) -> Result<SpecOutput, SpecError> {
+    let variables: Vec<CemVariable> = spec
+        .cem
+        .variables
+        .iter()
+        .map(|variable| match variable {
+            CemVariableSpec::Numeric { name, binning } => {
+                CemVariable::numeric(name.clone(), binning.into())
+            }
+            CemVariableSpec::Categorical { name, groups } => {
+                CemVariable::categorical(name.clone(), groups.clone())
+            }
+        })
+        .collect();
+    let Some(k2k) = &spec.cem.k2k else {
+        let outcome = cem_subclasses(anchors, candidates, &variables)?;
+        return Ok(SpecOutput::Exact(Box::new(outcome)));
+    };
+    let strata = cem_strata(anchors, candidates, &variables)?;
+    let built = k2k
+        .distance
+        .as_ref()
+        .map(|distance| build_distance(distance, anchors, candidates, spec.seed, false))
+        .transpose()?;
+    let order = k2k.m_order.map_or(MatchOrder::Data, Into::into);
+    let outcome = cem_k2k_pairs(
+        anchors,
+        candidates,
+        &strata,
+        built.as_ref().and_then(|built| built.config.as_ref()),
+        order,
+        spec.seed,
+        spec.estimand,
+    )?;
+    Ok(SpecOutput::Pairs {
+        outcome: Box::new(outcome),
+        propensity: built.and_then(|built| built.propensity.map(Box::new)),
     })
 }
 
@@ -1357,7 +1654,8 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         )),
         DistanceSpec::Propensity { .. }
         | DistanceSpec::Mahalanobis { .. }
-        | DistanceSpec::Euclidean { .. } => {
+        | DistanceSpec::Euclidean { .. }
+        | DistanceSpec::Matrix { .. } => {
             return Err(SpecError::option(
                 "distance",
                 "not available in risk-set mode",
@@ -1421,7 +1719,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         MatchMethod::Random => job.with_strategy(RandomSelection::seeded(spec.seed)).run(),
         MatchMethod::LowestIndex => job.with_strategy(DeterministicSelection).run(),
         MatchMethod::NearestBirthDate => job.with_strategy(NearestBirthDateSelection).run(),
-        MatchMethod::Nearest | MatchMethod::Exact | MatchMethod::Subclass => {
+        MatchMethod::Nearest | MatchMethod::Exact | MatchMethod::Subclass | MatchMethod::Cem => {
             unreachable!("rejected by validation")
         }
     };

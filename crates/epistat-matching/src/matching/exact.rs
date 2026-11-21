@@ -126,28 +126,47 @@ pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
             .collect()
     };
 
-    // Stratum numbers in order of first appearance, anchors first.
     let mut stratum_of: HashMap<Vec<String>, usize> = HashMap::new();
-    let mut anchor_counts: Vec<usize> = Vec::new();
-    let mut candidate_counts: Vec<usize> = Vec::new();
     let mut anchor_strata = Vec::with_capacity(anchors.len());
     let mut candidate_strata = Vec::with_capacity(candidates.len());
-    for (rows, is_anchor) in [(anchors, true), (candidates, false)] {
+    for (rows, strata) in [
+        (anchors, &mut anchor_strata),
+        (candidates, &mut candidate_strata),
+    ] {
         for row in rows {
-            let next = anchor_counts.len();
-            let stratum = *stratum_of.entry(key(row)?).or_insert(next);
-            if stratum == next {
-                anchor_counts.push(0);
-                candidate_counts.push(0);
-            }
-            if is_anchor {
-                anchor_counts[stratum] += 1;
-                anchor_strata.push(stratum);
-            } else {
-                candidate_counts[stratum] += 1;
-                candidate_strata.push(stratum);
-            }
+            let next = stratum_of.len();
+            strata.push(*stratum_of.entry(key(row)?).or_insert(next));
         }
+    }
+    subclasses_of_strata(
+        anchors,
+        candidates,
+        &anchor_strata,
+        &candidate_strata,
+        stratum_of.len(),
+    )
+}
+
+/// Subclasses and weights of units that already have a stratum number.
+///
+/// Strata are numbered from 0 in order of first appearance, anchors first, as
+/// `exact_match_subclasses` numbers them. The subclasses are the strata that
+/// hold both groups, and they keep that order. Coarsened exact matching uses
+/// this with strata from binned values.
+pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    anchor_strata: &[usize],
+    candidate_strata: &[usize],
+    strata: usize,
+) -> Result<ExactMatchOutcome, ExactMatchError> {
+    let mut anchor_counts = vec![0_usize; strata];
+    let mut candidate_counts = vec![0_usize; strata];
+    for stratum in anchor_strata {
+        anchor_counts[*stratum] += 1;
+    }
+    for stratum in candidate_strata {
+        candidate_counts[*stratum] += 1;
     }
 
     // Subclasses are the strata with both groups. Every one of them has an
@@ -173,8 +192,8 @@ pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
         ..ExactMatchOutcome::default()
     };
     for (rows, strata, is_anchor) in [
-        (anchors, &anchor_strata, true),
-        (candidates, &candidate_strata, false),
+        (anchors, anchor_strata, true),
+        (candidates, candidate_strata, false),
     ] {
         for (row, stratum) in rows.iter().zip(strata) {
             let Some(subclass) = subclass_of[*stratum] else {
