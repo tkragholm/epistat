@@ -645,6 +645,16 @@ fn design(
 }
 
 fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, EffectError> {
+    let weighted = |treated: bool| {
+        sample
+            .treated
+            .iter()
+            .zip(&sample.weight)
+            .any(|(t, w)| *t == treated && *w > 0.0)
+    };
+    if !weighted(true) || !weighted(false) {
+        return Err(EffectError::EmptyTarget);
+    }
     let n = sample.len();
     let p = width(sample, spec.interactions);
     if n < p {
@@ -707,18 +717,7 @@ fn means(sample: &MatchedSample, spec: &EffectSpec, beta: &[f64]) -> Result<Mean
         })
         .collect();
     let total: f64 = rows.iter().map(|&i| sample.weight[i]).sum();
-    if total <= 0.0
-        || !sample
-            .treated
-            .iter()
-            .zip(&sample.weight)
-            .any(|(t, w)| *t && *w > 0.0)
-        || !sample
-            .treated
-            .iter()
-            .zip(&sample.weight)
-            .any(|(t, w)| !*t && *w > 0.0)
-    {
+    if total <= 0.0 {
         return Err(EffectError::EmptyTarget);
     }
     let p = beta.len();
@@ -1066,4 +1065,132 @@ pub fn bootstrap(
         ratio: optional(|c| c.ratio.as_ref())?,
         odds_ratio: optional(|c| c.odds_ratio.as_ref())?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Eight pairs of one treated and one control row, outcomes chosen so that
+    /// the weighted means are easy to read.
+    fn pairs_sample() -> MatchedSample {
+        let treated = (0..16).map(|i| i % 2 == 0).collect();
+        let outcome = vec![
+            3.0, 1.0, 4.0, 2.0, 5.0, 2.0, 6.0, 3.0, 3.0, 1.0, 4.0, 2.0, 5.0, 2.0, 7.0, 3.0,
+        ];
+        MatchedSample::new(
+            treated,
+            vec![1.0; 16],
+            outcome,
+            Vec::new(),
+            (0..16).map(|i| Some(i / 2)).collect(),
+            (0..16).collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_model_without_covariates_gives_the_difference_in_means() {
+        let sample = pairs_sample();
+        let out = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear)).unwrap();
+        // Treated mean 4.625, control mean 2.0.
+        assert!((out.difference.estimate - 2.625).abs() < 1e-12);
+        assert!((out.mean_treated - 4.625).abs() < 1e-12);
+        assert!(out.difference.se.is_some());
+        assert!(out.ratio.is_none());
+    }
+
+    #[test]
+    fn one_cluster_has_no_covariance() {
+        let mut sample = pairs_sample();
+        sample.pair = vec![Some(0); 16];
+        let out = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear)).unwrap();
+        assert!(out.covariance.is_none());
+        assert_eq!(out.difference.se, None);
+    }
+
+    #[test]
+    fn rows_without_a_pair_need_clustering_by_unit() {
+        let mut sample = pairs_sample();
+        sample.pair = vec![None; 16];
+        let pair = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear));
+        assert_eq!(pair.unwrap_err(), EffectError::MissingPair { row: 0 });
+        let mut spec = EffectSpec::new(OutcomeModel::Linear);
+        spec.clustering = Clustering::Unit;
+        assert!(
+            estimate_effects(&sample, &spec)
+                .unwrap()
+                .difference
+                .se
+                .is_some()
+        );
+        let boot = bootstrap(&sample, &spec, &BootstrapSpec::new(10, 1));
+        assert_eq!(boot.unwrap_err(), EffectError::MissingPair { row: 0 });
+    }
+
+    #[test]
+    fn a_target_without_weighted_controls_is_an_error() {
+        let mut sample = pairs_sample();
+        for (w, t) in sample.weight.iter_mut().zip(&sample.treated) {
+            if !*t {
+                *w = 0.0;
+            }
+        }
+        let out = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear));
+        assert_eq!(out.unwrap_err(), EffectError::EmptyTarget);
+    }
+
+    #[test]
+    fn a_logistic_outcome_outside_the_unit_interval_is_an_error() {
+        let sample = pairs_sample();
+        let out = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Logistic));
+        assert_eq!(out.unwrap_err(), EffectError::Outcome { row: 0 });
+    }
+
+    #[test]
+    fn unit_data_rejects_repeated_ids_and_unknown_units_are_named() {
+        let dup = UnitData::new(
+            vec!["a".into(), "a".into()],
+            vec![true, false],
+            vec![1.0, 2.0],
+        );
+        assert_eq!(
+            dup.unwrap_err(),
+            EffectError::DuplicateUnit { id: "a".into() }
+        );
+        let units = UnitData::new(vec!["a".into()], vec![true], vec![1.0]).unwrap();
+        let data = MatchData {
+            id: vec!["b".into()],
+            role: vec![crate::UnitRole::Anchor],
+            weight: vec![1.0],
+            subclass: vec![Some(1)],
+        };
+        assert_eq!(
+            MatchedSample::from_match_data(&data, &units).unwrap_err(),
+            EffectError::UnknownUnit { id: "b".into() }
+        );
+    }
+
+    #[test]
+    fn resamples_are_reproducible_and_within_range() {
+        let a = cluster_resamples(5, 20, 3);
+        assert_eq!(a, cluster_resamples(5, 20, 3));
+        assert_ne!(a, cluster_resamples(5, 20, 4));
+        assert!(a.iter().all(|d| d.len() == 5 && d.iter().all(|&c| c < 5)));
+    }
+
+    #[test]
+    fn the_bootstrap_summarises_its_replicates() {
+        let sample = pairs_sample();
+        let spec = EffectSpec::new(OutcomeModel::Linear);
+        let out = bootstrap(&sample, &spec, &BootstrapSpec::new(50, 11)).unwrap();
+        let d = &out.difference;
+        assert_eq!(d.replicates.len(), 50);
+        assert!((d.summary.estimate - 2.625).abs() < 1e-12);
+        assert!(d.summary.percentile.0 <= d.summary.estimate + 1.0);
+        assert!(d.summary.normal.0 < d.summary.estimate && d.summary.estimate < d.summary.normal.1);
+        assert!(out.ratio.is_none() && out.odds_ratio.is_none());
+        let few = bootstrap(&sample, &spec, &BootstrapSpec::new(0, 11));
+        assert_eq!(few.unwrap_err(), EffectError::Bootstrap);
+    }
 }
