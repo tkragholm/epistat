@@ -7,19 +7,20 @@
 //! HiGHS's status and objective in every exact stratum. The checks are:
 //!
 //! 1. Where HiGHS reports the optimum in every stratum and our search closes
-//!    within its node limit (4000 relaxations per stratum), the number of units
+//!    within its node limit (4000 relaxations per stratum in an optimised
+//!    build, 1000 in a debug build, `CARD_NODES` to set it), the number of units
 //!    selected equals MatchIt's, exactly. Where the search stops at the limit
-//!    its subset is no larger than HiGHS's, and the shortfall is printed, as is
-//!    the number of cases that closed. The environment variable `CARD_NODES`
-//!    raises the limit. Where it stopped at its time limit,
-//!    ours is at least MatchIt's, since MatchIt's solution is feasible.
-//! 2. A case that HiGHS did not close is reported and not asserted. Every balance constraint, as the documentation of `method_cardinality`
-//!    states it, holds for our selection, in every exact stratum. The same
-//!    function accepts MatchIt's selection, which shows it is the constraint
-//!    MatchIt solved. HiGHS holds its rows to `1e-6` on sums, so MatchIt's
-//!    selection is accepted to `1e-6` in units of a mean difference, and ours to
-//!    `1e-8`, which is the solver's row tolerance `1e-9 ‖a‖₂` divided by the size of
-//!    the smaller selected group at these sizes.
+//!    its subset is no larger than HiGHS's. Each case's size, HiGHS's, our
+//!    bound and node count are printed, as are the number of cases that closed
+//!    and the units short in the others; at least 18 must close.
+//! 2. A case that HiGHS did not close is reported and not asserted. Every
+//!    balance constraint, as the documentation of `method_cardinality` states
+//!    it, holds for our selection, in every exact stratum. The same function
+//!    accepts MatchIt's selection, which shows it is the constraint MatchIt
+//!    solved. HiGHS holds its rows to `1e-6` on sums, so MatchIt's selection is
+//!    accepted to `1e-6` in units of a mean difference, and ours to `1e-8`,
+//!    which is the solver's row tolerance `1e-9 ‖a‖₂` divided by the size of the
+//!    smaller selected group at these sizes.
 //! 3. The weight rule of the documentation, applied to MatchIt's own selected
 //!    units, gives MatchIt's weights, and applied to ours gives ours. Where the
 //!    selected set is the same as MatchIt's the weights are the same. How often
@@ -145,12 +146,14 @@ fn request<'a>(case: &'a Case, data: &'a Dataset, treated: &'a [bool]) -> Cardin
     request.std_tols.clone_from(&case.std_tols);
     request.exact = case.exact.as_deref();
     request.sampling_weights = case.s_weights.as_deref();
-    // A node limit, not a time limit, so the result does not depend on the machine.
-    // `CARD_NODES` raises it to see how many cases the search closes.
+    // A node limit, not a time limit, so the result does not depend on the
+    // machine: 4000 relaxations per stratum in an optimised build, and 1000 in a
+    // debug build, where the cases that do not close would take minutes.
+    // `CARD_NODES` sets it.
     let nodes = std::env::var("CARD_NODES")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(4_000);
+        .unwrap_or(if cfg!(debug_assertions) { 1_000 } else { 4_000 });
     request.limits = CardinalityLimits {
         time: None,
         nodes: Some(nodes),
@@ -413,8 +416,17 @@ fn selection_sizes_and_balance_agree_with_matchit() {
             }
             Err(e) => panic!("{}: {e}", case.name),
         };
-        eprintln!("{} {:?}", case.name, t0.elapsed());
         let ours = selected_from(&outcome.weights);
+        eprintln!(
+            "{}: {} selected, HiGHS {}, bound {}, proven {}, {} nodes, {:?}",
+            case.name,
+            ours.iter().filter(|&&b| b).count(),
+            case.n_selected,
+            outcome.strata.iter().map(|s| s.bound).sum::<f64>(),
+            outcome.strata.iter().all(|s| s.proven_optimal),
+            outcome.strata.iter().map(|s| s.nodes).sum::<u64>(),
+            t0.elapsed()
+        );
         let violation = worst_violation(case, data, &treated, &outcome.selected);
         worst_ours = worst_ours.max(violation);
         assert!(
@@ -475,7 +487,7 @@ fn selection_sizes_and_balance_agree_with_matchit() {
         "{compared} cases, {optimal_cases} where HiGHS proved its optimum, {proven_cases} of them \
          proved by us, the others {deficit} units short in all and {not_found} with none found; same selected set in {identical}; worst balance excess ours {worst_ours:.2e}, MatchIt's {worst_theirs:.2e}"
     );
-    assert!(proven_cases >= 12, "only {proven_cases} cases closed");
+    assert!(proven_cases >= 18, "only {proven_cases} cases closed");
 }
 
 #[test]

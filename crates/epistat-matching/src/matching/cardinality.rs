@@ -43,12 +43,15 @@
 //!
 //! # Solver
 //!
-//! The programs have a million columns and a few dozen rows. They are solved by
-//! [`epistat_optim::branch_and_bound`], an own bounded dual simplex with branch
-//! and bound, not a general solver. Its limits are the node and time limits of
+//! The programs have up to a million columns and a few dozen rows. They are
+//! solved by [`epistat_optim::branch_and_bound`], an own bounded dual simplex
+//! with Gomory cuts, local search and branch and bound by objective level, not
+//! a general solver. Its limits are the node and time limits of
 //! [`CardinalityRequest`]. A stratum whose search stops at a limit returns the
-//! best subset found, and [`StratumReport::proven_optimal`] is false. `MatchIt`'s
-//! default time limit is 120 seconds, and this is the default here.
+//! best subset found, [`StratumReport::proven_optimal`] is false, and
+//! [`StratumReport::bound`] is the largest objective the search could not rule
+//! out. `MatchIt`'s default time limit is 120 seconds, and this is the default
+//! here.
 //!
 //! The columns of one binary program are dense: for 10^6 units and 30 rows the
 //! matrix takes 240 MB.

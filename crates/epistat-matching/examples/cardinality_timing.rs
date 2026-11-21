@@ -2,11 +2,13 @@
 //! `tests/data/cardinality_timing.R`: a `treat` column followed by covariates.
 //!
 //! ```text
-//! cargo run --release -p epistat-matching --example cardinality_timing -- data.csv [seconds]
+//! cargo run --release -p epistat-matching --example cardinality_timing -- data.csv [seconds] [tols]
 //! ```
 //!
 //! Prints the units, the selected units, the status of the search, the bound and
-//! the wall time. The optional second argument is the time limit in seconds.
+//! the wall time. The optional second argument is the time limit in seconds, and
+//! the third the tolerance in standard deviations, 0.1 by default as in the R
+//! script.
 
 use epistat_matching::{CardinalityLimits, CardinalityRequest, match_cardinality};
 use std::time::{Duration, Instant};
@@ -15,6 +17,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().expect("a CSV path");
     let seconds: Option<f64> = args.next().map(|s| s.parse().expect("seconds"));
+    let tols: f64 = args.next().map_or(0.1, |s| s.parse().expect("a tolerance"));
     let text = std::fs::read_to_string(&path).expect("readable file");
     let mut lines = text.lines();
     let header: Vec<&str> = lines.next().expect("a header").split(',').collect();
@@ -27,6 +30,7 @@ fn main() {
     let treated: Vec<bool> = columns[0].iter().map(|&t| t > 0.5).collect();
     let covariates: Vec<Vec<f64>> = columns[1..].to_vec();
     let mut request = CardinalityRequest::new(&treated, &covariates);
+    request.tols = vec![tols];
     request.limits = CardinalityLimits {
         time: seconds.map(Duration::from_secs_f64),
         nodes: None,
