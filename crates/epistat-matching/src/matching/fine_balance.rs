@@ -78,12 +78,13 @@
 //! depend on the number of threads, since the strata are solved independently
 //! and combined in stratum order.
 //!
-//! The work is the pricing sweeps over all pairs (a sweep is `O(pairs)`, and
-//! there are few of them), the sort of each stratum's pairs by distance within
-//! the stratum, and the solver on the pairs kept, with pivots that cost about
-//! the size of a stratum. The solver's block of arcs searched per pivot is
-//! short, since the pivots are cheap. Memory is the admissible pairs, 24 bytes
-//! each plus 8 for the integer cost, and the network of the pairs kept.
+//! The work is a sort of the pairs of each stratum by distance, the sweeps that
+//! price the pairs left out (each `O(pairs)`, and there are a few), the price
+//! rounds of step 2, which solve each stratum's small assignment problem, and
+//! the solver on the pairs kept. Memory is the admissible pairs, 24 bytes each
+//! plus 8 for the integer cost, and the network of the pairs kept. The solver's
+//! block of arcs searched per pivot is short, since most pivots of this network
+//! touch a small subtree.
 //!
 //! # References
 //!
