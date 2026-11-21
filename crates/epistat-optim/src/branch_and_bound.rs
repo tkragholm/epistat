@@ -22,26 +22,35 @@
 //! 2. If no binary column is fractional, the rounded point is an integer
 //!    solution. It is checked against the rows, and it replaces the incumbent
 //!    when it is better.
-//! 3. Otherwise a fractional column is chosen, the one furthest from an
-//!    integer, the lowest index among ties. Two children fix it to 0 and 1. The
-//!    child on the side the value is nearer to (1 on a tie) is solved at once
-//!    and the other is kept on a stack.
-//! 4. The search is depth first, which finds an integer solution early and
-//!    needs memory only for the stack. A node whose bound cannot beat the
-//!    incumbent is dropped without branching. A kept sibling is also dropped,
-//!    unsolved, when its parent's bound cannot beat the incumbent found since.
-//!    Each solve starts from the basis of the node it branches from: the child
-//!    solved at once continues from the parent's final basis, and a sibling
-//!    reloads the basis saved when it was put on the stack, so a node costs a
-//!    few dual pivots.
+//! 3. Otherwise a fractional column is chosen: a general integer column before
+//!    a binary one, then the one furthest from a whole value, the lowest index
+//!    among ties. Two children bound it above by `floor(v)` and below by
+//!    `ceil(v)`. The child on the side the value is nearer to (up on a tie) is
+//!    solved at once and the other is kept.
+//! 4. After a node is closed, by bound, by infeasibility or as an integer
+//!    solution, the search takes the most recently kept node, for 50 times in a
+//!    row, and then the kept node with the best bound, the latest of equals.
+//!    The first finds integer solutions by diving, and the second keeps the
+//!    search from staying in a region that has none. A node whose bound cannot
+//!    beat the incumbent is dropped without branching, and a kept node is
+//!    dropped, unsolved, when its parent's bound cannot. Each solve starts from
+//!    the basis of the node it branches from: the child solved at once
+//!    continues from the parent's final basis, and a kept node reloads the basis
+//!    saved when it was put away, so a node costs a few dual pivots.
 //!
 //! When every binary column has an integer cost and every continuous column
 //! has cost zero, the value of any integer solution is an integer, so a node is
 //! dropped unless `floor(bound) > incumbent`. This is detected from the data.
 //!
-//! # Neighbourhood search
+//! # Rounding dive and neighbourhood search
 //!
-//! In a matching problem many units are interchangeable, and depth first search
+//! Before the search starts, the root relaxation is rounded by diving: all its
+//! fractional columns are fixed to their nearest whole values at once, the
+//! relaxation is solved again, and this repeats until it is whole. When fixing
+//! all of them is infeasible, the most fractional one is fixed alone, and the
+//! dive stops when that fails too. A whole point is an integer solution.
+//!
+//! In a matching problem many units are interchangeable, and the search
 //! alone can stay a few units below the optimum for a long time. After the root
 //! relaxation, the binary columns are ordered by the size of their reduced cost,
 //! the basic ones, which include every fractional one, first. The first 64
@@ -92,6 +101,7 @@
 //!     row_lo: &[f64::NEG_INFINITY],
 //!     row_hi: &[5.0],
 //!     binary: &[true; 3],
+//!     integer: &[],
 //! };
 //! let solution = solve(&program, &Options::default()).unwrap();
 //! assert_eq!(solution.status, Status::Optimal);
@@ -113,6 +123,9 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use crate::bounded_simplex::{BoundedLpError, BoundedSimplex, Snapshot};
+
+/// Backtracks to the latest open node before the one with the best bound is taken.
+const PLUNGE: usize = 50;
 
 /// A basic binary column within this of 0 or 1 is integral.
 const INT_TOL: f64 = 1e-8;
@@ -137,6 +150,10 @@ pub struct MixedBinaryProgram<'a> {
     pub row_hi: &'a [f64],
     /// Which columns must be 0 or 1. Their bounds must be within `[0, 1]`.
     pub binary: &'a [bool],
+    /// Further columns that must take whole values, within their bounds, which
+    /// are then finite. Empty for none, otherwise one entry per column. Branching
+    /// goes to these before the binary columns.
+    pub integer: &'a [bool],
 }
 
 /// Limits on the search, and whether to run the root heuristic. `None` is no
@@ -243,9 +260,12 @@ impl std::error::Error for MipError {}
 
 struct Node {
     var: usize,
-    value: f64,
+    /// The bounds of the sibling to solve.
+    lo: f64,
+    hi: f64,
     parent_bound: f64,
-    trail_len: usize,
+    /// The bounds fixed by the branches above it, in order.
+    path: Vec<(usize, f64, f64)>,
     snapshot: Snapshot,
 }
 
@@ -272,7 +292,18 @@ fn solve_with_deadline(
             "binary needs one entry per column".to_string(),
         ));
     }
+    if !(program.integer.is_empty() || program.integer.len() == n) {
+        return Err(MipError::InvalidInput(
+            "integer needs no entries or one per column".to_string(),
+        ));
+    }
+    let general = |j: usize| program.integer.get(j).copied().unwrap_or(false) && !program.binary[j];
     for j in 0..n {
+        if general(j) && !(program.col_lo[j].is_finite() && program.col_hi[j].is_finite()) {
+            return Err(MipError::InvalidInput(
+                "an integer column needs finite bounds".to_string(),
+            ));
+        }
         if program.binary[j]
             && !((program.col_lo[j] == 0.0 || program.col_lo[j] == 1.0)
                 && (program.col_hi[j] == 0.0 || program.col_hi[j] == 1.0)
@@ -299,7 +330,7 @@ fn solve_with_deadline(
 
     lp.perturb_costs();
     let integral_objective = (0..n).all(|j| {
-        if program.binary[j] {
+        if program.binary[j] || general(j) {
             program.cost[j] == program.cost[j].round()
         } else {
             program.cost[j] == 0.0
@@ -308,7 +339,8 @@ fn solve_with_deadline(
 
     let mut nodes: u64 = 0;
     let mut incumbent: Option<(Vec<f64>, f64)> = None;
-    let mut trail: Vec<(usize, f64, f64)> = Vec::new();
+    let mut path: Vec<(usize, f64, f64)> = Vec::new();
+    let mut local_backtracks = 0_usize;
     let mut stack: Vec<Node> = Vec::new();
     let mut status = Status::Optimal;
     let root_bound;
@@ -351,6 +383,9 @@ fn solve_with_deadline(
         Err(e) => return Err(MipError::Lp(e)),
     }
 
+    if options.neighbourhood_search && solved.is_some() {
+        rounding_dive(program, &mut lp, deadline, &mut incumbent, &mut nodes)?;
+    }
     if options.neighbourhood_search
         && let Some(z) = solved
     {
@@ -391,10 +426,13 @@ fn solve_with_deadline(
                         .then_some(Status::TimeLimit)
                 });
             if beats(z, &incumbent) {
-                // Fractional binary columns among the basic ones.
-                let mut branch: Option<(usize, f64, f64)> = None;
+                // Fractional whole columns among the basic ones: the general
+                // integer columns first, then the furthest from a whole value,
+                // then the lowest index.
+                let mut branch: Option<(usize, f64, (bool, f64))> = None;
                 for (j, v) in lp.basic_columns() {
-                    if !program.binary[j] {
+                    let is_general = general(j);
+                    if !(program.binary[j] || is_general) {
                         continue;
                     }
                     let (lo, hi) = lp.bounds(j);
@@ -402,13 +440,18 @@ fn solve_with_deadline(
                         continue;
                     }
                     let dist = (v - v.round()).abs();
-                    if dist > INT_TOL {
+                    if dist > INT_TOL * v.abs().max(1.0) {
+                        let key = (is_general, dist);
                         let better = match branch {
                             None => true,
-                            Some((bj, _, bd)) => dist > bd || (dist == bd && j < bj),
+                            Some((bj, _, bk)) => {
+                                key.0 > bk.0
+                                    || (key.0 == bk.0
+                                        && (key.1 > bk.1 || (key.1 == bk.1 && j < bj)))
+                            }
                         };
                         if better {
-                            branch = Some((j, v, dist));
+                            branch = Some((j, v, key));
                         }
                     }
                 }
@@ -426,17 +469,25 @@ fn solve_with_deadline(
                             break 'search;
                         }
                         let (lo, hi) = lp.bounds(j);
-                        let near = if v >= 0.5 { 1.0 } else { 0.0 };
-                        let far = 1.0 - near;
+                        // Down: `x <= floor(v)`. Up: `x >= ceil(v)`. The side
+                        // the value is nearer to, up on a tie, is solved first.
+                        let down = (lo, v.floor());
+                        let up = (v.ceil(), hi);
+                        let (near, far) = if v - v.floor() >= 0.5 {
+                            (up, down)
+                        } else {
+                            (down, up)
+                        };
                         stack.push(Node {
                             var: j,
-                            value: far,
+                            lo: far.0,
+                            hi: far.1,
                             parent_bound: z,
-                            trail_len: trail.len(),
+                            path: path.clone(),
                             snapshot: lp.snapshot(),
                         });
-                        trail.push((j, lo, hi));
-                        lp.set_bounds(j, near, near).map_err(MipError::Lp)?;
+                        path.push((j, near.0, near.1));
+                        lp.set_bounds(j, near.0, near.1).map_err(MipError::Lp)?;
                         match lp.solve(deadline) {
                             Ok(()) => {
                                 nodes += 1;
@@ -457,14 +508,26 @@ fn solve_with_deadline(
                 }
             }
         }
-        // Backtrack to the next open node.
+        // Backtrack to the open node with the best bound, the latest of equals.
         loop {
-            let Some(node) = stack.pop() else {
+            stack.retain(|node| beats(node.parent_bound, &incumbent));
+            // The latest node, for `PLUNGE` backtracks in a row, then the best.
+            let mut pick: Option<usize> = None;
+            if local_backtracks < PLUNGE {
+                local_backtracks += 1;
+                pick = stack.len().checked_sub(1);
+            } else {
+                local_backtracks = 0;
+                for (i, node) in stack.iter().enumerate() {
+                    if pick.is_none_or(|p| node.parent_bound >= stack[p].parent_bound) {
+                        pick = Some(i);
+                    }
+                }
+            }
+            let Some(pick) = pick else {
                 break 'search;
             };
-            if !beats(node.parent_bound, &incumbent) {
-                continue;
-            }
+            let node = stack.remove(pick);
             if let Some(l) = options.node_limit
                 && nodes >= l
             {
@@ -479,16 +542,18 @@ fn solve_with_deadline(
                 stack.push(node);
                 break 'search;
             }
-            while trail.len() > node.trail_len {
-                let Some((j, lo, hi)) = trail.pop() else {
-                    break;
-                };
+            for &(j, _, _) in &path {
+                lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
+                    .map_err(MipError::Lp)?;
+            }
+            for &(j, lo, hi) in &node.path {
                 lp.set_bounds(j, lo, hi).map_err(MipError::Lp)?;
             }
             lp.restore(&node.snapshot);
-            lp.set_bounds(node.var, node.value, node.value)
+            lp.set_bounds(node.var, node.lo, node.hi)
                 .map_err(MipError::Lp)?;
-            trail.push((node.var, 0.0, 1.0));
+            path.clone_from(&node.path);
+            path.push((node.var, node.lo, node.hi));
             match lp.solve(deadline) {
                 Ok(()) => {
                     nodes += 1;
@@ -535,6 +600,117 @@ fn solve_with_deadline(
         pivots: lp.iterations(),
         max_row_violation,
     })
+}
+
+/// The most relaxations a rounding dive may solve.
+const DIVE_LIMIT: u64 = 3000;
+
+/// Fractional whole columns among the basic ones, general integer columns
+/// first and then by distance from a whole value, furthest first, ties to the
+/// lowest index.
+fn fractional_columns(lp: &BoundedSimplex, program: &MixedBinaryProgram<'_>) -> Vec<(usize, f64)> {
+    let mut out: Vec<(usize, f64, bool, f64)> = Vec::new();
+    for (j, v) in lp.basic_columns() {
+        let general = program.integer.get(j).copied().unwrap_or(false) && !program.binary[j];
+        if !(program.binary[j] || general) {
+            continue;
+        }
+        let (lo, hi) = lp.bounds(j);
+        let dist = (v - v.round()).abs();
+        if lo != hi && dist > INT_TOL * v.abs().max(1.0) {
+            out.push((j, v, general, dist));
+        }
+    }
+    out.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.total_cmp(&a.3)).then(a.0.cmp(&b.0)));
+    out.into_iter().map(|(j, v, _, _)| (j, v)).collect()
+}
+
+/// Rounds the root relaxation to an integer solution by diving.
+///
+/// All the fractional columns of the relaxation are fixed to their nearest whole
+/// value at once and the relaxation is solved again, and this repeats until it is
+/// whole. When fixing them all makes the relaxation infeasible, only the most
+/// fractional is fixed, to its nearest value and else to the other. The dive
+/// gives up when that fails too or after [`DIVE_LIMIT`] relaxations. The bounds
+/// and the basis are put back afterwards. A whole point is a solution of the
+/// program and can only raise the incumbent.
+fn rounding_dive(
+    program: &MixedBinaryProgram<'_>,
+    lp: &mut BoundedSimplex,
+    deadline: Option<Instant>,
+    incumbent: &mut Option<(Vec<f64>, f64)>,
+    nodes: &mut u64,
+) -> Result<(), MipError> {
+    let snapshot = lp.snapshot();
+    let mut changed: Vec<usize> = Vec::new();
+    let mut solves = 0_u64;
+    'dive: while solves < DIVE_LIMIT {
+        let fractional = fractional_columns(lp, program);
+        if fractional.is_empty() {
+            let (x, objective) = rounded_point(lp, program)?;
+            if incumbent.as_ref().is_none_or(|(_, v)| objective > *v) {
+                *incumbent = Some((x, objective));
+            }
+            break;
+        }
+        let try_fix = |lp: &mut BoundedSimplex, fixes: &[(usize, f64)]| -> Result<bool, MipError> {
+            for &(j, value) in fixes {
+                lp.set_bounds(j, value, value).map_err(MipError::Lp)?;
+            }
+            match lp.solve(deadline) {
+                Ok(()) => Ok(true),
+                Err(BoundedLpError::Infeasible) => Ok(false),
+                Err(BoundedLpError::TimeLimit) => Err(MipError::NoSolution {
+                    status: Status::TimeLimit,
+                    bound: f64::INFINITY,
+                }),
+                Err(e) => Err(MipError::Lp(e)),
+            }
+        };
+        let restore = |lp: &mut BoundedSimplex, fixes: &[(usize, f64)]| -> Result<(), MipError> {
+            for &(j, _) in fixes {
+                lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
+                    .map_err(MipError::Lp)?;
+            }
+            Ok(())
+        };
+        let all: Vec<(usize, f64)> = fractional.iter().map(|&(j, v)| (j, v.round())).collect();
+        solves += 1;
+        let before = lp.snapshot();
+        let ok = match try_fix(lp, &all) {
+            Err(MipError::NoSolution { .. }) => break 'dive,
+            other => other?,
+        };
+        if ok {
+            changed.extend(all.iter().map(|&(j, _)| j));
+            continue;
+        }
+        restore(lp, &all)?;
+        lp.restore(&before);
+        let (j, v) = fractional[0];
+        for value in [v.round(), if v.round() > v { v.floor() } else { v.ceil() }] {
+            solves += 1;
+            let single = [(j, value)];
+            let r = try_fix(lp, &single);
+            if matches!(r, Ok(true)) {
+                changed.push(j);
+                continue 'dive;
+            }
+            restore(lp, &single)?;
+            lp.restore(&before);
+        }
+        break;
+    }
+    *nodes += solves;
+    for j in changed {
+        lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
+            .map_err(MipError::Lp)?;
+    }
+    lp.restore(&snapshot);
+    match lp.solve(deadline) {
+        Ok(()) | Err(BoundedLpError::TimeLimit) => Ok(()),
+        Err(e) => Err(MipError::Lp(e)),
+    }
 }
 
 /// Sizes of the free sets of the neighbourhood search, in binary columns.
@@ -602,6 +778,7 @@ fn neighbourhood_search(
             }
         }
         let mut columns = Vec::with_capacity(kept.len() * m);
+        let mut integer = Vec::with_capacity(kept.len());
         let (mut cost, mut col_lo, mut col_hi, mut binary) = (
             Vec::with_capacity(kept.len()),
             Vec::with_capacity(kept.len()),
@@ -614,6 +791,7 @@ fn neighbourhood_search(
             col_lo.push(program.col_lo[j]);
             col_hi.push(program.col_hi[j]);
             binary.push(program.binary[j]);
+            integer.push(program.integer.get(j).copied().unwrap_or(false));
         }
         let row_lo: Vec<f64> = (0..m)
             .map(|i| program.row_lo[i] - fixed_activity[i])
@@ -630,6 +808,7 @@ fn neighbourhood_search(
             row_lo: &row_lo,
             row_hi: &row_hi,
             binary: &binary,
+            integer: &integer,
         };
         let sub_deadline = deadline.map(|dl| {
             let now = Instant::now();
@@ -676,7 +855,7 @@ fn rounded_point(
     let mut moved = vec![0.0; program.rows];
     let m = program.rows;
     for j in 0..x.len() {
-        if program.binary[j] {
+        if program.binary[j] || program.integer.get(j).copied().unwrap_or(false) {
             let r = x[j].round();
             let d = (x[j] - r).abs();
             if d > 0.0 {
@@ -807,6 +986,7 @@ mod tests {
             row_lo: &[-INF],
             row_hi: &[5.0],
             binary: &[true; 3],
+            integer: &[],
         };
         let s = solve(&program, &Options::default()).unwrap();
         assert_eq!(s.status, Status::Optimal);
@@ -825,6 +1005,7 @@ mod tests {
             row_lo: &[1.5],
             row_hi: &[1.5],
             binary: &[true; 2],
+            integer: &[],
         };
         assert!(matches!(
             solve(&program, &Options::default()),
@@ -886,6 +1067,7 @@ mod tests {
                 row_lo: &row_lo,
                 row_hi: &row_hi,
                 binary: &binary,
+                integer: &[],
             };
             let reference = brute_force(m, &columns, &cost, &row_lo, &row_hi, col_hi[nbin], nbin);
             let got = solve(&program, &Options::default());
@@ -919,6 +1101,7 @@ mod tests {
             row_lo: &[-INF],
             row_hi: &[50.0],
             binary: &vec![true; n],
+            integer: &[],
         };
         let full = solve(&program, &Options::default()).unwrap();
         assert_eq!(full.status, Status::Optimal);
