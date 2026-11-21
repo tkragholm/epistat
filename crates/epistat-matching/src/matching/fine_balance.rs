@@ -82,9 +82,10 @@
 //!    cost, so the flow ends optimal for the pairs kept.
 //! 4. Potentials for the whole network are the shortest distances from the
 //!    category nodes, and every pair left out is priced against them. A pair
-//!    whose reduced cost is negative could improve the flow. A stratum is
-//!    listed again only when the recorded costs of step 1 do not already show
-//!    that none of its pairs left out prices negatively. The pairs that do are
+//!    whose reduced cost is negative could improve the flow. Only the anchors
+//!    for which the recorded costs of step 1 do not already show that none of
+//!    their pairs left out prices negatively have their pairs listed again.
+//!    The pairs that do price negatively are
 //!    added, their blocks are solved again from their flow at prices that are
 //!    the potentials of the category nodes, which keeps every cycle at a
 //!    non-negative cost, and step 3 continues. When no pair prices negatively
@@ -99,8 +100,8 @@
 //! are solved independently and combined in stratum order, and the shortest
 //! paths are found on one thread with ties settled by node number.
 //!
-//! The work is linear in the admissible pairs for each listing, of which there
-//! are two or three (the first pass and the sweeps, which skip most strata),
+//! The work is one listing of the admissible pairs, linear in their number,
+//! and the sweeps, which list the pairs of the few anchors not ruled out,
 //! plus the price rounds, each a warm-started solve of every block, plus for
 //! each unit of flow moved in step 3 a shortest-path search on the category
 //! nodes and `L` searches of each block crossed, `L` being its number of
@@ -383,6 +384,9 @@ struct Pairs<'a> {
     list: &'a StratumPairs<'a>,
     /// The number of the first pair of each stratum, and the total at the end.
     offset: Vec<usize>,
+    /// For each stratum, the position in its list of the first pair of each
+    /// row, and the number of pairs at the end.
+    row_start: Vec<Vec<u32>>,
 }
 
 impl Pairs<'_> {
@@ -390,11 +394,37 @@ impl Pairs<'_> {
         self.offset[self.strata.len()]
     }
 
+    /// The pairs of the rows `rows` (increasing) of stratum `s` as (number,
+    /// anchor, candidate, distance), numbered as in the list of all its pairs.
+    fn of_rows(&self, s: usize, rows: &[usize]) -> Vec<(usize, usize, usize, f64)> {
+        let stratum = &self.strata[s];
+        let starts = &self.row_start[s];
+        let mut row = usize::MAX;
+        let mut next = 0;
+        (self.list)(stratum, Some(rows))
+            .into_iter()
+            .map(|edge| {
+                if edge.row != row {
+                    row = edge.row;
+                    next = starts[row] as usize;
+                }
+                let k = self.offset[s] + next;
+                next += 1;
+                (
+                    k,
+                    stratum.anchors[edge.row],
+                    stratum.candidates[edge.col],
+                    edge.distance,
+                )
+            })
+            .collect()
+    }
+
     /// The pairs of stratum `s` as (anchor, candidate, distance), by position
     /// in the anchor and candidate slices.
     fn of(&self, s: usize) -> Vec<(usize, usize, f64)> {
         let stratum = &self.strata[s];
-        (self.list)(stratum)
+        (self.list)(stratum, None)
             .into_iter()
             .map(|edge| {
                 (
@@ -788,29 +818,36 @@ impl Block {
         hold
     }
 
-    /// Whether no pair left out of the block can have a negative reduced cost
-    /// against the potentials `d` of [`Self::network_potentials`]. A pair of
-    /// an anchor and category left out costs at least the bound of that
-    /// anchor and category, every candidate of the category has at least the
-    /// least potential among the block's candidates of the category, its
-    /// entry, or (without an entry) the category node `hub[k]`, and the
-    /// anchors and categories without a bound have no pair left out.
-    fn none_below(&self, bounds: &[(usize, usize, i64)], d: &[i64], hub: &[i64]) -> bool {
+    /// The anchors of the block, by position in the anchor slice, that may
+    /// have a pair left out with a negative reduced cost against the
+    /// potentials `d` of [`Self::network_potentials`]. A pair of an anchor
+    /// and category left out costs at least the bound of that anchor and
+    /// category, every candidate of the category has at least the least
+    /// potential among the block's candidates of the category, its entry, or
+    /// (without an entry) the category node `hub[k]`, and the anchors and
+    /// categories without a bound have no pair left out.
+    fn wanting(&self, bounds: &[(usize, usize, i64)], d: &[i64], hub: &[i64]) -> Vec<usize> {
         let mut least: Vec<i64> = d[..self.entries()].to_vec();
         for (c, &entry) in self.entry_of.iter().enumerate() {
             let entry = entry as usize;
             least[entry] = least[entry].min(d[self.candidate_node(c)]);
         }
-        bounds.iter().all(|&(anchor, k, bound)| {
-            let lowest = match self.leaf.binary_search(&k) {
-                Ok(entry) => least[entry],
-                Err(_) => hub[k],
-            };
-            let Ok(a) = self.anchors.binary_search(&anchor) else {
-                return false;
-            };
-            i128::from(bound) + i128::from(lowest) - i128::from(d[self.anchor_node(a)]) >= 0
-        })
+        let mut out: Vec<usize> = bounds
+            .iter()
+            .filter(|&&(anchor, k, bound)| {
+                let lowest = match self.leaf.binary_search(&k) {
+                    Ok(entry) => least[entry],
+                    Err(_) => hub[k],
+                };
+                self.anchors.binary_search(&anchor).ok().is_none_or(|a| {
+                    i128::from(bound) + i128::from(lowest) - i128::from(d[self.anchor_node(a)]) < 0
+                })
+            })
+            .map(|&(anchor, _, _)| anchor)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// Restore non-negative reduced costs by label correction from the
@@ -1635,42 +1672,53 @@ impl Network<'_> {
                     return Vec::new();
                 };
                 let (block, d) = (&coupled.blocks[b], &potentials[b]);
-                let skip = block.none_below(&bounds[s], d, &leaf_hub);
-                if skip && !cfg!(debug_assertions) {
-                    return Vec::new();
-                }
-                let first = pairs.offset[s];
-                let found: Vec<Kept> = pairs
-                    .of(s)
+                let stratum = &pairs.strata[s];
+                // Rows of the stratum, increasing.
+                let rows: Vec<usize> = block
+                    .wanting(&bounds[s], d, &leaf_hub)
                     .into_iter()
-                    .enumerate()
-                    .filter_map(|(i, (anchor, candidate, distance))| {
-                        let k = first + i;
-                        if selected.contains(k) {
-                            return None;
-                        }
-                        // A candidate outside the block hangs from the entry
-                        // of its category, or from the category node.
-                        let at_candidate = match block.candidates.binary_search(&candidate) {
-                            Ok(c) => d[block.candidate_node(c)],
-                            Err(_) => match block.leaf.binary_search(&leaf_of[candidate]) {
-                                Ok(entry) => d[entry],
-                                Err(_) => leaf_hub[leaf_of[candidate]],
-                            },
-                        };
-                        let a = block.anchors.binary_search(&anchor).ok()?;
-                        let at_anchor = d[block.anchor_node(a)];
-                        let cost = self.pair_cost(distance);
-                        (i128::from(cost) + i128::from(at_candidate) - i128::from(at_anchor) < 0)
-                            .then_some(Kept {
-                                k,
-                                anchor,
-                                candidate,
-                                cost,
-                            })
-                    })
+                    .filter_map(|anchor| stratum.anchors.binary_search(&anchor).ok())
                     .collect();
-                debug_assert!(!skip || found.is_empty(), "stratum {s} skipped with pairs to add");
+                let price = |&(k, anchor, candidate, distance): &(usize, usize, usize, f64)| {
+                    if selected.contains(k) {
+                        return None;
+                    }
+                    // A candidate outside the block hangs from the entry of
+                    // its category, or from the category node.
+                    let at_candidate = match block.candidates.binary_search(&candidate) {
+                        Ok(c) => d[block.candidate_node(c)],
+                        Err(_) => match block.leaf.binary_search(&leaf_of[candidate]) {
+                            Ok(entry) => d[entry],
+                            Err(_) => leaf_hub[leaf_of[candidate]],
+                        },
+                    };
+                    let a = block.anchors.binary_search(&anchor).ok()?;
+                    let at_anchor = d[block.anchor_node(a)];
+                    let cost = self.pair_cost(distance);
+                    (i128::from(cost) + i128::from(at_candidate) - i128::from(at_anchor) < 0)
+                        .then_some(Kept {
+                            k,
+                            anchor,
+                            candidate,
+                            cost,
+                        })
+                };
+                let found: Vec<Kept> = if rows.is_empty() {
+                    Vec::new()
+                } else {
+                    pairs.of_rows(s, &rows).iter().filter_map(price).collect()
+                };
+                if cfg!(debug_assertions) {
+                    let every: Vec<usize> = (0..stratum.anchors.len()).collect();
+                    let all: Vec<usize> = pairs
+                        .of_rows(s, &every)
+                        .iter()
+                        .filter_map(price)
+                        .map(|pair| pair.k)
+                        .collect();
+                    let ours: Vec<usize> = found.iter().map(|pair| pair.k).collect();
+                    debug_assert_eq!(ours, all, "stratum {s}: pairs to add outside the rows listed");
+                }
                 found
             })
             .collect()
@@ -1883,19 +1931,24 @@ where
         // distance, the anchors that have a pair and the nearest candidates.
         let per = FIRST_PER_CATEGORY * ratio;
         let leaf_of = &levels[levels.len() - 1].of_unit[na..];
-        let summaries: Vec<Summary> = strata
+        let mut summaries: Vec<Summary> = strata
             .par_iter()
-            .map(|stratum| Summary::of(stratum, &list(stratum), per, leaf_of))
+            .map(|stratum| Summary::of(stratum, &list(stratum, None), per, leaf_of))
             .collect();
         let mut offset = Vec::with_capacity(strata.len() + 1);
         offset.push(0);
         for summary in &summaries {
             offset.push(offset[offset.len() - 1] + summary.pairs);
         }
+        let row_start = summaries
+            .iter_mut()
+            .map(|summary| std::mem::take(&mut summary.row_start))
+            .collect();
         let pairs = Pairs {
             strata: &strata,
             list,
             offset,
+            row_start,
         };
         if pairs.total() == 0 {
             return Err(OptimalError::NoMatches);
@@ -1985,6 +2038,8 @@ struct Summary {
     /// Anchors with a pair, by position in the anchor slice.
     anchors: Vec<usize>,
     near: Nearest,
+    /// The position of the first pair of each row, and the count at the end.
+    row_start: Vec<u32>,
 }
 
 impl Summary {
@@ -1992,12 +2047,17 @@ impl Summary {
         let mut anchor_seen = vec![false; stratum.anchors.len()];
         let mut anchors = Vec::new();
         let mut max_distance = 0.0_f64;
+        let mut row_start = vec![0_u32; stratum.anchors.len() + 1];
         for edge in edges {
             if !anchor_seen[edge.row] {
                 anchor_seen[edge.row] = true;
                 anchors.push(stratum.anchors[edge.row]);
             }
+            row_start[edge.row + 1] += 1;
             max_distance = max_distance.max(edge.distance);
+        }
+        for row in 0..stratum.anchors.len() {
+            row_start[row + 1] += row_start[row];
         }
         let near = nearest(
             &edges
@@ -2018,6 +2078,7 @@ impl Summary {
             max_distance,
             anchors,
             near,
+            row_start,
         }
     }
 }
