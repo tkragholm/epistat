@@ -54,7 +54,8 @@
 //!    entering, which is what keeps the iteration count near `m` when `n` is a
 //!    million. The first candidate that would take the rate below zero enters.
 //!    The candidates are found by a selection that splits the list at its
-//!    median, which costs `O(n)` instead of `O(n log n)`. Harris's rule \[5\] then lets any candidate whose ratio is within the step that
+//!    median, which costs `O(n)` instead of `O(n log n)`. Harris's rule \[5\] then
+//!    lets any candidate whose ratio is within the step that
 //!    keeps every other reduced cost within the dual tolerance of its sign enter,
 //!    and the one with the largest `|t_j|` does, for the sake of the pivot.
 //! 4. Update. The flipped columns change the basic values by `-B^{-1} Σ a_j Δ_j`.
@@ -109,9 +110,13 @@
 //!   `1e-9 · (1 + |b|)` of the bound `b`.
 //! - The dual tolerance is `1e-11 · max(1, max|q|)`. A pivot keeps every reduced
 //!   cost within it of the right sign (Harris's rule), and a reduced cost is
-//!   taken to have the wrong sign only beyond ten times it.
-//! - A candidate with `|t_j|` below `1e-9` times the largest `|t|` of the row is
-//!   not a pivot.
+//!   taken to have the wrong sign only beyond ten times it, a margin over the
+//!   at most one tolerance that Harris's rule leaves.
+//! - A candidate with `|t_j|` below `1e-7` times the largest `|t|` of the row is
+//!   not a pivot. Dividing by a pivot of relative size `ρ` multiplies the
+//!   rounding error of a row by `1/ρ`, so with a unit roundoff of about
+//!   `1.1e-16` a pivot of at least `1e-7` keeps the error of a row near `1e-9`,
+//!   the relative tolerance above.
 //!
 //! # Determinism
 //!
@@ -177,7 +182,8 @@ const REL_TOL: f64 = 1e-9;
 /// The largest cost perturbation, relative to the largest cost, see
 /// [`BoundedSimplex::perturb_costs`].
 const PERTURBATION: f64 = 1e-5;
-/// A candidate must be at least this fraction of the largest in its row.
+/// A candidate must be at least this fraction of the largest in its row. The
+/// unit roundoff `1.1e-16` divided by it is about `REL_TOL`.
 const REL_PIVOT: f64 = 1e-7;
 /// A pivot smaller than this in the elimination makes the basis singular.
 const TOL_SINGULAR: f64 = 1e-12;
@@ -1517,6 +1523,10 @@ impl BoundedSimplex {
             } else {
                 -rho[q - n]
             };
+            // The pivot element is computed from the row and from the column. The
+            // two may differ by the rounding error of up to `REFACTOR_EVERY`
+            // updates, each at most `1.1e-16 / REL_PIVOT`, which is below `1e-7`
+            // in relative terms.
             if alpha_r.abs() < TOL_PIVOT_ABS
                 || (alpha_r - from_row).abs() > 1e-7 * (1.0 + alpha_r.abs())
             {

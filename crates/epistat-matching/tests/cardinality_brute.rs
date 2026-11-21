@@ -46,24 +46,32 @@ fn brute_size(treated: &[bool], x: &[Vec<f64>], tols: &[f64], mode: Mode) -> Opt
         let nt = (0..n).filter(|&i| sel(i) && treated[i]).count();
         let nc = (0..n).filter(|&i| sel(i) && !treated[i]).count();
         let sum = |g: bool, c: usize| -> f64 {
-            (0..n).filter(|&i| sel(i) && treated[i] == g).map(|i| x[c][i]).sum()
+            (0..n)
+                .filter(|&i| sel(i) && treated[i] == g)
+                .map(|i| x[c][i])
+                .sum()
         };
         let eps = 1e-9;
         let ok = match mode {
             Mode::Card(r) => {
                 (nc as f64 - r * nt as f64).abs() < 1e-12
-                    && (0..p).all(|c| (sum(true, c) - sum(false, c) / r).abs() <= tols[c] * nt as f64 + eps)
+                    && (0..p).all(|c| {
+                        (sum(true, c) - sum(false, c) / r).abs() <= tols[c] * nt as f64 + eps
+                    })
             }
             Mode::ProfileAtt => {
                 (0..n).all(|i| !treated[i] || sel(i))
-                    && (0..p).all(|c| (sum(false, c) - nc as f64 * mu_att[c]).abs() <= tols[c] * nc as f64 + eps)
+                    && (0..p).all(|c| {
+                        (sum(false, c) - nc as f64 * mu_att[c]).abs() <= tols[c] * nc as f64 + eps
+                    })
             }
             Mode::ProfileAte(ratio) => {
                 nt >= 1
                     && nc >= 1
                     && ratio.is_none_or(|r| (nc as f64 - r * nt as f64).abs() < 1e-12)
                     && (0..p).all(|c| {
-                        (sum(true, c) - nt as f64 * mu_all[c]).abs() <= tols[c] / 2.0 * nt as f64 + eps
+                        (sum(true, c) - nt as f64 * mu_all[c]).abs()
+                            <= tols[c] / 2.0 * nt as f64 + eps
                             && (sum(false, c) - nc as f64 * mu_all[c]).abs()
                                 <= tols[c] / 2.0 * nc as f64 + eps
                     })
@@ -120,7 +128,10 @@ fn cardinality_and_profile_sizes_agree_with_enumeration() {
         request.ratio = ratio;
         request.tols = tols.clone();
         request.std_tols = vec![false];
-        request.limits = CardinalityLimits { time: None, nodes: None };
+        request.limits = CardinalityLimits {
+            time: None,
+            nodes: None,
+        };
         let reference = brute_size(&treated, &x, &tols, mode);
         match (reference, match_cardinality(&request)) {
             (Some(r), Ok(out)) => {
@@ -137,10 +148,18 @@ fn cardinality_and_profile_sizes_agree_with_enumeration() {
                 }
             }
             (None, Err(_)) => {}
-            (r, g) => failures.push(format!("trial {trial} {mode:?}: reference {r:?}, got {:?}", g.map(|o| o.strata))),
+            (r, g) => failures.push(format!(
+                "trial {trial} {mode:?}: reference {r:?}, got {:?}",
+                g.map(|o| o.strata)
+            )),
         }
     }
-    assert!(failures.is_empty(), "{} failures: {:#?}", failures.len(), &failures[..failures.len().min(6)]);
+    assert!(
+        failures.is_empty(),
+        "{} failures: {:#?}",
+        failures.len(),
+        &failures[..failures.len().min(6)]
+    );
 }
 
 /// Profile matching for the ATT with sampling weights and tolerances so wide
@@ -166,7 +185,12 @@ fn profile_att_with_sampling_weights_keeps_every_control_when_all_fit() {
             short.push((trial, kept, nc));
         }
     }
-    assert!(short.is_empty(), "{} of 300 drop a control: {:?}", short.len(), &short[..short.len().min(5)]);
+    assert!(
+        short.is_empty(),
+        "{} of 300 drop a control: {:?}",
+        short.len(),
+        &short[..short.len().min(5)]
+    );
 }
 
 /// `pair_units` is public and takes slices of the lengths of the units. A
@@ -178,15 +202,27 @@ fn pair_units_with_inputs_of_the_wrong_length_is_an_error_not_a_panic() {
     let strata: Vec<&[usize]> = vec![&[0, 1, 2]];
     let short = vec![true, true];
     let result = pair_units(&treated, &short, &pair_on, 1, &strata, None, None);
-    assert!(matches!(result, Err(CardinalityError::Shape(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(CardinalityError::Shape(_))),
+        "{result:?}"
+    );
     let full = vec![true, true, true];
     let result = pair_units(&treated, &full, &pair_on, 1, &strata, Some(&short), None);
-    assert!(matches!(result, Err(CardinalityError::Shape(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(CardinalityError::Shape(_))),
+        "{result:?}"
+    );
     let result = pair_units(&treated, &full, &pair_on, 1, &strata, None, Some(&[1.0]));
-    assert!(matches!(result, Err(CardinalityError::Shape(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(CardinalityError::Shape(_))),
+        "{result:?}"
+    );
     let outside: Vec<&[usize]> = vec![&[0, 1, 7]];
     let result = pair_units(&treated, &full, &pair_on, 1, &outside, None, None);
-    assert!(matches!(result, Err(CardinalityError::Shape(_))), "{result:?}");
+    assert!(
+        matches!(result, Err(CardinalityError::Shape(_))),
+        "{result:?}"
+    );
 }
 
 /// A pairing column is dropped only when it has no variance, whatever its

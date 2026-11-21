@@ -75,8 +75,8 @@
 //!
 //! Costs and potentials are `i64`. The solver refuses input for which
 //! `4 (n + 2)(max |c_a| + 1)` or the sum of the supplies could overflow, with
-//! [`FlowError::Overflow`]. Capacities may be as large as `i64::MAX / 4`.
-//! There are at most `u32::MAX - 1` nodes and `u32::MAX` arcs.
+//! [`FlowError::Overflow`]. A capacity may be any non-negative `i64`, including
+//! `i64::MAX`, and a capacity of 0 gives an arc that carries no flow. There are at most `u32::MAX - 1` nodes and `u32::MAX` arcs.
 //!
 //! # References
 //!

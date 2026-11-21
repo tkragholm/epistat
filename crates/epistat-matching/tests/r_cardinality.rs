@@ -664,8 +664,14 @@ fn weights_on_a_size_tie_do_not_depend_on_the_order_of_the_data() {
     let backward: Vec<usize> = forward.iter().rev().copied().collect();
     let ours_a = weights_by_stratum(&tie, &run(&forward));
     let ours_b = weights_by_stratum(&tie, &run(&backward));
-    assert_eq!(ours_a, ours_b, "our weights depend on the order of the data");
-    assert_eq!(ours_a, theirs_b, "ours differ from MatchIt's with the controls first");
+    assert_eq!(
+        ours_a, ours_b,
+        "our weights depend on the order of the data"
+    );
+    assert_eq!(
+        ours_a, theirs_b,
+        "ours differ from MatchIt's with the controls first"
+    );
 }
 
 #[test]
@@ -723,7 +729,11 @@ fn a_node_limit_is_reported_as_not_proven() {
             let report = &outcome.strata[0];
             let size = (report.selected_treated + report.selected_control) as f64;
             assert!(!report.proven_optimal, "proven at one node: {report:?}");
-            assert!(report.bound > size, "bound {} not above {size}", report.bound);
+            assert!(
+                report.bound > size,
+                "bound {} not above {size}",
+                report.bound
+            );
         }
         Err(CardinalityError::NoSolutionInTime { .. }) => {}
         Err(e) => panic!("{e}"),
