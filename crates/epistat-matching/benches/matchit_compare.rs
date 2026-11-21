@@ -310,7 +310,7 @@ fn write_lines(path: &std::path::Path, header: &str, lines: &[(String, String)])
 
 fn output_lines(out: &SpecOutput) -> (usize, Vec<(String, String)>, &'static str) {
     match out {
-        SpecOutput::Pairs { outcome, .. } => (
+        SpecOutput::Pairs { outcome, .. } | SpecOutput::Genetic { outcome, .. } => (
             outcome.matched_cases,
             outcome
                 .pairs
@@ -338,6 +338,15 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(String, String)>, &'static str
             outcome.assignments.len(),
             subclasses(&outcome.assignments),
             "id,subclass",
+        ),
+        SpecOutput::Cardinality(m) => (
+            m.outcome.selected.iter().filter(|s| **s).count(),
+            m.ids
+                .iter()
+                .zip(&m.outcome.weights)
+                .map(|(id, weight)| (id.clone(), weight.to_string()))
+                .collect(),
+            "id,weight",
         ),
         SpecOutput::ExposureDensity(_) | SpecOutput::Trials(_) => {
             unreachable!("the benchmark runs no exposure density or trial specification")

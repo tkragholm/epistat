@@ -166,6 +166,17 @@ pub enum OutputError {
         /// The output that was asked for.
         output: &'static str,
     },
+    /// A per-unit column is not as long as the list of units.
+    ColumnLength {
+        /// The column.
+        column: &'static str,
+        /// Number of units.
+        units: usize,
+        /// Length of the column.
+        length: usize,
+    },
+    /// Pairs were asked for from a selection that was not paired.
+    NotPaired,
 }
 
 impl Display for OutputError {
@@ -194,6 +205,17 @@ impl Display for OutputError {
                 "{output} needs each unit to be an anchor or a candidate throughout; \
                  these units have a role in each pair"
             ),
+            Self::ColumnLength {
+                column,
+                units,
+                length,
+            } => write!(
+                f,
+                "{column} has {length} values for {units} units; give one for every unit"
+            ),
+            Self::NotPaired => {
+                f.write_str("the selection was not paired; give mahvars to pair the selected units")
+            }
         }
     }
 }
@@ -551,6 +573,148 @@ pub fn match_data(
         } else {
             subclass_of.get(id.as_str()).copied()
         });
+    }
+    Ok(out)
+}
+
+fn check_column(column: &'static str, units: &Units, length: usize) -> Result<(), OutputError> {
+    if length == units.len() {
+        Ok(())
+    } else {
+        Err(OutputError::ColumnLength {
+            column,
+            units: units.len(),
+            length,
+        })
+    }
+}
+
+/// The matched data of a method that weights units and forms no pairs, or
+/// forms them after selecting.
+///
+/// `weights` and `pair` hold one entry per unit of `units`, in its order. A
+/// unit with weight 0 is not matched. `pair` numbers the pairs or subclasses
+/// from 1, as `subclass` of MatchIt's `match_data()`. The options are those of
+/// [`match_data`], and `replacement` is not read.
+///
+/// # Errors
+///
+/// [`OutputError::ColumnLength`] when a column is not as long as `units`, and
+/// [`OutputError::NoFixedRoles`] for units with no fixed group.
+pub fn match_data_from_weights(
+    weights: &[f64],
+    pair: &[Option<usize>],
+    units: &Units,
+    options: MatchDataOptions,
+) -> Result<MatchData, OutputError> {
+    units.require_fixed_roles("match_data_from_weights")?;
+    check_column("weights", units, weights.len())?;
+    check_column("pair", units, pair.len())?;
+    let mut set = UnitWeightSet::default();
+    for ((id, is_anchor), weight) in units.ids.iter().zip(&units.anchor).zip(weights) {
+        if *weight > 0.0 {
+            let group = if *is_anchor {
+                &mut set.anchor
+            } else {
+                &mut set.candidate
+            };
+            group.insert(id.clone(), *weight);
+        }
+    }
+    let set = if options.normalize {
+        set.normalized()
+    } else {
+        set
+    };
+    let mut out = MatchData {
+        id: Vec::new(),
+        role: Vec::new(),
+        weight: Vec::new(),
+        subclass: Vec::new(),
+    };
+    for ((id, is_anchor), pair) in units.ids.iter().zip(&units.anchor).zip(pair) {
+        let group = if *is_anchor {
+            &set.anchor
+        } else {
+            &set.candidate
+        };
+        let weight = group.get(id).copied();
+        if weight.is_none() && options.drop_unmatched {
+            continue;
+        }
+        out.id.push(id.clone());
+        out.role.push(if *is_anchor {
+            UnitRole::Anchor
+        } else {
+            UnitRole::Candidate
+        });
+        out.weight.push(weight.unwrap_or(0.0));
+        out.subclass.push(pair.map(|number| number + 1));
+    }
+    Ok(out)
+}
+
+/// The long form of a paired selection, as [`get_matches`] gives it.
+///
+/// `pair` holds the pair of each unit of `units`, numbered from 0, `None` for
+/// a unit that is not selected, and `weights` the weight of each unit. Each
+/// pair has one row per unit, the anchors first and then the candidates, each
+/// in the order of `units`. Pairs follow in order of their number, which is
+/// renumbered from 1. With `include_unmatched`, the anchors that are not
+/// selected follow the pairs with no pair number and weight 0.
+///
+/// # Errors
+///
+/// [`OutputError::ColumnLength`] when a column is not as long as `units`, and
+/// [`OutputError::NoFixedRoles`] for units with no fixed group.
+pub fn get_matches_from_pairs(
+    pair: &[Option<usize>],
+    weights: &[f64],
+    units: &Units,
+    include_unmatched: bool,
+) -> Result<LongMatches, OutputError> {
+    units.require_fixed_roles("get_matches_from_pairs")?;
+    check_column("pair", units, pair.len())?;
+    check_column("weights", units, weights.len())?;
+    let mut members: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (position, pair) in pair.iter().enumerate() {
+        if let Some(pair) = pair {
+            members.entry(*pair).or_default().push(position);
+        }
+    }
+    let mut out = LongMatches {
+        id: Vec::new(),
+        role: Vec::new(),
+        pair_id: Vec::new(),
+        weight: Vec::new(),
+    };
+    let role_of = |position: usize| {
+        if units.anchor[position] {
+            UnitRole::Anchor
+        } else {
+            UnitRole::Candidate
+        }
+    };
+    for (number, positions) in members.values().enumerate() {
+        let anchors = positions.iter().filter(|p| units.anchor[**p]);
+        let candidates = positions.iter().filter(|p| !units.anchor[**p]);
+        for position in anchors.chain(candidates) {
+            out.id.push(units.ids[*position].clone());
+            out.role.push(role_of(*position));
+            out.pair_id.push(Some(number + 1));
+            out.weight.push(weights[*position]);
+        }
+    }
+    if include_unmatched {
+        for (position, pair) in pair.iter().enumerate() {
+            if pair.is_none() && units.anchor[position] {
+                out.id.push(units.ids[position].clone());
+                out.role.push(UnitRole::Anchor);
+                out.pair_id.push(None);
+                out.weight.push(0.0);
+            }
+        }
     }
     Ok(out)
 }

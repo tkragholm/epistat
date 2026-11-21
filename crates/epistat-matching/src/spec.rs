@@ -12,15 +12,20 @@
 //! [`run_spec`] turns that into a [`SpecError`] as well, so a caller never
 //! mistakes it for a match that found nothing.
 
+mod wiring;
+
+pub use wiring::{CardinalityMatch, CardinalitySpec, FitFuncSpec, GeneticSpec, LossSpec};
+
 use crate::constraints::{
     AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field, numeric_field_sd,
 };
 use crate::matching::{
-    Assignment, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemError, CemRule, CemVariable,
-    Chained, CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
-    ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError, EuclideanPreparationConfig,
-    EuclideanScale, ExactMatchError, ExactMatchOutcome, FineBalance, FullMatchConfig,
-    FullMatchOutcome, LambdaRule, LogisticRegressionConfig, MahalanobisCovarianceStrategy,
+    Assignment, CardinalityError, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemError,
+    CemRule, CemVariable, Chained, CovariateEncodingConfig, CovariateRecord,
+    DeterministicSelection, DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig,
+    EstimationError, EuclideanPreparationConfig, EuclideanScale, ExactMatchError,
+    ExactMatchOutcome, FineBalance, FullMatchConfig, FullMatchOutcome, GeneticError,
+    GeneticOutcome, LambdaRule, LogisticRegressionConfig, MahalanobisCovarianceStrategy,
     MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord,
     MissingValuePolicy, NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest,
     PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
@@ -107,6 +112,14 @@ pub enum MatchMethod {
     /// minimise the total distance, as `matchit(method = "full")`. Standard
     /// mode only. The anchors are the focal group.
     Full,
+    /// The weights of a genetic search, then nearest neighbour matching on the
+    /// weighted distance, as `matchit(method = "genetic")`. Standard mode only.
+    /// The anchors are the focal group.
+    Genetic,
+    /// The largest subset that satisfies balance constraints, selected by an
+    /// integer program, as `matchit(method = "cardinality")`. Standard mode
+    /// only.
+    Cardinality,
 }
 
 /// The order in which anchors take their controls.
@@ -770,6 +783,10 @@ pub struct MatchSpec {
     pub quick: QuickSpec,
     /// Options of the full method.
     pub full: FullSpec,
+    /// Options of the genetic method.
+    pub genetic: GeneticSpec,
+    /// Options of the cardinality method.
+    pub cardinality: CardinalitySpec,
     /// Fine, near-fine or refined balance on nominal keys. Optimal method only.
     pub fine_balance: Option<FineBalance>,
     /// Options of [`MatchMode::SequentialTrials`]. The options of risk-set
@@ -843,6 +860,8 @@ impl Default for MatchSpec {
             cem: CemSpec::default(),
             quick: QuickSpec::default(),
             full: FullSpec::default(),
+            genetic: GeneticSpec::default(),
+            cardinality: CardinalitySpec::default(),
             fine_balance: None,
             trials: TrialOptions::default(),
             assignment: None,
@@ -940,6 +959,18 @@ pub enum SpecOutput {
     Quick(Box<QuickMatchOutcome>),
     /// Subclasses with the weights of each estimand, from the full method.
     Full(Box<FullMatchOutcome>),
+    /// The pairs of genetic matching and the search that found their weights.
+    /// The pairs are those of [`SpecOutput::Pairs`], so the outputs and
+    /// balance functions that take a [`MatchOutcome`] take them.
+    Genetic {
+        /// The pairs and their diagnostics.
+        outcome: Box<MatchOutcome>,
+        /// The best weights of the search, their loss and the history.
+        search: Box<GeneticOutcome>,
+    },
+    /// The selected units of cardinality or profile matching, with their
+    /// weights and, when `mahvars` was given, their pairs.
+    Cardinality(Box<CardinalityMatch>),
     /// Subclasses with weights, from the subclass method.
     Subclass {
         /// The subclasses and their weights.
@@ -976,6 +1007,10 @@ pub enum SpecError {
     Quick(QuickMatchError),
     /// Optimal matching could not run.
     Optimal(OptimalError),
+    /// Genetic matching could not run.
+    Genetic(GeneticError),
+    /// Cardinality matching could not run.
+    Cardinality(CardinalityError),
     /// The matcher refused the configuration.
     Rejected(ExclusionReason),
 }
@@ -1013,6 +1048,8 @@ impl Display for SpecError {
             Self::Cem(error) => write!(f, "coarsened exact matching could not run: {error}"),
             Self::Quick(error) => write!(f, "generalised full matching could not run: {error}"),
             Self::Optimal(error) => write!(f, "optimal matching could not run: {error}"),
+            Self::Genetic(error) => write!(f, "genetic matching could not run: {error}"),
+            Self::Cardinality(error) => write!(f, "cardinality matching could not run: {error}"),
             Self::Rejected(reason) => write!(
                 f,
                 "the matcher refused the configuration ({reason}); \
@@ -1031,6 +1068,8 @@ impl Error for SpecError {
             Self::Cem(error) => Some(error),
             Self::Quick(error) => Some(error),
             Self::Optimal(error) => Some(error),
+            Self::Genetic(error) => Some(error),
+            Self::Cardinality(error) => Some(error),
             Self::Option { .. } | Self::InputMode { .. } | Self::Rejected(_) => None,
         }
     }
@@ -1069,6 +1108,18 @@ impl From<QuickMatchError> for SpecError {
 impl From<OptimalError> for SpecError {
     fn from(error: OptimalError) -> Self {
         Self::Optimal(error)
+    }
+}
+
+impl From<GeneticError> for SpecError {
+    fn from(error: GeneticError) -> Self {
+        Self::Genetic(error)
+    }
+}
+
+impl From<CardinalityError> for SpecError {
+    fn from(error: CardinalityError) -> Self {
+        Self::Cardinality(error)
     }
 }
 
@@ -1175,6 +1226,21 @@ impl MatchSpec {
                  full method; set the method to full or drop them",
             ));
         }
+        if self.genetic != GeneticSpec::default() && self.method != MatchMethod::Genetic {
+            return Err(SpecError::option(
+                "genetic",
+                "the genetic options belong to the genetic method; \
+                 set the method to genetic or drop them",
+            ));
+        }
+        if self.cardinality != CardinalitySpec::default() && self.method != MatchMethod::Cardinality
+        {
+            return Err(SpecError::option(
+                "cardinality",
+                "the cardinality options belong to the cardinality method; \
+                 set the method to cardinality or drop them",
+            ));
+        }
         let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper.any();
         if nearest_options && self.method != MatchMethod::Nearest {
             return Err(SpecError::option(
@@ -1191,6 +1257,8 @@ impl MatchSpec {
             MatchMethod::Quick => self.validate_quick()?,
             MatchMethod::Optimal | MatchMethod::Full => self.validate_optimal()?,
             MatchMethod::Nearest => self.validate_nearest()?,
+            MatchMethod::Genetic => self.validate_genetic()?,
+            MatchMethod::Cardinality => self.validate_cardinality()?,
             MatchMethod::Random | MatchMethod::LowestIndex | MatchMethod::NearestBirthDate => {
                 if self.assignment == Some(AssignmentSpec::Rounds)
                     && !self.ratio_fallback.is_empty()
@@ -2131,6 +2199,8 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
             let outcome = run_quick(config, anchors, candidates, &spec.exact, &options)?;
             return Ok(SpecOutput::Quick(Box::new(outcome)));
         }
+        MatchMethod::Genetic => return wiring::run_genetic(spec, anchors, candidates),
+        MatchMethod::Cardinality => return wiring::run_cardinality(spec, anchors, candidates),
         MatchMethod::Optimal | MatchMethod::Full => {
             let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
             let calipers = field_calipers(spec, anchors, candidates)?;
@@ -2246,7 +2316,9 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         | MatchMethod::Cem
         | MatchMethod::Quick
         | MatchMethod::Optimal
-        | MatchMethod::Full => {
+        | MatchMethod::Full
+        | MatchMethod::Genetic
+        | MatchMethod::Cardinality => {
             unreachable!("handled above")
         }
     };
@@ -2431,7 +2503,9 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         | MatchMethod::Cem
         | MatchMethod::Quick
         | MatchMethod::Optimal
-        | MatchMethod::Full => {
+        | MatchMethod::Full
+        | MatchMethod::Genetic
+        | MatchMethod::Cardinality => {
             unreachable!("rejected by validation")
         }
     };
