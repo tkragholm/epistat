@@ -117,6 +117,12 @@ pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, Sig
     if !observed.is_finite() || ranks.iter().any(|r| !r.is_finite() || *r < 0.0) {
         return Err(SignedRankError::NotFinite);
     }
+    // The table size is checked in floating point before any conversion, so
+    // ranks too large for the table are an error and never an overflow.
+    let total_f: f64 = ranks.iter().map(|r| (2.0 * r).round()).sum();
+    if !total_f.is_finite() || (ranks.len() as f64) * (total_f + 1.0) > MAX_TABLE_WORK {
+        return Err(SignedRankError::TooLarge);
+    }
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -124,9 +130,6 @@ pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, Sig
     )]
     let doubled: Vec<usize> = ranks.iter().map(|r| (2.0 * r).round() as usize).collect();
     let total: usize = doubled.iter().sum();
-    if (ranks.len() as f64) * (total as f64 + 1.0) > MAX_TABLE_WORK {
-        return Err(SignedRankError::TooLarge);
-    }
     let mut f = vec![0.0_f64; total + 1];
     f[0] = 1.0;
     let mut reach = 0;
@@ -220,5 +223,13 @@ mod tests {
         // Sums of {1,2,3}: 0,1,2,3,3,4,5,6, each with probability 1/8.
         let t = exact_upper_tail(&[1.0, 2.0, 3.0], 5.0, 0.5).unwrap();
         assert!((t - 2.0 / 8.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn exact_upper_tail_with_huge_ranks_is_too_large() {
+        assert_eq!(
+            exact_upper_tail(&[1e19, 1e19], 1.0, 0.5),
+            Err(SignedRankError::TooLarge)
+        );
     }
 }
