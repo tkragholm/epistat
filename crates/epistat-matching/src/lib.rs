@@ -127,6 +127,7 @@ pub mod output;
 #[cfg(feature = "reporting")]
 pub mod reporting;
 mod role_transition;
+pub mod sensitivity;
 pub mod spec;
 mod trials;
 mod types;
