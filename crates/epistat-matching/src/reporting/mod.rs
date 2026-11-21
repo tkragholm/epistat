@@ -44,6 +44,16 @@ fn format_cell(value: Option<f64>, precision: usize) -> String {
     value.map_or_else(|| "NA".to_string(), |value| format!("{value:.precision$}"))
 }
 
+/// A text field as RFC 4180 writes it: in double quotes, with embedded quotes
+/// doubled, when it contains the delimiter, a quote or a line break.
+fn csv_field(text: &str, delimiter: char) -> String {
+    if text.contains([delimiter, '"', '\n', '\r']) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_string()
+    }
+}
+
 /// Trait for types that can be rendered to a report.
 pub trait ReportSink {
     /// Write the report content to the provided writer.
@@ -85,16 +95,18 @@ impl ReportSink for BalanceReport {
                 row.eqq_max_diff_post,
             ]
             .map(|value| format_cell(value, p));
-            writeln!(writer, "{}{d}{}", row.name, cells.join(&d.to_string()))?;
+            writeln!(
+                writer,
+                "{}{d}{}",
+                csv_field(&row.name, d),
+                cells.join(&d.to_string())
+            )?;
         }
-
-        // Write Categorical Balance (often in a separate file, but here we provide a choice or a combined report)
-        // Given existing usage, we might want separate sinks or separate methods.
         Ok(())
     }
 }
 
-/// Separate sink for categorical balance to follow existing patterns.
+/// The categorical rows of a balance report, which `BalanceReport` itself leaves out.
 pub struct CategoricalBalanceReport<'a>(pub &'a BalanceReport);
 
 impl ReportSink for CategoricalBalanceReport<'_> {
@@ -123,8 +135,8 @@ impl ReportSink for CategoricalBalanceReport<'_> {
                 writeln!(
                     writer,
                     "{}{d}{}{d}{}",
-                    covariate.name,
-                    level.level,
+                    csv_field(&covariate.name, d),
+                    csv_field(&level.level, d),
                     cells.join(&d.to_string())
                 )?;
             }
@@ -201,7 +213,7 @@ impl ReportSink for ExclusionCountsReport<'_> {
             writeln!(writer, "none{d}0")?;
         } else {
             for (reason, count) in &self.outcome.diagnostics.exclusion_counts {
-                writeln!(writer, "{reason}{d}{count}")?;
+                writeln!(writer, "{}{d}{count}", csv_field(&reason.to_string(), d))?;
             }
         }
         Ok(())
@@ -257,6 +269,16 @@ impl MatchOutcome {
 mod tests {
     use super::*;
     use crate::types::{MatchDiagnostics, MatchedPair, NumericBalance};
+
+    #[test]
+    fn fields_with_the_delimiter_or_quotes_are_quoted() {
+        assert_eq!(csv_field("Aarhus, C", ','), "\"Aarhus, C\"");
+        assert_eq!(csv_field("say \"hi\"", ','), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("a;b", ';'), "\"a;b\"");
+        assert_eq!(csv_field("a,b", ';'), "a,b");
+        assert_eq!(csv_field("plain", ','), "plain");
+        assert_eq!(csv_field("two\nlines", ','), "\"two\nlines\"");
+    }
 
     #[test]
     fn balance_report_numeric_csv_format() {
