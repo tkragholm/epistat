@@ -313,6 +313,84 @@ fn exposure_density_sampling() {
 }
 
 #[test]
+fn sequential_trials() {
+    let people = cohort(4_000, 90, 12, 31);
+    let rows = records(&people, Level::Municipality, true, false);
+    let start = NaiveDate::from_ymd_opt(2006, 1, 1).expect("valid date");
+    // Eight periods of 180 days. A person starts treatment at a period set by
+    // the position in the cohort, stops again after two or three periods for
+    // some, and is eligible while never treated.
+    let panel: Vec<TrialPerson<BalanceRecord>> = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let first_on = (i * 7 + i / 3) % 11;
+            let length = 2 + i % 2;
+            let mut periods = Vec::new();
+            for p in 0..8_usize {
+                let date = start + chrono::Days::new(180 * p as u64);
+                let gone = row.record.death_date.is_some_and(|d| d <= date)
+                    || row.record.emigration_date.is_some_and(|d| d <= date)
+                    || row.record.entry_date.is_some_and(|d| d > date);
+                if gone {
+                    continue;
+                }
+                let on = i % 5 != 0 && p >= first_on && p < first_on + length;
+                periods.push(TrialPeriod {
+                    period: p as i64,
+                    date,
+                    eligible: p <= first_on || i % 5 == 0,
+                    treatment: Some(on),
+                    event: false,
+                });
+            }
+            TrialPerson {
+                record: BalanceRecord {
+                    core: row.record,
+                    covariates: HashMap::new(),
+                },
+                periods,
+            }
+        })
+        .collect();
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let spec = MatchSpec {
+            mode: MatchMode::SequentialTrials,
+            seed: 5,
+            ratio: 2,
+            replace: false,
+            birth_window_days: 365,
+            age_limit_years: Some(12),
+            exact: vec!["sex".into(), "municipality".into()],
+            require_alive: true,
+            require_resident: true,
+            trials: TrialOptions {
+                control_reuse: ControlReuse::OncePerRun,
+                ..TrialOptions::default()
+            },
+            ..MatchSpec::default()
+        };
+        let SpecOutput::Trials(out) =
+            run_spec(&spec, SpecInput::Trials { panel: &panel }).expect("valid spec")
+        else {
+            panic!("expected trials");
+        };
+        assert!(
+            out.trials.iter().any(|t| !t.outcome.pairs.is_empty()),
+            "no output, test is vacuous"
+        );
+        for trial in &out.trials {
+            d.int(trial.n_eligible);
+            d.int(trial.n_initiators);
+            d.outcome(&trial.outcome);
+            d.debug(&trial.members);
+        }
+        d.0
+    });
+}
+
+#[test]
 fn run_with_balance_and_balance_reports() {
     let (cases, controls) = balance_inputs(800, 3_200, 3);
     let anchors: Vec<BaseRecord> = cases.iter().map(|r| r.core.clone()).collect();
