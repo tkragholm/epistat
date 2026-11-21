@@ -708,14 +708,15 @@ fn impossible_tolerances_are_infeasible() {
 }
 
 /// A search stopped at one relaxation on a case that does not close at the root
-/// reports that it is not proven, and its bound is above its subset.
+/// reports that it is not proven, and its bound is above its subset. The case is
+/// profile matching for the ATE, which does not close within 4000 relaxations.
 #[test]
 fn a_node_limit_is_reported_as_not_proven() {
     let reference = load();
     let case = reference
         .cases
         .iter()
-        .find(|c| c.name == "sim_att_1")
+        .find(|c| c.name == "sim_ate_profile")
         .unwrap();
     let data = &reference.datasets[&case.dataset];
     let treated: Vec<bool> = data.treat.iter().map(|&t| t == 1).collect();

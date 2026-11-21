@@ -38,9 +38,11 @@
 //!    tableau are added as rows, see `cut_rounds`, and the relaxation is solved
 //!    again. Cuts the relaxation no longer holds tight are dropped in the next
 //!    round.
-//! 5. **Primal heuristics.** A local search (see below) from the root point for
-//!    a solution of value `U`, then `U - g`, for up to 16 values, and a
-//!    neighbourhood search (see below).
+//! 5. **Primal heuristics.** A repair search (see below) from the root point
+//!    for a solution of value `U`, then `U - g`, for up to 16 values, followed
+//!    at each value by the local search (see below) in a program with at most
+//!    20000 free whole columns, and a neighbourhood search (see below). A
+//!    solution of value `U` ends the search with a proof.
 //! 6. **Levels.** With a step, the search asks, from `z = U` down: is there a
 //!    solution of value at least `z`? Every level above has been shown empty, so
 //!    the first solution found is optimal, and the bound at any time is the
@@ -62,7 +64,8 @@
 //!   program of its own on the free columns, the fixed ones moved into the row
 //!   bounds, with the row `z ≤ c'x ≤ z` (or `z ≤ c'x` when improving), and with
 //!   its own root, cuts and fixing.
-//! - **Local search** from the relaxation's point, see below.
+//! - **Repair search** from the relaxation's point, and the local search after
+//!   it in a program with at most 20000 free whole columns, see below.
 //! - **Branch and bound.** A fractional whole column is chosen among the basic
 //!   ones: a general integer column before a binary one, then the one furthest
 //!   from a whole value, the lowest index among ties. The child on the side the
@@ -72,7 +75,24 @@
 //!   row, and then the kept node with the best bound, the latest of equals.
 //!   Each solve starts from the basis of the node it branches from, so a node
 //!   costs a few dual pivots. A node whose bound is below the threshold is
-//!   closed.
+//!   closed. Every 100 nodes the repair search, and in a small program the
+//!   local search, runs from the node's point.
+//!
+//! # Repair search
+//!
+//! A basic solution has at most as many fractional columns as the program has
+//! rows, so the relaxation's point is a few roundings away from an integer
+//! point. Every combination of the roundings of up to 14 fractional columns is
+//! tried, and the one that breaks the rows least is kept. In a matching problem
+//! that point is a few units out of balance. The binary columns with the
+//! smallest reduced costs, 2048 and then 8192 of them, are the units nearest the
+//! margin of the relaxation, and an exchange of two of them that have the same
+//! coefficients on the equality rows keeps the count rows and changes the
+//! objective's bound by little. The search makes the flip or exchange within
+//! that pool that lowers the violation of the rows most, until every row holds
+//! or no move helps. It costs one pass over the matrix and `O(p²)` per move for
+//! a pool of `p`, so it runs on programs of any size, where the local search
+//! costs a pass over every column per move. See `repair_search`.
 //!
 //! # Local search
 //!
@@ -100,7 +120,7 @@
 //! 256, 1024, 4096 and 16384 free columns are tried \[6\]. Each solution is a
 //! solution of the whole program, so it can only raise the incumbent, and the
 //! proof of optimality, by bound, is unchanged. [`Options::neighbourhood_search`]
-//! turns this and the root local searches off.
+//! turns this and the root repair and local searches off.
 //!
 //! # Limits and the gap
 //!
@@ -223,7 +243,7 @@ pub struct Options {
     pub node_limit: Option<u64>,
     /// The most time to spend. The result then depends on the machine.
     pub time_limit: Option<Duration>,
-    /// Run the local searches and the neighbourhood search at the root, see the
+    /// Run the repair, local and neighbourhood searches at the root, see the
     /// [module](self) documentation. They only ever improve the incumbent, so
     /// they change how fast the search ends and not the optimum it proves.
     pub neighbourhood_search: bool,
@@ -626,7 +646,7 @@ fn search_lp(
     }
     let mut best: Option<(Vec<f64>, f64)> = None;
     if goal.heuristics {
-        ladder(program, &shape, lp, upper, cutoff, &mut best);
+        ladder(program, &shape, lp, &root, upper, cutoff, &mut best);
         if best.as_ref().is_none_or(|(_, v)| !reaches(*v, upper)) {
             neighbourhood_search(program, &shape, lp, &root, upper, cutoff, budget, &mut best)?;
         }
@@ -1050,45 +1070,60 @@ fn improved(v: f64, step: Option<f64>) -> f64 {
     }
 }
 
-/// The most values the ladder of local searches tries.
+/// The most values the ladder of searches tries.
 const LADDER: usize = 16;
 
-/// Local searches from the root relaxation for a solution of value at least
-/// `upper`, then one step of the objective less, and so on, for [`LADDER`]
-/// values or down to `cutoff`, until one succeeds. A solution better than
-/// `best` replaces it. Without a step of the objective, one search at `upper`.
+/// Searches from the root relaxation for a solution of value in `[z, upper]`,
+/// with `z = upper`, then one step of the objective less, and so on, for
+/// [`LADDER`] values or down to `cutoff`, until one succeeds: the repair search,
+/// and after it the local search when at most [`SEARCH_COLUMNS`] whole columns
+/// are free. A solution better than `best` replaces it. Without a step of the
+/// objective, one value, `upper`.
 fn ladder(
     program: &MixedBinaryProgram<'_>,
     shape: &Shape,
     lp: &BoundedSimplex,
+    root: &DualBound,
     upper: f64,
     cutoff: f64,
     best: &mut Option<(Vec<f64>, f64)>,
 ) {
     let n = program.cost.len();
-    let free = (0..n)
-        .filter(|&j| shape.whole[j] && program.col_lo[j] != program.col_hi[j])
-        .count();
-    if free > SEARCH_COLUMNS {
-        return;
-    }
     let start = lp.values();
     let frozen = vec![false; n];
     let tolerance: Vec<f64> = (0..program.rows).map(|i| lp.row_tolerance(i)).collect();
+    let small = free_whole(program, shape, &frozen) <= SEARCH_COLUMNS;
     let mut target = upper;
     for _ in 0..LADDER {
         if !reaches(target, cutoff) || best.as_ref().is_some_and(|(_, v)| reaches(*v, target)) {
             return;
         }
-        if let Some(found) = local_search(
+        let found = repair_search(
             program,
             shape,
             &start,
+            &root.reduced_costs,
             &frozen,
             target,
-            f64::INFINITY,
+            upper,
             &tolerance,
-        ) {
+        )
+        .or_else(|| {
+            small
+                .then(|| {
+                    local_search(
+                        program,
+                        shape,
+                        &start,
+                        &frozen,
+                        target,
+                        f64::INFINITY,
+                        &tolerance,
+                    )
+                })
+                .flatten()
+        });
+        if let Some(found) = found {
             if best.as_ref().is_none_or(|(_, v)| found.1 > *v) {
                 *best = Some(found);
             }
@@ -1101,8 +1136,16 @@ fn ladder(
     }
 }
 
-/// The local search runs on programs with at most this many whole columns free.
-const SEARCH_COLUMNS: usize = 200_000;
+/// The whole columns that are neither fixed nor `frozen`.
+fn free_whole(program: &MixedBinaryProgram<'_>, shape: &Shape, frozen: &[bool]) -> usize {
+    (0..program.cost.len())
+        .filter(|&j| shape.whole[j] && !frozen[j] && program.col_lo[j] != program.col_hi[j])
+        .count()
+}
+
+/// The local search runs, when the repair search finds nothing, on programs
+/// with at most this many whole columns free.
+const SEARCH_COLUMNS: usize = 20_000;
 
 /// Branch and bound runs the local search from every this many nodes.
 const SEARCH_EVERY: usize = 100;
@@ -1292,8 +1335,14 @@ fn local_search(
             }
         }
         let order = |a: &(f64, usize), b: &(f64, usize)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
-        adds.sort_by(order);
-        drops.sort_by(order);
+        // Only the first SEARCH_PAIRS of each list, in order, are used.
+        for list in [&mut adds, &mut drops] {
+            if list.len() > SEARCH_PAIRS {
+                list.select_nth_unstable_by(SEARCH_PAIRS, order);
+                list.truncate(SEARCH_PAIRS);
+            }
+            list.sort_by(order);
+        }
         let mut best_move: Option<(f64, Option<usize>, Option<usize>)> = None;
         let mut consider = |d: f64, add: Option<usize>, drop: Option<usize>| {
             if best_move.is_none_or(|(bd, _, _)| d < bd) {
@@ -1349,6 +1398,392 @@ fn local_search(
     let value = objective(program, &x);
     let whole = (0..n).all(|j| !shape.whole[j] || x[j] == x[j].round());
     (holds && whole && reaches(value, cutoff)).then_some((x, value))
+}
+
+/// The pools of the repair search, in binary columns, see [`repair_search`].
+const REPAIR_POOLS: [usize; 2] = [2048, 8192];
+
+/// The most moves of the repair search with one pool.
+const REPAIR_STEPS: usize = 48;
+
+/// The most fractional columns whose roundings the repair search tries in
+/// every combination.
+const ROUND_EXHAUSTIVE: usize = 14;
+
+/// The rows of a repair search: the program's and `cutoff ≤ c'x ≤ ceiling`
+/// last, each with its bounds, its tolerance, and the inverse of its largest
+/// coefficient, which puts a violation in units of one column's effect.
+struct RepairRows {
+    lo: Vec<f64>,
+    hi: Vec<f64>,
+    tol: Vec<f64>,
+    scale: Vec<f64>,
+}
+
+impl RepairRows {
+    /// The violation of row `i` at activity `a`, in units of its largest
+    /// coefficient.
+    fn violation(&self, i: usize, a: f64) -> f64 {
+        ((self.lo[i] - self.tol[i] - a).max(a - self.hi[i] - self.tol[i])).max(0.0) * self.scale[i]
+    }
+
+    /// How far activity `a` is from breaking row `i`, in the row's units.
+    fn room(&self, i: usize, a: f64) -> f64 {
+        (a - (self.lo[i] - self.tol[i])).min(self.hi[i] + self.tol[i] - a)
+    }
+}
+
+/// Moves every continuous column that is not `frozen` to the value in its
+/// bounds that minimises the violation of its rows, one after the other.
+fn settle_continuous(
+    program: &MixedBinaryProgram<'_>,
+    shape: &Shape,
+    frozen: &[bool],
+    rows: &RepairRows,
+    x: &mut [f64],
+    act: &mut [f64],
+) {
+    let m = program.rows;
+    let coef = |j: usize, i: usize| {
+        if i < m {
+            program.columns[j * m + i]
+        } else {
+            program.cost[j]
+        }
+    };
+    for j in 0..x.len() {
+        if shape.whole[j] || frozen[j] || program.col_lo[j] == program.col_hi[j] {
+            continue;
+        }
+        let touched: Vec<usize> = (0..=m).filter(|&i| coef(j, i) != 0.0).collect();
+        if touched.is_empty() {
+            continue;
+        }
+        let (l, u) = (program.col_lo[j], program.col_hi[j]);
+        let cost_at = |v: f64, x: &[f64], act: &[f64]| -> f64 {
+            touched
+                .iter()
+                .map(|&i| rows.violation(i, act[i] + coef(j, i) * (v - x[j])))
+                .sum()
+        };
+        // The violation is convex and piecewise linear in the column, with its
+        // corners where a row reaches a bound.
+        let mut candidates = vec![l, u];
+        for &i in &touched {
+            for b in [rows.lo[i], rows.hi[i]] {
+                if b.is_finite() {
+                    candidates.push(x[j] + (b - act[i]) / coef(j, i));
+                }
+            }
+        }
+        let mut best_v = x[j];
+        let mut best_c = cost_at(x[j], x, act);
+        for v in candidates {
+            if !v.is_finite() {
+                continue;
+            }
+            let v = v.clamp(l, u);
+            let c = cost_at(v, x, act);
+            if c < best_c {
+                best_c = c;
+                best_v = v;
+            }
+        }
+        if best_v != x[j] {
+            let d = best_v - x[j];
+            for &i in &touched {
+                act[i] += coef(j, i) * d;
+            }
+            x[j] = best_v;
+        }
+    }
+}
+
+/// Looks for a solution of value in `[cutoff, ceiling]` near the relaxation's
+/// point `start` by rounding it and repairing the rounding by exchanges.
+///
+/// A basic solution of a program with `m` rows has at most `m` fractional
+/// columns, so the rounding is small:
+///
+/// 1. **Rounding.** Every whole column within `1e-8` of a whole value takes it.
+///    For the fractional ones, up to [`ROUND_EXHAUSTIVE`] of the furthest from
+///    a whole value, every combination of their two nearest whole values is
+///    tried, in Gray-code order, and the one with the least violation of the
+///    rows, the first of equals, is kept; the others are rounded to the
+///    nearest. The continuous columns then move to the values that minimise the
+///    violation of their rows.
+/// 2. **Exchanges.** The binary columns that are not `frozen` are ordered by
+///    `priority`, the size of their reduced cost in the relaxation, smallest
+///    first, and the first 2048 form a pool. Two columns of the pool are
+///    interchangeable when they have the same coefficients on every equality
+///    row, the row of the objective included when `cutoff = ceiling`, so that
+///    setting one to 1 and the other to 0 keeps those rows. Each move is the
+///    flip of one pool column or such an exchange, the one that lowers the sum
+///    of the rows' violations, each in units of the row's largest coefficient,
+///    the most, ties to the lowest indices; the general integer and continuous
+///    columns stay. Only rows that one move can break are evaluated: those
+///    broken and those within twice the pool's largest coefficient of a bound.
+///    The search stops when every row holds, or when no move helps, and then
+///    goes on with a pool of 8192, for at most [`REPAIR_STEPS`] moves with each.
+///
+/// With small reduced costs an exchange costs little of the gap between the
+/// relaxation's bound and `cutoff`, and in a matching problem the pool holds
+/// many units near the margin of the relaxation, so the exchanges can move the
+/// balance rows in small steps. A move costs `O(p² r)` for a pool of `p` and
+/// `r` rows evaluated, and the search `O(n m)` besides, for the activity.
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "the program, the point and the search's limits; one pass of rounding and moves"
+)]
+fn repair_search(
+    program: &MixedBinaryProgram<'_>,
+    shape: &Shape,
+    start: &[f64],
+    priority: &[f64],
+    frozen: &[bool],
+    cutoff: f64,
+    ceiling: f64,
+    tolerance: &[f64],
+) -> Option<(Vec<f64>, f64)> {
+    let n = program.cost.len();
+    let m = program.rows;
+    let total_rows = m + 1;
+    let coef = |j: usize, i: usize| {
+        if i < m {
+            program.columns[j * m + i]
+        } else {
+            program.cost[j]
+        }
+    };
+    let mut rows = RepairRows {
+        lo: (0..total_rows)
+            .map(|i| if i < m { program.row_lo[i] } else { cutoff })
+            .collect(),
+        hi: (0..total_rows)
+            .map(|i| if i < m { program.row_hi[i] } else { ceiling })
+            .collect(),
+        tol: (0..total_rows)
+            .map(|i| {
+                if i < m {
+                    tolerance[i]
+                } else {
+                    OBJECTIVE_TOL * cutoff.abs().max(1.0)
+                }
+            })
+            .collect(),
+        scale: vec![0.0; total_rows],
+    };
+    // Rounding: the whole columns near a whole value take it.
+    let mut x = start.to_vec();
+    let mut fractional: Vec<(f64, usize)> = Vec::new();
+    for j in 0..n {
+        if !shape.whole[j] {
+            continue;
+        }
+        let v = start[j];
+        let d = (v - v.round()).abs();
+        if frozen[j] || d <= INT_TOL * v.abs().max(1.0) {
+            x[j] = v.round();
+        } else {
+            fractional.push((d, j));
+        }
+    }
+    fractional.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    // The columns whose roundings are enumerated start at their floor.
+    let mut enumerated: Vec<usize> = Vec::new();
+    for (k, &(_, j)) in fractional.iter().enumerate() {
+        let v = start[j];
+        let (fl, ce) = (v.floor(), v.ceil());
+        if k < ROUND_EXHAUSTIVE && fl >= program.col_lo[j] && ce <= program.col_hi[j] {
+            x[j] = fl;
+            enumerated.push(j);
+        } else {
+            x[j] = v.round().clamp(program.col_lo[j], program.col_hi[j]);
+        }
+    }
+    let mut act = vec![0.0; total_rows];
+    for (j, &xj) in x.iter().enumerate() {
+        for (i, s) in rows.scale.iter_mut().enumerate() {
+            let a = coef(j, i);
+            *s = s.max(a.abs());
+            if xj != 0.0 {
+                act[i] += a * xj;
+            }
+        }
+    }
+    for s in &mut rows.scale {
+        *s = if *s > 0.0 { 1.0 / *s } else { 1.0 };
+    }
+    let total = |act: &[f64]| -> f64 { (0..total_rows).map(|i| rows.violation(i, act[i])).sum() };
+    if !enumerated.is_empty() {
+        let mut current = act.clone();
+        let mut best = (total(&current), 0_u64);
+        let mut up = vec![false; enumerated.len()];
+        for step in 1..(1_u64 << enumerated.len()) {
+            let bit = step.trailing_zeros() as usize;
+            let j = enumerated[bit];
+            let sign = if up[bit] { -1.0 } else { 1.0 };
+            up[bit] = !up[bit];
+            for (i, a) in current.iter_mut().enumerate() {
+                *a += sign * coef(j, i);
+            }
+            let v = total(&current);
+            if v < best.0 {
+                best = (v, step ^ (step >> 1));
+            }
+        }
+        for (bit, &j) in enumerated.iter().enumerate() {
+            if best.1 >> bit & 1 == 1 {
+                x[j] += 1.0;
+                for (i, a) in act.iter_mut().enumerate() {
+                    *a += coef(j, i);
+                }
+            }
+        }
+    }
+    settle_continuous(program, shape, frozen, &rows, &mut x, &mut act);
+
+    // Exchanges within growing pools of the binary columns nearest the margin.
+    let equality: Vec<usize> = (0..total_rows)
+        .filter(|&i| rows.lo[i] == rows.hi[i] && rows.lo[i].is_finite())
+        .collect();
+    let mut movable: Vec<usize> = (0..n)
+        .filter(|&j| program.binary[j] && !frozen[j] && program.col_lo[j] != program.col_hi[j])
+        .collect();
+    let order = |&a: &usize, &b: &usize| {
+        priority[a]
+            .abs()
+            .total_cmp(&priority[b].abs())
+            .then(a.cmp(&b))
+    };
+    let mut steps_left;
+    let mut covered = 0;
+    for &size in &REPAIR_POOLS {
+        if total(&act) == 0.0 {
+            break;
+        }
+        if size == 0 || covered >= movable.len() {
+            break;
+        }
+        let size = size.min(movable.len());
+        covered = size;
+        if size < movable.len() {
+            movable.select_nth_unstable_by(size, order);
+        }
+        let mut pool: Vec<usize> = movable[..size].to_vec();
+        pool.sort_unstable();
+        // The largest effect of one pool column on each row.
+        let mut reach = vec![0.0_f64; total_rows];
+        for &j in &pool {
+            for (i, r) in reach.iter_mut().enumerate() {
+                *r = r.max(coef(j, i).abs());
+            }
+        }
+        // Classes of interchangeable columns, by their equality coefficients.
+        let mut classes: std::collections::BTreeMap<Vec<u64>, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for &j in &pool {
+            let key: Vec<u64> = equality.iter().map(|&i| coef(j, i).to_bits()).collect();
+            classes.entry(key).or_default().push(j);
+        }
+        steps_left = REPAIR_STEPS;
+        while steps_left > 0 {
+            steps_left -= 1;
+            let now = total(&act);
+            if now == 0.0 {
+                break;
+            }
+            let active: Vec<usize> = (0..total_rows)
+                .filter(|&i| {
+                    rows.violation(i, act[i]) > 0.0 || rows.room(i, act[i]) <= 2.0 * reach[i]
+                })
+                .collect();
+            let base: f64 = active.iter().map(|&i| rows.violation(i, act[i])).sum();
+            // (new total over the active rows, column set to 1, column set to 0).
+            let mut best: Option<(f64, usize, usize)> = None;
+            let mut consider = |v: f64, add: usize, drop: usize| {
+                let better =
+                    best.is_none_or(|(bv, ba, bd)| v < bv || (v == bv && (add, drop) < (ba, bd)));
+                if better {
+                    best = Some((v, add, drop));
+                }
+            };
+            for &j in &pool {
+                let sign = if x[j] == 0.0 { 1.0 } else { -1.0 };
+                let v: f64 = active
+                    .iter()
+                    .map(|&i| rows.violation(i, act[i] + sign * coef(j, i)))
+                    .sum();
+                if x[j] == 0.0 {
+                    consider(v, j, usize::MAX);
+                } else {
+                    consider(v, usize::MAX, j);
+                }
+            }
+            // Exchanges change no equality row, so only the others are evaluated.
+            let free_rows: Vec<usize> = active
+                .iter()
+                .copied()
+                .filter(|i| !equality.contains(i))
+                .collect();
+            let fixed_part: f64 = active
+                .iter()
+                .filter(|i| equality.contains(i))
+                .map(|&i| rows.violation(i, act[i]))
+                .sum();
+            let r = free_rows.len();
+            for members in classes.values() {
+                let ins: Vec<usize> = members.iter().copied().filter(|&j| x[j] == 0.0).collect();
+                let outs: Vec<usize> = members.iter().copied().filter(|&j| x[j] == 1.0).collect();
+                if ins.is_empty() || outs.is_empty() {
+                    continue;
+                }
+                let block = |list: &[usize]| -> Vec<f64> {
+                    let mut out = Vec::with_capacity(list.len() * r);
+                    for &j in list {
+                        out.extend(free_rows.iter().map(|&i| coef(j, i)));
+                    }
+                    out
+                };
+                let (a_in, a_out) = (block(&ins), block(&outs));
+                let here: Vec<f64> = free_rows.iter().map(|&i| act[i]).collect();
+                for (q, &u) in ins.iter().enumerate() {
+                    let au = &a_in[q * r..(q + 1) * r];
+                    for (w, &v) in outs.iter().enumerate() {
+                        let av = &a_out[w * r..(w + 1) * r];
+                        let mut s = fixed_part;
+                        for k in 0..r {
+                            s += rows.violation(free_rows[k], here[k] + au[k] - av[k]);
+                        }
+                        consider(s, u, v);
+                    }
+                }
+            }
+            match best {
+                Some((v, add, drop)) if v < base * (1.0 - 1e-9) => {
+                    for (j, value) in [(add, 1.0), (drop, 0.0)] {
+                        if j != usize::MAX {
+                            for (i, a) in act.iter_mut().enumerate() {
+                                *a += coef(j, i) * (value - x[j]);
+                            }
+                            x[j] = value;
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+    // A point is a solution when every row holds to its tolerance.
+    let act = activity(program, &x);
+    let holds = (0..m).all(|i| {
+        act[i] >= program.row_lo[i] - tolerance[i] && act[i] <= program.row_hi[i] + tolerance[i]
+    });
+    let value = objective(program, &x);
+    let within = value <= ceiling + OBJECTIVE_TOL * ceiling.abs().max(1.0);
+    let whole = (0..n).all(|j| !shape.whole[j] || x[j] == x[j].round());
+    (holds && whole && within && reaches(value, cutoff)).then_some((x, value))
 }
 
 /// The fraction of the perturbation kept for the clean-up solve, see
@@ -1473,7 +1908,7 @@ impl Context<'_, '_> {
         if shrinks || (!self.bounded && open - fixed.len() <= CUT_COLUMNS) {
             return self.search_compressed(&fixed, threshold, improve, best);
         }
-        if open - fixed.len() <= SEARCH_COLUMNS && !improve {
+        if !improve {
             let mut start = self.lp.values();
             let mut frozen = vec![false; n];
             for &(j, b) in &fixed {
@@ -1483,15 +1918,32 @@ impl Context<'_, '_> {
             let tolerance: Vec<f64> = (0..self.program.rows)
                 .map(|i| self.lp.row_tolerance(i))
                 .collect();
-            if let Some(found) = local_search(
+            let found = repair_search(
                 self.program,
                 self.shape,
                 &start,
+                &self.root.reduced_costs,
                 &frozen,
                 threshold,
                 threshold,
                 &tolerance,
-            ) {
+            )
+            .or_else(|| {
+                (free_whole(self.program, self.shape, &frozen) <= SEARCH_COLUMNS)
+                    .then(|| {
+                        local_search(
+                            self.program,
+                            self.shape,
+                            &start,
+                            &frozen,
+                            threshold,
+                            threshold,
+                            &tolerance,
+                        )
+                    })
+                    .flatten()
+            });
+            if let Some(found) = found {
                 *best = Some(found);
                 return Ok(End::Done);
             }
@@ -1631,7 +2083,7 @@ impl Context<'_, '_> {
                 }
                 // Now and then, a local search from the node's point.
                 processed += 1;
-                if processed % SEARCH_EVERY == 0 && n <= SEARCH_COLUMNS {
+                if processed % SEARCH_EVERY == 0 {
                     let start = self.lp.values();
                     let frozen: Vec<bool> = (0..n)
                         .map(|j| {
@@ -1642,16 +2094,37 @@ impl Context<'_, '_> {
                     let tolerance: Vec<f64> = (0..self.program.rows)
                         .map(|i| self.lp.row_tolerance(i))
                         .collect();
-                    let ceiling = if improve { f64::INFINITY } else { threshold };
-                    if let Some((x, value)) = local_search(
+                    let ceiling = if improve {
+                        floor_to(bound.value, step)
+                    } else {
+                        threshold
+                    };
+                    let found = repair_search(
                         self.program,
                         self.shape,
                         &start,
+                        &bound.reduced_costs,
                         &frozen,
                         threshold,
                         ceiling,
                         &tolerance,
-                    ) {
+                    )
+                    .or_else(|| {
+                        (free_whole(self.program, self.shape, &frozen) <= SEARCH_COLUMNS)
+                            .then(|| {
+                                local_search(
+                                    self.program,
+                                    self.shape,
+                                    &start,
+                                    &frozen,
+                                    threshold,
+                                    ceiling,
+                                    &tolerance,
+                                )
+                            })
+                            .flatten()
+                    });
+                    if let Some((x, value)) = found {
                         if best.as_ref().is_none_or(|(_, b)| value > *b) {
                             *best = Some((x, value));
                         }
@@ -2437,10 +2910,14 @@ mod tests {
 
     /// A random program of the shape of profile matching: `x` binary, `t` a
     /// whole column with `Σ x - t = 0` and, per covariate,
-    /// `Σ x v - (μ + tol) t ≤ 0` and `Σ x v - (μ - tol) t ≥ 0`.
+    /// `Σ x v - (μ + tol) t ≤ 0` and `Σ x v - (μ - tol) t ≥ 0`. Or of the shape
+    /// of 1:1 cardinality matching, see [`Random::cardinality`].
     struct Random {
         m: usize,
         nbin: usize,
+        /// The group of each binary column in a cardinality program, empty in
+        /// a profile program.
+        group: Vec<bool>,
         columns: Vec<f64>,
         cost: Vec<f64>,
         col_lo: Vec<f64>,
@@ -2486,6 +2963,60 @@ mod tests {
             Self {
                 m,
                 nbin,
+                group: Vec::new(),
+                columns,
+                cost,
+                col_lo: vec![0.0; n],
+                col_hi,
+                row_lo,
+                row_hi,
+                binary,
+                integer,
+            }
+        }
+
+        /// A program of the shape of 1:1 cardinality matching: `x` binary in
+        /// two groups, `k` a whole column with `Σ_g x - k = 0` for each group,
+        /// and per covariate `|Σ_1 x v - Σ_0 x v| ≤ tol k` as two rows. The
+        /// objective is `2 k`, the number of columns selected.
+        fn cardinality(rng: &mut Rng, nbin: usize, p: usize) -> Self {
+            let m = 2 + 2 * p;
+            let n = nbin + 1;
+            let group: Vec<bool> = (0..nbin).map(|j| j % 2 == 1).collect();
+            let mut columns = vec![0.0; n * m];
+            for (j, &g) in group.iter().enumerate() {
+                columns[j * m + usize::from(g)] = 1.0;
+            }
+            columns[nbin * m] = -1.0;
+            columns[nbin * m + 1] = -1.0;
+            let mut row_lo = vec![0.0; m];
+            let mut row_hi = vec![0.0; m];
+            for c in 0..p {
+                let shift = rng.uniform(0.0, 0.8);
+                let tol = rng.uniform(0.02, 0.2);
+                for (j, &g) in group.iter().enumerate() {
+                    let v = rng.uniform(-1.0, 1.0) + if g { shift } else { 0.0 };
+                    let coef = if g { v } else { -v };
+                    columns[j * m + 2 + c] = coef;
+                    columns[j * m + 2 + p + c] = coef;
+                }
+                columns[nbin * m + 2 + c] = -tol;
+                columns[nbin * m + 2 + p + c] = tol;
+                row_lo[2 + c] = -INF;
+                row_hi[2 + p + c] = INF;
+            }
+            let mut cost = vec![0.0; n];
+            cost[nbin] = 2.0;
+            let mut col_hi = vec![1.0; n];
+            col_hi[nbin] = (nbin / 2) as f64;
+            let mut binary = vec![true; n];
+            binary[nbin] = false;
+            let mut integer = vec![false; n];
+            integer[nbin] = true;
+            Self {
+                m,
+                nbin,
+                group,
                 columns,
                 cost,
                 col_lo: vec![0.0; n],
@@ -2516,15 +3047,28 @@ mod tests {
             let (m, nbin) = (self.m, self.nbin);
             let mut out = Vec::new();
             for mask in 0..(1_u32 << nbin) {
-                let t = f64::from(mask.count_ones());
                 let mut x: Vec<f64> = (0..nbin).map(|j| f64::from(mask >> j & 1)).collect();
+                let t = if self.group.is_empty() {
+                    f64::from(mask.count_ones())
+                } else {
+                    let ones = |g: bool| {
+                        (0..nbin)
+                            .filter(|&j| self.group[j] == g && x[j] == 1.0)
+                            .count()
+                    };
+                    if ones(true) != ones(false) {
+                        continue;
+                    }
+                    ones(true) as f64
+                };
                 x.push(t);
                 let ok = (0..m).all(|i| {
                     let a: f64 = (0..=nbin).map(|j| self.columns[j * m + i] * x[j]).sum();
                     a >= self.row_lo[i] - 1e-12 && a <= self.row_hi[i] + 1e-12
                 });
                 if ok {
-                    out.push((x, t));
+                    let value = if self.group.is_empty() { t } else { 2.0 * t };
+                    out.push((x, value));
                 }
             }
             out
@@ -2694,5 +3238,135 @@ mod tests {
             }
         }
         assert!(found > 50);
+    }
+
+    /// Solves the relaxation of `program` and returns the repair search's
+    /// solution of value in `[cutoff, upper]`, with `upper` the floored dual
+    /// bound.
+    fn repair_from_root(
+        program: &MixedBinaryProgram<'_>,
+        cutoff_below: f64,
+    ) -> Option<(Vec<f64>, f64, f64)> {
+        let mut lp = BoundedSimplex::new(
+            program.rows,
+            program.columns,
+            program.cost,
+            program.col_lo,
+            program.col_hi,
+            program.row_lo,
+            program.row_hi,
+        )
+        .unwrap();
+        lp.perturb_costs();
+        lp.solve(None).ok()?;
+        let shape = shape(program);
+        let bound = lp.dual_bound();
+        let upper = floor_to(bound.value, shape.step);
+        let tolerance: Vec<f64> = (0..program.rows).map(|i| lp.row_tolerance(i)).collect();
+        let frozen = vec![false; program.cost.len()];
+        let cutoff = upper - cutoff_below;
+        repair_search(
+            program,
+            &shape,
+            &lp.values(),
+            &bound.reduced_costs,
+            &frozen,
+            cutoff,
+            upper,
+            &tolerance,
+        )
+        .map(|(x, v)| (x, v, cutoff))
+    }
+
+    /// Every point the repair search returns is an integer point of the
+    /// program, checked against the list of all of them, with its value in
+    /// the range asked for.
+    #[test]
+    fn repair_search_returns_solutions_of_the_program() {
+        let mut rng = Rng(311);
+        let mut found = 0;
+        let mut at_best = 0;
+        for trial in 0..400 {
+            let random = if trial % 2 == 0 {
+                Random::profile(&mut rng, 8 + trial % 7, 1 + trial % 3)
+            } else {
+                Random::cardinality(&mut rng, 8 + trial % 8, 1 + trial % 3)
+            };
+            let program = random.program();
+            let points = random.points();
+            let best = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+            for below in [0.0, 2.0] {
+                let Some((x, v, cutoff)) = repair_from_root(&program, below) else {
+                    continue;
+                };
+                assert!(
+                    v >= cutoff && v <= best,
+                    "trial {trial}: {v} outside [{cutoff}, {best}]"
+                );
+                let integral: Vec<f64> = x.iter().map(|v| v.round()).collect();
+                assert_eq!(x, integral, "trial {trial}");
+                assert!(
+                    points.iter().any(|(p, value)| *p == x && *value == v),
+                    "trial {trial}: {x:?} is not a solution"
+                );
+                found += 1;
+                if v == best {
+                    at_best += 1;
+                }
+            }
+        }
+        assert!(found > 500, "{found} found");
+        assert!(at_best > 500, "{at_best} at the optimum");
+    }
+
+    /// On a program of the shape of cardinality matching with many units the
+    /// relaxation's point needs exchanges, and the repair search finds a
+    /// solution at the floored bound of the relaxation, which is optimal.
+    #[test]
+    fn repair_search_closes_a_large_matching_program() {
+        let mut rng = Rng(5);
+        let random = Random::cardinality(&mut rng, 4000, 2);
+        let program = random.program();
+        let (x, v, cutoff) = repair_from_root(&program, 0.0).expect("a solution");
+        assert_eq!(v, cutoff);
+        assert!(row_violation(&program, &x) <= 1e-9 * 4000.0);
+        let s = solve(&program, &Options::default()).unwrap();
+        assert_eq!(s.status, Status::Optimal);
+        assert_eq!(s.objective, v);
+    }
+
+    /// With its objective on the size column, as cardinality matching passes
+    /// it, the solver searches by levels two apart and agrees with exhaustive
+    /// search.
+    #[test]
+    fn cardinality_programs_agree_with_exhaustive_search() {
+        let mut rng = Rng(808);
+        let mut solved = 0;
+        for trial in 0..300 {
+            let random = Random::cardinality(&mut rng, 6 + trial % 9, 1 + trial % 3);
+            assert_eq!(shape(&random.program()).step, Some(2.0));
+            let best = random
+                .points()
+                .iter()
+                .map(|p| p.1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            for heuristics in [true, false] {
+                let options = Options {
+                    neighbourhood_search: heuristics,
+                    ..Options::default()
+                };
+                match solve(&random.program(), &options) {
+                    Ok(s) => {
+                        assert_eq!(s.status, Status::Optimal, "trial {trial}");
+                        assert_eq!(s.objective, best, "trial {trial}");
+                        assert!(s.max_row_violation < 1e-7, "trial {trial}");
+                        solved += 1;
+                    }
+                    Err(MipError::Infeasible) => assert!(best.is_infinite(), "trial {trial}"),
+                    Err(e) => panic!("trial {trial}: {e}"),
+                }
+            }
+        }
+        assert!(solved > 550, "{solved} solved");
     }
 }
