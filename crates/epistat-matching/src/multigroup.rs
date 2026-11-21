@@ -548,8 +548,12 @@ pub fn vector_match(
         }
     }
     let kept_ids: Vec<String> = keep.iter().map(|&i| records[i].core.id.clone()).collect();
+    let mut kept = vec![false; records.len()];
+    for &i in &keep {
+        kept[i] = true;
+    }
     let discarded: Vec<String> = (0..records.len())
-        .filter(|i| !keep.contains(i))
+        .filter(|&i| !kept[i])
         .map(|i| records[i].core.id.clone())
         .collect();
     let kept_groups: Vec<usize> = keep.iter().map(|&i| groups[i]).collect();
