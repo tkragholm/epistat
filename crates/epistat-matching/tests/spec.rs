@@ -2045,3 +2045,50 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     }
     assert_eq!(from_long, from_outcome);
 }
+
+/// A spec with fine balance gives what the typed call gives, balances the
+/// categories of the anchors, and is refused with other methods.
+#[test]
+fn fine_balance_spec_equals_the_typed_call() {
+    use epistat_matching::{FineBalance, OptimalRequest, match_fine_balance};
+
+    let (anchors, candidates) = standard_inputs(24);
+    let anchors: Vec<_> = anchors.into_iter().take(40).collect();
+    let candidates: Vec<_> = candidates.into_iter().take(300).collect();
+    let input = SpecInput::Standard {
+        anchors: &anchors,
+        candidates: &candidates,
+    };
+    let balance = FineBalance::on_keys(["sex", "municipality"]);
+    let spec = MatchSpec {
+        method: MatchMethod::Optimal,
+        birth_window_days: 36_500,
+        ratio: 2,
+        fine_balance: Some(balance.clone()),
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Pairs { outcome, .. } = run_spec(&spec, input.clone()).expect("valid spec")
+    else {
+        panic!("expected pairs");
+    };
+    let criteria = MatchingCriteria::builder()
+        .birth_date_window_days(36_500)
+        .match_ratio(2)
+        .build();
+    let request = OptimalRequest::new(&criteria, &());
+    let by_hand = match_fine_balance(&anchors, &candidates, &request, &balance).expect("feasible");
+    assert_eq!(outcome.pairs, by_hand.outcome.pairs);
+    assert_eq!(by_hand.outcome.pairs.len(), 80);
+
+    let bad = MatchSpec {
+        method: MatchMethod::Full,
+        fine_balance: Some(balance),
+        ..MatchSpec::default()
+    };
+    assert!(matches!(
+        run_spec(&bad, input),
+        Err(SpecError::Option { .. })
+    ));
+    let again: MatchSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
+    assert_eq!(spec, again);
+}

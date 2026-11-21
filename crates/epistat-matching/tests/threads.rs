@@ -1244,3 +1244,60 @@ fn optimal_and_full_matching() {
         d.0
     });
 }
+
+/// Balanced matching builds the edges of the strata in parallel and solves one
+/// network, so the result is the same in every pool.
+#[test]
+fn fine_balance_matching() {
+    use epistat_matching::{FineBalance, OptimalRequest, RapidHashMap, match_fine_balance};
+
+    let mut state = 0x1f83_d9ab_fb41_bd6b_u64;
+    let mut draw = move || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    let birth = date(0);
+    let mut anchors = Vec::new();
+    let mut candidates = Vec::new();
+    let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
+    for (rows, prefix, count, shift) in [
+        (&mut anchors, "a", 300, 0.2),
+        (&mut candidates, "c", 1_000, 0.0),
+    ] {
+        for index in 0..count {
+            let id = format!("{prefix}{index}");
+            let mut record = BaseRecord::new(id.clone(), birth);
+            let coarse = (draw() * 3.0).floor();
+            let fine = coarse * 2.0 + (draw() * 2.0).floor();
+            record
+                .strata
+                .insert("g".to_string(), (draw() * 4.0).floor().to_string());
+            record
+                .strata
+                .insert("coarse".to_string(), coarse.to_string());
+            record.strata.insert("fine".to_string(), fine.to_string());
+            scores.insert(id, draw() + shift);
+            rows.push(record);
+        }
+    }
+    let distance = DistanceConfig::propensity_score_map(scores, None);
+    let criteria = MatchingCriteria::builder()
+        .match_ratio(2)
+        .required_strata(vec!["g".to_string()])
+        .build();
+    let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
+    let balance = FineBalance {
+        levels: vec![vec!["coarse".into()], vec!["fine".into()]],
+        ..FineBalance::default()
+    };
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let out = match_fine_balance(&anchors, &candidates, &request, &balance).unwrap();
+        assert_ne!(out.outcome.pairs.len(), 0);
+        d.outcome(&out.outcome);
+        d.debug(&out.levels);
+        d.0
+    });
+}
