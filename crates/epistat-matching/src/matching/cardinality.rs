@@ -35,7 +35,10 @@
 //!
 //! where `μ_c` is the (sampling weighted) mean of `X_c` in the focal group for the
 //! ATT and in the whole sample for the ATE, and `t`, `t_g` and `k` are continuous
-//! variables that carry the sizes. A tolerance is a difference of means in
+//! variables that carry the sizes. In cardinality matching the size rows make
+//! `Σ x_i = (1 + ratio) k`, and the program is passed with the objective
+//! `(1 + ratio) k`, so that the solver sees that every value is a multiple of
+//! `1 + ratio`. A tolerance is a difference of means in
 //! standard deviations when `std_tols` is true, the default. The standard
 //! deviation is the sampling weighted one of the focal group for the ATT and the
 //! ATC, and the root of the mean of the two group variances for the ATE, a binary
@@ -45,8 +48,11 @@
 //!
 //! The programs have up to a million columns and a few dozen rows. They are
 //! solved by [`epistat_optim::branch_and_bound`], an own bounded dual simplex
-//! with Gomory cuts, local search and branch and bound by objective level, not
-//! a general solver. Its limits are the node and time limits of
+//! with Gomory cuts, a repair search that rounds the relaxation and exchanges
+//! units near its margin, and branch and bound by objective level, not a
+//! general solver. On the large cohorts where balance binds, the relaxation's
+//! bound rounded down to a multiple of `1 + ratio` is usually reached by the
+//! repair search at the root, which proves the optimum after one relaxation. Its limits are the node and time limits of
 //! [`CardinalityRequest`]. A stratum whose search stops at a limit returns the
 //! best subset found, [`StratumReport::proven_optimal`] is false, and
 //! [`StratumReport::bound`] is the largest objective the search could not rule
@@ -507,6 +513,11 @@ fn solve_stratum(
             let smaller = group_size[0].min(group_size[1]) as f64;
             hi[k] = smaller;
             integer[k] = true;
+            // The size rows make `Σ x_i = (1 + ratio) k`, so the objective is
+            // carried by `k` alone. Every solution's value is then a multiple
+            // of `1 + ratio`, which the solver sees as the step of its levels.
+            cost[..n_units].fill(0.0);
+            cost[k] = 1.0 + ratio;
         }
         Kind::ProfileAtt => {
             let target: Vec<f64> = (0..p)
