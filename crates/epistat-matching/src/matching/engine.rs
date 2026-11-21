@@ -15,6 +15,7 @@ use crate::types::{
 };
 use rapidhash::RapidHashMap;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 fn initial_diagnostics(
     total_anchors: usize,
@@ -91,6 +92,7 @@ pub struct MatchEngine<'a, R: MatchingRecord, S: SelectionStrategy<R>> {
     pub(crate) precomputed: MatchingPrecomputed<'a>,
     pub(crate) candidate_index: CandidateIndex<'a>,
     pub(crate) selector: S,
+    id_ranks: OnceLock<Option<IdRanks>>,
 }
 
 /// Unified request for standard anchor-to-candidate matching.
@@ -214,6 +216,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             precomputed,
             candidate_index,
             selector,
+            id_ranks: OnceLock::new(),
         }
     }
 
@@ -234,9 +237,9 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         diagnostics: &mut MatchDiagnostics,
     ) -> Vec<usize>
     where
-        F: FnMut(usize, &R) -> bool,
+        F: Fn(usize, &R) -> bool + Sync,
     {
-        self.candidate_pool_with_distance_and_constraint_group(
+        self.candidate_pool_inner(
             request.case,
             &CandidatePoolConfig {
                 used_controls: request.used_controls,
@@ -250,6 +253,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             extra_constraints,
             additional_filter,
             diagnostics,
+            PoolScan::Wide,
         )
     }
 
@@ -262,11 +266,38 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         case: &R,
         pool_config: &CandidatePoolConfig<'_, D>,
         extra_constraints: &G,
-        mut additional_filter: F,
+        additional_filter: F,
         diagnostics: &mut MatchDiagnostics,
     ) -> Vec<usize>
     where
-        F: FnMut(usize, &R) -> bool,
+        F: Fn(usize, &R) -> bool + Sync,
+    {
+        self.candidate_pool_inner(
+            case,
+            pool_config,
+            extra_constraints,
+            additional_filter,
+            diagnostics,
+            PoolScan::Narrow,
+        )
+    }
+
+    /// The controls that may be matched to `case`, in the order of their ids.
+    ///
+    /// A `Wide` scan splits a long candidate list over the rayon pool and sorts
+    /// by a precomputed id rank. Both produce the pool a `Narrow` scan does,
+    /// element for element.
+    fn candidate_pool_inner<F, D: DistanceMetric<R> + Sync, G: ConstraintGroup<R> + ?Sized>(
+        &self,
+        case: &R,
+        pool_config: &CandidatePoolConfig<'_, D>,
+        extra_constraints: &G,
+        additional_filter: F,
+        diagnostics: &mut MatchDiagnostics,
+        scan: PoolScan,
+    ) -> Vec<usize>
+    where
+        F: Fn(usize, &R) -> bool + Sync,
     {
         let case_strata_values = (!self.criteria.required_strata.is_empty())
             .then(|| build_strata_values(case.strata(), &self.criteria.required_strata));
@@ -304,31 +335,6 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                     .or_insert(0) += excluded_by_index;
             }
         }
-        let mut eligible = Vec::new();
-
-        let replacement_constraint = ReplacementConstraint;
-        let no_self_match_constraint = NoSelfMatchConstraint;
-        let strata_constraint = ExactMatchConstraint;
-        let unique_constraint = UniqueKeyConstraint;
-        let all_builtin: [&dyn Constraint<R>; 4] = [
-            &replacement_constraint,
-            &no_self_match_constraint,
-            &strata_constraint,
-            &unique_constraint,
-        ];
-        let indexed_builtin: [&dyn Constraint<R>; 3] = [
-            &replacement_constraint,
-            &no_self_match_constraint,
-            &unique_constraint,
-        ];
-        // Every candidate the strata index returns has the case's value for each
-        // required stratum, so the exact-match constraint cannot block it.
-        let builtin_constraints: &[&dyn Constraint<R>] =
-            if pool_config.use_birth_date_index && case_strata_values.is_some() {
-                &indexed_builtin
-            } else {
-                &all_builtin
-            };
         let caliper_constraint = pool_config.distance_caliper.map(|max_distance| {
             CaliperConstraint::new(
                 pool_config.distance_metric,
@@ -336,57 +342,60 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 pool_config.caliper_reason,
             )
         });
+        // Every candidate the strata index returns has the case's value for each
+        // required stratum, so the exact-match constraint cannot block it.
+        let strata_indexed = pool_config.use_birth_date_index && case_strata_values.is_some();
 
-        // Exclusions are tallied by reason string here and entered into the
-        // diagnostics once per pool. `ConstraintReason::from_reason_str`
-        // allocates for every string it has no variant for, which is most of
-        // the built-in ones, and this loop runs once per candidate.
-        let mut filtered_out = 0_usize;
-        let mut constraint_exclusions: Vec<(&'static str, usize)> = Vec::new();
-
-        for idx in candidate_indices {
-            let control = &self.controls[idx];
-
-            if !additional_filter(idx, control) {
-                filtered_out += 1;
-                continue;
-            }
-
-            let control_strata_values = self
-                .precomputed
-                .control_strata_values
-                .as_ref()
-                .and_then(|values| values.row(idx));
-            let context = ConstraintContext {
-                criteria: self.precomputed.criteria,
-                used_controls: pool_config.used_controls,
-                used_unique: pool_config.used_unique,
-                unique_interner: pool_config.unique_interner,
-                control_idx: ControlIdx::new(idx),
-                case_strata_values: case_strata_values.as_deref(),
-                control_strata_values,
-            };
-
-            if let Some(reason) = first_blocking_constraint_reason(
-                case,
-                control,
-                builtin_constraints,
-                caliper_constraint.as_ref(),
-                extra_constraints,
-                &context,
-            ) {
-                match constraint_exclusions
-                    .iter_mut()
-                    .find(|(seen, _)| *seen == reason)
-                {
-                    Some((_, count)) => *count += 1,
-                    None => constraint_exclusions.push((reason, 1)),
+        let self_match = match (scan, self.id_ranks()) {
+            (PoolScan::Wide, Some(ranks)) => ranks
+                .position_of(self.controls, case.id())
+                .map_or(SelfMatch::Nobody, SelfMatch::At),
+            _ => SelfMatch::ById,
+        };
+        let scan_chunk = |chunk: &[usize]| {
+            self.scan_candidates(
+                chunk,
+                &ScanContext {
+                    case,
+                    pool_config,
+                    extra_constraints,
+                    case_strata_values: case_strata_values.as_deref(),
+                    caliper_constraint: caliper_constraint.as_ref(),
+                    strata_indexed,
+                    self_match,
+                },
+                &additional_filter,
+            )
+        };
+        let tally = match scan {
+            PoolScan::Narrow => scan_chunk(&candidate_indices),
+            PoolScan::Wide if candidate_indices.len() < 2 * SCAN_CHUNK => {
+                let mut tally = scan_chunk(&candidate_indices);
+                if let Some(ranks) = self.id_ranks() {
+                    ranks.sort(&mut tally.eligible);
                 }
-                continue;
+                tally
             }
-
-            eligible.push(idx);
-        }
+            PoolScan::Wide => {
+                let ranks = self.id_ranks();
+                let tallies: Vec<ScanTally> = candidate_indices
+                    .par_chunks(SCAN_CHUNK)
+                    .map(|chunk| {
+                        let mut tally = scan_chunk(chunk);
+                        if let Some(ranks) = ranks {
+                            ranks.sort(&mut tally.eligible);
+                        }
+                        tally
+                    })
+                    .collect();
+                ScanTally::join_all(tallies, ranks)
+            }
+        };
+        let ScanTally {
+            mut eligible,
+            filtered_out,
+            constraint_exclusions,
+        } = tally;
 
         if filtered_out > 0 {
             *diagnostics
@@ -411,8 +420,113 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         // the stable control IDENTITY (person id) makes the pool order reproducible
         // regardless of the array order (and gives a stable tie-break for
         // distance-based selection) without changing which candidates are eligible.
-        sort_by_id(self.controls, &mut eligible);
+        match (scan, self.id_ranks()) {
+            // A wide scan has ordered the pool already.
+            (PoolScan::Wide, Some(_)) => {}
+            (PoolScan::Narrow, _) | (PoolScan::Wide, None) => {
+                sort_by_id(self.controls, &mut eligible);
+            }
+        }
         eligible
+    }
+
+    /// Apply the additional filter and every constraint to `chunk`, in order.
+    ///
+    /// Exclusions are tallied by reason string here and entered into the
+    /// diagnostics once per pool. `ConstraintReason::from_reason_str`
+    /// allocates for every string it has no variant for, which is most of
+    /// the built-in ones, and this loop runs once per candidate.
+    fn scan_candidates<F, D: DistanceMetric<R> + Sync, G: ConstraintGroup<R> + ?Sized>(
+        &self,
+        chunk: &[usize],
+        context: &ScanContext<'_, R, D, G>,
+        additional_filter: &F,
+    ) -> ScanTally
+    where
+        F: Fn(usize, &R) -> bool,
+    {
+        let ScanContext {
+            case,
+            pool_config,
+            extra_constraints,
+            case_strata_values,
+            caliper_constraint,
+            strata_indexed,
+            self_match,
+        } = *context;
+
+        let replacement_constraint = ReplacementConstraint;
+        let no_self_match_constraint = NoSelfMatchConstraint;
+        let self_match_at = SelfMatchAt(match self_match {
+            SelfMatch::At(idx) => Some(idx),
+            SelfMatch::ById | SelfMatch::Nobody => None,
+        });
+        let no_self_match: &dyn Constraint<R> = match self_match {
+            SelfMatch::ById => &no_self_match_constraint,
+            SelfMatch::At(_) | SelfMatch::Nobody => &self_match_at,
+        };
+        let strata_constraint = ExactMatchConstraint;
+        let unique_constraint = UniqueKeyConstraint;
+        let all_builtin: [&dyn Constraint<R>; 4] = [
+            &replacement_constraint,
+            no_self_match,
+            &strata_constraint,
+            &unique_constraint,
+        ];
+        let indexed_builtin: [&dyn Constraint<R>; 3] =
+            [&replacement_constraint, no_self_match, &unique_constraint];
+        let builtin_constraints: &[&dyn Constraint<R>] = if strata_indexed {
+            &indexed_builtin
+        } else {
+            &all_builtin
+        };
+
+        let mut tally = ScanTally::default();
+        for &idx in chunk {
+            let control = &self.controls[idx];
+
+            if !additional_filter(idx, control) {
+                tally.filtered_out += 1;
+                continue;
+            }
+
+            let control_strata_values = self
+                .precomputed
+                .control_strata_values
+                .as_ref()
+                .and_then(|values| values.row(idx));
+            let constraint_context = ConstraintContext {
+                criteria: self.precomputed.criteria,
+                used_controls: pool_config.used_controls,
+                used_unique: pool_config.used_unique,
+                unique_interner: pool_config.unique_interner,
+                control_idx: ControlIdx::new(idx),
+                case_strata_values,
+                control_strata_values,
+            };
+
+            if let Some(reason) = first_blocking_constraint_reason(
+                case,
+                control,
+                builtin_constraints,
+                caliper_constraint,
+                extra_constraints,
+                &constraint_context,
+            ) {
+                tally.exclude(reason, 1);
+                continue;
+            }
+
+            tally.eligible.push(idx);
+        }
+        tally
+    }
+
+    /// Id ranks of the controls, or `None` when two controls share an id.
+    fn id_ranks(&self) -> Option<&IdRanks> {
+        self.id_ranks
+            .get_or_init(|| IdRanks::of_controls(self.controls))
+            .as_ref()
     }
 
     pub fn select_control(
@@ -1087,6 +1201,180 @@ fn id_prefix(id: &str) -> u64 {
     u64::from_be_bytes(word)
 }
 
+/// Candidates per task when a pool is scanned in parallel.
+const SCAN_CHUNK: usize = 1024;
+
+/// How a candidate pool is scanned and ordered.
+#[derive(Clone, Copy)]
+enum PoolScan {
+    /// One thread, ordered by comparing ids.
+    Narrow,
+    /// Long candidate lists are split over the rayon pool and ordered by rank.
+    Wide,
+}
+
+struct ScanContext<'a, R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> {
+    case: &'a R,
+    pool_config: &'a CandidatePoolConfig<'a, D>,
+    extra_constraints: &'a G,
+    case_strata_values: Option<&'a [Option<&'a str>]>,
+    caliper_constraint: Option<&'a CaliperConstraint<'a, R, D>>,
+    strata_indexed: bool,
+    self_match: SelfMatch,
+}
+
+/// How a control that is the case itself is recognised.
+#[derive(Clone, Copy)]
+enum SelfMatch {
+    /// By comparing ids.
+    ById,
+    /// Ids are distinct and this control has the case's id.
+    At(usize),
+    /// Ids are distinct and no control has the case's id.
+    Nobody,
+}
+
+/// Blocks the one control that is the case itself, found by position.
+struct SelfMatchAt(Option<usize>);
+
+impl<R: MatchingRecord> Constraint<R> for SelfMatchAt {
+    fn reason(&self) -> &'static str {
+        Constraint::<R>::reason(&NoSelfMatchConstraint)
+    }
+
+    fn allows(&self, _case: &R, _control: &R, ctx: &ConstraintContext<'_>) -> bool {
+        self.0 != Some(ctx.control_idx.get())
+    }
+}
+
+impl<R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> Clone for ScanContext<'_, R, D, G> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> Copy for ScanContext<'_, R, D, G> {}
+
+/// The outcome of scanning a run of candidates.
+#[derive(Default)]
+struct ScanTally {
+    eligible: Vec<usize>,
+    filtered_out: usize,
+    constraint_exclusions: Vec<(&'static str, usize)>,
+}
+
+impl ScanTally {
+    fn exclude(&mut self, reason: &'static str, count: usize) {
+        match self
+            .constraint_exclusions
+            .iter_mut()
+            .find(|(seen, _)| *seen == reason)
+        {
+            Some((_, total)) => *total += count,
+            None => self.constraint_exclusions.push((reason, count)),
+        }
+    }
+
+    /// The tallies of consecutive runs as one. When the ranks are given, every
+    /// run's eligible controls are in id order and so are the merged ones.
+    fn join_all(tallies: Vec<Self>, ranks: Option<&IdRanks>) -> Self {
+        let mut joined = Self::default();
+        let mut runs: Vec<Vec<usize>> = Vec::with_capacity(tallies.len());
+        for tally in tallies {
+            joined.filtered_out += tally.filtered_out;
+            for (reason, count) in tally.constraint_exclusions {
+                joined.exclude(reason, count);
+            }
+            runs.push(tally.eligible);
+        }
+        joined.eligible = match ranks {
+            Some(ranks) => ranks.merge(runs),
+            None => runs.concat(),
+        };
+        joined
+    }
+}
+
+/// Position of every control in the order of ids, for controls with distinct ids.
+struct IdRanks {
+    rank: Vec<u32>,
+    by_rank: Vec<u32>,
+}
+
+impl IdRanks {
+    fn of_controls<R: MatchingRecord>(controls: &[R]) -> Option<Self> {
+        let mut order: Vec<usize> = (0..controls.len()).collect();
+        sort_by_id(controls, &mut order);
+        if order
+            .windows(2)
+            .any(|pair| controls[pair[0]].id() == controls[pair[1]].id())
+        {
+            return None;
+        }
+        let mut rank = vec![0_u32; controls.len()];
+        let mut by_rank = Vec::with_capacity(controls.len());
+        for (position, &idx) in order.iter().enumerate() {
+            rank[idx] = u32::try_from(position).ok()?;
+            by_rank.push(u32::try_from(idx).ok()?);
+        }
+        Some(Self { rank, by_rank })
+    }
+
+    /// The control with this id, if any.
+    fn position_of<R: MatchingRecord>(&self, controls: &[R], id: &str) -> Option<usize> {
+        let at = self
+            .by_rank
+            .partition_point(|&idx| controls[idx as usize].id() < id);
+        let idx = *self.by_rank.get(at)? as usize;
+        (controls[idx].id() == id).then_some(idx)
+    }
+
+    /// Sort control indices by id.
+    fn sort(&self, indices: &mut Vec<usize>) {
+        let mut ranks: Vec<u32> = indices.iter().map(|&idx| self.rank[idx]).collect();
+        ranks.sort_unstable();
+        indices.clear();
+        indices.extend(
+            ranks
+                .into_iter()
+                .map(|rank| self.by_rank[rank as usize] as usize),
+        );
+    }
+
+    /// Merge runs of control indices that are each in id order into one run.
+    fn merge(&self, mut runs: Vec<Vec<usize>>) -> Vec<usize> {
+        while runs.len() > 1 {
+            let mut next = Vec::with_capacity(runs.len().div_ceil(2));
+            let mut pending = runs.into_iter();
+            while let Some(first) = pending.next() {
+                match pending.next() {
+                    Some(second) => next.push(self.merge_two(&first, &second)),
+                    None => next.push(first),
+                }
+            }
+            runs = next;
+        }
+        runs.pop().unwrap_or_default()
+    }
+
+    fn merge_two(&self, left: &[usize], right: &[usize]) -> Vec<usize> {
+        let mut out = Vec::with_capacity(left.len() + right.len());
+        let (mut i, mut j) = (0, 0);
+        while i < left.len() && j < right.len() {
+            if self.rank[left[i]] <= self.rank[right[j]] {
+                out.push(left[i]);
+                i += 1;
+            } else {
+                out.push(right[j]);
+                j += 1;
+            }
+        }
+        out.extend_from_slice(&left[i..]);
+        out.extend_from_slice(&right[j..]);
+        out
+    }
+}
+
 /// Sort control indices by the id of the control, as `str::cmp` orders them.
 fn sort_by_id<R: MatchingRecord>(controls: &[R], indices: &mut Vec<usize>) {
     let mut keyed: Vec<(u64, usize)> = indices
@@ -1298,5 +1586,322 @@ mod id_order_tests {
         assert_eq!(intern_unique(&mut interner, "f1"), first);
         assert_eq!(intern_unique(&mut interner, "f2"), second);
         assert_eq!(interner.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod pool_scan_tests {
+    use super::*;
+    use crate::matching::{DateDistance, RandomSelection};
+    use crate::types::{BaseRecord, RoleTransitionRecord};
+    use chrono::{Days, NaiveDate};
+    use std::collections::BTreeMap;
+
+    type Member = RoleTransitionRecord<BaseRecord>;
+
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) % bound
+        }
+    }
+
+    fn origin() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date")
+    }
+
+    /// A cohort with few distinct dates, so that many events and entries tie.
+    ///
+    /// Ids share a long prefix, so that ordering them needs the full string.
+    fn cohort(seed: u64, n: usize, strata: u64, duplicate_ids: bool) -> Vec<Member> {
+        let mut rng = Lcg(seed);
+        (0..n)
+            .map(|i| {
+                let id = if duplicate_ids && i % 97 == 0 {
+                    "person_dup".to_string()
+                } else {
+                    format!("person_{:07}", rng.next(10_000_000) * 100_000 + i as u64)
+                };
+                let mut record = BaseRecord::new(&id, origin() + Days::new(rng.next(5)));
+                record
+                    .strata
+                    .insert("s".to_string(), format!("s{}", rng.next(strata)));
+                if rng.next(4) == 0 {
+                    record.entry_date = Some(origin() + Days::new(rng.next(20) * 5));
+                }
+                if rng.next(5) == 0 {
+                    record.death_date = Some(origin() + Days::new(50 + rng.next(30) * 5));
+                }
+                let event = (rng.next(8) == 0).then(|| origin() + Days::new(20 + rng.next(30) * 5));
+                RoleTransitionRecord::from_record(record, event)
+            })
+            .collect()
+    }
+
+    fn at_risk(control: &Member, event: NaiveDate) -> bool {
+        control.record.entry_date.is_none_or(|entry| entry <= event)
+            && control.transition_date.is_none_or(|date| date > event)
+            && control.record.death_date.is_none_or(|death| death > event)
+    }
+
+    /// The pool as a single thread builds it, with the order given by comparing ids.
+    fn reference_pool<G: ConstraintGroup<Member> + ?Sized>(
+        engine: &MatchEngine<'_, Member, RandomSelection>,
+        case: &Member,
+        pool_config: &CandidatePoolConfig<'_, DateDistance>,
+        extra_constraints: &G,
+        additional_filter: impl Fn(usize, &Member) -> bool,
+        diagnostics: &mut MatchDiagnostics,
+    ) -> Vec<usize> {
+        let case_strata_values = (!engine.criteria.required_strata.is_empty())
+            .then(|| build_strata_values(case.strata(), &engine.criteria.required_strata));
+        let window_days = engine
+            .criteria
+            .typed_birth_date_window()
+            .map_or(0_i64, |days| i64::from(days.get()));
+        let candidate_indices = engine.candidate_index.candidate_indices(
+            case.birth_date(),
+            window_days,
+            case_strata_values.as_deref(),
+        );
+        let caliper_constraint = pool_config.distance_caliper.map(|max_distance| {
+            CaliperConstraint::new(
+                pool_config.distance_metric,
+                max_distance.get(),
+                pool_config.caliper_reason,
+            )
+        });
+        let builtin: [&dyn Constraint<Member>; 3] = [
+            &ReplacementConstraint,
+            &NoSelfMatchConstraint,
+            &UniqueKeyConstraint,
+        ];
+        let mut eligible = Vec::new();
+        let mut filtered_out = 0_usize;
+        let mut exclusions: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for idx in candidate_indices {
+            let control = &engine.controls[idx];
+            if !additional_filter(idx, control) {
+                filtered_out += 1;
+                continue;
+            }
+            let context = ConstraintContext {
+                criteria: engine.criteria,
+                used_controls: pool_config.used_controls,
+                used_unique: pool_config.used_unique,
+                unique_interner: pool_config.unique_interner,
+                control_idx: ControlIdx::new(idx),
+                case_strata_values: case_strata_values.as_deref(),
+                control_strata_values: engine
+                    .precomputed
+                    .control_strata_values
+                    .as_ref()
+                    .and_then(|values| values.row(idx)),
+            };
+            if let Some(reason) = first_blocking_constraint_reason(
+                case,
+                control,
+                &builtin,
+                caliper_constraint.as_ref(),
+                extra_constraints,
+                &context,
+            ) {
+                *exclusions.entry(reason).or_insert(0) += 1;
+                continue;
+            }
+            eligible.push(idx);
+        }
+        if filtered_out > 0 {
+            *diagnostics
+                .exclusion_counts
+                .entry(ExclusionReason::AdditionalFilter)
+                .or_insert(0) += filtered_out;
+        }
+        for (reason, count) in exclusions {
+            *diagnostics
+                .exclusion_counts
+                .entry(ExclusionReason::Constraint(
+                    ConstraintReason::from_reason_str(reason),
+                ))
+                .or_insert(0) += count;
+        }
+        sort_by_id(engine.controls, &mut eligible);
+        eligible
+    }
+
+    /// Walk the cases in event order, as risk-set matching does, and compare
+    /// every pool and its exclusion counts with the single-threaded reference.
+    /// Controls are drawn from the pool in the same way for both, so a
+    /// difference in order would send the walks apart.
+    fn walk(seed: u64, n: usize, strata: u64, replace: bool, duplicate_ids: bool) {
+        let members = cohort(seed, n, strata, duplicate_ids);
+        let criteria = MatchingCriteria::builder()
+            .required_strata(vec!["s".to_string()])
+            .birth_date_window_days(1000)
+            .allow_replacement(replace)
+            .build()
+            .validate()
+            .expect("valid criteria");
+        let engine = MatchEngine::new(&members, criteria.as_ref(), RandomSelection::seeded(seed));
+        let mut selector = RandomSelection::seeded(seed);
+        let mut used = UsedControlsVec::with_capacity(n);
+        let unique = FxHashSet::default();
+        let interner = RapidHashMap::default();
+        let channel = DistanceChannel::new(&DateDistance, criteria.typed_birth_date_caliper());
+
+        let mut cases: Vec<usize> = (0..n)
+            .filter(|&i| members[i].transition_date.is_some())
+            .collect();
+        cases.sort_by(|&a, &b| {
+            members[a]
+                .transition_date
+                .cmp(&members[b].transition_date)
+                .then_with(|| members[a].record.id.cmp(&members[b].record.id))
+        });
+        assert!(cases.len() > 10);
+        // Every case of a short cohort, and the first ones of a long cohort.
+        cases.truncate(if n > 5_000 { 150 } else { usize::MAX });
+        let mut compared_wide = false;
+        for case_idx in cases {
+            let case = &members[case_idx];
+            let event = case.transition_date.expect("a case has an event date");
+            let filter = |_: usize, control: &Member| at_risk(control, event);
+
+            let mut new_diagnostics = MatchDiagnostics::default();
+            let mut pool = engine.candidate_pool_for_request_and_constraint_group(
+                &CandidatePoolRequest {
+                    case,
+                    used_controls: &used,
+                    used_unique: &unique,
+                    unique_interner: &interner,
+                    distance_channel: channel,
+                    use_birth_date_index: true,
+                },
+                &(),
+                filter,
+                &mut new_diagnostics,
+            );
+            let mut reference_diagnostics = MatchDiagnostics::default();
+            let reference = reference_pool(
+                &engine,
+                case,
+                &CandidatePoolConfig {
+                    used_controls: &used,
+                    used_unique: &unique,
+                    unique_interner: &interner,
+                    distance_metric: channel.metric(),
+                    distance_caliper: channel.typed_caliper(),
+                    use_birth_date_index: true,
+                    caliper_reason: channel.reason(),
+                },
+                &(),
+                filter,
+                &mut reference_diagnostics,
+            );
+            compared_wide |= reference.len() >= 2 * SCAN_CHUNK;
+            assert_eq!(pool, reference, "pool of case {case_idx}");
+            assert_eq!(
+                new_diagnostics.exclusion_counts, reference_diagnostics.exclusion_counts,
+                "exclusion counts of case {case_idx}"
+            );
+            if let Some(selected) = engine_select(&mut selector, case, &members, &mut pool) {
+                if !replace {
+                    used.insert(ControlIdx::new(selected));
+                }
+            }
+        }
+        if n >= 20_000 {
+            assert!(compared_wide, "a pool must be long enough to split");
+        }
+    }
+
+    fn engine_select(
+        selector: &mut RandomSelection,
+        case: &Member,
+        members: &[Member],
+        pool: &mut Vec<usize>,
+    ) -> Option<usize> {
+        let position = selector.select_position(case, members, pool)?;
+        Some(pool.swap_remove(position))
+    }
+
+    #[test]
+    fn short_pools_with_and_without_replacement() {
+        for seed in [1, 2, 3, 4, 5] {
+            for replace in [false, true] {
+                walk(seed, 600, 3, replace, false);
+            }
+        }
+    }
+
+    #[test]
+    fn long_pools_split_over_threads_are_the_same() {
+        for seed in [11, 12] {
+            for replace in [false, true] {
+                walk(seed, 24_000, 2, replace, false);
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_ids_fall_back_to_comparing_ids() {
+        for replace in [false, true] {
+            walk(21, 600, 3, replace, true);
+            walk(22, 24_000, 2, replace, true);
+        }
+    }
+
+    #[test]
+    fn a_pool_is_the_same_on_every_thread_count() {
+        let members = cohort(31, 24_000, 2, false);
+        let criteria = MatchingCriteria::builder()
+            .required_strata(vec!["s".to_string()])
+            .birth_date_window_days(1000)
+            .allow_replacement(true)
+            .build()
+            .validate()
+            .expect("valid criteria");
+        let engine = MatchEngine::new(&members, criteria.as_ref(), RandomSelection::seeded(1));
+        let case = members
+            .iter()
+            .find(|m| m.transition_date.is_some())
+            .expect("a case");
+        let event = case.transition_date.expect("event date");
+        let channel = DistanceChannel::new(&DateDistance, criteria.typed_birth_date_caliper());
+        let used = UsedControlsVec::with_capacity(members.len());
+        let unique = FxHashSet::default();
+        let interner = RapidHashMap::default();
+        let pool_with = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("pool")
+                .install(|| {
+                    let mut diagnostics = MatchDiagnostics::default();
+                    let pool = engine.candidate_pool_for_request_and_constraint_group(
+                        &CandidatePoolRequest {
+                            case,
+                            used_controls: &used,
+                            used_unique: &unique,
+                            unique_interner: &interner,
+                            distance_channel: channel,
+                            use_birth_date_index: true,
+                        },
+                        &(),
+                        |_, control: &Member| at_risk(control, event),
+                        &mut diagnostics,
+                    );
+                    (pool, diagnostics.exclusion_counts)
+                })
+        };
+        let one = pool_with(1);
+        assert!(one.0.len() > 2 * SCAN_CHUNK);
+        assert_eq!(one, pool_with(3));
+        assert_eq!(one, pool_with(12));
     }
 }
