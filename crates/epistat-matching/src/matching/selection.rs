@@ -55,6 +55,16 @@ pub trait SelectionStrategy<R: MatchingRecord> {
     {
         self.clone()
     }
+
+    /// The [`RandomSelection`] that makes this strategy's choices, when its
+    /// choice is a uniform draw of a position that reads nothing but the
+    /// number of candidates. Risk-set matching then draws from it without
+    /// listing the candidates. Answer `Some` only when
+    /// [`Self::select_position`] is that selection's own.
+    #[doc(hidden)]
+    fn as_random(&mut self) -> Option<&mut RandomSelection> {
+        None
+    }
 }
 
 /// Wraps a strategy so that anchors take their controls in rounds.
@@ -85,6 +95,10 @@ impl<R: MatchingRecord, S: SelectionStrategy<R> + Clone> SelectionStrategy<R> fo
     {
         Self(SelectionStrategy::<R>::for_unit(&self.0, index))
     }
+
+    fn as_random(&mut self) -> Option<&mut RandomSelection> {
+        self.0.as_random()
+    }
 }
 
 /// Random control selection using a reproducible RNG seed.
@@ -108,6 +122,11 @@ impl RandomSelection {
     pub const fn seed(&self) -> u64 {
         self.seed
     }
+
+    /// A position below `len`, or `None` when `len` is 0.
+    pub(crate) fn draw(&mut self, len: usize) -> Option<usize> {
+        (len > 0).then(|| self.rng.below(len))
+    }
 }
 
 impl<R: MatchingRecord> SelectionStrategy<R> for RandomSelection {
@@ -117,15 +136,15 @@ impl<R: MatchingRecord> SelectionStrategy<R> for RandomSelection {
         _controls: &[R],
         candidate_indices: &[usize],
     ) -> Option<usize> {
-        if candidate_indices.is_empty() {
-            None
-        } else {
-            Some(self.rng.below(candidate_indices.len()))
-        }
+        self.draw(candidate_indices.len())
     }
 
     fn for_unit(&self, index: usize) -> Self {
         Self::seeded(replicate_seed(self.seed, index as u64))
+    }
+
+    fn as_random(&mut self) -> Option<&mut RandomSelection> {
+        Some(self)
     }
 }
 
