@@ -50,41 +50,62 @@
 //!
 //! The network has an arc for every admissible pair, which for a few hundred
 //! units per stratum is hundreds of arcs per anchor. The solver starts from far
-//! fewer and adds the rest only if they can improve the result.
+//! fewer and adds the rest only if they can improve the result. The strata
+//! touch only through the category nodes, so each stratum is solved as a block
+//! of its own and the blocks are coupled through those nodes.
 //!
-//! 1. For each anchor, the pairs with its `3 * ratio` nearest candidates in
-//!    each category of the finest level are the first arcs.
-//! 2. A start flow is found stratum by stratum, as a plain assignment problem
-//!    on those arcs. The candidates of finest-level category `k` cost `price[k]`
-//!    more, and the prices are moved (resilient propagation, each price with
-//!    its own step) until the number of candidates taken per category is near
-//!    its target. This only chooses where the solver starts, so it cannot
-//!    change the optimum, and a start with little to fix by moving candidates
-//!    between categories is what keeps the solver's pivots cheap.
-//! 3. [`MinCostFlow::solve_from_flow`] solves the network from that start.
-//! 4. Every pair left out is priced against the potentials of the solution.
-//!    A pair whose reduced cost is negative could improve the flow, so those
-//!    pairs are added, at the end of the arc list, and the network is solved
-//!    again from the final tree of the last solve
-//!    ([`MinCostFlow::solve_from`]). When no pair prices negatively the
-//!    potentials are feasible for the full network, so the flow is optimal for
-//!    it by complementary slackness: the optimal value, and so the deviation at
-//!    every level and the total distance, is that of the network with all pairs.
-//!    If the arcs so far leave some anchor without enough candidates, the lists
-//!    are widened fourfold until it is feasible.
+//! 1. The pairs are listed one stratum at a time and never held together. In
+//!    the first pass, the pairs of each anchor with its `3 * ratio` nearest
+//!    candidates in each category of the finest level become the first arcs,
+//!    found by selection, and for each anchor and category with pairs left
+//!    out the cost of the last pair kept is recorded. No pair left out costs
+//!    less.
+//! 2. Every block is solved on its own as a flow from a root through one entry
+//!    per finest-level category, with the arc into the entry of category `k`
+//!    costing `price[k]`. The prices are moved (resilient propagation, each
+//!    price with its own step) until the number of candidates taken per
+//!    category is near its target, each round starting from the final tree of
+//!    the round before. The blocks keep the flow of the round nearest the
+//!    targets.
+//! 3. The arcs between category nodes are filled or left empty by the sign of
+//!    their reduced costs against potentials that put each finest-level
+//!    category at its price. Since each block is optimal at those prices, no
+//!    cycle of the network has a negative cost, and the flow left over at
+//!    category nodes is moved by successive shortest paths \[4, ch. 9\]
+//!    between category nodes. A path through a block moves one matched
+//!    candidate from one category to another along the block's cheapest
+//!    exchange, so the shortest paths are found on the category nodes alone,
+//!    with each pair of categories joined by the cheapest exchange over the
+//!    blocks. Each block keeps its exchange costs, from one shortest-path
+//!    search per entry, and only the blocks a path crosses are searched again.
+//!    Augmenting along shortest paths keeps every cycle at a non-negative
+//!    cost, so the flow ends optimal for the pairs kept.
+//! 4. Potentials for the whole network are the shortest distances from the
+//!    category nodes, and every pair left out is priced against them. A pair
+//!    whose reduced cost is negative could improve the flow. A stratum is
+//!    listed again only when the recorded costs of step 1 do not already show
+//!    that none of its pairs left out prices negatively. The pairs that do are
+//!    added, their blocks are solved again from their flow at prices that are
+//!    the potentials of the category nodes, which keeps every cycle at a
+//!    non-negative cost, and step 3 continues. When no pair prices negatively
+//!    the potentials are feasible for the full network, so the flow is optimal
+//!    for it by complementary slackness: the optimal value, and so the
+//!    deviation at every level and the total distance, is that of the network
+//!    with all pairs. If the arcs so far leave some anchor without enough
+//!    candidates, the lists are widened fourfold until it is feasible.
 //!
 //! The pairs returned can differ from those of the full network only among
-//! matches of equal cost. The prices of step 2 and the order of arcs do not
-//! depend on the number of threads, since the strata are solved independently
-//! and combined in stratum order.
+//! matches of equal cost. Nothing depends on the number of threads: the blocks
+//! are solved independently and combined in stratum order, and the shortest
+//! paths are found on one thread with ties settled by node number.
 //!
-//! The work is a sort of the pairs of each stratum by distance, the sweeps that
-//! price the pairs left out (each `O(pairs)`, and there are a few), the price
-//! rounds of step 2, which solve each stratum's small assignment problem, and
-//! the solver on the pairs kept. Memory is the admissible pairs, 24 bytes each
-//! plus 8 for the integer cost, and the network of the pairs kept. The solver's
-//! block of arcs searched per pivot is short, since most pivots of this network
-//! touch a small subtree.
+//! The work is linear in the admissible pairs for each listing, of which there
+//! are two or three (the first pass and the sweeps, which skip most strata),
+//! plus the price rounds, each a warm-started solve of every block, plus for
+//! each unit of flow moved in step 3 a shortest-path search on the category
+//! nodes and `L` searches of each block crossed, `L` being its number of
+//! entries. Memory is the arcs kept, about 50 bytes each, and the blocks'
+//! flows; the admissible pairs are not held.
 //!
 //! # References
 //!
@@ -99,6 +120,8 @@
 //!    Large, sparse optimal matching with refined covariate balance in an
 //!    observational study of the health outcomes produced by new surgeons.
 //!    *Journal of the American Statistical Association* 110, 515-527.
+//! 4. Ahuja, R. K., Magnanti, T. L. and Orlin, J. B. (1993). *Network Flows:
+//!    Theory, Algorithms, and Applications.* Prentice Hall. Chapter 9.
 
 use super::constraints::ConstraintGroup;
 use super::optimal::{
@@ -106,10 +129,10 @@ use super::optimal::{
 };
 use super::records::MatchingRecord;
 use crate::types::MatchOutcome;
-use epistat_optim::min_cost_flow::{Basis, FlowError, MinCostFlow};
+use epistat_optim::min_cost_flow::{Basis, FlowError, FlowSolution, MinCostFlow};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Whether the balance must be exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -343,12 +366,14 @@ enum Arcs {
 /// multiple of the match ratio.
 const FIRST_PER_CATEGORY: usize = 3;
 
-/// Arcs per block of the solver's pricing search. The pivots of this network
-/// are mostly cheap, so a short block pays.
-const PRICING_BLOCK: usize = 32;
-
-/// Rounds of price adjustment for the start.
+/// Rounds of price adjustment for the start, at most.
 const ROUNDS: usize = 40;
+
+/// The price rounds stop when this many rounds in a row come no nearer the
+/// targets than the best so far.
+const PATIENCE: usize = 8;
+
+const NONE: u32 = u32::MAX;
 
 /// The admissible pairs, listed one stratum at a time when they are needed
 /// rather than held. The pairs are numbered stratum by stratum, in the order
@@ -407,118 +432,908 @@ impl PairSet {
     }
 }
 
-/// One stratum's pairs as an assignment problem, with local numbering.
-struct Local {
-    /// Positions of the pairs in the list of the network's pairs.
-    arcs: Vec<usize>,
-    anchors: usize,
-    candidates: usize,
-    from: Vec<usize>,
-    to: Vec<usize>,
-    /// Finest-level category of each local candidate.
-    category: Vec<usize>,
+/// Lists of numbers, one per key, stored end to end.
+struct Lists {
+    start: Vec<u32>,
+    items: Vec<u32>,
 }
 
-impl Local {
-    /// The positions of the pairs of the cheapest assignment and the number of
-    /// candidates it takes in each category (indexed as the prices are).
-    fn assign(
-        &self,
-        ratio: usize,
-        used: &[Kept],
-        price: &[i64],
-    ) -> Option<(Vec<usize>, Vec<usize>)> {
-        let (a, c) = (self.anchors, self.candidates);
-        let mut flow = MinCostFlow::new(a + c + 1);
-        for node in 0..a {
-            flow.set_supply(node, to_i64(ratio));
+impl Lists {
+    /// The items of `(key, item)` grouped by key, each list in input order.
+    fn new(keys: usize, entries: &[(usize, u32)]) -> Self {
+        let mut start = vec![0_u32; keys + 1];
+        for &(key, _) in entries {
+            start[key + 1] += 1;
         }
-        flow.set_supply(a + c, -to_i64(ratio * a));
-        for (slot, &arc) in self.arcs.iter().enumerate() {
-            let cost = used[arc]
-                .cost
-                .saturating_add(price[self.category[self.to[slot]]]);
-            flow.add_arc(self.from[slot], a + self.to[slot], 1, cost);
+        for key in 0..keys {
+            start[key + 1] += start[key];
         }
-        for node in 0..c {
-            flow.add_arc(a + node, a + c, 1, 0);
+        let mut fill: Vec<u32> = start[..keys].to_vec();
+        let mut items = vec![0; entries.len()];
+        for &(key, item) in entries {
+            items[fill[key] as usize] = item;
+            fill[key] += 1;
         }
-        let solution = flow.solve().ok()?;
-        let mut chosen = Vec::new();
-        let mut counts = vec![0; price.len()];
-        for (slot, &arc) in self.arcs.iter().enumerate() {
-            if solution.flow[slot] == 1 {
-                chosen.push(arc);
-                counts[self.category[self.to[slot]]] += 1;
-            }
-        }
-        Some((chosen, counts))
+        Self { start, items }
+    }
+
+    fn of(&self, key: usize) -> &[u32] {
+        &self.items[self.start[key] as usize..self.start[key + 1] as usize]
     }
 }
 
-/// Node numbers for the anchors and candidates, in the order of the strata, so
-/// that the pairs of one stratum touch nearby nodes.
-struct Ids {
-    anchor: Vec<usize>,
-    candidate: Vec<usize>,
-    /// Candidates in node order.
-    candidate_order: Vec<usize>,
+fn index(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(NONE)
 }
 
-impl Ids {
-    /// Numbers from the anchors and candidates of each stratum in the order
-    /// they first appear in its pairs, strata in order, and then the units
-    /// with no pair.
-    fn new(na: usize, nc: usize, seen: &[(Vec<usize>, Vec<usize>)]) -> Self {
-        let mut anchor = vec![usize::MAX; na];
-        let mut candidate = vec![usize::MAX; nc];
-        let (mut next_anchor, mut next_candidate) = (0, na);
-        for (anchors, candidates) in seen {
-            for &a in anchors {
-                if anchor[a] == usize::MAX {
-                    anchor[a] = next_anchor;
-                    next_anchor += 1;
-                }
-            }
-            for &c in candidates {
-                if candidate[c] == usize::MAX {
-                    candidate[c] = next_candidate;
-                    next_candidate += 1;
-                }
-            }
-        }
-        for slot in &mut anchor {
-            if *slot == usize::MAX {
-                *slot = next_anchor;
-                next_anchor += 1;
-            }
-        }
-        for slot in &mut candidate {
-            if *slot == usize::MAX {
-                *slot = next_candidate;
-                next_candidate += 1;
-            }
-        }
-        let mut candidate_order = vec![0; nc];
-        for (c, id) in candidate.iter().enumerate() {
-            candidate_order[id - na] = c;
-        }
+/// A shortest-path search inside a block.
+struct Search {
+    /// Reduced distance of each node, `i64::MAX` when not reached.
+    dist: Vec<i64>,
+    /// The node before each node on its path, `NONE` at a seed.
+    pred: Vec<u32>,
+    /// The pair whose arc reached the node, `NONE` for an arc between an
+    /// entry and a candidate.
+    via: Vec<u32>,
+}
+
+/// One stratum's part of the network, with local node numbers: an entry for
+/// each finest-level category of its candidates, then the candidates, then
+/// the anchors. The entry of category `k` is joined to the category's node by
+/// an arc of unbounded capacity and no cost; the entry has an arc to each of
+/// its candidates, and a candidate has an arc to each anchor it is kept with.
+struct Block {
+    /// The finest-level category of each entry, increasing.
+    leaf: Vec<usize>,
+    /// Anchors by position in the anchor slice, increasing.
+    anchors: Vec<usize>,
+    /// Candidates by position in the candidate slice, increasing.
+    candidates: Vec<usize>,
+    /// The entry of each candidate.
+    entry_of: Vec<u32>,
+    /// The pairs, in order of their numbers.
+    arcs: Vec<Kept>,
+    /// The local candidate and anchor of each pair.
+    from: Vec<u32>,
+    to: Vec<u32>,
+    /// Whether each pair is matched.
+    on: Vec<bool>,
+    /// Whether each candidate is matched.
+    taken: Vec<bool>,
+    /// Matched candidates of each entry.
+    count: Vec<i64>,
+    /// Node potentials for which every arc of the block with room for flow has
+    /// a non-negative reduced cost.
+    pi: Vec<i64>,
+    entry_candidates: Lists,
+    candidate_arcs: Lists,
+    anchor_arcs: Lists,
+}
+
+impl Block {
+    /// A block of the pairs `arcs`, sorted by number, with no flow.
+    fn new(arcs: Vec<Kept>, leaf_of: &[usize]) -> Self {
+        let mut anchors: Vec<usize> = arcs.iter().map(|pair| pair.anchor).collect();
+        anchors.sort_unstable();
+        anchors.dedup();
+        let mut candidates: Vec<usize> = arcs.iter().map(|pair| pair.candidate).collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+        let mut leaf: Vec<usize> = candidates.iter().map(|&c| leaf_of[c]).collect();
+        leaf.sort_unstable();
+        leaf.dedup();
+        let entry_of: Vec<u32> = candidates
+            .iter()
+            .map(|&c| index(leaf.binary_search(&leaf_of[c]).unwrap_or(0)))
+            .collect();
+        let from: Vec<u32> = arcs
+            .iter()
+            .map(|pair| index(candidates.binary_search(&pair.candidate).unwrap_or(0)))
+            .collect();
+        let to: Vec<u32> = arcs
+            .iter()
+            .map(|pair| index(anchors.binary_search(&pair.anchor).unwrap_or(0)))
+            .collect();
+        let entry_candidates = Lists::new(
+            leaf.len(),
+            &entry_of
+                .iter()
+                .enumerate()
+                .map(|(c, &e)| (e as usize, index(c)))
+                .collect::<Vec<_>>(),
+        );
+        let candidate_arcs = Lists::new(
+            candidates.len(),
+            &from
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| (c as usize, index(i)))
+                .collect::<Vec<_>>(),
+        );
+        let anchor_arcs = Lists::new(
+            anchors.len(),
+            &to.iter()
+                .enumerate()
+                .map(|(i, &a)| (a as usize, index(i)))
+                .collect::<Vec<_>>(),
+        );
+        let nodes = leaf.len() + candidates.len() + anchors.len();
         Self {
-            anchor,
-            candidate,
-            candidate_order,
+            on: vec![false; arcs.len()],
+            taken: vec![false; candidates.len()],
+            count: vec![0; leaf.len()],
+            pi: vec![0; nodes],
+            leaf,
+            anchors,
+            candidates,
+            entry_of,
+            arcs,
+            from,
+            to,
+            entry_candidates,
+            candidate_arcs,
+            anchor_arcs,
         }
+    }
+
+    /// This block with the pairs `more` added, sorted by number, and the flow
+    /// of this block.
+    fn with(&self, more: &[Kept], leaf_of: &[usize]) -> Self {
+        let mut arcs = Vec::with_capacity(self.arcs.len() + more.len());
+        let (mut i, mut j) = (0, 0);
+        while i < self.arcs.len() || j < more.len() {
+            if j == more.len() || (i < self.arcs.len() && self.arcs[i].k < more[j].k) {
+                arcs.push(self.arcs[i]);
+                i += 1;
+            } else {
+                arcs.push(more[j]);
+                j += 1;
+            }
+        }
+        let mut block = Self::new(arcs, leaf_of);
+        let on: std::collections::HashSet<usize> = self
+            .arcs
+            .iter()
+            .zip(&self.on)
+            .filter(|(_, on)| **on)
+            .map(|(pair, _)| pair.k)
+            .collect();
+        for (slot, pair) in block.arcs.iter().enumerate() {
+            block.on[slot] = on.contains(&pair.k);
+        }
+        for (c, &candidate) in self.candidates.iter().enumerate() {
+            if self.taken[c] {
+                let local = block.candidates.binary_search(&candidate).unwrap_or(0);
+                block.taken[local] = true;
+                block.count[block.entry_of[local] as usize] += 1;
+            }
+        }
+        block
+    }
+
+    fn entries(&self) -> usize {
+        self.leaf.len()
+    }
+
+    fn nodes(&self) -> usize {
+        self.pi.len()
+    }
+
+    fn candidate_node(&self, c: usize) -> usize {
+        self.entries() + c
+    }
+
+    fn anchor_node(&self, a: usize) -> usize {
+        self.entries() + self.candidates.len() + a
+    }
+
+    /// The block as a flow problem of its own, with a root that supplies
+    /// every anchor through the entries. The arc from the root to the entry of
+    /// category `k` costs `price[k]`, less the least price of the block's
+    /// entries, and has room for more than all the flow. The arcs are those
+    /// to the entries, then those to the candidates, then the pairs.
+    fn problem(&self, ratio: usize, price: &[i64]) -> MinCostFlow {
+        let (e, c, a) = (self.entries(), self.candidates.len(), self.anchors.len());
+        let root = e + c + a;
+        let mut flow = MinCostFlow::new(root + 1);
+        flow.reserve_arcs(e + c + self.arcs.len());
+        flow.set_supply(root, to_i64(ratio * a));
+        for anchor in 0..a {
+            flow.set_supply(e + c + anchor, -to_i64(ratio));
+        }
+        let least = self.leaf.iter().map(|&k| price[k]).min().unwrap_or(0);
+        for (entry, &k) in self.leaf.iter().enumerate() {
+            flow.add_arc(root, entry, to_i64(ratio * a + 1), price[k] - least);
+        }
+        for (candidate, &entry) in self.entry_of.iter().enumerate() {
+            flow.add_arc(entry as usize, e + candidate, 1, 0);
+        }
+        for (slot, pair) in self.arcs.iter().enumerate() {
+            flow.add_arc(
+                e + self.from[slot] as usize,
+                e + c + self.to[slot] as usize,
+                1,
+                pair.cost,
+            );
+        }
+        flow
+    }
+
+    /// The flow of the block on the arcs of [`Self::problem`].
+    fn flow_values(&self) -> Vec<i64> {
+        let mut values = self.count.clone();
+        values.extend(self.taken.iter().map(|&t| i64::from(t)));
+        values.extend(self.on.iter().map(|&o| i64::from(o)));
+        values
+    }
+
+    /// Take the flow and the potentials of a solution of [`Self::problem`].
+    fn adopt(&mut self, solution: &FlowSolution) {
+        let (e, c) = (self.entries(), self.candidates.len());
+        self.count.copy_from_slice(&solution.flow[..e]);
+        for (slot, taken) in self.taken.iter_mut().enumerate() {
+            *taken = solution.flow[e + slot] == 1;
+        }
+        for (slot, on) in self.on.iter_mut().enumerate() {
+            *on = solution.flow[e + c + slot] == 1;
+        }
+        let nodes = self.nodes();
+        self.pi.copy_from_slice(&solution.potentials[..nodes]);
+    }
+
+    /// Calls `f(head, cost, via)` for every arc out of `node` with room for
+    /// flow, `via` being the pair of the arc or `NONE`.
+    fn each_arc(&self, node: usize, mut f: impl FnMut(usize, i64, u32)) {
+        let (e, c) = (self.entries(), self.candidates.len());
+        if node < e {
+            for &candidate in self.entry_candidates.of(node) {
+                if !self.taken[candidate as usize] {
+                    f(e + candidate as usize, 0, NONE);
+                }
+            }
+        } else if node < e + c {
+            let candidate = node - e;
+            if self.taken[candidate] {
+                f(self.entry_of[candidate] as usize, 0, NONE);
+            }
+            for &slot in self.candidate_arcs.of(candidate) {
+                if !self.on[slot as usize] {
+                    let anchor = self.to[slot as usize] as usize;
+                    f(e + c + anchor, self.arcs[slot as usize].cost, slot);
+                }
+            }
+        } else {
+            for &slot in self.anchor_arcs.of(node - e - c) {
+                if self.on[slot as usize] {
+                    let candidate = self.from[slot as usize] as usize;
+                    f(e + candidate, -self.arcs[slot as usize].cost, slot);
+                }
+            }
+        }
+    }
+
+    /// Dijkstra's method on the reduced costs, from `seeds` with their
+    /// starting distances. Ties are settled by node number.
+    fn search(&self, seeds: &[(usize, i64)]) -> Search {
+        let nodes = self.nodes();
+        let mut dist = vec![i64::MAX; nodes];
+        let mut pred = vec![NONE; nodes];
+        let mut via = vec![NONE; nodes];
+        let mut heap = std::collections::BinaryHeap::new();
+        for &(node, start) in seeds {
+            if start < dist[node] {
+                dist[node] = start;
+                heap.push(std::cmp::Reverse((start, node)));
+            }
+        }
+        while let Some(std::cmp::Reverse((d, u))) = heap.pop() {
+            if d > dist[u] {
+                continue;
+            }
+            self.each_arc(u, |v, cost, arc| {
+                let reduced = cost + self.pi[u] - self.pi[v];
+                let next = d + reduced;
+                if next < dist[v] {
+                    dist[v] = next;
+                    pred[v] = index(u);
+                    via[v] = arc;
+                    heap.push(std::cmp::Reverse((next, v)));
+                }
+            });
+        }
+        Search { dist, pred, via }
+    }
+
+    /// The path of `search` to `node`, from its seed: each node with the pair
+    /// that reached it.
+    fn path(search: &Search, node: usize) -> Vec<(usize, u32)> {
+        let mut path = vec![(node, search.via[node])];
+        let mut at = node;
+        while search.pred[at] != NONE {
+            at = search.pred[at] as usize;
+            path.push((at, search.via[at]));
+        }
+        path.reverse();
+        path
+    }
+
+    /// The least cost of moving one matched candidate from category `j` to
+    /// category `k` in this block, for every pair of entries: one unit enters
+    /// at the entry of `k` and leaves at the entry of `j`. The result is
+    /// `(k, j, cost)` by finest-level category.
+    fn exchanges(&self) -> Vec<(usize, usize, i64)> {
+        let mut out = Vec::new();
+        for entry in 0..self.entries() {
+            let search = self.search(&[(entry, 0)]);
+            for exit in 0..self.entries() {
+                if exit != entry && search.dist[exit] != i64::MAX {
+                    out.push((
+                        self.leaf[entry],
+                        self.leaf[exit],
+                        search.dist[exit] - self.pi[entry] + self.pi[exit],
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether every arc of the block with room for flow has a non-negative
+    /// reduced cost.
+    fn reduced_costs_hold(&self) -> bool {
+        let mut hold = true;
+        for u in 0..self.nodes() {
+            self.each_arc(u, |v, cost, _| hold &= cost + self.pi[u] - self.pi[v] >= 0);
+        }
+        hold
+    }
+
+    /// Whether no pair left out of the block can have a negative reduced cost
+    /// against the potentials `d` of [`Self::network_potentials`]. A pair of
+    /// an anchor and category left out costs at least the bound of that
+    /// anchor and category, every candidate of the category has at least the
+    /// least potential among the block's candidates of the category, its
+    /// entry, or (without an entry) the category node `hub[k]`, and the
+    /// anchors and categories without a bound have no pair left out.
+    fn none_below(&self, bounds: &[(usize, usize, i64)], d: &[i64], hub: &[i64]) -> bool {
+        let mut least: Vec<i64> = d[..self.entries()].to_vec();
+        for (c, &entry) in self.entry_of.iter().enumerate() {
+            let entry = entry as usize;
+            least[entry] = least[entry].min(d[self.candidate_node(c)]);
+        }
+        bounds.iter().all(|&(anchor, k, bound)| {
+            let lowest = match self.leaf.binary_search(&k) {
+                Ok(entry) => least[entry],
+                Err(_) => hub[k],
+            };
+            let Ok(a) = self.anchors.binary_search(&anchor) else {
+                return false;
+            };
+            i128::from(bound) + i128::from(lowest) - i128::from(d[self.anchor_node(a)]) >= 0
+        })
+    }
+
+    /// Restore non-negative reduced costs by label correction from the
+    /// current potentials. The block has no cycle of negative cost, so it
+    /// ends.
+    fn repair(&mut self) {
+        let nodes = self.nodes();
+        let mut queue: std::collections::VecDeque<usize> = (0..nodes).collect();
+        let mut queued = vec![true; nodes];
+        while let Some(u) = queue.pop_front() {
+            queued[u] = false;
+            let mut lowered = Vec::new();
+            self.each_arc(u, |v, cost, _| {
+                if self.pi[u] + cost < self.pi[v] {
+                    lowered.push((v, self.pi[u] + cost));
+                }
+            });
+            for (v, value) in lowered {
+                if value < self.pi[v] {
+                    self.pi[v] = value;
+                    if !queued[v] {
+                        queued[v] = true;
+                        queue.push_back(v);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Potentials for the whole network on the nodes of this block: the
+    /// shortest distance from the category nodes, with the category node of
+    /// `k` at `hub[k]`. A node no category reaches gets its own potential
+    /// shifted by the least amount that keeps the arcs out of it
+    /// non-negative.
+    fn network_potentials(&self, hub: &[i64]) -> Vec<i64> {
+        let seeds: Vec<(usize, i64)> = self
+            .leaf
+            .iter()
+            .enumerate()
+            .map(|(entry, &k)| (entry, hub[k] - self.pi[entry]))
+            .collect();
+        let search = self.search(&seeds);
+        let mut out: Vec<i64> = (0..self.nodes())
+            .map(|v| {
+                if search.dist[v] == i64::MAX {
+                    i64::MIN
+                } else {
+                    search.dist[v] + self.pi[v]
+                }
+            })
+            .collect();
+        let mut shift: Option<i64> = None;
+        for u in 0..self.nodes() {
+            if search.dist[u] != i64::MAX {
+                continue;
+            }
+            self.each_arc(u, |v, cost, _| {
+                if search.dist[v] != i64::MAX {
+                    let need = out[v] - cost - self.pi[u];
+                    shift = Some(shift.map_or(need, |s| s.max(need)));
+                }
+            });
+        }
+        for u in 0..self.nodes() {
+            if search.dist[u] == i64::MAX {
+                out[u] = self.pi[u] + shift.unwrap_or(0);
+            }
+        }
+        out
+    }
+}
+
+/// An arc between category nodes, or from the sink to a category.
+struct HubArc {
+    from: usize,
+    to: usize,
+    cap: i64,
+    cost: i64,
+    flow: i64,
+}
+
+/// A step of a shortest path between category nodes.
+#[derive(Clone, Copy)]
+enum Step {
+    None,
+    /// Along a hub arc, forward or against its flow.
+    Hub { arc: usize, forward: bool },
+    /// Through a block, from the entry of one finest-level category to that of
+    /// another.
+    Exchange { block: usize, from: usize, to: usize },
+}
+
+/// A node of the whole network on an augmenting path.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Node {
+    Hub(usize),
+    Local(usize, usize),
+}
+
+/// How a path reaches a node.
+#[derive(Clone, Copy)]
+enum Move {
+    Start,
+    Hub { arc: usize, forward: bool },
+    /// From a category node into the entry of a block.
+    Enter { block: usize, entry: usize },
+    /// From the entry of a block to its category node.
+    Leave { block: usize, entry: usize },
+    /// Along an arc of a block.
+    Inside { block: usize, from: usize, to: usize, via: u32 },
+}
+
+#[cfg(test)]
+fn always_repair() -> bool {
+    tests::always_repair()
+}
+
+#[cfg(not(test))]
+const fn always_repair() -> bool {
+    false
+}
+
+/// The state of the decomposed solve: the blocks, the arcs between the
+/// category nodes, and for each pair of finest-level categories the cost of
+/// the cheapest exchange in each block.
+struct Coupled {
+    blocks: Vec<Block>,
+    /// Hub node of the first category of each level; node 0 is the sink.
+    first: Vec<usize>,
+    hub: Vec<HubArc>,
+    /// Hub arcs at each hub node, with whether the node is the arc's tail.
+    adjacent: Vec<Vec<(usize, bool)>>,
+    excess: Vec<i64>,
+    /// `(k, j)` to the exchange costs and blocks, cheapest first.
+    exchange: BTreeMap<(usize, usize), BTreeSet<(i64, usize)>>,
+    /// The entries of `exchange` from each block.
+    block_exchange: Vec<Vec<(usize, usize, i64)>>,
+}
+
+impl Coupled {
+    fn hub_nodes(&self) -> usize {
+        self.excess.len()
+    }
+
+    fn leaf_node(&self, k: usize) -> usize {
+        self.first[self.first.len() - 1] + k
+    }
+
+    /// The blocks' exchanges into the table, replacing their old entries.
+    fn refresh(&mut self, touched: &[usize]) {
+        let fresh: Vec<Vec<(usize, usize, i64)>> = touched
+            .par_iter()
+            .map(|&b| self.blocks[b].exchanges())
+            .collect();
+        for (&b, entries) in touched.iter().zip(fresh) {
+            for &(k, j, cost) in &self.block_exchange[b] {
+                let key = (k, j);
+                if let Some(set) = self.exchange.get_mut(&key) {
+                    set.remove(&(cost, b));
+                    if set.is_empty() {
+                        self.exchange.remove(&key);
+                    }
+                }
+            }
+            for &(k, j, cost) in &entries {
+                self.exchange.entry((k, j)).or_default().insert((cost, b));
+            }
+            self.block_exchange[b] = entries;
+        }
+    }
+
+    /// Calls `f(head, cost, step)` for every arc out of hub node `u` with room
+    /// for flow, the exchanges taking the cheapest block.
+    fn each_hub_arc(&self, u: usize, mut f: impl FnMut(usize, i64, Step)) {
+        for &(arc, tail) in &self.adjacent[u] {
+            let a = &self.hub[arc];
+            if tail && a.flow < a.cap {
+                f(a.to, a.cost, Step::Hub { arc, forward: true });
+            } else if !tail && a.flow > 0 {
+                f(a.from, -a.cost, Step::Hub { arc, forward: false });
+            }
+        }
+        let leaves = self.first[self.first.len() - 1];
+        if u >= leaves {
+            let k = u - leaves;
+            for (&(_, j), set) in self.exchange.range((k, 0)..(k + 1, 0)) {
+                if let Some(&(cost, block)) = set.first() {
+                    f(
+                        leaves + j,
+                        cost,
+                        Step::Exchange {
+                            block,
+                            from: k,
+                            to: j,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Shortest distances between hub nodes by label correction from the
+    /// labels `dist`, with the step into each node. There is no cycle of
+    /// negative cost, so it ends.
+    fn label(&self, mut dist: Vec<i64>) -> (Vec<i64>, Vec<Step>) {
+        let nodes = self.hub_nodes();
+        let mut pred = vec![Step::None; nodes];
+        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+        let mut queued = vec![false; nodes];
+        for v in 0..nodes {
+            if dist[v] != i64::MAX {
+                queue.push_back(v);
+                queued[v] = true;
+            }
+        }
+        while let Some(u) = queue.pop_front() {
+            queued[u] = false;
+            let du = dist[u];
+            let mut lowered = Vec::new();
+            self.each_hub_arc(u, |v, cost, step| {
+                if du + cost < dist[v] {
+                    lowered.push((v, du + cost, step));
+                }
+            });
+            for (v, value, step) in lowered {
+                if value < dist[v] {
+                    dist[v] = value;
+                    pred[v] = step;
+                    if !queued[v] {
+                        queued[v] = true;
+                        queue.push_back(v);
+                    }
+                }
+            }
+        }
+        (dist, pred)
+    }
+
+    fn tail_of(&self, step: Step) -> usize {
+        match step {
+            Step::Hub { arc, forward } => {
+                if forward {
+                    self.hub[arc].from
+                } else {
+                    self.hub[arc].to
+                }
+            }
+            Step::Exchange { from, .. } => self.leaf_node(from),
+            Step::None => usize::MAX,
+        }
+    }
+
+    /// Successive shortest paths: while a hub node has flow to spare, send it
+    /// along a cheapest path to a hub node short of flow.
+    fn balance(&mut self) -> Result<(), OptimalError> {
+        let nodes = self.hub_nodes();
+        while let Some(source) = (0..nodes).find(|&v| self.excess[v] > 0) {
+            let mut start = vec![i64::MAX; nodes];
+            start[source] = 0;
+            let (dist, pred) = self.label(start);
+            let Some(target) = (0..nodes)
+                .filter(|&v| self.excess[v] < 0 && dist[v] != i64::MAX)
+                .min_by_key(|&v| (dist[v], v))
+            else {
+                return Err(OptimalError::Infeasible {
+                    stratum: 0,
+                    message: "the categories cannot be given their candidates".into(),
+                });
+            };
+            let mut steps = Vec::new();
+            let mut at = target;
+            while at != source {
+                let step = pred[at];
+                steps.push(step);
+                at = self.tail_of(step);
+            }
+            steps.reverse();
+            self.augment(source, target, &steps);
+        }
+        Ok(())
+    }
+
+    /// Send flow along the hub path `steps` from `source` to `target`, each
+    /// exchange taken along the shortest path of its block.
+    fn augment(&mut self, source: usize, target: usize, steps: &[Step]) {
+        let mut path: Vec<(Node, Move)> = vec![(Node::Hub(source), Move::Start)];
+        let mut at: std::collections::HashMap<Node, usize> = std::collections::HashMap::new();
+        at.insert(Node::Hub(source), 0);
+        let mut cut = false;
+        let mut segments: Vec<(usize, Search, usize)> = Vec::new();
+        let mut push = |path: &mut Vec<(Node, Move)>,
+                        at: &mut std::collections::HashMap<Node, usize>,
+                        node: Node,
+                        how: Move| {
+            if let Some(&position) = at.get(&node) {
+                // A node met twice closes a loop of zero cost; drop it.
+                for (dropped, _) in path.drain(position + 1..) {
+                    at.remove(&dropped);
+                }
+                cut = true;
+            } else {
+                at.insert(node, path.len());
+                path.push((node, how));
+            }
+        };
+        for &step in steps {
+            match step {
+                Step::Hub { arc, forward } => {
+                    let head = if forward {
+                        self.hub[arc].to
+                    } else {
+                        self.hub[arc].from
+                    };
+                    push(&mut path, &mut at, Node::Hub(head), Move::Hub { arc, forward });
+                }
+                Step::Exchange { block, from, to } => {
+                    let b = &self.blocks[block];
+                    let entry = b.leaf.binary_search(&from).unwrap_or(0);
+                    let exit = b.leaf.binary_search(&to).unwrap_or(0);
+                    let search = b.search(&[(entry, 0)]);
+                    let inner = Block::path(&search, exit);
+                    push(
+                        &mut path,
+                        &mut at,
+                        Node::Local(block, entry),
+                        Move::Enter { block, entry },
+                    );
+                    for pair in inner.windows(2) {
+                        let ((u, _), (v, via)) = (pair[0], pair[1]);
+                        push(
+                            &mut path,
+                            &mut at,
+                            Node::Local(block, v),
+                            Move::Inside {
+                                block,
+                                from: u,
+                                to: v,
+                                via,
+                            },
+                        );
+                    }
+                    push(
+                        &mut path,
+                        &mut at,
+                        Node::Hub(self.leaf_node(to)),
+                        Move::Leave { block, entry: exit },
+                    );
+                    segments.push((block, search, exit));
+                }
+                Step::None => {}
+            }
+        }
+        let mut amount = self.excess[source].min(-self.excess[target]);
+        for &(_, how) in &path {
+            match how {
+                Move::Hub { arc, forward } => {
+                    let a = &self.hub[arc];
+                    amount = amount.min(if forward { a.cap - a.flow } else { a.flow });
+                }
+                Move::Leave { block, entry } => {
+                    amount = amount.min(self.blocks[block].count[entry]).min(1);
+                }
+                Move::Inside { .. } | Move::Enter { .. } => amount = amount.min(1),
+                Move::Start => {}
+            }
+        }
+        let mut touched: Vec<usize> = Vec::new();
+        for &(_, how) in &path {
+            match how {
+                Move::Hub { arc, forward } => {
+                    self.hub[arc].flow += if forward { amount } else { -amount };
+                }
+                Move::Enter { block, entry } => {
+                    self.blocks[block].count[entry] += amount;
+                    touched.push(block);
+                }
+                Move::Leave { block, entry } => {
+                    self.blocks[block].count[entry] -= amount;
+                    touched.push(block);
+                }
+                Move::Inside {
+                    block,
+                    from,
+                    to,
+                    via,
+                } => {
+                    let b = &mut self.blocks[block];
+                    let (e, c) = (b.entries(), b.candidates.len());
+                    if via != NONE {
+                        b.on[via as usize] = from < e + c;
+                    } else if from < e {
+                        b.taken[to - e] = true;
+                    } else {
+                        b.taken[from - e] = false;
+                    }
+                    touched.push(block);
+                }
+                Move::Start => {}
+            }
+        }
+        self.excess[source] -= amount;
+        self.excess[target] += amount;
+        touched.sort_unstable();
+        touched.dedup();
+        for &block in &touched {
+            let mine: Vec<&(usize, Search, usize)> =
+                segments.iter().filter(|s| s.0 == block).collect();
+            let b = &mut self.blocks[block];
+            if !cut && mine.len() == 1 && !always_repair() {
+                // The segment is a shortest path from its entry, so these
+                // potentials keep every reduced cost non-negative.
+                let (_, search, exit) = mine[0];
+                let cap = search.dist[*exit];
+                for (pi, &d) in b.pi.iter_mut().zip(&search.dist) {
+                    *pi += d.min(cap);
+                }
+            } else {
+                b.repair();
+            }
+            debug_assert!(b.reduced_costs_hold(), "potentials of block {block}");
+        }
+        self.refresh(&touched);
+    }
+
+    /// Potentials of the hub nodes that keep every reduced cost of the
+    /// network non-negative.
+    fn hub_potentials(&self) -> Vec<i64> {
+        self.label(vec![0; self.hub_nodes()]).0
+    }
+
+    /// The total cost of the flow, pairs and penalties.
+    fn cost(&self) -> i128 {
+        let pairs: i128 = self
+            .blocks
+            .iter()
+            .flat_map(|b| b.arcs.iter().zip(&b.on))
+            .filter(|(_, on)| **on)
+            .map(|(pair, _)| i128::from(pair.cost))
+            .sum();
+        let hub: i128 = self
+            .hub
+            .iter()
+            .map(|a| i128::from(a.cost) * i128::from(a.flow))
+            .sum();
+        pairs + hub
+    }
+}
+
+/// The pairs of a stratum kept at the start, as (position in the stratum's
+/// list, anchor, candidate, distance), and for every anchor and finest-level category with pairs left
+/// out, the distance of the last pair kept, which no pair left out is below.
+struct Nearest {
+    pairs: Vec<(usize, usize, usize, f64)>,
+    bounds: Vec<(usize, usize, f64)>,
+}
+
+/// For anchors and finest-level categories with pairs left out: (anchor,
+/// category, least cost of a pair left out).
+type Bounds = Vec<(usize, usize, i64)>;
+
+/// [`Nearest`] with integer costs.
+struct Near {
+    pairs: Vec<Kept>,
+    bounds: Bounds,
+}
+
+/// The `per` nearest pairs of every anchor and finest-level category among
+/// the pairs of a stratum, ties by candidate, in the order of the stratum's
+/// list. The list is grouped by anchor, so each anchor's pairs are split by
+/// category and the nearest of each category found by selection, in time
+/// linear in the pairs.
+fn nearest(pairs: &[(usize, usize, f64)], per: usize, leaf_of: &[usize]) -> Nearest {
+    let mut keep = Vec::new();
+    let mut bounds = Vec::new();
+    let order = |x: &(usize, usize, usize, f64), y: &(usize, usize, usize, f64)| {
+        x.3.total_cmp(&y.3).then(x.2.cmp(&y.2))
+    };
+    let mut group: Vec<(usize, usize, usize, f64)> = Vec::new();
+    let mut start = 0;
+    while start < pairs.len() {
+        let anchor = pairs[start].0;
+        let mut stop = start;
+        while stop < pairs.len() && pairs[stop].0 == anchor {
+            stop += 1;
+        }
+        group.clear();
+        group.extend(
+            (start..stop).map(|i| (leaf_of[pairs[i].1], i, pairs[i].1, pairs[i].2)),
+        );
+        group.sort_unstable_by_key(|pair| pair.0);
+        let mut from = 0;
+        while from < group.len() {
+            let leaf = group[from].0;
+            let mut to = from;
+            while to < group.len() && group[to].0 == leaf {
+                to += 1;
+            }
+            let run = &mut group[from..to];
+            if run.len() > per {
+                run.select_nth_unstable_by(per - 1, order);
+                let chosen = &mut run[..per];
+                chosen.sort_unstable_by(order);
+                bounds.push((anchor, leaf, chosen[per - 1].3));
+            }
+            for pair in &run[..run.len().min(per)] {
+                keep.push((pair.1, anchor, pair.2, pair.3));
+            }
+            from = to;
+        }
+        start = stop;
+    }
+    keep.sort_unstable_by_key(|pair| pair.0);
+    Nearest {
+        pairs: keep,
+        bounds,
     }
 }
 
 /// The fixed parts of the flow network.
 struct Network<'a> {
     na: usize,
-    nc: usize,
     ratio: usize,
     n: usize,
-    sink: usize,
-    first_category: &'a [usize],
     levels: &'a [LevelData],
     costs: &'a Costs,
 }
@@ -531,7 +1346,17 @@ impl Network<'_> {
         cost
     }
 
+    fn leaf(&self) -> &LevelData {
+        &self.levels[self.levels.len() - 1]
+    }
+
+    /// The finest-level category of each candidate.
+    fn leaf_of(&self) -> &[usize] {
+        &self.leaf().of_unit[self.na..]
+    }
+
     /// The pairs of stratum `s` with their numbers and costs.
+    #[cfg(test)]
     fn kept(&self, pairs: &Pairs<'_>, s: usize) -> Vec<Kept> {
         let first = pairs.offset[s];
         pairs
@@ -547,197 +1372,123 @@ impl Network<'_> {
             .collect()
     }
 
-    /// For each stratum, the `per` cheapest pairs of every anchor and
-    /// finest-level category, ties by candidate, in order of their numbers.
-    fn nearest(&self, pairs: &Pairs<'_>, per: usize) -> Vec<Kept> {
-        let leaf = &self.levels[self.levels.len() - 1];
-        let chosen: Vec<Vec<Kept>> = (0..pairs.strata.len())
+    /// [`nearest`] for every stratum, with the pairs' costs.
+    fn nearest(&self, pairs: &Pairs<'_>, per: usize) -> Vec<Near> {
+        let leaf_of = self.leaf_of();
+        (0..pairs.strata.len())
             .into_par_iter()
-            .map(|s| {
-                let mut order = self.kept(pairs, s);
-                order.sort_unstable_by_key(|pair| {
-                    (
-                        pair.anchor,
-                        leaf.of_unit[self.na + pair.candidate],
-                        pair.cost,
-                        pair.candidate,
-                    )
-                });
-                let mut keep = Vec::new();
-                let mut group = (usize::MAX, usize::MAX);
-                let mut taken = 0;
-                for pair in order {
-                    let this = (pair.anchor, leaf.of_unit[self.na + pair.candidate]);
-                    if this != group {
-                        group = this;
-                        taken = 0;
-                    }
-                    if taken < per {
-                        keep.push(pair);
-                        taken += 1;
-                    }
-                }
-                keep.sort_unstable_by_key(|pair| pair.k);
-                keep
-            })
-            .collect();
-        chosen.into_iter().flatten().collect()
+            .map(|s| self.priced(nearest(&pairs.of(s), per, leaf_of), pairs.offset[s]))
+            .collect()
     }
 
-    /// Every pair, in order of their numbers.
+    /// The pairs and bounds of `near`, a stratum whose first pair is number
+    /// `first`, with integer costs. Rounding keeps the order of the
+    /// distances, so a bound stays at or below the cost of every pair left
+    /// out.
+    fn priced(&self, near: Nearest, first: usize) -> Near {
+        Near {
+            pairs: near
+                .pairs
+                .into_iter()
+                .map(|(i, anchor, candidate, distance)| Kept {
+                    k: first + i,
+                    anchor,
+                    candidate,
+                    cost: self.pair_cost(distance),
+                })
+                .collect(),
+            bounds: near
+                .bounds
+                .into_iter()
+                .map(|(anchor, leaf, distance)| (anchor, leaf, self.pair_cost(distance)))
+                .collect(),
+        }
+    }
+
+    /// Every pair of each stratum.
     #[cfg(test)]
-    fn every(&self, pairs: &Pairs<'_>) -> Vec<Kept> {
-        let lists: Vec<Vec<Kept>> = (0..pairs.strata.len())
+    fn every(&self, pairs: &Pairs<'_>) -> Vec<Near> {
+        (0..pairs.strata.len())
             .into_par_iter()
-            .map(|s| self.kept(pairs, s))
-            .collect();
-        lists.into_iter().flatten().collect()
+            .map(|s| Near {
+                pairs: self.kept(pairs, s),
+                bounds: Vec::new(),
+            })
+            .collect()
     }
 
-    /// The network with the arcs of the categories, then the pairs of `used`
-    /// in that order. Pairs added later go at the end, as
-    /// [`MinCostFlow::solve_from`] needs.
-    fn flow(&self, used: &[Kept], ids: &Ids) -> MinCostFlow {
-        let na = self.na;
-        let mut flow = MinCostFlow::new(self.sink + 1);
-        flow.set_pricing_block(PRICING_BLOCK);
-        flow.reserve_arcs(
-            used.len()
-                + self.nc
-                + 2 * self
-                    .levels
-                    .iter()
-                    .map(|l| l.categories.len())
-                    .sum::<usize>(),
-        );
-        for &node in &ids.anchor {
-            flow.set_supply(node, -to_i64(self.ratio));
-        }
-        flow.set_supply(self.sink, to_i64(self.n));
-        let depth = self.levels.len();
-        let leaf = &self.levels[depth - 1];
-        for &candidate in &ids.candidate_order {
-            let category = leaf.of_unit[na + candidate];
-            flow.add_arc(
-                self.first_category[depth - 1] + category,
-                ids.candidate[candidate],
-                1,
-                0,
-            );
-        }
-        for (depth, level) in self.levels.iter().enumerate() {
-            for category in 0..level.categories.len() {
-                let to = if depth == 0 {
-                    self.sink
-                } else {
-                    self.first_category[depth - 1] + level.parent[category]
-                };
-                let from = self.first_category[depth] + category;
-                let target = self.ratio * level.anchors[category];
-                if target > 0 {
-                    flow.add_arc(to, from, to_i64(target), 0);
-                }
-                flow.add_arc(to, from, to_i64(self.n), self.costs.penalty[depth]);
-            }
-        }
-        for pair in used {
-            flow.add_arc(
-                ids.candidate[pair.candidate],
-                ids.anchor[pair.anchor],
-                1,
-                pair.cost,
-            );
-        }
-        flow
-    }
-
-    /// The pairs of `used` in stratum `s` as a small assignment problem.
-    fn local(&self, used: &[Kept], arcs: Vec<usize>) -> Local {
-        let leaf = &self.levels[self.levels.len() - 1];
-        let mut anchors: Vec<usize> = arcs.iter().map(|&i| used[i].anchor).collect();
-        anchors.sort_unstable();
-        anchors.dedup();
-        let mut candidates: Vec<usize> = arcs.iter().map(|&i| used[i].candidate).collect();
-        candidates.sort_unstable();
-        candidates.dedup();
-        let from = arcs
-            .iter()
-            .map(|&i| anchors.binary_search(&used[i].anchor).unwrap_or(0))
-            .collect();
-        let to = arcs
-            .iter()
-            .map(|&i| candidates.binary_search(&used[i].candidate).unwrap_or(0))
-            .collect();
-        let category = candidates
-            .iter()
-            .map(|&c| leaf.of_unit[self.na + c])
-            .collect();
-        Local {
-            arcs,
-            anchors: anchors.len(),
-            candidates: candidates.len(),
-            from,
-            to,
-            category,
-        }
-    }
-
-    /// Pairs for the start: the cheapest assignment in each stratum when the
-    /// candidates of finest-level category `k` cost `price[k]` more, with the
-    /// prices moved until the number taken per category is near its target.
-    /// Which pairs the start uses does not change the optimum. The result is
-    /// positions in `used`, or `None` when some stratum has no assignment.
-    fn stratum_start(&self, pairs: &Pairs<'_>, used: &[Kept]) -> Option<Vec<usize>> {
-        let leaf = &self.levels[self.levels.len() - 1];
+    /// The prices of the start and the blocks' flows at those prices. Each
+    /// round solves every block on its own with the candidates of category
+    /// `k` costing `price[k]` more, from the final tree of the round before,
+    /// and moves the prices (resilient propagation, each price with its own
+    /// step) until the numbers taken per category meet their targets or
+    /// [`PATIENCE`] rounds in a row bring them no nearer. The blocks are left
+    /// with the flows of the round nearest the targets. `None` when a block
+    /// has no flow.
+    fn start(&self, blocks: &mut [Block]) -> Result<Option<Vec<i64>>, OptimalError> {
+        let leaf = self.leaf();
         let categories = leaf.categories.len();
-        // The pairs of each stratum in order of their numbers.
-        let mut by_stratum: Vec<Vec<usize>> = vec![Vec::new(); pairs.strata.len()];
-        for (i, pair) in used.iter().enumerate() {
-            let s = pairs.offset.partition_point(|&first| first <= pair.k) - 1;
-            by_stratum[s].push(i);
-        }
-        for arcs in &mut by_stratum {
-            arcs.sort_unstable_by_key(|&i| used[i].k);
-        }
-        let locals: Vec<Local> = by_stratum
-            .into_par_iter()
-            .map(|arcs| self.local(used, arcs))
-            .collect();
         let target: Vec<usize> = leaf.anchors.iter().map(|a| self.ratio * a).collect();
         let unit = {
-            let (sum, count) = locals
+            let (sum, count) = blocks
                 .iter()
-                .flat_map(|l| l.arcs.iter())
-                .fold((0.0_f64, 0_usize), |(s, c), &i| {
-                    (s + used[i].cost as f64, c + 1)
-                });
+                .flat_map(|b| b.arcs.iter())
+                .fold((0.0_f64, 0_usize), |(s, c), pair| (s + pair.cost as f64, c + 1));
             (sum / count.max(1) as f64).max(1.0)
         };
+        // Prices stay well inside the penalties, so that they choose only the
+        // start.
+        let limit = self.costs.penalty[self.levels.len() - 1] / 8;
         let mut price = vec![0_f64; categories];
         let mut step = vec![unit * 1e-4; categories];
         let mut last = vec![0_i8; categories];
-        let mut best: Option<(usize, Vec<usize>)> = None;
+        let mut bases: Vec<Option<Basis>> = vec![None; blocks.len()];
+        let mut best: Option<(usize, Vec<i64>, Vec<FlowSolution>)> = None;
+        let mut since_best = 0;
         for _ in 0..ROUNDS {
-            #[expect(clippy::cast_possible_truncation, reason = "a price is a few costs")]
-            let whole: Vec<i64> = price.iter().map(|p| *p as i64).collect();
-            let parts: Vec<Option<(Vec<usize>, Vec<usize>)>> = locals
-                .par_iter()
-                .map(|l| l.assign(self.ratio, used, &whole))
+            #[expect(clippy::cast_possible_truncation, reason = "the price is clamped")]
+            let whole: Vec<i64> = price
+                .iter()
+                .map(|p| (p.clamp(-1e18, 1e18) as i64).clamp(-limit, limit))
                 .collect();
-            let mut chosen = Vec::new();
-            let mut got = vec![0_usize; categories];
-            for part in parts {
-                let (arcs, counts) = part?;
-                chosen.extend(arcs);
-                for (total, add) in got.iter_mut().zip(counts) {
-                    *total += add;
+            let solved: Vec<Result<FlowSolution, FlowError>> = blocks
+                .par_iter()
+                .zip(bases.par_iter())
+                .map(|(block, basis)| {
+                    let problem = block.problem(self.ratio, &whole);
+                    match basis {
+                        Some(tree) => problem.solve_from(tree),
+                        None => problem.solve(),
+                    }
+                })
+                .collect();
+            let mut solutions = Vec::with_capacity(blocks.len());
+            for result in solved {
+                match result {
+                    Ok(solution) => solutions.push(solution),
+                    Err(FlowError::Infeasible) => return Ok(None),
+                    Err(FlowError::Overflow | FlowError::InvalidInput) => {
+                        return Err(OptimalError::TooLarge { stratum: 0 });
+                    }
                 }
+            }
+            let mut got = vec![0_usize; categories];
+            for (block, solution) in blocks.iter().zip(&solutions) {
+                for (entry, &k) in block.leaf.iter().enumerate() {
+                    got[k] += usize::try_from(solution.flow[entry]).unwrap_or(0);
+                }
+            }
+            for (basis, solution) in bases.iter_mut().zip(&solutions) {
+                *basis = Some(solution.basis.clone());
             }
             let gap: usize = got.iter().zip(&target).map(|(a, b)| a.abs_diff(*b)).sum();
             if best.as_ref().is_none_or(|b| gap < b.0) {
-                best = Some((gap, chosen));
+                best = Some((gap, whole, solutions));
+                since_best = 0;
+            } else {
+                since_best += 1;
             }
-            if gap == 0 {
+            if gap == 0 || since_best == PATIENCE {
                 break;
             }
             // Resilient propagation: each price moves by its own step in the
@@ -758,74 +1509,138 @@ impl Network<'_> {
                 }
             }
         }
-        best.map(|b| b.1)
+        let Some((_, whole, solutions)) = best else {
+            return Ok(Some(vec![0; categories]));
+        };
+        for (block, solution) in blocks.iter_mut().zip(&solutions) {
+            block.adopt(solution);
+        }
+        Ok(Some(whole))
     }
 
-    /// The flow on each arc of [`Self::flow`] when the pairs at positions
-    /// `chosen` of `used` are matched, with the category arcs filled in from
-    /// the counts.
-    fn start_values(&self, chosen: &[usize], used: &[Kept], ids: &Ids) -> Vec<i64> {
-        let na = self.na;
-        let mut taken = vec![false; self.nc];
-        for &i in chosen {
-            taken[used[i].candidate] = true;
-        }
+    /// The category nodes and their arcs for blocks solved at the prices
+    /// `price`. The flow on each hub arc is set from the sign of its reduced
+    /// cost against potentials that put each finest-level category at its
+    /// price and every coarser one at the least of the categories below it:
+    /// full when negative, and for an arc of the target when zero. With the
+    /// blocks optimal at those prices, no cycle of the network then has a
+    /// negative cost, and what is left is flow to move between category
+    /// nodes.
+    fn couple(&self, blocks: Vec<Block>, price: &[i64]) -> Coupled {
         let depth = self.levels.len();
-        let leaf = &self.levels[depth - 1];
-        let mut values: Vec<i64> = ids
-            .candidate_order
-            .iter()
-            .map(|&c| i64::from(taken[c]))
-            .collect();
-        let mut count: Vec<Vec<usize>> = self
-            .levels
-            .iter()
-            .map(|level| vec![0; level.categories.len()])
-            .collect();
-        for (candidate, t) in taken.iter().enumerate() {
-            if *t {
-                count[depth - 1][leaf.of_unit[na + candidate]] += 1;
+        let mut first = Vec::with_capacity(depth);
+        let mut next = 1;
+        for level in self.levels {
+            first.push(next);
+            next += level.categories.len();
+        }
+        let nodes = next;
+        let mut potential = vec![i64::MAX; nodes];
+        for (k, &value) in price.iter().enumerate() {
+            potential[first[depth - 1] + k] = value;
+        }
+        for d in (1..depth).rev() {
+            for c in 0..self.levels[d].categories.len() {
+                let up = first[d - 1] + self.levels[d].parent[c];
+                potential[up] = potential[up].min(potential[first[d] + c]);
             }
         }
-        for level in (1..depth).rev() {
-            for category in 0..self.levels[level].categories.len() {
-                let up = self.levels[level].parent[category];
-                let moved = count[level][category];
-                count[level - 1][up] += moved;
-            }
+        for c in 0..self.levels[0].categories.len() {
+            potential[0] = potential[0].min(potential[first[0] + c]);
         }
-        for (level, data) in self.levels.iter().enumerate() {
-            for (category, &here) in count[level].iter().enumerate() {
-                let target = self.ratio * data.anchors[category];
-                let cheap = here.min(target);
+        let mut hub = Vec::new();
+        for (d, level) in self.levels.iter().enumerate() {
+            for c in 0..level.categories.len() {
+                let from = if d == 0 {
+                    0
+                } else {
+                    first[d - 1] + level.parent[c]
+                };
+                let to = first[d] + c;
+                let mut add = |cap: i64, cost: i64, fill_when_zero: bool| {
+                    let reduced = cost + potential[from] - potential[to];
+                    let flow = if reduced < 0 || (reduced == 0 && fill_when_zero) {
+                        cap
+                    } else {
+                        0
+                    };
+                    hub.push(HubArc {
+                        from,
+                        to,
+                        cap,
+                        cost,
+                        flow,
+                    });
+                };
+                let target = self.ratio * level.anchors[c];
                 if target > 0 {
-                    values.push(to_i64(cheap));
+                    add(to_i64(target), 0, true);
                 }
-                values.push(to_i64(here - cheap));
+                add(to_i64(self.n), self.costs.penalty[d], false);
             }
         }
-        let mut on = vec![false; used.len()];
-        for &i in chosen {
-            on[i] = true;
+        let mut adjacent = vec![Vec::new(); nodes];
+        let mut excess = vec![0_i64; nodes];
+        excess[0] = to_i64(self.n);
+        for (slot, arc) in hub.iter().enumerate() {
+            adjacent[arc.from].push((slot, true));
+            adjacent[arc.to].push((slot, false));
+            excess[arc.from] -= arc.flow;
+            excess[arc.to] += arc.flow;
         }
-        values.extend(on.iter().map(|&o| i64::from(o)));
-        values
+        for block in &blocks {
+            for (entry, &k) in block.leaf.iter().enumerate() {
+                excess[first[depth - 1] + k] -= block.count[entry];
+            }
+        }
+        let all: Vec<usize> = (0..blocks.len()).collect();
+        let mut coupled = Coupled {
+            block_exchange: vec![Vec::new(); blocks.len()],
+            blocks,
+            first,
+            hub,
+            adjacent,
+            excess,
+            exchange: BTreeMap::new(),
+        };
+        coupled.refresh(&all);
+        coupled
     }
 
-    /// The pairs not in `selected` whose reduced cost against `potentials` is
-    /// negative, in order of their numbers.
+    /// The pairs left out of the network whose reduced cost against
+    /// potentials of the whole network is negative, by stratum in order of
+    /// their numbers. `hub` gives the potential of each hub node.
     fn violating(
         &self,
         pairs: &Pairs<'_>,
         selected: &PairSet,
-        potentials: &[i64],
-        ids: &Ids,
-    ) -> Vec<Kept> {
-        let lists: Vec<Vec<Kept>> = (0..pairs.strata.len())
+        coupled: &Coupled,
+        block_of: &[usize],
+        bounds: &[Bounds],
+        hub: &[i64],
+    ) -> Vec<Vec<Kept>> {
+        let leaf_of = self.leaf_of();
+        let leaf_hub: Vec<i64> = (0..self.leaf().categories.len())
+            .map(|k| hub[coupled.leaf_node(k)])
+            .collect();
+        let potentials: Vec<Vec<i64>> = coupled
+            .blocks
+            .par_iter()
+            .map(|block| block.network_potentials(&leaf_hub))
+            .collect();
+        (0..pairs.strata.len())
             .into_par_iter()
             .map(|s| {
+                let Some(&b) = block_of.get(s).filter(|&&b| b != usize::MAX) else {
+                    return Vec::new();
+                };
+                let (block, d) = (&coupled.blocks[b], &potentials[b]);
+                let skip = block.none_below(&bounds[s], d, &leaf_hub);
+                if skip && !cfg!(debug_assertions) {
+                    return Vec::new();
+                }
                 let first = pairs.offset[s];
-                pairs
+                let found: Vec<Kept> = pairs
                     .of(s)
                     .into_iter()
                     .enumerate()
@@ -834,70 +1649,79 @@ impl Network<'_> {
                         if selected.contains(k) {
                             return None;
                         }
+                        // A candidate outside the block hangs from the entry
+                        // of its category, or from the category node.
+                        let at_candidate = match block.candidates.binary_search(&candidate) {
+                            Ok(c) => d[block.candidate_node(c)],
+                            Err(_) => match block.leaf.binary_search(&leaf_of[candidate]) {
+                                Ok(entry) => d[entry],
+                                Err(_) => leaf_hub[leaf_of[candidate]],
+                            },
+                        };
+                        let a = block.anchors.binary_search(&anchor).ok()?;
+                        let at_anchor = d[block.anchor_node(a)];
                         let cost = self.pair_cost(distance);
-                        (i128::from(cost) + i128::from(potentials[ids.candidate[candidate]])
-                            - i128::from(potentials[ids.anchor[anchor]])
-                            < 0)
-                        .then_some(Kept {
-                            k,
-                            anchor,
-                            candidate,
-                            cost,
-                        })
+                        (i128::from(cost) + i128::from(at_candidate) - i128::from(at_anchor) < 0)
+                            .then_some(Kept {
+                                k,
+                                anchor,
+                                candidate,
+                                cost,
+                            })
                     })
-                    .collect()
+                    .collect();
+                debug_assert!(!skip || found.is_empty(), "stratum {s} skipped with pairs to add");
+                found
             })
-            .collect();
-        lists.into_iter().flatten().collect()
+            .collect()
     }
 
     /// The matched pairs and the optimal cost.
     fn solve(
         &self,
         pairs: &Pairs<'_>,
-        ids: &Ids,
+        start: Vec<Nearest>,
         arcs: Arcs,
     ) -> Result<(Vec<(usize, usize)>, i128), OptimalError> {
         let total = pairs.total();
+        let leaf_of = self.leaf_of();
         let mut per = FIRST_PER_CATEGORY * self.ratio;
         let mut selected = PairSet::new(total);
-        let mut basis: Option<Basis> = None;
-        let mut used: Vec<Kept> = match arcs {
-            Arcs::Pruned => self.nearest(pairs, per),
+        let near: Vec<Near> = match arcs {
+            Arcs::Pruned => start
+                .into_iter()
+                .zip(&pairs.offset)
+                .map(|(near, &first)| self.priced(near, first))
+                .collect(),
             #[cfg(test)]
-            Arcs::All => self.every(pairs),
+            Arcs::All => {
+                drop(start);
+                self.every(pairs)
+            }
         };
-        for pair in &used {
+        let (mut kept, mut bounds): (Vec<Vec<Kept>>, Vec<Bounds>) =
+            near.into_iter().map(|near| (near.pairs, near.bounds)).unzip();
+        let mut in_network = 0;
+        for pair in kept.iter().flatten() {
             selected.insert(pair.k);
+            in_network += 1;
         }
         loop {
-            let everything = used.len() == total;
-            let problem = self.flow(&used, ids);
-            let offset = problem.arcs() - used.len();
-            let solved = match &basis {
-                Some(basis) => problem.solve_from(basis),
-                None => match self.stratum_start(pairs, &used) {
-                    Some(chosen) => {
-                        problem.solve_from_flow(&self.start_values(&chosen, &used, ids))
-                    }
-                    _ => problem.solve(),
-                },
-            };
-            let solution = match solved {
-                Ok(solution) => solution,
-                Err(FlowError::Infeasible) if !everything => {
-                    // Too few pairs for the anchors to get their candidates.
-                    per = per.saturating_mul(4);
-                    let mut more = self.nearest(pairs, per);
-                    more.retain(|pair| !selected.contains(pair.k));
-                    for pair in &more {
-                        selected.insert(pair.k);
-                    }
-                    used.extend(more);
-                    basis = None;
-                    continue;
+            let everything = in_network == total;
+            let mut block_of = vec![usize::MAX; kept.len()];
+            let mut lists = Vec::new();
+            for (s, list) in kept.iter().enumerate() {
+                if !list.is_empty() {
+                    block_of[s] = lists.len();
+                    lists.push(list);
                 }
-                Err(FlowError::Infeasible) => {
+            }
+            let mut blocks: Vec<Block> = lists
+                .into_par_iter()
+                .map(|list| Block::new(list.clone(), leaf_of))
+                .collect();
+            let Some(price) = self.start(&mut blocks)? else {
+                if everything {
                     return Err(OptimalError::Infeasible {
                         stratum: 0,
                         message: format!(
@@ -907,32 +1731,90 @@ impl Network<'_> {
                         ),
                     });
                 }
-                Err(FlowError::Overflow | FlowError::InvalidInput) => {
-                    return Err(OptimalError::TooLarge { stratum: 0 });
+                // Too few pairs for the anchors to get their candidates.
+                per = per.saturating_mul(4);
+                for ((list, bound), more) in kept
+                    .iter_mut()
+                    .zip(bounds.iter_mut())
+                    .zip(self.nearest(pairs, per))
+                {
+                    *bound = more.bounds;
+                    for pair in more.pairs {
+                        if !selected.contains(pair.k) {
+                            selected.insert(pair.k);
+                            list.push(pair);
+                            in_network += 1;
+                        }
+                    }
+                    list.sort_unstable_by_key(|pair| pair.k);
                 }
+                continue;
             };
-            // A pair left out has no flow. Its reduced cost against the
-            // potentials is what pricing the pair would give, and a negative
-            // one means the pair could improve the flow.
-            let violating = if everything {
-                Vec::new()
-            } else {
-                self.violating(pairs, &selected, &solution.potentials, ids)
-            };
-            if violating.is_empty() {
-                let matched = used
-                    .iter()
-                    .enumerate()
-                    .filter(|&(arc, _)| solution.flow[offset + arc] == 1)
-                    .map(|(_, pair)| (pair.anchor, pair.candidate))
+            let mut coupled = self.couple(blocks, &price);
+            loop {
+                coupled.balance()?;
+                if everything {
+                    break;
+                }
+                let hub = coupled.hub_potentials();
+                let violating =
+                    self.violating(pairs, &selected, &coupled, &block_of, &bounds, &hub);
+                if violating.iter().all(Vec::is_empty) {
+                    break;
+                }
+                // The blocks with new pairs are solved again from their flow at
+                // prices that are the potentials of the category nodes, which
+                // keeps every cycle of the network at a non-negative cost.
+                let price: Vec<i64> = (0..self.leaf().categories.len())
+                    .map(|k| hub[coupled.leaf_node(k)])
                     .collect();
-                return Ok((matched, solution.cost));
+                let touched: Vec<(usize, Vec<Kept>)> = violating
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, more)| !more.is_empty())
+                    .map(|(s, more)| (block_of[s], more))
+                    .collect();
+                for (_, more) in &touched {
+                    for pair in more {
+                        selected.insert(pair.k);
+                    }
+                }
+                let solved: Vec<Result<Block, FlowError>> = touched
+                    .par_iter()
+                    .map(|(b, more)| {
+                        let mut block = coupled.blocks[*b].with(more, leaf_of);
+                        let solution = block
+                            .problem(self.ratio, &price)
+                            .solve_from_flow(&block.flow_values())?;
+                        block.adopt(&solution);
+                        Ok(block)
+                    })
+                    .collect();
+                let mut changed = Vec::with_capacity(touched.len());
+                for ((b, _), result) in touched.iter().zip(solved) {
+                    let block = result.map_err(|_| OptimalError::TooLarge { stratum: 0 })?;
+                    let old = std::mem::replace(&mut coupled.blocks[*b], block);
+                    for (entry, &k) in old.leaf.iter().enumerate() {
+                        let node = coupled.leaf_node(k);
+                        coupled.excess[node] += old.count[entry];
+                    }
+                    for entry in 0..coupled.blocks[*b].entries() {
+                        let k = coupled.blocks[*b].leaf[entry];
+                        let node = coupled.leaf_node(k);
+                        coupled.excess[node] -= coupled.blocks[*b].count[entry];
+                    }
+                    changed.push(*b);
+                }
+                coupled.refresh(&changed);
             }
-            for pair in &violating {
-                selected.insert(pair.k);
-            }
-            used.extend(violating);
-            basis = Some(solution.basis);
+            let matched = coupled
+                .blocks
+                .iter()
+                .flat_map(|b| b.arcs.iter().zip(&b.on))
+                .filter(|(_, on)| **on)
+                .map(|(pair, _)| (pair.anchor, pair.candidate))
+                .collect();
+            return Ok((matched, coupled.cost()));
         }
     }
 }
@@ -998,10 +1880,12 @@ where
         let (na, nc) = (anchors.len(), candidates.len());
 
         // One pass over the pairs of each stratum for their number, the largest
-        // distance and the order in which the units first appear.
+        // distance, the anchors that have a pair and the nearest candidates.
+        let per = FIRST_PER_CATEGORY * ratio;
+        let leaf_of = &levels[levels.len() - 1].of_unit[na..];
         let summaries: Vec<Summary> = strata
             .par_iter()
-            .map(|stratum| Summary::of(stratum, &list(stratum)))
+            .map(|stratum| Summary::of(stratum, &list(stratum), per, leaf_of))
             .collect();
         let mut offset = Vec::with_capacity(strata.len() + 1);
         offset.push(0);
@@ -1039,15 +1923,9 @@ where
             });
         }
 
-        // Nodes: anchors, candidates, the categories of each level, the sink.
-        let mut first_category = Vec::with_capacity(levels.len());
-        let mut next = na + nc;
-        for level in &levels {
-            first_category.push(next);
-            next += level.categories.len();
-        }
-        let sink = next;
-        let nodes = next + 1;
+        // The full network has a node per anchor, candidate and category, and
+        // the sink; the penalties are set for that many nodes.
+        let nodes = na + nc + levels.iter().map(|l| l.categories.len()).sum::<usize>() + 1;
         let max_distance = summaries
             .iter()
             .map(|summary| summary.max_distance)
@@ -1055,24 +1933,16 @@ where
         let Some(costs) = costs(max_distance, n, levels.len(), nodes) else {
             return Err(OptimalError::TooLarge { stratum: 0 });
         };
-        let seen: Vec<(Vec<usize>, Vec<usize>)> = summaries
-            .into_iter()
-            .map(|summary| (summary.anchors, summary.candidates))
-            .collect();
-        let ids = Ids::new(na, nc, &seen);
-        drop(seen);
+        let start: Vec<Nearest> = summaries.into_iter().map(|summary| summary.near).collect();
 
         let network = Network {
             na,
-            nc,
             ratio,
             n,
-            sink,
-            first_category: &first_category,
             levels: &levels,
             costs: &costs,
         };
-        let (matched, optimum) = network.solve(&pairs, &ids, arcs)?;
+        let (matched, optimum) = network.solve(&pairs, start, arcs)?;
         let table = balance_table(&levels, &matched, na, ratio);
         if balance.mode == BalanceMode::Exact {
             if let Some((depth, level)) = table
@@ -1112,35 +1982,42 @@ where
 struct Summary {
     pairs: usize,
     max_distance: f64,
-    /// Anchors and candidates by position in the slices, in the order they
-    /// first appear in the pairs.
+    /// Anchors with a pair, by position in the anchor slice.
     anchors: Vec<usize>,
-    candidates: Vec<usize>,
+    near: Nearest,
 }
 
 impl Summary {
-    fn of(stratum: &Stratum, edges: &[Edge]) -> Self {
+    fn of(stratum: &Stratum, edges: &[Edge], per: usize, leaf_of: &[usize]) -> Self {
         let mut anchor_seen = vec![false; stratum.anchors.len()];
-        let mut candidate_seen = vec![false; stratum.candidates.len()];
         let mut anchors = Vec::new();
-        let mut candidates = Vec::new();
         let mut max_distance = 0.0_f64;
         for edge in edges {
             if !anchor_seen[edge.row] {
                 anchor_seen[edge.row] = true;
                 anchors.push(stratum.anchors[edge.row]);
             }
-            if !candidate_seen[edge.col] {
-                candidate_seen[edge.col] = true;
-                candidates.push(stratum.candidates[edge.col]);
-            }
             max_distance = max_distance.max(edge.distance);
         }
+        let near = nearest(
+            &edges
+                .iter()
+                .map(|edge| {
+                    (
+                        stratum.anchors[edge.row],
+                        stratum.candidates[edge.col],
+                        edge.distance,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            per,
+            leaf_of,
+        );
         Self {
             pairs: edges.len(),
             max_distance,
             anchors,
-            candidates,
+            near,
         }
     }
 }
@@ -1183,6 +2060,16 @@ mod tests {
     use crate::RapidHashMap;
     use crate::prelude::*;
     use chrono::NaiveDate;
+
+    thread_local! {
+        static ALWAYS_REPAIR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Whether the potentials of a block crossed by a path are always found by
+    /// label correction, so that tests reach that branch.
+    pub(super) fn always_repair() -> bool {
+        ALWAYS_REPAIR.with(std::cell::Cell::get)
+    }
 
     struct Lcg(u64);
 
@@ -1251,103 +2138,37 @@ mod tests {
     /// has the optimum of the network with every pair: the same total cost and
     /// the same deviation from balance at every level. The pairs agree up to
     /// equal-cost optima.
+    /// The decomposed solve, on the pruned pairs and on every pair, has the
+    /// optimum of the network with every pair solved as one problem by the
+    /// network simplex: the same optimal value and the same deviation from
+    /// balance at every level. The pairs agree up to equal-cost optima, so the
+    /// total distance is compared instead. The problems have exact ties
+    /// (coarse score grids), one to four strata, one and two levels, ratios 1
+    /// and 2, and some a caliper.
     #[test]
-    fn pruned_network_has_the_optimum_of_the_full_network() {
+    fn decomposed_solve_has_the_optimum_of_the_full_network() {
+        compare_with_full_network();
+    }
+
+    /// As above, with the potentials of every block an augmenting path
+    /// crosses found by label correction rather than from the path's search.
+    #[test]
+    fn label_correction_keeps_the_optimum() {
+        ALWAYS_REPAIR.with(|flag| flag.set(true));
+        compare_with_full_network();
+    }
+
+    fn compare_with_full_network() {
         let mut rng = Lcg(20_261_121);
         let mut compared = 0;
-        for round in 0..60 {
+        for round in 0..72 {
             let strata = 1 + round % 4;
-            let ratio = 1 + round % 2;
+            let ratio = 1 + (round / 4) % 2;
             let anchors = 8 + rng.below(40);
             let candidates = ratio * anchors + 5 + rng.below(60);
             let grid = [4, 16, 1000][round % 3];
             let data = case(&mut rng, anchors, candidates, strata, grid);
-            let distance = DistanceConfig::propensity_score_map(data.scores.clone(), None);
-            let criteria = MatchingCriteria::builder()
-                .match_ratio(ratio)
-                .required_strata(vec!["s".to_string()])
-                .build();
-            let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
-            for levels in [
-                vec![vec!["a".to_string()]],
-                vec![vec!["a".to_string()], vec!["b".to_string()]],
-            ] {
-                let balance = FineBalance {
-                    levels,
-                    ..FineBalance::default()
-                };
-                let full = run(
-                    &data.anchors,
-                    &data.candidates,
-                    &request,
-                    &balance,
-                    Arcs::All,
-                );
-                let pruned = run(
-                    &data.anchors,
-                    &data.candidates,
-                    &request,
-                    &balance,
-                    Arcs::Pruned,
-                );
-                match (full, pruned) {
-                    (Ok((full, full_cost)), Ok((pruned, pruned_cost))) => {
-                        compared += 1;
-                        assert_eq!(pruned_cost, full_cost, "round {round}: optimal value");
-                        // Categories that have no target can share their surplus
-                        // in different ways at equal cost, so the deviation of
-                        // each level is compared, not the counts.
-                        let deviation = |o: &FineBalanceOutcome| -> Vec<usize> {
-                            o.levels.iter().map(BalanceLevel::total_deviation).collect()
-                        };
-                        assert_eq!(
-                            deviation(&pruned),
-                            deviation(&full),
-                            "round {round}: balance"
-                        );
-                        let (full_pairs, pruned_pairs) =
-                            (matched_pairs(&full), matched_pairs(&pruned));
-                        assert_eq!(full_pairs.len(), pruned_pairs.len());
-                        let key = |id: &str| data.scores[id];
-                        let total = |pairs: &[(String, String)]| -> f64 {
-                            pairs.iter().map(|(a, c)| (key(a) - key(c)).abs()).sum()
-                        };
-                        // Equal optimal values mean equal total distance up to
-                        // the rounding of the integer costs.
-                        assert!(
-                            (total(&full_pairs) - total(&pruned_pairs)).abs() < 1e-6,
-                            "round {round}: total distance"
-                        );
-                    }
-                    (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "round {round}"),
-                    (a, b) => panic!(
-                        "round {round}: full {:?}, pruned {:?}",
-                        a.is_ok(),
-                        b.is_ok()
-                    ),
-                }
-            }
-        }
-        assert!(compared > 80, "only {compared} problems compared");
-    }
-
-    /// Listing the pairs one stratum at a time gives the match of the
-    /// implementation that holds every pair: the same pairs, the same optimal
-    /// value and the same balance, with exact ties (coarse score grids),
-    /// one and several strata, one and two levels, ratios 1 and 2, and with and
-    /// without a caliper.
-    #[test]
-    fn pairs_listed_by_stratum_give_the_match_of_held_pairs() {
-        let mut rng = Lcg(20_261_122);
-        let mut compared = 0;
-        for round in 0..48 {
-            let strata = 1 + round % 4;
-            let ratio = 1 + (round / 4) % 2;
-            let anchors = 8 + rng.below(40);
-            let candidates = ratio * anchors + 5 + rng.below(80);
-            let grid = [4, 16, 1000][round % 3];
-            let data = case(&mut rng, anchors, candidates, strata, grid);
-            let caliper = (round % 2 == 1).then(|| DistanceCaliper::new(0.3).expect("caliper"));
+            let caliper = (round % 5 == 4).then(|| DistanceCaliper::new(0.3).expect("caliper"));
             let distance = DistanceConfig::propensity_score_map(data.scores.clone(), caliper);
             let criteria = MatchingCriteria::builder()
                 .match_ratio(ratio)
@@ -1362,41 +2183,51 @@ mod tests {
                     levels,
                     ..FineBalance::default()
                 };
-                let listed = run(
-                    &data.anchors,
-                    &data.candidates,
-                    &request,
-                    &balance,
-                    Arcs::Pruned,
-                );
-                let held = held::run(
-                    &data.anchors,
-                    &data.candidates,
-                    &request,
-                    &balance,
-                    held::Arcs::Pruned,
-                );
-                match (listed, held) {
-                    (Ok((listed, listed_cost)), Ok((held, held_cost))) => {
-                        compared += 1;
-                        assert_eq!(listed_cost, held_cost, "round {round}");
-                        assert_eq!(matched_pairs(&listed), matched_pairs(&held), "round {round}");
-                        assert_eq!(listed.levels, held.levels, "round {round}");
+                let full = full_network::run(&data.anchors, &data.candidates, &request, &balance);
+                for arcs in [Arcs::Pruned, Arcs::All] {
+                    let ours = run(&data.anchors, &data.candidates, &request, &balance, arcs);
+                    match (&full, ours) {
+                        (Ok((full, full_cost)), Ok((ours, our_cost))) => {
+                            compared += 1;
+                            assert_eq!(our_cost, *full_cost, "round {round}: optimal value");
+                            // Categories that have no target can share their
+                            // surplus in different ways at equal cost, so the
+                            // deviation of each level is compared, not the
+                            // counts.
+                            let deviation = |o: &FineBalanceOutcome| -> Vec<usize> {
+                                o.levels.iter().map(BalanceLevel::total_deviation).collect()
+                            };
+                            assert_eq!(deviation(&ours), deviation(full), "round {round}: balance");
+                            let (full_pairs, our_pairs) = (matched_pairs(full), matched_pairs(&ours));
+                            assert_eq!(full_pairs.len(), our_pairs.len());
+                            let key = |id: &str| data.scores[id];
+                            let total = |pairs: &[(String, String)]| -> f64 {
+                                pairs.iter().map(|(a, c)| (key(a) - key(c)).abs()).sum()
+                            };
+                            // Equal optimal values mean equal total distance up
+                            // to the rounding of the integer costs.
+                            assert!(
+                                (total(&full_pairs) - total(&our_pairs)).abs() < 1e-6,
+                                "round {round}: total distance"
+                            );
+                        }
+                        (Err(a), Err(b)) => {
+                            assert_eq!(a.to_string(), b.to_string(), "round {round}");
+                        }
+                        (a, b) => panic!(
+                            "round {round}: full {:?}, ours {:?}",
+                            a.is_ok(),
+                            b.is_ok()
+                        ),
                     }
-                    (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "round {round}"),
-                    (a, b) => panic!(
-                        "round {round}: listed {:?}, held {:?}",
-                        a.is_ok(),
-                        b.is_ok()
-                    ),
                 }
             }
         }
-        assert!(compared > 60, "only {compared} problems compared");
+        assert!(compared > 200, "only {compared} problems compared");
     }
 
     #[test]
-    fn pruned_network_is_the_same_on_every_thread_count() {
+    fn decomposed_solve_is_the_same_on_every_thread_count() {
         let mut rng = Lcg(99);
         let data = case(&mut rng, 60, 200, 5, 16);
         let distance = DistanceConfig::propensity_score_map(data.scores.clone(), None);
@@ -1404,25 +2235,31 @@ mod tests {
             .required_strata(vec!["s".to_string()])
             .build();
         let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
-        let balance = FineBalance::on_keys(["a"]);
-        let mut results = Vec::new();
-        for threads in [1, 2, 7] {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .expect("pool");
-            let got = pool
-                .install(|| match_fine_balance(&data.anchors, &data.candidates, &request, &balance))
+        let balance = FineBalance {
+            levels: vec![vec!["a".to_string()], vec!["b".to_string()]],
+            ..FineBalance::default()
+        };
+        let index: RapidHashMap<&str, f64> = data
+            .anchors
+            .iter()
+            .chain(&data.candidates)
+            .enumerate()
+            .map(|(i, record)| (record.id.as_str(), i as f64))
+            .collect();
+        epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
+            let got = match_fine_balance(&data.anchors, &data.candidates, &request, &balance)
                 .expect("feasible");
-            results.push(matched_pairs(&got));
-        }
-        assert_eq!(results[0], results[1]);
-        assert_eq!(results[0], results[2]);
+            matched_pairs(&got)
+                .iter()
+                .flat_map(|(a, c)| [index[a.as_str()], index[c.as_str()]])
+                .collect()
+        });
     }
 
-    /// The implementation that holds every admissible pair, kept to show that
-    /// listing the pairs one stratum at a time gives the same match.
-    mod held {
+    /// The network with every admissible pair solved as one problem by the
+    /// network simplex, from the start of price rounds, as a reference for the
+    /// optimum.
+    mod full_network {
         use super::super::{
             BalanceCategory, BalanceLevel, BalanceMode, Costs, FineBalance, FineBalanceOutcome,
             Key, LevelData, costs, level_data, option_error, to_i64,
@@ -1436,14 +2273,6 @@ mod tests {
         use rayon::prelude::*;
         use std::collections::BTreeMap;
 
-        /// Which pairs enter the network.
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        pub(super) enum Arcs {
-            /// The nearest candidates of each anchor in each category of the finest
-            /// level, then every pair that prices negatively against the potentials of
-            /// the solution. The optimum is that of the network with every pair.
-            Pruned,
-        }
 
         /// Candidates kept per anchor and finest-level category at the start, as a
         /// multiple of the match ratio.
@@ -1853,7 +2682,6 @@ mod tests {
                 &self,
                 pairs: &[(usize, usize, f64)],
                 runs: &[std::ops::Range<usize>],
-                arcs: Arcs,
             ) -> Result<(Vec<(usize, usize)>, i128), OptimalError> {
                 let costs: Vec<i64> = pairs
                     .par_iter()
@@ -1863,9 +2691,7 @@ mod tests {
                 let mut selected = vec![false; pairs.len()];
                 let ids = Ids::new(self.na, self.nc, pairs, runs);
                 let mut basis: Option<Basis> = None;
-                let mut used: Vec<usize> = match arcs {
-                    Arcs::Pruned => self.nearest(pairs, &costs, runs, per),
-                };
+                let mut used: Vec<usize> = (0..pairs.len()).collect();
                 used.sort_unstable();
                 for &k in &used {
                     selected[k] = true;
@@ -1953,7 +2779,6 @@ mod tests {
             candidates: &[R],
             request: &OptimalRequest<'_, G>,
             balance: &FineBalance,
-            arcs: Arcs,
         ) -> Result<(FineBalanceOutcome, i128), OptimalError>
         where
             R: MatchingRecord,
@@ -2039,7 +2864,7 @@ mod tests {
                 levels: &levels,
                 costs: &costs,
             };
-            let (matched, optimum) = network.solve(&pairs, &runs, arcs)?;
+            let (matched, optimum) = network.solve(&pairs, &runs)?;
             let mut table: Vec<BalanceLevel> = Vec::with_capacity(levels.len());
             for level in &levels {
                 let mut counts = vec![0_usize; level.categories.len()];
