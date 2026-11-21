@@ -55,6 +55,34 @@
 //! to the old attachment point reversed, and its potentials and depths are
 //! recomputed.
 //!
+//! # Warm starts
+//!
+//! [`MinCostFlow::solve_from`] starts from the final tree of an earlier solve
+//! of the same nodes and supplies, with arcs added at the end. The new arcs
+//! start at their lower bound, the flows and potentials are rebuilt from the
+//! tree and the bounds, and the first pricing search starts at the new arcs.
+//! The tree is still strongly feasible, since the flow and the tree arcs are
+//! those of the earlier optimum, so the guarantees above hold. A problem that
+//! is solved with a few arcs, priced against the potentials for arcs that
+//! would enter, and solved again with those added, therefore costs the pivots
+//! that the new arcs need and not a solve from scratch.
+//!
+//! [`MinCostFlow::solve_from_flow`] starts from a feasible flow instead. Every
+//! arc strictly between its bounds is in the tree, which must not close a
+//! cycle, and each component of such arcs hangs from the root by an artificial
+//! arc that leaves the root and carries nothing. A tree arc with no flow then
+//! points away from the root and every arc at its capacity is outside the
+//! tree, which is strong feasibility. A flow that is already near the optimum
+//! needs few pivots, and the pivots it needs are the ones that matter, where a
+//! start from the artificial arcs spends many on building a flow first.
+//!
+//! # Pricing block
+//!
+//! The block of the pricing search can be set with
+//! [`MinCostFlow::set_pricing_block`]. A pivot costs the arcs scanned for the
+//! entering arc plus the cycle and the re-hung subtree, so when the latter is
+//! small a short block is faster in total even though it takes more pivots.
+//!
 //! # Cost
 //!
 //! A pivot costs `O(cycle length + size of the re-hung subtree)`, at most
@@ -137,6 +165,21 @@ pub struct FlowSolution {
     pub potentials: Vec<i64>,
     /// Number of pivots.
     pub pivots: u64,
+    /// The final basis, for [`MinCostFlow::solve_from`].
+    pub basis: Basis,
+}
+
+/// The spanning tree and the bound of every arc outside it at the end of a
+/// solve. It starts a later solve of the same nodes and supplies with more arcs
+/// added at the end ([`MinCostFlow::solve_from`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Basis {
+    nodes: usize,
+    arcs: usize,
+    /// The state of each arc and then of each artificial arc.
+    state: Vec<i8>,
+    /// Whether every artificial arc leaves the root.
+    from_root: bool,
 }
 
 /// A minimum-cost flow problem.
@@ -147,6 +190,7 @@ pub struct MinCostFlow {
     head: Vec<u32>,
     cost: Vec<i64>,
     cap: Vec<i64>,
+    block: Option<usize>,
 }
 
 impl MinCostFlow {
@@ -166,6 +210,16 @@ impl MinCostFlow {
         self.head.reserve(arcs);
         self.cost.reserve(arcs);
         self.cap.reserve(arcs);
+    }
+
+    /// Set the number of arcs scanned in one block of the pricing search
+    /// (at least 1). The default is the square root of the number of arcs, at
+    /// least 10. A smaller block prices each pivot faster and looks at fewer
+    /// arcs for the one to enter, which suits a problem whose pivots are cheap.
+    /// The optimal cost does not depend on it, and the flow can differ only
+    /// among equal-cost optima.
+    pub fn set_pricing_block(&mut self, arcs: usize) {
+        self.block = Some(arcs.max(1));
     }
 
     /// Number of nodes.
@@ -221,6 +275,51 @@ impl MinCostFlow {
     pub fn solve(&self) -> Result<FlowSolution, FlowError> {
         Solver::new(self)?.run()
     }
+
+    /// Find a minimum-cost flow starting from the basis of an earlier solve.
+    ///
+    /// The problem must have the same nodes and supplies as the one that gave
+    /// `basis`, and the arcs of that problem first, in the same order, with
+    /// any new arcs after them. The new arcs start at their lower bound. The
+    /// flow and the optimal cost are the same as [`MinCostFlow::solve`] gives,
+    /// and the optimal flow can differ only among equal-cost optima. A basis
+    /// that does not fit the problem is ignored and the solve starts from
+    /// scratch.
+    ///
+    /// # Errors
+    ///
+    /// As [`MinCostFlow::solve`].
+    pub fn solve_from(&self, basis: &Basis) -> Result<FlowSolution, FlowError> {
+        let mut solver = Solver::new(self)?;
+        solver.adopt(self, basis);
+        solver.run()
+    }
+
+    /// Find a minimum-cost flow starting from a feasible flow, one value per
+    /// arc in the order the arcs were added.
+    ///
+    /// The result is as [`MinCostFlow::solve`] gives it. A start that is not
+    /// feasible, or whose arcs strictly between their bounds close a cycle, is
+    /// ignored and the solve starts from scratch.
+    ///
+    /// # Errors
+    ///
+    /// As [`MinCostFlow::solve`].
+    pub fn solve_from_flow(&self, flow: &[i64]) -> Result<FlowSolution, FlowError> {
+        let mut solver = Solver::new(self)?;
+        solver.adopt_flow(self, flow);
+        solver.run()
+    }
+}
+
+/// The representative of the set of `v` in a disjoint-set forest, with path
+/// halving.
+fn find(component: &mut [u32], mut v: u32) -> u32 {
+    while component[v as usize] != v {
+        component[v as usize] = component[component[v as usize] as usize];
+        v = component[v as usize];
+    }
+    v
 }
 
 /// The working state of one solve. Arc `m + v` is the artificial arc of node
@@ -249,6 +348,8 @@ struct Solver {
     pivots: u64,
     stack: Vec<u32>,
     path: Vec<u32>,
+    /// Whether every artificial arc leaves the root.
+    from_root: bool,
 }
 
 impl Solver {
@@ -362,7 +463,9 @@ impl Solver {
             clippy::cast_sign_loss,
             reason = "the block size is the square root of an arc count, which fits"
         )]
-        let block = (total_arcs_f.sqrt() as usize).max(10);
+        let block = problem
+            .block
+            .unwrap_or_else(|| (total_arcs_f.sqrt() as usize).max(10));
         Ok(Self {
             n,
             m,
@@ -385,7 +488,227 @@ impl Solver {
             pivots: 0,
             stack: Vec::new(),
             path: Vec::new(),
+            from_root: false,
         })
+    }
+
+    /// Replace the starting tree by the one in `basis`, when it fits.
+    /// Anything that does not fit leaves the start as it was.
+    fn adopt(&mut self, problem: &MinCostFlow, basis: &Basis) {
+        let (n, m) = (self.n, self.m);
+        if basis.nodes != n || basis.arcs > m || basis.state.len() != basis.arcs + n {
+            return;
+        }
+        let mut state = vec![LOWER; m + n];
+        state[..basis.arcs].copy_from_slice(&basis.state[..basis.arcs]);
+        state[m..].copy_from_slice(&basis.state[basis.arcs..]);
+        if basis.from_root {
+            self.install_from_root(problem, state);
+        } else {
+            self.install(problem, state);
+        }
+        // The arcs added since are the ones likely to price out, so the first
+        // search starts at them.
+        self.next_arc = basis.arcs;
+    }
+
+    /// [`Self::install`] with every artificial arc leaving the root. The
+    /// arcs are left as they were when it fails.
+    fn install_from_root(&mut self, problem: &MinCostFlow, state: Vec<i8>) {
+        let (n, m) = (self.n, self.m);
+        let root = n as u32;
+        let saved: Vec<(u32, u32)> = (0..n)
+            .map(|node| (self.tail[m + node], self.head[m + node]))
+            .collect();
+        for node in 0..n {
+            self.tail[m + node] = root;
+            self.head[m + node] = node as u32;
+        }
+        if self.install(problem, state) {
+            self.from_root = true;
+        } else {
+            for (node, (t, h)) in saved.into_iter().enumerate() {
+                self.tail[m + node] = t;
+                self.head[m + node] = h;
+            }
+        }
+    }
+
+    /// Start from a feasible flow. Every arc strictly between its bounds is in
+    /// the tree and must not close a cycle with the others. Each component of
+    /// those arcs hangs from the root by an artificial arc that points away
+    /// from the root and carries no flow, which keeps the tree strongly
+    /// feasible. A flow that does not fit leaves the start as it was.
+    fn adopt_flow(&mut self, problem: &MinCostFlow, flow: &[i64]) {
+        let (n, m) = (self.n, self.m);
+        if flow.len() != m {
+            return;
+        }
+        let mut excess: Vec<i128> = problem.supply.iter().map(|s| i128::from(*s)).collect();
+        for arc in 0..m {
+            if flow[arc] < 0 || flow[arc] > self.cap[arc] {
+                return;
+            }
+            excess[self.tail[arc] as usize] -= i128::from(flow[arc]);
+            excess[self.head[arc] as usize] += i128::from(flow[arc]);
+        }
+        if excess.iter().any(|e| *e != 0) {
+            return;
+        }
+        let mut component: Vec<u32> = (0..n as u32).collect();
+        let mut state = vec![LOWER; m + n];
+        for arc in 0..m {
+            if self.cap[arc] == 0 {
+                state[arc] = TREE;
+            } else if flow[arc] == self.cap[arc] {
+                state[arc] = UPPER;
+            } else if flow[arc] > 0 {
+                state[arc] = TREE;
+                let t = find(&mut component, self.tail[arc]);
+                let h = find(&mut component, self.head[arc]);
+                if t == h {
+                    return;
+                }
+                component[t as usize] = h;
+            }
+        }
+        let mut seen = vec![false; n];
+        for node in 0..n {
+            let r = find(&mut component, node as u32) as usize;
+            if !seen[r] {
+                seen[r] = true;
+                state[m + r] = TREE;
+            }
+        }
+        // Every artificial arc leaves the root, with no flow.
+        self.install_from_root(problem, state);
+    }
+
+    /// Build the tree, the flows, the potentials and the child lists from the
+    /// arcs in the tree and the bound of every other arc. The flow of the tree
+    /// arcs follows from the supplies. When the arcs do not form a spanning
+    /// tree or the flow is not within the capacities, nothing changes.
+    fn install(&mut self, problem: &MinCostFlow, state: Vec<i8>) -> bool {
+        let (n, m) = (self.n, self.m);
+        let is_tree =
+            |arc: usize, state: &[i8]| state[arc] == TREE && (arc >= m || self.cap[arc] > 0);
+        // Adjacency of the tree arcs, as lists of arc numbers per node.
+        let mut degree = vec![0_u32; n + 2];
+        let mut tree_arcs = 0;
+        for arc in 0..m + n {
+            if is_tree(arc, &state) {
+                tree_arcs += 1;
+                degree[self.tail[arc] as usize + 1] += 1;
+                degree[self.head[arc] as usize + 1] += 1;
+            }
+        }
+        if tree_arcs != n {
+            return false;
+        }
+        for v in 0..=n {
+            degree[v + 1] += degree[v];
+        }
+        let mut fill = degree.clone();
+        let mut adjacent = vec![0_u32; 2 * n];
+        for arc in 0..m + n {
+            if is_tree(arc, &state) {
+                for end in [self.tail[arc] as usize, self.head[arc] as usize] {
+                    adjacent[fill[end] as usize] = arc as u32;
+                    fill[end] += 1;
+                }
+            }
+        }
+        // Breadth-first from the root.
+        let root = n;
+        let mut parent = vec![NONE; n + 1];
+        let mut pred = vec![NONE; n + 1];
+        let mut up = vec![false; n + 1];
+        let mut depth = vec![0_u32; n + 1];
+        let mut pi = vec![0_i64; n + 1];
+        let mut order: Vec<u32> = Vec::with_capacity(n + 1);
+        let mut seen = vec![false; n + 1];
+        seen[root] = true;
+        order.push(root as u32);
+        let mut at = 0;
+        while at < order.len() {
+            let v = order[at] as usize;
+            at += 1;
+            for slot in degree[v]..degree[v + 1] {
+                let arc = adjacent[slot as usize] as usize;
+                let (t, h) = (self.tail[arc] as usize, self.head[arc] as usize);
+                let w = if t == v { h } else { t };
+                if seen[w] {
+                    continue;
+                }
+                seen[w] = true;
+                parent[w] = v as u32;
+                pred[w] = arc as u32;
+                up[w] = t == w;
+                depth[w] = depth[v] + 1;
+                pi[w] = if up[w] {
+                    pi[v] - self.cost[arc]
+                } else {
+                    pi[v] + self.cost[arc]
+                };
+                order.push(w as u32);
+            }
+        }
+        if order.len() != n + 1 {
+            return false;
+        }
+        // Flows: non-tree arcs at their bounds, tree arcs from the leaves up.
+        let mut flow = vec![0_i64; m + n];
+        let mut excess = vec![0_i128; n + 1];
+        for (node, slot) in excess.iter_mut().enumerate().take(n) {
+            *slot = i128::from(problem.supply[node]);
+        }
+        for arc in 0..m + n {
+            if state[arc] == UPPER {
+                flow[arc] = self.cap[arc];
+                excess[self.tail[arc] as usize] -= i128::from(flow[arc]);
+                excess[self.head[arc] as usize] += i128::from(flow[arc]);
+            }
+        }
+        for &v in order.iter().skip(1).rev() {
+            let v = v as usize;
+            let arc = pred[v] as usize;
+            let parent_of = parent[v] as usize;
+            let x = if up[v] { excess[v] } else { -excess[v] };
+            if x < 0 || x > i128::from(self.cap[arc]) {
+                return false;
+            }
+            // In range of the arc's capacity, so it fits i64.
+            flow[arc] = i64::try_from(x).unwrap_or(0);
+            if up[v] {
+                excess[parent_of] += x;
+            } else {
+                excess[parent_of] -= x;
+            }
+            excess[v] = 0;
+        }
+        let mut first_child = vec![NONE; n + 1];
+        let mut next_sibling = vec![NONE; n + 1];
+        let mut prev_sibling = vec![NONE; n + 1];
+        for &v in order.iter().skip(1).rev() {
+            let p = parent[v as usize] as usize;
+            let head_of_list = first_child[p];
+            next_sibling[v as usize] = head_of_list;
+            if head_of_list != NONE {
+                prev_sibling[head_of_list as usize] = v;
+            }
+            first_child[p] = v;
+        }
+        self.state = state;
+        self.flow = flow;
+        self.parent = parent;
+        self.pred = pred;
+        self.up = up;
+        self.depth = depth;
+        self.pi = pi;
+        self.first_child = first_child;
+        self.next_sibling = next_sibling;
+        self.prev_sibling = prev_sibling;
+        true
     }
 
     fn reduced_cost(&self, arc: usize) -> i64 {
@@ -644,6 +967,12 @@ impl Solver {
         for arc in 0..self.m {
             cost += i128::from(self.cost[arc]) * i128::from(self.flow[arc]);
         }
+        let basis = Basis {
+            nodes: self.n,
+            arcs: self.m,
+            state: self.state,
+            from_root: self.from_root,
+        };
         self.flow.truncate(self.m);
         self.pi.truncate(self.n);
         Ok(FlowSolution {
@@ -651,6 +980,7 @@ impl Solver {
             cost,
             potentials: self.pi,
             pivots: self.pivots,
+            basis,
         })
     }
 }
@@ -976,6 +1306,117 @@ mod tests {
             }
         }
         assert!(feasible > 100, "only {feasible} feasible problems drawn");
+    }
+
+    /// A copy of `problem` with other costs on the same arcs.
+    fn recosted(problem: &MinCostFlow, state: &mut u64) -> MinCostFlow {
+        let mut other = problem.clone();
+        for cost in &mut other.cost {
+            *cost = below(state, 21) as i64 - 6;
+        }
+        other
+    }
+
+    #[test]
+    fn warm_starts_give_the_optimal_cost() {
+        let mut state = 77_u64;
+        let mut checked = 0;
+        for round in 0..600 {
+            let nodes = 3 + below(&mut state, 9) as usize;
+            let arcs = 4 + below(&mut state, 30) as usize;
+            let problem = random_network(&mut state, nodes, arcs);
+            let Ok(first) = problem.solve() else { continue };
+            checked += 1;
+            let expected = Some(first.cost);
+
+            // The same problem from its own flow and basis.
+            let again = problem.solve_from_flow(&first.flow).expect("feasible");
+            assert_eq!(Some(again.cost), expected, "round {round}: own flow");
+            assert_certificate(&problem, &again);
+            let again = problem.solve_from(&first.basis).expect("feasible");
+            assert_eq!(Some(again.cost), expected, "round {round}: own basis");
+
+            // Other costs on the same arcs: the flow stays feasible.
+            let other = recosted(&problem, &mut state);
+            let from_flow = other.solve_from_flow(&first.flow).expect("feasible");
+            assert_eq!(
+                Some(from_flow.cost),
+                reference_cost(&other),
+                "round {round}: flow of other costs"
+            );
+            assert_certificate(&other, &from_flow);
+            let from_basis = other.solve_from(&first.basis).expect("feasible");
+            assert_eq!(Some(from_basis.cost), Some(from_flow.cost), "round {round}");
+
+            // More arcs, from the basis of the smaller problem and from that of
+            // a solve started at a flow.
+            let mut larger = problem.clone();
+            for _ in 0..=below(&mut state, 8) {
+                let from = below(&mut state, nodes as u64) as usize;
+                let to = below(&mut state, nodes as u64) as usize;
+                larger.add_arc(
+                    from,
+                    to,
+                    below(&mut state, 6) as i64,
+                    below(&mut state, 21) as i64 - 6,
+                );
+            }
+            let cold = larger.solve().expect("feasible");
+            for basis in [&first.basis, &again.basis, &from_flow.basis] {
+                if basis == &from_flow.basis && other.arcs() != problem.arcs() {
+                    continue;
+                }
+                let warm = larger.solve_from(basis).expect("feasible");
+                assert_eq!(warm.cost, cold.cost, "round {round}: more arcs");
+                assert_certificate(&larger, &warm);
+            }
+        }
+        assert!(checked > 150, "only {checked} feasible problems drawn");
+    }
+
+    #[test]
+    fn a_start_that_does_not_fit_is_ignored() {
+        let mut problem = MinCostFlow::new(3);
+        problem.set_supply(0, 2);
+        problem.set_supply(2, -2);
+        problem.add_arc(0, 1, 2, 1);
+        problem.add_arc(1, 2, 2, 1);
+        problem.add_arc(0, 2, 2, 5);
+        let cold = problem.solve().expect("feasible");
+        // Wrong length, over capacity and not conserving flow.
+        for bad in [vec![1], vec![3, 3, 0], vec![1, 0, 0]] {
+            let solution = problem.solve_from_flow(&bad).expect("feasible");
+            assert_eq!(solution.cost, cold.cost);
+        }
+        // A basis from a problem with other nodes.
+        let mut other = MinCostFlow::new(2);
+        other.set_supply(0, 1);
+        other.set_supply(1, -1);
+        other.add_arc(0, 1, 1, 1);
+        let basis = other.solve().expect("feasible").basis;
+        assert_eq!(
+            problem.solve_from(&basis).expect("feasible").cost,
+            cold.cost
+        );
+    }
+
+    #[test]
+    fn the_pricing_block_does_not_change_the_cost() {
+        let mut state = 5_u64;
+        for round in 0..200 {
+            let nodes = 3 + below(&mut state, 9) as usize;
+            let arcs = 4 + below(&mut state, 30) as usize;
+            let mut problem = random_network(&mut state, nodes, arcs);
+            let Ok(default) = problem.solve() else {
+                continue;
+            };
+            for block in [1, 2, 7] {
+                problem.set_pricing_block(block);
+                let solution = problem.solve().expect("feasible");
+                assert_eq!(solution.cost, default.cost, "round {round} block {block}");
+                assert_certificate(&problem, &solution);
+            }
+        }
     }
 
     /// The cheapest assignment of `rows` rows to distinct columns, by trying
