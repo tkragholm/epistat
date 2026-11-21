@@ -54,9 +54,9 @@
 //!    entering, which is what keeps the iteration count near `m` when `n` is a
 //!    million. The first candidate that would take the rate below zero enters.
 //!    The candidates are found by a selection that splits the list at its
-//!    median, which costs `O(n)` instead of `O(n log n)`. Among candidates
-//!    whose ratio is within the dual tolerance of the entering one, the entering
-//!    column is the one with the largest `|t_j|`, for the sake of the pivot.
+//!    median, which costs `O(n)` instead of `O(n log n)`. Harris's rule \[5\] then lets any candidate whose ratio is within the step that
+//!    keeps every other reduced cost within the dual tolerance of its sign enter,
+//!    and the one with the largest `|t_j|` does, for the sake of the pivot.
 //! 4. Update. The flipped columns change the basic values by `-B^{-1} Σ a_j Δ_j`.
 //!    The entering column then moves until the leaving variable reaches its
 //!    violated bound, the basic values and `B^{-1}` are updated, and the
@@ -67,12 +67,17 @@
 //! reduced costs are recomputed from `B^{-1}` at every iteration, not
 //! updated, so they do not drift. A pivot below `1e-12` in the elimination is
 //! [`BoundedLpError::Singular`]. After a refactorisation, a non-basic column whose
-//! reduced cost has the wrong sign beyond the dual tolerance is flipped to its
-//! other bound, which restores dual feasibility when both bounds are finite.
+//! reduced cost has the wrong sign beyond the tolerance below is flipped to its
+//! other bound, which restores dual feasibility when both bounds are finite. A
+//! slack with one infinite bound cannot flip. Its cost is shifted to make the
+//! reduced cost zero, and [`BoundedSimplex::relaxation_bound`] is raised by the
+//! shift times the largest activity the row can have, so that it stays an upper
+//! bound. A structural column in that state is [`BoundedLpError::DualInfeasible`].
+//! The shifts are of the size of the tolerance.
 //!
 //! # Degeneracy
 //!
-//! A step of length at most the dual tolerance is degenerate. After 25 in a row,
+//! A step of length at most the dual tolerance is degenerate. After 200 in a row,
 //! the leaving variable becomes the infeasible basic variable of lowest index
 //! and the entering column the candidate of lowest index among the minimum
 //! ratios, with no flips, for the rest of that solve, which cannot cycle \[4\].
@@ -97,8 +102,9 @@
 //!   of a sum of such terms, in units of `1e-9`.
 //! - A basic structural column `j` is within its bounds when it is within
 //!   `1e-9 · (1 + |b|)` of the bound `b`.
-//! - A reduced cost has the wrong sign only when it is beyond
-//!   `1e-9 · max(1, max|q|)`.
+//! - The dual tolerance is `1e-9 · max(1, max|q|)`. A pivot keeps every reduced
+//!   cost within it of the right sign (Harris's rule), and a reduced cost is
+//!   taken to have the wrong sign only beyond ten times it.
 //! - A candidate with `|t_j|` below `1e-9` times the largest `|t|` of the row is
 //!   not a pivot.
 //!
@@ -140,6 +146,8 @@
 //!    implementation. PhD thesis, Universität Paderborn; 2005.
 //! 4. Bland RG. New finite pivoting rules for the simplex method. Math Oper Res.
 //!    1977;2(2):103-7.
+//! 5. Harris PMJ. Pivot selection methods of the Devex LP code. Math Program.
+//!    1973;5(1):1-28.
 
 #![expect(
     clippy::float_cmp,
@@ -151,10 +159,16 @@ use std::fmt;
 use std::time::Instant;
 
 const CHUNK: usize = 4096;
+/// Below this many chunks of columns the scan runs on the calling thread, since
+/// handing a few microseconds of work to the pool costs more than it saves.
+#[cfg(feature = "rayon")]
+const PARALLEL_FROM_CHUNKS: usize = 8;
 const REFACTOR_EVERY: usize = 40;
-const BLAND_AFTER_DEGENERATE: usize = 25;
+const BLAND_AFTER_DEGENERATE: usize = 200;
 /// Relative tolerance of every comparison, in units of the data scale.
 const REL_TOL: f64 = 1e-9;
+/// A candidate must be at least this fraction of the largest in its row.
+const REL_PIVOT: f64 = 1e-7;
 /// A pivot smaller than this in the elimination makes the basis singular.
 const TOL_SINGULAR: f64 = 1e-12;
 /// A candidate below this absolute size cannot be a pivot.
@@ -214,6 +228,8 @@ pub struct Snapshot {
 #[derive(Clone, Copy)]
 struct Candidate {
     j: usize,
+    /// The reduced cost, as a magnitude: zero when it has the wrong sign.
+    d: f64,
     ratio: f64,
     t: f64,
     weight: f64,
@@ -233,8 +249,20 @@ pub struct BoundedSimplex {
     n: usize,
     /// Column-major `m * n`.
     a: Vec<f64>,
-    /// Minimisation costs of the `n + m` variables.
+    /// The costs `c` of the structural columns, as given.
+    cost: Vec<f64>,
+    /// Minimisation costs of the `n + m` variables, `-c` plus the perturbation.
     q: Vec<f64>,
+    /// The perturbation of the cost of each structural column, see
+    /// [`BoundedSimplex::perturb_costs`].
+    eps: Vec<f64>,
+    /// How far the activity of each row can be from 0 at most: `Σ_j |a_ij|
+    /// max(|l_j|, |u_j|)`, infinite when a column with a nonzero entry has an
+    /// infinite bound.
+    row_extent: Vec<f64>,
+    /// Added to [`BoundedSimplex::relaxation_bound`] for the costs of slacks
+    /// that were shifted, see [`BoundedSimplex::solve`].
+    bound_margin: f64,
     lo: Vec<f64>,
     hi: Vec<f64>,
     /// Tolerance on the bounds of each of the `n + m` variables.
@@ -261,15 +289,14 @@ where
 {
     let chunks = n.div_ceil(CHUNK);
     #[cfg(feature = "rayon")]
-    {
+    if chunks >= PARALLEL_FROM_CHUNKS {
         use rayon::prelude::*;
         let parts: Vec<Vec<T>> = (0..chunks)
             .into_par_iter()
             .map(|c| f(c * CHUNK, ((c + 1) * CHUNK).min(n)))
             .collect();
-        parts.into_iter().flatten().collect()
+        return parts.into_iter().flatten().collect();
     }
-    #[cfg(not(feature = "rayon"))]
     {
         let mut out = Vec::new();
         for c in 0..chunks {
@@ -338,7 +365,11 @@ impl BoundedSimplex {
             m,
             n,
             a: columns.to_vec(),
+            cost: cost.to_vec(),
             q,
+            eps: vec![0.0; n],
+            row_extent: vec![0.0; m],
+            bound_margin: 0.0,
             lo,
             hi,
             tol: vec![0.0; n + m],
@@ -370,6 +401,17 @@ impl BoundedSimplex {
     fn set_tolerances(&mut self) {
         let (m, n) = (self.m, self.n);
         let widths: Vec<f64> = (0..n).map(|j| self.width(j)).collect();
+        let mut extent = vec![0.0; m];
+        for j in 0..n {
+            let reach = self.lo[j].abs().max(self.hi[j].abs());
+            for i in 0..m {
+                let a = self.a[j * m + i].abs();
+                if a != 0.0 {
+                    extent[i] += a * reach;
+                }
+            }
+        }
+        self.row_extent = extent;
         let mut sq = vec![0.0; m];
         for j in 0..n {
             let w2 = widths[j] * widths[j];
@@ -544,12 +586,93 @@ impl BoundedSimplex {
             .map(|(b, v)| (*b, *v))
     }
 
-    /// `c'x` at the current point. Meaningful after a successful solve.
+    /// `c'x` at the current point, with the costs as given. Meaningful after a
+    /// successful solve.
     #[must_use]
     pub fn objective(&self) -> f64 {
         let x = self.values();
-        // Sum in column order so the value does not depend on the basis.
-        -x.iter().zip(&self.q).map(|(v, q)| v * q).sum::<f64>()
+        // Summed in column order so the value does not depend on the basis.
+        x.iter().zip(&self.cost).map(|(v, c)| v * c).sum::<f64>()
+    }
+
+    /// The optimal value of the program that was solved: `c'x` plus the
+    /// perturbation of the costs, see [`Self::perturb_costs`]. It is at least
+    /// the optimum of the program with the costs as given and exceeds it by at
+    /// most [`Self::perturbation_total`], so it is an upper bound on that
+    /// optimum.
+    #[must_use]
+    pub fn relaxation_bound(&self) -> f64 {
+        let x = self.values();
+        -x.iter().zip(&self.q).map(|(v, q)| v * q).sum::<f64>() + self.bound_margin
+    }
+
+    /// The largest amount the perturbation can add to the objective,
+    /// `Σ ε_j max(|l_j|, |u_j|)` over the perturbed columns.
+    #[must_use]
+    pub fn perturbation_total(&self) -> f64 {
+        (0..self.n)
+            .map(|j| {
+                self.eps[j] * finite_or(self.lo[j].abs(), 0.0).max(finite_or(self.hi[j].abs(), 0.0))
+            })
+            .sum()
+    }
+
+    /// Adds a small positive amount to the cost of every column that has a
+    /// nonzero cost and finite bounds, different for each column.
+    ///
+    /// A program whose columns share costs, as the units of a matching problem
+    /// do, has many reduced costs equal to zero at once, and the dual simplex
+    /// method then makes long runs of pivots of length zero. Distinct costs
+    /// make such ties rare. The amount for column `j` is `ε (1/2 + h_j/2)` with
+    /// `h_j` in `[0, 1)` from a hash of `j`, and `ε = clamp(10^-2/n, 10^-8,
+    /// 10^-6)` times the largest cost, so that the perturbation exceeds the dual
+    /// tolerance, `10^-9` times the largest cost, and adds at most about
+    /// `10^-2` times the largest cost per `n` columns at their upper bound.
+    /// With a nonnegative amount on a maximisation the solved value is an upper
+    /// bound on the optimum for the costs as given, see
+    /// [`Self::relaxation_bound`]. The point returned is optimal for the
+    /// perturbed costs. Call it before the first solve.
+    pub fn perturb_costs(&mut self) {
+        let n = self.n;
+        let c_max = self.cost.iter().fold(0.0_f64, |a, c| a.max(c.abs()));
+        let eps_max = (1e-2 / n.max(1) as f64).clamp(1e-8, 1e-6) * c_max;
+        for j in 0..n {
+            let finite = self.lo[j].is_finite() && self.hi[j].is_finite();
+            if finite && self.cost[j] != 0.0 {
+                let mut z = (j as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                let h = (z >> 11) as f64 / (1u64 << 53) as f64;
+                self.eps[j] = eps_max * (0.5 + 0.5 * h) * self.cost[j].signum();
+                self.q[j] = -(self.cost[j] + self.eps[j]);
+            }
+        }
+    }
+
+    /// The reduced cost of each structural column at the current basis, in the
+    /// minimisation form with the perturbed costs: 0 for a basic column, and
+    /// otherwise the amount by which the objective changes per unit the column
+    /// moves away from its bound. Meaningful after a successful solve.
+    #[must_use]
+    pub fn reduced_costs(&self) -> Vec<f64> {
+        let y = self.duals();
+        let m = self.m;
+        chunked(self.n, |start, end| {
+            (start..end)
+                .map(|j| {
+                    if self.status[j] == Status::Basic {
+                        return 0.0;
+                    }
+                    let column = &self.a[j * m..(j + 1) * m];
+                    let mut ay = 0.0;
+                    for i in 0..m {
+                        ay += column[i] * y[i];
+                    }
+                    self.q[j] - ay
+                })
+                .collect()
+        })
     }
 
     /// The activity `A x` of each row at the current point.
@@ -678,9 +801,11 @@ impl BoundedSimplex {
                 v
             };
             #[cfg(feature = "rayon")]
-            {
+            if chunks >= PARALLEL_FROM_CHUNKS {
                 use rayon::prelude::*;
                 (0..chunks).into_par_iter().map(one).collect()
+            } else {
+                (0..chunks).map(one).collect()
             }
             #[cfg(not(feature = "rayon"))]
             {
@@ -765,7 +890,28 @@ impl BoundedSimplex {
             let flipped = match self.status[j] {
                 Status::Lower if self.hi[j].is_finite() => Status::Upper,
                 Status::Upper if self.lo[j].is_finite() => Status::Lower,
-                _ => return Err(BoundedLpError::DualInfeasible),
+                _ => {
+                    // A slack with an infinite bound cannot flip. Its cost is
+                    // shifted to make its reduced cost zero, and the bound of
+                    // the relaxation widened by the most the shift can change
+                    // the objective.
+                    let reach = if j >= n {
+                        self.row_extent[j - n]
+                    } else {
+                        f64::INFINITY
+                    };
+                    if !reach.is_finite() {
+                        return Err(BoundedLpError::DualInfeasible);
+                    }
+                    let d = if j >= n {
+                        self.q[j] + y[j - n]
+                    } else {
+                        return Err(BoundedLpError::DualInfeasible);
+                    };
+                    self.q[j] -= d;
+                    self.bound_margin += d.abs() * reach;
+                    continue;
+                }
             };
             self.status[j] = flipped;
             changed = true;
@@ -776,11 +922,15 @@ impl BoundedSimplex {
         Ok(())
     }
 
+    /// Whether a reduced cost is on the wrong side of zero for its bound by
+    /// more than Harris's rule allows (the dual tolerance) and rounding (a
+    /// further factor of 10).
     fn wrong_sign(&self, status: Status, d: f64) -> bool {
+        let tol = 10.0 * self.dual_tol;
         match status {
-            Status::Lower => d < -self.dual_tol,
-            Status::Upper => d > self.dual_tol,
-            Status::Free => d.abs() > self.dual_tol,
+            Status::Lower => d < -tol,
+            Status::Upper => d > tol,
+            Status::Free => d.abs() > tol,
             Status::Basic => false,
         }
     }
@@ -814,6 +964,7 @@ impl BoundedSimplex {
             };
             Some(Candidate {
                 j,
+                d: signed_d,
                 ratio: signed_d / t.abs(),
                 t,
                 weight,
@@ -958,7 +1109,7 @@ impl BoundedSimplex {
             let y = self.duals();
             let mut cands = self.candidates(&rho, &y, increase);
             let t_max = cands.iter().fold(0.0_f64, |acc, c| acc.max(c.t.abs()));
-            cands.retain(|c| c.t.abs() >= REL_TOL * t_max);
+            cands.retain(|c| c.t.abs() >= REL_PIVOT * t_max);
             if cands.is_empty() {
                 if self.since_refactor > 0 {
                     self.refactor()?;
@@ -985,11 +1136,17 @@ impl BoundedSimplex {
                     }
                     return Err(BoundedLpError::Infeasible);
                 };
-                // Among the candidates not flipped whose ratio is within the dual
-                // tolerance of the entering one, the largest pivot.
-                let window = e.ratio + self.dual_tol / e.t.abs().max(TOL_PIVOT_ABS);
+                // Harris's rule: no candidate that is not flipped may end with a
+                // reduced cost more than the dual tolerance on the wrong side, so
+                // the step is at most the smallest of `(d + tol) / |t|` over them,
+                // and among those within it the largest pivot enters.
+                let step_max = cands
+                    .iter()
+                    .filter(|c| !c.flip)
+                    .map(|c| (c.d + self.dual_tol) / c.t.abs())
+                    .fold(f64::INFINITY, f64::min);
                 let mut best = e;
-                for c in cands.iter().filter(|c| !c.flip && c.ratio <= window) {
+                for c in cands.iter().filter(|c| !c.flip && c.ratio <= step_max) {
                     if c.t.abs() > best.t.abs() || (c.t.abs() == best.t.abs() && c.j < best.j) {
                         best = *c;
                     }

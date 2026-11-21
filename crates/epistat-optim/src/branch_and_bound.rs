@@ -39,6 +39,19 @@
 //! has cost zero, the value of any integer solution is an integer, so a node is
 //! dropped unless `floor(bound) > incumbent`. This is detected from the data.
 //!
+//! # Neighbourhood search
+//!
+//! In a matching problem many units are interchangeable, and depth first search
+//! alone can stay a few units below the optimum for a long time. After the root
+//! relaxation, the binary columns are ordered by the size of their reduced cost,
+//! the basic ones, which include every fractional one, first. The first 64
+//! stay free and the others are fixed at the root values rounded, and the
+//! smaller program is solved by this search within 2000 relaxations. Then 256,
+//! 1024, 4096 and 16384 free columns are tried. Each solution is a solution
+//! of the whole program, so it can only raise the incumbent, and the proof of
+//! optimality, by bound, is unchanged. [`Options::neighbourhood_search`] turns it
+//! off.
+//!
 //! # Limits and the gap
 //!
 //! The search ends when no node is left, or when the node limit or the time
@@ -126,13 +139,28 @@ pub struct MixedBinaryProgram<'a> {
     pub binary: &'a [bool],
 }
 
-/// Limits on the search. `None` is no limit.
-#[derive(Debug, Clone, Copy, Default)]
+/// Limits on the search, and whether to run the root heuristic. `None` is no
+/// limit.
+#[derive(Debug, Clone, Copy)]
 pub struct Options {
     /// The most relaxations to solve, the root included.
     pub node_limit: Option<u64>,
     /// The most time to spend. The result then depends on the machine.
     pub time_limit: Option<Duration>,
+    /// Run the neighbourhood search at the root, see the [module](self)
+    /// documentation. It only ever improves the incumbent, so it changes how
+    /// fast the search ends and not the optimum it proves.
+    pub neighbourhood_search: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            node_limit: None,
+            time_limit: None,
+            neighbourhood_search: true,
+        }
+    }
 }
 
 /// How the search ended.
@@ -226,6 +254,18 @@ struct Node {
 /// # Errors
 /// See [`MipError`].
 pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solution, MipError> {
+    solve_with_deadline(
+        program,
+        options,
+        options.time_limit.map(|d| Instant::now() + d),
+    )
+}
+
+fn solve_with_deadline(
+    program: &MixedBinaryProgram<'_>,
+    options: &Options,
+    deadline: Option<Instant>,
+) -> Result<Solution, MipError> {
     let n = program.cost.len();
     if program.binary.len() != n {
         return Err(MipError::InvalidInput(
@@ -257,6 +297,7 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
         other => MipError::Lp(other),
     })?;
 
+    lp.perturb_costs();
     let integral_objective = (0..n).all(|j| {
         if program.binary[j] {
             program.cost[j] == program.cost[j].round()
@@ -264,8 +305,6 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
             program.cost[j] == 0.0
         }
     });
-    let start = Instant::now();
-    let deadline = options.time_limit.map(|d| start + d);
 
     let mut nodes: u64 = 0;
     let mut incumbent: Option<(Vec<f64>, f64)> = None;
@@ -299,8 +338,8 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
     match lp.solve(deadline) {
         Ok(()) => {
             nodes += 1;
-            solved = Some(lp.objective());
-            root_bound = lp.objective();
+            solved = Some(lp.relaxation_bound());
+            root_bound = lp.relaxation_bound();
         }
         Err(BoundedLpError::Infeasible) => return Err(MipError::Infeasible),
         Err(BoundedLpError::TimeLimit) => {
@@ -310,6 +349,34 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
             });
         }
         Err(e) => return Err(MipError::Lp(e)),
+    }
+
+    if options.neighbourhood_search
+        && let Some(z) = solved
+    {
+        let target = tighten(z);
+        neighbourhood_search(
+            program,
+            &lp,
+            deadline,
+            integral_objective.then_some(target),
+            &mut incumbent,
+            &mut nodes,
+        );
+        if integral_objective && incumbent.as_ref().is_some_and(|(_, v)| *v >= target - 0.5) {
+            // Nothing better than the incumbent can exist.
+            let (x, objective) = incumbent.expect("checked above");
+            let max_row_violation = row_violation(program, &x);
+            return Ok(Solution {
+                x,
+                objective,
+                bound: objective,
+                status: Status::Optimal,
+                nodes,
+                pivots: lp.iterations(),
+                max_row_violation,
+            });
+        }
     }
 
     'search: loop {
@@ -373,7 +440,7 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
                         match lp.solve(deadline) {
                             Ok(()) => {
                                 nodes += 1;
-                                solved = Some(lp.objective());
+                                solved = Some(lp.relaxation_bound());
                                 continue 'search;
                             }
                             Err(BoundedLpError::Infeasible) => {}
@@ -425,7 +492,7 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
             match lp.solve(deadline) {
                 Ok(()) => {
                     nodes += 1;
-                    solved = Some(lp.objective());
+                    solved = Some(lp.relaxation_bound());
                     continue 'search;
                 }
                 Err(BoundedLpError::Infeasible) => {}
@@ -468,6 +535,136 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
         pivots: lp.iterations(),
         max_row_violation,
     })
+}
+
+/// Sizes of the free sets of the neighbourhood search, in binary columns.
+const NEIGHBOURHOODS: [usize; 5] = [64, 256, 1024, 4096, 16384];
+
+/// The relaxations a neighbourhood's own search may solve.
+const NEIGHBOURHOOD_NODES: u64 = 2000;
+
+/// Looks for integer solutions near the root relaxation.
+///
+/// The binary columns are ordered by the size of their reduced cost at the
+/// root optimum, which is zero for the basic ones, and the `f` first are kept
+/// free while the rest are fixed to their rounded relaxation values. The
+/// program on the free columns, with the fixed ones moved to the row bounds, is
+/// solved by the same search without this step, within a node limit and a
+/// quarter of the time left. The sizes `f` grow through
+/// [`NEIGHBOURHOODS`]. The search ends when a solution reaches `target`.
+fn neighbourhood_search(
+    program: &MixedBinaryProgram<'_>,
+    lp: &BoundedSimplex,
+    deadline: Option<Instant>,
+    target: Option<f64>,
+    incumbent: &mut Option<(Vec<f64>, f64)>,
+    nodes: &mut u64,
+) {
+    let n = program.cost.len();
+    let m = program.rows;
+    let x = lp.values();
+    let d = lp.reduced_costs();
+    let mut order: Vec<usize> = (0..n)
+        .filter(|&j| program.binary[j] && program.col_lo[j] != program.col_hi[j])
+        .collect();
+    order.sort_by(|&a, &b| d[a].abs().total_cmp(&d[b].abs()).then(a.cmp(&b)));
+    for &size in &NEIGHBOURHOODS {
+        if size >= order.len() {
+            break;
+        }
+        if deadline.is_some_and(|dl| Instant::now() >= dl) {
+            return;
+        }
+        let mut free = vec![false; n];
+        for &j in &order[..size] {
+            free[j] = true;
+        }
+        for j in 0..n {
+            if !program.binary[j] {
+                free[j] = true;
+            }
+        }
+        let kept: Vec<usize> = (0..n).filter(|&j| free[j]).collect();
+        let mut fixed_activity = vec![0.0; m];
+        let mut fixed_value = vec![0.0; n];
+        for j in (0..n).filter(|&j| !free[j]) {
+            let v = if program.col_lo[j] == program.col_hi[j] {
+                program.col_lo[j]
+            } else {
+                x[j].round()
+            };
+            fixed_value[j] = v;
+            if v != 0.0 {
+                let column = &program.columns[j * m..(j + 1) * m];
+                for i in 0..m {
+                    fixed_activity[i] += column[i] * v;
+                }
+            }
+        }
+        let mut columns = Vec::with_capacity(kept.len() * m);
+        let (mut cost, mut col_lo, mut col_hi, mut binary) = (
+            Vec::with_capacity(kept.len()),
+            Vec::with_capacity(kept.len()),
+            Vec::with_capacity(kept.len()),
+            Vec::with_capacity(kept.len()),
+        );
+        for &j in &kept {
+            columns.extend_from_slice(&program.columns[j * m..(j + 1) * m]);
+            cost.push(program.cost[j]);
+            col_lo.push(program.col_lo[j]);
+            col_hi.push(program.col_hi[j]);
+            binary.push(program.binary[j]);
+        }
+        let row_lo: Vec<f64> = (0..m)
+            .map(|i| program.row_lo[i] - fixed_activity[i])
+            .collect();
+        let row_hi: Vec<f64> = (0..m)
+            .map(|i| program.row_hi[i] - fixed_activity[i])
+            .collect();
+        let sub = MixedBinaryProgram {
+            rows: m,
+            columns: &columns,
+            cost: &cost,
+            col_lo: &col_lo,
+            col_hi: &col_hi,
+            row_lo: &row_lo,
+            row_hi: &row_hi,
+            binary: &binary,
+        };
+        let sub_deadline = deadline.map(|dl| {
+            let now = Instant::now();
+            now + dl.saturating_duration_since(now) / 4
+        });
+        let sub_options = Options {
+            node_limit: Some(NEIGHBOURHOOD_NODES),
+            time_limit: None,
+            neighbourhood_search: false,
+        };
+        let Ok(solution) = solve_with_deadline(&sub, &sub_options, sub_deadline) else {
+            continue;
+        };
+        *nodes += solution.nodes;
+        let mut full = fixed_value;
+        for (k, &j) in kept.iter().enumerate() {
+            full[j] = solution.x[k];
+        }
+        let objective: f64 = full.iter().zip(program.cost).map(|(v, c)| v * c).sum();
+        // The sub-problem's rows are the program's rows, so the point is
+        // feasible for it to the sub-problem's tolerance, checked again here.
+        let act = activity(program, &full);
+        let ok = (0..m).all(|i| {
+            let tol = lp.row_tolerance(i) * 10.0;
+            act[i] >= program.row_lo[i] - tol && act[i] <= program.row_hi[i] + tol
+        });
+        if ok && incumbent.as_ref().is_none_or(|(_, v)| objective > *v) {
+            *incumbent = Some((full, objective));
+        }
+        if let (Some(t), Some((_, v))) = (target, incumbent.as_ref())
+            && *v >= t - 0.5
+        {
+            return;
+        }
+    }
 }
 
 /// The LP point with its binary columns rounded, checked against the rows.
@@ -730,6 +927,7 @@ mod tests {
             &Options {
                 node_limit: Some(3),
                 time_limit: None,
+                ..Options::default()
             },
         );
         match cut {
