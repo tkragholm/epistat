@@ -1062,14 +1062,15 @@ mod tests {
         .unwrap();
         let pair = [Some(3), Some(3), Some(7), Some(7)];
         let weights = [1.0; 4];
-        let data = match_data_from_weights(&weights, &pair, &units, MatchDataOptions::default())
-            .unwrap();
+        let data =
+            match_data_from_weights(&weights, &pair, &units, MatchDataOptions::default()).unwrap();
         assert_eq!(data.subclass, [Some(1), Some(1), Some(2), Some(2)]);
         let long = get_matches_from_pairs(&pair, &weights, &units, false).unwrap();
         assert_eq!(long.pair_id, [Some(1), Some(1), Some(2), Some(2)]);
         let from_zero = [Some(0), Some(0), Some(1), Some(1)];
-        let data = match_data_from_weights(&weights, &from_zero, &units, MatchDataOptions::default())
-            .unwrap();
+        let data =
+            match_data_from_weights(&weights, &from_zero, &units, MatchDataOptions::default())
+                .unwrap();
         assert_eq!(data.subclass, [Some(1), Some(1), Some(2), Some(2)]);
     }
 
