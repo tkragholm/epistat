@@ -25,17 +25,18 @@ use crate::matching::{
     NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest, PairDistanceMatrix,
     PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
     PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions, QuickMatchOutcome,
-    RandomSelection, Retain, RoleIndexedRecord, SeedMethod, SelectionStrategy,
-    SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome, apply_transposed,
-    cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower, exact_match_subclasses, match_full,
-    match_optimal, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    RandomSelection, Retain, RoleIndexedRecord, Rounds, SeedMethod, SelectionStrategy,
+    SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome, VariableRatio,
+    apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower,
+    estimate_propensity_and_match, exact_match_subclasses, match_full, match_optimal,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, quick_match_subclasses,
     subclassify_by_propensity_score_map,
 };
 use crate::role_transition::{ExposureDensityOutcome, exposure_density_sets};
 use crate::types::{
-    AgeLimitYears, BirthDateWindowDays, CriteriaValidationError, DistanceCaliper, Estimand,
-    ExclusionReason, MatchOutcome, MatchRatio, MatchingCriteria, RoleTransitionRecord,
+    AgeLimitYears, BirthDateWindowDays, CommonSupport, CriteriaValidationError, DistanceCaliper,
+    Estimand, ExclusionReason, MatchOutcome, MatchRatio, MatchingCriteria, RoleTransitionRecord,
 };
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
@@ -235,6 +236,11 @@ pub enum EstimatorSpec {
         /// Number of penalties tried.
         #[serde(default = "default_nlambda")]
         nlambda: usize,
+        /// Smallest penalty as a fraction of the largest, `lambda.min.ratio`
+        /// of `glmnet`. The default is 1e-4 when there are more units than
+        /// covariates and 1e-2 otherwise.
+        #[serde(default)]
+        lambda_min_ratio: Option<f64>,
         /// The rule that picks the penalty.
         #[serde(default)]
         rule: LambdaSpec,
@@ -397,6 +403,108 @@ pub enum TransformSpec {
     RankTieAdjusted,
 }
 
+/// The part of the common support to trim, `discard` of `matchit()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscardSpec {
+    /// Anchors outside the overlap of the scores.
+    Treated,
+    /// Candidates outside the overlap of the scores.
+    Control,
+    /// Both.
+    Both,
+}
+
+impl From<DiscardSpec> for CommonSupport {
+    fn from(spec: DiscardSpec) -> Self {
+        match spec {
+            DiscardSpec::Treated => Self::Treated,
+            DiscardSpec::Control => Self::Control,
+            DiscardSpec::Both => Self::Both,
+        }
+    }
+}
+
+/// A variable number of controls per anchor, `ratio`, `min.controls` and
+/// `max.controls` of `matchit()`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VariableRatioSpec {
+    /// The mean number of controls per anchor.
+    pub average: f64,
+    /// The fewest controls an anchor gets.
+    pub min: usize,
+    /// The most controls an anchor gets.
+    pub max: usize,
+}
+
+/// Which calipers are read in standard deviations, `std.caliper` of
+/// `matchit()`.
+///
+/// A single flag applies to the distance caliper and every caliper on a field.
+/// The other form says it for each caliper by name, as the vector of
+/// `std.caliper` does. A caliper that is not named is in its own units.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StdCaliperSpec {
+    /// All calipers or none.
+    All(bool),
+    /// Each caliper by name.
+    Each(StdCaliperEach),
+}
+
+impl Default for StdCaliperSpec {
+    fn default() -> Self {
+        Self::All(false)
+    }
+}
+
+impl From<bool> for StdCaliperSpec {
+    fn from(all: bool) -> Self {
+        Self::All(all)
+    }
+}
+
+/// The calipers read in standard deviations, by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StdCaliperEach {
+    /// The caliper of the distance.
+    pub distance: bool,
+    /// The calipers on fields, by field name. Each name must have an entry in
+    /// the spec's `calipers`.
+    pub fields: BTreeMap<String, bool>,
+}
+
+impl StdCaliperSpec {
+    /// Whether the distance caliper is in standard deviations.
+    #[must_use]
+    pub const fn distance(&self) -> bool {
+        match self {
+            Self::All(all) => *all,
+            Self::Each(each) => each.distance,
+        }
+    }
+
+    /// Whether the caliper on a field is in standard deviations.
+    #[must_use]
+    pub fn field(&self, name: &str) -> bool {
+        match self {
+            Self::All(all) => *all,
+            Self::Each(each) => each.fields.get(name).copied().unwrap_or(false),
+        }
+    }
+
+    /// Whether any caliper is in standard deviations.
+    #[must_use]
+    pub fn any(&self) -> bool {
+        match self {
+            Self::All(all) => *all,
+            Self::Each(each) => each.distance || each.fields.values().any(|set| *set),
+        }
+    }
+}
+
 /// The options of the nearest method.
 ///
 /// Options that only the nearest method has are fields of this struct.
@@ -411,6 +519,9 @@ pub struct NearestSpec {
     /// spec's distance as a caliper and for the order of anchors, as
     /// `mahvars` does.
     pub mahvars: Option<DistanceSpec>,
+    /// A variable number of controls per anchor in place of `ratio`. Needs a
+    /// score distance and no fallback ratios.
+    pub variable_ratio: Option<VariableRatioSpec>,
 }
 
 /// How a numeric variable is cut into bins.
@@ -642,12 +753,21 @@ pub struct MatchSpec {
     /// Calipers on numeric fields of the units, by field name, as the named
     /// calipers of `matchit()`.
     pub calipers: BTreeMap<String, f64>,
-    /// Read the calipers in standard deviations, as `std.caliper` does: the
-    /// distance caliper in standard deviations of the distance, and the
-    /// calipers on fields in standard deviations of the field over all units.
-    /// Nearest method only. Scaling the calipers on fields is not compared with
-    /// MatchIt.
-    pub std_caliper: bool,
+    /// Read calipers in standard deviations, as `std.caliper` does: the
+    /// distance caliper in standard deviations of the distance, and a caliper
+    /// on a field in standard deviations of the field over all units. One flag
+    /// covers all calipers, or each is named. Nearest method only. Scaling the
+    /// calipers on fields is not compared with MatchIt.
+    pub std_caliper: StdCaliperSpec,
+    /// Trim the units outside the common support of the scores before
+    /// matching, `discard` of `matchit()`. Needs a propensity score or a score
+    /// of your own as distance, and one of the random, lowest_index,
+    /// nearest_birth_date and nearest methods.
+    pub discard: Option<DiscardSpec>,
+    /// Fit the propensity model again on the units that remain after
+    /// `discard`, `reestimate` of `matchit()`. Needs `discard` and a propensity
+    /// distance.
+    pub reestimate: bool,
     /// Strata keys on which a pair must agree, `exact` in `matchit()`.
     pub exact: Vec<String>,
     /// Strata keys on which a pair must differ, `antiexact` in `matchit()`.
@@ -689,7 +809,9 @@ impl Default for MatchSpec {
             replace: criteria.allow_replacement,
             birth_window_days: criteria.birth_date_window_days,
             calipers: BTreeMap::new(),
-            std_caliper: false,
+            std_caliper: StdCaliperSpec::default(),
+            discard: None,
+            reestimate: false,
             exact: Vec::new(),
             antiexact: Vec::new(),
             match_sex: false,
@@ -998,14 +1120,15 @@ impl MatchSpec {
                  full method; set the method to full or drop them",
             ));
         }
-        let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper;
+        let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper.any();
         if nearest_options && self.method != MatchMethod::Nearest {
             return Err(SpecError::option(
                 "nearest",
-                "m_order, mahvars and std_caliper belong to the nearest method; \
+                "m_order, mahvars, variable_ratio and std_caliper belong to the nearest method; \
                  set the method to nearest or drop them",
             ));
         }
+        self.validate_support()?;
         match self.method {
             MatchMethod::Exact => self.validate_exact()?,
             MatchMethod::Subclass => self.validate_subclass()?,
@@ -1039,7 +1162,7 @@ impl MatchSpec {
             unique_by_key: self.unique_by_key.clone(),
             allow_replacement: self.replace,
             estimand: self.estimand,
-            common_support: None,
+            common_support: self.discard.map(Into::into),
         }
     }
 
@@ -1056,6 +1179,16 @@ impl MatchSpec {
                 "ratio_fallback",
                 "the nearest method has no fallback ratios; drop them or use another method",
             ));
+        }
+        if let Some(variable) = self.nearest.variable_ratio {
+            VariableRatio::new(variable.average, variable.min, variable.max)
+                .map_err(|error| SpecError::option("nearest.variable_ratio", error.to_string()))?;
+            if self.ratio != 1 {
+                return Err(SpecError::option(
+                    "ratio",
+                    "a variable ratio sets the number of controls; drop the ratio",
+                ));
+            }
         }
         let assignment = self.assignment.unwrap_or(AssignmentSpec::Rounds);
         if matches!(
@@ -1079,7 +1212,10 @@ impl MatchSpec {
                  Euclidean distance does not have; use data, random, closest or farthest",
             ));
         }
-        if self.std_caliper && !self.distance.is_score() && self.distance.caliper().is_some() {
+        if self.std_caliper.distance()
+            && !self.distance.is_score()
+            && self.distance.caliper().is_some()
+        {
             return Err(SpecError::option(
                 "std_caliper",
                 "a caliper in standard deviations needs a score distance; \
@@ -1228,7 +1364,7 @@ impl MatchSpec {
                  Euclidean or Mahalanobis distance; set the distance",
             ));
         }
-        if self.std_caliper {
+        if self.std_caliper.any() {
             return Err(SpecError::option(
                 "std_caliper",
                 "the quick method takes its caliper in the units of the distance; drop it",
@@ -1266,6 +1402,63 @@ impl MatchSpec {
             return Err(SpecError::option(
                 "distance",
                 "coarsened exact matching takes its distance from cem.k2k.distance; drop it",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The options on calipers in standard deviations and on common support.
+    fn validate_support(&self) -> Result<(), SpecError> {
+        if let StdCaliperSpec::Each(each) = &self.std_caliper {
+            let unnamed = each
+                .fields
+                .keys()
+                .find(|name| !self.calipers.contains_key(*name));
+            if let Some(name) = unnamed {
+                return Err(SpecError::option(
+                    "std_caliper",
+                    format!("{name} has no caliper in calipers; add one or drop the entry"),
+                ));
+            }
+        }
+        if self.reestimate && self.discard.is_none() {
+            return Err(SpecError::option(
+                "reestimate",
+                "the model is fitted again on the units that discard leaves; set discard",
+            ));
+        }
+        if self.discard.is_none() {
+            return Ok(());
+        }
+        let supported = self.mode == MatchMode::Standard
+            && matches!(
+                self.method,
+                MatchMethod::Random
+                    | MatchMethod::LowestIndex
+                    | MatchMethod::NearestBirthDate
+                    | MatchMethod::Nearest
+            );
+        if !supported {
+            return Err(SpecError::option(
+                "discard",
+                "common support is trimmed in standard mode with the random, lowest_index, \
+                 nearest_birth_date and nearest methods; drop it",
+            ));
+        }
+        if !matches!(
+            self.distance,
+            DistanceSpec::Propensity { .. } | DistanceSpec::Scores { .. }
+        ) {
+            return Err(SpecError::option(
+                "discard",
+                "common support is read from a propensity score or a score of your own; \
+                 set the distance to propensity or scores",
+            ));
+        }
+        if self.reestimate && !matches!(self.distance, DistanceSpec::Propensity { .. }) {
+            return Err(SpecError::option(
+                "reestimate",
+                "only a propensity model can be fitted again; set the distance to propensity",
             ));
         }
         Ok(())
@@ -1331,6 +1524,88 @@ impl MatchSpec {
     }
 }
 
+/// The propensity model of a propensity distance, from its spec.
+fn propensity_config(
+    spec: &DistanceSpec,
+    seed: u64,
+    caliper: Option<DistanceCaliper>,
+    reestimate: bool,
+) -> Result<PropensityScoreConfig, SpecError> {
+    let DistanceSpec::Propensity {
+        covariates,
+        link,
+        estimator,
+        scale,
+        sampling_weights,
+        ..
+    } = spec
+    else {
+        return Err(SpecError::option(
+            "distance",
+            "reestimate needs a propensity score distance",
+        ));
+    };
+    let estimator = match *estimator {
+        EstimatorSpec::Glm => PropensityEstimator::GlmLogit,
+        EstimatorSpec::ElasticNet {
+            alpha,
+            lambda,
+            standardize,
+        } => PropensityEstimator::ElasticNetLogit(
+            ElasticNetLogisticConfig::builder()
+                .alpha(alpha)
+                .lambda(lambda)
+                .standardize(standardize)
+                .build(),
+        ),
+        EstimatorSpec::ElasticNetCv {
+            alpha,
+            nfolds,
+            nlambda,
+            lambda_min_ratio,
+            rule,
+            standardize,
+        } => PropensityEstimator::ElasticNetCv(
+            ElasticNetCvConfig::builder()
+                .seed(seed)
+                .alpha(alpha)
+                .nfolds(nfolds)
+                .nlambda(nlambda)
+                .maybe_lambda_min_ratio(lambda_min_ratio)
+                .rule(match rule {
+                    LambdaSpec::Min => LambdaRule::Min,
+                    LambdaSpec::OneStandardError => LambdaRule::OneStandardError,
+                })
+                .standardize(standardize)
+                .build(),
+        ),
+    };
+    let logistic = LogisticRegressionConfig::builder()
+        .link(match link {
+            LinkSpec::Logit => PropensityLink::Logit,
+            LinkSpec::Probit => PropensityLink::Probit,
+            LinkSpec::Cloglog => PropensityLink::Cloglog,
+        })
+        .build();
+    Ok(PropensityScoreConfig::builder()
+        .encoding(covariates.encoding(true))
+        .estimator(estimator)
+        .logistic(logistic)
+        .output_scale(match scale {
+            ScaleSpec::Probability => PropensityScoreOutputScale::Probability,
+            ScaleSpec::Linear => PropensityScoreOutputScale::LinearPredictor,
+        })
+        .maybe_caliper(caliper)
+        .maybe_sampling_weights(sampling_weights.as_ref().map(|weights| {
+            weights
+                .iter()
+                .map(|(id, weight)| (id.clone(), *weight))
+                .collect::<RapidHashMap<_, _>>()
+        }))
+        .reestimate(reestimate)
+        .build())
+}
+
 /// The distance of a spec, built from the units, and the model behind it.
 struct BuiltDistance {
     config: Option<DistanceConfig>,
@@ -1367,70 +1642,8 @@ fn build_distance<R: CovariateRecord>(
             )),
             propensity: None,
         },
-        DistanceSpec::Propensity {
-            covariates,
-            link,
-            estimator,
-            scale,
-            sampling_weights,
-            ..
-        } => {
-            let estimator = match *estimator {
-                EstimatorSpec::Glm => PropensityEstimator::GlmLogit,
-                EstimatorSpec::ElasticNet {
-                    alpha,
-                    lambda,
-                    standardize,
-                } => PropensityEstimator::ElasticNetLogit(
-                    ElasticNetLogisticConfig::builder()
-                        .alpha(alpha)
-                        .lambda(lambda)
-                        .standardize(standardize)
-                        .build(),
-                ),
-                EstimatorSpec::ElasticNetCv {
-                    alpha,
-                    nfolds,
-                    nlambda,
-                    rule,
-                    standardize,
-                } => PropensityEstimator::ElasticNetCv(
-                    ElasticNetCvConfig::builder()
-                        .seed(seed)
-                        .alpha(alpha)
-                        .nfolds(nfolds)
-                        .nlambda(nlambda)
-                        .rule(match rule {
-                            LambdaSpec::Min => LambdaRule::Min,
-                            LambdaSpec::OneStandardError => LambdaRule::OneStandardError,
-                        })
-                        .standardize(standardize)
-                        .build(),
-                ),
-            };
-            let logistic = LogisticRegressionConfig::builder()
-                .link(match link {
-                    LinkSpec::Logit => PropensityLink::Logit,
-                    LinkSpec::Probit => PropensityLink::Probit,
-                    LinkSpec::Cloglog => PropensityLink::Cloglog,
-                })
-                .build();
-            let config = PropensityScoreConfig::builder()
-                .encoding(covariates.encoding(true))
-                .estimator(estimator)
-                .logistic(logistic)
-                .output_scale(match scale {
-                    ScaleSpec::Probability => PropensityScoreOutputScale::Probability,
-                    ScaleSpec::Linear => PropensityScoreOutputScale::LinearPredictor,
-                })
-                .maybe_caliper(caliper)
-                .maybe_sampling_weights(sampling_weights.as_ref().map(|weights| {
-                    weights
-                        .iter()
-                        .map(|(id, weight)| (id.clone(), *weight))
-                        .collect::<RapidHashMap<_, _>>()
-                }))
-                .build();
+        DistanceSpec::Propensity { .. } => {
+            let config = propensity_config(spec, seed, caliper, false)?;
             let prepared = prepare_propensity_distance_config(anchors, candidates, &config)?;
             BuiltDistance {
                 config: Some(prepared.distance_config),
@@ -1623,7 +1836,7 @@ fn field_calipers<R: MatchingRecord>(
     spec.calipers
         .iter()
         .map(|(field, width)| {
-            if !spec.std_caliper {
+            if !spec.std_caliper.field(field) {
                 return Ok((field.clone(), *width));
             }
             let sd = numeric_field_sd(anchors, candidates, field).ok_or_else(|| {
@@ -1669,9 +1882,9 @@ fn typed_fallback(spec: &MatchSpec) -> Vec<MatchRatio> {
 fn run_standard_with<R, S>(
     plan: StandardPlan<'_, R>,
     strategy: S,
-) -> Result<MatchOutcome, SpecError>
+) -> Result<(MatchOutcome, Option<PropensityScoreEstimate>), SpecError>
 where
-    R: MatchingRecord,
+    R: MatchingRecord + CovariateRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
 {
     let spec = plan.spec;
@@ -1690,6 +1903,41 @@ where
         .iter()
         .map(|(field, width)| caliper_on_field::<R>(field, *width))
         .collect();
+    if spec.reestimate {
+        let caliper = typed_caliper("distance", spec.distance.caliper())?;
+        let config = propensity_config(&spec.distance, spec.seed, caliper, true)?;
+        let constraints = Chained {
+            first: Chained {
+                first: sex,
+                second: anti,
+            },
+            second: calipers,
+        };
+        let criteria = spec.criteria();
+        let fallback = typed_fallback(spec);
+        let matched = if plan.rounds {
+            estimate_propensity_and_match(
+                plan.anchors,
+                plan.candidates,
+                &criteria,
+                Rounds(strategy),
+                &fallback,
+                &constraints,
+                &config,
+            )?
+        } else {
+            estimate_propensity_and_match(
+                plan.anchors,
+                plan.candidates,
+                &criteria,
+                strategy,
+                &fallback,
+                &constraints,
+                &config,
+            )?
+        };
+        return Ok((reject_invalid(matched.outcome)?, Some(matched.propensity)));
+    }
     let mut job = MatchJob::new_standard(plan.anchors, plan.candidates, spec.seed)
         .with_ratio(typed_ratio(spec)?)
         .with_birth_window(typed_window(spec)?)
@@ -1698,6 +1946,7 @@ where
         .with_exact_matches(spec.exact.iter().cloned())
         .with_unique_by_key(spec.unique_by_key.clone())
         .with_ratio_fallback(typed_fallback(spec))
+        .with_common_support(spec.discard.map(Into::into))
         .with_constraints(sex)
         .with_constraints(anti)
         .with_constraints(calipers);
@@ -1710,7 +1959,7 @@ where
     } else {
         job.run()
     };
-    reject_invalid(outcome)
+    Ok((reject_invalid(outcome)?, None))
 }
 
 /// Check a spec and run it on the units.
@@ -1855,7 +2104,16 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         | MatchMethod::Nearest => {}
     }
 
-    let built = build_distance(&spec.distance, anchors, candidates, spec.seed, false)?;
+    // With reestimate the typed call fits the model itself, on all units and
+    // again on the ones that remain.
+    let built = if spec.reestimate {
+        BuiltDistance {
+            config: None,
+            propensity: None,
+        }
+    } else {
+        build_distance(&spec.distance, anchors, candidates, spec.seed, false)?
+    };
     let calipers = field_calipers(spec, anchors, candidates)?;
     let rounds = spec.assignment == Some(AssignmentSpec::Rounds);
     let plan = |rounds| StandardPlan {
@@ -1866,16 +2124,24 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         calipers: calipers.clone(),
         rounds,
     };
-    let outcome = match spec.method {
+    let (outcome, refitted) = match spec.method {
         MatchMethod::Random => run_standard_with(plan(rounds), RandomSelection::seeded(spec.seed))?,
         MatchMethod::LowestIndex => run_standard_with(plan(rounds), DeterministicSelection)?,
         MatchMethod::NearestBirthDate => {
             run_standard_with(plan(rounds), NearestBirthDateSelection)?
         }
         MatchMethod::Nearest => {
-            let mut strategy = NearestSelection::new(spec.seed).with_std_caliper(spec.std_caliper);
+            let mut strategy =
+                NearestSelection::new(spec.seed).with_std_caliper(spec.std_caliper.distance());
             if let Some(order) = spec.nearest.m_order {
                 strategy = strategy.with_order(order.into());
+            }
+            if let Some(variable) = spec.nearest.variable_ratio {
+                strategy = strategy.with_variable_ratio(
+                    VariableRatio::new(variable.average, variable.min, variable.max).map_err(
+                        |error| SpecError::option("nearest.variable_ratio", error.to_string()),
+                    )?,
+                );
             }
             if let Some(assignment) = spec.assignment {
                 strategy = strategy.with_assignment(assignment.into());
@@ -1899,7 +2165,7 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
     };
     Ok(SpecOutput::Pairs {
         outcome: Box::new(outcome),
-        propensity: built.propensity.map(Box::new),
+        propensity: refitted.or(built.propensity).map(Box::new),
     })
 }
 

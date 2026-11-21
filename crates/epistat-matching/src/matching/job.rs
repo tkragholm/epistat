@@ -543,6 +543,15 @@ impl<R: MatchingRecord, S, G, P> MatchJob<StandardMode<'_, R>, R, S, G, P>
 where
     G: ConstraintGroup<R>,
 {
+    /// Trim the units outside the common support of the propensity scores
+    /// before matching (`discard`). Needs a score distance, a propensity score
+    /// or any numeric score; without one the job returns an invalid outcome.
+    #[must_use]
+    pub const fn with_common_support(mut self, policy: Option<crate::CommonSupport>) -> Self {
+        self.criteria.common_support = policy;
+        self
+    }
+
     /// Set optional descending fallback ratios for standard matching.
     ///
     /// They cannot be combined with the nearest mode or with round assignment:
