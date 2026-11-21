@@ -1,5 +1,5 @@
 use super::IdOrder;
-use super::sweep::{RiskSetSweep, SwapRemovePool};
+use super::sweep::{LIST_LIMIT, RiskSetSweep};
 use crate::matching::{
     CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
     DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
@@ -55,6 +55,75 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// record for every case.
     fn default_at_risk_rule(&self) -> Option<DefaultAtRiskRule> {
         None
+    }
+
+    /// The span of days on which `control` is at risk, for a policy whose
+    /// [`Self::is_control_at_risk`] depends on the control and the date alone
+    /// and is true on the days of one span. `None`, the default, when the
+    /// policy does not say.
+    ///
+    /// A policy that answers `Some` for every record promises that
+    /// `is_control_at_risk(case, control, date)` is
+    /// `control_at_risk_span(control).contains(date)` for every case. Matching
+    /// then keeps the risk sets by a sweep over the case dates, as it does
+    /// under the default rule (see [`match_transition`]), and gives the pairs
+    /// and diagnostics of the scan. A policy that answers `None` for any
+    /// record is scanned.
+    fn control_at_risk_span(&self, _control: &R) -> Option<AtRiskSpan> {
+        None
+    }
+}
+
+/// The days on which a control is at risk, whatever the case; see
+/// [`RiskSetPolicy::control_at_risk_span`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtRiskSpan {
+    /// Not at risk on any day.
+    Never,
+    /// At risk on the days from `from` up to but not including `until`. A
+    /// missing `from` is before every day and a missing `until` after every
+    /// day.
+    Between {
+        /// The first day at risk.
+        from: Option<NaiveDate>,
+        /// The first day no longer at risk.
+        until: Option<NaiveDate>,
+    },
+}
+
+impl AtRiskSpan {
+    /// The span of the default rule: from the entry date up to but not
+    /// including the event date.
+    #[must_use]
+    pub fn of_default_rule<R: RoleIndexedRecord>(control: &R) -> Self {
+        Self::Between {
+            from: control.entry_date(),
+            until: control.event_date(),
+        }
+    }
+
+    /// The span cut to end on `until` at the latest, which is not a day of
+    /// it. A missing `until` leaves the span as it is.
+    #[must_use]
+    pub fn ending_by(self, until: Option<NaiveDate>) -> Self {
+        match (self, until) {
+            (Self::Between { from, until: end }, Some(cut)) => Self::Between {
+                from,
+                until: Some(end.map_or(cut, |end| end.min(cut))),
+            },
+            (span, _) => span,
+        }
+    }
+
+    /// Whether `date` is a day of the span.
+    #[must_use]
+    pub fn contains(self, date: NaiveDate) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Between { from, until } => {
+                from.is_none_or(|from| from <= date) && until.is_none_or(|until| date < until)
+            }
+        }
     }
 }
 
@@ -131,12 +200,17 @@ impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
 /// candidate whose score is outside the range of the cases' scores is not
 /// used. See [`CommonSupport`].
 ///
-/// Cases are matched in order of event date. Under [`DefaultRiskSetPolicy`],
-/// with the birth date as the distance (no distance configuration), a seeded
-/// [`RandomSelection`](crate::RandomSelection), no unique key and no
-/// constraints other than alive checks, the risk sets are kept by a sweep over
-/// the case dates rather than scanned for each case, in time close to linear
-/// in the cohort. Any other job scans the candidates of each case's stratum
+/// Cases are matched in order of event date. The risk sets are kept by a
+/// sweep over the case dates rather than scanned for each case when the
+/// at-risk rule is given as a span of each control ([`DefaultRiskSetPolicy`],
+/// or a policy that answers [`RiskSetPolicy::control_at_risk_span`]), the
+/// birth date is the distance (no distance configuration), the selection is a
+/// seeded [`RandomSelection`](crate::RandomSelection), there is no unique key
+/// and every constraint is an alive check, a residence check by periods
+/// ([`MatchJob::with_resident_spells`](crate::MatchJob::with_resident_spells))
+/// or a caliper on a numeric field. Without a caliper the sweep takes time
+/// close to linear in the cohort; a caliper is tested on the controls of each
+/// case's window. Any other job scans the candidates of each case's stratum
 /// and birth window, in time proportional to the cases times the candidates
 /// per case. Both give the same pairs and diagnostics.
 #[must_use]
@@ -775,25 +849,27 @@ fn run_transition_case_loop<
 }
 
 /// The sweep of [`super::sweep`], when it gives what the scan of every
-/// candidate gives: the default at-risk rule, the birth-date index with the
-/// date distance (whose caliper is the birth window, so it refuses nobody the
-/// index returns), no unique key, no common-support trimming, a seeded random
-/// draw, and constraints that each allow every pair or refuse a control from
-/// a date of its own on. Every other job scans.
+/// candidate gives: an at-risk rule given as a span of each control (the
+/// default rule, or a policy's [`RiskSetPolicy::control_at_risk_span`]), the
+/// birth-date index with the date distance (whose caliper is the birth window,
+/// so it refuses nobody the index returns), no unique key, no common-support
+/// trimming, a seeded random draw, distinct ids, and constraints that each
+/// have a rule the sweep reads (see [`Constraint::status_rule`]). Every other
+/// job scans.
 fn risk_set_sweep<
+    'a,
     R: RoleIndexedRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
     D: DistanceMetric<R> + Sync,
     G: ConstraintGroup<R> + ?Sized,
     P: RiskSetPolicy<R> + ?Sized,
 >(
-    loop_config: &TransitionLoopConfig<'_, R, D, G, P>,
+    loop_config: &TransitionLoopConfig<'a, R, D, G, P>,
     engine: &mut MatchEngine<'_, R, S>,
-) -> Option<RiskSetSweep> {
+) -> Option<RiskSetSweep<'a, R>> {
     let config = loop_config.config;
     let filters = loop_config.common_support_filters;
-    if config.risk_set_policy.default_at_risk_rule().is_none()
-        || !config.use_birth_date_index
+    if !config.use_birth_date_index
         || loop_config.validated.unique_by_key.is_some()
         || !filters.trimmed_case_indices.is_empty()
         || !filters.trimmed_candidate_indices.is_empty()
@@ -805,12 +881,41 @@ fn risk_set_sweep<
     if !config.extra_constraints.status_rules(&mut rules) {
         return None;
     }
+    let spans = at_risk_spans(
+        loop_config.cohort,
+        config.risk_set_policy,
+        loop_config.case_indices,
+    )?;
     RiskSetSweep::new(
         loop_config.cohort,
         &engine.candidate_index,
         &rules,
         loop_config.id_order?,
+        spans,
     )
+}
+
+/// The at-risk span of every record, or `None` when the policy does not give
+/// them all, or gives a case a span that holds its own event date (the scan
+/// would refuse it as the case itself, which the sweep does not count).
+fn at_risk_spans<R: RoleIndexedRecord, P: RiskSetPolicy<R> + ?Sized>(
+    cohort: &[R],
+    policy: &P,
+    case_indices: &[usize],
+) -> Option<Vec<AtRiskSpan>> {
+    if policy.default_at_risk_rule().is_some() {
+        return Some(cohort.iter().map(AtRiskSpan::of_default_rule).collect());
+    }
+    let spans: Vec<AtRiskSpan> = cohort
+        .iter()
+        .map(|record| policy.control_at_risk_span(record))
+        .collect::<Option<_>>()?;
+    let own_date_at_risk = case_indices.iter().any(|&idx| {
+        cohort[idx]
+            .event_date()
+            .is_some_and(|date| spans[idx].contains(date))
+    });
+    (!own_date_at_risk).then_some(spans)
 }
 
 /// The case loop of [`run_transition_case_loop`] with the risk sets of a
@@ -828,7 +933,7 @@ fn run_swept_case_loop<
     loop_config: &TransitionLoopConfig<'_, R, D, G, P>,
     engine: &mut MatchEngine<'_, R, S>,
     state: &mut TransitionRunState,
-    sweep: &mut RiskSetSweep,
+    sweep: &mut RiskSetSweep<'_, R>,
 ) {
     #[cfg(test)]
     super::sweep::SWEPT_RUNS.with(|runs| runs.set(runs.get() + 1));
@@ -839,15 +944,34 @@ fn run_swept_case_loop<
         .map_or(0_i64, |days| i64::from(days.get()));
     let required = &validated.required_strata;
     let drawn_reason = Constraint::<R>::reason(&ReplacementConstraint);
+
+    // The stratum and window of each case. A stratum is counted with trees
+    // when some case's window in it holds more than `LIST_LIMIT` controls.
+    let places: Vec<Option<(usize, std::ops::Range<usize>)>> = loop_config
+        .case_indices
+        .iter()
+        .map(|&case_idx| {
+            let case = &cohort[case_idx];
+            case.event_date()?;
+            let case_strata_values =
+                (!required.is_empty()).then(|| build_strata_values(case, required));
+            let stratum = engine
+                .candidate_index
+                .stratum_of(case_strata_values.as_deref())?;
+            let window = engine
+                .candidate_index
+                .window(stratum, case.birth_date(), window_days)?;
+            Some((stratum, window))
+        })
+        .collect();
+    let mut counted = vec![false; engine.candidate_index.strata().len()];
+    for (stratum, window) in places.iter().flatten() {
+        counted[*stratum] |= window.len() > LIST_LIMIT;
+    }
+    sweep.count_strata(&counted);
+
     let mut drawn_now: Vec<usize> = Vec::new();
-    for case_idx in loop_config.case_indices {
-        if loop_config
-            .common_support_filters
-            .trimmed_case_indices
-            .contains(case_idx)
-        {
-            continue;
-        }
+    for (case_idx, place) in loop_config.case_indices.iter().zip(places) {
         state.eligible_cases += 1;
 
         let case = &cohort[*case_idx];
@@ -856,21 +980,11 @@ fn run_swept_case_loop<
         };
         sweep.advance(case_event_date);
 
-        let case_strata_values =
-            (!required.is_empty()).then(|| build_strata_values(case, required));
-        let place = engine
-            .candidate_index
-            .stratum_of(case_strata_values.as_deref())
-            .and_then(|stratum| {
-                engine
-                    .candidate_index
-                    .window(stratum, case.birth_date(), window_days)
-                    .map(|window| (stratum, window))
-            });
-        let counts = place
-            .as_ref()
-            .map(|(stratum, window)| sweep.counts(*stratum, window.clone()))
-            .unwrap_or_default();
+        let Some((stratum, window)) = place else {
+            state.diagnostics.anchors_with_no_candidates += 1;
+            continue;
+        };
+        let (counts, mut pool) = sweep.pool(stratum, window, *case_idx);
 
         let exclusions = &mut state.diagnostics.exclusion_counts;
         if counts.not_at_risk > 0 {
@@ -893,9 +1007,6 @@ fn run_swept_case_loop<
             state.diagnostics.anchors_with_no_candidates += 1;
             continue;
         }
-        let Some((stratum, window)) = place else {
-            continue;
-        };
 
         let Some(target_ratio) = loop_config.ratio_policy.target_ratio(eligible) else {
             state.diagnostics.anchors_below_required_ratio += 1;
@@ -908,7 +1019,6 @@ fn run_swept_case_loop<
             state.diagnostics.anchors_on_lower_tier += 1;
         }
 
-        let mut pool = SwapRemovePool::new(eligible);
         let mut local_matches = 0usize;
         drawn_now.clear();
         for _ in 0..target_ratio {
@@ -919,8 +1029,7 @@ fn run_swept_case_loop<
             else {
                 break;
             };
-            let rank = pool.swap_remove(position);
-            let selected_idx = sweep.nth_eligible(stratum, window.clone(), rank);
+            let selected_idx = sweep.take(stratum, &mut pool, position);
             let control = &cohort[selected_idx];
             state.pairs.push(MatchedPair::new(case.id(), control.id()));
             local_matches += 1;

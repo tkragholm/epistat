@@ -215,7 +215,7 @@ pub use matching::{
     quick_clusters, quick_match_subclasses,
 };
 pub use role_transition::{
-    DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
+    AtRiskSpan, DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
     match_transition,
 };
 pub use role_transition::{
@@ -284,7 +284,7 @@ pub mod prelude {
         match_full, match_optimal,
     };
     pub use crate::{
-        AgeLimitYears, AnchorRecord, AssignmentSpec, BalanceDiagnostics, BalanceRecord,
+        AgeLimitYears, AnchorRecord, AssignmentSpec, AtRiskSpan, BalanceDiagnostics, BalanceRecord,
         BalanceRecordBuilder, BalanceReport, BalanceReportOptions, BalanceThresholdSummary,
         BalanceThresholds, BaseRecord, BirthDateWindowDays, CaliperConstraint, CandidateRecord,
         CardinalityMatch, CardinalitySpec, CategoricalBalance, CategoricalCovariateSpec,
@@ -356,7 +356,8 @@ pub mod prelude {
     pub mod constraints {
         pub use crate::constraints::{
             AntiExact, Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive,
-            MustBeResident, caliper_on_field, numeric_field_sd,
+            MustBeResident, MustBeResidentInSpells, ResidenceSpell, caliper_on_field,
+            numeric_field_sd,
         };
     }
 }

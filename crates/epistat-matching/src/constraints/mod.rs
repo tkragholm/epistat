@@ -1,6 +1,6 @@
 use crate::matching::{
-    Constraint, ConstraintContext, MatchingRecord, RefusesFromDate, RoleIndexedRecord, StatusRule,
-    StatusRuleKind,
+    Constraint, ConstraintContext, FieldValueSource, MatchingRecord, RefusesFromDate,
+    ResidenceSpellSource, RoleIndexedRecord, StatusRule, StatusRuleKind,
 };
 use chrono::NaiveDate;
 use std::marker::PhantomData;
@@ -253,9 +253,27 @@ where
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
-        let case_val = (self.selector)(case);
-        let control_val = (self.selector)(control);
-        match (case_val, control_val) {
+        self.allows_values((self.selector)(case), (self.selector)(control))
+    }
+
+    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
+        Some(StatusRule(StatusRuleKind::ComparesValues {
+            reason: self.reason,
+            source: self,
+        }))
+    }
+}
+
+impl<R: MatchingRecord, F> FieldValueSource<R> for Caliper<R, F>
+where
+    F: Fn(&R) -> Option<f64> + Send + Sync,
+{
+    fn value_of(&self, record: &R) -> Option<f64> {
+        (self.selector)(record)
+    }
+
+    fn allows_values(&self, case: Option<f64>, control: Option<f64>) -> bool {
+        match (case, control) {
             (Some(c), Some(ctrl)) => (c - ctrl).abs() <= self.window,
             // Both missing: alike in the one respect the caliper can see, if the
             // caller has said so. One missing and one present is refused either
@@ -410,6 +428,89 @@ where
             return true;
         };
         (self.check)(control, index_date)
+    }
+}
+
+/// A period of residence: from `from` up to but not including `to`. A missing
+/// `from` is a period that began before every date, and a missing `to` one
+/// that has not ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResidenceSpell {
+    /// The first day of residence, or `None` when it began before every date.
+    pub from: Option<NaiveDate>,
+    /// The day the residence ends, which is not a day of it, or `None` when it
+    /// has not ended.
+    pub to: Option<NaiveDate>,
+}
+
+impl ResidenceSpell {
+    /// Whether `date` is a day of the period.
+    #[must_use]
+    pub fn contains(&self, date: NaiveDate) -> bool {
+        self.from.is_none_or(|from| from <= date) && self.to.is_none_or(|to| date < to)
+    }
+}
+
+/// Constraint that ensures the control is resident at the case's index date,
+/// with residence given as periods.
+///
+/// `spells` gives the periods of a control, or `None` for a control that is
+/// resident on every date. A control with periods is resident on a date when
+/// one of them contains it, so a control with an empty list is never
+/// resident. A person who emigrates on the index date is not resident on it,
+/// and one who immigrates on it is.
+///
+/// The verdict is [`MustBeResident`]'s with the check "one of the periods
+/// contains the date". Given as periods, it lets risk-set matching read each
+/// control's periods once instead of asking the check for every case.
+pub struct MustBeResidentInSpells<'s, F> {
+    spells: F,
+    _spells: PhantomData<&'s [ResidenceSpell]>,
+}
+
+impl<F> MustBeResidentInSpells<'_, F> {
+    /// Create a constraint that reads the periods of each control from `spells`.
+    pub const fn at_index_date(spells: F) -> Self {
+        Self {
+            spells,
+            _spells: PhantomData,
+        }
+    }
+}
+
+impl<'s, R: RoleIndexedRecord, F> Constraint<R> for MustBeResidentInSpells<'s, F>
+where
+    F: Fn(&R) -> Option<&'s [ResidenceSpell]> + Send + Sync,
+{
+    fn reason(&self) -> &'static str {
+        "control_non_resident_at_index_date"
+    }
+
+    fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
+        self.allows_at_risk(case, control)
+    }
+
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        let Some(index_date) = case.event_date() else {
+            return true;
+        };
+        (self.spells)(control).is_none_or(|spells| spells.iter().any(|s| s.contains(index_date)))
+    }
+
+    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
+        Some(StatusRule(StatusRuleKind::OutsideSpells {
+            reason: Constraint::<R>::reason(self),
+            source: self,
+        }))
+    }
+}
+
+impl<'s, R: RoleIndexedRecord, F> ResidenceSpellSource<R> for MustBeResidentInSpells<'s, F>
+where
+    F: Fn(&R) -> Option<&'s [ResidenceSpell]> + Send + Sync,
+{
+    fn spells_of(&self, control: &R) -> Option<&[ResidenceSpell]> {
+        (self.spells)(control)
     }
 }
 

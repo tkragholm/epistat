@@ -489,6 +489,25 @@ where
         self.with_constraint(MustBeResident::at_index_date(resident_selector::<R>))
     }
 
+    /// Add a residency-at-index constraint with residence given as periods;
+    /// see [`MustBeResidentInSpells`](crate::constraints::MustBeResidentInSpells).
+    ///
+    /// Use this when residence comes from a register of migrations. It refuses
+    /// what [`Self::with_resident_check_by`] with the same periods refuses, and
+    /// lets risk-set matching take the sweep.
+    #[must_use]
+    pub fn with_resident_spells<'s, F>(
+        self,
+        spells: F,
+    ) -> MatchJob<Mode, R, S, (G, crate::constraints::MustBeResidentInSpells<'s, F>), P>
+    where
+        F: Fn(&R) -> Option<&'s [crate::constraints::ResidenceSpell]> + Send + Sync,
+    {
+        self.with_constraint(crate::constraints::MustBeResidentInSpells::at_index_date(
+            spells,
+        ))
+    }
+
     /// Add a custom residency-at-index constraint.
     ///
     /// Use this when residency is derived from study-specific fields.

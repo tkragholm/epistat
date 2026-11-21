@@ -93,6 +93,25 @@ pub(crate) trait RefusesFromDate<R>: Sync {
     fn refused_from(&self, control: &R) -> Option<NaiveDate>;
 }
 
+/// A constraint that allows a control on the index dates inside its periods
+/// of residence and refuses it on the others.
+pub(crate) trait ResidenceSpellSource<R>: Sync {
+    /// The periods of residence of the control, or `None` when it is resident
+    /// on every date.
+    fn spells_of(&self, control: &R) -> Option<&[crate::constraints::ResidenceSpell]>;
+}
+
+/// A constraint that compares one numeric value of the case with the same
+/// value of the control.
+pub(crate) trait FieldValueSource<R>: Sync {
+    /// The value of the record.
+    fn value_of(&self, record: &R) -> Option<f64>;
+
+    /// Whether a case with value `case` and a control with value `control`
+    /// may be matched.
+    fn allows_values(&self, case: Option<f64>, control: Option<f64>) -> bool;
+}
+
 /// What a constraint decides, in a form that risk-set matching under the
 /// default policy can count with a sweep over the index dates. See
 /// [`Constraint::status_rule`].
@@ -108,6 +127,18 @@ pub(crate) enum StatusRuleKind<'a, R> {
     RefusesFrom {
         reason: &'static str,
         source: &'a dyn RefusesFromDate<R>,
+    },
+    /// Refuses a control, for `reason`, on the index dates outside the
+    /// periods of residence `source` gives for it.
+    OutsideSpells {
+        reason: &'static str,
+        source: &'a dyn ResidenceSpellSource<R>,
+    },
+    /// Refuses a pair, for `reason`, by comparing a value of the case with
+    /// the same value of the control, as `source` says.
+    ComparesValues {
+        reason: &'static str,
+        source: &'a dyn FieldValueSource<R>,
     },
 }
 
