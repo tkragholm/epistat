@@ -102,7 +102,7 @@ fn scores_of(ids: &[&str], values: &[f64]) -> Vec<(String, f64)> {
 fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
     let reference = reference();
     assert!(reference.versions.r.starts_with("R version"));
-    assert!(!reference.versions.epi.is_empty());
+    assert_ne!(reference.versions.epi, "");
     assert!(
         reference.at_bounds > 0,
         "the reference has no tie at a bound"

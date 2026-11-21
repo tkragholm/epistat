@@ -300,15 +300,15 @@ fn at_risk_score_ranges<R: RoleIndexedRecord, P: RiskSetPolicy<R> + ?Sized>(
 
     // Records with a score, by entry date (no entry date first) and by event
     // date. Ties keep cohort order, which does not matter for a set.
-    let scored: Vec<usize> = (0..cohort.len())
+    let with_score: Vec<usize> = (0..cohort.len())
         .filter(|&idx| score_of(idx).is_some())
         .collect();
-    let by_entry: Vec<usize> = scored
+    let by_entry: Vec<usize> = with_score
         .iter()
         .copied()
         .sorted_by_key(|&idx| cohort[idx].entry_date())
         .collect();
-    let by_event: Vec<usize> = scored
+    let by_event: Vec<usize> = with_score
         .iter()
         .copied()
         .filter(|&idx| cohort[idx].event_date().is_some())
