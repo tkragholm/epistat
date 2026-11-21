@@ -14,6 +14,8 @@ pub mod mcmc;
 pub mod normal;
 pub mod poisson;
 pub mod quantile;
+pub mod rosenbaum;
+pub mod signed_rank;
 pub mod standardisation;
 pub mod student;
 pub mod sum;
