@@ -929,8 +929,7 @@ mod tests {
         use crate::constraints::caliper_on_field;
 
         // The rule: comparators whose parents were born within one year. The
-        // far control is the one the first production run kept -- the parental
-        // window was measured after matching and never imposed during it.
+        // far control is outside that window and must not be chosen.
         let records = vec![
             child("case", Some(date(2012, 1, 1)), 1980.0, 1978.0),
             child("far", None, 1996.0, 1978.0),

@@ -231,7 +231,7 @@ where
 /// from a config file becomes a list of constraints.
 ///
 /// The field is read through [`MatchingRecord::numeric`], and a record that does
-/// not carry it refuses the pair — an unverifiable constraint has not been
+/// not carry it refuses the pair, as an unverifiable constraint has not been
 /// satisfied. [`Caliper::on_missing`] changes that when a study's convention is
 /// that unknown matches unknown.
 ///
