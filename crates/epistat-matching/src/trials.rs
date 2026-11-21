@@ -483,9 +483,9 @@ pub fn trial_seed(seed: u64, period: i64) -> u64 {
 /// start, with the date of the trial as the transition date of the initiators
 /// and none for the rest. It returns the matching of that cohort, for example
 /// by running a [`MatchJob::new_transition`](crate::MatchJob::new_transition)
-/// with the options of the study and a seed from [`trial_seed`]. The record of
-/// a person is cloned into the pool of every trial in which the person is
-/// eligible.
+/// with the options of the study and a seed from [`trial_seed`]. The pool
+/// holds a reference to the record of each person in the panel, so a record
+/// is never copied, however many trials the person is eligible in.
 ///
 /// Trials without an initiator in the pool are left out of the output.
 ///
@@ -498,8 +498,8 @@ pub fn match_trials<R, E, F>(
     mut run: F,
 ) -> Result<TrialOutcome, TrialsError<E>>
 where
-    R: MatchingRecord + Clone,
-    F: FnMut(i64, &[RoleTransitionRecord<R>]) -> Result<MatchOutcome, E>,
+    R: MatchingRecord,
+    F: FnMut(i64, &[RoleTransitionRecord<&R>]) -> Result<MatchOutcome, E>,
 {
     validate(panel)?;
     let plan = plan(panel, options);
@@ -520,11 +520,11 @@ where
         if n_initiators == 0 {
             continue;
         }
-        let cohort: Vec<RoleTransitionRecord<R>> = pool
+        let cohort: Vec<RoleTransitionRecord<&R>> = pool
             .iter()
             .map(|e| {
                 RoleTransitionRecord::from_record(
-                    panel[e.person].record.clone(),
+                    &panel[e.person].record,
                     e.assigned.then_some(*date),
                 )
             })
