@@ -381,6 +381,28 @@ impl UnitData {
         Ok(self)
     }
 
+    /// The treatment and outcome of the unit with this id.
+    ///
+    /// # Errors
+    ///
+    /// [`EffectError::UnknownUnit`] when there is no such unit.
+    pub fn treatment_and_outcome(&self, id: &str) -> Result<(bool, f64), EffectError> {
+        let row = self.row_of(id)?;
+        Ok((self.treated[row], self.outcome[row]))
+    }
+
+    pub(crate) fn treated_flags(&self) -> &[bool] {
+        &self.treated
+    }
+
+    pub(crate) fn outcomes(&self) -> &[f64] {
+        &self.outcome
+    }
+
+    pub(crate) fn covariate_columns(&self) -> &[Vec<f64>] {
+        &self.covariates
+    }
+
     fn row_of(&self, id: &str) -> Result<usize, EffectError> {
         self.index
             .get(id)

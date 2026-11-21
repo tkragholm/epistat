@@ -7,12 +7,15 @@
 
 pub mod balance;
 pub mod decomposition;
+pub mod evalue;
 pub mod gamma;
 pub mod likelihood;
 pub mod mcmc;
 pub mod normal;
 pub mod poisson;
 pub mod quantile;
+pub mod rosenbaum;
+pub mod signed_rank;
 pub mod standardisation;
 pub mod student;
 pub mod sum;

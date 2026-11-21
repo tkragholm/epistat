@@ -115,6 +115,7 @@ macro_rules! delegate_matching_record {
     };
 }
 
+pub mod abadie_imbens;
 #[cfg(feature = "arrow")]
 pub mod arrow;
 mod balance;
@@ -126,6 +127,7 @@ pub mod output;
 #[cfg(feature = "reporting")]
 pub mod reporting;
 mod role_transition;
+pub mod sensitivity;
 pub mod spec;
 mod trials;
 mod types;
