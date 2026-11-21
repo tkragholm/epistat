@@ -34,6 +34,9 @@ use crate::matching::{
     subclassify_by_propensity_score_map,
 };
 use crate::role_transition::{ExposureDensityOutcome, exposure_density_sets};
+use crate::trials::{
+    TrialOptions, TrialOutcome, TrialPerson, TrialsError, match_trials, trial_seed,
+};
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, CommonSupport, CriteriaValidationError, DistanceCaliper,
     Estimand, ExclusionReason, MatchOutcome, MatchRatio, MatchingCriteria, RoleTransitionRecord,
@@ -61,6 +64,12 @@ pub enum MatchMode {
     /// date is the date of exposure. The output carries the index date of
     /// each set and the date on which each control is later exposed.
     ExposureDensity,
+    /// Sequential trial emulation: in each period at which people are
+    /// eligible, those who start treatment are matched to eligible people who
+    /// do not, by risk-set matching on the date of the period. The output
+    /// carries the sets of every trial, the start of follow-up of each person
+    /// and the period at which the person deviates from the assigned strategy.
+    SequentialTrials,
 }
 
 /// How controls are chosen.
@@ -737,6 +746,11 @@ pub struct MatchSpec {
     pub quick: QuickSpec,
     /// Options of the full method.
     pub full: FullSpec,
+    /// Options of [`MatchMode::SequentialTrials`]. The options of risk-set
+    /// matching (ratio, exact, birth window, age limit, alive, resident and
+    /// the rest) apply inside each trial. Every trial draws with a seed
+    /// derived from `seed` and the period of the trial.
+    pub trials: TrialOptions,
     /// How anchors share the candidates when each takes more than one. The
     /// default is sequential, and rounds for the nearest method as in
     /// `matchit()`. Risk-set matching is always sequential.
@@ -803,6 +817,7 @@ impl Default for MatchSpec {
             cem: CemSpec::default(),
             quick: QuickSpec::default(),
             full: FullSpec::default(),
+            trials: TrialOptions::default(),
             assignment: None,
             ratio: criteria.match_ratio,
             ratio_fallback: Vec::new(),
@@ -868,6 +883,12 @@ pub enum SpecInput<'a, R> {
         /// The cohort. A unit with a transition date is a case on that date.
         cohort: &'a [RoleTransitionRecord<R>],
     },
+    /// The people of a panel, for [`MatchMode::SequentialTrials`].
+    Trials {
+        /// One entry per person, with the periods in which the person is
+        /// observed.
+        panel: &'a [TrialPerson<R>],
+    },
 }
 
 /// What a spec produced.
@@ -882,6 +903,9 @@ pub enum SpecOutput {
     },
     /// Exposure density sets, from [`MatchMode::ExposureDensity`].
     ExposureDensity(Box<ExposureDensityOutcome>),
+    /// The trials of a sequential trial emulation, from
+    /// [`MatchMode::SequentialTrials`].
+    Trials(Box<TrialOutcome>),
     /// Strata with weights, from the exact method and from coarsened exact
     /// matching without k:k pairing.
     Exact(Box<ExactMatchOutcome>),
@@ -951,6 +975,10 @@ impl Display for SpecError {
                 MatchMode::RiskSet | MatchMode::ExposureDensity => f.write_str(
                     "the spec is for risk-set matching and needs one cohort; \
                      pass it, or set the mode to standard",
+                ),
+                MatchMode::SequentialTrials => f.write_str(
+                    "the spec is for sequential trials and needs a panel of people \
+                     with their periods; pass it, or set the mode to standard",
                 ),
             },
             Self::Distance(error) => write!(f, "the distance could not be built: {error}"),
@@ -1150,7 +1178,9 @@ impl MatchSpec {
         }
         match self.mode {
             MatchMode::Standard => self.validate_standard(),
-            MatchMode::RiskSet | MatchMode::ExposureDensity => self.validate_risk_set(),
+            MatchMode::RiskSet | MatchMode::ExposureDensity | MatchMode::SequentialTrials => {
+                self.validate_risk_set()
+            }
         }
     }
 
@@ -1979,7 +2009,7 @@ where
 /// when exact matching cannot run.
 pub fn run_spec<R>(spec: &MatchSpec, input: SpecInput<'_, R>) -> Result<SpecOutput, SpecError>
 where
-    R: MatchingRecord + CovariateRecord,
+    R: MatchingRecord + CovariateRecord + Clone,
 {
     spec.validate()?;
     match (spec.mode, input) {
@@ -1994,6 +2024,7 @@ where
         (MatchMode::ExposureDensity, SpecInput::RiskSet { cohort }) => {
             run_exposure_density(spec, cohort)
         }
+        (MatchMode::SequentialTrials, SpecInput::Trials { panel }) => run_trials(spec, panel),
         (mode, _) => Err(SpecError::InputMode { mode }),
     }
 }
@@ -2231,6 +2262,28 @@ fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
     let sets = exposure_density_sets(cohort, *outcome)
         .map_err(|error| SpecError::option("cohort", error.to_string()))?;
     Ok(SpecOutput::ExposureDensity(Box::new(sets)))
+}
+
+fn run_trials<R: MatchingRecord + CovariateRecord + Clone>(
+    spec: &MatchSpec,
+    panel: &[TrialPerson<R>],
+) -> Result<SpecOutput, SpecError> {
+    let outcome = match_trials(panel, &spec.trials, |period, cohort| {
+        let in_trial = MatchSpec {
+            seed: trial_seed(spec.seed, period),
+            mode: MatchMode::RiskSet,
+            ..spec.clone()
+        };
+        match run_risk_set(&in_trial, cohort)? {
+            SpecOutput::Pairs { outcome, .. } => Ok(*outcome),
+            _ => unreachable!("risk-set matching returns pairs"),
+        }
+    })
+    .map_err(|error| match error {
+        TrialsError::Input(error) => SpecError::option("panel", error.to_string()),
+        TrialsError::Matching { error, .. } => error,
+    })?;
+    Ok(SpecOutput::Trials(Box::new(outcome)))
 }
 
 fn run_risk_set<R: MatchingRecord + CovariateRecord>(
