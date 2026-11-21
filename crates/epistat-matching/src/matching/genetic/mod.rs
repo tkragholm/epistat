@@ -535,15 +535,23 @@ impl GeneticProblem {
         })
     }
 
-    /// The `ratio` nearest admissible controls of focal unit `row`, nearest
-    /// first, ties by position. `taken` marks the controls that are gone.
-    fn nearest(&self, row: usize, w: &[f64], taken: Option<&[bool]>, best: &mut Vec<(f64, usize)>) {
+    /// Adds to `best`, nearest first and ties by position, the admissible
+    /// controls of focal unit `row` among `start..end` that are nearer than
+    /// what it holds, keeping at most `ratio`.
+    fn scan(
+        &self,
+        row: usize,
+        w: &[f64],
+        taken: Option<&[bool]>,
+        start: usize,
+        end: usize,
+        best: &mut Vec<(f64, usize)>,
+    ) {
         let p = self.variables;
         let ratio = self.options.ratio;
-        best.clear();
         let zf = &self.z_focal[row * p..(row + 1) * p];
         let forbidden = &self.forbidden[row];
-        for (c, zc) in self.z_control.chunks_exact(p).enumerate() {
+        for c in start..end {
             if let Some(taken) = taken {
                 if taken[c] {
                     continue;
@@ -564,6 +572,7 @@ impl GeneticProblem {
             if !forbidden.is_empty() && forbidden.binary_search(&c).is_ok() {
                 continue;
             }
+            let zc = &self.z_control[c * p..(c + 1) * p];
             let mut d = 0.0;
             for k in 0..p {
                 let diff = zf[k] - zc[k];
@@ -577,6 +586,56 @@ impl GeneticProblem {
                 best.pop();
             }
             best.insert(at, (d, c));
+        }
+    }
+
+    /// The `ratio` nearest admissible controls of focal unit `row`, nearest
+    /// first, ties by position. `taken` marks the controls that are gone.
+    /// With `split`, a long list of controls is scanned in chunks of a fixed
+    /// size in parallel and the chunks are merged in order, which gives the
+    /// list a single scan would.
+    fn nearest(
+        &self,
+        row: usize,
+        w: &[f64],
+        taken: Option<&[bool]>,
+        split: bool,
+        best: &mut Vec<(f64, usize)>,
+    ) {
+        const CHUNK: usize = 8192;
+        let ratio = self.options.ratio;
+        let n_control = self.control_position.len();
+        best.clear();
+        if split && n_control >= 2 * CHUNK {
+            let chunks: Vec<Vec<(f64, usize)>> = (0..n_control.div_ceil(CHUNK))
+                .into_par_iter()
+                .map(|chunk| {
+                    let mut local = Vec::with_capacity(ratio);
+                    self.scan(
+                        row,
+                        w,
+                        taken,
+                        chunk * CHUNK,
+                        ((chunk + 1) * CHUNK).min(n_control),
+                        &mut local,
+                    );
+                    local
+                })
+                .collect();
+            for list in chunks {
+                for (d, c) in list {
+                    if best.len() == ratio && d >= best[ratio - 1].0 {
+                        continue;
+                    }
+                    let at = best.partition_point(|&(other, _)| other <= d);
+                    if best.len() == ratio {
+                        best.pop();
+                    }
+                    best.insert(at, (d, c));
+                }
+            }
+        } else {
+            self.scan(row, w, taken, 0, n_control, best);
         }
         // A focal unit that cannot get all its controls gets none.
         if best.len() < ratio {
@@ -592,7 +651,7 @@ impl GeneticProblem {
             let per_focal: Vec<Vec<(f64, usize)>> = (0..n_focal)
                 .into_par_iter()
                 .map_init(Vec::new, |best, row| {
-                    self.nearest(row, w, None, best);
+                    self.nearest(row, w, None, false, best);
                     best.clone()
                 })
                 .collect();
@@ -608,7 +667,7 @@ impl GeneticProblem {
             let mut best = Vec::new();
             let mut pairs = Vec::new();
             for row in 0..n_focal {
-                self.nearest(row, w, Some(&taken), &mut best);
+                self.nearest(row, w, Some(&taken), true, &mut best);
                 for &(_, c) in &best {
                     taken[c] = true;
                     pairs.push((row, c));
@@ -812,6 +871,47 @@ mod tests {
             ratio,
             ..GeneticMatchOptions::default()
         })
+    }
+
+    #[test]
+    fn a_split_scan_gives_the_list_of_a_single_scan() {
+        // Many controls on a coarse grid, so that distances tie across the
+        // chunk boundaries and the order among ties is tested.
+        let n = 20_000;
+        let mut stream = Stream::seeded(11);
+        let focal: Vec<bool> = (0..n).map(|i| i < 40).collect();
+        let columns: Vec<Vec<f64>> = (0..2)
+            .map(|_| {
+                (0..n)
+                    .map(|_| f64::from(u8::try_from(stream.below(6)).unwrap()))
+                    .collect()
+            })
+            .collect();
+        let order: Vec<usize> = (0..n).collect();
+        let problem = GeneticProblem::new(
+            &focal,
+            &columns,
+            &columns,
+            &order,
+            GeneticMatchOptions {
+                ratio: 3,
+                ..GeneticMatchOptions::default()
+            },
+            1e-8,
+        )
+        .unwrap();
+        let w = [1.0, 2.0];
+        let mut taken = vec![false; n - 40];
+        for c in (0..taken.len()).step_by(7) {
+            taken[c] = true;
+        }
+        for row in 0..40 {
+            let (mut one, mut many) = (Vec::new(), Vec::new());
+            problem.nearest(row, &w, Some(&taken), false, &mut one);
+            problem.nearest(row, &w, Some(&taken), true, &mut many);
+            assert_eq!(one, many, "focal unit {row}");
+            assert_eq!(one.len(), 3);
+        }
     }
 
     #[test]
