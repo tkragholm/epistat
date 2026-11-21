@@ -337,7 +337,7 @@ fn sequential_trials() {
                 }
                 let on = i % 5 != 0 && p >= first_on && p < first_on + length;
                 periods.push(TrialPeriod {
-                    period: p as i64,
+                    period: i64::try_from(p).expect("small"),
                     date,
                     eligible: p <= first_on || i % 5 == 0,
                     treatment: Some(on),

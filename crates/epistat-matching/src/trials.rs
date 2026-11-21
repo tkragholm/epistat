@@ -62,7 +62,7 @@ use crate::types::{MatchOutcome, RoleTransitionRecord};
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -297,28 +297,6 @@ pub struct TrialOutcome {
     pub trials: Vec<TrialResult>,
 }
 
-impl TrialOutcome {
-    /// How many times each person is in a set across the trials, in the order
-    /// of first appearance.
-    #[must_use]
-    pub fn appearances(&self) -> Vec<(&str, usize)> {
-        let mut position: RapidHashMap<&str, usize> = RapidHashMap::default();
-        let mut counts: Vec<(&str, usize)> = Vec::new();
-        for trial in &self.trials {
-            for member in &trial.members {
-                match position.get(member.id.as_str()) {
-                    Some(at) => counts[*at].1 += 1,
-                    None => {
-                        position.insert(member.id.as_str(), counts.len());
-                        counts.push((member.id.as_str(), 1));
-                    }
-                }
-            }
-        }
-        counts
-    }
-}
-
 /// A person in a trial, by position in the panel.
 #[derive(Debug, Clone, Copy)]
 struct Enrolment {
@@ -341,10 +319,10 @@ struct Plan {
 }
 
 fn validate<R: MatchingRecord>(panel: &[TrialPerson<R>]) -> Result<(), TrialInputError> {
-    let mut seen: RapidHashMap<&str, ()> = RapidHashMap::default();
+    let mut seen: HashSet<&str> = HashSet::new();
     let mut dates: BTreeMap<i64, NaiveDate> = BTreeMap::new();
     for person in panel {
-        if seen.insert(person.record.id(), ()).is_some() {
+        if !seen.insert(person.record.id()) {
             return Err(TrialInputError::DuplicateId {
                 id: person.record.id().to_string(),
             });
@@ -485,6 +463,10 @@ pub fn expand_trials<R: MatchingRecord>(
 /// trial has the same seed in every run with the same seed, whatever the other
 /// trials are and however many threads run.
 #[must_use]
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "the bits of the period are mixed, the sign is not used"
+)]
 pub fn trial_seed(seed: u64, period: i64) -> u64 {
     // SplitMix64 of the seed combined with the period, so that the seeds of
     // neighbouring periods are not neighbours.
@@ -614,7 +596,7 @@ mod tests {
                 .iter()
                 .map(|&(period, eligible, treatment, event)| TrialPeriod {
                     period,
-                    date: day(period as u64),
+                    date: day(u64::try_from(period).expect("non-negative")),
                     eligible,
                     treatment,
                     event,
@@ -634,7 +616,8 @@ mod tests {
                 (3, false, Some(true), true),
             ],
         );
-        let per_protocol = expand_trials(&[a.clone()], &TrialOptions::default()).expect("valid");
+        let per_protocol =
+            expand_trials(std::slice::from_ref(&a), &TrialOptions::default()).expect("valid");
         let shape: Vec<(i64, i64)> = per_protocol
             .iter()
             .map(|r| (r.trial_period, r.follow_up_time))

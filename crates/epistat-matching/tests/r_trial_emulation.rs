@@ -79,9 +79,9 @@ struct Simulated {
 struct PanelCols {
     id: Vec<i64>,
     period: Vec<i64>,
-    eligible: Vec<f64>,
-    treatment: Vec<Option<f64>>,
-    outcome: Vec<f64>,
+    eligible: Vec<i64>,
+    treatment: Vec<Option<i64>>,
+    outcome: Vec<i64>,
 }
 
 #[derive(Deserialize)]
@@ -89,7 +89,7 @@ struct Expansion {
     id: Vec<i64>,
     trial_period: Vec<i64>,
     itt_rows: Vec<i64>,
-    assigned: Vec<f64>,
+    assigned: Vec<i64>,
     outcome_at: Vec<Option<i64>>,
     pp_rows: Vec<i64>,
     pp_outcome_at: Vec<Option<i64>>,
@@ -129,9 +129,9 @@ fn day(days: i64) -> NaiveDate {
         .expect("in range")
 }
 
-fn flag(value: f64) -> bool {
-    assert!(value == 0.0 || value == 1.0, "a 0 or 1 flag, got {value}");
-    value == 1.0
+fn flag(value: i64) -> bool {
+    assert!(value == 0 || value == 1, "a 0 or 1 flag, got {value}");
+    value == 1
 }
 
 /// People with no matching data, for the expansion.
@@ -415,7 +415,7 @@ fn risk_sets_of_every_trial_equal_ccwc() {
             .expansion
             .assigned
             .iter()
-            .filter(|a| **a == 1.0)
+            .filter(|a| **a == 1)
             .count();
     assert!(over_age, "the data has initiators over the age limit");
 }
