@@ -533,6 +533,7 @@ dependencies = [
  "criterion",
  "epistat-glm",
  "epistat-linalg",
+ "epistat-optim",
  "epistat-register",
  "epistat-rng",
  "epistat-stats",

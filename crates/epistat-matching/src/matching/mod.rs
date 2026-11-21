@@ -6,6 +6,7 @@ mod exact;
 mod index;
 pub mod job;
 mod nearest;
+mod optimal;
 pub mod ratio;
 mod reconstructed;
 mod records;
@@ -38,6 +39,10 @@ pub use estimation::{
 };
 pub use exact::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
 pub use nearest::{MatchOrder, NearestSelection, VariableRatio, VariableRatioError};
+pub use optimal::{
+    FullMatchConfig, FullMatchOutcome, OptimalError, OptimalRequest, Retain, match_full,
+    match_optimal,
+};
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingOptions,
     ReconstructedMatchingOutput, ReconstructedMatchingTier, reconstruct_case_control_pairs,

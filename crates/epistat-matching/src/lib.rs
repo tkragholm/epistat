@@ -162,6 +162,10 @@ pub use matching::{
     reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
+pub use matching::{
+    FullMatchConfig, FullMatchOutcome, OptimalError, OptimalRequest, Retain, match_full,
+    match_optimal,
+};
 pub use role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
 };
@@ -214,9 +218,10 @@ pub fn benchmark_eqq_distance_stats(
 pub mod prelude {
     pub use crate::constraints::{AntiExact, GenderMatch};
     pub use crate::matching::{
-        Assignment, DeterministicSelection, ExactMatchError, ExactMatchOutcome, MatchOrder,
-        NearestBirthDateSelection, NearestSelection, RandomSelection, Rounds, SelectionStrategy,
-        exact_match_subclasses,
+        Assignment, DeterministicSelection, ExactMatchError, ExactMatchOutcome, FullMatchConfig,
+        FullMatchOutcome, MatchOrder, NearestBirthDateSelection, NearestSelection, OptimalError,
+        OptimalRequest, RandomSelection, Retain, Rounds, SelectionStrategy, exact_match_subclasses,
+        match_full, match_optimal,
     };
     pub use crate::{
         AgeLimitYears, AnchorRecord, AssignmentSpec, BalanceDiagnostics, BalanceRecord,
