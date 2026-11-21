@@ -11,8 +11,9 @@ use crate::types::{
 use chrono::{Datelike, NaiveDate};
 use epistat_register::{AgeRule, LeapBirthday, age_in_years};
 use itertools::Itertools;
+use ordered_float::OrderedFloat;
 use rapidhash::RapidHashMap;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Policy hook for role-transition risk-set construction.
 ///
@@ -36,13 +37,26 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     fn is_control_at_risk(&self, _case: &R, control: &R, case_event_date: NaiveDate) -> bool {
         default_control_is_at_risk(control, case_event_date)
     }
+
+    /// Whether [`Self::is_control_at_risk`] is the default rule, which reads
+    /// only the entry and event dates of the control. Common-support trimming
+    /// then finds the scores at risk on each case date in one sweep. A policy
+    /// that changes the rule leaves this `false`, and the trimming asks
+    /// [`Self::is_control_at_risk`] of every record for every case.
+    fn is_default_at_risk_rule(&self) -> bool {
+        false
+    }
 }
 
 /// Default role-transition risk-set policy used by existing APIs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRiskSetPolicy;
 
-impl<R: RoleIndexedRecord> RiskSetPolicy<R> for DefaultRiskSetPolicy {}
+impl<R: RoleIndexedRecord> RiskSetPolicy<R> for DefaultRiskSetPolicy {
+    fn is_default_at_risk_rule(&self) -> bool {
+        true
+    }
+}
 
 /// Unified request for role-transition matching.
 #[derive(Clone, Copy)]
@@ -94,6 +108,12 @@ impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
 }
 
 /// Risk-set matching with role transitions using neutral terminology.
+///
+/// With `common_support` set in the criteria the scores of the distance
+/// configuration decide the trimming: a case whose score is strictly outside
+/// the range of the scores of the records at risk on its event date (by the
+/// risk-set rule and the alive and resident checks) is not matched, and a candidate whose score is outside the range of the cases'
+/// scores is not used. See [`CommonSupport`].
 #[must_use]
 pub fn match_transition<
     R: RoleIndexedRecord,
@@ -237,11 +257,136 @@ fn score_inside_interval<R: RoleIndexedRecord>(
         .is_some_and(|score| score.is_finite() && score >= interval.0 && score <= interval.1)
 }
 
-fn transition_common_support_filters<R: RoleIndexedRecord>(
+/// For each case, the smallest and largest finite score among the records at
+/// risk on the case's event date, or `None` where nobody is at risk or the
+/// case has no event date. Cases are given in order of event date.
+///
+/// A record is at risk when the risk-set policy says so and the status
+/// constraints of `constraints` (alive, resident) allow it, as of the case's
+/// event date. No other constraint is read.
+///
+/// With the default policy rule a record is at risk from its entry date up to
+/// but not including its event date. The sweep visits the case dates in
+/// order, adds the records that have entered and removes those whose event is
+/// on or before the date, keeping the scores in a sorted set. The status
+/// constraints depend on the case and may be any function of the date, so the
+/// ends of the set are read from the outside in, skipping records they refuse.
+fn at_risk_score_ranges<
+    R: RoleIndexedRecord,
+    P: RiskSetPolicy<R> + ?Sized,
+    G: ConstraintGroup<R> + ?Sized,
+>(
+    cohort: &[R],
+    case_indices: &[usize],
+    scores: &RapidHashMap<String, f64>,
+    policy: &P,
+    constraints: &G,
+) -> Vec<Option<(f64, f64)>> {
+    let score_of = |idx: usize| {
+        scores
+            .get(cohort[idx].id())
+            .copied()
+            .filter(|score| score.is_finite())
+    };
+    if !policy.is_default_at_risk_rule() {
+        return case_indices
+            .iter()
+            .map(|&case_idx| {
+                let case = &cohort[case_idx];
+                let date = case.event_date()?;
+                let mut range: Option<(f64, f64)> = None;
+                for (idx, control) in cohort.iter().enumerate() {
+                    if let Some(score) = score_of(idx) {
+                        if policy.is_control_at_risk(case, control, date)
+                            && constraints.allows_at_risk(case, control)
+                        {
+                            range = Some(range.map_or((score, score), |(low, high)| {
+                                (low.min(score), high.max(score))
+                            }));
+                        }
+                    }
+                }
+                range
+            })
+            .collect();
+    }
+
+    // Records with a score, by entry date (no entry date first) and by event
+    // date. Ties keep cohort order, which does not matter for a set.
+    let with_score: Vec<usize> = (0..cohort.len())
+        .filter(|&idx| score_of(idx).is_some())
+        .collect();
+    let by_entry: Vec<usize> = with_score
+        .iter()
+        .copied()
+        .sorted_by_key(|&idx| cohort[idx].entry_date())
+        .collect();
+    let by_event: Vec<usize> = with_score
+        .iter()
+        .copied()
+        .filter(|&idx| cohort[idx].event_date().is_some())
+        .sorted_by_key(|&idx| cohort[idx].event_date())
+        .collect();
+
+    let mut at_risk: BTreeSet<(OrderedFloat<f64>, usize)> = BTreeSet::new();
+    let (mut next_entry, mut next_event) = (0, 0);
+    case_indices
+        .iter()
+        .map(|&case_idx| {
+            let case = &cohort[case_idx];
+            let date = case.event_date()?;
+            while next_entry < by_entry.len()
+                && cohort[by_entry[next_entry]]
+                    .entry_date()
+                    .is_none_or(|entry| entry <= date)
+            {
+                let idx = by_entry[next_entry];
+                next_entry += 1;
+                if cohort[idx].event_date().is_none_or(|event| event > date) {
+                    at_risk.insert((OrderedFloat(score_of(idx).expect("scored record")), idx));
+                }
+            }
+            while next_event < by_event.len()
+                && cohort[by_event[next_event]]
+                    .event_date()
+                    .is_some_and(|event| event <= date)
+            {
+                let idx = by_event[next_event];
+                next_event += 1;
+                at_risk.remove(&(OrderedFloat(score_of(idx).expect("scored record")), idx));
+            }
+            let admitted = |entry: &&(OrderedFloat<f64>, usize)| {
+                constraints.allows_at_risk(case, &cohort[entry.1])
+            };
+            let low = at_risk.iter().find(admitted)?.0.0;
+            let high = at_risk.iter().rev().find(admitted)?.0.0;
+            Some((low, high))
+        })
+        .collect()
+}
+
+/// Common-support trimming of a risk-set match.
+///
+/// A candidate is trimmed under `Control` or `Both` when its score is outside
+/// the range of the scores of all cases. A case is trimmed under `Treated` or
+/// `Both` when its score is strictly outside the range of the scores of the
+/// records at risk on its event date. At risk means the risk-set rule and, as
+/// of the event date, the alive and resident checks when the job has them.
+/// Strata, the birth window and every other matching constraint are not read.
+/// A score equal to an end of the range is kept. A case with nobody at risk is not trimmed, since it has no range to be
+/// outside of, and is counted among the cases without candidates. A record
+/// without a finite score lies outside every range.
+fn transition_common_support_filters<
+    R: RoleIndexedRecord,
+    P: RiskSetPolicy<R> + ?Sized,
+    G: ConstraintGroup<R> + ?Sized,
+>(
     cohort: &[R],
     case_indices: &[usize],
     policy: CommonSupport,
     scores: &RapidHashMap<String, f64>,
+    risk_set_policy: &P,
+    constraints: &G,
 ) -> Option<TransitionCommonSupportFilters> {
     let candidate_indices = (0..cohort.len()).collect_vec();
     let case_bounds = score_bounds_for_indices(cohort, case_indices, scores)?;
@@ -257,11 +402,14 @@ fn transition_common_support_filters<R: RoleIndexedRecord>(
     };
 
     if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+        let ranges =
+            at_risk_score_ranges(cohort, case_indices, scores, risk_set_policy, constraints);
         filters.trimmed_case_indices = case_indices
             .iter()
-            .filter_map(|idx| {
-                let row = cohort.get(*idx)?;
-                (!score_inside_interval(row, scores, overlap)).then_some(*idx)
+            .zip(ranges)
+            .filter_map(|(&idx, range)| {
+                let range = range?;
+                (!score_inside_interval(&cohort[idx], scores, range)).then_some(idx)
             })
             .collect();
     }
@@ -280,19 +428,32 @@ fn transition_common_support_filters<R: RoleIndexedRecord>(
     Some(filters)
 }
 
-fn resolve_transition_common_support<R: RoleIndexedRecord>(
+fn resolve_transition_common_support<
+    R: RoleIndexedRecord,
+    P: RiskSetPolicy<R> + ?Sized,
+    G: ConstraintGroup<R> + ?Sized,
+>(
     cohort: &[R],
     case_indices: &[usize],
     criteria: &MatchingCriteria,
     scores: Option<&RapidHashMap<String, f64>>,
+    risk_set_policy: &P,
+    constraints: &G,
 ) -> Result<TransitionCommonSupportFilters, CommonSupportFailureReason> {
     if criteria.common_support.is_some() && scores.is_none() {
         return Err(CommonSupportFailureReason::RequiresPropensityScoreMap);
     }
 
     if let (Some(policy), Some(scores)) = (criteria.common_support, scores) {
-        return transition_common_support_filters(cohort, case_indices, policy, scores)
-            .ok_or(CommonSupportFailureReason::NoOverlap);
+        return transition_common_support_filters(
+            cohort,
+            case_indices,
+            policy,
+            scores,
+            risk_set_policy,
+            constraints,
+        )
+        .ok_or(CommonSupportFailureReason::NoOverlap);
     }
 
     Ok(TransitionCommonSupportFilters::default())
@@ -343,6 +504,8 @@ fn match_with_role_indexing_with_channel_internal<
         &case_indices,
         validated.as_ref(),
         config.common_support_scores,
+        config.risk_set_policy,
+        config.extra_constraints,
     ) {
         Ok(filters) => filters,
         Err(reason) => {

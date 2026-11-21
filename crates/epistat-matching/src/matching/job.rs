@@ -488,6 +488,16 @@ where
         self
     }
 
+    /// Trim cases and candidates outside the common support of the scores
+    /// of the distance configuration. A case is judged against the people at
+    /// risk on its event date; see [`CommonSupport`](crate::CommonSupport).
+    /// Needs a score distance; without one the job returns an invalid outcome.
+    #[must_use]
+    pub const fn with_common_support(mut self, policy: Option<crate::CommonSupport>) -> Self {
+        self.criteria.common_support = policy;
+        self
+    }
+
     /// Set a custom risk-set policy.
     #[must_use]
     pub fn with_risk_set_policy<P2>(
