@@ -509,12 +509,11 @@ fn selection_sizes_and_balance_agree_with_matchit() {
         "{compared} cases, {optimal_cases} where HiGHS proved its optimum, {proven_cases} of them \
          proved by us, the others {deficit} units short in all and {not_found} with none found; same selected set in {identical}; worst balance excess ours {worst_ours:.2e}, MatchIt's {worst_theirs:.2e}"
     );
-    // At the 4000-node limit of an optimised build 20 of the cases that HiGHS
-    // closes are closed by us as well. A debug build has a quarter of the
-    // nodes, and 18 close there. A different `CARD_NODES` or `CARD_CASE` checks
-    // sizes only.
+    // 21 of the cases that HiGHS closes are closed by us as well, at the
+    // 4000-node limit of an optimised build and at the 1000 nodes of a debug
+    // build alike. A different `CARD_NODES` or `CARD_CASE` checks sizes only.
     if std::env::var("CARD_NODES").is_err() && std::env::var("CARD_CASE").is_err() {
-        let required_closed = if cfg!(debug_assertions) { 18 } else { 20 };
+        let required_closed = 21;
         assert!(
             proven_cases >= required_closed,
             "only {proven_cases} cases closed, {required_closed} expected"
