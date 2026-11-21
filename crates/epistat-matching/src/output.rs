@@ -137,7 +137,7 @@ impl Units {
 }
 
 /// Why an output could not be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OutputError {
     /// The id list and the group list differ in length.
     LengthMismatch {
@@ -177,6 +177,13 @@ pub enum OutputError {
     },
     /// Pairs were asked for from a selection that was not paired.
     NotPaired,
+    /// A weight is NaN, infinite or negative.
+    InvalidWeight {
+        /// The id of the unit.
+        id: String,
+        /// The weight.
+        weight: f64,
+    },
 }
 
 impl Display for OutputError {
@@ -212,6 +219,10 @@ impl Display for OutputError {
             } => write!(
                 f,
                 "{column} has {length} values for {units} units; give one for every unit"
+            ),
+            Self::InvalidWeight { id, weight } => write!(
+                f,
+                "the weight {weight} of {id} is not a finite number of at least 0"
             ),
             Self::NotPaired => {
                 f.write_str("the selection was not paired; give mahvars to pair the selected units")
@@ -593,14 +604,18 @@ fn check_column(column: &'static str, units: &Units, length: usize) -> Result<()
 /// forms them after selecting.
 ///
 /// `weights` and `pair` hold one entry per unit of `units`, in its order. A
-/// unit with weight 0 is not matched. `pair` numbers the pairs or subclasses
-/// from 1, as `subclass` of MatchIt's `match_data()`. The options are those of
-/// [`match_data`], and `replacement` is not read.
+/// unit with weight 0 is not matched. `pair` holds labels of any size, and the
+/// result numbers the distinct labels from 1 in increasing order, as
+/// [`get_matches_from_pairs`] does, so labels from 0 and labels with gaps give
+/// the same numbers there and here. The numbers are the `subclass` of
+/// MatchIt's `match_data()`. The options are those of [`match_data`], and
+/// `replacement` is not read.
 ///
 /// # Errors
 ///
-/// [`OutputError::ColumnLength`] when a column is not as long as `units`, and
-/// [`OutputError::NoFixedRoles`] for units with no fixed group.
+/// [`OutputError::ColumnLength`] when a column is not as long as `units`,
+/// [`OutputError::InvalidWeight`] for a weight that is NaN, infinite or
+/// negative, and [`OutputError::NoFixedRoles`] for units with no fixed group.
 pub fn match_data_from_weights(
     weights: &[f64],
     pair: &[Option<usize>],
@@ -610,6 +625,23 @@ pub fn match_data_from_weights(
     units.require_fixed_roles("match_data_from_weights")?;
     check_column("weights", units, weights.len())?;
     check_column("pair", units, pair.len())?;
+    for (id, weight) in units.ids.iter().zip(weights) {
+        if !weight.is_finite() || *weight < 0.0 {
+            return Err(OutputError::InvalidWeight {
+                id: id.clone(),
+                weight: *weight,
+            });
+        }
+    }
+    let numbers: std::collections::BTreeMap<usize, usize> = pair
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<std::collections::BTreeSet<usize>>()
+        .into_iter()
+        .enumerate()
+        .map(|(rank, label)| (label, rank + 1))
+        .collect();
     let mut set = UnitWeightSet::default();
     for ((id, is_anchor), weight) in units.ids.iter().zip(&units.anchor).zip(weights) {
         if *weight > 0.0 {
@@ -649,24 +681,27 @@ pub fn match_data_from_weights(
             UnitRole::Candidate
         });
         out.weight.push(weight.unwrap_or(0.0));
-        out.subclass.push(pair.map(|number| number + 1));
+        out.subclass.push(pair.map(|label| numbers[&label]));
     }
     Ok(out)
 }
 
 /// The long form of a paired selection, as [`get_matches`] gives it.
 ///
-/// `pair` holds the pair of each unit of `units`, numbered from 0, `None` for
-/// a unit that is not selected, and `weights` the weight of each unit. Each
-/// pair has one row per unit, the anchors first and then the candidates, each
-/// in the order of `units`. Pairs follow in order of their number, which is
-/// renumbered from 1. With `include_unmatched`, the anchors that are not
+/// `pair` holds the pair label of each unit of `units`, `None` for a unit that
+/// is not selected, and `weights` the weight of each unit. Labels may be of any
+/// size and have gaps. Each pair has one row per unit, the anchors first and
+/// then the candidates, each in the order of `units`. Pairs follow in
+/// increasing order of their label and are numbered from 1, as
+/// [`match_data_from_weights`] numbers them. With `include_unmatched`, the anchors that are not
 /// selected follow the pairs with no pair number and weight 0.
 ///
 /// # Errors
 ///
-/// [`OutputError::ColumnLength`] when a column is not as long as `units`, and
-/// [`OutputError::NoFixedRoles`] for units with no fixed group.
+/// [`OutputError::ColumnLength`] when a column is not as long as `units`,
+/// [`OutputError::InvalidWeight`] for a selected unit whose weight is NaN,
+/// infinite or negative, and [`OutputError::NoFixedRoles`] for units with no
+/// fixed group.
 pub fn get_matches_from_pairs(
     pair: &[Option<usize>],
     weights: &[f64],
@@ -680,6 +715,13 @@ pub fn get_matches_from_pairs(
         std::collections::BTreeMap::new();
     for (position, pair) in pair.iter().enumerate() {
         if let Some(pair) = pair {
+            let weight = weights[position];
+            if !weight.is_finite() || weight < 0.0 {
+                return Err(OutputError::InvalidWeight {
+                    id: units.ids[position].clone(),
+                    weight,
+                });
+            }
             members.entry(*pair).or_default().push(position);
         }
     }
@@ -1009,5 +1051,44 @@ mod tests {
         assert_eq!(ids, ["a", "b", "c", "d"]);
         assert_eq!(weights, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(set.candidate_sorted().0, ["z"]);
+    }
+
+    #[test]
+    fn match_data_from_weights_numbers_labels_from_one_with_gaps_closed() {
+        let units = Units::new(
+            vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            vec![true, false, true, false],
+        )
+        .unwrap();
+        let pair = [Some(3), Some(3), Some(7), Some(7)];
+        let weights = [1.0; 4];
+        let data = match_data_from_weights(&weights, &pair, &units, MatchDataOptions::default())
+            .unwrap();
+        assert_eq!(data.subclass, [Some(1), Some(1), Some(2), Some(2)]);
+        let long = get_matches_from_pairs(&pair, &weights, &units, false).unwrap();
+        assert_eq!(long.pair_id, [Some(1), Some(1), Some(2), Some(2)]);
+        let from_zero = [Some(0), Some(0), Some(1), Some(1)];
+        let data = match_data_from_weights(&weights, &from_zero, &units, MatchDataOptions::default())
+            .unwrap();
+        assert_eq!(data.subclass, [Some(1), Some(1), Some(2), Some(2)]);
+    }
+
+    #[test]
+    fn invalid_weights_are_errors() {
+        let units = Units::new(vec!["a".into(), "b".into()], vec![true, false]).unwrap();
+        let pair = [Some(0), Some(0)];
+        for bad in [f64::NAN, -1.0, f64::INFINITY] {
+            let weights = [1.0, bad];
+            assert!(matches!(
+                match_data_from_weights(&weights, &pair, &units, MatchDataOptions::default()),
+                Err(OutputError::InvalidWeight { .. })
+            ));
+            assert!(matches!(
+                get_matches_from_pairs(&pair, &weights, &units, false),
+                Err(OutputError::InvalidWeight { .. })
+            ));
+        }
+        // The weight of a unit that is not selected is not read.
+        assert!(get_matches_from_pairs(&[None, None], &[f64::NAN, 1.0], &units, false).is_ok());
     }
 }
