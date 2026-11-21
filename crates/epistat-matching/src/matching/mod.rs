@@ -1,3 +1,4 @@
+mod cardinality;
 mod cem;
 mod constraints;
 mod distance;
@@ -18,6 +19,10 @@ mod selection;
 mod subclassification;
 mod weights;
 
+pub use cardinality::{
+    CardinalityError, CardinalityLimits, CardinalityOutcome, CardinalityRequest, StratumReport,
+    match_cardinality, pair_units,
+};
 pub use cem::{
     CemBinning, CemError, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata,
     cem_subclasses,

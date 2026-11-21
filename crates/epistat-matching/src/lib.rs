@@ -181,8 +181,10 @@ pub use matching::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
 };
 pub use matching::{
-    BalanceMeasure, GeneticError, GeneticFit, GeneticLoss, GeneticMatchOptions, GeneticMatches,
-    GeneticOutcome, GeneticProblem, GeneticSearch, KsTest, LossRule, ks_limit_upper, ks_two_sample,
+    BalanceMeasure, CardinalityError, CardinalityLimits, CardinalityOutcome, CardinalityRequest,
+    GeneticError, GeneticFit, GeneticLoss, GeneticMatchOptions, GeneticMatches, GeneticOutcome,
+    GeneticProblem, GeneticSearch, KsTest, LossRule, StratumReport, ks_limit_upper, ks_two_sample,
+    match_cardinality, pair_units,
 };
 pub use matching::{
     CemBinning, CemError, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata,
