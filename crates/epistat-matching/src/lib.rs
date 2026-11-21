@@ -167,6 +167,10 @@ pub use matching::{
     cem_subclasses,
 };
 pub use matching::{ExactMatchError, ExactMatchOutcome, exact_match_subclasses};
+pub use matching::{
+    QuickMatchError, QuickMatchOptions, QuickMatchOutcome, SeedMethod, quick_clusters,
+    quick_match_subclasses,
+};
 pub use role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
 };
@@ -193,8 +197,8 @@ pub use output::{
 pub use spec::{
     AssignmentSpec, BinRuleSpec, BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec,
     CovariatesSpec, DistanceSpec, EstimatorSpec, K2kSpec, LambdaSpec, LinkSpec, MatchMethod,
-    MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, ReferenceSpec, ScaleSpec, SpecError,
-    SpecInput, SpecOutput, SubclassSpec, TransformSpec, run_spec,
+    MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec, ReferenceSpec, ScaleSpec,
+    SpecError, SpecInput, SpecOutput, SubclassSpec, TransformSpec, run_spec,
 };
 
 #[cfg(feature = "bench-internals")]

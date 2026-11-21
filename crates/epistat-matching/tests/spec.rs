@@ -19,6 +19,7 @@ mod common;
 
 use common::{Level, Person, cohort, records};
 use epistat_matching::prelude::*;
+use epistat_matching::{QuickMatchOptions, quick_match_subclasses};
 use std::collections::BTreeMap;
 
 fn fnv(text: &str) -> u64 {
@@ -666,6 +667,119 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     assert_eq!(
         format!("{:?}", outcome.weights_sorted()),
         format!("{:?}", by_hand.weights_sorted())
+    );
+}
+
+/// The quick method through a spec equals the function on the same scores, its
+/// weights feed the balance report, and its options are validated.
+#[test]
+fn spec_quick_gives_subclasses_and_weights_for_balance() {
+    let (anchors, candidates) = covariate_inputs();
+    let spec = MatchSpec {
+        method: MatchMethod::Quick,
+        distance: DistanceSpec::Propensity {
+            covariates: covariates(&["age", "income"]),
+            link: LinkSpec::Logit,
+            estimator: EstimatorSpec::Glm,
+            scale: ScaleSpec::Probability,
+            sampling_weights: None,
+            caliper: None,
+        },
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Quick(outcome) = run_spec(
+        &spec,
+        SpecInput::Standard {
+            anchors: &anchors,
+            candidates: &candidates,
+        },
+    )
+    .expect("valid spec") else {
+        panic!("expected quick output");
+    };
+    let prepared = prepare_propensity_distance_config(
+        &anchors,
+        &candidates,
+        &PropensityScoreConfig::builder()
+            .encoding(
+                CovariateEncodingConfig::builder()
+                    .covariate_keys(vec!["age".into(), "income".into()])
+                    .include_intercept(true)
+                    .build(),
+            )
+            .build(),
+    )
+    .unwrap();
+    let by_hand = quick_match_subclasses::<_, &str, _>(
+        &anchors,
+        &candidates,
+        |row: &BalanceRecord| {
+            prepared
+                .estimate
+                .distance_scores
+                .get(row.id())
+                .map(std::slice::from_ref)
+        },
+        1,
+        &[],
+        &QuickMatchOptions::default(),
+    )
+    .unwrap();
+    assert!(outcome.subclasses.len() > 1);
+    let sorted = |map: &std::collections::HashMap<String, usize>| {
+        let mut rows: Vec<_> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        rows.sort();
+        rows
+    };
+    assert_eq!(sorted(&outcome.assignments), sorted(&by_hand.assignments));
+    assert_eq!(outcome.dropped_ids, by_hand.dropped_ids);
+    assert_eq!(outcome.retained_units(), anchors.len() + candidates.len());
+
+    let weights = BalanceWeights::from_unit_weights(
+        &anchors,
+        &candidates,
+        &outcome.att_weights,
+        Estimand::Att,
+    );
+    weights.validate().unwrap();
+    let report = balance_report_on_weights(
+        &anchors,
+        &candidates,
+        &weights,
+        &BalanceReportOptions::default(),
+    )
+    .unwrap();
+    assert!(!report.numeric.is_empty());
+
+    let message = |spec: MatchSpec| {
+        run_spec(
+            &spec,
+            SpecInput::Standard {
+                anchors: &anchors,
+                candidates: &candidates,
+            },
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    assert!(
+        message(MatchSpec {
+            method: MatchMethod::Quick,
+            ..MatchSpec::default()
+        })
+        .contains("distance")
+    );
+    let mut with_size = MatchSpec::default();
+    with_size.quick.size = Some(5);
+    assert!(message(with_size).contains("quick"));
+    assert!(
+        message(MatchSpec {
+            method: MatchMethod::Quick,
+            distance: spec.distance.clone(),
+            ratio: 2,
+            ..MatchSpec::default()
+        })
+        .contains("`ratio`")
     );
 }
 

@@ -1048,3 +1048,90 @@ fn nearest_matching_on_a_distance_matrix() {
         d.0
     });
 }
+
+/// Generalised full matching on a line and in the plane, with every seed
+/// method and a caliper, and on records with exact strata. The plane is large
+/// enough for the k-d tree to be built in parallel.
+#[test]
+fn generalised_full_matching() {
+    use epistat_matching::{QuickMatchOptions, SeedMethod, quick_clusters, quick_match_subclasses};
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    let line: Vec<f64> = (0..20_000).map(|_| next()).collect();
+    let plane: Vec<f64> = (0..2 * 12_000).map(|_| next()).collect();
+    let anchor_line: Vec<bool> = line.iter().map(|x| next() < 0.2 + 0.3 * x).collect();
+    let anchor_plane: Vec<bool> = (0..12_000).map(|_| next() < 0.3).collect();
+
+    let birth = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+    let mut anchors = Vec::new();
+    let mut candidates = Vec::new();
+    let mut coordinates: HashMap<String, Vec<f64>> = HashMap::new();
+    for row in 0..3_000_usize {
+        let mut record = BaseRecord::new(format!("r{row}"), birth);
+        record
+            .strata
+            .insert("sex".into(), ["f", "m"][row % 2].into());
+        coordinates.insert(record.id().to_string(), vec![next(), next()]);
+        if next() < 0.35 {
+            anchors.push(record);
+        } else {
+            candidates.push(record);
+        }
+    }
+
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        for method in [
+            SeedMethod::InwardsUpdating,
+            SeedMethod::InwardsOrder,
+            SeedMethod::Lexical,
+        ] {
+            for (min_anchors, min_candidates, size, caliper) in [
+                (1, 1, None, None),
+                (2, 3, Some(7), None),
+                (1, 1, None, Some(0.002)),
+            ] {
+                let options = QuickMatchOptions {
+                    min_anchors,
+                    min_candidates,
+                    size,
+                    caliper,
+                    seed_method: method,
+                };
+                let labels = quick_clusters(&line, 1, &anchor_line, &options).unwrap();
+                assert!(labels.iter().flatten().count() > 0, "vacuous");
+                d.debug(&labels);
+                let caliper = caliper.map(|width| width * 40.0);
+                let options = QuickMatchOptions { caliper, ..options };
+                let labels = quick_clusters(&plane, 2, &anchor_plane, &options).unwrap();
+                assert!(labels.iter().flatten().count() > 0, "vacuous");
+                d.debug(&labels);
+            }
+            let out = quick_match_subclasses(
+                &anchors,
+                &candidates,
+                |record: &BaseRecord| coordinates.get(record.id()).map(Vec::as_slice),
+                2,
+                &["sex"],
+                &QuickMatchOptions {
+                    seed_method: method,
+                    ..QuickMatchOptions::default()
+                },
+            )
+            .unwrap();
+            let mut assignments: Vec<_> = out.assignments.iter().collect();
+            assignments.sort();
+            d.debug(&assignments);
+            d.floats(&out.att_weights);
+            d.floats(&out.atc_weights);
+            d.floats(&out.ate_weights);
+            d.debug(&out.subclasses);
+        }
+        d.0
+    });
+}
