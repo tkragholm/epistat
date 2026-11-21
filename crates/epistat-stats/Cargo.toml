@@ -11,8 +11,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[dependencies]
+thiserror = "2"
+
 [dev-dependencies]
 epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1.0.200", features = ["derive"] }
 
 [lints]
 workspace = true

@@ -592,6 +592,8 @@ name = "epistat-stats"
 version = "0.2.4"
 dependencies = [
  "epistat-testkit",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
