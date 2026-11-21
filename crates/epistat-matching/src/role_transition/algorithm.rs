@@ -18,7 +18,8 @@ use std::collections::HashSet;
 ///
 /// This allows downstream orchestrators to inject study-specific entry/exit logic
 /// (e.g. alive/resident checks) while keeping matching mechanics generic.
-pub trait RiskSetPolicy<R: RoleIndexedRecord> {
+/// Candidate lists are scanned on several threads, so a policy is `Sync`.
+pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// Whether a record should be treated as an eligible case.
     ///
     /// Default behavior requires an event date before the configured age limit.
