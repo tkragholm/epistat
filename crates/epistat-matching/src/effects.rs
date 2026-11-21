@@ -404,7 +404,13 @@ impl UnitData {
         &self.covariates
     }
 
-    fn row_of(&self, id: &str) -> Result<usize, EffectError> {
+    /// The treatment and outcome of the unit in row `row`.
+    pub(crate) fn treatment_and_outcome_at(&self, row: usize) -> (bool, f64) {
+        (self.treated[row], self.outcome[row])
+    }
+
+    /// The row of a unit.
+    pub(crate) fn row_of(&self, id: &str) -> Result<usize, EffectError> {
         self.index
             .get(id)
             .copied()

@@ -44,6 +44,7 @@
 //! `summary()`.
 
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, SolveError};
+use rayon::prelude::*;
 
 /// Fitting controls for the multinomial logit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -336,7 +337,13 @@ fn singular(probs: &[f64]) -> MultinomError {
     }
 }
 
+/// Rows from which the per-row work runs in parallel.
+const PARALLEL_FROM: usize = 2048;
+
 /// The log-likelihood and the fitted probabilities at `beta`.
+///
+/// The probabilities and each row's term are computed row by row, in
+/// parallel for many rows, and the terms are added in the order of the rows.
 fn evaluate(
     x: MatRef<'_, f64>,
     y: &[usize],
@@ -344,11 +351,11 @@ fn evaluate(
     classes: usize,
     beta: &[f64],
 ) -> (f64, Vec<f64>) {
-    let (n, p) = (x.nrows(), x.ncols());
+    let n = x.nrows();
+    let p = x.ncols();
     let mut probs = vec![0.0; n * classes];
-    let mut loglik = 0.0;
-    let mut eta = vec![0.0; classes];
-    for i in 0..n {
+    let mut terms = vec![0.0; n];
+    let row = |eta: &mut Vec<f64>, i: usize, probs: &mut [f64], term: &mut f64| {
         let mut top = 0.0_f64;
         for k in 1..classes {
             let mut s = 0.0;
@@ -360,20 +367,43 @@ fn evaluate(
         }
         eta[0] = 0.0;
         let mut sum = 0.0;
-        for e in &eta {
+        for e in eta.iter() {
             sum += (e - top).exp();
         }
         let log_sum = top + sum.ln();
         for k in 0..classes {
-            probs[i * classes + k] = (eta[k] - log_sum).exp();
+            probs[k] = (eta[k] - log_sum).exp();
         }
-        loglik += w[i] * (eta[y[i]] - log_sum);
+        *term = w[i] * (eta[y[i]] - log_sum);
+    };
+    if n >= PARALLEL_FROM {
+        probs
+            .par_chunks_mut(classes)
+            .zip(terms.par_iter_mut())
+            .enumerate()
+            .for_each_init(
+                || vec![0.0; classes],
+                |eta, (i, (probs, term))| row(eta, i, probs, term),
+            );
+    } else {
+        let mut eta = vec![0.0; classes];
+        for (i, (probs, term)) in probs.chunks_mut(classes).zip(&mut terms).enumerate() {
+            row(&mut eta, i, probs, term);
+        }
+    }
+    let mut loglik = 0.0;
+    for term in terms {
+        loglik += term;
     }
     (loglik, probs)
 }
 
 /// The gradient of the log-likelihood and the negative Hessian, which is the
 /// information, at the fitted probabilities `probs`.
+///
+/// Every entry is a sum over the rows with nonzero weight, taken in the order
+/// of the rows, and the entries are computed in parallel, so the result does
+/// not depend on the number of threads.
 fn derivatives(
     x: MatRef<'_, f64>,
     y: &[usize],
@@ -383,29 +413,49 @@ fn derivatives(
 ) -> (Vec<f64>, Mat<f64>) {
     let (n, p) = (x.nrows(), x.ncols());
     let q = (classes - 1) * p;
-    let mut gradient = vec![0.0; q];
+    let active: Vec<usize> = (0..n).filter(|&i| w[i] != 0.0).collect();
+    let in_parallel = n >= PARALLEL_FROM;
+
+    let gradient_entry = |entry: usize| {
+        let (k, j) = (entry / p + 1, entry % p);
+        let mut sum = 0.0;
+        for &i in &active {
+            let r = w[i] * (f64::from(u8::from(y[i] == k)) - probs[i * classes + k]);
+            sum += r * x[(i, j)];
+        }
+        sum
+    };
+    // The entry in row `(k - 1) p + a` and column `(l - 1) p + b` of the lower
+    // block triangle, `l <= k`.
+    let information_entry = |(k, l, a, b): (usize, usize, usize, usize)| {
+        let mut sum = 0.0;
+        for &i in &active {
+            let pi = &probs[i * classes..(i + 1) * classes];
+            let delta = if k == l { pi[k] } else { 0.0 };
+            let c = w[i] * (delta - pi[k] * pi[l]);
+            let ca = c * x[(i, a)];
+            sum += ca * x[(i, b)];
+        }
+        sum
+    };
+    let entries: Vec<(usize, usize, usize, usize)> = (1..classes)
+        .flat_map(|k| (1..=k).map(move |l| (k, l)))
+        .flat_map(|(k, l)| (0..p).flat_map(move |a| (0..p).map(move |b| (k, l, a, b))))
+        .collect();
+    let (gradient, lower): (Vec<f64>, Vec<f64>) = if in_parallel {
+        (
+            (0..q).into_par_iter().map(gradient_entry).collect(),
+            entries.par_iter().copied().map(information_entry).collect(),
+        )
+    } else {
+        (
+            (0..q).map(gradient_entry).collect(),
+            entries.iter().copied().map(information_entry).collect(),
+        )
+    };
     let mut information = Mat::<f64>::zeros(q, q);
-    for i in 0..n {
-        if w[i] == 0.0 {
-            continue;
-        }
-        let pi = &probs[i * classes..(i + 1) * classes];
-        for k in 1..classes {
-            let r = w[i] * (f64::from(u8::from(y[i] == k)) - pi[k]);
-            for j in 0..p {
-                gradient[(k - 1) * p + j] += r * x[(i, j)];
-            }
-            for l in 1..=k {
-                let delta = if k == l { pi[k] } else { 0.0 };
-                let c = w[i] * (delta - pi[k] * pi[l]);
-                for a in 0..p {
-                    let ca = c * x[(i, a)];
-                    for b in 0..p {
-                        information[((k - 1) * p + a, (l - 1) * p + b)] += ca * x[(i, b)];
-                    }
-                }
-            }
-        }
+    for (&(k, l, a, b), value) in entries.iter().zip(lower) {
+        information[((k - 1) * p + a, (l - 1) * p + b)] = value;
     }
     // Mirror the lower block triangle into the upper.
     for k in 1..classes {
@@ -419,4 +469,183 @@ fn derivatives(
         }
     }
     (gradient, information)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn evaluate_reference(
+        x: MatRef<'_, f64>,
+        y: &[usize],
+        w: &[f64],
+        classes: usize,
+        beta: &[f64],
+    ) -> (f64, Vec<f64>) {
+        let (n, p) = (x.nrows(), x.ncols());
+        let mut probs = vec![0.0; n * classes];
+        let mut loglik = 0.0;
+        let mut eta = vec![0.0; classes];
+        for i in 0..n {
+            let mut top = 0.0_f64;
+            for k in 1..classes {
+                let mut s = 0.0;
+                for j in 0..p {
+                    s += x[(i, j)] * beta[(k - 1) * p + j];
+                }
+                eta[k] = s;
+                top = top.max(s);
+            }
+            eta[0] = 0.0;
+            let mut sum = 0.0;
+            for e in &eta {
+                sum += (e - top).exp();
+            }
+            let log_sum = top + sum.ln();
+            for k in 0..classes {
+                probs[i * classes + k] = (eta[k] - log_sum).exp();
+            }
+            loglik += w[i] * (eta[y[i]] - log_sum);
+        }
+        (loglik, probs)
+    }
+
+    fn derivatives_reference(
+        x: MatRef<'_, f64>,
+        y: &[usize],
+        w: &[f64],
+        classes: usize,
+        probs: &[f64],
+    ) -> (Vec<f64>, Mat<f64>) {
+        let (n, p) = (x.nrows(), x.ncols());
+        let q = (classes - 1) * p;
+        let mut gradient = vec![0.0; q];
+        let mut information = Mat::<f64>::zeros(q, q);
+        for i in 0..n {
+            if w[i] == 0.0 {
+                continue;
+            }
+            let pi = &probs[i * classes..(i + 1) * classes];
+            for k in 1..classes {
+                let r = w[i] * (f64::from(u8::from(y[i] == k)) - pi[k]);
+                for j in 0..p {
+                    gradient[(k - 1) * p + j] += r * x[(i, j)];
+                }
+                for l in 1..=k {
+                    let delta = if k == l { pi[k] } else { 0.0 };
+                    let c = w[i] * (delta - pi[k] * pi[l]);
+                    for a in 0..p {
+                        let ca = c * x[(i, a)];
+                        for b in 0..p {
+                            information[((k - 1) * p + a, (l - 1) * p + b)] += ca * x[(i, b)];
+                        }
+                    }
+                }
+            }
+        }
+        // Mirror the lower block triangle into the upper.
+        for k in 1..classes {
+            for l in 1..k {
+                for a in 0..p {
+                    for b in 0..p {
+                        information[((l - 1) * p + b, (k - 1) * p + a)] =
+                            information[((k - 1) * p + a, (l - 1) * p + b)];
+                    }
+                }
+            }
+        }
+        (gradient, information)
+    }
+
+    /// A small deterministic generator.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn unit(&mut self) -> f64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 11) as f64 / (1_u64 << 53) as f64
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            self.unit();
+            usize::try_from((self.0 >> 33) % u64::try_from(bound).unwrap()).unwrap()
+        }
+    }
+
+    /// The log-likelihood, probabilities, gradient and information equal those
+    /// of the sequential reference bit for bit, with zero weights, for row
+    /// counts below and above the one where the work runs in parallel.
+    #[test]
+    fn parallel_evaluation_equals_the_sequential_reference() {
+        for (n, classes, p) in [(50, 3, 3), (5000, 3, 3), (4096, 4, 2), (2500, 2, 4)] {
+            let mut rng = Lcg(7 + n as u64);
+            let x = Mat::from_fn(n, p, |i, j| {
+                if j == 0 {
+                    1.0
+                } else {
+                    rng.unit() * 2.0 - 1.0 + 0.01 * i as f64 % 1.0
+                }
+            });
+            let y: Vec<usize> = (0..n).map(|_| rng.below(classes)).collect();
+            let w: Vec<f64> = (0..n)
+                .map(|i| if i % 11 == 0 { 0.0 } else { 0.3 + rng.unit() })
+                .collect();
+            let beta: Vec<f64> = (0..(classes - 1) * p).map(|_| rng.unit() - 0.5).collect();
+            let (loglik, probs) = evaluate(x.as_ref(), &y, &w, classes, &beta);
+            let (loglik_ref, probs_ref) = evaluate_reference(x.as_ref(), &y, &w, classes, &beta);
+            assert_eq!(
+                loglik.to_bits(),
+                loglik_ref.to_bits(),
+                "log-likelihood, n {n}"
+            );
+            assert!(
+                probs
+                    .iter()
+                    .zip(&probs_ref)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+            let (gradient, information) = derivatives(x.as_ref(), &y, &w, classes, &probs);
+            let (gradient_ref, information_ref) =
+                derivatives_reference(x.as_ref(), &y, &w, classes, &probs);
+            assert!(
+                gradient
+                    .iter()
+                    .zip(&gradient_ref)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+            let q = (classes - 1) * p;
+            for r in 0..q {
+                for c in 0..q {
+                    assert_eq!(
+                        information[(r, c)].to_bits(),
+                        information_ref[(r, c)].to_bits(),
+                        "information ({r}, {c}), n {n}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A fit on 5000 rows is the same on pools of 1, 2, 4 and 12 threads.
+    #[test]
+    fn fit_is_the_same_on_every_pool_size() {
+        let mut rng = Lcg(3);
+        let n = 5000;
+        let x = Mat::from_fn(
+            n,
+            3,
+            |_, j| if j == 0 { 1.0 } else { rng.unit() * 2.0 - 1.0 },
+        );
+        let y: Vec<usize> = (0..n).map(|_| rng.below(3)).collect();
+        epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
+            let fit = Multinom::default().fit(x.as_ref(), &y, 3, None).unwrap();
+            fit.coefficients
+                .into_iter()
+                .chain(fit.probabilities)
+                .collect()
+        });
+    }
 }

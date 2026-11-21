@@ -67,8 +67,12 @@ fn vector_matching_does_not_depend_on_the_number_of_threads() {
     });
 }
 
-#[test]
-fn imputation_matching_does_not_depend_on_the_number_of_threads() {
+/// The anchors and the candidates of each imputed data set.
+type AnchorsAndCandidates = Vec<(Vec<BalanceRecord>, Vec<BalanceRecord>)>;
+
+/// The imputed data sets of `matchthem.json` as anchors and candidates, and
+/// the outcome of each set.
+fn matchthem_sets() -> (AnchorsAndCandidates, Vec<UnitData>) {
     let data: Vec<BTreeMap<String, Vec<f64>>> = {
         #[derive(serde::Deserialize)]
         struct File {
@@ -101,13 +105,6 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
             (anchors, candidates)
         })
         .collect();
-    let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
-        .iter()
-        .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
-        })
-        .collect();
     let outcomes: Vec<UnitData> = data
         .iter()
         .map(|d| {
@@ -117,6 +114,19 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
                 d["re78"].clone(),
             )
             .unwrap()
+        })
+        .collect();
+    (prepared, outcomes)
+}
+
+#[test]
+fn imputation_matching_does_not_depend_on_the_number_of_threads() {
+    let (prepared, outcomes) = matchthem_sets();
+    let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
+        .iter()
+        .map(|(a, c)| ImputedSet {
+            anchors: a,
+            candidates: c,
         })
         .collect();
     let criteria = MatchingCriteria::builder().match_ratio(1).build();
@@ -150,5 +160,65 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
             }
             values
         });
+    }
+}
+
+/// The sets matched together, each in its own task, are those one call per set
+/// gives, in the order of the sets.
+#[test]
+fn within_imputation_matches_each_set_as_a_single_set() {
+    let (prepared, _) = matchthem_sets();
+    let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
+        .iter()
+        .map(|(a, c)| ImputedSet {
+            anchors: a,
+            candidates: c,
+        })
+        .collect();
+    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let config = PropensityScoreConfig::default();
+    let matches = match_imputed(
+        &sets,
+        ImputationApproach::Within,
+        &criteria,
+        &NearestSelection::new(0),
+        &[],
+        &(),
+        &config,
+    )
+    .unwrap();
+    for (set, together) in sets.iter().zip(&matches.sets) {
+        let alone = estimate_propensity_and_match(
+            set.anchors,
+            set.candidates,
+            &criteria,
+            NearestSelection::new(0),
+            &[],
+            &(),
+            &config,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{:?}", alone.outcome),
+            format!("{:?}", together.outcome)
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                alone
+                    .propensity
+                    .distance_scores
+                    .iter()
+                    .collect::<BTreeMap<_, _>>()
+            ),
+            format!(
+                "{:?}",
+                together
+                    .propensity
+                    .distance_scores
+                    .iter()
+                    .collect::<BTreeMap<_, _>>()
+            )
+        );
     }
 }

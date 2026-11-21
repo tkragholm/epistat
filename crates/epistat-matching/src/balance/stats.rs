@@ -28,7 +28,23 @@ pub(super) fn standard_deviation(variance: f64) -> Option<f64> {
 /// each group's weights are scaled to sum to one. A point of weight zero adds an
 /// evaluation point and no mass. Negative and positive zero are one value. This is the definition in the documentation of
 /// MatchIt's `summary.matchit()`.
+#[cfg(test)]
 pub(super) fn weighted_ecdf_distance(points: &[(f64, bool, f64)]) -> Option<(f64, f64)> {
+    let mut order = (0..points.len())
+        .map(|idx| u32::try_from(idx).expect("fewer than 2^32 points"))
+        .collect::<Vec<_>>();
+    order.sort_by(|&left, &right| points[left as usize].0.total_cmp(&points[right as usize].0));
+    weighted_ecdf_distance_ordered(points, &order)
+}
+
+/// [`weighted_ecdf_distance`] with the points' order given: `order` lists the
+/// indices of `points` in ascending order of value under `f64::total_cmp`,
+/// units that tie in their original order. The same order serves any weights
+/// on the same values.
+pub(super) fn weighted_ecdf_distance_ordered(
+    points: &[(f64, bool, f64)],
+    order: &[u32],
+) -> Option<(f64, f64)> {
     let total = |case: bool| {
         points
             .iter()
@@ -40,18 +56,16 @@ pub(super) fn weighted_ecdf_distance(points: &[(f64, bool, f64)]) -> Option<(f64
     if !(total_case > 0.0 && total_control > 0.0) {
         return None;
     }
-    let mut order = (0..points.len()).collect::<Vec<_>>();
-    order.sort_by(|&left, &right| points[left].0.total_cmp(&points[right].0));
 
     let (mut cumulative_case, mut cumulative_control) = (0.0_f64, 0.0_f64);
     let (mut sum, mut max, mut distinct) = (0.0_f64, 0.0_f64, 0usize);
     let mut idx = 0;
     while idx < order.len() {
-        let value = points[order[idx]].0;
+        let value = points[order[idx] as usize].0;
         while idx < order.len()
-            && points[order[idx]].0.partial_cmp(&value) == Some(std::cmp::Ordering::Equal)
+            && points[order[idx] as usize].0.partial_cmp(&value) == Some(std::cmp::Ordering::Equal)
         {
-            let (_, is_case, weight) = points[order[idx]];
+            let (_, is_case, weight) = points[order[idx] as usize];
             if is_case {
                 cumulative_case += weight;
             } else {
@@ -95,6 +109,7 @@ pub(super) fn ecdf_distance_stats(
 /// Weighted eQQ distance summary as `summary.matchit()` reports it, `None`
 /// when a group has no unit of positive weight. See
 /// [`epistat_stats::balance::eqq_distance_weighted`].
+#[cfg(test)]
 pub(super) fn eqq_distance_weighted(
     case_values: &[f64],
     case_weights: &[f64],
@@ -102,6 +117,15 @@ pub(super) fn eqq_distance_weighted(
     control_weights: &[f64],
 ) -> Option<(f64, f64)> {
     balance::eqq_distance_weighted(case_values, case_weights, control_values, control_weights)
+}
+
+/// [`eqq_distance_weighted`] on groups in ascending order of value with their
+/// total weights, see [`epistat_stats::balance::eqq_distance_weighted_sorted`].
+pub(super) fn eqq_distance_weighted_sorted(
+    case: (&[f64], &[f64], f64),
+    control: (&[f64], &[f64], f64),
+) -> Option<(f64, f64)> {
+    balance::eqq_distance_weighted_sorted(case.0, case.1, case.2, control.0, control.1, control.2)
 }
 
 /// eQQ distance summary (mean and max absolute quantile distance), `None`

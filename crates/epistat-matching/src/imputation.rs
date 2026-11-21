@@ -49,6 +49,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use rayon::prelude::*;
+
 use epistat_inference::InferenceError;
 use epistat_inference::pooling::{Pooled, rubin};
 
@@ -224,18 +226,22 @@ where
     }
     match approach {
         ImputationApproach::Within => {
-            let mut matched = Vec::with_capacity(sets.len());
-            for set in sets {
-                matched.push(estimate_propensity_and_match(
-                    set.anchors,
-                    set.candidates,
-                    criteria,
-                    strategy.clone(),
-                    ratio_fallback,
-                    extra_constraints,
-                    config,
-                )?);
-            }
+            let matched = in_set_order(
+                sets.par_iter()
+                    .map(|set| {
+                        estimate_propensity_and_match(
+                            set.anchors,
+                            set.candidates,
+                            criteria,
+                            strategy.clone(),
+                            ratio_fallback,
+                            extra_constraints,
+                            config,
+                        )
+                        .map_err(ImputationError::from)
+                    })
+                    .collect(),
+            )?;
             Ok(ImputedMatches {
                 approach,
                 sets: matched,
@@ -245,32 +251,37 @@ where
             if config.reestimate {
                 return Err(ImputationError::ReestimateAcross);
             }
-            let mut estimates = Vec::with_capacity(sets.len());
-            for set in sets {
-                estimates.push(
-                    prepare_propensity_distance_config(set.anchors, set.candidates, config)?
-                        .estimate,
-                );
-            }
+            let estimates = in_set_order(
+                sets.par_iter()
+                    .map(|set| {
+                        prepare_propensity_distance_config(set.anchors, set.candidates, config)
+                            .map(|prepared| prepared.estimate)
+                            .map_err(ImputationError::from)
+                    })
+                    .collect(),
+            )?;
             let averaged = average_scores(&estimates, sets)?;
             let distance_config =
                 DistanceConfig::propensity_score_map(averaged.clone(), config.caliper);
-            let mut matched = Vec::with_capacity(sets.len());
-            for (set, mut estimate) in sets.iter().zip(estimates) {
-                let request = StandardMatchRequest {
-                    criteria,
-                    strategy: strategy.clone(),
-                    constraints: extra_constraints,
-                    ratio_fallback,
-                    distance_config: Some(&distance_config),
-                };
-                let outcome = match_standard(set.anchors, set.candidates, request);
-                estimate.distance_scores.clone_from(&averaged);
-                matched.push(PropensityMatchedOutcome {
-                    outcome,
-                    propensity: estimate,
-                });
-            }
+            let matched = sets
+                .par_iter()
+                .zip(estimates)
+                .map(|(set, mut estimate)| {
+                    let request = StandardMatchRequest {
+                        criteria,
+                        strategy: strategy.clone(),
+                        constraints: extra_constraints,
+                        ratio_fallback,
+                        distance_config: Some(&distance_config),
+                    };
+                    let outcome = match_standard(set.anchors, set.candidates, request);
+                    estimate.distance_scores.clone_from(&averaged);
+                    PropensityMatchedOutcome {
+                        outcome,
+                        propensity: estimate,
+                    }
+                })
+                .collect();
             Ok(ImputedMatches {
                 approach,
                 sets: matched,
@@ -418,22 +429,44 @@ pub fn estimate_pooled<R: MatchingRecord>(
     };
     check("matches", matches.sets.len())?;
     check("data", data.len())?;
-    let mut per_set = Vec::with_capacity(sets.len());
-    for ((set, matched), units_data) in sets.iter().zip(&matches.sets).zip(data) {
-        let ids = set
-            .anchors
-            .iter()
-            .chain(set.candidates)
-            .map(|r| r.id().to_string())
-            .collect();
-        let anchor = (0..set.anchors.len() + set.candidates.len())
-            .map(|i| i < set.anchors.len())
-            .collect();
-        let units = Units::new(ids, anchor)?;
-        let md = match_data(&matched.outcome, &units, options)?;
-        let sample = MatchedSample::from_match_data(&md, units_data)?;
-        per_set.push(estimate_effects(&sample, spec)?);
-    }
+    let per_set = in_set_order(
+        sets.par_iter()
+            .zip(&matches.sets)
+            .zip(data)
+            .map(|((set, matched), units_data)| {
+                estimate_set(set, matched, units_data, options, spec)
+            })
+            .collect(),
+    )?;
     let pooled = pool_effects(&per_set)?;
     Ok(ImputedEffects { per_set, pooled })
+}
+
+/// The effects in one matched data set.
+fn estimate_set<R: MatchingRecord>(
+    set: &ImputedSet<'_, R>,
+    matched: &PropensityMatchedOutcome,
+    units_data: &UnitData,
+    options: MatchDataOptions,
+    spec: &EffectSpec,
+) -> Result<EffectEstimates, ImputationError> {
+    let ids = set
+        .anchors
+        .iter()
+        .chain(set.candidates)
+        .map(|r| r.id().to_string())
+        .collect();
+    let anchor = (0..set.anchors.len() + set.candidates.len())
+        .map(|i| i < set.anchors.len())
+        .collect();
+    let units = Units::new(ids, anchor)?;
+    let md = match_data(&matched.outcome, &units, options)?;
+    let sample = MatchedSample::from_match_data(&md, units_data)?;
+    Ok(estimate_effects(&sample, spec)?)
+}
+
+/// The results of the sets in the order of the sets, or the error of the
+/// first set that failed, whichever thread finished first.
+fn in_set_order<T>(results: Vec<Result<T, ImputationError>>) -> Result<Vec<T>, ImputationError> {
+    results.into_iter().collect()
 }

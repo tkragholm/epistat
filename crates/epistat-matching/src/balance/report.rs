@@ -1,7 +1,7 @@
 use super::input::{BalanceInputError, BalanceWeights};
 use super::stats::{
-    cramers_v_weighted, eqq_distance_weighted, standard_deviation, standardised_difference,
-    variance_ratio, weighted_ecdf_distance,
+    cramers_v_weighted, eqq_distance_weighted_sorted, standard_deviation, standardised_difference,
+    variance_ratio, weighted_ecdf_distance_ordered,
 };
 use crate::matching::{CovariateRecord, effective_sample_size};
 use crate::types::{
@@ -13,6 +13,7 @@ use crate::types::{
 };
 use epistat_stats::weighted;
 use itertools::Itertools;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -138,6 +139,11 @@ fn compute_summary<R: CovariateRecord>(
         } else {
             &[]
         },
+        pair_positions: None,
+    };
+    let sample = BalanceSample {
+        pair_positions: pair_positions(cases, controls, sample.pairs),
+        ..sample
     };
     let levels = categorical_keys
         .iter()
@@ -544,6 +550,79 @@ struct BalanceSample<'a, R> {
     sampled: bool,
     estimand: Estimand,
     pairs: &'a [MatchedPair],
+    /// The pairs as positions in the pooled records, cases first, with the
+    /// pairs whose units are not among the records left out. `None` when an
+    /// identifier occurs twice in a group, where a pair has to be read by
+    /// identifier.
+    pair_positions: Option<Vec<(usize, usize)>>,
+}
+
+impl<R: CovariateRecord> BalanceSample<'_, R> {
+    /// The value of a pair's case and control for each pair in which both have
+    /// one, in the order of the pairs. `values` holds one value per record, the
+    /// cases first. When an identifier occurs more than once in a group, the
+    /// last record of it with a value is the one a pair reads.
+    fn pair_values<T: Copy>(&self, values: &[Option<T>]) -> Vec<(T, T)> {
+        if let Some(positions) = &self.pair_positions {
+            return positions
+                .iter()
+                .filter_map(|&(case, control)| Some((values[case]?, values[control]?)))
+                .collect();
+        }
+        let split = self.cases.len();
+        let by_id = |records: &[R], values: &[Option<T>]| {
+            records
+                .iter()
+                .zip(values)
+                .filter_map(|(record, value)| Some((record.id().to_owned(), (*value)?)))
+                .collect::<HashMap<_, _>>()
+        };
+        let case_values = by_id(self.cases, &values[..split]);
+        let control_values = by_id(self.controls, &values[split..]);
+        self.pairs
+            .iter()
+            .filter_map(|pair| {
+                Some((
+                    *case_values.get(pair.case_id.as_str())?,
+                    *control_values.get(pair.control_id.as_str())?,
+                ))
+            })
+            .collect()
+    }
+}
+
+/// The records by identifier, `None` when an identifier occurs twice.
+fn index_by_id<R: CovariateRecord>(records: &[R]) -> Option<HashMap<&str, usize>> {
+    let map = records
+        .iter()
+        .enumerate()
+        .map(|(position, record)| (record.id(), position))
+        .collect::<HashMap<_, _>>();
+    (map.len() == records.len()).then_some(map)
+}
+
+/// The pairs as positions among the pooled records, `None` when an identifier
+/// occurs twice in the cases or in the controls.
+fn pair_positions<R: CovariateRecord>(
+    cases: &[R],
+    controls: &[R],
+    pairs: &[MatchedPair],
+) -> Option<Vec<(usize, usize)>> {
+    if pairs.is_empty() {
+        return Some(Vec::new());
+    }
+    let (case_index, control_index) = (index_by_id(cases)?, index_by_id(controls)?);
+    Some(
+        pairs
+            .iter()
+            .filter_map(|pair| {
+                Some((
+                    *case_index.get(pair.case_id.as_str())?,
+                    cases.len() + *control_index.get(pair.control_id.as_str())?,
+                ))
+            })
+            .collect(),
+    )
 }
 
 /// One record's value of a feature, its group and its weights.
@@ -607,8 +686,9 @@ fn build_numeric_balance<R: CovariateRecord>(
     levels: &LevelTable,
     transforms: NumericBalanceTransform,
 ) -> (Vec<NumericBalance>, Vec<PairDistance>) {
+    // The features are independent, and the report keeps their order.
     numeric_feature_specs(numeric_keys, levels, transforms)
-        .iter()
+        .par_iter()
         .filter(|feature| !is_redundant_term(sample, context, feature))
         .map(|feature| summarize_numeric_feature(sample, context, feature))
         .unzip()
@@ -651,15 +731,16 @@ fn is_redundant_term<R: CovariateRecord>(
     all_zero || equals_left
 }
 
-/// The records of both groups with their value of the feature, pre-match order,
-/// cases first. A record without a finite value is left out. The second element
-/// is the record's identifier.
-fn feature_units<'a, R: CovariateRecord>(
-    sample: &BalanceSample<'a, R>,
+/// The records of both groups with their value of the feature, in the order
+/// of the records, cases first, and the value of every record by position, `None`
+/// for a record without a finite value, which is left out of the units.
+fn feature_units<R: CovariateRecord>(
+    sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
-) -> Vec<(Unit<f64>, &'a str)> {
+) -> (Vec<Unit<f64>>, Vec<Option<f64>>) {
     let mut units = Vec::new();
+    let mut values = Vec::with_capacity(sample.cases.len() + sample.controls.len());
     for (records, weights, is_case, supplemental) in [
         (
             sample.cases,
@@ -675,20 +756,117 @@ fn feature_units<'a, R: CovariateRecord>(
         ),
     ] {
         for (record, weights) in records.iter().zip(weights) {
-            if let Some(value) = feature.value(record, supplemental) {
-                units.push((
-                    Unit {
-                        value,
-                        is_case,
-                        weights: *weights,
-                    },
-                    record.id(),
-                ));
+            let value = feature.value(record, supplemental);
+            if let Some(value) = value {
+                units.push(Unit {
+                    value,
+                    is_case,
+                    weights: *weights,
+                });
             }
+            values.push(value);
         }
     }
-    units
+    (units, values)
 }
+
+/// The units of a feature in ascending order of value, sorted once for every
+/// statistic that needs the order.
+///
+/// Units that tie stay in the order of the records. The eCDF distance reads the
+/// order by `f64::total_cmp`, in which negative zero comes before positive
+/// zero, and the eQQ distance reads negative and positive zero as one value.
+struct SortedUnits {
+    /// Every unit, for the eCDF distance.
+    ecdf: Vec<u32>,
+    /// The units with a finite value, one list per group, for the eQQ distance.
+    cases: Vec<u32>,
+    controls: Vec<u32>,
+}
+
+impl SortedUnits {
+    fn new(units: &[Unit<f64>]) -> Self {
+        let mut keyed = units
+            .iter()
+            .enumerate()
+            .map(|(position, unit)| {
+                (
+                    unit.value,
+                    u32::try_from(position).expect("fewer than 2^32 units"),
+                )
+            })
+            .collect_vec();
+        let by_value_then_position = |left: &(f64, u32), right: &(f64, u32)| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.1.cmp(&right.1))
+        };
+        if keyed.len() > PARALLEL_SORT_FROM {
+            keyed.par_sort_unstable_by(by_value_then_position);
+        } else {
+            keyed.sort_unstable_by(by_value_then_position);
+        }
+        let group = |is_case: bool| {
+            keyed
+                .iter()
+                .filter(|(value, position)| {
+                    value.is_finite() && units[*position as usize].is_case == is_case
+                })
+                .map(|(_, position)| *position)
+                .collect_vec()
+        };
+        let (cases, controls) = (group(true), group(false));
+
+        // Within a run of zeros, negative zero first and each sign in the
+        // order of the records.
+        let is_zero = |value: f64| value.to_bits() << 1 == 0;
+        let mut start = 0;
+        while start < keyed.len() {
+            if is_zero(keyed[start].0) {
+                let end = start + keyed[start..].partition_point(|(value, _)| is_zero(*value));
+                keyed[start..end]
+                    .sort_by_key(|(value, position)| (value.is_sign_positive(), *position));
+                start = end;
+            } else {
+                start += 1;
+            }
+        }
+        Self {
+            ecdf: keyed.into_iter().map(|(_, position)| position).collect(),
+            cases,
+            controls,
+        }
+    }
+
+    /// One group's values in order, its weights under the stage and the total
+    /// weight of its units with a finite value, summed in the order of the
+    /// records.
+    fn group_in_order(
+        units: &[Unit<f64>],
+        order: &[u32],
+        is_case: bool,
+        matched: bool,
+    ) -> (Vec<f64>, Vec<f64>, f64) {
+        let total = units
+            .iter()
+            .filter(|unit| unit.is_case == is_case && unit.value.is_finite())
+            .map(|unit| unit.weight(matched))
+            .sum::<f64>();
+        let (values, weights) = order
+            .iter()
+            .map(|&position| {
+                let unit = &units[position as usize];
+                (unit.value, unit.weight(matched))
+            })
+            .unzip();
+        (values, weights, total)
+    }
+}
+
+/// Features with more units than this sort in parallel. The order does not
+/// depend on it.
+const PARALLEL_SORT_FROM: usize = 1 << 16;
 
 /// Whether a value is exactly zero or one, as in a binary variable.
 #[expect(
@@ -733,8 +911,7 @@ fn summarize_numeric_feature<R: CovariateRecord>(
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
 ) -> (NumericBalance, PairDistance) {
-    let identified = feature_units(sample, context, feature);
-    let units = identified.iter().map(|unit| unit.0).collect_vec();
+    let (units, positioned) = feature_units(sample, context, feature);
     let binary = !units.is_empty() && units.iter().all(|unit| is_zero_or_one(unit.value));
     let standardiser = Standardiser::for_estimand(sample.estimand);
 
@@ -767,40 +944,35 @@ fn summarize_numeric_feature<R: CovariateRecord>(
         }
     };
 
+    let sorted = (!binary).then(|| SortedUnits::new(&units));
+
     // Binary variables: both distribution distances are the absolute
     // difference in proportions.
     let ecdf = |matched: bool, case: GroupMoments, control: GroupMoments| {
-        if binary {
-            let gap = difference(case, control).map(f64::abs);
-            (gap, gap)
-        } else {
+        if let Some(sorted) = &sorted {
             let points = units
                 .iter()
                 .map(|unit| (unit.value, unit.is_case, unit.weight(matched)))
                 .collect_vec();
-            split_pair(weighted_ecdf_distance(&points))
+            split_pair(weighted_ecdf_distance_ordered(&points, &sorted.ecdf))
+        } else {
+            let gap = difference(case, control).map(f64::abs);
+            (gap, gap)
         }
     };
     let eqq = |matched: bool, case: GroupMoments, control: GroupMoments| {
-        if binary {
+        if let Some(sorted) = &sorted {
+            let (case_values, case_weights, case_total) =
+                SortedUnits::group_in_order(&units, &sorted.cases, true, matched);
+            let (control_values, control_weights, control_total) =
+                SortedUnits::group_in_order(&units, &sorted.controls, false, matched);
+            split_pair(eqq_distance_weighted_sorted(
+                (&case_values, &case_weights, case_total),
+                (&control_values, &control_weights, control_total),
+            ))
+        } else {
             let gap = difference(case, control).map(f64::abs);
             (gap, gap)
-        } else {
-            let group = |is_case: bool| {
-                units
-                    .iter()
-                    .filter(|unit| unit.is_case == is_case)
-                    .map(|unit| (unit.value, unit.weight(matched)))
-                    .unzip::<f64, f64, Vec<f64>, Vec<f64>>()
-            };
-            let ((case_values, case_weights), (control_values, control_weights)) =
-                (group(true), group(false));
-            split_pair(eqq_distance_weighted(
-                &case_values,
-                &case_weights,
-                &control_values,
-                &control_weights,
-            ))
         }
     };
     let (ecdf_mean_diff_pre, ecdf_max_diff_pre) = ecdf(false, case_pre, control_pre);
@@ -809,7 +981,7 @@ fn summarize_numeric_feature<R: CovariateRecord>(
     let (eqq_mean_diff_post, eqq_max_diff_post) = eqq(true, case_post, control_post);
 
     let name = feature.name();
-    let distance = pair_distance(sample, &name, &identified, standardiser_scale(reference));
+    let distance = pair_distance(sample, &name, &positioned, standardiser_scale(reference));
     let balance = NumericBalance {
         name,
         mean_case_pre: case_pre.mean,
@@ -839,26 +1011,18 @@ fn standardiser_scale(reference: Option<f64>) -> Option<f64> {
 }
 
 /// Mean absolute difference over the matched pairs in which both units have a
-/// value, summed in the order of the pairs.
+/// value, summed in the order of the pairs. `values` holds the value of each
+/// record, the cases first.
 fn pair_distance<R: CovariateRecord>(
     sample: &BalanceSample<'_, R>,
     name: &str,
-    units: &[(Unit<f64>, &str)],
+    values: &[Option<f64>],
     scale: Option<f64>,
 ) -> PairDistance {
-    let by_group = |is_case: bool| {
-        units
-            .iter()
-            .filter(|(unit, _)| unit.is_case == is_case)
-            .map(|(unit, id)| (*id, unit.value))
-            .collect::<HashMap<_, _>>()
-    };
-    let (case_values, control_values) = (by_group(true), by_group(false));
-    let gaps = sample.pairs.iter().filter_map(|pair| {
-        let case = case_values.get(pair.case_id.as_str())?;
-        let control = control_values.get(pair.control_id.as_str())?;
-        Some((case - control).abs())
-    });
+    let gaps = sample
+        .pair_values(values)
+        .into_iter()
+        .map(|(case, control)| (case - control).abs());
     mean_gap(name, gaps, scale)
 }
 
@@ -880,11 +1044,13 @@ fn build_categorical_balance<R: CovariateRecord>(
     categorical_keys: &[String],
     levels: &LevelTable,
 ) -> (Vec<CategoricalBalance>, Vec<PairDistance>) {
+    let summaries = categorical_keys
+        .par_iter()
+        .map(|key| summarize_categorical_feature(sample, context, key, &levels[key.as_str()]))
+        .collect::<Vec<_>>();
     let mut balances = Vec::new();
     let mut distances = Vec::new();
-    for key in categorical_keys {
-        let (balance, level_distances) =
-            summarize_categorical_feature(sample, context, key, &levels[key.as_str()]);
+    for (balance, level_distances) in summaries {
         balances.push(balance);
         distances.extend(level_distances);
     }
@@ -919,7 +1085,9 @@ fn summarize_categorical_feature<R: CovariateRecord>(
         .enumerate()
         .map(|(idx, level)| (level.as_str(), idx))
         .collect::<HashMap<_, _>>();
-    let mut units: Vec<(Unit<usize>, &str)> = Vec::new();
+    let mut units: Vec<Unit<usize>> = Vec::new();
+    let mut positioned: Vec<Option<usize>> =
+        Vec::with_capacity(sample.cases.len() + sample.controls.len());
     for (records, is_case, supplemental, weights) in [
         (
             sample.cases,
@@ -936,19 +1104,18 @@ fn summarize_categorical_feature<R: CovariateRecord>(
     ] {
         for (record, weights) in records.iter().zip(weights) {
             let level = map_optional_covariate_to_level(covariate_value(record, key, supplemental));
-            if let Some(&value) = level_position.get(level.as_str()) {
-                units.push((
-                    Unit {
-                        value,
-                        is_case,
-                        weights: *weights,
-                    },
-                    record.id(),
-                ));
+            let value = level_position.get(level.as_str()).copied();
+            if let Some(value) = value {
+                units.push(Unit {
+                    value,
+                    is_case,
+                    weights: *weights,
+                });
             }
+            positioned.push(value);
         }
     }
-    let plain = units.iter().map(|unit| unit.0).collect_vec();
+    let plain = units;
     let mass_case_pre = level_mass(&plain, true, false, levels.len());
     let mass_control_pre = level_mass(&plain, false, false, levels.len());
     let mass_case_post = level_mass(&plain, true, true, levels.len());
@@ -959,24 +1126,7 @@ fn summarize_categorical_feature<R: CovariateRecord>(
     let share_control_post = level_shares(&mass_control_post);
     let standardiser = Standardiser::for_estimand(sample.estimand);
 
-    let by_group = |is_case: bool| {
-        units
-            .iter()
-            .filter(|(unit, _)| unit.is_case == is_case)
-            .map(|(unit, id)| (*id, unit.value))
-            .collect::<HashMap<_, _>>()
-    };
-    let (case_level, control_level) = (by_group(true), by_group(false));
-    let pair_levels = sample
-        .pairs
-        .iter()
-        .filter_map(|pair| {
-            Some((
-                *case_level.get(pair.case_id.as_str())?,
-                *control_level.get(pair.control_id.as_str())?,
-            ))
-        })
-        .collect_vec();
+    let pair_levels = sample.pair_values(&positioned);
 
     let mut distances = Vec::new();
     let level_balances = levels
@@ -1161,6 +1311,8 @@ fn covariate_value<'a, R: CovariateRecord>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::balance::stats::{eqq_distance_weighted, weighted_ecdf_distance};
+    use crate::matching::MatchingRecord;
     use crate::types::{
         BalanceRecord, BalanceReportOptions, MatchedPair, NumericBalanceTransform,
         SupplementalBalanceCovariates,
@@ -1881,5 +2033,364 @@ mod tests {
         };
         let report = balance_report_on_weights(&cases, &controls, &weights, &options).unwrap();
         assert!(report.numeric.iter().any(|row| row.name == "x^2"));
+    }
+
+    fn feature_units_with_ids<'a, R: CovariateRecord>(
+        sample: &BalanceSample<'a, R>,
+        context: BalanceCovariateContext<'_>,
+        feature: &NumericFeature,
+    ) -> Vec<(Unit<f64>, &'a str)> {
+        let mut units = Vec::new();
+        for (records, weights, is_case, supplemental) in [
+            (
+                sample.cases,
+                &sample.case_weights,
+                true,
+                context.case_supplemental,
+            ),
+            (
+                sample.controls,
+                &sample.control_weights,
+                false,
+                context.control_supplemental,
+            ),
+        ] {
+            for (record, weights) in records.iter().zip(weights) {
+                if let Some(value) = feature.value(record, supplemental) {
+                    units.push((
+                        Unit {
+                            value,
+                            is_case,
+                            weights: *weights,
+                        },
+                        record.id(),
+                    ));
+                }
+            }
+        }
+        units
+    }
+
+    fn summarize_numeric_feature_reference<R: CovariateRecord>(
+        sample: &BalanceSample<'_, R>,
+        context: BalanceCovariateContext<'_>,
+        feature: &NumericFeature,
+    ) -> (NumericBalance, PairDistance) {
+        let identified = feature_units_with_ids(sample, context, feature);
+        let units = identified.iter().map(|unit| unit.0).collect_vec();
+        let binary = !units.is_empty() && units.iter().all(|unit| is_zero_or_one(unit.value));
+        let standardiser = Standardiser::for_estimand(sample.estimand);
+
+        let pre = Stage {
+            matched: false,
+            sampled: sample.sampled,
+        };
+        let post = Stage {
+            matched: true,
+            ..pre
+        };
+        let case_pre = group_moments(&units, true, pre, binary);
+        let control_pre = group_moments(&units, false, pre, binary);
+        let case_post = group_moments(&units, true, post, binary);
+        let control_post = group_moments(&units, false, post, binary);
+        let reference = standardiser.variance(case_pre.variance, control_pre.variance);
+
+        let difference = |case: GroupMoments, control: GroupMoments| {
+            case.mean.zip(control.mean).map(|(a, b)| a - b)
+        };
+        let smd = |case: GroupMoments, control: GroupMoments| {
+            difference(case, control).and_then(|value| standardised_difference(value, reference))
+        };
+        let ratio = |case: GroupMoments, control: GroupMoments| {
+            if binary {
+                None
+            } else {
+                case.variance
+                    .zip(control.variance)
+                    .and_then(|(a, b)| variance_ratio(a, b))
+            }
+        };
+
+        // Binary variables: both distribution distances are the absolute
+        // difference in proportions.
+        let ecdf = |matched: bool, case: GroupMoments, control: GroupMoments| {
+            if binary {
+                let gap = difference(case, control).map(f64::abs);
+                (gap, gap)
+            } else {
+                let points = units
+                    .iter()
+                    .map(|unit| (unit.value, unit.is_case, unit.weight(matched)))
+                    .collect_vec();
+                split_pair(weighted_ecdf_distance(&points))
+            }
+        };
+        let eqq = |matched: bool, case: GroupMoments, control: GroupMoments| {
+            if binary {
+                let gap = difference(case, control).map(f64::abs);
+                (gap, gap)
+            } else {
+                let group = |is_case: bool| {
+                    units
+                        .iter()
+                        .filter(|unit| unit.is_case == is_case)
+                        .map(|unit| (unit.value, unit.weight(matched)))
+                        .unzip::<f64, f64, Vec<f64>, Vec<f64>>()
+                };
+                let ((case_values, case_weights), (control_values, control_weights)) =
+                    (group(true), group(false));
+                split_pair(eqq_distance_weighted(
+                    &case_values,
+                    &case_weights,
+                    &control_values,
+                    &control_weights,
+                ))
+            }
+        };
+        let (ecdf_mean_diff_pre, ecdf_max_diff_pre) = ecdf(false, case_pre, control_pre);
+        let (ecdf_mean_diff_post, ecdf_max_diff_post) = ecdf(true, case_post, control_post);
+        let (eqq_mean_diff_pre, eqq_max_diff_pre) = eqq(false, case_pre, control_pre);
+        let (eqq_mean_diff_post, eqq_max_diff_post) = eqq(true, case_post, control_post);
+
+        let name = feature.name();
+        let distance =
+            pair_distance_by_id(sample, &name, &identified, standardiser_scale(reference));
+        let balance = NumericBalance {
+            name,
+            mean_case_pre: case_pre.mean,
+            mean_control_pre: control_pre.mean,
+            smd_pre: smd(case_pre, control_pre),
+            var_ratio_pre: ratio(case_pre, control_pre),
+            ecdf_mean_diff_pre,
+            ecdf_max_diff_pre,
+            eqq_mean_diff_pre,
+            eqq_max_diff_pre,
+            mean_case_post: case_post.mean,
+            mean_control_post: control_post.mean,
+            smd_post: smd(case_post, control_post),
+            var_ratio_post: ratio(case_post, control_post),
+            ecdf_mean_diff_post,
+            ecdf_max_diff_post,
+            eqq_mean_diff_post,
+            eqq_max_diff_post,
+        };
+        (balance, distance)
+    }
+
+    fn pair_distance_by_id<R: CovariateRecord>(
+        sample: &BalanceSample<'_, R>,
+        name: &str,
+        units: &[(Unit<f64>, &str)],
+        scale: Option<f64>,
+    ) -> PairDistance {
+        let by_group = |is_case: bool| {
+            units
+                .iter()
+                .filter(|(unit, _)| unit.is_case == is_case)
+                .map(|(unit, id)| (*id, unit.value))
+                .collect::<HashMap<_, _>>()
+        };
+        let (case_values, control_values) = (by_group(true), by_group(false));
+        let gaps = sample.pairs.iter().filter_map(|pair| {
+            let case = case_values.get(pair.case_id.as_str())?;
+            let control = control_values.get(pair.control_id.as_str())?;
+            Some((case - control).abs())
+        });
+        mean_gap(name, gaps, scale)
+    }
+
+    fn tied_record(id: &str, values: &[(&str, f64)]) -> BalanceRecord {
+        let mut record = participant(id);
+        for (key, value) in values {
+            record
+                .covariates
+                .insert((*key).to_string(), CovariateValue::Numeric(*value));
+        }
+        record
+    }
+
+    /// A small deterministic generator, so that the cases are fixed.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            usize::try_from(self.next() % u64::try_from(bound).unwrap()).unwrap()
+        }
+
+        /// A value from a short list, so that values tie often, including
+        /// negative and positive zero.
+        fn tied_value(&mut self) -> f64 {
+            [-0.0, 0.0, 1.0, -1.5, 2.0, 2.5, 3.0][self.below(7)]
+        }
+    }
+
+    /// The numeric rows and pair distances of the report equal those of the
+    /// reference that sorts for each statistic and reads pairs by identifier,
+    /// on data with many ties and zeros of both signs, with and without
+    /// duplicated identifiers, weights of zero and sampling weights.
+    #[test]
+    fn numeric_rows_equal_the_reference_on_tied_data() {
+        for (seed, units, duplicate_ids, sampled) in [
+            (1_u64, 7_usize, false, false),
+            (2, 40, false, false),
+            (3, 40, true, false),
+            (4, 300, false, true),
+            (5, 300, true, true),
+            (6, 3, false, false),
+        ] {
+            let mut rng = Lcg(seed);
+            let make = |prefix: &str, rng: &mut Lcg| {
+                (0..units)
+                    .map(|idx| {
+                        let id = if duplicate_ids && idx % 5 == 4 {
+                            format!("{prefix}{}", idx - 1)
+                        } else {
+                            format!("{prefix}{idx}")
+                        };
+                        tied_record(
+                            &id,
+                            &[
+                                ("a", rng.tied_value()),
+                                ("b", f64::from(u8::try_from(rng.below(2)).unwrap())),
+                                ("c", rng.tied_value()),
+                            ],
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let cases = make("case", &mut rng);
+            let controls = make("control", &mut rng);
+            let pairs = (0..units)
+                .map(|idx| {
+                    MatchedPair::new(
+                        format!("case{}", rng.below(units)),
+                        if idx % 7 == 6 {
+                            "absent".to_string()
+                        } else {
+                            format!("control{}", rng.below(units))
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
+            for record in cases.iter().chain(&controls) {
+                let weight = [0.0, 0.1, 0.3, 0.7, 1.1][rng.below(5)];
+                let target = if MatchingRecord::id(record).starts_with("case") {
+                    &mut weights.matching.anchor
+                } else {
+                    &mut weights.matching.candidate
+                };
+                target.insert(MatchingRecord::id(record).to_string(), weight);
+            }
+            if sampled {
+                weights.sampling = Some(
+                    cases
+                        .iter()
+                        .chain(&controls)
+                        .map(|record| {
+                            (
+                                MatchingRecord::id(record).to_string(),
+                                0.37 + 0.1 * f64::from(u32::try_from(rng.next() % 4).unwrap()),
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            weights.pairs = pairs;
+            let options = BalanceReportOptions {
+                numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+                ..BalanceReportOptions::default()
+            };
+
+            let summary = balance_summary(&cases, &controls, &weights, &options).unwrap();
+
+            let context = BalanceCovariateContext {
+                case_supplemental: &options.supplemental_covariates.cases,
+                control_supplemental: &options.supplemental_covariates.controls,
+            };
+            let sample = BalanceSample {
+                cases: &cases,
+                controls: &controls,
+                case_weights: unit_weights(
+                    &cases,
+                    &weights.matching.anchor,
+                    weights.sampling.as_ref(),
+                ),
+                control_weights: unit_weights(
+                    &controls,
+                    &weights.matching.candidate,
+                    weights.sampling.as_ref(),
+                ),
+                sampled,
+                estimand: weights.estimand,
+                pairs: &weights.pairs,
+                pair_positions: None,
+            };
+            let keys = ["a", "b", "c"].map(String::from);
+            let features = numeric_feature_specs(
+                &keys,
+                &LevelTable::new(),
+                NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            );
+            let expected = features
+                .iter()
+                .filter(|feature| !is_redundant_term(&sample, context, feature))
+                .map(|feature| summarize_numeric_feature_reference(&sample, context, feature))
+                .collect::<Vec<_>>();
+            let (rows, distances): (Vec<_>, Vec<_>) = expected.into_iter().unzip();
+            assert_eq!(
+                format!("{:?}", summary.report.numeric),
+                format!("{rows:?}"),
+                "numeric rows, seed {seed}"
+            );
+            assert_eq!(
+                format!("{:?}", summary.pair_distances),
+                format!("{distances:?}"),
+                "pair distances, seed {seed}"
+            );
+        }
+    }
+
+    /// The report, with the sort running in parallel on a large feature, is
+    /// the same bit for bit on pools of 1, 2, 4 and 12 threads.
+    #[test]
+    fn report_is_the_same_on_every_pool_size() {
+        let mut rng = Lcg(11);
+        let make = |prefix: &str, rng: &mut Lcg| {
+            (0..40_000)
+                .map(|idx| {
+                    tied_record(
+                        &format!("{prefix}{idx}"),
+                        &[("a", rng.tied_value()), ("c", rng.tied_value())],
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let cases = make("case", &mut rng);
+        let controls = make("control", &mut rng);
+        let mut weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
+        for (idx, weight) in weights.matching.candidate.values_mut().enumerate() {
+            *weight = 0.1 * f64::from(u8::try_from(idx % 7).unwrap());
+        }
+        weights.pairs = (0..20_000)
+            .map(|idx| MatchedPair::new(format!("case{idx}"), format!("control{}", idx * 2)))
+            .collect();
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
+        epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
+            let summary = balance_summary(&cases, &controls, &weights, &options).unwrap();
+            let text = format!("{:?}{:?}", summary.report, summary.pair_distances);
+            text.bytes().map(f64::from).collect()
+        });
     }
 }

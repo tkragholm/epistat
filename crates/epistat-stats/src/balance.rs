@@ -164,10 +164,6 @@ pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
 /// `None` when a group has no unit of positive weight, or the lengths of a
 /// group's values and weights differ, or a weight is negative or not finite.
 #[must_use]
-#[expect(
-    clippy::float_cmp,
-    reason = "values are compared for being the same sample value"
-)]
 pub fn eqq_distance_weighted(
     a: &[f64],
     weights_a: &[f64],
@@ -176,6 +172,39 @@ pub fn eqq_distance_weighted(
 ) -> Option<(f64, f64)> {
     let group_a = QuantileGroup::new(a, weights_a)?;
     let group_b = QuantileGroup::new(b, weights_b)?;
+    eqq_distance_of_groups(&group_a, &group_b)
+}
+
+/// [`eqq_distance_weighted`] for groups already in ascending order of value.
+///
+/// Each group is given as finite values in ascending order, with negative and
+/// positive zero counted as equal and units that tie in their original order,
+/// the weight of each unit, and the total weight of the group summed in the
+/// original order before sorting. The result is the same as that of
+/// [`eqq_distance_weighted`] on the unsorted group, bit for bit. This lets a
+/// caller that needs the distance under several weightings sort once.
+///
+/// `None` when a group has no unit of positive weight, or the lengths of a
+/// group's values and weights differ, or a weight is negative or not finite.
+#[must_use]
+pub fn eqq_distance_weighted_sorted(
+    a: &[f64],
+    weights_a: &[f64],
+    total_a: f64,
+    b: &[f64],
+    weights_b: &[f64],
+    total_b: f64,
+) -> Option<(f64, f64)> {
+    let group_a = QuantileGroup::from_sorted(a, weights_a, total_a)?;
+    let group_b = QuantileGroup::from_sorted(b, weights_b, total_b)?;
+    eqq_distance_of_groups(&group_a, &group_b)
+}
+
+#[expect(
+    clippy::float_cmp,
+    reason = "values are compared for being the same sample value"
+)]
+fn eqq_distance_of_groups(group_a: &QuantileGroup, group_b: &QuantileGroup) -> Option<(f64, f64)> {
     if group_a.values.is_empty() || group_b.values.is_empty() {
         return None;
     }
@@ -190,9 +219,9 @@ pub fn eqq_distance_weighted(
     let few_values = pooled.len() <= 5;
 
     let (small, large) = if group_a.values.len() <= group_b.values.len() {
-        (&group_a, &group_b)
+        (group_a, group_b)
     } else {
-        (&group_b, &group_a)
+        (group_b, group_a)
     };
     let gaps: Vec<f64> = if small.values.len() == large.values.len() {
         small
@@ -257,13 +286,32 @@ impl QuantileGroup {
         // Negative and positive zero are one value, so units that tie keep
         // their given order.
         units.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap_or(std::cmp::Ordering::Equal));
-        let all_values = units.iter().map(|u| u.0).collect();
-        let positive: Vec<(f64, f64)> = units.into_iter().filter(|u| u.1 > 0.0).collect();
-        Some(Self {
+        let sorted_values: Vec<f64> = units.iter().map(|u| u.0).collect();
+        let sorted_weights: Vec<f64> = units.iter().map(|u| u.1).collect();
+        Some(Self::scaled(sorted_values, &sorted_weights, total))
+    }
+
+    /// The group from values that are finite and already ascending, with the
+    /// total weight summed in the original order.
+    fn from_sorted(values: &[f64], weights: &[f64], total: f64) -> Option<Self> {
+        if values.len() != weights.len() || weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
+            return None;
+        }
+        Some(Self::scaled(values.to_vec(), weights, total))
+    }
+
+    fn scaled(all_values: Vec<f64>, weights: &[f64], total: f64) -> Self {
+        let positive: Vec<(f64, f64)> = all_values
+            .iter()
+            .copied()
+            .zip(weights.iter().copied())
+            .filter(|u| u.1 > 0.0)
+            .collect();
+        Self {
             all_values,
             values: positive.iter().map(|u| u.0).collect(),
             weights: positive.iter().map(|u| u.1 / total).collect(),
-        })
+        }
     }
 
     /// The value of the last unit whose cumulative weight is at most each
@@ -440,6 +488,31 @@ mod tests {
         assert!(mean > 0.0 && max <= 2.0 + 1e-12);
         // Perfect association between group and category.
         assert!((cramers_v(&[10, 0], &[0, 10]).unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    /// Sorting by hand with the ties kept in order, as the caller of the sorted
+    /// form does, gives the unsorted form's result bit for bit.
+    #[test]
+    fn weighted_eqq_sorted_form_equals_the_unsorted_form() {
+        let a = [2.0, -0.0, 0.0, 1.0, 2.0, 0.0, 3.5, 1.0];
+        let wa = [0.1, 0.3, 0.7, 0.2, 1.1, 0.0, 0.4, 0.9];
+        let b = [1.0, 0.0, -0.0, 2.0, 2.0];
+        let wb = [0.3, 0.1, 0.7, 0.2, 0.5];
+        let sorted = |values: &[f64], weights: &[f64]| {
+            let mut units: Vec<(f64, f64)> = values
+                .iter()
+                .copied()
+                .zip(weights.iter().copied())
+                .collect();
+            units.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap());
+            let (v, w): (Vec<f64>, Vec<f64>) = units.into_iter().unzip();
+            (v, w, weights.iter().sum::<f64>())
+        };
+        let ((va, swa, ta), (vb, swb, tb)) = (sorted(&a, &wa), sorted(&b, &wb));
+        let expected = eqq_distance_weighted(&a, &wa, &b, &wb).unwrap();
+        let got = eqq_distance_weighted_sorted(&va, &swa, ta, &vb, &swb, tb).unwrap();
+        assert_eq!(expected.0.to_bits(), got.0.to_bits());
+        assert_eq!(expected.1.to_bits(), got.1.to_bits());
     }
 
     #[test]
