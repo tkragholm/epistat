@@ -39,6 +39,7 @@ pub use distance::{
 pub use engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
 };
+pub(crate) use estimation::encode_covariates_pooled;
 pub use estimation::{
     CbpsConfig, CbpsEstimand, CbpsFit, CbpsMethod, CovariateEncodingConfig, CovariateMatrix,
     CrossValidation, ElasticNetCvConfig, ElasticNetLogisticConfig, EstimationError,

@@ -621,6 +621,17 @@ pub fn encode_covariates<R: CovariateRecord>(
     build_covariate_matrix(&refs, config)
 }
 
+/// The design matrix of two groups of records, the first group's rows first,
+/// encoded together as [`encode_covariates`] does.
+pub(crate) fn encode_covariates_pooled<R: CovariateRecord>(
+    first: &[R],
+    second: &[R],
+    config: &CovariateEncodingConfig,
+) -> Result<CovariateMatrix, EstimationError> {
+    let refs = first.iter().chain(second).collect_vec();
+    build_covariate_matrix(&refs, config)
+}
+
 /// Run matching with propensity scores estimated internally from covariates.
 ///
 /// With `propensity_config.reestimate`, the units that `criteria.common_support`
