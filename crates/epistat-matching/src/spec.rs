@@ -32,6 +32,7 @@ use crate::matching::{
     prepare_propensity_distance_config, quick_match_subclasses,
     subclassify_by_propensity_score_map,
 };
+use crate::role_transition::{ExposureDensityOutcome, exposure_density_sets};
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, CriteriaValidationError, DistanceCaliper, Estimand,
     ExclusionReason, MatchOutcome, MatchRatio, MatchingCriteria, RoleTransitionRecord,
@@ -55,6 +56,10 @@ pub enum MatchMode {
     /// date. The units are one cohort, and a unit with a transition date is a
     /// case.
     RiskSet,
+    /// Exposure density sampling: risk-set matching in which the transition
+    /// date is the date of exposure. The output carries the index date of
+    /// each set and the date on which each control is later exposed.
+    ExposureDensity,
 }
 
 /// How controls are chosen.
@@ -736,7 +741,7 @@ pub enum SpecInput<'a, R> {
         /// The candidates.
         candidates: &'a [R],
     },
-    /// One cohort, for [`MatchMode::RiskSet`].
+    /// One cohort, for [`MatchMode::RiskSet`] and [`MatchMode::ExposureDensity`].
     RiskSet {
         /// The cohort. A unit with a transition date is a case on that date.
         cohort: &'a [RoleTransitionRecord<R>],
@@ -753,6 +758,8 @@ pub enum SpecOutput {
         /// The propensity model, when the distance was a fitted score.
         propensity: Option<Box<PropensityScoreEstimate>>,
     },
+    /// Exposure density sets, from [`MatchMode::ExposureDensity`].
+    ExposureDensity(Box<ExposureDensityOutcome>),
     /// Strata with weights, from the exact method and from coarsened exact
     /// matching without k:k pairing.
     Exact(Box<ExactMatchOutcome>),
@@ -819,7 +826,7 @@ impl Display for SpecError {
                     "the spec is for standard matching and needs anchors and candidates; \
                      pass them, or set the mode to risk_set",
                 ),
-                MatchMode::RiskSet => f.write_str(
+                MatchMode::RiskSet | MatchMode::ExposureDensity => f.write_str(
                     "the spec is for risk-set matching and needs one cohort; \
                      pass it, or set the mode to standard",
                 ),
@@ -1020,7 +1027,7 @@ impl MatchSpec {
         }
         match self.mode {
             MatchMode::Standard => self.validate_standard(),
-            MatchMode::RiskSet => self.validate_risk_set(),
+            MatchMode::RiskSet | MatchMode::ExposureDensity => self.validate_risk_set(),
         }
     }
 
@@ -1735,6 +1742,9 @@ where
             },
         ) => run_standard(spec, anchors, candidates),
         (MatchMode::RiskSet, SpecInput::RiskSet { cohort }) => run_risk_set(spec, cohort),
+        (MatchMode::ExposureDensity, SpecInput::RiskSet { cohort }) => {
+            run_exposure_density(spec, cohort)
+        }
         (mode, _) => Err(SpecError::InputMode { mode }),
     }
 }
@@ -1944,6 +1954,18 @@ fn death_date<R: RoleIndexedRecord>(record: &R) -> Option<NaiveDate> {
 type Rec<R> = RoleTransitionRecord<R>;
 type DeathSelector<R> = fn(&Rec<R>) -> Option<NaiveDate>;
 type ResidentSelector<R> = fn(&Rec<R>, NaiveDate) -> bool;
+
+fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
+    spec: &MatchSpec,
+    cohort: &[RoleTransitionRecord<R>],
+) -> Result<SpecOutput, SpecError> {
+    let SpecOutput::Pairs { outcome, .. } = run_risk_set(spec, cohort)? else {
+        unreachable!("risk-set matching returns pairs")
+    };
+    let sets = exposure_density_sets(cohort, *outcome)
+        .map_err(|error| SpecError::option("cohort", error.to_string()))?;
+    Ok(SpecOutput::ExposureDensity(Box::new(sets)))
+}
 
 fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,

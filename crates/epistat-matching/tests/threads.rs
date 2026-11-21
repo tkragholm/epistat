@@ -271,6 +271,48 @@ fn transition_matching() {
 }
 
 #[test]
+fn exposure_density_sampling() {
+    let people = cohort(6_000, 90, 12, 31);
+    assert_same_on_pools(&POOLS, || {
+        let mut d = Digest::default();
+        let recs: Vec<RoleTransitionRecord<BalanceRecord>> =
+            records(&people, Level::Municipality, true, false)
+                .into_iter()
+                .map(|row| {
+                    RoleTransitionRecord::from_record(
+                        BalanceRecord {
+                            core: row.record,
+                            covariates: HashMap::new(),
+                        },
+                        row.transition_date,
+                    )
+                })
+                .collect();
+        let spec = MatchSpec {
+            mode: MatchMode::ExposureDensity,
+            seed: 99,
+            ratio: 3,
+            replace: true,
+            birth_window_days: 60,
+            age_limit_years: Some(6),
+            exact: vec!["sex".into(), "municipality".into()],
+            require_alive: true,
+            ..MatchSpec::default()
+        };
+        let SpecOutput::ExposureDensity(sets) =
+            run_spec(&spec, SpecInput::RiskSet { cohort: &recs }).expect("valid spec")
+        else {
+            panic!("expected exposure density sets");
+        };
+        assert!(!sets.controls.is_empty(), "no output, test is vacuous");
+        d.outcome(&sets.outcome);
+        d.debug(&sets.exposed);
+        d.debug(&sets.controls);
+        d.0
+    });
+}
+
+#[test]
 fn run_with_balance_and_balance_reports() {
     let (cases, controls) = balance_inputs(800, 3_200, 3);
     let anchors: Vec<BaseRecord> = cases.iter().map(|r| r.core.clone()).collect();

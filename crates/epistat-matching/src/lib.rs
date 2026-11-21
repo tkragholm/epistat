@@ -175,6 +175,10 @@ pub use matching::{
 pub use role_transition::{
     DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest, match_transition,
 };
+pub use role_transition::{
+    ExposedPerson, ExposureDensityControl, ExposureDensityError, ExposureDensityOutcome,
+    exposure_density_sets, match_exposure_density,
+};
 pub use types::{
     AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
     BalanceReport, BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds, BaseRecord,
@@ -281,6 +285,11 @@ pub mod prelude {
         BinRuleSpec, BinningSpec, CemBinning, CemError, CemKind, CemRule, CemSpec, CemStrata,
         CemVariable, CemVariableSpec, K2kSpec, MatrixDistance, PairDistanceMatrix,
         PairDistanceMatrixError, cem_k2k_pairs, cem_strata, cem_subclasses,
+    };
+
+    pub use crate::{
+        ExposedPerson, ExposureDensityControl, ExposureDensityError, ExposureDensityOutcome,
+        exposure_density_sets, match_exposure_density,
     };
 
     pub mod constraints {
