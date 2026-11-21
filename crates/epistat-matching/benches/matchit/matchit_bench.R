@@ -4,9 +4,14 @@
 # Usage: Rscript matchit_bench.R N METHOD SCRATCH
 #   N        number of units, as in SCRATCH/cohort_N.csv
 #   METHOD   load | nn_ps | nn_ps_cal | nn_strata | nn_cal_strata | nn_1to3 |
-#            nn_mahal | subclass | exact | cem | quick | optimal_cal |
-#            full_cal | riskset | balance
-#   SCRATCH  directory with the cohort file; results go to SCRATCH/out
+#            nn_ps_r4 | nn_strata_r4 | nn_replace | nn_mahal | nn_mahal_strata |
+#            nn_euclid | nn_euclid_strata | subclass | exact | cem | quick |
+#            optimal_cal | full_cal | cardinality | profile | genetic_eval |
+#            genetic_short | riskset | riskset_replace | balance | fit_logit |
+#            fit_probit | fit_enet_cv | fit_cbps | effects | abadie |
+#            sens_wilcoxon | sens_hl | sens_mscore
+#   SCRATCH  directory with the cohort file; results go to OUT, by default
+#            SCRATCH/out
 #
 # The environment variable REPS sets the number of timed repetitions (default
 # 3), CALIPER_RAW the caliper of optimal_cal and full_cal (default 0.2, as in
@@ -23,7 +28,8 @@ method <- args[2]
 scratch <- args[3]
 reps <- as.integer(Sys.getenv("REPS", "3"))
 caliper_raw <- as.numeric(Sys.getenv("CALIPER_RAW", "0.2"))
-dir.create(file.path(scratch, "out"), showWarnings = FALSE)
+out_dir <- Sys.getenv("OUT", file.path(scratch, "out"))
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 d <- as.data.frame(fread(file.path(scratch, sprintf("cohort_%s.csv", n))))
 d$f3 <- factor(d$x3)
@@ -56,7 +62,25 @@ call <- switch(method,
   nn_strata = function() run_nearest(distance = "glm", exact = ~s),
   nn_cal_strata = function() run_nearest(distance = "glm", caliper = 0.2, exact = ~s),
   nn_1to3 = function() run_nearest(distance = "glm", ratio = 3),
+  nn_ps_r4 = function() run_nearest(distance = "glm", ratio = 4),
+  nn_strata_r4 = function() run_nearest(distance = "glm", exact = ~s, ratio = 4),
+  nn_replace = function() run_nearest(distance = "glm", replace = TRUE),
   nn_mahal = function() run_nearest(distance = "mahalanobis"),
+  nn_mahal_strata = function() run_nearest(distance = "mahalanobis", exact = ~s),
+  nn_euclid = function() run_nearest(distance = "scaled_euclidean"),
+  nn_euclid_strata = function() run_nearest(distance = "scaled_euclidean", exact = ~s),
+  cardinality = function() matchit(ctreat ~ x1 + x2 + x3 + x4 + x5, data = d,
+                                   method = "cardinality", ratio = 1, tols = 0.05,
+                                   std.tols = TRUE, solver = "highs", time = 120),
+  profile = function() matchit(ctreat ~ x1 + x2 + x3 + x4 + x5, data = d,
+                               method = "cardinality", ratio = NA, tols = 0.05,
+                               std.tols = TRUE, solver = "highs", time = 120),
+  genetic_eval = function() suppressWarnings(
+    matchit(f, data = d, method = "genetic", pop.size = 1, max.generations = 0,
+            wait.generations = 0, distance = "glm")),
+  genetic_short = function() suppressWarnings(
+    matchit(f, data = d, method = "genetic", pop.size = 10, max.generations = 2,
+            wait.generations = 1, hard.generation.limit = TRUE, distance = "glm")),
   subclass = function() matchit(f, data = d, method = "subclass", subclass = 6,
                                 distance = "glm"),
   exact = function() matchit(treat ~ s + x3 + x5, data = d, method = "exact"),
@@ -90,12 +114,62 @@ elapsed <- function(expr_fn) {
   list(res = res, secs = proc.time()[["elapsed"]] - t0)
 }
 
-out_dir <- file.path(scratch, "out")
 times <- numeric()
 res <- NULL
 matched <- NA_integer_
 
-if (method == "riskset") {
+# Model fits: the propensity score alone.
+if (method == "fit_logit") call <- function() glm(f, data = d, family = binomial())
+if (method == "fit_probit") call <- function() glm(f, data = d, family = binomial("probit"))
+if (method == "fit_enet_cv") {
+  suppressMessages(library(glmnet))
+  xm <- model.matrix(f, d)[, -1, drop = FALSE]
+  call <- function() cv.glmnet(xm, d$treat, family = "binomial", alpha = 1, nfolds = 10)
+}
+if (method == "fit_cbps") {
+  suppressMessages(library(CBPS))
+  call <- function() suppressMessages(CBPS(f, data = d, ATT = 1, method = "over",
+                                          print.level = 0))
+}
+
+# Effects, Abadie-Imbens and sensitivity bounds start from a 1:1 nearest match
+# on the propensity score, as the Rust program does. Only what follows is timed.
+if (method %in% c("effects", "abadie", "sens_wilcoxon", "sens_hl", "sens_mscore")) {
+  m0 <- run_nearest(distance = "glm")
+  mm <- m0$match.matrix
+  ok <- !is.na(mm[, 1])
+  tr_rows <- as.integer(rownames(mm)[ok])
+  co_rows <- as.integer(mm[ok, 1])
+  gam <- 3
+}
+if (method == "effects") {
+  suppressMessages({library(sandwich)})
+  call <- function() {
+    md <- match.data(m0)
+    fit <- lm(y ~ treat + x1 + x2, data = md, weights = weights)
+    vcovCL(fit, cluster = ~subclass)
+  }
+}
+if (method == "abadie") {
+  suppressMessages(library(Matching))
+  call <- function() Match(Y = d$y, Tr = d$treat, X = as.matrix(d[, c("x1", "x2")]),
+                           estimand = "ATT", M = 1, BiasAdjust = TRUE, Var.calc = 2)
+}
+if (method == "sens_wilcoxon") {
+  suppressMessages(library(rbounds))
+  call <- function() psens(d$y[tr_rows], d$y[co_rows], Gamma = gam, GammaInc = 0.5)
+}
+if (method == "sens_hl") {
+  suppressMessages(library(rbounds))
+  call <- function() hlsens(d$y[tr_rows], d$y[co_rows], Gamma = gam, GammaInc = 0.5)
+}
+if (method == "sens_mscore") {
+  suppressMessages(library(sensitivitymv))
+  ymv <- cbind(d$y[tr_rows], d$y[co_rows])
+  call <- function() lapply(c(1, 1.5, 2, 2.5, 3), function(g) senmv(ymv, gamma = g))
+}
+
+if (method %in% c("riskset", "riskset_replace")) {
   suppressMessages(library(Epi))
   # ccwc keeps a person with exit equal to the failure time in the risk set, so
   # a person who dies on day t leaves on day t - 1 to be out on day t.
@@ -115,6 +189,7 @@ if (method == "balance") {
     e <- elapsed(function() summary(m0))
     times <- c(times, e$secs)
     res <- e$res
+    if (sum(times) > 20) break
   }
   s <- res$sum.matched
   fwrite(data.table(name = rownames(s), smd_post = s[, "Std. Mean Diff."],
@@ -131,13 +206,19 @@ if (method == "balance") {
     e <- elapsed(call)
     times <- c(times, e$secs)
     res <- e$res
+    if (sum(times) > 20) break
     if (r < reps) rm(res)
   }
   if (method %in% c("nn_ps", "nn_ps_cal", "nn_strata", "nn_cal_strata", "nn_1to3",
-                    "nn_mahal")) {
+                    "nn_ps_r4", "nn_strata_r4", "nn_replace", "nn_mahal",
+                    "nn_mahal_strata", "nn_euclid", "nn_euclid_strata")) {
     p <- pairs_of(res)
     matched <- n_matched_anchors(res)
     fwrite(p, file.path(out_dir, sprintf("r_%s_%s.csv", method, n)))
+  } else if (method %in% c("cardinality", "profile")) {
+    matched <- sum(res$weights > 0)
+  } else if (method %in% c("genetic_eval", "genetic_short")) {
+    matched <- n_matched_anchors(res)
   } else if (method %in% c("subclass", "exact", "cem", "quick")) {
     ok <- !is.na(res$subclass)
     matched <- sum(ok)
@@ -160,7 +241,7 @@ if (method == "balance") {
     matched <- sum(ok)
     fwrite(data.table(id = ids[ok], subclass = as.integer(factor(g[ok]))),
            file.path(out_dir, sprintf("r_%s_%s.csv", method, n)))
-  } else if (method == "riskset") {
+  } else if (method %in% c("riskset", "riskset_replace")) {
     # Cases in a set that got at least one control. Cases that fail on the same
     # day in the same stratum share a set.
     sets <- as.data.table(res)
