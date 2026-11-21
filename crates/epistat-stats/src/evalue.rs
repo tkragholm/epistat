@@ -243,7 +243,9 @@ pub fn hazard_ratio_to_rr(hazard_ratio: f64, outcome: Outcome) -> Result<f64, EV
     let hr = positive("hazard ratio", hazard_ratio)?;
     Ok(match outcome {
         Outcome::Rare => hr,
-        Outcome::Common => (1.0 - 0.5_f64.powf(hr.sqrt())) / (1.0 - 0.5_f64.powf((1.0 / hr).sqrt())),
+        Outcome::Common => {
+            (1.0 - 0.5_f64.powf(hr.sqrt())) / (1.0 - 0.5_f64.powf((1.0 / hr).sqrt()))
+        }
     })
 }
 

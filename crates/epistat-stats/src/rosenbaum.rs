@@ -211,9 +211,7 @@ pub fn wilcoxon_bounds(
         match distribution {
             WilcoxonDistribution::Normal => signed_rank::normal_upper_tail(&ranks, statistic, p)
                 .ok_or(SensitivityError::ZeroVariance),
-            WilcoxonDistribution::Exact => {
-                Ok(signed_rank::exact_upper_tail(&ranks, statistic, p)?)
-            }
+            WilcoxonDistribution::Exact => Ok(signed_rank::exact_upper_tail(&ranks, statistic, p)?),
         }
     };
     Ok(WilcoxonBounds {

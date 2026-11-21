@@ -381,6 +381,18 @@ impl UnitData {
         Ok(self)
     }
 
+    pub(crate) fn treated_flags(&self) -> &[bool] {
+        &self.treated
+    }
+
+    pub(crate) fn outcomes(&self) -> &[f64] {
+        &self.outcome
+    }
+
+    pub(crate) fn covariate_columns(&self) -> &[Vec<f64>] {
+        &self.covariates
+    }
+
     fn row_of(&self, id: &str) -> Result<usize, EffectError> {
         self.index
             .get(id)

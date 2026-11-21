@@ -115,6 +115,7 @@ macro_rules! delegate_matching_record {
     };
 }
 
+pub mod abadie_imbens;
 #[cfg(feature = "arrow")]
 pub mod arrow;
 mod balance;
