@@ -851,6 +851,29 @@ where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
 {
+    with_strata_pairs(anchors, candidates, request, |strata, pairs| {
+        let edges = strata.par_iter().map(pairs).collect();
+        Ok(StrataEdges { strata, edges })
+    })
+}
+
+/// Lists the admissible pairs of one stratum, sorted by row and then column.
+pub(super) type StratumPairs<'a> = dyn Fn(&Stratum) -> Vec<Edge> + Sync + 'a;
+
+/// Calls `f` with the exact strata of a request and a function that lists the
+/// admissible pairs of a stratum, with the request's options checked. A caller
+/// that cannot hold every pair lists them one stratum at a time; each call
+/// gives the same pairs in the same order.
+pub(super) fn with_strata_pairs<R, G, T>(
+    anchors: &[R],
+    candidates: &[R],
+    request: &OptimalRequest<'_, G>,
+    f: impl FnOnce(Vec<Stratum>, &StratumPairs<'_>) -> Result<T, OptimalError>,
+) -> Result<T, OptimalError>
+where
+    R: MatchingRecord,
+    G: ConstraintGroup<R> + ?Sized,
+{
     let criteria = request.criteria;
     let validated = criteria.validate()?;
     let criteria = validated.as_ref();
@@ -882,11 +905,7 @@ where
         anchor_strata: (!required.is_empty()).then_some(anchor_strata),
         candidate_strata: (!required.is_empty()).then_some(candidate_strata),
     };
-    let edges = strata
-        .par_iter()
-        .map(|stratum| builder.edges(stratum))
-        .collect();
-    Ok(StrataEdges { strata, edges })
+    f(strata, &|stratum: &Stratum| builder.edges(stratum))
 }
 
 fn solve_strata<R, G>(
