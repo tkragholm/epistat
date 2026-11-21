@@ -7,6 +7,7 @@
 
 pub mod balance;
 pub mod decomposition;
+pub mod evalue;
 pub mod gamma;
 pub mod likelihood;
 pub mod mcmc;
