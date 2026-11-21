@@ -77,10 +77,12 @@
 //!
 //! # Degeneracy
 //!
-//! A step of length at most the dual tolerance is degenerate. After 200 in a row,
-//! the leaving variable becomes the infeasible basic variable of lowest index
-//! and the entering column the candidate of lowest index among the minimum
+//! A step of length at most the dual tolerance is degenerate. After 20000 in a
+//! row, the leaving variable becomes the infeasible basic variable of lowest
+//! index and the entering column the candidate of lowest index among the minimum
 //! ratios, with no flips, for the rest of that solve, which cannot cycle \[4\].
+//! Cost perturbation ([`BoundedSimplex::perturb_costs`]) is what keeps ties rare
+//! enough that this is not reached in practice.
 //! A solve is limited to `100 (m + n) + 1000` pivots, after which it fails with
 //! [`BoundedLpError::IterationLimit`].
 //!
@@ -102,7 +104,7 @@
 //!   of a sum of such terms, in units of `1e-9`.
 //! - A basic structural column `j` is within its bounds when it is within
 //!   `1e-9 · (1 + |b|)` of the bound `b`.
-//! - The dual tolerance is `1e-9 · max(1, max|q|)`. A pivot keeps every reduced
+//! - The dual tolerance is `1e-11 · max(1, max|q|)`. A pivot keeps every reduced
 //!   cost within it of the right sign (Harris's rule), and a reduced cost is
 //!   taken to have the wrong sign only beyond ten times it.
 //! - A candidate with `|t_j|` below `1e-9` times the largest `|t|` of the row is
@@ -164,8 +166,10 @@ const CHUNK: usize = 4096;
 #[cfg(feature = "rayon")]
 const PARALLEL_FROM_CHUNKS: usize = 8;
 const REFACTOR_EVERY: usize = 40;
-const BLAND_AFTER_DEGENERATE: usize = 200;
-/// Relative tolerance of every comparison, in units of the data scale.
+const BLAND_AFTER_DEGENERATE: usize = 20_000;
+/// Relative tolerance on a reduced cost, in units of the largest cost.
+const DUAL_REL_TOL: f64 = 1e-11;
+/// Relative tolerance of every other comparison, in units of the data scale.
 const REL_TOL: f64 = 1e-9;
 /// A candidate must be at least this fraction of the largest in its row.
 const REL_PIVOT: f64 = 1e-7;
@@ -373,7 +377,7 @@ impl BoundedSimplex {
             lo,
             hi,
             tol: vec![0.0; n + m],
-            dual_tol: REL_TOL * q_max,
+            dual_tol: DUAL_REL_TOL * q_max,
             status: vec![Status::Lower; n + m],
             basis: (n..n + m).collect(),
             binv: vec![0.0; m * m],
@@ -623,10 +627,11 @@ impl BoundedSimplex {
     /// do, has many reduced costs equal to zero at once, and the dual simplex
     /// method then makes long runs of pivots of length zero. Distinct costs
     /// make such ties rare. The amount for column `j` is `ε (1/2 + h_j/2)` with
-    /// `h_j` in `[0, 1)` from a hash of `j`, and `ε = clamp(10^-2/n, 10^-8,
-    /// 10^-6)` times the largest cost, so that the perturbation exceeds the dual
-    /// tolerance, `10^-9` times the largest cost, and adds at most about
-    /// `10^-2` times the largest cost per `n` columns at their upper bound.
+    /// `h_j` in `[0, 1)` from a hash of `j`, and `ε = clamp(10^-1/n, 10^-7,
+    /// 10^-5)` times the largest cost, so that the perturbation is 10^4 times
+    /// the dual tolerance, `10^-11` times the largest cost, and adds at most
+    /// about `10^-1` times the largest cost per `n` columns at their upper
+    /// bound.
     /// With a nonnegative amount on a maximisation the solved value is an upper
     /// bound on the optimum for the costs as given, see
     /// [`Self::relaxation_bound`]. The point returned is optimal for the
@@ -634,7 +639,7 @@ impl BoundedSimplex {
     pub fn perturb_costs(&mut self) {
         let n = self.n;
         let c_max = self.cost.iter().fold(0.0_f64, |a, c| a.max(c.abs()));
-        let eps_max = (1e-2 / n.max(1) as f64).clamp(1e-8, 1e-6) * c_max;
+        let eps_max = (1e-1 / n.max(1) as f64).clamp(1e-7, 1e-5) * c_max;
         for j in 0..n {
             let finite = self.lo[j].is_finite() && self.hi[j].is_finite();
             if finite && self.cost[j] != 0.0 {
