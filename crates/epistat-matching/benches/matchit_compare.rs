@@ -624,7 +624,7 @@ fn run_standard(method: &str, spec: &MatchSpec, input: &Inputs, reps: usize) -> 
     }
 }
 
-fn cohort_of(rows: Vec<Row>) -> Vec<RoleTransitionRecord<BalanceRecord>> {
+fn cohort_of(rows: &[Row]) -> Vec<RoleTransitionRecord<BalanceRecord>> {
     rows.iter()
         .map(|row| {
             let mut r = record(row);
@@ -650,7 +650,8 @@ fn risk_set_spec(mode: MatchMode, replace: bool) -> MatchSpec {
 }
 
 fn run_risk_set(rows: Vec<Row>, reps: usize, mode: MatchMode, replace: bool) -> Timed {
-    let cohort = cohort_of(rows);
+    let cohort = cohort_of(&rows);
+    drop(rows);
     let spec = risk_set_spec(mode, replace);
     let (times, out) = time_reps(reps, || {
         run_spec(&spec, SpecInput::RiskSet { cohort: &cohort })
@@ -668,7 +669,7 @@ fn run_risk_set(rows: Vec<Row>, reps: usize, mode: MatchMode, replace: bool) -> 
 /// People observed in six periods; a person who starts treatment does so in
 /// the period `g mod 6`, is eligible until then, and the outcome falls in the
 /// period of the case date.
-fn trial_panel(rows: Vec<Row>) -> Vec<TrialPerson<BalanceRecord>> {
+fn trial_panel(rows: &[Row]) -> Vec<TrialPerson<BalanceRecord>> {
     rows.iter()
         .map(|row| {
             let mut r = record(row);
@@ -679,7 +680,7 @@ fn trial_panel(rows: Vec<Row>) -> Vec<TrialPerson<BalanceRecord>> {
                 .map(|d| ((u64::from(d) - 1) / TRIAL_SPACING) as usize);
             let periods = (0..TRIAL_PERIODS)
                 .map(|k| TrialPeriod {
-                    period: k as i64,
+                    period: i64::try_from(k).expect("small"),
                     date: origin() + Days::new(TRIAL_SPACING * (k as u64 + 1)),
                     eligible: !row.treat || k <= start,
                     treatment: Some(row.treat && k >= start),
@@ -692,7 +693,8 @@ fn trial_panel(rows: Vec<Row>) -> Vec<TrialPerson<BalanceRecord>> {
 }
 
 fn run_trials(rows: Vec<Row>, reps: usize) -> Timed {
-    let panel = trial_panel(rows);
+    let panel = trial_panel(&rows);
+    drop(rows);
     let spec = MatchSpec {
         mode: MatchMode::SequentialTrials,
         method: MatchMethod::Random,
@@ -734,7 +736,7 @@ fn unit_data_of(input: &Inputs, y: &[f64]) -> UnitData {
     let ids: Vec<String> = all().map(|r| r.core.id.clone()).collect();
     let treated: Vec<bool> = (0..ids.len()).map(|i| i < input.anchors.len()).collect();
     let outcome: Vec<f64> = all()
-        .map(|r| y[id_number(&r.core.id) as usize - 1])
+        .map(|r| y[usize::try_from(id_number(&r.core.id)).expect("id") - 1])
         .collect();
     let mut data = UnitData::new(ids, treated, outcome).expect("unit data");
     for name in ["x1", "x2"] {
@@ -871,7 +873,7 @@ fn run_sensitivity(input: &Inputs, reps: usize, which: &str) -> Timed {
             header: "",
         };
     }
-    let (times, _) = time_reps(reps, || match which {
+    let (times, ()) = time_reps(reps, || match which {
         "sens_wilcoxon" => {
             wilcoxon_bounds(&sets, &gammas, WilcoxonDistribution::Normal).expect("bounds");
         }
