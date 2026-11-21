@@ -28,6 +28,7 @@ use std::fmt::{Display, Formatter};
 pub struct Units {
     ids: Vec<String>,
     anchor: Vec<bool>,
+    fixed_roles: bool,
 }
 
 impl Units {
@@ -50,7 +51,45 @@ impl Units {
                 return Err(OutputError::DuplicateId { id: id.clone() });
             }
         }
-        Ok(Self { ids, anchor })
+        Ok(Self {
+            ids,
+            anchor,
+            fixed_roles: true,
+        })
+    }
+
+    /// The units of a match in which a unit has no fixed group, in the order
+    /// of the data.
+    ///
+    /// Risk-set matching is one, since a future case is a control in the pairs
+    /// of earlier cases. The role of a unit is read from each pair. Only
+    /// [`get_matches`] takes these units, and it cannot list the anchors that
+    /// found no control, since the outcome does not name them.
+    ///
+    /// # Errors
+    ///
+    /// [`OutputError::DuplicateId`] when an id occurs twice.
+    pub fn without_fixed_roles(ids: Vec<String>) -> Result<Self, OutputError> {
+        let anchor = vec![false; ids.len()];
+        let mut units = Self::new(ids, anchor)?;
+        units.fixed_roles = false;
+        Ok(units)
+    }
+
+    /// Whether each unit has one group in every pair. False for units made
+    /// with [`Units::without_fixed_roles`], whose anchor flags are all false
+    /// and mean nothing.
+    #[must_use]
+    pub const fn has_fixed_roles(&self) -> bool {
+        self.fixed_roles
+    }
+
+    fn require_fixed_roles(&self, output: &'static str) -> Result<(), OutputError> {
+        if self.fixed_roles {
+            Ok(())
+        } else {
+            Err(OutputError::NoFixedRoles { output })
+        }
     }
 
     /// The ids in input order.
@@ -122,6 +161,11 @@ pub enum OutputError {
         /// The id.
         id: String,
     },
+    /// The units have no fixed group, and the output needs one.
+    NoFixedRoles {
+        /// The output that was asked for.
+        output: &'static str,
+    },
 }
 
 impl Display for OutputError {
@@ -144,6 +188,11 @@ impl Display for OutputError {
                 f,
                 "a pair has the candidate {id}, which is not a candidate among the units given; \
                  pass the units the match was run on"
+            ),
+            Self::NoFixedRoles { output } => write!(
+                f,
+                "{output} needs each unit to be an anchor or a candidate throughout; \
+                 these units have a role in each pair"
             ),
         }
     }
@@ -201,6 +250,7 @@ pub fn match_matrix(
     units: &Units,
     ratio: usize,
 ) -> Result<MatchMatrix, OutputError> {
+    units.require_fixed_roles("match_matrix")?;
     let anchors = units.anchor_ids();
     let row_of: HashMap<&str, usize> = anchors
         .iter()
@@ -263,10 +313,16 @@ impl LongMatches {
 ///
 /// Each anchor with controls is a pair, numbered from 1 in the order of
 /// `units`. A pair has one row for the anchor and one for each of its controls,
-/// the anchor first and the controls in the order of `units`. Pairs follow in
-/// order of their number. With `include_unmatched`, an anchor without controls
-/// follows the pairs with no pair number and weight 0, where MatchIt leaves it
-/// out.
+/// the anchor first. Pairs follow in order of their number. With
+/// `include_unmatched`, an anchor without controls follows the pairs with no
+/// pair number and weight 0, where MatchIt leaves it out.
+///
+/// The controls of a pair are in the order MatchIt's `get_matches()` lists
+/// them. Going through the anchors in order and each anchor's controls in the
+/// order they were assigned, a control takes its place from the first time it
+/// is met. Without replacement that is the order of assignment. With
+/// replacement a control that an earlier pair used comes before one that is
+/// new to this pair.
 ///
 /// An anchor row weighs 1 and a control row its pair weight, the reciprocal of
 /// the number of controls its anchor got. These are the weights of
@@ -276,37 +332,69 @@ impl LongMatches {
 /// MatchIt's table puts the treated unit of a pair first, which is the
 /// control when the anchors are the controls. Here the anchor is always first.
 ///
+/// With units made by [`Units::without_fixed_roles`], as in risk-set matching,
+/// the anchors are the units that are the anchor of some pair, numbered in the
+/// order of `units`, and a unit that is a control in one pair can be the
+/// anchor of another. The `role` of each row says which it is in that pair.
+///
 /// # Errors
 ///
 /// [`OutputError::UnknownAnchor`] or [`OutputError::UnknownCandidate`] when a
-/// pair names a unit that is not in `units` in that role.
+/// pair names a unit that is not in `units` in that role, and
+/// [`OutputError::NoFixedRoles`] when `include_unmatched` is set for units with
+/// no fixed roles.
 pub fn get_matches(
     outcome: &MatchOutcome,
     units: &Units,
     include_unmatched: bool,
 ) -> Result<LongMatches, OutputError> {
+    if include_unmatched {
+        units.require_fixed_roles("get_matches with include_unmatched")?;
+    }
     let position = units.positions();
     let pair_weights = outcome.pair_weights(MatchWeightMethod::AnchorUnitCandidateFractional);
-    let mut by_anchor: HashMap<&str, Vec<(usize, &str, f64)>> = HashMap::new();
+    let mut by_anchor: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
     for entry in &pair_weights.pairs {
         let anchor = entry.pair.anchor_id();
         let control = entry.pair.comparator_id();
-        if !position.get(anchor).is_some_and(|at| units.anchor[*at]) {
+        let anchor_known = position
+            .get(anchor)
+            .is_some_and(|at| !units.fixed_roles || units.anchor[*at]);
+        if !anchor_known {
             return Err(OutputError::UnknownAnchor {
                 id: anchor.to_string(),
             });
         }
-        let control_position = position
+        let control_known = position
             .get(control)
-            .copied()
-            .filter(|at| !units.anchor[*at])
-            .ok_or_else(|| OutputError::UnknownCandidate {
+            .is_some_and(|at| !units.fixed_roles || !units.anchor[*at]);
+        if !control_known {
+            return Err(OutputError::UnknownCandidate {
                 id: control.to_string(),
-            })?;
+            });
+        }
         by_anchor
             .entry(anchor)
             .or_default()
-            .push((control_position, control, entry.weight));
+            .push((control, entry.weight));
+    }
+
+    let anchors: Vec<&str> = if units.fixed_roles {
+        units.anchor_ids()
+    } else {
+        units
+            .ids
+            .iter()
+            .map(String::as_str)
+            .filter(|id| by_anchor.contains_key(id))
+            .collect()
+    };
+    let mut first_met: HashMap<&str, usize> = HashMap::new();
+    for anchor in &anchors {
+        for (control, _) in by_anchor.get(anchor).into_iter().flatten() {
+            let next = first_met.len();
+            first_met.entry(control).or_insert(next);
+        }
     }
 
     let mut out = LongMatches {
@@ -317,18 +405,18 @@ pub fn get_matches(
     };
     let mut next_pair = 0_usize;
     let mut unmatched: Vec<&str> = Vec::new();
-    for anchor in units.anchor_ids() {
+    for anchor in anchors {
         let Some(mut controls) = by_anchor.remove(anchor) else {
             unmatched.push(anchor);
             continue;
         };
         next_pair += 1;
-        controls.sort_by_key(|(position, _, _)| *position);
+        controls.sort_by_key(|(control, _)| first_met[control]);
         out.id.push(anchor.to_string());
         out.role.push(UnitRole::Anchor);
         out.pair_id.push(Some(next_pair));
         out.weight.push(1.0);
-        for (_, control, weight) in controls {
+        for (control, weight) in controls {
             out.id.push(control.to_string());
             out.role.push(UnitRole::Candidate);
             out.pair_id.push(Some(next_pair));
@@ -419,6 +507,7 @@ pub fn match_data(
     units: &Units,
     options: MatchDataOptions,
 ) -> Result<MatchData, OutputError> {
+    units.require_fixed_roles("match_data")?;
     let long = get_matches(outcome, units, false)?;
     let mut subclass_of: HashMap<&str, usize> = HashMap::new();
     for (id, pair) in long.id.iter().zip(&long.pair_id) {
@@ -598,9 +687,9 @@ mod tests {
     }
 
     #[test]
-    fn long_form_orders_pairs_by_anchor_and_controls_by_input_position() {
+    fn long_form_orders_pairs_by_anchor_and_controls_by_assignment() {
         let long = get_matches(&outcome(), &units(), false).expect("long");
-        assert_eq!(long.id, ["a1", "c1", "c3", "a2", "c2"]);
+        assert_eq!(long.id, ["a1", "c3", "c1", "a2", "c2"]);
         assert_eq!(long.pair_id, [Some(1), Some(1), Some(1), Some(2), Some(2)]);
         assert_eq!(long.weight, [1.0, 0.5, 0.5, 1.0, 1.0]);
         assert_eq!(long.role[0], UnitRole::Anchor);
@@ -611,6 +700,85 @@ mod tests {
         assert_eq!(with_unmatched.id[5], "a3");
         assert_eq!(with_unmatched.pair_id[5], None);
         assert!((with_unmatched.weight[5]).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_reused_control_is_listed_where_it_first_occurs() {
+        // a1 took c1 then c3, a2 took c3 then c1. In a2's pair c3 comes first
+        // although it was assigned second to a1, since MatchIt lists a control
+        // by its first occurrence over all pairs. Here that is c1 before c3.
+        let reused = test_outcome(
+            vec![
+                MatchedPair::new("a1", "c1"),
+                MatchedPair::new("a1", "c3"),
+                MatchedPair::new("a2", "c3"),
+                MatchedPair::new("a2", "c2"),
+                MatchedPair::new("a2", "c1"),
+            ],
+            2,
+            0,
+        );
+        let long = get_matches(&reused, &units(), false).expect("long");
+        assert_eq!(long.id, ["a1", "c1", "c3", "a2", "c1", "c3", "c2"]);
+        // a2's controls by first occurrence: c1, c3, c2.
+        assert_eq!(long.pair_id[3..], [Some(2); 4]);
+    }
+
+    #[test]
+    fn risk_set_units_have_a_role_in_each_pair() {
+        // p1 is a case with p2 and p3 as controls, p2 is a case with p3 and p1
+        // as controls. p1 and p2 are controls in the other's pair.
+        let ids = ["p3", "p1", "p2", "p4"].map(String::from).to_vec();
+        let units = Units::without_fixed_roles(ids).expect("units");
+        assert!(!units.has_fixed_roles());
+        let outcome = test_outcome(
+            vec![
+                MatchedPair::new("p2", "p3"),
+                MatchedPair::new("p1", "p2"),
+                MatchedPair::new("p2", "p1"),
+                MatchedPair::new("p1", "p3"),
+            ],
+            2,
+            0,
+        );
+        let long = get_matches(&outcome, &units, false).expect("long");
+        // Pairs follow the order of the units: p1 before p2.
+        assert_eq!(long.id, ["p1", "p2", "p3", "p2", "p3", "p1"]);
+        assert_eq!(
+            long.pair_id,
+            [Some(1), Some(1), Some(1), Some(2), Some(2), Some(2)]
+        );
+        assert_eq!(
+            long.role,
+            [
+                UnitRole::Anchor,
+                UnitRole::Candidate,
+                UnitRole::Candidate,
+                UnitRole::Anchor,
+                UnitRole::Candidate,
+                UnitRole::Candidate
+            ]
+        );
+        assert_eq!(long.weight, [1.0, 0.5, 0.5, 1.0, 0.5, 0.5]);
+        assert!(matches!(
+            get_matches(&outcome, &units, true),
+            Err(OutputError::NoFixedRoles { .. })
+        ));
+        assert!(matches!(
+            match_matrix(&outcome, &units, 2),
+            Err(OutputError::NoFixedRoles { .. })
+        ));
+        assert!(
+            match_data(&outcome, &units, MatchDataOptions::default())
+                .expect_err("roles")
+                .to_string()
+                .contains("a role in each pair")
+        );
+        let stray = test_outcome(vec![MatchedPair::new("zz", "p1")], 1, 0);
+        assert_eq!(
+            get_matches(&stray, &units, false),
+            Err(OutputError::UnknownAnchor { id: "zz".into() })
+        );
     }
 
     #[test]

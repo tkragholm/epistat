@@ -1948,3 +1948,100 @@ fn invalid_support_and_ratio_options_are_errors_that_name_the_option() {
         }),
     );
 }
+
+#[test]
+fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
+    let people = cohort(4_000, 100, 10, 14);
+    let cohort_records = transition_cohort(&people, false);
+    let spec = MatchSpec {
+        mode: MatchMode::RiskSet,
+        method: MatchMethod::NearestBirthDate,
+        seed: 99,
+        ratio: 3,
+        birth_window_days: 60,
+        age_limit_years: Some(6),
+        exact: vec!["sex".into(), "municipality".into()],
+        require_alive: true,
+        ..MatchSpec::default()
+    };
+    let output = run_spec(
+        &spec,
+        SpecInput::RiskSet {
+            cohort: &cohort_records,
+        },
+    )
+    .expect("valid spec");
+    let SpecOutput::Pairs { outcome, .. } = output else {
+        panic!("expected pairs");
+    };
+    let ids: Vec<String> = cohort_records
+        .iter()
+        .map(|row| row.id().to_string())
+        .collect();
+    let units = Units::without_fixed_roles(ids).expect("unique ids");
+    let long = get_matches(&outcome, &units, false).expect("long form of a risk-set match");
+
+    let cases: std::collections::BTreeSet<&str> =
+        outcome.pairs.iter().map(MatchedPair::anchor_id).collect();
+    let anchor_rows = long.role.iter().filter(|r| **r == UnitRole::Anchor).count();
+    assert_eq!(anchor_rows, cases.len(), "one pair per case");
+    assert_eq!(long.len(), cases.len() + outcome.pairs.len());
+    assert_eq!(long.pair_id.last().copied().flatten(), Some(cases.len()));
+
+    // A case can be a control in the pairs of earlier cases.
+    let controls: std::collections::BTreeSet<&str> = outcome
+        .pairs
+        .iter()
+        .map(MatchedPair::comparator_id)
+        .collect();
+    let both: Vec<&str> = cases.intersection(&controls).copied().collect();
+    assert!(!both.is_empty(), "some case is also a control");
+    let person: &str = both.first().expect("one");
+    let roles_of_person: std::collections::BTreeSet<_> = long
+        .id
+        .iter()
+        .zip(&long.role)
+        .filter(|(id, _)| id.as_str() == person)
+        .map(|(_, role)| format!("{role:?}"))
+        .collect();
+    assert_eq!(roles_of_person.len(), 2, "both roles for {person}");
+
+    // Each pair is its anchor first, then its controls, weighing 1 together.
+    let mut start = 0;
+    while start < long.len() {
+        let pair = long.pair_id[start];
+        let end = (start..long.len())
+            .find(|row| long.pair_id[*row] != pair)
+            .unwrap_or(long.len());
+        assert_eq!(long.role[start], UnitRole::Anchor);
+        assert!(
+            long.role[start + 1..end]
+                .iter()
+                .all(|r| *r == UnitRole::Candidate)
+        );
+        let controls: f64 = long.weight[start + 1..end].iter().sum();
+        assert!((controls - 1.0).abs() < 1e-12);
+        start = end;
+    }
+    // The controls of each case are the pairs of the outcome, as a set.
+    let mut from_long: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut current = "";
+    for (id, role) in long.id.iter().zip(&long.role) {
+        if *role == UnitRole::Anchor {
+            current = id;
+        } else {
+            from_long.entry(current).or_default().push(id);
+        }
+    }
+    let mut from_outcome: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for pair in &outcome.pairs {
+        from_outcome
+            .entry(pair.anchor_id())
+            .or_default()
+            .push(pair.comparator_id());
+    }
+    for controls in from_long.values_mut().chain(from_outcome.values_mut()) {
+        controls.sort_unstable();
+    }
+    assert_eq!(from_long, from_outcome);
+}
