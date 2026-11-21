@@ -1493,25 +1493,30 @@ impl MatchSpec {
         if self.discard.is_none() {
             return Ok(());
         }
-        let supported = self.mode == MatchMode::Standard
-            && matches!(
-                self.method,
-                MatchMethod::Random
-                    | MatchMethod::LowestIndex
-                    | MatchMethod::NearestBirthDate
-                    | MatchMethod::Nearest
-            );
+        let supported = self.mode == MatchMode::RiskSet
+            || (self.mode == MatchMode::Standard
+                && matches!(
+                    self.method,
+                    MatchMethod::Random
+                        | MatchMethod::LowestIndex
+                        | MatchMethod::NearestBirthDate
+                        | MatchMethod::Nearest
+                ));
         if !supported {
             return Err(SpecError::option(
                 "discard",
-                "common support is trimmed in standard mode with the random, lowest_index, \
-                 nearest_birth_date and nearest methods; drop it",
+                "common support is trimmed in risk-set mode and in standard mode with the \
+                 random, lowest_index, nearest_birth_date and nearest methods; drop it",
             ));
         }
-        if !matches!(
-            self.distance,
-            DistanceSpec::Propensity { .. } | DistanceSpec::Scores { .. }
-        ) {
+        let score_distance = match self.mode {
+            MatchMode::RiskSet => matches!(self.distance, DistanceSpec::Scores { .. }),
+            _ => matches!(
+                self.distance,
+                DistanceSpec::Propensity { .. } | DistanceSpec::Scores { .. }
+            ),
+        };
+        if !score_distance {
             return Err(SpecError::option(
                 "discard",
                 "common support is read from a propensity score or a score of your own; \
@@ -2397,6 +2402,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     };
 
     let mut job = MatchJob::new_transition(cohort, spec.seed)
+        .with_common_support(spec.discard.map(Into::into))
         .with_ratio(typed_ratio(spec)?)
         .with_birth_window(typed_window(spec)?)
         .with_replacement(spec.replace)

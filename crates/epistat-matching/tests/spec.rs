@@ -2175,3 +2175,74 @@ fn fine_balance_spec_equals_the_typed_call() {
     let again: MatchSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
     assert_eq!(spec, again);
 }
+
+#[test]
+fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
+    let people = cohort(1_500, 100, 10, 14);
+    let records = transition_cohort(&people, false);
+    let scores: BTreeMap<String, f64> = records
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.id().to_string(), ((i * 37) % 101) as f64 / 10.0))
+        .collect();
+    let spec = MatchSpec {
+        mode: MatchMode::RiskSet,
+        method: MatchMethod::LowestIndex,
+        distance: DistanceSpec::Scores {
+            scores: scores.clone(),
+            caliper: None,
+        },
+        discard: Some(DiscardSpec::Both),
+        seed: 3,
+        ratio: 2,
+        birth_window_days: 60,
+        age_limit_years: Some(6),
+        exact: vec!["sex".into()],
+        require_alive: true,
+        ..MatchSpec::default()
+    };
+    let SpecOutput::Pairs { outcome, .. } =
+        run_spec(&spec, SpecInput::RiskSet { cohort: &records }).expect("valid spec")
+    else {
+        panic!("expected pairs");
+    };
+    let by_hand = MatchJob::new_transition(&records, 3)
+        .with_ratio(MatchRatio::new(2).unwrap())
+        .with_birth_window(BirthDateWindowDays::new(60).unwrap())
+        .with_age_limit(AgeLimitYears::new(6).unwrap())
+        .with_exact_matches(["sex"])
+        .with_alive_check()
+        .with_distance_config(DistanceConfig::propensity_score_map(
+            scores.into_iter().collect(),
+            None,
+        ))
+        .with_common_support(Some(CommonSupport::Both))
+        .with_strategy(DeterministicSelection)
+        .run();
+    same(&outcome, &by_hand);
+    assert!(
+        outcome.diagnostics.common_support_trimmed_anchors
+            + outcome.diagnostics.common_support_trimmed_candidates
+            > 0,
+        "nothing was trimmed, test is vacuous"
+    );
+
+    // A propensity model is not a distance in risk-set mode.
+    let propensity = MatchSpec {
+        distance: DistanceSpec::Propensity {
+            covariates: CovariatesSpec {
+                names: vec!["age".into()],
+                missing: MissingSpec::Error,
+            },
+            link: LinkSpec::Logit,
+            estimator: EstimatorSpec::Glm,
+            scale: ScaleSpec::Probability,
+            sampling_weights: None,
+            caliper: None,
+        },
+        ..spec
+    };
+    let error = run_spec(&propensity, SpecInput::RiskSet { cohort: &records })
+        .expect_err("not available in risk-set mode");
+    assert!(error.to_string().contains("discard"), "{error}");
+}
