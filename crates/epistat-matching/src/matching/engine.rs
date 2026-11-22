@@ -16,6 +16,7 @@ use crate::types::{
     MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair, MatchingCriteria, UniqueValueId,
 };
 use rapidhash::RapidHashMap;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -94,7 +95,7 @@ pub struct MatchEngine<'a, R: MatchingRecord, S: SelectionStrategy<R>> {
     pub(crate) precomputed: MatchingPrecomputed<'a>,
     pub(crate) candidate_index: CandidateIndex<'a>,
     pub(crate) selector: S,
-    id_ranks: OnceLock<Option<IdRanks>>,
+    id_order: OnceLock<Option<Cow<'a, IdOrder>>>,
 }
 
 /// Unified request for standard anchor-to-candidate matching.
@@ -242,7 +243,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             precomputed,
             candidate_index,
             selector,
-            id_ranks: OnceLock::new(),
+            id_order: OnceLock::new(),
         }
     }
 
@@ -372,8 +373,8 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         // required stratum, so the exact-match constraint cannot block it.
         let strata_indexed = pool_config.use_birth_date_index && case_strata_values.is_some();
 
-        let self_match = match (scan, self.id_ranks()) {
-            (PoolScan::Wide, Some(ranks)) => ranks
+        let self_match = match (scan, self.distinct_id_order()) {
+            (PoolScan::Wide, Some(order)) => order
                 .position_of(self.controls, case.id())
                 .map_or(SelfMatch::Nobody, SelfMatch::At),
             _ => SelfMatch::ById,
@@ -397,24 +398,24 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             PoolScan::Narrow => scan_chunk(&candidate_indices),
             PoolScan::Wide if candidate_indices.len() < 2 * SCAN_CHUNK => {
                 let mut tally = scan_chunk(&candidate_indices);
-                if let Some(ranks) = self.id_ranks() {
-                    ranks.sort(&mut tally.eligible);
+                if let Some(order) = self.id_order() {
+                    order.sort(&mut tally.eligible);
                 }
                 tally
             }
             PoolScan::Wide => {
-                let ranks = self.id_ranks();
+                let order = self.id_order();
                 let tallies: Vec<ScanTally> = candidate_indices
                     .par_chunks(SCAN_CHUNK)
                     .map(|chunk| {
                         let mut tally = scan_chunk(chunk);
-                        if let Some(ranks) = ranks {
-                            ranks.sort(&mut tally.eligible);
+                        if let Some(order) = order {
+                            order.sort(&mut tally.eligible);
                         }
                         tally
                     })
                     .collect();
-                ScanTally::join_all(tallies, ranks)
+                ScanTally::join_all(tallies, order)
             }
         };
         let ScanTally {
@@ -441,12 +442,11 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         // which callers may build through hash-backed collections. The sort also
         // gives distance-based selection a stable tie-break and does not change
         // which candidates are eligible.
-        match (scan, self.id_ranks()) {
+        match (scan, self.id_order()) {
             // A wide scan has ordered the pool already.
             (PoolScan::Wide, Some(_)) => {}
-            (PoolScan::Narrow, _) | (PoolScan::Wide, None) => {
-                sort_by_id(self.controls, &mut eligible);
-            }
+            (PoolScan::Narrow, Some(order)) => order.sort(&mut eligible),
+            (_, None) => sort_by_id(self.controls, &mut eligible),
         }
         eligible
     }
@@ -543,21 +543,24 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         tally
     }
 
-    /// Take the id ranks of the controls from `order`, the order of their
-    /// ids. Does nothing once the ranks are known.
-    pub(crate) fn use_id_order(&self, order: &IdOrder) {
+    /// Take the order of the controls' ids from `order`. Does nothing once
+    /// the order is known.
+    pub(crate) fn use_id_order(&self, order: &'a IdOrder) {
         debug_assert_eq!(order.len(), self.controls.len());
-        let _ = self.id_ranks.set(order.distinct().then(|| IdRanks {
-            rank: order.ranks().to_vec(),
-            by_rank: order.by_id().to_vec(),
-        }));
+        let _ = self.id_order.set(Some(Cow::Borrowed(order)));
     }
 
-    /// Id ranks of the controls, or `None` when two controls share an id.
-    fn id_ranks(&self) -> Option<&IdRanks> {
-        self.id_ranks
-            .get_or_init(|| IdRanks::of_controls(self.controls))
-            .as_ref()
+    /// The order of the controls' ids, or `None` when there are more than
+    /// `u32::MAX` controls.
+    fn id_order(&self) -> Option<&IdOrder> {
+        self.id_order
+            .get_or_init(|| IdOrder::of(self.controls).map(Cow::Owned))
+            .as_deref()
+    }
+
+    /// The order of the controls' ids when every id occurs once.
+    fn distinct_id_order(&self) -> Option<&IdOrder> {
+        self.id_order().filter(|order| order.distinct())
     }
 
     pub fn select_control(
@@ -1453,9 +1456,9 @@ impl ScanTally {
         }
     }
 
-    /// The tallies of consecutive runs as one. When the ranks are given, every
+    /// The tallies of consecutive runs as one. When the order is given, every
     /// run's eligible controls are in id order and so are the merged ones.
-    fn join_all(tallies: Vec<Self>, ranks: Option<&IdRanks>) -> Self {
+    fn join_all(tallies: Vec<Self>, order: Option<&IdOrder>) -> Self {
         let mut joined = Self::default();
         let mut runs: Vec<Vec<usize>> = Vec::with_capacity(tallies.len());
         for tally in tallies {
@@ -1465,95 +1468,17 @@ impl ScanTally {
             }
             runs.push(tally.eligible);
         }
-        joined.eligible = match ranks {
-            Some(ranks) => ranks.merge(runs),
+        joined.eligible = match order {
+            Some(order) => order.merge(runs),
             None => runs.concat(),
         };
         joined
     }
 }
 
-/// Position of every control in the order of ids, for controls with distinct ids.
-struct IdRanks {
-    rank: Vec<u32>,
-    by_rank: Vec<u32>,
-}
-
-impl IdRanks {
-    fn of_controls<R: MatchingRecord>(controls: &[R]) -> Option<Self> {
-        let mut order: Vec<usize> = (0..controls.len()).collect();
-        sort_by_id(controls, &mut order);
-        if order
-            .windows(2)
-            .any(|pair| controls[pair[0]].id() == controls[pair[1]].id())
-        {
-            return None;
-        }
-        let mut rank = vec![0_u32; controls.len()];
-        let mut by_rank = Vec::with_capacity(controls.len());
-        for (position, &idx) in order.iter().enumerate() {
-            rank[idx] = u32::try_from(position).ok()?;
-            by_rank.push(u32::try_from(idx).ok()?);
-        }
-        Some(Self { rank, by_rank })
-    }
-
-    /// The control with this id, if any.
-    fn position_of<R: MatchingRecord>(&self, controls: &[R], id: &str) -> Option<usize> {
-        let at = self
-            .by_rank
-            .partition_point(|&idx| controls[idx as usize].id() < id);
-        let idx = *self.by_rank.get(at)? as usize;
-        (controls[idx].id() == id).then_some(idx)
-    }
-
-    /// Sort control indices by id.
-    fn sort(&self, indices: &mut Vec<usize>) {
-        let mut ranks: Vec<u32> = indices.iter().map(|&idx| self.rank[idx]).collect();
-        ranks.sort_unstable();
-        indices.clear();
-        indices.extend(
-            ranks
-                .into_iter()
-                .map(|rank| self.by_rank[rank as usize] as usize),
-        );
-    }
-
-    /// Merge runs of control indices that are each in id order into one run.
-    fn merge(&self, mut runs: Vec<Vec<usize>>) -> Vec<usize> {
-        while runs.len() > 1 {
-            let mut next = Vec::with_capacity(runs.len().div_ceil(2));
-            let mut pending = runs.into_iter();
-            while let Some(first) = pending.next() {
-                match pending.next() {
-                    Some(second) => next.push(self.merge_two(&first, &second)),
-                    None => next.push(first),
-                }
-            }
-            runs = next;
-        }
-        runs.pop().unwrap_or_default()
-    }
-
-    fn merge_two(&self, left: &[usize], right: &[usize]) -> Vec<usize> {
-        let mut out = Vec::with_capacity(left.len() + right.len());
-        let (mut i, mut j) = (0, 0);
-        while i < left.len() && j < right.len() {
-            if self.rank[left[i]] <= self.rank[right[j]] {
-                out.push(left[i]);
-                i += 1;
-            } else {
-                out.push(right[j]);
-                j += 1;
-            }
-        }
-        out.extend_from_slice(&left[i..]);
-        out.extend_from_slice(&right[j..]);
-        out
-    }
-}
-
-/// Sort control indices by the id of the control, as `str::cmp` orders them.
+/// Sort control indices by the id of the control as `str::cmp` orders them,
+/// and by index among equal ids, so the order is a function of the controls
+/// alone. [`IdOrder::sort`] gives the same order from precomputed ranks.
 fn sort_by_id<R: MatchingRecord>(controls: &[R], indices: &mut Vec<usize>) {
     let keys = id_keys(indices.iter().map(|&idx| controls[idx].id()));
     let mut keyed: Vec<(u64, usize)> = keys.into_iter().zip(indices.iter().copied()).collect();
@@ -1561,6 +1486,7 @@ fn sort_by_id<R: MatchingRecord>(controls: &[R], indices: &mut Vec<usize>) {
         left_prefix
             .cmp(&right_prefix)
             .then_with(|| controls[left].id().cmp(controls[right].id()))
+            .then_with(|| left.cmp(&right))
     });
     indices.clear();
     indices.extend(keyed.into_iter().map(|(_, idx)| idx));
