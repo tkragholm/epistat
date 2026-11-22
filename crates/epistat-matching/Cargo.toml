@@ -74,6 +74,10 @@ name = "transition_strata"
 harness = false
 
 [[bench]]
+name = "risk_set_caliper"
+harness = false
+
+[[bench]]
 name = "matchit_compare"
 harness = false
 

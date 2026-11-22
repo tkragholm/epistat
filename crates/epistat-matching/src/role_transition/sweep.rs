@@ -36,14 +36,15 @@
 //! in two orders: by birth date, so that a birth window is a range of
 //! positions, and by id, which is the order of the pool a scan builds.
 //!
-//! A window is then read in one of two ways, with the same counts and the same
-//! pool:
+//! A window is then read in one of three ways, with the same counts and the
+//! same pool:
 //!
 //! * Listed: the controls of the window are visited in birth order, their
 //!   states read, the value rules tested where they come in the order of the
 //!   group, and the id ranks of the eligible controls sorted. This is the way
-//!   for every window when the group has a value rule, and for the strata in
-//!   which no case's window holds more than [`LIST_LIMIT`] controls.
+//!   for the strata in which no case's window holds more than [`LIST_LIMIT`]
+//!   controls, and, when the group has a value rule, more than
+//!   [`REACH_LIMIT`].
 //! * Counted: Fenwick trees over the birth order count the controls of each
 //!   state in any range, and the eligible controls are counted by difference.
 //!   The seeded draw picks a position in the pool by its length alone, so the
@@ -53,7 +54,20 @@
 //!   birth order, built for the stratum the first time it is needed,
 //!   otherwise. Drawing more than one control removes a drawn position from
 //!   the pool as `Vec::swap_remove` does, which a small map of moved
-//!   positions follows.
+//!   positions follows. This is the way for the wide strata of a group with
+//!   no value rule.
+//! * Reached: for the wide strata of a group with one value rule, whose
+//!   eligible controls depend on the case and cannot be counted ahead. The
+//!   controls are kept in chunks of [`CHUNK`] birth positions, each sorted by
+//!   the value the rule compares and counting its controls by state. A window
+//!   visits the controls of the chunks at its ends and finds, in each whole
+//!   chunk, the controls the rule allows by binary search on the value. The
+//!   others are counted from the chunk's counts: each state decides which
+//!   rule refuses a control first, so a control that is at risk, not drawn,
+//!   refused by a status rule after the value rule and outside the value
+//!   window is counted under the value rule, and one refused by a status
+//!   rule before it under that rule. The pool is listed from the allowed
+//!   controls alone.
 //!
 //! # Complexity
 //!
@@ -64,8 +78,11 @@
 //! counted stratum, `O(log m)` per tree or `O(L log m)` with a wavelet matrix.
 //! A counted case costs `O(k log m)` for its counts and `O(r L log m)` for its
 //! draws; a listed case with `w` controls in its window costs
-//! `O(w k + w log w)`. Memory is `O(n (k + s))` words, with `k + 3` trees and
-//! possibly a wavelet matrix of `2 L` words per record in a counted stratum.
+//! `O(w k + w log w)`. A reached case costs `O((w / C) (k + log C) + C + h log h)`
+//! with `C` the chunk size and `h` the controls the value rule allows. Memory
+//! is `O(n (k + s))` words, with `k + 3` trees and possibly a wavelet matrix of
+//! `2 L` words per record in a counted stratum, and a position, a value and
+//! `(k + 3) / C` counts per record in a reached one.
 //!
 //! # References
 //!
@@ -88,8 +105,17 @@ use std::ops::Range;
 /// The largest window, in controls, that a stratum lists rather than counts.
 pub(super) const LIST_LIMIT: usize = 2048;
 
+/// The largest window, in controls, that a stratum with a value rule lists
+/// control by control rather than from the chunks of its [`Reach`].
+const REACH_LIMIT: usize = 256;
+
+/// [`REACH_LIMIT`], or the smaller of it and the limit a test has set.
+fn reach_limit() -> usize {
+    list_limit().min(REACH_LIMIT)
+}
+
 /// [`LIST_LIMIT`], or in tests the limit a test has set on its thread.
-pub(super) fn list_limit() -> usize {
+fn list_limit() -> usize {
     #[cfg(test)]
     return LIST_LIMIT_IN_TESTS.with(std::cell::Cell::get);
     #[cfg(not(test))]
@@ -115,6 +141,111 @@ struct Trees {
     eligible_by_birth: Option<WaveletMatrix>,
 }
 
+/// The number of birth positions in a chunk of a [`Reach`].
+const CHUNK: usize = 64;
+
+/// What a counted stratum keeps when the group has one value rule, so that a
+/// window lists only the controls the rule allows.
+///
+/// The birth positions are cut into chunks of [`CHUNK`]. Each chunk holds its
+/// controls in order of the value the rule compares, those with a value first,
+/// then those without, then those whose value is not a number, and counts its
+/// controls by state. A window covers whole chunks and a part of the chunk at
+/// each end. The controls of the end parts are visited. For each whole chunk
+/// the controls with a value within the window of the case are found by two
+/// binary searches, and the others are counted from the chunk's counts.
+struct Reach {
+    /// Position of the value rule among the rules.
+    rule: usize,
+    /// The birth position of each control, chunk by chunk, in the order above.
+    positions: Vec<u32>,
+    /// The value of each control with one, in the order of `positions`.
+    values: Vec<f64>,
+    /// For each chunk, the number of controls with a value and the number
+    /// without.
+    valued: Vec<u8>,
+    without: Vec<u8>,
+    /// For each chunk, the controls at risk, those at risk and drawn, and
+    /// those at risk and not drawn by state, the state minus `ELIGIBLE` being
+    /// the index. [`Self::width`] numbers per chunk.
+    counts: Vec<u32>,
+    width: usize,
+}
+
+impl Reach {
+    fn new(rule: usize, states: usize, values: &[Option<f64>]) -> Self {
+        let m = values.len();
+        let chunks = m.div_ceil(CHUNK);
+        let mut positions = Vec::with_capacity(m);
+        let mut sorted = Vec::with_capacity(m);
+        let mut valued = Vec::with_capacity(chunks);
+        let mut without = Vec::with_capacity(chunks);
+        for chunk in 0..chunks {
+            let range = chunk * CHUNK..m.min((chunk + 1) * CHUNK);
+            let position = |p: usize| u32::try_from(p).expect("position fits u32");
+            let mut with: Vec<usize> = range
+                .clone()
+                .filter(|&p| values[p].is_some_and(|value| !value.is_nan()))
+                .collect();
+            let value_at = |p: usize| values[p].unwrap_or(f64::NAN);
+            with.sort_unstable_by(|&a, &b| value_at(a).total_cmp(&value_at(b)).then(a.cmp(&b)));
+            let missing: Vec<usize> = range.clone().filter(|&p| values[p].is_none()).collect();
+            let not_a_number: Vec<usize> = range
+                .filter(|&p| values[p].is_some_and(f64::is_nan))
+                .collect();
+            valued.push(u8::try_from(with.len()).expect("a chunk holds at most 64"));
+            without.push(u8::try_from(missing.len()).expect("a chunk holds at most 64"));
+            for p in with.into_iter().chain(missing).chain(not_a_number) {
+                positions.push(position(p));
+                sorted.push(value_at(p));
+            }
+        }
+        let width = 2 + states;
+        Self {
+            rule,
+            positions,
+            values: sorted,
+            valued,
+            without,
+            counts: vec![0; chunks * width],
+            width,
+        }
+    }
+
+    /// The entries of `chunk`, as a range of `positions`, that hold every
+    /// control a case with value `case` may be paired with by the rule, and
+    /// perhaps controls it may not.
+    fn candidates(
+        &self,
+        chunk: usize,
+        case: Option<f64>,
+        window: f64,
+        match_missing: bool,
+    ) -> Range<usize> {
+        let first = chunk * CHUNK;
+        let valued = usize::from(self.valued[chunk]);
+        let without = usize::from(self.without[chunk]);
+        match case {
+            None if match_missing => first + valued..first + valued + without,
+            None => first..first,
+            Some(c) if c.is_nan() => first..first,
+            Some(c) => {
+                // Left of `c` the controls the window refuses come first, and
+                // right of it they come last, because a difference rounded to
+                // a double does not decrease as the value moves away.
+                let values = &self.values[first..first + valued];
+                let low = values.partition_point(|&x| x < c && !((c - x).abs() <= window));
+                let high = values.partition_point(|&x| x <= c || (c - x).abs() <= window);
+                first + low..first + high.max(low)
+            }
+        }
+    }
+
+    fn counts_of(&self, chunk: usize) -> &[u32] {
+        &self.counts[chunk * self.width..(chunk + 1) * self.width]
+    }
+}
+
 /// The controls of one stratum and, when it is counted, their counts.
 struct Stratum {
     /// Record index of each id rank.
@@ -130,6 +261,7 @@ struct Stratum {
     /// birth position.
     values: Vec<Vec<Option<f64>>>,
     trees: Option<Trees>,
+    reach: Option<Reach>,
 }
 
 #[derive(Clone, Copy)]
@@ -431,6 +563,7 @@ impl RiskSetSweep {
                     id_rank_by_birth,
                     values,
                     trees: None,
+                    reach: None,
                 }
             })
             .collect();
@@ -448,19 +581,24 @@ impl RiskSetSweep {
         })
     }
 
-    /// Count the strata of `counted` with trees from now on, before the first
-    /// call of [`Self::advance`]. A stratum not counted is listed.
-    pub(super) fn count_strata(&mut self, counted: &[bool]) {
+    /// Count the strata with trees from now on, before the first call of
+    /// [`Self::advance`]. `widest` is the number of controls in the widest
+    /// window of each stratum. A stratum whose widest window is over
+    /// [`LIST_LIMIT`] is counted with trees, and with a value rule over
+    /// [`REACH_LIMIT`] with a [`Reach`]. Any other is listed.
+    pub(super) fn count_strata(&mut self, widest: &[usize]) {
         debug_assert_eq!(self.today, ALWAYS, "before the sweep starts");
         if self.has_values {
+            self.reach_strata(widest);
             return;
         }
         let slots = self.reasons.len();
+        let limit = list_limit();
         for (stratum, _) in self
             .strata
             .iter_mut()
-            .zip(counted)
-            .filter(|(_, counted)| **counted)
+            .zip(widest)
+            .filter(|(_, widest)| **widest > limit)
         {
             let m = stratum.by_birth.len();
             stratum.trees = Some(Trees {
@@ -470,6 +608,30 @@ impl RiskSetSweep {
                 eligible_by_id: Fenwick::zeros(m),
                 eligible_by_birth: None,
             });
+        }
+    }
+
+    /// Give the strata with a wide window a [`Reach`] when the group has
+    /// exactly one value rule. With more, every window is listed.
+    fn reach_strata(&mut self, widest: &[usize]) {
+        let mut value_rules = self
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| matches!(rule, Rule::Values { .. }))
+            .map(|(position, _)| position);
+        let (Some(rule), None) = (value_rules.next(), value_rules.next()) else {
+            return;
+        };
+        let states = self.rules.len() + 1;
+        let limit = reach_limit();
+        for (stratum, _) in self
+            .strata
+            .iter_mut()
+            .zip(widest)
+            .filter(|(_, widest)| **widest > limit)
+        {
+            stratum.reach = Some(Reach::new(rule, states, &stratum.values[0]));
         }
     }
 
@@ -494,10 +656,25 @@ impl RiskSetSweep {
     /// Add `delta` to the counts of `state` for record `idx`.
     fn count(&mut self, idx: usize, state: u8, delta: i32) {
         let unit = self.units[idx];
-        let Some(trees) = &mut self.strata[unit.stratum as usize].trees else {
+        let position = unit.birth_position as usize;
+        let stratum = &mut self.strata[unit.stratum as usize];
+        if let Some(reach) = &mut stratum.reach {
+            if state != NOT_AT_RISK {
+                let base = position / CHUNK * reach.width;
+                let slot = if state == DRAWN {
+                    1
+                } else {
+                    2 + usize::from(state - ELIGIBLE)
+                };
+                for index in [base, base + slot] {
+                    reach.counts[index] = reach.counts[index].wrapping_add_signed(delta);
+                }
+            }
+            return;
+        }
+        let Some(trees) = &mut stratum.trees else {
             return;
         };
-        let position = unit.birth_position as usize;
         match state {
             NOT_AT_RISK => return,
             DRAWN => trees.drawn.add(position, delta),
@@ -550,6 +727,9 @@ impl RiskSetSweep {
     ) -> (WindowCounts, Pool) {
         let s = &self.strata[stratum];
         let (start, end) = (window.start, window.end);
+        if s.reach.is_some() {
+            return self.reached(stratum, window, case_idx);
+        }
         let Some(trees) = &s.trees else {
             return self.list(stratum, window, case_idx);
         };
@@ -572,6 +752,117 @@ impl RiskSetSweep {
             },
             Pool::Counted(window, SwapRemovePool::new(eligible)),
         )
+    }
+
+    /// The counts and the pool of a window of a stratum with a [`Reach`].
+    ///
+    /// The controls the value rule allows are listed from the chunks. The
+    /// others are not visited, except in the chunks at the ends of the window:
+    /// those at risk and not drawn are counted by state, and each state
+    /// decides which rule refuses them first, as [`Self::first_refusal`] does
+    /// for one control. A status rule earlier in the group than the value rule
+    /// refuses its controls before the value rule is asked, and one after it
+    /// only those the value rule allows.
+    fn reached(
+        &self,
+        stratum: usize,
+        window: Range<usize>,
+        case_idx: usize,
+    ) -> (WindowCounts, Pool) {
+        let s = &self.strata[stratum];
+        let reach = s.reach.as_ref().expect("a stratum with a reach");
+        let Rule::Values {
+            values,
+            window: width,
+            match_missing,
+            ..
+        } = &self.rules[reach.rule]
+        else {
+            unreachable!("the rule of a reach is a value rule");
+        };
+        let (start, end) = (window.start, window.end);
+        let m = s.by_birth.len();
+        let case = values[case_idx];
+        let states = reach.width - 2;
+        let mut counts = WindowCounts::default();
+        // Controls at risk and not drawn, and those among them the rule
+        // allows, by state.
+        let mut live = vec![0_usize; states];
+        let mut whole_live = vec![0_usize; states];
+        let mut inside = vec![0_usize; states];
+        let mut ranks = Vec::new();
+        let mut visit = |position: usize, counts: &mut WindowCounts, whole: bool| {
+            let state = s.states[position];
+            if whole && state < ELIGIBLE {
+                return;
+            }
+            match state {
+                NOT_AT_RISK => counts.not_at_risk += 1,
+                DRAWN => counts.drawn += 1,
+                _ => {
+                    let index = usize::from(state - ELIGIBLE);
+                    let allowed =
+                        caliper_allows(case, s.values[0][position], *width, *match_missing);
+                    live[index] += usize::from(!whole);
+                    if allowed {
+                        inside[index] += 1;
+                        if state == ELIGIBLE {
+                            ranks.push(s.id_rank_by_birth[position]);
+                        }
+                    }
+                }
+            }
+        };
+        // The chunks the window covers whole, the last of the stratum being
+        // short.
+        let first = start.div_ceil(CHUNK);
+        let last = if end == m {
+            m.div_ceil(CHUNK)
+        } else {
+            end / CHUNK
+        };
+        let (first, last) = if first < last { (first, last) } else { (0, 0) };
+        let (from, to) = (first * CHUNK, m.min(last * CHUNK));
+        if first == last {
+            for position in start..end {
+                visit(position, &mut counts, false);
+            }
+        } else {
+            for position in (start..from).chain(to..end) {
+                visit(position, &mut counts, false);
+            }
+            for chunk in first..last {
+                let size = m.min((chunk + 1) * CHUNK) - chunk * CHUNK;
+                let held = reach.counts_of(chunk);
+                counts.not_at_risk += size - held[0] as usize;
+                counts.drawn += held[1] as usize;
+                for (total, &count) in whole_live.iter_mut().zip(&held[2..]) {
+                    *total += count as usize;
+                }
+                for entry in reach.candidates(chunk, case, *width, *match_missing) {
+                    visit(reach.positions[entry] as usize, &mut counts, true);
+                }
+            }
+        }
+        let mut refused = vec![0_usize; self.reasons.len()];
+        for (index, &partial) in live.iter().enumerate() {
+            let outside = partial + whole_live[index] - inside[index];
+            let Some(status) = index.checked_sub(1) else {
+                refused[self.rule_slot[reach.rule]] += outside;
+                continue;
+            };
+            refused[self.rule_slot[status]] += inside[index];
+            let first = if reach.rule < status {
+                reach.rule
+            } else {
+                status
+            };
+            refused[self.rule_slot[first]] += outside;
+        }
+        ranks.sort_unstable();
+        counts.refused = self.reasons.iter().copied().zip(refused).collect();
+        counts.eligible = ranks.len();
+        (counts, Pool::Listed(ranks))
     }
 
     /// The counts and the pool of a window, by visiting its controls.
@@ -1085,12 +1376,18 @@ mod tests {
     #[test]
     fn a_job_of_study_two_shape_sweeps_as_it_scans() {
         let mut checked = 0;
-        for (seed, n, birth_days) in [
-            (21, 300, 40),
-            (22, 900, 400),
-            (23, 1500, 3),
-            (24, 2000, 900),
-        ] {
+        // Every stratum counted, those with a window of over 64 controls, and
+        // none.
+        for (limit, (seed, n, birth_days)) in [0, 64, LIST_LIMIT].into_iter().flat_map(|limit| {
+            [
+                (21, 300, 40),
+                (22, 900, 400),
+                (23, 1500, 3),
+                (24, 2000, 900),
+            ]
+            .map(|cohort| (limit, cohort))
+        }) {
+            LIST_LIMIT_IN_TESTS.with(|cell| cell.set(limit));
             let mut people = cohort(seed, n, birth_days);
             let shape = shape(seed, &mut people);
             for window in [0, 30, 400, 36_500] {
@@ -1104,14 +1401,16 @@ mod tests {
                         assert_eq!(
                             format!("{swept:?}"),
                             format!("{scanned:?}"),
-                            "seed {seed}, window {window}, order {order}, replace {replace}"
+                            "seed {seed}, window {window}, order {order}, replace {replace}, \
+                             limit {limit}"
                         );
                         checked += usize::from(swept.pairs.len() > 10);
                     }
                 }
             }
         }
-        assert!(checked > 60, "{checked} runs with pairs");
+        LIST_LIMIT_IN_TESTS.with(|cell| cell.set(LIST_LIMIT));
+        assert!(checked > 180, "{checked} runs with pairs");
     }
 
     /// The default policy with residence as periods and a caliper, whose
