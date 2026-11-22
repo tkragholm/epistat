@@ -27,12 +27,10 @@ pub fn test_outcome(
     unmatched_cases: usize,
 ) -> MatchOutcome {
     MatchOutcome {
-        avg_controls_per_case: if matched_cases == 0 {
-            0.0
-        } else {
+        avg_controls_per_case: (matched_cases != 0).then(|| {
             f64::from(u32::try_from(pairs.len()).expect("small test vector length"))
                 / f64::from(u32::try_from(matched_cases).expect("small matched case count"))
-        },
+        }),
         used_controls: pairs.len(),
         pairs,
         matched_cases,

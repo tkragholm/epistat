@@ -181,8 +181,13 @@ impl ReportSink for MatchSummaryReport<'_> {
         writeln!(writer, "used_controls{d}{}", self.outcome.used_controls)?;
         writeln!(
             writer,
-            "avg_controls_per_case{d}{:.*}",
-            p, self.outcome.avg_controls_per_case
+            "avg_controls_per_case{d}{}",
+            format_cell(self.outcome.avg_controls_per_case, p)
+        )?;
+        writeln!(
+            writer,
+            "anchors_on_lower_tier{d}{}",
+            self.outcome.diagnostics.anchors_on_lower_tier
         )?;
         writeln!(
             writer,
@@ -390,7 +395,7 @@ mod tests {
             unmatched_cases: 0,
             used_controls: 1,
             matched_cases: 1,
-            avg_controls_per_case: 1.0,
+            avg_controls_per_case: Some(1.0),
             diagnostics: MatchDiagnostics {
                 total_anchors_evaluated: 1,
                 ..MatchDiagnostics::default()
@@ -407,5 +412,29 @@ mod tests {
         assert!(output.contains("total_anchors_evaluated,1"));
         assert!(output.contains("matched_anchors,1"));
         assert!(output.contains("avg_controls_per_case,1.0000"));
+        assert!(output.contains("anchors_on_lower_tier,0"));
+    }
+
+    #[test]
+    fn match_summary_csv_marks_an_undefined_average() {
+        let outcome = MatchOutcome {
+            pairs: Vec::new(),
+            unmatched_cases: 1,
+            used_controls: 0,
+            matched_cases: 0,
+            avg_controls_per_case: None,
+            diagnostics: MatchDiagnostics {
+                total_anchors_evaluated: 1,
+                anchors_on_lower_tier: 3,
+                ..MatchDiagnostics::default()
+            },
+        };
+        let mut buffer = Vec::new();
+        MatchSummaryReport { outcome: &outcome }
+            .write_report(&mut buffer, &ReportConfig::default())
+            .unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+        assert!(output.contains("avg_controls_per_case,NA"));
+        assert!(output.contains("anchors_on_lower_tier,3"));
     }
 }

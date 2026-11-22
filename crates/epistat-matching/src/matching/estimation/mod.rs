@@ -1349,7 +1349,7 @@ mod tests {
                 unmatched_cases: 0,
                 used_controls: 1,
                 matched_cases: 1,
-                avg_controls_per_case: 1.0,
+                avg_controls_per_case: Some(1.0),
                 diagnostics: MatchDiagnostics::default(),
             },
             propensity: PropensityScoreEstimate {

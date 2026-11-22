@@ -637,7 +637,7 @@ mod tests {
             unmatched_cases: 0,
             used_controls: 0,
             matched_cases: 0,
-            avg_controls_per_case: 0.0,
+            avg_controls_per_case: None,
             diagnostics: MatchDiagnostics {
                 realized_estimand,
                 ..MatchDiagnostics::default()

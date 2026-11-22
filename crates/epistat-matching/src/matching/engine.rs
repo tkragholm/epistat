@@ -1492,11 +1492,8 @@ pub fn build_outcome(
     used_controls: usize,
     diagnostics: MatchDiagnostics,
 ) -> MatchOutcome {
-    let avg_controls_per_case = if matched_cases == 0 {
-        0.0
-    } else {
-        usize_to_f64(pairs.len()) / usize_to_f64(matched_cases)
-    };
+    let avg_controls_per_case =
+        (matched_cases != 0).then(|| usize_to_f64(pairs.len()) / usize_to_f64(matched_cases));
 
     MatchOutcome {
         pairs,
@@ -1534,7 +1531,7 @@ pub fn invalid_criteria_outcome(
         unmatched_cases: anchor_count,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics,
     }
 }
@@ -1552,7 +1549,7 @@ pub fn invalid_cohort_outcome(anchor_count: usize, reason: ExclusionReason) -> M
         unmatched_cases: anchor_count,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics,
     }
 }
@@ -1574,7 +1571,7 @@ pub fn invalid_common_support_outcome(
         unmatched_cases: anchor_count,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics,
     }
 }
