@@ -1,7 +1,7 @@
 //! Standard errors, covariances, confidence intervals and tests for
 //! estimators.
 //!
-//! The crate has seven parts. [`influence`] gives variances from an
+//! The crate has eight parts. [`influence`] gives variances from an
 //! influence function, with or without clusters. [`sandwich`] gives the
 //! M-estimator sandwich covariance. [`bootstrap`] draws multiplier and
 //! cluster bootstrap replicates. [`interval`] turns an estimate and a standard

@@ -1,6 +1,7 @@
 //! Tools for register data: person-time by calendar year, merging of
-//! overlapping intervals, connected components of rows that share a key, and
-//! constant-price deflation.
+//! overlapping intervals, connected components of rows that share a key,
+//! constant-price deflation, normalisation of ICD-10 codes and age in whole
+//! years.
 //!
 //! Each module is one small, self-contained method on plain slices and integers,
 //! with no dependence on a data-frame library.

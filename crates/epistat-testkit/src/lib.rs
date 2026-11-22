@@ -1,7 +1,7 @@
 //! Test helpers for numerical code: tolerances, bit fingerprints, checks that
 //! results do not depend on the number of threads, ratios of deviations to
-//! tolerances, a `SplitMix64` generator for test problems, a marker for undefined values, and loading of reference values
-//! written by R.
+//! tolerances, a `SplitMix64` generator for test problems, a marker for
+//! undefined values, and loading of reference values written by R.
 #![warn(missing_docs)]
 
 mod absent;

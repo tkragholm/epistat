@@ -17,8 +17,7 @@
 //!
 //! [`clustered_variance`] sums the values within each of `G` clusters and
 //! does not centre them. It follows the cluster-robust variance of \[2\] and
-//! \[3\] with the finite-cluster factor `G / (G - 1)`, as R's `did` package
-//! computes it:
+//! \[3\] with the finite-cluster factor `G / (G - 1)`:
 //!
 //! ```text
 //! s_g = sum_{i in g} psi_i
@@ -96,8 +95,8 @@ pub fn standard_error(psi: &[f64]) -> Result<f64, InferenceError> {
     Ok(mean_square.sqrt() / n.sqrt())
 }
 
-/// The cluster-robust variance `G / (G - 1) * sum_g (sum_{i in g} psi_i)^2 / n^2`,
-/// as R's `did` computes it. `None` with fewer than two clusters.
+/// The cluster-robust variance `G / (G - 1) * sum_g (sum_{i in g} psi_i)^2 / n^2`.
+/// It is `None` with fewer than two clusters.
 ///
 /// Cluster sums are formed in observation order and added in cluster order.
 ///
