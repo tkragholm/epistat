@@ -1353,18 +1353,17 @@ fn digit_key(id: &str) -> Option<u64> {
     if !tail.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let mut chunks = head.chunks_exact(8);
+    let (chunks, remainder) = head.as_chunks::<8>();
     let mut word = 0_u64;
-    let mut place = 0;
-    for chunk in chunks.by_ref() {
-        let eight = u64::from_be_bytes(chunk.try_into().expect("eight bytes"));
+    for (place, chunk) in chunks.iter().enumerate() {
+        let eight = u64::from_be_bytes(*chunk);
         if !eight_digits(eight) {
             return None;
         }
         word |= pack_eight_digits(eight) << (32 - 32 * place);
-        place += 1;
     }
-    for (k, &byte) in chunks.remainder().iter().enumerate() {
+    let place = chunks.len();
+    for (k, &byte) in remainder.iter().enumerate() {
         if !byte.is_ascii_digit() {
             return None;
         }
@@ -1731,21 +1730,21 @@ mod id_order_tests {
     #[test]
     fn the_word_key_equals_the_digit_key() {
         let mut state = 9_u64;
-        let mut next = move |bound: u64| {
+        let mut next = move |bound: usize| {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            (state >> 33) % bound
+            usize::try_from((state >> 33) % u64::try_from(bound).unwrap()).unwrap()
         };
         let odd = ['/', ':', 'a', '\u{0}', 'é', ' ', '\u{7f}', '9', '0'];
         for length in 0..40_usize {
             for _ in 0..300 {
                 let mut id: Vec<char> = (0..length)
-                    .map(|_| char::from(b'0' + next(10) as u8))
+                    .map(|_| char::from_digit(u32::try_from(next(10)).unwrap(), 10).unwrap())
                     .collect();
                 if length > 0 && next(2) == 0 {
-                    let place = next(length as u64) as usize;
-                    id[place] = odd[next(odd.len() as u64) as usize];
+                    let place = next(length);
+                    id[place] = odd[next(odd.len())];
                 }
                 let id: String = id.into_iter().collect();
                 assert_eq!(digit_key(&id), digit_key_by_digits(&id), "{id:?}");
@@ -1759,19 +1758,17 @@ mod id_order_tests {
     #[test]
     fn the_digit_keys_order_digit_strings_as_str_does() {
         let mut state = 5_u64;
-        let mut next = move |bound: u64| {
+        let mut next = move |bound: usize| {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            (state >> 33) % bound
+            usize::try_from((state >> 33) % u64::try_from(bound).unwrap()).unwrap()
         };
         let ids: Vec<String> = (0..3000)
             .map(|_| {
-                let length = next(21) as usize;
+                let length = next(21);
                 // Few distinct digits, so that long prefixes repeat.
-                (0..length)
-                    .map(|_| char::from(b'0' + [0, 1, 9][next(3) as usize]))
-                    .collect()
+                (0..length).map(|_| ['0', '1', '9'][next(3)]).collect()
             })
             .collect();
         let keys = id_keys(ids.iter().map(String::as_str));
@@ -1787,7 +1784,7 @@ mod id_order_tests {
         }
         let mixed = ["12", "1a", "7"];
         assert_eq!(id_keys(mixed.into_iter()), mixed.map(id_prefix).to_vec());
-        assert!(id_keys(std::iter::empty()).is_empty());
+        assert_eq!(id_keys(std::iter::empty()), Vec::<u64>::new());
     }
 
     /// The prefix order agrees with `str` order wherever the prefixes differ,

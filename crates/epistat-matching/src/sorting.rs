@@ -52,31 +52,52 @@ fn offsets(counts: &mut [usize; RADIX]) {
     }
 }
 
-/// `words` sorted ascending, which are known to be below `2^bits`.
-fn radix_words(words: &mut Vec<u64>, bits: u32) {
-    let mut scratch = vec![0_u64; words.len()];
+/// The digit of `word` at bit `shift`.
+#[expect(clippy::cast_possible_truncation, reason = "masked to DIGIT_BITS bits")]
+const fn digit_of(word: u64, shift: u32) -> usize {
+    ((word >> shift) & (RADIX as u64 - 1)) as usize
+}
+
+/// One stable counting pass of `from` into `to` on the digit at `shift` of
+/// `key`, or `false` and nothing moved when every key has the same digit.
+fn counting_pass<T: Copy>(from: &[T], to: &mut [T], shift: u32, key: impl Fn(T) -> u64) -> bool {
+    let mut counts = [0_usize; RADIX];
+    for &item in from {
+        counts[digit_of(key(item), shift)] += 1;
+    }
+    if counts.contains(&from.len()) {
+        return false;
+    }
+    offsets(&mut counts);
+    for &item in from {
+        let slot = &mut counts[digit_of(key(item), shift)];
+        to[*slot] = item;
+        *slot += 1;
+    }
+    true
+}
+
+/// `items` sorted ascending on `key`, whose values are below `2^bits`.
+fn radix<T: Copy + Default>(items: &mut [T], bits: u32, key: impl Fn(T) -> u64 + Copy) {
+    let mut scratch = vec![T::default(); items.len()];
+    // Whether the data are in `scratch` rather than in `items`.
+    let mut in_scratch = false;
     for pass in 0..bits.div_ceil(DIGIT_BITS) {
         let shift = pass * DIGIT_BITS;
-        let digit = |word: u64| ((word >> shift) as usize) & (RADIX - 1);
-        let mut counts = [0_usize; RADIX];
-        for &word in words.iter() {
-            counts[digit(word)] += 1;
-        }
-        if counts.contains(&words.len()) {
-            continue;
-        }
-        offsets(&mut counts);
-        for &word in words.iter() {
-            let slot = &mut counts[digit(word)];
-            scratch[*slot] = word;
-            *slot += 1;
-        }
-        std::mem::swap(words, &mut scratch);
+        let moved = if in_scratch {
+            counting_pass(&scratch, items, shift, key)
+        } else {
+            counting_pass(items, &mut scratch, shift, key)
+        };
+        in_scratch ^= moved;
+    }
+    if in_scratch {
+        items.copy_from_slice(&scratch);
     }
 }
 
 /// Sort `entries` by day, then by index.
-pub(crate) fn sort_days(entries: &mut Vec<(i32, u32)>) {
+pub(crate) fn sort_days(entries: &mut [(i32, u32)]) {
     if entries.len() < DAYS_FROM {
         entries.sort_unstable();
         return;
@@ -94,19 +115,19 @@ pub(crate) fn sort_days(entries: &mut Vec<(i32, u32)>) {
             (i64::from(day).abs_diff(i64::from(min)) << index_bits) | u64::from(index)
         })
         .collect();
-    radix_words(&mut words, day_bits + index_bits);
+    radix(&mut words, day_bits + index_bits, |word| word);
     let mask = (1_u64 << index_bits) - 1;
     for (entry, word) in entries.iter_mut().zip(words) {
         let day = i64::from(min) + i64::try_from(word >> index_bits).expect("a day range");
         *entry = (
             i32::try_from(day).expect("a day between the extremes"),
-            (word & mask) as u32,
+            u32::try_from(word & mask).expect("an index"),
         );
     }
 }
 
 /// [`sort_days`] for indices of type `usize`.
-pub(crate) fn sort_days_usize(entries: &mut Vec<(i32, usize)>) {
+pub(crate) fn sort_days_usize(entries: &mut [(i32, usize)]) {
     let narrow: Option<Vec<(i32, u32)>> = (entries.len() >= DAYS_FROM)
         .then(|| {
             entries
@@ -126,7 +147,7 @@ pub(crate) fn sort_days_usize(entries: &mut Vec<(i32, usize)>) {
 }
 
 /// Sort `entries` by key, then by index.
-pub(crate) fn sort_keyed(entries: &mut Vec<(u64, u32)>) {
+pub(crate) fn sort_keyed(entries: &mut [(u64, u32)]) {
     if entries.len() < KEYED_FROM {
         entries.sort_unstable();
         return;
@@ -134,25 +155,7 @@ pub(crate) fn sort_keyed(entries: &mut Vec<(u64, u32)>) {
     let (min, max) = entries.iter().fold((u64::MAX, 0), |(min, max), &(key, _)| {
         (min.min(key), max.max(key))
     });
-    let mut scratch = vec![(0_u64, 0_u32); entries.len()];
-    for pass in 0..width(max - min).div_ceil(DIGIT_BITS) {
-        let shift = pass * DIGIT_BITS;
-        let digit = |key: u64| (((key - min) >> shift) as usize) & (RADIX - 1);
-        let mut counts = [0_usize; RADIX];
-        for &(key, _) in entries.iter() {
-            counts[digit(key)] += 1;
-        }
-        if counts.contains(&entries.len()) {
-            continue;
-        }
-        offsets(&mut counts);
-        for &entry in entries.iter() {
-            let slot = &mut counts[digit(entry.0)];
-            scratch[*slot] = entry;
-            *slot += 1;
-        }
-        std::mem::swap(entries, &mut scratch);
-    }
+    radix(entries, width(max - min), |(key, _)| key - min);
     let mut start = 0;
     while start < entries.len() {
         let key = entries[start].0;
@@ -183,20 +186,24 @@ mod tests {
         }
     }
 
-    const SIZES: [usize; 10] = [0, 1, 2, 100, 2047, 2048, 4095, 4096, 4097, 20_011];
+    impl Mix {
+        fn below(&mut self, bound: u32) -> u32 {
+            u32::try_from(self.next() % u64::from(bound)).expect("below a u32")
+        }
+    }
+
+    const SIZES: [u32; 10] = [0, 1, 2, 100, 2047, 2048, 4095, 4096, 4097, 20_011];
 
     #[test]
     fn days_sort_as_pairs_do() {
         let mut rng = Mix(1);
         for n in SIZES {
-            for spread in [1_u64, 40, 11_000, u64::from(u32::MAX)] {
+            for spread in [1_u32, 40, 11_000, 2_000_000_000] {
                 let mut pairs: Vec<(i32, u32)> = (0..n)
                     .map(|i| {
-                        let day = (rng.next() % spread) as i64 - i64::from(i32::MAX / 2);
-                        (
-                            day as i32,
-                            (rng.next() % (n as u64 + 1)) as u32 + i as u32 % 3,
-                        )
+                        let day =
+                            i32::try_from(rng.below(spread)).expect("below 2^31") - 1_000_000_000;
+                        (day, rng.below(n + 1) + i % 3)
                     })
                     .collect();
                 let mut expected = pairs.clone();
@@ -209,7 +216,8 @@ mod tests {
 
     #[test]
     fn days_with_the_extreme_values_sort() {
-        let mut pairs: Vec<(i32, u32)> = (0..DAYS_FROM as u32 + 5)
+        let size = u32::try_from(DAYS_FROM).expect("small") + 5;
+        let mut pairs: Vec<(i32, u32)> = (0..size)
             .map(|i| match i % 3 {
                 0 => (i32::MIN, i),
                 1 => (i32::MAX, u32::MAX - i),
@@ -227,7 +235,10 @@ mod tests {
         let mut rng = Mix(2);
         for n in SIZES {
             let mut pairs: Vec<(i32, usize)> = (0..n)
-                .map(|i| ((rng.next() % 500) as i32 + 700_000, i / 2))
+                .map(|i| {
+                    let day = i32::try_from(rng.below(500)).expect("small") + 700_000;
+                    (day, usize::try_from(i / 2).expect("small"))
+                })
                 .collect();
             let mut expected = pairs.clone();
             expected.sort_unstable();
@@ -244,7 +255,7 @@ mod tests {
                 let mut pairs: Vec<(u64, u32)> = (0..n)
                     .map(|_| {
                         let key = (rng.next() % distinct).wrapping_add(u64::MAX - 5_000);
-                        (key, (rng.next() % 50) as u32)
+                        (key, rng.below(50))
                     })
                     .collect();
                 let mut expected = pairs.clone();

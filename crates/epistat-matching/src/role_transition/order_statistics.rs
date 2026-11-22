@@ -267,12 +267,12 @@ impl RankBits {
         for bit in bits {
             word |= u64::from(bit) << (length % 64);
             length += 1;
-            if length % 64 == 0 {
+            if length.is_multiple_of(64) {
                 words.push(word);
                 word = 0;
             }
         }
-        if length % 64 != 0 {
+        if !length.is_multiple_of(64) {
             words.push(word);
         }
         let mut before = Vec::with_capacity(words.len());

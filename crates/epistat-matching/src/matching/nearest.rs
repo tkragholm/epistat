@@ -699,7 +699,7 @@ impl Availability {
         loop {
             let words = len.div_ceil(64).max(1);
             let mut level = vec![u64::MAX; words];
-            if len % 64 != 0 {
+            if !len.is_multiple_of(64) {
                 level[words - 1] = (1_u64 << (len % 64)) - 1;
             }
             if len == 0 {

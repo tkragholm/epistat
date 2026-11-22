@@ -145,7 +145,7 @@ pub(crate) trait Form {
 /// coordinate, zero inside. A NaN operand is passed over by `max`, so a NaN
 /// query or edge gives the gap the other edge gives, and none at all gives
 /// zero, as [`gap_by_branches`] does.
-#[inline(always)]
+#[inline]
 fn gap(q: f64, low: f64, high: f64) -> f64 {
     (low - q).max(q - high).max(0.0)
 }
@@ -188,7 +188,7 @@ impl Form for Euclidean {
 
     fn bound_pair(&self, query: &[f64], boxes: &[f64]) -> (f64, f64) {
         let mut sum = [0.0_f64; 2];
-        for (q, edges) in query.iter().zip(boxes.chunks_exact(4)) {
+        for (q, edges) in query.iter().zip(boxes.as_chunks::<4>().0) {
             for (lane, total) in sum.iter_mut().enumerate() {
                 let g = gap(*q, edges[lane], edges[2 + lane]);
                 *total += g * g;
@@ -225,7 +225,7 @@ impl Form for WeightedSquares<'_> {
 
     fn bound_pair(&self, query: &[f64], boxes: &[f64]) -> (f64, f64) {
         let mut sum = [0.0_f64; 2];
-        for ((q, edges), w) in query.iter().zip(boxes.chunks_exact(4)).zip(self.0) {
+        for ((q, edges), w) in query.iter().zip(boxes.as_chunks::<4>().0).zip(self.0) {
             for (lane, total) in sum.iter_mut().enumerate() {
                 let g = gap(*q, edges[lane], edges[2 + lane]);
                 *total += w * (g * g);
@@ -926,7 +926,8 @@ mod tests {
                     }
                     let (a, b) = (gap(q, low, high), gap_by_branches(q, low, high));
                     assert!(
-                        a == b || (a.is_nan() && b.is_nan()),
+                        a.partial_cmp(&b).is_some_and(std::cmp::Ordering::is_eq)
+                            || (a.is_nan() && b.is_nan()),
                         "gap {q} {low} {high}: {a} {b}"
                     );
                     assert_eq!(
@@ -944,7 +945,7 @@ mod tests {
                 let mut pick = || values[usize::try_from(mix.next() % 8).expect("small")];
                 let query: Vec<f64> = (0..d).map(|_| pick()).collect();
                 let mut boxes: Vec<f64> = (0..4 * d).map(|_| pick()).collect();
-                for edges in boxes.chunks_exact_mut(4) {
+                for edges in boxes.as_chunks_mut::<4>().0 {
                     for lane in 0..2 {
                         if edges[lane] > edges[2 + lane] {
                             edges.swap(lane, 2 + lane);
@@ -952,8 +953,13 @@ mod tests {
                     }
                 }
                 let single = |lane: usize, form: &dyn Fn(&[f64], &[f64]) -> f64| {
-                    let low: Vec<f64> = boxes.chunks_exact(4).map(|c| c[lane]).collect();
-                    let high: Vec<f64> = boxes.chunks_exact(4).map(|c| c[2 + lane]).collect();
+                    let low: Vec<f64> = boxes.as_chunks::<4>().0.iter().map(|c| c[lane]).collect();
+                    let high: Vec<f64> = boxes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| c[2 + lane])
+                        .collect();
                     form(&low, &high)
                 };
                 let same =

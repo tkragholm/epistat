@@ -1148,7 +1148,7 @@ fn cases_by_event_and_rank(triples: Vec<(Option<NaiveDate>, u32, usize)>) -> Vec
         .map(|(event, rank, idx)| {
             // Zero is no event, and a date is above it, in the order of dates.
             let day = event.map_or(0_u64, |date| {
-                u64::from((date.num_days_from_ce() as u32 ^ 0x8000_0000).saturating_add(1))
+                u64::from((date.num_days_from_ce().cast_unsigned() ^ 0x8000_0000).saturating_add(1))
             });
             (
                 (day << 32) | u64::from(rank),
@@ -1226,17 +1226,17 @@ mod tests {
     #[test]
     fn cases_sort_by_event_date_and_rank_as_the_triples_do() {
         let mut state = 7_u64;
-        let mut next = move |bound: u64| {
+        let mut next = move |bound: usize| {
             state = state
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            (state >> 33) % bound
+            usize::try_from((state >> 33) % u64::try_from(bound).unwrap()).unwrap()
         };
         let first = NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
         for n in [0_usize, 1, 5, 4095, 4096, 4097, 30_000] {
             let mut ranks: Vec<u32> = (0..u32::try_from(n).unwrap()).collect();
             for i in (1..n).rev() {
-                ranks.swap(i, next(i as u64 + 1) as usize);
+                ranks.swap(i, next(i + 1));
             }
             let triples: Vec<(Option<NaiveDate>, u32, usize)> = ranks
                 .into_iter()
