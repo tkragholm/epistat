@@ -43,7 +43,7 @@
 //! every row at its break at entry. Computed with floating-point numbers the
 //! two elapsed times can differ by rounding error, and cutting at both would
 //! leave a piece of length about `1e-16` in a cell the person never entered.
-//! As [`pyears`](crate::pyears) does (decision 75), two breaks whose elapsed
+//! As [`pyears`](crate::pyears) does, two breaks whose elapsed
 //! times differ by no more than rounding error are the same instant, and no
 //! piece is made between them. The bound is four times the machine epsilon of
 //! the sum of the magnitudes of the numbers that formed the elapsed time: the

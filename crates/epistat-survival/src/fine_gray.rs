@@ -982,8 +982,8 @@ mod tests {
         assert!(rows(&delayed, 1, &RowsOptions::default()).is_err());
     }
 
-    /// With no weights or all weights positive, the entry points use the same
-    /// code as the slice functions, so the rows are the same.
+    /// With no weights or all weights positive, every row is used, so the rows
+    /// are those of the core on the columns as they are.
     #[test]
     fn the_rows_are_those_of_the_core_when_every_row_is_used() {
         let weight: Vec<f64> = (0..20).map(|i| 0.5 + f64::from(i % 3)).collect();

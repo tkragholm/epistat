@@ -1,9 +1,22 @@
 # epistat-survival
 
-Cox regression on one covariate or a design matrix (Breslow and Efron ties,
-delayed entry, strata, case weights, cluster-robust variance), the Fine-Gray model, Aalen-Johansen cumulative
-incidence with a clustered bootstrap, multi-state occupation probabilities and
-the Titman-Putter test of the Markov property.
+Survival analysis for follow-up data in R's vocabulary, checked against `survival`,
+`mstate`, `cmprsk`, `riskRegression` and other R packages.
 
-Estimators take slices, bootstrap replicates are seeded from the caller's seeds
-through `epistat-rng`, and results do not depend on the number of threads.
+- Cox regression on a design matrix (Breslow, Efron and exact ties, delayed
+  entry, strata, case weights, offsets, cluster-robust variance), its tests,
+  residuals, predictions and time-transform covariates, and `clogit`.
+- The Fine-Gray model, Aalen-Johansen cumulative incidence, multi-state
+  occupation probabilities and Cox models for multi-state processes, each with
+  infinitesimal jackknife standard errors, and clustered bootstraps for the
+  first and the third.
+- The Titman-Putter test of the Markov property.
+- Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
+  pseudo-observations, concordance, Brier scores and calibration, standardised
+  risks, accelerated failure time models, person-time tables and the data tools
+  `survSplit`, `tmerge` and `survcondense`.
+
+Most estimators read a `SurvData`, the checked columns of a follow-up table.
+Bootstrap replicates are seeded from the caller's seeds through `epistat-rng`,
+and results do not depend on the number of threads. With the `arrow` feature a
+`SurvData` is built from Apache Arrow arrays without copying the columns.
