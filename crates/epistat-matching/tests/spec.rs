@@ -1982,7 +1982,11 @@ fn invalid_support_and_ratio_options_are_errors_that_name_the_option() {
             ..nearest.clone()
         }),
     );
-    for method in [MatchMethod::Exact, MatchMethod::Cem, MatchMethod::Cardinality] {
+    for method in [
+        MatchMethod::Exact,
+        MatchMethod::Cem,
+        MatchMethod::Cardinality,
+    ] {
         named(
             "discard",
             run(MatchSpec {
