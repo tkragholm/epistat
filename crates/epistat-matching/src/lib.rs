@@ -155,6 +155,7 @@ pub mod output;
 pub mod reporting;
 mod role_transition;
 pub mod sensitivity;
+mod sorting;
 pub mod spec;
 mod trials;
 mod types;

@@ -75,7 +75,7 @@ impl<'a> CandidateIndex<'a> {
                 .enumerate()
                 .map(|(idx, control)| (control.birth_date().num_days_from_ce(), idx))
                 .collect();
-            global.sort_unstable_by_key(|entry| (entry.0, entry.1));
+            crate::sorting::sort_days_usize(&mut global);
             index.strata.push(global);
             return index;
         }
@@ -101,7 +101,7 @@ impl<'a> CandidateIndex<'a> {
             }
         }
         for entries in &mut index.strata {
-            entries.sort_unstable_by_key(|entry| (entry.0, entry.1));
+            crate::sorting::sort_days_usize(entries);
         }
 
         index

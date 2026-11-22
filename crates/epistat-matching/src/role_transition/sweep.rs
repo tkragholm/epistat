@@ -318,7 +318,7 @@ impl DateQueue {
     /// are taken on the first date.
     fn new(mut entries: Vec<(i32, u32)>) -> Self {
         entries.retain(|&(date, _)| date != NEVER);
-        entries.sort_unstable();
+        crate::sorting::sort_days(&mut entries);
         Self { entries, next: 0 }
     }
 

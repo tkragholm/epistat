@@ -959,7 +959,7 @@ impl Pool {
         if entries.len() >= PAR_SORT_FROM {
             entries.par_sort_unstable();
         } else {
-            entries.sort_unstable();
+            crate::sorting::sort_keyed(&mut entries);
         }
         let candidate: Vec<usize> = entries.iter().map(|entry| entry.1 as usize).collect();
         let sorted_keys: Vec<f64> = candidate.iter().map(|&idx| keys.candidates[idx]).collect();

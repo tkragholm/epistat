@@ -1132,11 +1132,41 @@ fn eligible_case_indices<R: RoleIndexedRecord, P: RiskSetPolicy<R> + ?Sized>(
     };
     // A rank orders records by id and then by index, so the order of
     // `(event date, rank)` is that of a stable sort by `(event date, id)`.
-    let mut keyed: Vec<(Option<NaiveDate>, u32, usize)> = cases
-        .map(|idx| (cohort[idx].event_date(), order.rank(idx), idx))
+    cases_by_event_and_rank(
+        cases
+            .map(|idx| (cohort[idx].event_date(), order.rank(idx), idx))
+            .collect(),
+    )
+}
+
+/// The indices of `(event date, rank, index)` triples, ordered by event date
+/// (none first) and then by rank, which no two triples share. The indices are
+/// those of an [`IdOrder`] and so fit `u32`.
+fn cases_by_event_and_rank(triples: Vec<(Option<NaiveDate>, u32, usize)>) -> Vec<usize> {
+    let mut keyed: Vec<(u64, u32)> = triples
+        .into_iter()
+        .map(|(event, rank, idx)| {
+            // Zero is no event, and a date is above it, in the order of dates.
+            let day = event.map_or(0_u64, |date| {
+                u64::from((date.num_days_from_ce() as u32 ^ 0x8000_0000).saturating_add(1))
+            });
+            (
+                (day << 32) | u64::from(rank),
+                u32::try_from(idx).expect("an index of an id order fits u32"),
+            )
+        })
         .collect();
-    keyed.sort_unstable_by_key(|&(event, rank, _)| (event, rank));
-    keyed.into_iter().map(|(_, _, idx)| idx).collect()
+    crate::sorting::sort_keyed(&mut keyed);
+    keyed.into_iter().map(|(_, idx)| idx as usize).collect()
+}
+
+/// [`cases_by_event_and_rank`] by comparing the triples.
+#[cfg(test)]
+fn cases_by_event_and_rank_compared(
+    mut triples: Vec<(Option<NaiveDate>, u32, usize)>,
+) -> Vec<usize> {
+    triples.sort_unstable_by_key(|&(event, rank, _)| (event, rank));
+    triples.into_iter().map(|(_, _, idx)| idx).collect()
 }
 
 /// [`eligible_case_indices`] by comparing ids, for a cohort too large for an
@@ -1192,6 +1222,38 @@ mod tests {
     use crate::matching::{DeterministicSelection, DistanceConfig, RandomSelection};
     use crate::types::{AgeLimitYears, BaseRecord, Estimand, MatchRatio, RoleTransitionRecord};
     use chrono::{Months, NaiveDate};
+
+    #[test]
+    fn cases_sort_by_event_date_and_rank_as_the_triples_do() {
+        let mut state = 7_u64;
+        let mut next = move |bound: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % bound
+        };
+        let first = NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
+        for n in [0_usize, 1, 5, 4095, 4096, 4097, 30_000] {
+            let mut ranks: Vec<u32> = (0..u32::try_from(n).unwrap()).collect();
+            for i in (1..n).rev() {
+                ranks.swap(i, next(i as u64 + 1) as usize);
+            }
+            let triples: Vec<(Option<NaiveDate>, u32, usize)> = ranks
+                .into_iter()
+                .enumerate()
+                .map(|(idx, rank)| {
+                    let event = (next(4) > 0)
+                        .then(|| first + chrono::Duration::days(i64::try_from(next(20)).unwrap()));
+                    (event, rank, idx)
+                })
+                .collect();
+            assert_eq!(
+                cases_by_event_and_rank(triples.clone()),
+                cases_by_event_and_rank_compared(triples),
+                "n {n}"
+            );
+        }
+    }
 
     #[test]
     fn age_limit_agrees_with_adding_whole_years_to_the_birth_date() {
