@@ -11,9 +11,9 @@
 //! After matching the variance is the reliability-weight estimator of R's
 //! `cov.wt()`.
 //!
-//! The variance ratio is `v_1 / v_0`, and is not given for a variable of 0 and
-//! 1. The eCDF distances are the mean and the maximum over every distinct
-//! value of `|F_1(x) - F_0(x)|`, with the weighted empirical distribution
+//! The variance ratio is `v_1 / v_0`, and is not given for a variable that only
+//! takes the values 0 and 1. The eCDF distances are the mean and the maximum over every distinct
+//! value of `abs(F_1(x) - F_0(x))`, with the weighted empirical distribution
 //! functions of the two groups. The eQQ distances are the mean and the maximum
 //! absolute difference of the two groups' weighted quantile functions, the
 //! larger group read at the smaller group's cumulative weights as a step
