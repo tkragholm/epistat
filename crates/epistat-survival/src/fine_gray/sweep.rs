@@ -326,8 +326,8 @@ impl Sweep {
                     k -= 1;
                     let factor = curve.before(self.times[k]);
                     late_hazard += factor * inc.hazard[k];
-                    for a in 0..p {
-                        late_centre[a] += factor * inc.centre[k * p + a];
+                    for (cell, &c) in late_centre.iter_mut().zip(&inc.centre[k * p..(k + 1) * p]) {
+                        *cell += factor * c;
                     }
                 }
                 let i = self.late[j] as usize;
