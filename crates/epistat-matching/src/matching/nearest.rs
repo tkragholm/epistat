@@ -83,7 +83,10 @@
 //! each anchor computes the distance to every available candidate in range,
 //! `a * c` distances for `a` anchors without a caliper.
 
-use super::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec, unique_value};
+use super::constraints::{
+    Constraint, ConstraintContext, ConstraintGroup, NoSelfMatchConstraint, UniqueKeyConstraint,
+    UsedControlsVec, unique_value,
+};
 use super::distance::{
     ConfiguredMetric, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
     IdMapMahalanobisDistance,
@@ -98,8 +101,8 @@ use super::selection::{Assignment, SelectionStrategy};
 use crate::constraints::sample_sd;
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 use crate::types::{
-    ControlIdx, Estimand, InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchedPair,
-    MatchingCriteria, UniqueValueId,
+    ConstraintReason, ControlIdx, Estimand, ExclusionReason, InvalidCriteriaReason,
+    MatchDiagnostics, MatchOutcome, MatchedPair, MatchingCriteria, UniqueValueId,
 };
 use epistat_rng::Stream;
 use ordered_float::OrderedFloat;
@@ -742,6 +745,28 @@ struct Pool {
     tree: TreeState,
 }
 
+/// The candidates the constraints refused in the searches, counted by the reason
+/// the constraint gives. A search tests a candidate only when it reaches it, so
+/// the counts are of the candidates tested, and a candidate refused in several
+/// searches counts in each.
+#[derive(Default)]
+struct Refusals(Vec<(&'static str, usize)>);
+
+impl Refusals {
+    fn add(&mut self, reason: &'static str, count: usize) {
+        match self.0.iter_mut().find(|(seen, _)| *seen == reason) {
+            Some((_, total)) => *total += count,
+            None => self.0.push((reason, count)),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        for (reason, count) in other.0 {
+            self.add(reason, count);
+        }
+    }
+}
+
 /// One anchor's view of the stratum: what it may not be matched to.
 struct Probe<'p, R: MatchingRecord, G: ?Sized> {
     env: &'p Env<'p, R, G>,
@@ -753,10 +778,12 @@ struct Probe<'p, R: MatchingRecord, G: ?Sized> {
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Probe<'_, R, G> {
     /// Whether the anchor may be matched to this candidate, apart from the
-    /// distance and the candidate being available.
-    fn admits(&self, candidate_idx: usize) -> bool {
+    /// distance and the candidate being available. A refusal is counted in
+    /// `refused`.
+    fn admits(&self, candidate_idx: usize, refused: &mut Refusals) -> bool {
         let control = &self.env.candidates[candidate_idx];
         if self.anchor.id() == control.id() {
+            refused.add(Constraint::<R>::reason(&NoSelfMatchConstraint), 1);
             return false;
         }
         let criteria = self.env.criteria;
@@ -768,6 +795,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Probe<'_, R, G> {
                     .is_some_and(|id| self.state.used_unique.contains(id))
             })
         {
+            refused.add(Constraint::<R>::reason(&UniqueKeyConstraint), 1);
             return false;
         }
         let context = ConstraintContext {
@@ -783,10 +811,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Probe<'_, R, G> {
                 .as_ref()
                 .and_then(|values| values.row(candidate_idx)),
         };
-        self.env
+        match self
+            .env
             .constraints
             .first_blocking_reason(self.anchor, control, &context)
-            .is_none()
+        {
+            None => true,
+            Some(reason) => {
+                refused.add(reason, 1);
+                false
+            }
+        }
     }
 }
 
@@ -805,6 +840,7 @@ fn walk_by_key<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     caliper: Option<f64>,
     k: usize,
     probe: &Probe<'_, R, G>,
+    refused: &mut Refusals,
 ) -> Vec<(usize, f64)> {
     let n = candidate.len();
     let split = keys.partition_point(|&key| key < x);
@@ -856,7 +892,7 @@ fn walk_by_key<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             right = (next < n).then_some(next);
         }
         let candidate_idx = candidate[position];
-        if !probe.admits(candidate_idx) {
+        if !probe.admits(candidate_idx, refused) {
             continue;
         }
         found.push((distance, candidate_idx, position));
@@ -982,6 +1018,7 @@ impl Pool {
         caliper: Option<f64>,
         k: usize,
         probe: &Probe<'_, R, G>,
+        refused: &mut Refusals,
     ) -> Vec<(usize, f64)> {
         walk_by_key(
             &self.keys,
@@ -991,6 +1028,7 @@ impl Pool {
             caliper,
             k,
             probe,
+            refused,
         )
     }
 
@@ -1002,6 +1040,7 @@ impl Pool {
         caliper: Option<f64>,
         k: usize,
         probe: &Probe<'_, R, G>,
+        refused: &mut Refusals,
     ) -> Vec<(usize, f64)> {
         walk_by_key(
             &self.keys,
@@ -1011,6 +1050,7 @@ impl Pool {
             caliper,
             k,
             probe,
+            refused,
         )
     }
 
@@ -1067,6 +1107,7 @@ impl Pool {
         k: usize,
         probe: &Probe<'_, R, G>,
         allow_tree: bool,
+        refused: &mut Refusals,
     ) -> Vec<(usize, f64)> {
         if k == 0 {
             return Vec::new();
@@ -1085,7 +1126,7 @@ impl Pool {
                 let candidate = &self.candidate;
                 return tree
                     .nearest(&Euclidean, anchor, k, caliper, &mut |position| {
-                        probe.admits(candidate[position])
+                        probe.admits(candidate[position], refused)
                     })
                     .into_iter()
                     .map(|(distance, position)| (position, distance))
@@ -1116,14 +1157,20 @@ impl Pool {
             probe,
         };
         let best = if high - low <= SCAN_CHUNK {
-            scan.range(low, high)
+            let (best, scan_refused) = scan.range(low, high);
+            refused.merge(scan_refused);
+            best
         } else {
             let starts: Vec<usize> = (low..high).step_by(SCAN_CHUNK).collect();
-            let parts: Vec<Vec<(f64, usize, usize)>> = starts
+            let parts: Vec<ScanFound> = starts
                 .par_iter()
                 .map(|&start| scan.range(start, (start + SCAN_CHUNK).min(high)))
                 .collect();
-            let mut merged: Vec<(f64, usize, usize)> = parts.into_iter().flatten().collect();
+            let mut merged: Vec<(f64, usize, usize)> = Vec::new();
+            for (part, part_refused) in parts {
+                merged.extend(part);
+                refused.merge(part_refused);
+            }
             merged.sort_by(|a, b| cmp_f64(a.0, b.0).then(a.1.cmp(&b.1)));
             merged.truncate(k);
             merged
@@ -1142,13 +1189,14 @@ impl Pool {
         caliper: Option<f64>,
         k: usize,
         probe: &Probe<'_, R, G>,
+        refused: &mut Refusals,
     ) -> Vec<(usize, f64)> {
         let (low, high) = self.gate_bounds(gate);
         let mut best: Vec<(f64, usize, usize)> = Vec::with_capacity(k + 1);
         let mut position = self.avail.at_or_after(low);
         while position < high {
             let candidate_idx = self.candidate[position];
-            let distance = if probe.admits(candidate_idx) {
+            let distance = if probe.admits(candidate_idx, refused) {
                 DistanceMetric::<R>::distance(
                     metric,
                     probe.anchor,
@@ -1185,6 +1233,10 @@ const SCAN_CHUNK: usize = 8192;
 /// Positions whose distances are computed together.
 const SCAN_BLOCK: usize = 256;
 
+/// The nearest candidates a scan found as (distance, candidate index, position),
+/// and the candidates the constraints refused on the way.
+type ScanFound = (Vec<(f64, usize, usize)>, Refusals);
+
 /// The scan of one anchor over a range of pool positions.
 struct WhitenedScan<'s, R: MatchingRecord, G: ?Sized> {
     /// Whitened coordinates by coordinate, then position.
@@ -1201,7 +1253,8 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> WhitenedScan<'_, R, G> {
     /// The up to `k` nearest admitted candidates among the positions
     /// `from..to` as (distance, candidate index, position), ordered by
     /// distance and then candidate index.
-    fn range(&self, from: usize, to: usize) -> Vec<(f64, usize, usize)> {
+    fn range(&self, from: usize, to: usize) -> ScanFound {
+        let mut refused = Refusals::default();
         let n = self.candidate.len();
         let k = self.k;
         let mut best: Vec<(f64, usize, usize)> = Vec::with_capacity(k + 1);
@@ -1244,7 +1297,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> WhitenedScan<'_, R, G> {
                         continue;
                     }
                 }
-                if !self.probe.admits(candidate_idx) {
+                if !self.probe.admits(candidate_idx, &mut refused) {
                     continue;
                 }
                 let at = best.partition_point(|entry| {
@@ -1260,7 +1313,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> WhitenedScan<'_, R, G> {
             }
             start += len;
         }
-        best
+        (best, refused)
     }
 }
 
@@ -1272,6 +1325,8 @@ struct StratumResult {
     unmatched: usize,
     below_ratio: usize,
     distinct_candidates: usize,
+    /// The candidates the constraints refused, by reason.
+    refused: Refusals,
 }
 
 /// Heap entry for the closest and farthest orders: larger pops first.
@@ -1294,6 +1349,8 @@ struct Stratum<'e, 'a, R: MatchingRecord, G: ?Sized> {
     assigned: Vec<usize>,
     /// The pool positions given to some anchor.
     touched: Marks,
+    /// The candidates the constraints refused in the searches.
+    refused: Refusals,
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
@@ -1318,7 +1375,8 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                 else {
                     return Vec::new();
                 };
-                self.pool.nearest_by_key(x, *caliper, k, &probe)
+                self.pool
+                    .nearest_by_key(x, *caliper, k, &probe, &mut self.refused)
             }
             Rank::Pairs {
                 gate,
@@ -1356,11 +1414,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                             k,
                             &probe,
                             mode != 2,
+                            &mut self.refused,
                         )
                     }
-                    _ => self
-                        .pool
-                        .nearest_by_pairs(gate, metric, *caliper, k, &probe),
+                    _ => self.pool.nearest_by_pairs(
+                        gate,
+                        metric,
+                        *caliper,
+                        k,
+                        &probe,
+                        &mut self.refused,
+                    ),
                 }
             }
         }
@@ -1370,10 +1434,10 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
     /// is by a score and no candidate has been taken out of the pool, which
     /// reads the stratum and changes nothing, so anchors can be searched at
     /// the same time.
-    fn search_unused(&self, slot: usize, k: usize) -> Vec<(usize, f64)> {
+    fn search_unused(&self, slot: usize, k: usize) -> (Vec<(usize, f64)>, Refusals) {
         let env = self.env;
         let Rank::Scalar { caliper } = &env.plan.rank else {
-            return Vec::new();
+            return (Vec::new(), Refusals::default());
         };
         let idx = self.usable[slot];
         let Some(x) = env
@@ -1382,7 +1446,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             .as_ref()
             .and_then(|keys| keys.anchor(idx))
         else {
-            return Vec::new();
+            return (Vec::new(), Refusals::default());
         };
         let probe = Probe {
             env,
@@ -1391,7 +1455,11 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             used: self.used,
             state: &*self.state,
         };
-        self.pool.nearest_by_key_unused(x, *caliper, k, &probe)
+        let mut refused = Refusals::default();
+        let found = self
+            .pool
+            .nearest_by_key_unused(x, *caliper, k, &probe, &mut refused);
+        (found, refused)
     }
 
     /// The number of controls the anchor in `slot` is to get.
@@ -1452,11 +1520,12 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             && matches!(self.env.plan.rank, Rank::Scalar { .. })
             && order.len() >= PAR_ANCHORS_FROM;
         if independent {
-            let found: Vec<Vec<(usize, f64)>> = order
+            let found: Vec<(Vec<(usize, f64)>, Refusals)> = order
                 .par_iter()
                 .map(|&slot| self.search_unused(slot, self.ratio_of(slot)))
                 .collect();
-            for (&slot, positions) in order.iter().zip(found) {
+            for (&slot, (positions, refused)) in order.iter().zip(found) {
+                self.refused.merge(refused);
                 for (position, _) in positions {
                     self.assign(slot, position);
                 }
@@ -1628,6 +1697,7 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         pool,
         state,
         assigned: Vec::new(),
+        refused: Refusals::default(),
     };
 
     let in_rounds = !criteria.allow_replacement && plan.assignment == Assignment::Rounds;
@@ -1643,6 +1713,7 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         stratum.used.remove(ControlIdx::new(candidate_idx));
     }
     result.distinct_candidates = stratum.touched.count;
+    result.refused = std::mem::take(&mut stratum.refused);
     for slot in order {
         let controls = std::mem::take(&mut stratum.controls_of[slot]);
         if controls.is_empty() {
@@ -1785,6 +1856,14 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         distinct += result.distinct_candidates;
         diagnostics.anchors_with_no_candidates += result.unmatched;
         diagnostics.anchors_below_required_ratio += result.below_ratio;
+        for (reason, count) in result.refused.0 {
+            *diagnostics
+                .exclusion_counts
+                .entry(ExclusionReason::Constraint(
+                    ConstraintReason::from_reason_str(reason),
+                ))
+                .or_insert(0) += count;
+        }
         for (anchor_idx, controls) in result.matched {
             matched_anchors += 1;
             let anchor_id = request.anchors[anchor_idx].id();
@@ -1933,28 +2012,42 @@ mod tests {
                         });
                         SEARCH_FOR_TESTS.store(0, Ordering::Relaxed);
                         match out.expect("match") {
-                            SpecOutput::Pairs { outcome, .. } => (
-                                outcome
-                                    .pairs
-                                    .iter()
-                                    .map(|p| (p.case_id.clone(), p.control_id.clone()))
-                                    .collect::<Vec<_>>(),
-                                format!("{:?}", outcome.diagnostics),
-                            ),
+                            SpecOutput::Pairs { outcome, .. } => {
+                                let mut diagnostics = outcome.diagnostics;
+                                let counts = std::mem::take(&mut diagnostics.exclusion_counts);
+                                (
+                                    outcome
+                                        .pairs
+                                        .iter()
+                                        .map(|p| (p.case_id.clone(), p.control_id.clone()))
+                                        .collect::<Vec<_>>(),
+                                    format!("{diagnostics:?}"),
+                                    format!("{counts:?}"),
+                                )
+                            }
                             _ => panic!("pairs expected"),
                         }
                     };
                     let reference = run(1, 1);
                     assert!(reference.0.len() > 100);
+                    // The exclusion counts are of the candidates a search tests,
+                    // which depends on how it searches, so they are compared
+                    // between thread counts only.
+                    let mut tree_counts = Vec::new();
                     for (mode, threads) in [(2, 4), (0, 1), (0, 4)] {
-                        assert_eq!(
-                            run(mode, threads),
-                            reference,
+                        let found = run(mode, threads);
+                        if mode == 0 {
+                            tree_counts.push(found.2.clone());
+                        }
+                        let context = format!(
                             "seed {seed}, distance {distance}, replace {replace}, ratio {ratio}, \
                              exact {exact}, unique {unique}, closest {closest}, mode {mode}, \
                              {threads} threads"
                         );
+                        assert_eq!(found.0, reference.0, "{context}");
+                        assert_eq!(found.1, reference.1, "{context}");
                     }
+                    assert_eq!(tree_counts[0], tree_counts[1], "counts on 1 and 4 threads");
                 }
             }
         }
@@ -1986,6 +2079,40 @@ mod tests {
                 .keys()
                 .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
         );
+    }
+
+    #[test]
+    fn nearest_matching_counts_the_candidates_the_constraints_refuse() {
+        use crate::types::{BaseRecord, ConstraintReason, ExclusionReason};
+        let date = crate::date(2010, 1, 1);
+        let anchors = vec![BaseRecord::new("self", date), BaseRecord::new("a", date)];
+        let mut candidates = vec![BaseRecord::new("self", date)];
+        for (id, value) in [("near", 0.5), ("far1", 9.0), ("far2", 9.5)] {
+            let mut record = BaseRecord::new(id, date);
+            record.numerics.insert("x".into(), value);
+            candidates.push(record);
+        }
+        candidates[0].numerics.insert("x".into(), 0.0);
+        let mut anchors_with_x = anchors;
+        for anchor in &mut anchors_with_x {
+            anchor.numerics.insert("x".into(), 0.0);
+        }
+        let outcome = crate::MatchJob::new_standard(&anchors_with_x, &candidates, 0)
+            .with_nearest()
+            .with_constraints(vec![crate::constraints::caliper_on_field::<BaseRecord>(
+                "x", 1.0,
+            )])
+            .run();
+        let count = |reason: ConstraintReason| {
+            outcome
+                .diagnostics
+                .exclusion_counts
+                .get(&ExclusionReason::Constraint(reason))
+                .copied()
+                .unwrap_or(0)
+        };
+        assert!(count(ConstraintReason::CaliperExceeded) >= 2);
+        assert!(count(ConstraintReason::NoSelfMatch) >= 1);
     }
 
     #[test]
