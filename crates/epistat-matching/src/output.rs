@@ -11,6 +11,7 @@
 //! The ordered views at the end of the module give the map-based outputs of
 //! the crate in the order of their keys.
 
+use crate::matching::to_f64;
 use crate::matching::{
     MatchWeightMethod, PropensityScoreEstimate, SubclassedUnits, SubclassificationOutcome,
     UnitRole, UnitWeightSet,
@@ -384,51 +385,17 @@ pub fn get_matches(
     if include_unmatched {
         units.require_fixed_roles("get_matches with include_unmatched")?;
     }
-    let position = units.positions();
-    let pair_weights = outcome.pair_weights(MatchWeightMethod::AnchorUnitCandidateFractional);
-    let mut by_anchor: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
-    for entry in &pair_weights.pairs {
-        let anchor = entry.pair.anchor_id();
-        let control = entry.pair.comparator_id();
-        let anchor_known = position
-            .get(anchor)
-            .is_some_and(|at| !units.fixed_roles || units.anchor[*at]);
-        if !anchor_known {
-            return Err(OutputError::UnknownAnchor {
-                id: anchor.to_string(),
-            });
-        }
-        let control_known = position
-            .get(control)
-            .is_some_and(|at| !units.fixed_roles || !units.anchor[*at]);
-        if !control_known {
-            return Err(OutputError::UnknownCandidate {
-                id: control.to_string(),
-            });
-        }
-        by_anchor
-            .entry(anchor)
-            .or_default()
-            .push((control, entry.weight));
-    }
-
-    let anchors: Vec<&str> = if units.fixed_roles {
-        units.anchor_ids()
-    } else {
-        units
-            .ids
-            .iter()
-            .map(String::as_str)
-            .filter(|id| by_anchor.contains_key(id))
-            .collect()
-    };
-    let mut first_met: HashMap<&str, usize> = HashMap::new();
-    for anchor in &anchors {
-        for (control, _) in by_anchor.get(anchor).into_iter().flatten() {
-            let next = first_met.len();
-            first_met.entry(control).or_insert(next);
-        }
-    }
+    let layout = PairLayout::new(outcome, units)?;
+    let anchors: Vec<usize> = (0..units.len())
+        .filter(|&position| {
+            if units.fixed_roles {
+                units.anchor[position]
+            } else {
+                layout.count[position] > 0
+            }
+        })
+        .collect();
+    let first_met = layout.first_met(&anchors);
 
     let mut out = LongMatches {
         id: Vec::new(),
@@ -437,20 +404,22 @@ pub fn get_matches(
         weight: Vec::new(),
     };
     let mut next_pair = 0_usize;
-    let mut unmatched: Vec<&str> = Vec::new();
+    let mut unmatched: Vec<usize> = Vec::new();
     for anchor in anchors {
-        let Some(mut controls) = by_anchor.remove(anchor) else {
+        if layout.count[anchor] == 0 {
             unmatched.push(anchor);
             continue;
-        };
+        }
         next_pair += 1;
-        controls.sort_by_key(|(control, _)| first_met[control]);
-        out.id.push(anchor.to_string());
+        let mut controls = layout.controls_of(anchor).to_vec();
+        controls.sort_by_key(|control| first_met[*control]);
+        let weight = 1.0 / to_f64(layout.count[anchor]);
+        out.id.push(units.ids[anchor].clone());
         out.role.push(UnitRole::Anchor);
         out.pair_id.push(Some(next_pair));
         out.weight.push(1.0);
-        for (control, weight) in controls {
-            out.id.push(control.to_string());
+        for control in controls {
+            out.id.push(units.ids[control].clone());
             out.role.push(UnitRole::Candidate);
             out.pair_id.push(Some(next_pair));
             out.weight.push(weight);
@@ -458,13 +427,93 @@ pub fn get_matches(
     }
     if include_unmatched {
         for anchor in unmatched {
-            out.id.push(anchor.to_string());
+            out.id.push(units.ids[anchor].clone());
             out.role.push(UnitRole::Anchor);
             out.pair_id.push(None);
             out.weight.push(0.0);
         }
     }
     Ok(out)
+}
+
+/// The pairs of an outcome as positions in the units, with the controls of
+/// each anchor listed together.
+struct PairLayout {
+    /// The pairs as (anchor position, control position), in the order of the
+    /// outcome.
+    pairs: Vec<(usize, usize)>,
+    /// The number of pairs of each unit as an anchor.
+    count: Vec<usize>,
+    /// The controls of the anchor at position `p` are
+    /// `controls[start[p]..start[p + 1]]`, in the order of the pairs.
+    start: Vec<usize>,
+    controls: Vec<usize>,
+}
+
+impl PairLayout {
+    /// The positions of the pairs of `outcome`, or the error for the first pair
+    /// that names a unit that is not in `units` in its role.
+    fn new(outcome: &MatchOutcome, units: &Units) -> Result<Self, OutputError> {
+        let position = units.positions();
+        let mut pairs = Vec::with_capacity(outcome.pairs.len());
+        for pair in &outcome.pairs {
+            let anchor = position
+                .get(pair.anchor_id())
+                .copied()
+                .filter(|at| !units.fixed_roles || units.anchor[*at])
+                .ok_or_else(|| OutputError::UnknownAnchor {
+                    id: pair.anchor_id().to_string(),
+                })?;
+            let control = position
+                .get(pair.comparator_id())
+                .copied()
+                .filter(|at| !units.fixed_roles || !units.anchor[*at])
+                .ok_or_else(|| OutputError::UnknownCandidate {
+                    id: pair.comparator_id().to_string(),
+                })?;
+            pairs.push((anchor, control));
+        }
+        let mut count = vec![0_usize; units.len()];
+        for (anchor, _) in &pairs {
+            count[*anchor] += 1;
+        }
+        let mut start = vec![0_usize; units.len() + 1];
+        for (at, number) in count.iter().enumerate() {
+            start[at + 1] = start[at] + number;
+        }
+        let mut fill = start.clone();
+        let mut controls = vec![0_usize; pairs.len()];
+        for (anchor, control) in &pairs {
+            controls[fill[*anchor]] = *control;
+            fill[*anchor] += 1;
+        }
+        Ok(Self {
+            pairs,
+            count,
+            start,
+            controls,
+        })
+    }
+
+    fn controls_of(&self, anchor: usize) -> &[usize] {
+        &self.controls[self.start[anchor]..self.start[anchor + 1]]
+    }
+
+    /// The order in which each control is first met going through `anchors` and
+    /// the controls of each in the order of the pairs.
+    fn first_met(&self, anchors: &[usize]) -> Vec<usize> {
+        let mut first_met = vec![usize::MAX; self.count.len()];
+        let mut next = 0_usize;
+        for &anchor in anchors {
+            for &control in self.controls_of(anchor) {
+                if first_met[control] == usize::MAX {
+                    first_met[control] = next;
+                    next += 1;
+                }
+            }
+        }
+        first_met
+    }
 }
 
 /// What [`match_data`] puts in the table.
@@ -541,34 +590,36 @@ pub fn match_data(
     options: MatchDataOptions,
 ) -> Result<MatchData, OutputError> {
     units.require_fixed_roles("match_data")?;
-    let long = get_matches(outcome, units, false)?;
-    let mut subclass_of: HashMap<&str, usize> = HashMap::new();
-    for (id, pair) in long.id.iter().zip(&long.pair_id) {
-        if let Some(pair) = pair {
-            subclass_of.entry(id.as_str()).or_insert(*pair);
+    let layout = PairLayout::new(outcome, units)?;
+    let n = units.len();
+
+    // The pair of a unit: its own for an anchor, and for a control the first
+    // pair it is in, going through the anchors in order.
+    let mut pair_of: Vec<Option<usize>> = vec![None; n];
+    let mut next_pair = 0_usize;
+    for anchor in (0..n).filter(|&position| units.anchor[position]) {
+        if layout.count[anchor] == 0 {
+            continue;
+        }
+        next_pair += 1;
+        pair_of[anchor] = Some(next_pair);
+        for &control in layout.controls_of(anchor) {
+            pair_of[control].get_or_insert(next_pair);
         }
     }
-    let weights = {
-        let raw = outcome.match_weights(options.method);
-        if options.normalize {
-            raw.normalized()
-        } else {
-            raw
-        }
-    };
+
+    let mut weights = layout.unit_weights(options.method);
+    if options.normalize {
+        normalize_columns(&units.ids, &units.anchor, &mut weights);
+    }
     let mut out = MatchData {
         id: Vec::new(),
         role: Vec::new(),
         weight: Vec::new(),
         subclass: Vec::new(),
     };
-    for (id, is_anchor) in units.ids.iter().zip(&units.anchor) {
-        let group = if *is_anchor {
-            &weights.anchor
-        } else {
-            &weights.candidate
-        };
-        let weight = group.get(id).copied();
+    for (position, (id, is_anchor)) in units.ids.iter().zip(&units.anchor).enumerate() {
+        let weight = weights[position];
         if weight.is_none() && options.drop_unmatched {
             continue;
         }
@@ -582,10 +633,66 @@ pub fn match_data(
         out.subclass.push(if options.replacement {
             None
         } else {
-            subclass_of.get(id.as_str()).copied()
+            pair_of[position]
         });
     }
     Ok(out)
+}
+
+impl PairLayout {
+    /// The weight of each unit that is in a pair, by position, for a weighting.
+    fn unit_weights(&self, method: MatchWeightMethod) -> Vec<Option<f64>> {
+        let mut weights: Vec<Option<f64>> = vec![None; self.count.len()];
+        match method {
+            MatchWeightMethod::PairCount => {
+                for (anchor, control) in &self.pairs {
+                    *weights[*anchor].get_or_insert(0.0) += 1.0;
+                    *weights[*control].get_or_insert(0.0) += 1.0;
+                }
+            }
+            MatchWeightMethod::AnchorUnitCandidateFractional => {
+                for (anchor, control) in &self.pairs {
+                    weights[*anchor] = Some(1.0);
+                    *weights[*control].get_or_insert(0.0) += 1.0 / to_f64(self.count[*anchor]);
+                }
+            }
+            MatchWeightMethod::CandidateUnitAnchorFractional => {
+                let mut controls = vec![0_usize; self.count.len()];
+                for (_, control) in &self.pairs {
+                    controls[*control] += 1;
+                }
+                for (anchor, control) in &self.pairs {
+                    weights[*control] = Some(1.0);
+                    *weights[*anchor].get_or_insert(0.0) += 1.0 / to_f64(controls[*control]);
+                }
+            }
+        }
+        weights
+    }
+}
+
+/// Rescales the weights of each group to a mean of 1 over its units with a
+/// positive weight, as `normalize = TRUE` does in `matchit()`. The sum is taken
+/// in the order of the ids, so that it does not depend on the order of the
+/// units. A group with no positive weight, or whose sum is not finite, is left
+/// as it is.
+pub(crate) fn normalize_columns(ids: &[String], anchor: &[bool], weights: &mut [Option<f64>]) {
+    for group in [true, false] {
+        let mut positive: Vec<usize> = (0..ids.len())
+            .filter(|&at| anchor[at] == group && weights[at].is_some_and(|weight| weight > 0.0))
+            .collect();
+        positive.sort_unstable_by(|left, right| ids[*left].cmp(&ids[*right]));
+        let sum = positive
+            .iter()
+            .fold(0.0_f64, |acc, &at| acc + weights[at].unwrap_or(0.0));
+        if positive.is_empty() || !sum.is_finite() {
+            continue;
+        }
+        let mean = sum / to_f64(positive.len());
+        for at in positive {
+            weights[at] = weights[at].map(|weight| weight / mean);
+        }
+    }
 }
 
 fn check_column(column: &'static str, units: &Units, length: usize) -> Result<(), OutputError> {
@@ -875,6 +982,72 @@ impl SubclassedUnits {
             (0..self.len()).map(|p| self.is_anchor(p)).collect(),
         )?;
         match_data_from_weights(&weights, &self.subclass, &units, options).map(Some)
+    }
+}
+
+impl SubclassedUnits {
+    /// MatchIt's `match_data()` for these units, with the rows in the order of
+    /// `units`, which may differ from the order of the units here: each unit of
+    /// `units` that is kept has its weight for the estimand and its subclass,
+    /// numbered from 1. With `normalize` the weights of each group are rescaled
+    /// to a mean of 1 over its kept units, as `matchit()` does. A unit that is
+    /// not kept has weight 0 and no subclass, and is left out with
+    /// `drop_unmatched`. `None` for the matched-sample effect.
+    #[must_use]
+    pub fn match_data_for(
+        &self,
+        units: &Units,
+        estimand: Estimand,
+        normalize: bool,
+        drop_unmatched: bool,
+    ) -> Option<MatchData> {
+        if estimand == Estimand::Atm {
+            return None;
+        }
+        let at: HashMap<&str, usize> = self
+            .ids
+            .iter()
+            .enumerate()
+            .map(|(position, id)| (id.as_str(), position))
+            .collect();
+        let found: Vec<Option<usize>> = units
+            .ids
+            .iter()
+            .map(|id| at.get(id.as_str()).copied())
+            .collect();
+        let mut weights: Vec<Option<f64>> = found
+            .iter()
+            .map(|position| position.and_then(|p| self.weight(estimand, p)))
+            .collect();
+        if normalize {
+            normalize_columns(&units.ids, &units.anchor, &mut weights);
+        }
+        let mut out = MatchData {
+            id: Vec::new(),
+            role: Vec::new(),
+            weight: Vec::new(),
+            subclass: Vec::new(),
+        };
+        for (row, (id, is_anchor)) in units.ids.iter().zip(&units.anchor).enumerate() {
+            let weight = weights[row];
+            if weight.is_none() && drop_unmatched {
+                continue;
+            }
+            out.id.push(id.clone());
+            out.role.push(if *is_anchor {
+                UnitRole::Anchor
+            } else {
+                UnitRole::Candidate
+            });
+            out.weight.push(weight.unwrap_or(0.0));
+            out.subclass.push(
+                weight
+                    .and(found[row])
+                    .and_then(|p| self.subclass[p])
+                    .map(|subclass| subclass + 1),
+            );
+        }
+        Some(out)
     }
 }
 
@@ -1203,5 +1376,250 @@ mod tests {
         assert_eq!(data.subclass, [Some(1), Some(1), Some(1), Some(1), Some(2)]);
         assert_eq!(data.weight, [1.0, 1.0, 1.0, 1.0, 1.0]);
         assert!(units.match_data(Estimand::Atm, options).unwrap().is_none());
+    }
+
+    /// The long form and the matched data as they were built with maps keyed by
+    /// id, kept to check the columns against.
+    mod reference {
+        use super::*;
+
+        pub fn get_matches_by_maps(
+            outcome: &MatchOutcome,
+            units: &Units,
+            include_unmatched: bool,
+        ) -> Result<LongMatches, OutputError> {
+            if include_unmatched {
+                units.require_fixed_roles("get_matches with include_unmatched")?;
+            }
+            let position = units.positions();
+            let pair_weights =
+                outcome.pair_weights(MatchWeightMethod::AnchorUnitCandidateFractional);
+            let mut by_anchor: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
+            for entry in &pair_weights.pairs {
+                let anchor = entry.pair.anchor_id();
+                let control = entry.pair.comparator_id();
+                let anchor_known = position
+                    .get(anchor)
+                    .is_some_and(|at| !units.fixed_roles || units.anchor[*at]);
+                if !anchor_known {
+                    return Err(OutputError::UnknownAnchor {
+                        id: anchor.to_string(),
+                    });
+                }
+                let control_known = position
+                    .get(control)
+                    .is_some_and(|at| !units.fixed_roles || !units.anchor[*at]);
+                if !control_known {
+                    return Err(OutputError::UnknownCandidate {
+                        id: control.to_string(),
+                    });
+                }
+                by_anchor
+                    .entry(anchor)
+                    .or_default()
+                    .push((control, entry.weight));
+            }
+
+            let anchors: Vec<&str> = if units.fixed_roles {
+                units.anchor_ids()
+            } else {
+                units
+                    .ids
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|id| by_anchor.contains_key(id))
+                    .collect()
+            };
+            let mut first_met: HashMap<&str, usize> = HashMap::new();
+            for anchor in &anchors {
+                for (control, _) in by_anchor.get(anchor).into_iter().flatten() {
+                    let next = first_met.len();
+                    first_met.entry(control).or_insert(next);
+                }
+            }
+
+            let mut out = LongMatches {
+                id: Vec::new(),
+                role: Vec::new(),
+                pair_id: Vec::new(),
+                weight: Vec::new(),
+            };
+            let mut next_pair = 0_usize;
+            let mut unmatched: Vec<&str> = Vec::new();
+            for anchor in anchors {
+                let Some(mut controls) = by_anchor.remove(anchor) else {
+                    unmatched.push(anchor);
+                    continue;
+                };
+                next_pair += 1;
+                controls.sort_by_key(|(control, _)| first_met[control]);
+                out.id.push(anchor.to_string());
+                out.role.push(UnitRole::Anchor);
+                out.pair_id.push(Some(next_pair));
+                out.weight.push(1.0);
+                for (control, weight) in controls {
+                    out.id.push(control.to_string());
+                    out.role.push(UnitRole::Candidate);
+                    out.pair_id.push(Some(next_pair));
+                    out.weight.push(weight);
+                }
+            }
+            if include_unmatched {
+                for anchor in unmatched {
+                    out.id.push(anchor.to_string());
+                    out.role.push(UnitRole::Anchor);
+                    out.pair_id.push(None);
+                    out.weight.push(0.0);
+                }
+            }
+            Ok(out)
+        }
+
+        pub fn match_data_by_maps(
+            outcome: &MatchOutcome,
+            units: &Units,
+            options: MatchDataOptions,
+        ) -> Result<MatchData, OutputError> {
+            units.require_fixed_roles("match_data")?;
+            let long = get_matches_by_maps(outcome, units, false)?;
+            let mut subclass_of: HashMap<&str, usize> = HashMap::new();
+            for (id, pair) in long.id.iter().zip(&long.pair_id) {
+                if let Some(pair) = pair {
+                    subclass_of.entry(id.as_str()).or_insert(*pair);
+                }
+            }
+            let weights = {
+                let raw = outcome.match_weights(options.method);
+                if options.normalize {
+                    raw.normalized()
+                } else {
+                    raw
+                }
+            };
+            let mut out = MatchData {
+                id: Vec::new(),
+                role: Vec::new(),
+                weight: Vec::new(),
+                subclass: Vec::new(),
+            };
+            for (id, is_anchor) in units.ids.iter().zip(&units.anchor) {
+                let group = if *is_anchor {
+                    &weights.anchor
+                } else {
+                    &weights.candidate
+                };
+                let weight = group.get(id).copied();
+                if weight.is_none() && options.drop_unmatched {
+                    continue;
+                }
+                out.id.push(id.clone());
+                out.role.push(if *is_anchor {
+                    UnitRole::Anchor
+                } else {
+                    UnitRole::Candidate
+                });
+                out.weight.push(weight.unwrap_or(0.0));
+                out.subclass.push(if options.replacement {
+                    None
+                } else {
+                    subclass_of.get(id.as_str()).copied()
+                });
+            }
+            Ok(out)
+        }
+    }
+
+    #[test]
+    fn the_columns_equal_the_maps_keyed_by_id() {
+        struct Lcg(u64);
+        impl Lcg {
+            fn below(&mut self, bound: usize) -> usize {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                usize::try_from((self.0 >> 33) % u64::try_from(bound).unwrap()).unwrap()
+            }
+        }
+        let mut rng = Lcg(17);
+        let mut compared = 0;
+        for round in 0..120_u64 {
+            let n = 4 + rng.below(40);
+            // Anchors and candidates in a shuffled data order.
+            let mut order: Vec<usize> = (0..n).collect();
+            for i in (1..n).rev() {
+                order.swap(i, rng.below(i + 1));
+            }
+            let anchor_flags: Vec<bool> = (0..n).map(|_| rng.below(3) == 0).collect();
+            let ids: Vec<String> = order.iter().map(|i| format!("u{i:03}")).collect();
+            let flags: Vec<bool> = order.iter().map(|i| anchor_flags[*i]).collect();
+            let units = Units::new(ids.clone(), flags.clone()).unwrap();
+            let anchors: Vec<&String> = ids
+                .iter()
+                .zip(&flags)
+                .filter(|f| *f.1)
+                .map(|f| f.0)
+                .collect();
+            let controls: Vec<&String> = ids
+                .iter()
+                .zip(&flags)
+                .filter(|f| !*f.1)
+                .map(|f| f.0)
+                .collect();
+            if anchors.is_empty() || controls.is_empty() {
+                continue;
+            }
+            let replace = round % 2 == 0;
+            let mut used = HashSet::new();
+            let mut pairs = Vec::new();
+            for anchor in &anchors {
+                for _ in 0..rng.below(4) {
+                    let control = controls[rng.below(controls.len())];
+                    if replace || used.insert(control.clone()) {
+                        pairs.push(MatchedPair::new(anchor.as_str(), control.as_str()));
+                    }
+                }
+            }
+            // A pair naming an unknown unit, now and then.
+            if round % 11 == 0 {
+                pairs.push(MatchedPair::new("zzz", controls[0].as_str()));
+            }
+            let matched = pairs
+                .iter()
+                .map(MatchedPair::anchor_id)
+                .collect::<HashSet<_>>()
+                .len();
+            let outcome = test_outcome(pairs, matched, anchors.len().saturating_sub(matched));
+            for include in [false, true] {
+                assert_eq!(
+                    get_matches(&outcome, &units, include),
+                    reference::get_matches_by_maps(&outcome, &units, include),
+                    "round {round}"
+                );
+            }
+            for method in [
+                MatchWeightMethod::PairCount,
+                MatchWeightMethod::AnchorUnitCandidateFractional,
+                MatchWeightMethod::CandidateUnitAnchorFractional,
+            ] {
+                for (normalize, drop_unmatched, replacement) in [
+                    (true, true, false),
+                    (false, false, true),
+                    (true, false, false),
+                ] {
+                    let options = MatchDataOptions {
+                        method,
+                        normalize,
+                        drop_unmatched,
+                        replacement,
+                    };
+                    let new = match_data(&outcome, &units, options);
+                    let old = reference::match_data_by_maps(&outcome, &units, options);
+                    assert_eq!(new, old, "round {round} {options:?}");
+                    compared += usize::from(new.is_ok());
+                }
+            }
+        }
+        assert!(compared > 100, "only {compared} comparisons produced data");
     }
 }

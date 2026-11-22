@@ -4,6 +4,7 @@ use crate::matching::{
 };
 use chrono::NaiveDate;
 use std::marker::PhantomData;
+use std::sync::OnceLock;
 
 /// Constraint that ensures case and control have the same value for a categorical field.
 ///
@@ -240,8 +241,39 @@ pub fn caliper_on_field<R: MatchingRecord>(
     field: &str,
     window: f64,
 ) -> Caliper<R, impl Fn(&R) -> Option<f64> + Send + Sync + use<R>> {
-    let field = field.to_owned();
-    Caliper::on(move |record: &R| record.numeric(&field), window)
+    let field = FieldReader::new(field);
+    Caliper::on(move |record: &R| field.read(record), window)
+}
+
+/// Reads one numeric field of many records, finding its slot once for every
+/// table the records are rows of, so that a field is then read by position
+/// and not by name. A record that is not a row of a table is read by name.
+struct FieldReader {
+    name: String,
+    /// The table and slot found for the first two tables met.
+    resolved: [OnceLock<(usize, Option<usize>)>; 2],
+}
+
+impl FieldReader {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            resolved: [OnceLock::new(), OnceLock::new()],
+        }
+    }
+
+    fn read<R: MatchingRecord>(&self, record: &R) -> Option<f64> {
+        let Some(table) = record.numeric_table() else {
+            return record.numeric(&self.name);
+        };
+        for cell in &self.resolved {
+            let &(known, slot) = cell.get_or_init(|| (table, record.numeric_slot(&self.name)));
+            if known == table {
+                return slot.and_then(|slot| record.numeric_in_slot(slot));
+            }
+        }
+        record.numeric(&self.name)
+    }
 }
 
 impl<R: MatchingRecord, F> Constraint<R> for Caliper<R, F>
@@ -1018,5 +1050,45 @@ mod named_caliper_tests {
             1.0,
             MissingPolicy::MatchMissing,
         ));
+    }
+
+    #[test]
+    fn a_field_read_by_slot_equals_the_field_read_by_name() {
+        use crate::{Cohort, date};
+        let birth = vec![date(2010, 1, 1); 3];
+        let first = Cohort::builder(["a", "b", "c"], birth.clone())
+            .numeric("x", [Some(1.0), None, Some(f64::NAN)])
+            .numeric("y", [Some(5.0), Some(6.0), Some(7.0)])
+            .build()
+            .unwrap();
+        // The same fields in the other order, so the slots differ.
+        let second = Cohort::builder(["d", "e", "f"], birth.clone())
+            .numeric("y", [Some(0.0), Some(1.0), Some(2.0)])
+            .numeric("x", [Some(-1.0), Some(f64::INFINITY), None])
+            .build()
+            .unwrap();
+        let third = Cohort::builder(["g", "h", "i"], birth.clone())
+            .numeric("z", [Some(0.0), Some(1.0), Some(2.0)])
+            .build()
+            .unwrap();
+        let fourth = Cohort::builder(["j", "k", "l"], birth)
+            .numeric("x", [Some(9.0), Some(8.0), None])
+            .build()
+            .unwrap();
+        let reader = FieldReader::new("x");
+        let rows: Vec<_> = [&first, &second, &third, &fourth]
+            .into_iter()
+            .flat_map(Cohort::rows)
+            .collect();
+        // The same reader over rows of four tables, two of which fit its cells.
+        for _ in 0..2 {
+            for row in &rows {
+                let by_slot = reader.read(row).map(f64::to_bits);
+                let by_name = row.numeric("x").map(f64::to_bits);
+                assert_eq!(by_slot, by_name, "row {}", row.id());
+            }
+        }
+        let base = BaseRecord::new("p", date(2010, 1, 1));
+        assert_eq!(reader.read(&base), None);
     }
 }

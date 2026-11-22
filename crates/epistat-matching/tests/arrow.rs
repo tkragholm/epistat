@@ -531,7 +531,7 @@ fn a_match_on_arrow_records_is_bit_identical() {
     assert_eq!(format!("{direct:?}"), format!("{arrow:?}"));
     // The golden hashes of the `nearest` case in tests/golden.rs.
     assert_eq!(
-        (fnv(&format!("{arrow:?}")), weights_hash(&arrow)),
+        (fnv(&common::golden_debug(&arrow)), weights_hash(&arrow)),
         (0x2c4ad6fd67c312f7, 0x585c1833c1e022cf)
     );
 }

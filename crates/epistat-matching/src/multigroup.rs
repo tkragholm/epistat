@@ -669,7 +669,7 @@ fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
         unmatched_cases: focal_total.saturating_sub(matched_cases),
         used_controls: 0,
         matched_cases,
-        avg_controls_per_case: if matched_cases == 0 { 0.0 } else { 1.0 },
+        avg_controls_per_case: (matched_cases != 0).then_some(1.0),
         diagnostics,
         pairs,
     }

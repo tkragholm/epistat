@@ -187,6 +187,140 @@ impl ScoreTable {
     }
 }
 
+/// The vectors of a distance by unit position: one row of `dimension` values
+/// for each unit id, in one array. Ids and values are shared between clones, so
+/// a preparation and the distance made from it hold the vectors once. An id is
+/// looked up through an index built on the first lookup; a matcher that reads
+/// by position builds none.
+#[derive(Debug, Clone)]
+pub struct VectorTable {
+    ids: Arc<[String]>,
+    dimension: usize,
+    values: Arc<[f64]>,
+    index: Arc<OnceLock<RapidHashMap<String, usize>>>,
+}
+
+impl VectorTable {
+    /// The vectors `values` of the units `ids`, row by row.
+    ///
+    /// # Errors
+    ///
+    /// [`MahalanobisError::ZeroDimension`] when `dimension` is zero, and
+    /// [`MahalanobisError::InvalidVectorLength`] when `values` does not hold
+    /// `dimension` values for each id.
+    pub fn new(
+        ids: Arc<[String]>,
+        dimension: usize,
+        values: Arc<[f64]>,
+    ) -> Result<Self, MahalanobisError> {
+        if dimension == 0 {
+            return Err(MahalanobisError::ZeroDimension);
+        }
+        if values.len() != ids.len().saturating_mul(dimension) {
+            return Err(MahalanobisError::InvalidVectorLength);
+        }
+        Ok(Self {
+            ids,
+            dimension,
+            values,
+            index: Arc::new(OnceLock::new()),
+        })
+    }
+
+    /// The vectors of a map keyed by unit id, in the order of the ids. A vector
+    /// that is not `dimension` long is left out, as it would have no distance.
+    #[must_use]
+    pub fn from_map(vectors: &RapidHashMap<String, Vec<f64>>, dimension: usize) -> Self {
+        let mut ids: Vec<&String> = vectors
+            .iter()
+            .filter(|(_, vector)| vector.len() == dimension)
+            .map(|(id, _)| id)
+            .collect();
+        ids.sort_unstable();
+        let mut values = Vec::with_capacity(ids.len() * dimension);
+        for id in &ids {
+            values.extend_from_slice(&vectors[*id]);
+        }
+        Self {
+            ids: ids.into_iter().cloned().collect(),
+            dimension,
+            values: values.into(),
+            index: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// The vectors as a map keyed by unit id.
+    #[must_use]
+    pub fn to_map(&self) -> RapidHashMap<String, Vec<f64>> {
+        (0..self.len())
+            .map(|position| (self.ids[position].clone(), self.row(position).to_vec()))
+            .collect()
+    }
+
+    /// The unit ids, in order.
+    #[must_use]
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// The length of a vector.
+    #[must_use]
+    pub const fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// The values of every vector, row by row, in the order of [`Self::ids`].
+    #[must_use]
+    pub fn values(&self) -> &[f64] {
+        &self.values
+    }
+
+    /// The number of units.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Whether there are no units.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// The vector of the unit at `position`.
+    ///
+    /// # Panics
+    ///
+    /// When `position` is not below [`Self::len`].
+    #[must_use]
+    pub fn row(&self, position: usize) -> &[f64] {
+        &self.values[position * self.dimension..(position + 1) * self.dimension]
+    }
+
+    /// The position of the unit `id`, `None` when it has no vector. The first
+    /// call builds a lookup of every id. Of an id that occurs twice, the
+    /// later position is found.
+    #[must_use]
+    pub fn position(&self, id: &str) -> Option<usize> {
+        self.index
+            .get_or_init(|| {
+                self.ids
+                    .iter()
+                    .enumerate()
+                    .map(|(position, id)| (id.clone(), position))
+                    .collect()
+            })
+            .get(id)
+            .copied()
+    }
+
+    /// The vector of the unit `id`, `None` when it has none.
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<&[f64]> {
+        self.position(id).map(|position| self.row(position))
+    }
+}
+
 impl From<RapidHashMap<String, f64>> for ScoreTable {
     fn from(scores: RapidHashMap<String, f64>) -> Self {
         Self::from_map(&scores)
@@ -206,15 +340,13 @@ pub enum DistanceConfig {
         reason: &'static str,
     },
     MahalanobisMap {
-        vectors: RapidHashMap<String, Vec<f64>>,
+        vectors: VectorTable,
         inverse_covariance: Vec<f64>,
-        dimension: usize,
         caliper: Option<DistanceCaliper>,
         reason: &'static str,
     },
     EuclideanMap {
-        vectors: RapidHashMap<String, Vec<f64>>,
-        dimension: usize,
+        vectors: VectorTable,
         caliper: Option<DistanceCaliper>,
         reason: &'static str,
     },
@@ -264,12 +396,36 @@ impl DistanceConfig {
     ///
     /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix shape
     /// is invalid or the matrix is not positive semi-definite.
+    #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn mahalanobis_map(
         vectors: RapidHashMap<String, Vec<f64>>,
         inverse_covariance: Vec<f64>,
         dimension: usize,
         caliper: Option<DistanceCaliper>,
     ) -> Result<Self, MahalanobisError> {
+        if dimension == 0 {
+            return Err(MahalanobisError::ZeroDimension);
+        }
+        Self::mahalanobis_table(
+            VectorTable::from_map(&vectors, dimension),
+            inverse_covariance,
+            caliper,
+        )
+    }
+
+    /// Build Mahalanobis config from vectors by position and inverse
+    /// covariance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MahalanobisError`] when the matrix is not `dimension` squared
+    /// long for the dimension of the vectors or is not positive semi-definite.
+    pub fn mahalanobis_table(
+        vectors: VectorTable,
+        inverse_covariance: Vec<f64>,
+        caliper: Option<DistanceCaliper>,
+    ) -> Result<Self, MahalanobisError> {
+        let dimension = vectors.dimension();
         if dimension == 0 {
             return Err(MahalanobisError::ZeroDimension);
         }
@@ -281,7 +437,6 @@ impl DistanceConfig {
         Ok(Self::MahalanobisMap {
             vectors,
             inverse_covariance,
-            dimension,
             caliper,
             reason: "mahalanobis_caliper",
         })
@@ -293,6 +448,7 @@ impl DistanceConfig {
     /// # Errors
     ///
     /// Returns [`MahalanobisError::ZeroDimension`] when `dimension` is zero.
+    #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn euclidean_map(
         vectors: RapidHashMap<String, Vec<f64>>,
         dimension: usize,
@@ -301,9 +457,25 @@ impl DistanceConfig {
         if dimension == 0 {
             return Err(MahalanobisError::ZeroDimension);
         }
+        Self::euclidean_table(VectorTable::from_map(&vectors, dimension), caliper)
+    }
+
+    /// Build a Euclidean config from vectors by position, already scaled as
+    /// the caller wants them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MahalanobisError::ZeroDimension`] when the vectors have no
+    /// values.
+    pub fn euclidean_table(
+        vectors: VectorTable,
+        caliper: Option<DistanceCaliper>,
+    ) -> Result<Self, MahalanobisError> {
+        if vectors.dimension() == 0 {
+            return Err(MahalanobisError::ZeroDimension);
+        }
         Ok(Self::EuclideanMap {
             vectors,
-            dimension,
             caliper,
             reason: "euclidean_caliper",
         })
@@ -404,16 +576,14 @@ impl DistanceConfig {
             Self::MahalanobisMap {
                 vectors,
                 inverse_covariance,
-                dimension,
                 ..
             } => ConfiguredMetric::Mahalanobis(IdMapMahalanobisDistance::new(
                 vectors,
                 inverse_covariance,
-                *dimension,
             )),
-            Self::EuclideanMap {
-                vectors, dimension, ..
-            } => ConfiguredMetric::Euclidean(IdMapEuclideanDistance::new(vectors, *dimension)),
+            Self::EuclideanMap { vectors, .. } => {
+                ConfiguredMetric::Euclidean(IdMapEuclideanDistance::new(vectors))
+            }
             Self::Matrix { matrix, .. } => ConfiguredMetric::Matrix(MatrixDistance::new(matrix)),
         }
     }
@@ -981,51 +1151,34 @@ const STACK_DIMENSION: usize = 32;
 /// depend on the CPU or the number of threads.
 #[derive(Debug, Clone)]
 pub struct IdMapMahalanobisDistance<'a> {
-    vectors: &'a RapidHashMap<String, Vec<f64>>,
+    vectors: &'a VectorTable,
     form: Option<QuadraticForm>,
-    /// Position of each id's transformed vector in `whitened`, for the ids
-    /// whose vector has the right length.
-    slots: RapidHashMap<&'a str, usize>,
+    /// The transformed vector of each row of `vectors`, when the matrix is
+    /// positive definite.
     whitened: Vec<f64>,
 }
 
 impl<'a> IdMapMahalanobisDistance<'a> {
+    /// The distance of the vectors in `vectors` under the inverse covariance
+    /// matrix, which is as long as the dimension of the vectors squared.
     #[must_use]
-    pub fn new(
-        vectors: &'a RapidHashMap<String, Vec<f64>>,
-        inverse_covariance: &'a [f64],
-        dimension: usize,
-    ) -> Self {
+    pub fn new(vectors: &'a VectorTable, inverse_covariance: &'a [f64]) -> Self {
+        let dimension = vectors.dimension();
         let form = QuadraticForm::new(inverse_covariance, dimension);
-        let mut slots = RapidHashMap::default();
         let mut whitened = Vec::new();
         if let Some((form, lower)) = form
             .as_ref()
             .and_then(|form| form.lower.as_deref().map(|lower| (form, lower)))
         {
-            // Hash order would not matter for the values, but a sorted pass
-            // keeps the buffer layout reproducible.
-            let mut ids: Vec<&'a String> = vectors.keys().collect();
-            ids.sort_unstable();
-            slots.reserve(ids.len());
-            whitened.resize(ids.len() * dimension, 0.0);
-            let mut position = 0;
-            for id in ids {
-                let vector = &vectors[id];
-                if vector.len() != dimension {
-                    continue;
-                }
+            whitened.resize(vectors.len() * dimension, 0.0);
+            for position in 0..vectors.len() {
                 let out = &mut whitened[position * dimension..(position + 1) * dimension];
-                form.whiten_into(lower, vector, out);
-                slots.insert(id.as_str(), position);
-                position += 1;
+                form.whiten_into(lower, vectors.row(position), out);
             }
-            whitened.truncate(position * dimension);
         }
         Self {
             vectors,
             form,
-            slots,
             whitened,
         }
     }
@@ -1035,7 +1188,8 @@ impl IdMapMahalanobisDistance<'_> {
     /// The row of the record's transformed vector, when the matrix is positive
     /// definite and the record has a vector of the right length.
     pub(crate) fn row(&self, id: &str) -> Option<usize> {
-        self.slots.get(id).copied()
+        self.dimension()?;
+        self.vectors.position(id)
     }
 
     /// The length of a whitened vector, when the matrix is positive definite.
@@ -1088,29 +1242,25 @@ impl<R: MatchingRecord> DistanceMetric<R> for IdMapMahalanobisDistance<'_> {
 /// the value does not depend on the CPU or the number of threads.
 #[derive(Debug, Clone)]
 pub struct IdMapEuclideanDistance<'a> {
-    vectors: &'a RapidHashMap<String, Vec<f64>>,
-    dimension: usize,
+    vectors: &'a VectorTable,
 }
 
 impl<'a> IdMapEuclideanDistance<'a> {
     #[must_use]
-    pub const fn new(vectors: &'a RapidHashMap<String, Vec<f64>>, dimension: usize) -> Self {
-        Self { vectors, dimension }
+    pub const fn new(vectors: &'a VectorTable) -> Self {
+        Self { vectors }
     }
 }
 
 impl IdMapEuclideanDistance<'_> {
     /// The length of the vectors.
     pub(crate) const fn dimension(&self) -> usize {
-        self.dimension
+        self.vectors.dimension()
     }
 
-    /// The record's vector, when it has one of the right length.
+    /// The record's vector, when it has one.
     pub(crate) fn vector(&self, id: &str) -> Option<&[f64]> {
-        self.vectors
-            .get(id)
-            .map(Vec::as_slice)
-            .filter(|vector| vector.len() == self.dimension)
+        self.vectors.get(id)
     }
 }
 
@@ -1122,9 +1272,6 @@ impl<R: MatchingRecord> DistanceMetric<R> for IdMapEuclideanDistance<'_> {
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
         let left = self.vectors.get(anchor.id())?;
         let right = self.vectors.get(candidate.id())?;
-        if left.len() != self.dimension || right.len() != self.dimension {
-            return None;
-        }
         let mut sum = 0.0_f64;
         for (a, b) in left.iter().zip(right) {
             let delta = a - b;
@@ -1227,6 +1374,8 @@ where
 pub enum MahalanobisError {
     ZeroDimension,
     InvalidInverseCovarianceLength,
+    /// The values of a vector table are not a whole number of vectors.
+    InvalidVectorLength,
     /// The inverse covariance matrix has a negative eigenvalue or a value that
     /// is not finite, so its quadratic form is not a distance. A generalised
     /// inverse of a singular covariance matrix is positive semi-definite and
@@ -1407,7 +1556,8 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let metric = IdMapMahalanobisDistance::new(&vectors, &[1.0, 0.0, 0.0], 2);
+        let table = VectorTable::from_map(&vectors, 2);
+        let metric = IdMapMahalanobisDistance::new(&table, &[1.0, 0.0, 0.0]);
         let anchor = BaseRecord::new("a", date(2010, 1, 1));
         let candidate = BaseRecord::new("b", date(2010, 1, 2));
 
@@ -1490,7 +1640,8 @@ mod tests {
                     )
                 })
                 .collect();
-            let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, dimension);
+            let table = VectorTable::from_map(&vectors, dimension);
+            let metric = IdMapMahalanobisDistance::new(&table, &inverse);
             for (a, left) in &vectors {
                 for (b, right) in &vectors {
                     let got = metric
@@ -1531,7 +1682,8 @@ mod tests {
                 .enumerate()
                 .map(|(i, row)| (format!("r{i:03}"), row.clone()))
                 .collect();
-            let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, dimension);
+            let table = VectorTable::from_map(&vectors, dimension);
+            let metric = IdMapMahalanobisDistance::new(&table, &inverse);
             let record = |i: usize| BaseRecord::new(format!("r{i:03}"), date(2010, 1, 1));
             for anchor in 0..100 {
                 let new: Vec<f64> = (100..200)
@@ -1597,7 +1749,8 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, 2);
+        let table = VectorTable::from_map(&vectors, 2);
+        let metric = IdMapMahalanobisDistance::new(&table, &inverse);
         let a = BaseRecord::new("a", date(2010, 1, 1));
         let b = BaseRecord::new("b", date(2010, 1, 1));
         let c = BaseRecord::new("c", date(2010, 1, 1));
@@ -1638,5 +1791,39 @@ mod tests {
             return None;
         }
         Some(distance_sq.sqrt())
+    }
+
+    #[test]
+    fn a_vector_table_holds_the_vectors_of_its_map_and_drops_the_wrong_length() {
+        let map: RapidHashMap<String, Vec<f64>> = [
+            ("b".to_string(), vec![3.0, 4.0]),
+            ("a".to_string(), vec![1.0, 2.0]),
+            ("short".to_string(), vec![9.0]),
+        ]
+        .into_iter()
+        .collect();
+        let table = VectorTable::from_map(&map, 2);
+        assert_eq!(table.ids(), ["a", "b"]);
+        assert_eq!(table.values(), [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(table.get("b"), Some([3.0, 4.0].as_slice()));
+        assert_eq!(table.get("short"), None);
+        assert_eq!(table.position("a"), Some(0));
+        let mut expected = map;
+        expected.remove("short");
+        assert_eq!(table.to_map(), expected);
+        assert_eq!(
+            VectorTable::new(table.ids().into(), 3, table.values().into()).unwrap_err(),
+            MahalanobisError::InvalidVectorLength
+        );
+        assert_eq!(
+            VectorTable::new(table.ids().into(), 0, Vec::new().into()).unwrap_err(),
+            MahalanobisError::ZeroDimension
+        );
+        let euclidean = IdMapEuclideanDistance::new(&table);
+        let a = BaseRecord::new("a", date(2010, 1, 1));
+        let b = BaseRecord::new("b", date(2010, 1, 1));
+        let gone = BaseRecord::new("short", date(2010, 1, 1));
+        assert_eq!(euclidean.distance(&a, &b), Some(8.0_f64.sqrt()));
+        assert_eq!(euclidean.distance(&a, &gone), None);
     }
 }

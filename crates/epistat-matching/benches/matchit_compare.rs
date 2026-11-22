@@ -607,16 +607,12 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(u64, u64)>, &'static str) {
             lines.sort_unstable();
             (outcome.matched_cases, lines, "anchor,control")
         }
-        SpecOutput::Exact(o) | SpecOutput::Quick(o) => (
+        SpecOutput::Exact(o) | SpecOutput::Quick(o) | SpecOutput::Full(o) => (
             o.retained_units(),
             subclass_lines(o.assignments()),
             "id,subclass",
         ),
-        SpecOutput::Full(o) => (
-            o.retained_units(),
-            subclass_lines(o.assignments.iter().map(|(k, v)| (k.as_str(), *v))),
-            "id,subclass",
-        ),
+
         SpecOutput::Subclass { outcome, .. } => (
             outcome.retained_units(),
             subclass_lines(outcome.assignments()),

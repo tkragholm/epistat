@@ -114,6 +114,15 @@ macro_rules! delegate_matching_record {
         fn numeric(&self, name: &str) -> Option<f64> {
             self.$field.numeric(name)
         }
+        fn numeric_table(&self) -> Option<usize> {
+            self.$field.numeric_table()
+        }
+        fn numeric_slot(&self, name: &str) -> Option<usize> {
+            self.$field.numeric_slot(name)
+        }
+        fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
+            self.$field.numeric_in_slot(slot)
+        }
         fn unique_key(&self) -> Option<&str> {
             self.$field.unique_key()
         }
@@ -189,7 +198,7 @@ pub use matching::{
     StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup, SubclassSummary,
     SubclassedUnits, SubclassificationConfig, SubclassificationError, SubclassificationOutcome,
     UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable, UsedControlsVec, VariableRatio,
-    VariableRatioError, cross_validation_folds, effective_sample_size,
+    VariableRatioError, VectorTable, cross_validation_folds, effective_sample_size,
     estimate_propensity_and_match, match_standard, match_standard_with_discard,
     match_weights_from_pairs, pair_weights_from_pairs, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
@@ -318,7 +327,7 @@ pub mod prelude {
         SubclassificationError, SubclassificationOutcome, SupplementalBalanceCovariates,
         TransformSpec, TransitionMatchRequest, TrimmedUnits, UniqueValueId, UnitRole,
         UnitWeightRow, UnitWeightSet, UnitWeightTable, Units, ValidatedMatchingCriteria,
-        balance_diagnostics, balance_report, balance_report_with_options,
+        VectorTable, balance_diagnostics, balance_report, balance_report_with_options,
         balance_threshold_summary, build_projected_balance_rows, categorical_max_abs_diff,
         cross_validation_folds, effective_sample_size, estimate_propensity_and_match, get_matches,
         get_matches_from_pairs, match_data, match_data_from_weights, match_matrix, match_standard,

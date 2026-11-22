@@ -14,7 +14,7 @@ pub use cross_validation::{CrossValidation, cross_validation_folds};
 pub use encoding::CovariateMatrix;
 
 use super::constraints::ConstraintGroup;
-use super::distance::{DistanceConfig, ScoreTable};
+use super::distance::{DistanceConfig, ScoreTable, VectorTable};
 use super::engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
 };
@@ -165,8 +165,8 @@ pub struct PropensityDistancePreparation {
 pub struct MahalanobisDistancePreparation {
     /// Prepared distance config for matching APIs.
     pub distance_config: DistanceConfig,
-    /// Encoded vectors by id.
-    pub vectors: RapidHashMap<String, Vec<f64>>,
+    /// Encoded vectors by unit position, shared with `distance_config`.
+    pub vectors: VectorTable,
     /// Inverse covariance in row-major format.
     pub inverse_covariance: Vec<f64>,
     /// Vector dimension.
@@ -187,8 +187,9 @@ pub struct MahalanobisDistancePreparation {
 pub struct EuclideanDistancePreparation {
     /// Prepared distance config for matching APIs.
     pub distance_config: DistanceConfig,
-    /// Encoded, and if asked scaled, vectors by id.
-    pub vectors: RapidHashMap<String, Vec<f64>>,
+    /// Encoded, and if asked scaled, vectors by unit position, shared with
+    /// `distance_config`.
+    pub vectors: VectorTable,
     /// Vector dimension.
     pub dimension: usize,
     /// Encoded vector column names.
@@ -544,20 +545,12 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
     let (inverse_covariance, covariance_rank) =
         invert_or_generalise(&covariance, GENERALISED_INVERSE_TOLERANCE)?;
 
-    let vectors = matrix
-        .row_ids
-        .iter()
-        .enumerate()
-        .map(|(row_idx, id)| (id.clone(), matrix.row(row_idx).to_vec()))
-        .collect::<RapidHashMap<_, _>>();
     let dimension = matrix.n_cols;
-    let distance_config = DistanceConfig::mahalanobis_map(
-        vectors.clone(),
-        inverse_covariance.clone(),
-        dimension,
-        caliper,
-    )
-    .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+    let vectors = VectorTable::new(matrix.row_ids.into(), dimension, matrix.values.into())
+        .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+    let distance_config =
+        DistanceConfig::mahalanobis_table(vectors.clone(), inverse_covariance.clone(), caliper)
+            .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
 
     Ok(MahalanobisDistancePreparation {
         distance_config,
@@ -635,14 +628,10 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
         }
     }
 
-    let vectors = matrix
-        .row_ids
-        .iter()
-        .enumerate()
-        .map(|(row_idx, id)| (id.clone(), matrix.row(row_idx).to_vec()))
-        .collect::<RapidHashMap<_, _>>();
     let dimension = matrix.n_cols;
-    let distance_config = DistanceConfig::euclidean_map(vectors.clone(), dimension, caliper)
+    let vectors = VectorTable::new(matrix.row_ids.into(), dimension, matrix.values.into())
+        .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+    let distance_config = DistanceConfig::euclidean_table(vectors.clone(), caliper)
         .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
 
     Ok(EuclideanDistancePreparation {
@@ -1349,7 +1338,7 @@ mod tests {
                 unmatched_cases: 0,
                 used_controls: 1,
                 matched_cases: 1,
-                avg_controls_per_case: 1.0,
+                avg_controls_per_case: Some(1.0),
                 diagnostics: MatchDiagnostics::default(),
             },
             propensity: PropensityScoreEstimate {

@@ -732,6 +732,18 @@ impl MatchingRecord for CohortRow<'_> {
         self.cohort.numeric(self.row, name)
     }
 
+    fn numeric_table(&self) -> Option<usize> {
+        Some(std::ptr::from_ref(self.cohort) as usize)
+    }
+
+    fn numeric_slot(&self, name: &str) -> Option<usize> {
+        self.cohort.field_names.find(name)
+    }
+
+    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
+        self.cohort.numbers[self.cohort.fields[slot]].get(self.row)
+    }
+
     fn unique_key(&self) -> Option<&str> {
         self.cohort.unique_key.as_ref()?.get(self.row)
     }

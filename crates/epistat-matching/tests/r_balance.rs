@@ -183,7 +183,7 @@ fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
         unmatched_cases: 0,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics: MatchDiagnostics {
             requested_estimand: estimand,
             realized_estimand: estimand,

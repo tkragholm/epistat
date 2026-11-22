@@ -652,11 +652,8 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
         unmatched_cases: unmatched,
         used_controls: if spec.replace { 0 } else { used.len() },
         matched_cases: matched.len(),
-        avg_controls_per_case: if matched.is_empty() {
-            0.0
-        } else {
-            rows.len() as f64 / matched.len() as f64
-        },
+        avg_controls_per_case: (!matched.is_empty())
+            .then(|| rows.len() as f64 / matched.len() as f64),
         diagnostics: MatchDiagnostics {
             total_anchors_evaluated: anchors.len(),
             anchors_below_required_ratio: unmatched,

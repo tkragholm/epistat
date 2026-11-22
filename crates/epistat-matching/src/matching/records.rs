@@ -36,6 +36,31 @@ pub trait MatchingRecord: Send + Sync {
     fn numeric(&self, _name: &str) -> Option<f64> {
         None
     }
+    /// Names the table of columns the record's numeric fields are read from,
+    /// for records that are rows of a shared table. Two records that return
+    /// the same number have their numeric fields at the same slots.
+    ///
+    /// A constraint that reads one field of many records finds the slot of its
+    /// name once for every table, through [`numeric_slot`](Self::numeric_slot),
+    /// and then reads each record with
+    /// [`numeric_in_slot`](Self::numeric_in_slot). The default, `None`, has it
+    /// read every record by name.
+    fn numeric_table(&self) -> Option<usize> {
+        None
+    }
+    /// The slot of the numeric field `name` in the record's table, `None` when
+    /// the table has no such field. Only called when
+    /// [`numeric_table`](Self::numeric_table) is `Some`.
+    fn numeric_slot(&self, _name: &str) -> Option<usize> {
+        None
+    }
+    /// The record's numeric field at `slot`, which
+    /// [`numeric_slot`](Self::numeric_slot) returned for a record of the same
+    /// table, `None` when the record has no value. Only called when
+    /// [`numeric_table`](Self::numeric_table) is `Some`.
+    fn numeric_in_slot(&self, _slot: usize) -> Option<f64> {
+        None
+    }
     /// Optional key for ensuring uniqueness (e.g., family ID).
     fn unique_key(&self) -> Option<&str>;
     /// Optional death date, read by [`MustBeAlive`](crate::constraints::MustBeAlive).
@@ -211,6 +236,18 @@ impl<R: MatchingRecord> MatchingRecord for RoleTransitionRecord<R> {
         self.record.numeric(name)
     }
 
+    fn numeric_table(&self) -> Option<usize> {
+        self.record.numeric_table()
+    }
+
+    fn numeric_slot(&self, name: &str) -> Option<usize> {
+        self.record.numeric_slot(name)
+    }
+
+    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
+        self.record.numeric_in_slot(slot)
+    }
+
     fn unique_key(&self) -> Option<&str> {
         self.record.unique_key()
     }
@@ -282,6 +319,18 @@ impl<R: MatchingRecord + ?Sized> MatchingRecord for &R {
 
     fn numeric(&self, name: &str) -> Option<f64> {
         (**self).numeric(name)
+    }
+
+    fn numeric_table(&self) -> Option<usize> {
+        (**self).numeric_table()
+    }
+
+    fn numeric_slot(&self, name: &str) -> Option<usize> {
+        (**self).numeric_slot(name)
+    }
+
+    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
+        (**self).numeric_in_slot(slot)
     }
 
     fn unique_key(&self) -> Option<&str> {

@@ -286,8 +286,9 @@ pub struct MatchOutcome {
     pub used_controls: usize,
     /// Number of anchors with at least one match.
     pub matched_cases: usize,
-    /// Average number of selected candidates among matched anchors.
-    pub avg_controls_per_case: f64,
+    /// Average number of selected candidates among matched anchors, `None` when no anchor
+    /// is matched.
+    pub avg_controls_per_case: Option<f64>,
     /// Structured run diagnostics.
     #[serde(default)]
     pub diagnostics: MatchDiagnostics,
@@ -444,7 +445,7 @@ impl MatchOutcome {
 
     /// Neutral accessor for average comparators per matched anchor.
     #[must_use]
-    pub const fn avg_comparators_per_anchor(&self) -> f64 {
+    pub const fn avg_comparators_per_anchor(&self) -> Option<f64> {
         self.avg_controls_per_case
     }
 
@@ -470,12 +471,12 @@ mod tests {
             unmatched_cases: 1,
             used_controls: 1,
             matched_cases: 1,
-            avg_controls_per_case: 1.0,
+            avg_controls_per_case: Some(1.0),
             diagnostics: MatchDiagnostics::default(),
         };
         assert_eq!(outcome.matched_anchors(), 1);
         assert_eq!(outcome.unmatched_anchors(), 1);
         assert_eq!(outcome.used_comparators(), 1);
-        assert!((outcome.avg_comparators_per_anchor() - 1.0).abs() < 1e-12);
+        assert_eq!(outcome.avg_comparators_per_anchor(), Some(1.0));
     }
 }

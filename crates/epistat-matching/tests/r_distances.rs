@@ -161,11 +161,7 @@ fn mahalanobis_ratio(
         .build();
     let prepared = prepare_mahalanobis_distance_config(&anchors, &candidates, None, &config)
         .expect("preparation");
-    let metric = IdMapMahalanobisDistance::new(
-        &prepared.vectors,
-        &prepared.inverse_covariance,
-        prepared.dimension,
-    );
+    let metric = IdMapMahalanobisDistance::new(&prepared.vectors, &prepared.inverse_covariance);
     assert!(
         prepared.covariance_rank == prepared.dimension
             || transform == MahalanobisTransform::RankTieAdjusted,
@@ -272,7 +268,7 @@ fn euclidean_and_scaled_euclidean() {
             let config = EuclideanPreparationConfig::builder().scale(scale).build();
             let prepared =
                 prepare_euclidean_distance_config(&anchors, &candidates, None, &config).unwrap();
-            let metric = IdMapEuclideanDistance::new(&prepared.vectors, prepared.dimension);
+            let metric = IdMapEuclideanDistance::new(&prepared.vectors);
             let ratio = worst_ratio(
                 |a, c| metric.distance(a, c),
                 &anchors,

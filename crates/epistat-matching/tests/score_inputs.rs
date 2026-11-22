@@ -236,8 +236,8 @@ fn mahalanobis_distance_does_not_depend_on_the_unit() {
         )
         .unwrap();
         let ia = prep.column_names.iter().position(|n| n == "x").unwrap();
-        let va = &prep.vectors["u0"];
-        let vb = &prep.vectors["u1"];
+        let va = prep.vectors.get("u0").expect("vector");
+        let vb = prep.vectors.get("u1").expect("vector");
         let d = prep.dimension;
         let diff: Vec<f64> = (0..d).map(|k| va[k] - vb[k]).collect();
         let mut q = 0.0;

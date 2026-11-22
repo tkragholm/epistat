@@ -38,6 +38,13 @@ impl Digest {
         self.bits(value.to_bits());
     }
 
+    fn optional(&mut self, value: Option<f64>) {
+        self.int(usize::from(value.is_some()));
+        if let Some(value) = value {
+            self.float(value);
+        }
+    }
+
     fn int(&mut self, value: usize) {
         self.bits(value as u64);
     }
@@ -91,7 +98,7 @@ impl Digest {
         self.int(outcome.matched_cases);
         self.int(outcome.unmatched_cases);
         self.int(outcome.used_controls);
-        self.float(outcome.avg_controls_per_case);
+        self.optional(outcome.avg_controls_per_case);
         for (reason, count) in &outcome.diagnostics.exclusion_counts {
             self.debug(reason);
             self.int(*count);
@@ -488,7 +495,7 @@ fn run_with_balance_and_balance_reports() {
             &["sex".to_string(), "region".to_string()],
         );
         d.float(diagnostics.match_rate.unwrap());
-        d.float(diagnostics.avg_controls_per_case);
+        d.optional(diagnostics.avg_controls_per_case);
         let mut strata: Vec<_> = diagnostics.strata_counts.iter().collect();
         strata.sort();
         d.debug(&strata);
@@ -781,7 +788,8 @@ fn mahalanobis_preparation_and_matching() {
                 let prepared =
                     prepare_mahalanobis_distance_config(&anchors, &candidates, None, &config)
                         .unwrap();
-                let mut vectors: Vec<_> = prepared.vectors.iter().collect();
+                let vector_map = prepared.vectors.to_map();
+                let mut vectors: Vec<_> = vector_map.iter().collect();
                 vectors.sort_by(|a, b| a.0.cmp(b.0));
                 for (id, vector) in vectors {
                     d.text(id);
@@ -830,7 +838,8 @@ fn euclidean_preparation_and_matching() {
                 &config,
             )
             .unwrap();
-            let mut vectors: Vec<_> = prepared.vectors.iter().collect();
+            let vector_map = prepared.vectors.to_map();
+            let mut vectors: Vec<_> = vector_map.iter().collect();
             vectors.sort_by(|a, b| a.0.cmp(b.0));
             for (id, vector) in vectors {
                 d.text(id);
@@ -1340,13 +1349,11 @@ fn optimal_and_full_matching() {
             },
         ] {
             let out = match_full(&anchors, &candidates, &request, &config).unwrap();
-            let mut assignments: Vec<_> = out.assignments.iter().collect();
-            assignments.sort();
-            d.debug(&assignments);
-            d.floats(&out.att_weights);
-            d.floats(&out.atc_weights);
-            d.floats(&out.ate_weights);
-            d.debug(&out.dropped_ids);
+            d.debug(&out.ids);
+            d.debug(&out.subclass);
+            for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
+                d.debug(&out.weights(estimand));
+            }
             d.debug(&out.subclasses);
         }
         d.0

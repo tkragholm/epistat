@@ -13,8 +13,8 @@ pub struct BalanceDiagnostics {
     pub matched_cases: usize,
     /// Number of unmatched anchors.
     pub unmatched_cases: usize,
-    /// Average candidates per matched anchor.
-    pub avg_controls_per_case: f64,
+    /// Average candidates per matched anchor, `None` when no anchor is matched.
+    pub avg_controls_per_case: Option<f64>,
     /// Counts by strata key (`anchor_count`, `candidate_count`).
     pub strata_counts: HashMap<String, (usize, usize)>,
 }
@@ -34,7 +34,7 @@ impl BalanceDiagnostics {
 
     /// Neutral accessor for average comparators per matched anchor.
     #[must_use]
-    pub const fn avg_comparators_per_anchor(&self) -> f64 {
+    pub const fn avg_comparators_per_anchor(&self) -> Option<f64> {
         self.avg_controls_per_case
     }
 }

@@ -177,6 +177,27 @@ fn intersect_candidate_indices(candidate_indices: &mut Vec<usize>, indexed_indic
     }
 }
 
+/// What stopped a control from being a candidate: a constraint of the run, or the
+/// distance caliper, which is recorded as a distance-caliper exclusion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Blocker {
+    Constraint(&'static str),
+    Caliper(&'static str),
+}
+
+impl Blocker {
+    fn exclusion_reason(self) -> ExclusionReason {
+        match self {
+            Self::Constraint(reason) => {
+                ExclusionReason::Constraint(ConstraintReason::from_reason_str(reason))
+            }
+            Self::Caliper(reason) => {
+                ExclusionReason::DistanceCaliper(DistanceCaliperReason::from_reason_str(reason))
+            }
+        }
+    }
+}
+
 fn first_blocking_constraint_reason<R: MatchingRecord, D: DistanceMetric<R> + Sync>(
     case: &R,
     control: &R,
@@ -184,17 +205,20 @@ fn first_blocking_constraint_reason<R: MatchingRecord, D: DistanceMetric<R> + Sy
     caliper_constraint: Option<&CaliperConstraint<'_, R, D>>,
     extra_constraints: &(impl ConstraintGroup<R> + ?Sized),
     context: &ConstraintContext<'_>,
-) -> Option<&'static str> {
-    for constraint in builtin_constraints.iter().copied().chain(
-        caliper_constraint
-            .as_ref()
-            .map(|constraint| *constraint as &dyn Constraint<R>),
-    ) {
+) -> Option<Blocker> {
+    for constraint in builtin_constraints {
         if !constraint.allows(case, control, context) {
-            return Some(constraint.reason());
+            return Some(Blocker::Constraint(constraint.reason()));
         }
     }
-    extra_constraints.first_blocking_reason(case, control, context)
+    if let Some(caliper) = caliper_constraint {
+        if !caliper.allows(case, control, context) {
+            return Some(Blocker::Caliper(caliper.reason()));
+        }
+    }
+    extra_constraints
+        .first_blocking_reason(case, control, context)
+        .map(Blocker::Constraint)
 }
 
 impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync>
@@ -407,9 +431,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         for (reason, count) in constraint_exclusions {
             *diagnostics
                 .exclusion_counts
-                .entry(ExclusionReason::Constraint(
-                    ConstraintReason::from_reason_str(reason),
-                ))
+                .entry(reason.exclusion_reason())
                 .or_insert(0) += count;
         }
 
@@ -1350,11 +1372,11 @@ impl<R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> Copy for ScanContext<'_
 struct ScanTally {
     eligible: Vec<usize>,
     filtered_out: usize,
-    constraint_exclusions: Vec<(&'static str, usize)>,
+    constraint_exclusions: Vec<(Blocker, usize)>,
 }
 
 impl ScanTally {
-    fn exclude(&mut self, reason: &'static str, count: usize) {
+    fn exclude(&mut self, reason: Blocker, count: usize) {
         match self
             .constraint_exclusions
             .iter_mut()
@@ -1492,11 +1514,8 @@ pub fn build_outcome(
     used_controls: usize,
     diagnostics: MatchDiagnostics,
 ) -> MatchOutcome {
-    let avg_controls_per_case = if matched_cases == 0 {
-        0.0
-    } else {
-        usize_to_f64(pairs.len()) / usize_to_f64(matched_cases)
-    };
+    let avg_controls_per_case =
+        (matched_cases != 0).then(|| usize_to_f64(pairs.len()) / usize_to_f64(matched_cases));
 
     MatchOutcome {
         pairs,
@@ -1534,7 +1553,7 @@ pub fn invalid_criteria_outcome(
         unmatched_cases: anchor_count,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics,
     }
 }
@@ -1552,7 +1571,7 @@ pub fn invalid_cohort_outcome(anchor_count: usize, reason: ExclusionReason) -> M
         unmatched_cases: anchor_count,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics,
     }
 }
@@ -1574,7 +1593,7 @@ pub fn invalid_common_support_outcome(
         unmatched_cases: anchor_count,
         used_controls: 0,
         matched_cases: 0,
-        avg_controls_per_case: 0.0,
+        avg_controls_per_case: None,
         diagnostics,
     }
 }
@@ -1779,7 +1798,7 @@ mod pool_scan_tests {
         ];
         let mut eligible = Vec::new();
         let mut filtered_out = 0_usize;
-        let mut exclusions: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut exclusions: BTreeMap<Blocker, usize> = BTreeMap::new();
         for idx in candidate_indices {
             let control = &engine.controls[idx];
             if !additional_filter(idx, control) {
@@ -1821,9 +1840,7 @@ mod pool_scan_tests {
         for (reason, count) in exclusions {
             *diagnostics
                 .exclusion_counts
-                .entry(ExclusionReason::Constraint(
-                    ConstraintReason::from_reason_str(reason),
-                ))
+                .entry(reason.exclusion_reason())
                 .or_insert(0) += count;
         }
         sort_by_id(engine.controls, &mut eligible);
@@ -1999,5 +2016,37 @@ mod pool_scan_tests {
         assert!(one.0.len() > 2 * SCAN_CHUNK);
         assert_eq!(one, pool_with(3));
         assert_eq!(one, pool_with(12));
+    }
+
+    #[test]
+    fn a_caliper_exclusion_on_the_scan_path_has_the_typed_reason() {
+        use crate::types::BaseRecord;
+        let date = crate::date(2010, 1, 1);
+        let anchors = vec![BaseRecord::new("a", date)];
+        let candidates: Vec<BaseRecord> = ["near", "far1", "far2"]
+            .iter()
+            .map(|id| BaseRecord::new(*id, date))
+            .collect();
+        let vectors: rapidhash::RapidHashMap<String, Vec<f64>> =
+            [("a", 0.0), ("near", 0.5), ("far1", 9.0), ("far2", 9.5)]
+                .into_iter()
+                .map(|(id, value)| (id.to_string(), vec![value]))
+                .collect();
+        let config = DistanceConfig::euclidean_map(vectors, 1, DistanceCaliper::new(1.0))
+            .expect("one column");
+        let outcome = crate::MatchJob::new_standard(&anchors, &candidates, 0)
+            .with_distance_config(config)
+            .run();
+        let counts = &outcome.diagnostics.exclusion_counts;
+        assert_eq!(
+            counts.get(&ExclusionReason::DistanceCaliper(
+                DistanceCaliperReason::Euclidean
+            )),
+            Some(&2)
+        );
+        assert!(counts.keys().all(|reason| !matches!(
+            reason,
+            ExclusionReason::Constraint(ConstraintReason::Custom(_))
+        )));
     }
 }

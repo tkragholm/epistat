@@ -26,7 +26,7 @@ fn fnv(text: &str) -> u64 {
 }
 
 fn outcome_hash(outcome: &MatchOutcome) -> u64 {
-    fnv(&format!("{outcome:?}"))
+    fnv(&common::golden_debug(outcome))
 }
 
 fn weights_hash(outcome: &MatchOutcome) -> u64 {
@@ -272,3 +272,26 @@ const E_STD_NOREPL: (u64, u64) = (0x1520dffbb17aef3e, 0x08198f3ecb4ed043);
 const E_STD_REPL: (u64, u64) = (0xc088ea6cbef91878, 0x74d78bbc0371530c);
 const E_STD_UNIQUE: (u64, u64) = (0x0182c20be256ce19, 0x4a4e53faf807cda6);
 const E_STD_NOSTRATA: (u64, u64) = (0xd72f85f8c74df990, 0x1a8b1221f7c395a3);
+
+#[test]
+fn the_golden_rendering_writes_the_average_as_the_plain_number() {
+    let pair = MatchedPair::new("a", "c");
+    let matched = MatchOutcome {
+        pairs: vec![pair],
+        unmatched_cases: 0,
+        used_controls: 1,
+        matched_cases: 1,
+        avg_controls_per_case: Some(1.0),
+        diagnostics: MatchDiagnostics::default(),
+    };
+    let unmatched = MatchOutcome {
+        pairs: Vec::new(),
+        unmatched_cases: 1,
+        used_controls: 0,
+        matched_cases: 0,
+        avg_controls_per_case: None,
+        diagnostics: MatchDiagnostics::default(),
+    };
+    assert!(common::golden_debug(&matched).contains("avg_controls_per_case: 1.0, diagnostics"));
+    assert!(common::golden_debug(&unmatched).contains("avg_controls_per_case: 0.0, diagnostics"));
+}
