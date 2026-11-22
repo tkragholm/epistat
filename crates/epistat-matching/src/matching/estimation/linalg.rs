@@ -1,7 +1,7 @@
 //! Dense inversion, with a generalised inverse when the matrix is singular.
 
 use super::EstimationError;
-use epistat_linalg::eigen::symmetric_eigen_jacobi;
+use epistat_linalg::eigen::pinv;
 use epistat_linalg::{Attempt, Mat, MatRef, Method, inverse};
 
 /// A pivot at most this times the largest absolute entry makes a factorisation count as failed.
@@ -47,27 +47,7 @@ pub(super) fn pseudo_inverse(
     if dimension == 0 || matrix.iter().any(|value| !value.is_finite()) {
         return Err(EstimationError::InvalidCovarianceMatrix);
     }
-    let (values, vectors) = symmetric_eigen_jacobi(matrix, dimension);
-    let largest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if largest <= 0.0 {
-        return Err(EstimationError::InvalidCovarianceMatrix);
-    }
-    let threshold = relative_tolerance * largest;
-    let mut inverse = vec![0.0_f64; dimension * dimension];
-    let mut kept = 0usize;
-    for (index, value) in values.iter().enumerate() {
-        if *value <= threshold {
-            continue;
-        }
-        kept += 1;
-        for row in 0..dimension {
-            for col in 0..dimension {
-                inverse[row * dimension + col] +=
-                    vectors[row * dimension + index] * vectors[col * dimension + index] / value;
-            }
-        }
-    }
-    Ok((inverse, kept))
+    pinv(matrix, dimension, relative_tolerance).ok_or(EstimationError::InvalidCovarianceMatrix)
 }
 
 fn row_major(matrix: &Mat<f64>, dimension: usize) -> Vec<f64> {

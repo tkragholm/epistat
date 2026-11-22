@@ -30,7 +30,7 @@ use crate::matching::{
     PropensityScoreEstimate, PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions,
     QuickMatchOutcome, RandomSelection, Retain, RoleIndexedRecord, Rounds, ScoreTable, SeedMethod,
     SelectionStrategy, SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
-    VariableRatio, apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses, cholesky_lower,
+    VariableRatio, apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses,
     estimate_propensity_and_match, exact_match_subclasses, match_fine_balance, match_full,
     match_optimal, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, quick_match_subclasses,
@@ -46,6 +46,7 @@ use crate::types::{
     Estimand, ExclusionReason, MatchOutcome, MatchRatio, MatchingCriteria, RoleTransitionRecord,
 };
 use chrono::NaiveDate;
+use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -1975,13 +1976,14 @@ fn run_quick<R: MatchingRecord>(
             ..
         } => {
             let dimension = vectors.dimension();
-            let factor = cholesky_lower(inverse_covariance, dimension).ok_or_else(|| {
-                SpecError::option(
-                    "distance",
-                    "the inverse covariance matrix is not positive definite; \
+            let factor =
+                cholesky_lower(inverse_covariance, dimension, Pivot::Strict).ok_or_else(|| {
+                    SpecError::option(
+                        "distance",
+                        "the inverse covariance matrix is not positive definite; \
                      drop covariates that are collinear or constant",
-                )
-            })?;
+                    )
+                })?;
             let embedded: Vec<f64> = (0..vectors.len())
                 .flat_map(|position| apply_transposed(&factor, vectors.row(position), dimension))
                 .collect();

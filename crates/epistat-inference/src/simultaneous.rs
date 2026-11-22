@@ -85,9 +85,8 @@
 //! 2. Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
 //!    periods. J Econom. 2021;225(2):200-30.
 
-use std::f64::consts::PI;
-
 use epistat_linalg::MatRef;
+use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_rng::{Stream, replicate_seed};
 use epistat_stats::{lanes, normal, quantile};
 use rayon::prelude::*;
@@ -141,7 +140,7 @@ pub fn sup_t_from_covariance(
             || (vec![0.0; dim], vec![0.0; dim]),
             |(z, t), r| {
                 let mut stream = Stream::seeded(replicate_seed(seed, r));
-                standard_normals(&mut stream, z);
+                stream.fill_normals(z);
                 lower_times(&lower, dim, z, t);
                 t.iter().map(|v| v.abs()).fold(0.0, f64::max)
             },
@@ -174,44 +173,15 @@ fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, InferenceError> 
 /// The lower Cholesky factor of a symmetric positive semidefinite matrix,
 /// row-major, with sums in column order.
 fn lower_cholesky(matrix: &[f64], n: usize) -> Result<Vec<f64>, InferenceError> {
-    let mut lower = vec![0.0; n * n];
-    for i in 0..n {
-        for j in 0..=i {
-            let mut sum = matrix[i * n + j];
-            for k in 0..j {
-                sum -= lower[i * n + k] * lower[j * n + k];
-            }
-            if i == j {
-                if sum < -NEGATIVE_FLOOR {
-                    return Err(InferenceError::NotFinite);
-                }
-                lower[i * n + j] = sum.max(0.0).sqrt();
-            } else if lower[j * n + j] > PIVOT_FLOOR {
-                lower[i * n + j] = sum / lower[j * n + j];
-            }
-        }
-    }
-    Ok(lower)
-}
-
-/// Standard normal draws in Box-Muller pairs: the cosine, then the sine, of
-/// one transform. An odd last entry takes the cosine of its own.
-fn standard_normals(stream: &mut Stream, out: &mut [f64]) {
-    let transform = |stream: &mut Stream| {
-        let u1 = stream.uniform().max(f64::MIN_POSITIVE);
-        let u2 = stream.uniform();
-        ((-2.0 * u1.ln()).sqrt(), 2.0 * PI * u2)
-    };
-    let (pairs, rest) = out.as_chunks_mut::<2>();
-    for pair in pairs {
-        let (radius, theta) = transform(stream);
-        pair[0] = radius * theta.cos();
-        pair[1] = radius * theta.sin();
-    }
-    if let [last] = rest {
-        let (radius, theta) = transform(stream);
-        *last = radius * theta.cos();
-    }
+    cholesky_lower(
+        matrix,
+        n,
+        Pivot::Semidefinite {
+            negative_floor: NEGATIVE_FLOOR,
+            pivot_floor: PIVOT_FLOOR,
+        },
+    )
+    .ok_or(InferenceError::NotFinite)
 }
 
 /// `out = L z` for a row-major lower triangular `L`.
@@ -627,7 +597,7 @@ mod tests {
             .map(|r| {
                 let mut stream = Stream::seeded(replicate_seed(seed, r));
                 let mut z = vec![0.0; dim];
-                standard_normals(&mut stream, &mut z);
+                stream.fill_normals(&mut z);
                 let mut best = 0.0_f64;
                 for i in 0..dim {
                     let sum = lanes::dot(&lower[i * dim..=i * dim + i], &z[..=i]);
@@ -636,6 +606,44 @@ mod tests {
                 best
             })
             .collect()
+    }
+
+    /// Box-Muller pairs by hand: the cosine, then the sine, of one transform,
+    /// and an odd last entry takes the cosine of its own.
+    fn reference_normals(stream: &mut Stream, out: &mut [f64]) {
+        use std::f64::consts::PI;
+        let transform = |stream: &mut Stream| {
+            let u1 = stream.uniform().max(f64::MIN_POSITIVE);
+            let u2 = stream.uniform();
+            ((-2.0 * u1.ln()).sqrt(), 2.0 * PI * u2)
+        };
+        let (pairs, rest) = out.as_chunks_mut::<2>();
+        for pair in pairs {
+            let (radius, theta) = transform(stream);
+            pair[0] = radius * theta.cos();
+            pair[1] = radius * theta.sin();
+        }
+        if let [last] = rest {
+            let (radius, theta) = transform(stream);
+            *last = radius * theta.cos();
+        }
+    }
+
+    #[test]
+    fn fill_normals_matches_the_hand_written_pairs_for_odd_and_even_lengths() {
+        for len in 0..20 {
+            for seed in 0..50 {
+                let mut a = vec![0.0; len];
+                let mut b = vec![0.0; len];
+                let mut sa = Stream::seeded(replicate_seed(7, seed));
+                let mut sb = Stream::seeded(replicate_seed(7, seed));
+                sa.fill_normals(&mut a);
+                reference_normals(&mut sb, &mut b);
+                let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&a), bits(&b), "length {len}");
+                assert_eq!(sa.uniform().to_bits(), sb.uniform().to_bits());
+            }
+        }
     }
 
     #[test]

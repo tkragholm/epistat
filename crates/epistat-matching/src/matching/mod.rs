@@ -70,7 +70,7 @@ pub use optimal::{
 };
 pub use quick::{
     QuickMatchError, QuickMatchOptions, QuickMatchOutcome, SeedMethod, apply_transposed,
-    cholesky_lower, quick_clusters, quick_match_subclasses,
+    quick_clusters, quick_match_subclasses,
 };
 pub use reconstructed::{
     ReconstructedEpisode, ReconstructedMatchedPair, ReconstructedMatchingError,

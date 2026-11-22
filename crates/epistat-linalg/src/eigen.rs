@@ -130,9 +130,56 @@ pub fn pinv_quadratic_form(
     Some((statistic, rank))
 }
 
+/// The generalised inverse of a symmetric non-negative matrix `m` of order
+/// `k`, row-major, dropping every eigenvalue not above
+/// `relative_tolerance` times the largest, and the number of eigenvalues
+/// kept. `None` when no eigenvalue is positive.
+///
+/// # Panics
+///
+/// When `m` does not have `k` squared entries.
+#[must_use]
+pub fn pinv(m: &[f64], k: usize, relative_tolerance: f64) -> Option<(Vec<f64>, usize)> {
+    let (values, vectors) = symmetric_eigen_jacobi(m, k);
+    let largest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if largest <= 0.0 {
+        return None;
+    }
+    let threshold = relative_tolerance * largest;
+    let mut inverse = vec![0.0_f64; k * k];
+    let mut kept = 0usize;
+    for (index, value) in values.iter().enumerate() {
+        if *value <= threshold {
+            continue;
+        }
+        kept += 1;
+        for row in 0..k {
+            for col in 0..k {
+                inverse[row * k + col] +=
+                    vectors[row * k + index] * vectors[col * k + index] / value;
+            }
+        }
+    }
+    Some((inverse, kept))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_generalised_inverse_inverts_and_drops_the_null_direction() {
+        let (inverse, kept) = pinv(&[2.0, 1.0, 1.0, 2.0], 2, 1e-12).unwrap();
+        assert_eq!(kept, 2);
+        let expected = [2.0 / 3.0, -1.0 / 3.0, -1.0 / 3.0, 2.0 / 3.0];
+        for (got, want) in inverse.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-14);
+        }
+        let (inverse, kept) = pinv(&[1.0, 1.0, 1.0, 1.0], 2, 1e-12).unwrap();
+        assert_eq!(kept, 1);
+        assert!((inverse[0] - 0.25).abs() < 1e-14);
+        assert_eq!(pinv(&[0.0; 4], 2, 1e-12), None);
+    }
 
     /// `[[2, 1], [1, 2]]` has eigenvalues 1 and 3 with eigenvectors
     /// `(1, -1)` and `(1, 1)` over `sqrt 2`. One rotation by 45 degrees

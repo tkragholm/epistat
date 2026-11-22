@@ -1024,36 +1024,6 @@ where
     })
 }
 
-/// Lower Cholesky factor `L` of a symmetric positive definite matrix, row-major
-/// of side `dimension`, so that the matrix is `L L^T`. A Mahalanobis distance
-/// under inverse covariance `S` is the Euclidean distance after `L^T` is applied
-/// to the difference, where `S = L L^T`. `None` when the matrix is not positive
-/// definite or does not have `dimension * dimension` entries.
-#[must_use]
-pub fn cholesky_lower(matrix: &[f64], dimension: usize) -> Option<Vec<f64>> {
-    if matrix.len() != dimension * dimension {
-        return None;
-    }
-    let mut lower = vec![0.0_f64; dimension * dimension];
-    for i in 0..dimension {
-        for j in 0..=i {
-            let mut sum = matrix[i * dimension + j];
-            for k in 0..j {
-                sum -= lower[i * dimension + k] * lower[j * dimension + k];
-            }
-            if i == j {
-                if !(sum.is_finite() && sum > 0.0) {
-                    return None;
-                }
-                lower[i * dimension + i] = sum.sqrt();
-            } else {
-                lower[i * dimension + j] = sum / lower[j * dimension + j];
-            }
-        }
-    }
-    Some(lower)
-}
-
 /// `L^T x` for a lower triangular `L`.
 #[must_use]
 pub fn apply_transposed(lower: &[f64], vector: &[f64], dimension: usize) -> Vec<f64> {
@@ -1071,6 +1041,7 @@ pub fn apply_transposed(lower: &[f64], vector: &[f64], dimension: usize) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_linalg::cholesky::{Pivot, cholesky_lower};
     use std::collections::HashMap;
 
     struct Lcg(u64);
@@ -1537,7 +1508,7 @@ mod tests {
     #[test]
     fn mahalanobis_coordinates_give_the_mahalanobis_distance() {
         let inverse = [2.0, 0.5, 0.5, 1.0];
-        let factor = cholesky_lower(&inverse, 2).unwrap();
+        let factor = cholesky_lower(&inverse, 2, Pivot::Strict).unwrap();
         let a = apply_transposed(&factor, &[1.0, 2.0], 2);
         let b = apply_transposed(&factor, &[0.0, 4.0], 2);
         let direct = {
@@ -1546,6 +1517,6 @@ mod tests {
         };
         let embedded: f64 = a.iter().zip(&b).map(|(x, y)| (x - y) * (x - y)).sum();
         assert!((embedded - direct).abs() < 1e-12);
-        assert!(cholesky_lower(&[1.0, 2.0, 2.0, 1.0], 2).is_none());
+        assert!(cholesky_lower(&[1.0, 2.0, 2.0, 1.0], 2, Pivot::Strict).is_none());
     }
 }
