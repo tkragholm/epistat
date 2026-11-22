@@ -171,6 +171,9 @@ impl<'a> Panel<'a> {
     /// Accumulated over positions in order, so a plain Hamming distance is a sum
     /// of exact ones and lands on the integer count.
     fn distance(&self, left: &[u8], right: &[u8]) -> f64 {
+        if self.costs.is_none() {
+            return f64::from(mismatches(&left[..self.length], &right[..self.length]));
+        }
         let mut total = 0.0;
         for position in 0..self.length {
             let (from, to) = (left[position], right[position]);
@@ -194,6 +197,26 @@ impl<'a> Panel<'a> {
         }
         best
     }
+}
+
+/// The number of positions at which two equally long sequences differ, eight
+/// bytes at a time. A byte of `left ^ right` is non-zero exactly when its high
+/// bit survives `((t & 0x7f..) + 0x7f..) | t`, so one popcount counts eight
+/// positions.
+fn mismatches(left: &[u8], right: &[u8]) -> u32 {
+    const LOW7: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+    let (left_words, right_words) = (left.chunks_exact(8), right.chunks_exact(8));
+    let (left_rest, right_rest) = (left_words.remainder(), right_words.remainder());
+    let mut count = 0;
+    for (a, b) in left_words.zip(right_words) {
+        let t = u64::from_le_bytes(a.try_into().expect("eight bytes"))
+            ^ u64::from_le_bytes(b.try_into().expect("eight bytes"));
+        count += (((t & LOW7).wrapping_add(LOW7) | t) & !LOW7).count_ones();
+    }
+    for (a, b) in left_rest.iter().zip(right_rest) {
+        count += u32::from(a != b);
+    }
+    count
 }
 
 /// Per-position symbol weights for one set of members: the `f_{C,p}` above.
@@ -544,6 +567,35 @@ pub fn silhouette(
 mod tests {
     use super::{Panel, kmedoids, silhouette};
     use crate::Restarts;
+
+    #[test]
+    fn plain_hamming_counts_the_bytes_that_differ() {
+        let mut state = 12345u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u8
+        };
+        for length in [1usize, 2, 7, 8, 9, 15, 16, 17, 31, 64, 100, 121] {
+            for alphabet in [2u8, 6, 200] {
+                let encoded: Vec<u8> = (0..length * 6).map(|_| next() % alphabet).collect();
+                let panel = Panel::new(&encoded, length, usize::from(alphabet), None).unwrap();
+                for a in 0..6 {
+                    for b in 0..6 {
+                        let (left, right) = (panel.at(a), panel.at(b));
+                        let mut expected = 0.0_f64;
+                        for p in 0..length {
+                            if left[p] != right[p] {
+                                expected += 1.0;
+                            }
+                        }
+                        assert_eq!(panel.distance(left, right).to_bits(), expected.to_bits());
+                    }
+                }
+            }
+        }
+    }
 
     fn one() -> Restarts {
         Restarts::from_seed(1, 1).unwrap()
