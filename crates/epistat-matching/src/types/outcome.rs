@@ -380,10 +380,12 @@ pub struct MatchDiagnostics {
     pub estimand_drift_reasons: Vec<EstimandDriftReason>,
 }
 
-/// The debug rendering lists every field. `anchors_on_lower_tier` is left out
+/// The debug rendering lists every field but the ids of the trimmed units, which
+/// the trimmed counts summarise. `anchors_on_lower_tier` is left out
 /// when it is 0, so that the rendering of a job that matches on no lower tier
 /// is the same as before the field existed and the hashes of renderings that
 /// tests pin stay valid.
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for MatchDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("MatchDiagnostics");
