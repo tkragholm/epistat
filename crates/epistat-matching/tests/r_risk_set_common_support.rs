@@ -205,7 +205,7 @@ fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
         outside_ids
     );
     assert!(reported.anchors.windows(2).all(|w| w[0] < w[1]));
-    assert!(reported.candidates.is_empty());
+    assert_eq!(reported.candidates, Vec::<String>::new());
 
     // Without it the dead stay in the range.
     let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), false, false);
