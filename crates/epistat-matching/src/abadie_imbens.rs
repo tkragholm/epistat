@@ -916,14 +916,8 @@ mod tests {
     #[test]
     fn the_trees_give_the_estimate_of_the_scan() {
         let n = 3_600;
-        let mut state = 7_u64;
-        let mut next = move || {
-            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            z ^ (z >> 31)
-        };
+        let mut rng = epistat_testkit::SplitMix64::new(7);
+        let mut next = move || rng.next_u64();
         let treated: Vec<bool> = (0..n).map(|_| next() % 3 == 0).collect();
         let covariates: Vec<Vec<f64>> = (0..3)
             .map(|c| {

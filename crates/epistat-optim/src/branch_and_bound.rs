@@ -2671,20 +2671,7 @@ fn row_violation(program: &MixedBinaryProgram<'_>, x: &[f64]) -> f64 {
 mod tests {
     use super::*;
 
-    struct Rng(u64);
-    impl Rng {
-        fn next_u64(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        }
-        fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
-            let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-            lo + (hi - lo) * unit
-        }
-    }
+    use epistat_testkit::SplitMix64 as Rng;
 
     const INF: f64 = f64::INFINITY;
 
@@ -2781,7 +2768,7 @@ mod tests {
     /// counts of two groups tied to `t`, and balance rows with `t` in them.
     #[test]
     fn agrees_with_exhaustive_search() {
-        let mut rng = Rng(2024);
+        let mut rng = Rng::new(2024);
         let mut solved = 0;
         for trial in 0..600 {
             let nbin = 6 + trial % 9;
@@ -2853,7 +2840,7 @@ mod tests {
     fn node_limit_reports_a_gap_and_is_not_optimal() {
         // A knapsack with two rows and a fractional root relaxation.
         let n = 120;
-        let mut rng = Rng(5);
+        let mut rng = Rng::new(5);
         let mut w = Vec::with_capacity(2 * n);
         for _ in 0..n {
             w.push(rng.uniform(1.0, 10.0));
@@ -3077,7 +3064,7 @@ mod tests {
 
     #[test]
     fn profile_programs_agree_with_exhaustive_search() {
-        let mut rng = Rng(77);
+        let mut rng = Rng::new(77);
         let mut solved = 0;
         for trial in 0..300 {
             let random = Random::profile(&mut rng, 6 + trial % 9, 1 + trial % 4);
@@ -3109,7 +3096,7 @@ mod tests {
     /// The rounds of Gomory cuts keep every integer point of the program.
     #[test]
     fn cuts_keep_every_integer_point() {
-        let mut rng = Rng(91);
+        let mut rng = Rng::new(91);
         let mut added = 0;
         for trial in 0..200 {
             let random = Random::profile(&mut rng, 6 + trial % 8, 1 + trial % 3);
@@ -3158,7 +3145,7 @@ mod tests {
     /// forced value in every integer point of at least that value.
     #[test]
     fn reduced_cost_fixing_keeps_every_good_point() {
-        let mut rng = Rng(13);
+        let mut rng = Rng::new(13);
         let mut fixed = 0;
         for trial in 0..200 {
             let random = Random::profile(&mut rng, 6 + trial % 8, 1 + trial % 3);
@@ -3201,7 +3188,7 @@ mod tests {
     /// A point the local search returns satisfies the rows and the cutoff.
     #[test]
     fn local_search_returns_solutions() {
-        let mut rng = Rng(29);
+        let mut rng = Rng::new(29);
         let mut found = 0;
         for trial in 0..200 {
             let random = Random::profile(&mut rng, 8 + trial % 7, 1 + trial % 3);
@@ -3283,7 +3270,7 @@ mod tests {
     /// the range asked for.
     #[test]
     fn repair_search_returns_solutions_of_the_program() {
-        let mut rng = Rng(311);
+        let mut rng = Rng::new(311);
         let mut found = 0;
         let mut at_best = 0;
         for trial in 0..400 {
@@ -3324,7 +3311,7 @@ mod tests {
     /// solution at the floored bound of the relaxation, which is optimal.
     #[test]
     fn repair_search_closes_a_large_matching_program() {
-        let mut rng = Rng(5);
+        let mut rng = Rng::new(5);
         let random = Random::cardinality(&mut rng, 4000, 2);
         let program = random.program();
         let (x, v, cutoff) = repair_from_root(&program, 0.0).expect("a solution");
@@ -3340,7 +3327,7 @@ mod tests {
     /// search.
     #[test]
     fn cardinality_programs_agree_with_exhaustive_search() {
-        let mut rng = Rng(808);
+        let mut rng = Rng::new(808);
         let mut solved = 0;
         for trial in 0..300 {
             let random = Random::cardinality(&mut rng, 6 + trial % 9, 1 + trial % 3);

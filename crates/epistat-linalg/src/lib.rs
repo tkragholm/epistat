@@ -16,14 +16,17 @@
 //!   factorisations, each on one thread.
 //! - `blocks` holds the products over the rows of a design matrix, computed
 //!   in blocks of [`ROW_BLOCK`] rows and added in block order.
+//! - [`cholesky`] holds the lower Cholesky factor with a caller-chosen pivot
+//!   rule.
 //! - [`design`] finds linearly independent columns and selects rows and
 //!   columns.
 //! - [`basis`] holds the polynomial and B-spline bases.
 //! - [`eigen`] holds a Jacobi eigendecomposition of a small symmetric matrix and
-//!   the quadratic form of its generalised inverse.
+//!   the generalised inverse and its quadratic form.
 
 pub mod basis;
 mod blocks;
+pub mod cholesky;
 pub mod design;
 pub mod eigen;
 mod error;

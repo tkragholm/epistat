@@ -155,21 +155,13 @@ fn canonical_text_sorts_maps_but_not_structs_or_lists() {
     );
 }
 
-struct Rng(u64);
+use epistat_testkit::SplitMix64 as Rng;
 
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
+trait Percent {
+    fn chance(&mut self, percent: u64) -> bool;
+}
 
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-
+impl Percent for Rng {
     fn chance(&mut self, percent: u64) -> bool {
         self.below(100) < percent
     }
@@ -202,7 +194,7 @@ fn day(offset: u64) -> NaiveDate {
 /// `n` units, about a quarter treated. Covariates take a few values so pairs
 /// tie, and every column has some rows without a value.
 fn units(seed: u64, n: usize) -> Vec<Unit> {
-    let mut rng = Rng(seed);
+    let mut rng = Rng::new(seed);
     (0..n)
         .map(|i| {
             let half_steps = rng.below(5);

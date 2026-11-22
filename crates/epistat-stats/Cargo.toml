@@ -12,6 +12,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
 rayon = "1.10"
 thiserror = "2"
 

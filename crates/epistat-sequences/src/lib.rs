@@ -105,6 +105,7 @@
 //!    J R Stat Soc Ser A. 2016;179(2):481-511. doi:10.1111/rssa.12125
 
 mod error;
+mod fit;
 pub mod nulls;
 pub mod optimal_matching;
 pub mod positionwise;

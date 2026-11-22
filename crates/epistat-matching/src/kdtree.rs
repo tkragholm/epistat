@@ -757,18 +757,7 @@ impl<F: Form> Search<'_, F> {
 mod tests {
     use super::*;
 
-    /// A small deterministic generator for test points.
-    struct Mix(u64);
-
-    impl Mix {
-        fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            z ^ (z >> 31)
-        }
-    }
+    use epistat_testkit::SplitMix64 as Mix;
 
     /// The selection puts the same row at `nth` as a full sort, with the
     /// rows before it no later and the rows after it no earlier, on inputs
@@ -778,11 +767,11 @@ mod tests {
     #[test]
     fn selection_agrees_with_a_sort_on_every_input_shape() {
         let d = 2;
-        let mut mix = Mix(17);
+        let mut mix = Mix::new(17);
         for n in [1_usize, 2, 3, 7, 64, 1000, 4097] {
             let shapes: Vec<Vec<f64>> = vec![
                 (0..n)
-                    .map(|_| f64::from(u32::try_from(mix.next() % 5).unwrap()))
+                    .map(|_| f64::from(u32::try_from(mix.next_u64() % 5).unwrap()))
                     .collect(),
                 (0..n).map(|i| i as f64).collect(),
                 (0..n).rev().map(|i| i as f64).collect(),
@@ -835,14 +824,14 @@ mod tests {
     /// weights, in one to six coordinates with many exactly equal values.
     #[test]
     fn search_equals_the_scan() {
-        let mut mix = Mix(11);
+        let mut mix = Mix::new(11);
         for d in 1..=6 {
             for &n in &[1_usize, 7, 40, 300, 2500] {
-                let coords: Vec<f64> = (0..n * d).map(|_| (mix.next() % 5) as f64).collect();
+                let coords: Vec<f64> = (0..n * d).map(|_| (mix.next_u64() % 5) as f64).collect();
                 // Keys in a scrambled order, with gaps in the key space.
                 let mut keys: Vec<usize> = (0..n).map(|i| 3 * i + 1).collect();
                 for i in (1..n).rev() {
-                    let j = usize::try_from(mix.next() % (i as u64 + 1)).expect("small");
+                    let j = usize::try_from(mix.next_u64() % (i as u64 + 1)).expect("small");
                     keys.swap(i, j);
                 }
                 let mut tree = KdTree::new(d, &coords, &keys, 3 * n + 2);
@@ -851,9 +840,9 @@ mod tests {
                 for round in 0..3 {
                     for _ in 0..20 {
                         let query: Vec<f64> = (0..d)
-                            .map(|_| (mix.next() % 11) as f64 / 2.0 - 0.5)
+                            .map(|_| (mix.next_u64() % 11) as f64 / 2.0 - 0.5)
                             .collect();
-                        let k = 1 + usize::try_from(mix.next() % 4).expect("small");
+                        let k = 1 + usize::try_from(mix.next_u64() % 4).expect("small");
                         let radius = (round == 1).then_some(1.5);
                         let refuse = |key: usize| key % 3 == 1 && key % 9 == 4;
                         let expected = scan(
@@ -894,7 +883,7 @@ mod tests {
                     }
                     // Delete about a third of what is left.
                     for i in 0..n {
-                        if live[i] && mix.next().is_multiple_of(3) {
+                        if live[i] && mix.next_u64().is_multiple_of(3) {
                             live[i] = false;
                             tree.remove(keys[i]);
                         }
@@ -941,11 +930,11 @@ mod tests {
                 }
             }
         }
-        let mut mix = Mix(17);
+        let mut mix = Mix::new(17);
         let weights = [1.0, 0.0, 2.5, 0.25];
         for d in 1..=4 {
             for _ in 0..200 {
-                let mut pick = || values[usize::try_from(mix.next() % 8).expect("small")];
+                let mut pick = || values[usize::try_from(mix.next_u64() % 8).expect("small")];
                 let query: Vec<f64> = (0..d).map(|_| pick()).collect();
                 let mut boxes: Vec<f64> = (0..4 * d).map(|_| pick()).collect();
                 for edges in boxes.as_chunks_mut::<4>().0 {
@@ -988,8 +977,10 @@ mod tests {
     fn a_parallel_build_is_the_same_on_every_pool_and_searches_like_the_scan() {
         let d = 3;
         let n = 3 * PARALLEL_BUILD / 2 + 11;
-        let mut mix = Mix(5);
-        let coords: Vec<f64> = (0..n * d).map(|_| (mix.next() % 40) as f64 / 4.0).collect();
+        let mut mix = Mix::new(5);
+        let coords: Vec<f64> = (0..n * d)
+            .map(|_| (mix.next_u64() % 40) as f64 / 4.0)
+            .collect();
         let keys: Vec<usize> = (0..n).map(|i| (i * 7919) % n).collect();
         epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
             let tree = KdTree::new(d, &coords, &keys, n);
@@ -1009,7 +1000,7 @@ mod tests {
         let live = vec![true; n];
         for _ in 0..30 {
             let query: Vec<f64> = (0..d)
-                .map(|_| (mix.next() % 100) as f64 / 8.0 - 1.0)
+                .map(|_| (mix.next_u64() % 100) as f64 / 8.0 - 1.0)
                 .collect();
             let expected = scan(
                 &Euclidean,

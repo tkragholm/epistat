@@ -557,6 +557,8 @@ dependencies = [
 name = "epistat-optim"
 version = "0.1.1"
 dependencies = [
+ "epistat-rng",
+ "epistat-testkit",
  "rayon",
 ]
 
@@ -592,6 +594,7 @@ dependencies = [
 name = "epistat-stats"
 version = "0.2.5"
 dependencies = [
+ "epistat-rng",
  "epistat-testkit",
  "rayon",
  "serde",

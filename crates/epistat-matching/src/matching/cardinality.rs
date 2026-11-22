@@ -116,8 +116,8 @@
               ratio is checked to be whole before it is cast"
 )]
 
-use super::quick::cholesky_lower;
 use crate::types::Estimand;
+use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_optim::branch_and_bound::{
     MipError, MixedBinaryProgram, Options as SolverOptions, Status as SolverStatus, solve,
 };
@@ -975,7 +975,7 @@ pub fn pair_units(
     let chol = if d == 0 {
         Vec::new()
     } else {
-        cholesky_lower(&scatter, d).ok_or(CardinalityError::SingularCovariance)?
+        cholesky_lower(&scatter, d, Pivot::Strict).ok_or(CardinalityError::SingularCovariance)?
     };
     let transformed = |i: usize| -> Vec<f64> {
         // Solve L z = x for z.

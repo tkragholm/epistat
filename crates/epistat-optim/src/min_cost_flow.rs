@@ -1005,6 +1005,7 @@ impl Solver {
 )]
 mod tests {
     use super::*;
+    use epistat_testkit::SplitMix64;
 
     fn solve(problem: &MinCostFlow) -> FlowSolution {
         problem.solve().expect("feasible")
@@ -1170,38 +1171,25 @@ mod tests {
 
     #[test]
     fn the_same_problem_gives_the_same_flow() {
-        let mut state = 7_u64;
+        let mut state = SplitMix64::new(7);
         let problem = random_network(&mut state, 12, 40);
         assert_eq!(problem.solve(), problem.solve());
     }
 
-    /// SplitMix64, which is enough to draw test problems.
-    fn next(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    fn below(state: &mut u64, bound: u64) -> u64 {
-        next(state) % bound
-    }
-
-    fn random_network(state: &mut u64, nodes: usize, arcs: usize) -> MinCostFlow {
+    fn random_network(state: &mut SplitMix64, nodes: usize, arcs: usize) -> MinCostFlow {
         let mut problem = MinCostFlow::new(nodes);
         for _ in 0..arcs {
-            let from = below(state, nodes as u64) as usize;
-            let to = below(state, nodes as u64) as usize;
-            let capacity = below(state, 6) as i64;
-            let cost = below(state, 21) as i64 - 6;
+            let from = state.below(nodes as u64) as usize;
+            let to = state.below(nodes as u64) as usize;
+            let capacity = state.below(6) as i64;
+            let cost = state.below(21) as i64 - 6;
             problem.add_arc(from, to, capacity, cost);
         }
         // Supplies from a random feasible flow, so the problem is feasible.
         for _ in 0..nodes {
-            let from = below(state, nodes as u64) as usize;
-            let to = below(state, nodes as u64) as usize;
-            let amount = below(state, 3) as i64;
+            let from = state.below(nodes as u64) as usize;
+            let to = state.below(nodes as u64) as usize;
+            let amount = state.below(3) as i64;
             problem.supply[from] += amount;
             problem.supply[to] -= amount;
         }
@@ -1300,11 +1288,11 @@ mod tests {
 
     #[test]
     fn random_networks_agree_with_successive_shortest_paths() {
-        let mut state = 20_261_121_u64;
+        let mut state = SplitMix64::new(20_261_121);
         let mut feasible = 0;
         for round in 0..400 {
-            let nodes = 3 + below(&mut state, 8) as usize;
-            let arcs = 4 + below(&mut state, 30) as usize;
+            let nodes = 3 + state.below(8) as usize;
+            let arcs = 4 + state.below(30) as usize;
             let problem = random_network(&mut state, nodes, arcs);
             let expected = reference_cost(&problem);
             match problem.solve() {
@@ -1321,21 +1309,21 @@ mod tests {
     }
 
     /// A copy of `problem` with other costs on the same arcs.
-    fn recosted(problem: &MinCostFlow, state: &mut u64) -> MinCostFlow {
+    fn recosted(problem: &MinCostFlow, state: &mut SplitMix64) -> MinCostFlow {
         let mut other = problem.clone();
         for cost in &mut other.cost {
-            *cost = below(state, 21) as i64 - 6;
+            *cost = state.below(21) as i64 - 6;
         }
         other
     }
 
     #[test]
     fn warm_starts_give_the_optimal_cost() {
-        let mut state = 77_u64;
+        let mut state = SplitMix64::new(77);
         let mut checked = 0;
         for round in 0..600 {
-            let nodes = 3 + below(&mut state, 9) as usize;
-            let arcs = 4 + below(&mut state, 30) as usize;
+            let nodes = 3 + state.below(9) as usize;
+            let arcs = 4 + state.below(30) as usize;
             let problem = random_network(&mut state, nodes, arcs);
             let Ok(first) = problem.solve() else { continue };
             checked += 1;
@@ -1363,15 +1351,10 @@ mod tests {
             // More arcs, from the basis of the smaller problem and from that of
             // a solve started at a flow.
             let mut larger = problem.clone();
-            for _ in 0..=below(&mut state, 8) {
-                let from = below(&mut state, nodes as u64) as usize;
-                let to = below(&mut state, nodes as u64) as usize;
-                larger.add_arc(
-                    from,
-                    to,
-                    below(&mut state, 6) as i64,
-                    below(&mut state, 21) as i64 - 6,
-                );
+            for _ in 0..=state.below(8) {
+                let from = state.below(nodes as u64) as usize;
+                let to = state.below(nodes as u64) as usize;
+                larger.add_arc(from, to, state.below(6) as i64, state.below(21) as i64 - 6);
             }
             let cold = larger.solve().expect("feasible");
             for basis in [&first.basis, &again.basis, &from_flow.basis] {
@@ -1414,10 +1397,10 @@ mod tests {
 
     #[test]
     fn the_pricing_block_does_not_change_the_cost() {
-        let mut state = 5_u64;
+        let mut state = SplitMix64::new(5);
         for round in 0..200 {
-            let nodes = 3 + below(&mut state, 9) as usize;
-            let arcs = 4 + below(&mut state, 30) as usize;
+            let nodes = 3 + state.below(9) as usize;
+            let arcs = 4 + state.below(30) as usize;
             let mut problem = random_network(&mut state, nodes, arcs);
             let Ok(default) = problem.solve() else {
                 continue;
@@ -1459,14 +1442,14 @@ mod tests {
 
     #[test]
     fn random_assignments_agree_with_brute_force() {
-        let mut state = 99_u64;
+        let mut state = SplitMix64::new(99);
         for round in 0..300 {
-            let rows = 1 + below(&mut state, 5) as usize;
-            let cols = rows + below(&mut state, 3) as usize;
+            let rows = 1 + state.below(5) as usize;
+            let cols = rows + state.below(3) as usize;
             let costs: Vec<Vec<Option<i64>>> = (0..rows)
                 .map(|_| {
                     (0..cols)
-                        .map(|_| (below(&mut state, 4) != 0).then(|| below(&mut state, 30) as i64))
+                        .map(|_| (state.below(4) != 0).then(|| state.below(30) as i64))
                         .collect()
                 })
                 .collect();
