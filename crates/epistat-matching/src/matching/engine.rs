@@ -2017,4 +2017,36 @@ mod pool_scan_tests {
         assert_eq!(one, pool_with(3));
         assert_eq!(one, pool_with(12));
     }
+
+    #[test]
+    fn a_caliper_exclusion_on_the_scan_path_has_the_typed_reason() {
+        use crate::types::BaseRecord;
+        let date = crate::date(2010, 1, 1);
+        let anchors = vec![BaseRecord::new("a", date)];
+        let candidates: Vec<BaseRecord> = ["near", "far1", "far2"]
+            .iter()
+            .map(|id| BaseRecord::new(*id, date))
+            .collect();
+        let vectors: rapidhash::RapidHashMap<String, Vec<f64>> =
+            [("a", 0.0), ("near", 0.5), ("far1", 9.0), ("far2", 9.5)]
+                .into_iter()
+                .map(|(id, value)| (id.to_string(), vec![value]))
+                .collect();
+        let config = DistanceConfig::euclidean_map(vectors, 1, DistanceCaliper::new(1.0))
+            .expect("one column");
+        let outcome = crate::MatchJob::new_standard(&anchors, &candidates, 0)
+            .with_distance_config(config)
+            .run();
+        let counts = &outcome.diagnostics.exclusion_counts;
+        assert_eq!(
+            counts.get(&ExclusionReason::DistanceCaliper(
+                DistanceCaliperReason::Euclidean
+            )),
+            Some(&2)
+        );
+        assert!(counts.keys().all(|reason| !matches!(
+            reason,
+            ExclusionReason::Constraint(ConstraintReason::Custom(_))
+        )));
+    }
 }
