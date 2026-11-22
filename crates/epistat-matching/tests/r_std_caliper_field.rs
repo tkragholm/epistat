@@ -23,9 +23,11 @@ use std::collections::BTreeSet;
 #[derive(Deserialize)]
 struct Reference {
     treat: Vec<f64>,
+    x: Vec<f64>,
     z: Vec<f64>,
     distance: Vec<f64>,
     cases: Vec<Case>,
+    reestimate_cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
@@ -40,7 +42,11 @@ fn id(row: usize) -> String {
     format!("r{row}")
 }
 
-fn pairs_from_spec(reference: &Reference, case: &Case) -> BTreeSet<(usize, usize)> {
+fn pairs_from_spec(
+    reference: &Reference,
+    case: &Case,
+    reestimate: bool,
+) -> BTreeSet<(usize, usize)> {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
     let mut anchors = Vec::new();
     let mut candidates = Vec::new();
@@ -49,6 +55,9 @@ fn pairs_from_spec(reference: &Reference, case: &Case) -> BTreeSet<(usize, usize
         let row = idx + 1;
         let mut record = BalanceRecord::builder(id(row), birth).build();
         record.core.numerics.insert("z".into(), reference.z[idx]);
+        record
+            .covariates
+            .insert("x".into(), CovariateValue::Numeric(reference.x[idx]));
         scores.insert(id(row), reference.distance[idx]);
         if *label > 0.5 {
             anchors.push(record);
@@ -58,10 +67,25 @@ fn pairs_from_spec(reference: &Reference, case: &Case) -> BTreeSet<(usize, usize
     }
     let spec = MatchSpec {
         method: MatchMethod::Nearest,
-        distance: DistanceSpec::Scores {
-            scores,
-            caliper: None,
+        distance: if reestimate {
+            DistanceSpec::Propensity {
+                covariates: CovariatesSpec {
+                    names: vec!["x".to_string()],
+                    missing: MissingSpec::Error,
+                },
+                link: LinkSpec::Logit,
+                estimator: EstimatorSpec::Glm,
+                scale: ScaleSpec::Probability,
+                sampling_weights: None,
+                caliper: None,
+            }
+        } else {
+            DistanceSpec::Scores {
+                scores,
+                caliper: None,
+            }
         },
+        reestimate,
         nearest: NearestSpec {
             m_order: Some(OrderSpec::Data),
             ..Default::default()
@@ -74,6 +98,7 @@ fn pairs_from_spec(reference: &Reference, case: &Case) -> BTreeSet<(usize, usize
         }),
         discard: match case.discard.as_str() {
             "both" => Some(DiscardSpec::Both),
+            "treated" => Some(DiscardSpec::Treated),
             _ => None,
         },
         birth_window_days: 100_000,
@@ -115,10 +140,36 @@ fn a_standard_deviation_caliper_on_a_field_equals_matchit() {
             .copied()
             .zip(case.control.iter().copied())
             .collect();
-        let ours = pairs_from_spec(&reference, case);
+        let ours = pairs_from_spec(&reference, case, false);
         assert_eq!(
             ours, expected,
             "discard {} width {}: pairs differ from MatchIt",
+            case.discard, case.width
+        );
+    }
+}
+
+/// With `reestimate` the pairs equal MatchIt's as well. The standard deviation
+/// is taken over the units the first fit keeps, which differs from the one over
+/// all units for these data, and the model is fitted again on those units.
+#[test]
+fn a_standard_deviation_caliper_on_a_field_with_reestimate_equals_matchit() {
+    let reference: Reference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/matchit_std_caliper_field.json"
+    ));
+    assert!(reference.reestimate_cases.len() >= 10);
+    for case in &reference.reestimate_cases {
+        let expected: BTreeSet<(usize, usize)> = case
+            .treated
+            .iter()
+            .copied()
+            .zip(case.control.iter().copied())
+            .collect();
+        let ours = pairs_from_spec(&reference, case, true);
+        assert_eq!(
+            ours, expected,
+            "reestimate, discard {} width {}: pairs differ from MatchIt",
             case.discard, case.width
         );
     }

@@ -800,9 +800,9 @@ pub struct MatchSpec {
     pub calipers: BTreeMap<String, f64>,
     /// Read calipers in standard deviations, as `std.caliper` does: the
     /// distance caliper in standard deviations of the distance, and a caliper
-    /// on a field in standard deviations of the field over all units. One flag
-    /// covers all calipers, or each is named. Nearest method only. Scaling the
-    /// calipers on fields is not compared with MatchIt.
+    /// on a field in standard deviations of the field over the units that remain
+    /// after `discard`, with `reestimate` as well. One flag covers all
+    /// calipers, or each is named. Nearest method only.
     pub std_caliper: StdCaliperSpec,
     /// Trim the units outside the common support of the scores before
     /// matching, `discard` of `matchit()`. Needs a propensity score or a score
@@ -1604,19 +1604,6 @@ impl MatchSpec {
                     format!("{name} has no caliper in calipers; add one or drop the entry"),
                 ));
             }
-        }
-        if self.reestimate
-            && self
-                .calipers
-                .keys()
-                .any(|field| self.std_caliper.field(field))
-        {
-            return Err(SpecError::option(
-                "std_caliper",
-                "the units that discard leaves are known only after the model is fitted \
-                 again, so a caliper on a field in standard deviations cannot be combined \
-                 with reestimate; give the caliper in the units of the field",
-            ));
         }
         if self.reestimate && self.discard.is_none() {
             return Err(SpecError::option(
@@ -2477,12 +2464,26 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
             false,
         )?
     };
-    let calipers = field_calipers(
-        spec,
-        anchors,
-        candidates,
-        built.config.as_ref().and_then(scores_of),
-    )?;
+    let calipers = if spec.reestimate && spec.std_caliper.any() {
+        // The units that remain are those the first fit leaves, so a field
+        // caliper in standard deviations is scaled over them.
+        let first = build_distance(
+            &spec.distance,
+            anchors,
+            candidates,
+            spec.estimand,
+            spec.seed,
+            false,
+        )?;
+        field_calipers(spec, anchors, candidates, first.config.as_ref().and_then(scores_of))?
+    } else {
+        field_calipers(
+            spec,
+            anchors,
+            candidates,
+            built.config.as_ref().and_then(scores_of),
+        )?
+    };
     let rounds = spec.assignment == Some(AssignmentSpec::Rounds);
     let plan = |rounds| StandardPlan {
         anchors,
