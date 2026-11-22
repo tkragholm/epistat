@@ -496,7 +496,12 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
                 &request,
                 &FullMatchConfig::default(),
             )
-            .map(|outcome| outcome.assignments.into_iter().collect::<BTreeMap<_, _>>())
+            .map(|outcome| {
+                outcome
+                    .assignments()
+                    .map(|(id, subclass)| (id.to_string(), subclass))
+                    .collect::<BTreeMap<_, _>>()
+            })
         };
         assert_eq!(full(&on_vectors).ok(), full(&on_matrix).ok(), "{name} full");
         compared += 1;

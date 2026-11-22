@@ -1347,13 +1347,11 @@ fn optimal_and_full_matching() {
             },
         ] {
             let out = match_full(&anchors, &candidates, &request, &config).unwrap();
-            let mut assignments: Vec<_> = out.assignments.iter().collect();
-            assignments.sort();
-            d.debug(&assignments);
-            d.floats(&out.att_weights);
-            d.floats(&out.atc_weights);
-            d.floats(&out.ate_weights);
-            d.debug(&out.dropped_ids);
+            d.debug(&out.ids);
+            d.debug(&out.subclass);
+            for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
+                d.debug(&out.weights(estimand));
+            }
             d.debug(&out.subclasses);
         }
         d.0

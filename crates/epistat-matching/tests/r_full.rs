@@ -223,8 +223,9 @@ fn subclasses_totals_and_weights_match_matchit() {
         let n = r_subclass.len();
 
         // Our subclasses by row.
+        let subclass_of: HashMap<&str, usize> = outcome.assignments().collect();
         let ours: Vec<Option<usize>> = (1..=n)
-            .map(|row| outcome.assignments.get(&row.to_string()).copied())
+            .map(|row| subclass_of.get(row.to_string().as_str()).copied())
             .collect();
         assert_eq!(
             ours.iter().flatten().count(),
@@ -280,9 +281,9 @@ fn subclasses_totals_and_weights_match_matchit() {
         if run.unique == Some(true) && !exchanged {
             assert_eq!(our_partition, r_partition, "{label}: subclasses");
             partitions += 1;
-            let weights: &HashMap<String, f64> = match run.estimand.as_str() {
-                "ATE" => &outcome.ate_weights,
-                _ => &outcome.att_weights,
+            let estimand = match run.estimand.as_str() {
+                "ATE" => Estimand::Ate,
+                _ => Estimand::Att,
             };
             let units = Units::new(
                 (1..=n).map(|row| row.to_string()).collect(),
@@ -291,7 +292,9 @@ fn subclasses_totals_and_weights_match_matchit() {
                     .collect(),
             )
             .expect("unique ids");
-            let data = outcome.match_data(&units, weights, true, false);
+            let data = outcome
+                .match_data_for(&units, estimand, true, false)
+                .expect("weights");
             let expected = run.weights.as_ref().expect("weights");
             for (position, id) in data.id.iter().enumerate() {
                 let want = expected[row_of(id) - 1];
@@ -351,7 +354,9 @@ fn match_data_numbers_subclasses_from_one_and_leaves_out_unmatched_units() {
         vec![true, true, false, false, false],
     )
     .expect("unique");
-    let data = outcome.match_data(&units, &outcome.att_weights, false, true);
+    let data = outcome
+        .match_data_for(&units, Estimand::Att, false, true)
+        .expect("weights");
     assert_eq!(data.len(), 5);
     assert_eq!(
         data.subclass,
@@ -399,8 +404,8 @@ fn optmatch_negative_omit_fraction_is_not_the_transposed_problem() {
     };
     let outcome = match_full(&anchors, &candidates, &request, &config).expect("feasible");
     let mut groups: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
-    for (id, subclass) in &outcome.assignments {
-        groups.entry(*subclass).or_default().push(id);
+    for (id, subclass) in outcome.assignments() {
+        groups.entry(subclass).or_default().push(id);
     }
     let mut total = 0.0;
     for members in groups.values() {

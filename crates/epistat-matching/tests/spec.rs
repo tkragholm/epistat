@@ -1470,7 +1470,8 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
         ..FullMatchConfig::default()
     };
     let by_hand = match_full(&anchors, &candidates, &request, &config).expect("feasible");
-    assert_eq!(outcome.assignments, by_hand.assignments);
+    assert_eq!(outcome.ids, by_hand.ids);
+    assert_eq!(outcome.subclass, by_hand.subclass);
 
     for bad in [
         MatchSpec {

@@ -452,9 +452,8 @@ fn check_weights(label: &str, run: &Run, got: &[f64]) {
 fn check_full(label: &str, run: &Run, data: &Data, outcome: &FullMatchOutcome, kept: &[usize]) {
     let expected = run.subclass.as_ref().expect("subclass");
     let ours: BTreeMap<usize, usize> = outcome
-        .assignments
-        .iter()
-        .map(|(unit, subclass)| (row_of(unit), *subclass))
+        .assignments()
+        .map(|(unit, subclass)| (row_of(unit), subclass))
         .collect();
     assert_eq!(
         ours.len(),
@@ -469,7 +468,14 @@ fn check_full(label: &str, run: &Run, data: &Data, outcome: &FullMatchOutcome, k
     check_totals(label, our_total, r_total, pairs.max(r_pairs), d_max);
     if run.unique == Some(true) {
         assert_eq!(our_partition, their_partition, "{label}: partition");
-        let weights = rescaled(data, &outcome.att_weights);
+        let att: HashMap<String, f64> = (0..outcome.len())
+            .filter_map(|at| {
+                outcome
+                    .weight(Estimand::Att, at)
+                    .map(|weight| (outcome.id(at).to_string(), weight))
+            })
+            .collect();
+        let weights = rescaled(data, &att);
         check_weights(label, run, &weights);
     }
 }
@@ -635,7 +641,10 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
                 .assignments()
                 .map(|(unit, _)| row_of(unit))
                 .collect(),
-            SpecOutput::Full(outcome) => outcome.assignments.keys().map(|u| row_of(u)).collect(),
+            SpecOutput::Full(outcome) => outcome
+                .assignments()
+                .map(|(unit, _)| row_of(unit))
+                .collect(),
             SpecOutput::Pairs { outcome, .. } | SpecOutput::Genetic { outcome, .. } => outcome
                 .pairs
                 .iter()

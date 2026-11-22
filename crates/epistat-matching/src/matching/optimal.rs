@@ -81,13 +81,10 @@
 use super::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec};
 use super::distance::{DistanceConfig, DistanceMetric};
 use super::engine::{build_outcome, finalize_estimand_diagnostics, to_f64};
+use super::exact::{SubclassedUnits, unit_ids};
 use super::index::StrataValues;
 use super::records::MatchingRecord;
-use super::subclassification::{
-    SubclassSummary, build_subclass_summaries, subclass_weight_for_estimand,
-};
-use super::weights::{UnitRole, UnitWeightSet};
-use crate::output::{MatchData, Units};
+use super::subclassification::build_subclass_summaries;
 use crate::types::{
     ControlIdx, CriteriaValidationError, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair,
     MatchingCriteria,
@@ -97,7 +94,6 @@ use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
 
 /// Why optimal matching could not run.
@@ -1070,109 +1066,12 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
     build_outcome(pairs, matched_anchors, anchors.len(), used, diagnostics)
 }
 
-/// Subclasses of an optimal full match, with the weights of each estimand.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct FullMatchOutcome {
-    /// Subclass of each matched unit. Subclasses are numbered from 0 in the
-    /// order of their first anchor in the anchor slice.
-    pub assignments: HashMap<String, usize>,
-    /// Ids of the units in no subclass, anchors first and then candidates, each
-    /// in the order of its slice.
-    pub dropped_ids: Vec<String>,
-    /// Counts and anchor share of each subclass.
-    pub subclasses: Vec<SubclassSummary>,
-    /// Subclass weights for the effect in the anchor group: 1 for an anchor
-    /// and the number of anchors over the number of candidates for a candidate.
-    pub att_weights: HashMap<String, f64>,
-    /// Subclass weights for the effect in the candidate group.
-    pub atc_weights: HashMap<String, f64>,
-    /// Subclass weights for the effect in the whole population.
-    pub ate_weights: HashMap<String, f64>,
-    /// The units that common-support trimming left out before matching, empty
-    /// when the match did not trim. They are not among the units above.
-    #[serde(default)]
-    pub trimmed: crate::TrimmedUnits,
-}
-
-impl FullMatchOutcome {
-    /// Number of matched units.
-    #[must_use]
-    pub fn retained_units(&self) -> usize {
-        self.assignments.len()
-    }
-
-    /// The weights for an estimand, or `None` for the matched-sample effect,
-    /// which full matching does not define separately.
-    #[must_use]
-    pub const fn weights(&self, estimand: Estimand) -> Option<&HashMap<String, f64>> {
-        match estimand {
-            Estimand::Att => Some(&self.att_weights),
-            Estimand::Atc => Some(&self.atc_weights),
-            Estimand::Ate => Some(&self.ate_weights),
-            Estimand::Atm => None,
-        }
-    }
-
-    /// MatchIt's `match_data()` of the full match: the units with their weight
-    /// and subclass, in the order of `units`.
-    ///
-    /// `weights` is one of the outcome's weight maps. With `normalize` the
-    /// weights of each group are rescaled to a mean of 1 over its matched
-    /// units, as `matchit()` does. The subclass is numbered from 1. A unit with
-    /// no weight has weight 0 and no subclass, and is left out with
-    /// `drop_unmatched`.
-    #[must_use]
-    pub fn match_data(
-        &self,
-        units: &Units,
-        weights: &HashMap<String, f64>,
-        normalize: bool,
-        drop_unmatched: bool,
-    ) -> MatchData {
-        let mut set = UnitWeightSet::default();
-        for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
-            let Some(weight) = weights.get(id) else {
-                continue;
-            };
-            if *is_anchor {
-                set.anchor.insert(id.clone(), *weight);
-            } else {
-                set.candidate.insert(id.clone(), *weight);
-            }
-        }
-        let set = if normalize { set.normalized() } else { set };
-        let mut out = MatchData {
-            id: Vec::new(),
-            role: Vec::new(),
-            weight: Vec::new(),
-            subclass: Vec::new(),
-        };
-        for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
-            let group = if *is_anchor {
-                &set.anchor
-            } else {
-                &set.candidate
-            };
-            let weight = group.get(id).copied();
-            if weight.is_none() && drop_unmatched {
-                continue;
-            }
-            out.id.push(id.clone());
-            out.role.push(if *is_anchor {
-                UnitRole::Anchor
-            } else {
-                UnitRole::Candidate
-            });
-            out.weight.push(weight.unwrap_or(0.0));
-            out.subclass.push(
-                weight
-                    .and_then(|_| self.assignments.get(id))
-                    .map(|subclass| subclass + 1),
-            );
-        }
-        out
-    }
-}
+/// Subclasses of an optimal full match, by unit position, with the weights of
+/// each estimand derived from the subclasses, see [`SubclassedUnits`].
+///
+/// Subclasses are numbered from 0 in the order of their first anchor in the
+/// anchor slice.
+pub type FullMatchOutcome = SubclassedUnits;
 
 /// Optimal full matching: subclasses of one anchor with several candidates or
 /// one candidate with several anchors that minimise the sum of the distances
@@ -1213,11 +1112,20 @@ where
         full_match_stratum(rows, cols, edges, restrictions)
     })?;
 
-    let mut assignments: HashMap<String, usize> = HashMap::new();
+    Ok(subclassed_by_sets(anchors, candidates, &sets))
+}
+
+/// The subclasses of a full match as columns by unit position: the sets are
+/// the pairs of (anchor position, candidate position) of each subclass.
+fn subclassed_by_sets<R: MatchingRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    sets: &[Vec<(usize, usize)>],
+) -> SubclassedUnits {
+    let mut subclass: Vec<Option<usize>> = vec![None; anchors.len() + candidates.len()];
     let mut anchor_counts = Vec::with_capacity(sets.len());
     let mut candidate_counts = Vec::with_capacity(sets.len());
-    let mut anchor_flags: Vec<(String, bool, usize)> = Vec::new();
-    for (subclass, set) in sets.iter().enumerate() {
+    for (number, set) in sets.iter().enumerate() {
         let mut anchor_positions: Vec<usize> = set.iter().map(|pair| pair.0).collect();
         anchor_positions.sort_unstable();
         anchor_positions.dedup();
@@ -1227,51 +1135,19 @@ where
         anchor_counts.push(anchor_positions.len());
         candidate_counts.push(candidate_positions.len());
         for position in anchor_positions {
-            anchor_flags.push((anchors[position].id().to_string(), true, subclass));
+            subclass[position] = Some(number);
         }
         for position in candidate_positions {
-            anchor_flags.push((candidates[position].id().to_string(), false, subclass));
+            subclass[anchors.len() + position] = Some(number);
         }
     }
-    let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
-    let mut anchor_effect = HashMap::new();
-    let mut candidate_effect = HashMap::new();
-    let mut population_effect = HashMap::new();
-    for (id, is_anchor, subclass) in anchor_flags {
-        let Some(share) = subclasses[subclass].subclass_propensity else {
-            continue;
-        };
-        anchor_effect.insert(
-            id.clone(),
-            subclass_weight_for_estimand(Estimand::Att, share, is_anchor),
-        );
-        candidate_effect.insert(
-            id.clone(),
-            subclass_weight_for_estimand(Estimand::Atc, share, is_anchor),
-        );
-        population_effect.insert(
-            id.clone(),
-            subclass_weight_for_estimand(Estimand::Ate, share, is_anchor),
-        );
-        assignments.insert(id, subclass);
-    }
-    let mut dropped_ids = Vec::new();
-    for rows in [anchors, candidates] {
-        for row in rows {
-            if !assignments.contains_key(row.id()) {
-                dropped_ids.push(row.id().to_string());
-            }
-        }
-    }
-    Ok(FullMatchOutcome {
-        assignments,
-        dropped_ids,
-        subclasses,
-        att_weights: anchor_effect,
-        atc_weights: candidate_effect,
-        ate_weights: population_effect,
+    SubclassedUnits {
+        ids: unit_ids(anchors, candidates),
+        anchor_count: anchors.len(),
+        subclass,
+        subclasses: build_subclass_summaries(&anchor_counts, &candidate_counts),
         trimmed: crate::TrimmedUnits::default(),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1474,6 +1350,225 @@ mod tests {
                 "total {total} against {}",
                 brute_force(&costs)
             );
+        }
+    }
+
+    /// The subclasses of a full match as they were built with maps keyed by id,
+    /// kept to check the columns against.
+    mod reference {
+        use super::*;
+        use crate::matching::subclassification::subclass_weight_for_estimand;
+        use crate::matching::weights::{UnitRole, UnitWeightSet};
+        use crate::output::{MatchData, Units};
+        use std::collections::HashMap;
+
+        pub struct Maps {
+            pub assignments: HashMap<String, usize>,
+            pub dropped_ids: Vec<String>,
+            pub att_weights: HashMap<String, f64>,
+            pub atc_weights: HashMap<String, f64>,
+            pub ate_weights: HashMap<String, f64>,
+        }
+
+        pub fn maps_by_sets<R: MatchingRecord>(
+            anchors: &[R],
+            candidates: &[R],
+            sets: &[Vec<(usize, usize)>],
+        ) -> Maps {
+            let mut assignments: HashMap<String, usize> = HashMap::new();
+            let mut anchor_counts = Vec::with_capacity(sets.len());
+            let mut candidate_counts = Vec::with_capacity(sets.len());
+            let mut anchor_flags: Vec<(String, bool, usize)> = Vec::new();
+            for (subclass, set) in sets.iter().enumerate() {
+                let mut anchor_positions: Vec<usize> = set.iter().map(|pair| pair.0).collect();
+                anchor_positions.sort_unstable();
+                anchor_positions.dedup();
+                let mut candidate_positions: Vec<usize> = set.iter().map(|pair| pair.1).collect();
+                candidate_positions.sort_unstable();
+                candidate_positions.dedup();
+                anchor_counts.push(anchor_positions.len());
+                candidate_counts.push(candidate_positions.len());
+                for position in anchor_positions {
+                    anchor_flags.push((anchors[position].id().to_string(), true, subclass));
+                }
+                for position in candidate_positions {
+                    anchor_flags.push((candidates[position].id().to_string(), false, subclass));
+                }
+            }
+            let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
+            let mut att_weights = HashMap::new();
+            let mut atc_weights = HashMap::new();
+            let mut ate_weights = HashMap::new();
+            for (id, is_anchor, subclass) in anchor_flags {
+                let Some(share) = subclasses[subclass].subclass_propensity else {
+                    continue;
+                };
+                att_weights.insert(
+                    id.clone(),
+                    subclass_weight_for_estimand(Estimand::Att, share, is_anchor),
+                );
+                atc_weights.insert(
+                    id.clone(),
+                    subclass_weight_for_estimand(Estimand::Atc, share, is_anchor),
+                );
+                ate_weights.insert(
+                    id.clone(),
+                    subclass_weight_for_estimand(Estimand::Ate, share, is_anchor),
+                );
+                assignments.insert(id, subclass);
+            }
+            let mut dropped_ids = Vec::new();
+            for rows in [anchors, candidates] {
+                for row in rows {
+                    if !assignments.contains_key(row.id()) {
+                        dropped_ids.push(row.id().to_string());
+                    }
+                }
+            }
+            Maps {
+                assignments,
+                dropped_ids,
+                att_weights,
+                atc_weights,
+                ate_weights,
+            }
+        }
+
+        pub fn match_data(
+            maps: &Maps,
+            units: &Units,
+            weights: &HashMap<String, f64>,
+            normalize: bool,
+            drop_unmatched: bool,
+        ) -> MatchData {
+            let mut set = UnitWeightSet::default();
+            for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
+                let Some(weight) = weights.get(id) else {
+                    continue;
+                };
+                if *is_anchor {
+                    set.anchor.insert(id.clone(), *weight);
+                } else {
+                    set.candidate.insert(id.clone(), *weight);
+                }
+            }
+            let set = if normalize { set.normalized() } else { set };
+            let mut out = MatchData {
+                id: Vec::new(),
+                role: Vec::new(),
+                weight: Vec::new(),
+                subclass: Vec::new(),
+            };
+            for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
+                let group = if *is_anchor {
+                    &set.anchor
+                } else {
+                    &set.candidate
+                };
+                let weight = group.get(id).copied();
+                if weight.is_none() && drop_unmatched {
+                    continue;
+                }
+                out.id.push(id.clone());
+                out.role.push(if *is_anchor {
+                    UnitRole::Anchor
+                } else {
+                    UnitRole::Candidate
+                });
+                out.weight.push(weight.unwrap_or(0.0));
+                out.subclass.push(
+                    weight
+                        .and_then(|_| maps.assignments.get(id))
+                        .map(|subclass| subclass + 1),
+                );
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn the_columns_equal_the_maps_keyed_by_id() {
+        use crate::output::Units;
+        use crate::types::BaseRecord;
+        let mut state = 99_u64;
+        let mut below = move |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 33) as usize) % bound
+        };
+        let date = crate::date(2010, 1, 1);
+        for round in 0..60 {
+            let n_anchors = 2 + below(30);
+            let n_candidates = 2 + below(60);
+            let anchors: Vec<BaseRecord> = (0..n_anchors)
+                .map(|i| BaseRecord::new(format!("a{i}"), date))
+                .collect();
+            let candidates: Vec<BaseRecord> = (0..n_candidates)
+                .map(|i| BaseRecord::new(format!("c{i}"), date))
+                .collect();
+            // Subclasses of one anchor or more with candidates, some units left out.
+            let mut sets: Vec<Vec<(usize, usize)>> = Vec::new();
+            let mut next_candidate = 0;
+            for anchor in 0..n_anchors {
+                if below(5) == 0 || next_candidate >= n_candidates {
+                    continue;
+                }
+                let take = 1 + below(3).min(n_candidates - next_candidate - 1);
+                sets.push(
+                    (next_candidate..next_candidate + take)
+                        .map(|candidate| (anchor, candidate))
+                        .collect(),
+                );
+                next_candidate += take;
+            }
+            if sets.is_empty() {
+                continue;
+            }
+            let new = subclassed_by_sets(&anchors, &candidates, &sets);
+            let old = reference::maps_by_sets(&anchors, &candidates, &sets);
+            assert_eq!(new.assignments().count(), old.assignments.len(), "{round}");
+            for (id, subclass) in new.assignments() {
+                assert_eq!(old.assignments.get(id), Some(&subclass), "{round} {id}");
+            }
+            let dropped: Vec<&str> = old.dropped_ids.iter().map(String::as_str).collect();
+            assert_eq!(new.dropped_ids(), dropped, "{round}");
+            for (estimand, map) in [
+                (Estimand::Att, &old.att_weights),
+                (Estimand::Atc, &old.atc_weights),
+                (Estimand::Ate, &old.ate_weights),
+            ] {
+                for position in 0..new.len() {
+                    assert_eq!(
+                        new.weight(estimand, position),
+                        map.get(new.id(position)).copied(),
+                        "{round} {estimand:?}"
+                    );
+                }
+                // Rows in a shuffled data order.
+                let mut order: Vec<usize> = (0..new.len()).collect();
+                for i in (1..order.len()).rev() {
+                    order.swap(i, below(i + 1));
+                }
+                let units = Units::new(
+                    order.iter().map(|p| new.id(*p).to_string()).collect(),
+                    order.iter().map(|p| new.is_anchor(*p)).collect(),
+                )
+                .unwrap();
+                for (normalize, drop_unmatched) in [(true, true), (false, false), (true, false)] {
+                    assert_eq!(
+                        new.match_data_for(&units, estimand, normalize, drop_unmatched),
+                        Some(reference::match_data(
+                            &old,
+                            &units,
+                            map,
+                            normalize,
+                            drop_unmatched
+                        )),
+                        "{round} {estimand:?} {normalize} {drop_unmatched}"
+                    );
+                }
+            }
         }
     }
 }
