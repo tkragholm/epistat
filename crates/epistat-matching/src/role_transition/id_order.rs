@@ -124,14 +124,6 @@ impl IdOrder {
         self.rank[idx]
     }
 
-    /// The record with this id, if any, when ids are distinct; `id` gives
-    /// the id of each record.
-    pub(crate) fn find<'r>(&self, wanted: &str, id: impl Fn(usize) -> &'r str) -> Option<usize> {
-        let at = self.by_id.partition_point(|&idx| id(idx as usize) < wanted);
-        let idx = *self.by_id.get(at)? as usize;
-        (id(idx) == wanted).then_some(idx)
-    }
-
     /// Whether every id occurs once.
     pub(crate) const fn distinct(&self) -> bool {
         self.distinct

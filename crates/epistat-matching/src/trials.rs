@@ -526,27 +526,6 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
     pub(crate) const fn id_order(&self) -> Option<&IdOrder> {
         self.id_order.as_ref()
     }
-
-    /// The position in the pool of the person with this id.
-    fn position(
-        &self,
-        id: &str,
-        by_hash: &OnceLock<RapidHashMap<&'p str, usize>>,
-    ) -> Option<usize> {
-        match &self.id_order {
-            Some(order) => order.find(id, |at| self.records[at].id()),
-            None => by_hash
-                .get_or_init(|| {
-                    self.records
-                        .iter()
-                        .enumerate()
-                        .map(|(at, record)| (record.record.id(), at))
-                        .collect()
-                })
-                .get(id)
-                .copied(),
-        }
-    }
 }
 
 /// Match initiators to non-initiators in every trial of the panel.
@@ -586,15 +565,10 @@ where
     let trials = match options.control_reuse {
         ControlReuse::AcrossTrials => {
             let starts: Vec<(&i64, &(NaiveDate, Vec<Enrolment>))> = plan.trials.iter().collect();
+            let context = TrialContext::new(panel, &plan, options, panel_order.as_ref());
             let results: Vec<Option<Result<TrialResult, TrialsError<E>>>> = starts
                 .into_par_iter()
                 .map(|(period, (date, enrolments))| {
-                    let context = TrialContext {
-                        panel,
-                        plan: &plan,
-                        options,
-                        panel_order: panel_order.as_ref(),
-                    };
                     context
                         .run(*period, *date, enrolments, None, &run)
                         .map(|result| result.map(|(trial, _)| trial))
@@ -624,12 +598,7 @@ where
     R: MatchingRecord,
     F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E>,
 {
-    let context = TrialContext {
-        panel,
-        plan,
-        options,
-        panel_order,
-    };
+    let context = TrialContext::new(panel, plan, options, panel_order);
     let once = options.control_reuse == ControlReuse::OncePerRun;
     let mut used_as_control = vec![false; panel.len()];
     let mut trials = Vec::new();
@@ -661,9 +630,40 @@ struct TrialContext<'a, R> {
     plan: &'a Plan,
     options: &'a TrialOptions,
     panel_order: Option<&'a IdOrder>,
+    /// The panel position of each id, built when a trial first has pairs.
+    person_of: OnceLock<RapidHashMap<&'a str, usize>>,
 }
 
-impl<R: MatchingRecord> TrialContext<'_, R> {
+impl<'a, R: MatchingRecord> TrialContext<'a, R> {
+    const fn new(
+        panel: &'a [TrialPerson<R>],
+        plan: &'a Plan,
+        options: &'a TrialOptions,
+        panel_order: Option<&'a IdOrder>,
+    ) -> Self {
+        Self {
+            panel,
+            plan,
+            options,
+            panel_order,
+            person_of: OnceLock::new(),
+        }
+    }
+
+    /// The panel position of the person with this id.
+    fn person_of(&self, id: &str) -> Option<usize> {
+        self.person_of
+            .get_or_init(|| {
+                self.panel
+                    .iter()
+                    .enumerate()
+                    .map(|(person, row)| (row.record.id(), person))
+                    .collect()
+            })
+            .get(id)
+            .copied()
+    }
+
     /// The trial that starts at `period`, and the people drawn as its
     /// controls, or `None` when its pool has no initiator. `used_as_control`
     /// marks the people drawn in earlier trials when they leave the pool.
@@ -715,12 +715,19 @@ impl<R: MatchingRecord> TrialContext<'_, R> {
             Ok(outcome) => outcome,
             Err(error) => return Some(Err(TrialsError::Matching { period, error })),
         };
-        let by_hash = OnceLock::new();
+        // The position in the pool of each person of the panel.
+        let mut pool_at = vec![usize::MAX; panel.len()];
+        for (at, e) in pool.iter().enumerate() {
+            pool_at[e.person] = at;
+        }
         let mut listed = vec![false; pool.len()];
         let mut members = Vec::new();
         let mut controls = Vec::new();
         let mut add = |id: &str, members: &mut Vec<TrialMember>| {
-            let at = trial_pool.position(id, &by_hash)?;
+            let at = pool_at[self.person_of(id)?];
+            if at == usize::MAX {
+                return None;
+            }
             if std::mem::replace(&mut listed[at], true) {
                 return Some(at);
             }
