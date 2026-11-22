@@ -44,7 +44,7 @@
 //!
 //! ```
 //! use faer::Mat;
-//! use semicontinuous_models::{
+//! use epistat_semicontinuous::{
 //!     ModelInput, PreparedGammaDesign, PreparedScratch, TweedieOptions,
 //!     fit_tweedie_ref_warm_prevalidated,
 //! };

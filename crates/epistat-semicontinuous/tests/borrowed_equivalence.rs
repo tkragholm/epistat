@@ -5,7 +5,7 @@
 //! every target.
 
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     FitOptions, InputError, LogNormalOptions, Model, ModelInput, ModelInputRef, TweedieError,
     TweedieOptions, TwoPartError, TwoPartWarmStart, fit_lognormal_smearing_input,
     fit_tweedie_input_warm, fit_tweedie_ref_warm, fit_tweedie_ref_warm_prevalidated,
@@ -80,12 +80,12 @@ fn same_opt(a: Option<&Mat<f64>>, b: Option<&Mat<f64>>) {
 
 fn same_two_part(
     a: &(
-        semicontinuous_models::TwoPartModel,
-        semicontinuous_models::TwoPartReport,
+        epistat_semicontinuous::TwoPartModel,
+        epistat_semicontinuous::TwoPartReport,
     ),
     b: &(
-        semicontinuous_models::TwoPartModel,
-        semicontinuous_models::TwoPartReport,
+        epistat_semicontinuous::TwoPartModel,
+        epistat_semicontinuous::TwoPartReport,
     ),
 ) {
     same(&a.0.beta_logit, &b.0.beta_logit);
@@ -101,12 +101,12 @@ fn same_two_part(
 
 fn same_tweedie(
     a: &(
-        semicontinuous_models::TweedieModel,
-        semicontinuous_models::TweedieReport,
+        epistat_semicontinuous::TweedieModel,
+        epistat_semicontinuous::TweedieReport,
     ),
     b: &(
-        semicontinuous_models::TweedieModel,
-        semicontinuous_models::TweedieReport,
+        epistat_semicontinuous::TweedieModel,
+        epistat_semicontinuous::TweedieReport,
     ),
 ) {
     same(&a.0.beta, &b.0.beta);

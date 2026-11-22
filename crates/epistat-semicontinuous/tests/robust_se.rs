@@ -10,7 +10,7 @@ use epistat_rng::{Stream, replicate_seed};
 use faer::prelude::*;
 use faer::{Mat, Side};
 use rand_distr::{Distribution, Gamma};
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     FitOptions, ModelInput, TweedieOptions, fit_tweedie_input, fit_two_part_input,
 };
 

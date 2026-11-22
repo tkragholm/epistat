@@ -254,7 +254,7 @@ pub(crate) fn select_models(x: &Mat<f64>, y: &Mat<f64>, powers: &[f64]) -> Selec
 ///
 /// ```
 /// use faer::Mat;
-/// use semicontinuous_models::{ModelInput, select_models_input};
+/// use epistat_semicontinuous::{ModelInput, select_models_input};
 ///
 /// fn idx_to_f64(idx: usize) -> f64 {
 ///     f64::from(u32::try_from(idx).unwrap_or(u32::MAX))

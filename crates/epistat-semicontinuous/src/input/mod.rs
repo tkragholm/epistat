@@ -7,7 +7,7 @@
 //!
 //! ```
 //! use faer::Mat;
-//! use semicontinuous_models::ModelInput;
+//! use epistat_semicontinuous::ModelInput;
 //!
 //! fn idx_to_f64(idx: usize) -> f64 {
 //!     f64::from(u32::try_from(idx).unwrap_or(u32::MAX))
@@ -22,7 +22,7 @@
 //!
 //! ```
 //! use faer::Mat;
-//! use semicontinuous_models::ModelInput;
+//! use epistat_semicontinuous::ModelInput;
 //!
 //! fn idx_to_f64(idx: usize) -> f64 {
 //!     f64::from(u32::try_from(idx).unwrap_or(u32::MAX))
@@ -230,7 +230,7 @@ impl ModelInput {
 ///
 /// ```
 /// use faer::Mat;
-/// use semicontinuous_models::{ModelInput, ModelInputRef};
+/// use epistat_semicontinuous::{ModelInput, ModelInputRef};
 ///
 /// let design = Mat::from_fn(3, 1, |_, _| 1.0);
 /// let outcome = Mat::from_fn(3, 1, |i, _| i as f64);

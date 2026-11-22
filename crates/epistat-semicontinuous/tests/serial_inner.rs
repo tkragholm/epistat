@@ -5,7 +5,7 @@
 
 use epistat_testkit::{Fingerprint, on_threads};
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     FitOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart, fit_tweedie_input_warm,
     fit_two_part_input_warm,
 };

@@ -13,7 +13,7 @@
 
 use epistat_testkit::Fingerprint;
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart,
     fit_lognormal_smearing_input, fit_tweedie_input, fit_tweedie_input_warm, fit_two_part_input,
     fit_two_part_input_warm,

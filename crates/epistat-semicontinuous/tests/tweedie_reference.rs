@@ -8,7 +8,7 @@
 //! computed in R from the glm fit's fitted means.
 
 use faer::Mat;
-use semicontinuous_models::{ModelInput, TweedieOptions, fit_tweedie_input};
+use epistat_semicontinuous::{ModelInput, TweedieOptions, fit_tweedie_input};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

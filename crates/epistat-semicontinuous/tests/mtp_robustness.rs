@@ -1,6 +1,6 @@
 use epistat_rng::Stream;
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     LongitudinalModelInput, MtpFitOptions, MtpMultiChainOptions, MtpProposalTuning,
     MtpSamplerConfig, fit_mtp_input_multi_chain_with_config, fit_mtp_input_with_posterior_config,
     posterior_predictive_summary,

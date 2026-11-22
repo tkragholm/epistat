@@ -1,6 +1,6 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use faer::Mat;
-use semicontinuous_models::models::two_part::{ConfidenceInterval, bootstrap_percentile_ci};
+use epistat_semicontinuous::models::two_part::{ConfidenceInterval, bootstrap_percentile_ci};
 
 fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).expect("benchmark size fits u32"))
@@ -18,9 +18,9 @@ fn bootstrap_percentile_ci_sorted_reference(
     for col in 0..n {
         let mut values = betas.iter().map(|b| b[(col, 0)]).collect::<Vec<_>>();
         values.sort_by(f64::total_cmp);
-        let lower = semicontinuous_models::utils::calculate_quantile(&values, alpha / 2.0).unwrap();
+        let lower = epistat_semicontinuous::utils::calculate_quantile(&values, alpha / 2.0).unwrap();
         let upper =
-            semicontinuous_models::utils::calculate_quantile(&values, 1.0 - alpha / 2.0).unwrap();
+            epistat_semicontinuous::utils::calculate_quantile(&values, 1.0 - alpha / 2.0).unwrap();
         intervals.push(ConfidenceInterval { lower, upper });
     }
     intervals

@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use semicontinuous_models::models::mtp::sampler::benchmark_sample_standard_normals;
+use epistat_semicontinuous::models::mtp::sampler::benchmark_sample_standard_normals;
 
 fn bench_sample_standard_normals(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("mtp_sample_standard_normals");

@@ -228,7 +228,7 @@ pub fn compare_models_input_with_fits(
         include_lognormal = options.include_lognormal,
         tweedie_powers = options.tweedie_powers.len(),
         duration_ms = base_fits_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison substep complete"
+        "epistat_semicontinuous comparison substep complete"
     );
 
     let selection_started_at = Instant::now();
@@ -237,7 +237,7 @@ pub fn compare_models_input_with_fits(
         step = "selection",
         tweedie_candidates = tweedie_candidates.len(),
         duration_ms = selection_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison substep complete"
+        "epistat_semicontinuous comparison substep complete"
     );
 
     let scoring_started_at = Instant::now();
@@ -262,7 +262,7 @@ pub fn compare_models_input_with_fits(
         information_criteria_rows = information_criteria.len(),
         tweedie_ic_rows = tweedie_ic.len(),
         duration_ms = scoring_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison substep complete"
+        "epistat_semicontinuous comparison substep complete"
     );
 
     let cv_default_started_at = Instant::now();
@@ -285,7 +285,7 @@ pub fn compare_models_input_with_fits(
         include_two_part = cv_default.include_two_part,
         include_lognormal = cv_default.include_lognormal,
         duration_ms = cv_default_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison substep complete"
+        "epistat_semicontinuous comparison substep complete"
     );
     let cv_elastic_net_started_at = Instant::now();
     let cv_elastic_net = if let Some(elastic_net_options) = two_part_elastic_net_options {
@@ -308,7 +308,7 @@ pub fn compare_models_input_with_fits(
         step = "cv_elastic_net",
         enabled = cv_elastic_net.is_some(),
         duration_ms = cv_elastic_net_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison substep complete"
+        "epistat_semicontinuous comparison substep complete"
     );
     let assembly_started_at = Instant::now();
     let cv_summary = build_cv_summary(&cv_default, cv_elastic_net.as_ref());
@@ -320,12 +320,12 @@ pub fn compare_models_input_with_fits(
         cv_ranking_rows = cv_ranking.len(),
         tweedie_cv_ranking_rows = tweedie_cv_ranking.len(),
         duration_ms = assembly_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison substep complete"
+        "epistat_semicontinuous comparison substep complete"
     );
     info!(
         step = "total",
         duration_ms = total_started_at.elapsed().as_millis() as u64,
-        "semicontinuous_models comparison complete"
+        "epistat_semicontinuous comparison complete"
     );
 
     Ok((

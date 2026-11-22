@@ -1,5 +1,5 @@
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     CounterfactualScenario, LongitudinalModelInput, MtpFitOptions,
     compute_counterfactual_effects_summary, fit_mtp_input_with_posterior,
     posterior_predictive_summary,

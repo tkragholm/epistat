@@ -1,6 +1,6 @@
-# semicontinuous_models
+# epistat_semicontinuous
 
-`semicontinuous_models` provides reusable model implementations for semi-continuous outcomes:
+`epistat_semicontinuous` provides reusable model implementations for semi-continuous outcomes:
 
 - Two-part model (logit + gamma log link)
 - Tweedie GLM (quasi-likelihood)
@@ -13,13 +13,13 @@ The crate was originally developed for a healthcare outcome study, but the API i
 
 ```toml
 [dependencies]
-semicontinuous_models = "0.5"
+epistat_semicontinuous = "0.5"
 ```
 
 ## Quick start
 
 ```rust
-use semicontinuous_models::{FitOptions, ModelInput, fit_two_part_input};
+use epistat_semicontinuous::{FitOptions, ModelInput, fit_two_part_input};
 use faer::Mat;
 
 fn idx_to_f64(idx: usize) -> f64 {
@@ -41,7 +41,7 @@ assert!(report.iterations_logit > 0);
 For more numerically stable defaults on observational data:
 
 ```rust
-use semicontinuous_models::{FitOptions, LogNormalOptions};
+use epistat_semicontinuous::{FitOptions, LogNormalOptions};
 
 let two_part_options = FitOptions::stable_defaults();
 let lognormal_options = LogNormalOptions::stable_defaults();

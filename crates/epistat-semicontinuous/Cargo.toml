@@ -1,28 +1,29 @@
 [package]
-name = "semicontinuous_models"
-version = "0.9.0"
-edition = "2024"
-authors = ["Tobias Kragholm"]
-license = "MIT OR Apache-2.0"
-description = "Reusable models for semi-continuous outcomes (two-part, Tweedie, and log-normal)"
+name = "epistat-semicontinuous"
+description = "Two-part, Tweedie, log-normal and marginalised two-part models for semicontinuous outcomes such as costs, with results that do not depend on the number of threads"
+keywords = ["two-part", "tweedie", "lognormal", "statistics", "costs"]
+categories = ["mathematics", "science"]
 readme = "README.md"
-documentation = "https://docs.rs/semicontinuous_models"
-repository = "https://github.com/tkragholm/semicontinuous_models"
-keywords = ["glm", "two-part", "tweedie", "lognormal", "statistics"]
-categories = ["science", "mathematics", "algorithms"]
-exclude = ["target/", ".DS_Store"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
-[lib]
-crate-type = ["lib"]
-
 [features]
 bench-internals = []
 
 [dependencies]
+epistat-glm = { path = "../epistat-glm", version = "0.2.0" }
+epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
+epistat-rng = { path = "../epistat-rng", version = "0.1.3", features = ["rand"] }
+epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
 bon = "3"
 thiserror = "2.0.18"
 # Dense linear algebra. default-features disabled to drop unused faer trees
@@ -35,15 +36,10 @@ comfy-table = "7.2.2"
 dyn-stack = "0.13.2"
 tracing = "0.1.41"
 rayon = "1.11.0"
-epistat-rng = { version = "0.1.3", features = ["rand"] }
-epistat-linalg = "0.3.0"
-epistat-inference = "0.3.1"
-epistat-stats = "0.2.3"
-epistat-glm = "0.1.1"
 
 [dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
 rand_distr = "0.6.0"
-epistat-testkit = "0.1.0"
 approx = "0.5.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

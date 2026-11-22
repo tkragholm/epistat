@@ -1,6 +1,6 @@
 use approx::assert_relative_eq;
 use faer::Mat;
-use semicontinuous_models::{ModelInput, TweedieOptions, fit_tweedie_input};
+use epistat_semicontinuous::{ModelInput, TweedieOptions, fit_tweedie_input};
 
 #[test]
 fn tweedie_input_uses_sample_weights_for_intercept_only_gamma_fit() {

@@ -6,8 +6,8 @@
 //! caller-held buffers is compared bit for bit with the dense path without them.
 
 use faer::Mat;
-use semicontinuous_models::models::FitStrategy;
-use semicontinuous_models::{
+use epistat_semicontinuous::models::FitStrategy;
+use epistat_semicontinuous::{
     FitOptions, ModelInput, PreparedFitError, PreparedGammaDesign, PreparedPredictionDesign,
     PreparedScratch, PreparedTwoPartDesign, Regularization, TweedieOptions, TweedieScratch,
     TwoPartWarmStart, fit_tweedie_ref_warm_prevalidated,

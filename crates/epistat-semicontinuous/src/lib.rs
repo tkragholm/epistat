@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! # `semicontinuous_models`
+//! # `epistat_semicontinuous`
 //!
 //! Reusable models and diagnostics for non-negative semi-continuous outcomes:
 //! two-part, Tweedie GLM, and log-normal with smearing.

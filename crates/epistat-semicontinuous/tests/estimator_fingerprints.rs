@@ -12,7 +12,7 @@
 use epistat_rng::Stream as Draws;
 use epistat_testkit::Fingerprint;
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     BootstrapOptions, ConfidenceInterval, FamilyRandomEffects, FitOptions,
     LongitudinalModelInput, ModelComparison, ModelComparisonOptions, ModelFitMetrics,
     ModelInput, MtpFitOptions, MtpMultiChainOptions, MtpPosteriorSummary, MtpSamplerConfig,
@@ -564,18 +564,18 @@ const GOLDEN: &[(&str, u64)] = &[
     ("bootstrap/draws", 0x1665116b57fac17c),
     ("bootstrap/summary", 0xda0e70c42c70b7ca),
     ("two_part/clustered/robust", 0x6a615d52a469116e),
-    ("two_part/elastic_net", 0x1ccf511945e42982),
+    ("two_part/elastic_net", 0x7aa9a058c6c773e0),
     ("two_part/prevalidated/warm", 0x45cb44511f4c3630),
     ("compact/gamma", 0xfbca6c2d3c43fbf8),
     ("compact/two_part", 0xbc06d03e59d9f18a),
     ("comparison/default", 0xa7aabf741b04d9aa),
-    ("comparison/elastic_net", 0x4197a8877a876518),
+    ("comparison/elastic_net", 0xa7bb6818a8e46428),
     ("selection", 0x33593df6d30b6785),
     ("lognormal/weighted", 0x22f8bede7fbf6966),
     ("mtp/draws", 0xf0902e04a16ea2fd),
     ("mtp/convergence", 0x062bdb420fa8775c),
     ("mtp/posterior_predictive", 0x2a818f18ff31a831),
-    ("mtp/autocorrelation", 0x3445df37d367dc2f),
+    ("mtp/autocorrelation", 0xe7e846cfe5a1e143),
 ];
 
 #[test]

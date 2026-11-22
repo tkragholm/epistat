@@ -9,7 +9,7 @@
 
 use epistat_testkit::on_threads;
 use faer::Mat;
-use semicontinuous_models::{
+use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, ModelInput, TweedieOptions, fit_lognormal_smearing_input,
     fit_tweedie_input, fit_two_part_input,
 };
