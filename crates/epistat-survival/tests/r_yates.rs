@@ -40,11 +40,6 @@
 //! The bounds are not changed after a run.
 
 #![expect(clippy::cast_precision_loss, reason = "counts are small")]
-#![allow(
-    clippy::float_cmp,
-    clippy::needless_range_loop,
-    reason = "degrees of freedom are whole numbers, and the bounds index several tables by the same level and coefficient"
-)]
 
 use epistat_linalg::Mat;
 use epistat_survival::standardise::Counterfactual;
@@ -207,12 +202,8 @@ fn population_means_match_r() {
             };
             mean_abs.push(ma);
         }
-        for l in 0..n_levels {
-            worst.put(
-                &format!("{name} estimate"),
-                (out.estimate[l] - case.estimate[l]).abs(),
-                b_est[l],
-            );
+        for ((got, want), bound) in out.estimate.iter().zip(&case.estimate).zip(&b_est) {
+            worst.put(&format!("{name} estimate"), (got - want).abs(), *bound);
         }
 
         // The covariance of the estimates: yates' for the identity link, the R
@@ -240,10 +231,10 @@ fn population_means_match_r() {
                 };
                 let mut sum = 0.0;
                 let mut fd = 0.0;
-                for i in 0..p {
-                    for j in 0..p {
+                for (i, &ga_i) in ga.iter().enumerate().take(p) {
+                    for (j, &gb_j) in gb.iter().enumerate().take(p) {
                         let v = case.var[i][j].abs();
-                        sum += ga[i] * v * gb[j];
+                        sum += ga_i * v * gb_j;
                         if !identity {
                             let delta = |k: usize| {
                                 let h = case.fd_step * case.coefficients[k].abs().max(1.0);
@@ -251,7 +242,7 @@ fn population_means_match_r() {
                                     4.0 * (rows + p as f64 + 4.0 + xb) * eps * m_max.max(0.25);
                                 eps_m / h + h * h * big_x.powi(3) * m_max.max(1.0) / 6.0
                             };
-                            fd += v * (delta(i) * gb[j] + ga[i] * delta(j));
+                            fd += v * (delta(i) * gb_j + ga_i * delta(j));
                         }
                     }
                 }
@@ -295,7 +286,11 @@ fn population_means_match_r() {
             .fold(0.0, f64::max);
         let b_s: f64 = b_cov.iter().flatten().copied().fold(0.0, f64::max);
         for (got, want) in out.tests.iter().zip(want_tests) {
-            assert_eq!(got.df as f64, want.df, "{name}: degrees of freedom");
+            assert_eq!(
+                f64::to_bits(got.df as f64),
+                f64::to_bits(want.df),
+                "{name}: degrees of freedom"
+            );
             let c_norm = want.chisq.sqrt().max(f64::MIN_POSITIVE);
             let rel = 2.0 * b_c / c_norm + kappa * b_s / norm_s;
             let bound = want.chisq * rel * 4.0 + 8.0 * eps * kappa * want.chisq;

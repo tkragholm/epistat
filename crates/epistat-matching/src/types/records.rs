@@ -64,9 +64,9 @@ pub struct BaseRecord {
     pub strata: HashMap<String, String>,
     /// Named numeric fields, for caliper constraints beyond the birth date.
     ///
-    /// `#[serde(default)]` so a record serialised before this field existed
-    /// still deserialises: the map is then empty and every caliper over it
-    /// refuses, which is the safe direction for a constraint.
+    /// A record serialised without this field deserialises with an empty map,
+    /// and every caliper over it refuses, which is the safe direction for a
+    /// constraint.
     #[serde(default)]
     pub numerics: HashMap<String, f64>,
     /// Optional generic uniqueness key.

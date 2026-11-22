@@ -48,7 +48,7 @@
 //! form used for designs with more than 32 columns. With
 //! 32 or fewer, the fit works from the weighted Gram matrix, see below. The binomial
 //! step is halved towards the previous coefficients, up to 30 times, until the
-//! penalised objective no longer rises, which glmnet does not do and which
+//! penalised objective does not rise, which glmnet does not do and which
 //! makes the step safe far from the solution. If no halving helps, the fit
 //! returns the coefficients of the previous step, not converged. Passes, steps
 //! and halvings run in a fixed order on one thread, so a fit does not depend on
@@ -106,7 +106,7 @@
 //! centred at their working-weighted means for each solve and the constant
 //! column's coefficient is recovered afterwards, as glmnet does with its
 //! implicit intercept. The objective is unchanged, and a column with a large
-//! mean and a small spread no longer fights the intercept. `v_j` is then the
+//! mean and a small spread does not compete with the intercept. `v_j` is then the
 //! weighted variance of the column. Without such a column nothing is centred
 //! and `v_j` is the weighted second moment. Near the solution the coefficient
 //! error is at most about `sqrt(tolerance / v_j) / (1 - ρ)` for column `j`,

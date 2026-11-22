@@ -46,7 +46,6 @@
     clippy::cast_possible_wrap,
     reason = "status codes are small positive integers"
 )]
-#![allow(clippy::float_cmp, reason = "event times are compared exactly")]
 
 #[path = "absrisk_naive/mod.rs"]
 mod absrisk_naive;
@@ -389,7 +388,7 @@ fn absolute_risk_matches_r() {
                 .map(|i| case.time[i])
                 .collect();
             t.sort_by(f64::total_cmp);
-            t.windows(2).any(|w| w[0] == w[1])
+            t.windows(2).any(|w| w[0].to_bits() == w[1].to_bits())
         });
         let mut naive_case = NCase {
             stop: case.time.clone(),

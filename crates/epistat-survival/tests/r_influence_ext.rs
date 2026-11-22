@@ -29,10 +29,6 @@
     clippy::cast_sign_loss,
     reason = "row counts and codes are small"
 )]
-#![allow(
-    clippy::float_cmp,
-    reason = "times are compared exactly with the times asked for"
-)]
 
 use epistat_linalg::{Mat, Side};
 use epistat_survival::SurvData;
@@ -342,7 +338,7 @@ fn standardised_risks_match_r() {
         let b_se = b_risk * p_max.mul_add(kappa, 0.0).max(1.0);
         let t = case.times.len();
         let level_of = |label: &str| label.parse::<usize>().unwrap();
-        let k_of = |time: f64| case.times.iter().position(|&x| x == time).unwrap();
+        let k_of = |time: f64| case.times.iter().position(|&x| x.to_bits() == time.to_bits()).unwrap();
         for row in &case.ate.mean {
             let (l, k) = (level_of(&row.treatment), k_of(row.time));
             let f = out.risk[l * t + k].unwrap();

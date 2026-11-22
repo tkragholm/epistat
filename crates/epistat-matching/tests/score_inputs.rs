@@ -1,7 +1,7 @@
 //! Checks on the inputs and settings of the score-based methods: the
 //! propensity score estimators, the Mahalanobis preparation, subclassification,
 //! quick matching and the genetic search. Each test states the behaviour the
-//! documentation or decision 59 requires.
+//! documentation requires: an undefined value is `None` and invalid input an error.
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
