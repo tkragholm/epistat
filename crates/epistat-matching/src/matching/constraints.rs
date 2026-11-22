@@ -93,6 +93,38 @@ pub(crate) trait RefusesFromDate<R>: Sync {
     fn refused_from(&self, control: &R) -> Option<NaiveDate>;
 }
 
+/// A constraint that allows a control on the index dates inside its periods
+/// of residence and refuses it on the others.
+pub(crate) trait ResidenceSpellSource<R>: Sync {
+    /// The periods of residence of the control, or `None` when it is resident
+    /// on every date.
+    fn spells_of(&self, control: &R) -> Option<&[crate::constraints::ResidenceSpell]>;
+}
+
+/// A constraint that compares one numeric value of the case with the same
+/// value of the control, as [`caliper_allows`] does.
+pub(crate) trait FieldValueSource<R>: Sync {
+    /// The value of the record.
+    fn value_of(&self, record: &R) -> Option<f64>;
+}
+
+/// Whether a case with value `case` and a control with value `control` are
+/// within `window` of each other. Two missing values are within it when
+/// `match_missing`, and one missing value never is.
+#[inline]
+pub(crate) fn caliper_allows(
+    case: Option<f64>,
+    control: Option<f64>,
+    window: f64,
+    match_missing: bool,
+) -> bool {
+    match (case, control) {
+        (Some(c), Some(ctrl)) => (c - ctrl).abs() <= window,
+        (None, None) => match_missing,
+        _ => false,
+    }
+}
+
 /// What a constraint decides, in a form that risk-set matching under the
 /// default policy can count with a sweep over the index dates. See
 /// [`Constraint::status_rule`].
@@ -108,6 +140,20 @@ pub(crate) enum StatusRuleKind<'a, R> {
     RefusesFrom {
         reason: &'static str,
         source: &'a dyn RefusesFromDate<R>,
+    },
+    /// Refuses a control, for `reason`, on the index dates outside the
+    /// periods of residence `source` gives for it.
+    OutsideSpells {
+        reason: &'static str,
+        source: &'a dyn ResidenceSpellSource<R>,
+    },
+    /// Refuses a pair, for `reason`, when the values `source` gives for the
+    /// case and the control are not within `window` by [`caliper_allows`].
+    ComparesValues {
+        reason: &'static str,
+        source: &'a dyn FieldValueSource<R>,
+        window: f64,
+        match_missing: bool,
     },
 }
 

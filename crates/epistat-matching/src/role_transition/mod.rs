@@ -1,9 +1,13 @@
 mod algorithm;
+mod id_order;
 mod order_statistics;
 mod sweep;
 
+pub(crate) use id_order::IdOrder;
+
+pub(crate) use algorithm::match_transition_ordered;
 pub use algorithm::{
-    DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
+    AtRiskSpan, DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
     match_transition,
 };
 mod exposure_density;

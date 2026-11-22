@@ -346,13 +346,13 @@ fn run(
     replacement: bool,
     seed: u64,
 ) -> TrialOutcome {
-    match_trials(panel, options, |period, cohort| {
+    match_trials(panel, options, |pool| {
         Ok::<_, std::convert::Infallible>(run_trial(
             reference,
-            cohort,
+            pool.records(),
             k,
             replacement,
-            trial_seed(seed, period),
+            trial_seed(seed, pool.period()),
         ))
     })
     .expect("valid panel")

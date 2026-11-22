@@ -57,14 +57,18 @@
 //! each person at the deviation. Weights for the censoring are the task of the
 //! analysis and are not computed here.
 
-use crate::matching::MatchingRecord;
+use crate::matching::job::TransitionMode;
+use crate::matching::{MatchJob, MatchingRecord, RandomSelection};
+use crate::role_transition::IdOrder;
 use crate::types::{MatchOutcome, RoleTransitionRecord};
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::sync::OnceLock;
 
 /// One period of one person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -476,104 +480,288 @@ pub fn trial_seed(seed: u64, period: i64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// The pool of one trial, as the matching of the trial is given it.
+///
+/// The records are the people eligible at the start of the trial, in the
+/// order of the panel, with the date of the trial as the transition date of
+/// the initiators and none for the rest. Each holds a reference to the record
+/// of the person in the panel, so a record is never copied, however many
+/// trials the person is eligible in.
+pub struct TrialPool<'p, R> {
+    period: i64,
+    records: Vec<RoleTransitionRecord<&'p R>>,
+    /// The order of the pool's ids, read off the order of the panel's.
+    id_order: Option<IdOrder>,
+}
+
+impl<'p, R: MatchingRecord> TrialPool<'p, R> {
+    /// The period at which the trial starts.
+    #[must_use]
+    pub const fn period(&self) -> i64 {
+        self.period
+    }
+
+    /// The people of the pool as a risk-set cohort.
+    #[must_use]
+    pub fn records(&self) -> &[RoleTransitionRecord<&'p R>] {
+        &self.records
+    }
+
+    /// A risk-set job on the pool: [`MatchJob::new_transition`] on
+    /// [`Self::records`] with the order of the pool's ids, which is read off
+    /// the order of the panel's ids, so the job does not sort them.
+    #[must_use]
+    pub fn job(
+        &self,
+        seed: u64,
+    ) -> MatchJob<
+        TransitionMode<'_, RoleTransitionRecord<&'p R>>,
+        RoleTransitionRecord<&'p R>,
+        RandomSelection,
+    > {
+        MatchJob::new_transition(&self.records, seed).with_id_order(self.id_order.as_ref())
+    }
+
+    /// The order of the pool's ids, when the panel fits one.
+    pub(crate) const fn id_order(&self) -> Option<&IdOrder> {
+        self.id_order.as_ref()
+    }
+}
+
 /// Match initiators to non-initiators in every trial of the panel.
 ///
-/// `run` matches one trial. It is given the period at which the trial starts
-/// and the pool of the trial as a risk-set cohort: the people eligible at the
-/// start, with the date of the trial as the transition date of the initiators
-/// and none for the rest. It returns the matching of that cohort, for example
-/// by running a [`MatchJob::new_transition`](crate::MatchJob::new_transition)
-/// with the options of the study and a seed from [`trial_seed`]. The pool
-/// holds a reference to the record of each person in the panel, so a record
-/// is never copied, however many trials the person is eligible in.
+/// `run` matches one trial. It is given the pool of the trial (see
+/// [`TrialPool`]) and returns the matching of its records, for example by
+/// running [`TrialPool::job`] with the options of the study and a seed from
+/// [`trial_seed`].
+///
+/// Under [`ControlReuse::AcrossTrials`] the trials do not depend on each
+/// other, and they are matched in parallel on the rayon pool; `run` must give
+/// the same matching for the same pool whatever else runs, which a seed from
+/// [`trial_seed`] does. Under [`ControlReuse::OncePerRun`] a trial depends on
+/// the controls drawn before it, and the trials are matched one after the
+/// other in order of their start. Either way the output is in order of the
+/// start and does not depend on the number of threads.
 ///
 /// Trials without an initiator in the pool are left out of the output.
 ///
 /// # Errors
 ///
-/// A [`TrialsError`] when the panel is not valid or `run` fails.
+/// A [`TrialsError`] when the panel is not valid or `run` fails. When `run`
+/// fails for several trials, the error is that of the earliest of them.
 pub fn match_trials<R, E, F>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
-    mut run: F,
+    run: F,
 ) -> Result<TrialOutcome, TrialsError<E>>
 where
-    R: MatchingRecord,
-    F: FnMut(i64, &[RoleTransitionRecord<&R>]) -> Result<MatchOutcome, E>,
+    R: MatchingRecord + Sync,
+    E: Send,
+    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E> + Sync,
 {
     validate(panel)?;
     let plan = plan(panel, options);
+    let panel_order = IdOrder::of_ids(panel.len(), |person| panel[person].record.id());
+    let trials = match options.control_reuse {
+        ControlReuse::AcrossTrials => {
+            let starts: Vec<(&i64, &(NaiveDate, Vec<Enrolment>))> = plan.trials.iter().collect();
+            let context = TrialContext::new(panel, &plan, options, panel_order.as_ref());
+            let results: Vec<Option<Result<TrialResult, TrialsError<E>>>> = starts
+                .into_par_iter()
+                .map(|(period, (date, enrolments))| {
+                    context
+                        .run(*period, *date, enrolments, None, &run)
+                        .map(|result| result.map(|(trial, _)| trial))
+                })
+                .collect();
+            results
+                .into_iter()
+                .flatten()
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        ControlReuse::OncePerRun => in_order(panel, &plan, options, panel_order.as_ref(), &run)?,
+    };
+    Ok(TrialOutcome { trials })
+}
+
+/// The trials of the plan one after the other, in order of their start. A
+/// person drawn as a control leaves the pools of the later trials under
+/// [`ControlReuse::OncePerRun`].
+fn in_order<R, E, F>(
+    panel: &[TrialPerson<R>],
+    plan: &Plan,
+    options: &TrialOptions,
+    panel_order: Option<&IdOrder>,
+    run: &F,
+) -> Result<Vec<TrialResult>, TrialsError<E>>
+where
+    R: MatchingRecord,
+    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E>,
+{
+    let context = TrialContext::new(panel, plan, options, panel_order);
+    let once = options.control_reuse == ControlReuse::OncePerRun;
     let mut used_as_control = vec![false; panel.len()];
     let mut trials = Vec::new();
     for (period, (date, enrolments)) in &plan.trials {
+        let Some(result) = context.run(
+            *period,
+            *date,
+            enrolments,
+            once.then_some(used_as_control.as_slice()),
+            run,
+        ) else {
+            continue;
+        };
+        let (trial, controls) = result?;
+        for person in controls {
+            used_as_control[person] = true;
+        }
+        trials.push(trial);
+    }
+    Ok(trials)
+}
+
+/// A trial and the panel positions of the people drawn as its controls.
+type RunTrial = (TrialResult, Vec<usize>);
+
+/// What every trial of a run reads.
+struct TrialContext<'a, R> {
+    panel: &'a [TrialPerson<R>],
+    plan: &'a Plan,
+    options: &'a TrialOptions,
+    panel_order: Option<&'a IdOrder>,
+    /// The panel position of each id, built when a trial first has pairs.
+    person_of: OnceLock<RapidHashMap<&'a str, usize>>,
+}
+
+impl<'a, R: MatchingRecord> TrialContext<'a, R> {
+    const fn new(
+        panel: &'a [TrialPerson<R>],
+        plan: &'a Plan,
+        options: &'a TrialOptions,
+        panel_order: Option<&'a IdOrder>,
+    ) -> Self {
+        Self {
+            panel,
+            plan,
+            options,
+            panel_order,
+            person_of: OnceLock::new(),
+        }
+    }
+
+    /// The panel position of the person with this id.
+    fn person_of(&self, id: &str) -> Option<usize> {
+        self.person_of
+            .get_or_init(|| {
+                self.panel
+                    .iter()
+                    .enumerate()
+                    .map(|(person, row)| (row.record.id(), person))
+                    .collect()
+            })
+            .get(id)
+            .copied()
+    }
+
+    /// The trial that starts at `period`, and the people drawn as its
+    /// controls, or `None` when its pool has no initiator. `used_as_control`
+    /// marks the people drawn in earlier trials when they leave the pool.
+    fn run<E, F>(
+        &self,
+        period: i64,
+        date: NaiveDate,
+        enrolments: &[Enrolment],
+        used_as_control: Option<&[bool]>,
+        run: &F,
+    ) -> Option<Result<RunTrial, TrialsError<E>>>
+    where
+        F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E>,
+    {
+        let (panel, options) = (self.panel, self.options);
         let pool: Vec<&Enrolment> = enrolments
             .iter()
             .filter(|e| {
                 e.assigned
-                    || !((options.control_reuse == ControlReuse::OncePerRun
-                        && used_as_control[e.person])
+                    || !(used_as_control.is_some_and(|used| used[e.person])
                         || (!options.initiators_as_earlier_controls
-                            && plan.last_initiation[e.person].is_some_and(|last| last > *period)))
+                            && self.plan.last_initiation[e.person]
+                                .is_some_and(|last| last > period)))
             })
             .collect();
         let n_initiators = pool.iter().filter(|e| e.assigned).count();
         if n_initiators == 0 {
-            continue;
+            return None;
         }
-        let cohort: Vec<RoleTransitionRecord<&R>> = pool
+        // A panel with an order has at most `u32::MAX` people.
+        let members: Vec<u32> = pool
             .iter()
-            .map(|e| {
-                RoleTransitionRecord::from_record(
-                    &panel[e.person].record,
-                    e.assigned.then_some(*date),
-                )
-            })
+            .filter_map(|e| u32::try_from(e.person).ok())
             .collect();
-        let outcome = run(*period, &cohort).map_err(|error| TrialsError::Matching {
-            period: *period,
-            error,
-        })?;
-        let position: RapidHashMap<&str, usize> = pool
-            .iter()
-            .enumerate()
-            .map(|(at, e)| (panel[e.person].record.id(), at))
-            .collect();
+        let trial_pool = TrialPool {
+            period,
+            records: pool
+                .iter()
+                .map(|e| {
+                    RoleTransitionRecord::from_record(
+                        &panel[e.person].record,
+                        e.assigned.then_some(date),
+                    )
+                })
+                .collect(),
+            id_order: self.panel_order.map(|order| order.subset(&members)),
+        };
+        let outcome = match run(&trial_pool) {
+            Ok(outcome) => outcome,
+            Err(error) => return Some(Err(TrialsError::Matching { period, error })),
+        };
+        // The position in the pool of each person of the panel.
+        let mut pool_at = vec![usize::MAX; panel.len()];
+        for (at, e) in pool.iter().enumerate() {
+            pool_at[e.person] = at;
+        }
         let mut listed = vec![false; pool.len()];
         let mut members = Vec::new();
+        let mut controls = Vec::new();
         let mut add = |id: &str, members: &mut Vec<TrialMember>| {
-            let at = position.get(id)?;
-            if std::mem::replace(&mut listed[*at], true) {
-                return Some(*at);
+            let at = pool_at[self.person_of(id)?];
+            if at == usize::MAX {
+                return None;
             }
-            let e = pool[*at];
+            if std::mem::replace(&mut listed[at], true) {
+                return Some(at);
+            }
+            let e = pool[at];
             let rows = &panel[e.person].periods;
             members.push(TrialMember {
                 id: id.to_string(),
                 assigned: e.assigned,
-                follow_up_start_period: *period,
-                follow_up_start: *date,
+                follow_up_start_period: period,
+                follow_up_start: date,
                 deviation_period: e.deviation.map(|d| rows[d].period),
                 deviation_date: e.deviation.map(|d| rows[d].date),
                 last_period: rows[e.last].period,
             });
-            Some(*at)
+            Some(at)
         };
         for pair in &outcome.pairs {
             add(pair.anchor_id(), &mut members);
             if let Some(at) = add(pair.comparator_id(), &mut members) {
-                used_as_control[pool[at].person] = true;
+                controls.push(pool[at].person);
             }
         }
-        trials.push(TrialResult {
-            period: *period,
-            index_date: *date,
-            n_eligible: pool.len(),
-            n_initiators,
-            outcome,
-            members,
-        });
+        Some(Ok((
+            TrialResult {
+                period,
+                index_date: date,
+                n_eligible: pool.len(),
+                n_initiators,
+                outcome,
+                members,
+            },
+            controls,
+        )))
     }
-    Ok(TrialOutcome { trials })
 }
 
 #[cfg(test)]
@@ -744,5 +932,118 @@ mod tests {
         assert_eq!(trial_seed(5, 3), trial_seed(5, 3));
         assert_ne!(trial_seed(5, 3), trial_seed(5, 4));
         assert_ne!(trial_seed(5, 3), trial_seed(6, 3));
+    }
+
+    /// A panel of people in strata, with births spread over years, eight
+    /// periods, initiation at a person's own period, deaths and outcomes,
+    /// and ids out of panel order.
+    fn panel(seed: u64, n: usize) -> Vec<TrialPerson<BaseRecord>> {
+        let mut state = seed;
+        let mut next = |bound: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % bound
+        };
+        (0..n)
+            .map(|i| {
+                let birth =
+                    NaiveDate::from_ymd_opt(2012, 1, 1).expect("valid") + Days::new(next(1500));
+                let mut record = BaseRecord::new(format!("{:x}-{i}", next(1 << 20)), birth);
+                record
+                    .strata
+                    .insert("sex".into(), if next(2) == 0 { "F" } else { "M" }.into());
+                if next(10) == 0 {
+                    record.death_date = Some(day(next(8)));
+                }
+                let start = i64::try_from(next(12)).expect("small");
+                let event = (next(6) == 0).then(|| i64::try_from(next(8)).expect("small"));
+                TrialPerson {
+                    record,
+                    periods: (0..8)
+                        .map(|period| TrialPeriod {
+                            period,
+                            date: day(u64::try_from(period).expect("small")),
+                            eligible: period <= start,
+                            treatment: Some(period >= start),
+                            event: event == Some(period),
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    fn job_on(pool: &TrialPool<'_, BaseRecord>, ordered: bool, ratio: usize) -> MatchOutcome {
+        let seed = trial_seed(3, pool.period());
+        let job = if ordered {
+            pool.job(seed)
+        } else {
+            MatchJob::new_transition(pool.records(), seed)
+        };
+        job.with_ratio(crate::types::MatchRatio::new(ratio).expect("ratio"))
+            .with_birth_window(crate::types::BirthDateWindowDays::new(60).expect("window"))
+            .with_age_limit(crate::types::AgeLimitYears::new(18).expect("limit"))
+            .with_exact_matches(["sex"])
+            .with_alive_check()
+            .run()
+    }
+
+    /// Trials matched in parallel under the default reuse rule equal the
+    /// trials matched one after the other, with or without the panel's id
+    /// order, on 1, 2, 4 and 12 threads.
+    #[test]
+    fn parallel_trials_equal_trials_in_order() {
+        for (seed, n, earlier) in [(1, 40, true), (2, 400, true), (3, 3000, false)] {
+            let people = panel(seed, n);
+            let options = TrialOptions {
+                initiators_as_earlier_controls: earlier,
+                ..TrialOptions::default()
+            };
+            let plan = plan(&people, &options);
+            let order = IdOrder::of_ids(people.len(), |p| people[p].record.id());
+            for ratio in [1, 3] {
+                let reference = in_order(&people, &plan, &options, None, &|pool| {
+                    Ok::<_, std::convert::Infallible>(job_on(pool, false, ratio))
+                })
+                .expect("valid");
+                let ordered = in_order(&people, &plan, &options, order.as_ref(), &|pool| {
+                    Ok::<_, std::convert::Infallible>(job_on(pool, true, ratio))
+                })
+                .expect("valid");
+                let pairs: usize = reference.iter().map(|t| t.outcome.pairs.len()).sum();
+                assert!(pairs > n / 20, "seed {seed}: {pairs} pairs");
+                let reference = format!("{reference:?}");
+                assert_eq!(format!("{ordered:?}"), reference, "seed {seed}");
+                let parallel = || {
+                    let outcome = match_trials(&people, &options, |pool| {
+                        Ok::<_, std::convert::Infallible>(job_on(pool, true, ratio))
+                    })
+                    .expect("valid");
+                    format!("{:?}", outcome.trials)
+                };
+                assert_eq!(parallel(), reference, "seed {seed}");
+                epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
+                    parallel().bytes().map(f64::from).collect()
+                });
+            }
+        }
+    }
+
+    /// The error of a failing run is that of the earliest failing trial.
+    #[test]
+    fn the_earliest_failing_trial_is_reported() {
+        let people = panel(4, 500);
+        let failed = match_trials(&people, &TrialOptions::default(), |pool| {
+            if pool.period() >= 2 {
+                Err(pool.period())
+            } else {
+                Ok(job_on(pool, true, 1))
+            }
+        });
+        let Err(TrialsError::Matching { period, error }) = failed else {
+            panic!("a trial fails");
+        };
+        assert_eq!((period, error), (2, 2));
     }
 }
