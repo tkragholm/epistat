@@ -133,7 +133,7 @@ mod tests {
         let transposed = Mat::from_fn(5, 300, |j, i| x[(i, j)]);
         let view = transposed.as_ref().transpose();
         let copy = contiguous_copy(view);
-        assert!(!copy.is_empty());
+        assert_eq!(copy.len(), 5 * 300);
         let cols = column_slices(view, &copy);
         assert_eq!(
             bits(&linear_predictor(&cols, &beta, &offset)),

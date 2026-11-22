@@ -635,6 +635,10 @@ impl Covariance<'_> {
 
     /// The working weight and residual of one row at `eta`, adding the row's
     /// loss to `loss` and writing its fitted mean.
+    #[expect(
+        clippy::inline_always,
+        reason = "the block kernels are fast only with the link inlined into their lane loop"
+    )]
     #[inline(always)]
     fn row_link(
         &self,
