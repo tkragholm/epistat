@@ -111,6 +111,140 @@ impl Fenwick {
     }
 }
 
+/// Counts of several kinds over the positions `0..n`, kept side by side in one
+/// tree, so that an update or a range sum walks the tree once for all kinds.
+///
+/// Kind 0 counts the points in play and every other kind a subset of them, so
+/// a point counts under kind 0 and under at most one other kind, its
+/// [`Tally`]. Each entry holds [`LANES`] kinds, in groups when there are more,
+/// and a walk adds a whole group at each step.
+pub(crate) struct CountTree {
+    groups: usize,
+    /// 1-based entries, `groups` of them per position; the first is unused.
+    tree: Vec<[u32; LANES]>,
+}
+
+/// The kinds counted side by side in one group of a [`CountTree`].
+pub(crate) const LANES: usize = 4;
+
+/// The groups of a [`CountTree`] whose sums a query keeps on the stack.
+const STACK_GROUPS: usize = 4;
+
+/// How a point counts: `None` when it is not in play, `Some(None)` when it
+/// counts under kind 0 only, and `Some(Some(kind))` when it counts under kind
+/// 0 and under `kind`, which is at least 1.
+pub(crate) type Tally = Option<Option<usize>>;
+
+/// Whether a point with this tally counts under `kind`.
+fn counts_under(tally: Tally, kind: usize) -> i32 {
+    match tally {
+        None => 0,
+        Some(other) => i32::from(kind == 0 || other == Some(kind)),
+    }
+}
+
+impl CountTree {
+    /// A tree of `n` positions, all counts 0, with `kinds` kinds.
+    pub(crate) fn zeros(n: usize, kinds: usize) -> Self {
+        let groups = kinds.div_ceil(LANES).max(1);
+        Self {
+            groups,
+            tree: vec![[0; LANES]; (n + 1) * groups],
+        }
+    }
+
+    /// Move the point at `position` from the tally `old` to the tally `new`.
+    pub(crate) fn change(&mut self, position: usize, old: Tally, new: Tally) {
+        let groups = self.groups;
+        let n = self.tree.len() / groups;
+        let delta = |group: usize| -> [i32; LANES] {
+            std::array::from_fn(|lane| {
+                let kind = group * LANES + lane;
+                counts_under(new, kind) - counts_under(old, kind)
+            })
+        };
+        let mut i = position + 1;
+        if groups == 1 {
+            let delta = delta(0);
+            while i < n {
+                let cell = &mut self.tree[i];
+                for lane in 0..LANES {
+                    cell[lane] = cell[lane].wrapping_add_signed(delta[lane]);
+                }
+                i += i & i.wrapping_neg();
+            }
+        } else {
+            let deltas: Vec<[i32; LANES]> = (0..groups).map(delta).collect();
+            while i < n {
+                let cells = &mut self.tree[i * groups..(i + 1) * groups];
+                for (cell, delta) in cells.iter_mut().zip(&deltas) {
+                    for lane in 0..LANES {
+                        cell[lane] = cell[lane].wrapping_add_signed(delta[lane]);
+                    }
+                }
+                i += i & i.wrapping_neg();
+            }
+        }
+    }
+
+    /// Write the sums over the positions `start..end`, one per kind, to
+    /// `out`, which has one entry per kind. The two prefix walks stop where
+    /// they meet.
+    pub(crate) fn range_into(&self, start: usize, end: usize, out: &mut [u32]) {
+        let groups = self.groups;
+        if groups == 1 {
+            let mut sum = [0_u32; LANES];
+            let (mut high, mut low) = (end, start);
+            while high > low {
+                let cell = &self.tree[high];
+                for lane in 0..LANES {
+                    sum[lane] = sum[lane].wrapping_add(cell[lane]);
+                }
+                high &= high - 1;
+            }
+            while low > high {
+                let cell = &self.tree[low];
+                for lane in 0..LANES {
+                    sum[lane] = sum[lane].wrapping_sub(cell[lane]);
+                }
+                low &= low - 1;
+            }
+            for (slot, &value) in out.iter_mut().zip(&sum) {
+                *slot = value;
+            }
+            return;
+        }
+        let mut stack = [[0_u32; LANES]; STACK_GROUPS];
+        let mut heap;
+        let sums: &mut [[u32; LANES]] = if groups <= STACK_GROUPS {
+            &mut stack[..groups]
+        } else {
+            heap = vec![[0_u32; LANES]; groups];
+            &mut heap
+        };
+        let (mut high, mut low) = (end, start);
+        while high > low {
+            for (sum, cell) in sums.iter_mut().zip(&self.tree[high * groups..]) {
+                for lane in 0..LANES {
+                    sum[lane] = sum[lane].wrapping_add(cell[lane]);
+                }
+            }
+            high &= high - 1;
+        }
+        while low > high {
+            for (sum, cell) in sums.iter_mut().zip(&self.tree[low * groups..]) {
+                for lane in 0..LANES {
+                    sum[lane] = sum[lane].wrapping_sub(cell[lane]);
+                }
+            }
+            low &= low - 1;
+        }
+        for (slot, &sum) in out.iter_mut().zip(sums.iter().flatten()) {
+            *slot = sum;
+        }
+    }
+}
+
 /// One level of a [`WaveletMatrix`].
 struct Level {
     /// `zeros[i]`: points among the first `i` of this level's order whose bit
@@ -253,6 +387,42 @@ mod tests {
                 let active: Vec<usize> = (0..n).filter(|&p| flags[p]).collect();
                 for (k, &p) in active.iter().enumerate() {
                     assert_eq!(tree.kth(u32::try_from(k).unwrap()), p);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn count_tree_agrees_with_one_fenwick_tree_per_kind() {
+        let mut rng = Lcg(23);
+        for kinds in [1_usize, 2, 4, 5, 8, 9] {
+            for n in [0_usize, 1, 2, 5, 8, 33, 100] {
+                let mut tree = CountTree::zeros(n, kinds);
+                let mut reference: Vec<Fenwick> = (0..kinds).map(|_| Fenwick::zeros(n)).collect();
+                let mut tallies: Vec<Tally> = vec![None; n];
+                for _ in 0..200 {
+                    if n > 0 {
+                        let p = rng.next(n);
+                        let new: Tally = match rng.next(4) {
+                            0 => None,
+                            1 => Some(None),
+                            _ if kinds > 1 => Some(Some(1 + rng.next(kinds - 1))),
+                            _ => Some(None),
+                        };
+                        tree.change(p, tallies[p], new);
+                        for (kind, fenwick) in reference.iter_mut().enumerate() {
+                            let d = counts_under(new, kind) - counts_under(tallies[p], kind);
+                            fenwick.add(p, d);
+                        }
+                        tallies[p] = new;
+                    }
+                    let start = rng.next(n + 1);
+                    let end = start + rng.next(n - start + 1);
+                    let mut got = vec![0; kinds];
+                    tree.range_into(start, end, &mut got);
+                    let expected: Vec<u32> =
+                        reference.iter().map(|f| f.range(start, end)).collect();
+                    assert_eq!(got, expected, "kinds {kinds}, n {n}");
                 }
             }
         }

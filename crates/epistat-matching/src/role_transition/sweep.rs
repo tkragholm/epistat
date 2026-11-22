@@ -92,7 +92,7 @@
 //!   efficient wavelet tree for large alphabets. Information Systems 47,
 //!   15-32.
 
-use super::order_statistics::{Fenwick, WaveletMatrix};
+use super::order_statistics::{CountTree, Fenwick, Tally, WaveletMatrix};
 use super::{AtRiskSpan, IdOrder};
 use crate::constraints::ResidenceSpell;
 use crate::matching::{
@@ -130,10 +130,9 @@ const REFUSED: u8 = 3;
 
 /// The counting trees of a counted stratum.
 struct Trees {
-    at_risk: Fenwick,
-    drawn: Fenwick,
-    /// One per refusal reason.
-    refused: Vec<Fenwick>,
+    /// By birth position: the controls at risk (kind 0), those at risk and
+    /// drawn (kind 1) and, from kind 2 on, those refused by each reason.
+    counts: CountTree,
     /// Eligible controls by id rank.
     eligible_by_id: Fenwick,
     /// Eligible controls by birth position, once a window narrower than the
@@ -603,9 +602,7 @@ impl RiskSetSweep {
         {
             let m = stratum.by_birth.len();
             stratum.trees = Some(Trees {
-                at_risk: Fenwick::zeros(m),
-                drawn: Fenwick::zeros(m),
-                refused: (0..slots).map(|_| Fenwick::zeros(m)).collect(),
+                counts: CountTree::zeros(m, 2 + slots),
                 eligible_by_id: Fenwick::zeros(m),
                 eligible_by_birth: None,
             });
@@ -654,43 +651,56 @@ impl RiskSetSweep {
             })
     }
 
-    /// Add `delta` to the counts of `state` for record `idx`.
-    fn count(&mut self, idx: usize, state: u8, delta: i32) {
+    /// How the counting tree of a counted stratum tallies a record in `state`.
+    fn tally(&self, state: u8) -> Tally {
+        match state {
+            NOT_AT_RISK => None,
+            DRAWN => Some(Some(1)),
+            ELIGIBLE => Some(None),
+            refused => Some(Some(2 + self.rule_slot[usize::from(refused - REFUSED)])),
+        }
+    }
+
+    /// Move the counts of record `idx` from `old` to `new`.
+    fn recount(&mut self, idx: usize, old: u8, new: u8) {
         let unit = self.units[idx];
         let position = unit.birth_position as usize;
-        let stratum = &mut self.strata[unit.stratum as usize];
-        if let Some(reach) = &mut stratum.reach {
-            if state != NOT_AT_RISK {
-                let base = position / CHUNK * reach.width;
-                let slot = if state == DRAWN {
-                    1
-                } else {
-                    2 + usize::from(state - ELIGIBLE)
-                };
-                for index in [base, base + slot] {
-                    reach.counts[index] = reach.counts[index].wrapping_add_signed(delta);
+        if self.strata[unit.stratum as usize].reach.is_some() {
+            let reach = self.strata[unit.stratum as usize]
+                .reach
+                .as_mut()
+                .expect("checked above");
+            for (state, delta) in [(old, -1), (new, 1)] {
+                if state != NOT_AT_RISK {
+                    let base = position / CHUNK * reach.width;
+                    let slot = if state == DRAWN {
+                        1
+                    } else {
+                        2 + usize::from(state - ELIGIBLE)
+                    };
+                    for index in [base, base + slot] {
+                        reach.counts[index] = reach.counts[index].wrapping_add_signed(delta);
+                    }
                 }
             }
             return;
         }
-        let Some(trees) = &mut stratum.trees else {
+        if self.strata[unit.stratum as usize].trees.is_none() {
+            return;
+        }
+        let (before, after) = (self.tally(old), self.tally(new));
+        let Some(trees) = &mut self.strata[unit.stratum as usize].trees else {
             return;
         };
-        match state {
-            NOT_AT_RISK => return,
-            DRAWN => trees.drawn.add(position, delta),
-            ELIGIBLE => {
+        trees.counts.change(position, before, after);
+        for (state, delta) in [(old, -1), (new, 1)] {
+            if state == ELIGIBLE {
                 trees.eligible_by_id.add(unit.id_rank as usize, delta);
                 if let Some(matrix) = &mut trees.eligible_by_birth {
                     matrix.add(position, delta);
                 }
             }
-            refused => {
-                let slot = self.rule_slot[usize::from(refused - REFUSED)];
-                trees.refused[slot].add(position, delta);
-            }
         }
-        trees.at_risk.add(position, delta);
     }
 
     /// Bring record `idx` to its state on the current date.
@@ -698,8 +708,7 @@ impl RiskSetSweep {
         let state = self.state_of(idx);
         let old = self.units[idx].state;
         if state != old {
-            self.count(idx, old, -1);
-            self.count(idx, state, 1);
+            self.recount(idx, old, state);
             let unit = &mut self.units[idx];
             unit.state = state;
             self.strata[unit.stratum as usize].states[unit.birth_position as usize] = state;
@@ -734,13 +743,15 @@ impl RiskSetSweep {
         let Some(trees) = &s.trees else {
             return self.list(stratum, window, case_idx);
         };
-        let at_risk = trees.at_risk.range(start, end) as usize;
-        let drawn = trees.drawn.range(start, end) as usize;
+        let mut held = vec![0_u32; 2 + self.reasons.len()];
+        trees.counts.range_into(start, end, &mut held);
+        let at_risk = held[0] as usize;
+        let drawn = held[1] as usize;
         let refused: Vec<(&'static str, usize)> = self
             .reasons
             .iter()
-            .zip(&trees.refused)
-            .map(|(&reason, tree)| (reason, tree.range(start, end) as usize))
+            .zip(&held[2..])
+            .map(|(&reason, &count)| (reason, count as usize))
             .collect();
         let refused_total: usize = refused.iter().map(|&(_, count)| count).sum();
         let eligible = at_risk - drawn - refused_total;
