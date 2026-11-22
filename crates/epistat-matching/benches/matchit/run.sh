@@ -33,7 +33,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/../.." && pwd)"
 SIZES="${SIZES:-100000 1000000 10000000}"
-OUT="${OUT:-$OUT}"
+OUT="${OUT:-$SCRATCH/out}"
 METHODS="${METHODS:-load nn_ps nn_ps_cal nn_strata nn_cal_strata nn_1to3 nn_ps_r4 nn_strata_r4 nn_replace nn_unique nn_mahal nn_mahal_strata nn_euclid nn_euclid_strata subclass exact cem quick optimal_cal full_cal fine_balance cardinality profile genetic_eval genetic_short riskset riskset_replace expdens trials balance fit_logit fit_probit fit_enet_cv fit_cbps effects effects_boot abadie sens_sets sens_wilcoxon sens_hl sens_mscore impute multigroup}"
 # Methods with no R counterpart in matchit_bench.R.
 NO_R=" nn_unique fine_balance expdens trials effects_boot sens_sets impute multigroup "
