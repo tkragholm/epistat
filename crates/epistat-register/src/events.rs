@@ -353,8 +353,8 @@ pub fn evaluate(
     let mut out = vec![vec![blank; persons]; rules.len()];
     let mut events: Vec<usize> = Vec::new();
     let mut next_other: Vec<usize> = Vec::new();
-    for p in 0..persons {
-        let (a, b) = (rows.person_offsets[p], rows.person_offsets[p + 1]);
+    for (p, span) in rows.person_offsets.windows(2).enumerate() {
+        let (a, b) = (span[0], span[1]);
         let days = &rows.day[a..b];
         let masks = &rows.mask[a..b];
         let present = masks.iter().fold(0_u64, |acc, m| acc | m);
