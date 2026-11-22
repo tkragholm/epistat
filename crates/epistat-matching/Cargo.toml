@@ -7,7 +7,7 @@ readme = "README.md"
 # The R references are about 8 MB of JSON that only this repository's tests read;
 # the R scripts that write them stay in the package as their provenance.
 exclude = ["tests/data/*.json"]
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -31,13 +31,13 @@ nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
 arrow-array = { version = "60", optional = true, default-features = false }
-epistat-glm = { path = "../epistat-glm", version = "0.1.1" }
-epistat-inference = { path = "../epistat-inference", version = "0.3.1" }
-epistat-linalg = { path = "../epistat-linalg", version = "0.3.0" }
-epistat-optim = { path = "../epistat-optim", version = "0.1.0", features = ["rayon"] }
+epistat-glm = { path = "../epistat-glm", version = "0.2.0" }
+epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
+epistat-optim = { path = "../epistat-optim", version = "0.1.1", features = ["rayon"] }
 epistat-register = { path = "../epistat-register", version = "0.1.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
-epistat-stats = { path = "../epistat-stats", version = "0.2.3" }
+epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
 bon = "3"
 chrono = { version = "0.4", features = ["serde"] }
 itertools = "0.14"

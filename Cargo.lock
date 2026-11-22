@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-glm"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "epistat-linalg",
  "epistat-stats",
@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-inference"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "epistat-linalg",
  "epistat-rng",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-linalg"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dyn-stack",
  "epistat-testkit",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-matching"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "bon",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-optim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rayon",
 ]
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-stats"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "epistat-testkit",
  "rayon",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-survival"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "arrow-array",
  "epistat-glm",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-testkit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rayon",
  "serde",
