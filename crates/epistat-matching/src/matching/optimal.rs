@@ -703,8 +703,9 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
         metric.distance(&self.anchors[anchor_idx], &self.candidates[candidate_idx])
     }
 
-    /// Every admissible pair of the stratum, sorted by row and then column.
-    fn edges(&self, stratum: &Stratum) -> Vec<Edge> {
+    /// Every admissible pair of the stratum, sorted by row and then column,
+    /// or only those of `rows` (increasing) when given.
+    fn edges(&self, stratum: &Stratum, rows: Option<&[usize]>) -> Vec<Edge> {
         let used = UsedControlsVec::with_capacity(0);
         let used_unique = FxHashSet::default();
         let interner: RapidHashMap<String, crate::types::UniqueValueId> = RapidHashMap::default();
@@ -733,9 +734,17 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
             _ => None,
         };
 
+        let every: Vec<usize>;
+        let rows = if let Some(rows) = rows {
+            rows
+        } else {
+            every = (0..stratum.anchors.len()).collect();
+            &every
+        };
         let mut edges = Vec::new();
         let mut row_cols: Vec<usize> = Vec::new();
-        for (row, anchor_idx) in stratum.anchors.iter().enumerate() {
+        for &row in rows {
+            let anchor_idx = &stratum.anchors[row];
             let anchor = &self.anchors[*anchor_idx];
             row_cols.clear();
             match (&sorted, lookup, self.caliper) {
@@ -851,6 +860,33 @@ where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
 {
+    with_strata_pairs(anchors, candidates, request, |strata, pairs| {
+        let edges = strata
+            .par_iter()
+            .map(|stratum| pairs(stratum, None))
+            .collect();
+        Ok(StrataEdges { strata, edges })
+    })
+}
+
+/// Lists the admissible pairs of one stratum, sorted by row and then column,
+/// or only those of the given rows (increasing).
+pub(super) type StratumPairs<'a> = dyn Fn(&Stratum, Option<&[usize]>) -> Vec<Edge> + Sync + 'a;
+
+/// Calls `f` with the exact strata of a request and a function that lists the
+/// admissible pairs of a stratum, with the request's options checked. A caller
+/// that cannot hold every pair lists them one stratum at a time; each call
+/// gives the same pairs in the same order.
+pub(super) fn with_strata_pairs<R, G, T>(
+    anchors: &[R],
+    candidates: &[R],
+    request: &OptimalRequest<'_, G>,
+    f: impl FnOnce(Vec<Stratum>, &StratumPairs<'_>) -> Result<T, OptimalError>,
+) -> Result<T, OptimalError>
+where
+    R: MatchingRecord,
+    G: ConstraintGroup<R> + ?Sized,
+{
     let criteria = request.criteria;
     let validated = criteria.validate()?;
     let criteria = validated.as_ref();
@@ -882,11 +918,9 @@ where
         anchor_strata: (!required.is_empty()).then_some(anchor_strata),
         candidate_strata: (!required.is_empty()).then_some(candidate_strata),
     };
-    let edges = strata
-        .par_iter()
-        .map(|stratum| builder.edges(stratum))
-        .collect();
-    Ok(StrataEdges { strata, edges })
+    f(strata, &|stratum: &Stratum, rows: Option<&[usize]>| {
+        builder.edges(stratum, rows)
+    })
 }
 
 fn solve_strata<R, G>(
