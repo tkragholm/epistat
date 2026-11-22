@@ -156,6 +156,39 @@ fn outcome_input_is_checked() {
 }
 
 #[test]
+fn the_covariance_between_two_curves_is_symmetric_and_holds_the_variance() {
+    let (z, treat) = design(60);
+    let w = iptw::fit(&treat, z.as_ref(), &IptwOptions::default()).unwrap();
+    let stop: Vec<f64> = (0..60)
+        .map(|i| 1.0 + f64::from((i * 7 % 17) as u32))
+        .collect();
+    let status: Vec<i32> = (0..60).map(|i| i32::from(i % 4 != 0)).collect();
+    let stratum: Vec<u32> = treat.iter().map(|&t| u32::from(t)).collect();
+    let data = SurvData::builder(&stop, &status)
+        .stratum(&stratum)
+        .build()
+        .unwrap();
+    let times = [3.0, 8.0, 12.0];
+    let curves = km::estimate(&data, &times, &KmOptions::default(), &w, None).unwrap();
+    assert_eq!(curves.groups.len(), 2);
+    for time in 0..times.len() {
+        let (a, b) = (
+            curves.covariance_between(0, 1, time).unwrap(),
+            curves.covariance_between(1, 0, time).unwrap(),
+        );
+        assert!(
+            (a - b).abs() <= 1e-12 * a.abs().max(b.abs()).max(1e-300),
+            "{a} {b}"
+        );
+        for group in 0..2 {
+            let variance = curves.covariance_between(group, group, time).unwrap();
+            let se = curves.standard_error(group, time).unwrap();
+            assert!((se * se - variance.max(0.0)).abs() <= 1e-12 * variance.abs().max(1e-300));
+        }
+    }
+}
+
+#[test]
 fn a_curve_at_zero_has_no_variance() {
     let (z, treat) = design(60);
     let w = iptw::fit(&treat, z.as_ref(), &IptwOptions::default()).unwrap();

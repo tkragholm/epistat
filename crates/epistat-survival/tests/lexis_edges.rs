@@ -53,6 +53,33 @@ fn breaks_met_together_up_to_rounding_make_one_cut() {
 }
 
 #[test]
+fn the_scales_and_the_intervals_of_a_scale_are_counted() {
+    let stop = [3.0];
+    let status = [1];
+    let (a, b) = ([0.0], [0.0]);
+    let out = split_lexis(
+        &data(&stop, &status),
+        &[
+            TimeScale {
+                entry: &a,
+                breaks: &[2.0, 1.0, 1.0],
+            },
+            TimeScale {
+                entry: &b,
+                breaks: &[],
+            },
+        ],
+        &LexisOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(out.n_scales(), 2);
+    // The breaks are sorted and unique, so two breaks make three intervals.
+    assert_eq!(out.breaks[0], vec![1.0, 2.0]);
+    assert_eq!(out.n_intervals(0), 3);
+    assert_eq!(out.n_intervals(1), 1);
+}
+
+#[test]
 fn breaks_at_the_start_and_end_of_a_row_cut_nothing() {
     let stop = [2.0, 2.0];
     let status = [1, 0];
