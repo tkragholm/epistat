@@ -1,6 +1,6 @@
 //! The code lists and weights of the comorbidity indices, written by
 //! `tests/data/comorbidity_lists.R` from the maps of the R package
-//! comorbidity 1.1.0 (R R version 4.6.2 (2026-10-29)). Do not edit by hand.
+//! comorbidity 1.1.0, R version 4.6.2 (2026-10-29). Formatted by rustfmt. Do not edit by hand.
 
 /// A condition as the package holds it: key, label and ICD-10 prefixes.
 pub(super) struct Spec {

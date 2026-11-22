@@ -57,7 +57,7 @@ person_ref <- function(map, assign0, weights) {
   out
 }
 persons <- list(
-  codes = person_codes,
+  codes = lapply(person_codes, I),
   charlson_raw = person_ref("charlson_icd10_quan", FALSE, c("charlson", "quan")),
   charlson = person_ref("charlson_icd10_quan", TRUE, c("charlson", "quan")),
   elixhauser_raw = person_ref("elixhauser_icd10_quan", FALSE, c("vw")),
