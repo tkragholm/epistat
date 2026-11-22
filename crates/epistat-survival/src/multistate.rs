@@ -158,7 +158,7 @@ use epistat_rng::dirichlet_weights;
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
-use crate::check::check_lengths;
+use crate::check::{check_ascending, check_lengths};
 use crate::error::{Error, Result};
 use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
@@ -1130,23 +1130,6 @@ pub struct Variance {
     pub n_rows: usize,
     /// The number of rows of positive weight, which are the rows used.
     pub n_used: usize,
-}
-
-/// Checks that `values` are finite and ascending.
-pub(crate) fn check_ascending(values: &[f64], name: &str, strict: bool) -> Result<()> {
-    if values.iter().any(|v| !v.is_finite()) {
-        return Err(Error::input(format!("{name} must be finite")));
-    }
-    if values
-        .windows(2)
-        .any(|w| if strict { w[0] >= w[1] } else { w[0] > w[1] })
-    {
-        return Err(Error::input(format!(
-            "{name} must be {}ascending",
-            if strict { "strictly " } else { "" }
-        )));
-    }
-    Ok(())
 }
 
 /// For each of `at`, the index of the last of `times` not after it, or `None`

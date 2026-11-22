@@ -9,6 +9,7 @@
 //! documentation of [`survfit`](crate::survfit).
 
 use super::{GroupCurve, Survfit};
+use crate::check::check_ascending;
 use crate::error::{Error, Result};
 use std::ops::AddAssign;
 
@@ -51,14 +52,7 @@ impl CurveIndex {
         if curve_time.is_empty() {
             return Err(Error::input("the curve has no times to read"));
         }
-        if curve_time
-            .windows(2)
-            .any(|w| w[0].partial_cmp(&w[1]) != Some(std::cmp::Ordering::Less))
-        {
-            return Err(Error::input(
-                "the times of the curve are not strictly ascending",
-            ));
-        }
+        check_ascending(curve_time, "curve_time", true)?;
         if times.is_empty() {
             return Err(Error::input("no values in times"));
         }

@@ -374,7 +374,7 @@ use epistat_stats::gamma::chi_square_sf;
 
 use super::sweep::{RiskSets, Sums, terms};
 use super::{Ties, moments};
-use crate::check::{check_lengths, refuse_non_finite};
+use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::surv::SurvData;
@@ -604,7 +604,7 @@ fn with_input<R>(
     f: impl FnOnce(&Input<'_>) -> R,
 ) -> Result<R> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
-    check_finite_matrix(x)?;
+    refuse_non_finite_matrix(x, "x")?;
     check_control(opts, data.n_rows(), x.ncols())?;
     if opts.ties == Ties::Exact {
         check_exact(data)?;
@@ -730,19 +730,6 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions<'_>) -> Re
     fit.n_rows = data.n_rows();
     fit.n_used = data.n_used();
     Ok(fit)
-}
-
-fn check_finite_matrix(x: MatRef<'_, f64>) -> Result<()> {
-    let non_finite = (0..x.nrows())
-        .flat_map(|i| (0..x.ncols()).map(move |j| (i, j)))
-        .filter(|&(i, j)| !x[(i, j)].is_finite())
-        .count();
-    if non_finite > 0 {
-        return Err(Error::input(format!(
-            "x: {non_finite} non-finite values; drop or resolve them before estimating"
-        )));
-    }
-    Ok(())
 }
 
 /// One stratum's rows in descending exit order.

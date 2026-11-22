@@ -141,9 +141,9 @@ use std::collections::HashMap;
 use epistat_rng::{dirichlet_weights, replicate_seed};
 use rayon::prelude::*;
 
-use crate::check::check_lengths;
+use crate::check::{check_ascending, check_lengths};
 use crate::error::{Error, Result};
-use crate::multistate::{check_ascending, influence, snapshot_positions};
+use crate::multistate::{influence, snapshot_positions};
 use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;

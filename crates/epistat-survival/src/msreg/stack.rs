@@ -4,7 +4,7 @@
 use epistat_linalg::{Mat, MatRef};
 
 use super::{MsBaseline, MsModel, MsOptions, MsTerm, MsTerms, MsTransition, resolve};
-use crate::check::{check_lengths, check_row_count, refuse_non_finite};
+use crate::check::{check_lengths, check_row_count, refuse_non_finite, refuse_non_finite_matrix};
 use crate::cox::{self, CoxOptions};
 use crate::error::{Error, Result};
 use crate::surv::{SurvBuf, SurvData};
@@ -155,15 +155,7 @@ pub(super) fn fit(
         check_lengths(&[("data", rows), ("offset", offset.len())])?;
         refuse_non_finite(offset, "offset")?;
     }
-    let non_finite = (0..x.nrows())
-        .flat_map(|i| (0..x.ncols()).map(move |j| (i, j)))
-        .filter(|&(i, j)| !x[(i, j)].is_finite())
-        .count();
-    if non_finite > 0 {
-        return Err(Error::input(format!(
-            "x: {non_finite} non-finite values; drop or resolve them before estimating"
-        )));
-    }
+    refuse_non_finite_matrix(x, "x")?;
 
     let (data, istate) = resolve(data, opts.timefix)?;
     let surv = data.followup()?;

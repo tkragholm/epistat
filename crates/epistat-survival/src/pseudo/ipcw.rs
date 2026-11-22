@@ -61,10 +61,10 @@
 
 use epistat_linalg::MatRef;
 
+use crate::check::check_ascending;
 use crate::cox::predict::{FittedModel, NewData, PredictOptions, PredictType, predict};
 use crate::cox::{CoxOptions, fit};
 use crate::error::{Error, Result};
-use crate::multistate::check_ascending;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 

@@ -123,7 +123,7 @@ use super::Ties;
 use super::design::{CoxModelFit, CoxOptions, score_residuals};
 pub(crate) use super::sweep::Sums;
 use super::sweep::{RiskSets, terms};
-use crate::check::check_lengths;
+use crate::check::{check_lengths, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 
@@ -379,15 +379,7 @@ pub(crate) fn prepare(
     if x.ncols() == 0 {
         return Err(Error::input("x has no columns"));
     }
-    let non_finite = (0..x.ncols())
-        .flat_map(|j| (0..x.nrows()).map(move |i| (i, j)))
-        .filter(|&(i, j)| !x[(i, j)].is_finite())
-        .count();
-    if non_finite > 0 {
-        return Err(Error::input(format!(
-            "x: {non_finite} non-finite values; drop or resolve them before estimating"
-        )));
-    }
+    refuse_non_finite_matrix(x, "x")?;
     if coefficients.iter().flatten().any(|c| !c.is_finite()) {
         return Err(Error::input("coefficients: a value is not finite"));
     }
