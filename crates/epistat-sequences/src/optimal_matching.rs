@@ -121,6 +121,83 @@ fn align(left: &[u8], right: &[u8], substitution: &[f32], size: usize, indel: f3
     previous[right.len()]
 }
 
+/// Sequences aligned against one left sequence at a time.
+const LANES: usize = 8;
+
+/// [`align`] of `left` against every sequence of `rights`, written to `out`.
+///
+/// Sequences of equal length are aligned [`LANES`] at a time, one alignment per
+/// lane with the additions and minima of [`align`], so every value is the one
+/// [`align`] returns. The sequences left over in each length are aligned one by
+/// one.
+fn align_row(
+    left: &[u8],
+    rights: &[&[u8]],
+    out: &mut [f32],
+    substitution: &[f32],
+    size: usize,
+    indel: f32,
+) {
+    let mut order: Vec<usize> = (0..out.len()).collect();
+    order.sort_by_key(|&index| rights[index].len());
+    let mut rest = order.as_slice();
+    while let Some(&head) = rest.first() {
+        let length = rights[head].len();
+        let run = rest
+            .iter()
+            .take_while(|&&index| rights[index].len() == length)
+            .count();
+        let (group, tail) = rest.split_at(run);
+        let (blocks, remainder) = group.as_chunks::<LANES>();
+        for block in blocks {
+            let lanes: [&[u8]; LANES] = std::array::from_fn(|lane| rights[block[lane]]);
+            let costs = align_lanes(left, lanes, substitution, size, indel);
+            for (&index, cost) in block.iter().zip(costs) {
+                out[index] = cost;
+            }
+        }
+        for &index in remainder {
+            out[index] = align(left, rights[index], substitution, size, indel);
+        }
+        rest = tail;
+    }
+}
+
+/// [`align`] of `left` against [`LANES`] sequences of one length, one
+/// alignment per lane.
+// The `usize as f32` casts are gap counts, as in `align`.
+fn align_lanes(
+    left: &[u8],
+    rights: [&[u8]; LANES],
+    substitution: &[f32],
+    size: usize,
+    indel: f32,
+) -> [f32; LANES] {
+    let length = rights[0].len();
+    let mut previous: Vec<[f32; LANES]> = (0..=length).map(|c| [c as f32 * indel; LANES]).collect();
+    let mut current: Vec<[f32; LANES]> = vec![[0.0; LANES]; length + 1];
+    for (row, &first) in left.iter().enumerate() {
+        current[0] = [(row + 1) as f32 * indel; LANES];
+        let costs = &substitution[first as usize * size..(first as usize + 1) * size];
+        for column in 0..length {
+            let (diagonal_cell, above_cell, beside_cell) =
+                (previous[column], previous[column + 1], current[column]);
+            let substitution_cost: [f32; LANES] =
+                std::array::from_fn(|lane| costs[rights[lane][column] as usize]);
+            let mut next = [0.0; LANES];
+            for lane in 0..LANES {
+                let diagonal = diagonal_cell[lane] + substitution_cost[lane];
+                let above = above_cell[lane] + indel;
+                let beside = beside_cell[lane] + indel;
+                next[lane] = diagonal.min(above).min(beside);
+            }
+            current[column + 1] = next;
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[length]
+}
+
 /// All pairwise distances over one fixed list of sequences.
 ///
 /// Stored as the strict upper triangle in row-major order, as single-precision
@@ -714,16 +791,14 @@ pub fn condensed(
         }
 
         rows.into_par_iter().enumerate().for_each(|(first, row)| {
-            let left = sequences[first];
-            for (offset, slot) in row.iter_mut().enumerate() {
-                *slot = align(
-                    left,
-                    sequences[first + 1 + offset],
-                    substitution,
-                    alphabet_size,
-                    indel,
-                );
-            }
+            align_row(
+                sequences[first],
+                &sequences[first + 1..],
+                row,
+                substitution,
+                alphabet_size,
+                indel,
+            );
         });
         condensed
     };
@@ -736,6 +811,76 @@ mod tests {
     use super::{CondensedMatrix, TILE, align, condensed};
     use crate::Restarts;
     use epistat_rng::Stream;
+
+    #[test]
+    fn the_triangle_equals_one_alignment_per_pair() {
+        let mut state = 99u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        let alphabet = 5usize;
+        let substitution: Vec<f32> = (0..alphabet * alphabet)
+            .map(|k| {
+                if k / alphabet == k % alphabet {
+                    0.0
+                } else {
+                    0.3 + (k % 7) as f32 * 0.37
+                }
+            })
+            .collect();
+        for indel in [1.0f32, 0.9, 1.7] {
+            for max_length in [0usize, 1, 9, 40] {
+                // Many sequences share a length, a few do not, and some are empty.
+                let lengths: Vec<u32> = (0..37)
+                    .map(|_| {
+                        (if next() % 5 == 0 {
+                            next() % (max_length + 1)
+                        } else {
+                            max_length
+                        }) as u32
+                    })
+                    .collect();
+                let encoded: Vec<u8> = (0..lengths.iter().map(|&l| l as usize).sum::<usize>())
+                    .map(|_| (next() % alphabet) as u8)
+                    .collect();
+                let got = condensed(&encoded, &lengths, &substitution, alphabet, indel).unwrap();
+                let mut sequences = Vec::new();
+                let mut rest = &encoded[..];
+                for &length in &lengths {
+                    let (head, tail) = rest.split_at(length as usize);
+                    sequences.push(head);
+                    rest = tail;
+                }
+                let mut index = 0;
+                for a in 0..sequences.len() {
+                    for b in a + 1..sequences.len() {
+                        let want =
+                            align(sequences[a], sequences[b], &substitution, alphabet, indel);
+                        assert_eq!(got.values()[index].to_bits(), want.to_bits());
+                        index += 1;
+                    }
+                }
+                assert_eq!(index, got.len());
+                for threads in [1usize, 4] {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap();
+                    let again = pool
+                        .install(|| condensed(&encoded, &lengths, &substitution, alphabet, indel))
+                        .unwrap();
+                    assert_eq!(bits32(again.values()), bits32(got.values()));
+                }
+            }
+        }
+    }
+
+    fn bits32(values: &[f32]) -> Vec<u32> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
 
     fn one() -> Restarts {
         Restarts::from_seed(1, 1).unwrap()

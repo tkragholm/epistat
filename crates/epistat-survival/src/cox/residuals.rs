@@ -291,17 +291,8 @@ impl Moments {
     }
 
     fn add(&mut self, c: f64, x: &[f64]) {
-        let p = x.len();
         self.m0 += c;
-        for a in 0..p {
-            let cx = c * x[a];
-            self.m1[a] += cx;
-            if !self.m2.is_empty() {
-                for (b, xb) in x.iter().enumerate().take(a + 1) {
-                    self.m2[a * p + b] += cx * xb;
-                }
-            }
-        }
+        super::moments::add(c, x, &mut self.m1, &mut self.m2);
     }
 }
 

@@ -344,6 +344,27 @@ pub fn rademacher_sum(values: &[f64], stream: &mut Stream) -> f64 {
     sum
 }
 
+/// [`rademacher_sum`] for `L` streams over the same values at once. Lane `l`
+/// returns what `rademacher_sum(values, &mut streams[l])` returns and leaves
+/// `streams[l]` where it leaves it, bit for bit: each lane adds the same
+/// values in the same order, and a clear sign bit flips the sign of the value,
+/// which is what negation does.
+pub fn rademacher_sums<const L: usize>(values: &[f64], streams: &mut [Stream; L]) -> [f64; L] {
+    let mut sum = [0.0_f64; L];
+    for chunk in values.chunks(64) {
+        let mut bits: [u64; L] = std::array::from_fn(|lane| streams[lane].next_u64());
+        for &value in chunk {
+            let magnitude = value.to_bits();
+            for lane in 0..L {
+                let flip = (!bits[lane] & 1) << 63;
+                sum[lane] += f64::from_bits(magnitude ^ flip);
+                bits[lane] >>= 1;
+            }
+        }
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,5 +482,37 @@ mod tests {
             (f64::from(plus) - f64::from(70 - plus)).to_bits()
         );
         assert_eq!(stream, reference);
+    }
+
+    #[test]
+    fn lanes_equal_the_single_stream_draw() {
+        let specials = [f64::NAN, -0.0, 0.0, f64::INFINITY, -f64::INFINITY, 1e308];
+        for n in [0usize, 1, 7, 63, 64, 65, 127, 128, 130, 1000] {
+            let values: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 17 == 5 {
+                        specials[i % specials.len()]
+                    } else {
+                        (i as f64 * 0.37).sin() * 1e-3 * (1.0 + i as f64)
+                    }
+                })
+                .collect();
+            let mut lanes: [Stream; 8] =
+                std::array::from_fn(|l| Stream::seeded(replicate_seed(9, l as u64)));
+            let mut singles = lanes.clone();
+            let got = rademacher_sums(&values, &mut lanes);
+            for l in 0..8 {
+                let want = rademacher_sum(&values, &mut singles[l]);
+                assert_eq!(got[l].to_bits(), want.to_bits(), "n = {n}, lane {l}");
+                assert_eq!(lanes[l], singles[l]);
+            }
+            let mut four: [Stream; 4] = std::array::from_fn(|l| Stream::seeded(l as u64 + 100));
+            let mut ref_four = four.clone();
+            let got = rademacher_sums(&values, &mut four);
+            for l in 0..4 {
+                let want = rademacher_sum(&values, &mut ref_four[l]);
+                assert_eq!(got[l].to_bits(), want.to_bits());
+            }
+        }
     }
 }
