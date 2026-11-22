@@ -2475,7 +2475,12 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
             spec.seed,
             false,
         )?;
-        field_calipers(spec, anchors, candidates, first.config.as_ref().and_then(scores_of))?
+        field_calipers(
+            spec,
+            anchors,
+            candidates,
+            first.config.as_ref().and_then(scores_of),
+        )?
     } else {
         field_calipers(
             spec,

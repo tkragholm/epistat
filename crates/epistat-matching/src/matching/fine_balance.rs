@@ -252,28 +252,57 @@ fn option_error(message: impl Into<String>) -> OptimalError {
     }
 }
 
+/// The rank of each value among the distinct values, from 0 in order.
+fn ranks(mut values: Vec<usize>) -> Vec<usize> {
+    let mut distinct = values.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    for value in &mut values {
+        *value = distinct.binary_search(value).unwrap_or(0);
+    }
+    values
+}
+
 fn level_data<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     keys: &[String],
     above: Option<&LevelData>,
 ) -> Result<LevelData, OptimalError> {
-    let key_of = |record: &R| -> Key {
-        keys.iter()
-            .map(|key| record.stratum(key).map(str::to_owned))
-            .collect()
-    };
-    let unit_keys: Vec<Key> = anchors
+    let units: Vec<&R> = anchors.iter().chain(candidates.iter()).collect();
+    // The rank of each unit's key among the keys present, built one key at a
+    // time: a rank over the first keys is joined with the rank of the next
+    // key's value and ranked again. Values are ranked in order, with a unit
+    // that lacks a value before every unit that has one, so the ranks follow
+    // the order of the keys as lists.
+    let mut of_unit = vec![0_usize; units.len()];
+    for key in keys {
+        let values: Vec<Option<&str>> = units.iter().map(|record| record.stratum(key)).collect();
+        let mut distinct = values.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let width = distinct.len();
+        let joined: Vec<usize> = values
+            .iter()
+            .zip(&of_unit)
+            .map(|(value, rank)| rank * width + distinct.binary_search(value).unwrap_or(0))
+            .collect();
+        of_unit = ranks(joined);
+    }
+    let count = of_unit.iter().max().map_or(0, |&last| last + 1);
+    let mut first_unit = vec![usize::MAX; count];
+    for (unit, &category) in of_unit.iter().enumerate() {
+        if first_unit[category] == usize::MAX {
+            first_unit[category] = unit;
+        }
+    }
+    let categories: Vec<Key> = first_unit
         .iter()
-        .chain(candidates.iter())
-        .map(key_of)
-        .collect();
-    let mut categories: Vec<Key> = unit_keys.clone();
-    categories.sort();
-    categories.dedup();
-    let of_unit: Vec<usize> = unit_keys
-        .iter()
-        .map(|key| categories.binary_search(key).unwrap_or(0))
+        .map(|&unit| {
+            keys.iter()
+                .map(|key| units[unit].stratum(key).map(str::to_owned))
+                .collect()
+        })
         .collect();
     let mut parent = vec![usize::MAX; categories.len()];
     if let Some(above) = above {
@@ -1513,7 +1542,7 @@ impl Network<'_> {
         let mut step = vec![unit * 1e-4; categories];
         let mut last = vec![0_i8; categories];
         let mut bases: Vec<Option<Basis>> = vec![None; blocks.len()];
-        let mut best: Option<(usize, Vec<i64>, Vec<FlowSolution>)> = None;
+        let mut best: Option<(usize, Vec<i64>)> = None;
         let mut since_best = 0;
         for _ in 0..ROUNDS {
             #[expect(clippy::cast_possible_truncation, reason = "the price is clamped")]
@@ -1548,12 +1577,20 @@ impl Network<'_> {
                     got[k] += usize::try_from(solution.flow[entry]).unwrap_or(0);
                 }
             }
-            for (basis, solution) in bases.iter_mut().zip(&solutions) {
-                *basis = Some(solution.basis.clone());
-            }
             let gap: usize = got.iter().zip(&target).map(|(a, b)| a.abs_diff(*b)).sum();
-            if best.as_ref().is_none_or(|b| gap < b.0) {
-                best = Some((gap, whole, solutions));
+            let improved = best.as_ref().is_none_or(|b| gap < b.0);
+            // The blocks take the flow of the round nearest the targets as it
+            // is found, and the next round starts from this round's basis, so
+            // nothing of a round is kept beyond those.
+            for ((block, basis), solution) in blocks.iter_mut().zip(bases.iter_mut()).zip(solutions)
+            {
+                if improved {
+                    block.adopt(&solution);
+                }
+                *basis = Some(solution.basis);
+            }
+            if improved {
+                best = Some((gap, whole));
                 since_best = 0;
             } else {
                 since_best += 1;
@@ -1579,13 +1616,9 @@ impl Network<'_> {
                 }
             }
         }
-        let Some((_, whole, solutions)) = best else {
-            return Ok(Some(vec![0; categories]));
-        };
-        for (block, solution) in blocks.iter_mut().zip(&solutions) {
-            block.adopt(solution);
-        }
-        Ok(Some(whole))
+        Ok(Some(
+            best.map_or_else(|| vec![0; categories], |(_, whole)| whole),
+        ))
     }
 
     /// The category nodes and their arcs for blocks solved at the prices
@@ -1796,15 +1829,15 @@ impl Network<'_> {
             let everything = in_network == total;
             let mut block_of = vec![usize::MAX; kept.len()];
             let mut lists = Vec::new();
-            for (s, list) in kept.iter().enumerate() {
+            for (s, list) in kept.iter_mut().enumerate() {
                 if !list.is_empty() {
                     block_of[s] = lists.len();
-                    lists.push(list);
+                    lists.push(std::mem::take(list));
                 }
             }
             let mut blocks: Vec<Block> = lists
                 .into_par_iter()
-                .map(|list| Block::new(list.clone(), leaf_of))
+                .map(|list| Block::new(list, leaf_of))
                 .collect();
             let Some(price) = self.start(&mut blocks)? else {
                 if everything {
@@ -1818,6 +1851,11 @@ impl Network<'_> {
                     });
                 }
                 // Too few pairs for the anchors to get their candidates.
+                for (list, &b) in kept.iter_mut().zip(&block_of) {
+                    if b != usize::MAX {
+                        *list = std::mem::take(&mut blocks[b].arcs);
+                    }
+                }
                 per = per.saturating_mul(4);
                 for ((list, bound), more) in kept
                     .iter_mut()
@@ -2219,6 +2257,109 @@ mod tests {
             anchors,
             candidates,
             scores,
+        }
+    }
+
+    /// The categories of a level by a key of strings per unit, which the
+    /// ranks of `level_data` replace.
+    fn level_data_by_strings<R: MatchingRecord>(
+        anchors: &[R],
+        candidates: &[R],
+        keys: &[String],
+        above: Option<&LevelData>,
+    ) -> Result<LevelData, OptimalError> {
+        let key_of = |record: &R| -> Key {
+            keys.iter()
+                .map(|key| record.stratum(key).map(str::to_owned))
+                .collect()
+        };
+        let unit_keys: Vec<Key> = anchors
+            .iter()
+            .chain(candidates.iter())
+            .map(key_of)
+            .collect();
+        let mut categories: Vec<Key> = unit_keys.clone();
+        categories.sort();
+        categories.dedup();
+        let of_unit: Vec<usize> = unit_keys
+            .iter()
+            .map(|key| categories.binary_search(key).unwrap_or(0))
+            .collect();
+        let mut parent = vec![usize::MAX; categories.len()];
+        if let Some(above) = above {
+            for (unit, category) in of_unit.iter().enumerate() {
+                let up = above.of_unit[unit];
+                if parent[*category] == usize::MAX {
+                    parent[*category] = up;
+                } else if parent[*category] != up {
+                    return Err(option_error("not nested"));
+                }
+            }
+        }
+        let mut anchor_counts = vec![0_usize; categories.len()];
+        for category in &of_unit[..anchors.len()] {
+            anchor_counts[*category] += 1;
+        }
+        Ok(LevelData {
+            keys: keys.to_vec(),
+            categories,
+            of_unit,
+            parent,
+            anchors: anchor_counts,
+        })
+    }
+
+    #[test]
+    fn level_data_by_ranks_equals_the_keys_of_strings() {
+        let birth = NaiveDate::from_ymd_opt(2000, 1, 1).expect("date");
+        let mut rng = Lcg(7);
+        for round in 0..40 {
+            let units = 1 + rng.below(60);
+            let mut records = Vec::new();
+            for i in 0..units {
+                let mut record = BaseRecord::new(format!("u{i}"), birth);
+                // Values of different lengths and prefixes, and some missing.
+                for (key, width) in [("a", 3), ("b", 4), ("c", 2)] {
+                    let pick = rng.below(width + 1);
+                    if pick < width {
+                        record
+                            .strata
+                            .insert(key.into(), "xy".chars().cycle().take(pick + 1).collect());
+                    }
+                }
+                records.push(record);
+            }
+            let split = rng.below(units + 1);
+            let (anchors, candidates) = records.split_at(split);
+            let first_keys = vec!["a".to_string()];
+            let both = vec!["a".to_string(), "b".to_string()];
+            let all = vec!["c".to_string(), "a".to_string(), "b".to_string()];
+            let old_first = level_data_by_strings(anchors, candidates, &first_keys, None).unwrap();
+            let new_first = level_data(anchors, candidates, &first_keys, None).unwrap();
+            for (new, old) in [(&new_first, &old_first)] {
+                assert_eq!(new.keys, old.keys, "round {round}");
+                assert_eq!(new.categories, old.categories, "round {round}");
+                assert_eq!(new.of_unit, old.of_unit, "round {round}");
+                assert_eq!(new.parent, old.parent, "round {round}");
+                assert_eq!(new.anchors, old.anchors, "round {round}");
+            }
+            let old_second =
+                level_data_by_strings(anchors, candidates, &both, Some(&old_first)).unwrap();
+            let new_second = level_data(anchors, candidates, &both, Some(&new_first)).unwrap();
+            assert_eq!(
+                new_second.categories, old_second.categories,
+                "round {round}"
+            );
+            assert_eq!(new_second.of_unit, old_second.of_unit, "round {round}");
+            assert_eq!(new_second.parent, old_second.parent, "round {round}");
+            assert_eq!(new_second.anchors, old_second.anchors, "round {round}");
+            // Not nested: both functions refuse.
+            let old_bad = level_data_by_strings(anchors, candidates, &all, Some(&old_second));
+            let new_bad = level_data(anchors, candidates, &all, Some(&new_second));
+            assert_eq!(old_bad.is_err(), new_bad.is_err(), "round {round}");
+            let old_up = level_data_by_strings(anchors, candidates, &first_keys, Some(&old_second));
+            let new_up = level_data(anchors, candidates, &first_keys, Some(&new_second));
+            assert_eq!(old_up.is_err(), new_up.is_err(), "round {round}");
         }
     }
 
