@@ -185,12 +185,12 @@ fn spec_of(run: &Run) -> MatchSpec {
         .and_then(serde_json::Value::as_u64)
     {
         spec.subclass = SubclassSpec {
-            n: count as usize,
+            n: usize::try_from(count).expect("count"),
             ..SubclassSpec::default()
         };
     }
     if let Some(ratio) = run.extra.get("ratio").and_then(serde_json::Value::as_u64) {
-        spec.ratio = ratio as usize;
+        spec.ratio = usize::try_from(ratio).expect("ratio");
     }
     if method == MatchMethod::Genetic {
         spec.genetic = GeneticSpec {
@@ -359,13 +359,13 @@ fn check_totals(label: &str, ours: f64, r: f64, pairs: usize, d_max: f64) {
 /// between order statistics, R's `quantile(type = 7)`.
 fn quantiles(mut values: Vec<f64>, k: usize) -> Vec<f64> {
     values.sort_by(f64::total_cmp);
-    let last = (values.len() - 1) as f64;
+    let span = values.len() - 1;
     (0..=k)
         .map(|bucket| {
-            let position = last * (bucket as f64 / k as f64);
-            let low = position.floor() as usize;
-            let high = position.ceil() as usize;
-            values[low] + (position - low as f64) * (values[high] - values[low])
+            let low = span * bucket / k;
+            let high = low + usize::from(span * bucket % k != 0);
+            let share = (span * bucket % k) as f64 / k as f64;
+            values[low] + share * (values[high] - values[low])
         })
         .collect()
 }
