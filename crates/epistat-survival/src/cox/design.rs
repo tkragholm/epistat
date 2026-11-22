@@ -388,7 +388,7 @@ const EPS: f64 = 1e-9;
 /// element, `.Machine$double.eps^0.75`, which is `2^-39`.
 const TOLER_CHOL: f64 = 1.818_989_403_545_856_5e-12;
 
-/// One Cox fit on a design matrix. See [`fit_cox`] for when entries are `None`.
+/// One Cox fit on a design matrix. See [`fit`] for when entries are `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoxModelFit {
     /// One coefficient per column of the design, `None` for an aliased column
