@@ -15,6 +15,7 @@ pub mod evalue;
 pub mod gamma;
 pub mod lanes;
 pub mod likelihood;
+pub mod mantel_haenszel;
 pub mod mcmc;
 pub mod normal;
 pub mod poisson;
