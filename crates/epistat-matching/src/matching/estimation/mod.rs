@@ -88,6 +88,38 @@ pub struct PropensityScoreEstimate {
 }
 
 impl PropensityScoreEstimate {
+    /// This first fit with the scores of `refit` for the units it covers, the
+    /// fit's other results (coefficients, convergence, penalty) taken from
+    /// `refit`, and `discarded_anchors` and `discarded_candidates` set. It is
+    /// what `matchit(reestimate = TRUE)` reports: the kept units carry the
+    /// refitted scores and the discarded ones keep those of the first fit.
+    #[must_use]
+    pub(crate) fn with_refit(
+        mut self,
+        refit: Self,
+        discarded_anchors: &[String],
+        discarded_candidates: &[String],
+    ) -> Self {
+        let mut distance = self.distance_scores.to_vec();
+        for (from, id) in refit.ids.iter().enumerate() {
+            if let Some(to) = self.position(id) {
+                self.probabilities[to] = refit.probabilities[from];
+                self.linear_predictor[to] = refit.linear_predictor[from];
+                distance[to] = refit.distance_scores[from];
+            }
+        }
+        Self {
+            ids: self.ids,
+            probabilities: self.probabilities,
+            linear_predictor: self.linear_predictor,
+            distance_scores: distance.into(),
+            index: self.index,
+            discarded_anchors: discarded_anchors.to_vec(),
+            discarded_candidates: discarded_candidates.to_vec(),
+            ..refit
+        }
+    }
+
     /// The position of the unit `id` in the score columns, `None` when it
     /// was not among the units. The first call builds a lookup of every id.
     #[must_use]

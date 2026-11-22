@@ -2629,13 +2629,13 @@ fn run_trimmed<R: MatchingRecord + CovariateRecord>(
         );
     }
     let output = run_untrimmed(&inner, &anchor_rows, &candidate_rows)?;
+    // With a refit, the estimate reports the refitted scores for the kept
+    // units and the first fit's for the trimmed ones, as `matchit()` does.
     let first_fit = first.propensity.map(Box::new);
-    let with_discarded = |mut estimate: Box<PropensityScoreEstimate>| {
-        estimate.discarded_anchors.clone_from(&trimmed.anchors);
-        estimate
-            .discarded_candidates
-            .clone_from(&trimmed.candidates);
-        estimate
+    let refit_estimate = first_fit.clone();
+    let with_discarded = |refit: Box<PropensityScoreEstimate>| match refit_estimate {
+        Some(first) => Box::new(first.with_refit(*refit, &trimmed.anchors, &trimmed.candidates)),
+        None => refit,
     };
     let mut output = match output {
         SpecOutput::Pairs {

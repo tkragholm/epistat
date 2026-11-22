@@ -13,9 +13,10 @@
 //!
 //! * The discarded units equal MatchIt's, as sets, and the crate reports them
 //!   by id, anchors and candidates apart.
-//! * The distance of every kept unit equals MatchIt's to 1e-9. The crate's
-//!   propensity fit agrees with R's to about 1e-13 (see `r_propensity.rs`), so
-//!   1e-9 leaves room for the refit on fewer units and no more.
+//! * The distance of every unit, kept or discarded, equals MatchIt's to 1e-9.
+//!   The crate's propensity fit agrees with R's to about 1e-13 (see
+//!   `r_propensity.rs`), so 1e-9 leaves room for the refit on fewer units and
+//!   no more.
 //! * Subclass: the cutpoints (to 1e-9, for the same reason), the subclass of
 //!   every kept unit and the rescaled weights.
 //! * Quick: the partition and the rescaled weights. Scores are distinct, so
@@ -570,13 +571,16 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
         let kept: Vec<usize> = (1..=reference.data.treat.len())
             .filter(|row| !discarded.contains(row))
             .collect();
+        // Every unit has a distance: a refit gives the kept units new scores
+        // and the discarded ones keep those of the first fit, as in R.
+        let every: Vec<usize> = (1..=reference.data.treat.len()).collect();
         match &output {
             SpecOutput::Subclass {
                 outcome,
                 propensity,
             } => {
                 check_trimmed(&label, run, &reference.data, &outcome.trimmed);
-                check_distance(&label, run, propensity.as_ref().expect("fit"), &kept);
+                check_distance(&label, run, propensity.as_ref().expect("fit"), &every);
                 check_subclass(&label, run, &reference.data, outcome);
                 check_matchit_cutpoints_include_discarded(&label, run, &reference.data);
                 if run.reestimate
@@ -612,13 +616,17 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
                     ids.into_iter().map(str::to_owned).zip(values).collect();
                 check_weights(&label, run, &rescaled(&reference.data, &weights));
             }
-            SpecOutput::Pairs { outcome, .. } => {
+            SpecOutput::Pairs {
+                outcome,
+                propensity,
+            } => {
                 check_trimmed(
                     &label,
                     run,
                     &reference.data,
                     &outcome.diagnostics.common_support_trimmed_ids,
                 );
+                check_distance(&label, run, propensity.as_ref().expect("fit"), &every);
                 check_optimal(&label, run, &reference.data, outcome, &kept);
             }
             SpecOutput::Genetic { outcome, .. } => {
