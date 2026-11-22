@@ -1,4 +1,53 @@
-//! Propensity scores and Mahalanobis configurations estimated from covariate records.
+//! Propensity scores and Mahalanobis and Euclidean distances estimated from
+//! covariate records.
+//!
+//! The records are encoded into a numeric matrix ([`encode_covariates`]), a
+//! model or a covariance matrix is fitted on it, and the result is a
+//! [`DistanceConfig`](crate::DistanceConfig) that a matcher reads.
+//!
+//! # Propensity scores
+//!
+//! The anchors are the treated group, coded 1, and the candidates the
+//! comparison group, coded 0. The score is the fitted probability, or the
+//! linear predictor when [`PropensityScoreOutputScale::LinearPredictor`] is
+//! asked for. The estimator is one of
+//!
+//! - a binomial generalised linear model with a logit, probit or complementary
+//!   log-log link, fitted by iteratively reweighted least squares as R's
+//!   `glm()` does;
+//! - an elastic-net penalised logistic regression, at a fixed penalty or with
+//!   the penalty chosen by cross-validation, as `glmnet` does;
+//! - the covariate balancing propensity score of Imai and Ratkovic \[1\].
+//!
+//! With `reestimate` set, the units outside common support are found from the
+//! first fit, as MatchIt's `discard` does, and the model is fitted again on the
+//! others.
+//!
+//! # Mahalanobis distance
+//!
+//! The covariance matrix `S` of the encoded covariates is pooled over the two
+//! groups, or taken over the full sample. Its inverse `S^-1` is the matrix of
+//! the distance `sqrt((x - y)' S^-1 (x - y))`. When `S` is singular a
+//! generalised inverse is formed from its eigendecomposition, with eigenvalues
+//! below `1e-8` times the largest counted as zero. The rank transform of
+//! Rosenbaum \[2\] replaces each column by its ranks first.
+//!
+//! # Euclidean distance
+//!
+//! The columns are optionally divided by their pooled within-group standard
+//! deviation, and the indicators of a categorical covariate are multiplied by
+//! `1/sqrt(2)` so that a mismatch on a categorical covariate counts as 1 in
+//! the squared distance, as in MatchIt.
+//!
+//! # References
+//!
+//! 1. Imai K, Ratkovic M. Covariate balancing propensity score. Journal of the
+//!    Royal Statistical Society Series B 2014;76:243-263.
+//! 2. Rosenbaum PR. Design of Observational Studies. Springer, 2010, section
+//!    8.3.
+//! 3. Ho DE, Imai K, King G, Stuart EA. MatchIt: nonparametric preprocessing
+//!    for parametric causal inference. Journal of Statistical Software
+//!    2011;42(8).
 
 mod cbps;
 mod config;
@@ -246,21 +295,33 @@ pub struct PropensityMatchedOutcome {
 /// Errors for in-crate preprocessing and estimation.
 #[derive(Debug, Clone)]
 pub enum EstimationError {
+    /// There are no records.
     EmptyInput,
+    /// A covariate has a missing value where none is allowed.
     MissingValuesNotAllowed {
+        /// The name of the covariate.
         covariate: String,
     },
+    /// A numeric covariate has a value that is not finite.
     NonFiniteNumericCovariate {
+        /// The record with the value.
         record_id: String,
+        /// The name of the covariate.
         covariate: String,
     },
+    /// A covariate is numeric for some records and categorical for others.
     MixedCovariateType {
+        /// The name of the covariate.
         covariate: String,
     },
+    /// A covariate has no observed value in any record.
     NoObservedValuesForCovariate {
+        /// The name of the covariate.
         covariate: String,
     },
+    /// No covariate is available to model.
     NoCovariatesAvailable,
+    /// The elastic net settings are out of range.
     InvalidElasticNetConfig,
     /// The iteration limit is 0 or the tolerance is not positive and finite.
     InvalidGlmConfig,
@@ -269,6 +330,7 @@ pub enum EstimationError {
     InvalidCrossValidation,
     /// A sampling weight is missing for a record, negative or not finite.
     InvalidSamplingWeight {
+        /// The record with the bad weight.
         record_id: String,
     },
     /// `reestimate` was set but no common-support policy was given.
@@ -292,12 +354,16 @@ pub enum EstimationError {
     /// the objective is not finite at the start, or a direction does not
     /// descend.
     CbpsFitFailed(epistat_optim::bfgs::BfgsError),
+    /// A linear system in the fit could not be solved.
     LinearSystemSolveFailed,
+    /// The covariance matrix is not usable.
     InvalidCovarianceMatrix,
+    /// The Mahalanobis distance could not be built from the covariance matrix.
     MahalanobisConfigBuildFailed,
     /// A column varies, but not within either group, so it has no pooled
     /// within-group standard deviation to scale by.
     ZeroWithinGroupVariance {
+        /// The name of the column.
         column: String,
     },
 }

@@ -14,6 +14,7 @@
 //! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
 //! variance function and the classic Park test.
+#![warn(missing_docs)]
 
 mod columns;
 pub mod elastic_net;

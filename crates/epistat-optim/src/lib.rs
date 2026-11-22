@@ -19,6 +19,7 @@
 //!
 //! Each module describes its algorithm, stopping rules and defaults, and lists
 //! its references.
+#![warn(missing_docs)]
 
 pub mod bfgs;
 pub mod bounded_simplex;

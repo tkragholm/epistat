@@ -29,11 +29,13 @@ impl MatchRatio {
 pub struct BirthDateWindowDays(i32);
 
 impl BirthDateWindowDays {
+    /// The window, or `None` when `value` is negative.
     #[must_use]
     pub const fn new(value: i32) -> Option<Self> {
         if value >= 0 { Some(Self(value)) } else { None }
     }
 
+    /// The number of days.
     #[must_use]
     pub const fn get(self) -> i32 {
         self.0
@@ -45,11 +47,13 @@ impl BirthDateWindowDays {
 pub struct AgeLimitYears(pub(super) u8);
 
 impl AgeLimitYears {
+    /// The limit, or `None` when `value` is 0.
     #[must_use]
     pub const fn new(value: u8) -> Option<Self> {
         if value > 0 { Some(Self(value)) } else { None }
     }
 
+    /// The number of years.
     #[must_use]
     pub const fn get(self) -> u8 {
         self.0

@@ -86,6 +86,7 @@ impl Clusters {
         self.of.len()
     }
 
+    /// Whether there are no observations.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.of.is_empty()

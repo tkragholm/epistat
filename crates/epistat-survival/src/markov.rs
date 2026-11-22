@@ -240,6 +240,10 @@ const NOT_QUALIFYING: u32 = u32::MAX;
 /// The stays as five columns of the same length. The state is the index among
 /// the qualifying states, and a value at or above their count is a state that
 /// does not qualify.
+///
+/// The columns are built from the data, the time-fixed stops and the
+/// qualifying states, so none of them is a slice of the caller's data. The
+/// struct only keeps the five slices together as one argument.
 #[derive(Debug, Clone, Copy)]
 struct Rows<'a> {
     person: &'a [u32],

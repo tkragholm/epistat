@@ -38,14 +38,16 @@
 //! The matchers take any type that implements [`MatchingRecord`], and the
 //! covariate methods [`CovariateRecord`]. [`BalanceRecord`] owns its values
 //! in hash maps, about 2 KiB per unit. A [`Cohort`] holds the same values as
-//! columns, a few tens of bytes per unit, and its rows are records that give
-//! the same results, so ten million units fit in memory.
+//! columns, about 120 bytes per unit with five strata and five numeric
+//! covariates, and its rows are records that give the same results, so ten
+//! million units fit in memory.
 //!
 //! ## Arrow input
 //!
 //! With the cargo feature `arrow`, the module `arrow` builds the records or a
 //! [`Cohort`] from Apache Arrow arrays, so a cohort held in columns, in Arrow
 //! or Polars, needs no per-row structs of its own.
+#![warn(missing_docs)]
 
 // ---------------------------------------------------------------------------
 // Shared builder-setter macros, which remove identical 3-line setter bodies
@@ -75,6 +77,7 @@ macro_rules! impl_with_reason {
 #[macro_export]
 macro_rules! impl_with_distance_config {
     () => {
+        /// Sets the distance configuration the matcher reads its distances from.
         #[must_use]
         pub const fn with_distance_config(mut self, distance_config: &'a DistanceConfig) -> Self {
             self.distance_config = Some(distance_config);
@@ -314,6 +317,7 @@ pub use spec::{
     VariableRatioSpec, run_spec,
 };
 
+/// The two eCDF distance statistics of `case_values` against `control_values`, for benchmarks. `None` when either slice is empty.
 #[cfg(feature = "bench-internals")]
 #[must_use]
 pub fn benchmark_ecdf_distance_stats(
@@ -323,6 +327,7 @@ pub fn benchmark_ecdf_distance_stats(
     balance::benchmark_ecdf_distance_stats(case_values, control_values)
 }
 
+/// The two empirical QQ distance statistics of `case_values` against `control_values`, for benchmarks. `None` when either slice is empty.
 #[cfg(feature = "bench-internals")]
 #[must_use]
 pub fn benchmark_eqq_distance_stats(
@@ -412,6 +417,7 @@ pub mod prelude {
         trial_seed,
     };
 
+    /// The constraints that can be added to a [`MatchJob`].
     pub mod constraints {
         pub use crate::constraints::{
             AntiExact, Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive,

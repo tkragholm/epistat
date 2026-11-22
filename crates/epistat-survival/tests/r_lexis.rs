@@ -9,11 +9,6 @@
 //! off by at most `(k + 4)` units in the last place of the largest magnitude
 //! of the case, which is the tolerance used.
 
-#![allow(
-    clippy::float_cmp,
-    reason = "the exact values of R's pieces and of the grid case are asserted"
-)]
-
 use epistat_survival::SurvData;
 use epistat_survival::lexis::rates::{RateOptions, fit_rates};
 use epistat_survival::lexis::{Lexis, LexisOptions, TimeScale, split_lexis};
@@ -199,14 +194,17 @@ fn a_short_last_piece_is_kept() {
     for pieces in [&case.epi, &case.multi] {
         // R: row 1 is one piece of length 5 carrying the event.
         assert_eq!(pieces.row, vec![1, 2, 2]);
-        assert_eq!(pieces.dur[0], 5.0);
+        assert_eq!(f64::to_bits(pieces.dur[0]), f64::to_bits(5.0));
         assert_eq!(pieces.status, vec![1, 0, 1]);
     }
     let got = run(case, &case.breaks, false);
     assert_eq!(got.row, vec![0, 0, 1, 1]);
     assert_eq!(got.status, vec![0, 1, 0, 1]);
-    assert_eq!(got.length[0], 5.0);
-    assert_eq!(got.length[1], (5.0 + 1e-9) - 5.0);
+    assert_eq!(f64::to_bits(got.length[0]), f64::to_bits(5.0));
+    assert_eq!(
+        f64::to_bits(got.length[1]),
+        f64::to_bits((5.0 + 1e-9) - 5.0)
+    );
     assert!((got.length[1] - 1e-9).abs() < 1e-15);
 }
 

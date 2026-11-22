@@ -109,6 +109,7 @@ pub struct RandomSelection {
 }
 
 impl RandomSelection {
+    /// A random selection that draws from the seeded stream of `seed`.
     #[must_use]
     pub fn seeded(seed: u64) -> Self {
         Self {

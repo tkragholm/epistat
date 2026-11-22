@@ -1,3 +1,8 @@
+//! Constraints a case and a control must satisfy to be matched, built from
+//! field names and values: equal sex, a birth-date window, a caliper on a
+//! numeric field, being alive or resident on the index date, and the
+//! exclusion of pairs that share a value.
+
 use crate::matching::{
     CachedSlot, Constraint, ConstraintContext, FieldValueSource, MatchingRecord, RefusesFromDate,
     ResidenceSpellSource, RoleIndexedRecord, SlotCache, StatusRule, StatusRuleKind, caliper_allows,
@@ -9,7 +14,9 @@ use std::marker::PhantomData;
 ///
 /// The `same_as_case` constructors use the "sex" key of the strata map.
 pub struct GenderMatch {
+    /// The strata key whose values must agree.
     pub key: String,
+    /// Whether a pair is allowed when either unit has no value.
     pub allow_unknown: bool,
 }
 

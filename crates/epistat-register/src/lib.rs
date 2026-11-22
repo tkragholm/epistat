@@ -1,6 +1,7 @@
 //! Tools for register data: person-time by calendar year, merging of
-//! overlapping intervals, connected components of rows that share a key, and
-//! constant-price deflation.
+//! overlapping intervals, connected components of rows that share a key,
+//! constant-price deflation, normalisation of ICD-10 codes and age in whole
+//! years.
 //!
 //! Each module is one small, self-contained method on plain slices and integers,
 //! with no dependence on a data-frame library.
@@ -26,6 +27,7 @@
 //! component numbers are `u32`, and a function that takes more rows than that
 //! refuses them. Every function returns results that depend only on its
 //! inputs, never on a thread count or hash order.
+#![warn(missing_docs)]
 
 pub mod age;
 pub mod cpi;

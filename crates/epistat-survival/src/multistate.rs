@@ -169,6 +169,11 @@ pub(crate) mod influence;
 
 /// The intervals as four slices of the same length, with the state ranks
 /// of the data. A rank at or above the number of states is outside the space.
+///
+/// The starts and stops are the times after the tie policy, held by the
+/// prepared data and not by the caller's data, and the ranks are derived from
+/// the state labels. The struct only keeps the four slices together as one
+/// argument.
 #[derive(Debug, Clone, Copy)]
 struct Rows<'a> {
     starts: &'a [f64],

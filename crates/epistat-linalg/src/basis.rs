@@ -88,12 +88,14 @@ pub trait Basis {
     /// Writes the first derivative of each function at `x` into `out`.
     fn derivatives_into(&self, x: f64, out: &mut [f64]);
 
+    /// The value of every function at `x`.
     fn values(&self, x: f64) -> Vec<f64> {
         let mut out = vec![0.0; self.len()];
         self.values_into(x, &mut out);
         out
     }
 
+    /// The first derivative of every function at `x`.
     fn derivatives(&self, x: f64) -> Vec<f64> {
         let mut out = vec![0.0; self.len()];
         self.derivatives_into(x, &mut out);
@@ -104,6 +106,7 @@ pub trait Basis {
 /// `1, x, x^2, ..., x^degree`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Polynomial {
+    /// The highest power of `x`.
     pub degree: usize,
 }
 
@@ -134,10 +137,13 @@ impl Basis for Polynomial {
 /// Invalid knots given to [`BSpline::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KnotError {
+    /// The boundary knots are not finite, or the lower is not below the upper.
     #[error("the boundary knots must be finite with lower below upper")]
     Boundary,
+    /// An internal knot is not strictly inside the boundary.
     #[error("the internal knots must lie strictly inside the boundary")]
     OutsideBoundary,
+    /// The internal knots are not in increasing order.
     #[error("the internal knots must be sorted")]
     Unsorted,
 }
@@ -181,6 +187,7 @@ impl BSpline {
         Ok(Self { degree, knots })
     }
 
+    /// The degree of the splines.
     #[must_use]
     pub const fn degree(&self) -> usize {
         self.degree

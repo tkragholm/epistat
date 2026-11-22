@@ -8,10 +8,6 @@
     clippy::cast_precision_loss,
     reason = "the grid values and counts are far below the limits of the casts"
 )]
-#![allow(
-    clippy::float_cmp,
-    reason = "sums of quarters and counts of events are exact, so equality is what is asserted"
-)]
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
@@ -50,8 +46,8 @@ fn breaks_met_together_up_to_rounding_make_one_cut() {
     assert_eq!(out.interval[0], vec![0, 1]);
     assert_eq!(out.interval[1], vec![0, 1]);
     // Both scales are at their break exactly at the start of the second piece.
-    assert_eq!(out.entry[0][1], 0.3);
-    assert_eq!(out.entry[1][1], 0.4);
+    assert_eq!(f64::to_bits(out.entry[0][1]), f64::to_bits(0.3));
+    assert_eq!(f64::to_bits(out.entry[1][1]), f64::to_bits(0.4));
     assert_eq!(out.status, vec![0, 1]);
     assert!(out.length.iter().all(|&l| l > 1e-3));
 }
@@ -283,13 +279,19 @@ fn invariants_on_random_data() {
                 .all(|&c| !(c > out.entry[1][k] && c < out.entry[1][k] + end))
         );
         if k + 1 < out.len() && out.row[k + 1] == out.row[k] {
-            assert_eq!(out.entry[0][k] + out.length[k], out.entry[0][k + 1]);
-            assert_eq!(out.entry[1][k] + out.length[k], out.entry[1][k + 1]);
+            assert_eq!(
+                f64::to_bits(out.entry[0][k] + out.length[k]),
+                f64::to_bits(out.entry[0][k + 1])
+            );
+            assert_eq!(
+                f64::to_bits(out.entry[1][k] + out.length[k]),
+                f64::to_bits(out.entry[1][k + 1])
+            );
             assert_eq!(out.status[k], 0);
         }
     }
     for r in 0..n {
-        assert_eq!(total[r], stop[r]);
+        assert_eq!(f64::to_bits(total[r]), f64::to_bits(stop[r]));
         assert_eq!(last[r], status[r]);
         assert!(pieces[r] >= 1);
     }
@@ -353,7 +355,10 @@ fn fit_on_cells_equals_fit_on_pieces() {
     let cells = aggregate(&keys, &out.length, &events).unwrap();
     assert!(cells.len() <= 36);
     assert_eq!(cells.pieces.iter().sum::<u64>() as usize, out.len());
-    assert_eq!(cells.events.iter().sum::<f64>(), events.iter().sum::<f64>());
+    assert_eq!(
+        f64::to_bits(cells.events.iter().sum::<f64>()),
+        f64::to_bits(events.iter().sum::<f64>())
+    );
 
     // The design: intercept and dummies for the levels after the first.
     let design = |codes: [&[u32]; 3], levels: [u32; 3]| -> Vec<Vec<f64>> {
@@ -431,7 +436,10 @@ fn fit_on_cells_equals_fit_on_pieces() {
     );
     assert!(worst_coef < tol_coef, "coefficients differ by {worst_coef}");
     assert!(worst_cov < tol_cov, "covariances differ by {worst_cov}");
-    assert_eq!(on_pieces.events, on_cells.events);
+    assert_eq!(
+        f64::to_bits(on_pieces.events),
+        f64::to_bits(on_cells.events)
+    );
 }
 
 /// Summing in the same pass gives the cells of summing the pieces: the same

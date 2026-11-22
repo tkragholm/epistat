@@ -11,6 +11,21 @@
 //! configuration as a count in the diagnostics of an empty outcome, and
 //! [`run_spec`] turns that into a [`SpecError`] as well, so a caller never
 //! mistakes it for a match that found nothing.
+//!
+//! # Algorithm
+//!
+//! [`run_spec`] reads the method, the distance, the estimator and the
+//! constraints from the spec, builds the distance configuration from the
+//! covariates when the spec names a model or a covariance, and calls the
+//! matcher of the method. Each option is read by the methods that use it, and
+//! an option that the chosen method does not read is an error. The names of
+//! the options follow those of `matchit()`.
+//!
+//! # References
+//!
+//! 1. Ho DE, Imai K, King G, Stuart EA. MatchIt: nonparametric preprocessing
+//!    for parametric causal inference. Journal of Statistical Software
+//!    2011;42(8).
 
 mod wiring;
 

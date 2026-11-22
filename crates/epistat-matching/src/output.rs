@@ -10,6 +10,22 @@
 //!
 //! The ordered views at the end of the module give the map-based outputs of
 //! the crate in the order of their keys.
+//!
+//! # Algorithm
+//!
+//! Units are numbered by their position in the data, and each output is built
+//! by one pass over the pairs. A row of the match matrix is an anchor, in the
+//! order of the units, with its controls in the order they were assigned. In
+//! the long shape an anchor row weighs 1 and a control row weighs the
+//! reciprocal of the number of controls its anchor got. Weights are rescaled to
+//! a mean of 1 in each group when the options ask for it, as `normalize = TRUE`
+//! does in `matchit()`. No random number is drawn.
+//!
+//! # References
+//!
+//! 1. Ho DE, Imai K, King G, Stuart EA. MatchIt: nonparametric preprocessing
+//!    for parametric causal inference. Journal of Statistical Software
+//!    2011;42(8).
 
 use crate::matching::to_f64;
 use crate::matching::{

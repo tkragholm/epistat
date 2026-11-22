@@ -122,6 +122,7 @@
 //!    doi:10.1145/2660193.2660195
 //! 2. Lemire D. Fast random integer generation in an interval. ACM Trans
 //!    Model Comput Simul. 2019;29(1):3. doi:10.1145/3230636
+#![warn(missing_docs)]
 
 mod draws;
 
@@ -179,11 +180,13 @@ pub struct Stream {
 }
 
 impl Stream {
+    /// A stream that starts from `seed`.
     #[must_use]
     pub const fn seeded(seed: u64) -> Self {
         Self { state: seed }
     }
 
+    /// The next 64-bit output.
     pub fn next_u64(&mut self) -> u64 {
         let output = splitmix64(self.state);
         self.state = self.state.wrapping_add(GAMMA);

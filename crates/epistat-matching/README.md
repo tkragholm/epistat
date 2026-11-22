@@ -40,10 +40,13 @@ let risk_sets = MatchJob::new_transition(&cohort, 42)
 ```
 
 The matchers take any record type that implements the crate's traits. A
-`Cohort` holds the units as columns, about a hundred bytes per unit, and its
+`Cohort` holds the units as columns, about 120 bytes per unit with five strata and five numeric covariates, and its
 rows are records that give the same results as owned ones, so ten million
 units fit in memory.
 
 The `arrow` feature builds records or a `Cohort` from Apache Arrow arrays.
 The `reporting` feature writes the matching summary and the balance tables as
-CSV.
+CSV. The `test-utils` feature adds small fixtures for tests and benchmarks. The
+`bench-internals` feature exposes the balance statistics that the benchmarks
+time. The `nightly` feature enables faer's AVX-512 kernels through
+`epistat-linalg`.

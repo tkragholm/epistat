@@ -8,10 +8,15 @@ use std::fmt::{Display, Formatter};
 /// Canonical exclusion-reason key for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ExclusionReason {
+    /// A pair removed by a filter other than the named constraints.
     AdditionalFilter,
+    /// A pair refused by a constraint.
     Constraint(ConstraintReason),
+    /// A pair refused by a distance caliper.
     DistanceCaliper(DistanceCaliperReason),
+    /// The job was refused because its criteria are invalid.
     InvalidCriteria(InvalidCriteriaReason),
+    /// The job was refused because common support could not be set.
     CommonSupportFailure(CommonSupportFailureReason),
     /// A case whose event date is before its birth date, by id. Risk-set
     /// matching under the default policy refuses such a cohort.
@@ -51,10 +56,15 @@ impl From<CommonSupportFailureReason> for ExclusionReason {
 /// Typed estimand drift reason recorded by matching diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EstimandDriftReason {
+    /// Anchors were dropped as outside common support.
     CommonSupportTrimming,
+    /// Some anchors found no control.
     UnmatchedAnchors,
+    /// Some anchors found fewer controls than the ratio.
     RatioShortfall,
+    /// A distance caliper removed pairs.
     DistanceCaliperExclusion,
+    /// Common-support trimming and a caliper both removed units.
     CommonSupportCaliperInteraction,
 }
 
@@ -188,8 +198,11 @@ impl Display for DistanceCaliperReason {
 /// Typed invalid-criteria diagnostics code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum InvalidCriteriaReason {
+    /// The birth-date window is negative.
     NegativeBirthDateWindow,
+    /// The match ratio is 0.
     ZeroMatchRatio,
+    /// The study options are invalid.
     StudyOptions,
     /// The nearest-neighbour options contradict each other or the distance.
     NearestOptions,
@@ -222,7 +235,9 @@ impl From<CriteriaValidationError> for InvalidCriteriaReason {
 /// Typed common-support failure diagnostics code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CommonSupportFailureReason {
+    /// Common support was asked for without propensity scores.
     RequiresPropensityScoreMap,
+    /// The anchors' scores and the candidates' scores do not overlap.
     NoOverlap,
 }
 
@@ -416,8 +431,7 @@ pub struct MatchDiagnostics {
 /// The debug rendering lists every field but the ids of the trimmed units, which
 /// the trimmed counts summarise. `anchors_on_lower_tier` is left out
 /// when it is 0, so that the rendering of a job that matches on no lower tier
-/// is the same as before the field existed and the hashes of renderings that
-/// tests pin stay valid.
+/// does not mention it.
 #[expect(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for MatchDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

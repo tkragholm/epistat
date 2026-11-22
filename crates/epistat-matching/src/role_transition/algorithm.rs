@@ -1,3 +1,40 @@
+//! Risk-set matching of cases to controls at the date a person becomes a
+//! case.
+//!
+//! # Algorithm
+//!
+//! A case is a person with an event date, eligible when the event falls before
+//! the age limit. Cases are taken in order of event date. A control is at risk
+//! on a case's event date when it has entered on or before that date and has
+//! no event or an event strictly after it, and it passes the alive and
+//! residence checks of the job. This is incidence density sampling: a person
+//! can be a control for an earlier case and later become a case, and a control
+//! is chosen from those at risk at the case's own time.
+//!
+//! Each case is matched on the required strata, the birth-date window and the
+//! constraints, and the selection strategy chooses among the controls at risk.
+//! A control can be used again when replacement is allowed. When the at-risk
+//! rule is a span of dates for each control, the selection is a seeded random
+//! draw, there is no unique key and every constraint decides from dates or
+//! values the sweep can read, the risk sets are kept by a sweep over the case
+//! dates instead of being rebuilt for each case; any other job scans the
+//! cohort for each case. Both give the same matches.
+//!
+//! With common support set, a case whose score is strictly outside the range
+//! of the scores at risk on its date is not matched, and a candidate whose
+//! score is outside the range of the cases' scores is not used.
+//!
+//! The age of a person on a date is the civil age in whole years, from
+//! `epistat_register`.
+//!
+//! # References
+//!
+//! 1. Lubin JH, Gail MH. Biased selection of controls for case-control
+//!    analyses of cohort studies. Biometrics 1984;40:63-75.
+//! 2. Richardson DB. An incidence density sampling program for nested
+//!    case-control analyses. Occupational and Environmental Medicine
+//!    2004;61:e59.
+
 use super::IdOrder;
 use super::sweep::RiskSetSweep;
 use crate::matching::{
@@ -146,15 +183,22 @@ impl<R: RoleIndexedRecord> RiskSetPolicy<R> for DefaultRiskSetPolicy {
 /// Unified request for role-transition matching.
 #[derive(Clone, Copy)]
 pub struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
+    /// The criteria of the job.
     pub criteria: &'a MatchingCriteria,
+    /// The options that define a transition.
     pub options: &'a RoleTransitionOptions,
+    /// How a case chooses among its eligible controls.
     pub strategy: S,
+    /// The constraints a pair must satisfy.
     pub constraints: &'a G,
+    /// The distance configuration, if any.
     pub distance_config: Option<&'a DistanceConfig>,
+    /// Who is at risk on each index date.
     pub risk_set_policy: &'a P,
 }
 
 impl<'a, S, G: ?Sized> TransitionMatchRequest<'a, S, G, DefaultRiskSetPolicy> {
+    /// A request that uses the default risk-set policy and no distance configuration.
     #[must_use]
     pub const fn new(
         criteria: &'a MatchingCriteria,
@@ -176,6 +220,7 @@ impl<'a, S, G: ?Sized> TransitionMatchRequest<'a, S, G, DefaultRiskSetPolicy> {
 impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
     crate::impl_with_distance_config!();
 
+    /// The same request with another risk-set policy.
     #[must_use]
     pub fn with_risk_set_policy<P2>(
         self,

@@ -1,6 +1,6 @@
 [package]
 name = "epistat-survival"
-description = "Survival analysis for follow-up data: Cox regression, Fine-Gray, Aalen-Johansen, multi-state models, Kaplan-Meier, metrics and pseudo-observations, with results that do not depend on the number of threads"
+description = "Survival analysis for follow-up data: Cox regression, Fine-Gray, Aalen-Johansen, multi-state models, Kaplan-Meier, metrics and pseudo-observations, with results that do not depend on the number of threads, and optional Apache Arrow input"
 keywords = ["statistics", "survival", "cox", "competing-risks", "multi-state"]
 categories = ["mathematics", "science"]
 readme = "README.md"

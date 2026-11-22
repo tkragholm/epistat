@@ -25,7 +25,7 @@
 //!   units gives the same distances between them.
 //! * A constant column is left out of every distance, as in MatchIt. When every
 //!   column is constant MatchIt returns zero for every pair and the crate
-//!   returns an error, since no distance is defined (decision 59). A column
+//!   returns an error, since no distance is defined. A column
 //!   with no variance within either group gives NaN in MatchIt's scaled
 //!   Euclidean distance and an error here.
 //!
