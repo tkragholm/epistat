@@ -2,7 +2,7 @@ use chrono::Duration;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use epistat_matching::{
     BaseRecord, DateDistance, DistanceMetric, IdMapMahalanobisDistance,
-    IdMapPropensityScoreDistance, ScoreTable, date,
+    IdMapPropensityScoreDistance, ScoreTable, VectorTable, date,
 };
 use rapidhash::RapidHashMap;
 use std::hint::black_box;
@@ -115,7 +115,8 @@ fn bench_distance_channels(c: &mut Criterion) {
     for dimension in [4_usize, 8, 16] {
         let vectors = synthetic_vectors(&records, dimension);
         let inverse = inverse_covariance(dimension);
-        let metric = IdMapMahalanobisDistance::new(&vectors, &inverse, dimension);
+        let table = VectorTable::from_map(&vectors, dimension);
+        let metric = IdMapMahalanobisDistance::new(&table, &inverse);
 
         group.bench_with_input(
             BenchmarkId::new("mahalanobis_map", dimension),

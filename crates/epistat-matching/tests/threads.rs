@@ -788,7 +788,8 @@ fn mahalanobis_preparation_and_matching() {
                 let prepared =
                     prepare_mahalanobis_distance_config(&anchors, &candidates, None, &config)
                         .unwrap();
-                let mut vectors: Vec<_> = prepared.vectors.iter().collect();
+                let vector_map = prepared.vectors.to_map();
+                let mut vectors: Vec<_> = vector_map.iter().collect();
                 vectors.sort_by(|a, b| a.0.cmp(b.0));
                 for (id, vector) in vectors {
                     d.text(id);
@@ -837,7 +838,8 @@ fn euclidean_preparation_and_matching() {
                 &config,
             )
             .unwrap();
-            let mut vectors: Vec<_> = prepared.vectors.iter().collect();
+            let vector_map = prepared.vectors.to_map();
+            let mut vectors: Vec<_> = vector_map.iter().collect();
             vectors.sort_by(|a, b| a.0.cmp(b.0));
             for (id, vector) in vectors {
                 d.text(id);

@@ -614,7 +614,7 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(u64, u64)>, &'static str) {
         ),
         SpecOutput::Full(o) => (
             o.retained_units(),
-            subclass_lines(o.assignments.iter().map(|(k, v)| (k.as_str(), *v))),
+            subclass_lines(o.assignments()),
             "id,subclass",
         ),
         SpecOutput::Subclass { outcome, .. } => (

@@ -1974,38 +1974,39 @@ fn run_quick<R: MatchingRecord>(
             exact,
             options,
         ),
-        DistanceConfig::EuclideanMap {
-            vectors, dimension, ..
-        } => quick_match_subclasses(
+        DistanceConfig::EuclideanMap { vectors, .. } => quick_match_subclasses(
             anchors,
             candidates,
-            |row: &R| vectors.get(row.id()).map(Vec::as_slice),
-            *dimension,
+            |row: &R| vectors.get(row.id()),
+            vectors.dimension(),
             exact,
             options,
         ),
         DistanceConfig::MahalanobisMap {
             vectors,
             inverse_covariance,
-            dimension,
             ..
         } => {
-            let factor = cholesky_lower(inverse_covariance, *dimension).ok_or_else(|| {
+            let dimension = vectors.dimension();
+            let factor = cholesky_lower(inverse_covariance, dimension).ok_or_else(|| {
                 SpecError::option(
                     "distance",
                     "the inverse covariance matrix is not positive definite; \
                      drop covariates that are collinear or constant",
                 )
             })?;
-            let embedded: RapidHashMap<String, Vec<f64>> = vectors
-                .iter()
-                .map(|(id, vector)| (id.clone(), apply_transposed(&factor, vector, *dimension)))
+            let embedded: Vec<f64> = (0..vectors.len())
+                .flat_map(|position| apply_transposed(&factor, vectors.row(position), dimension))
                 .collect();
             quick_match_subclasses(
                 anchors,
                 candidates,
-                |row: &R| embedded.get(row.id()).map(Vec::as_slice),
-                *dimension,
+                |row: &R| {
+                    vectors
+                        .position(row.id())
+                        .map(|position| &embedded[position * dimension..(position + 1) * dimension])
+                },
+                dimension,
                 exact,
                 options,
             )
