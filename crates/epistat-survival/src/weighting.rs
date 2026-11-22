@@ -4,7 +4,9 @@
 //! - [`iptw`] fits a logistic propensity model with `epistat-glm` and returns
 //!   the weights of the average treatment effect, of the treated or of the
 //!   controls, unstabilised or stabilised, as `WeightIt::weightit(method =
-//!   "glm")`, with the summary of the weights that `summary.weightit` gives.
+//!   "glm")`, and the overlap, matching and optimal-subset weights of `estimand
+//!   = "ATO"`, `"ATM"` and `"ATOS"`, with the summary of the weights that
+//!   `summary.weightit` gives.
 //! - [`ipcw`] gives inverse probability of censoring weights for time-to-event
 //!   data from a Kaplan-Meier or Cox model of the censoring hazard, with
 //!   counting-process rows and covariates that change over time.

@@ -11,6 +11,9 @@
 //! ATE   a_i / p_i + (1 - a_i) / (1 - p_i)
 //! ATT   a_i + (1 - a_i) p_i / (1 - p_i)
 //! ATC   (1 - a_i) + a_i (1 - p_i) / p_i
+//! ATO   a_i (1 - p_i) + (1 - a_i) p_i
+//! ATM   min(p_i, 1 - p_i) / (a_i p_i + (1 - a_i)(1 - p_i))
+//! ATOS  (a_i / p_i + (1 - a_i) / (1 - p_i)) 1(alpha <= p_i <= 1 - alpha)
 //! ```
 //!
 //! which are the weights of `WeightIt::weightit(method = "glm")`. The
@@ -19,6 +22,32 @@
 //! proportion treated, the fit of the logistic model with an intercept only
 //! (Robins, Hernan and Brumback 2000). `WeightIt` stabilises only for the
 //! average treatment effect, and so does this module.
+//!
+//! The overlap weights (ATO) target the population with weight `p (1 - p)`, the
+//! one with the most overlap between the groups, and balance every covariate of
+//! the logistic model exactly: with an intercept, the weighted sums of the
+//! covariates in the two groups are equal, `sum a_i (1 - p_i) z_i = sum (1 - a_i)
+//! p_i z_i`, because the score equation of the model is `sum (a_i - p_i) z_i = 0`
+//! (Li, Morgan and Zaslavsky 2018). The matching weights (ATM) weight each
+//! subject by the smaller of the two probabilities over the probability of the
+//! group it is in, the population that one-to-one matching on the propensity
+//! score would give (Li and Greene 2013). The optimal subset (ATOS) weights as
+//! the average treatment effect and gives weight 0 outside `[alpha, 1 - alpha]`.
+//! The `alpha` of Crump, Hotz, Imbens and Mitnik (2009) is, over the candidates
+//! `alpha` in increasing order among the sorted values of `p` and `1 - p` below
+//! one half, the first with
+//!
+//! ```text
+//! 2 alpha (1 - alpha) * mean(1 / (p_i (1 - p_i)) over p_i (1 - p_i) >= alpha (1 - alpha)) >= 1
+//! ```
+//!
+//! as `WeightIt` computes it, 0 if none qualifies. Candidates that differ from
+//! the previous by less than `1e-8` are skipped, as there. [`fit_atos`] takes an
+//! `alpha` of the caller instead.
+//!
+//! The variance that accounts for the estimated propensity model (see
+//! [`weighting`](super)) takes the weights as functions of the coefficients and
+//! the cut-off `alpha` of ATOS, and the 0.5 of ATM, as fixed.
 //!
 //! The summary of the weights per treatment group is the range, mean,
 //! coefficient of variation and Kish's effective sample size.
@@ -30,7 +59,21 @@
 //! exactly 0 or 1 are errors, since the weights would be undefined or
 //! infinite. A weight that is very large without the probability reaching 0
 //! or 1, which is what near-separation looks like, is not an error and shows
-//! in the summary.
+//! in the summary. The weights of ATOS are 0 for the subjects outside the
+//! optimal subset, and the summary includes them.
+//!
+//! # References
+//!
+//! 1. Li F, Morgan KL, Zaslavsky AM. Balancing covariates via propensity score
+//!    weighting. J Am Stat Assoc. 2018;113(521):390-400.
+//! 2. Li L, Greene T. A weighting analogue to pair matching in propensity score
+//!    analysis. Int J Biostat. 2013;9(2):215-34.
+//! 3. Crump RK, Hotz VJ, Imbens GW, Mitnik OA. Dealing with limited overlap in
+//!    estimation of average treatment effects. Biometrika. 2009;96(1):187-99.
+//! 4. Greifer N. WeightIt: weighting for covariate balance in observational
+//!    studies. R package.
+//! 5. Zhou T, Tong G, Li F, Thomas LE, Li F. PSweight: an R package for
+//!    propensity score weighting analysis. R J. 2022;14(1):282-300.
 
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
@@ -49,6 +92,16 @@ pub enum Estimand {
     Att,
     /// The controls, `estimand = "ATC"`.
     Atc,
+    /// The population with the most overlap, weight `p (1 - p)`,
+    /// `estimand = "ATO"`: treated subjects are weighted by `1 - p` and controls
+    /// by `p`.
+    Ato,
+    /// The population of matching on the propensity score, `estimand = "ATM"`.
+    Atm,
+    /// The optimal subset of Crump et al., `estimand = "ATOS"`: the weights of the
+    /// average treatment effect on the subjects with propensity in `[alpha, 1 -
+    /// alpha]` and 0 outside.
+    Atos,
 }
 
 /// What [`fit`] does besides the data.
@@ -91,6 +144,8 @@ pub struct Iptw<'a> {
     pub coefficients: Vec<f64>,
     /// The proportion treated, used by stabilised weights, otherwise `None`.
     pub marginal: Option<f64>,
+    /// The cut-off `alpha` of the optimal subset, for `Atos` only.
+    pub alpha: Option<f64>,
     /// The summary of the weights by treatment group.
     pub summary: IptwSummary,
     pub(super) treatment: &'a [bool],
@@ -127,6 +182,74 @@ pub fn fit<'a>(
     treatment: &'a [bool],
     design: MatRef<'a, f64>,
     opts: &IptwOptions,
+) -> Result<Iptw<'a>> {
+    fit_with(treatment, design, opts, None)
+}
+
+/// Fit the propensity model and weight the subjects of the optimal subset
+/// between `alpha` and `1 - alpha`, a cut-off of the caller's, or the one of
+/// Crump et al. for `None`.
+///
+/// The weights are those of the average treatment effect inside the subset and 0
+/// outside, and [`Iptw::alpha`] holds the cut-off used.
+///
+/// # Errors
+///
+/// As [`fit`], and [`Error::Input`] when `alpha` is not in `[0, 0.5)`.
+pub fn fit_atos<'a>(
+    treatment: &'a [bool],
+    design: MatRef<'a, f64>,
+    alpha: Option<f64>,
+) -> Result<Iptw<'a>> {
+    if let Some(a) = alpha
+        && !(0.0..0.5).contains(&a)
+    {
+        return Err(Error::input(format!("alpha: {a} is not in [0, 0.5)")));
+    }
+    let opts = IptwOptions {
+        estimand: Estimand::Atos,
+        stabilise: false,
+    };
+    fit_with(treatment, design, &opts, alpha)
+}
+
+/// The cut-off of Crump et al. as `WeightIt` finds it, 0 if none qualifies.
+fn crump_alpha(propensity: &[f64]) -> f64 {
+    let n = propensity.len();
+    let mut sorted: Vec<f64> = propensity
+        .iter()
+        .copied()
+        .chain(propensity.iter().map(|&p| 1.0 - p))
+        .collect();
+    sorted.sort_by(f64::total_cmp);
+    // `z` ascending with the suffix sums of `1 / z`.
+    let mut z: Vec<f64> = propensity.iter().map(|&p| p * (1.0 - p)).collect();
+    z.sort_by(f64::total_cmp);
+    let mut suffix = vec![0.0; n + 1];
+    for i in (0..n).rev() {
+        suffix[i] = suffix[i + 1] + 1.0 / z[i];
+    }
+    let below = propensity.iter().filter(|&&p| p < 0.5).count();
+    for i in 0..below {
+        if i > 0 && (sorted[i] - sorted[i - 1]).abs() < 1e-8 {
+            continue;
+        }
+        let alpha = sorted[i];
+        let a = alpha * (1.0 - alpha);
+        let first = z.partition_point(|&v| v < a);
+        let count = (n - first) as f64;
+        if count > 0.0 && 2.0 * a * suffix[first] / count >= 1.0 {
+            return alpha;
+        }
+    }
+    0.0
+}
+
+fn fit_with<'a>(
+    treatment: &'a [bool],
+    design: MatRef<'a, f64>,
+    opts: &IptwOptions,
+    alpha: Option<f64>,
 ) -> Result<Iptw<'a>> {
     let n = treatment.len();
     if design.nrows() != n {
@@ -171,6 +294,8 @@ pub fn fit<'a>(
         )));
     }
     let marginal = opts.stabilise.then(|| n_treated as f64 / n as f64);
+    let alpha = (opts.estimand == Estimand::Atos)
+        .then(|| alpha.unwrap_or_else(|| crump_alpha(&propensity)));
     let weights: Vec<f64> = treatment
         .iter()
         .zip(&propensity)
@@ -181,6 +306,14 @@ pub fn fit<'a>(
                 (Estimand::Att, true) | (Estimand::Atc, false) => 1.0,
                 (Estimand::Att, false) => p / (1.0 - p),
                 (Estimand::Atc, true) => (1.0 - p) / p,
+                (Estimand::Ato, true) => 1.0 - p,
+                (Estimand::Ato, false) => p,
+                (Estimand::Atm, true) if p > 0.5 => (1.0 - p) / p,
+                (Estimand::Atm, false) if p < 0.5 => p / (1.0 - p),
+                (Estimand::Atm, _) => 1.0,
+                (Estimand::Atos, _) if alpha.is_some_and(|al| p < al || p > 1.0 - al) => 0.0,
+                (Estimand::Atos, true) => 1.0 / p,
+                (Estimand::Atos, false) => 1.0 / (1.0 - p),
             };
             match marginal {
                 Some(pi) if a => pi * base,
@@ -209,6 +342,7 @@ pub fn fit<'a>(
         propensity,
         coefficients,
         marginal,
+        alpha,
         summary,
         treatment,
         design,

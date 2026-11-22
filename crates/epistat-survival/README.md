@@ -10,6 +10,10 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   occupation probabilities and Cox models for multi-state processes, each with
   infinitesimal jackknife standard errors, and clustered bootstraps for the
   first and the third.
+- Inverse probability weights for treatment (average effect, on the treated or
+  the controls, overlap, matching and optimal-subset weights), for censoring and
+  for time-varying treatment, with weighted Cox and Kaplan-Meier fits whose
+  variance accounts for the estimated weights.
 - The Titman-Putter test of the Markov property.
 - Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
   pseudo-observations, concordance, Brier scores and calibration, standardised
