@@ -385,7 +385,7 @@ pub struct MatchDiagnostics {
 /// when it is 0, so that the rendering of a job that matches on no lower tier
 /// is the same as before the field existed and the hashes of renderings that
 /// tests pin stay valid.
-#[allow(clippy::missing_fields_in_debug)]
+#[expect(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for MatchDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("MatchDiagnostics");
