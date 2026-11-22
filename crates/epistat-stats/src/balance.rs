@@ -24,7 +24,9 @@
 //! mean = (1/K) sum_k |F_a(v_k) - F_b(v_k)|,    max = max_k |F_a(v_k) - F_b(v_k)|
 //! ```
 //!
-//! The maximum is the Kolmogorov-Smirnov statistic. [`eqq_distance`] does the same
+//! The maximum is the Kolmogorov-Smirnov statistic. [`ecdf_distance_weighted`]
+//! is the same on weighted points, and [`ecdf_gaps_sorted`] gives the gaps
+//! themselves. [`eqq_distance`] does the same
 //! for the empirical quantile functions \[3\]. For groups of equal size it
 //! compares the order statistics pair by pair. Otherwise it reads both groups at
 //! `N = max(n_a, n_b)` probabilities `k / (N - 1)`, `k = 0, ..., N - 1`, with the
@@ -87,15 +89,29 @@ pub fn variance_ratio(var_a: f64, var_b: f64) -> Option<f64> {
 pub fn ecdf_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
     let a = sorted_finite(a)?;
     let b = sorted_finite(b)?;
+    let (mut sum, mut max, mut points) = (0.0_f64, 0.0_f64, 0usize);
+    for gap in ecdf_gaps_sorted(&a, &b) {
+        sum += gap;
+        max = max.max(gap);
+        points += 1;
+    }
+    Some((sum / points as f64, max))
+}
+
+/// The absolute difference between the two empirical distribution functions
+/// at each distinct value of the pooled sample, in ascending order of value.
+///
+/// Both samples are given in ascending order, without NaN, and neither is
+/// empty. Negative and positive zero are one value.
+pub fn ecdf_gaps_sorted<'a>(a: &'a [f64], b: &'a [f64]) -> impl Iterator<Item = f64> + 'a {
     let (na, nb) = (a.len() as f64, b.len() as f64);
-    let (mut i, mut j, mut points) = (0, 0, 0usize);
-    let (mut sum, mut max) = (0.0_f64, 0.0_f64);
-    while i < a.len() || j < b.len() {
+    let (mut i, mut j) = (0, 0);
+    std::iter::from_fn(move || {
         let point = match (a.get(i), b.get(j)) {
             (Some(&x), Some(&y)) => x.min(y),
             (Some(&x), None) => x,
             (None, Some(&y)) => y,
-            (None, None) => break,
+            (None, None) => return None,
         };
         while i < a.len() && a[i] <= point {
             i += 1;
@@ -103,12 +119,72 @@ pub fn ecdf_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
         while j < b.len() && b[j] <= point {
             j += 1;
         }
-        let gap = (i as f64 / na - j as f64 / nb).abs();
+        Some((i as f64 / na - j as f64 / nb).abs())
+    })
+}
+
+/// The mean and the maximum absolute difference between two weighted
+/// empirical distribution functions, `None` when a group has no positive
+/// weight, or when there are more than `u32::MAX` points.
+///
+/// Each point is a value, whether it belongs to the first group, and a
+/// non-negative weight. The two distribution functions are evaluated at every
+/// distinct value among all points, units of weight zero included, and each
+/// group's weights are scaled to sum to one. A point of weight zero adds an
+/// evaluation point and no mass. Negative and positive zero are one value.
+/// This is the definition in the documentation of MatchIt's `summary.matchit()`.
+#[must_use]
+pub fn ecdf_distance_weighted(points: &[(f64, bool, f64)]) -> Option<(f64, f64)> {
+    let mut order = (0..points.len())
+        .map(|idx| u32::try_from(idx).ok())
+        .collect::<Option<Vec<_>>>()?;
+    order.sort_by(|&left, &right| points[left as usize].0.total_cmp(&points[right as usize].0));
+    ecdf_distance_weighted_ordered(points, &order)
+}
+
+/// [`ecdf_distance_weighted`] with the points' order given: `order` lists the
+/// indices of `points` in ascending order of value under `f64::total_cmp`,
+/// units that tie in their original order. The same order serves any weights
+/// on the same values.
+#[must_use]
+pub fn ecdf_distance_weighted_ordered(
+    points: &[(f64, bool, f64)],
+    order: &[u32],
+) -> Option<(f64, f64)> {
+    let total = |first: bool| {
+        points
+            .iter()
+            .filter(|(_, in_first, _)| *in_first == first)
+            .map(|(_, _, weight)| *weight)
+            .sum::<f64>()
+    };
+    let (total_first, total_second) = (total(true), total(false));
+    if !(total_first > 0.0 && total_second > 0.0) {
+        return None;
+    }
+
+    let (mut cumulative_first, mut cumulative_second) = (0.0_f64, 0.0_f64);
+    let (mut sum, mut max, mut distinct) = (0.0_f64, 0.0_f64, 0usize);
+    let mut idx = 0;
+    while idx < order.len() {
+        let value = points[order[idx] as usize].0;
+        while idx < order.len()
+            && points[order[idx] as usize].0.partial_cmp(&value) == Some(std::cmp::Ordering::Equal)
+        {
+            let (_, in_first, weight) = points[order[idx] as usize];
+            if in_first {
+                cumulative_first += weight;
+            } else {
+                cumulative_second += weight;
+            }
+            idx += 1;
+        }
+        let gap = (cumulative_first / total_first - cumulative_second / total_second).abs();
         sum += gap;
         max = max.max(gap);
-        points += 1;
+        distinct += 1;
     }
-    Some((sum / points as f64, max))
+    Some((sum / distinct as f64, max))
 }
 
 /// The mean and the maximum absolute difference between the two empirical
@@ -597,5 +673,63 @@ mod tests {
         let small = cramers_v_weighted(&scaled_a, &scaled_b).unwrap();
         // Scaling by a power of ten changes each term by a few rounding errors.
         assert!((base - small).abs() < 1e-12, "{base} {small}");
+    }
+
+    #[test]
+    fn weighted_ecdf_with_unit_weights_matches_the_unweighted_distance() {
+        let case = [1.0, 2.0, 2.0, 5.0];
+        let control = [0.5, 2.0, 4.0];
+        let points: Vec<(f64, bool, f64)> = case
+            .iter()
+            .map(|value| (*value, true, 1.0))
+            .chain(control.iter().map(|value| (*value, false, 1.0)))
+            .collect();
+        let weighted = ecdf_distance_weighted(&points).unwrap();
+        let plain = ecdf_distance(&case, &control).unwrap();
+        assert!((weighted.0 - plain.0).abs() < 1e-15);
+        assert!((weighted.1 - plain.1).abs() < 1e-15);
+    }
+
+    #[test]
+    fn weighted_ecdf_counts_zero_weight_points_as_evaluation_points() {
+        // The point at 9 carries no mass but is an evaluation point where the
+        // two distribution functions already agree at one, so the mean gap is a third.
+        let points = [(1.0, true, 1.0), (2.0, false, 1.0), (9.0, false, 0.0)];
+        let (mean, max) = ecdf_distance_weighted(&points).unwrap();
+        assert!((max - 1.0).abs() < 1e-15);
+        assert!((mean - 1.0 / 3.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn weighted_ecdf_is_undefined_without_mass_in_a_group() {
+        assert_eq!(ecdf_distance_weighted(&[(1.0, true, 1.0)]), None);
+        assert_eq!(
+            ecdf_distance_weighted(&[(1.0, true, 1.0), (2.0, false, 0.0)]),
+            None
+        );
+    }
+
+    /// The gaps are those of the empirical distribution functions evaluated by
+    /// counting, at each distinct pooled value, ties and signed zeros included.
+    #[test]
+    fn ecdf_gaps_follow_the_counting_definition() {
+        let a = [-1.0, -0.0, 0.0, 2.0, 2.0, 5.0];
+        let b = [0.0, 1.0, 2.0, 7.0];
+        let mut pooled: Vec<f64> = a.iter().chain(&b).copied().collect();
+        pooled.sort_by(f64::total_cmp);
+        pooled.dedup();
+        let expected: Vec<f64> = pooled
+            .iter()
+            .map(|&point| {
+                let fa = a.partition_point(|&v| v <= point) as f64 / a.len() as f64;
+                let fb = b.partition_point(|&v| v <= point) as f64 / b.len() as f64;
+                (fa - fb).abs()
+            })
+            .collect();
+        let got: Vec<f64> = ecdf_gaps_sorted(&a, &b).collect();
+        assert_eq!(got.len(), expected.len());
+        for (g, e) in got.iter().zip(&expected) {
+            assert_eq!(g.to_bits(), e.to_bits());
+        }
     }
 }
