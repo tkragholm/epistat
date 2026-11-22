@@ -847,8 +847,9 @@ enum StratumLabels {
     Absent,
     /// The labels of its units, in position order.
     Labels(Vec<Option<usize>>),
-    /// No unit fits a subclass under the caliper.
-    Lost,
+    /// No subclass can be made in the stratum, for the reason given: too few
+    /// units, or no unit that fits a subclass under the caliper.
+    Lost(QuickMatchError),
 }
 
 /// Generalised full matching of anchors and candidates.
@@ -865,13 +866,11 @@ enum StratumLabels {
 ///
 /// # Errors
 ///
-/// A [`QuickMatchError`] when a unit lacks coordinates or an exact variable,
-/// when a stratum is too small for the constraints, or when nothing can be
-/// matched. A stratum in which no unit fits a subclass under the caliper loses
-/// its units, which are dropped; the call fails with
-/// [`QuickMatchError::NoSubclass`] only when no stratum has a subclass. When
-/// several strata fail, the error is that of the first in order of first
-/// appearance.
+/// A [`QuickMatchError`] when a unit lacks coordinates or an exact variable, or
+/// when nothing can be matched. A stratum that is too small for the constraints,
+/// or in which no unit fits a subclass under the caliper, loses its units, which
+/// are dropped; the call fails only when no stratum has a subclass, with the
+/// error of the first stratum lost in order of first appearance.
 pub fn quick_match_subclasses<'c, R, V, F>(
     anchors: &[R],
     candidates: &[R],
@@ -945,14 +944,16 @@ where
             let flags: Vec<bool> = positions.iter().map(|p| is_anchor(*p)).collect();
             match quick_clusters(&points, dimension, &flags, options) {
                 Ok(labels) => Ok(StratumLabels::Labels(labels)),
-                // With several strata, one in which no unit fits a subclass
-                // under the caliper loses its units, which are dropped; the
-                // run fails only when no stratum has a subclass.
-                Err(QuickMatchError::NoSubclass) if stratified => Ok(StratumLabels::Lost),
+                // With several strata, one with too few units or in which no
+                // unit fits a subclass under the caliper loses its units, which
+                // are dropped; the run fails only when no stratum has a subclass.
+                Err(QuickMatchError::NoSubclass) if stratified => {
+                    Ok(StratumLabels::Lost(QuickMatchError::NoSubclass))
+                }
                 Err(QuickMatchError::TooFewUnits { .. }) if stratified => {
-                    Err(QuickMatchError::TooFewUnits {
+                    Ok(StratumLabels::Lost(QuickMatchError::TooFewUnits {
                         stratum: Some(stratum.to_string()),
-                    })
+                    }))
                 }
                 Err(error) => Err(error),
             }
@@ -963,10 +964,14 @@ where
     // first position of its stratum in `order` name a subclass uniquely.
     let mut global = vec![NONE; unit_count];
     let mut shared = false;
+    let mut first_lost: Option<QuickMatchError> = None;
     for (stratum, result) in results.into_iter().enumerate() {
         match result? {
             StratumLabels::Absent => {}
-            StratumLabels::Lost => shared = true,
+            StratumLabels::Lost(error) => {
+                shared = true;
+                first_lost.get_or_insert(error);
+            }
             StratumLabels::Labels(labels) => {
                 shared = true;
                 let positions = &order[start[stratum]..start[stratum + 1]];
@@ -1008,7 +1013,7 @@ where
         subclass.push(Some(numbered));
     }
     if anchor_counts.is_empty() {
-        return Err(QuickMatchError::NoSubclass);
+        return Err(first_lost.unwrap_or(QuickMatchError::NoSubclass));
     }
     Ok(SubclassedUnits {
         ids: unit_ids(anchors, candidates),
@@ -1171,6 +1176,7 @@ mod tests {
             // Subclass of each unit, numbered over strata by first appearance.
             let mut global: Vec<Option<(usize, usize)>> = vec![None; units.len()];
             let mut shared = false;
+            let mut first_lost: Option<QuickMatchError> = None;
             for (stratum, positions) in members.iter().enumerate() {
                 let has_anchor = positions.iter().any(|p| units[*p].1);
                 let has_candidate = positions.iter().any(|p| !units[*p].1);
@@ -1191,14 +1197,18 @@ mod tests {
                 let flags: Vec<bool> = positions.iter().map(|p| units[*p].1).collect();
                 let labels = match quick_clusters(&points, dimension, &flags, options) {
                     Ok(labels) => labels,
-                    // With several strata, one in which no unit fits a subclass under
-                    // the caliper loses its units, which are dropped; the run fails
-                    // only when no stratum has a subclass.
-                    Err(QuickMatchError::NoSubclass) if !exact.is_empty() => continue,
+                    // With several strata, one that is too small or in which no unit
+                    // fits a subclass under the caliper loses its units, which are
+                    // dropped; the run fails only when no stratum has a subclass.
+                    Err(QuickMatchError::NoSubclass) if !exact.is_empty() => {
+                        first_lost.get_or_insert(QuickMatchError::NoSubclass);
+                        continue;
+                    }
                     Err(QuickMatchError::TooFewUnits { .. }) if !exact.is_empty() => {
-                        return Err(QuickMatchError::TooFewUnits {
+                        first_lost.get_or_insert(QuickMatchError::TooFewUnits {
                             stratum: Some(stratum.to_string()),
                         });
+                        continue;
                     }
                     Err(error) => return Err(error),
                 };
@@ -1232,7 +1242,7 @@ mod tests {
                 subclass_of.push(subclass);
             }
             if anchor_counts.is_empty() {
-                return Err(QuickMatchError::NoSubclass);
+                return Err(first_lost.unwrap_or(QuickMatchError::NoSubclass));
             }
             let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
             let mut outcome = Maps {
@@ -1334,6 +1344,54 @@ mod tests {
             }
         }
         assert!(agreed >= 12, "only {agreed} runs produced an outcome");
+    }
+
+    /// Records with a stratum "g" and one coordinate each, anchors first.
+    fn grouped(
+        groups: &[(&str, usize, usize)],
+    ) -> (
+        Vec<crate::types::BaseRecord>,
+        Vec<crate::types::BaseRecord>,
+        HashMap<String, Vec<f64>>,
+    ) {
+        let date = chrono::NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid test date");
+        let (mut anchors, mut candidates) = (Vec::new(), Vec::new());
+        let mut points = HashMap::new();
+        for (group, anchor_count, candidate_count) in groups {
+            for (prefix, count, list) in [
+                ("a", *anchor_count, &mut anchors),
+                ("c", *candidate_count, &mut candidates),
+            ] {
+                for i in 0..count {
+                    let id = format!("{prefix}{group}{i}");
+                    let mut record = crate::types::BaseRecord::new(id.clone(), date);
+                    record.strata.insert("g".into(), (*group).to_string());
+                    points.insert(id, vec![i as f64]);
+                    list.push(record);
+                }
+            }
+        }
+        (anchors, candidates, points)
+    }
+
+    #[test]
+    fn a_stratum_with_too_few_units_is_dropped() {
+        let (anchors, candidates, points) = grouped(&[("x", 5, 5), ("y", 1, 0), ("z", 0, 1)]);
+        let lookup = |row: &crate::types::BaseRecord| points.get(row.id()).map(Vec::as_slice);
+        let options = QuickMatchOptions {
+            min_anchors: 2,
+            ..QuickMatchOptions::default()
+        };
+        let out = quick_match_subclasses(&anchors, &candidates, lookup, 1, &["g"], &options)
+            .expect("the stratum that can be matched is matched");
+        assert!(out.subclass.iter().any(Option::is_some));
+
+        let (anchors, candidates, points) = grouped(&[("x", 1, 1), ("y", 1, 1)]);
+        let lookup = |row: &crate::types::BaseRecord| points.get(row.id()).map(Vec::as_slice);
+        assert!(matches!(
+            quick_match_subclasses(&anchors, &candidates, lookup, 1, &["g"], &options),
+            Err(QuickMatchError::TooFewUnits { stratum: Some(_) })
+        ));
     }
 
     #[test]
