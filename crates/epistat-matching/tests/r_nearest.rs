@@ -47,11 +47,15 @@
 //! distance equals the caliper to that bit would move, and the references
 //! have none.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_matching::{Assignment, DeterministicSelection, MatchOrder, RapidHashMap};
 use epistat_testkit::load_json;
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -138,10 +142,7 @@ impl Rows {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_nearest.json"
-    ))
+    load_reference("matchit_nearest.json")
 }
 
 fn birth() -> NaiveDate {
@@ -285,7 +286,7 @@ fn expected(rows: &[Rows]) -> Vec<Vec<usize>> {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
 }
 

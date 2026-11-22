@@ -24,11 +24,15 @@
 //! `ccwc_keeps_people_who_leave_on_the_failure_day` checks that the
 //! unshifted data does give a different set.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
 use epistat_stats::gamma::chi_square_sf;
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -86,10 +90,7 @@ struct Draw {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/ccwc_risk_sets.json"
-    ))
+    load_reference("ccwc_risk_sets.json")
 }
 
 type Rec = RoleTransitionRecord<BaseRecord>;
@@ -312,7 +313,7 @@ fn assert_same_sets(outcome: &MatchOutcome, scale: &Scale, label: &str) {
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.epi, "2.66");
 }
 

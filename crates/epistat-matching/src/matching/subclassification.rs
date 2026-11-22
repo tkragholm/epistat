@@ -410,14 +410,11 @@ fn sorted_reference_scores(
 }
 
 /// The `subclasses + 1` quantiles at probabilities `0, 1/k, ..., 1` of the
-/// sorted scores, by linear interpolation between order statistics: the
-/// quantile at `p` lies at position `1 + (n - 1) p` of the sorted values (R's
-/// type 7, evaluated in the same arithmetic). The probabilities are multiples
-/// of `1/k` as `seq(0, 1, length.out = k + 1)` builds them, so a quantile that
-/// falls on an order statistic is that statistic exactly. `sorted_scores` must
-/// not be empty.
+/// sorted scores, R's type 7. The probabilities are multiples of `1/k` as
+/// `seq(0, 1, length.out = k + 1)` builds them, so a quantile that falls on an
+/// order statistic is that statistic exactly. `sorted_scores` must be finite
+/// and not empty.
 fn quantile_cuts(sorted_scores: &[f64], subclasses: usize) -> Vec<f64> {
-    let count = sorted_scores.len();
     let step = 1.0 / to_f64(subclasses);
     (0..=subclasses)
         .map(|bucket| {
@@ -426,33 +423,10 @@ fn quantile_cuts(sorted_scores: &[f64], subclasses: usize) -> Vec<f64> {
             } else {
                 to_f64(bucket) * step
             };
-            let position = 1.0 + to_f64(count - 1) * probability;
-            let lower_rank = floor_rank(position, count);
-            let lower = sorted_scores[lower_rank - 1];
-            let fraction = position - to_f64(lower_rank);
-            let upper = sorted_scores[lower_rank.min(count - 1)];
-            if fraction > 0.0 && upper.total_cmp(&lower).is_ne() {
-                (1.0 - fraction) * lower + fraction * upper
-            } else {
-                lower
-            }
+            epistat_stats::quantile::type7(sorted_scores, probability)
+                .expect("the scores are finite and non-empty and the probability lies in [0, 1]")
         })
         .collect()
-}
-
-/// The largest rank in `1..=count` that is at most `position`, which is at
-/// least 1.
-fn floor_rank(position: f64, count: usize) -> usize {
-    let (mut low, mut high) = (1, count);
-    while low < high {
-        let middle = low + (high - low).div_ceil(2);
-        if to_f64(middle) <= position {
-            low = middle;
-        } else {
-            high = middle - 1;
-        }
-    }
-    low
 }
 
 /// Renumber the subclasses that some unit occupies as `0..count`, keeping
@@ -1144,5 +1118,72 @@ mod tests {
         .expect("valid subclassification settings");
         assert_eq!(outcome.retained_units(), 0, "{:?}", outcome.subclass);
         assert_eq!(outcome.dropped_ids().len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod quantile_cut_reference_tests {
+    use super::{quantile_cuts, to_f64};
+
+    fn floor_rank(position: f64, count: usize) -> usize {
+        let (mut low, mut high) = (1, count);
+        while low < high {
+            let middle = low + (high - low).div_ceil(2);
+            if to_f64(middle) <= position {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        low
+    }
+
+    fn reference_cuts(sorted_scores: &[f64], subclasses: usize) -> Vec<f64> {
+        let count = sorted_scores.len();
+        let step = 1.0 / to_f64(subclasses);
+        (0..=subclasses)
+            .map(|bucket| {
+                let probability = if bucket == subclasses {
+                    1.0
+                } else {
+                    to_f64(bucket) * step
+                };
+                let position = 1.0 + to_f64(count - 1) * probability;
+                let lower_rank = floor_rank(position, count);
+                let lower = sorted_scores[lower_rank - 1];
+                let fraction = position - to_f64(lower_rank);
+                let upper = sorted_scores[lower_rank.min(count - 1)];
+                if fraction > 0.0 && upper.total_cmp(&lower).is_ne() {
+                    (1.0 - fraction) * lower + fraction * upper
+                } else {
+                    lower
+                }
+            })
+            .collect()
+    }
+
+    /// The cuts equal a direct evaluation of the interpolation, bit for bit,
+    /// for sample sizes and class counts around the ends.
+    #[test]
+    fn cuts_equal_the_hand_written_interpolation() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        for n in [1_usize, 2, 3, 7, 10, 11, 64, 101, 1000, 4097] {
+            let mut scores: Vec<f64> = (0..n)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    // Repeated values make ties between neighbours.
+                    ((state >> 40) % 997) as f64 / 997.0
+                })
+                .collect();
+            scores.sort_by(f64::total_cmp);
+            for subclasses in [1_usize, 2, 3, 5, 6, 10, 17, 50] {
+                let got = quantile_cuts(&scores, subclasses);
+                let expected = reference_cuts(&scores, subclasses);
+                let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&got), bits(&expected), "n {n}, k {subclasses}");
+            }
+        }
     }
 }

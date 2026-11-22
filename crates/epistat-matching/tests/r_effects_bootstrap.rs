@@ -28,6 +28,9 @@
 //!   Austin and Small reports the estimate plus and minus the normal quantile
 //!   times the standard error, which is what the Rust code does.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
     BootstrapSpec, BootstrapStatistic, EffectSpec, MatchedSample, OutcomeModel, UnitData,
@@ -35,6 +38,7 @@ use epistat_matching::effects::{
 };
 use epistat_matching::output::{LongMatches, MatchData};
 use epistat_testkit::load_json;
+use r_reference::assert_r_version;
 use serde::{Deserialize, Serialize};
 
 const REPLICATES: usize = 200;
@@ -247,7 +251,7 @@ fn bootstrap_agrees_with_boot() {
     );
     let matches: Matches = load_json(data_path("effects.json"));
     let reference: Reference = load_json(data_path("effects_boot.json"));
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.boot, "1.3.32");
     assert_eq!(reference.runs.len(), 4);
     for run in &reference.runs {

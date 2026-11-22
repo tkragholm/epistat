@@ -12,6 +12,7 @@
 use std::cmp::Ordering;
 
 use epistat_rng::Stream;
+use epistat_stats::balance::ecdf_gaps_sorted;
 use epistat_stats::student::t_cdf_sf;
 
 use super::ks;
@@ -237,37 +238,19 @@ fn qq_summaries(treated: &[f64], control: &[f64]) -> (f64, f64, f64) {
     let mut ys = control.to_vec();
     xs.sort_by(f64::total_cmp);
     ys.sort_by(f64::total_cmp);
-    let mut values: Vec<f64> = xs.iter().chain(&ys).copied().collect();
-    values.sort_by(f64::total_cmp);
-    values.dedup();
-    let (nx, ny) = (xs.len() as f64, ys.len() as f64);
-    let (mut i, mut j) = (0_usize, 0_usize);
-    let mut diffs = Vec::with_capacity(values.len());
-    for &value in &values {
-        while i < xs.len() && xs[i] <= value {
-            i += 1;
-        }
-        while j < ys.len() && ys[j] <= value {
-            j += 1;
-        }
-        diffs.push((i as f64 / nx - j as f64 / ny).abs());
-    }
+    let mut diffs: Vec<f64> = ecdf_gaps_sorted(&xs, &ys).collect();
     let mut sum = 0.0;
     for d in &diffs {
         sum += d;
     }
     let mean = sum / diffs.len() as f64;
     let max = diffs.iter().copied().fold(0.0, f64::max);
-    diffs.sort_by(f64::total_cmp);
-    let half = diffs.len() / 2;
-    let median = if diffs.len() % 2 == 1 {
-        diffs[half]
-    } else {
-        f64::midpoint(diffs[half - 1], diffs[half])
-    };
+    let median = median_of(&mut diffs);
     (mean, median, max)
 }
 
+/// The median, the mean of the two middle values for an even count. Sorts
+/// `values`.
 fn median_of(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     let half = values.len() / 2;

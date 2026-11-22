@@ -1,6 +1,7 @@
 use crate::types::{BalanceRecord, BaseRecord, CovariateRef, CovariateValue, RoleTransitionRecord};
 use chrono::NaiveDate;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub trait MatchingRecord: Send + Sync {
     /// Unique identifier for the record.
@@ -216,53 +217,7 @@ impl CovariateRecord for BalanceRecord {
 }
 
 impl<R: MatchingRecord> MatchingRecord for RoleTransitionRecord<R> {
-    fn id(&self) -> &str {
-        self.record.id()
-    }
-
-    fn birth_date(&self) -> NaiveDate {
-        self.record.birth_date()
-    }
-
-    fn strata(&self) -> &HashMap<String, String> {
-        self.record.strata()
-    }
-
-    fn stratum(&self, key: &str) -> Option<&str> {
-        self.record.stratum(key)
-    }
-
-    fn numeric(&self, name: &str) -> Option<f64> {
-        self.record.numeric(name)
-    }
-
-    fn numeric_table(&self) -> Option<usize> {
-        self.record.numeric_table()
-    }
-
-    fn numeric_slot(&self, name: &str) -> Option<usize> {
-        self.record.numeric_slot(name)
-    }
-
-    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
-        self.record.numeric_in_slot(slot)
-    }
-
-    fn unique_key(&self) -> Option<&str> {
-        self.record.unique_key()
-    }
-
-    fn death_date(&self) -> Option<NaiveDate> {
-        self.record.death_date()
-    }
-
-    fn emigration_date(&self) -> Option<NaiveDate> {
-        self.record.emigration_date()
-    }
-
-    fn entry_date(&self) -> Option<NaiveDate> {
-        self.record.entry_date()
-    }
+    crate::delegate_matching_record!(record);
 }
 
 impl<R: MatchingRecord> RoleIndexedRecord for RoleTransitionRecord<R> {
@@ -284,82 +239,14 @@ impl<R: MatchingRecord> ResidentAtIndexRecord for RoleTransitionRecord<R> {
 }
 
 impl<R: CovariateRecord> CovariateRecord for RoleTransitionRecord<R> {
-    fn covariates(&self) -> &HashMap<String, CovariateValue> {
-        self.record.covariates()
-    }
-
-    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
-        self.record.covariate(name)
-    }
-
-    fn covariate_names(&self) -> impl Iterator<Item = &str> {
-        self.record.covariate_names()
-    }
-
-    fn covariate_table(&self) -> Option<usize> {
-        self.record.covariate_table()
-    }
-
-    fn covariate_slot(&self, name: &str) -> Option<usize> {
-        self.record.covariate_slot(name)
-    }
-
-    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
-        self.record.covariate_in_slot(slot)
-    }
+    delegate_covariate_record!(record);
 }
 
 /// A shared reference is a record of the same kind, so a matcher can take
 /// `&R` in place of `R` and work on records it does not own, as sequential
 /// trials do with the people of a panel.
 impl<R: MatchingRecord + ?Sized> MatchingRecord for &R {
-    fn id(&self) -> &str {
-        (**self).id()
-    }
-
-    fn birth_date(&self) -> NaiveDate {
-        (**self).birth_date()
-    }
-
-    fn strata(&self) -> &HashMap<String, String> {
-        (**self).strata()
-    }
-
-    fn stratum(&self, key: &str) -> Option<&str> {
-        (**self).stratum(key)
-    }
-
-    fn numeric(&self, name: &str) -> Option<f64> {
-        (**self).numeric(name)
-    }
-
-    fn numeric_table(&self) -> Option<usize> {
-        (**self).numeric_table()
-    }
-
-    fn numeric_slot(&self, name: &str) -> Option<usize> {
-        (**self).numeric_slot(name)
-    }
-
-    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
-        (**self).numeric_in_slot(slot)
-    }
-
-    fn unique_key(&self) -> Option<&str> {
-        (**self).unique_key()
-    }
-
-    fn death_date(&self) -> Option<NaiveDate> {
-        (**self).death_date()
-    }
-
-    fn emigration_date(&self) -> Option<NaiveDate> {
-        (**self).emigration_date()
-    }
-
-    fn entry_date(&self) -> Option<NaiveDate> {
-        (**self).entry_date()
-    }
+    crate::delegate_matching_record!(*);
 }
 
 impl<R: RoleIndexedRecord + ?Sized> RoleIndexedRecord for &R {
@@ -375,28 +262,42 @@ impl<R: ResidentAtIndexRecord + ?Sized> ResidentAtIndexRecord for &R {
 }
 
 impl<R: CovariateRecord + ?Sized> CovariateRecord for &R {
-    fn covariates(&self) -> &HashMap<String, CovariateValue> {
-        (**self).covariates()
-    }
+    delegate_covariate_record!(*);
+}
 
-    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
-        (**self).covariate(name)
-    }
+/// The slot of one column in each of the first two tables of columns a run of
+/// records reads from, found once per table.
+///
+/// A third table is not cached, and its records are read by name.
+#[derive(Default)]
+pub(crate) struct SlotCache {
+    resolved: [OnceLock<(usize, Option<usize>)>; 2],
+}
 
-    fn covariate_names(&self) -> impl Iterator<Item = &str> {
-        (**self).covariate_names()
-    }
+/// What a [`SlotCache`] knows about a column in a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CachedSlot {
+    /// The column is at this slot.
+    At(usize),
+    /// The table has no such column.
+    Absent,
+    /// The cache holds two other tables, so the column is read by name.
+    ByName,
+}
 
-    fn covariate_table(&self) -> Option<usize> {
-        (**self).covariate_table()
-    }
-
-    fn covariate_slot(&self, name: &str) -> Option<usize> {
-        (**self).covariate_slot(name)
-    }
-
-    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
-        (**self).covariate_in_slot(slot)
+impl SlotCache {
+    /// The slot of the column in `table`, with `find` called to look it up
+    /// the first time the table is met.
+    pub(crate) fn slot(&self, table: usize, find: impl FnOnce() -> Option<usize>) -> CachedSlot {
+        let mut find = Some(find);
+        for cell in &self.resolved {
+            let &(known, slot) =
+                cell.get_or_init(|| (table, find.take().expect("a lookup runs at most once")()));
+            if known == table {
+                return slot.map_or(CachedSlot::Absent, CachedSlot::At);
+            }
+        }
+        CachedSlot::ByName
     }
 }
 
@@ -407,14 +308,14 @@ impl<R: CovariateRecord + ?Sized> CovariateRecord for &R {
 /// not by name.
 pub(crate) struct ColumnReader<'k> {
     key: &'k str,
-    resolved: Option<(usize, Option<usize>)>,
+    slots: SlotCache,
 }
 
 impl<'k> ColumnReader<'k> {
-    pub(crate) const fn new(key: &'k str) -> Self {
+    pub(crate) fn new(key: &'k str) -> Self {
         Self {
             key,
-            resolved: None,
+            slots: SlotCache::default(),
         }
     }
 
@@ -429,15 +330,11 @@ impl<'k> ColumnReader<'k> {
         let Some(table) = record.covariate_table() else {
             return record.covariate(self.key);
         };
-        let slot = match self.resolved {
-            Some((known, slot)) if known == table => slot,
-            _ => {
-                let slot = record.covariate_slot(self.key);
-                self.resolved = Some((table, slot));
-                slot
-            }
-        };
-        slot.map(|slot| record.covariate_in_slot(slot))
+        match self.slots.slot(table, || record.covariate_slot(self.key)) {
+            CachedSlot::At(slot) => Some(record.covariate_in_slot(slot)),
+            CachedSlot::Absent => None,
+            CachedSlot::ByName => record.covariate(self.key),
+        }
     }
 }
 
@@ -517,8 +414,24 @@ mod tests {
         );
         let macro_fns = fn_names(
             include_str!("../lib.rs"),
-            "macro_rules! delegate_matching_record",
-            "mod balance;",
+            "macro_rules! delegate_matching_methods",
+            "macro_rules! delegate_covariate_record",
+        );
+        assert!(!trait_fns.is_empty());
+        assert_eq!(trait_fns, macro_fns);
+    }
+
+    #[test]
+    fn delegate_macro_forwards_every_covariate_method() {
+        let trait_fns = fn_names(
+            include_str!("records.rs"),
+            "pub trait CovariateRecord",
+            "impl MatchingRecord for BaseRecord",
+        );
+        let macro_fns = fn_names(
+            include_str!("../lib.rs"),
+            "macro_rules! delegate_covariate_record",
+            "pub mod abadie_imbens;",
         );
         assert!(!trait_fns.is_empty());
         assert_eq!(trait_fns, macro_fns);
@@ -604,5 +517,38 @@ mod tests {
         );
         assert_eq!(through_macro.matched_cases, direct.matched_cases);
         assert_eq!(through_macro.unmatched_cases, direct.unmatched_cases);
+    }
+
+    #[test]
+    fn column_reader_agrees_with_reading_by_name_over_four_tables() {
+        use crate::cohort::Cohort;
+        let birth = vec![date(2000, 1, 1); 3];
+        let tables: Vec<Cohort> = vec![
+            Cohort::builder(["a", "b", "c"], birth.clone())
+                .numeric_covariate("x", [Some(1.0), None, Some(3.0)])
+                .numeric_covariate("y", [Some(5.0), Some(6.0), Some(7.0)])
+                .build()
+                .unwrap(),
+            Cohort::builder(["d", "e", "f"], birth.clone())
+                .numeric_covariate("y", [Some(0.0), Some(1.0), Some(2.0)])
+                .numeric_covariate("x", [Some(-1.0), Some(4.0), None])
+                .build()
+                .unwrap(),
+            Cohort::builder(["g", "h", "i"], birth.clone())
+                .numeric_covariate("z", [Some(0.0), Some(1.0), Some(2.0)])
+                .build()
+                .unwrap(),
+            Cohort::builder(["j", "k", "l"], birth)
+                .numeric_covariate("x", [Some(9.0), Some(8.0), None])
+                .build()
+                .unwrap(),
+        ];
+        let rows: Vec<_> = tables.iter().flat_map(Cohort::rows).collect();
+        let mut reader = ColumnReader::new("x");
+        for _ in 0..2 {
+            for row in &rows {
+                assert_eq!(reader.read(row), row.covariate("x"), "row {}", row.id());
+            }
+        }
     }
 }

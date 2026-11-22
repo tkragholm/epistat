@@ -32,9 +32,13 @@
 //! units, the pair distance, the improvement and interactions with factor
 //! dummies. Cramér's V is in neither MatchIt nor cobalt.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
+use r_reference::assert_r_version;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -109,7 +113,7 @@ fn load() -> Reference {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/balance.json"
     ));
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
     assert_eq!(reference.versions.cobalt, "5.0.0");
     reference

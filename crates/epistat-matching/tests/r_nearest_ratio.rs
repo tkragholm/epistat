@@ -29,10 +29,14 @@
 //!   and no caliper, and this test asserts it too, and that the crate keeps to
 //!   the minimum and to the same total.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{MatchOrder, RapidHashMap, VariableRatio};
-use epistat_testkit::{Tolerance, load_json};
+use epistat_testkit::Tolerance;
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -110,10 +114,7 @@ fn expected(rows: &[Rows]) -> Vec<Vec<usize>> {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_variable_ratio.json"
-    ))
+    load_reference("matchit_variable_ratio.json")
 }
 
 fn birth() -> NaiveDate {
@@ -229,7 +230,7 @@ fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
 }
 

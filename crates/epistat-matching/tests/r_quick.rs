@@ -25,6 +25,9 @@
 //! 4. `run_spec` with a Mahalanobis distance reproduces MatchIt's
 //!    `distance = "mahalanobis"` partition and weights.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
@@ -32,7 +35,8 @@ use epistat_matching::{
     QuickMatchOptions, QuickMatchOutcome, SeedMethod, SpecInput, SpecOutput, quick_clusters,
     quick_match_subclasses, run_spec,
 };
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -85,10 +89,7 @@ struct MatchItRun {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_quick.json"
-    ))
+    load_reference("matchit_quick.json")
 }
 
 fn seed_method(name: &str) -> SeedMethod {
@@ -193,7 +194,7 @@ fn assert_constraints(labels: &[Option<usize>], anchor: &[bool], options: &Quick
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
     assert_eq!(reference.versions.quickmatch, "0.2.3");
 }

@@ -530,19 +530,9 @@ impl CondensedMatrix {
 
         let mut owned = vec![0.0f64; self.size];
         for group in &members {
-            // One tile of members per worker, one cluster at a time.
-            //
-            // Clusters are not taken in parallel with each other: they differ
-            // in size and the work is quadratic in it, so `k` tasks would leave
-            // the largest cluster running alone. Nor are their tiles pooled into
-            // one task list, which is the obvious answer to the barrier this
-            // leaves between clusters and was tried: a cluster is about `n / k`
-            // members, so at `k = 10` and 17,273 sequences that is fourteen
-            // tiles over twelve threads and two of them run a second tile while
-            // ten wait, ten times per update. Flattening removes exactly that
-            // and measured SLOWER, 0.94 s of fit against 0.73 s, presumably
-            // because the restarts above already keep every thread fed and what
-            // the pooled list costs in locality it cannot win back in balance.
+            // One tile of members per worker, one cluster at a time. Clusters
+            // differ in size and the work is quadratic in it, so a task per
+            // cluster would leave the largest running alone.
             let mut sums = vec![0.0f64; group.len()];
             sums.par_chunks_mut(TILE)
                 .enumerate()

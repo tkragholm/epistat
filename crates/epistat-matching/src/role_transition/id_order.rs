@@ -114,11 +114,6 @@ impl IdOrder {
         &self.by_id
     }
 
-    /// The position of each record in [`Self::by_id`].
-    pub(crate) fn ranks(&self) -> &[u32] {
-        &self.rank
-    }
-
     /// The position of record `idx` in [`Self::by_id`].
     pub(crate) fn rank(&self, idx: usize) -> u32 {
         self.rank[idx]
@@ -127,6 +122,63 @@ impl IdOrder {
     /// Whether every id occurs once.
     pub(crate) const fn distinct(&self) -> bool {
         self.distinct
+    }
+
+    /// The record with this id, or the first of them in index order when
+    /// several have it. `records` are the records the order was made from.
+    pub(crate) fn position_of<R: MatchingRecord>(&self, records: &[R], id: &str) -> Option<usize> {
+        let at = self
+            .by_id
+            .partition_point(|&idx| records[idx as usize].id() < id);
+        let idx = *self.by_id.get(at)? as usize;
+        (records[idx].id() == id).then_some(idx)
+    }
+
+    /// Sort record indices into the order of `(id, index)`. The indices must
+    /// be distinct.
+    pub(crate) fn sort(&self, indices: &mut Vec<usize>) {
+        let mut ranks: Vec<u32> = indices.iter().map(|&idx| self.rank[idx]).collect();
+        ranks.sort_unstable();
+        indices.clear();
+        indices.extend(
+            ranks
+                .into_iter()
+                .map(|rank| self.by_id[rank as usize] as usize),
+        );
+    }
+
+    /// Merge runs of record indices that are each in the order of `(id, index)`
+    /// into one run.
+    pub(crate) fn merge(&self, mut runs: Vec<Vec<usize>>) -> Vec<usize> {
+        while runs.len() > 1 {
+            let mut next = Vec::with_capacity(runs.len().div_ceil(2));
+            let mut pending = runs.into_iter();
+            while let Some(first) = pending.next() {
+                match pending.next() {
+                    Some(second) => next.push(self.merge_two(&first, &second)),
+                    None => next.push(first),
+                }
+            }
+            runs = next;
+        }
+        runs.pop().unwrap_or_default()
+    }
+
+    fn merge_two(&self, left: &[usize], right: &[usize]) -> Vec<usize> {
+        let mut out = Vec::with_capacity(left.len() + right.len());
+        let (mut i, mut j) = (0, 0);
+        while i < left.len() && j < right.len() {
+            if self.rank[left[i]] <= self.rank[right[j]] {
+                out.push(left[i]);
+                i += 1;
+            } else {
+                out.push(right[j]);
+                j += 1;
+            }
+        }
+        out.extend_from_slice(&left[i..]);
+        out.extend_from_slice(&right[j..]);
+        out
     }
 
     /// The first record, in index order, whose id an earlier record has.
@@ -231,7 +283,39 @@ mod tests {
         let direct = IdOrder::of(&sub).expect("fits");
         let derived = order.subset(&members);
         assert_eq!(derived.by_id(), direct.by_id());
-        assert_eq!(derived.ranks(), direct.ranks());
+        for idx in 0..sub.len() {
+            assert_eq!(derived.rank(idx), direct.rank(idx));
+        }
         assert_eq!(derived.len(), sub.len());
+    }
+
+    /// Sorting and merging index lists gives the order of a stable sort by id,
+    /// repeated ids included, and a lookup finds the first record of an id.
+    #[test]
+    fn sort_merge_and_lookup_follow_id_then_index() {
+        let ids = awkward_ids(7, 400);
+        let people = records(&ids.iter().map(String::as_str).collect::<Vec<_>>());
+        let order = IdOrder::of(&people).expect("fits");
+        let mut picked: Vec<usize> = (0..400).filter(|i| i % 3 != 0).rev().collect();
+        let mut expected = picked.clone();
+        expected.sort_by(|&a, &b| ids[a].cmp(&ids[b]).then(a.cmp(&b)));
+        order.sort(&mut picked);
+        assert_eq!(picked, expected);
+        let runs: Vec<Vec<usize>> = (0..5)
+            .map(|r| {
+                let mut run: Vec<usize> = (0..400).filter(|i| i % 5 == r).collect();
+                order.sort(&mut run);
+                run
+            })
+            .collect();
+        let mut all: Vec<usize> = (0..400).collect();
+        all.sort_by(|&a, &b| ids[a].cmp(&ids[b]).then(a.cmp(&b)));
+        assert_eq!(order.merge(runs), all);
+        assert_eq!(order.merge(Vec::new()), Vec::<usize>::new());
+        for (idx, id) in ids.iter().enumerate() {
+            let first = ids.iter().position(|other| other == id);
+            assert_eq!(order.position_of(&people, id), first, "record {idx}");
+        }
+        assert_eq!(order.position_of(&people, "no such id"), None);
     }
 }

@@ -29,12 +29,16 @@
 //!   since R's `1 - pnorm` cannot be more accurate than that.
 //! * `evalues.*`: 1e-12 relative, the error of a square root and a power.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use epistat_matching::sensitivity::{
     EValues, MScore, MatchedSet, Outcome, WilcoxonDistribution, evalues_hr, evalues_md, evalues_or,
     evalues_rr, hodges_lehmann_bounds, m_statistic_bounds, wilcoxon_bounds,
 };
 use epistat_stats::rosenbaum;
-use epistat_testkit::load_json;
+
+use r_reference::reference as load_reference;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -117,10 +121,7 @@ struct Ev {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/sensitivity.json"
-    ))
+    load_reference("sensitivity.json")
 }
 
 fn pair_sets(trt: &[f64], ctrl: &[f64]) -> Vec<MatchedSet> {

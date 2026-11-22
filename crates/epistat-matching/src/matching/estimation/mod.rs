@@ -20,6 +20,7 @@ use super::engine::{
 };
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
+use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{CommonSupport, DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
 use cbps::fit_cbps;
 use covariance::{covariance_matrix, rank_transform_columns, rescale_rank_covariance};
@@ -380,29 +381,15 @@ fn rows_outside_common_support(
     n_anchors: usize,
     policy: CommonSupport,
 ) -> Option<Vec<usize>> {
-    let bounds = |rows: std::ops::Range<usize>| -> Option<(f64, f64)> {
-        rows.filter(|&row| scores[row].is_finite())
-            .fold(None, |acc, row| match acc {
-                None => Some((scores[row], scores[row])),
-                Some((low, high)) => {
-                    Some((f64::min(low, scores[row]), f64::max(high, scores[row])))
-                }
-            })
-    };
-    let anchor_bounds = bounds(0..n_anchors)?;
-    let candidate_bounds = bounds(n_anchors..scores.len())?;
-    let lower = anchor_bounds.0.max(candidate_bounds.0);
-    let upper = anchor_bounds.1.min(candidate_bounds.1);
-    if lower > upper {
-        return None;
-    }
-    let outside =
-        |row: usize| !(scores[row].is_finite() && scores[row] >= lower && scores[row] <= upper);
+    let anchor_bounds = finite_bounds(scores[..n_anchors].iter().copied())?;
+    let candidate_bounds = finite_bounds(scores[n_anchors..].iter().copied())?;
+    let overlap = Overlap::from_bounds(anchor_bounds, candidate_bounds)?;
+    let outside = |row: usize| !overlap.contains(scores[row]);
     let mut rows = Vec::new();
-    if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+    if policy.trims_anchors() {
         rows.extend((0..n_anchors).filter(|&row| outside(row)));
     }
-    if matches!(policy, CommonSupport::Control | CommonSupport::Both) {
+    if policy.trims_candidates() {
         rows.extend((n_anchors..scores.len()).filter(|&row| outside(row)));
     }
     Some(rows)

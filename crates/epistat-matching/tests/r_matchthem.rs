@@ -25,13 +25,17 @@
 //! `MatchThem`'s own `with()` and `pool()` return. Its model-based standard
 //! error is not compared: the crate pools the cluster-robust one.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::effects::{Clustering, EffectSpec, OutcomeModel, UnitData};
 use epistat_matching::imputation::{
     ImputationApproach, ImputationError, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::prelude::*;
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference, split_by_group};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -80,10 +84,7 @@ struct RPooled {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchthem.json"
-    ))
+    load_reference("matchthem.json")
 }
 
 const COVARIATES: [&str; 6] = ["age", "educ", "married", "nodegree", "re74", "re75"];
@@ -92,8 +93,7 @@ const COVARIATES: [&str; 6] = ["age", "educ", "married", "nodegree", "re74", "re
 /// rows.
 fn records(data: &BTreeMap<String, Vec<f64>>) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
-    let mut anchors = Vec::new();
-    let mut candidates = Vec::new();
+    let mut units = Vec::new();
     for (row, treat) in data["treat"].iter().enumerate() {
         let mut record = BalanceRecord::new((row + 1).to_string(), birth);
         for name in COVARIATES {
@@ -101,13 +101,9 @@ fn records(data: &BTreeMap<String, Vec<f64>>) -> (Vec<BalanceRecord>, Vec<Balanc
                 .covariates
                 .insert(name.to_string(), CovariateValue::Numeric(data[name][row]));
         }
-        if *treat > 0.5 {
-            anchors.push(record);
-        } else {
-            candidates.push(record);
-        }
+        units.push((*treat > 0.5, record));
     }
-    (anchors, candidates)
+    split_by_group(units)
 }
 
 fn close(got: f64, want: f64, rel: f64) -> bool {
@@ -117,7 +113,7 @@ fn close(got: f64, want: f64, rel: f64) -> bool {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let r = reference();
-    assert!(r.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&r.versions.r);
     assert_eq!(r.versions.matchthem, "1.2.1");
     assert_eq!(r.versions.mice, "3.19.0");
 }

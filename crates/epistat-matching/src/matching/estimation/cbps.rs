@@ -281,7 +281,7 @@ impl Problem<'_> {
         );
         theta
             .into_iter()
-            .map(|t| (1.0 / (1.0 + (-t).exp())).clamp(PROBABILITY_BOUND, 1.0 - PROBABILITY_BOUND))
+            .map(|t| epistat_glm::expit(t).clamp(PROBABILITY_BOUND, 1.0 - PROBABILITY_BOUND))
             .collect()
     }
 

@@ -40,9 +40,13 @@
     reason = "statistics that are exactly zero or one in the reference are compared for equality"
 )]
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
+use r_reference::assert_r_version;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -115,7 +119,7 @@ fn load() -> Reference {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/balance_weights.json"
     ));
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
     reference
 }

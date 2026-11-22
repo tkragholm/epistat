@@ -10,8 +10,12 @@
 //! run every reference design, including the correlated ones and the one with a
 //! covariate near 40, at the default configuration.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use r_reference::{reference as load_reference, split_by_group};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -36,18 +40,12 @@ struct RFit {
 }
 
 fn reference() -> Reference {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/glmnet.json"
-    ))
-    .expect("fixture is readable");
-    serde_json::from_str(&text).expect("fixture parses")
+    load_reference("glmnet.json")
 }
 
 fn records(design: &Design) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
     let birth_date = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
-    let mut anchors = Vec::new();
-    let mut candidates = Vec::new();
+    let mut units = Vec::new();
     for (idx, (row, label)) in design.x.iter().zip(&design.y).enumerate() {
         let mut record = BalanceRecord::new(format!("r{idx}"), birth_date);
         for (col, value) in row.iter().enumerate() {
@@ -55,13 +53,9 @@ fn records(design: &Design) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
                 .covariates
                 .insert(format!("x{}", col + 1), CovariateValue::Numeric(*value));
         }
-        if *label > 0.5 {
-            anchors.push(record);
-        } else {
-            candidates.push(record);
-        }
+        units.push((*label > 0.5, record));
     }
-    (anchors, candidates)
+    split_by_group(units)
 }
 
 struct Fitted {

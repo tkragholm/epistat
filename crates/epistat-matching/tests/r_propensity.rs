@@ -20,9 +20,13 @@
 //! because the Cholesky factorisation of the normal equations is not affected
 //! by the scale of a column.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_testkit::load_json;
+
+use r_reference::{reference as load_reference, unit_id as id};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -84,14 +88,7 @@ struct RReestimated {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_propensity.json"
-    ))
-}
-
-fn id(idx: usize) -> String {
-    format!("u{idx}")
+    load_reference("matchit_propensity.json")
 }
 
 fn link_of(name: &str) -> PropensityLink {

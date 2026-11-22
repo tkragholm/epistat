@@ -34,10 +34,14 @@
 //! compared with the minimum the script found, and the test asserts the size of
 //! CBPS's shortfall.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{CbpsConfig, CbpsEstimand, CbpsMethod};
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -96,11 +100,7 @@ struct RFit {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cbps.json"))
-}
-
-fn id(idx: usize) -> String {
-    format!("u{idx}")
+    load_reference("cbps.json")
 }
 
 fn fit_ours(
@@ -228,7 +228,7 @@ fn balance_bound(data: &Data, fit: &RFit, p: &[f64], delta: f64) -> Vec<f64> {
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.cbps, "0.24");
     assert_eq!(reference.versions.matchit, "4.8.2");
 }

@@ -12,10 +12,14 @@
 //! computes the smallest and largest score in each set in R. The file records
 //! the versions of R and Epi. The other tests use small cohorts built by hand.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
-use epistat_testkit::{POOLS, assert_same_on_pools, load_json};
+use epistat_testkit::{POOLS, assert_same_on_pools};
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -44,10 +48,7 @@ struct Versions {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/ccwc_support_ranges.json"
-    ))
+    load_reference("ccwc_support_ranges.json")
 }
 
 fn day(days: i64) -> NaiveDate {
@@ -145,7 +146,7 @@ fn scores_of(ids: &[&str], values: &[f64]) -> Vec<(String, f64)> {
 #[test]
 fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_ne!(reference.versions.epi, "");
     assert!(reference.outside.iter().any(|&o| o));
     assert!(

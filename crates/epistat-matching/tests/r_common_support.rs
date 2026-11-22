@@ -18,10 +18,14 @@
 //! The scores here are handed to `DistanceConfig::propensity_score_map` the
 //! same way, so the test covers the numeric-vector row for trimming too.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{DeterministicSelection, RapidHashMap};
-use epistat_testkit::load_json;
+
+use r_reference::{reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
@@ -55,14 +59,7 @@ struct Discarded {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_discard.json"
-    ))
-}
-
-fn id(idx: usize) -> String {
-    format!("u{idx}")
+    load_reference("matchit_discard.json")
 }
 
 struct Run {

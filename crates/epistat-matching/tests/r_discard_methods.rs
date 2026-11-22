@@ -33,6 +33,9 @@
 //! MatchIt rescales the weights of each group to sum to the number of its
 //! kept units. The test applies the same rescaling to the crate's weights.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
@@ -40,7 +43,8 @@ use epistat_matching::{
     GeneticSpec, LinkSpec, MatchMethod, MatchSpec, ScaleSpec, SpecInput, SpecOutput, SubclassSpec,
     TrimmedUnits, run_spec,
 };
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -107,10 +111,7 @@ struct Run {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_discard_methods.json"
-    ))
+    load_reference("matchit_discard_methods.json")
 }
 
 fn id(row: usize) -> String {
@@ -545,7 +546,7 @@ fn check_genetic(label: &str, run: &Run, outcome: &MatchOutcome) {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
 }
 

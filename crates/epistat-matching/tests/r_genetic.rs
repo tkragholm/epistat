@@ -56,11 +56,15 @@
 //!   and better than the unweighted start. The distributions are printed
 //!   (`cargo test -- --nocapture`).
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use epistat_matching::{
     BalanceMeasure, GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, LossRule,
     ks_limit_upper, ks_two_sample,
 };
-use epistat_testkit::{POOLS, assert_same_on_pools, assert_within_standard_errors, load_json};
+use epistat_testkit::{POOLS, assert_same_on_pools, assert_within_standard_errors};
+use r_reference::reference as load_reference;
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
 
@@ -202,10 +206,7 @@ struct Budget {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_genetic.json"
-    ))
+    load_reference("matchit_genetic.json")
 }
 
 /// The matching variables of a run, as the script builds them: the

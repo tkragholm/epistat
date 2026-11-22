@@ -30,10 +30,14 @@
 //! The options that say how people are reused between trials have no
 //! counterpart in R and are checked here against the data.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::{Days, NaiveDate};
 use epistat_matching::prelude::*;
 use epistat_stats::gamma::chi_square_sf;
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -116,10 +120,7 @@ struct Draw {
 type Panel = Vec<TrialPerson<BalanceRecord>>;
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/trial_emulation.json"
-    ))
+    load_reference("trial_emulation.json")
 }
 
 fn day(days: i64) -> NaiveDate {
@@ -278,7 +279,7 @@ fn check_expansion(
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.trial_emulation, "0.0.5");
     assert_eq!(reference.versions.epi, "2.66");
 }

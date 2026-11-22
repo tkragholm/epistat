@@ -77,7 +77,7 @@ pub use reconstructed::{
     ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
     reconstruct_case_control_pairs,
 };
-pub(crate) use records::{ColumnReader, NameScan};
+pub(crate) use records::{CachedSlot, ColumnReader, NameScan, SlotCache};
 pub use records::{CovariateRecord, MatchingRecord, ResidentAtIndexRecord, RoleIndexedRecord};
 pub use selection::{
     Assignment, DeterministicSelection, NearestBirthDateSelection, RandomSelection, Rounds,
@@ -99,10 +99,10 @@ pub(crate) use constraints::{
     FieldValueSource, RefusesFromDate, ReplacementConstraint, ResidenceSpellSource, StatusRule,
     StatusRuleKind, build_strata_values, caliper_allows,
 };
-pub use engine::{build_outcome, invalid_cohort_outcome, invalid_criteria_outcome, to_f64};
+pub use engine::{build_outcome, refused_outcome, to_f64};
 pub(crate) use index::CandidateIndex;
 
 pub use engine::CandidatePoolRequest;
-pub use engine::{MatchEngine, finalize_estimand_diagnostics, invalid_common_support_outcome};
+pub use engine::{MatchEngine, finalize_estimand_diagnostics};
 pub(crate) use engine::{id_keys, intern_unique};
 pub use job::MatchJob;

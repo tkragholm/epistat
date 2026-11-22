@@ -8,6 +8,7 @@ use super::index::{CandidateIndex, StrataValues};
 use super::ratio::RatioPolicy;
 use super::records::MatchingRecord;
 use super::selection::SelectionStrategy;
+use crate::overlap::{Overlap, finite_bounds};
 use crate::role_transition::IdOrder;
 use crate::types::{
     CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, DistanceCaliper,
@@ -15,6 +16,7 @@ use crate::types::{
     MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair, MatchingCriteria, UniqueValueId,
 };
 use rapidhash::RapidHashMap;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -93,7 +95,7 @@ pub struct MatchEngine<'a, R: MatchingRecord, S: SelectionStrategy<R>> {
     pub(crate) precomputed: MatchingPrecomputed<'a>,
     pub(crate) candidate_index: CandidateIndex<'a>,
     pub(crate) selector: S,
-    id_ranks: OnceLock<Option<IdRanks>>,
+    id_order: OnceLock<Option<Cow<'a, IdOrder>>>,
 }
 
 /// Unified request for standard anchor-to-candidate matching.
@@ -241,7 +243,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             precomputed,
             candidate_index,
             selector,
-            id_ranks: OnceLock::new(),
+            id_order: OnceLock::new(),
         }
     }
 
@@ -352,12 +354,12 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             let excluded_by_index = pre_filter_count.saturating_sub(candidate_indices.len());
             if excluded_by_index > 0 {
                 let reason = pool_config.caliper_reason;
-                *diagnostics
-                    .exclusion_counts
-                    .entry(ExclusionReason::DistanceCaliper(
-                        DistanceCaliperReason::from_reason_str(reason),
-                    ))
-                    .or_insert(0) += excluded_by_index;
+                diagnostics.add_exclusion(
+                    ExclusionReason::DistanceCaliper(DistanceCaliperReason::from_reason_str(
+                        reason,
+                    )),
+                    excluded_by_index,
+                );
             }
         }
         let caliper_constraint = pool_config.distance_caliper.map(|max_distance| {
@@ -371,8 +373,8 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         // required stratum, so the exact-match constraint cannot block it.
         let strata_indexed = pool_config.use_birth_date_index && case_strata_values.is_some();
 
-        let self_match = match (scan, self.id_ranks()) {
-            (PoolScan::Wide, Some(ranks)) => ranks
+        let self_match = match (scan, self.distinct_id_order()) {
+            (PoolScan::Wide, Some(order)) => order
                 .position_of(self.controls, case.id())
                 .map_or(SelfMatch::Nobody, SelfMatch::At),
             _ => SelfMatch::ById,
@@ -396,24 +398,24 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             PoolScan::Narrow => scan_chunk(&candidate_indices),
             PoolScan::Wide if candidate_indices.len() < 2 * SCAN_CHUNK => {
                 let mut tally = scan_chunk(&candidate_indices);
-                if let Some(ranks) = self.id_ranks() {
-                    ranks.sort(&mut tally.eligible);
+                if let Some(order) = self.id_order() {
+                    order.sort(&mut tally.eligible);
                 }
                 tally
             }
             PoolScan::Wide => {
-                let ranks = self.id_ranks();
+                let order = self.id_order();
                 let tallies: Vec<ScanTally> = candidate_indices
                     .par_chunks(SCAN_CHUNK)
                     .map(|chunk| {
                         let mut tally = scan_chunk(chunk);
-                        if let Some(ranks) = ranks {
-                            ranks.sort(&mut tally.eligible);
+                        if let Some(order) = order {
+                            order.sort(&mut tally.eligible);
                         }
                         tally
                     })
                     .collect();
-                ScanTally::join_all(tallies, ranks)
+                ScanTally::join_all(tallies, order)
             }
         };
         let ScanTally {
@@ -423,16 +425,10 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         } = tally;
 
         if filtered_out > 0 {
-            *diagnostics
-                .exclusion_counts
-                .entry(ExclusionReason::AdditionalFilter)
-                .or_insert(0) += filtered_out;
+            diagnostics.add_exclusion(ExclusionReason::AdditionalFilter, filtered_out);
         }
         for (reason, count) in constraint_exclusions {
-            *diagnostics
-                .exclusion_counts
-                .entry(reason.exclusion_reason())
-                .or_insert(0) += count;
+            diagnostics.add_exclusion(reason.exclusion_reason(), count);
         }
 
         // The pool is ordered by control id. The seeded selector draws a position
@@ -440,12 +436,11 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         // which callers may build through hash-backed collections. The sort also
         // gives distance-based selection a stable tie-break and does not change
         // which candidates are eligible.
-        match (scan, self.id_ranks()) {
+        match (scan, self.id_order()) {
             // A wide scan has ordered the pool already.
             (PoolScan::Wide, Some(_)) => {}
-            (PoolScan::Narrow, _) | (PoolScan::Wide, None) => {
-                sort_by_id(self.controls, &mut eligible);
-            }
+            (PoolScan::Narrow, Some(order)) => order.sort(&mut eligible),
+            (_, None) => sort_by_id(self.controls, &mut eligible),
         }
         eligible
     }
@@ -542,21 +537,24 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         tally
     }
 
-    /// Take the id ranks of the controls from `order`, the order of their
-    /// ids. Does nothing once the ranks are known.
-    pub(crate) fn use_id_order(&self, order: &IdOrder) {
+    /// Take the order of the controls' ids from `order`. Does nothing once
+    /// the order is known.
+    pub(crate) fn use_id_order(&self, order: &'a IdOrder) {
         debug_assert_eq!(order.len(), self.controls.len());
-        let _ = self.id_ranks.set(order.distinct().then(|| IdRanks {
-            rank: order.ranks().to_vec(),
-            by_rank: order.by_id().to_vec(),
-        }));
+        let _ = self.id_order.set(Some(Cow::Borrowed(order)));
     }
 
-    /// Id ranks of the controls, or `None` when two controls share an id.
-    fn id_ranks(&self) -> Option<&IdRanks> {
-        self.id_ranks
-            .get_or_init(|| IdRanks::of_controls(self.controls))
-            .as_ref()
+    /// The order of the controls' ids, or `None` when there are more than
+    /// `u32::MAX` controls.
+    fn id_order(&self) -> Option<&IdOrder> {
+        self.id_order
+            .get_or_init(|| IdOrder::of(self.controls).map(Cow::Owned))
+            .as_deref()
+    }
+
+    /// The order of the controls' ids when every id occurs once.
+    fn distinct_id_order(&self) -> Option<&IdOrder> {
+        self.id_order().filter(|order| order.distinct())
     }
 
     pub fn select_control(
@@ -1008,13 +1006,13 @@ pub fn match_standard_with_discard<
     let validated = match request.criteria.validate() {
         Ok(validated) => validated,
         Err(err) => {
-            return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::from(err));
+            return refused_outcome(anchors.len(), InvalidCriteriaReason::from(err));
         }
     };
     let criteria = validated.as_ref();
     let engine = MatchEngine::new(candidates, criteria, request.strategy);
     if RatioPolicy::fallback_above_primary(validated.match_ratio, request.ratio_fallback) {
-        return invalid_criteria_outcome(
+        return refused_outcome(
             anchors.len(),
             InvalidCriteriaReason::FallbackRatioAbovePrimary,
         );
@@ -1049,7 +1047,7 @@ pub fn match_standard_with_discard<
                 .distance_config
                 .and_then(DistanceConfig::propensity_scores)
             else {
-                return invalid_common_support_outcome(
+                return refused_outcome(
                     anchors.len(),
                     CommonSupportFailureReason::RequiresPropensityScoreMap,
                 );
@@ -1059,7 +1057,7 @@ pub fn match_standard_with_discard<
                     support.record_in(&mut diagnostics, anchors, candidates);
                     Some(support)
                 }
-                Err(reason) => return invalid_common_support_outcome(anchors.len(), reason),
+                Err(reason) => return refused_outcome(anchors.len(), reason),
             }
         }
     };
@@ -1076,7 +1074,7 @@ pub fn match_standard_with_discard<
 
     if let Some(nearest) = engine.selector.nearest() {
         if !request.ratio_fallback.is_empty() {
-            return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
+            return refused_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
         }
         return super::nearest::match_nearest(
             &super::nearest::NearestRequest {
@@ -1094,7 +1092,7 @@ pub fn match_standard_with_discard<
     if engine.selector.assignment() == super::selection::Assignment::Rounds
         && !request.ratio_fallback.is_empty()
     {
-        return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
+        return refused_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
     }
 
     // The unconfigured path is the common one, so it keeps the concrete date
@@ -1195,13 +1193,7 @@ impl StandardCommonSupport {
 /// The smallest and largest finite score among `rows`, or `None` when no row
 /// has one.
 fn finite_score_bounds<R: MatchingRecord>(rows: &[R], scores: &ScoreTable) -> Option<(f64, f64)> {
-    rows.iter()
-        .filter_map(|row| scores.get(row.id()).copied())
-        .filter(|score| score.is_finite())
-        .fold(None, |bounds, score| match bounds {
-            None => Some((score, score)),
-            Some((low, high)) => Some((low.min(score), high.max(score))),
-        })
+    finite_bounds(rows.iter().filter_map(|row| scores.get(row.id()).copied()))
 }
 
 /// Trim to the region where the anchors' and the candidates' scores overlap.
@@ -1224,34 +1216,31 @@ pub(crate) fn standard_common_support<R: MatchingRecord>(
         finite_score_bounds(anchors, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;
     let candidate_bounds =
         finite_score_bounds(candidates, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;
-    let lower = anchor_bounds.0.max(candidate_bounds.0);
-    let upper = anchor_bounds.1.min(candidate_bounds.1);
-    if lower > upper {
-        return Err(CommonSupportFailureReason::NoOverlap);
-    }
+    let overlap = Overlap::from_bounds(anchor_bounds, candidate_bounds)
+        .ok_or(CommonSupportFailureReason::NoOverlap)?;
     let outside = |rows: &[R]| -> HashSet<usize> {
         rows.iter()
             .enumerate()
             .filter(|(_, row)| {
                 !scores
                     .get(row.id())
-                    .is_some_and(|score| score.is_finite() && *score >= lower && *score <= upper)
+                    .is_some_and(|score| overlap.contains(*score))
             })
             .map(|(idx, _)| idx)
             .collect()
     };
     Ok(StandardCommonSupport {
-        anchors: if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+        anchors: if policy.trims_anchors() {
             outside(anchors)
         } else {
             HashSet::new()
         },
-        candidates: if matches!(policy, CommonSupport::Control | CommonSupport::Both) {
+        candidates: if policy.trims_candidates() {
             outside(candidates)
         } else {
             HashSet::new()
         },
-        overlap: (lower, upper),
+        overlap: overlap.bounds(),
         anchor_bounds,
         candidate_bounds,
     })
@@ -1461,9 +1450,9 @@ impl ScanTally {
         }
     }
 
-    /// The tallies of consecutive runs as one. When the ranks are given, every
+    /// The tallies of consecutive runs as one. When the order is given, every
     /// run's eligible controls are in id order and so are the merged ones.
-    fn join_all(tallies: Vec<Self>, ranks: Option<&IdRanks>) -> Self {
+    fn join_all(tallies: Vec<Self>, order: Option<&IdOrder>) -> Self {
         let mut joined = Self::default();
         let mut runs: Vec<Vec<usize>> = Vec::with_capacity(tallies.len());
         for tally in tallies {
@@ -1473,95 +1462,17 @@ impl ScanTally {
             }
             runs.push(tally.eligible);
         }
-        joined.eligible = match ranks {
-            Some(ranks) => ranks.merge(runs),
+        joined.eligible = match order {
+            Some(order) => order.merge(runs),
             None => runs.concat(),
         };
         joined
     }
 }
 
-/// Position of every control in the order of ids, for controls with distinct ids.
-struct IdRanks {
-    rank: Vec<u32>,
-    by_rank: Vec<u32>,
-}
-
-impl IdRanks {
-    fn of_controls<R: MatchingRecord>(controls: &[R]) -> Option<Self> {
-        let mut order: Vec<usize> = (0..controls.len()).collect();
-        sort_by_id(controls, &mut order);
-        if order
-            .windows(2)
-            .any(|pair| controls[pair[0]].id() == controls[pair[1]].id())
-        {
-            return None;
-        }
-        let mut rank = vec![0_u32; controls.len()];
-        let mut by_rank = Vec::with_capacity(controls.len());
-        for (position, &idx) in order.iter().enumerate() {
-            rank[idx] = u32::try_from(position).ok()?;
-            by_rank.push(u32::try_from(idx).ok()?);
-        }
-        Some(Self { rank, by_rank })
-    }
-
-    /// The control with this id, if any.
-    fn position_of<R: MatchingRecord>(&self, controls: &[R], id: &str) -> Option<usize> {
-        let at = self
-            .by_rank
-            .partition_point(|&idx| controls[idx as usize].id() < id);
-        let idx = *self.by_rank.get(at)? as usize;
-        (controls[idx].id() == id).then_some(idx)
-    }
-
-    /// Sort control indices by id.
-    fn sort(&self, indices: &mut Vec<usize>) {
-        let mut ranks: Vec<u32> = indices.iter().map(|&idx| self.rank[idx]).collect();
-        ranks.sort_unstable();
-        indices.clear();
-        indices.extend(
-            ranks
-                .into_iter()
-                .map(|rank| self.by_rank[rank as usize] as usize),
-        );
-    }
-
-    /// Merge runs of control indices that are each in id order into one run.
-    fn merge(&self, mut runs: Vec<Vec<usize>>) -> Vec<usize> {
-        while runs.len() > 1 {
-            let mut next = Vec::with_capacity(runs.len().div_ceil(2));
-            let mut pending = runs.into_iter();
-            while let Some(first) = pending.next() {
-                match pending.next() {
-                    Some(second) => next.push(self.merge_two(&first, &second)),
-                    None => next.push(first),
-                }
-            }
-            runs = next;
-        }
-        runs.pop().unwrap_or_default()
-    }
-
-    fn merge_two(&self, left: &[usize], right: &[usize]) -> Vec<usize> {
-        let mut out = Vec::with_capacity(left.len() + right.len());
-        let (mut i, mut j) = (0, 0);
-        while i < left.len() && j < right.len() {
-            if self.rank[left[i]] <= self.rank[right[j]] {
-                out.push(left[i]);
-                i += 1;
-            } else {
-                out.push(right[j]);
-                j += 1;
-            }
-        }
-        out.extend_from_slice(&left[i..]);
-        out.extend_from_slice(&right[j..]);
-        out
-    }
-}
-
-/// Sort control indices by the id of the control, as `str::cmp` orders them.
+/// Sort control indices by the id of the control as `str::cmp` orders them,
+/// and by index among equal ids, so the order is a function of the controls
+/// alone. [`IdOrder::sort`] gives the same order from precomputed ranks.
 fn sort_by_id<R: MatchingRecord>(controls: &[R], indices: &mut Vec<usize>) {
     let keys = id_keys(indices.iter().map(|&idx| controls[idx].id()));
     let mut keyed: Vec<(u64, usize)> = keys.into_iter().zip(indices.iter().copied()).collect();
@@ -1569,6 +1480,7 @@ fn sort_by_id<R: MatchingRecord>(controls: &[R], indices: &mut Vec<usize>) {
         left_prefix
             .cmp(&right_prefix)
             .then_with(|| controls[left].id().cmp(controls[right].id()))
+            .then_with(|| left.cmp(&right))
     });
     indices.clear();
     indices.extend(keyed.into_iter().map(|(_, idx)| idx));
@@ -1608,57 +1520,16 @@ fn usize_to_f64(n: usize) -> f64 {
     n as f64
 }
 
-pub fn invalid_criteria_outcome(
-    anchor_count: usize,
-    reason: InvalidCriteriaReason,
-) -> MatchOutcome {
+/// The outcome of a job refused for `reason`, with no pairs and every anchor
+/// unmatched.
+pub fn refused_outcome(anchor_count: usize, reason: impl Into<ExclusionReason>) -> MatchOutcome {
+    let reason = reason.into();
+    debug_assert!(reason.refuses_job());
     let mut diagnostics = MatchDiagnostics {
         total_anchors_evaluated: anchor_count,
         ..MatchDiagnostics::default()
     };
-    diagnostics
-        .exclusion_counts
-        .insert(ExclusionReason::InvalidCriteria(reason), 1);
-
-    MatchOutcome {
-        pairs: Vec::new(),
-        unmatched_cases: anchor_count,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics,
-    }
-}
-
-/// The outcome of a cohort refused for a record-level reason, with no pairs.
-pub fn invalid_cohort_outcome(anchor_count: usize, reason: ExclusionReason) -> MatchOutcome {
-    let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchor_count,
-        ..MatchDiagnostics::default()
-    };
-    diagnostics.exclusion_counts.insert(reason, 1);
-
-    MatchOutcome {
-        pairs: Vec::new(),
-        unmatched_cases: anchor_count,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics,
-    }
-}
-
-pub fn invalid_common_support_outcome(
-    anchor_count: usize,
-    reason: CommonSupportFailureReason,
-) -> MatchOutcome {
-    let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchor_count,
-        ..MatchDiagnostics::default()
-    };
-    diagnostics
-        .exclusion_counts
-        .insert(ExclusionReason::CommonSupportFailure(reason), 1);
+    diagnostics.add_exclusion(reason, 1);
 
     MatchOutcome {
         pairs: Vec::new(),
@@ -1967,16 +1838,10 @@ mod pool_scan_tests {
             eligible.push(idx);
         }
         if filtered_out > 0 {
-            *diagnostics
-                .exclusion_counts
-                .entry(ExclusionReason::AdditionalFilter)
-                .or_insert(0) += filtered_out;
+            diagnostics.add_exclusion(ExclusionReason::AdditionalFilter, filtered_out);
         }
         for (reason, count) in exclusions {
-            *diagnostics
-                .exclusion_counts
-                .entry(reason.exclusion_reason())
-                .or_insert(0) += count;
+            diagnostics.add_exclusion(reason.exclusion_reason(), count);
         }
         sort_by_id(engine.controls, &mut eligible);
         eligible

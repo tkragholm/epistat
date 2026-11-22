@@ -43,11 +43,15 @@
 //! weights are sums of a few reciprocals of small integers, exact to about
 //! 1e-16).
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::DeterministicSelection;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
-use epistat_testkit::{Tolerance, load_json};
+use epistat_testkit::Tolerance;
+use r_reference::reference as load_reference;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -128,10 +132,7 @@ struct LongTable {
 const WEIGHT_TOLERANCE: Tolerance = Tolerance::exact().abs(1e-12);
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/match_pairs.json"
-    ))
+    load_reference("match_pairs.json")
 }
 
 fn records(scenario: &Scenario, focal_value: u8) -> (Vec<usize>, Vec<BaseRecord>, Vec<BaseRecord>) {

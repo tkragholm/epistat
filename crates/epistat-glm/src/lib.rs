@@ -23,6 +23,6 @@ pub mod multinom;
 pub mod park;
 
 pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};
-pub use family::{Family, Link};
+pub use family::{Family, Link, expit};
 pub use fit::{Fit, Glm, GlmError};
 pub use multinom::{Multinom, MultinomError, MultinomFit};
