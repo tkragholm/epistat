@@ -89,9 +89,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(strict, loose);
-        assert_eq!(strict[0], 2.0);
-        assert_eq!(strict[2], 1.0);
-        assert_eq!(strict[3], 2.0_f64.sqrt());
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&strict), bits(&[2.0, 0.0, 1.0, 2.0_f64.sqrt()]));
     }
 
     #[test]
