@@ -10,7 +10,7 @@
 use epistat_register::exposure::{
     Assumption, Dispensings, DoseRule, Stock, Supply, exposure_periods,
 };
-use epistat_testkit::{Fingerprint, load_json};
+use epistat_testkit::{Fingerprint, Tolerance, assert_close, load_json};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -75,8 +75,8 @@ fn episodes_agree_with_adherer_at_every_permitted_gap() {
         for i in 0..p.len() {
             let label = format!("gap {} episode {i}", e.gap);
             assert_eq!(p.person[i], e.id[i], "{label} person");
-            assert_eq!(p.start[i] as f64, e.start[i], "{label} start");
-            assert_eq!(p.end[i], e.end[i], "{label} end");
+            assert_close(&[p.start[i] as f64], &[e.start[i]], Tolerance::exact());
+            assert_close(&[p.end[i]], &[e.end[i]], Tolerance::exact());
             fp = fp.u64(p.start[i].cast_unsigned()).f64(p.end[i]);
         }
     }
