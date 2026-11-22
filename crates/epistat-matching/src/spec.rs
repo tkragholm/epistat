@@ -1188,13 +1188,13 @@ impl MatchSpec {
             }
         }
         typed_caliper("distance", self.distance.caliper())?;
-        if let DistanceSpec::Scores { scores, .. } = &self.distance {
-            if let Some((id, score)) = scores.iter().find(|(_, score)| !score.is_finite()) {
-                return Err(SpecError::option(
-                    "distance",
-                    format!("the score of {id} is {score}; scores must be finite numbers"),
-                ));
-            }
+        if let DistanceSpec::Scores { scores, .. } = &self.distance
+            && let Some((id, score)) = scores.iter().find(|(_, score)| !score.is_finite())
+        {
+            return Err(SpecError::option(
+                "distance",
+                format!("the score of {id} is {score}; scores must be finite numbers"),
+            ));
         }
         if let Some(mahvars) = &self.nearest.mahvars {
             typed_caliper("nearest.mahvars", mahvars.caliper())?;

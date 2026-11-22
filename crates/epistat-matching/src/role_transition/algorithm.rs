@@ -417,14 +417,13 @@ fn at_risk_score_ranges<
                 let date = case.event_date()?;
                 let mut range: Option<(f64, f64)> = None;
                 for (idx, control) in cohort.iter().enumerate() {
-                    if let Some(score) = score_of(idx) {
-                        if policy.is_control_at_risk(case, control, date)
-                            && constraints.allows_at_risk(case, control)
-                        {
-                            range = Some(range.map_or((score, score), |(low, high)| {
-                                (low.min(score), high.max(score))
-                            }));
-                        }
+                    if let Some(score) = score_of(idx)
+                        && policy.is_control_at_risk(case, control, date)
+                        && constraints.allows_at_risk(case, control)
+                    {
+                        range = Some(range.map_or((score, score), |(low, high)| {
+                            (low.min(score), high.max(score))
+                        }));
                     }
                 }
                 range
@@ -641,10 +640,10 @@ fn match_with_role_indexing_with_channel_internal<
         computed_order.as_ref()
     };
 
-    if config.risk_set_policy.default_at_risk_rule().is_some() {
-        if let Some(reason) = invalid_record(cohort, id_order) {
-            return invalid_cohort_outcome(cohort.len(), reason);
-        }
+    if config.risk_set_policy.default_at_risk_rule().is_some()
+        && let Some(reason) = invalid_record(cohort, id_order)
+    {
+        return invalid_cohort_outcome(cohort.len(), reason);
     }
 
     if RatioPolicy::fallback_above_primary(validated.match_ratio, config.ratio_fallback) {

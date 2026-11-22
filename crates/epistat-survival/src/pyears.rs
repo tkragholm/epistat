@@ -267,12 +267,12 @@ pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions)
 
     let stop = surv.stop();
     let start = surv.start();
-    if start.is_none() {
-        if let Some(row) = data.used_rows().find(|&r| stop[r as usize] < 0.0) {
-            return Err(Error::input(format!(
-                "row {row} has a negative follow-up time and no start time"
-            )));
-        }
+    if start.is_none()
+        && let Some(row) = data.used_rows().find(|&r| stop[r as usize] < 0.0)
+    {
+        return Err(Error::input(format!(
+            "row {row} has a negative follow-up time and no start time"
+        )));
     }
 
     // Strides, first dimension fastest.
@@ -392,10 +392,10 @@ pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions)
                     .sum::<usize>()
             });
         }
-        if status[i] == code {
-            if let Some(cell) = last {
-                events[cell] += w;
-            }
+        if status[i] == code
+            && let Some(cell) = last
+        {
+            events[cell] += w;
         }
     }
 

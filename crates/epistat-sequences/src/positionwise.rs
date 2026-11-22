@@ -117,7 +117,7 @@ impl<'a> Panel<'a> {
                 "a position-wise panel needs a positive length and alphabet",
             ));
         }
-        if encoded.len() % length != 0 {
+        if !encoded.len().is_multiple_of(length) {
             return Err(SequenceError::input(format!(
                 "{} encoded symbols do not divide into sequences of {length}; a \
                  position-wise distance is only defined on a common time axis",

@@ -503,13 +503,13 @@ impl Pseudo {
         let n = self.n_subjects();
         let k = self.times.len();
         let q = covariates.map_or(0, |c| c.ncols());
-        if let Some(c) = covariates {
-            if c.nrows() != n {
-                return Err(Error::input(format!(
-                    "the covariates have {} rows and there are {n} subjects",
-                    c.nrows()
-                )));
-            }
+        if let Some(c) = covariates
+            && c.nrows() != n
+        {
+            return Err(Error::input(format!(
+                "the covariates have {} rows and there are {n} subjects",
+                c.nrows()
+            )));
         }
         let t = if time_effects { k - 1 } else { 0 };
         let x = Mat::from_fn(n * k, 1 + t + q, |row, col| {

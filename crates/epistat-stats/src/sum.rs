@@ -207,7 +207,7 @@ pub fn blocked(values: &[f64]) -> f64 {
 fn blocked_pairwise(values: &[f64]) -> f64 {
     if values.len() == BLOCK {
         let mut lanes = [0.0_f64; LANES];
-        for chunk in values.chunks_exact(LANES) {
+        for chunk in values.as_chunks::<LANES>().0 {
             for (lane, &value) in lanes.iter_mut().zip(chunk) {
                 *lane += value;
             }

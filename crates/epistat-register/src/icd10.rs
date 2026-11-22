@@ -93,13 +93,13 @@ pub fn normalize_diagnosis_code(code: &str) -> Option<NormalizedDiagnosis> {
     if text.starts_with('D') {
         let mut chars = text.chars();
         let _ = chars.next();
-        if let Some(next) = chars.next() {
-            if next.is_ascii_alphabetic() {
-                let mut rest = String::new();
-                rest.push(next);
-                rest.extend(chars);
-                text = rest;
-            }
+        if let Some(next) = chars.next()
+            && next.is_ascii_alphabetic()
+        {
+            let mut rest = String::new();
+            rest.push(next);
+            rest.extend(chars);
+            text = rest;
         }
     }
 

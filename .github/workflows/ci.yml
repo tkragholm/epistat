@@ -33,14 +33,14 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   # The committed lock is ignored: a fresh resolution is what a consumer gets.
-  # Rust 1.89 is only for `epistat-linalg`'s `nightly` feature, which makes
-  # faer enable bytemuck's AVX-512 types, stable from 1.89 and compiled only
-  # on x86.
+  # The minimum supported Rust is 1.89, the first with fearless_simd's
+  # requirements and bytemuck's AVX-512 types, which `epistat-linalg`'s
+  # `nightly` feature uses.
   msrv:
     strategy:
       matrix:
         include:
-          - toolchain: "1.85"
+          - toolchain: "1.89"
             flags: --workspace
           - toolchain: "1.89"
             flags: --workspace --all-features

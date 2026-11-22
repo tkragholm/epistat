@@ -211,10 +211,10 @@ fn first_blocking_constraint_reason<R: MatchingRecord, D: DistanceMetric<R> + Sy
             return Some(Blocker::Constraint(constraint.reason()));
         }
     }
-    if let Some(caliper) = caliper_constraint {
-        if !caliper.allows(case, control, context) {
-            return Some(Blocker::Caliper(caliper.reason()));
-        }
+    if let Some(caliper) = caliper_constraint
+        && !caliper.allows(case, control, context)
+    {
+        return Some(Blocker::Caliper(caliper.reason()));
     }
     extra_constraints
         .first_blocking_reason(case, control, context)
@@ -1922,10 +1922,10 @@ mod pool_scan_tests {
                 new_diagnostics.exclusion_counts, reference_diagnostics.exclusion_counts,
                 "exclusion counts of case {case_idx}"
             );
-            if let Some(selected) = engine_select(&mut selector, case, &members, &mut pool) {
-                if !replace {
-                    used.insert(ControlIdx::new(selected));
-                }
+            if let Some(selected) = engine_select(&mut selector, case, &members, &mut pool)
+                && !replace
+            {
+                used.insert(ControlIdx::new(selected));
             }
         }
         if n >= 20_000 {

@@ -682,12 +682,12 @@ pub fn test(
     let ids = data.id().ok_or_else(|| {
         Error::input("the test needs an id column to know which rows belong together")
     })?;
-    if let Some(weight) = data.weight() {
-        if weight.iter().any(|&w| w != 0.0 && w != 1.0) {
-            return Err(Error::input(
-                "the test is unweighted: a weight is 0, to leave the row out, or 1",
-            ));
-        }
+    if let Some(weight) = data.weight()
+        && weight.iter().any(|&w| w != 0.0 && w != 1.0)
+    {
+        return Err(Error::input(
+            "the test is unweighted: a weight is 0, to leave the row out, or 1",
+        ));
     }
     if data.n_used() == 0 {
         return Err(Error::input(

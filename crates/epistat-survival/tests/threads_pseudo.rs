@@ -134,7 +134,7 @@ fn regression_does_not_depend_on_the_number_of_threads() {
             let n = p.n_subjects();
             let covariate = Mat::from_fn(n, 2, |i, j| {
                 if j == 0 {
-                    f64::from(p.subject[i] % 2 == 0)
+                    f64::from(p.subject[i].is_multiple_of(2))
                 } else {
                     f64::from(p.subject[i] % 7) / 7.0
                 }

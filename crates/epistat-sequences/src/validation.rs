@@ -700,7 +700,7 @@ pub fn refit_agreements(
             reference.len()
         )));
     }
-    if count == 0 || replicate_weights.len() % count != 0 {
+    if count == 0 || !replicate_weights.len().is_multiple_of(count) {
         return Err(SequenceError::input(format!(
             "{} replicate weights do not divide into replicates of {count} \
              sequences",

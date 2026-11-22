@@ -2073,22 +2073,21 @@ where
         };
         let (matched, optimum) = network.solve(&pairs, start, arcs)?;
         let table = balance_table(&levels, &matched, na, ratio);
-        if balance.mode == BalanceMode::Exact {
-            if let Some((depth, level)) = table
+        if balance.mode == BalanceMode::Exact
+            && let Some((depth, level)) = table
                 .iter()
                 .enumerate()
                 .find(|(_, level)| level.total_deviation() > 0)
-            {
-                return Err(OptimalError::Infeasible {
-                    stratum: 0,
-                    message: format!(
-                        "fine balance on level {depth} (keys {:?}) is not possible with these \
+        {
+            return Err(OptimalError::Infeasible {
+                stratum: 0,
+                message: format!(
+                    "fine balance on level {depth} (keys {:?}) is not possible with these \
                          pairs; the least total deviation is {}",
-                        level.keys,
-                        level.total_deviation()
-                    ),
-                });
-            }
+                    level.keys,
+                    level.total_deviation()
+                ),
+            });
         }
         let outcome = pair_outcome(
             anchors,
@@ -3123,22 +3122,21 @@ mod tests {
                     categories: categories.into_values().collect(),
                 });
             }
-            if balance.mode == BalanceMode::Exact {
-                if let Some((depth, level)) = table
+            if balance.mode == BalanceMode::Exact
+                && let Some((depth, level)) = table
                     .iter()
                     .enumerate()
                     .find(|(_, level)| level.total_deviation() > 0)
-                {
-                    return Err(OptimalError::Infeasible {
-                        stratum: 0,
-                        message: format!(
-                            "fine balance on level {depth} (keys {:?}) is not possible with these \
+            {
+                return Err(OptimalError::Infeasible {
+                    stratum: 0,
+                    message: format!(
+                        "fine balance on level {depth} (keys {:?}) is not possible with these \
                              pairs; the least total deviation is {}",
-                            level.keys,
-                            level.total_deviation()
-                        ),
-                    });
-                }
+                        level.keys,
+                        level.total_deviation()
+                    ),
+                });
             }
             let outcome = pair_outcome(
                 anchors,

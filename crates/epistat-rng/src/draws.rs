@@ -102,8 +102,8 @@ impl Stream {
     /// the cosine and the sine of the same Box-Muller angle. A last odd
     /// position takes one [`Stream::normal`].
     pub fn fill_normals(&mut self, out: &mut [f64]) {
-        let mut pairs = out.chunks_exact_mut(2);
-        for pair in &mut pairs {
+        let (pairs, rest) = out.as_chunks_mut::<2>();
+        for pair in pairs {
             let u1 = self.uniform().max(f64::MIN_POSITIVE);
             let u2 = self.uniform();
             let radius = (-2.0_f64 * u1.ln()).sqrt();
@@ -111,7 +111,7 @@ impl Stream {
             pair[0] = radius * theta.cos();
             pair[1] = radius * theta.sin();
         }
-        if let [last] = pairs.into_remainder() {
+        if let [last] = rest {
             *last = self.normal();
         }
     }

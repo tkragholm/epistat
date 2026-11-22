@@ -325,12 +325,12 @@ fn counting(
         }
     }
     let origin = common_start.expect("there is at least one row");
-    if let Some(times) = times {
-        if let Some(t) = times.iter().find(|&&t| t <= origin) {
-            return Err(Error::input(format!(
-                "the reporting time {t} is not after the common start {origin}"
-            )));
-        }
+    if let Some(times) = times
+        && let Some(t) = times.iter().find(|&&t| t <= origin)
+    {
+        return Err(Error::input(format!(
+            "the reporting time {t} is not after the common start {origin}"
+        )));
     }
     let n_columns = times.map_or(1, <[f64]>::len);
     let mut weights = Mat::<f64>::zeros(n, n_columns);

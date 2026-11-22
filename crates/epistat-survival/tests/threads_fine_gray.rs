@@ -142,7 +142,7 @@ fn fine_gray_fit_all_options() {
     let s = sample(2003, 42);
     let x = Mat::from_fn(s.x.len(), 4, |i, j| match j {
         0 => s.x[i],
-        1 => f64::from(u8::from(s.cluster[i] % 2 == 0)),
+        1 => f64::from(u8::from(s.cluster[i].is_multiple_of(2))),
         2 => f64::from(u8::from(s.cluster[i] % 3 == 1)),
         _ => f64::from(u8::from(s.cluster[i] % 3 == 2)),
     });

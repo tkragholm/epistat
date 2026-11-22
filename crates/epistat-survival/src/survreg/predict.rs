@@ -238,12 +238,12 @@ impl SurvregFit {
             }
             _ => vec![0; n],
         };
-        if let Some(offset) = &options.offset {
-            if offset.len() != n || offset.iter().any(|v| !v.is_finite()) {
-                return Err(Error::input(format!(
-                    "the offset needs one finite value for each of the {n} rows"
-                )));
-            }
+        if let Some(offset) = &options.offset
+            && (offset.len() != n || offset.iter().any(|v| !v.is_finite()))
+        {
+            return Err(Error::input(format!(
+                "the offset needs one finite value for each of the {n} rows"
+            )));
         }
         let terms: &[Vec<usize>] = match &options.kind {
             PredictType::Terms { groups, .. } => {
@@ -536,13 +536,13 @@ impl SurvregFit {
                 "the strata of the data differ from those of the fit".to_owned(),
             ));
         }
-        if let Some(codes) = options.collapse {
-            if codes.len() != n {
-                return Err(Error::input(format!(
-                    "collapse has {} codes for {n} rows",
-                    codes.len()
-                )));
-            }
+        if let Some(codes) = options.collapse
+            && codes.len() != n
+        {
+            return Err(Error::input(format!(
+                "collapse has {} codes for {n} rows",
+                codes.len()
+            )));
         }
         let v = self.dense_variance()?;
         let q = self.n_params();
@@ -584,10 +584,10 @@ impl SurvregFit {
                 if options.standardise {
                     *value /= v[b * q + b].sqrt();
                 }
-                if options.weighted {
-                    if let Some(w) = data.weight() {
-                        *value *= w[i];
-                    }
+                if options.weighted
+                    && let Some(w) = data.weight()
+                {
+                    *value *= w[i];
                 }
             }
         }

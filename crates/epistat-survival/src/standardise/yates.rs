@@ -254,10 +254,10 @@ pub fn yates(
             }
         }
     }
-    if let Some(c) = opts.centre {
-        if c.len() != p || c.iter().any(|v| !v.is_finite()) {
-            return Err(Error::input("centre: one finite value per coefficient"));
-        }
+    if let Some(c) = opts.centre
+        && (c.len() != p || c.iter().any(|v| !v.is_finite()))
+    {
+        return Err(Error::input("centre: one finite value per coefficient"));
     }
     let n_levels = levels.len();
     let mut estimate = Vec::with_capacity(n_levels);

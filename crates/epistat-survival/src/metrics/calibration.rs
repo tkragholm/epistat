@@ -205,14 +205,13 @@ pub fn estimate(
     };
     breaks.sort_by(f64::total_cmp);
     breaks.dedup();
-    if let Groups::Breaks(_) = opts.groups {
-        if breaks.first().is_none_or(|&b| b > values[0])
-            || breaks.last().is_none_or(|&b| b < values[n - 1])
-        {
-            return Err(Error::input(
-                "the breaks must cover every predicted risk, from the smallest to the largest",
-            ));
-        }
+    if let Groups::Breaks(_) = opts.groups
+        && (breaks.first().is_none_or(|&b| b > values[0])
+            || breaks.last().is_none_or(|&b| b < values[n - 1]))
+    {
+        return Err(Error::input(
+            "the breaks must cover every predicted risk, from the smallest to the largest",
+        ));
     }
 
     let by_value = distinct.len() <= breaks.len();

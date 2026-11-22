@@ -45,11 +45,11 @@ impl UsedControlsVec {
 
     /// Mark a control as unused again.
     pub(crate) fn remove(&mut self, idx: ControlIdx) {
-        if let Some(slot) = self.bits.get_mut(idx.get()) {
-            if *slot {
-                *slot = false;
-                self.count -= 1;
-            }
+        if let Some(slot) = self.bits.get_mut(idx.get())
+            && *slot
+        {
+            *slot = false;
+            self.count -= 1;
         }
     }
 

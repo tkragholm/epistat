@@ -552,12 +552,12 @@ impl Tmerge {
                 "time of {name} must be finite, row {i}"
             )));
         }
-        if let Some(v) = obs.value {
-            if let Some(i) = v.iter().position(|x| x.is_some_and(|x| !x.is_finite())) {
-                return Err(Error::input(format!(
-                    "value of {name} must be finite, row {i}"
-                )));
-            }
+        if let Some(v) = obs.value
+            && let Some(i) = v.iter().position(|x| x.is_some_and(|x| !x.is_finite()))
+        {
+            return Err(Error::input(format!(
+                "value of {name} must be finite, row {i}"
+            )));
         }
         if let Some(x) = init.filter(|x| !x.is_finite()) {
             return Err(Error::input(format!(
@@ -587,10 +587,11 @@ impl Tmerge {
                 continue;
             };
             let value = obs.value.map(|v| v[i]);
-            if let Some(v) = value {
-                if self.options.na_rm && v.is_none() {
-                    continue;
-                }
+            if let Some(v) = value
+                && self.options.na_rm
+                && v.is_none()
+            {
+                continue;
             }
             let group = by_id[at].1;
             if is_cov && self.options.delay > 0.0 {
@@ -726,10 +727,10 @@ impl Tmerge {
                     } else {
                         Some(inc)
                     };
-                    if matches!(place, Place::Boundary | Place::Trailing) {
-                        if let (Some(v), Some(r)) = (recorded, i2) {
-                            values[r] = v;
-                        }
+                    if matches!(place, Place::Boundary | Place::Trailing)
+                        && let (Some(v), Some(r)) = (recorded, i2)
+                    {
+                        values[r] = v;
                     }
                 }
             }

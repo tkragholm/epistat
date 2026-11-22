@@ -657,15 +657,15 @@ pub fn zph(
         start += n_stratum;
     }
     let mut variance = vec![None; nterm * nterm];
-    if nterm > 0 {
-        if let Some(factor) = Factor::new(&vterm, nterm) {
-            for c in 0..nterm {
-                let mut e = vec![0.0f64; nterm];
-                e[c] = 1.0;
-                factor.solve(&mut e);
-                for r in 0..nterm {
-                    variance[r * nterm + c] = Some(e[r]);
-                }
+    if nterm > 0
+        && let Some(factor) = Factor::new(&vterm, nterm)
+    {
+        for c in 0..nterm {
+            let mut e = vec![0.0f64; nterm];
+            e[c] = 1.0;
+            factor.solve(&mut e);
+            for r in 0..nterm {
+                variance[r * nterm + c] = Some(e[r]);
             }
         }
     }

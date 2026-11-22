@@ -286,13 +286,13 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
         let mut seen = vec![usize::MAX; n_states as usize + 1];
         for (g, &(a, b)) in bounds.iter().enumerate() {
             for s in &mut status[a..b] {
-                if let Some(v) = *s {
-                    if v != 0 {
-                        if seen[v as usize] == g {
-                            *s = Some(0);
-                        } else {
-                            seen[v as usize] = g;
-                        }
+                if let Some(v) = *s
+                    && v != 0
+                {
+                    if seen[v as usize] == g {
+                        *s = Some(0);
+                    } else {
+                        seen[v as usize] = g;
                     }
                 }
             }
@@ -336,10 +336,10 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     for &(a, b) in &bounds {
         let mut current = 0;
         for p in a..b - 1 {
-            if let Some(v) = status[p] {
-                if v != 0 {
-                    current = v;
-                }
+            if let Some(v) = status[p]
+                && v != 0
+            {
+                current = v;
             }
             let mut s = status[p + 1];
             if opts.repeated == Repeated::Collapse && has_istate && s == Some(current) {

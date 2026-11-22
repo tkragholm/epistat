@@ -1616,10 +1616,10 @@ fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> 
             "hazard: the Kalbfleisch-Prentice curve has no choice of hazard form",
         ));
     }
-    if let Some(from) = opts.start_time {
-        if !from.is_finite() {
-            return Err(Error::input("start_time: must be finite"));
-        }
+    if let Some(from) = opts.start_time
+        && !from.is_finite()
+    {
+        return Err(Error::input("start_time: must be finite"));
     }
     let centre = m.means(opts.centring)?;
     build_baseline(

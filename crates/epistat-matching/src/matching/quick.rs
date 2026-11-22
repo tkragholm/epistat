@@ -530,11 +530,11 @@ fn build_graph(
                     }
                 }
             }
-            if let Some(radius) = constraints.radius {
-                if scratch.chosen.iter().any(|hit| hit.0.sqrt() > radius) {
-                    *ok = false;
-                    return;
-                }
+            if let Some(radius) = constraints.radius
+                && scratch.chosen.iter().any(|hit| hit.0.sqrt() > radius)
+            {
+                *ok = false;
+                return;
             }
             for (place, hit) in slot.iter_mut().zip(&scratch.chosen) {
                 *place = hit.1;
@@ -721,10 +721,10 @@ pub fn quick_clusters(
     if size < minimum_total {
         return Err(QuickMatchError::SizeBelowMinimums);
     }
-    if let Some(caliper) = options.caliper {
-        if !(caliper.is_finite() && caliper > 0.0) {
-            return Err(QuickMatchError::InvalidCaliper);
-        }
+    if let Some(caliper) = options.caliper
+        && !(caliper.is_finite() && caliper > 0.0)
+    {
+        return Err(QuickMatchError::InvalidCaliper);
     }
     let anchors = anchor.iter().filter(|flag| **flag).count();
     if anchors < options.min_anchors || n - anchors < options.min_candidates || n < size {

@@ -179,10 +179,10 @@ pub fn evalues_rr(
     if let Some(hi) = upper {
         positive("upper limit", hi)?;
     }
-    if let (Some(lo), Some(hi)) = (lower, upper) {
-        if lo > hi {
-            return Err(EValueError::LimitsReversed);
-        }
+    if let (Some(lo), Some(hi)) = (lower, upper)
+        && lo > hi
+    {
+        return Err(EValueError::LimitsReversed);
     }
     if lower.is_some_and(|lo| estimate < lo) || upper.is_some_and(|hi| estimate > hi) {
         return Err(EValueError::EstimateOutsideInterval);

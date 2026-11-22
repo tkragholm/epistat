@@ -364,7 +364,7 @@ fn quantiles(mut values: Vec<f64>, k: usize) -> Vec<f64> {
     (0..=k)
         .map(|bucket| {
             let low = span * bucket / k;
-            let high = low + usize::from(span * bucket % k != 0);
+            let high = low + usize::from(!(span * bucket).is_multiple_of(k));
             let share = (span * bucket % k) as f64 / k as f64;
             values[low] + share * (values[high] - values[low])
         })

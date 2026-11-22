@@ -69,14 +69,14 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
             surv.n_codes()
         )));
     }
-    if let Some(weight) = data.weight() {
-        if let Some(position) = weight.iter().position(|&w| w != 0.0 && w != 1.0) {
-            return Err(Error::input(format!(
-                "weights other than 0 and 1 are not supported, as in riskRegression::Score and \
+    if let Some(weight) = data.weight()
+        && let Some(position) = weight.iter().position(|&w| w != 0.0 && w != 1.0)
+    {
+        return Err(Error::input(format!(
+            "weights other than 0 and 1 are not supported, as in riskRegression::Score and \
                  timeROC: row {position} has weight {}",
-                weight[position]
-            )));
-        }
+            weight[position]
+        )));
     }
     let mut rows: Vec<u32> = data.used_rows().collect();
     if rows.is_empty() {
@@ -126,13 +126,13 @@ pub(super) fn check_times(times: &[f64], max_time: f64) -> Result<()> {
             position + 1
         )));
     }
-    if let Some(&last) = times.last() {
-        if last > max_time {
-            return Err(Error::input(format!(
-                "time {last} is after the last observed time {max_time}; riskRegression::Score \
+    if let Some(&last) = times.last()
+        && last > max_time
+    {
+        return Err(Error::input(format!(
+            "time {last} is after the last observed time {max_time}; riskRegression::Score \
                  drops such times, here they are refused"
-            )));
-        }
+        )));
     }
     Ok(())
 }

@@ -697,15 +697,15 @@ fn search_lp(
             }
             match context.search(level, false, &mut best)? {
                 End::Done => {
-                    if let Some((_, v)) = best.as_ref() {
-                        if reaches(*v, level) {
-                            let bound = *v;
-                            return Ok(Outcome {
-                                best,
-                                bound,
-                                status: Status::Optimal,
-                            });
-                        }
+                    if let Some((_, v)) = best.as_ref()
+                        && reaches(*v, level)
+                    {
+                        let bound = *v;
+                        return Ok(Outcome {
+                            best,
+                            bound,
+                            status: Status::Optimal,
+                        });
                     }
                     level -= g;
                 }
@@ -2083,7 +2083,7 @@ impl Context<'_, '_> {
                 }
                 // Now and then, a local search from the node's point.
                 processed += 1;
-                if processed % SEARCH_EVERY == 0 {
+                if processed.is_multiple_of(SEARCH_EVERY) {
                     let start = self.lp.values();
                     let frozen: Vec<bool> = (0..n)
                         .map(|j| {

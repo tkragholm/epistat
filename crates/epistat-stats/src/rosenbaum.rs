@@ -788,7 +788,7 @@ mod tests {
                     // Halves and negative zeros.
                     2 => {
                         let v = (rng.next() % 7) as f64 / 2.0 - 1.5;
-                        if v == 0.0 && rng.next() % 2 == 0 {
+                        if v == 0.0 && rng.next().is_multiple_of(2) {
                             -0.0
                         } else {
                             v

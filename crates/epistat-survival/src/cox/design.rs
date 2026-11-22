@@ -734,12 +734,12 @@ fn check_exact(data: &SurvData<'_>) -> Result<()> {
             "ties: the exact method has no cluster-robust variance",
         ));
     }
-    if let Some(weight) = data.weight() {
-        if weight.iter().any(|&w| w > 0.0 && w - 1.0 != 0.0) {
-            return Err(Error::input(
-                "weight: the exact method supports case weights of 1 only",
-            ));
-        }
+    if let Some(weight) = data.weight()
+        && weight.iter().any(|&w| w > 0.0 && w - 1.0 != 0.0)
+    {
+        return Err(Error::input(
+            "weight: the exact method supports case weights of 1 only",
+        ));
     }
     Ok(())
 }
@@ -1639,12 +1639,14 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
                 factorise(&mut m, p) != Some(initial_rank)
             });
         let halving = halvings > 0 && stepping != Stepping::RightCensored;
-        if let Some(e) = &evaluation {
-            if !halving && !rank_changed && (1.0 - accepted_loglik / e.loglik).abs() <= input.eps {
-                converged = true;
-                last = evaluation;
-                break;
-            }
+        if let Some(e) = &evaluation
+            && !halving
+            && !rank_changed
+            && (1.0 - accepted_loglik / e.loglik).abs() <= input.eps
+        {
+            converged = true;
+            last = evaluation;
+            break;
         }
         let better = !rank_changed && matches!(&evaluation, Some(e) if e.loglik >= accepted_loglik);
         if count == input.iter_max {

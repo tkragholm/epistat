@@ -48,7 +48,7 @@ fn units(seed: u64) -> Units {
         let id = format!("{}{i}", if anchor { "a" } else { "c" });
         let base = (rng.next() % 1000) as f64 / 1000.0;
         let score = if anchor { base * 0.6 + 0.4 } else { base };
-        let score = if !anchor && rng.next() % 50 == 0 {
+        let score = if !anchor && rng.next().is_multiple_of(50) {
             f64::NAN
         } else {
             score

@@ -203,13 +203,13 @@ pub fn fit<'a>(
             return Err(Error::input(format!("{name}: a value is not finite")));
         }
     }
-    if let Some(c) = censored {
-        if c.len() != n {
-            return Err(Error::input(format!(
-                "censored: {} values for {n} rows",
-                c.len()
-            )));
-        }
+    if let Some(c) = censored
+        && c.len() != n
+    {
+        return Err(Error::input(format!(
+            "censored: {} values for {n} rows",
+            c.len()
+        )));
     }
     let stop = surv.stop();
     let subject: Vec<u32> = data

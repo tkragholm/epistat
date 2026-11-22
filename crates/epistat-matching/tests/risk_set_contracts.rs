@@ -134,10 +134,10 @@ fn brute(c: &[P], alive: bool, policy: CommonSupport) -> Option<(usize, usize)> 
                     range = Some(range.map_or((s, s), |(l, h)| (l.min(s), h.max(s))));
                 }
             }
-            if let Some((l, h)) = range {
-                if !fin(case).is_some_and(|s| s >= l && s <= h) {
-                    tc += 1;
-                }
+            if let Some((l, h)) = range
+                && !fin(case).is_some_and(|s| s >= l && s <= h)
+            {
+                tc += 1;
             }
         }
     }

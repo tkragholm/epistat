@@ -816,10 +816,9 @@ impl DenseSimplex {
 fn dot(a: &[f64], b: &[f64]) -> f64 {
     debug_assert_eq!(a.len(), b.len());
     let mut acc = [0.0_f64; 4];
-    let chunks_a = a.chunks_exact(4);
-    let chunks_b = b.chunks_exact(4);
-    let (rest_a, rest_b) = (chunks_a.remainder(), chunks_b.remainder());
-    for (ca, cb) in chunks_a.zip(chunks_b) {
+    let (chunks_a, rest_a) = a.as_chunks::<4>();
+    let (chunks_b, rest_b) = b.as_chunks::<4>();
+    for (ca, cb) in chunks_a.iter().zip(chunks_b) {
         acc[0] += ca[0] * cb[0];
         acc[1] += ca[1] * cb[1];
         acc[2] += ca[2] * cb[2];

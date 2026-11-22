@@ -821,7 +821,7 @@ mod tests {
                     }
                     // Delete about a third of what is left.
                     for i in 0..n {
-                        if live[i] && mix.next() % 3 == 0 {
+                        if live[i] && mix.next().is_multiple_of(3) {
                             live[i] = false;
                             tree.remove(keys[i]);
                         }

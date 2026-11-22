@@ -238,12 +238,12 @@ impl Default for FitOptions {
 pub fn estimate(data: &SurvData<'_>, eta: &[f64], opts: &RoystonOptions) -> Result<Royston> {
     check_lengths(&[("data", data.n_rows()), ("eta", eta.len())])?;
     refuse_non_finite(eta, "eta")?;
-    if let Some(a) = opts.adjust {
-        if !(a.n_events.is_finite() && a.n_events > a.n_coef as f64) {
-            return Err(Error::input(
-                "adjust: the number of events must be finite and exceed the number of coefficients",
-            ));
-        }
+    if let Some(a) = opts.adjust
+        && !(a.n_events.is_finite() && a.n_events > a.n_coef as f64)
+    {
+        return Err(Error::input(
+            "adjust: the number of events must be finite and exceed the number of coefficients",
+        ));
     }
     check_row_count(data.n_rows())?;
     let timefixed = data.clone().with_timefix(opts.timefix)?;

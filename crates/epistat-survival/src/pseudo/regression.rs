@@ -246,13 +246,13 @@ pub fn fit(
             )));
         }
     }
-    if let Some(start) = start {
-        if start.len() != p {
-            return Err(Error::input(format!(
-                "start has {} entries and the design has {p} columns",
-                start.len()
-            )));
-        }
+    if let Some(start) = start
+        && start.len() != p
+    {
+        return Err(Error::input(format!(
+            "start has {} entries and the design has {p} columns",
+            start.len()
+        )));
     }
     if p == 0 || n < p {
         return Err(Error::input(format!(

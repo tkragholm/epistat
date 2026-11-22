@@ -292,13 +292,13 @@ fn a_binary_covariate_regression_is_the_difference_of_the_means() {
     )
     .unwrap();
     let n = p.n_subjects();
-    let x = Mat::from_fn(n, 1, |i, _| f64::from(p.subject[i] % 3 == 0));
+    let x = Mat::from_fn(n, 1, |i, _| f64::from(p.subject[i].is_multiple_of(3)));
     let fit = p
         .regress(Some(x.as_ref()), false, &GeeOptions::new(Link::Identity))
         .unwrap();
     let mean = |flag: bool| {
         let v: Vec<f64> = (0..n)
-            .filter(|&i| (p.subject[i] % 3 == 0) == flag)
+            .filter(|&i| p.subject[i].is_multiple_of(3) == flag)
             .map(|i| p.values[i])
             .collect();
         v.iter().sum::<f64>() / v.len() as f64
@@ -312,7 +312,7 @@ fn a_binary_covariate_regression_is_the_difference_of_the_means() {
     let var = |flag: bool| {
         let m = mean(flag);
         let v: Vec<f64> = (0..n)
-            .filter(|&i| (p.subject[i] % 3 == 0) == flag)
+            .filter(|&i| p.subject[i].is_multiple_of(3) == flag)
             .map(|i| (p.values[i] - m).powi(2))
             .collect();
         v.iter().sum::<f64>() / (v.len() as f64).powi(2)

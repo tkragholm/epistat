@@ -196,14 +196,13 @@ pub fn solve(
         for (matrix, ridge) in candidates(a, attempt.ridge) {
             if let Some(factor) =
                 Factor::with_method(matrix.as_ref(), attempt.method, attempt.min_pivot)
+                && let Ok(x) = factor.solve(b)
             {
-                if let Ok(x) = factor.solve(b) {
-                    return Ok(Solution {
-                        x,
-                        method: attempt.method,
-                        ridge,
-                    });
-                }
+                return Ok(Solution {
+                    x,
+                    method: attempt.method,
+                    ridge,
+                });
             }
         }
     }

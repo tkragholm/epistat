@@ -587,10 +587,10 @@ impl GeneticProblem {
         let ratio = self.options.ratio;
         let zf = &self.z_focal[row * p..(row + 1) * p];
         for c in start..end {
-            if let Some(taken) = taken {
-                if taken[c] {
-                    continue;
-                }
+            if let Some(taken) = taken
+                && taken[c]
+            {
+                continue;
             }
             if !self.admits(row, c) {
                 continue;

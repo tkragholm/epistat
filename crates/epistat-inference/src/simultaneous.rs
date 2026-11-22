@@ -202,13 +202,13 @@ fn standard_normals(stream: &mut Stream, out: &mut [f64]) {
         let u2 = stream.uniform();
         ((-2.0 * u1.ln()).sqrt(), 2.0 * PI * u2)
     };
-    let mut pairs = out.chunks_exact_mut(2);
-    for pair in pairs.by_ref() {
+    let (pairs, rest) = out.as_chunks_mut::<2>();
+    for pair in pairs {
         let (radius, theta) = transform(stream);
         pair[0] = radius * theta.cos();
         pair[1] = radius * theta.sin();
     }
-    if let [last] = pairs.into_remainder() {
+    if let [last] = rest {
         let (radius, theta) = transform(stream);
         *last = radius * theta.cos();
     }

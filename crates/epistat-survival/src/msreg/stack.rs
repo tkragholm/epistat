@@ -94,12 +94,12 @@ fn terms_of(opts: &MsOptions<'_>, n_columns: usize, n_transitions: usize) -> Res
     };
     let mut covered = vec![false; (n_columns + 1) * n_transitions];
     for (t, term) in terms.iter().enumerate() {
-        if let Some(column) = term.column {
-            if column >= n_columns {
-                return Err(Error::input(format!(
-                    "terms: term {t} uses column {column} of {n_columns}"
-                )));
-            }
+        if let Some(column) = term.column
+            && column >= n_columns
+        {
+            return Err(Error::input(format!(
+                "terms: term {t} uses column {column} of {n_columns}"
+            )));
         }
         if term.transitions.is_empty() {
             return Err(Error::input(format!("terms: term {t} has no transition")));

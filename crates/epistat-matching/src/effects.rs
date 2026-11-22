@@ -689,10 +689,10 @@ fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, Effect
     if n < p {
         return Err(EffectError::TooFewRows);
     }
-    if spec.model == OutcomeModel::Logistic {
-        if let Some(row) = sample.outcome.iter().position(|y| !(0.0..=1.0).contains(y)) {
-            return Err(EffectError::Outcome { row });
-        }
+    if spec.model == OutcomeModel::Logistic
+        && let Some(row) = sample.outcome.iter().position(|y| !(0.0..=1.0).contains(y))
+    {
+        return Err(EffectError::Outcome { row });
     }
     let all: Vec<usize> = (0..n).collect();
     let x = design(sample, spec.interactions, &all, None);

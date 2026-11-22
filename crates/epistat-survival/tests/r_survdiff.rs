@@ -88,12 +88,12 @@ const U: f64 = f64::EPSILON;
 /// Density of the chi-square distribution with `df` degrees of freedom.
 fn chi_square_pdf(x: f64, df: usize) -> f64 {
     // Gamma(df / 2) for df >= 1 by the recurrence from Gamma(1) and Gamma(1/2).
-    let mut g = if df % 2 == 0 {
+    let mut g = if df.is_multiple_of(2) {
         1.0
     } else {
         std::f64::consts::PI.sqrt()
     };
-    let mut a = if df % 2 == 0 { 1.0 } else { 0.5 };
+    let mut a = if df.is_multiple_of(2) { 1.0 } else { 0.5 };
     while a < df as f64 / 2.0 {
         g *= a;
         a += 1.0;

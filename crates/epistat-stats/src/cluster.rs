@@ -136,14 +136,14 @@ pub fn kmeans(
     if max_iterations == 0 {
         return Err(KMeansError::NoIterations);
     }
-    if points.len() % d != 0 {
+    if !points.len().is_multiple_of(d) {
         return Err(KMeansError::Shape {
             what: "points",
             found: points.len(),
             d,
         });
     }
-    if start.len() % d != 0 {
+    if !start.len().is_multiple_of(d) {
         return Err(KMeansError::Shape {
             what: "start",
             found: start.len(),

@@ -993,11 +993,11 @@ impl Pool {
         let mut coords = Vec::with_capacity(n * dimension);
         let mut keys = Vec::with_capacity(n);
         for (position, &idx) in self.candidate.iter().enumerate() {
-            if let Some(vector) = vectors.vector(candidates[idx].id()) {
-                if vector.iter().all(|value| value.is_finite()) {
-                    coords.extend_from_slice(vector);
-                    keys.push(position);
-                }
+            if let Some(vector) = vectors.vector(candidates[idx].id())
+                && vector.iter().all(|value| value.is_finite())
+            {
+                coords.extend_from_slice(vector);
+                keys.push(position);
             }
         }
         let mut tree = KdTree::new(dimension, &coords, &keys, n);
@@ -1500,12 +1500,12 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             self.used.insert(ControlIdx::new(candidate_idx));
             self.assigned.push(candidate_idx);
         }
-        if criteria.unique_by_key.is_some() {
-            if let Some(value) = unique_value(&self.env.candidates[candidate_idx], criteria) {
-                self.state
-                    .used_unique
-                    .insert(intern_unique(&mut self.state.interner, value));
-            }
+        if criteria.unique_by_key.is_some()
+            && let Some(value) = unique_value(&self.env.candidates[candidate_idx], criteria)
+        {
+            self.state
+                .used_unique
+                .insert(intern_unique(&mut self.state.interner, value));
         }
     }
 
