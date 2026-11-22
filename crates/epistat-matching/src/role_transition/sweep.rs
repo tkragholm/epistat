@@ -178,8 +178,8 @@ impl Reach {
         let chunks = m.div_ceil(CHUNK);
         let mut positions = Vec::with_capacity(m);
         let mut sorted = Vec::with_capacity(m);
-        let mut valued = Vec::with_capacity(chunks);
-        let mut without = Vec::with_capacity(chunks);
+        let mut with_value = Vec::with_capacity(chunks);
+        let mut lacking = Vec::with_capacity(chunks);
         for chunk in 0..chunks {
             let range = chunk * CHUNK..m.min((chunk + 1) * CHUNK);
             let position = |p: usize| u32::try_from(p).expect("position fits u32");
@@ -193,8 +193,8 @@ impl Reach {
             let not_a_number: Vec<usize> = range
                 .filter(|&p| values[p].is_some_and(f64::is_nan))
                 .collect();
-            valued.push(u8::try_from(with.len()).expect("a chunk holds at most 64"));
-            without.push(u8::try_from(missing.len()).expect("a chunk holds at most 64"));
+            with_value.push(u8::try_from(with.len()).expect("a chunk holds at most 64"));
+            lacking.push(u8::try_from(missing.len()).expect("a chunk holds at most 64"));
             for p in with.into_iter().chain(missing).chain(not_a_number) {
                 positions.push(position(p));
                 sorted.push(value_at(p));
@@ -205,8 +205,8 @@ impl Reach {
             rule,
             positions,
             values: sorted,
-            valued,
-            without,
+            valued: with_value,
+            without: lacking,
             counts: vec![0; chunks * width],
             width,
         }
@@ -233,9 +233,10 @@ impl Reach {
                 // Left of `c` the controls the window refuses come first, and
                 // right of it they come last, because a difference rounded to
                 // a double does not decrease as the value moves away.
-                let values = &self.values[first..first + valued];
-                let low = values.partition_point(|&x| x < c && !((c - x).abs() <= window));
-                let high = values.partition_point(|&x| x <= c || (c - x).abs() <= window);
+                let ascending = &self.values[first..first + valued];
+                let within = |x: f64| (c - x).abs() <= window;
+                let low = ascending.partition_point(|&x| x < c && !within(x));
+                let high = ascending.partition_point(|&x| x <= c || within(x));
                 first + low..first + high.max(low)
             }
         }
@@ -845,17 +846,17 @@ impl RiskSetSweep {
             }
         }
         let mut refused = vec![0_usize; self.reasons.len()];
-        for (index, &partial) in live.iter().enumerate() {
-            let outside = partial + whole_live[index] - inside[index];
-            let Some(status) = index.checked_sub(1) else {
+        for (slot, &visited) in live.iter().enumerate() {
+            let outside = visited + whole_live[slot] - inside[slot];
+            let Some(refusing) = slot.checked_sub(1) else {
                 refused[self.rule_slot[reach.rule]] += outside;
                 continue;
             };
-            refused[self.rule_slot[status]] += inside[index];
-            let first = if reach.rule < status {
+            refused[self.rule_slot[refusing]] += inside[slot];
+            let first = if reach.rule < refusing {
                 reach.rule
             } else {
-                status
+                refusing
             };
             refused[self.rule_slot[first]] += outside;
         }

@@ -2336,13 +2336,11 @@ mod tests {
             let all = vec!["c".to_string(), "a".to_string(), "b".to_string()];
             let old_first = level_data_by_strings(anchors, candidates, &first_keys, None).unwrap();
             let new_first = level_data(anchors, candidates, &first_keys, None).unwrap();
-            for (new, old) in [(&new_first, &old_first)] {
-                assert_eq!(new.keys, old.keys, "round {round}");
-                assert_eq!(new.categories, old.categories, "round {round}");
-                assert_eq!(new.of_unit, old.of_unit, "round {round}");
-                assert_eq!(new.parent, old.parent, "round {round}");
-                assert_eq!(new.anchors, old.anchors, "round {round}");
-            }
+            assert_eq!(new_first.keys, old_first.keys, "round {round}");
+            assert_eq!(new_first.categories, old_first.categories, "round {round}");
+            assert_eq!(new_first.of_unit, old_first.of_unit, "round {round}");
+            assert_eq!(new_first.parent, old_first.parent, "round {round}");
+            assert_eq!(new_first.anchors, old_first.anchors, "round {round}");
             let old_second =
                 level_data_by_strings(anchors, candidates, &both, Some(&old_first)).unwrap();
             let new_second = level_data(anchors, candidates, &both, Some(&new_first)).unwrap();
