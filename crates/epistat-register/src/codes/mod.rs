@@ -146,9 +146,9 @@ fn normalise(mut list: Vec<Interval>, width: usize) -> Vec<Interval> {
     out
 }
 
-fn contains_key(list: &[Interval], key: &Key) -> bool {
-    let at = list.partition_point(|(lo, _)| lo <= key);
-    at > 0 && *key <= list[at - 1].1
+fn contains_key(list: &[Interval], key: Key) -> bool {
+    let at = list.partition_point(|(lo, _)| *lo <= key);
+    at > 0 && key <= list[at - 1].1
 }
 
 fn intersect_lists(a: &[Interval], b: &[Interval]) -> Vec<Interval> {
@@ -186,12 +186,11 @@ fn subtract_lists(a: &[Interval], b: &[Interval], width: usize) -> Vec<Interval>
                 exhausted = true;
                 break;
             }
-            match successor(bhi, width) {
-                Some(next) => cursor = next,
-                None => {
-                    exhausted = true;
-                    break;
-                }
+            if let Some(next) = successor(bhi, width) {
+                cursor = next;
+            } else {
+                exhausted = true;
+                break;
             }
             j += 1;
         }
@@ -379,7 +378,7 @@ impl CodeSet {
         }
         let mut key = [0_u8; MAX_LEN];
         key[..width].copy_from_slice(&bytes[..width]);
-        contains_key(&self.classes[width - 1], &key)
+        contains_key(&self.classes[width - 1], key)
     }
 
     /// Whether the set holds no code.
@@ -458,7 +457,7 @@ impl CodeSet {
         (1..=bytes.len().min(MAX_LEN)).rev().find(|&len| {
             let mut key = [0_u8; MAX_LEN];
             key[..len].copy_from_slice(&bytes[..len]);
-            contains_key(&by_len[len - 1], &key)
+            contains_key(&by_len[len - 1], key)
         })
     }
 

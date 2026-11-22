@@ -1,3 +1,8 @@
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "test sizes are small draws from a generator"
+)]
+
 use super::*;
 use epistat_testkit::SplitMix64;
 
@@ -105,7 +110,7 @@ fn membership_equals_the_naive_rule_on_every_short_code() {
 }
 
 fn random_items(rng: &mut SplitMix64) -> Vec<(String, String)> {
-    (0..1 + rng.below(4))
+    (0..=rng.below(4))
         .map(|_| {
             let len = 1 + rng.below(4) as usize;
             let pick = |rng: &mut SplitMix64| -> String {

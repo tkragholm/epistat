@@ -77,7 +77,7 @@ fn episodes_agree_with_adherer_at_every_permitted_gap() {
             assert_eq!(p.person[i], e.id[i], "{label} person");
             assert_eq!(p.start[i] as f64, e.start[i], "{label} start");
             assert_eq!(p.end[i], e.end[i], "{label} end");
-            fp = fp.u64(p.start[i] as u64).f64(p.end[i]);
+            fp = fp.u64(p.start[i].cast_unsigned()).f64(p.end[i]);
         }
     }
     assert_eq!(fp.finish(), 7_957_771_175_707_055_590, "golden hash");

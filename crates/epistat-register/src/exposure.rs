@@ -59,9 +59,9 @@
 //! [`DoseRule::Observed`] it is the quantity-weighted harmonic mean of the
 //! doses. It is [`None`] when the sum of durations is 0.
 //!
-//! Without cap, pauses and grace, the recurrence has the closed form `e_i = S_i
-//! + max_{j<=i}(t_j - S_{j-1})` with `S_i` the cumulative duration, which the
-//! tests use as an oracle.
+//! Without cap, pauses and grace, the recurrence has the closed form
+//! `e_i = S_i + max_{j<=i}(t_j - S_{j-1})` with `S_i` the cumulative duration,
+//! which the tests use as an oracle.
 //!
 //! # Cumulative dose
 //!

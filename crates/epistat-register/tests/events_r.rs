@@ -110,15 +110,15 @@ fn every_definition_agrees_with_r() {
     for (k, (g, e)) in got.iter().zip(&r.rules).enumerate() {
         for (p, o) in g.iter().enumerate() {
             let label = format!("rule {k} person {p}");
-            let day = |v: Option<f64>| v.map(|x| x as i64);
+            let day = |v: Option<f64>| v.map(|x| ints(&[x])[0]);
             assert_eq!(o.first_in_window, day(e.first[p]), "{label} first");
             assert_eq!(o.case_day, day(e.case[p]), "{label} case");
             assert_eq!(o.prior, status(&e.prior[p]), "{label} prior");
             assert_eq!(o.n_events_in_window, e.n[p], "{label} n");
             assert_eq!(o.n_before_history, e.before[p], "{label} before history");
             fp = fp
-                .u64(o.first_in_window.map_or(u64::MAX, |d| d as u64))
-                .u64(o.case_day.map_or(u64::MAX, |d| d as u64))
+                .u64(o.first_in_window.map_or(u64::MAX, i64::cast_unsigned))
+                .u64(o.case_day.map_or(u64::MAX, i64::cast_unsigned))
                 .u64(o.prior as u64)
                 .u64(u64::from(o.n_events_in_window));
             seen[0] += usize::from(o.prior == PriorStatus::Prevalent);

@@ -1,3 +1,9 @@
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "test sizes and days are small draws from a generator"
+)]
+
 use super::*;
 use crate::person_time::days_from_civil;
 use epistat_testkit::{SplitMix64, assert_same_on_threads};
@@ -360,16 +366,14 @@ fn the_closed_form_holds_without_cap_pauses_and_grace() {
             ends.push(cumulative + best);
         }
         // Period ends are the closed-form value at the last row of each period.
-        let mut k = 0;
         let mut expected = Vec::new();
-        for i in 0..rows.len() {
-            let next_gap = rows.get(i + 1).is_none_or(|r| r.0 as f64 > ends[i]);
+        for (i, end) in ends.iter().enumerate() {
+            let next_gap = rows.get(i + 1).is_none_or(|r| r.0 as f64 > *end);
             if next_gap {
-                expected.push(ends[i]);
-                k += 1;
+                expected.push(*end);
             }
         }
-        assert_eq!(k, p.len());
+        assert_eq!(expected.len(), p.len());
         for (got, want) in p.end.iter().zip(&expected) {
             assert!((got - want).abs() <= 4.0 * n as f64 * f64::EPSILON * want.abs().max(1.0));
         }

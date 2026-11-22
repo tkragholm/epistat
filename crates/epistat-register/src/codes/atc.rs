@@ -34,7 +34,7 @@ pub enum Level {
 impl Level {
     /// The number of characters of a code at this level.
     #[must_use]
-    pub const fn len(self) -> usize {
+    pub const fn code_len(self) -> usize {
         match self {
             Self::Anatomical => 1,
             Self::Therapeutic => 3,
@@ -80,7 +80,7 @@ pub fn is_valid(code: &str) -> bool {
 #[must_use]
 pub fn ancestor(code: &str, level: Level) -> Option<&str> {
     let own = level_of(code)?;
-    (own >= level).then(|| &code[..level.len()])
+    (own >= level).then(|| &code[..level.code_len()])
 }
 
 #[cfg(test)]

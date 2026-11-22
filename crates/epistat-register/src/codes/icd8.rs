@@ -164,21 +164,15 @@ impl Crosswalk {
     pub fn from_pairs(pairs: &[(&str, &str, MapKind)]) -> Result<Self, RegisterError> {
         let mut entries = Vec::with_capacity(pairs.len());
         for &(from, to, kind) in pairs {
-            let from_code = match normalize_any(from) {
-                Some((Revision::Icd8, code)) => code,
-                _ => {
-                    return Err(RegisterError::input(format!(
-                        "crosswalk source {from:?} is not an ICD-8 code"
-                    )));
-                }
+            let Some((Revision::Icd8, from_code)) = normalize_any(from) else {
+                return Err(RegisterError::input(format!(
+                    "crosswalk source {from:?} is not an ICD-8 code"
+                )));
             };
-            let to_code = match normalize_any(to) {
-                Some((Revision::Icd10, code)) => code,
-                _ => {
-                    return Err(RegisterError::input(format!(
-                        "crosswalk target {to:?} is not an ICD-10 code"
-                    )));
-                }
+            let Some((Revision::Icd10, to_code)) = normalize_any(to) else {
+                return Err(RegisterError::input(format!(
+                    "crosswalk target {to:?} is not an ICD-10 code"
+                )));
             };
             entries.push(CrosswalkEntry {
                 from: from_code,
@@ -315,7 +309,7 @@ mod tests {
         let hit = x.map_icd8("250");
         assert_eq!(hit.len(), 2);
         assert_eq!(hit[0].to, "E10");
-        assert!(x.map_icd8("999").is_empty());
+        assert_eq!(x.map_icd8("999").len(), 0);
         let cover = x.coverage(["250", "410", "999", "250", "411", "427"].into_iter());
         assert_eq!(cover.codes, 5);
         assert_eq!(cover.mapped, 4);
