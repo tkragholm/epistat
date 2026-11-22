@@ -18,7 +18,11 @@
 //! - [`pooled`] gives inverse probability of censoring weights from a pooled
 //!   logistic model of censoring on person-period data, as
 //!   `ipw::ipwtm(type = "cens", family = "binomial")`, stabilised by a numerator
-//!   model.
+//!   model, and inverse probability weights for a treatment that changes over
+//!   time from a pooled logistic model of treatment, as `ipwtm(type = "first"`
+//!   or `"all")`, with truncation. Its fit goes into [`Estimated`] as a
+//!   [`Censoring::Pooled`], since the variance treats it as any other pooled
+//!   model of weights.
 //! - [`estimated`] names the estimated weights of an outcome model, of treatment,
 //!   of censoring or both, and [`cox::fit_estimated`] and
 //!   [`km::estimate_estimated`] give the variance that accounts for every model

@@ -169,6 +169,21 @@ impl Nuisance for PooledNuisance<'_> {
         let p = self.pooled;
         let (qd, q, m) = (p.design.ncols(), p.n_params(), a.ncols());
         let n = a.nrows();
+        // A weight set to a limit of the truncation does not move with the
+        // parameters.
+        let masked;
+        let a = match &p.clamped {
+            Some((stop, before)) => {
+                let flags = if self.at == WeightAt::Stop {
+                    stop
+                } else {
+                    before
+                };
+                masked = Mat::from_fn(n, m, |r, c| if flags[r] { 0.0 } else { a[(r, c)] });
+                masked.as_ref()
+            }
+            None => a,
+        };
         // K: the rows after a row, and the row itself for the weight through
         // the row, have the weight of that row in their product.
         let mut big_k = Mat::<f64>::zeros(q, m);
@@ -189,17 +204,21 @@ impl Nuisance for PooledNuisance<'_> {
                     }
                 }
                 if p.active[r] {
-                    let pd = p.probability[r];
+                    // The factor is the probability of the value observed, `o`:
+                    // d log f / d theta is `(o - p) z`, and the weight divides by
+                    // the denominator's and multiplies by the numerator's.
+                    let o = f64::from(u8::from(p.observed(r)));
+                    let pd = p.probability[r] - o;
                     for (c, &sc) in s.iter().enumerate() {
                         for j in 0..qd {
                             big_k[(j, c)] += sc * pd * p.design[(r, j)];
                         }
                     }
                     if let (Some(zn), Some(pn)) = (p.numerator_design, &p.numerator_probability) {
-                        let pn = pn[r];
+                        let pn = o - pn[r];
                         for (c, &sc) in s.iter().enumerate() {
                             for j in 0..zn.ncols() {
-                                big_k[(qd + j, c)] -= sc * pn * zn[(r, j)];
+                                big_k[(qd + j, c)] += sc * pn * zn[(r, j)];
                             }
                         }
                     }
@@ -218,7 +237,7 @@ impl Nuisance for PooledNuisance<'_> {
             if !p.active[r] {
                 continue;
             }
-            let y = f64::from(u8::from(p.censored[r]));
+            let y = f64::from(u8::from(p.response(r)));
             let res = y - p.probability[r];
             for (j, v) in psi.iter_mut().enumerate().take(qd) {
                 *v = p.design[(r, j)] * res;

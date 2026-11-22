@@ -1,5 +1,5 @@
-//! Inverse probability of censoring weights from a pooled logistic model of
-//! censoring on person-period data.
+//! Inverse probability weights from a pooled logistic model of censoring, or of
+//! treatment, on person-period data.
 //!
 //! # Algorithm
 //!
@@ -33,6 +33,35 @@
 //! model takes depends on whether the outcome of an interval is observed given
 //! that the subject stays uncensored in the interval (`weight`, as in target
 //! trial emulation) or at its start.
+//!
+//! # Treatment weights
+//!
+//! For a treatment that changes over time (Robins, Hernan and Brumback 2000) the
+//! binary variable of each row is the treatment `a_j` of the interval. The factor
+//! of a row is the probability of the value that was observed, `p_j` if `a_j = 1`
+//! and `1 - p_j` otherwise, under the denominator model, which holds the
+//! covariates that change over time, and under the numerator model of
+//! stabilised weights:
+//!
+//! ```text
+//! w_i = prod over j <= i of f_n(a_j) / f_d(a_j)
+//! ```
+//!
+//! The probability of censoring above is the case where the observed value is
+//! always "not censored". [`TreatmentHistory::First`] is `ipw::ipwtm(type =
+//! "first", family = "binomial")`, for a treatment that is absorbing: the fit and
+//! the product run from the first row of a subject up to and including its first
+//! treated row, and the later rows carry the weight of that row.
+//! [`TreatmentHistory::All`] is `type = "all"`, where every row is in the fit and
+//! the product.
+//!
+//! Truncation, `trunc` of `ipwtm`, sets the weights of all rows below the
+//! `lower` quantile and above the `upper` quantile (type 7, over every row) to
+//! those quantiles. It is applied to the final weights, after the cumulative
+//! product, and the weights before it are in [`PooledIpcw::untruncated`]. The
+//! weight of a row before its own factor is truncated with the same limits. The
+//! variance that accounts for the estimated models takes the truncated weights
+//! as constant and the limits as fixed.
 //!
 //! # Edge cases
 //!
@@ -70,13 +99,17 @@ pub struct PooledIpcw<'a> {
     /// The weight of each row before it: the product over the earlier rows of
     /// its subject, 1 for the first.
     pub weight_before: Vec<f64>,
-    /// Whether each row is a censoring event.
+    /// Whether each row is a censoring event. All false for treatment weights.
     pub censored: Vec<bool>,
+    /// The treatment of each row, for treatment weights, otherwise `None`.
+    pub treated: Option<Vec<bool>>,
+    /// The weight through the row before truncation, `None` without truncation.
+    pub untruncated: Option<Vec<f64>>,
     /// Whether each row is in the fit: not after the first censoring event of its
     /// subject.
     pub active: Vec<bool>,
-    /// The fitted probability of censoring in each row under the denominator
-    /// model.
+    /// The fitted probability of censoring, or of treatment, in each row under the
+    /// denominator model.
     pub probability: Vec<f64>,
     /// The coefficients of the denominator model.
     pub coefficients: Vec<f64>,
@@ -85,6 +118,9 @@ pub struct PooledIpcw<'a> {
     /// The summary of `weight` over the active rows.
     pub summary: Option<WeightSummary>,
     pub(super) numerator_probability: Option<Vec<f64>>,
+    /// Whether the weight through each row, and before it, was set to a limit of
+    /// the truncation.
+    pub(super) clamped: Option<(Vec<bool>, Vec<bool>)>,
     pub(super) subject: Vec<u32>,
     /// The rows in the order of their subject and stop.
     pub(super) order: Vec<u32>,
@@ -103,6 +139,17 @@ impl PooledIpcw<'_> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.weight.is_empty()
+    }
+
+    /// The binary variable the models are fitted to in a row.
+    pub(super) fn response(&self, row: usize) -> bool {
+        self.treated.as_ref().map_or(self.censored[row], |t| t[row])
+    }
+
+    /// The value whose probability is the factor of a row: treatment as
+    /// observed, and not censored for the weights of censoring.
+    pub(super) fn observed(&self, row: usize) -> bool {
+        self.treated.as_ref().is_some_and(|t| t[row])
     }
 
     /// The number of parameters of the models, the denominator's then the
@@ -162,6 +209,36 @@ fn fit_model(
     Ok((coefficients, probability))
 }
 
+/// What the rows of a pooled logistic model are events of.
+#[derive(Debug, Clone, Copy)]
+pub enum PooledEvent<'a> {
+    /// The rows are intervals at risk of censoring, as in [`fit`]. `censored`
+    /// marks the censoring events, `None` takes the last row of each subject
+    /// when its status is 0.
+    Censoring {
+        /// The censoring events.
+        censored: Option<&'a [bool]>,
+    },
+    /// The binary treatment of each row. The weight uses the probability of the
+    /// value observed.
+    Treatment {
+        /// The treatment in each row.
+        treated: &'a [bool],
+        /// Which rows are in the fit and the product.
+        history: TreatmentHistory,
+    },
+}
+
+/// The rows of a subject that treatment weights use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreatmentHistory {
+    /// From the first row up to and including the first treated one:
+    /// `type = "first"`, for an absorbing treatment.
+    First,
+    /// Every row: `type = "all"`.
+    All,
+}
+
 /// Fit the pooled logistic model of censoring on `design` and weight the rows
 /// of `data`.
 ///
@@ -186,8 +263,61 @@ pub fn fit<'a>(
     design: MatRef<'a, f64>,
     numerator: Option<MatRef<'a, f64>>,
 ) -> Result<PooledIpcw<'a>> {
+    fit_pooled(
+        data,
+        PooledEvent::Censoring { censored },
+        design,
+        numerator,
+        None,
+    )
+}
+
+/// Fit the pooled logistic model of `event` on `design` and weight the rows of
+/// `data`.
+///
+/// `design`, `numerator` and the rules of the rows are those of [`fit`] for
+/// censoring. For treatment, `design` holds the covariates that change over
+/// time and `numerator` those of the stabilising model. `trunc` is `(lower,
+/// upper)`, two probabilities with `0 <= lower < upper <= 1`, at whose quantiles
+/// the weights are truncated; `ipwtm(trunc = t)` is `(t, 1 - t)`.
+///
+/// # Errors
+///
+/// The errors of [`fit`], [`Error::Input`] for `treated` of another length than
+/// the data, when the rows of the fit are all treated or all untreated, and for
+/// limits of truncation that are not ordered probabilities.
+pub fn fit_pooled<'a>(
+    data: &SurvData<'_>,
+    event: PooledEvent<'_>,
+    design: MatRef<'a, f64>,
+    numerator: Option<MatRef<'a, f64>>,
+    trunc: Option<(f64, f64)>,
+) -> Result<PooledIpcw<'a>> {
     let surv = data.followup()?;
     let n = data.n_rows();
+    if let Some((lo, hi)) = trunc
+        && !(0.0 <= lo && lo < hi && hi <= 1.0)
+    {
+        return Err(Error::input(format!(
+            "trunc: ({lo}, {hi}) are not probabilities in increasing order"
+        )));
+    }
+    let censored = match event {
+        PooledEvent::Censoring { censored } => censored,
+        PooledEvent::Treatment { .. } => None,
+    };
+    let treated = match event {
+        PooledEvent::Treatment { treated, .. } => Some(treated),
+        PooledEvent::Censoring { .. } => None,
+    };
+    if let Some(t) = treated
+        && t.len() != n
+    {
+        return Err(Error::input(format!(
+            "treated: {} values for {n} rows",
+            t.len()
+        )));
+    }
     for (name, m) in [("design", Some(design)), ("numerator", numerator)] {
         let Some(m) = m else { continue };
         if m.nrows() != n {
@@ -230,19 +360,32 @@ pub fn fit<'a>(
         }
     }
     // The censoring events, and the rows up to the first of each subject.
-    let mut event = vec![false; n];
+    let mut event_rows = vec![false; n];
     match censored {
-        Some(c) => event.copy_from_slice(c),
+        _ if treated.is_some() => {}
+        Some(c) => event_rows.copy_from_slice(c),
         None => {
             for (k, &r) in order.iter().enumerate() {
                 let r = r as usize;
                 let last = order
                     .get(k + 1)
                     .is_none_or(|&s| subject[s as usize] != subject[r]);
-                event[r] = last && surv.status()[r] == 0;
+                event_rows[r] = last && surv.status()[r] == 0;
             }
         }
     }
+    // The rows after which a subject leaves the fit.
+    let ends: Vec<bool> = match event {
+        PooledEvent::Censoring { .. } => event_rows.clone(),
+        PooledEvent::Treatment {
+            treated,
+            history: TreatmentHistory::First,
+        } => treated.to_vec(),
+        PooledEvent::Treatment {
+            history: TreatmentHistory::All,
+            ..
+        } => vec![false; n],
+    };
     let mut active = vec![true; n];
     let mut weight = vec![0.0; n];
     let mut weight_before = vec![0.0; n];
@@ -253,20 +396,35 @@ pub fn fit<'a>(
             seen = false;
         }
         active[r] = !seen;
-        seen |= event[r];
+        seen |= ends[r];
     }
-    let y: Vec<f64> = event.iter().map(|&e| f64::from(u8::from(e))).collect();
-    let n_events = (0..n).filter(|&r| active[r] && event[r]).count();
+    let response: &[bool] = treated.unwrap_or(&event_rows);
+    let y: Vec<f64> = response.iter().map(|&e| f64::from(u8::from(e))).collect();
+    let n_positive = (0..n).filter(|&r| active[r] && response[r]).count();
     let n_active = active.iter().filter(|&&a| a).count();
-    if n_events == 0 || n_events == n_active {
-        return Err(Error::input(
-            "censored: the rows of the fit need both censoring events and rows that are not",
-        ));
+    if n_positive == 0 || n_positive == n_active {
+        return Err(Error::input(if treated.is_some() {
+            "treated: the rows of the fit need both treated and untreated rows"
+        } else {
+            "censored: the rows of the fit need both censoring events and rows that are not"
+        }));
     }
-    let (coefficients, probability) = fit_model(design, &y, &active, "censoring")?;
+    let what = if treated.is_some() {
+        "treatment"
+    } else {
+        "censoring"
+    };
+    let (coefficients, probability) = fit_model(design, &y, &active, what)?;
     let numerator_fit = numerator
         .map(|m| fit_model(m, &y, &active, "numerator"))
         .transpose()?;
+    let factor = |p: f64, row: usize| {
+        if treated.is_some_and(|t| t[row]) {
+            p
+        } else {
+            1.0 - p
+        }
+    };
     let mut cum = 1.0;
     for (k, &r) in order.iter().enumerate() {
         let r = r as usize;
@@ -275,10 +433,29 @@ pub fn fit<'a>(
         }
         weight_before[r] = cum;
         if active[r] {
-            let num = numerator_fit.as_ref().map_or(1.0, |(_, pn)| 1.0 - pn[r]);
-            cum *= num / (1.0 - probability[r]);
+            let num = numerator_fit
+                .as_ref()
+                .map_or(1.0, |(_, pn)| factor(pn[r], r));
+            cum *= num / factor(probability[r], r);
         }
         weight[r] = cum;
+    }
+    let mut untruncated = None;
+    let mut clamped = None;
+    if let Some((lower, upper)) = trunc {
+        let mut sorted = weight.clone();
+        sorted.sort_by(f64::total_cmp);
+        let limit = |p: f64| {
+            epistat_stats::quantile::type7(&sorted, p)
+                .ok_or_else(|| Error::input("trunc: there are no weights"))
+        };
+        let (lo, hi) = (limit(lower)?, limit(upper)?);
+        let outside = |w: &[f64]| w.iter().map(|&v| v < lo || v > hi).collect::<Vec<_>>();
+        clamped = Some((outside(&weight), outside(&weight_before)));
+        untruncated = Some(weight.clone());
+        for w in weight.iter_mut().chain(weight_before.iter_mut()) {
+            *w = w.clamp(lo, hi);
+        }
     }
     let summary = WeightSummary::new((0..n).filter(|&r| active[r]).map(|r| weight[r]));
     let (numerator_coefficients, numerator_probability) = match numerator_fit {
@@ -288,7 +465,10 @@ pub fn fit<'a>(
     Ok(PooledIpcw {
         weight,
         weight_before,
-        censored: event,
+        censored: event_rows,
+        treated: treated.map(<[bool]>::to_vec),
+        untruncated,
+        clamped,
         active,
         probability,
         coefficients,

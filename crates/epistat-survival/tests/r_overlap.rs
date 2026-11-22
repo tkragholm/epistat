@@ -157,14 +157,24 @@ fn weights_match_weightit_and_psweight() {
             }
             let tol = r.weights[i] * (2.0 * eta[i] + 4.0 * EPS);
             let d = (w.weights[i] - r.weights[i]).abs() / tol;
-            assert!(d <= 1.0, "{} weight {i}: {} against {}", r.name, w.weights[i], r.weights[i]);
+            assert!(
+                d <= 1.0,
+                "{} weight {i}: {} against {}",
+                r.name,
+                w.weights[i],
+                r.weights[i]
+            );
             worst = worst.max(d);
             let dp = (w.propensity[i] - r.propensity[i]).abs() / (eta[i] / 4.0 + 4.0 * EPS);
             assert!(dp <= 1.0, "{} propensity {i}", r.name);
         }
         if let Some(alpha) = r.alpha {
             let mine = w.alpha.unwrap();
-            assert!((mine - alpha).abs() <= 1e-9, "{} alpha {mine} against {alpha}", r.name);
+            assert!(
+                (mine - alpha).abs() <= 1e-9,
+                "{} alpha {mine} against {alpha}",
+                r.name
+            );
         } else {
             assert!(w.alpha.is_none());
         }
@@ -192,7 +202,10 @@ fn weights_match_weightit_and_psweight() {
         }
         if let Some(ps) = &r.psweight {
             for group in [true, false] {
-                let sum: f64 = (0..n).filter(|&i| treat[i] == group).map(|i| w.weights[i]).sum();
+                let sum: f64 = (0..n)
+                    .filter(|&i| treat[i] == group)
+                    .map(|i| w.weights[i])
+                    .sum();
                 for i in (0..n).filter(|&i| treat[i] == group) {
                     let mine = w.weights[i] / sum;
                     assert!(
@@ -216,7 +229,10 @@ fn weights_match_weightit_and_psweight() {
             }
             assert!(r.balance_gap.is_finite());
         }
-        println!("{}: worst deviation in tolerances: weights {worst:.3e}", r.name);
+        println!(
+            "{}: worst deviation in tolerances: weights {worst:.3e}",
+            r.name
+        );
     }
 }
 
@@ -296,13 +312,19 @@ fn cox_variances_match_finite_differences_of_refits() {
         let rel = 16.0 * (bound * big_x + omega) + 16.0 * n as f64 * EPS;
         for j in 0..p {
             let d = (fit.coefficients[j] - c.coefficients[j]).abs()
-                / (bound * c.coefficients[j].abs().max(1.0) + 2.0 * omega * c.coefficients[j].abs());
+                / (bound * c.coefficients[j].abs().max(1.0)
+                    + 2.0 * omega * c.coefficients[j].abs());
             assert!(d <= 1.0, "{} coefficient {j}", c.estimand);
         }
         let mut worst = (0.0f64, 0.0f64);
         for (mine, theirs, plain, slot) in [
             (&fit.covariance, &c.covariance, &c.covariance_plain, 0),
-            (&fit.robust_covariance, &c.robust_covariance, &c.robust_covariance_plain, 1),
+            (
+                &fit.robust_covariance,
+                &c.robust_covariance,
+                &c.robust_covariance_plain,
+                1,
+            ),
         ] {
             for i in 0..p {
                 for j in 0..p {
