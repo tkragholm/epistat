@@ -2723,8 +2723,7 @@ fn record_trimming<R: MatchingRecord>(
             support.record_after_match(&mut outcome.diagnostics, policy, anchors, candidates);
         }
         SpecOutput::Subclass { outcome, .. } => outcome.trimmed = trimmed,
-        SpecOutput::Quick(outcome) => outcome.trimmed = trimmed,
-        SpecOutput::Full(outcome) => outcome.trimmed = trimmed,
+        SpecOutput::Quick(outcome) | SpecOutput::Full(outcome) => outcome.trimmed = trimmed,
         _ => {}
     }
 }

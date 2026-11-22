@@ -1533,22 +1533,22 @@ mod tests {
     fn the_columns_equal_the_maps_keyed_by_id() {
         struct Lcg(u64);
         impl Lcg {
-            fn below(&mut self, bound: u64) -> u64 {
+            fn below(&mut self, bound: usize) -> usize {
                 self.0 = self
                     .0
                     .wrapping_mul(6_364_136_223_846_793_005)
                     .wrapping_add(1_442_695_040_888_963_407);
-                (self.0 >> 33) % bound
+                usize::try_from((self.0 >> 33) % u64::try_from(bound).unwrap()).unwrap()
             }
         }
         let mut rng = Lcg(17);
         let mut compared = 0;
         for round in 0..120_u64 {
-            let n = 4 + rng.below(40) as usize;
+            let n = 4 + rng.below(40);
             // Anchors and candidates in a shuffled data order.
             let mut order: Vec<usize> = (0..n).collect();
             for i in (1..n).rev() {
-                order.swap(i, rng.below(i as u64 + 1) as usize);
+                order.swap(i, rng.below(i + 1));
             }
             let anchor_flags: Vec<bool> = (0..n).map(|_| rng.below(3) == 0).collect();
             let ids: Vec<String> = order.iter().map(|i| format!("u{i:03}")).collect();
@@ -1574,7 +1574,7 @@ mod tests {
             let mut pairs = Vec::new();
             for anchor in &anchors {
                 for _ in 0..rng.below(4) {
-                    let control = controls[rng.below(controls.len() as u64) as usize];
+                    let control = controls[rng.below(controls.len())];
                     if replace || used.insert(control.clone()) {
                         pairs.push(MatchedPair::new(anchor.as_str(), control.as_str()));
                     }

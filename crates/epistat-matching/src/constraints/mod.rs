@@ -1078,7 +1078,7 @@ mod named_caliper_tests {
         let reader = FieldReader::new("x");
         let rows: Vec<_> = [&first, &second, &third, &fourth]
             .into_iter()
-            .flat_map(|cohort| cohort.rows())
+            .flat_map(Cohort::rows)
             .collect();
         // The same reader over rows of four tables, two of which fit its cells.
         for _ in 0..2 {

@@ -1396,22 +1396,22 @@ mod tests {
                 }
             }
             let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
-            let mut att_weights = HashMap::new();
-            let mut atc_weights = HashMap::new();
-            let mut ate_weights = HashMap::new();
+            let mut anchor_effect = HashMap::new();
+            let mut candidate_effect = HashMap::new();
+            let mut population_effect = HashMap::new();
             for (id, is_anchor, subclass) in anchor_flags {
                 let Some(share) = subclasses[subclass].subclass_propensity else {
                     continue;
                 };
-                att_weights.insert(
+                anchor_effect.insert(
                     id.clone(),
                     subclass_weight_for_estimand(Estimand::Att, share, is_anchor),
                 );
-                atc_weights.insert(
+                candidate_effect.insert(
                     id.clone(),
                     subclass_weight_for_estimand(Estimand::Atc, share, is_anchor),
                 );
-                ate_weights.insert(
+                population_effect.insert(
                     id.clone(),
                     subclass_weight_for_estimand(Estimand::Ate, share, is_anchor),
                 );
@@ -1428,9 +1428,9 @@ mod tests {
             Maps {
                 assignments,
                 dropped_ids,
-                att_weights,
-                atc_weights,
-                ate_weights,
+                att_weights: anchor_effect,
+                atc_weights: candidate_effect,
+                ate_weights: population_effect,
             }
         }
 
