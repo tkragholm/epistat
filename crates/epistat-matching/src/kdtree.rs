@@ -90,7 +90,7 @@ use std::sync::Arc;
 pub(crate) const LEAF: usize = 32;
 
 /// The fewest points in up to five coordinates searched on a tree.
-const MIN_POINTS: usize = 1024;
+const MIN_POINTS: usize = 512;
 
 /// Points with more coordinates than this are searched by a scan.
 const MAX_DIMENSION: usize = 12;
@@ -102,13 +102,16 @@ const MAX_DIMENSION: usize = 12;
 ///
 /// The rule comes from timing both on one thread, with one query per eight
 /// points and each query's nearest point removed, the tree's build included,
-/// on points whose coordinates are sums of three uniform draws. The tree
-/// broke even with the scan at about 1,500 points in three to five
-/// coordinates, 4,000 in eight, 8,000 in ten and 25,000 in twelve, and was
-/// slower than the scan at every size up to 131,072 points in sixteen. It was
-/// 55 times faster at 131,072 points in three coordinates and 10 times in
-/// eight. The scan of a long pool runs on several threads and the tree on
-/// one, which the rule does not credit to the scan.
+/// on points whose coordinates are sums of three uniform draws. With leaves of
+/// 32 points the tree broke even with the scan at about 400 points in two to
+/// five coordinates, 550 in six, 800 in seven and eight, 1,500 in nine, 2,000
+/// in ten, 3,500 in eleven, 6,000 in twelve, 13,000 in fourteen and 32,000 in
+/// sixteen. It was 11 times faster at 4,096 points in two coordinates, 5 times
+/// in five and 2.6 times in eight. The rule asks for a little more than the
+/// break-even point, because the scan of a long pool runs on several threads
+/// and the tree on one, which the timing does not credit to the scan, and it
+/// stops at [`MAX_DIMENSION`] because the margin over the scan is thin beyond
+/// it.
 pub(crate) const fn worth_a_tree(points: usize, dimension: usize) -> bool {
     if dimension == 0 || dimension > MAX_DIMENSION {
         return false;
