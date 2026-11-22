@@ -612,7 +612,7 @@ pub fn cumulative_dose(
     let mut out = vec![0.0; m];
     match mode {
         DoseMode::AtDispensing => {
-            for w in 0..m {
+            for (w, slot) in out.iter_mut().enumerate() {
                 let p = windows.person[w] as usize;
                 let (lo, hi) = (
                     windows.start[w].saturating_sub(lag_days),
@@ -625,13 +625,13 @@ pub fn cumulative_dose(
                         sum += d.quantity[row];
                     }
                 }
-                out[w] = sum;
+                *slot = sum;
             }
         }
         DoseMode::ProratedOverSupply(supply) => {
             let persons = validate(d, supply)?;
             let (steps, _) = walk(d, supply, persons);
-            for w in 0..m {
+            for (w, slot) in out.iter_mut().enumerate() {
                 let (person, group) = (windows.person[w], windows.group[w]);
                 let lo = steps.partition_point(|s| (s.person, s.group) < (person, group));
                 let hi = steps.partition_point(|s| (s.person, s.group) <= (person, group));
@@ -647,7 +647,7 @@ pub fn cumulative_dose(
                         sum += step.quantity * (overlap / span);
                     }
                 }
-                out[w] = sum;
+                *slot = sum;
             }
         }
     }
