@@ -36,7 +36,7 @@ use epistat_matching::abadie_imbens::{
 };
 use epistat_matching::effects::Target;
 
-use r_reference::reference as load_reference;
+use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -45,12 +45,6 @@ struct Reference {
     lalonde: Lalonde,
     sim: Sim,
     results: Vec<Result>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matching: String,
 }
 
 #[derive(Deserialize)]
@@ -133,7 +127,11 @@ fn data(r: &Reference, name: &str, with_z: bool) -> AbadieImbensData {
 #[test]
 fn estimate_and_standard_errors_agree_with_match() {
     let r = reference();
-    assert!(r.versions.matching.starts_with("4.10"), "{}", r.versions.r);
+    assert!(
+        r.versions["matching"].starts_with("4.10"),
+        "{}",
+        r.versions["r"]
+    );
     let mut worst = [0.0_f64; 4];
     let mut count = 0;
     for case in &r.results {

@@ -26,19 +26,13 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 
-use r_reference::{reference as load_reference, unit_id as id};
+use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Reference {
     versions: Versions,
     fits: Vec<RFit>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -240,7 +234,7 @@ fn links_match_matchit() {
     let reference = reference();
     println!(
         "{} / MatchIt {}",
-        reference.versions.r, reference.versions.matchit
+        reference.versions["r"], reference.versions["matchit"]
     );
     for fit in &reference.fits {
         let none = vec![false; fit.treat.len()];

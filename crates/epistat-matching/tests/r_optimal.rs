@@ -41,7 +41,7 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{RapidHashMap, match_full, match_optimal};
 
-use r_reference::reference as load_reference;
+use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,14 +51,6 @@ struct Reference {
     scenarios: BTreeMap<String, Scenario>,
     runs: Vec<Run>,
     caliper_runs: Vec<CaliperRun>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-    optmatch: String,
-    solver: String,
 }
 
 #[derive(Deserialize)]
@@ -286,10 +278,10 @@ fn pairs_totals_and_weights_match_matchit() {
     let reference = reference();
     println!(
         "{} / MatchIt {} / optmatch {} / solver {}",
-        reference.versions.r,
-        reference.versions.matchit,
-        reference.versions.optmatch,
-        reference.versions.solver
+        reference.versions["r"],
+        reference.versions["matchit"],
+        reference.versions["optmatch"],
+        reference.versions["solver"]
     );
     let (mut compared, mut pairs_compared, mut errors) = (0, 0, 0);
     for run in &reference.runs {

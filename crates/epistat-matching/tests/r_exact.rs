@@ -27,7 +27,7 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 
-use r_reference::{reference as load_reference, unit_id as id};
+use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -35,12 +35,6 @@ use std::collections::{BTreeMap, HashMap};
 struct Reference {
     versions: Versions,
     datasets: Vec<Dataset>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -147,7 +141,7 @@ fn subclasses_and_weights_match_matchit() {
     let reference = reference();
     println!(
         "{} / MatchIt {}",
-        reference.versions.r, reference.versions.matchit
+        reference.versions["r"], reference.versions["matchit"]
     );
     let mut dropped_somewhere = false;
     let mut compared = 0;

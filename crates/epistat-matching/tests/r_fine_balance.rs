@@ -27,12 +27,16 @@
 //! Exact mode is checked on the runs with no deviation, which it must
 //! reproduce, and on those with deviation, which it must refuse.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, RapidHashMap, match_fine_balance,
 };
 use epistat_testkit::load_json;
+use r_reference::Versions;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -40,14 +44,6 @@ use std::collections::BTreeSet;
 struct Reference {
     versions: Versions,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    rcbalance: String,
-    designmatch: String,
-    rlemon: String,
 }
 
 #[derive(Deserialize)]
@@ -159,10 +155,10 @@ fn balance_tables_totals_and_pairs_match_rcbalance() {
     ));
     println!(
         "{} / rcbalance {} / designmatch {} / rlemon {}",
-        reference.versions.r,
-        reference.versions.rcbalance,
-        reference.versions.designmatch,
-        reference.versions.rlemon
+        reference.versions["r"],
+        reference.versions["rcbalance"],
+        reference.versions["designmatch"],
+        reference.versions["rlemon"]
     );
     let (mut errors, mut compared, mut designmatch) = (0, 0, 0);
     for run in &reference.runs {

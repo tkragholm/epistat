@@ -41,7 +41,7 @@ use epistat_matching::effects::{
 };
 use epistat_matching::output::{LongMatches, MatchData};
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -50,13 +50,6 @@ struct Reference {
     lalonde: Lalonde,
     cases: Vec<Case>,
     results: Vec<Result>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    marginaleffects: String,
-    sandwich: String,
 }
 
 #[derive(Deserialize)]
@@ -191,9 +184,9 @@ impl Worst {
 #[test]
 fn effects_agree_with_marginaleffects() {
     let r = reference();
-    assert_r_version(&r.versions.r);
-    assert_eq!(r.versions.marginaleffects, "1.0.0");
-    assert_eq!(r.versions.sandwich, "3.1.3");
+    assert_r_version(&r.versions["r"]);
+    assert_eq!(r.versions["marginaleffects"], "1.0.0");
+    assert_eq!(r.versions["sandwich"], "3.1.3");
     let mut worst = Worst(0.0);
     for res in &r.results {
         let case = r.cases.iter().find(|c| c.name == res.case).unwrap();

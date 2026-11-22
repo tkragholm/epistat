@@ -28,14 +28,15 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use chrono::NaiveDate;
 use epistat_matching::effects::{Clustering, EffectSpec, OutcomeModel, UnitData};
 use epistat_matching::imputation::{
     ImputationApproach, ImputationError, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::prelude::*;
 
-use r_reference::{assert_r_version, reference as load_reference, split_by_group};
+use r_reference::{
+    Versions, assert_r_version, covariate_unit, reference as load_reference, split_by_group,
+};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -44,14 +45,6 @@ struct Reference {
     versions: Versions,
     data: Vec<BTreeMap<String, Vec<f64>>>,
     approaches: Vec<Approach>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    #[serde(rename = "MatchThem")]
-    matchthem: String,
-    mice: String,
 }
 
 #[derive(Deserialize)]
@@ -92,18 +85,18 @@ const COVARIATES: [&str; 6] = ["age", "educ", "married", "nodegree", "re74", "re
 /// The anchors and candidates of one imputed data set, ids being the 1-based
 /// rows.
 fn records(data: &BTreeMap<String, Vec<f64>>) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
-    let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
-    let mut units = Vec::new();
-    for (row, treat) in data["treat"].iter().enumerate() {
-        let mut record = BalanceRecord::new((row + 1).to_string(), birth);
-        for name in COVARIATES {
-            record
-                .covariates
-                .insert(name.to_string(), CovariateValue::Numeric(data[name][row]));
-        }
-        units.push((*treat > 0.5, record));
-    }
-    split_by_group(units)
+    split_by_group(data["treat"].iter().enumerate().map(|(row, treat)| {
+        let covariates = COVARIATES.iter().map(|name| {
+            (
+                (*name).to_string(),
+                CovariateValue::Numeric(data[*name][row]),
+            )
+        });
+        (
+            *treat > 0.5,
+            covariate_unit((row + 1).to_string(), covariates),
+        )
+    }))
 }
 
 fn close(got: f64, want: f64, rel: f64) -> bool {
@@ -113,9 +106,9 @@ fn close(got: f64, want: f64, rel: f64) -> bool {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let r = reference();
-    assert_r_version(&r.versions.r);
-    assert_eq!(r.versions.matchthem, "1.2.1");
-    assert_eq!(r.versions.mice, "3.19.0");
+    assert_r_version(&r.versions["r"]);
+    assert_eq!(r.versions["MatchThem"], "1.2.1");
+    assert_eq!(r.versions["mice"], "3.19.0");
 }
 
 #[test]

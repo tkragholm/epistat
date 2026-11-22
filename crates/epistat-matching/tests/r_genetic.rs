@@ -64,7 +64,7 @@ use epistat_matching::{
     ks_limit_upper, ks_two_sample,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools, assert_within_standard_errors};
-use r_reference::reference as load_reference;
+use r_reference::{Versions, reference as load_reference};
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
 
@@ -102,14 +102,6 @@ struct LimitCase {
     x: f64,
     r: f64,
     series: f64,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-    matching: String,
-    rgenoud: String,
 }
 
 #[derive(Deserialize)]
@@ -346,10 +338,10 @@ fn pairs_for_given_weights_equal_matchit() {
     let reference = reference();
     println!(
         "{}, MatchIt {}, Matching {}, rgenoud {}",
-        reference.versions.r,
-        reference.versions.matchit,
-        reference.versions.matching,
-        reference.versions.rgenoud
+        reference.versions["r"],
+        reference.versions["matchit"],
+        reference.versions["matching"],
+        reference.versions["rgenoud"]
     );
     let mut compared = 0;
     for (k, run) in reference.runs.iter().enumerate() {

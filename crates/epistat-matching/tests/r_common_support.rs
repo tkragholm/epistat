@@ -25,7 +25,7 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{DeterministicSelection, RapidHashMap};
 
-use r_reference::{reference as load_reference, unit_id as id};
+use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
@@ -33,12 +33,6 @@ use std::collections::{BTreeSet, HashMap};
 struct Reference {
     versions: Versions,
     cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -143,7 +137,7 @@ fn trimmed_units_match_matchit() {
     let reference = reference();
     println!(
         "{} / MatchIt {}",
-        reference.versions.r, reference.versions.matchit
+        reference.versions["r"], reference.versions["matchit"]
     );
     let mut boundary_kept = HashMap::<&str, usize>::new();
     for case in reference.cases.iter().filter(|c| c.name != "disjoint") {

@@ -18,10 +18,9 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_testkit::load_json;
-use r_reference::{split_by_group, unit_id as id};
+use r_reference::{Versions, covariate_unit, split_by_group, unit_id as id};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -45,12 +44,6 @@ struct FoldCase {
 struct Reference {
     versions: Versions,
     cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    glmnet: String,
 }
 
 #[derive(Deserialize)]
@@ -86,18 +79,14 @@ fn folds_path() -> String {
 }
 
 fn records(case: &Case) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
-    let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
-    let mut units = Vec::new();
-    for (idx, label) in case.y.iter().enumerate() {
-        let mut record = BalanceRecord::new(id(idx), birth);
-        for (name, value) in case.covariate_names.iter().zip(&case.x[idx]) {
-            record
-                .covariates
-                .insert(name.clone(), CovariateValue::Numeric(*value));
-        }
-        units.push((*label > 0.5, record));
-    }
-    split_by_group(units)
+    split_by_group(case.y.iter().enumerate().map(|(idx, label)| {
+        let covariates = case
+            .covariate_names
+            .iter()
+            .zip(&case.x[idx])
+            .map(|(name, value)| (name.clone(), CovariateValue::Numeric(*value)));
+        (*label > 0.5, covariate_unit(id(idx), covariates))
+    }))
 }
 
 fn fit_case(case: &Case, rule: LambdaRule) -> PropensityDistancePreparation {
@@ -198,7 +187,7 @@ fn cross_validation_matches_cv_glmnet() {
     ));
     println!(
         "{} / glmnet {}",
-        reference.versions.r, reference.versions.glmnet
+        reference.versions["r"], reference.versions["glmnet"]
     );
     let folds: Folds = load_json(folds_path());
     for case in &reference.cases {

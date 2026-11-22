@@ -31,7 +31,7 @@ mod r_reference;
 
 use epistat_stats::balance::eqq_distance_weighted;
 use epistat_testkit::{Tolerance, load_json, na_f64};
-use r_reference::assert_r_version;
+use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -43,12 +43,6 @@ struct Case {
     mean: f64,
     #[serde(deserialize_with = "na_f64")]
     max: f64,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -105,8 +99,8 @@ fn weighted_eqq_agrees_with_matchit() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/matchit_eqq.json"
     ));
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
     let tolerance = Tolerance::exact().rel(1e-12).abs(1e-12);
     let (mut compared, mut defects, mut few_valued) = (0, 0, 0);
     for (idx, case) in reference.cases.iter().enumerate() {

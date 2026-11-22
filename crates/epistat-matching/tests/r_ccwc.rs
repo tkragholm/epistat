@@ -32,7 +32,7 @@ use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
 use epistat_stats::gamma::chi_square_sf;
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -47,14 +47,6 @@ struct Reference {
     age: Scale,
     draws: Vec<Draw>,
     r_chi_square: Vec<f64>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    #[serde(rename = "R")]
-    r: String,
-    #[serde(rename = "Epi")]
-    epi: String,
 }
 
 #[derive(Deserialize)]
@@ -313,8 +305,8 @@ fn assert_same_sets(outcome: &MatchOutcome, scale: &Scale, label: &str) {
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.epi, "2.66");
+    assert_r_version(&reference.versions["R"]);
+    assert_eq!(reference.versions["Epi"], "2.66");
 }
 
 /// With a ratio above every risk set and replacement, the engine returns each
