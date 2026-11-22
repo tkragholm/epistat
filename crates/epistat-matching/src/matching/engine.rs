@@ -520,8 +520,8 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         tally
     }
 
-    /// Take the id ranks of the controls from `order`, the order of their ids,
-    /// instead of sorting the ids again. Does nothing once the ranks are known.
+    /// Take the id ranks of the controls from `order`, the order of their
+    /// ids. Does nothing once the ranks are known.
     pub(crate) fn use_id_order(&self, order: &IdOrder) {
         debug_assert_eq!(order.len(), self.controls.len());
         let _ = self.id_ranks.set(order.distinct().then(|| IdRanks {

@@ -559,8 +559,8 @@ where
         self
     }
 
-    /// Use `order`, the order of the cohort's ids, instead of sorting the
-    /// ids again.
+    /// Give the job `order`, the order of the cohort's ids, so that it does
+    /// not sort the ids itself.
     #[must_use]
     pub(crate) const fn with_id_order(mut self, order: Option<&'a IdOrder>) -> Self {
         self.mode.id_order = order;

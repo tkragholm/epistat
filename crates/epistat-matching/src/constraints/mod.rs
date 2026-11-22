@@ -460,8 +460,8 @@ impl ResidenceSpell {
 /// and one who immigrates on it is.
 ///
 /// The verdict is [`MustBeResident`]'s with the check "one of the periods
-/// contains the date". Given as periods, it lets risk-set matching read each
-/// control's periods once instead of asking the check for every case.
+/// contains the date". Risk-set matching reads the periods of each control once
+/// and follows the control's residence as the case dates pass its periods.
 pub struct MustBeResidentInSpells<'s, F> {
     spells: F,
     _spells: PhantomData<&'s [ResidenceSpell]>,

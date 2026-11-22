@@ -508,8 +508,8 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
     }
 
     /// A risk-set job on the pool: [`MatchJob::new_transition`] on
-    /// [`Self::records`], which takes the order of the ids from the panel
-    /// instead of sorting them again for every trial.
+    /// [`Self::records`] with the order of the pool's ids, which is read off
+    /// the order of the panel's ids, so the job does not sort them.
     #[must_use]
     pub fn job(
         &self,
