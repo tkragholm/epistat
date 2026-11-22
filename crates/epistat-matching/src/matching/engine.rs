@@ -177,6 +177,27 @@ fn intersect_candidate_indices(candidate_indices: &mut Vec<usize>, indexed_indic
     }
 }
 
+/// What stopped a control from being a candidate: a constraint of the run, or the
+/// distance caliper, which is recorded as a distance-caliper exclusion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Blocker {
+    Constraint(&'static str),
+    Caliper(&'static str),
+}
+
+impl Blocker {
+    fn exclusion_reason(self) -> ExclusionReason {
+        match self {
+            Self::Constraint(reason) => {
+                ExclusionReason::Constraint(ConstraintReason::from_reason_str(reason))
+            }
+            Self::Caliper(reason) => {
+                ExclusionReason::DistanceCaliper(DistanceCaliperReason::from_reason_str(reason))
+            }
+        }
+    }
+}
+
 fn first_blocking_constraint_reason<R: MatchingRecord, D: DistanceMetric<R> + Sync>(
     case: &R,
     control: &R,
@@ -184,17 +205,20 @@ fn first_blocking_constraint_reason<R: MatchingRecord, D: DistanceMetric<R> + Sy
     caliper_constraint: Option<&CaliperConstraint<'_, R, D>>,
     extra_constraints: &(impl ConstraintGroup<R> + ?Sized),
     context: &ConstraintContext<'_>,
-) -> Option<&'static str> {
-    for constraint in builtin_constraints.iter().copied().chain(
-        caliper_constraint
-            .as_ref()
-            .map(|constraint| *constraint as &dyn Constraint<R>),
-    ) {
+) -> Option<Blocker> {
+    for constraint in builtin_constraints {
         if !constraint.allows(case, control, context) {
-            return Some(constraint.reason());
+            return Some(Blocker::Constraint(constraint.reason()));
         }
     }
-    extra_constraints.first_blocking_reason(case, control, context)
+    if let Some(caliper) = caliper_constraint
+        && !caliper.allows(case, control, context)
+    {
+        return Some(Blocker::Caliper(caliper.reason()));
+    }
+    extra_constraints
+        .first_blocking_reason(case, control, context)
+        .map(Blocker::Constraint)
 }
 
 impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync>
@@ -407,9 +431,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         for (reason, count) in constraint_exclusions {
             *diagnostics
                 .exclusion_counts
-                .entry(ExclusionReason::Constraint(
-                    ConstraintReason::from_reason_str(reason),
-                ))
+                .entry(reason.exclusion_reason())
                 .or_insert(0) += count;
         }
 
@@ -1350,11 +1372,11 @@ impl<R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> Copy for ScanContext<'_
 struct ScanTally {
     eligible: Vec<usize>,
     filtered_out: usize,
-    constraint_exclusions: Vec<(&'static str, usize)>,
+    constraint_exclusions: Vec<(Blocker, usize)>,
 }
 
 impl ScanTally {
-    fn exclude(&mut self, reason: &'static str, count: usize) {
+    fn exclude(&mut self, reason: Blocker, count: usize) {
         match self
             .constraint_exclusions
             .iter_mut()
@@ -1776,7 +1798,7 @@ mod pool_scan_tests {
         ];
         let mut eligible = Vec::new();
         let mut filtered_out = 0_usize;
-        let mut exclusions: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut exclusions: BTreeMap<Blocker, usize> = BTreeMap::new();
         for idx in candidate_indices {
             let control = &engine.controls[idx];
             if !additional_filter(idx, control) {
@@ -1818,9 +1840,7 @@ mod pool_scan_tests {
         for (reason, count) in exclusions {
             *diagnostics
                 .exclusion_counts
-                .entry(ExclusionReason::Constraint(
-                    ConstraintReason::from_reason_str(reason),
-                ))
+                .entry(reason.exclusion_reason())
                 .or_insert(0) += count;
         }
         sort_by_id(engine.controls, &mut eligible);
