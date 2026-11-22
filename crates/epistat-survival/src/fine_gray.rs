@@ -138,6 +138,7 @@ use epistat_linalg::{Mat, MatRef};
 use crate::check::{check_lengths, check_row_count};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
+use crate::metrics::censoring::CensoringKm;
 use crate::step::Steps;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -153,62 +154,13 @@ use crate::timefix::TimeFix;
 ///
 /// The curve is 1 before the first censoring. Its times are also the times the
 /// Fine-Gray weights change, so the rows are split there.
-// Exact `==` groups rows that share a time.
-#[expect(clippy::float_cmp, reason = "rows that share a time are grouped")]
 fn censoring_curve(time: &[f64], event: &[i32], weight: &[f64]) -> Steps {
     let mut order: Vec<usize> = (0..time.len()).collect();
     order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-
-    // Per distinct time: its value, total weight, censored weight, and
-    // whether anyone was censored there.
-    let mut blocks: Vec<(f64, f64, f64, bool)> = Vec::new();
-    for &i in &order {
-        let censored = event[i] == 0;
-        match blocks.last_mut() {
-            Some(block) if block.0 == time[i] => {
-                block.1 += weight[i];
-                if censored {
-                    block.2 += weight[i];
-                    block.3 = true;
-                }
-            }
-            _ => blocks.push((
-                time[i],
-                weight[i],
-                if censored { weight[i] } else { 0.0 },
-                censored,
-            )),
-        }
-    }
-
-    // Weight strictly after each block, as a suffix total.
-    let mut after = vec![0.0f64; blocks.len()];
-    let mut running = 0.0f64;
-    for (slot, block) in after.iter_mut().zip(&blocks).rev() {
-        *slot = running;
-        running += block.1;
-    }
-
-    let mut survival = 1.0f64;
-    let mut times = Vec::new();
-    let mut steps = Vec::new();
-    for (block, &later) in blocks.iter().zip(&after) {
-        let (t, _, censored_here, any_censored) = *block;
-        if !any_censored {
-            continue;
-        }
-        let at_risk = later + censored_here;
-        if at_risk > 0.0 && censored_here > 0.0 {
-            survival *= 1.0 - censored_here / at_risk;
-        }
-        times.push(t);
-        steps.push(survival);
-    }
-    Steps {
-        time: times,
-        first: 1.0,
-        value: steps,
-    }
+    let sorted_time: Vec<f64> = order.iter().map(|&i| time[i]).collect();
+    let censored: Vec<bool> = order.iter().map(|&i| event[i] == 0).collect();
+    let sorted_weight: Vec<f64> = order.iter().map(|&i| weight[i]).collect();
+    CensoringKm::new(&sorted_time, &censored, &sorted_weight, true).curve
 }
 
 /// Counting-process rows for a Cox fit. `row` is an input row: the individual
@@ -680,6 +632,7 @@ mod tests {
         Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, rows,
     };
     use crate::cox::{CoxModelFit, CoxOptions, Ties};
+    use crate::step::Steps;
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
 
@@ -806,6 +759,93 @@ mod tests {
             0.8 * (1.0 - 1.0 / 3.0) * (1.0 - 1.0 / 2.0),
             1e-15
         ));
+    }
+
+    /// The censoring curve as the blocks of tied times, which sums the weight
+    /// after each time from block totals.
+    #[expect(clippy::float_cmp, reason = "rows that share a time are grouped")]
+    fn censoring_curve_by_blocks(time: &[f64], event: &[i32], weight: &[f64]) -> Steps {
+        let mut order: Vec<usize> = (0..time.len()).collect();
+        order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
+
+        // Per distinct time: its value, total weight, censored weight, and
+        // whether anyone was censored there.
+        let mut blocks: Vec<(f64, f64, f64, bool)> = Vec::new();
+        for &i in &order {
+            let censored = event[i] == 0;
+            match blocks.last_mut() {
+                Some(block) if block.0 == time[i] => {
+                    block.1 += weight[i];
+                    if censored {
+                        block.2 += weight[i];
+                        block.3 = true;
+                    }
+                }
+                _ => blocks.push((
+                    time[i],
+                    weight[i],
+                    if censored { weight[i] } else { 0.0 },
+                    censored,
+                )),
+            }
+        }
+
+        // Weight strictly after each block, as a suffix total.
+        let mut after = vec![0.0f64; blocks.len()];
+        let mut running = 0.0f64;
+        for (slot, block) in after.iter_mut().zip(&blocks).rev() {
+            *slot = running;
+            running += block.1;
+        }
+
+        let mut survival = 1.0f64;
+        let mut times = Vec::new();
+        let mut steps = Vec::new();
+        for (block, &later) in blocks.iter().zip(&after) {
+            let (t, _, censored_here, any_censored) = *block;
+            if !any_censored {
+                continue;
+            }
+            let at_risk = later + censored_here;
+            if at_risk > 0.0 && censored_here > 0.0 {
+                survival *= 1.0 - censored_here / at_risk;
+            }
+            times.push(t);
+            steps.push(survival);
+        }
+        Steps {
+            time: times,
+            first: 1.0,
+            value: steps,
+        }
+    }
+
+    /// The shared Kaplan-Meier estimate and the one built from block totals
+    /// sum the same weights in another order, so they differ by rounding only.
+    /// The bound is `n` units in the last place of each value, the error of a
+    /// sum of at most `n` weights, applied at each of at most `n` steps.
+    #[test]
+    fn the_shared_censoring_curve_equals_the_block_form_up_to_rounding() {
+        let time: Vec<f64> = (0..300).map(|i| 1.0 + f64::from((i * 7) % 40)).collect();
+        let event: Vec<i32> = (0..300).map(|i| [0, 1, 2, 0, 1][i % 5]).collect();
+        let weight: Vec<f64> = (0..300)
+            .map(|i| 0.25 + 0.1 * f64::from((i * 13) % 17))
+            .collect();
+        for weights in [vec![1.0; 300], weight] {
+            let shared = censoring_curve(&time, &event, &weights);
+            let blocks = censoring_curve_by_blocks(&time, &event, &weights);
+            assert_eq!(shared.time, blocks.time);
+            let bound = 300.0 * 300.0 * f64::EPSILON;
+            for (a, b) in shared.value.iter().zip(&blocks.value) {
+                assert!((a - b).abs() <= bound * a.abs().max(*b), "{a} {b}");
+            }
+        }
+        // With unit weights every sum is exact, so the curves are the same.
+        let ones = vec![1.0; 300];
+        assert_eq!(
+            censoring_curve(&time, &event, &ones).value,
+            censoring_curve_by_blocks(&time, &event, &ones).value
+        );
     }
 
     fn data<'a>(

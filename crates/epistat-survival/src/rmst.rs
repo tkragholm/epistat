@@ -114,6 +114,7 @@ use epistat_inference::sandwich::sandwich;
 use epistat_linalg::{Attempt, Mat, MatRef, weighted_gram};
 
 use crate::error::{Error, Result};
+use crate::metrics::censoring::CensoringKm;
 use crate::surv::SurvData;
 use crate::survfit::{ConfType, GroupCurve, SurvfitOptions, estimate};
 use crate::timefix::TimeFix;
@@ -537,26 +538,14 @@ pub fn rmst2_regression(
     }
     for rows in &mut order {
         rows.sort_by(|&a, &b| y[a].total_cmp(&y[b]).then(a.cmp(&b)));
-        let m = rows.len();
-        let mut g = 1.0f64;
-        let mut k = 0;
-        while k < m {
-            let mut end = k;
-            let mut censored = 0usize;
-            while end < m && y[rows[end]].total_cmp(&y[rows[k]]).is_eq() {
-                censored += usize::from(!d[rows[end]]);
-                end += 1;
+        let time: Vec<f64> = rows.iter().map(|&i| y[i]).collect();
+        let censored: Vec<bool> = rows.iter().map(|&i| !d[i]).collect();
+        let unit = vec![1.0; rows.len()];
+        let g = CensoringKm::new(&time, &censored, &unit, false);
+        for &i in rows.iter() {
+            if d[i] {
+                weight[i] = 1.0 / g.at(y[i]);
             }
-            let at_risk = (m - k) as f64;
-            if at_risk > 0.0 {
-                g *= 1.0 - censored as f64 / at_risk;
-            }
-            for &i in &rows[k..end] {
-                if d[i] {
-                    weight[i] = 1.0 / g;
-                }
-            }
-            k = end;
         }
     }
 

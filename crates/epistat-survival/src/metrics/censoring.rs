@@ -19,7 +19,7 @@ use crate::step::Steps;
 /// risk set, the plain Kaplan-Meier estimate of the censoring times, which is
 /// what `survfit(Surv(time, 1 - status) ~ 1)` gives.
 #[derive(Debug, Clone)]
-pub(super) struct CensoringKm {
+pub(crate) struct CensoringKm {
     /// `G` just after each distinct censoring time, ascending, and 1 before
     /// the first.
     pub curve: Steps,
@@ -36,7 +36,7 @@ impl CensoringKm {
     /// Build from rows sorted by ascending time. `weight` is the case weight
     /// of each row, `censored` says whether it was censored. With the event in
     /// place of the censoring, the curve is the product limit of the events.
-    pub(super) fn new(time: &[f64], censored: &[bool], weight: &[f64], deaths_first: bool) -> Self {
+    pub(crate) fn new(time: &[f64], censored: &[bool], weight: &[f64], deaths_first: bool) -> Self {
         let n = time.len();
         // Weight of the rows from each position to the end, summed from the
         // end so that the order is fixed.
@@ -87,12 +87,12 @@ impl CensoringKm {
     }
 
     /// `G(t)`: the censorings at or before `t` are counted.
-    pub(super) fn at(&self, t: f64) -> f64 {
+    pub(crate) fn at(&self, t: f64) -> f64 {
         self.curve.at(t)
     }
 
     /// `G(t-)`: only the censorings before `t` are counted.
-    pub(super) fn before(&self, t: f64) -> f64 {
+    pub(crate) fn before(&self, t: f64) -> f64 {
         self.curve.before(t)
     }
 }
