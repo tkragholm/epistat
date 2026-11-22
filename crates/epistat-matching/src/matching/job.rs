@@ -67,15 +67,29 @@ type WithResidentConstraint<Mode, R, S, G, P> =
 /// methods.
 ///
 /// ### Example (Standard)
-/// ```rust,ignore
+/// ```rust
+/// use chrono::NaiveDate;
 /// use epistat_matching::prelude::*;
 ///
+/// let person = |id: &str, sex: &str, day: u32| {
+///     let mut record = BaseRecord::new(id, NaiveDate::from_ymd_opt(2010, 1, day).unwrap());
+///     record.strata.insert("sex".to_string(), sex.to_string());
+///     record
+/// };
+/// let anchors = vec![person("case1", "F", 3), person("case2", "M", 10)];
+/// let candidates = vec![
+///     person("control1", "F", 5),
+///     person("control2", "M", 12),
+///     person("control3", "F", 28),
+/// ];
+///
 /// let job = MatchJob::new_standard(&anchors, &candidates, 42)
-///     .with_ratio(MatchRatio::new(4).expect("non-zero ratio"))
+///     .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
 ///     .with_birth_window(BirthDateWindowDays::new(30).expect("non-negative birth window"))
 ///     .with_gender_match();
 ///
 /// let result = job.run();
+/// assert_eq!(result.pairs.len(), 2);
 /// ```
 ///
 /// ### Example (Role-Transition)

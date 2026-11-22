@@ -225,8 +225,9 @@ enum Covariate {
 /// - numeric fields and numeric covariates as `f64` columns, with a bit per row
 ///   for a missing value only when the column has one.
 ///
-/// The same five strata and five covariates then take about 90 bytes per unit,
-/// and 10^7 units in about 1 GB, with 16 bytes more per row handle.
+/// A unit with a nine-character id, a birth date, five strata of twenty values
+/// and five numeric covariates takes about 120 bytes of resident memory, so
+/// 10^7 such units take about 1.2 GB. The `cohort_memory` example measures it.
 ///
 /// A [`CohortRow`] is a reference to the cohort and a row number, 16 bytes,
 /// and is `Copy`. It implements [`MatchingRecord`] and [`CovariateRecord`], so
@@ -246,8 +247,8 @@ enum Covariate {
 /// # Values
 ///
 /// A row is the record that the same values make through the owned records'
-/// constructors and setters, or through
-/// [`ArrowRecords::balance_records`](crate::arrow::ArrowRecords::balance_records):
+/// constructors and setters, or through `ArrowRecords::balance_records` with
+/// the `arrow` feature:
 ///
 /// - a stratum without a value is a stratum the record does not have;
 /// - a numeric field without a value is a field the record does not have, and a

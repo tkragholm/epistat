@@ -40,7 +40,7 @@ let risk_sets = MatchJob::new_transition(&cohort, 42)
 ```
 
 The matchers take any record type that implements the crate's traits. A
-`Cohort` holds the units as columns, about a hundred bytes per unit, and its
+`Cohort` holds the units as columns, about 120 bytes per unit with five strata and five numeric covariates, and its
 rows are records that give the same results as owned ones, so ten million
 units fit in memory.
 

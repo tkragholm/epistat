@@ -38,8 +38,9 @@
 //! The matchers take any type that implements [`MatchingRecord`], and the
 //! covariate methods [`CovariateRecord`]. [`BalanceRecord`] owns its values
 //! in hash maps, about 2 KiB per unit. A [`Cohort`] holds the same values as
-//! columns, a few tens of bytes per unit, and its rows are records that give
-//! the same results, so ten million units fit in memory.
+//! columns, about 120 bytes per unit with five strata and five numeric
+//! covariates, and its rows are records that give the same results, so ten
+//! million units fit in memory.
 //!
 //! ## Arrow input
 //!
@@ -416,7 +417,7 @@ pub mod prelude {
         trial_seed,
     };
 
-    /// The constraints that can be added to a [`MatchJob`](crate::MatchJob).
+    /// The constraints that can be added to a [`MatchJob`].
     pub mod constraints {
         pub use crate::constraints::{
             AntiExact, Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive,

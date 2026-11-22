@@ -14,8 +14,8 @@
 //! given to [`BaseRecord::new`] and its setters.
 //!
 //! [`ArrowRecords::cohort`] reads the same columns into a [`Cohort`], which
-//! holds them as columns and costs a few tens of bytes per row where the
-//! records cost about two kilobytes. Its rows are records too, the same ones
+//! holds them as columns and costs about 120 bytes per row with five strata
+//! and five numeric covariates, where the records cost about two kilobytes. Its rows are records too, the same ones
 //! [`balance_records`](ArrowRecords::balance_records) makes, and
 //! [`Cohort::risk_set_rows`] gives those of
 //! [`risk_set_records`](ArrowRecords::risk_set_records).
