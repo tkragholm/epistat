@@ -1573,10 +1573,9 @@ mod tests {
             &HashMap::new(),
         );
         assert_eq!(keys, vec!["age".to_string(), "region".to_string()]);
-        // Through the splitter rather than the per-key classifier it replaced:
-        // same question, and it also pins which side each key lands on.
-        // `age` is Numeric even though the case's value is NaN, and `region`
-        // is Categorical because Missing is not Numeric.
+        // The splitter says which side each key lands on. `age` is Numeric
+        // even though the case's value is NaN, and `region` is Categorical
+        // because Missing is not Numeric.
         let (numeric, categorical) = split_covariate_keys_by_kind(
             &[case_a.clone()],
             &[control_a.clone()],

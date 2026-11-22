@@ -1162,8 +1162,8 @@ mod quantile_cut_reference_tests {
             .collect()
     }
 
-    /// The cuts equal those the earlier hand-written interpolation gave, bit
-    /// for bit, for sample sizes and class counts around the ends.
+    /// The cuts equal a direct evaluation of the interpolation, bit for bit,
+    /// for sample sizes and class counts around the ends.
     #[test]
     fn cuts_equal_the_hand_written_interpolation() {
         let mut state = 0x2545_f491_4f6c_dd1d_u64;

@@ -981,11 +981,11 @@ mod quantile_reference_tests {
         }
     }
 
-    /// The shared quantile agrees with the one written here for CEM, within
-    /// one unit in the last place. The two differ only in how the weight of
-    /// the upper neighbour is rounded.
+    /// The type 7 quantile agrees with a direct evaluation on the zero-based
+    /// position, within two units in the last place. The two differ only in
+    /// how the weight of the upper neighbour is rounded.
     #[test]
-    fn the_shared_quantile_is_within_an_ulp_of_the_earlier_one() {
+    fn the_quantile_is_within_an_ulp_of_the_zero_based_evaluation() {
         let mut state = 0x9e37_79b9_7f4a_7c15_u64;
         let mut worst = 0_u64;
         for n in [2_usize, 3, 10, 101, 1000, 5000] {

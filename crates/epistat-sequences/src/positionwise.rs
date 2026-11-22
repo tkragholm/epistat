@@ -401,73 +401,71 @@ fn one_fit(
     let mut iterations = 0usize;
     let mut converged = false;
 
-    {
-        for iteration in 1..=max_iterations {
-            iterations = iteration;
-            let labels: Vec<u32> = (0..panel.count)
-                .into_par_iter()
-                .map(|index| panel.nearest(index, &medoids).0 as u32)
-                .collect();
-
-            // Parallel over clusters, serial within one. The candidate scan
-            // takes the first member attaining the minimum, so splitting a
-            // cluster across threads would need that tie-break reassembled.
-            let chosen: Vec<Option<u32>> = members_by_cluster(&labels, k)
-                .par_iter()
-                .map(|members| {
-                    let first = *members.first()?;
-                    let frequencies = Frequencies::build(panel, members, weights);
-                    let mut best = first;
-                    let mut best_cost: Option<f64> = None;
-                    for &candidate in members {
-                        let cost = frequencies.medoid_cost(panel, panel.at(candidate as usize));
-                        if best_cost.is_none_or(|previous| cost < previous) {
-                            best = candidate;
-                            best_cost = Some(cost);
-                        }
-                    }
-                    Some(best)
-                })
-                .collect();
-
-            let mut moved = false;
-            for (cluster, choice) in chosen.iter().enumerate() {
-                if let Some(best) = choice.filter(|&best| best != medoids[cluster]) {
-                    medoids[cluster] = best;
-                    moved = true;
-                }
-            }
-            if !moved {
-                converged = true;
-                break;
-            }
-        }
-
-        // Assigned once more against the medoids the loop settled on, because a
-        // run that stopped at `max_iterations` moved its medoids after the last
-        // assignment. The distance to the chosen medoid is kept for the
-        // objective, summed in index order.
-        let assigned: Vec<(u32, f64)> = (0..panel.count)
+    for iteration in 1..=max_iterations {
+        iterations = iteration;
+        let labels: Vec<u32> = (0..panel.count)
             .into_par_iter()
-            .map(|index| {
-                let (rank, distance) = panel.nearest(index, &medoids);
-                (rank as u32, distance)
+            .map(|index| panel.nearest(index, &medoids).0 as u32)
+            .collect();
+
+        // Parallel over clusters, serial within one. The candidate scan
+        // takes the first member attaining the minimum, so splitting a
+        // cluster across threads would need that tie-break reassembled.
+        let chosen: Vec<Option<u32>> = members_by_cluster(&labels, k)
+            .par_iter()
+            .map(|members| {
+                let first = *members.first()?;
+                let frequencies = Frequencies::build(panel, members, weights);
+                let mut best = first;
+                let mut best_cost: Option<f64> = None;
+                for &candidate in members {
+                    let cost = frequencies.medoid_cost(panel, panel.at(candidate as usize));
+                    if best_cost.is_none_or(|previous| cost < previous) {
+                        best = candidate;
+                        best_cost = Some(cost);
+                    }
+                }
+                Some(best)
             })
             .collect();
-        let objective = assigned
-            .iter()
-            .zip(weights.iter())
-            .fold(0.0f64, |total, ((_, distance), weight)| {
-                total + distance * weight
-            });
-        let labels: Vec<u32> = assigned.into_iter().map(|(rank, _)| rank).collect();
-        Attempt {
-            medoids,
-            labels,
-            iterations,
-            converged,
-            objective,
+
+        let mut moved = false;
+        for (cluster, choice) in chosen.iter().enumerate() {
+            if let Some(best) = choice.filter(|&best| best != medoids[cluster]) {
+                medoids[cluster] = best;
+                moved = true;
+            }
         }
+        if !moved {
+            converged = true;
+            break;
+        }
+    }
+
+    // Assigned once more against the medoids the loop settled on, because a
+    // run that stopped at `max_iterations` moved its medoids after the last
+    // assignment. The distance to the chosen medoid is kept for the
+    // objective, summed in index order.
+    let assigned: Vec<(u32, f64)> = (0..panel.count)
+        .into_par_iter()
+        .map(|index| {
+            let (rank, distance) = panel.nearest(index, &medoids);
+            (rank as u32, distance)
+        })
+        .collect();
+    let objective = assigned
+        .iter()
+        .zip(weights.iter())
+        .fold(0.0f64, |total, ((_, distance), weight)| {
+            total + distance * weight
+        });
+    let labels: Vec<u32> = assigned.into_iter().map(|(rank, _)| rank).collect();
+    Attempt {
+        medoids,
+        labels,
+        iterations,
+        converged,
+        objective,
     }
 }
 

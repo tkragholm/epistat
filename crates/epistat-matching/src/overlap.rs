@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn matches_the_loop_forms_it_replaces() {
+    fn matches_direct_loop_evaluations() {
         let pool = [
             0.0,
             -0.0,
