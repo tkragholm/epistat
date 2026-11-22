@@ -31,9 +31,9 @@
 //!
 //! # Method
 //!
-//! Each condition has one [`EraCodeSet`](crate::codes::EraCodeSet), a set of ICD-8
+//! Each condition has one [`EraCodeSet`], a set of ICD-8
 //! codes and a set of ICD-10 codes, and a code is tested against the set of its
-//! own revision ([`revision_of`](crate::codes::revision_of)). The distinct codes
+//! own revision ([`revision_of`]). The distinct codes
 //! of a column are classified once by [`ComorbidityMap::classify`] into a mask
 //! with bit `k` set when the code is in condition `k`. The flags of an index are
 //! the OR of the masks of the diagnoses in its look-back window
