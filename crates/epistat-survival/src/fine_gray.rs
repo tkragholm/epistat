@@ -2,21 +2,31 @@
 //! matrix, with the Kaplan-Meier estimate of the censoring distribution it
 //! needs.
 //!
-//! The model is fitted as a weighted Cox model on rows built from the data \[1\],
-//! so the fit itself is [`crate::cox::fit`] and the result is a
-//! [`CoxModelFit`]: coefficients, model-based and robust covariance, and the
-//! Wald, score and likelihood ratio tests. This module builds the rows.
+//! The model is the weighted Cox model on rows built from the data \[1\]:
+//! `coxph` on the rows of `survival::finegray` in R. [`rows`] and
+//! [`risk_rows`] build those rows. [`fit`] fits the model without building
+//! them, by a sweep over the event times that forms the sums of the rows'
+//! risk sets from running sums over the individuals, and gives the result of
+//! the Cox fit, a [`CoxModelFit`]: coefficients, model-based and robust
+//! covariance, and the Wald, score and likelihood ratio tests, by the same
+//! Newton iteration as [`crate::cox::fit`].
 //!
 //! # Input
 //!
 //! [`rows`], [`risk_rows`] and [`fit`] take a [`SurvData`]. Its status is the
 //! cause code, with 0 for censoring, the cause of interest is a code in
 //! `1..=n_codes`, and every other nonzero code is a competing event. Its
-//! stop is the time, its weight the case weight and, for [`fit`], its cluster
-//! the cluster of the robust variance, as the dense codes the type holds. The
-//! covariates of [`fit`] are the columns of a matrix with one row per row of
-//! the data. The model follows every individual from time 0, so data with a
-//! start column is an error.
+//! stop is the time, its weight the case weight, its stratum the censoring
+//! stratum and, for [`fit`], its cluster the cluster of the robust variance,
+//! as the dense codes the type holds. The covariates of [`fit`] are the
+//! columns of a matrix with one row per row of the data. The model follows
+//! every individual from time 0, so data with a start column is an error.
+//!
+//! A stratum is a censoring stratum, `cengroup` of `cmprsk::crr`: the
+//! censoring distribution is estimated within each stratum and each competing
+//! event is reweighted by that of its own stratum. The model has one baseline
+//! subdistribution hazard. Without a stratum the censoring distribution is
+//! estimated from everyone.
 //!
 //! The tie rule of [`FineGrayOptions::timefix`] and [`RowsOptions::timefix`]
 //! is applied to the times first. It defaults to the rule of
@@ -26,60 +36,148 @@
 //! Rows of weight 0 are individuals who do not take part. They are left out
 //! before the censoring distribution is estimated, so they have no rows and no
 //! say in `G` or in the last time the rows run to. The rows keep the row
-//! numbers of the data. The fit reports the rows of the form it used in
-//! `n_rows`, and `n_used` is the same, since the rows of the form fitted have
-//! positive weight.
+//! numbers of the data. The fit reports the rows of the data in `n_rows` and
+//! those of positive weight in `n_used`, as [`crate::cox::fit`] does.
 //!
-//! # Algorithm
+//! # The model
 //!
 //! Individual `i` has a time `x_i`, a cause code `c_i` with 0 for censoring, a
-//! weight `w_i` and a covariate. The cause of interest is `k`. The subdistribution
-//! hazard of `k` keeps an individual with a competing event, a cause other than
-//! `k` and 0, in the risk set after the event, because that individual could
-//! no longer have had the event `k` but would have been observed for it if the
-//! competing event had not happened \[1\]. The individual's weight after the
-//! event decreases with the chance that a censoring would have removed them:
+//! weight `w_i` and covariates `z_i`. The cause of interest is `k`. The
+//! subdistribution hazard of `k` keeps an individual with a competing event, a
+//! cause other than `k` and 0, in the risk set after the event, because that
+//! individual could no longer have had the event `k` but would have been
+//! observed for it if the competing event had not happened \[1\]. The
+//! individual's weight after the event decreases with the chance that a
+//! censoring would have removed them:
 //!
 //! ```text
 //! weight at time s >= x_i:   w_i G(s) / G(x_i-)
 //! ```
 //!
-//! where `G` is the Kaplan-Meier estimate of the censoring distribution \[2\],
-//! censoring being the event and every failure of any cause being censored for
-//! it. The risk set at a censoring time `t` is the weight with a time strictly
-//! after `t` plus the weight censored at `t`, so a failure and a censoring at
-//! the same time are ordered failure first. Using `time >= t` would add every
-//! tied failure to the risk set and change every weight derived from `G`.
-//! `G(t-)` is `G` just before `t`, which is 1 before the first censoring.
+//! where `G` is the Kaplan-Meier estimate of the censoring distribution \[2\]
+//! of the individual's censoring stratum, censoring being the event and every
+//! failure of any cause being censored for it. The risk set at a censoring
+//! time `t` is the weight with a time strictly after `t` plus the weight
+//! censored at `t`, so a failure and a censoring at the same time are ordered
+//! failure first. Using `time >= t` would add every tied failure to the risk
+//! set and change every weight derived from `G`. `G(t-)` is `G` just before
+//! `t`, which is 1 before the first censoring. Past the largest time of a
+//! stratum, when that is below the largest time of all, its `G` is not
+//! estimated and is 0, as in `crr`, so a competing event of the stratum
+//! leaves the risk set there.
+//!
+//! # The rows
 //!
 //! The rows are counting-process intervals. [`rows`] writes one
 //! row per individual and interval, which is the form `survival::finegray` in R
 //! produces. Individuals with the cause of interest or censored have the single
 //! row `(0, x_i]`. An individual with a competing event has rows at full weight
-//! to the first censoring time at or after the event, then at
+//! to the first censoring time of its stratum at or after the event, then at
 //! `w_i G(max(s, x_i)) / G(x_i-)` for each interval `(s, s']` between later
-//! censoring times, ending at the largest observed time. The denominator is `G`
-//! before the event, so an event that ties with a censoring time loses the
-//! weight of that censoring. `G` is read at `max(s, x_i)` because `G(s)` alone
-//! gives weights above 1 when the event falls after censoring has begun. Rows of
-//! weight zero are left out.
+//! censoring times of its stratum, ending at the largest observed time. The
+//! denominator is `G` before the event, so an event that ties with a censoring
+//! time loses the weight of that censoring. `G` is read at `max(s, x_i)`
+//! because `G(s)` alone gives weights above 1 when the event falls after
+//! censoring has begun. Rows of weight zero are left out.
 //!
-//! [`risk_rows`] sums the competing-event rows that share an
-//! interval and a covariate value. These rows all end without an event, so
+//! [`risk_rows`] sums the competing-event rows that share an interval, a
+//! covariate value and a stratum. These rows all end without an event, so
 //! they enter the partial likelihood only through weighted sums, and adding
 //! them is exact. The weight on the interval opening at censoring time `c_j`
 //! factorises as `G(c_j) w_i / G(x_i-)`, so one prefix sum of `w_i / G(x_i-)`
-//! over the event times, per covariate level, gives every interval.
-//! [`fit`] fits on these collapsed rows, with the rows of the design matrix
-//! as levels, or on the expanded rows when the data has clusters, because the
-//! robust variance needs each individual's own rows.
+//! over the event times, per covariate level and stratum, gives every
+//! interval.
 //!
-//! # Agreement with R
+//! # Algorithm of the fit
+//!
+//! A row of [`rows`] is in the risk set at an event time `t` of the cause
+//! when its interval holds `t`. For an individual with the cause or censored
+//! that is `t <= x_i`, at weight `w_i`. For a competing event it is every `t`
+//! up to the largest time, at weight `w_i` for `t <= x_i` and
+//! `w_i G_g(t-) / G_g(x_i-)` for `t > x_i`, with `g` the stratum: the rows
+//! between censoring times carry `G` of the censoring time that opens them,
+//! which is `G(t-)` for every `t` inside. `G(t-)` is common to everyone of the
+//! stratum at `t`, and `1 / G(x_i-)` belongs to the individual \[1\]. With
+//! `theta_i = exp(beta' z_i)` the sums over the risk set at `t` are therefore
+//!
+//! ```text
+//! S_r(t) = sum over x_i >= t of w_i theta_i z_i^r
+//!        + sum over strata g of G_g(t-) A_r,g(t),
+//! A_r,g(t) = sum over competing events of g with x_i < t of
+//!            (w_i / G_g(x_i-)) theta_i z_i^r,
+//! ```
+//!
+//! for `r = 0, 1, 2`, with `z^0 = 1`, `z^1 = z` and `z^2 = z z'`. The first sum
+//! is the risk set of an ordinary Cox model, accumulated as the time descends,
+//! and `A` a running sum accumulated as the time ascends. Given `S_r` the log
+//! partial likelihood, score and information are those of
+//! [`crate::cox::design`] with Breslow's or Efron's approximation, from the
+//! same code: with `D(t)` the events at `t`, `E_r` the sums over them, and the
+//! terms `(u, f)` of the approximation (one term of the summed event weight
+//! and `f = 0` for Breslow, `d` terms of the mean weight and `f = j / d` for
+//! Efron),
+//!
+//! ```text
+//! l(beta) = sum over t of [ sum over D(t) of w_i beta' z_i - sum over terms of u log D_0 ]
+//! U(beta) = sum over t of [ sum over D(t) of w_i z_i - sum over terms of u D_1 / D_0 ]
+//! I(beta) = sum over t, terms of u [ D_2 / D_0 - (D_1 / D_0)(D_1 / D_0)' ],
+//! D_r = S_r(t) - f E_r(t).
+//! ```
+//!
+//! An individual with a competing event and `G(x_i-) = 0` has no weight after
+//! the first censoring time at or after the event, so it counts at `w_i` up to
+//! that time and has no `A` term. With positive weights `G(x_i-)` is positive
+//! for every individual, since the individual is in the risk set of every
+//! censoring before `x_i`, so this arises only from rounding.
+//!
+//! The descending sums are one pass over the individuals. The ascending sums
+//! are kept at checkpoints, one per block of about `sqrt(m s)` event times
+//! with `m` event times and `s` strata, and each block is summed again from its
+//! checkpoint when the descending pass reaches it, so each sum is that of one
+//! ascending pass and the memory is that of the checkpoints and one block,
+//! `O(sqrt(m s) s p^2)`, besides the data. Each evaluation of the likelihood
+//! costs three passes over the individuals of `p^2` each and `m s p^2` for the
+//! strata. Nothing of the size of the rows is held: the rows of an individual
+//! with a competing event are as many as the censoring times after the event,
+//! which came to about 10 KB per individual on the cohort of
+//! `benches/survival_compare.rs`.
+//!
+//! The covariates are centred and scaled as `coxph` does it on the rows, by the
+//! weighted mean and mean absolute deviation with each individual's total row
+//! weight `w_i (1 + sum_j G(c_j) / G(x_i-))` over the censoring times `c_j` that
+//! open an interval of the individual, so the iteration, the aliasing rule and
+//! the test for a diverging coefficient are those of `coxph` on the rows. The
+//! iteration is that of `coxph` on counting-process data (`agreg.fit`).
+//!
+//! # Robust variance
+//!
+//! With clusters the robust covariance is the sandwich `V (sum_g U_g U_g') V`
+//! of `coxph` on the rows with the clusters of the individuals \[3\], where
+//! `U_g` sums the score residuals of the rows in cluster `g`. The residuals of
+//! an individual's rows add up to
+//!
+//! ```text
+//! w_i (z_i - m(x_i)) [the event, with the correction of Efron's approximation]
+//! - w_i theta_i sum over t <= end_i of (z_i h_t - c_t)
+//! - (w_i / G_g(x_i-)) theta_i sum over t > x_i of G_g(t-) (z_i h_t - c_t)
+//! ```
+//!
+//! with `h_t` the sum over the terms at `t` of `u / D_0`, `c_t` that of
+//! `u D_1 / D_0^2`, `m(t)` the mean of `D_1 / D_0` over the terms, and `end_i`
+//! the last time at the individual's own weight. The first sum is a prefix sum
+//! over the event times; the second is summed per stratum over the event times
+//! in descending order. The sandwich treats `G` as known, as `coxph` on the
+//! rows does. The variance of `crr` adds a term for the estimation of `G`
+//! \[1\], which this one does not have.
+//!
+//! # Agreement with R and with the rows
 //!
 //! `tests/r_fine_gray.rs` compares with `survival::finegray` followed by
 //! `coxph` on its rows, with weights `fgwt` and, for the robust variance, the
-//! individual as cluster, and with `cmprsk::crr`. A factor is written as
-//! indicator columns, as `model.matrix` does.
+//! individual or a group of four as cluster, and with `cmprsk::crr`. A factor
+//! is written as indicator columns, as `model.matrix` does. With censoring
+//! strata it compares with `coxph` on rows built in R with the censoring
+//! distribution of each stratum, and with `crr(cengroup =)`.
 //!
 //! - `survival::finegray` writes no row whose interval holds no event time of
 //!   the cause, because such a row enters no risk set. [`rows`] writes every
@@ -92,6 +190,10 @@
 //!   and multiplies the row weights by them afterwards, so its rows are
 //!   those of unit weights times the case weight. The weighted estimate is the
 //!   one the test compares with, through `finegray` on repeated individuals.
+//! - `finegray` with a `strata()` term estimates the censoring distribution per
+//!   stratum for a model stratified by the same variable, and writes each
+//!   stratum's rows only up to its own last time and event, so it is not the
+//!   reference for censoring strata with one baseline.
 //! - `crr` estimates the censoring distribution with `survfit` on the
 //!   censoring indicator, which keeps a failure at a censoring time in the risk
 //!   set of that censoring. Here, as in `finegray`, the failure is taken out
@@ -105,12 +207,21 @@
 //!   censoring distribution. The robust standard error here is the sandwich
 //!   of `coxph` on the rows, which treats the weights as known, and does not.
 //!
+//! The unit tests compare [`fit`] with [`crate::cox::fit`] on the rows of
+//! [`rows`], on random data with ties, fractional weights with zeros,
+//! censoring strata and clusters, for both approximations: coefficients,
+//! standard errors, covariance, robust covariance and log partial likelihood
+//! within tolerances derived from the order of the sums, and the iteration
+//! count exactly.
+//!
 //! # Edge cases
 //!
-//! Cause 0 is censoring and is refused as a cause of interest. An individual
-//! whose `G(x_i-)` is zero contributes no weight after the event. The estimates
-//! of [`rows`] and [`risk_rows`] are the same, and `n_rows` of the fit counts the
-//! rows of the form used.
+//! Cause 0 is censoring and is refused as a cause of interest. Data without
+//! an event of the cause has no estimate. `Ties::Exact` is the Cox fit with
+//! exact ties of the rows, which `coxph` has for rows of weight 1 only: case
+//! weights of 1 and no censoring in a competing event's stratum after the
+//! event, with a later time after that. Each individual is then one row, and
+//! other data is refused, as are clusters.
 //!
 //! # References
 //!
@@ -120,9 +231,12 @@
 //! 2. Kaplan EL, Meier P. Nonparametric estimation from incomplete
 //!    observations. J Am Stat Assoc 1958;53(282):457-81.
 //!    doi:10.1080/01621459.1958.10501452
-//! 3. Therneau TM, Crowson C, Atkinson E. Multi-state models and competing
+//! 3. Lin DY, Wei LJ. The robust inference for the Cox proportional hazards
+//!    model. J Am Stat Assoc 1989;84(408):1074-8.
+//!    doi:10.1080/01621459.1989.10478874
+//! 4. Therneau TM, Crowson C, Atkinson E. Multi-state models and competing
 //!    risks. Vignette of the R package survival.
-//! 4. Gray RJ. cmprsk: subdistribution analysis of competing risks. R package.
+//! 5. Gray RJ. cmprsk: subdistribution analysis of competing risks. R package.
 
 #![expect(
     clippy::cast_possible_truncation,
@@ -136,6 +250,7 @@ use std::collections::HashMap;
 use epistat_linalg::{Mat, MatRef};
 
 use crate::check::{check_lengths, check_row_count};
+use crate::cox::design::{Clusters, Newton, Stepping, newton};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
 use crate::metrics::censoring::CensoringKm;
@@ -143,6 +258,8 @@ use crate::order::pick_used;
 use crate::step::Steps;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
+
+mod sweep;
 
 /// The Kaplan-Meier estimate of the censoring distribution `G`, as a step
 /// function.
@@ -205,7 +322,10 @@ struct Expansion<'a> {
     event: &'a [i32],
     weight: &'a [f64],
     cause: i32,
-    curve: Steps,
+    /// The censoring stratum of each individual, empty without strata.
+    group: &'a [u32],
+    /// The censoring distribution of each stratum, one without strata.
+    curves: Vec<Steps>,
     horizon: f64,
 }
 
@@ -216,28 +336,84 @@ impl<'a> Expansion<'a> {
     /// # Errors
     ///
     /// [`Error::Input`] when the slices differ in length or `cause` is 0.
+    #[cfg(test)]
     fn new(time: &'a [f64], event: &'a [i32], weight: &'a [f64], cause: i32) -> Result<Self> {
+        Self::with_strata(time, event, weight, cause, &[], 0)
+    }
+
+    /// [`Expansion::new`] with a censoring stratum `group` per individual, a
+    /// code below `n_groups`, or `group` empty for one stratum.
+    fn with_strata(
+        time: &'a [f64],
+        event: &'a [i32],
+        weight: &'a [f64],
+        cause: i32,
+        group: &'a [u32],
+        n_groups: usize,
+    ) -> Result<Self> {
         check_lengths(&[
             ("time", time.len()),
             ("event", event.len()),
             ("weight", weight.len()),
         ])?;
+        if !group.is_empty() {
+            check_lengths(&[("time", time.len()), ("stratum", group.len())])?;
+        }
         check_row_count(time.len())?;
         if cause == 0 {
             return Err(Error::input("cause 0 is censoring, not a cause"));
         }
+        let horizon = time.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let curves = if group.is_empty() {
+            vec![censoring_curve(time, event, weight)]
+        } else {
+            (0..n_groups)
+                .map(|g| {
+                    let members: Vec<usize> = (0..time.len())
+                        .filter(|&i| group[i] as usize == g)
+                        .collect();
+                    let pick = |column: &[f64]| -> Vec<f64> {
+                        members.iter().map(|&i| column[i]).collect()
+                    };
+                    let own_time = pick(time);
+                    let own_event: Vec<i32> = members.iter().map(|&i| event[i]).collect();
+                    let mut curve = censoring_curve(&own_time, &own_event, &pick(weight));
+                    // Past the stratum's largest time its censoring
+                    // distribution is not estimated, and is 0 as in
+                    // `cmprsk::crr`. A censoring at that time has made it 0
+                    // already.
+                    let last = own_time.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    if last < horizon && curve.time.last().is_none_or(|&c| c < last) {
+                        curve.time.push(last);
+                        curve.value.push(0.0);
+                    }
+                    curve
+                })
+                .collect()
+        };
         Ok(Self {
-            curve: censoring_curve(time, event, weight),
-            horizon: time.iter().copied().fold(f64::NEG_INFINITY, f64::max),
             time,
             event,
             weight,
             cause,
+            group,
+            curves,
+            horizon,
         })
     }
 
     fn competing(&self, i: usize) -> bool {
         self.event[i] != self.cause && self.event[i] != 0
+    }
+
+    /// The censoring stratum of individual `i`.
+    fn group_of(&self, i: usize) -> usize {
+        self.group.get(i).map_or(0, |&g| g as usize)
+    }
+
+    /// The censoring distribution of individual `i`.
+    fn curve(&self, i: usize) -> &Steps {
+        &self.curves[self.group_of(i)]
     }
 
     /// One row `(0, x_i]` for each individual with the cause of interest or
@@ -274,19 +450,20 @@ impl<'a> Expansion<'a> {
                 rows.push(i, 0.0, t, self.event[i] == self.cause, w);
                 continue;
             }
-            let g_before_event = self.curve.before(t);
+            let curve = self.curve(i);
+            let g_before_event = curve.before(t);
             let weight_from = |previous: f64| {
                 if previous < t {
                     w
                 } else if g_before_event > 0.0 {
-                    w * (self.curve.at(previous) / g_before_event)
+                    w * (curve.at(previous) / g_before_event)
                 } else {
                     0.0
                 }
             };
-            let first = self.curve.time.partition_point(|&c| c < t);
+            let first = curve.time.partition_point(|&c| c < t);
             let mut previous = 0.0f64;
-            for &boundary in &self.curve.time[first..] {
+            for &boundary in &curve.time[first..] {
                 let weight_here = weight_from(previous);
                 if weight_here > 0.0 {
                     rows.push(i, previous, boundary, false, weight_here);
@@ -303,12 +480,14 @@ impl<'a> Expansion<'a> {
         rows
     }
 
-    /// The expansion with competing-event rows summed per interval and level.
+    /// The expansion with competing-event rows summed per interval, level and
+    /// censoring stratum.
     ///
     /// The weight on the interval opening at censoring time `c_j` factorises as
     /// `G(c_j) * w_i / G(x_i-)`, so one prefix sum of `w_i / G(x_i-)` over event
-    /// times, per level, gives every interval. `level` codes the covariate;
-    /// levels are emitted in order of their first competing-event individual.
+    /// times, per level and stratum, gives every interval. `level` codes the
+    /// covariate; levels are emitted in order of their first competing-event
+    /// individual.
     ///
     /// # Errors
     ///
@@ -318,20 +497,20 @@ impl<'a> Expansion<'a> {
         let mut rows = Rows::default();
         self.direct_rows(&mut rows);
 
-        // Per level: (event time, w, w / G(event time-)) and a representative
-        // row.
-        let mut slot_of: HashMap<u32, usize> = HashMap::new();
+        // Per level and stratum: (event time, w, w / G(event time-)) and a
+        // representative row.
+        let mut slot_of: HashMap<(usize, u32), usize> = HashMap::new();
         let mut by_level: Vec<(usize, Vec<TiedEvent>)> = Vec::new();
         for (i, &code) in level.iter().enumerate() {
             if !self.competing(i) {
                 continue;
             }
-            let g_before_event = self.curve.before(self.time[i]);
+            let g_before_event = self.curve(i).before(self.time[i]);
             if g_before_event <= 0.0 {
                 // Every weight after the event is zero.
                 continue;
             }
-            let slot = *slot_of.entry(code).or_insert_with(|| {
+            let slot = *slot_of.entry((self.group_of(i), code)).or_insert_with(|| {
                 by_level.push((i, Vec::new()));
                 by_level.len() - 1
             });
@@ -342,8 +521,9 @@ impl<'a> Expansion<'a> {
             ));
         }
 
-        let censoring = &self.curve.time;
         for (representative, mut entries) in by_level {
+            let curve = self.curve(representative);
+            let censoring = &curve.time;
             entries.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
             let event_times: Vec<f64> = entries.iter().map(|entry| entry.0).collect();
             let mut prefix = Vec::with_capacity(entries.len() + 1);
@@ -381,7 +561,7 @@ impl<'a> Expansion<'a> {
                     continue;
                 }
                 let covered = prefix[event_times.partition_point(|&v| v <= boundary)];
-                let weight = self.curve.at(boundary) * covered;
+                let weight = curve.at(boundary) * covered;
                 if weight > 0.0 {
                     rows.push(representative, boundary, stop, false, weight);
                 }
@@ -407,6 +587,7 @@ pub fn float_codes(values: &[f64]) -> Vec<u32> {
 
 /// Codes for the distinct rows of a matrix, in order of first appearance, by
 /// bit pattern.
+#[cfg(test)]
 fn row_codes(x: MatRef<'_, f64>) -> Vec<u32> {
     let mut codes: HashMap<Vec<u64>, u32> = HashMap::new();
     (0..x.nrows())
@@ -431,7 +612,8 @@ pub struct RowsOptions {
 pub struct FineGrayOptions {
     /// The cause of interest, a status code in `1..=n_codes` of the data.
     pub cause: u32,
-    /// How tied events enter the partial likelihood.
+    /// How tied events enter the partial likelihood. `Ties::Exact` needs every
+    /// row weight to be 1; see [`fit`].
     pub ties: Ties,
     /// How times that differ by rounding error are treated. The default is the
     /// rule of `survival::aeqSurv`, which `coxph` applies.
@@ -487,7 +669,11 @@ fn with_expansion<T>(
         None => Cow::Owned(vec![1.0; fixed.n_rows()]),
         Some(weight) => pick_used(weight, index.as_deref()),
     };
-    let expansion = Expansion::new(&time, &event, &weight, code)?;
+    let group: Cow<'_, [u32]> = match fixed.stratum() {
+        None => Cow::Borrowed(&[]),
+        Some(stratum) => pick_used(stratum, index.as_deref()),
+    };
+    let expansion = Expansion::with_strata(&time, &event, &weight, code, &group, fixed.n_strata())?;
     body(&expansion, index.as_deref())
 }
 
@@ -505,10 +691,12 @@ fn original_rows(mut rows: Rows, index: Option<&[u32]>) -> Rows {
 /// individual and interval, as `survival::finegray` writes them.
 ///
 /// The cause is a status code of `data`, a code other than 0 and another
-/// cause is a competing event. The tie rule of `opts` is applied to the times
-/// first, and rows of weight 0 are left out of the data, of the censoring
-/// distribution and of the rows. [`Rows::row`] is the row of `data` each row
-/// comes from.
+/// cause is a competing event. The stratum of `data`, if any, is the
+/// censoring stratum: a competing event's rows are split at the censoring
+/// times of its stratum and weighted by its censoring distribution. The tie
+/// rule of `opts` is applied to the times first, and rows of weight 0 are left
+/// out of the data, of the censoring distribution and of the rows.
+/// [`Rows::row`] is the row of `data` each row comes from.
 ///
 /// # Errors
 ///
@@ -521,12 +709,12 @@ pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<Rows>
 }
 
 /// The expansion of [`rows`] with the competing-event rows summed per
-/// interval and covariate level.
+/// interval, covariate level and censoring stratum.
 ///
 /// `level` holds one code per row of `data`, the covariate level of the row.
-/// The rows are the ones a fit on a covariate with those levels uses.
-/// [`Rows::row`] is the first row of `data` of the level that has a
-/// competing event, and levels are emitted in order of that first row.
+/// The rows have the risk sets of [`rows`] for a covariate with those levels.
+/// [`Rows::row`] is the first row of `data` of the level and stratum that has
+/// a competing event, and levels are emitted in order of that first row.
 ///
 /// # Errors
 ///
@@ -549,26 +737,27 @@ pub fn risk_rows(
 ///
 /// `x` holds the covariates, one row per row of `data` and one column per
 /// covariate, with no intercept column. A factor is its indicator columns. The
-/// cause is [`FineGrayOptions::cause`], a status code of `data`. Rows of
-/// weight 0 are dropped, the tie rule of `opts` is applied to the times, and
-/// every individual is at risk from time 0. The weighted Cox model with delayed
-/// entry is fitted to the rows of the model by [`crate::cox::fit`], so the
-/// result is that of the Cox fit: coefficients, covariances, tests, aliased
-/// columns and the convergence report.
+/// cause is [`FineGrayOptions::cause`], a status code of `data`, and the
+/// stratum of `data`, if any, is the censoring stratum. Rows of weight 0 are
+/// dropped, the tie rule of `opts` is applied to the times, and every
+/// individual is at risk from time 0. The result is that of
+/// [`crate::cox::fit`] on the rows of [`rows`] with their weights:
+/// coefficients, covariances, tests, aliased columns and the convergence
+/// report. It is computed by the sweep of the module documentation, without
+/// the rows.
 ///
-/// The fit is on the collapsed rows ([`risk_rows`], with the distinct rows of
-/// `x` as levels). When `data` has clusters it is on the uncollapsed rows
-/// ([`rows`]), because the robust variance needs each individual's rows, and
-/// clusters are the dense codes of `data`. The robust covariance is then the
-/// sandwich of the Cox fit on those rows, which treats the weights as known.
-/// The estimate is the same in both forms. `n_rows` and `n_used` of the result
-/// count the rows of the form used.
+/// With clusters in `data`, dense codes, the robust covariance is the sandwich
+/// of the Cox fit on the rows with each row in its individual's cluster, which
+/// treats the weights as known. `n_rows` counts the rows of `data` and
+/// `n_used` those of positive weight.
 ///
 /// # Errors
 ///
 /// [`Error::Input`] when `x` has no column, does not hold one row per row of
 /// `data` or has a value that is not finite, when `opts.eps` is not positive
-/// and finite, and as for [`rows`].
+/// and finite, for `Ties::Exact` with clusters, with case weights other than 1
+/// or with a censoring after a competing event in its stratum, and as for
+/// [`rows`].
 pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> Result<CoxModelFit> {
     check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() == 0 {
@@ -577,57 +766,351 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
     if (0..x.ncols()).any(|j| (0..x.nrows()).any(|i| !x[(i, j)].is_finite())) {
         return Err(Error::input("x: a value is not finite"));
     }
-    with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
-        let source = |row: u32| index.map_or(row as usize, |index| index[row as usize] as usize);
-        let rows = if data.cluster().is_some() {
-            expansion.expand()
-        } else {
-            let used = Mat::from_fn(expansion.time.len(), x.ncols(), |i, j| {
-                x[(source(i as u32), j)]
-            });
-            expansion.risk_rows(&row_codes(used.as_ref()))?
-        };
-        let design = Mat::from_fn(rows.row.len(), x.ncols(), |k, j| {
-            x[(source(rows.row[k]), j)]
-        });
-        let cluster: Option<Vec<u32>> = data
-            .cluster()
-            .map(|cluster| rows.row.iter().map(|&row| cluster[source(row)]).collect());
-        let mut builder = SurvData::builder(&rows.stop, &rows.event)
-            .n_codes(1)
-            .start(&rows.start)
-            .weight(&rows.weight);
-        if let Some(cluster) = &cluster {
-            builder = builder.cluster(cluster);
+    if !(opts.eps.is_finite() && opts.eps > 0.0) {
+        return Err(Error::input("eps: must be finite and positive"));
+    }
+    if opts.ties == Ties::Exact && data.cluster().is_some() {
+        return Err(Error::input(
+            "ties: the exact method has no cluster-robust variance",
+        ));
+    }
+    let mut fit = with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
+        let source = |i: usize| index.map_or(i, |index| index[i] as usize);
+        if opts.ties == Ties::Exact {
+            return exact(expansion, x, &source, opts);
         }
-        // The tie rule is applied to the individuals' times above; the rows
-        // carry those times and the censoring times, so there is nothing to
-        // merge.
-        crate::cox::fit(
-            &builder.build()?,
-            design.as_ref(),
-            &CoxOptions {
-                ties: opts.ties,
-                timefix: TimeFix::Exact,
-                eps: opts.eps,
+        let p = x.ncols();
+        let n = expansion.time.len();
+        let n_events: f64 = (0..n)
+            .filter(|&i| expansion.event[i] == expansion.cause)
+            .map(|i| expansion.weight[i])
+            .sum();
+        let clusters = data.cluster().map(|cluster| {
+            let used: Vec<u32> = (0..n).map(|i| cluster[source(i)]).collect();
+            let count = used.iter().map(|&c| c as usize + 1).max().unwrap_or(0);
+            (used, count)
+        });
+        let with_clusters = clusters.is_some();
+        if !expansion.event.contains(&expansion.cause) {
+            return Ok(CoxModelFit::degenerate(p, n_events, n, with_clusters));
+        }
+        let (model, factor) = prepare(expansion, x, &source, opts.ties, clusters);
+        let summary = with_clusters
+            .then(|| Clusters::of(&model.cluster, 0..model.cluster.len(), model.n_clusters));
+        newton(
+            &model,
+            &Newton {
+                p,
+                factor: &factor,
+                init: None,
                 iter_max: opts.iter_max,
-                ..CoxOptions::default()
+                eps: opts.eps,
+                stepping: Stepping::Counting,
+                ties: opts.ties,
+                n_events,
+                n_rows: n,
+                clusters: summary,
             },
         )
-    })
+    })?;
+    fit.n_rows = data.n_rows();
+    fit.n_used = data.n_used();
+    Ok(fit)
+}
+
+/// The fit with exact ties, which the Cox fit has for rows of weight 1 only.
+///
+/// Every row of [`rows`] has weight 1 when the case weights are 1 and no
+/// competing event has a later interval of positive weight, that is no
+/// censoring time at or after it in its stratum with a later time after
+/// that. Each individual is then the one row `(0, x_i]`, or for a competing
+/// event `(0, c]` with `c` the first censoring time at or after it or the
+/// largest time, and the fit is the Cox fit of those rows.
+fn exact(
+    expansion: &Expansion<'_>,
+    x: MatRef<'_, f64>,
+    source: &impl Fn(usize) -> usize,
+    opts: &FineGrayOptions,
+) -> Result<CoxModelFit> {
+    if expansion.weight.iter().any(|&w| w - 1.0 != 0.0) {
+        return Err(Error::input(
+            "weight: the exact method supports case weights of 1 only",
+        ));
+    }
+    let n = expansion.time.len();
+    let mut stop = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = expansion.time[i];
+        if !expansion.competing(i) {
+            stop.push(t);
+            continue;
+        }
+        let curve = expansion.curve(i);
+        let first = curve.time.partition_point(|&c| c < t);
+        let later = (first..curve.time.len()).any(|j| {
+            let next = curve.time.get(j + 1).copied().unwrap_or(expansion.horizon);
+            next > curve.time[j] && curve.value[j] > 0.0
+        });
+        if later && curve.before(t) > 0.0 {
+            return Err(Error::input(
+                "ties: the exact method needs every Fine-Gray weight to be 1, so no \
+                 censoring after a competing event in its stratum",
+            ));
+        }
+        stop.push(curve.time.get(first).copied().unwrap_or(expansion.horizon));
+    }
+    let start = vec![0.0f64; n];
+    let status: Vec<i32> = (0..n)
+        .map(|i| i32::from(expansion.event[i] == expansion.cause))
+        .collect();
+    let design = Mat::from_fn(n, x.ncols(), |i, j| x[(source(i), j)]);
+    let rows = SurvData::builder(&stop, &status)
+        .n_codes(1)
+        .start(&start)
+        .weight(expansion.weight)
+        .build()?;
+    crate::cox::fit(
+        &rows,
+        design.as_ref(),
+        &CoxOptions {
+            ties: Ties::Exact,
+            timefix: TimeFix::Exact,
+            eps: opts.eps,
+            iter_max: opts.iter_max,
+            ..CoxOptions::default()
+        },
+    )
+}
+
+/// The sweep of [`sweep::Sweep`] for `expansion` and the covariates `x` of
+/// the data, with `source` the row of `x` of each individual, and the factor
+/// of each column from the scaled to the given scale.
+///
+/// The covariates are centred and scaled as `coxph` does it on the rows of
+/// [`rows`]: by the mean and the mean absolute deviation weighted by the total
+/// weight of each individual's rows. A competing event at `x_i` has the row
+/// weight `w_i` up to the first censoring time at or after it and
+/// `w_i G(c_j) / G(x_i-)` on the interval opening at each later censoring time
+/// `c_j`, so its total is `w_i (1 + sum_j G(c_j) / G(x_i-))` over the
+/// intervals that have a length.
+fn prepare(
+    expansion: &Expansion<'_>,
+    x: MatRef<'_, f64>,
+    source: &impl Fn(usize) -> usize,
+    ties: Ties,
+    clusters: Option<(Vec<u32>, usize)>,
+) -> (sweep::Sweep, Vec<f64>) {
+    let n = expansion.time.len();
+    let p = x.ncols();
+    let groups = expansion.curves.len();
+
+    // Per stratum, the sum over the censoring times from each on of `G(c_j)`
+    // for the intervals that open there and have a length.
+    let tails: Vec<Vec<f64>> = expansion
+        .curves
+        .iter()
+        .map(|curve| {
+            let m = curve.time.len();
+            let mut tail = vec![0.0f64; m + 1];
+            for j in (0..m).rev() {
+                let stop = curve.time.get(j + 1).copied().unwrap_or(expansion.horizon);
+                let here = if stop > curve.time[j] {
+                    curve.value[j]
+                } else {
+                    0.0
+                };
+                tail[j] = tail[j + 1] + here;
+            }
+            tail
+        })
+        .collect();
+
+    let mut end = Vec::with_capacity(n);
+    let mut total = Vec::with_capacity(n);
+    let mut late: Vec<(usize, u32, f64, f64)> = Vec::new();
+    for i in 0..n {
+        let (t, w) = (expansion.time[i], expansion.weight[i]);
+        if !expansion.competing(i) {
+            end.push(t);
+            total.push(w);
+            continue;
+        }
+        let g = expansion.group_of(i);
+        let curve = &expansion.curves[g];
+        let first = curve.time.partition_point(|&c| c < t);
+        let g_before_event = curve.before(t);
+        if g_before_event > 0.0 {
+            let ratio = w / g_before_event;
+            end.push(t);
+            total.push(w + ratio * tails[g][first]);
+            late.push((g, i as u32, t, ratio));
+        } else {
+            // Every weight after the first censoring time at or after the
+            // event is zero.
+            end.push(curve.time.get(first).copied().unwrap_or(expansion.horizon));
+            total.push(w);
+        }
+    }
+
+    // Centre and scale as `coxph` does.
+    let total_weight: f64 = total.iter().sum();
+    let mut centre = vec![0.0f64; p];
+    let mut factor = vec![0.0f64; p];
+    for a in 0..p {
+        let first = x[(source(0), a)];
+        if (0..n).all(|i| x[(source(i), a)] - first == 0.0) {
+            continue;
+        }
+        let mean: f64 = (0..n).map(|i| total[i] * x[(source(i), a)]).sum::<f64>() / total_weight;
+        let deviation: f64 = (0..n)
+            .map(|i| total[i] * (x[(source(i), a)] - mean).abs())
+            .sum::<f64>()
+            / total_weight;
+        centre[a] = mean;
+        factor[a] = if deviation > 0.0 {
+            1.0 / deviation
+        } else {
+            1.0
+        };
+    }
+    let mut scaled = Vec::with_capacity(n * p);
+    for i in 0..n {
+        for a in 0..p {
+            scaled.push(if factor[a] == 0.0 {
+                0.0
+            } else {
+                (x[(source(i), a)] - centre[a]) * factor[a]
+            });
+        }
+    }
+
+    let mut by_end: Vec<u32> = (0..n as u32).collect();
+    by_end.sort_by(|&a, &b| end[b as usize].total_cmp(&end[a as usize]));
+    late.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.total_cmp(&b.2)));
+    let mut late_offset = vec![0usize; groups + 1];
+    for &(g, ..) in &late {
+        late_offset[g + 1] += 1;
+    }
+    for g in 0..groups {
+        late_offset[g + 1] += late_offset[g];
+    }
+
+    let is_event: Vec<bool> = (0..n)
+        .map(|i| expansion.event[i] == expansion.cause)
+        .collect();
+    let mut by_time: Vec<u32> = (0..n as u32).filter(|&i| is_event[i as usize]).collect();
+    by_time.sort_by(|&a, &b| expansion.time[a as usize].total_cmp(&expansion.time[b as usize]));
+    let mut event_times: Vec<f64> = Vec::new();
+    let mut dying_offset = vec![0usize];
+    for (position, &i) in by_time.iter().enumerate() {
+        let t = expansion.time[i as usize];
+        if event_times
+            .last()
+            .is_some_and(|&last| last.total_cmp(&t) == Ordering::Equal)
+        {
+            continue;
+        }
+        if !event_times.is_empty() {
+            dying_offset.push(position);
+        }
+        event_times.push(t);
+    }
+    dying_offset.push(by_time.len());
+    let (cluster, n_clusters) = clusters.unwrap_or_default();
+    (
+        sweep::Sweep {
+            p,
+            ties,
+            x: scaled,
+            weight: expansion.weight.to_vec(),
+            end,
+            is_event,
+            by_end,
+            late: late.iter().map(|entry| entry.1).collect(),
+            late_time: late.iter().map(|entry| entry.2).collect(),
+            late_ratio: late.iter().map(|entry| entry.3).collect(),
+            late_offset,
+            curves: expansion.curves.clone(),
+            times: event_times,
+            dying: by_time,
+            dying_offset,
+            cluster,
+            n_clusters,
+        },
+        factor,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use epistat_linalg::Mat;
 
+    use epistat_linalg::MatRef;
+    use epistat_rng::Stream;
+
     use super::{
-        Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, rows,
+        Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, row_codes,
+        rows, with_expansion,
     };
+    use crate::check::check_lengths;
     use crate::cox::{CoxModelFit, CoxOptions, Ties};
+    use crate::error::{Error, Result};
     use crate::step::Steps;
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
+
+    /// The fit as a weighted Cox fit on the rows of [`rows`], or with
+    /// `collapsed` on those of [`risk_rows`] with the distinct rows of `x` as
+    /// levels, by [`crate::cox::fit`]. The rows of a competing event are
+    /// clustered by individual through the cluster of the data. This is the
+    /// definition the sweep of [`fit`] is checked against.
+    fn reference_fit(
+        data: &SurvData<'_>,
+        x: MatRef<'_, f64>,
+        opts: &FineGrayOptions,
+        collapsed: bool,
+    ) -> Result<CoxModelFit> {
+        check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
+        if x.ncols() == 0 {
+            return Err(Error::input("x has no columns"));
+        }
+        with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
+            let source =
+                |row: u32| index.map_or(row as usize, |index| index[row as usize] as usize);
+            let rows = if collapsed {
+                let used = Mat::from_fn(expansion.time.len(), x.ncols(), |i, j| {
+                    x[(source(i as u32), j)]
+                });
+                expansion.risk_rows(&row_codes(used.as_ref()))?
+            } else {
+                expansion.expand()
+            };
+            let design = Mat::from_fn(rows.row.len(), x.ncols(), |k, j| {
+                x[(source(rows.row[k]), j)]
+            });
+            let cluster: Option<Vec<u32>> = data
+                .cluster()
+                .map(|cluster| rows.row.iter().map(|&row| cluster[source(row)]).collect());
+            let mut builder = SurvData::builder(&rows.stop, &rows.event)
+                .n_codes(1)
+                .start(&rows.start)
+                .weight(&rows.weight);
+            if let Some(cluster) = &cluster {
+                builder = builder.cluster(cluster);
+            }
+            crate::cox::fit(
+                &builder.build()?,
+                design.as_ref(),
+                &CoxOptions {
+                    ties: opts.ties,
+                    timefix: TimeFix::Exact,
+                    eps: opts.eps,
+                    iter_max: opts.iter_max,
+                    ..CoxOptions::default()
+                },
+            )
+        })
+    }
 
     // Two groups, two causes, with ties within a cause, across causes, and
     // between a censoring time and an event time.
@@ -887,8 +1370,8 @@ mod tests {
             clustered.coefficients[0].unwrap(),
             1e-10
         ));
-        assert!(plain.n_rows < clustered.n_rows);
-        assert_eq!(plain.n_rows, plain.n_used);
+        assert_eq!((plain.n_rows, plain.n_used), (20, 20));
+        assert_eq!((clustered.n_rows, clustered.n_used), (20, 20));
         assert!(clustered.robust_standard_errors.is_some());
         assert!(plain.robust_standard_errors.is_none());
     }
@@ -1029,7 +1512,8 @@ mod tests {
             let b = fit(&only, column(&kept_x).as_ref(), &options(1, ties)).unwrap();
             assert_eq!(a.coefficients, b.coefficients);
             assert_eq!(a.robust_covariance, b.robust_covariance);
-            assert_eq!(a.n_rows, b.n_rows);
+            assert_eq!((a.n_rows, a.n_used), (20, 16));
+            assert_eq!((b.n_rows, b.n_used), (16, 16));
         }
     }
 
@@ -1062,5 +1546,391 @@ mod tests {
         .unwrap();
         assert_eq!(by_default, reference);
         assert_ne!(exact, reference);
+    }
+
+    /// A random cohort with ties on a time grid, three causes, fractional
+    /// weights with zeros, censoring strata and clusters.
+    struct Cohort {
+        time: Vec<f64>,
+        event: Vec<i32>,
+        weight: Vec<f64>,
+        stratum: Vec<u32>,
+        cluster: Vec<u32>,
+        x: Mat<f64>,
+    }
+
+    fn cohort(n: usize, seed: u64, grid: usize, censored: usize) -> Cohort {
+        let mut rng = Stream::seeded(seed);
+        let mut c = Cohort {
+            time: Vec::new(),
+            event: Vec::new(),
+            weight: Vec::new(),
+            stratum: Vec::new(),
+            cluster: Vec::new(),
+            x: Mat::zeros(n, 3),
+        };
+        for i in 0..n {
+            c.time.push((1 + rng.below(grid)) as f64 * 0.5);
+            c.event.push(if rng.below(100) < censored {
+                0
+            } else {
+                1 + i32::try_from(rng.below(3)).unwrap()
+            });
+            c.weight.push(if rng.below(20) == 0 {
+                0.0
+            } else {
+                0.25 + rng.uniform() * 2.0
+            });
+            c.stratum.push(rng.below(3) as u32);
+            c.cluster.push(rng.below(n / 3) as u32);
+            c.x[(i, 0)] = rng.normal();
+            c.x[(i, 1)] = f64::from(u8::from(rng.below(2) == 0));
+            c.x[(i, 2)] = rng.below(4) as f64 - 1.5;
+        }
+        c
+    }
+
+    impl Cohort {
+        fn data(&self, strata: bool, clusters: bool) -> SurvData<'_> {
+            let mut builder = SurvData::builder(&self.time, &self.event)
+                .n_codes(3)
+                .weight(&self.weight);
+            if strata {
+                builder = builder.stratum(&self.stratum);
+            }
+            if clusters {
+                builder = builder.cluster(&self.cluster);
+            }
+            builder.build().unwrap()
+        }
+    }
+
+    /// The tolerances of the sweep against the Cox fit of the rows.
+    ///
+    /// Both compute the same weights and risk-set sums in another order. A
+    /// weight after a competing event is the product of the case weight,
+    /// `G(t-)` and `1 / G(x-)`, rounded in another order, so the two differ by
+    /// `2 epsilon` relative. A risk-set sum of the Cox fit adds and removes up
+    /// to `k` row terms, and the sweep adds up to `2 n` terms, so every sum
+    /// differs by at most `f = (k + 2 n + 4) epsilon` relative. The rest is the
+    /// derivation of `tests/r_fine_gray.rs`: a relative change `f` of the
+    /// sums moves the score in column `k` by at most `2 f W r_k`, with `W` the
+    /// weight of the events and `r_k` the range of the column, the root by
+    /// `db_j = sum_k |V_jk| 2 f W r_k`, the information by
+    /// `dI_kl = r_k r_l (2 f W + W sum_m r_m db_m)` and the covariance by
+    /// `dV = |V| dI |V|`. The solves add `8 p kappa epsilon` relative, with
+    /// `kappa` the 1-norm condition number of the information scaled to a
+    /// unit diagonal, which bounds the 2-norm condition number of the scaled
+    /// covariates the fit solves on up to the factor `p`.
+    struct Bounds {
+        f: f64,
+        solve: f64,
+        kappa: f64,
+        db: Vec<f64>,
+        dv: Vec<f64>,
+    }
+
+    fn bounds(reference: &CoxModelFit, x: MatRef<'_, f64>, rows: usize, n: usize) -> Bounds {
+        let p = x.ncols();
+        let v: Vec<f64> = reference.covariance.iter().map(|c| c.unwrap()).collect();
+        let mut factor = v.clone();
+        let pivots = crate::ldl::factorise(&mut factor, p, 0.0);
+        assert_eq!(pivots.rank, p);
+        let information = crate::ldl::inverse(&factor, p);
+        let norm = |m: &dyn Fn(usize, usize) -> f64| {
+            (0..p)
+                .map(|b| (0..p).map(|a| m(a, b).abs()).sum::<f64>())
+                .fold(0.0, f64::max)
+        };
+        let d = |a: usize| information[a * p + a].sqrt();
+        let kappa = norm(&|a, b| information[a * p + b] / (d(a) * d(b)))
+            * norm(&|a, b| v[a * p + b] * d(a) * d(b));
+        let range: Vec<f64> = (0..p)
+            .map(|j| {
+                let column = (0..x.nrows()).map(|i| x[(i, j)]);
+                column.clone().fold(f64::NEG_INFINITY, f64::max)
+                    - column.fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        let w = reference.n_events;
+        let f = (rows + 2 * n + 4) as f64 * f64::EPSILON;
+        let db: Vec<f64> = (0..p)
+            .map(|j| {
+                (0..p)
+                    .map(|k| v[j * p + k].abs() * 2.0 * f * w * range[k])
+                    .sum()
+            })
+            .collect();
+        let beta_term: f64 = (0..p).map(|m| range[m] * db[m]).sum();
+        let di = |k: usize, l: usize| range[k] * range[l] * (2.0 * f * w + w * beta_term);
+        let dv = (0..p * p)
+            .map(|ab| {
+                let (a, b) = (ab / p, ab % p);
+                (0..p * p)
+                    .map(|kl| {
+                        let (k, l) = (kl / p, kl % p);
+                        v[a * p + k].abs() * di(k, l) * v[l * p + b].abs()
+                    })
+                    .sum()
+            })
+            .collect();
+        Bounds {
+            f,
+            solve: 8.0 * p as f64 * kappa * f64::EPSILON,
+            kappa,
+            db,
+            dv,
+        }
+    }
+
+    /// The largest deviations of `got` from `want` in units of the bounds:
+    /// coefficients, standard errors, covariance, robust covariance and log
+    /// partial likelihood.
+    fn deviations(
+        got: &CoxModelFit,
+        want: &CoxModelFit,
+        x: MatRef<'_, f64>,
+        rows: usize,
+        n: usize,
+    ) -> [f64; 5] {
+        let p = x.ncols();
+        let b = bounds(want, x, rows, n);
+        let units = |g: f64, w: f64, tolerance: f64| (g - w).abs() / tolerance;
+        let v = |a: usize, c: usize| want.covariance[a * p + c].unwrap();
+        let mut worst = [0.0f64; 5];
+        for a in 0..p {
+            let beta = want.coefficients[a].unwrap();
+            worst[0] = worst[0].max(units(
+                got.coefficients[a].unwrap(),
+                beta,
+                b.db[a] + b.solve * beta.abs().max(1.0),
+            ));
+            let sd = v(a, a).sqrt();
+            worst[1] = worst[1].max(units(
+                got.standard_errors[a].unwrap(),
+                sd,
+                f64::midpoint(b.dv[a * p + a], p as f64 * b.solve * v(a, a)) / sd,
+            ));
+            for c in 0..p {
+                worst[2] = worst[2].max(units(
+                    got.covariance[a * p + c].unwrap(),
+                    v(a, c),
+                    b.dv[a * p + c] + p as f64 * b.solve * (v(a, a) * v(c, c)).sqrt(),
+                ));
+            }
+        }
+        if let (Some(robust), Some(reference)) = (&got.robust_covariance, &want.robust_covariance) {
+            // The robust covariance `V M V`: the relative changes of `V` enter
+            // twice, amplified by at most kappa, the meat has the weights
+            // squared, and the sums of the residuals add `2 k epsilon`.
+            let relative_v = (0..p * p)
+                .map(|ac| b.dv[ac] / (v(ac / p, ac / p) * v(ac % p, ac % p)).sqrt())
+                .fold(0.0, f64::max);
+            let relative = 4.0 * p as f64 * b.solve
+                + 2.0 * rows as f64 * f64::EPSILON
+                + 2.0 * b.kappa * relative_v
+                + 4.0 * b.f;
+            let r = |a: usize, c: usize| reference[a * p + c].unwrap();
+            for (ac, value) in robust.iter().enumerate() {
+                let (a, c) = (ac / p, ac % p);
+                worst[3] = worst[3].max(units(
+                    value.unwrap(),
+                    r(a, c),
+                    relative * (r(a, a) * r(c, c)).sqrt(),
+                ));
+            }
+        }
+        // `W f` from the weights in the log of each risk-set sum, `W f
+        // max|x| sum |beta|` in the linear predictor, and the rounding of the
+        // sums.
+        let eta: f64 = (0..p)
+            .map(|j| {
+                let largest = (0..x.nrows()).map(|i| x[(i, j)].abs()).fold(0.0, f64::max);
+                largest * want.coefficients[j].unwrap().abs()
+            })
+            .sum();
+        let loglik = want.log_partial_likelihood.unwrap();
+        worst[4] = units(
+            got.log_partial_likelihood.unwrap(),
+            loglik,
+            2.0 * b.f * want.n_events * (1.0 + eta)
+                + (b.solve + rows as f64 * f64::EPSILON) * loglik.abs().max(1.0),
+        );
+        worst
+    }
+
+    /// The sweep against the Cox fit of the rows of [`rows`], on random data
+    /// with ties within and across causes and with censoring, fractional
+    /// weights with zeros, censoring strata, clusters and three covariates,
+    /// for Breslow and Efron ties and every cause.
+    #[test]
+    fn the_sweep_is_the_cox_fit_of_the_rows() {
+        let mut worst = [0.0f64; 5];
+        let mut largest = [0.0f64; 5];
+        for (n, seed, grid, censored) in [(300, 7, 30, 35), (500, 8, 12, 50), (200, 9, 200, 20)] {
+            let c = cohort(n, seed, grid, censored);
+            for strata in [false, true] {
+                for clusters in [false, true] {
+                    for ties in [Ties::Breslow, Ties::Efron] {
+                        for cause in 1..=3 {
+                            let d = c.data(strata, clusters);
+                            let o = options(cause, ties);
+                            let got = fit(&d, c.x.as_ref(), &o).unwrap();
+                            let want = reference_fit(&d, c.x.as_ref(), &o, false).unwrap();
+                            let label = format!(
+                                "n {n} strata {strata} clusters {clusters} {ties:?} cause {cause}"
+                            );
+                            assert!(got.converged && want.converged, "{label}");
+                            assert_eq!(got.iterations, want.iterations, "{label}");
+                            assert_eq!(got.rank, want.rank, "{label}");
+                            assert_eq!(got.n_events.to_bits(), want.n_events.to_bits(), "{label}");
+                            assert_eq!(
+                                got.robust_covariance.is_some(),
+                                want.robust_covariance.is_some(),
+                                "{label}"
+                            );
+                            let rows = rows(&d, cause, &RowsOptions::default()).unwrap().row.len();
+                            let units = deviations(&got, &want, c.x.as_ref(), rows, n);
+                            for (k, &value) in units.iter().enumerate() {
+                                assert!(value <= 1.0, "{label}: {value} of the bound in {k}");
+                                worst[k] = worst[k].max(value);
+                            }
+                            let absolute = [
+                                got.coefficients
+                                    .iter()
+                                    .zip(&want.coefficients)
+                                    .map(|(a, b)| (a.unwrap() - b.unwrap()).abs())
+                                    .fold(0.0, f64::max),
+                                got.standard_errors
+                                    .iter()
+                                    .zip(&want.standard_errors)
+                                    .map(|(a, b)| (a.unwrap() / b.unwrap() - 1.0).abs())
+                                    .fold(0.0, f64::max),
+                                got.covariance
+                                    .iter()
+                                    .zip(&want.covariance)
+                                    .map(|(a, b)| (a.unwrap() - b.unwrap()).abs())
+                                    .fold(0.0, f64::max),
+                                got.robust_covariance
+                                    .iter()
+                                    .flatten()
+                                    .zip(want.robust_covariance.iter().flatten())
+                                    .map(|(a, b)| (a.unwrap() - b.unwrap()).abs())
+                                    .fold(0.0, f64::max),
+                                (got.log_partial_likelihood.unwrap()
+                                    - want.log_partial_likelihood.unwrap())
+                                .abs(),
+                            ];
+                            for (slot, value) in largest.iter_mut().zip(absolute) {
+                                *slot = slot.max(value);
+                            }
+                            let score = |fit: &CoxModelFit| fit.tests.score.unwrap().statistic;
+                            assert!(
+                                (score(&got) - score(&want)).abs()
+                                    <= 1e3 * rows as f64 * f64::EPSILON * score(&want).max(1.0),
+                                "{label}: score test"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "sweep against rows, worst in units of the bound: coefficient {:.2e}, se {:.2e}, \
+             covariance {:.2e}, robust covariance {:.2e}, loglik {:.2e}",
+            worst[0], worst[1], worst[2], worst[3], worst[4]
+        );
+        eprintln!(
+            "largest deviations: coefficient {:.2e}, relative se {:.2e}, covariance {:.2e}, \
+             robust covariance {:.2e}, loglik {:.2e}",
+            largest[0], largest[1], largest[2], largest[3], largest[4]
+        );
+    }
+
+    /// With one censoring stratum for everyone the fit is the fit without
+    /// strata, bit for bit.
+    #[test]
+    fn one_censoring_stratum_is_no_strata() {
+        let c = cohort(300, 11, 25, 35);
+        let single = vec![4u32; 300];
+        let one = SurvData::builder(&c.time, &c.event)
+            .n_codes(3)
+            .weight(&c.weight)
+            .stratum(&single)
+            .cluster(&c.cluster)
+            .build()
+            .unwrap();
+        for ties in [Ties::Breslow, Ties::Efron] {
+            let o = options(1, ties);
+            assert_eq!(
+                fit(&one, c.x.as_ref(), &o).unwrap(),
+                fit(&c.data(false, true), c.x.as_ref(), &o).unwrap()
+            );
+            assert_eq!(
+                rows(&one, 1, &RowsOptions::default()).unwrap(),
+                rows(&c.data(false, false), 1, &RowsOptions::default()).unwrap()
+            );
+        }
+    }
+
+    /// Censoring strata change the weights: each competing event is reweighted
+    /// by the censoring distribution of its own stratum, and its rows are split
+    /// at the censoring times of that stratum.
+    #[test]
+    fn censoring_strata_reweight_by_their_own_curve() {
+        let c = cohort(300, 12, 25, 35);
+        let o = options(1, Ties::Breslow);
+        let pooled = fit(&c.data(false, false), c.x.as_ref(), &o).unwrap();
+        let stratified = fit(&c.data(true, false), c.x.as_ref(), &o).unwrap();
+        assert_ne!(pooled.coefficients, stratified.coefficients);
+        let expanded = rows(&c.data(true, false), 1, &RowsOptions::default()).unwrap();
+        for k in 0..expanded.row.len() {
+            let i = expanded.row[k] as usize;
+            if expanded.start[k] > 0.0 {
+                // A later row starts at a censoring time of the individual's
+                // own stratum.
+                assert!((0..300).any(|j| {
+                    c.event[j] == 0
+                        && c.weight[j] > 0.0
+                        && c.stratum[j] == c.stratum[i]
+                        && c.time[j].to_bits() == expanded.start[k].to_bits()
+                }));
+            }
+        }
+    }
+
+    /// Exact ties are the Cox fit of one row per individual, which needs every
+    /// row weight to be 1: case weights of 1 and no censoring after a competing
+    /// event. The fit is then that of the rows, bit for bit, and otherwise it is
+    /// refused.
+    #[test]
+    fn exact_ties_fit_the_rows_when_every_weight_is_one() {
+        let time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0, 8.0, 9.0];
+        let event = [0, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1];
+        let x = column(&[
+            0.5, 1.0, -1.0, 0.0, 2.0, 1.0, -0.5, 0.3, 1.5, -1.0, 0.2, 0.7,
+        ]);
+        let unit = [1.0; 12];
+        let d = data(&time, &event, &unit, None);
+        let o = options(1, Ties::Exact);
+        let got = fit(&d, x.as_ref(), &o).unwrap();
+        let want = reference_fit(&d, x.as_ref(), &o, false).unwrap();
+        assert!(got.converged);
+        assert_eq!(got.coefficients, want.coefficients);
+        assert_eq!(got.covariance, want.covariance);
+        assert_eq!(got.log_partial_likelihood, want.log_partial_likelihood);
+        assert_eq!(got.tests, want.tests);
+
+        let mut weight = unit;
+        weight[3] = 2.0;
+        let error = fit(&data(&time, &event, &weight, None), x.as_ref(), &o).unwrap_err();
+        assert!(error.to_string().contains("case weights of 1"), "{error}");
+        let mut late = event;
+        late[10] = 0;
+        let error = fit(&data(&time, &late, &unit, None), x.as_ref(), &o).unwrap_err();
+        assert!(error.to_string().contains("censoring after"), "{error}");
+        let cluster: Vec<u32> = (0..12).collect();
+        let error = fit(&data(&time, &event, &unit, Some(&cluster)), x.as_ref(), &o).unwrap_err();
+        assert!(error.to_string().contains("cluster"), "{error}");
     }
 }

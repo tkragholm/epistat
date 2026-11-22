@@ -488,7 +488,7 @@ pub struct CoxTests {
 }
 
 impl CoxModelFit {
-    fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
+    pub(crate) fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
         Self {
             coefficients: vec![None; p],
             standard_errors: vec![None; p],

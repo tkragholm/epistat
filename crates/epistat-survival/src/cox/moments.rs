@@ -7,7 +7,7 @@
 /// Adds `c x` to `m1` and `c x x'` to the lower triangle of `m2` (a full
 /// `p * p` array, or empty when the second moment is not wanted). Covariate
 /// counts up to 16 have their own compiled loops.
-pub(super) fn add(c: f64, x: &[f64], m1: &mut [f64], m2: &mut [f64]) {
+pub(crate) fn add(c: f64, x: &[f64], m1: &mut [f64], m2: &mut [f64]) {
     if m2.is_empty() {
         for (cell, &xa) in m1.iter_mut().zip(x) {
             *cell += c * xa;
@@ -52,7 +52,7 @@ fn add_rows(c: f64, x: &[f64], m1: &mut [f64], m2: &mut [f64]) {
 }
 
 /// The quotients `d1[a] / d0`, formed once per column.
-pub(super) fn quotients(d1: &[f64], d0: f64, e: &mut [f64]) {
+pub(crate) fn quotients(d1: &[f64], d0: f64, e: &mut [f64]) {
     for (q, &d) in e.iter_mut().zip(d1) {
         *q = d / d0;
     }
@@ -60,7 +60,7 @@ pub(super) fn quotients(d1: &[f64], d0: f64, e: &mut [f64]) {
 
 /// Adds `u (d2 / d0 - e[a] e[b])` to the lower triangle of `information`, with
 /// `d2 = risk - fraction * dying` cell by cell and `e` from [`quotients`].
-pub(super) fn add_information(
+pub(crate) fn add_information(
     p: usize,
     u: f64,
     d0: f64,

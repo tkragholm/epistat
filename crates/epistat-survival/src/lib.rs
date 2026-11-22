@@ -24,8 +24,9 @@
 //!   covariates as `coxph(tt = )` ([`cox::fit_tt`]).
 //! - [`clogit`]: conditional logistic regression for matched sets, as `clogit`,
 //!   with the exact partial likelihood of [`cox`] by default.
-//! - [`fine_gray`]: the rows of the Fine-Gray model, the Kaplan-Meier estimate of
-//!   the censoring distribution they need, and the fit on a design matrix.
+//! - [`fine_gray`]: the Fine-Gray model on a design matrix, fitted by a sweep
+//!   over the event times with censoring strata, and its weighted rows as
+//!   `survival::finegray` writes them.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
 //!   groups, weights and delayed entry, its infinitesimal jackknife standard
 //!   errors, and a clustered bootstrap of the incidence in two arms over many

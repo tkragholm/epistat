@@ -18,10 +18,10 @@
 
 pub mod anova;
 pub mod design;
-mod moments;
+pub(crate) mod moments;
 pub mod predict;
 pub mod residuals;
-mod sweep;
+pub(crate) mod sweep;
 pub mod tt;
 pub mod zph;
 pub use anova::{AnovaRow, AnovaTable, anova, anova_terms};
