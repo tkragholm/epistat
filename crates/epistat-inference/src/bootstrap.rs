@@ -61,6 +61,7 @@
 //!    Chapman & Hall; 1993.
 
 use epistat_rng::{Stream, rademacher_sum, rademacher_sums, replicate_seed, resample_counts};
+use epistat_stats::lanes;
 use rayon::prelude::*;
 
 use crate::{InferenceError, check_length};
@@ -138,11 +139,7 @@ pub fn cluster_totals(
         .for_each(|(r, row)| {
             let counts = resample_counts(clusters, replicate_seed(seed, r as u64));
             for (slot, column) in row.iter_mut().zip(columns) {
-                *slot = counts
-                    .iter()
-                    .zip(*column)
-                    .map(|(&k, &v)| f64::from(k) * v)
-                    .fold(0.0, |a, b| a + b);
+                *slot = lanes::sum_map2(&counts, column, |k, v| f64::from(k) * v);
             }
         });
     Ok(totals)

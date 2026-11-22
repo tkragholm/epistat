@@ -38,6 +38,7 @@
 //!
 //! 1. Rosenbaum PR. Observational Studies, 2nd ed. Springer; 2002. Chapter 4.
 
+use crate::lanes;
 use crate::normal;
 
 /// The largest `n * (2 sum r_i + 1)` [`exact_upper_tail`] works through.
@@ -166,8 +167,8 @@ pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, Sig
 /// variance is zero.
 #[must_use]
 pub fn normal_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Option<f64> {
-    let mean = p * ranks.iter().sum::<f64>();
-    let variance = p * (1.0 - p) * ranks.iter().map(|r| r * r).sum::<f64>();
+    let mean = p * lanes::sum(ranks);
+    let variance = p * (1.0 - p) * lanes::sum_squares(ranks);
     if variance > 0.0 && variance.is_finite() {
         Some(normal::cdf(-(observed - mean) / variance.sqrt()))
     } else {

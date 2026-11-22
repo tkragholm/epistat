@@ -116,6 +116,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use crate::lanes;
 use crate::normal;
 use crate::quantile::type7_unsorted;
 use crate::signed_rank::{self, SignedRankError, average_ranks};
@@ -223,12 +224,7 @@ pub fn wilcoxon_bounds(
     }
     let absolute: Vec<f64> = kept.iter().map(|d| d.abs()).collect();
     let ranks = average_ranks(&absolute)?;
-    let statistic: f64 = ranks
-        .iter()
-        .zip(&kept)
-        .filter(|(_, d)| **d > 0.0)
-        .map(|(r, _)| *r)
-        .sum();
+    let statistic = lanes::sum_map2(&ranks, &kept, |r, d| if d > 0.0 { r } else { 0.0 });
     let p_plus = gamma / (1.0 + gamma);
     let p_minus = 1.0 / (1.0 + gamma);
     let tail = |p: f64| -> Result<f64, SensitivityError> {

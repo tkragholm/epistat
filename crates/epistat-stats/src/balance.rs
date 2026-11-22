@@ -53,6 +53,7 @@
 //!    parametric causal inference. Journal of Statistical Software
 //!    2011;42(8):1-28.
 
+use crate::lanes;
 use crate::quantile;
 
 /// Standardised mean difference of a continuous variable, the difference in
@@ -133,7 +134,7 @@ pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
             .collect()
     };
     let max = gaps.iter().fold(0.0_f64, |m, &g| m.max(g));
-    Some((gaps.iter().sum::<f64>() / gaps.len() as f64, max))
+    Some((lanes::sum(&gaps) / gaps.len() as f64, max))
 }
 
 /// The mean and the maximum absolute difference between the two weighted
@@ -245,7 +246,7 @@ fn eqq_distance_of_groups(group_a: &QuantileGroup, group_b: &QuantileGroup) -> O
             .collect()
     };
     let max = gaps.iter().fold(0.0_f64, |m, &g| m.max(g));
-    Some((gaps.iter().sum::<f64>() / gaps.len() as f64, max))
+    Some((lanes::sum(&gaps) / gaps.len() as f64, max))
 }
 
 /// Cumulative sums of the weights scaled to end at one.
@@ -282,7 +283,8 @@ impl QuantileGroup {
             .filter(|(x, _)| x.is_finite())
             .collect();
         // The total is summed in the order given, before sorting.
-        let total: f64 = units.iter().map(|u| u.1).sum();
+        let given: Vec<f64> = units.iter().map(|u| u.1).collect();
+        let total = lanes::sum(&given);
         // Negative and positive zero are one value, so units that tie keep
         // their given order.
         units.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -335,7 +337,7 @@ impl QuantileGroup {
     /// `pooled` in ascending order take the share of the group's weight that
     /// their units have.
     fn read_at_distinct_values(&self, pooled: &[f64], probabilities: &[f64]) -> Vec<f64> {
-        let total: f64 = self.weights.iter().sum();
+        let total = lanes::sum(&self.weights);
         let mass: Vec<f64> = pooled
             .iter()
             .map(|&value| {
@@ -386,8 +388,8 @@ pub fn cramers_v_weighted(weights_a: &[f64], weights_b: &[f64]) -> Option<f64> {
     {
         return None;
     }
-    let total_a: f64 = weights_a.iter().sum();
-    let total_b: f64 = weights_b.iter().sum();
+    let total_a = lanes::sum(weights_a);
+    let total_b = lanes::sum(weights_b);
     let n = total_a + total_b;
     if n <= 0.0 {
         return None;
@@ -506,7 +508,7 @@ mod tests {
                 .collect();
             units.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap());
             let (v, w): (Vec<f64>, Vec<f64>) = units.into_iter().unzip();
-            (v, w, weights.iter().sum::<f64>())
+            (v, w, lanes::sum(weights))
         };
         let ((va, swa, ta), (vb, swb, tb)) = (sorted(&a, &wa), sorted(&b, &wb));
         let expected = eqq_distance_weighted(&a, &wa, &b, &wb).unwrap();
