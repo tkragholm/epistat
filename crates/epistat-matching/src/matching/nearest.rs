@@ -674,24 +674,146 @@ struct UseState {
 }
 
 /// Which of the next positions to the left and right of a point are still
-/// available, with removal. Both directions are union-find forests with path
-/// halving, so skipping a run of used positions costs near-constant time.
+/// available, with removal.
+///
+/// A three-level bitmap: bit `i` of level 0 is position `i`, and bit `j` of
+/// level `k + 1` is set when word `j` of level `k` is not zero. A search for
+/// the next available position at or after `i` looks in `i`'s word and then
+/// climbs a level at a time to the first word with a set bit at or after it,
+/// and descends to the lowest set bit, each step a trailing zero count. The
+/// search to the left is the same with leading zero counts. The bitmap of `n`
+/// positions takes about `n / 8` bytes, against 9 bytes a position for the
+/// two union-find forests of [`UnionFindAvailability`], and a search reads
+/// one word a level, `ceil(log64 n)` levels at most.
 struct Availability {
+    n: usize,
+    levels: Vec<Vec<u64>>,
+    remaining: usize,
+}
+
+impl Availability {
+    fn new(n: usize) -> Self {
+        // The narrowest top level is one word.
+        let mut levels = Vec::new();
+        let mut len = n;
+        loop {
+            let words = len.div_ceil(64).max(1);
+            let mut level = vec![u64::MAX; words];
+            if !len.is_multiple_of(64) {
+                level[words - 1] = (1_u64 << (len % 64)) - 1;
+            }
+            if len == 0 {
+                level[0] = 0;
+            }
+            levels.push(level);
+            if words == 1 {
+                break;
+            }
+            len = words;
+        }
+        Self {
+            n,
+            levels,
+            remaining: n,
+        }
+    }
+
+    fn is_available(&self, position: usize) -> bool {
+        self.levels[0][position / 64] >> (position % 64) & 1 == 1
+    }
+
+    /// The smallest available position at or after `position`, or `n`.
+    fn at_or_after(&mut self, position: usize) -> usize {
+        if position >= self.n {
+            return self.n;
+        }
+        // Climb until a word holds a set bit at or after the position.
+        let mut i = position;
+        let mut level = 0;
+        loop {
+            let word = self.levels[level][i / 64] & (u64::MAX << (i % 64));
+            if word != 0 {
+                i = i / 64 * 64 + word.trailing_zeros() as usize;
+                break;
+            }
+            i = i / 64 + 1;
+            level += 1;
+            if level == self.levels.len() || i >= self.levels[level - 1].len() {
+                return self.n;
+            }
+        }
+        // Descend to the lowest set bit below.
+        while level > 0 {
+            level -= 1;
+            i = i * 64 + self.levels[level][i].trailing_zeros() as usize;
+        }
+        i
+    }
+
+    /// The largest available position at or before `position`.
+    fn at_or_before(&mut self, position: usize) -> Option<usize> {
+        if self.n == 0 {
+            return None;
+        }
+        let mut i = position.min(self.n - 1);
+        let mut level = 0;
+        loop {
+            let keep = 63 - i % 64;
+            let word = (self.levels[level][i / 64] << keep) >> keep;
+            if word != 0 {
+                i = i / 64 * 64 + 63 - word.leading_zeros() as usize;
+                break;
+            }
+            if i / 64 == 0 {
+                return None;
+            }
+            i = i / 64 - 1;
+            level += 1;
+            if level == self.levels.len() {
+                return None;
+            }
+        }
+        while level > 0 {
+            level -= 1;
+            i = i * 64 + 63 - self.levels[level][i].leading_zeros() as usize;
+        }
+        Some(i)
+    }
+
+    fn remove(&mut self, position: usize) {
+        if !self.is_available(position) {
+            return;
+        }
+        self.remaining -= 1;
+        let mut i = position;
+        for level in &mut self.levels {
+            let word = &mut level[i / 64];
+            *word &= !(1_u64 << (i % 64));
+            if *word != 0 {
+                return;
+            }
+            i /= 64;
+        }
+    }
+}
+
+/// [`Availability`] by two union-find forests with path halving.
+#[cfg(test)]
+struct UnionFindAvailability {
     /// `right[i]`: the smallest available position at or after `i`, or `n`.
     right: Vec<u32>,
     /// `left[i]`: one more than the largest available position below `i`, or 0.
     left: Vec<u32>,
-    remaining: usize,
     available: Vec<bool>,
 }
 
-impl Availability {
+#[cfg(test)]
+impl UnionFindAvailability {
     fn new(n: usize) -> Self {
         let end = narrow(n);
         Self {
             right: (0..=end).collect(),
             left: (0..=end).collect(),
-            remaining: n,
             available: vec![true; n],
         }
     }
@@ -720,7 +842,6 @@ impl Availability {
     fn remove(&mut self, position: usize) {
         if self.available[position] {
             self.available[position] = false;
-            self.remaining -= 1;
             self.right[position] = narrow(position + 1);
             self.left[position + 1] = narrow(position);
         }
@@ -959,7 +1080,7 @@ impl Pool {
         if entries.len() >= PAR_SORT_FROM {
             entries.par_sort_unstable();
         } else {
-            entries.sort_unstable();
+            crate::sorting::sort_keyed(&mut entries);
         }
         let candidate: Vec<usize> = entries.iter().map(|entry| entry.1 as usize).collect();
         let sorted_keys: Vec<f64> = candidate.iter().map(|&idx| keys.candidates[idx]).collect();
@@ -1001,8 +1122,8 @@ impl Pool {
             }
         }
         let mut tree = KdTree::new(dimension, &coords, &keys, n);
-        for (position, &available) in self.avail.available.iter().enumerate() {
-            if !available {
+        for position in 0..self.candidate.len() {
+            if !self.avail.is_available(position) {
                 tree.remove(position);
             }
         }
@@ -1151,7 +1272,7 @@ impl Pool {
             columns,
             anchor,
             candidate,
-            available: &self.avail.available,
+            available: &self.avail,
             caliper,
             k,
             probe,
@@ -1243,7 +1364,7 @@ struct WhitenedScan<'s, R: MatchingRecord, G: ?Sized> {
     columns: &'s [f64],
     anchor: &'s [f64],
     candidate: &'s [usize],
-    available: &'s [bool],
+    available: &'s Availability,
     caliper: Option<f64>,
     k: usize,
     probe: &'s Probe<'s, R, G>,
@@ -1280,7 +1401,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> WhitenedScan<'_, R, G> {
                     continue;
                 }
                 let position = start + offset;
-                if !self.available[position] {
+                if !self.available.is_available(position) {
                     continue;
                 }
                 let distance = sum.sqrt();
@@ -1606,7 +1727,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
                     break;
                 }
                 let (slot, position) = entries[entry];
-                if self.pool.avail.available[position] && !self.unique_value_taken(position) {
+                if self.pool.avail.is_available(position) && !self.unique_value_taken(position) {
                     self.assign(slot, position);
                     matched_now.push(slot);
                 } else if let Some(&(next_position, distance)) = self.search(slot, 1).first() {
@@ -1890,6 +2011,58 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bitmap_availability_agrees_with_the_union_find_forests() {
+        let mut state = 99_u64;
+        let mut next = move |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 33) % bound as u64) as usize
+        };
+        for n in [
+            0_usize, 1, 2, 63, 64, 65, 127, 128, 129, 1000, 4095, 4096, 4097, 5000,
+        ] {
+            let mut bitmap = Availability::new(n);
+            let mut forests = UnionFindAvailability::new(n);
+            let mut removals = 0;
+            while removals <= n {
+                for probe in 0..=n {
+                    if probe % 7 == 0 || n < 200 {
+                        assert_eq!(
+                            bitmap.at_or_after(probe),
+                            forests.at_or_after(probe),
+                            "after {probe}, n {n}"
+                        );
+                        if probe < n {
+                            assert_eq!(
+                                bitmap.at_or_before(probe),
+                                forests.at_or_before(probe),
+                                "before {probe}, n {n}"
+                            );
+                            assert_eq!(bitmap.is_available(probe), forests.available[probe]);
+                        }
+                    }
+                }
+                assert_eq!(
+                    bitmap.remaining,
+                    forests.available.iter().filter(|&&a| a).count()
+                );
+                if n == 0 {
+                    break;
+                }
+                // Remove a run or one position, some of them already removed.
+                let start = next(n);
+                let run = if next(3) == 0 { next(200) } else { 1 };
+                for position in start..(start + run).min(n) {
+                    bitmap.remove(position);
+                    forests.remove(position);
+                }
+                removals += 1 + run / 8;
+            }
+        }
+    }
 
     #[test]
     fn availability_skips_removed_positions_in_both_directions() {
