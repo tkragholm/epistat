@@ -1,10 +1,9 @@
 use crate::matching::{
-    Constraint, ConstraintContext, FieldValueSource, MatchingRecord, RefusesFromDate,
-    ResidenceSpellSource, RoleIndexedRecord, StatusRule, StatusRuleKind, caliper_allows,
+    CachedSlot, Constraint, ConstraintContext, FieldValueSource, MatchingRecord, RefusesFromDate,
+    ResidenceSpellSource, RoleIndexedRecord, SlotCache, StatusRule, StatusRuleKind, caliper_allows,
 };
 use chrono::NaiveDate;
 use std::marker::PhantomData;
-use std::sync::OnceLock;
 
 /// Constraint that ensures case and control have the same value for a categorical field.
 ///
@@ -250,15 +249,14 @@ pub fn caliper_on_field<R: MatchingRecord>(
 /// and not by name. A record that is not a row of a table is read by name.
 struct FieldReader {
     name: String,
-    /// The table and slot found for the first two tables met.
-    resolved: [OnceLock<(usize, Option<usize>)>; 2],
+    slots: SlotCache,
 }
 
 impl FieldReader {
     fn new(name: &str) -> Self {
         Self {
             name: name.to_owned(),
-            resolved: [OnceLock::new(), OnceLock::new()],
+            slots: SlotCache::default(),
         }
     }
 
@@ -266,13 +264,11 @@ impl FieldReader {
         let Some(table) = record.numeric_table() else {
             return record.numeric(&self.name);
         };
-        for cell in &self.resolved {
-            let &(known, slot) = cell.get_or_init(|| (table, record.numeric_slot(&self.name)));
-            if known == table {
-                return slot.and_then(|slot| record.numeric_in_slot(slot));
-            }
+        match self.slots.slot(table, || record.numeric_slot(&self.name)) {
+            CachedSlot::At(slot) => record.numeric_in_slot(slot),
+            CachedSlot::Absent => None,
+            CachedSlot::ByName => record.numeric(&self.name),
         }
-        record.numeric(&self.name)
     }
 }
 

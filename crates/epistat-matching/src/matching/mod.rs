@@ -77,7 +77,7 @@ pub use reconstructed::{
     ReconstructedMatchingOptions, ReconstructedMatchingOutput, ReconstructedMatchingTier,
     reconstruct_case_control_pairs,
 };
-pub(crate) use records::{ColumnReader, NameScan};
+pub(crate) use records::{CachedSlot, ColumnReader, NameScan, SlotCache};
 pub use records::{CovariateRecord, MatchingRecord, ResidentAtIndexRecord, RoleIndexedRecord};
 pub use selection::{
     Assignment, DeterministicSelection, NearestBirthDateSelection, RandomSelection, Rounds,
