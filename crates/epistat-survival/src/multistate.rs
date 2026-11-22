@@ -61,11 +61,6 @@
 //! whatever its weight, so a subject whose first row has weight 0 adds nothing
 //! to the initial distribution.
 //!
-//! [`Intervals`], [`state_occupation_curve`] and [`bootstrap_state_occupation`]
-//! take the same quantities as separate slices, with the ranks themselves, and
-//! are deprecated. They run the same code, with exact ties and without the
-//! structural checks, and they give the same bits as before.
-//!
 //! The restricted expected time in each state up to a horizon `h` is the integral
 //! of `p` from an origin `o` to `h`. Since `p` is a step function, the integral
 //! is a sum of rectangles, and the segment from the origin to the first event
@@ -172,67 +167,8 @@ use crate::timefix::TimeFix;
 
 pub(crate) mod influence;
 
-/// The intervals of a multi-state process, one entry per row.
-///
-/// States are ranks into the caller's own state space; a rank at or above the
-/// number of states means "outside the space". Rows are read positionally, so
-/// the four slices are the same length.
-#[deprecated(
-    since = "0.3.0",
-    note = "use `multistate::estimate` or `multistate::bootstrap` with a `SurvData`"
-)]
-#[derive(Debug, Clone, Copy)]
-pub struct Intervals<'a> {
-    rows: Rows<'a>,
-}
-
-#[expect(deprecated, reason = "the methods of the deprecated type itself")]
-impl<'a> Intervals<'a> {
-    /// The interval `(starts[i], stops[i]]` spent in state `from_states[i]`,
-    /// ending in `to_states[i]`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Input`] when the slices differ in length.
-    pub fn new(
-        starts: &'a [f64],
-        stops: &'a [f64],
-        from_states: &'a [u32],
-        to_states: &'a [u32],
-    ) -> Result<Self> {
-        check_lengths(&[
-            ("starts", starts.len()),
-            ("stops", stops.len()),
-            ("from_states", from_states.len()),
-            ("to_states", to_states.len()),
-        ])?;
-        Ok(Self {
-            rows: Rows {
-                starts,
-                stops,
-                from_states,
-                to_states,
-            },
-        })
-    }
-
-    /// The number of intervals.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.rows.starts.len()
-    }
-
-    /// Whether there are no intervals.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.rows.starts.is_empty()
-    }
-}
-
 /// The intervals as four slices of the same length, with the state ranks
-/// of the caller. A rank at or above the number of states is outside the space.
-/// Both the deprecated entry points and the ones that read a [`SurvData`] end in
-/// the code that reads this.
+/// of the data. A rank at or above the number of states is outside the space.
 #[derive(Debug, Clone, Copy)]
 struct Rows<'a> {
     starts: &'a [f64],
@@ -251,12 +187,11 @@ impl Rows<'_> {
 const OUTSIDE: u32 = u32::MAX;
 
 /// The occupation probabilities at every event time, and the weight at risk.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Occupation {
+struct Occupation {
     /// `time * state`, row-major: the probability of each state after each time.
-    pub probabilities: Vec<f64>,
+    probabilities: Vec<f64>,
     /// The total weight at risk at each time.
-    pub at_risk: Vec<f64>,
+    at_risk: Vec<f64>,
 }
 
 /// Which cells of the risk and transition tables each row adds its weight to.
@@ -432,27 +367,6 @@ fn accumulate(
 /// [`Error::Input`] when `weights` does not hold one weight per interval,
 /// `initial` does not hold one entry per state, or more weight leaves a state
 /// than was at risk in it.
-#[deprecated(since = "0.3.0", note = "use `multistate::estimate` with a `SurvData`")]
-#[expect(deprecated, reason = "takes the deprecated `Intervals`")]
-pub fn state_occupation_curve(
-    intervals: Intervals<'_>,
-    weights: &[f64],
-    times: &[f64],
-    initial: &[f64],
-    states: usize,
-    rate_tolerance: f64,
-) -> Result<Occupation> {
-    occupation(
-        intervals.rows,
-        weights,
-        times,
-        initial,
-        states,
-        rate_tolerance,
-    )
-}
-
-/// The curve of [`state_occupation_curve`], on the intervals as ranks.
 fn occupation(
     intervals: Rows<'_>,
     weights: &[f64],
@@ -663,42 +577,6 @@ pub fn integrate(
 /// intervals carry no weight inside the state space (no initial distribution
 /// exists), or when more weight leaves a state than was at risk in it in some
 /// replicate.
-#[deprecated(
-    since = "0.3.0",
-    note = "use `multistate::bootstrap` with a `SurvData`"
-)]
-#[expect(deprecated, reason = "takes the deprecated `Intervals`")]
-pub fn bootstrap_state_occupation(
-    intervals: Intervals<'_>,
-    base: &[f64],
-    cluster_codes: &[u32],
-    first_positions: &[u32],
-    first_states: &[i32],
-    times: &[f64],
-    horizons: &[f64],
-    origin: f64,
-    seeds: &[u64],
-    n_clusters: usize,
-    states: usize,
-    rate_tolerance: f64,
-) -> Result<Vec<f64>> {
-    bootstrap_rows(
-        intervals.rows,
-        base,
-        cluster_codes,
-        first_positions,
-        first_states,
-        times,
-        horizons,
-        origin,
-        seeds,
-        n_clusters,
-        states,
-        rate_tolerance,
-    )
-}
-
-/// The replicates of [`bootstrap_state_occupation`], on the intervals as ranks.
 fn bootstrap_rows(
     intervals: Rows<'_>,
     base: &[f64],
@@ -1429,9 +1307,8 @@ pub fn variance(
 }
 
 #[cfg(test)]
-#[expect(deprecated, reason = "the tests of the deprecated functions")]
 mod tests {
-    use super::{Intervals, Plan, accumulate, bootstrap_state_occupation, state_occupation_curve};
+    use super::{Plan, Rows, accumulate, bootstrap_rows, occupation};
 
     // Person A moves from state 0 to 1 at 2 and stays until 5. Person B is
     // censored at 3, a state outside the space. Person C moves at 4 and stays
@@ -1440,6 +1317,20 @@ mod tests {
     const STOPS: [f64; 5] = [2.0, 5.0, 3.0, 4.0, 6.0];
     const FROM: [u32; 5] = [0, 1, 0, 0, 1];
     const TO: [u32; 5] = [1, 1, 2, 1, 1];
+
+    fn intervals<'a>(
+        starts: &'a [f64],
+        stops: &'a [f64],
+        from_states: &'a [u32],
+        to_states: &'a [u32],
+    ) -> Rows<'a> {
+        Rows {
+            starts,
+            stops,
+            from_states,
+            to_states,
+        }
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-14
@@ -1450,9 +1341,8 @@ mod tests {
     /// one in state 0 moves, so everyone is in state 1.
     #[test]
     fn the_product_integral_matches_a_hand_computed_curve() {
-        let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
-        let out = state_occupation_curve(intervals, &[1.0; 5], &[2.0, 4.0], &[1.0, 0.0], 2, 1e-9)
-            .unwrap();
+        let intervals = intervals(&STARTS, &STOPS, &FROM, &TO);
+        let out = occupation(intervals, &[1.0; 5], &[2.0, 4.0], &[1.0, 0.0], 2, 1e-9).unwrap();
         for (got, want) in out
             .probabilities
             .iter()
@@ -1469,8 +1359,8 @@ mod tests {
     fn the_plan_and_the_direct_sums_agree_to_the_bit() {
         let weights = [0.1, 0.7, 0.3, 1.9, 0.2];
         let times = [2.0, 3.0, 4.0, 6.0];
-        let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
-        let plan = Plan::new(intervals.rows, &times, 2).expect("ascending times");
+        let intervals = intervals(&STARTS, &STOPS, &FROM, &TO);
+        let plan = Plan::new(intervals, &times, 2).expect("ascending times");
         let direct = accumulate(&STARTS, &STOPS, &FROM, &TO, &weights, &times, 2, None);
         let planned = accumulate(
             &STARTS,
@@ -1489,17 +1379,16 @@ mod tests {
 
     #[test]
     fn a_zero_length_interval_is_not_a_transition() {
-        let intervals = Intervals::new(&[0.0, 1.0], &[3.0, 1.0], &[0, 0], &[0, 1]).unwrap();
-        let out =
-            state_occupation_curve(intervals, &[1.0; 2], &[1.0], &[1.0, 0.0], 2, 1e-9).unwrap();
+        let intervals = intervals(&[0.0, 1.0], &[3.0, 1.0], &[0, 0], &[0, 1]);
+        let out = occupation(intervals, &[1.0; 2], &[1.0], &[1.0, 0.0], 2, 1e-9).unwrap();
         assert_eq!(out.probabilities, vec![1.0, 0.0]);
     }
 
     #[test]
     fn the_bootstrap_is_reproducible_and_has_the_documented_shape() {
-        let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
+        let intervals = intervals(&STARTS, &STOPS, &FROM, &TO);
         let run = |horizons: &[f64]| {
-            bootstrap_state_occupation(
+            bootstrap_rows(
                 intervals,
                 &[1.0; 5],
                 &[0, 1, 0, 2, 2],
@@ -1531,14 +1420,13 @@ mod tests {
 
     #[test]
     fn malformed_input_is_refused() {
-        assert!(Intervals::new(&[0.0], &[1.0, 2.0], &[0], &[0]).is_err());
-        let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
+        let intervals = intervals(&STARTS, &STOPS, &FROM, &TO);
         assert!(
-            state_occupation_curve(intervals, &[1.0; 5], &[2.0], &[1.0], 2, 1e-9).is_err(),
+            occupation(intervals, &[1.0; 5], &[2.0], &[1.0], 2, 1e-9).is_err(),
             "initial distribution of the wrong size"
         );
         let refused = |states: usize, codes: &[u32]| {
-            bootstrap_state_occupation(
+            bootstrap_rows(
                 intervals,
                 &[1.0; 5],
                 codes,
@@ -1561,9 +1449,9 @@ mod tests {
 
     #[test]
     fn opening_intervals_without_weight_have_no_initial_distribution() {
-        let intervals = Intervals::new(&STARTS, &STOPS, &FROM, &TO).unwrap();
+        let intervals = intervals(&STARTS, &STOPS, &FROM, &TO);
         let run = |base: &[f64]| {
-            bootstrap_state_occupation(
+            bootstrap_rows(
                 intervals,
                 base,
                 &[0, 0, 0, 0, 0],

@@ -243,9 +243,6 @@ fn bits_are_pinned() {
 
 /// A column that is one in rows that are all censored makes the coefficient
 /// diverge.
-
-/// A column that is one in rows that are all censored makes the coefficient
-/// diverge.
 #[test]
 fn diverging_coefficient() {
     let s = sample(300, 21);

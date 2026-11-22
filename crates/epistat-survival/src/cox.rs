@@ -8,11 +8,6 @@
 //! [`zph`](mod@zph) give `residuals.coxph` and `cox.zph`, [`predict`](mod@predict)
 //! gives `basehaz`, `predict.coxph` and `survfit.coxph`, and [`tt`] fits
 //! time-transform covariates as `coxph(tt =)`.
-//!
-//! [`fit_cox`] and [`CoxDesign`] are deprecated wrappers of [`fit`] with exact
-//! ties. [`fit_cox_single_covariate`] and [`CoxData`], the fit on one covariate
-//! that came before the design matrix, are deprecated too; its algorithm is
-//! described in the private `single` module.
 
 // Rows, levels and strata are counted in `u32`; the entry point refuses more
 // rows than that.
@@ -26,16 +21,10 @@ pub mod design;
 mod moments;
 pub mod predict;
 pub mod residuals;
-mod single;
 pub mod tt;
 pub mod zph;
 pub use anova::{AnovaRow, AnovaTable, anova, anova_terms};
 pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_residuals};
-#[expect(
-    deprecated,
-    reason = "the deprecated names stay exported for a release"
-)]
-pub use design::{CoxDesign, cox_score_residuals, fit_cox};
 pub use predict::predict_expected_martingale;
 pub use predict::{
     Baseline, BaselineOptions, Centring, ConfType, Curve, CurveTimes, CurveType, FittedModel,
@@ -44,11 +33,6 @@ pub use predict::{
     predict, predict_terms, reference_means, reference_offset, survfit, survfit_paths,
 };
 pub use residuals::{Collapse, CoxResiduals, ResidualKind, ResidualOptions, residuals};
-#[expect(
-    deprecated,
-    reason = "the deprecated single-covariate fit stays public until it is removed"
-)]
-pub use single::{CoxData, CoxFit, fit_cox_single_covariate};
 pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
 pub use zph::{CoxZph, ZphOptions, ZphTransform, zph};
 

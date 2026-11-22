@@ -15,9 +15,8 @@
 //! stop is the time, its weight the case weight and, for [`fit`], its cluster
 //! the cluster of the robust variance, as the dense codes the type holds. The
 //! covariates of [`fit`] are the columns of a matrix with one row per row of
-//! the data. The
-//! model follows every individual from time 0, so data with a start column is
-//! an error.
+//! the data. The model follows every individual from time 0, so data with a
+//! start column is an error.
 //!
 //! The tie rule of [`FineGrayOptions::timefix`] and [`RowsOptions::timefix`]
 //! is applied to the times first. It defaults to the rule of
@@ -30,11 +29,6 @@
 //! numbers of the data. The fit reports the rows of the form it used in
 //! `n_rows`, and `n_used` is the same, since the rows of the form fitted have
 //! positive weight.
-//!
-//! [`fine_gray_fit`] and [`FineGrayData`] are deprecated. They take slices,
-//! compare times exactly and keep every row, including those of weight 0, in
-//! the censoring distribution, so their results are those of release 0.2. They
-//! share the implementation of the new functions.
 //!
 //! # Algorithm
 //!
@@ -142,11 +136,6 @@ use std::collections::HashMap;
 use epistat_linalg::{Mat, MatRef};
 
 use crate::check::{check_lengths, check_row_count};
-#[expect(
-    deprecated,
-    reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
-)]
-use crate::cox::{CoxData, CoxFit, fit_cox_single_covariate};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
 use crate::step::Steps;
@@ -256,9 +245,8 @@ type TiedEvent = (f64, f64, f64);
 /// What every Fine-Gray construction starts from: the data, the cause of
 /// interest and the Kaplan-Meier estimate of the censoring distribution.
 ///
-/// The columns are slices of the individuals that take part, which are all of
-/// them for the deprecated functions and the rows of positive weight for the
-/// [`SurvData`] entry points. Both go through this one implementation.
+/// The columns are slices of the individuals that take part, the rows of
+/// positive weight of the data.
 struct Expansion<'a> {
     time: &'a [f64],
     event: &'a [i32],
@@ -477,44 +465,6 @@ fn row_codes(x: MatRef<'_, f64>) -> Vec<u32> {
         .collect()
 }
 
-/// Fit the weighted Cox model with delayed entry to the rows of `expansion`
-/// on a single covariate, for the deprecated function.
-///
-/// `x` and `cluster` hold one value per individual of the expansion. Without
-/// `cluster` the fit is on the collapsed rows, and with it on the expanded
-/// rows, because the robust variance needs each individual's own rows.
-#[expect(
-    deprecated,
-    reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
-)]
-fn fit_expansion(
-    expansion: &Expansion<'_>,
-    x: &[f64],
-    ties: Ties,
-    cluster: Option<&[u32]>,
-) -> Result<CoxFit> {
-    let rows = if cluster.is_some() {
-        expansion.expand()
-    } else {
-        expansion.risk_rows(&float_codes(x))?
-    };
-    let row_x: Vec<f64> = rows.row.iter().map(|&i| x[i as usize]).collect();
-    let row_cluster: Option<Vec<u32>> =
-        cluster.map(|cluster| rows.row.iter().map(|&i| cluster[i as usize]).collect());
-    let is_event: Vec<bool> = rows.event.iter().map(|&code| code == 1).collect();
-    let stratum = vec![0u32; rows.row.len()];
-    fit_cox_single_covariate(&CoxData {
-        x: &row_x,
-        is_event: &is_event,
-        start: &rows.start,
-        stop: &rows.stop,
-        weight: &rows.weight,
-        stratum: &stratum,
-        ties,
-        cluster: row_cluster.as_deref(),
-    })
-}
-
 /// The options of [`rows`] and [`risk_rows`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RowsOptions {
@@ -722,108 +672,14 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
     })
 }
 
-/// What every Fine-Gray construction starts from: the data, the cause of
-/// interest and the Kaplan-Meier estimate of the censoring distribution.
-#[deprecated(
-    since = "0.3.0",
-    note = "use `fine_gray::rows` and `fine_gray::risk_rows`, which take a `SurvData`"
-)]
-pub struct FineGrayData<'a>(Expansion<'a>);
-
-#[expect(
-    deprecated,
-    reason = "the methods of the deprecated type are deprecated with it"
-)]
-impl<'a> FineGrayData<'a> {
-    /// The data of one analysis: one `time`, cause code `event` (0 for
-    /// censoring) and `weight` per individual, and the `cause` of interest.
-    /// Times are compared exactly.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Input`] when the slices differ in length or `cause` is 0.
-    #[deprecated(since = "0.3.0", note = "use `fine_gray::rows` with a `SurvData`")]
-    pub fn new(time: &'a [f64], event: &'a [i32], weight: &'a [f64], cause: i32) -> Result<Self> {
-        Expansion::new(time, event, weight, cause).map(Self)
-    }
-
-    /// One row per individual and interval, as `survival::finegray` writes it.
-    ///
-    /// A competing-event individual runs at full weight to the first
-    /// censoring time at or after the event and at `w * G(max(start, x)) /
-    /// G(x-)` after it, split at every later censoring time and ending at the
-    /// largest observed time. The denominator is `G` before the event, so an
-    /// event that ties with a censoring time loses the weight of that
-    /// censoring, as in `survival::finegray`. `G` is read at `max(start, x)`
-    /// because `G(start)` alone gives weights above 1 when the event falls
-    /// after censoring has begun. Rows of weight zero are left out.
-    #[must_use]
-    #[deprecated(since = "0.3.0", note = "use `fine_gray::rows` with a `SurvData`")]
-    pub fn expand(&self) -> Rows {
-        self.0.expand()
-    }
-
-    /// The expansion with competing-event rows summed per interval and level.
-    ///
-    /// `level` codes the covariate; levels are emitted in order of their first
-    /// competing-event individual.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Input`] when `level` does not hold one code per individual.
-    #[deprecated(since = "0.3.0", note = "use `fine_gray::risk_rows` with a `SurvData`")]
-    pub fn risk_rows(&self, level: &[u32]) -> Result<Rows> {
-        self.0.risk_rows(level)
-    }
-}
-
-/// Fit the subdistribution log hazard ratio of `cause` for one covariate.
-///
-/// Times are compared exactly, and every individual is at risk from time 0.
-/// Builds the collapsed rows and fits the weighted Cox model with delayed
-/// entry on them. `n_rows` in the result counts the collapsed rows. With
-/// `cluster`, one code per individual, the fit is on the uncollapsed rows,
-/// because the robust variance needs each individual's rows. The estimate is
-/// the same and `n_rows` counts the expanded rows.
-///
-/// # Errors
-///
-/// [`Error::Input`] when the slices differ in length or `cause` is 0.
-#[deprecated(since = "0.3.0", note = "use `fine_gray::fit` with a `SurvData`")]
-#[expect(
-    deprecated,
-    reason = "it returns the deprecated single-covariate fit's result"
-)]
-pub fn fine_gray_fit(
-    time: &[f64],
-    event: &[i32],
-    weight: &[f64],
-    x: &[f64],
-    cause: i32,
-    ties: Ties,
-    cluster: Option<&[u32]>,
-) -> Result<CoxFit> {
-    check_lengths(&[
-        ("time", time.len()),
-        ("x", x.len()),
-        ("cluster", cluster.map_or(time.len(), <[u32]>::len)),
-    ])?;
-    let expansion = Expansion::new(time, event, weight, cause)?;
-    fit_expansion(&expansion, x, ties, cluster)
-}
-
 #[cfg(test)]
-#[expect(
-    deprecated,
-    reason = "the deprecated fine_gray_fit fits through the deprecated single-covariate Cox fit"
-)]
 mod tests {
     use epistat_linalg::Mat;
 
     use super::{
         Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, rows,
     };
-    use crate::cox::{CoxData, CoxFit, Ties, fit_cox_single_covariate};
+    use crate::cox::{CoxModelFit, CoxOptions, Ties};
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
 
@@ -887,19 +743,23 @@ mod tests {
         }
     }
 
-    fn fit_rows(rows: &Rows, x: &[f64]) -> CoxFit {
-        let row_x: Vec<f64> = rows.row.iter().map(|&i| x[i as usize]).collect();
-        let is_event: Vec<bool> = rows.event.iter().map(|&e| e == 1).collect();
-        fit_cox_single_covariate(&CoxData {
-            x: &row_x,
-            is_event: &is_event,
-            start: &rows.start,
-            stop: &rows.stop,
-            weight: &rows.weight,
-            stratum: &vec![0; rows.row.len()],
-            ties: Ties::Breslow,
-            cluster: None,
-        })
+    fn fit_rows(rows: &Rows, x: &[f64]) -> CoxModelFit {
+        let design = Mat::from_fn(rows.row.len(), 1, |k, _| x[rows.row[k] as usize]);
+        let data = SurvData::builder(&rows.stop, &rows.event)
+            .n_codes(1)
+            .start(&rows.start)
+            .weight(&rows.weight)
+            .build()
+            .unwrap();
+        crate::cox::fit(
+            &data,
+            design.as_ref(),
+            &CoxOptions {
+                ties: Ties::Breslow,
+                timefix: TimeFix::Exact,
+                ..CoxOptions::default()
+            },
+        )
         .expect("consistent lengths")
     }
 
@@ -916,11 +776,15 @@ mod tests {
             let fit = fit_rows(&rows, &x);
             assert!(fit.converged);
             assert!(
-                close(fit.log_hazard_ratio.unwrap(), 0.151_472_434_751_664, 1e-10),
+                close(fit.coefficients[0].unwrap(), 0.151_472_434_751_664, 1e-10),
                 "{fit:?}"
             );
             assert!(
-                close(fit.standard_error.unwrap(), 0.634_301_730_060_493, 1e-10),
+                close(
+                    fit.standard_errors[0].unwrap(),
+                    0.634_301_730_060_493,
+                    1e-10
+                ),
                 "{fit:?}"
             );
         }

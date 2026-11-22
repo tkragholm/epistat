@@ -17,6 +17,7 @@
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
@@ -318,9 +319,7 @@ fn tests_on_awkward_stays() {
     let mut far = process(80, 43, false, |id| id as u32);
     far.n_codes = 8;
     for index in 0..far.istate.len() {
-        if far.istate[index] == 3 {
-            far.istate[index] = 6 + index as u32 % 3;
-        } else if far.istate[index] == 2 && index % 4 == 0 {
+        if far.istate[index] == 3 || (far.istate[index] == 2 && index % 4 == 0) {
             far.istate[index] = 6 + index as u32 % 3;
         }
     }
