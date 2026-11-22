@@ -33,6 +33,7 @@ pub mod age;
 pub mod codes;
 pub mod cpi;
 mod error;
+pub mod events;
 pub mod icd10;
 pub mod person_time;
 pub mod relations;
