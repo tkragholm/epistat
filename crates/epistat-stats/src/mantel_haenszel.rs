@@ -331,9 +331,10 @@ pub fn risk_ratio(tables: &[Table], level: f64) -> Result<Pooled, MhError> {
     if total(tables.iter().map(|t| t.a)) == 0.0 || total(tables.iter().map(|t| t.c)) == 0.0 {
         return Ok(undefined(used));
     }
-    let numerator = total(tables.iter().map(|t| {
-        ((t.a + t.b) / n(t)) * ((t.c + t.d) / n(t)) * (t.a + t.c) - (t.a / n(t)) * t.c
-    }));
+    let numerator =
+        total(tables.iter().map(|t| {
+            ((t.a + t.b) / n(t)) * ((t.c + t.d) / n(t)) * (t.a + t.c) - (t.a / n(t)) * t.c
+        }));
     Ok(ratio_result(r / s, numerator / (r * s), level, used))
 }
 
@@ -416,7 +417,12 @@ pub fn rate_difference(strata: &[RateStratum], level: f64) -> Result<Pooled, MhE
         let w = (s.t1 / tt(s)) * s.t0;
         w * w * (s.x1 / (s.t1 * s.t1) + s.x0 / (s.t0 * s.t0))
     }));
-    Ok(difference_result(beta, spread / (weight * weight), level, used))
+    Ok(difference_result(
+        beta,
+        spread / (weight * weight),
+        level,
+        used,
+    ))
 }
 
 fn chi_square_test(statistic: f64, df: usize) -> Test {
@@ -428,7 +434,11 @@ fn chi_square_test(statistic: f64, df: usize) -> Test {
 }
 
 fn continuity_shift(delta: f64, continuity: bool) -> f64 {
-    if continuity && delta.abs() >= 0.5 { 0.5 } else { 0.0 }
+    if continuity && delta.abs() >= 0.5 {
+        0.5
+    } else {
+        0.0
+    }
 }
 
 /// The Cochran-Mantel-Haenszel test of no association over the 2 x 2 tables,
@@ -448,7 +458,11 @@ pub fn cmh_test(tables: &[Table], continuity: bool) -> Result<Option<Test>, MhEr
     if cases == 0.0 || non_cases == 0.0 {
         return Ok(None);
     }
-    let delta = total(tables.iter().map(|t| t.a - ((t.a + t.b) / n(t)) * (t.a + t.c)));
+    let delta = total(
+        tables
+            .iter()
+            .map(|t| t.a - ((t.a + t.b) / n(t)) * (t.a + t.c)),
+    );
     let variance = total(tables.iter().filter(|t| n(t) > 1.0).map(|t| {
         let (n1, n0) = (t.a + t.b, t.c + t.d);
         let (m1, m0) = (t.a + t.c, t.b + t.d);
@@ -597,7 +611,12 @@ mod tests {
         let p = odds_ratio(&[tab(0.0, 5.0, 3.0, 4.0)], 0.95).unwrap();
         assert_eq!(p.estimate, None);
         let p = rate_ratio(
-            &[RateStratum { x1: 0.0, t1: 4.0, x0: 2.0, t0: 3.0 }],
+            &[RateStratum {
+                x1: 0.0,
+                t1: 4.0,
+                x0: 2.0,
+                t0: 3.0,
+            }],
             0.95,
         )
         .unwrap();
@@ -616,7 +635,10 @@ mod tests {
             odds_ratio(&[tab(-1.0, 1.0, 1.0, 1.0)], 0.95),
             Err(MhError::Cell)
         );
-        assert_eq!(odds_ratio(&[tab(1.0, 1.0, 1.0, 1.0)], 1.0), Err(MhError::Level));
+        assert_eq!(
+            odds_ratio(&[tab(1.0, 1.0, 1.0, 1.0)], 1.0),
+            Err(MhError::Level)
+        );
     }
 
     #[test]

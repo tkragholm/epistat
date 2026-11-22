@@ -23,6 +23,7 @@ pub mod quantile;
 pub mod rates;
 pub mod rosenbaum;
 pub mod signed_rank;
+pub mod sir;
 pub mod standardisation;
 pub mod student;
 pub mod sum;

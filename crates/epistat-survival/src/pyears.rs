@@ -320,9 +320,7 @@ impl<'d, 'x> Layout<'d, 'x> {
                             "dimension {d} needs at least two cut points"
                         )));
                     }
-                    if cuts.iter().any(|c| !c.is_finite())
-                        || cuts.windows(2).any(|w| w[0] > w[1])
-                    {
+                    if cuts.iter().any(|c| !c.is_finite()) || cuts.windows(2).any(|w| w[0] > w[1]) {
                         return Err(Error::input(format!(
                             "dimension {d}: the cut points must be finite and not decreasing"
                         )));

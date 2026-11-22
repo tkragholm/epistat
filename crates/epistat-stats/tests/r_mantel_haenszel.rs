@@ -106,14 +106,22 @@ impl Worst {
             (Some(g), Some(w)) => {
                 let r = (g - w).abs() / (bound * w.abs().max(1e-300));
                 self.0 = self.0.max(r);
-                assert!(r <= 1.0 || (g == 0.0 && w == 0.0), "{what}: {g:e} against {w:e}");
+                assert!(
+                    r <= 1.0 || (g == 0.0 && w == 0.0),
+                    "{what}: {g:e} against {w:e}"
+                );
             }
             _ => panic!("{what}: {got:?} against {want:?}"),
         }
     }
 
     fn pooled(&mut self, what: &str, got: &epistat_stats::mantel_haenszel::Pooled, want: &Pooled) {
-        self.check(&format!("{what} estimate"), got.estimate, want.estimate, 1e-12);
+        self.check(
+            &format!("{what} estimate"),
+            got.estimate,
+            want.estimate,
+            1e-12,
+        );
         self.check(&format!("{what} se"), got.se, want.se, 1e-12);
         self.check(&format!("{what} lower"), got.lower, want.lower, 1e-12);
         self.check(&format!("{what} upper"), got.upper, want.upper, 1e-12);
@@ -138,9 +146,21 @@ fn table_estimators_and_tests() {
     for case in reference().tables {
         let tables = tables_of(&case);
         let name = &case.name;
-        worst.pooled(&format!("{name} OR"), &odds_ratio(&tables, 0.95).unwrap(), &case.or);
-        worst.pooled(&format!("{name} RR"), &risk_ratio(&tables, 0.95).unwrap(), &case.rr);
-        worst.pooled(&format!("{name} RD"), &risk_difference(&tables, 0.95).unwrap(), &case.rd);
+        worst.pooled(
+            &format!("{name} OR"),
+            &odds_ratio(&tables, 0.95).unwrap(),
+            &case.or,
+        );
+        worst.pooled(
+            &format!("{name} RR"),
+            &risk_ratio(&tables, 0.95).unwrap(),
+            &case.rr,
+        );
+        worst.pooled(
+            &format!("{name} RD"),
+            &risk_difference(&tables, 0.95).unwrap(),
+            &case.rd,
+        );
 
         let cmh = cmh_test(&tables, false).unwrap();
         worst.check(
@@ -149,7 +169,12 @@ fn table_estimators_and_tests() {
             case.test_uncorrected.stat,
             1e-12,
         );
-        worst.check(&format!("{name} CMH p"), cmh.map(|t| t.p_value), case.test_uncorrected.p, 1e-8);
+        worst.check(
+            &format!("{name} CMH p"),
+            cmh.map(|t| t.p_value),
+            case.test_uncorrected.p,
+            1e-8,
+        );
         if let Some(hh) = &case.mantelhaen {
             let or = odds_ratio(&tables, 0.95).unwrap();
             if or.estimate.is_some() {
@@ -161,11 +186,26 @@ fn table_estimators_and_tests() {
                 // pooled ratio is undefined here.
                 assert_eq!((hh.or, hh.lower), (Some(0.0), None), "{name}");
             }
-            worst.check(&format!("{name} mh stat"), cmh.map(|t| t.statistic), hh.stat, 1e-12);
+            worst.check(
+                &format!("{name} mh stat"),
+                cmh.map(|t| t.statistic),
+                hh.stat,
+                1e-12,
+            );
             worst.check(&format!("{name} mh p"), cmh.map(|t| t.p_value), hh.p, 1e-8);
             let corrected = cmh_test(&tables, true).unwrap();
-            worst.check(&format!("{name} cc stat"), corrected.map(|t| t.statistic), hh.stat_corrected, 1e-12);
-            worst.check(&format!("{name} cc p"), corrected.map(|t| t.p_value), hh.p_corrected, 1e-8);
+            worst.check(
+                &format!("{name} cc stat"),
+                corrected.map(|t| t.statistic),
+                hh.stat_corrected,
+                1e-12,
+            );
+            worst.check(
+                &format!("{name} cc p"),
+                corrected.map(|t| t.p_value),
+                hh.p_corrected,
+                1e-8,
+            );
         }
 
         let bd = breslow_day(&tables, false).unwrap();
@@ -174,14 +214,34 @@ fn table_estimators_and_tests() {
             assert_eq!(bd, None, "{name}");
             continue;
         }
-        worst.check(&format!("{name} BD"), bd.map(|t| t.statistic), case.bd.stat, 1e-9);
-        worst.check(&format!("{name} BD p"), bd.map(|t| t.p_value), case.bd.p, 1e-7);
+        worst.check(
+            &format!("{name} BD"),
+            bd.map(|t| t.statistic),
+            case.bd.stat,
+            1e-9,
+        );
+        worst.check(
+            &format!("{name} BD p"),
+            bd.map(|t| t.p_value),
+            case.bd.p,
+            1e-7,
+        );
         if let (Some(t), Some(k)) = (bd, case.bd.k_pos) {
             assert_eq!(t.df as f64, k - 1.0, "{name} df");
         }
         let ta = breslow_day(&tables, true).unwrap();
-        worst.check(&format!("{name} TA"), ta.map(|t| t.statistic), case.ta.stat, 1e-9);
-        worst.check(&format!("{name} TA p"), ta.map(|t| t.p_value), case.ta.p, 1e-7);
+        worst.check(
+            &format!("{name} TA"),
+            ta.map(|t| t.statistic),
+            case.ta.stat,
+            1e-9,
+        );
+        worst.check(
+            &format!("{name} TA p"),
+            ta.map(|t| t.p_value),
+            case.ta.p,
+            1e-7,
+        );
     }
     eprintln!("tables: worst deviation {:.3} of its bound", worst.0);
 }
@@ -199,15 +259,38 @@ fn rate_estimators_and_tests() {
             })
             .collect();
         let name = &case.name;
-        worst.pooled(&format!("{name} IRR"), &rate_ratio(&strata, 0.95).unwrap(), &case.irr);
-        worst.pooled(&format!("{name} IRD"), &rate_difference(&strata, 0.95).unwrap(), &case.ird);
+        worst.pooled(
+            &format!("{name} IRR"),
+            &rate_ratio(&strata, 0.95).unwrap(),
+            &case.irr,
+        );
+        worst.pooled(
+            &format!("{name} IRD"),
+            &rate_difference(&strata, 0.95).unwrap(),
+            &case.ird,
+        );
         let plain = rate_ratio_test(&strata, false).unwrap();
-        worst.check(&format!("{name} MH"), plain.map(|t| t.statistic), case.test_uncorrected.stat, 1e-12);
-        worst.check(&format!("{name} MH p"), plain.map(|t| t.p_value), case.test_uncorrected.p, 1e-8);
+        worst.check(
+            &format!("{name} MH"),
+            plain.map(|t| t.statistic),
+            case.test_uncorrected.stat,
+            1e-12,
+        );
+        worst.check(
+            &format!("{name} MH p"),
+            plain.map(|t| t.p_value),
+            case.test_uncorrected.p,
+            1e-8,
+        );
         // rma.mh subtracts 1/2 without the minimum, so compare where the
         // numerator exceeds 1/2, which every case here does.
         let corrected = rate_ratio_test(&strata, true).unwrap();
-        worst.check(&format!("{name} MH cc"), corrected.map(|t| t.statistic), case.test_corrected.stat, 1e-12);
+        worst.check(
+            &format!("{name} MH cc"),
+            corrected.map(|t| t.statistic),
+            case.test_corrected.stat,
+            1e-12,
+        );
     }
     eprintln!("rates: worst deviation {:.3} of its bound", worst.0);
 }

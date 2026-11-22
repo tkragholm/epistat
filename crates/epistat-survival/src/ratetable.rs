@@ -14,14 +14,16 @@
 //!
 //! # Cells
 //!
-//! A time dimension is given by the start of each of its cells, strictly
-//! increasing, as the cut points of a `ratetable`. Cell `j` is
-//! `[c_j, c_{j+1})` and the last cell has no upper end: a value above the last
-//! cut has the rate of the last cell, as in R, so that an age of 112 uses the
-//! last age band. A value below the first cut is off the table. Follow-up
-//! off the table has no expected count and is added to
-//! [`Expected::offtable`], as [`crate::pyears::Pyears::offtable`] does.
-//! A factor has `levels` cells, coded `0..levels`.
+//! A time dimension is given by its cut points, strictly increasing, with
+//! cell `j` the interval `[c_j, c_{j+1})`, as the cut points of
+//! [`crate::pyears::Dimension::Time`]. A value below the first cut or at or
+//! above the last is off the table. Follow-up off the table has no expected
+//! count and is added to [`Expected::offtable`], as
+//! [`crate::pyears::Pyears::offtable`] does, so the caller sees it. A
+//! `ratetable` of R instead uses the first or last cell for a value outside the
+//! cut points, and a table read from R can be given the same reach by moving
+//! its first and last cut far out. A factor has `levels` cells, coded
+//! `0..levels`.
 //!
 //! The rates are hazards per `scale` units of the follow-up time. With
 //! follow-up in days and daily hazards, as `survexp.us` has, the scale is 1.
@@ -77,18 +79,14 @@ use crate::error::{Error, Result};
 use crate::pyears::{Dimension, Layout, PyearsOptions};
 use crate::surv::SurvData;
 
-/// The upper end given to the last cell of a time dimension when the table is
-/// walked. It is far above any follow-up and finite.
-const OPEN_END: f64 = 1e300;
-
 /// One dimension of a rate table.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RateDim {
-    /// A classification that advances with follow-up, given by the start of
-    /// each cell. The last cell has no upper end.
+    /// A classification that advances with follow-up, given by the cut points
+    /// of its cells.
     Time {
-        /// The starts of the cells, finite, strictly increasing and at least
-        /// one.
+        /// The cut points, finite, strictly increasing and at least two. There
+        /// are `cuts.len() - 1` cells.
         cuts: Vec<f64>,
     },
     /// A classification fixed for a row.
@@ -101,7 +99,7 @@ pub enum RateDim {
 impl RateDim {
     fn len(&self) -> usize {
         match self {
-            Self::Time { cuts } => cuts.len(),
+            Self::Time { cuts } => cuts.len() - 1,
             Self::Factor { levels } => *levels,
         }
     }
@@ -152,7 +150,7 @@ impl RateTable {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for no dimension, a time dimension with no cut or with
+    /// [`Error::Input`] for no dimension, a time dimension with fewer than two cuts or with
     /// cuts that are not finite and strictly increasing, a factor with no
     /// level, a number of hazards other than the number of cells, a hazard
     /// that is negative, NaN or infinite, or a scale that is not finite and
@@ -169,10 +167,13 @@ impl RateTable {
         for (d, dim) in dims.iter().enumerate() {
             match dim {
                 RateDim::Time { cuts } => {
-                    if cuts.is_empty() {
-                        return Err(Error::input(format!("dimension {d} has no cut points")));
+                    if cuts.len() < 2 {
+                        return Err(Error::input(format!(
+                            "dimension {d} needs at least two cut points"
+                        )));
                     }
-                    if cuts.iter().any(|c| !c.is_finite()) || cuts.windows(2).any(|w| !(w[0] < w[1]))
+                    if cuts.iter().any(|c| !c.is_finite())
+                        || cuts.windows(2).any(|w| !(w[0] < w[1]))
                     {
                         return Err(Error::input(format!(
                             "dimension {d}: the cut points must be finite and strictly increasing"
@@ -235,8 +236,8 @@ impl RateTable {
 
     /// The hazard at `coords`, one value per dimension: the value of a time
     /// dimension, or the level of a factor as an integer value. `None` when
-    /// the length is wrong, a time value is not finite or is below the first
-    /// cut, or a factor value is not a level.
+    /// the length is wrong, a time value is not finite or is off the table, or
+    /// a factor value is not a level.
     #[must_use]
     pub fn rate(&self, coords: &[f64]) -> Option<f64> {
         if coords.len() != self.dims.len() {
@@ -250,7 +251,11 @@ impl RateTable {
                     if !x.is_finite() {
                         return None;
                     }
-                    cuts.partition_point(|&c| c <= x).checked_sub(1)?
+                    let above = cuts.partition_point(|&c| c <= x);
+                    if above == 0 || above == cuts.len() {
+                        return None;
+                    }
+                    above - 1
                 }
                 RateDim::Factor { levels } => {
                     if !(x >= 0.0 && x.fract() == 0.0 && x < *levels as f64) {
@@ -283,7 +288,10 @@ impl RateTable {
                 self.rates.len()
             )));
         }
-        if let Some(i) = person_time.iter().position(|v| !(v.is_finite() && *v >= 0.0)) {
+        if let Some(i) = person_time
+            .iter()
+            .position(|v| !(v.is_finite() && *v >= 0.0))
+        {
             return Err(Error::input(format!(
                 "the person-time of cell {i} is not finite and non-negative"
             )));
@@ -307,7 +315,7 @@ impl RateTable {
     ///
     /// [`Error::Input`] for a number of dimensions other than the table's, slices of
     /// different length, a code outside the levels of its dimension (a time
-    /// dimension has one more level than it has cuts, the last being open), or a
+    /// dimension has one more level than it has cuts), or a
     /// length that is negative or not finite.
     pub fn expected_keyed(&self, codes: &[&[u32]], length: &[f64]) -> Result<KeyedExpected> {
         if codes.len() != self.dims.len() {
@@ -350,13 +358,14 @@ impl RateTable {
             for (d, dim) in self.dims.iter().enumerate() {
                 let code = codes[d][k] as usize;
                 let cell = match dim {
-                    RateDim::Time { .. } => match code.checked_sub(1) {
-                        Some(cell) => cell,
-                        None => {
+                    RateDim::Time { cuts } => {
+                        if code == 0 || code == cuts.len() {
                             off = true;
                             0
+                        } else {
+                            code - 1
                         }
-                    },
+                    }
                     RateDim::Factor { .. } => code,
                 };
                 position += cell * stride;
@@ -409,27 +418,15 @@ impl RateTable {
                 factors.len()
             )));
         }
-        let open: Vec<Vec<f64>> = self
-            .dims
-            .iter()
-            .filter_map(|d| match d {
-                RateDim::Time { cuts } => {
-                    let mut open = cuts.clone();
-                    open.push(OPEN_END);
-                    Some(open)
-                }
-                RateDim::Factor { .. } => None,
-            })
-            .collect();
         let (mut next_time, mut next_factor) = (0, 0);
         let dims: Vec<Dimension<'_>> = self
             .dims
             .iter()
             .map(|d| match d {
-                RateDim::Time { .. } => {
+                RateDim::Time { cuts } => {
                     let dim = Dimension::Time {
                         origin: origins[next_time],
-                        cuts: &open[next_time],
+                        cuts,
                     };
                     next_time += 1;
                     dim
@@ -483,11 +480,11 @@ mod tests {
     use super::*;
 
     fn table() -> RateTable {
-        // Age bands from 0 and 10, sex of two levels, hazards per year.
+        // Age bands 0 to 10 and 10 to 100, sex of two levels, hazards per year.
         RateTable::new(
             vec![
                 RateDim::Time {
-                    cuts: vec![0.0, 10.0],
+                    cuts: vec![0.0, 10.0, 100.0],
                 },
                 RateDim::Factor { levels: 2 },
             ],
@@ -505,6 +502,7 @@ mod tests {
         assert_eq!(t.rate(&[10.0, 0.0]), Some(0.02));
         assert_eq!(t.rate(&[99.0, 1.0]), Some(0.2));
         assert_eq!(t.rate(&[-1.0, 0.0]), None);
+        assert_eq!(t.rate(&[100.0, 0.0]), None);
         assert_eq!(t.rate(&[5.0, 2.0]), None);
         assert_eq!(t.rate(&[5.0, 0.5]), None);
         assert_eq!(t.rate(&[5.0]), None);
@@ -519,7 +517,10 @@ mod tests {
         let data = SurvData::builder(&stop, &status).build().unwrap();
         let e = t.expected(&data, &[&[8.0]], &[&[0]]).unwrap();
         assert!((e.total - (2.0 * 0.01 + 2.0 * 0.02)).abs() < 1e-15);
-        assert_eq!(e.per_row[0].to_bits(), (2.0_f64 * 0.01 + 2.0 * 0.02).to_bits());
+        assert_eq!(
+            e.per_row[0].to_bits(),
+            (2.0_f64 * 0.01 + 2.0 * 0.02).to_bits()
+        );
         assert_eq!(e.offtable, 0.0);
     }
 
@@ -542,17 +543,27 @@ mod tests {
         assert!(RateTable::new(dim(), vec![0.1, f64::NAN], 1.0).is_err());
         assert!(RateTable::new(dim(), vec![0.1, -0.2], 1.0).is_err());
         assert!(RateTable::new(dim(), vec![0.1, 0.2], 0.0).is_err());
-        let bad = vec![RateDim::Time { cuts: vec![1.0, 1.0] }];
+        let bad = vec![RateDim::Time {
+            cuts: vec![1.0, 1.0, 2.0],
+        }];
         assert!(RateTable::new(bad, vec![0.1, 0.2], 1.0).is_err());
+        let one = vec![RateDim::Time { cuts: vec![1.0] }];
+        assert!(RateTable::new(one, vec![], 1.0).is_err());
     }
 
     #[test]
     fn keyed_cells_match_the_walk() {
         let t = table();
         let k = t
-            .expected_keyed(&[&[0, 1, 2, 2], &[0, 0, 0, 1]], &[1.0, 2.0, 3.0, 4.0])
+            .expected_keyed(
+                &[&[0, 1, 2, 2, 3], &[0, 0, 0, 1, 0]],
+                &[1.0, 2.0, 3.0, 4.0, 5.0],
+            )
             .unwrap();
-        assert_eq!(k.offtable, 1.0);
-        assert_eq!(k.per_cell, vec![0.0, 2.0 * 0.01, 3.0 * 0.02, 4.0 * 0.2]);
+        assert_eq!(k.offtable, 6.0);
+        assert_eq!(
+            k.per_cell,
+            vec![0.0, 2.0 * 0.01, 3.0 * 0.02, 4.0 * 0.2, 0.0]
+        );
     }
 }
