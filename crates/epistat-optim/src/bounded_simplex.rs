@@ -297,6 +297,10 @@ pub struct BoundedSimplex {
     n: usize,
     /// Column-major `m * n`.
     a: Vec<f64>,
+    /// The first `n - n % 4` columns of `a` in blocks of four columns, each
+    /// block stored by row: entry `i` of the four columns is contiguous. The
+    /// pivot-row scan reads it to keep four sums in four lanes.
+    a_blocks: Vec<f64>,
     /// The costs `c` of the structural columns, as given.
     cost: Vec<f64>,
     /// Minimisation costs of the `n + m` variables, `-c` plus the perturbation.
@@ -323,6 +327,30 @@ pub struct BoundedSimplex {
     xb: Vec<f64>,
     since_refactor: usize,
     iterations: u64,
+}
+
+/// The first `n - n % 4` columns of the column-major `m * n` matrix `a` in
+/// blocks of four columns, each stored by row.
+fn interleave(a: &[f64], m: usize, n: usize) -> Vec<f64> {
+    let mut out = Vec::with_capacity(n / 4 * 4 * m);
+    for block in a[..n / 4 * 4 * m].chunks_exact(4 * m) {
+        for i in 0..m {
+            out.extend((0..4).map(|lane| block[lane * m + i]));
+        }
+    }
+    out
+}
+
+/// `sum_i x[i] column[i]` of four columns at once, each sum in the order of
+/// `i`, which is the sum of one column on its own.
+fn block_dots(block: &[f64], x: &[f64]) -> [f64; 4] {
+    let mut sum = [0.0_f64; 4];
+    for (&xi, row) in x.iter().zip(block.chunks_exact(4)) {
+        for lane in 0..4 {
+            sum[lane] += xi * row[lane];
+        }
+    }
+    sum
 }
 
 fn finite_or(value: f64, otherwise: f64) -> f64 {
@@ -413,6 +441,7 @@ impl BoundedSimplex {
             m,
             n,
             a: columns.to_vec(),
+            a_blocks: interleave(columns, m, n),
             cost: cost.to_vec(),
             q,
             eps: vec![0.0; n],
@@ -1262,22 +1291,45 @@ impl BoundedSimplex {
                 flip: false,
             })
         };
+        let blocked = n / 4 * 4;
         let mut out = chunked(n, |start, end| {
             let mut v = Vec::new();
-            for j in start..end {
-                if self.status[j] == Status::Basic {
+            let mut j = start;
+            while j < end {
+                if j % 4 == 0 && j + 4 <= end.min(blocked) {
+                    // `start` is a multiple of `CHUNK`, so a block never
+                    // straddles two chunks.
+                    if self.status[j..j + 4].iter().any(|&s| s != Status::Basic) {
+                        let block = &self.a_blocks[j * m..(j + 4) * m];
+                        let alpha = block_dots(block, rho);
+                        let ay = block_dots(block, y);
+                        for lane in 0..4 {
+                            if self.status[j + lane] == Status::Basic {
+                                continue;
+                            }
+                            if let Some(c) =
+                                consider(j + lane, alpha[lane], self.q[j + lane] - ay[lane])
+                            {
+                                v.push(c);
+                            }
+                        }
+                    }
+                    j += 4;
                     continue;
                 }
-                let column = &self.a[j * m..(j + 1) * m];
-                let mut alpha = 0.0;
-                let mut ay = 0.0;
-                for i in 0..m {
-                    alpha += rho[i] * column[i];
-                    ay += y[i] * column[i];
+                if self.status[j] != Status::Basic {
+                    let column = &self.a[j * m..(j + 1) * m];
+                    let mut alpha = 0.0;
+                    let mut ay = 0.0;
+                    for i in 0..m {
+                        alpha += rho[i] * column[i];
+                        ay += y[i] * column[i];
+                    }
+                    if let Some(c) = consider(j, alpha, self.q[j] - ay) {
+                        v.push(c);
+                    }
                 }
-                if let Some(c) = consider(j, alpha, self.q[j] - ay) {
-                    v.push(c);
-                }
+                j += 1;
             }
             v
         });
@@ -1599,6 +1651,99 @@ mod tests {
     }
 
     const INF: f64 = f64::INFINITY;
+
+    /// The pivot-row scan one column at a time.
+    fn candidates_by_column(
+        lp: &BoundedSimplex,
+        rho: &[f64],
+        y: &[f64],
+        increase: bool,
+    ) -> Vec<Candidate> {
+        let (m, n) = (lp.m, lp.n);
+        let sign = if increase { -1.0 } else { 1.0 };
+        let mut out = Vec::new();
+        for j in 0..n {
+            if lp.status[j] == Status::Basic || lp.lo[j] == lp.hi[j] {
+                continue;
+            }
+            let column = &lp.a[j * m..(j + 1) * m];
+            let (mut alpha, mut ay) = (0.0, 0.0);
+            for i in 0..m {
+                alpha += rho[i] * column[i];
+                ay += y[i] * column[i];
+            }
+            let (t, d) = (sign * alpha, lp.q[j] - ay);
+            let (eligible, signed_d) = match lp.status[j] {
+                Status::Lower => (t > TOL_PIVOT_ABS, d.max(0.0)),
+                Status::Upper => (t < -TOL_PIVOT_ABS, (-d).max(0.0)),
+                _ => (t.abs() > TOL_PIVOT_ABS, 0.0),
+            };
+            if eligible {
+                let width = lp.hi[j] - lp.lo[j];
+                out.push(Candidate {
+                    j,
+                    d: signed_d,
+                    ratio: signed_d / t.abs(),
+                    t,
+                    weight: if width.is_finite() {
+                        t.abs() * width
+                    } else {
+                        f64::INFINITY
+                    },
+                    flip: false,
+                });
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_blocked_scan_equals_the_column_scan() {
+        let mut rng = Rng(23);
+        for trial in 0..60 {
+            let m = 1 + trial % 9;
+            let n = 3 + trial % 14;
+            let columns: Vec<f64> = (0..n * m)
+                .map(|_| {
+                    if rng.uniform(0.0, 1.0) < 0.3 {
+                        0.0
+                    } else {
+                        rng.uniform(-1.0, 2.0)
+                    }
+                })
+                .collect();
+            let cost: Vec<f64> = (0..n).map(|_| rng.uniform(-1.0, 1.0)).collect();
+            let hi: Vec<f64> = (0..n).map(|j| if j % 5 == 0 { 0.0 } else { 3.0 }).collect();
+            let mut lp = BoundedSimplex::new(
+                m,
+                &columns,
+                &cost,
+                &vec![0.0; n],
+                &hi,
+                &vec![-INF; m],
+                &vec![1.0; m],
+            )
+            .unwrap();
+            for pivots in [0usize, 1, 3] {
+                let _ = lp.solve_within(None, pivots);
+                let rho: Vec<f64> = (0..m).map(|_| rng.uniform(-1.0, 1.0)).collect();
+                let y = lp.duals();
+                for increase in [false, true] {
+                    let mut got = lp.candidates(&rho, &y, increase);
+                    got.retain(|c| c.j < lp.n);
+                    let want = candidates_by_column(&lp, &rho, &y, increase);
+                    assert_eq!(got.len(), want.len(), "trial {trial}");
+                    for (g, w) in got.iter().zip(&want) {
+                        assert_eq!(g.j, w.j);
+                        assert_eq!(g.d.to_bits(), w.d.to_bits());
+                        assert_eq!(g.ratio.to_bits(), w.ratio.to_bits());
+                        assert_eq!(g.t.to_bits(), w.t.to_bits());
+                        assert_eq!(g.weight.to_bits(), w.weight.to_bits());
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn small_example_with_a_bound_flip() {
