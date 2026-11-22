@@ -247,27 +247,10 @@ fn signif(x: f64, digits: i32) -> f64 {
     }
 }
 
-/// The type 7 quantile of sorted values: linear interpolation between order
-/// statistics at position `(n - 1) p`.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::float_cmp,
-    reason = "the position lies between 0 and n - 1, and equal neighbours are \
-              returned as they are rather than interpolated"
-)]
+/// The type 7 quantile of sorted finite values at a probability in `[0, 1]`.
 fn quantile7(sorted: &[f64], p: f64) -> f64 {
-    let index = (sorted.len() - 1) as f64 * p;
-    let lower = index.floor();
-    let upper = index.ceil();
-    let low = sorted[lower as usize];
-    let high = sorted[upper as usize];
-    if index > lower && high != low {
-        let h = index - lower;
-        (1.0 - h) * low + h * high
-    } else {
-        low
-    }
+    epistat_stats::quantile::type7(sorted, p)
+        .expect("the values are finite and non-empty and the probability lies in [0, 1]")
 }
 
 fn sample_variance(values: &[f64]) -> f64 {
@@ -971,5 +954,61 @@ mod tests {
         assert!((signif(123_456.0, 5) - 123_460.0).abs() < 1e-9);
         assert!((signif(0.000_123_456, 5) - 0.000_123_46).abs() < 1e-15);
         assert!((signif(-2.5, 1) + 2.0).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod quantile_reference_tests {
+    use super::quantile7;
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::float_cmp,
+        reason = "the position lies between 0 and n - 1"
+    )]
+    fn reference_quantile7(sorted: &[f64], p: f64) -> f64 {
+        let index = (sorted.len() - 1) as f64 * p;
+        let lower = index.floor();
+        let upper = index.ceil();
+        let low = sorted[lower as usize];
+        let high = sorted[upper as usize];
+        if index > lower && high != low {
+            let h = index - lower;
+            (1.0 - h) * low + h * high
+        } else {
+            low
+        }
+    }
+
+    /// The shared quantile agrees with the one written here for CEM, within
+    /// one unit in the last place. The two differ only in how the weight of
+    /// the upper neighbour is rounded.
+    #[test]
+    fn the_shared_quantile_is_within_an_ulp_of_the_earlier_one() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut worst = 0_u64;
+        for n in [2_usize, 3, 10, 101, 1000, 5000] {
+            let mut values: Vec<f64> = (0..n)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    (state >> 11) as f64 / (1_u64 << 53) as f64 * 100.0
+                })
+                .collect();
+            values.sort_by(f64::total_cmp);
+            for k in 0..=64 {
+                let p = f64::from(k) / 64.0;
+                let (a, b) = (quantile7(&values, p), reference_quantile7(&values, p));
+                let apart = a.to_bits().abs_diff(b.to_bits());
+                worst = worst.max(apart);
+            }
+            for &p in &[0.25, 0.75, 1.0 / 3.0, 0.1, 0.9, 1.0 - 1.0 / 512.0] {
+                let (a, b) = (quantile7(&values, p), reference_quantile7(&values, p));
+                worst = worst.max(a.to_bits().abs_diff(b.to_bits()));
+            }
+        }
+        assert!(worst <= 2, "largest gap {worst} ulp");
     }
 }
