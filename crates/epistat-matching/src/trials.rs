@@ -474,10 +474,7 @@ pub fn expand_trials<R: MatchingRecord>(
 pub fn trial_seed(seed: u64, period: i64) -> u64 {
     // SplitMix64 of the seed combined with the period, so that the seeds of
     // neighbouring periods are not neighbours.
-    let mut z = seed.wrapping_add((period as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
+    epistat_rng::mix64(seed.wrapping_add((period as u64).wrapping_mul(epistat_rng::GAMMA)))
 }
 
 /// The pool of one trial, as the matching of the trial is given it.

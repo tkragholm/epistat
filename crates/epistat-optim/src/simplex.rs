@@ -835,33 +835,16 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 mod tests {
     use super::{DenseSimplex, LpError};
 
-    /// `SplitMix64`, enough for generating test problems.
-    struct Rng(u64);
+    use epistat_testkit::SplitMix64 as Rng;
 
-    impl Rng {
-        fn next_u64(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        }
+    /// Uniform integer in `[lo, hi)`.
+    #[expect(clippy::cast_possible_truncation, reason = "the range is small")]
+    fn range(rng: &mut Rng, lo: usize, hi: usize) -> usize {
+        lo + rng.below((hi - lo) as u64) as usize
+    }
 
-        /// Uniform in `[lo, hi)`.
-        fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
-            let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-            lo + (hi - lo) * unit
-        }
-
-        /// Uniform integer in `[lo, hi)`.
-        #[expect(clippy::cast_possible_truncation, reason = "the range is small")]
-        fn range(&mut self, lo: usize, hi: usize) -> usize {
-            lo + (self.next_u64() % (hi - lo) as u64) as usize
-        }
-
-        fn chance(&mut self, p: f64) -> bool {
-            self.uniform(0.0, 1.0) < p
-        }
+    fn chance(rng: &mut Rng, p: f64) -> bool {
+        rng.unit() < p
     }
 
     /// Costs that keep `max c'λ` bounded on these columns: each `c_j` sits
@@ -886,7 +869,7 @@ mod tests {
         // g = A λ0 for a sparse nonnegative λ0, so the problem is feasible.
         let mut g = vec![0.0; m];
         for column in &columns {
-            if rng.chance(0.4) {
+            if chance(rng, 0.4) {
                 let weight = rng.uniform(0.0, 2.0);
                 for (g, a) in g.iter_mut().zip(column) {
                     *g += weight * a;
@@ -977,10 +960,10 @@ mod tests {
 
     #[test]
     fn random_feasible_bounded_programs_are_optimal() {
-        let mut rng = Rng(20_260_904);
+        let mut rng = Rng::new(20_260_904);
         for trial in 0..300 {
-            let m = rng.range(2, 9);
-            let n = rng.range(m, m + 24);
+            let m = range(&mut rng, 2, 9);
+            let n = range(&mut rng, m, m + 24);
             let (columns, g, c) = random_feasible_problem(&mut rng, m, n);
             let mut lp = DenseSimplex::new(&columns, &g);
             lp.set_cost(&c);
@@ -991,10 +974,10 @@ mod tests {
 
     #[test]
     fn small_programs_match_enumeration_of_basic_solutions() {
-        let mut rng = Rng(31);
+        let mut rng = Rng::new(31);
         for trial in 0..300 {
-            let m = rng.range(1, 4);
-            let n = rng.range(m, 8);
+            let m = range(&mut rng, 1, 4);
+            let n = range(&mut rng, m, 8);
             let (columns, g, c) = random_feasible_problem(&mut rng, m, n);
             let reference = brute_force(&columns, &g, &c);
             let mut lp = DenseSimplex::new(&columns, &g);
@@ -1014,10 +997,10 @@ mod tests {
 
     #[test]
     fn warm_start_after_a_cost_change_matches_a_cold_solve() {
-        let mut rng = Rng(7);
+        let mut rng = Rng::new(7);
         for _ in 0..100 {
-            let m = rng.range(2, 8);
-            let n = rng.range(m + 2, m + 20);
+            let m = range(&mut rng, 2, 8);
+            let n = range(&mut rng, m + 2, m + 20);
             let (columns, g, c1) = random_feasible_problem(&mut rng, m, n);
             let c2 = bounded_cost(&mut rng, &columns, m);
             let mut warm = DenseSimplex::new(&columns, &g);
@@ -1035,10 +1018,10 @@ mod tests {
 
     #[test]
     fn remembered_bases_give_the_same_optimum() {
-        let mut rng = Rng(11);
+        let mut rng = Rng::new(11);
         for _ in 0..50 {
-            let m = rng.range(2, 8);
-            let n = rng.range(m + 2, m + 20);
+            let m = range(&mut rng, 2, 8);
+            let n = range(&mut rng, m + 2, m + 20);
             let (columns, g, _) = random_feasible_problem(&mut rng, m, n);
             let mut with_memory = DenseSimplex::new(&columns, &g);
             with_memory.set_memory(4);
@@ -1099,7 +1082,7 @@ mod tests {
     fn survives_a_degenerate_start_and_many_pivots() {
         // g = e_0 makes every artificial but one start at zero, so phase one is
         // degenerate from the first pivot.
-        let mut rng = Rng(99);
+        let mut rng = Rng::new(99);
         let mut feasible_programs = 0;
         for _ in 0..50 {
             let m = 20;

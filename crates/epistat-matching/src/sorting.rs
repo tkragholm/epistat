@@ -174,36 +174,24 @@ pub(crate) fn sort_keyed(entries: &mut [(u64, u32)]) {
 mod tests {
     use super::*;
 
-    struct Mix(u64);
+    use epistat_testkit::SplitMix64 as Mix;
 
-    impl Mix {
-        fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            z ^ (z >> 31)
-        }
-    }
-
-    impl Mix {
-        fn below(&mut self, bound: u32) -> u32 {
-            u32::try_from(self.next() % u64::from(bound)).expect("below a u32")
-        }
+    fn below(mix: &mut Mix, bound: u32) -> u32 {
+        u32::try_from(mix.below(u64::from(bound))).expect("below a u32")
     }
 
     const SIZES: [u32; 10] = [0, 1, 2, 100, 2047, 2048, 4095, 4096, 4097, 20_011];
 
     #[test]
     fn days_sort_as_pairs_do() {
-        let mut rng = Mix(1);
+        let mut rng = Mix::new(1);
         for n in SIZES {
             for spread in [1_u32, 40, 11_000, 2_000_000_000] {
                 let mut pairs: Vec<(i32, u32)> = (0..n)
                     .map(|i| {
-                        let day =
-                            i32::try_from(rng.below(spread)).expect("below 2^31") - 1_000_000_000;
-                        (day, rng.below(n + 1) + i % 3)
+                        let day = i32::try_from(below(&mut rng, spread)).expect("below 2^31")
+                            - 1_000_000_000;
+                        (day, below(&mut rng, n + 1) + i % 3)
                     })
                     .collect();
                 let mut expected = pairs.clone();
@@ -232,11 +220,11 @@ mod tests {
 
     #[test]
     fn days_with_usize_indices_sort_as_pairs_do() {
-        let mut rng = Mix(2);
+        let mut rng = Mix::new(2);
         for n in SIZES {
             let mut pairs: Vec<(i32, usize)> = (0..n)
                 .map(|i| {
-                    let day = i32::try_from(rng.below(500)).expect("small") + 700_000;
+                    let day = i32::try_from(below(&mut rng, 500)).expect("small") + 700_000;
                     (day, usize::try_from(i / 2).expect("small"))
                 })
                 .collect();
@@ -249,13 +237,13 @@ mod tests {
 
     #[test]
     fn keyed_pairs_sort_as_pairs_do() {
-        let mut rng = Mix(3);
+        let mut rng = Mix::new(3);
         for n in SIZES {
             for distinct in [3_u64, 1000, u64::MAX] {
                 let mut pairs: Vec<(u64, u32)> = (0..n)
                     .map(|_| {
-                        let key = (rng.next() % distinct).wrapping_add(u64::MAX - 5_000);
-                        (key, rng.below(50))
+                        let key = (rng.next_u64() % distinct).wrapping_add(u64::MAX - 5_000);
+                        (key, below(&mut rng, 50))
                     })
                     .collect();
                 let mut expected = pairs.clone();

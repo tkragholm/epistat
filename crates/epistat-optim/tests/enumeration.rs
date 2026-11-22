@@ -20,22 +20,10 @@
 use epistat_optim::branch_and_bound::{MipError, MixedBinaryProgram, Options, Status, solve};
 use epistat_optim::min_cost_flow::{FlowError, MinCostFlow};
 
-struct Rng(u64);
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
-        let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-        lo + (hi - lo) * unit
-    }
-    fn int(&mut self, lo: i64, hi: i64) -> i64 {
-        lo + (self.next_u64() % ((hi - lo + 1) as u64)) as i64
-    }
+use epistat_testkit::SplitMix64 as Rng;
+
+fn int(rng: &mut Rng, lo: i64, hi: i64) -> i64 {
+    lo + rng.below((hi - lo + 1) as u64) as i64
 }
 
 const INF: f64 = f64::INFINITY;
@@ -170,7 +158,7 @@ fn check_trial(
 /// negative costs, general integer columns and columns fixed at 1.
 #[test]
 fn integer_programs_agree_with_enumeration() {
-    let mut rng = Rng(77);
+    let mut rng = Rng::new(77);
     let mut failures = Vec::new();
     for trial in 0..3000 {
         let nbin = 4 + trial % 9;
@@ -179,25 +167,25 @@ fn integer_programs_agree_with_enumeration() {
         let m = 1 + trial % 4;
         let mut columns = vec![0.0; n * m];
         for v in &mut columns {
-            *v = rng.int(-3, 6) as f64;
+            *v = int(&mut rng, -3, 6) as f64;
         }
-        let cost: Vec<f64> = (0..n).map(|_| rng.int(-2, 9) as f64).collect();
+        let cost: Vec<f64> = (0..n).map(|_| int(&mut rng, -2, 9) as f64).collect();
         let mut lo = vec![0.0; n];
         let mut hi = vec![1.0; n];
         for j in 0..nbin {
-            if rng.int(0, 9) == 0 {
+            if int(&mut rng, 0, 9) == 0 {
                 lo[j] = 1.0;
             }
         }
         for j in nbin..n {
-            lo[j] = rng.int(-2, 0) as f64;
-            hi[j] = rng.int(1, 3) as f64;
+            lo[j] = int(&mut rng, -2, 0) as f64;
+            hi[j] = int(&mut rng, 1, 3) as f64;
         }
         let mut row_lo = vec![-INF; m];
         let mut row_hi = vec![INF; m];
         for i in 0..m {
-            let kind = rng.int(0, 3);
-            let centre = rng.int(0, (2 * n) as i64) as f64;
+            let kind = int(&mut rng, 0, 3);
+            let centre = int(&mut rng, 0, (2 * n) as i64) as f64;
             match kind {
                 0 => row_hi[i] = centre,
                 1 => row_lo[i] = centre,
@@ -206,8 +194,8 @@ fn integer_programs_agree_with_enumeration() {
                     row_hi[i] = centre;
                 }
                 _ => {
-                    row_lo[i] = centre - rng.int(0, 3) as f64;
-                    row_hi[i] = centre + rng.int(0, 3) as f64;
+                    row_lo[i] = centre - int(&mut rng, 0, 3) as f64;
+                    row_hi[i] = centre + int(&mut rng, 0, 3) as f64;
                 }
             }
         }
@@ -242,7 +230,7 @@ fn integer_programs_agree_with_enumeration() {
 /// that has a cost, and binary columns only otherwise.
 #[test]
 fn real_programs_agree_with_enumeration() {
-    let mut rng = Rng(91);
+    let mut rng = Rng::new(91);
     let mut failures = Vec::new();
     for trial in 0..3000 {
         let nbin = 4 + trial % 10;
@@ -264,7 +252,7 @@ fn real_programs_agree_with_enumeration() {
         let mut row_hi = vec![INF; m];
         for i in 0..m {
             let centre = rng.uniform(0.0, nbin as f64 / 2.0);
-            match rng.int(0, 2) {
+            match int(&mut rng, 0, 2) {
                 0 => row_hi[i] = centre,
                 1 => row_lo[i] = centre - 1.0,
                 _ => {
@@ -303,7 +291,7 @@ fn real_programs_agree_with_enumeration() {
 /// branching carry the proof alone.
 #[test]
 fn integer_programs_without_heuristics_agree_with_enumeration() {
-    let mut rng = Rng(1234);
+    let mut rng = Rng::new(1234);
     let mut failures = Vec::new();
     let options = Options {
         neighbourhood_search: false,
@@ -315,13 +303,15 @@ fn integer_programs_without_heuristics_agree_with_enumeration() {
         let m = 1 + trial % 3;
         let mut columns = vec![0.0; n * m];
         for v in &mut columns {
-            *v = rng.int(0, 7) as f64;
+            *v = int(&mut rng, 0, 7) as f64;
         }
-        let cost: Vec<f64> = (0..n).map(|_| rng.int(1, 12) as f64).collect();
+        let cost: Vec<f64> = (0..n).map(|_| int(&mut rng, 1, 12) as f64).collect();
         let lo = vec![0.0; n];
         let hi = vec![1.0; n];
         let row_lo = vec![-INF; m];
-        let row_hi: Vec<f64> = (0..m).map(|_| rng.int(3, 3 * n as i64) as f64).collect();
+        let row_hi: Vec<f64> = (0..m)
+            .map(|_| int(&mut rng, 3, 3 * n as i64) as f64)
+            .collect();
         let binary = vec![true; n];
         if let Err(e) = check_trial(
             trial,
@@ -439,26 +429,26 @@ fn reference_flow(nodes: usize, supply: &[i64], arcs: &[(usize, usize, i64, i64)
 
 #[test]
 fn network_simplex_agrees_with_successive_shortest_paths() {
-    let mut rng = Rng(5);
+    let mut rng = Rng::new(5);
     let mut failures = Vec::new();
     for trial in 0..3000 {
         let nodes = 3 + trial % 10;
-        let narcs = nodes + rng.int(0, 3 * nodes as i64) as usize;
+        let narcs = nodes + int(&mut rng, 0, 3 * nodes as i64) as usize;
         let mut arcs = Vec::new();
         for _ in 0..narcs {
-            let a = rng.int(0, nodes as i64 - 1) as usize;
-            let mut b = rng.int(0, nodes as i64 - 1) as usize;
+            let a = int(&mut rng, 0, nodes as i64 - 1) as usize;
+            let mut b = int(&mut rng, 0, nodes as i64 - 1) as usize;
             if a == b {
                 b = (b + 1) % nodes;
             }
             // Non-negative costs (no negative cycles), zero capacities included.
-            arcs.push((a, b, rng.int(0, 4), rng.int(0, 9)));
+            arcs.push((a, b, int(&mut rng, 0, 4), int(&mut rng, 0, 9)));
         }
         let mut supply = vec![0_i64; nodes];
-        for _ in 0..rng.int(1, 4) {
-            let a = rng.int(0, nodes as i64 - 1) as usize;
-            let b = rng.int(0, nodes as i64 - 1) as usize;
-            let q = rng.int(1, 3);
+        for _ in 0..int(&mut rng, 1, 4) {
+            let a = int(&mut rng, 0, nodes as i64 - 1) as usize;
+            let b = int(&mut rng, 0, nodes as i64 - 1) as usize;
+            let q = int(&mut rng, 1, 3);
             supply[a] += q;
             supply[b] -= q;
         }
@@ -552,7 +542,7 @@ fn a_huge_capacity_negative_cycle_is_solved_exactly() {
 /// and a status of Optimal must mean the optimum.
 #[test]
 fn bounds_under_node_limits_hold() {
-    let mut rng = Rng(4242);
+    let mut rng = Rng::new(4242);
     let mut failures = Vec::new();
     for trial in 0..1500 {
         let nbin = 8 + trial % 9;
@@ -562,7 +552,7 @@ fn bounds_under_node_limits_hold() {
         let mut columns = vec![0.0; n * m];
         for v in &mut columns {
             *v = if integer_data {
-                rng.int(-2, 7) as f64
+                int(&mut rng, -2, 7) as f64
             } else {
                 rng.uniform(-1.0, 2.0)
             };
@@ -570,7 +560,7 @@ fn bounds_under_node_limits_hold() {
         let cost: Vec<f64> = (0..n)
             .map(|_| {
                 if integer_data {
-                    rng.int(-1, 9) as f64
+                    int(&mut rng, -1, 9) as f64
                 } else {
                     rng.uniform(-0.3, 2.0)
                 }
@@ -585,7 +575,7 @@ fn bounds_under_node_limits_hold() {
         let row_hi: Vec<f64> = (0..m)
             .map(|_| {
                 if integer_data {
-                    rng.int(2, 2 * nbin as i64) as f64
+                    int(&mut rng, 2, 2 * nbin as i64) as f64
                 } else {
                     rng.uniform(1.0, nbin as f64 / 2.0)
                 }
@@ -678,7 +668,7 @@ fn bounds_under_node_limits_hold() {
 #[test]
 fn matching_shaped_programs_with_a_ratio_agree_with_enumeration() {
     let trials = if cfg!(debug_assertions) { 60 } else { 400 };
-    let mut rng = Rng(99);
+    let mut rng = Rng::new(99);
     let mut failures = Vec::new();
     for trial in 0..trials {
         let nbin = 12 + trial % 7;

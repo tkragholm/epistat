@@ -2097,14 +2097,9 @@ mod tests {
 
         let names = ["x1", "x2", "x3"];
         for seed in [2_u64, 3] {
-            let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            let mut next = move || {
-                state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-                let mut z = state;
-                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-                z ^ (z >> 31)
-            };
+            let mut rng =
+                epistat_testkit::SplitMix64::new(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            let mut next = move || rng.next_u64();
             // Small integer coordinates make many pairs tie exactly. Chosen
             // so the pool is longer than one scan chunk.
             let units: Vec<BalanceRecord> = (0..9_000)

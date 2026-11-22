@@ -724,10 +724,7 @@ impl BoundedSimplex {
             } else {
                 continue;
             };
-            let mut z = (j as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^= z >> 31;
+            let z = epistat_rng::splitmix64(j as u64);
             let h = (z >> 11) as f64 / (1u64 << 53) as f64;
             self.eps[j] = eps_max * (0.5 + 0.5 * h) * sign;
             self.q[j] = -(self.cost[j] + self.eps[j]);
@@ -1634,21 +1631,7 @@ impl BoundedSimplex {
 mod tests {
     use super::*;
 
-    /// SplitMix64, enough for generating test problems.
-    struct Rng(u64);
-    impl Rng {
-        fn next_u64(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        }
-        fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
-            let unit = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-            lo + (hi - lo) * unit
-        }
-    }
+    use epistat_testkit::SplitMix64 as Rng;
 
     const INF: f64 = f64::INFINITY;
 
@@ -1699,7 +1682,7 @@ mod tests {
 
     #[test]
     fn the_blocked_scan_equals_the_column_scan() {
-        let mut rng = Rng(23);
+        let mut rng = Rng::new(23);
         for trial in 0..60 {
             let m = 1 + trial % 9;
             let n = 3 + trial % 14;
@@ -1794,7 +1777,7 @@ mod tests {
     #[test]
     fn agrees_with_the_primal_simplex() {
         use crate::simplex::DenseSimplex;
-        let mut rng = Rng(7);
+        let mut rng = Rng::new(7);
         let mut compared = 0;
         for trial in 0..200 {
             let m = 1 + (trial % 4);
@@ -1840,7 +1823,7 @@ mod tests {
     #[test]
     fn dual_bound_holds_at_every_basis() {
         use crate::simplex::DenseSimplex;
-        let mut rng = Rng(19);
+        let mut rng = Rng::new(19);
         let mut compared = 0;
         for trial in 0..200 {
             let m = 1 + (trial % 4);
@@ -1894,7 +1877,7 @@ mod tests {
 
     #[test]
     fn warm_start_after_bound_change_matches_a_fresh_solve() {
-        let mut rng = Rng(11);
+        let mut rng = Rng::new(11);
         let (m, n) = (3, 40);
         let columns: Vec<f64> = (0..m * n).map(|_| rng.uniform(-1.0, 1.0)).collect();
         let cost: Vec<f64> = (0..n).map(|_| 1.0).collect();

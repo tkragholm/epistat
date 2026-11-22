@@ -131,13 +131,21 @@ pub use draws::DrawError;
 /// the golden ratio.
 pub const GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// The first output of a stream seeded with `value`.
+/// The `SplitMix64` output function: two xor-shift-multiply rounds and a final
+/// xor-shift, with no increment of its own. [`splitmix64`] is this applied to
+/// `value + GAMMA`.
 #[must_use]
-pub const fn splitmix64(value: u64) -> u64 {
-    let mut z = value.wrapping_add(GAMMA);
+pub const fn mix64(value: u64) -> u64 {
+    let mut z = value;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+/// The first output of a stream seeded with `value`.
+#[must_use]
+pub const fn splitmix64(value: u64) -> u64 {
+    mix64(value.wrapping_add(GAMMA))
 }
 
 /// The seed of replicate `replicate`: `splitmix64(base ^ replicate * GAMMA)`.
