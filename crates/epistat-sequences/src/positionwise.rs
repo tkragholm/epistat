@@ -72,11 +72,11 @@
     reason = "sequence indices are bounded by the u32 limit checked when a panel or triangle is built, symbol ranks by the alphabet, and cluster ranks by the number of labels"
 )]
 
-use epistat_rng::Stream;
 use rayon::prelude::*;
 
+use crate::fit::{FitDistance, check_lengths, check_partition, check_types, check_weights, fit};
 use crate::silhouette::{rank_labels, weighted_average};
-use crate::{Attempt, Restarts, SequenceError, best_attempt};
+use crate::{Attempt, Restarts, SequenceError};
 
 /// One panel of equal-length rank-encoded sequences and the costs over them.
 pub struct Panel<'a> {
@@ -292,57 +292,6 @@ fn members_by_cluster(labels: &[u32], k: usize) -> Vec<Vec<u32>> {
     members
 }
 
-/// k-means++ seeding: `k` starting medoids, drawn proportional to `d^2 * w`.
-///
-/// The first is the head of the panel, so it depends on no draw. Each of the
-/// rest costs exactly one uniform, and only when the remaining scores are not
-/// all zero. A degenerate step pads deterministically and takes no draw.
-///
-/// The running total is accumulated left to right and compared with `>=`, and
-/// the total is summed left to right too.
-// `usize as u32` on sequence indices, bounded by `Panel::new`.
-fn seed_medoids(panel: &Panel, weights: &[f64], k: usize, stream: &mut Stream) -> Vec<u32> {
-    let mut medoids: Vec<u32> = vec![0];
-    let mut chosen = vec![false; panel.count];
-    chosen[0] = true;
-
-    while medoids.len() < k {
-        let scores: Vec<f64> = (0..panel.count)
-            .into_par_iter()
-            .map(|index| {
-                let distance = panel.nearest(index, &medoids).1;
-                distance * distance * weights[index]
-            })
-            .collect();
-        let total: f64 = scores.iter().sum();
-
-        if total <= 0.0 {
-            // Every remaining sequence is already a medoid, or is at distance
-            // zero from one. Padded in index order, and no draw is taken.
-            match chosen.iter().position(|taken| !taken) {
-                Some(next) => {
-                    medoids.push(next as u32);
-                    chosen[next] = true;
-                }
-                None => break,
-            }
-            continue;
-        }
-
-        let target = stream.uniform() * total;
-        let mut running = 0.0;
-        for (index, contribution) in scores.iter().enumerate() {
-            running += contribution;
-            if running >= target {
-                medoids.push(index as u32);
-                chosen[index] = true;
-                break;
-            }
-        }
-    }
-    medoids
-}
-
 /// Every restart of the k-medoids fit, and the best of them.
 ///
 /// Restart `i` seeds by weighted k-means++ from `Stream::seeded(restarts.seeds()[i])`
@@ -365,61 +314,29 @@ pub fn kmedoids(
     restarts: &Restarts,
     max_iterations: usize,
 ) -> Result<Attempt, SequenceError> {
-    if weights.len() != panel.count {
-        return Err(SequenceError::input(format!(
-            "{} sequences but {} weights; they must correspond one to one",
-            panel.count,
-            weights.len()
-        )));
-    }
-    if k == 0 || k > panel.count {
-        return Err(SequenceError::input(format!(
-            "asked for {k} types from {} distinct sequences",
-            panel.count
-        )));
-    }
-
-    // The restarts are independent, and each owns a stream seeded from the
-    // caller's, so the set is one deterministic fit.
-    let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.len(), |attempt| {
-        let mut stream = Stream::seeded(restarts.seeds()[attempt]);
-        one_fit(panel, weights, k, max_iterations, &mut stream)
-    });
-    best_attempt(attempts).ok_or_else(|| SequenceError::input("a fit needs at least one restart"))
+    check_weights("sequences", panel.count, weights.len())?;
+    check_types(panel.count, k)?;
+    fit(panel, panel.count, weights, k, restarts, max_iterations)
 }
 
-/// One seeding and the alternating loop that follows it.
-// `usize as u32` on sequence indices, bounded by `Panel::new`.
-fn one_fit(
-    panel: &Panel,
-    weights: &[f64],
-    k: usize,
-    max_iterations: usize,
-    stream: &mut Stream,
-) -> Attempt {
-    let mut medoids = seed_medoids(panel, weights, k, stream);
-    let mut iterations = 0usize;
-    let mut converged = false;
+impl FitDistance for Panel<'_> {
+    fn nearest(&self, index: usize, medoids: &[u32]) -> (usize, f64) {
+        Self::nearest(self, index, medoids)
+    }
 
-    for iteration in 1..=max_iterations {
-        iterations = iteration;
-        let labels: Vec<u32> = (0..panel.count)
-            .into_par_iter()
-            .map(|index| panel.nearest(index, &medoids).0 as u32)
-            .collect();
-
-        // Parallel over clusters, serial within one. The candidate scan
-        // takes the first member attaining the minimum, so splitting a
-        // cluster across threads would need that tie-break reassembled.
-        let chosen: Vec<Option<u32>> = members_by_cluster(&labels, k)
+    // Parallel over clusters, serial within one. The candidate scan takes the
+    // first member attaining the minimum, so splitting a cluster across
+    // threads would need that tie-break reassembled.
+    fn medoids_from(&self, weights: &[f64], labels: &[u32], k: usize) -> Vec<Option<u32>> {
+        members_by_cluster(labels, k)
             .par_iter()
             .map(|members| {
                 let first = *members.first()?;
-                let frequencies = Frequencies::build(panel, members, weights);
+                let frequencies = Frequencies::build(self, members, weights);
                 let mut best = first;
                 let mut best_cost: Option<f64> = None;
                 for &candidate in members {
-                    let cost = frequencies.medoid_cost(panel, panel.at(candidate as usize));
+                    let cost = frequencies.medoid_cost(self, self.at(candidate as usize));
                     if best_cost.is_none_or(|previous| cost < previous) {
                         best = candidate;
                         best_cost = Some(cost);
@@ -427,45 +344,7 @@ fn one_fit(
                 }
                 Some(best)
             })
-            .collect();
-
-        let mut moved = false;
-        for (cluster, choice) in chosen.iter().enumerate() {
-            if let Some(best) = choice.filter(|&best| best != medoids[cluster]) {
-                medoids[cluster] = best;
-                moved = true;
-            }
-        }
-        if !moved {
-            converged = true;
-            break;
-        }
-    }
-
-    // Assigned once more against the medoids the loop settled on, because a
-    // run that stopped at `max_iterations` moved its medoids after the last
-    // assignment. The distance to the chosen medoid is kept for the
-    // objective, summed in index order.
-    let assigned: Vec<(u32, f64)> = (0..panel.count)
-        .into_par_iter()
-        .map(|index| {
-            let (rank, distance) = panel.nearest(index, &medoids);
-            (rank as u32, distance)
-        })
-        .collect();
-    let objective = assigned
-        .iter()
-        .zip(weights.iter())
-        .fold(0.0f64, |total, ((_, distance), weight)| {
-            total + distance * weight
-        });
-    let labels: Vec<u32> = assigned.into_iter().map(|(rank, _)| rank).collect();
-    Attempt {
-        medoids,
-        labels,
-        iterations,
-        converged,
-        objective,
+            .collect()
     }
 }
 
@@ -507,20 +386,7 @@ pub fn cluster_distance_sums(
     labels: &[u32],
     k: usize,
 ) -> Result<Vec<f64>, SequenceError> {
-    if weights.len() != panel.count || labels.len() != panel.count {
-        return Err(SequenceError::input(format!(
-            "{} sequences but {} weights and {} labels; all three describe the same \
-             sequences",
-            panel.count,
-            weights.len(),
-            labels.len()
-        )));
-    }
-    if let Some(bad) = labels.iter().find(|&&label| label as usize >= k) {
-        return Err(SequenceError::input(format!(
-            "cluster label {bad} is outside the {k} clusters declared"
-        )));
-    }
+    check_partition(panel.count, weights.len(), labels, k)?;
     if k == 0 {
         return Ok(Vec::new());
     }
@@ -543,15 +409,7 @@ pub fn silhouette(
     weights: &[f64],
     labels: &[i64],
 ) -> Result<f64, SequenceError> {
-    if weights.len() != panel.count || labels.len() != panel.count {
-        return Err(SequenceError::input(format!(
-            "{} sequences but {} weights and {} labels; all three describe the same \
-             sequences",
-            panel.count,
-            weights.len(),
-            labels.len()
-        )));
-    }
+    check_lengths("sequences", panel.count, weights.len(), labels.len())?;
     let (ranks, k) = rank_labels(labels);
     if k < 2 {
         return Ok(0.0);

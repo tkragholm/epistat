@@ -84,11 +84,11 @@
     reason = "sequence indices are bounded by the u32 limit checked when a panel or triangle is built, symbol ranks by the alphabet, and cluster ranks by the number of labels"
 )]
 
-use epistat_rng::Stream;
 use rayon::prelude::*;
 
+use crate::fit::{FitDistance, check_lengths, check_partition, check_types, check_weights, fit};
 use crate::silhouette::{rank_labels, weighted_average};
-use crate::{Attempt, Restarts, SequenceError, best_attempt};
+use crate::{Attempt, Restarts, SequenceError};
 
 /// Rows of the triangle one worker takes at a time in the cluster sums.
 ///
@@ -289,30 +289,19 @@ impl CondensedMatrix {
         max_iterations: usize,
     ) -> Result<Attempt, SequenceError> {
         let count = offsets.len();
-        if weights.len() != count {
-            return Err(SequenceError::input(format!(
-                "{count} offsets but {} weights; they must correspond one to one",
-                weights.len()
-            )));
-        }
+        check_weights("offsets", count, weights.len())?;
         if let Some(bad) = offsets.iter().find(|&&o| o as usize >= self.size) {
             return Err(SequenceError::input(format!(
                 "offset {bad} is outside the {} sequences this matrix covers",
                 self.size
             )));
         }
-        if k == 0 || k > count {
-            return Err(SequenceError::input(format!(
-                "asked for {k} types from {count} distinct sequences"
-            )));
-        }
-
-        let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.len(), |attempt| {
-            let mut stream = Stream::seeded(restarts.seeds()[attempt]);
-            self.one_fit(offsets, weights, k, max_iterations, &mut stream)
-        });
-        best_attempt(attempts)
-            .ok_or_else(|| SequenceError::input("a fit needs at least one restart"))
+        check_types(count, k)?;
+        let distance = Offsets {
+            matrix: self,
+            offsets,
+        };
+        fit(&distance, count, weights, k, restarts, max_iterations)
     }
 
     /// Weighted sum of distances from every sequence to every cluster.
@@ -341,19 +330,7 @@ impl CondensedMatrix {
         k: usize,
     ) -> Result<Vec<f64>, SequenceError> {
         let n = self.size;
-        if weights.len() != n || labels.len() != n {
-            return Err(SequenceError::input(format!(
-                "{n} sequences but {} weights and {} labels; all three describe the \
-                 same sequences",
-                weights.len(),
-                labels.len()
-            )));
-        }
-        if let Some(bad) = labels.iter().find(|&&label| label as usize >= k) {
-            return Err(SequenceError::input(format!(
-                "cluster label {bad} is outside the {k} clusters declared"
-            )));
-        }
+        check_partition(n, weights.len(), labels, k)?;
         if k == 0 {
             return Ok(Vec::new());
         }
@@ -381,14 +358,7 @@ impl CondensedMatrix {
         labels: &[i64],
     ) -> Result<f64, SequenceError> {
         let count = offsets.len();
-        if weights.len() != count || labels.len() != count {
-            return Err(SequenceError::input(format!(
-                "{count} offsets but {} weights and {} labels; all three describe the \
-                 same sequences",
-                weights.len(),
-                labels.len()
-            )));
-        }
+        check_lengths("offsets", count, weights.len(), labels.len())?;
         if let Some(bad) = offsets.iter().find(|&&o| o as usize >= self.size) {
             return Err(SequenceError::input(format!(
                 "offset {bad} is outside the {} sequences this matrix covers",
@@ -607,101 +577,19 @@ impl CondensedMatrix {
     }
 }
 
-impl CondensedMatrix {
-    /// One seeding and the alternating loop that follows it, over the triangle.
-    fn one_fit(
-        &self,
-        offsets: &[u32],
-        weights: &[f64],
-        k: usize,
-        max_iterations: usize,
-        stream: &mut Stream,
-    ) -> Attempt {
-        let count = offsets.len();
+/// The triangle read through the caller's order of the sequences.
+struct Offsets<'a> {
+    matrix: &'a CondensedMatrix,
+    offsets: &'a [u32],
+}
 
-        // k-means++ over the triangle, as in the position-wise fit: a
-        // degenerate step pads in index order and takes no draw, and the total
-        // and the running sum accumulate left to right.
-        let mut medoids: Vec<u32> = vec![0];
-        let mut chosen = vec![false; count];
-        chosen[0] = true;
-        while medoids.len() < k {
-            let scores: Vec<f64> = (0..count)
-                .into_par_iter()
-                .map(|index| {
-                    let distance = self.nearest(offsets, index, &medoids).1;
-                    distance * distance * weights[index]
-                })
-                .collect();
-            let total: f64 = scores.iter().sum();
-            if total <= 0.0 {
-                match chosen.iter().position(|taken| !taken) {
-                    Some(next) => {
-                        medoids.push(next as u32);
-                        chosen[next] = true;
-                    }
-                    None => break,
-                }
-                continue;
-            }
-            let target = stream.uniform() * total;
-            let mut running = 0.0;
-            for (index, contribution) in scores.iter().enumerate() {
-                running += contribution;
-                if running >= target {
-                    medoids.push(index as u32);
-                    chosen[index] = true;
-                    break;
-                }
-            }
-        }
+impl FitDistance for Offsets<'_> {
+    fn nearest(&self, index: usize, medoids: &[u32]) -> (usize, f64) {
+        self.matrix.nearest(self.offsets, index, medoids)
+    }
 
-        let mut iterations = 0usize;
-        let mut converged = false;
-        for iteration in 1..=max_iterations {
-            iterations = iteration;
-            let labels: Vec<u32> = (0..count)
-                .into_par_iter()
-                .map(|index| self.nearest(offsets, index, &medoids).0 as u32)
-                .collect();
-            let mut moved = false;
-            for (cluster, choice) in self
-                .medoids_from(offsets, weights, &labels)
-                .iter()
-                .enumerate()
-            {
-                if let Some(best) = choice.filter(|&best| best != medoids[cluster]) {
-                    medoids[cluster] = best;
-                    moved = true;
-                }
-            }
-            if !moved {
-                converged = true;
-                break;
-            }
-        }
-
-        let assigned: Vec<(u32, f64)> = (0..count)
-            .into_par_iter()
-            .map(|index| {
-                let (rank, distance) = self.nearest(offsets, index, &medoids);
-                (rank as u32, distance)
-            })
-            .collect();
-        let objective = assigned
-            .iter()
-            .zip(weights.iter())
-            .fold(0.0f64, |total, ((_, distance), weight)| {
-                total + distance * weight
-            });
-        let labels: Vec<u32> = assigned.into_iter().map(|(rank, _)| rank).collect();
-        Attempt {
-            medoids,
-            labels,
-            iterations,
-            converged,
-            objective,
-        }
+    fn medoids_from(&self, weights: &[f64], labels: &[u32], _k: usize) -> Vec<Option<u32>> {
+        self.matrix.medoids_from(self.offsets, weights, labels)
     }
 }
 
