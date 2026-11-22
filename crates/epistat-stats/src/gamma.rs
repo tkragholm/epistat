@@ -1,5 +1,5 @@
-//! The log-gamma function, the regularised incomplete gamma functions and
-//! the chi-square distribution.
+//! The log-gamma function, its first two derivatives (digamma and trigamma),
+//! the regularised incomplete gamma functions and the chi-square distribution.
 //!
 //! # Algorithm
 //!
@@ -14,6 +14,26 @@
 //! evaluated on the log scale, with the reflection
 //! `ln Γ(x) = ln(π / sin(π x)) - ln Γ(1 - x)` below `x = 1/2`. Its relative
 //! error is about `1e-15` for positive arguments.
+//!
+//! [`digamma`] `ψ(x) = d ln Γ(x) / dx` and [`trigamma`] `ψ'(x)` use the upward
+//! recurrence
+//!
+//! ```text
+//! ψ(x) = ψ(x + 1) - 1/x,        ψ'(x) = ψ'(x + 1) + 1/x²
+//! ```
+//!
+//! until `x >= 10`, and then the asymptotic series \[3\]
+//!
+//! ```text
+//! ψ(x)  = ln x - 1/(2x) - Σ_{k>=1} B_2k / (2k x^2k)
+//! ψ'(x) = 1/x + 1/(2x²) + Σ_{k>=1} B_2k / x^(2k+1)
+//! ```
+//!
+//! with the Bernoulli numbers `B_2 ... B_14`. The first omitted term is below
+//! `1e-17` of the result at `x = 10`. For `x < 0` the reflection
+//! `ψ(1 - x) - ψ(x) = π cot(π x)` and
+//! `ψ'(1 - x) + ψ'(x) = π² / sin²(π x)` is used. Both are NaN at `x = NaN`,
+//! digamma is NaN and trigamma infinite at zero and the negative integers.
 //!
 //! [`lower_regularised`] `P(a, x)` and [`upper_regularised`] `Q(a, x)` are
 //! the regularised incomplete gamma functions,
@@ -38,7 +58,8 @@
 //!
 //! # Agreement with R
 //!
-//! The tests compare [`ln_gamma`] with R's `lgamma()` and the chi-square
+//! The tests compare [`ln_gamma`] with R's `lgamma()`, [`digamma`] and
+//! [`trigamma`] with R's `digamma()` and `trigamma()`, and the chi-square
 //! functions with `pchisq()`, both tails, to `1e-13` relative.
 //!
 //! # References
@@ -49,6 +70,8 @@
 //! 2. Press WH, Teukolsky SA, Vetterling WT, Flannery BP. Numerical Recipes:
 //!    The Art of Scientific Computing. 3rd ed. Cambridge: Cambridge University
 //!    Press; 2007. Section 6.2.
+//! 3. Abramowitz M, Stegun IA. Handbook of Mathematical Functions. New York:
+//!    Dover; 1972. Sections 6.3 and 6.4.
 
 use std::f64::consts::PI;
 
@@ -90,6 +113,67 @@ pub fn ln_gamma(x: f64) -> f64 {
     }
     let t = x + LANCZOS_G + 0.5;
     0.5 * (2.0 * PI).ln() + (x + 0.5) * t.ln() - t + sum.ln()
+}
+
+const ASYMPTOTIC_FROM: f64 = 10.0;
+
+/// The digamma function `ψ(x) = d ln Γ(x) / dx`. NaN at zero and the negative
+/// integers.
+#[must_use]
+pub fn digamma(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() && x < 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 && x.fract() == 0.0 {
+        return f64::NAN;
+    }
+    if x < 0.0 {
+        return digamma(1.0 - x) - PI / (PI * x).tan();
+    }
+    let mut x = x;
+    let mut shift = 0.0;
+    while x < ASYMPTOTIC_FROM {
+        shift += 1.0 / x;
+        x += 1.0;
+    }
+    let r = 1.0 / (x * x);
+    // B_2k / (2k) for k = 1 ... 7, by Horner's rule in 1/x².
+    let series = r
+        * (1.0 / 12.0
+            + r * (-1.0 / 120.0
+                + r * (1.0 / 252.0
+                    + r * (-1.0 / 240.0 + r * (1.0 / 132.0 + r * (-691.0 / 32760.0 + r / 12.0))))));
+    x.ln() - 0.5 / x - series - shift
+}
+
+/// The trigamma function `ψ'(x)`. Infinite at zero and the negative integers.
+#[must_use]
+pub fn trigamma(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() && x < 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 && x.fract() == 0.0 {
+        return f64::INFINITY;
+    }
+    if x < 0.0 {
+        let s = (PI * x).sin();
+        return PI * PI / (s * s) - trigamma(1.0 - x);
+    }
+    let mut x = x;
+    let mut shift = 0.0;
+    while x < ASYMPTOTIC_FROM {
+        shift += 1.0 / (x * x);
+        x += 1.0;
+    }
+    let r = 1.0 / (x * x);
+    // B_2k for k = 1 ... 7 over x^(2k+1), by Horner's rule in 1/x².
+    let series = r
+        * (1.0 / 6.0
+            + r * (-1.0 / 30.0
+                + r * (1.0 / 42.0
+                    + r * (-1.0 / 30.0
+                        + r * (5.0 / 66.0 + r * (-691.0 / 2730.0 + r * 7.0 / 6.0))))));
+    1.0 / x + 0.5 * r + series / x + shift
 }
 
 /// `P(a, x)`, the regularised lower incomplete gamma function, for `a > 0`
@@ -206,6 +290,30 @@ mod tests {
         // P(1, x) = 1 - exp(-x).
         assert!((lower_regularised(1.0, 2.0) - (1.0 - (-2.0f64).exp())).abs() < 1e-15);
         assert!((upper_regularised(1.0, 50.0) / (-50.0f64).exp() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn digamma_and_trigamma_known_values() {
+        let euler = 0.577_215_664_901_532_9;
+        assert!((digamma(1.0) + euler).abs() < 1e-15);
+        assert!((digamma(0.5) + euler + 2.0 * 2f64.ln()).abs() < 1e-14);
+        assert!((trigamma(1.0) - PI * PI / 6.0).abs() < 1e-14);
+        assert!((trigamma(0.5) - PI * PI / 2.0).abs() < 1e-14);
+        assert!(digamma(0.0).is_nan() && digamma(-3.0).is_nan());
+        assert!(trigamma(0.0).is_infinite() && trigamma(-3.0).is_infinite());
+        // The recurrence psi(x + 1) = psi(x) + 1/x holds across the switch to
+        // the series at 10, and for negative arguments.
+        for x in [0.3, 1.7, 8.9, 9.999, -0.4, -2.5] {
+            assert!(
+                (digamma(x + 1.0) - digamma(x) - 1.0 / x).abs() < 1e-13,
+                "{x}"
+            );
+            assert!(
+                (trigamma(x) - trigamma(x + 1.0) - 1.0 / (x * x)).abs()
+                    < 1e-12 * trigamma(x).abs().max(1.0),
+                "{x}"
+            );
+        }
     }
 
     #[test]
