@@ -1,5 +1,5 @@
 use super::IdOrder;
-use super::sweep::{RiskSetSweep, list_limit};
+use super::sweep::RiskSetSweep;
 use crate::matching::{
     CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
     DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
@@ -960,9 +960,8 @@ fn run_swept_case_loop<
     let required = &validated.required_strata;
     let drawn_reason = Constraint::<R>::reason(&ReplacementConstraint);
 
-    // The stratum and window of each case. A stratum is counted with trees
-    // when some case's window in it holds more than the list limit of
-    // controls.
+    // The stratum and window of each case. A stratum is counted when some
+    // case's window in it is wide.
     let places: Vec<Option<(usize, std::ops::Range<usize>)>> = loop_config
         .case_indices
         .iter()
@@ -980,12 +979,11 @@ fn run_swept_case_loop<
             Some((stratum, window))
         })
         .collect();
-    let limit = list_limit();
-    let mut counted = vec![false; engine.candidate_index.strata().len()];
+    let mut widest = vec![0; engine.candidate_index.strata().len()];
     for (stratum, window) in places.iter().flatten() {
-        counted[*stratum] |= window.len() > limit;
+        widest[*stratum] = widest[*stratum].max(window.len());
     }
-    sweep.count_strata(&counted);
+    sweep.count_strata(&widest);
 
     let mut drawn_now: Vec<usize> = Vec::new();
     for (case_idx, place) in loop_config.case_indices.iter().zip(places) {
