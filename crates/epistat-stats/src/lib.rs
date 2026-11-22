@@ -10,6 +10,7 @@
 pub mod balance;
 pub mod cluster;
 pub mod decomposition;
+mod discrete;
 pub mod evalue;
 pub mod gamma;
 pub mod lanes;
@@ -18,6 +19,7 @@ pub mod mcmc;
 pub mod normal;
 pub mod poisson;
 pub mod quantile;
+pub mod rates;
 pub mod rosenbaum;
 pub mod signed_rank;
 pub mod standardisation;

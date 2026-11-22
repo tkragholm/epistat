@@ -19,6 +19,8 @@ thiserror = "2"
 [dev-dependencies]
 epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1.0.200", features = ["derive"] }
+# Parses floats to the nearest double, so the R references are compared to the bit.
+serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
 
 [lints]
 workspace = true
