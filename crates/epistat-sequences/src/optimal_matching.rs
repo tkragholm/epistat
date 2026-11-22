@@ -182,9 +182,11 @@ fn align_lanes(
         for column in 0..length {
             let (diagonal_cell, above_cell, beside_cell) =
                 (previous[column], previous[column + 1], current[column]);
+            let substitution_cost: [f32; LANES] =
+                std::array::from_fn(|lane| costs[rights[lane][column] as usize]);
             let mut next = [0.0; LANES];
             for lane in 0..LANES {
-                let diagonal = diagonal_cell[lane] + costs[rights[lane][column] as usize];
+                let diagonal = diagonal_cell[lane] + substitution_cost[lane];
                 let above = above_cell[lane] + indel;
                 let beside = beside_cell[lane] + indel;
                 next[lane] = diagonal.min(above).min(beside);
