@@ -84,11 +84,11 @@ macro_rules! impl_with_distance_config {
 }
 
 /// Generates a full `MatchingRecord` impl that delegates every method to an
-/// inner field. A method added to `MatchingRecord` must be added here too:
+/// inner field, or to the record behind a reference with `*`. A method added
+/// to `MatchingRecord` must be added to `delegate_matching_methods` too:
 /// `matching::records::tests::delegate_macro_forwards_every_trait_method`
-/// fails until it is.  Used in test fixtures that wrap a `BaseRecord` or
-/// `RoleTransitionRecord<BaseRecord>` to avoid repeating identical 3-line
-/// getter bodies.
+/// fails until it is.  Used for the wrappers of a record, in the crate and in
+/// test fixtures.
 ///
 /// ```ignore
 /// impl crate::MatchingRecord for MyWrapper {
@@ -99,41 +99,87 @@ macro_rules! impl_with_distance_config {
 #[macro_export]
 macro_rules! delegate_matching_record {
     ($field:ident) => {
-        fn id(&self) -> &str {
-            self.$field.id()
+        $crate::delegate_matching_methods!(self, self.$field);
+    };
+    (*) => {
+        $crate::delegate_matching_methods!(self, (**self));
+    };
+}
+
+/// The methods of `MatchingRecord`, each forwarded to `$target`, which names
+/// the record through `$this`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! delegate_matching_methods {
+    ($this:ident, $target:expr) => {
+        fn id(&$this) -> &str {
+            $target.id()
         }
-        fn birth_date(&self) -> chrono::NaiveDate {
-            self.$field.birth_date()
+        fn birth_date(&$this) -> chrono::NaiveDate {
+            $target.birth_date()
         }
-        fn strata(&self) -> &std::collections::HashMap<String, String> {
-            self.$field.strata()
+        fn strata(&$this) -> &std::collections::HashMap<String, String> {
+            $target.strata()
         }
-        fn stratum(&self, key: &str) -> Option<&str> {
-            self.$field.stratum(key)
+        fn stratum(&$this, key: &str) -> Option<&str> {
+            $target.stratum(key)
         }
-        fn numeric(&self, name: &str) -> Option<f64> {
-            self.$field.numeric(name)
+        fn numeric(&$this, name: &str) -> Option<f64> {
+            $target.numeric(name)
         }
-        fn numeric_table(&self) -> Option<usize> {
-            self.$field.numeric_table()
+        fn numeric_table(&$this) -> Option<usize> {
+            $target.numeric_table()
         }
-        fn numeric_slot(&self, name: &str) -> Option<usize> {
-            self.$field.numeric_slot(name)
+        fn numeric_slot(&$this, name: &str) -> Option<usize> {
+            $target.numeric_slot(name)
         }
-        fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
-            self.$field.numeric_in_slot(slot)
+        fn numeric_in_slot(&$this, slot: usize) -> Option<f64> {
+            $target.numeric_in_slot(slot)
         }
-        fn unique_key(&self) -> Option<&str> {
-            self.$field.unique_key()
+        fn unique_key(&$this) -> Option<&str> {
+            $target.unique_key()
         }
-        fn death_date(&self) -> Option<chrono::NaiveDate> {
-            self.$field.death_date()
+        fn death_date(&$this) -> Option<chrono::NaiveDate> {
+            $target.death_date()
         }
-        fn emigration_date(&self) -> Option<chrono::NaiveDate> {
-            self.$field.emigration_date()
+        fn emigration_date(&$this) -> Option<chrono::NaiveDate> {
+            $target.emigration_date()
         }
-        fn entry_date(&self) -> Option<chrono::NaiveDate> {
-            self.$field.entry_date()
+        fn entry_date(&$this) -> Option<chrono::NaiveDate> {
+            $target.entry_date()
+        }
+    };
+}
+
+/// The same for the methods of `CovariateRecord`. A method added to the trait
+/// must be added here:
+/// `matching::records::tests::delegate_macro_forwards_every_covariate_method`
+/// fails until it is.
+macro_rules! delegate_covariate_record {
+    ($field:ident) => {
+        delegate_covariate_record!(@methods self, self.$field);
+    };
+    (*) => {
+        delegate_covariate_record!(@methods self, (**self));
+    };
+    (@methods $this:ident, $target:expr) => {
+        fn covariates(&$this) -> &HashMap<String, CovariateValue> {
+            $target.covariates()
+        }
+        fn covariate(&$this, name: &str) -> Option<CovariateRef<'_>> {
+            $target.covariate(name)
+        }
+        fn covariate_names(&$this) -> impl Iterator<Item = &str> {
+            $target.covariate_names()
+        }
+        fn covariate_table(&$this) -> Option<usize> {
+            $target.covariate_table()
+        }
+        fn covariate_slot(&$this, name: &str) -> Option<usize> {
+            $target.covariate_slot(name)
+        }
+        fn covariate_in_slot(&$this, slot: usize) -> CovariateRef<'_> {
+            $target.covariate_in_slot(slot)
         }
     };
 }

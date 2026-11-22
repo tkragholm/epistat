@@ -217,53 +217,7 @@ impl CovariateRecord for BalanceRecord {
 }
 
 impl<R: MatchingRecord> MatchingRecord for RoleTransitionRecord<R> {
-    fn id(&self) -> &str {
-        self.record.id()
-    }
-
-    fn birth_date(&self) -> NaiveDate {
-        self.record.birth_date()
-    }
-
-    fn strata(&self) -> &HashMap<String, String> {
-        self.record.strata()
-    }
-
-    fn stratum(&self, key: &str) -> Option<&str> {
-        self.record.stratum(key)
-    }
-
-    fn numeric(&self, name: &str) -> Option<f64> {
-        self.record.numeric(name)
-    }
-
-    fn numeric_table(&self) -> Option<usize> {
-        self.record.numeric_table()
-    }
-
-    fn numeric_slot(&self, name: &str) -> Option<usize> {
-        self.record.numeric_slot(name)
-    }
-
-    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
-        self.record.numeric_in_slot(slot)
-    }
-
-    fn unique_key(&self) -> Option<&str> {
-        self.record.unique_key()
-    }
-
-    fn death_date(&self) -> Option<NaiveDate> {
-        self.record.death_date()
-    }
-
-    fn emigration_date(&self) -> Option<NaiveDate> {
-        self.record.emigration_date()
-    }
-
-    fn entry_date(&self) -> Option<NaiveDate> {
-        self.record.entry_date()
-    }
+    crate::delegate_matching_record!(record);
 }
 
 impl<R: MatchingRecord> RoleIndexedRecord for RoleTransitionRecord<R> {
@@ -285,82 +239,14 @@ impl<R: MatchingRecord> ResidentAtIndexRecord for RoleTransitionRecord<R> {
 }
 
 impl<R: CovariateRecord> CovariateRecord for RoleTransitionRecord<R> {
-    fn covariates(&self) -> &HashMap<String, CovariateValue> {
-        self.record.covariates()
-    }
-
-    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
-        self.record.covariate(name)
-    }
-
-    fn covariate_names(&self) -> impl Iterator<Item = &str> {
-        self.record.covariate_names()
-    }
-
-    fn covariate_table(&self) -> Option<usize> {
-        self.record.covariate_table()
-    }
-
-    fn covariate_slot(&self, name: &str) -> Option<usize> {
-        self.record.covariate_slot(name)
-    }
-
-    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
-        self.record.covariate_in_slot(slot)
-    }
+    delegate_covariate_record!(record);
 }
 
 /// A shared reference is a record of the same kind, so a matcher can take
 /// `&R` in place of `R` and work on records it does not own, as sequential
 /// trials do with the people of a panel.
 impl<R: MatchingRecord + ?Sized> MatchingRecord for &R {
-    fn id(&self) -> &str {
-        (**self).id()
-    }
-
-    fn birth_date(&self) -> NaiveDate {
-        (**self).birth_date()
-    }
-
-    fn strata(&self) -> &HashMap<String, String> {
-        (**self).strata()
-    }
-
-    fn stratum(&self, key: &str) -> Option<&str> {
-        (**self).stratum(key)
-    }
-
-    fn numeric(&self, name: &str) -> Option<f64> {
-        (**self).numeric(name)
-    }
-
-    fn numeric_table(&self) -> Option<usize> {
-        (**self).numeric_table()
-    }
-
-    fn numeric_slot(&self, name: &str) -> Option<usize> {
-        (**self).numeric_slot(name)
-    }
-
-    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
-        (**self).numeric_in_slot(slot)
-    }
-
-    fn unique_key(&self) -> Option<&str> {
-        (**self).unique_key()
-    }
-
-    fn death_date(&self) -> Option<NaiveDate> {
-        (**self).death_date()
-    }
-
-    fn emigration_date(&self) -> Option<NaiveDate> {
-        (**self).emigration_date()
-    }
-
-    fn entry_date(&self) -> Option<NaiveDate> {
-        (**self).entry_date()
-    }
+    crate::delegate_matching_record!(*);
 }
 
 impl<R: RoleIndexedRecord + ?Sized> RoleIndexedRecord for &R {
@@ -376,29 +262,7 @@ impl<R: ResidentAtIndexRecord + ?Sized> ResidentAtIndexRecord for &R {
 }
 
 impl<R: CovariateRecord + ?Sized> CovariateRecord for &R {
-    fn covariates(&self) -> &HashMap<String, CovariateValue> {
-        (**self).covariates()
-    }
-
-    fn covariate(&self, name: &str) -> Option<CovariateRef<'_>> {
-        (**self).covariate(name)
-    }
-
-    fn covariate_names(&self) -> impl Iterator<Item = &str> {
-        (**self).covariate_names()
-    }
-
-    fn covariate_table(&self) -> Option<usize> {
-        (**self).covariate_table()
-    }
-
-    fn covariate_slot(&self, name: &str) -> Option<usize> {
-        (**self).covariate_slot(name)
-    }
-
-    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
-        (**self).covariate_in_slot(slot)
-    }
+    delegate_covariate_record!(*);
 }
 
 /// The slot of one column in each of the first two tables of columns a run of
@@ -550,8 +414,24 @@ mod tests {
         );
         let macro_fns = fn_names(
             include_str!("../lib.rs"),
-            "macro_rules! delegate_matching_record",
-            "mod balance;",
+            "macro_rules! delegate_matching_methods",
+            "macro_rules! delegate_covariate_record",
+        );
+        assert!(!trait_fns.is_empty());
+        assert_eq!(trait_fns, macro_fns);
+    }
+
+    #[test]
+    fn delegate_macro_forwards_every_covariate_method() {
+        let trait_fns = fn_names(
+            include_str!("records.rs"),
+            "pub trait CovariateRecord",
+            "impl MatchingRecord for BaseRecord",
+        );
+        let macro_fns = fn_names(
+            include_str!("../lib.rs"),
+            "macro_rules! delegate_covariate_record",
+            "pub mod abadie_imbens;",
         );
         assert!(!trait_fns.is_empty());
         assert_eq!(trait_fns, macro_fns);
