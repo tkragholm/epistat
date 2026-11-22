@@ -59,11 +59,6 @@
 //! The test is unweighted. A weight is 0, which leaves the row out, or 1. The
 //! result reports `n_rows`, all rows, and `n_used`, the rows of weight 1.
 //!
-//! [`Stays`] and [`markov_test`] take the same columns as slices, with the
-//! state already mapped to its index among the qualifying states, and are
-//! deprecated. They run the same code, with exact ties and without the
-//! structural checks, and give the same bits as before.
-//!
 //! # Arithmetic
 //!
 //! The sums of traces, variances and scores are compensated. The cumulative
@@ -105,7 +100,7 @@
 //! That amounts to dropping the slot from the sum, while the mean is still
 //! taken over every landmark. A qualifying state for which every slot is of
 //! that kind has no test: [`fn@test`] gives it no statistic and no p-value,
-//! where 0 and 1 would read as a test that found nothing. The deprecated [`markov_test`] keeps the 0 and the p-value it always gave.
+//! where 0 and 1 would read as a test that found nothing.
 //! The test needs at least one qualifying state and one landmark.
 //!
 //! # References
@@ -129,8 +124,8 @@ use epistat_rng::Stream;
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
-use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::error::{Error, Result};
+use crate::step::Steps;
 use crate::surv::SurvData;
 use crate::survcheck::{Policy, survcheck};
 use crate::timefix::TimeFix;
@@ -165,18 +160,8 @@ impl RiskIndex {
             let sorted_keys: Vec<f64> = order.iter().map(|&i| keys[i as usize]).collect();
             (order, sorted_keys)
         };
-        let lower_bound = |keys: &[f64], target: f64| -> u32 {
-            let (mut low, mut high) = (0usize, keys.len());
-            while low < high {
-                let mid = usize::midpoint(low, high);
-                if keys[mid] < target {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
-            low as u32
-        };
+        let lower_bound =
+            |keys: &[f64], target: f64| -> u32 { keys.partition_point(|&key| key < target) as u32 };
         let (exit_order, exit_keys) = sorted(exit);
         let (entry_order, entry_keys) = sorted(entry);
         Self {
@@ -211,52 +196,34 @@ impl RiskIndex {
     }
 }
 
-/// The Nelson-Aalen cumulative intensity as a right-continuous step function.
+/// The Nelson-Aalen cumulative intensity as a right-continuous step function,
+/// 0 before the first time.
 ///
 /// Increments at one instant are summed before the running total: two
 /// transitions recorded at the same time are one jump, and evaluating between
-/// them would return a value the estimator never takes.
-struct StepCumulative {
-    times: Vec<f64>,
-    totals: Vec<f64>,
-}
-
-impl StepCumulative {
-    /// Group first, then accumulate. The increments at each instant are summed
-    /// walking the rows in input order, and then one group total at a time is
-    /// added in sorted time order. Adding the increments one by one in sorted
-    /// order is a different sequence of roundings.
-    fn build(times: &[f64], increments: &[f64]) -> Self {
-        let mut grouped: HashMap<u64, f64> = HashMap::new();
-        for (&time, &increment) in times.iter().zip(increments.iter()) {
-            *grouped.entry(time.to_bits()).or_insert(0.0) += increment;
-        }
-        let mut distinct: Vec<f64> = grouped.keys().map(|&bits| f64::from_bits(bits)).collect();
-        distinct.sort_by(f64::total_cmp);
-
-        let mut totals = Vec::with_capacity(distinct.len());
-        let mut running = 0.0f64;
-        for time in &distinct {
-            running += grouped[&time.to_bits()];
-            totals.push(running);
-        }
-        Self {
-            times: distinct,
-            totals,
-        }
+/// them would return a value the estimator never takes. Group first, then
+/// accumulate. The increments at each instant are summed walking the rows in
+/// input order, and then one group total at a time is added in sorted time
+/// order. Adding the increments one by one in sorted order is a different
+/// sequence of roundings.
+fn cumulative_intensity(times: &[f64], increments: &[f64]) -> Steps {
+    let mut grouped: HashMap<u64, f64> = HashMap::new();
+    for (&time, &increment) in times.iter().zip(increments.iter()) {
+        *grouped.entry(time.to_bits()).or_insert(0.0) += increment;
     }
+    let mut distinct: Vec<f64> = grouped.keys().map(|&bits| f64::from_bits(bits)).collect();
+    distinct.sort_by(f64::total_cmp);
 
-    fn at(&self, when: f64) -> f64 {
-        let (mut low, mut high) = (0usize, self.times.len());
-        while low < high {
-            let mid = usize::midpoint(low, high);
-            if self.times[mid] <= when {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        if low == 0 { 0.0 } else { self.totals[low - 1] }
+    let mut totals = Vec::with_capacity(distinct.len());
+    let mut running = 0.0f64;
+    for time in &distinct {
+        running += grouped[&time.to_bits()];
+        totals.push(running);
+    }
+    Steps {
+        time: distinct,
+        first: 0.0,
+        value: totals,
     }
 }
 
@@ -270,60 +237,9 @@ fn standard_normals(count: usize, seed: u64) -> Vec<f64> {
 /// cover no landmark.
 const NOT_QUALIFYING: u32 = u32::MAX;
 
-/// The interval data the test reads: every stay of every individual, in input
-/// order.
-#[deprecated(since = "0.3.0", note = "use `markov::test` with a `SurvData`")]
-#[derive(Debug, Clone, Copy)]
-pub struct Stays<'a> {
-    rows: Rows<'a>,
-}
-
-#[expect(deprecated, reason = "the methods of the deprecated type itself")]
-impl<'a> Stays<'a> {
-    /// The stays, one entry per stay. `person` is the dense code of the
-    /// individual. `state` is the index of the state occupied during the stay
-    /// among the qualifying states, or any value at or above their count for
-    /// another state. Qualifying state 0 is the origin of the transition, so its
-    /// stays are the ones at risk. `event` is 1 when the stay ends in the target
-    /// state of the transition.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Input`] when the columns differ in length, or when a
-    /// start or stop time is NaN or infinite.
-    pub fn new(
-        person: &'a [u32],
-        start: &'a [f64],
-        stop: &'a [f64],
-        state: &'a [u32],
-        event: &'a [f64],
-    ) -> Result<Self> {
-        check_lengths(&[
-            ("person", person.len()),
-            ("start", start.len()),
-            ("stop", stop.len()),
-            ("state", state.len()),
-            ("event", event.len()),
-        ])?;
-        check_row_count(person.len())?;
-        refuse_non_finite(start, "start")?;
-        refuse_non_finite(stop, "stop")?;
-        Ok(Self {
-            rows: Rows {
-                person,
-                start,
-                stop,
-                state,
-                event,
-            },
-        })
-    }
-}
-
 /// The stays as five columns of the same length. The state is the index among
 /// the qualifying states, and a value at or above their count is a state that
-/// does not qualify. The deprecated entry point and the one that reads a
-/// [`SurvData`] end in the code that reads this.
+/// does not qualify.
 #[derive(Debug, Clone, Copy)]
 struct Rows<'a> {
     person: &'a [u32],
@@ -367,29 +283,29 @@ fn occupancy(stays: &Rows<'_>, at_risk: &[usize], grid: &[f64], qualifying: usiz
     indicators
 }
 
-/// The result of the test. Per-landmark-and-state values are flattened
+/// What the test computes. Per-landmark-and-state values are flattened
 /// `landmark * qualifying + state`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MarkovTest {
+struct Computed {
     /// The trace `Z_j(s)`, `grid * qualifying` values.
-    pub trace: Vec<f64>,
+    trace: Vec<f64>,
     /// The variance estimate `V_j(s)`, `grid * qualifying` values.
-    pub variance: Vec<f64>,
+    variance: Vec<f64>,
     /// Stays at risk whose individual occupied the state at the landmark,
     /// `grid * qualifying` values.
-    pub n_occupied: Vec<f64>,
+    n_occupied: Vec<f64>,
     /// Transitions under test after each landmark, `grid` values.
-    pub n_events_after: Vec<f64>,
+    n_events_after: Vec<f64>,
     /// The statistic of each qualifying state, `qualifying` values.
-    pub statistic: Vec<f64>,
+    statistic: Vec<f64>,
     /// The wild-bootstrap p-value of each qualifying state, `qualifying` values,
     /// `None` without replicates.
-    pub p_value: Vec<Option<f64>>,
+    p_value: Vec<Option<f64>>,
 }
 
 /// The observed traces, their variance, the summary statistic and the p-value,
 /// with one wild-bootstrap replicate per seed.
-fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> MarkovTest {
+fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> Computed {
     let at_risk: Vec<usize> = (0..stays.state.len())
         .filter(|&row| stays.state[row] == 0)
         .collect();
@@ -408,7 +324,7 @@ fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64
         .zip(at_risk_n.iter())
         .map(|(&event, &size)| if size > 0.0 { event / size } else { 0.0 })
         .collect();
-    let cumulative = StepCumulative::build(&t1, &increment);
+    let cumulative = cumulative_intensity(&t1, &increment);
 
     let slots = grid.len() * qualifying;
     let mut centred = vec![0.0f64; slots * n];
@@ -534,7 +450,7 @@ fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64
         .map(|&count| (n_bootstrap > 0).then(|| (count + 1) as f64 / (n_bootstrap + 1) as f64))
         .collect();
 
-    MarkovTest {
+    Computed {
         trace: traces,
         variance: variances,
         n_occupied,
@@ -544,33 +460,9 @@ fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64
     }
 }
 
-/// The Titman-Putter test of one transition, from the interval data.
-///
-/// `grid` holds the landmarks and `qualifying` the number of qualifying states
-/// of `stays`. There is one wild-bootstrap replicate per entry of `seeds`, and
-/// the multipliers of a replicate come from its seed. See [`MarkovTest`] for
-/// what comes back and the module documentation for the method.
-///
-/// A landmark and state whose variance is not positive adds 0 to the statistic
-/// and to every replicate, which drops the slot from the sum. The mean is still
-/// taken over all landmarks.
-///
-/// # Errors
-///
-/// [`Error::Input`] when there is no qualifying state or no landmark.
-#[deprecated(since = "0.3.0", note = "use `markov::test` with a `SurvData`")]
-#[expect(deprecated, reason = "takes the deprecated `Stays`")]
-pub fn markov_test(
-    stays: &Stays<'_>,
-    grid: &[f64],
-    qualifying: usize,
-    seeds: &[u64],
-) -> Result<MarkovTest> {
-    run(&stays.rows, grid, qualifying, seeds)
-}
-
-/// The test of [`markov_test`], on the stays as columns.
-fn run(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> Result<MarkovTest> {
+/// The test on the stays as columns. `qualifying` is the number of qualifying
+/// states, and a stay in a state at or above it qualifies for none.
+fn run(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> Result<Computed> {
     if qualifying == 0 || grid.is_empty() {
         return Err(Error::input(
             "the test needs at least one qualifying state and one landmark",
@@ -760,9 +652,8 @@ pub fn test(
 }
 
 #[cfg(test)]
-#[expect(deprecated, reason = "the tests of the deprecated functions")]
 mod tests {
-    use super::{Stays, markov_test, risk_set_sums, titman_putter};
+    use super::{Rows, risk_set_sums, run, titman_putter};
 
     /// A three-state fixture with `a` as state 0, `b` as 1 and everything else
     /// as 2. Rows are
@@ -802,8 +693,14 @@ mod tests {
         let person: Vec<u32> = FIXTURE.iter().map(|row| row.0).collect();
         let state: Vec<u32> = FIXTURE.iter().map(|row| row.3).collect();
         let (start, stop, event) = (column(|r| r.1), column(|r| r.2), column(|r| r.4));
-        let stays = Stays::new(&person, &start, &stop, &state, &event).unwrap();
-        let out = titman_putter(&stays.rows, &[1.0, 2.0, 3.0], 2, &[]);
+        let stays = Rows {
+            person: &person,
+            start: &start,
+            stop: &stop,
+            state: &state,
+            event: &event,
+        };
+        let out = titman_putter(&stays, &[1.0, 2.0, 3.0], 2, &[]);
 
         let zbar = [
             [-1.110_223_024_625_16e-16, 0.0],
@@ -836,8 +733,14 @@ mod tests {
     #[test]
     fn occupancy_reads_the_stay_covering_the_landmark() {
         // Person 0 is in state 1 on (0, 2] and in the origin on (2, 5].
-        let stays = Stays::new(&[0, 0], &[0.0, 2.0], &[2.0, 5.0], &[1, 0], &[0.0, 1.0]).unwrap();
-        let indicators = super::occupancy(&stays.rows, &[1], &[2.0, 3.0], 2);
+        let stays = Rows {
+            person: &[0, 0],
+            start: &[0.0, 2.0],
+            stop: &[2.0, 5.0],
+            state: &[1, 0],
+            event: &[0.0, 1.0],
+        };
+        let indicators = super::occupancy(&stays, &[1], &[2.0, 3.0], 2);
         // At 2 the first stay covers it (start < 2 <= stop); at 3 the second.
         assert_eq!(indicators, vec![0, 1, 1, 0]);
     }
@@ -856,41 +759,22 @@ mod tests {
     }
 
     #[test]
-    fn a_non_finite_time_is_refused_with_its_column() {
-        let person = [0u32, 0];
-        let state = [0u32, 1];
-        let event = [1.0, 0.0];
-        let finite = [0.0, 2.0];
-        for (bad, column) in [(f64::NAN, "start"), (f64::INFINITY, "stop")] {
-            let broken = [1.0, bad];
-            let (start, stop) = if column == "start" {
-                (&broken, &[2.0, 3.0])
-            } else {
-                (&finite, &broken)
-            };
-            let Err(error) = Stays::new(&person, start, stop, &state, &event) else {
-                panic!("a non-finite {column} must be refused");
-            };
-            assert!(
-                error
-                    .to_string()
-                    .starts_with(&format!("{column}: 1 non-finite"))
-            );
-        }
-        assert!(Stays::new(&person, &finite, &[2.0, 3.0], &state, &event).is_ok());
-    }
-
-    #[test]
     fn the_bootstrap_p_value_is_reproducible_and_in_range() {
         let person: Vec<u32> = FIXTURE.iter().map(|row| row.0).collect();
         let state: Vec<u32> = FIXTURE.iter().map(|row| row.3).collect();
         let start: Vec<f64> = FIXTURE.iter().map(|row| row.1).collect();
         let stop: Vec<f64> = FIXTURE.iter().map(|row| row.2).collect();
         let event: Vec<f64> = FIXTURE.iter().map(|row| row.4).collect();
-        let stays = Stays::new(&person, &start, &stop, &state, &event).unwrap();
+        let stays = Rows {
+            person: &person,
+            start: &start,
+            stop: &stop,
+            state: &state,
+            event: &event,
+        };
         let seeds: Vec<u64> = (0..50).collect();
-        let first = markov_test(&stays, &[1.0, 2.0, 3.0], 2, &seeds).unwrap();
-        let second = markov_test(&stays, &[1.0, 2.0, 3.0], 2, &seeds).unwrap();
+        let first = run(&stays, &[1.0, 2.0, 3.0], 2, &seeds).unwrap();
+        let second = run(&stays, &[1.0, 2.0, 3.0], 2, &seeds).unwrap();
         assert_eq!(
             first
                 .p_value
@@ -913,8 +797,14 @@ mod tests {
 
     #[test]
     fn a_test_without_states_or_landmarks_is_refused() {
-        let stays = Stays::new(&[0], &[0.0], &[1.0], &[0], &[1.0]).unwrap();
-        assert!(markov_test(&stays, &[1.0], 0, &[]).is_err());
-        assert!(markov_test(&stays, &[], 1, &[]).is_err());
+        let stays = Rows {
+            person: &[0],
+            start: &[0.0],
+            stop: &[1.0],
+            state: &[0],
+            event: &[1.0],
+        };
+        assert!(run(&stays, &[1.0], 0, &[]).is_err());
+        assert!(run(&stays, &[], 1, &[]).is_err());
     }
 }

@@ -22,7 +22,7 @@
 //! the tolerances of the terms of the sums of products. They are not changed
 //! after a run.
 
-#![allow(
+#![expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     reason = "the inputs are a few hundred rows"

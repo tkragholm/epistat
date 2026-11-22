@@ -59,8 +59,9 @@
 
 use rayon::prelude::*;
 
+use crate::check::check_ascending;
 use crate::error::{Error, Result};
-use crate::multistate::{self, Options, VarianceOptions, check_ascending};
+use crate::multistate::{self, Options, VarianceOptions};
 use crate::order::{dense_index, dense_of_present};
 use crate::surv::{SurvBuf, SurvData};
 use crate::survcheck::{Policy, survcheck};

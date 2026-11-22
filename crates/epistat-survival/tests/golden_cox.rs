@@ -1,7 +1,7 @@
-//! The bits of `fit_cox` and `cox_score_residuals` on varied inputs, pinned by
-//! a hash of every output field. The numbers of downstream studies depend on
-//! them, so a change to any last bit is a failure here. The hashes were
-//! recorded once from the implementation before the shared input type.
+//! The bits of `cox::fit` and `cox::score_residuals` on varied inputs, pinned
+//! by a hash of every output field. The numbers of downstream studies depend
+//! on them, so a change to any last bit is a failure here. Times are compared
+//! as they are, so the inputs that tie stay tied.
 //!
 //! The bits depend on the platform's `ln` and `exp`, which come from its maths
 //! library, so the test runs only on the target it was recorded on, aarch64
@@ -9,7 +9,6 @@
 //! does not depend on the platform, is checked everywhere by the thread tests.
 
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
-#![expect(deprecated, reason = "pins the deprecated entry points")]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
@@ -17,7 +16,9 @@
 
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
-use epistat_survival::cox::{CoxDesign, CoxModelFit, Ties, cox_score_residuals, fit_cox};
+use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit, score_residuals};
+use epistat_survival::timefix::TimeFix;
+use epistat_survival::{Error, SurvBuf};
 use epistat_testkit::Fingerprint;
 
 fn opts(hash: Fingerprint, values: &[Option<f64>]) -> Fingerprint {
@@ -43,7 +44,7 @@ fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
     h = h.option_f64(fit.null_log_partial_likelihood);
     h = h
         .f64(fit.n_events)
-        .u64(fit.n_rows as u64)
+        .u64(fit.n_used as u64)
         .u64(fit.rank as u64)
         .u64(u64::from(fit.iterations))
         .u64(u64::from(fit.converged));
@@ -123,45 +124,46 @@ struct Case {
     columns: usize,
 }
 
+/// The options of every fit here: exact times, the tie rule of the case.
+fn options(ties: Ties) -> CoxOptions<'static> {
+    CoxOptions {
+        ties,
+        timefix: TimeFix::Exact,
+        ..CoxOptions::default()
+    }
+}
+
+fn status(is_event: &[bool]) -> Vec<i32> {
+    is_event.iter().map(|&e| i32::from(e)).collect()
+}
+
 fn run(s: &Sample, case: &Case, ties: Ties) -> (u64, u64) {
     let n = s.stop.len();
     let x = Mat::from_fn(n, case.columns, |i, j| s.x[(i, j)]);
-    let start = if case.use_start {
-        s.start.clone()
-    } else {
-        vec![f64::NEG_INFINITY; n]
-    };
-    let stratum = if case.use_strata {
-        s.stratum.clone()
-    } else {
-        vec![0; n]
-    };
-    let weight = if case.use_weights {
-        s.weight.clone()
-    } else {
-        vec![1.0; n]
-    };
-    let cluster: Option<Vec<u32>> = case
-        .clusters
-        .map(|k| s.cluster.iter().map(|&c| (c as usize % k) as u32).collect());
-    let design = CoxDesign {
-        x: x.as_ref(),
-        is_event: &s.is_event,
-        start: &start,
-        stop: &s.stop,
-        weight: &weight,
-        stratum: &stratum,
-        ties,
-        cluster: cluster.as_deref(),
-    };
-    let fit = fit_cox(&design).unwrap();
+    let mut builder = SurvBuf::builder(s.stop.clone(), status(&s.is_event));
+    if case.use_start {
+        builder = builder.start(s.start.clone());
+    }
+    if case.use_strata {
+        builder = builder.stratum(s.stratum.clone());
+    }
+    if case.use_weights {
+        builder = builder.weight(s.weight.clone());
+    }
+    if let Some(k) = case.clusters {
+        builder = builder.cluster(s.cluster.iter().map(|&c| (c as usize % k) as u32).collect());
+    }
+    let buf = builder.build().unwrap();
+    let data = buf.as_data();
+    let opts = options(ties);
+    let fit = fit(&data, x.as_ref(), &opts).unwrap();
     assert!(fit.converged, "{}", case.name);
     assert_eq!(fit.rank, 2, "{}", case.name);
-    let residuals = cox_score_residuals(&design, &fit.coefficients).unwrap();
+    let residuals = score_residuals(&data, x.as_ref(), &fit.coefficients, &opts).unwrap();
     // Residuals away from the estimate, with the last column left out.
     let mut other: Vec<Option<f64>> = (0..case.columns).map(|j| Some(0.1 * j as f64)).collect();
     *other.last_mut().unwrap() = None;
-    let away = cox_score_residuals(&design, &other).unwrap();
+    let away = score_residuals(&data, x.as_ref(), &other, &opts).unwrap();
     (
         hash_fit(&fit).finish(),
         hash_residuals(&residuals).finish() ^ hash_residuals(&away).finish().rotate_left(1),
@@ -252,67 +254,61 @@ fn diverging_coefficient() {
             s.x[(i, 0)]
         }
     });
+    let buf = SurvBuf::builder(s.stop.clone(), status(&s.is_event))
+        .start(s.start.clone())
+        .weight(s.weight.clone())
+        .stratum(s.stratum.clone())
+        .cluster(s.cluster.clone())
+        .build()
+        .unwrap();
+    let data = buf.as_data();
     let mut lines: Vec<Line> = Vec::new();
     for (label, ties) in [("breslow", Ties::Breslow), ("efron", Ties::Efron)] {
-        let design = CoxDesign {
-            x: x.as_ref(),
-            is_event: &s.is_event,
-            start: &s.start,
-            stop: &s.stop,
-            weight: &s.weight,
-            stratum: &s.stratum,
-            ties,
-            cluster: Some(&s.cluster),
-        };
-        let fit = fit_cox(&design).unwrap();
-        assert_ne!(fit.monotone_columns.len(), 0);
-        let residuals = cox_score_residuals(&design, &[Some(0.3), Some(-0.2)]).unwrap();
+        let opts = options(ties);
+        let model = fit(&data, x.as_ref(), &opts).unwrap();
+        assert_ne!(model.monotone_columns.len(), 0);
+        let residuals =
+            score_residuals(&data, x.as_ref(), &[Some(0.3), Some(-0.2)], &opts).unwrap();
         lines.push((
             format!("diverging {label}"),
-            hash_fit(&fit).finish(),
+            hash_fit(&model).finish(),
             hash_residuals(&residuals).finish(),
         ));
     }
     check(&lines, EXPECTED_DIVERGING);
 }
 
-/// No events, no weight, a cluster whose rows all have weight zero, and the
-/// errors.
+/// No events, no weight, a cluster whose rows all have weight zero, a design
+/// without columns, and the errors.
 #[test]
 fn edge_cases() {
     let s = sample(60, 22);
     let n = s.stop.len();
     let x = Mat::from_fn(n, 1, |i, _| s.x[(i, 0)]);
-    let base = CoxDesign {
-        x: x.as_ref(),
-        is_event: &s.is_event,
-        start: &s.start,
-        stop: &s.stop,
-        weight: &s.weight,
-        stratum: &s.stratum,
-        ties: Ties::Efron,
-        cluster: Some(&s.cluster),
+    let opts = options(Ties::Efron);
+    let builder = |event: &[bool], start: &[f64], weight: &[f64], stop: &[f64]| {
+        SurvBuf::builder(stop.to_vec(), status(event))
+            .start(start.to_vec())
+            .weight(weight.to_vec())
+            .stratum(s.stratum.clone())
+            .cluster(s.cluster.clone())
+            .build()
     };
     let mut lines: Vec<Line> = Vec::new();
 
     let none = vec![false; n];
-    let fit = fit_cox(&CoxDesign {
-        is_event: &none,
-        ..base
-    })
-    .unwrap();
-    lines.push(("no events".to_string(), hash_fit(&fit).finish(), 0));
+    let buf = builder(&none, &s.start, &s.weight, &s.stop).unwrap();
+    let model = fit(&buf.as_data(), x.as_ref(), &opts).unwrap();
+    lines.push(("no events".to_string(), hash_fit(&model).finish(), 0));
 
     let zeros = vec![0.0; n];
-    let design = CoxDesign {
-        weight: &zeros,
-        ..base
-    };
-    let fit = fit_cox(&design).unwrap();
-    let residuals = cox_score_residuals(&design, &fit.coefficients).unwrap();
+    let buf = builder(&s.is_event, &s.start, &zeros, &s.stop).unwrap();
+    let data = buf.as_data();
+    let model = fit(&data, x.as_ref(), &opts).unwrap();
+    let residuals = score_residuals(&data, x.as_ref(), &model.coefficients, &opts).unwrap();
     lines.push((
         "no weight".to_string(),
-        hash_fit(&fit).finish(),
+        hash_fit(&model).finish(),
         hash_residuals(&residuals).finish(),
     ));
 
@@ -326,64 +322,45 @@ fn edge_cases() {
             }
         })
         .collect();
-    let design = CoxDesign {
-        weight: &weight,
-        ..base
-    };
-    let fit = fit_cox(&design).unwrap();
-    let residuals = cox_score_residuals(&design, &fit.coefficients).unwrap();
+    let buf = builder(&s.is_event, &s.start, &weight, &s.stop).unwrap();
+    let data = buf.as_data();
+    let model = fit(&data, x.as_ref(), &opts).unwrap();
+    let residuals = score_residuals(&data, x.as_ref(), &model.coefficients, &opts).unwrap();
     lines.push((
         "empty cluster".to_string(),
-        hash_fit(&fit).finish(),
+        hash_fit(&model).finish(),
         hash_residuals(&residuals).finish(),
     ));
 
-    // A bad entry time on a row of weight zero is not an error.
+    let mut errors: Vec<(&str, String)> = Vec::new();
+    let mut message = |name: &'static str, r: Result<(), Error>| {
+        errors.push((name, r.unwrap_err().to_string()));
+    };
+    // A NaN entry time is refused even on a row of weight zero.
     let mut start = s.start.clone();
     start[0] = f64::NAN;
     let mut weight = s.weight.clone();
     weight[0] = 0.0;
-    let design = CoxDesign {
-        start: &start,
-        weight: &weight,
-        ..base
-    };
-    let fit = fit_cox(&design).unwrap();
-    lines.push((
-        "bad entry, no weight".to_string(),
-        hash_fit(&fit).finish(),
-        0,
-    ));
-
-    let mut errors: Vec<(&str, String)> = Vec::new();
-    let mut message = |name: &'static str, r: Result<CoxModelFit, epistat_survival::Error>| {
-        errors.push((name, r.unwrap_err().to_string()));
-    };
+    message(
+        "bad entry, no weight",
+        builder(&s.is_event, &start, &weight, &s.stop).map(|_| ()),
+    );
     let short = vec![1.0; n - 1];
     message(
         "short weight",
-        fit_cox(&CoxDesign {
-            weight: &short,
-            ..base
-        }),
+        builder(&s.is_event, &s.start, &short, &s.stop).map(|_| ()),
     );
     let mut negative = s.weight.clone();
     negative[3] = -1.0;
     message(
         "negative weight",
-        fit_cox(&CoxDesign {
-            weight: &negative,
-            ..base
-        }),
+        builder(&s.is_event, &s.start, &negative, &s.stop).map(|_| ()),
     );
     let mut infinite = s.stop.clone();
     infinite[4] = f64::INFINITY;
     message(
         "infinite stop",
-        fit_cox(&CoxDesign {
-            stop: &infinite,
-            ..base
-        }),
+        builder(&s.is_event, &s.start, &s.weight, &infinite).map(|_| ()),
     );
     let mut late = s.start.clone();
     late[5] = s.stop[5];
@@ -391,44 +368,32 @@ fn edge_cases() {
     positive[5] = 1.0;
     message(
         "late entry",
-        fit_cox(&CoxDesign {
-            start: &late,
-            weight: &positive,
-            ..base
-        }),
+        builder(&s.is_event, &late, &positive, &s.stop).map(|_| ()),
     );
+    let buf = builder(&s.is_event, &s.start, &s.weight, &s.stop).unwrap();
+    let data = buf.as_data();
     let nan = Mat::from_fn(n, 1, |i, _| if i == 2 { f64::NAN } else { 1.0 });
-    message(
-        "nan x",
-        fit_cox(&CoxDesign {
-            x: nan.as_ref(),
-            ..base
-        }),
-    );
-    let empty = Mat::<f64>::zeros(n, 0);
-    message(
-        "no columns",
-        fit_cox(&CoxDesign {
-            x: empty.as_ref(),
-            ..base
-        }),
-    );
+    message("nan x", fit(&data, nan.as_ref(), &opts).map(|_| ()));
     for (name, text) in &errors {
         lines.push((name.to_string(), hash_text(text).finish(), 0));
     }
-    let wrong = cox_score_residuals(&base, &[Some(0.0), Some(0.0)]).unwrap_err();
+    // A design without columns is the null model.
+    let empty = Mat::<f64>::zeros(n, 0);
+    let null = fit(&data, empty.as_ref(), &opts).unwrap();
+    lines.push(("no columns".to_string(), hash_fit(&null).finish(), 0));
+    let wrong = score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &opts).unwrap_err();
     lines.push((
         "wrong coefficients".to_string(),
         hash_text(&wrong.to_string()).finish(),
         0,
     ));
-    let nonfinite = cox_score_residuals(&base, &[Some(f64::NAN)]).unwrap_err();
+    let nonfinite = score_residuals(&data, x.as_ref(), &[Some(f64::NAN)], &opts).unwrap_err();
     lines.push((
         "nonfinite coefficient".to_string(),
         hash_text(&nonfinite.to_string()).finish(),
         0,
     ));
-    let overflow = cox_score_residuals(&base, &[Some(1e6)]).unwrap_err();
+    let overflow = score_residuals(&data, x.as_ref(), &[Some(1e6)], &opts).unwrap_err();
     lines.push((
         "overflow".to_string(),
         hash_text(&overflow.to_string()).finish(),
@@ -535,13 +500,13 @@ const EXPECTED_EDGE: &[(&str, u64, u64)] = &[
         0xc7ac_3043_2ac1_d019,
         0x1a46_505a_c9ac_c763,
     ),
-    ("bad entry, no weight", 0x1645_3870_1cd5_0765, 0),
-    ("short weight", 0xd8e2_3414_a04d_a4cb, 0),
-    ("negative weight", 0x0b62_d251_a63a_cddf, 0),
-    ("infinite stop", 0x107f_5522_2c89_2f50, 0),
-    ("late entry", 0xff79_f512_fa54_de0c, 0),
+    ("bad entry, no weight", 0x6adb_fbf7_5635_d875, 0),
+    ("short weight", 0xa2db_2acb_90e8_808b, 0),
+    ("negative weight", 0x78ca_702a_5353_ddf9, 0),
+    ("infinite stop", 0x053b_2689_9576_58e9, 0),
+    ("late entry", 0xef25_10df_23b1_6720, 0),
     ("nan x", 0x6249_3f14_1384_1f90, 0),
-    ("no columns", 0x9b6b_0fb0_4013_c103, 0),
+    ("no columns", 0x8317_bdc3_58f8_e3b5, 0),
     ("wrong coefficients", 0xcbae_9c82_4a20_4b9c, 0),
     ("nonfinite coefficient", 0x1637_3757_1948_17c5, 0),
     ("overflow", 0x7b41_5d57_a467_fe58, 0),

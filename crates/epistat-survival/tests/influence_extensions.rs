@@ -27,7 +27,7 @@
 //! standard error or a covariance is `sum (|a_i| tb_i + |b_i| ta_i + ta_i
 //! tb_i)` over the persons. They are not changed after a run.
 
-#![allow(
+#![expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,

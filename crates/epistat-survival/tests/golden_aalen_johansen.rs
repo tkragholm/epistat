@@ -1,5 +1,4 @@
-//! The public functions of `aalen_johansen` give the same bits as when this
-//! test was recorded.
+//! The public functions of `aalen_johansen` give the bits recorded here.
 //!
 //! Inputs come from a seeded stream. The curves are run with and without
 //! delayed entry and weights, with weights of zero, with groups, with ties on a
@@ -20,15 +19,13 @@
     clippy::cast_possible_wrap,
     reason = "the grid values and counts are far below the limits of the casts"
 )]
-#![expect(
-    deprecated,
-    reason = "the test is of the deprecated functions, whose numbers must not move"
-)]
 
 use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
-    ArmColumns, Draw, RowWindows, bootstrap_arm_incidence, curves,
+    AalenJohansenOptions, BootstrapOptions, Draw, RowWindows, bootstrap, estimate,
 };
+use epistat_survival::timefix::TimeFix;
+use epistat_survival::{SurvBuf, SurvData};
 use epistat_testkit::bits;
 
 mod golden_values;
@@ -100,60 +97,94 @@ fn push_curves(
     }
 }
 
+/// Times are compared as they are.
+const EXACT: AalenJohansenOptions = AalenJohansenOptions {
+    timefix: TimeFix::Exact,
+};
+
+/// The curves of rows with the given columns, one stratum per group code, and
+/// `n_codes` causes.
+fn curves(
+    time: &[f64],
+    event: &[i32],
+    weight: &[f64],
+    group: &[u32],
+    entry: Option<&[f64]>,
+    n_codes: u32,
+) -> Result<epistat_survival::aalen_johansen::Curves, epistat_survival::Error> {
+    let mut builder = SurvData::builder(time, event)
+        .n_codes(n_codes)
+        .weight(weight)
+        .stratum(group);
+    if let Some(entry) = entry {
+        builder = builder.start(entry);
+    }
+    estimate(&builder.build()?, &EXACT)
+}
+
 fn curve_cases(out: &mut Vec<(String, Vec<u64>)>) {
     let a = input(240, 1, 3, false);
     let b = input(240, 2, 2, true);
     let ones = vec![1.0; 240];
     let one_group = vec![0u32; 240];
-    for (name, s, weight, group, with_entry) in [
-        ("plain", &a, &ones, &one_group, false),
-        ("groups", &a, &ones, &a.group, false),
-        ("entry", &a, &ones, &one_group, true),
-        ("weights groups entry", &b, &b.weight, &b.group, true),
-        ("weights groups", &b, &b.weight, &b.group, false),
-        ("weights", &b, &b.weight, &one_group, false),
+    for (name, s, weight, group, with_entry, causes) in [
+        ("plain", &a, &ones, &one_group, false, 3),
+        ("groups", &a, &ones, &a.group, false, 3),
+        ("entry", &a, &ones, &one_group, true, 3),
+        ("weights groups entry", &b, &b.weight, &b.group, true, 2),
+        ("weights groups", &b, &b.weight, &b.group, false, 2),
+        ("weights", &b, &b.weight, &one_group, false, 2),
     ] {
         let entry = with_entry.then_some(s.entry.as_slice());
-        let c = curves(&s.time, &s.event, weight, group, entry).unwrap();
+        let c = curves(&s.time, &s.event, weight, group, entry, causes).unwrap();
         push_curves(out, name, &c);
     }
 
     // Three causes declared by the data, the third unobserved.
     let mut u = input(120, 3, 2, true);
     u.event[0] = 2;
-    let c = curves(&u.time, &u.event, &u.weight, &u.group, Some(&u.entry)).unwrap();
+    let c = curves(&u.time, &u.event, &u.weight, &u.group, Some(&u.entry), 3).unwrap();
     push_curves(out, "two causes", &c);
 
-    // An entry time equal to the exit time, and a group of weight zero only.
+    // An entry time equal to another row's exit time, and a group of weight
+    // zero only.
     let time = [1.0, 2.0, 2.0, 3.0, 4.0, 5.0];
-    let entry = [0.0, 2.0, 0.0, 1.0, 4.0, 0.0];
+    let entry = [0.0, 1.0, 0.0, 1.0, 3.0, 0.0];
     let event = [1, 2, 0, 1, 2, 0];
     let weight = [1.0, 0.0, 2.0, 0.5, 0.0, 0.0];
     let group = [0, 1, 0, 0, 1, 2];
-    let c = curves(&time, &event, &weight, &group, Some(&entry)).unwrap();
+    let c = curves(&time, &event, &weight, &group, Some(&entry), 2).unwrap();
     push_curves(out, "degenerate", &c);
 
-    let c = curves(&time, &[0; 6], &weight, &group, None).unwrap();
+    let c = curves(&time, &[0; 6], &weight, &group, None, 1).unwrap();
     push_curves(out, "all censored", &c);
-    let c = curves(&[], &[], &[], &[], None).unwrap();
+    let c = curves(&[], &[], &[], &[], None, 1).unwrap();
     push_curves(out, "empty", &c);
 
     out.push((
         "errors".into(),
         vec![
-            u64::from(curves(&[1.0], &[1, 1], &[1.0], &[0], None).is_err()),
-            u64::from(curves(&[f64::NAN], &[1], &[1.0], &[0], None).is_err()),
-            u64::from(curves(&[1.0], &[1], &[1.0], &[0], Some(&[f64::NAN])).is_err()),
+            u64::from(curves(&[1.0], &[1, 1], &[1.0], &[0], None, 1).is_err()),
+            u64::from(curves(&[f64::NAN], &[1], &[1.0], &[0], None, 1).is_err()),
+            u64::from(curves(&[1.0], &[1], &[1.0], &[0], Some(&[f64::NAN]), 1).is_err()),
+            u64::from(curves(&[1.0], &[1], &[f64::NAN], &[0], None, 1).is_err()),
+            u64::from(curves(&[1.0], &[1], &[1.0], &[0], Some(&[1.0]), 1).is_err()),
         ],
     ));
 }
 
-fn frame(n: usize) -> (ArmColumns, RowWindows) {
+/// The rows, the arm of each and the windows of every cell.
+fn frame(n: usize) -> (SurvBuf, Vec<bool>, RowWindows) {
     let s = input(n, 4, 3, true);
     let mut rng = Stream::seeded(5);
     let exposed: Vec<bool> = (0..n).map(|_| rng.below(2) == 0).collect();
     let family: Vec<u32> = (0..n).map(|_| rng.below(40) as u32).collect();
-    let columns = ArmColumns::new(s.time, s.event, s.weight, family, exposed.clone()).unwrap();
+    let data = SurvBuf::builder(s.time, s.event)
+        .n_codes(3)
+        .weight(s.weight)
+        .cluster(family)
+        .build()
+        .unwrap();
     let mut rows = Vec::new();
     let mut offsets = vec![0u32];
     for (cell, len) in [150usize, 20, 90, 300, 0, 60, 41].into_iter().enumerate() {
@@ -166,18 +197,37 @@ fn frame(n: usize) -> (ArmColumns, RowWindows) {
         }
         offsets.push(rows.len() as u32);
     }
-    (columns, RowWindows::new(rows, offsets, n, "cell").unwrap())
+    (
+        data,
+        exposed,
+        RowWindows::new(rows, offsets, n, "cell").unwrap(),
+    )
+}
+
+fn options(n_replicates: usize, draw: Draw) -> BootstrapOptions {
+    BootstrapOptions {
+        timefix: TimeFix::Exact,
+        ..BootstrapOptions::new(n_replicates, draw)
+    }
 }
 
 fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
-    let (columns, cells) = frame(400);
+    let (buf, exposed, cells) = frame(400);
+    let data = buf.as_data();
     let seeds: Vec<u64> = (0..cells.len() as u64).map(|c| 11 + 7919 * c).collect();
     let ages = vec![2.5, 0.05, 1.0, 40.0, 4.0];
     for (name, draw) in [("per cell", Draw::PerCell), ("shared", Draw::Shared)] {
         for cause in [1, 3] {
-            let (exposed, comparator, estimable) =
-                bootstrap_arm_incidence(&columns, &cells, &seeds, ages.clone(), cause, 9, draw)
-                    .unwrap();
+            let (exposed, comparator, estimable) = bootstrap(
+                &data,
+                &exposed,
+                &cells,
+                &seeds,
+                &ages,
+                cause,
+                &options(9, draw),
+            )
+            .unwrap();
             out.push((format!("{name} cause {cause} exposed"), bits(&exposed)));
             out.push((
                 format!("{name} cause {cause} comparator"),
@@ -189,42 +239,68 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
             ));
         }
         let (e, c, ok) =
-            bootstrap_arm_incidence(&columns, &cells, &seeds, vec![], 1, 9, draw).unwrap();
+            bootstrap(&data, &exposed, &cells, &seeds, &[], 1, &options(9, draw)).unwrap();
         out.push((
             format!("{name} no ages"),
             vec![e.len() as u64, c.len() as u64, ok.len() as u64],
         ));
         let (e, c, ok) =
-            bootstrap_arm_incidence(&columns, &cells, &seeds, ages.clone(), 1, 0, draw).unwrap();
+            bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &options(0, draw)).unwrap();
         out.push((
             format!("{name} no replicates"),
             vec![e.len() as u64, c.len() as u64, ok.len() as u64],
         ));
     }
     let none = RowWindows::new(vec![], vec![0], 400, "cell").unwrap();
-    let r = bootstrap_arm_incidence(&columns, &none, &[], vec![1.0], 1, 3, Draw::PerCell).unwrap();
+    let r = bootstrap(
+        &data,
+        &exposed,
+        &none,
+        &[],
+        &[1.0],
+        1,
+        &options(3, Draw::PerCell),
+    )
+    .unwrap();
     out.push(("no cells".into(), vec![r.0.len() as u64]));
     out.push((
         "errors".into(),
         vec![
             u64::from(
-                bootstrap_arm_incidence(&columns, &cells, &seeds[..2], ages, 1, 3, Draw::Shared)
-                    .is_err(),
-            ),
-            u64::from(
-                bootstrap_arm_incidence(
-                    &columns,
-                    &RowWindows::new(vec![], vec![0], 7, "cell").unwrap(),
-                    &[],
-                    vec![],
+                bootstrap(
+                    &data,
+                    &exposed,
+                    &cells,
+                    &seeds[..2],
+                    &ages,
                     1,
-                    3,
-                    Draw::Shared,
+                    &options(3, Draw::Shared),
                 )
                 .is_err(),
             ),
             u64::from(
-                ArmColumns::new(vec![1.0], vec![1], vec![1.0], vec![0], vec![true, false]).is_err(),
+                bootstrap(
+                    &data,
+                    &exposed,
+                    &RowWindows::new(vec![], vec![0], 7, "cell").unwrap(),
+                    &[],
+                    &[],
+                    1,
+                    &options(3, Draw::Shared),
+                )
+                .is_err(),
+            ),
+            u64::from(
+                bootstrap(
+                    &data,
+                    &exposed[1..],
+                    &cells,
+                    &seeds,
+                    &ages,
+                    1,
+                    &options(3, Draw::Shared),
+                )
+                .is_err(),
             ),
         ],
     ));

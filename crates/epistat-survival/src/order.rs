@@ -7,6 +7,8 @@
 //! groups in order of first appearance: the order of a sum over groups
 //! follows the numbering, so the two are not interchangeable.
 
+use std::borrow::Cow;
+
 use rayon::prelude::*;
 
 /// Sorts `items` by `key(item)` under `f64::total_cmp`, ties by the item.
@@ -20,6 +22,15 @@ pub(crate) fn par_sort_by_key<T: Ord + Copy + Send>(
     key: impl Fn(T) -> f64 + Sync,
 ) {
     items.par_sort_unstable_by(|&a, &b| key(a).total_cmp(&key(b)).then(a.cmp(&b)));
+}
+
+/// The values of a column at `index`, the rows used, or the column itself when
+/// `index` is `None` because every row is used.
+pub(crate) fn pick_used<'a, T: Copy>(column: &'a [T], index: Option<&[u32]>) -> Cow<'a, [T]> {
+    match index {
+        None => Cow::Borrowed(column),
+        Some(index) => Cow::Owned(index.iter().map(|&i| column[i as usize]).collect()),
+    }
 }
 
 /// The row indices `0..keys.len()` ordered by `keys`, ties by index.

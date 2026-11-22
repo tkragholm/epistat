@@ -8,6 +8,7 @@
 
 use epistat_linalg::MatRef;
 
+use crate::check::check_ascending;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -115,17 +116,7 @@ pub(super) fn check_times(times: &[f64], max_time: f64) -> Result<()> {
     if times.is_empty() {
         return Err(Error::input("times: at least one time is needed"));
     }
-    if let Some(position) = times.iter().position(|t| !t.is_finite()) {
-        return Err(Error::input(format!(
-            "times: value {position} is not finite"
-        )));
-    }
-    if let Some(position) = times.windows(2).position(|w| w[1] <= w[0]) {
-        return Err(Error::input(format!(
-            "times must be strictly increasing: value {} is not above value {position}",
-            position + 1
-        )));
-    }
+    check_ascending(times, "times", true)?;
     if let Some(&last) = times.last()
         && last > max_time
     {

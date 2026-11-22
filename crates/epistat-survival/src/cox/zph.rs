@@ -85,7 +85,8 @@ use epistat_stats::sum::compensated;
 
 use super::design::{ChiSquareTest, CoxModelFit, CoxOptions};
 use super::moments;
-use super::residuals::{Prepared, Sums, prepare, schoenfeld_rows};
+use super::residuals::{Prepared, prepare, schoenfeld_rows};
+use super::sweep::Sums;
 use crate::check::check_lengths;
 use crate::error::{Error, Result};
 use crate::step::Steps;

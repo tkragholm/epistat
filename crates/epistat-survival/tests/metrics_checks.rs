@@ -170,10 +170,10 @@ fn score_refuses_what_it_cannot_score() {
             .unwrap_err()
             .to_string()
     };
-    assert!(msg(&[5.0, 2.0]).contains("strictly increasing"));
-    assert!(msg(&[5.0, 5.0]).contains("strictly increasing"));
+    assert!(msg(&[5.0, 2.0]).contains("strictly ascending"));
+    assert!(msg(&[5.0, 5.0]).contains("strictly ascending"));
     assert!(msg(&[5.0, 11.0]).contains("after the last observed time"));
-    assert!(msg(&[5.0, f64::NAN]).contains("not finite"));
+    assert!(msg(&[5.0, f64::NAN]).contains("must be finite"));
     assert!(msg(&[]).contains("at least one time"));
     assert!(msg(&[5.0]).contains("is 11 by 2, but there are 11 rows and 1 times"));
 

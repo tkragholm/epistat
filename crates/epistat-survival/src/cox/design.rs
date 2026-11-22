@@ -29,20 +29,12 @@
 //! status code is never read as a transition between states; that is a model
 //! of its own.
 //!
-//! Rows of weight zero are left out of the fit, as before. `n_rows` of the
+//! Rows of weight zero are left out of the fit. `n_rows` of the
 //! result counts every row of the data, as `n` of a `coxph` fit does, and
 //! `n_used` the rows with a weight above zero. Strata and clusters are the
 //! dense codes of the data, which are in the order of the codes the caller
 //! gave, so the strata are summed in that order. A cluster whose rows all have
-//! weight zero adds a row of zeros to the sum of cluster scores, as a code that
-//! no row carries did for the deprecated entry points. Cluster codes that skip
-//! values can change the order of the additions of that sum, and with it the
-//! last bits of the robust variance, against the deprecated entry points.
-//!
-//! [`fit_cox`], [`cox_score_residuals`] and [`CoxDesign`] are deprecated. They
-//! take the same columns as slices, compare times exactly, and give the bits
-//! they gave before the data type. Their `n_rows` counts the rows fitted, so it
-//! equals `n_used`.
+//! weight zero adds a row of zeros to the sum of cluster scores.
 //!
 //! # Algorithm
 //!
@@ -140,7 +132,7 @@
 //! so the flag can differ in a borderline case.
 //!
 //! # Newton-Raphson with step halving
-//!//!
+//!
 //! The covariates are centred at their weighted mean and divided by their
 //! weighted mean absolute deviation, as `coxph` does, and the iteration runs on
 //! these. A column that is constant over the rows is set to zero. Starting at
@@ -180,9 +172,7 @@
 //! `coxph.fit` reports one trial point more than the limit when it runs out of
 //! iterations, and also returns a variance matrix that is not that of the point
 //! it reports. `iterations` is the number of trial points, and the variance is
-//! that of the point reported. The deprecated entry points halve half way
-//! each time, accept no convergence during halving and keep the last trial
-//! point, as they always did.
+//! that of the point reported.
 //!
 //! The offset enters the linear predictor of every row, `beta' x_j + o_j`, and
 //! therefore the risk score and the log partial likelihood, but not the score
@@ -234,7 +224,7 @@
 //!
 //! # Score residuals
 //!
-//! [`cox_score_residuals`] returns, for every row, the derivative of the log
+//! [`score_residuals`] returns, for every row, the derivative of the log
 //! partial likelihood with respect to each coefficient through the case weight
 //! of the row, on the scale of the columns given. A row with an event
 //! contributes `w_j (x_j - m)` with `m` the mean over the terms at its time of
@@ -332,12 +322,6 @@
 //! time or weight that is not finite, a negative weight, an entry time that is
 //! not before the exit time, and more rows than a `u32` addresses.
 //!
-//! The deprecated entry points refuse columns of different lengths, a
-//! covariate, weight or exit time that is not finite, a negative weight, an
-//! entry time that is NaN or not before the exit time on a row of positive
-//! weight, a design without columns, and more rows than a `u32` addresses.
-//! Without delayed entry they take negative infinity as every entry time.
-//!
 //! # Agreement with R
 //!
 //! The tests run [`fit`] and [`score_residuals`] with the default tie rule, as
@@ -388,8 +372,9 @@ use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
 
+use super::sweep::{RiskSets, Sums, terms};
 use super::{Ties, moments};
-use crate::check::{check_lengths, check_row_count, refuse_non_finite};
+use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::surv::SurvData;
@@ -403,39 +388,7 @@ const EPS: f64 = 1e-9;
 /// element, `.Machine$double.eps^0.75`, which is `2^-39`.
 const TOLER_CHOL: f64 = 1.818_989_403_545_856_5e-12;
 
-/// The rows of a Cox fit on a design matrix. One entry per row, all of the same
-/// length.
-///
-/// Superseded by [`SurvData`] and [`fit`], which take the same
-/// columns and apply the tie rule of `survival`.
-#[deprecated(
-    since = "0.3.0",
-    note = "build a `SurvData` and call `cox::fit` with a `CoxOptions`"
-)]
-#[derive(Debug, Clone, Copy)]
-pub struct CoxDesign<'a> {
-    /// The covariates, one row per observation and one column per covariate.
-    /// There is no intercept column: a column that is constant over the rows is
-    /// aliased.
-    pub x: MatRef<'a, f64>,
-    /// Whether the row ends in the event of interest.
-    pub is_event: &'a [bool],
-    /// Entry time. Minus infinity when there is no delayed entry.
-    pub start: &'a [f64],
-    /// Exit time.
-    pub stop: &'a [f64],
-    /// Case weight. Rows with a weight of zero are dropped.
-    pub weight: &'a [f64],
-    /// Stratum codes. Strata are summed in code order.
-    pub stratum: &'a [u32],
-    /// How tied events enter the partial likelihood.
-    pub ties: Ties,
-    /// Cluster codes for the robust variance, or `None` for the model-based
-    /// variance alone.
-    pub cluster: Option<&'a [u32]>,
-}
-
-/// One Cox fit on a design matrix. See [`fit_cox`] for when entries are `None`.
+/// One Cox fit on a design matrix. See [`fit`] for when entries are `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoxModelFit {
     /// One coefficient per column of the design, `None` for an aliased column
@@ -466,9 +419,7 @@ pub struct CoxModelFit {
     pub tests: CoxTests,
     /// The summed weight of the events among the rows fitted.
     pub n_events: f64,
-    /// The rows of the input. [`fit`] counts every row, as `n` of a `coxph`
-    /// fit does. The deprecated [`fit_cox`] counts only the rows it fitted,
-    /// after dropping rows whose weight is zero, so there it equals `n_used`.
+    /// The rows of the input, every row, as `n` of a `coxph` fit does.
     pub n_rows: usize,
     /// The rows fitted: those with a weight above zero.
     pub n_used: usize,
@@ -587,33 +538,11 @@ enum Stepping {
     /// `coxexact.fit`, which `coxph` calls for exact ties without entry times:
     /// half way back at each halving, no convergence during halving, and the
     /// last accepted point on running out of iterations after the first.
-    /// `agexact.fit`, for data with entry times, is the legacy rule.
     ExactRight,
-    /// The rule of the deprecated entry points: half way back at each halving,
-    /// the last trial point kept on running out of iterations, and no
-    /// convergence during halving.
-    Legacy,
-}
-
-#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
-impl<'a> From<&CoxDesign<'a>> for Input<'a> {
-    fn from(data: &CoxDesign<'a>) -> Self {
-        Self {
-            x: data.x,
-            is_event: data.is_event,
-            start: data.start,
-            stop: data.stop,
-            weight: data.weight,
-            stratum: data.stratum,
-            ties: data.ties,
-            cluster: data.cluster,
-            offset: None,
-            init: None,
-            iter_max: MAX_ITERATIONS,
-            eps: EPS,
-            stepping: Stepping::Legacy,
-        }
-    }
+    /// `agexact.fit`, which `coxph` calls for exact ties with entry times:
+    /// half way back at each halving, no convergence during halving, and the
+    /// last trial point kept on running out of iterations.
+    AgExact,
 }
 
 /// What [`fit`] and [`score_residuals`] take besides the data.
@@ -675,7 +604,7 @@ fn with_input<R>(
     f: impl FnOnce(&Input<'_>) -> R,
 ) -> Result<R> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
-    check_finite_matrix(x)?;
+    refuse_non_finite_matrix(x, "x")?;
     check_control(opts, data.n_rows(), x.ncols())?;
     if opts.ties == Ties::Exact {
         check_exact(data)?;
@@ -718,7 +647,7 @@ fn with_input<R>(
         iter_max: opts.iter_max,
         eps: opts.eps,
         stepping: match (surv.start().is_some(), opts.ties) {
-            (true, Ties::Exact) => Stepping::Legacy,
+            (true, Ties::Exact) => Stepping::AgExact,
             (false, Ties::Exact) => Stepping::ExactRight,
             (true, _) => Stepping::Counting,
             (false, _) => Stepping::RightCensored,
@@ -803,80 +732,6 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions<'_>) -> Re
     Ok(fit)
 }
 
-/// Newton-Raphson with step halving on the weighted partial likelihood of a
-/// design matrix, Breslow or Efron, as `survival::coxph` fits it.
-///
-/// This is the form that takes no tie rule: times are compared exactly, which
-/// gives the numbers of 0.2. Use [`fit`].
-///
-/// See the module documentation for the method, the robust variance, aliased
-/// columns and diverging coefficients.
-///
-/// # Errors
-///
-/// [`Error::Input`] when the columns differ in length, the design has no
-/// column, a covariate, weight or exit time is not finite, a weight is
-/// negative, an entry time is NaN or not before its exit time, or there are
-/// more rows than a `u32` addresses.
-#[deprecated(
-    since = "0.3.0",
-    note = "build a `SurvData` and call `cox::fit` with a `CoxOptions`"
-)]
-#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
-pub fn fit_cox(data: &CoxDesign<'_>) -> Result<CoxModelFit> {
-    check_design(data)?;
-    fit_checked(&data.into())
-}
-
-/// The checks every deprecated entry point makes on a design.
-#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
-fn check_design(data: &CoxDesign<'_>) -> Result<()> {
-    let rows = data.x.nrows();
-    check_lengths(&[
-        ("x", rows),
-        ("is_event", data.is_event.len()),
-        ("start", data.start.len()),
-        ("stop", data.stop.len()),
-        ("weight", data.weight.len()),
-        ("stratum", data.stratum.len()),
-        ("cluster", data.cluster.map_or(rows, <[u32]>::len)),
-    ])?;
-    check_row_count(rows)?;
-    if data.ties == Ties::Exact {
-        return Err(Error::input("ties: exact ties are fitted by `cox::fit`"));
-    }
-    if data.x.ncols() == 0 {
-        return Err(Error::input("x has no columns"));
-    }
-    refuse_non_finite(data.stop, "stop")?;
-    refuse_non_finite(data.weight, "weight")?;
-    if let Some(index) = data.weight.iter().position(|&w| w < 0.0) {
-        return Err(Error::input(format!("weight: row {index} is negative")));
-    }
-    check_finite_matrix(data.x)?;
-    for i in 0..rows {
-        if data.weight[i] > 0.0 && (data.start[i].is_nan() || data.start[i] >= data.stop[i]) {
-            return Err(Error::input(format!(
-                "start: row {i} has an entry time that is NaN or not before its exit time"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn check_finite_matrix(x: MatRef<'_, f64>) -> Result<()> {
-    let non_finite = (0..x.nrows())
-        .flat_map(|i| (0..x.ncols()).map(move |j| (i, j)))
-        .filter(|&(i, j)| !x[(i, j)].is_finite())
-        .count();
-    if non_finite > 0 {
-        return Err(Error::input(format!(
-            "x: {non_finite} non-finite values; drop or resolve them before estimating"
-        )));
-    }
-    Ok(())
-}
-
 /// One stratum's rows in descending exit order.
 struct Stratum {
     /// Standardised covariates, `p` per row, in descending exit order.
@@ -902,41 +757,19 @@ struct Stratum {
     dying_offset: Vec<usize>,
 }
 
-/// The sums `sum c x^r` for `r = 0, 1, 2`, with the lower triangle of `r = 2`.
-struct Moments {
-    m0: f64,
-    m1: Vec<f64>,
-    m2: Vec<f64>,
-}
-
-impl Moments {
-    fn new(p: usize) -> Self {
-        Self {
-            m0: 0.0,
-            m1: vec![0.0; p],
-            m2: vec![0.0; p * p],
+impl Stratum {
+    fn risk_sets(&self) -> RiskSets<'_> {
+        RiskSets {
+            x: &self.x,
+            stop: &self.stop,
+            by_start: &self.by_start,
+            start_sorted: &self.start_sorted,
+            event_times: &self.event_times,
+            dying: &self.dying_rows,
+            dying_offset: &self.dying_offset,
         }
     }
 
-    fn clear(&mut self) {
-        self.m0 = 0.0;
-        self.m1.fill(0.0);
-        self.m2.fill(0.0);
-    }
-
-    fn add(&mut self, c: f64, x: &[f64]) {
-        self.m0 += c;
-        super::moments::add(c, x, &mut self.m1, &mut self.m2);
-    }
-}
-
-/// The risk-set sums and the sums over the tied events at one event time.
-struct Sums {
-    risk: Moments,
-    dying: Moments,
-}
-
-impl Stratum {
     /// Visit every event time in descending order with the sums at the
     /// per-row weights `risk`, which are `w exp(beta' x)`.
     fn sweep(
@@ -945,56 +778,19 @@ impl Stratum {
         risk: &[f64],
         active: &mut Vec<bool>,
         sums: &mut Sums,
-        mut visit: impl FnMut(usize, &Sums),
+        visit: impl FnMut(usize, &Sums),
     ) {
-        let size = self.stop.len();
-        active.clear();
-        active.resize(size, false);
-        sums.risk.clear();
-        let (mut entering, mut leaving) = (0usize, 0usize);
-        for (position, &time) in self.event_times.iter().enumerate() {
-            while entering < size && self.stop[entering] >= time {
-                sums.risk
-                    .add(risk[entering], &self.x[entering * p..(entering + 1) * p]);
-                active[entering] = true;
-                entering += 1;
-            }
-            while leaving < size && self.start_sorted[leaving] >= time {
-                let row = self.by_start[leaving] as usize;
-                if active[row] {
-                    sums.risk.add(-risk[row], &self.x[row * p..(row + 1) * p]);
-                    active[row] = false;
-                }
-                leaving += 1;
-            }
-            sums.dying.clear();
-            for &row in
-                &self.dying_rows[self.dying_offset[position]..self.dying_offset[position + 1]]
-            {
-                let row = row as usize;
-                sums.dying.add(risk[row], &self.x[row * p..(row + 1) * p]);
-            }
-            visit(position, sums);
-        }
+        self.risk_sets().sweep(p, risk, active, sums, visit);
     }
 
     /// The terms of the log partial likelihood at event time `position`, as
     /// `(weight, fraction)`: the term has denominator `S - fraction * E` and
-    /// is multiplied by `weight`.
+    /// is multiplied by `weight`. A single exact event has the Breslow term;
+    /// sets of more are computed by `ExactScratch` before the terms are asked
+    /// for.
     fn terms(&self, position: usize, ties: Ties) -> impl Iterator<Item = (f64, f64)> + use<> {
         let range = self.dying_offset[position]..self.dying_offset[position + 1];
-        let count = range.len();
-        let total: f64 = self.dying_rows[range]
-            .iter()
-            .map(|&row| self.weight[row as usize])
-            .sum();
-        let (terms, weight, spread) = match ties {
-            // A single exact event has the Breslow term; sets of more are
-            // computed by `ExactScratch` before the terms are asked for.
-            Ties::Breslow | Ties::Exact => (1, total, 0.0),
-            Ties::Efron => (count, total / count as f64, 1.0 / count as f64),
-        };
-        (0..terms).map(move |k| (weight, k as f64 * spread))
+        terms(&self.weight, &self.dying_rows[range], ties == Ties::Efron)
     }
 }
 
@@ -1103,10 +899,7 @@ impl Model {
         let mut score = vec![0.0f64; p];
         let mut information = vec![0.0f64; p * p];
         let mut active = Vec::new();
-        let mut sums = Sums {
-            risk: Moments::new(p),
-            dying: Moments::new(p),
-        };
+        let mut sums = Sums::new(p, true);
         let mut d1 = vec![0.0f64; p];
         let mut quotient = vec![0.0f64; p];
         let mut scratch = ExactScratch::default();
@@ -1225,10 +1018,7 @@ impl Model {
         let p = self.p;
         let mut residual = vec![0.0f64; p];
         let mut active = Vec::new();
-        let mut sums = Sums {
-            risk: Moments::new(p),
-            dying: Moments::new(p),
-        };
+        let mut sums = Sums::new(p, true);
         for stratum in &self.strata {
             let (_, risk) = Self::row_risk(stratum, p, beta)?;
             let count = stratum.event_times.len();
@@ -1652,7 +1442,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
             // Out of iterations.
             let keep_trial = match (&evaluation, stepping) {
                 (None, _) => false,
-                (Some(_), Stepping::Legacy) => true,
+                (Some(_), Stepping::AgExact) => true,
                 (Some(_), Stepping::ExactRight) => input.iter_max == 1,
                 (Some(e), Stepping::Counting) => {
                     input.iter_max == 1
@@ -1660,7 +1450,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
                 }
                 (Some(_), Stepping::RightCensored) => better,
             };
-            if keep_trial || stepping == Stepping::Legacy {
+            if keep_trial || stepping == Stepping::AgExact {
                 last = evaluation;
             } else {
                 trial.clone_from(&beta);
@@ -1686,9 +1476,10 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         } else {
             // Step halving. Each halving in a row takes the trial point a
             // larger share of the way back to the last accepted point, as
-            // `coxph` does. The first fits kept half way back each time.
+            // `coxph` does, except for the exact-ties routines, which go half
+            // way back each time.
             halvings += 1;
-            let h = if matches!(stepping, Stepping::Legacy | Stepping::ExactRight) {
+            let h = if matches!(stepping, Stepping::AgExact | Stepping::ExactRight) {
                 1.0
             } else {
                 f64::from(halvings)
@@ -1886,44 +1677,6 @@ pub fn score_residuals(
     })?
 }
 
-/// The score residual of every row at `coefficients`, one vector of `rows`
-/// values per column, as `residuals(fit, type = "score")` of `survival`.
-///
-/// Row `i` of column `j` is the derivative of the log partial likelihood with
-/// respect to the coefficient of column `j` through the case weight of row
-/// `i`, on the scale of the columns given. The rows are in the order of the
-/// input. A row whose weight is zero, and a row in a stratum without events,
-/// has residuals of zero. A column whose coefficient is `None`, such as one
-/// that is aliased, is `None`.
-///
-/// `coefficients` is normally `CoxModelFit::coefficients`. Any other value is
-/// the residual at that point, with a column left out where it is `None`. The
-/// `cluster` of `data` is not used.
-///
-/// The residuals contain the case weight; see the module documentation for
-/// how they relate to `residuals(fit, "score")` of `survival`. Times are
-/// compared exactly, which gives the numbers of 0.2; [`score_residuals`] is the
-/// form that applies the tie rule.
-///
-/// # Errors
-///
-/// [`Error::Input`] for the invalid input of [`fit_cox`], for `coefficients`
-/// of another length than the design has columns, for a coefficient that is
-/// not finite, and for coefficients at which a risk score or the denominator
-/// of a partial-likelihood term is not finite and positive.
-#[deprecated(
-    since = "0.3.0",
-    note = "build a `SurvData` and call `cox::score_residuals` with a `CoxOptions`"
-)]
-#[expect(deprecated, reason = "the wrapper reads the deprecated input type")]
-pub fn cox_score_residuals(
-    data: &CoxDesign<'_>,
-    coefficients: &[Option<f64>],
-) -> Result<Vec<Option<Vec<f64>>>> {
-    check_design(data)?;
-    score_residuals_checked(&data.into(), coefficients)
-}
-
 fn score_residuals_checked(
     data: &Input<'_>,
     coefficients: &[Option<f64>],
@@ -1977,27 +1730,36 @@ fn score_residuals_checked(
 }
 
 #[cfg(test)]
-#[expect(deprecated, reason = "the tests of the deprecated entry points")]
 mod tests {
     use epistat_linalg::Mat;
 
-    use super::{CoxDesign, cox_score_residuals, fit_cox};
+    use super::{CoxOptions, fit, score_residuals};
     use crate::cox::Ties;
+    use crate::surv::SurvBuf;
+    use crate::timefix::TimeFix;
 
     const STOP: [f64; 8] = [1., 2., 2., 3., 4., 5., 6., 7.];
-    const EVENT: [bool; 8] = [true, true, true, false, true, true, false, true];
+    const EVENT: [i32; 8] = [1, 1, 1, 0, 1, 1, 0, 1];
+
+    fn options(ties: Ties) -> CoxOptions<'static> {
+        CoxOptions {
+            ties,
+            timefix: TimeFix::Exact,
+            ..CoxOptions::default()
+        }
+    }
+
+    fn buf(status: &[i32], weight: &[f64], cluster: Option<&[u32]>) -> SurvBuf {
+        let mut builder = SurvBuf::builder(STOP.to_vec(), status.to_vec()).weight(weight.to_vec());
+        if let Some(cluster) = cluster {
+            builder = builder.cluster(cluster.to_vec());
+        }
+        builder.build().unwrap()
+    }
 
     fn design(x: &Mat<f64>, cluster: Option<&[u32]>) -> super::Result<super::CoxModelFit> {
-        fit_cox(&CoxDesign {
-            x: x.as_ref(),
-            is_event: &EVENT,
-            start: &[f64::NEG_INFINITY; 8],
-            stop: &STOP,
-            weight: &[1.0; 8],
-            stratum: &[0; 8],
-            ties: Ties::Efron,
-            cluster,
-        })
+        let data = buf(&EVENT, &[1.0; 8], cluster);
+        fit(&data.as_data(), x.as_ref(), &options(Ties::Efron))
     }
 
     fn column(values: [f64; 8]) -> Mat<f64> {
@@ -2030,17 +1792,8 @@ mod tests {
     #[test]
     fn no_events_gives_no_estimate() {
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
-        let fit = fit_cox(&CoxDesign {
-            x: x.as_ref(),
-            is_event: &[false; 8],
-            start: &[f64::NEG_INFINITY; 8],
-            stop: &STOP,
-            weight: &[1.0; 8],
-            stratum: &[0; 8],
-            ties: Ties::Breslow,
-            cluster: None,
-        })
-        .unwrap();
+        let data = buf(&[0; 8], &[1.0; 8], None);
+        let fit = fit(&data.as_data(), x.as_ref(), &options(Ties::Breslow)).unwrap();
         assert_eq!(fit.coefficients, vec![None]);
         assert!(!fit.converged && fit.iterations == 0);
     }
@@ -2054,38 +1807,29 @@ mod tests {
                 .to_string()
                 .starts_with("x: 1 non-finite")
         );
-        let none = Mat::<f64>::zeros(8, 0);
-        assert_eq!(
-            design(&none, None).unwrap_err().to_string(),
-            "x has no columns"
-        );
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
         let mut weight = [1.0; 8];
         weight[3] = -1.0;
-        let error = fit_cox(&CoxDesign {
-            x: x.as_ref(),
-            is_event: &EVENT,
-            start: &[f64::NEG_INFINITY; 8],
-            stop: &STOP,
-            weight: &weight,
-            stratum: &[0; 8],
-            ties: Ties::Breslow,
-            cluster: None,
-        })
-        .unwrap_err();
-        assert_eq!(error.to_string(), "weight: row 3 is negative");
-        let error = fit_cox(&CoxDesign {
-            x: x.as_ref(),
-            is_event: &EVENT,
-            start: &[0., 0., 2., 0., 0., 0., 0., 0.],
-            stop: &STOP,
-            weight: &[1.0; 8],
-            stratum: &[0; 8],
-            ties: Ties::Breslow,
-            cluster: None,
-        })
-        .unwrap_err();
-        assert!(error.to_string().starts_with("start: row 2"));
+        let error = SurvBuf::builder(STOP.to_vec(), EVENT.to_vec())
+            .weight(weight.to_vec())
+            .build()
+            .unwrap_err();
+        assert!(error.to_string().starts_with("weight:"), "{error}");
+        let error = SurvBuf::builder(STOP.to_vec(), EVENT.to_vec())
+            .start(vec![0., 0., 2., 0., 0., 0., 0., 0.])
+            .build()
+            .unwrap_err();
+        assert!(error.to_string().starts_with("start:"), "{error}");
+        let short = Mat::from_fn(7, 1, |i, _| x[(i, 0)]);
+        assert!(design(&short, None).is_err());
+    }
+
+    #[test]
+    fn a_design_without_columns_is_the_null_model() {
+        let none = Mat::<f64>::zeros(8, 0);
+        let fit = design(&none, None).unwrap();
+        assert!(fit.coefficients.is_empty() && fit.rank == 0);
+        assert_eq!(fit.log_partial_likelihood, fit.null_log_partial_likelihood);
     }
 
     #[test]
@@ -2126,16 +1870,30 @@ mod tests {
         assert!(design(&x, None).unwrap().robust_covariance.is_none());
     }
 
+    fn residuals(
+        x: &Mat<f64>,
+        weight: &[f64; 8],
+        coefficients: &[Option<f64>],
+    ) -> super::Result<Vec<Option<Vec<f64>>>> {
+        let data = buf(&EVENT, weight, None);
+        score_residuals(
+            &data.as_data(),
+            x.as_ref(),
+            coefficients,
+            &options(Ties::Efron),
+        )
+    }
+
     #[test]
     fn score_residuals_add_up_to_the_score() {
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
         let fit = design(&x, None).unwrap();
         // At the estimate the score is zero, and at zero it is the sum of the
         // residuals there, which is the first Newton step times the information.
-        let at_estimate = cox_score_residuals(&data(&x), &fit.coefficients).unwrap();
+        let at_estimate = residuals(&x, &[1.0; 8], &fit.coefficients).unwrap();
         let sum: f64 = at_estimate[0].as_ref().unwrap().iter().sum();
         assert!(sum.abs() < 1e-8, "{sum}");
-        let at_zero = cox_score_residuals(&data(&x), &[Some(0.0)]).unwrap();
+        let at_zero = residuals(&x, &[1.0; 8], &[Some(0.0)]).unwrap();
         let sum: f64 = at_zero[0].as_ref().unwrap().iter().sum();
         assert!(sum.abs() > 0.1);
     }
@@ -2152,14 +1910,7 @@ mod tests {
         let fit = design(&x, None).unwrap();
         let mut weight = [1.0; 8];
         weight[4] = 0.0;
-        let residuals = cox_score_residuals(
-            &CoxDesign {
-                weight: &weight,
-                ..data(&x)
-            },
-            &fit.coefficients,
-        )
-        .unwrap();
+        let residuals = residuals(&x, &weight, &fit.coefficients).unwrap();
         assert!(residuals[1].is_none());
         assert_eq!(
             residuals[0].as_ref().unwrap()[4].to_bits(),
@@ -2170,26 +1921,13 @@ mod tests {
     #[test]
     fn score_residuals_refuse_invalid_coefficients() {
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
-        let wrong = cox_score_residuals(&data(&x), &[Some(0.1), Some(0.2)]).unwrap_err();
+        let wrong = residuals(&x, &[1.0; 8], &[Some(0.1), Some(0.2)]).unwrap_err();
         assert_eq!(wrong.to_string(), "coefficients: 2 values for 1 columns");
-        let nan = cox_score_residuals(&data(&x), &[Some(f64::NAN)]).unwrap_err();
+        let nan = residuals(&x, &[1.0; 8], &[Some(f64::NAN)]).unwrap_err();
         assert_eq!(nan.to_string(), "coefficients: a value is not finite");
-        let huge = cox_score_residuals(&data(&x), &[Some(1e4)]).unwrap_err();
+        let huge = residuals(&x, &[1.0; 8], &[Some(1e4)]).unwrap_err();
         assert!(huge.to_string().starts_with("coefficients: a risk score"));
-        let none = cox_score_residuals(&data(&x), &[None]).unwrap();
+        let none = residuals(&x, &[1.0; 8], &[None]).unwrap();
         assert_eq!(none, vec![None]);
-    }
-
-    fn data(x: &Mat<f64>) -> CoxDesign<'_> {
-        CoxDesign {
-            x: x.as_ref(),
-            is_event: &EVENT,
-            start: &[f64::NEG_INFINITY; 8],
-            stop: &STOP,
-            weight: &[1.0; 8],
-            stratum: &[0; 8],
-            ties: Ties::Efron,
-            cluster: None,
-        }
     }
 }

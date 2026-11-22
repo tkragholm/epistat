@@ -23,12 +23,15 @@
 //! and p-values follow by first-order propagation. The bounds are not changed
 //! after a run.
 
-#![allow(
+#![expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
+    reason = "row counts and codes are small"
+)]
+#![allow(
     clippy::float_cmp,
-    reason = "row counts and codes are small, and times are compared exactly with the times asked for"
+    reason = "times are compared exactly with the times asked for"
 )]
 
 use epistat_linalg::{Mat, Side};

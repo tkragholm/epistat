@@ -2,10 +2,12 @@
 //! competing risks, the Aalen-Johansen estimator, state occupation in a
 //! multi-state process and the Titman-Putter test of the Markov property.
 //!
-//! The estimators take slices, return plain structs and give the same bits on
-//! the same input, whatever the number of threads. Where an estimator
-//! bootstraps, the caller supplies the seeds, and each replicate depends on its
-//! seed only, through [`epistat_rng`].
+//! Most estimators read a [`SurvData`], the checked columns of a follow-up
+//! table (exit and entry time, status, weight, strata, clusters, subject and
+//! starting state), and a design matrix where they have covariates. They return
+//! plain structs and give the same bits on the same input, whatever the number
+//! of threads. Where an estimator bootstraps, the caller supplies the seeds,
+//! and each replicate depends on its seed only, through [`epistat_rng`].
 //!
 //! # Contents
 //!
@@ -14,7 +16,7 @@
 //!   `CSC` and `predict.CauseSpecificCox`.
 //! - [`concordance`]: Harrell's C and its relatives for a numeric score, with weights,
 //!   strata, delayed entry, time weights and an infinitesimal jackknife variance.
-//! - [`cox`]: Cox regression on one covariate or a design matrix, with Breslow or
+//! - [`cox`]: Cox regression on a design matrix, with Breslow or
 //!   Efron or exact ties, delayed entry, strata, case weights, offsets, starting values
 //!   and iteration limits, a cluster-robust variance, and the Wald, score and
 //!   likelihood-ratio tests of the coefficients, its residuals as `residuals.coxph`,

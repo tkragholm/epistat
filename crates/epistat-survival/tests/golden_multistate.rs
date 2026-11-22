@@ -1,16 +1,15 @@
 //! The bits of every output of the multi-state functions on varied inputs.
 //!
 //! The recorded values are an FNV-1a digest of the `to_bits` of each output
-//! field, with its length. They were taken from the functions as they were
-//! before the shared input type, and they must not change: a study that has
-//! used these functions gets the same numbers after any later change. To
-//! record again, run with `GOLDEN_RECORD=1 -- --nocapture` and paste the lines.
+//! field, with its length, and they must not change: a study that has used
+//! these functions gets the same numbers after any later change. To record
+//! again, run with `GOLDEN_RECORD=1 -- --nocapture` and paste the lines.
 //!
 //! The inputs come from a seeded stream. They cover ascending times, which use
 //! the precomputed plan, and descending, unsorted and tied times, which sum
 //! over the times directly. They cover weights with zeros, delayed entry,
-//! states outside the space on both ends of a move, a missing start time, an
-//! empty state space and the refusals.
+//! moves to a state left out of the analysis, no times, no rows and the
+//! refusals.
 //!
 //! The bits depend on the platform's `ln` and `exp`, which come from its maths
 //! library, so the test runs only on the target it was recorded on, aarch64
@@ -19,31 +18,22 @@
 
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
-    deprecated,
-    reason = "the deprecated functions are what this test pins"
-)]
-#![expect(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
 use epistat_rng::Stream;
-use epistat_survival::multistate::{
-    Intervals, bootstrap_state_occupation, integrate, state_occupation_curve,
-};
+use epistat_survival::multistate::{Options, bootstrap, estimate, integrate};
+use epistat_survival::timefix::TimeFix;
+use epistat_survival::{SurvBuf, SurvData};
 use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded field.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("refuse/no states", 64, 0x0a36_fcf6_333f_2fcd),
-    ("refuse/base length", 65, 0x8569_aa8e_4c9b_7ee8),
-    ("refuse/cluster code", 38, 0x071f_3d3b_e7d4_6e37),
-    ("refuse/position", 40, 0x5542_0fed_53d6_fa19),
-    ("refuse/position lengths", 82, 0xb4a1_aa93_69d6_19ef),
-    ("refuse/opening state", 42, 0xeb0c_a8e9_a250_9e94),
-    ("refuse/opening without weight", 93, 0xf775_e26a_fc64_e76d),
-    ("refuse/opening outside", 93, 0xf775_e26a_fc64_e76d),
+    ("refuse/initial given", 84, 0x1ead_8649_64b0_384a),
+    ("refuse/no cluster", 67, 0x21d1_005e_95fc_6f57),
+    ("refuse/no weight", 59, 0x13fa_029d_9cad_5cf3),
     ("plain ascending/curves", 2484, 0xdf16_23ba_b590_a02e),
     ("plain ascending/restricted", 54, 0xc4dc_7e01_0e0a_c5f6),
     ("plain ascending/single seed", 3, 0x9db9_e0c7_6414_7e49),
@@ -52,25 +42,25 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("plain descending/restricted", 54, 0xfeec_f043_dee0_3656),
     ("plain descending/single seed", 3, 0x7e02_a796_e43f_520d),
     ("plain descending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich ascending/curves", 2718, 0x0605_ae59_b4a0_5a83),
-    ("rich ascending/restricted", 54, 0x10bf_c4ac_92f0_d594),
-    ("rich ascending/single seed", 3, 0x0932_4ebd_9158_4c67),
+    ("rich ascending/curves", 2736, 0x431b_b850_4962_1fc0),
+    ("rich ascending/restricted", 54, 0x51d6_1108_62c6_5553),
+    ("rich ascending/single seed", 3, 0xa22c_7c50_fe6d_ca8e),
     ("rich ascending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich padded/curves", 4626, 0x3b6c_2b50_12ca_c701),
-    ("rich padded/restricted", 54, 0xd98b_e865_d2ce_de20),
-    ("rich padded/single seed", 3, 0xa577_e502_c017_3a56),
+    ("rich padded/curves", 4644, 0x3a25_09fe_b306_a614),
+    ("rich padded/restricted", 54, 0xf0fe_5ca7_1176_27f3),
+    ("rich padded/single seed", 3, 0xd5fa_4250_e3f5_4b16),
     ("rich padded/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich descending/curves", 2718, 0x5f5c_0dc8_4389_984f),
-    ("rich descending/restricted", 54, 0x5fbd_a106_8b2f_eb5b),
-    ("rich descending/single seed", 3, 0xf781_b9b9_2b8e_89fc),
+    ("rich descending/curves", 2736, 0x14d8_ca9a_8abb_4fb3),
+    ("rich descending/restricted", 54, 0xb48b_735c_cf21_42a5),
+    ("rich descending/single seed", 3, 0x1090_d82c_1794_273c),
     ("rich descending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich shuffled/curves", 2718, 0x86db_f6e2_83bd_5f73),
-    ("rich shuffled/restricted", 54, 0x0a7e_0919_58f7_5cd4),
-    ("rich shuffled/single seed", 3, 0xf781_b9b9_2b8e_89fc),
+    ("rich shuffled/curves", 2736, 0xc773_f44f_b00c_0c6e),
+    ("rich shuffled/restricted", 54, 0x9799_c1d4_69c4_318a),
+    ("rich shuffled/single seed", 3, 0x1090_d82c_1794_273c),
     ("rich shuffled/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("two states/curves", 1812, 0x9816_8b00_f92c_3570),
-    ("two states/restricted", 36, 0xf547_1d5e_47f9_0033),
-    ("two states/single seed", 2, 0x6182_27da_7f75_267f),
+    ("two states/curves", 1824, 0xbdee_5473_1f06_55d3),
+    ("two states/restricted", 36, 0x381f_0924_9caa_f1f5),
+    ("two states/single seed", 2, 0xb236_47b7_aa49_3e01),
     ("two states/no seeds", 0, 0xcbf2_9ce4_8422_2325),
     ("plain ascending/probabilities", 360, 0x883a_1b01_5ad4_3c79),
     ("plain ascending/at_risk", 120, 0xe166_05a9_b7fa_d256),
@@ -92,50 +82,31 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("zeros shuffled/integrate", 18, 0x95de_7c5d_bf0f_8428),
     (
         "outside ascending/probabilities",
-        393,
-        0x76a3_91ab_f808_8bd9,
+        324,
+        0x7090_3468_90c8_e333,
     ),
-    ("outside ascending/at_risk", 131, 0x6502_6a54_6b42_0b1f),
-    ("outside ascending/integrate", 18, 0x4469_6e0d_5833_b7ac),
+    ("outside ascending/at_risk", 108, 0xb377_b0fc_762f_02ca),
+    ("outside ascending/integrate", 18, 0x74b9_109c_00cb_eb25),
     (
         "outside descending/probabilities",
-        393,
-        0xd035_bee6_0a1e_2d66,
+        324,
+        0x8389_5b7e_e162_a273,
     ),
-    ("outside descending/at_risk", 131, 0x3336_376a_1c91_4643),
-    ("outside descending/integrate", 18, 0x7cce_81a2_e861_7e05),
-    ("two states/probabilities", 262, 0x7422_242b_c4d2_d815),
-    ("two states/at_risk", 131, 0x6502_6a54_6b42_0b1f),
-    ("two states/integrate", 12, 0x0393_4f08_2042_4c16),
-    ("one state/probabilities", 131, 0x569c_56c2_aff9_1e58),
-    ("one state/at_risk", 131, 0x51d9_10c3_0e89_e1dd),
-    ("one state/integrate", 6, 0x11a9_855c_1bb0_8335),
-    (
-        "nan start ascending/probabilities",
-        207,
-        0xfed1_4f3c_0cc6_0d19,
-    ),
-    ("nan start ascending/at_risk", 69, 0xee4a_07d6_f724_5aef),
-    ("nan start ascending/integrate", 18, 0x968a_8d43_5519_553c),
-    (
-        "nan start descending/probabilities",
-        207,
-        0x0d7f_45dd_b9ae_d70f,
-    ),
-    ("nan start descending/at_risk", 69, 0xa5ee_c2d7_3e68_5613),
-    ("nan start descending/integrate", 18, 0x1526_1a11_27e5_ef25),
+    ("outside descending/at_risk", 108, 0xf4c3_6a5a_1197_70d2),
+    ("outside descending/integrate", 18, 0xbbe9_b6cd_b499_9004),
+    ("two states/probabilities", 216, 0xbe3d_100b_fb67_0bf5),
+    ("two states/at_risk", 108, 0xb377_b0fc_762f_02ca),
+    ("two states/integrate", 12, 0xfb39_b5bb_f369_f82e),
     ("no times/probabilities", 0, 0xcbf2_9ce4_8422_2325),
     ("no times/at_risk", 0, 0xcbf2_9ce4_8422_2325),
     ("no times/integrate", 18, 0xc72f_2d6c_dfc3_9b75),
-    ("no rows/probabilities", 6, 0xbe19_a168_b74b_7f05),
-    ("no rows/at_risk", 2, 0x8820_1fb9_60ff_6465),
-    ("no rows/integrate", 18, 0xc72f_2d6c_dfc3_9b75),
-    ("zero length/probabilities", 4, 0xbcb9_9a05_911b_b965),
-    ("zero length/at_risk", 2, 0x2be2_cbea_19a8_27c5),
     ("refuse/initial length", 54, 0x4d5c_9720_950f_7cd3),
-    ("refuse/weights length", 68, 0x7c47_0879_e6b8_5046),
-    ("refuse/rate tolerance", 100, 0xaf15_6ea7_0f89_fb46),
-    ("refuse/interval lengths", 64, 0xe96f_356f_c6d3_b986),
+    ("refuse/weights length", 65, 0x7402_8656_1126_dae8),
+    ("refuse/rate tolerance", 56, 0xe069_4bd1_a89c_cb35),
+    ("refuse/interval lengths", 62, 0x3bb4_3fbf_d485_b2a6),
+    ("refuse/nan start", 84, 0x75ab_e541_820b_a685),
+    ("refuse/zero length", 56, 0x131c_7799_4edf_3aa3),
+    ("refuse/no rows", 59, 0x13fa_029d_9cad_5cf3),
 ];
 
 fn digest(values: &[f64]) -> u64 {
@@ -171,31 +142,33 @@ fn check_text(name: &str, text: &str) {
     check(name, &bytes);
 }
 
+/// The rows of a process in the form `SurvData` takes: the state a row starts
+/// in is the code `istate`, and the state it ends in the code `status`, 0 when
+/// it ends outside the state space or in the end of follow-up.
 struct Process {
     starts: Vec<f64>,
     stops: Vec<f64>,
-    from: Vec<u32>,
-    to: Vec<u32>,
+    istate: Vec<u32>,
+    status: Vec<i32>,
     person: Vec<u32>,
     weight: Vec<f64>,
-    first: Vec<u32>,
 }
 
 /// An illness-death process with recovery, on a grid of tenths so that stops
-/// tie. State 2 absorbs, 9 is a censoring and stands outside the space. With
-/// `delayed` some people enter after time 0, with `zeros` some rows have weight
-/// 0, with `outside` some rows start in state 7 and some moves go to state 5,
-/// both outside the space of three states.
+/// tie. Code `s + 1` is state `s`, and state 2 absorbs. With `delayed` some
+/// people enter after time 0, with `zeros` some rows have weight 0, with
+/// `outside` some rows have weight 0 as if they started outside the space and
+/// some moves are to a state that is left out of the analysis, which ends the
+/// follow-up with status 0.
 fn process(people: usize, seed: u64, delayed: bool, zeros: bool, outside: bool) -> Process {
     let mut rng = Stream::seeded(seed);
     let mut p = Process {
         starts: Vec::new(),
         stops: Vec::new(),
-        from: Vec::new(),
-        to: Vec::new(),
+        istate: Vec::new(),
+        status: Vec::new(),
         person: Vec::new(),
         weight: Vec::new(),
-        first: Vec::new(),
     };
     for id in 0..people {
         let mut state = rng.below(2) as u32;
@@ -204,7 +177,6 @@ fn process(people: usize, seed: u64, delayed: bool, zeros: bool, outside: bool) 
         } else {
             0.0
         };
-        p.first.push(p.starts.len() as u32);
         loop {
             let stop = clock + 0.1 + (rng.exp1() * 30.0).floor() / 10.0;
             let next = match (state, rng.below(10)) {
@@ -212,21 +184,23 @@ fn process(people: usize, seed: u64, delayed: bool, zeros: bool, outside: bool) 
                 (0, _) => 1,
                 _ => 0,
             };
-            let last = next == 2 || stop > 12.0 || rng.below(6) == 0;
-            let mut to = if last && next != 2 { 9 } else { next };
-            let mut from = state;
+            let mut last = next == 2 || stop > 12.0 || rng.below(6) == 0;
+            let mut status = if last && next != 2 {
+                0
+            } else {
+                next as i32 + 1
+            };
             if outside && rng.below(9) == 0 {
-                to = 5;
+                status = 0;
+                last = true;
             }
-            if outside && rng.below(11) == 0 {
-                from = 7;
-            }
+            let unused = outside && rng.below(11) == 0;
             p.starts.push(clock);
             p.stops.push(stop);
-            p.from.push(from);
-            p.to.push(to);
+            p.istate.push(state + 1);
+            p.status.push(status);
             p.person.push(id as u32);
-            let weight = if zeros && rng.below(6) == 0 {
+            let weight = if (zeros && rng.below(6) == 0) || unused {
                 0.0
             } else {
                 0.5 + rng.uniform()
@@ -240,6 +214,43 @@ fn process(people: usize, seed: u64, delayed: bool, zeros: bool, outside: bool) 
         }
     }
     p
+}
+
+impl Process {
+    /// The process with every state above the first `states` left out: a move
+    /// to one of them is a censoring.
+    fn restricted(&self, states: i32) -> Process {
+        Process {
+            starts: self.starts.clone(),
+            stops: self.stops.clone(),
+            istate: self.istate.clone(),
+            status: self
+                .status
+                .iter()
+                .map(|&s| if s > states { 0 } else { s })
+                .collect(),
+            person: self.person.clone(),
+            weight: self.weight.clone(),
+        }
+    }
+
+    fn buf(
+        &self,
+        weights: &[f64],
+        clusters: Option<Vec<u32>>,
+        n_codes: u32,
+    ) -> Result<SurvBuf, epistat_survival::Error> {
+        let mut builder = SurvBuf::builder(self.stops.clone(), self.status.clone())
+            .start(self.starts.clone())
+            .id(self.person.clone())
+            .istate(self.istate.clone())
+            .weight(weights.to_vec())
+            .n_codes(n_codes);
+        if let Some(clusters) = clusters {
+            builder = builder.cluster(clusters);
+        }
+        builder.build()
+    }
 }
 
 fn event_times(p: &Process) -> Vec<f64> {
@@ -285,17 +296,25 @@ const HORIZONS: [(f64, f64); 6] = [
     (100.0, 0.0),
 ];
 
+/// Times are compared as they are, and the leaving rate may exceed 1 by 1e-9.
+fn options(initial: Option<&[f64]>) -> Options {
+    Options {
+        timefix: TimeFix::Exact,
+        rate_tolerance: Some(1e-9),
+        initial: initial.map(<[f64]>::to_vec),
+    }
+}
+
 fn curve_case(
     name: &str,
     p: &Process,
     weights: &[f64],
     times: &[f64],
     initial: &[f64],
-    states: usize,
+    states: u32,
 ) {
-    let intervals = Intervals::new(&p.starts, &p.stops, &p.from, &p.to).unwrap();
-    let occupation =
-        state_occupation_curve(intervals, weights, times, initial, states, 1e-9).unwrap();
+    let buf = p.buf(weights, None, states).unwrap();
+    let occupation = estimate(&buf.as_data(), times, &options(Some(initial))).unwrap();
     check(&format!("{name}/probabilities"), &occupation.probabilities);
     check(&format!("{name}/at_risk"), &occupation.at_risk);
     let mut totals = Vec::new();
@@ -304,12 +323,23 @@ fn curve_case(
             &occupation.probabilities,
             times,
             initial,
-            states,
+            states as usize,
             horizon,
             origin,
         ));
     }
     check(&format!("{name}/integrate"), &totals);
+}
+
+fn message<T>(result: Result<T, epistat_survival::Error>) -> String {
+    match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => error.to_string(),
+    }
+}
+
+fn ones_of(p: &Process) -> Vec<f64> {
+    vec![1.0; p.starts.len()]
 }
 
 #[test]
@@ -371,70 +401,18 @@ fn occupation_curves() {
     ] {
         curve_case(name, &outside, &outside.weight, &times, &initial, 3);
     }
-    // Two states: state 2 and everything above it is outside the space.
+    // Two states: state 2 is left out of the analysis.
     curve_case(
         "two states",
-        &outside,
+        &outside.restricted(2),
         &outside.weight,
         &times,
         &[0.5, 0.5],
         2,
     );
-    curve_case("one state", &outside, &ones_of(&outside), &times, &[1.0], 1);
 
-    // A start time that is not a number is at risk at no time.
-    let mut broken = process(30, 4, false, false, false);
-    broken.starts[3] = f64::NAN;
-    broken.starts[11] = f64::NAN;
-    let times = event_times(&broken);
-    let weights = ones_of(&broken);
-    curve_case(
-        "nan start ascending",
-        &broken,
-        &weights,
-        &times,
-        &[0.5, 0.5, 0.0],
-        3,
-    );
-    curve_case(
-        "nan start descending",
-        &broken,
-        &weights,
-        &reversed(&times),
-        &[0.5, 0.5, 0.0],
-        3,
-    );
-
-    // No times, and no intervals.
+    // No times.
     curve_case("no times", &plain, &ones, &[], &[1.0, 0.0, 0.0], 3);
-    let empty = Process {
-        starts: vec![],
-        stops: vec![],
-        from: vec![],
-        to: vec![],
-        person: vec![],
-        weight: vec![],
-        first: vec![],
-    };
-    curve_case("no rows", &empty, &[], &[1.0, 2.0], &[1.0, 0.0, 0.0], 3);
-
-    // A zero-length interval is not a move.
-    let intervals = Intervals::new(&[0.0, 1.0], &[3.0, 1.0], &[0, 0], &[0, 1]).unwrap();
-    let out =
-        state_occupation_curve(intervals, &[1.0; 2], &[1.0, 3.0], &[1.0, 0.0], 2, 1e-9).unwrap();
-    check("zero length/probabilities", &out.probabilities);
-    check("zero length/at_risk", &out.at_risk);
-}
-
-fn message<T>(result: Result<T, epistat_survival::Error>) -> String {
-    match result {
-        Ok(_) => "ok".to_owned(),
-        Err(error) => error.to_string(),
-    }
-}
-
-fn ones_of(p: &Process) -> Vec<f64> {
-    vec![1.0; p.starts.len()]
 }
 
 #[test]
@@ -442,120 +420,80 @@ fn occupation_refusals() {
     let p = process(20, 5, false, false, false);
     let ones = ones_of(&p);
     let times = event_times(&p);
-    let intervals = Intervals::new(&p.starts, &p.stops, &p.from, &p.to).unwrap();
+    let buf = p.buf(&ones, None, 3).unwrap();
+    let data = buf.as_data();
     check_text(
         "refuse/initial length",
-        &message(state_occupation_curve(
-            intervals,
-            &ones,
-            &times,
-            &[1.0],
-            3,
-            1e-9,
-        )),
+        &message(estimate(&data, &times, &options(Some(&[1.0])))),
     );
-    check_text(
-        "refuse/weights length",
-        &message(state_occupation_curve(
-            intervals,
-            &ones[1..],
-            &times,
-            &[1.0, 0.0, 0.0],
-            3,
-            1e-9,
-        )),
-    );
+    let short = p.buf(&ones[1..], None, 3);
+    check_text("refuse/weights length", &message(short));
+    let tolerance = Options {
+        rate_tolerance: Some(-1.5),
+        ..options(Some(&[1.0, 0.0, 0.0]))
+    };
     check_text(
         "refuse/rate tolerance",
-        &message(state_occupation_curve(
-            intervals,
-            &ones,
-            &times,
-            &[1.0, 0.0, 0.0],
-            3,
-            -1.5,
-        )),
+        &message(estimate(&data, &times, &tolerance)),
     );
+    let lengths = SurvData::builder(&[1.0, 2.0], &[0, 0])
+        .start(&[0.0])
+        .build();
+    check_text("refuse/interval lengths", &message(lengths));
+    let mut broken = p.starts.clone();
+    broken[3] = f64::NAN;
+    let nan = SurvData::builder(&p.stops, &p.status)
+        .start(&broken)
+        .id(&p.person)
+        .istate(&p.istate)
+        .n_codes(3)
+        .build();
+    check_text("refuse/nan start", &message(nan));
+    // A zero-length row is not an interval.
+    let zero = SurvData::builder(&[3.0, 1.0], &[0, 1])
+        .start(&[0.0, 1.0])
+        .id(&[0, 1])
+        .istate(&[1, 1])
+        .n_codes(2)
+        .build();
+    check_text("refuse/zero length", &message(zero));
+    let empty = SurvData::builder(&[], &[])
+        .start(&[])
+        .id(&[])
+        .istate(&[])
+        .n_codes(3)
+        .build()
+        .unwrap();
     check_text(
-        "refuse/interval lengths",
-        &message(Intervals::new(&[0.0], &[1.0, 2.0], &[0], &[0])),
+        "refuse/no rows",
+        &message(estimate(
+            &empty,
+            &[1.0, 2.0],
+            &options(Some(&[1.0, 0.0, 0.0])),
+        )),
     );
 }
 
 fn bootstrap_case(
     name: &str,
     p: &Process,
-    base: &[f64],
+    weights: &[f64],
     clusters: &[u32],
-    n_clusters: usize,
     times: &[f64],
-    states: usize,
+    states: u32,
 ) {
-    let intervals = Intervals::new(&p.starts, &p.stops, &p.from, &p.to).unwrap();
-    let first_states: Vec<i32> = p
-        .first
-        .iter()
-        .map(|&i| {
-            let from = p.from[i as usize];
-            if (from as usize) < states {
-                from as i32
-            } else {
-                -1
-            }
-        })
-        .collect();
+    let buf = p.buf(weights, Some(clusters.to_vec()), states).unwrap();
+    let data = buf.as_data();
     let seeds: Vec<u64> = (0..6).map(|r| 500 + r * 7919).collect();
     for (label, horizons) in [("curves", vec![]), ("restricted", vec![2.0, 7.5, 30.0])] {
-        let out = bootstrap_state_occupation(
-            intervals,
-            base,
-            clusters,
-            &p.first,
-            &first_states,
-            times,
-            &horizons,
-            0.5,
-            &seeds,
-            n_clusters,
-            states,
-            1e-9,
-        )
-        .unwrap();
-        check(&format!("{name}/{label}"), &out);
+        let out = bootstrap(&data, times, &horizons, 0.5, &seeds, &options(None)).unwrap();
+        check(&format!("{name}/{label}"), &out.values);
     }
     // One seed, and no seeds.
-    let single = bootstrap_state_occupation(
-        intervals,
-        base,
-        clusters,
-        &p.first,
-        &first_states,
-        times,
-        &[4.0],
-        0.0,
-        &[77],
-        n_clusters,
-        states,
-        1e-9,
-    )
-    .unwrap();
-    check(&format!("{name}/single seed"), &single);
-    let none = bootstrap_state_occupation(
-        intervals,
-        base,
-        clusters,
-        &p.first,
-        &first_states,
-        times,
-        &[],
-        0.0,
-        &[],
-        n_clusters,
-        states,
-        1e-9,
-    )
-    .unwrap();
-    check(&format!("{name}/no seeds"), &none);
+    let single = bootstrap(&data, times, &[4.0], 0.0, &[77], &options(None)).unwrap();
+    check(&format!("{name}/single seed"), &single.values);
+    let none = bootstrap(&data, times, &[], 0.0, &[], &options(None)).unwrap();
+    check(&format!("{name}/no seeds"), &none.values);
 }
 
 #[test]
@@ -568,7 +506,6 @@ fn bootstraps() {
         &plain,
         &weights,
         &plain.person,
-        60,
         &ascending,
         3,
     );
@@ -577,14 +514,13 @@ fn bootstraps() {
         &plain,
         &plain.weight,
         &plain.person,
-        60,
         &reversed(&ascending),
         3,
     );
 
     let rich = process(80, 12, true, true, true);
     let times = event_times(&rich);
-    // Clusters of three people, and clusters that no row belongs to.
+    // Clusters of three people.
     let clusters: Vec<u32> = rich.person.iter().map(|&p| p / 3).collect();
     for (name, times) in [
         ("rich ascending", times.clone()),
@@ -592,9 +528,16 @@ fn bootstraps() {
         ("rich descending", reversed(&times)),
         ("rich shuffled", shuffled(&times, 4)),
     ] {
-        bootstrap_case(name, &rich, &rich.weight, &clusters, 40, &times, 3);
+        bootstrap_case(name, &rich, &rich.weight, &clusters, &times, 3);
     }
-    bootstrap_case("two states", &rich, &rich.weight, &clusters, 27, &times, 2);
+    bootstrap_case(
+        "two states",
+        &rich.restricted(2),
+        &rich.weight,
+        &clusters,
+        &times,
+        2,
+    );
 }
 
 #[test]
@@ -602,66 +545,42 @@ fn bootstrap_refusals() {
     let p = process(20, 13, false, false, false);
     let ones = ones_of(&p);
     let times = event_times(&p);
-    let intervals = Intervals::new(&p.starts, &p.stops, &p.from, &p.to).unwrap();
-    let first_states = vec![0; p.first.len()];
-    let run = |base: &[f64],
-               codes: &[u32],
-               positions: &[u32],
-               opening: &[i32],
-               n_clusters: usize,
-               states: usize| {
-        message(bootstrap_state_occupation(
-            intervals,
-            base,
-            codes,
-            positions,
-            opening,
+    let seeds = [1, 2];
+    let clustered = p.buf(&ones, Some(p.person.clone()), 3).unwrap();
+    check_text(
+        "refuse/initial given",
+        &message(bootstrap(
+            &clustered.as_data(),
             &times,
             &[],
             0.0,
-            &[1, 2],
-            n_clusters,
-            states,
-            1e-9,
-        ))
-    };
-    check_text(
-        "refuse/no states",
-        &run(&ones, &p.person, &p.first, &first_states, 20, 0),
+            &seeds,
+            &options(Some(&[1.0, 0.0, 0.0])),
+        )),
     );
+    let plain = p.buf(&ones, None, 3).unwrap();
     check_text(
-        "refuse/base length",
-        &run(&ones[1..], &p.person, &p.first, &first_states, 20, 3),
+        "refuse/no cluster",
+        &message(bootstrap(
+            &plain.as_data(),
+            &times,
+            &[],
+            0.0,
+            &seeds,
+            &options(None),
+        )),
     );
+    let zeros = vec![0.0; ones.len()];
+    let unweighted = p.buf(&zeros, Some(p.person.clone()), 3).unwrap();
     check_text(
-        "refuse/cluster code",
-        &run(&ones, &p.person, &p.first, &first_states, 19, 3),
-    );
-    check_text(
-        "refuse/position",
-        &run(&ones, &p.person, &[10_000], &[0], 20, 3),
-    );
-    check_text(
-        "refuse/position lengths",
-        &run(&ones, &p.person, &p.first, &first_states[1..], 20, 3),
-    );
-    check_text(
-        "refuse/opening state",
-        &run(&ones, &p.person, &[0], &[3], 20, 3),
-    );
-    check_text(
-        "refuse/opening without weight",
-        &run(
-            &vec![0.0; ones.len()],
-            &p.person,
-            &p.first,
-            &first_states,
-            20,
-            3,
-        ),
-    );
-    check_text(
-        "refuse/opening outside",
-        &run(&ones, &p.person, &p.first, &vec![-1; p.first.len()], 20, 3),
+        "refuse/no weight",
+        &message(bootstrap(
+            &unweighted.as_data(),
+            &times,
+            &[],
+            0.0,
+            &seeds,
+            &options(None),
+        )),
     );
 }

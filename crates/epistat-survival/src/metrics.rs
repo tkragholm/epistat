@@ -24,7 +24,7 @@
 //! [`cox::predict::survfit`](crate::cox::predict::survfit) and for a
 //! competing-risks model from the caller's own absolute risks.
 
-mod censoring;
+pub(crate) mod censoring;
 mod coxcens;
 mod marginal;
 mod prepare;

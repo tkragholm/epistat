@@ -173,8 +173,8 @@ mod table;
 
 use epistat_linalg::{Mat, MatRef};
 
+use crate::check::check_ascending;
 use crate::error::{Error, Result};
-use crate::multistate::check_ascending;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 

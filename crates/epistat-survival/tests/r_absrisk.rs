@@ -41,12 +41,12 @@
 //! The bounds are not changed after a run. The worst deviation in units of its
 //! bound is printed for each output.
 
-#![allow(
+#![expect(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
-    clippy::float_cmp,
-    reason = "status codes are small positive integers, and event times are compared exactly"
+    reason = "status codes are small positive integers"
 )]
+#![allow(clippy::float_cmp, reason = "event times are compared exactly")]
 
 #[path = "absrisk_naive/mod.rs"]
 mod absrisk_naive;
