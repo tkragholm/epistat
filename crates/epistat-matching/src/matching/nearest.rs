@@ -93,7 +93,7 @@ use super::distance::{
 };
 use super::engine::{
     TrimmedIndexConfig, build_outcome, finalize_estimand_diagnostics, intern_unique,
-    invalid_criteria_outcome,
+    refused_outcome,
 };
 use super::index::StrataValues;
 use super::records::MatchingRecord;
@@ -447,7 +447,7 @@ struct Plan<'a> {
 }
 
 fn invalid(anchors: usize) -> MatchOutcome {
-    invalid_criteria_outcome(anchors, InvalidCriteriaReason::NearestOptions)
+    refused_outcome(anchors, InvalidCriteriaReason::NearestOptions)
 }
 
 /// Settle the options against the distance, or say they contradict it.
@@ -1978,12 +1978,10 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         diagnostics.anchors_with_no_candidates += result.unmatched;
         diagnostics.anchors_below_required_ratio += result.below_ratio;
         for (reason, count) in result.refused.0 {
-            *diagnostics
-                .exclusion_counts
-                .entry(ExclusionReason::Constraint(
-                    ConstraintReason::from_reason_str(reason),
-                ))
-                .or_insert(0) += count;
+            diagnostics.add_exclusion(
+                ExclusionReason::Constraint(ConstraintReason::from_reason_str(reason)),
+                count,
+            );
         }
         for (anchor_idx, controls) in result.matched {
             matched_anchors += 1;

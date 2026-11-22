@@ -2032,15 +2032,7 @@ fn reject_invalid(outcome: MatchOutcome) -> Result<MatchOutcome, SpecError> {
         .diagnostics
         .exclusion_counts
         .keys()
-        .find(|reason| {
-            matches!(
-                reason,
-                ExclusionReason::InvalidCriteria(_)
-                    | ExclusionReason::CommonSupportFailure(_)
-                    | ExclusionReason::EventBeforeBirth(_)
-                    | ExclusionReason::DuplicateId(_)
-            )
-        })
+        .find(|reason| reason.refuses_job())
         .cloned();
     match rejected {
         Some(reason) => Err(SpecError::Rejected(reason)),

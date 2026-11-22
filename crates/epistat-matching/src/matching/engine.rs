@@ -354,12 +354,12 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             let excluded_by_index = pre_filter_count.saturating_sub(candidate_indices.len());
             if excluded_by_index > 0 {
                 let reason = pool_config.caliper_reason;
-                *diagnostics
-                    .exclusion_counts
-                    .entry(ExclusionReason::DistanceCaliper(
-                        DistanceCaliperReason::from_reason_str(reason),
-                    ))
-                    .or_insert(0) += excluded_by_index;
+                diagnostics.add_exclusion(
+                    ExclusionReason::DistanceCaliper(DistanceCaliperReason::from_reason_str(
+                        reason,
+                    )),
+                    excluded_by_index,
+                );
             }
         }
         let caliper_constraint = pool_config.distance_caliper.map(|max_distance| {
@@ -425,16 +425,10 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
         } = tally;
 
         if filtered_out > 0 {
-            *diagnostics
-                .exclusion_counts
-                .entry(ExclusionReason::AdditionalFilter)
-                .or_insert(0) += filtered_out;
+            diagnostics.add_exclusion(ExclusionReason::AdditionalFilter, filtered_out);
         }
         for (reason, count) in constraint_exclusions {
-            *diagnostics
-                .exclusion_counts
-                .entry(reason.exclusion_reason())
-                .or_insert(0) += count;
+            diagnostics.add_exclusion(reason.exclusion_reason(), count);
         }
 
         // The pool is ordered by control id. The seeded selector draws a position
@@ -1012,13 +1006,13 @@ pub fn match_standard_with_discard<
     let validated = match request.criteria.validate() {
         Ok(validated) => validated,
         Err(err) => {
-            return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::from(err));
+            return refused_outcome(anchors.len(), InvalidCriteriaReason::from(err));
         }
     };
     let criteria = validated.as_ref();
     let engine = MatchEngine::new(candidates, criteria, request.strategy);
     if RatioPolicy::fallback_above_primary(validated.match_ratio, request.ratio_fallback) {
-        return invalid_criteria_outcome(
+        return refused_outcome(
             anchors.len(),
             InvalidCriteriaReason::FallbackRatioAbovePrimary,
         );
@@ -1053,7 +1047,7 @@ pub fn match_standard_with_discard<
                 .distance_config
                 .and_then(DistanceConfig::propensity_scores)
             else {
-                return invalid_common_support_outcome(
+                return refused_outcome(
                     anchors.len(),
                     CommonSupportFailureReason::RequiresPropensityScoreMap,
                 );
@@ -1063,7 +1057,7 @@ pub fn match_standard_with_discard<
                     support.record_in(&mut diagnostics, anchors, candidates);
                     Some(support)
                 }
-                Err(reason) => return invalid_common_support_outcome(anchors.len(), reason),
+                Err(reason) => return refused_outcome(anchors.len(), reason),
             }
         }
     };
@@ -1080,7 +1074,7 @@ pub fn match_standard_with_discard<
 
     if let Some(nearest) = engine.selector.nearest() {
         if !request.ratio_fallback.is_empty() {
-            return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
+            return refused_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
         }
         return super::nearest::match_nearest(
             &super::nearest::NearestRequest {
@@ -1098,7 +1092,7 @@ pub fn match_standard_with_discard<
     if engine.selector.assignment() == super::selection::Assignment::Rounds
         && !request.ratio_fallback.is_empty()
     {
-        return invalid_criteria_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
+        return refused_outcome(anchors.len(), InvalidCriteriaReason::NearestOptions);
     }
 
     // The unconfigured path is the common one, so it keeps the concrete date
@@ -1526,57 +1520,16 @@ fn usize_to_f64(n: usize) -> f64 {
     n as f64
 }
 
-pub fn invalid_criteria_outcome(
-    anchor_count: usize,
-    reason: InvalidCriteriaReason,
-) -> MatchOutcome {
+/// The outcome of a job refused for `reason`, with no pairs and every anchor
+/// unmatched.
+pub fn refused_outcome(anchor_count: usize, reason: impl Into<ExclusionReason>) -> MatchOutcome {
+    let reason = reason.into();
+    debug_assert!(reason.refuses_job());
     let mut diagnostics = MatchDiagnostics {
         total_anchors_evaluated: anchor_count,
         ..MatchDiagnostics::default()
     };
-    diagnostics
-        .exclusion_counts
-        .insert(ExclusionReason::InvalidCriteria(reason), 1);
-
-    MatchOutcome {
-        pairs: Vec::new(),
-        unmatched_cases: anchor_count,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics,
-    }
-}
-
-/// The outcome of a cohort refused for a record-level reason, with no pairs.
-pub fn invalid_cohort_outcome(anchor_count: usize, reason: ExclusionReason) -> MatchOutcome {
-    let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchor_count,
-        ..MatchDiagnostics::default()
-    };
-    diagnostics.exclusion_counts.insert(reason, 1);
-
-    MatchOutcome {
-        pairs: Vec::new(),
-        unmatched_cases: anchor_count,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics,
-    }
-}
-
-pub fn invalid_common_support_outcome(
-    anchor_count: usize,
-    reason: CommonSupportFailureReason,
-) -> MatchOutcome {
-    let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchor_count,
-        ..MatchDiagnostics::default()
-    };
-    diagnostics
-        .exclusion_counts
-        .insert(ExclusionReason::CommonSupportFailure(reason), 1);
+    diagnostics.add_exclusion(reason, 1);
 
     MatchOutcome {
         pairs: Vec::new(),
@@ -1885,16 +1838,10 @@ mod pool_scan_tests {
             eligible.push(idx);
         }
         if filtered_out > 0 {
-            *diagnostics
-                .exclusion_counts
-                .entry(ExclusionReason::AdditionalFilter)
-                .or_insert(0) += filtered_out;
+            diagnostics.add_exclusion(ExclusionReason::AdditionalFilter, filtered_out);
         }
         for (reason, count) in exclusions {
-            *diagnostics
-                .exclusion_counts
-                .entry(reason.exclusion_reason())
-                .or_insert(0) += count;
+            diagnostics.add_exclusion(reason.exclusion_reason(), count);
         }
         sort_by_id(engine.controls, &mut eligible);
         eligible

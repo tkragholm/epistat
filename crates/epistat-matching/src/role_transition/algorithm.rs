@@ -4,8 +4,8 @@ use crate::matching::{
     CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
     DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
     ScoreTable, SelectionStrategy, UsedControlsVec, build_outcome, build_strata_values,
-    finalize_estimand_diagnostics, intern_unique, invalid_cohort_outcome,
-    invalid_common_support_outcome, invalid_criteria_outcome, ratio::RatioPolicy, unique_value,
+    finalize_estimand_diagnostics, intern_unique, ratio::RatioPolicy, refused_outcome,
+    unique_value,
 };
 use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{
@@ -257,7 +257,7 @@ pub(crate) fn match_transition_ordered<
     };
     let scores = config.propensity_scores();
     if scores.is_none() && request.criteria.common_support.is_some() {
-        return invalid_common_support_outcome(
+        return refused_outcome(
             cohort.len(),
             CommonSupportFailureReason::RequiresPropensityScoreMap,
         );
@@ -608,7 +608,7 @@ fn match_with_role_indexing_with_channel_internal<
     let validated = match config.criteria.validate() {
         Ok(validated) => validated,
         Err(err) => {
-            return invalid_criteria_outcome(cohort.len(), InvalidCriteriaReason::from(err));
+            return refused_outcome(cohort.len(), InvalidCriteriaReason::from(err));
         }
     };
 
@@ -623,11 +623,11 @@ fn match_with_role_indexing_with_channel_internal<
     if config.risk_set_policy.default_at_risk_rule().is_some()
         && let Some(reason) = invalid_record(cohort, id_order)
     {
-        return invalid_cohort_outcome(cohort.len(), reason);
+        return refused_outcome(cohort.len(), reason);
     }
 
     if RatioPolicy::fallback_above_primary(validated.match_ratio, config.ratio_fallback) {
-        return invalid_criteria_outcome(
+        return refused_outcome(
             cohort.len(),
             InvalidCriteriaReason::FallbackRatioAbovePrimary,
         );
@@ -649,7 +649,7 @@ fn match_with_role_indexing_with_channel_internal<
     ) {
         Ok(filters) => filters,
         Err(reason) => {
-            return invalid_common_support_outcome(case_indices.len(), reason);
+            return refused_outcome(case_indices.len(), reason);
         }
     };
 
@@ -980,19 +980,16 @@ fn run_swept_case_loop<
         };
         let (counts, mut pool) = sweep.pool(stratum, window, *case_idx);
 
-        let exclusions = &mut state.diagnostics.exclusion_counts;
+        let diagnostics = &mut state.diagnostics;
         if counts.not_at_risk > 0 {
-            *exclusions
-                .entry(ExclusionReason::AdditionalFilter)
-                .or_insert(0) += counts.not_at_risk;
+            diagnostics.add_exclusion(ExclusionReason::AdditionalFilter, counts.not_at_risk);
         }
         for (reason, count) in std::iter::once((drawn_reason, counts.drawn)).chain(counts.refused) {
             if count > 0 {
-                *exclusions
-                    .entry(ExclusionReason::Constraint(
-                        ConstraintReason::from_reason_str(reason),
-                    ))
-                    .or_insert(0) += count;
+                diagnostics.add_exclusion(
+                    ExclusionReason::Constraint(ConstraintReason::from_reason_str(reason)),
+                    count,
+                );
             }
         }
 

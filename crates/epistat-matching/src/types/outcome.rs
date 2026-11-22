@@ -21,6 +21,33 @@ pub enum ExclusionReason {
     DuplicateId(String),
 }
 
+impl ExclusionReason {
+    /// Whether the reason says the whole job was refused, so that the outcome
+    /// has no pairs and one count of this reason.
+    #[must_use]
+    pub const fn refuses_job(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidCriteria(_)
+                | Self::CommonSupportFailure(_)
+                | Self::EventBeforeBirth(_)
+                | Self::DuplicateId(_)
+        )
+    }
+}
+
+impl From<InvalidCriteriaReason> for ExclusionReason {
+    fn from(reason: InvalidCriteriaReason) -> Self {
+        Self::InvalidCriteria(reason)
+    }
+}
+
+impl From<CommonSupportFailureReason> for ExclusionReason {
+    fn from(reason: CommonSupportFailureReason) -> Self {
+        Self::CommonSupportFailure(reason)
+    }
+}
+
 /// Typed estimand drift reason recorded by matching diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EstimandDriftReason {
@@ -295,6 +322,11 @@ pub struct MatchOutcome {
 }
 
 impl MatchDiagnostics {
+    /// Count `count` more units or candidates excluded for `reason`.
+    pub fn add_exclusion(&mut self, reason: ExclusionReason, count: usize) {
+        *self.exclusion_counts.entry(reason).or_insert(0) += count;
+    }
+
     /// Merge another diagnostics object into this one.
     pub fn merge(&mut self, other: Self) {
         self.total_anchors_evaluated += other.total_anchors_evaluated;
@@ -313,7 +345,7 @@ impl MatchDiagnostics {
             .extend(other.common_support_trimmed_ids.candidates);
 
         for (reason, count) in other.exclusion_counts {
-            *self.exclusion_counts.entry(reason).or_insert(0) += count;
+            self.add_exclusion(reason, count);
         }
         for reason in other.estimand_drift_reasons {
             if !self.estimand_drift_reasons.contains(&reason) {
