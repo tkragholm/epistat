@@ -155,6 +155,7 @@
 //!    Philadelphia: SIAM; 1979. R's `dqrdc2` modifies its `dqrdc` to pivot
 //!    only the columns that fall below the tolerance.
 
+use crate::columns::{columns_of, linear_predictor};
 use epistat_linalg::design::select_columns;
 use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, weighted_xtz};
 use epistat_linalg::{Mat, MatRef};
@@ -345,24 +346,31 @@ impl Glm {
                 .map(|i| family.deviance(y[i], mu[i], weights[i]))
                 .sum()
         };
-        let predict = |beta: &[f64]| -> (Vec<f64>, Vec<f64>) {
-            let eta: Vec<f64> = (0..n)
-                .map(|i| (0..p).map(|j| x[(i, j)] * beta[j]).sum::<f64>() + offset[i])
-                .collect();
-            let mu = eta.iter().map(|&e| link.inverse(e)).collect();
-            (eta, mu)
+        let mut copy = Vec::new();
+        let columns = columns_of(x, &mut copy);
+        // The linear predictor, the mean and the derivative of the mean.
+        let predict = |beta: &[f64]| -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+            let eta = linear_predictor(&columns, beta, offset);
+            let (mu, derivative) = eta
+                .iter()
+                .map(|&e| link.inverse_and_derivative(e))
+                .unzip();
+            (eta, mu, derivative)
         };
         let valid = |mu: &[f64]| mu.iter().all(|&m| family.valid_mean(m));
 
         // R starts from the family's means, mapped to the linear predictor and
         // back, unless coefficients are given.
-        let (mut eta, mut mu) = start.map_or_else(
+        let (mut eta, mut mu, mut derivative) = start.map_or_else(
             || {
                 let eta: Vec<f64> = (0..n)
                     .map(|i| link.link(family.start(y[i], weights[i])))
                     .collect();
-                let mu = eta.iter().map(|&e| link.inverse(e)).collect();
-                (eta, mu)
+                let (mu, derivative) = eta
+                    .iter()
+                    .map(|&e| link.inverse_and_derivative(e))
+                    .unzip();
+                (eta, mu, derivative)
             },
             predict,
         );
@@ -382,10 +390,10 @@ impl Glm {
             let mut z = vec![0.0; n];
             let mut w2 = vec![0.0; n];
             for i in 0..n {
-                let derivative = link.derivative(eta[i]);
-                if weights[i] > 0.0 && derivative != 0.0 {
-                    z[i] = eta[i] - offset[i] + (y[i] - mu[i]) / derivative;
-                    w2[i] = weights[i] * derivative * derivative / family.variance(mu[i]);
+                let slope = derivative[i];
+                if weights[i] > 0.0 && slope != 0.0 {
+                    z[i] = eta[i] - offset[i] + (y[i] - mu[i]) / slope;
+                    w2[i] = weights[i] * slope * slope / family.variance(mu[i]);
                 }
             }
             if iteration == 1 && self.ridge == 0.0 {
@@ -408,7 +416,7 @@ impl Glm {
                 None => beta = solution,
             }
             last_weights.clone_from(&w2);
-            (eta, mu) = predict(&beta);
+            (eta, mu, derivative) = predict(&beta);
             current_deviance = deviance(&mu);
             boundary = false;
             if !current_deviance.is_finite() || !valid(&mu) {
@@ -424,7 +432,7 @@ impl Glm {
                     for (b, o) in beta.iter_mut().zip(old) {
                         *b = (*b + o) / 2.0;
                     }
-                    (eta, mu) = predict(&beta);
+                    (eta, mu, derivative) = predict(&beta);
                     current_deviance = deviance(&mu);
                 }
                 boundary = true;
@@ -452,7 +460,7 @@ impl Glm {
             let pearson: f64 = (0..n)
                 .filter(|&i| last_weights[i] > 0.0)
                 .map(|i| {
-                    let residual = (y[i] - mu[i]) / link.derivative(eta[i]);
+                    let residual = (y[i] - mu[i]) / derivative[i];
                     last_weights[i] * residual * residual
                 })
                 .sum();
