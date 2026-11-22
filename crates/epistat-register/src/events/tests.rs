@@ -52,7 +52,7 @@ fn an_event_on_the_entry_day_is_prior_or_in_window_never_both() {
         ..Rule::single(Lookback::Days(40))
     };
     let exclusive = Rule::single(Lookback::Days(40));
-    let o = run(&[50], &[1], 50, 80, 0, &[inclusive, exclusive]);
+    let o = run(&[50], &[0b11], 50, 80, 0, &[inclusive, exclusive]);
     assert_eq!(
         (o[0].prior, o[0].first_in_window),
         (PriorStatus::Prevalent, None)
