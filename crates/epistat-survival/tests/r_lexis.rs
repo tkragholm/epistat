@@ -9,6 +9,11 @@
 //! off by at most `(k + 4)` units in the last place of the largest magnitude
 //! of the case, which is the tolerance used.
 
+#![allow(
+    clippy::float_cmp,
+    reason = "the exact values of R's pieces and of the grid case are asserted"
+)]
+
 use epistat_survival::SurvData;
 use epistat_survival::lexis::rates::{RateOptions, fit_rates};
 use epistat_survival::lexis::{Lexis, LexisOptions, TimeScale, split_lexis};

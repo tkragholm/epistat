@@ -39,9 +39,11 @@
 //!
 //! The bounds are not changed after a run.
 
-#![expect(
-    clippy::cast_precision_loss,
-    reason = "counts and degrees of freedom are small whole numbers"
+#![expect(clippy::cast_precision_loss, reason = "counts are small")]
+#![allow(
+    clippy::float_cmp,
+    clippy::needless_range_loop,
+    reason = "degrees of freedom are whole numbers, and the bounds index several tables by the same level and coefficient"
 )]
 
 use epistat_linalg::Mat;
