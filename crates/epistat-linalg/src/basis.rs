@@ -1,5 +1,6 @@
-//! Basis expansions of one variable, for series and sieve estimators: the
-//! polynomial basis and B-splines, with first derivatives.
+//! Basis expansions of one variable, for series and sieve estimators and for
+//! regression on smooth terms: the polynomial basis, B-splines, restricted
+//! cubic splines and natural cubic splines, with first derivatives.
 //!
 //! # Polynomial
 //!
@@ -61,6 +62,16 @@
 //! the last place, or within an absolute 1e-14 for values and 1e-12 for
 //! derivatives, on the test grid.
 //!
+//! # Restricted and natural cubic splines
+//!
+//! [`RestrictedCubic`] is Harrell's restricted cubic spline basis, as
+//! `Hmisc::rcspline.eval` and `rms::rcs` build it, and [`NaturalSpline`] is
+//! the basis of `splines::ns`. [`harrell_knots`] and [`natural_spline_knots`]
+//! place their knots as R does, and [`basis_matrix`] builds the design matrix of
+//! any basis over a vector of values. Each is explained in its own module.
+//! [`BSpline::nonzero_values_into`] evaluates only the `d + 1` functions that are
+//! not zero at a point, by the triangular scheme of de Boor, in `O(d^2)`.
+//!
 //! # References
 //!
 //! 1. de Boor C. A Practical Guide to Splines. Revised ed. New York:
@@ -71,6 +82,17 @@
 //!    1972;6(1):50-62.
 //! 4. R Core Team. R: A Language and Environment for Statistical Computing.
 //!    Vienna: R Foundation for Statistical Computing. The `splines` package.
+
+mod knots;
+mod natural;
+mod rcs;
+
+pub use knots::{harrell_knots, natural_spline_knots};
+pub use natural::NaturalSpline;
+pub use rcs::{RcsScale, RestrictedCubic};
+
+use crate::Mat;
+use rayon::prelude::*;
 
 /// A finite set of functions of one variable and their derivatives.
 pub trait Basis {
@@ -140,10 +162,23 @@ pub enum KnotError {
     /// The boundary knots are not finite, or the lower is not below the upper.
     #[error("the boundary knots must be finite with lower below upper")]
     Boundary,
+    /// A knot is not finite.
+    #[error("the knots must be finite")]
+    NotFinite,
+    /// Fewer than three knots were given for a restricted cubic spline, or
+    /// fewer were asked for.
+    #[error("a restricted cubic spline needs at least three knots")]
+    TooFewKnots,
+    /// The sample has too few values to place knots.
+    #[error("too few observations to place the knots")]
+    TooFewObservations,
+    /// Fewer than three distinct knots can be placed.
+    #[error("fewer than three distinct knots can be placed")]
+    TooFewDistinct,
     /// An internal knot is not strictly inside the boundary.
     #[error("the internal knots must lie strictly inside the boundary")]
     OutsideBoundary,
-    /// The internal knots are not in increasing order.
+    /// The knots are not in increasing order.
     #[error("the internal knots must be sorted")]
     Unsorted,
 }
@@ -191,6 +226,128 @@ impl BSpline {
     #[must_use]
     pub const fn degree(&self) -> usize {
         self.degree
+    }
+
+    /// The span `s` with `t[s] <= x < t[s + 1]`, the last span for `x = upper`;
+    /// `None` outside `[lower, upper]` and for NaN.
+    fn span(&self, x: f64) -> Option<usize> {
+        let t = &self.knots;
+        let n = self.len();
+        if !(x >= t[0] && x <= t[n + self.degree]) {
+            return None;
+        }
+        let after = t.partition_point(|&k| k <= x);
+        Some(after.saturating_sub(1).clamp(self.degree, n - 1))
+    }
+
+    /// Writes the values of the `degree + 1` functions that are not zero at `x`
+    /// into `out` and returns the index of the first of them, by the triangular
+    /// scheme of de Boor in `O(degree^2)`. The other functions are zero. The
+    /// values equal [`Basis::values_into`] up to rounding and, like it, the last
+    /// function is 1 at `x = upper`. `None` for `x` outside `[lower, upper]`.
+    ///
+    /// # Panics
+    ///
+    /// If `out` has fewer than `degree + 1` entries.
+    pub fn nonzero_values_into(&self, x: f64, out: &mut [f64]) -> Option<usize> {
+        let span = self.span(x)?;
+        let d = self.degree;
+        let t = &self.knots;
+        let mut buffer = [0.0_f64; 32];
+        let mut heap;
+        let (left, right) = if d < 16 {
+            buffer.split_at_mut(16)
+        } else {
+            heap = vec![0.0; 2 * (d + 1)];
+            heap.split_at_mut(d + 1)
+        };
+        out[0] = 1.0;
+        for j in 1..=d {
+            left[j] = x - t[span + 1 - j];
+            right[j] = t[span + j] - x;
+            let mut saved = 0.0;
+            for r in 0..j {
+                let temp = out[r] / (right[r + 1] + left[j - r]);
+                out[r] = saved + right[r + 1] * temp;
+                saved = left[j - r] * temp;
+            }
+            out[j] = saved;
+        }
+        Some(span - d)
+    }
+
+    /// The values and derivatives up to `order` of the `degree + 1` functions
+    /// that are not zero at `x`, as `result[k][j]` for the `k`-th derivative of
+    /// function `first + j`, with the index `first`. The recurrence is the
+    /// derivative scheme of Piegl and Tiller. `None` outside `[lower, upper]`.
+    #[expect(
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "the scheme indexes with offsets that are negative for some terms, as published"
+    )]
+    pub(crate) fn nonzero_derivatives(
+        &self,
+        x: f64,
+        order: usize,
+    ) -> Option<(usize, Vec<Vec<f64>>)> {
+        let span = self.span(x)?;
+        let p = self.degree;
+        let order = order.min(p);
+        let t = &self.knots;
+        let mut ndu = vec![vec![0.0; p + 1]; p + 1];
+        let (mut left, mut right) = (vec![0.0; p + 1], vec![0.0; p + 1]);
+        ndu[0][0] = 1.0;
+        for j in 1..=p {
+            left[j] = x - t[span + 1 - j];
+            right[j] = t[span + j] - x;
+            let mut saved = 0.0;
+            for r in 0..j {
+                ndu[j][r] = right[r + 1] + left[j - r];
+                let temp = ndu[r][j - 1] / ndu[j][r];
+                ndu[r][j] = saved + right[r + 1] * temp;
+                saved = left[j - r] * temp;
+            }
+            ndu[j][j] = saved;
+        }
+        let mut ders = vec![vec![0.0; p + 1]; order + 1];
+        for j in 0..=p {
+            ders[0][j] = ndu[j][p];
+        }
+        let mut a = [vec![0.0; p + 1], vec![0.0; p + 1]];
+        for r in 0..=p {
+            let (mut s1, mut s2) = (0, 1);
+            a[0][0] = 1.0;
+            for k in 1..=order {
+                let mut d = 0.0;
+                let rk = r as isize - k as isize;
+                let pk = p as isize - k as isize;
+                if r >= k {
+                    a[s2][0] = a[s1][0] / ndu[(pk + 1) as usize][rk as usize];
+                    d = a[s2][0] * ndu[rk as usize][pk as usize];
+                }
+                let j1 = if rk >= -1 { 1 } else { (-rk) as usize };
+                let j2 = if (r as isize) - 1 <= pk { k - 1 } else { p - r };
+                for j in j1..=j2 {
+                    let column = (rk + j as isize) as usize;
+                    a[s2][j] = (a[s1][j] - a[s1][j - 1]) / ndu[(pk + 1) as usize][column];
+                    d += a[s2][j] * ndu[column][pk as usize];
+                }
+                if (r as isize) <= pk {
+                    a[s2][k] = -a[s1][k - 1] / ndu[(pk + 1) as usize][r];
+                    d += a[s2][k] * ndu[r][pk as usize];
+                }
+                ders[k][r] = d;
+                std::mem::swap(&mut s1, &mut s2);
+            }
+        }
+        let mut factor = p as f64;
+        for (k, row) in ders.iter_mut().enumerate().skip(1) {
+            for value in row {
+                *value *= factor;
+            }
+            factor *= (p - k) as f64;
+        }
+        Some((span - p, ders))
     }
 
     fn spline(&self, i: usize, k: usize, x: f64) -> f64 {
@@ -250,9 +407,70 @@ impl Basis for BSpline {
     }
 }
 
+/// The design matrix of `basis` at `x`: row `i` holds the functions at
+/// `x[i]`. Rows are computed independently, in blocks over the rayon pool,
+/// so the result does not depend on the number of threads.
+#[must_use]
+pub fn basis_matrix<B: Basis + Sync + ?Sized>(basis: &B, x: &[f64]) -> Mat<f64> {
+    const BLOCK: usize = 4096;
+    let k = basis.len();
+    let mut buffer = vec![0.0; x.len() * k];
+    if k > 0 {
+        buffer
+            .par_chunks_mut(BLOCK * k)
+            .zip(x.par_chunks(BLOCK))
+            .for_each(|(out, values)| {
+                for (row, &v) in out.chunks_exact_mut(k).zip(values) {
+                    basis.values_into(v, row);
+                }
+            });
+    }
+    Mat::from_fn(x.len(), k, |i, j| buffer[i * k + j])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonzero_functions_equal_the_full_recursion() {
+        let basis = BSpline::new(3, &[0.25, 0.5, 0.5, 0.8], -1.0, 2.0).unwrap();
+        let full_len = basis.len();
+        for x in [-1.0, -0.3, 0.25, 0.5, 0.79, 1.5, 2.0] {
+            let full = basis.values(x);
+            let mut four = [0.0; 4];
+            let first = basis.nonzero_values_into(x, &mut four).unwrap();
+            for (i, &f) in full.iter().enumerate() {
+                let local = if i >= first && i < first + 4 {
+                    four[i - first]
+                } else {
+                    0.0
+                };
+                assert!((f - local).abs() < 1e-14, "{x} {i}");
+            }
+            let (first, ders) = basis.nonzero_derivatives(x, 1).unwrap();
+            let slopes = basis.derivatives(x);
+            assert_eq!(full_len, slopes.len());
+            for (i, &f) in slopes.iter().enumerate() {
+                let local = if i >= first && i < first + 4 {
+                    ders[1][i - first]
+                } else {
+                    0.0
+                };
+                assert!((f - local).abs() < 1e-11, "{x} {i}: {f} {local}");
+            }
+        }
+        assert!(basis.nonzero_values_into(2.1, &mut [0.0; 4]).is_none());
+        assert!(basis.nonzero_values_into(f64::NAN, &mut [0.0; 4]).is_none());
+    }
+
+    #[test]
+    fn the_design_matrix_has_the_values_row_by_row() {
+        let basis = Polynomial { degree: 2 };
+        let m = basis_matrix(&basis, &[1.0, 2.0, 3.0]);
+        assert_eq!((m.nrows(), m.ncols()), (3, 3));
+        assert!((m[(2, 2)] - 9.0).abs() < 1e-15);
+    }
 
     #[test]
     fn polynomial_values_and_derivatives() {
