@@ -1,3 +1,5 @@
+//! Reports on a match outcome, written as CSV through [`ReportSink`].
+
 use crate::types::{BalanceReport, MatchOutcome};
 use std::collections::HashMap;
 use std::fs::File;
@@ -147,6 +149,7 @@ impl ReportSink for CategoricalBalanceReport<'_> {
 
 /// Wrapper for matching summary report.
 pub struct MatchSummaryReport<'a> {
+    /// The outcome to report on.
     pub outcome: &'a MatchOutcome,
 }
 
@@ -206,6 +209,7 @@ impl ReportSink for MatchSummaryReport<'_> {
 
 /// Wrapper for exclusion counts report.
 pub struct ExclusionCountsReport<'a> {
+    /// The outcome to report on.
     pub outcome: &'a MatchOutcome,
 }
 

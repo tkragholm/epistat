@@ -1,3 +1,46 @@
+//! Subclassification on the propensity score.
+//!
+//! # Algorithm
+//!
+//! The cutpoints are the quantiles of the reference group's scores at
+//! probabilities `0, 1/k, ..., 1` for `k` subclasses, with R's type 7 rule:
+//! the quantile at probability `p` of `n` sorted scores `x_(1) <= ... <= x_(n)`
+//! is `x_(j) + g (x_(j+1) - x_(j))` with `j + g = 1 + (n - 1) p`. The
+//! subclasses are the intervals between consecutive cutpoints, closed on the
+//! left, and the last is closed on both sides. Intervals without a unit are
+//! left out and the others renumbered in order.
+//!
+//! A subclass with fewer than `min_n` units of a group takes units of that
+//! group from the nearest subclass that has some to give: the unit whose score
+//! is closest to the deficient subclass. A subclass without both groups is
+//! dropped, and so are all its units.
+//!
+//! # Weights
+//!
+//! With `p` the share of anchors among the units of a subclass, an anchor
+//! weighs
+//!
+//! ```text
+//! ATT: 1        ATC: (1 - p) / p        ATE: 1 / p
+//! ```
+//!
+//! and a candidate weighs
+//!
+//! ```text
+//! ATT: p / (1 - p)        ATC: 1        ATE: 1 / (1 - p)
+//! ```
+//!
+//! The weights are not rescaled to sum to the number of kept units in each
+//! group.
+//!
+//! # References
+//!
+//! 1. Rosenbaum PR, Rubin DB. Reducing bias in observational studies using
+//!    subclassification on the propensity score. Journal of the American
+//!    Statistical Association 1984;79:516-524.
+//! 2. Hyndman RJ, Fan Y. Sample quantiles in statistical packages. The American
+//!    Statistician 1996;50:361-365.
+
 use super::exact::unit_ids;
 use super::records::MatchingRecord;
 use crate::types::Estimand;
@@ -29,9 +72,9 @@ pub struct SubclassificationConfig {
     /// Optional reference group used for cutpoints.
     ///
     /// Defaults by estimand:
-    /// - ATT -> `Anchors`
-    /// - ATC -> `Candidates`
-    /// - ATE/ATM -> `Pooled`
+    /// - ATT: `Anchors`
+    /// - ATC: `Candidates`
+    /// - ATE and ATM: `Pooled`
     pub reference_group: Option<SubclassReferenceGroup>,
     /// Smallest number of units of each group a subclass may hold.
     ///

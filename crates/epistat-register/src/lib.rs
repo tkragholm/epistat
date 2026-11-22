@@ -26,6 +26,7 @@
 //! component numbers are `u32`, and a function that takes more rows than that
 //! refuses them. Every function returns results that depend only on its
 //! inputs, never on a thread count or hash order.
+#![warn(missing_docs)]
 
 pub mod age;
 pub mod cpi;

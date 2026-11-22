@@ -1,3 +1,10 @@
+//! The standardised difference and the standard deviation behind it, as the
+//! balance report uses them.
+//!
+//! The standardised difference is `difference / sqrt(variance)`, and both
+//! functions give `None` for a variance that is not positive and finite, so a
+//! zero or undefined spread never produces a number.
+
 /// Standardised difference `difference / sqrt(variance)`, `None` when the
 /// variance is not positive and finite or the difference is not finite.
 ///

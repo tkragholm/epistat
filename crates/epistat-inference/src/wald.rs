@@ -24,9 +24,11 @@ use crate::{InferenceError, check_length};
 /// The result of [`wald`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Wald {
+    /// The Wald chi-square statistic.
     pub statistic: f64,
     /// The number of estimates.
     pub df: usize,
+    /// The upper tail probability of the statistic.
     pub p_value: f64,
 }
 

@@ -439,9 +439,11 @@ pub struct CoxModelFit {
 /// probability.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChiSquareTest {
+    /// The statistic.
     pub statistic: f64,
     /// The rank of the fit.
     pub df: usize,
+    /// The upper tail probability.
     pub p_value: f64,
 }
 

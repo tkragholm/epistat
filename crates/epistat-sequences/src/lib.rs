@@ -103,6 +103,7 @@
 //! 6. Studer M, Ritschard G. What matters in differences between life
 //!    trajectories: a comparative review of sequence dissimilarity measures.
 //!    J R Stat Soc Ser A. 2016;179(2):481-511. doi:10.1111/rssa.12125
+#![warn(missing_docs)]
 
 mod error;
 mod fit;

@@ -94,6 +94,7 @@ pub enum Method {
     /// Bunch-Kaufman `L B L'` of the lower triangle, for symmetric indefinite
     /// systems.
     Lblt,
+    /// LU with partial pivoting, for general square systems.
     PartialPivLu,
     /// For rank-deficient or nearly singular systems.
     FullPivLu,
@@ -104,8 +105,11 @@ pub enum Method {
 /// ridge to the original matrix.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ridge {
+    /// The first ridge.
     pub start: f64,
+    /// The factor by which the ridge grows at each retry.
     pub growth: f64,
+    /// The number of retries.
     pub tries: u32,
 }
 
@@ -113,7 +117,9 @@ pub struct Ridge {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Attempt {
+    /// The factorisation to use.
     pub method: Method,
+    /// The ridge schedule to retry with, if any.
     pub ridge: Option<Ridge>,
     /// A factorisation whose smallest pivot is at most this in absolute
     /// value counts as failed: the diagonal of `U` for the LU methods, of `L`
@@ -122,6 +128,7 @@ pub struct Attempt {
 }
 
 impl Attempt {
+    /// An attempt with no ridge and no pivot threshold.
     #[must_use]
     pub const fn plain(method: Method) -> Self {
         Self {
@@ -131,6 +138,7 @@ impl Attempt {
         }
     }
 
+    /// An attempt that retries with a ridge, with no pivot threshold.
     #[must_use]
     pub const fn ridged(method: Method, ridge: Ridge) -> Self {
         Self {
@@ -158,14 +166,20 @@ impl Attempt {
     ];
 }
 
+/// The ways a solve can fail.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SolveError {
+    /// The matrix is not square or the right-hand side has the wrong number of rows.
     #[error("the system is {rows} by {cols} with {rhs} right-hand-side rows")]
     Shape {
+        /// The number of rows of the matrix.
         rows: usize,
+        /// The number of columns of the matrix.
         cols: usize,
+        /// The number of rows of the right-hand side.
         rhs: usize,
     },
+    /// Every attempt gave a solution that is not finite.
     #[error("no factorisation gave a finite solution")]
     NotFinite,
 }
@@ -173,7 +187,9 @@ pub enum SolveError {
 /// A solution with the factorisation and ridge that produced it.
 #[derive(Debug, Clone)]
 pub struct Solution {
+    /// The solution.
     pub x: Mat<f64>,
+    /// The factorisation that produced it.
     pub method: Method,
     /// The ridge added to the diagonal, 0 when none was.
     pub ridge: f64,
@@ -263,6 +279,7 @@ impl Factor {
         Err(SolveError::NotFinite)
     }
 
+    /// The factorisation that succeeded.
     #[must_use]
     pub const fn method(&self) -> Method {
         self.method

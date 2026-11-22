@@ -1,4 +1,34 @@
 //! Covariance matrices and the rank transform for Mahalanobis preparation.
+//!
+//! # Formulas
+//!
+//! For a group of `n` rows with mean `m`, the scatter is
+//! `W = sum_i (x_i - m)(x_i - m)'` and the covariance is `W / (n - 1)`. The
+//! three strategies are
+//!
+//! - the pooled covariance by degrees of freedom, `(W_1 + W_2) / (n - 2)` over
+//!   `n = n_1 + n_2` rows, which is the matrix of MatchIt's `mahalanobis_dist()`;
+//! - the average `(S_1 + S_2) / 2` of the two group covariances, whatever the
+//!   group sizes;
+//! - the covariance of all rows together.
+//!
+//! The rank transform replaces each column by its ranks, ties by the average
+//! of the ranks they span. After it the covariance of the ranks of a column
+//! with ties is below the variance of `1, ..., n`, which is `n (n + 1) / 12`.
+//! The rescaling multiplies entry `(i, j)` by `m_i m_j` with
+//! `m_i = sqrt(n (n + 1) / 12) / sqrt(S_ii)`, so every diagonal entry is the
+//! variance of the untied ranks, as in Rosenbaum \[1\].
+//!
+//! The pooled within-group variance of a column that holds only 0 and 1 is
+//! `sum_g n_g p_g (1 - p_g) / n` with `p_g` the share of ones in group `g`.
+//! For any other column it is the within-group sum of squares over `n - 2`.
+//!
+//! Sums run over the rows in order and without fused multiply-add.
+//!
+//! # References
+//!
+//! 1. Rosenbaum PR. Design of Observational Studies. Springer, 2010, section
+//!    8.3.
 
 use super::EstimationError;
 use super::config::MahalanobisCovarianceStrategy;

@@ -101,6 +101,7 @@
 //! reference use [`epistat_stats::sum::compensated`], and the rest are plain
 //! loops in input order. `ln` and `cos`, used for the cluster weights and the
 //! normal multipliers, come from the platform's maths library.
+#![warn(missing_docs)]
 
 pub mod aalen_johansen;
 pub mod absrisk;

@@ -3,6 +3,7 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+/// A unit that can be matched: an identifier, a birth date and the values the constraints and distances read.
 pub trait MatchingRecord: Send + Sync {
     /// Unique identifier for the record.
     fn id(&self) -> &str;
@@ -88,15 +89,19 @@ pub trait MatchingRecord: Send + Sync {
     }
 }
 
+/// A record with the date of the event that makes a person a case.
 pub trait RoleIndexedRecord: MatchingRecord {
+    /// The date of the event, if the person has one.
     fn event_date(&self) -> Option<NaiveDate>;
 }
 
 /// Record type that can determine residency at a given index date.
 pub trait ResidentAtIndexRecord: RoleIndexedRecord {
+    /// Whether the person lives in the study area on `index_date`.
     fn is_resident_at(&self, index_date: NaiveDate) -> bool;
 }
 
+/// A record that carries covariates, for propensity models and balance reports.
 pub trait CovariateRecord: MatchingRecord {
     /// Map of the covariates of the record.
     ///

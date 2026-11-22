@@ -1,4 +1,20 @@
 //! Encoding covariate records into a numeric design matrix.
+//!
+//! The covariates are either the keys asked for or every key the records
+//! carry, in sorted order. A numeric covariate is one column. A categorical
+//! covariate with levels `l_1, ..., l_k` in sorted order is `k` indicator
+//! columns named `key=level`, or `k - 1` when the first level is dropped as the
+//! reference. An intercept column of ones comes first when asked for.
+//!
+//! A covariate that is numeric for some records and categorical for others is
+//! an error, and so is a numeric value that is not finite. A missing value is
+//! an error under [`MissingValuePolicy::Error`]. Under
+//! [`MissingValuePolicy::Impute`] a numeric covariate takes the mean of its
+//! observed values, summed in record order, and a categorical covariate gets a
+//! level of its own for the missing values.
+//!
+//! A column whose value is exactly the same in every row is left out, the
+//! intercept excepted, and listed in `dropped_columns`.
 
 use super::EstimationError;
 use super::config::{CovariateEncodingConfig, MissingValuePolicy};

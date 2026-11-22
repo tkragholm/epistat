@@ -1,3 +1,58 @@
+//! Distances between an anchor and a candidate, and the tables they read.
+//!
+//! A distance is a number for a pair, smaller for a closer match, or `None`
+//! for a pair that has none. [`DistanceMetric`] is the trait the matchers use.
+//! [`DistanceConfig`] names a distance as plain data that does not depend on
+//! the record type, so that a preparation step can build it once and any
+//! matcher can read it.
+//!
+//! # Distances
+//!
+//! The birth-date distance is the absolute difference of the two birth dates
+//! in days. The propensity score distance is `|s_a - s_c|` of the two scores,
+//! and a pair with a score that is missing or not finite has none. The
+//! Euclidean distance of two vectors `x` and `y` of `p` values is
+//!
+//! ```text
+//! d(x, y) = sqrt( sum_j (x_j - y_j)^2 )
+//! ```
+//!
+//! with the squares added in column order by a plain multiply and add. The
+//! Mahalanobis distance with the inverse covariance matrix `M` is
+//!
+//! ```text
+//! d(x, y) = sqrt( (x - y)' M (x - y) )
+//! ```
+//!
+//! Rubin \[1\] used it for matching. When `M` is positive definite with lower
+//! Cholesky factor `L` (`M = L L'`), the form equals `|L' (x - y)|^2`, so every
+//! vector is transformed once and a pair costs a pass over two transformed
+//! vectors. A matrix that is not positive definite keeps the plain form, summed
+//! in a fixed order, and a form that is negative beyond rounding gives the
+//! pair no distance. The constructors refuse a matrix with a negative
+//! eigenvalue, since its form is not a distance.
+//!
+//! A [`PairDistanceMatrix`] holds distances that the caller computed, one for
+//! each anchor and candidate. An infinite entry forbids the pair.
+//!
+//! Every sum runs in a fixed order and without fused multiply-add, so a
+//! distance has the same bits on any CPU and any number of threads.
+//!
+//! # Tables
+//!
+//! A [`ScoreTable`] holds one score for each unit and a [`VectorTable`] one
+//! row of values for each unit, both in the order the units were listed in.
+//! A matcher given the same units in the same order reads them by position. A
+//! matcher given other units finds each id once through an index that is built
+//! on first use.
+//!
+//! # References
+//!
+//! 1. Rubin DB. Bias reduction using Mahalanobis-metric matching. Biometrics
+//!    1980;36:293-298.
+//! 2. Stuart EA. Matching methods for causal inference: a review and a look
+//!    forward. Statistical Science 2010;25:1-21.
+
 use super::records::MatchingRecord;
 use crate::types::DistanceCaliper;
 use epistat_linalg::{Attempt, Factor, Mat, Method};
@@ -330,36 +385,56 @@ impl From<RapidHashMap<String, f64>> for ScoreTable {
 /// Named and reusable distance setup independent of concrete record type.
 #[derive(Debug, Clone)]
 pub enum DistanceConfig {
+    /// The birth-date distance in days.
     Date {
+        /// The largest allowed distance, if any.
         caliper: Option<DistanceCaliper>,
+        /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
+    /// The absolute difference of propensity scores.
     PropensityScoreMap {
+        /// The score of each unit.
         scores: ScoreTable,
+        /// The largest allowed distance, if any.
         caliper: Option<DistanceCaliper>,
+        /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
+    /// The Mahalanobis distance of covariate vectors.
     MahalanobisMap {
+        /// The covariate vector of each unit.
         vectors: VectorTable,
+        /// The inverse covariance matrix, row by row.
         inverse_covariance: Vec<f64>,
+        /// The largest allowed distance, if any.
         caliper: Option<DistanceCaliper>,
+        /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
+    /// The Euclidean distance of covariate vectors.
     EuclideanMap {
+        /// The covariate vector of each unit.
         vectors: VectorTable,
+        /// The largest allowed distance, if any.
         caliper: Option<DistanceCaliper>,
+        /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
     /// Distances between every anchor and every candidate, given by the
     /// caller.
     Matrix {
+        /// The distances.
         matrix: PairDistanceMatrix,
+        /// The largest allowed distance, if any.
         caliper: Option<DistanceCaliper>,
+        /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
 }
 
 impl DistanceConfig {
+    /// A birth-date distance with an optional caliper in days.
     #[must_use]
     pub const fn date(caliper: Option<DistanceCaliper>) -> Self {
         Self::Date {
@@ -368,6 +443,7 @@ impl DistanceConfig {
         }
     }
 
+    /// A propensity score distance on scores keyed by unit id.
     #[must_use]
     pub fn propensity_score_map(
         scores: RapidHashMap<String, f64>,
@@ -492,6 +568,7 @@ impl DistanceConfig {
         }
     }
 
+    /// The same configuration with another reason recorded for the caliper.
     #[must_use]
     pub const fn with_reason(mut self, reason: &'static str) -> Self {
         match &mut self {
@@ -528,6 +605,7 @@ impl DistanceConfig {
         self.pair_matrix()?.at(anchor, candidate)
     }
 
+    /// The largest allowed distance, if any.
     #[must_use]
     pub const fn caliper(&self) -> Option<f64> {
         match self {
@@ -542,6 +620,7 @@ impl DistanceConfig {
         }
     }
 
+    /// The largest allowed distance as its validated type, if any.
     #[must_use]
     pub const fn typed_caliper(&self) -> Option<DistanceCaliper> {
         match self {
@@ -553,6 +632,7 @@ impl DistanceConfig {
         }
     }
 
+    /// The reason recorded when the caliper refuses a pair.
     #[must_use]
     pub const fn reason(&self) -> &'static str {
         match self {
@@ -895,6 +975,7 @@ pub struct MatrixDistance<'a> {
 }
 
 impl<'a> MatrixDistance<'a> {
+    /// The distance of `matrix`.
     #[must_use]
     pub const fn new(matrix: &'a PairDistanceMatrix) -> Self {
         Self { matrix }
@@ -922,6 +1003,7 @@ pub struct IdMapPropensityScoreDistance<'a> {
 }
 
 impl<'a> IdMapPropensityScoreDistance<'a> {
+    /// The score distance on `scores`, with no index built.
     #[must_use]
     pub const fn new(scores: &'a ScoreTable) -> Self {
         Self {
@@ -962,6 +1044,7 @@ impl<'a> IdMapPropensityScoreDistance<'a> {
         )
     }
 
+    /// The scores the distance reads.
     #[must_use]
     pub const fn scores(&self) -> &'a ScoreTable {
         self.scores
@@ -1246,6 +1329,7 @@ pub struct IdMapEuclideanDistance<'a> {
 }
 
 impl<'a> IdMapEuclideanDistance<'a> {
+    /// The Euclidean distance on `vectors`.
     #[must_use]
     pub const fn new(vectors: &'a VectorTable) -> Self {
         Self { vectors }
@@ -1295,11 +1379,13 @@ impl<'a, R: MatchingRecord, D: DistanceMetric<R>> DistanceChannel<'a, R, D> {
 
     crate::impl_with_reason!();
 
+    /// The distance that is measured.
     #[must_use]
     pub const fn metric(&self) -> &'a D {
         self.metric
     }
 
+    /// The largest allowed distance, if any.
     #[must_use]
     pub const fn caliper(&self) -> Option<f64> {
         match self.caliper {
@@ -1308,11 +1394,13 @@ impl<'a, R: MatchingRecord, D: DistanceMetric<R>> DistanceChannel<'a, R, D> {
         }
     }
 
+    /// The largest allowed distance as its validated type, if any.
     #[must_use]
     pub const fn typed_caliper(&self) -> Option<DistanceCaliper> {
         self.caliper
     }
 
+    /// The reason recorded when the caliper refuses a pair.
     #[must_use]
     pub const fn reason(&self) -> &'static str {
         self.reason
@@ -1345,6 +1433,7 @@ pub struct PropensityScoreDistance<F> {
 }
 
 impl<F> PropensityScoreDistance<F> {
+    /// The score distance of the values `accessor` returns.
     #[must_use]
     pub const fn new(accessor: F) -> Self {
         Self { accessor }
@@ -1372,7 +1461,9 @@ where
 /// Errors constructing [`MahalanobisDistance`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MahalanobisError {
+    /// The vectors have no dimension.
     ZeroDimension,
+    /// The inverse covariance matrix does not have one value per pair of dimensions.
     InvalidInverseCovarianceLength,
     /// The values of a vector table are not a whole number of vectors.
     InvalidVectorLength,

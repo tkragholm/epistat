@@ -171,11 +171,14 @@ pub struct MoreThuente {
     pub c1: f64,
     /// Curvature, in `(c1, 1)`.
     pub c2: f64,
+    /// The smallest step the search accepts.
     pub step_min: f64,
+    /// The largest step the search tries.
     pub step_max: f64,
     /// Relative width of the interval of uncertainty at which the search
     /// stops.
     pub x_tolerance: f64,
+    /// The most cost and gradient evaluations in one search.
     pub max_evaluations: usize,
 }
 
@@ -201,9 +204,13 @@ impl Default for MoreThuente {
 /// `max_iterations` iterations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bfgs {
+    /// The most iterations.
     pub max_iterations: usize,
+    /// Stop when the gradient norm falls below this.
     pub gradient_tolerance: f64,
+    /// Stop when an iteration changes the cost by less than this.
     pub cost_tolerance: f64,
+    /// The line search used along each direction.
     pub line_search: MoreThuente,
 }
 
@@ -221,14 +228,19 @@ impl Default for Bfgs {
 /// The best point found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Minimum {
+    /// The point.
     pub x: Vec<f64>,
+    /// The cost at the point.
     pub value: f64,
+    /// The gradient at the point.
     pub gradient: Vec<f64>,
+    /// The number of iterations used.
     pub iterations: usize,
     /// Whether a tolerance was met before the iteration limit.
     pub converged: bool,
 }
 
+/// The ways a minimisation can refuse its input or fail.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BfgsError {
     /// The starting point is empty, or the gradient or inverse Hessian has the

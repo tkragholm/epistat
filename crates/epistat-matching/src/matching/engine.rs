@@ -1,3 +1,38 @@
+//! The engine behind standard pair matching: for each anchor it builds the
+//! pool of eligible controls and the selection strategy chooses among them.
+//!
+//! # Algorithm
+//!
+//! The criteria are validated first. A job with invalid criteria, a fallback
+//! ratio above the primary ratio or common support asked for without scores
+//! is refused, and its outcome has no pairs and one count of the reason.
+//!
+//! Common support is applied before any pair is formed. The interval is the
+//! overlap of the anchors' and the candidates' score ranges, and a unit
+//! outside it is trimmed according to the policy. Alternatively the caller
+//! lists the units to leave out.
+//!
+//! The pool of an anchor is the candidates that agree on the required strata,
+//! lie inside the birth-date or distance caliper, are not the anchor itself,
+//! are unused when matching is without replacement and pass every constraint.
+//! Candidates are found through indexes on the strata and on the distance
+//! where the distance allows it, and the rest are tested one by one. Each
+//! refusal is counted under the reason of the constraint that refused it.
+//! The pool is kept in the order of the controls' ids so that the result does
+//! not depend on how the work is split over threads.
+//!
+//! With replacement and no unique key the anchors are independent and run in
+//! parallel. Otherwise the anchors are grouped by their strata and the groups
+//! run in parallel, since controls of different strata are never
+//! interchangeable. With a unique key the groups share the used values and
+//! run in order. The anchors of one group run in order. A selection strategy that assigns in rounds gives every
+//! anchor its first control before any gets a second.
+//!
+//! An anchor that finds fewer controls than the ratio tries the fallback
+//! ratios in turn. The diagnostics record the exclusions, the unmatched
+//! anchors and, when the realised estimand differs from the requested one,
+//! why.
+
 use super::constraints::{
     CaliperConstraint, Constraint, ConstraintContext, ConstraintGroup, ExactMatchConstraint,
     NoSelfMatchConstraint, ReplacementConstraint, UniqueKeyConstraint, UsedControlsVec,
@@ -101,14 +136,20 @@ pub struct MatchEngine<'a, R: MatchingRecord, S: SelectionStrategy<R>> {
 /// Unified request for standard anchor-to-candidate matching.
 #[derive(Clone, Copy)]
 pub struct StandardMatchRequest<'a, S, G: ?Sized> {
+    /// The criteria of the job.
     pub criteria: &'a MatchingCriteria,
+    /// How a case chooses among its eligible controls.
     pub strategy: S,
+    /// The constraints a pair must satisfy.
     pub constraints: &'a G,
+    /// The lower ratios to try, in turn, for a case that cannot get the full ratio.
     pub ratio_fallback: &'a [MatchRatio],
+    /// The distance configuration, if any.
     pub distance_config: Option<&'a DistanceConfig>,
 }
 
 impl<'a, S, G: ?Sized> StandardMatchRequest<'a, S, G> {
+    /// A request with no fallback ratios and no distance configuration.
     #[must_use]
     pub const fn new(criteria: &'a MatchingCriteria, strategy: S, constraints: &'a G) -> Self {
         Self {
@@ -120,6 +161,7 @@ impl<'a, S, G: ?Sized> StandardMatchRequest<'a, S, G> {
         }
     }
 
+    /// Sets the ratios to fall back on.
     #[must_use]
     pub const fn with_ratio_fallback(mut self, ratio_fallback: &'a [MatchRatio]) -> Self {
         self.ratio_fallback = ratio_fallback;

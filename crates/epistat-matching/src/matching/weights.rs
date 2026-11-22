@@ -1,3 +1,35 @@
+//! Match weights from matched pairs, and the effective sample size.
+//!
+//! # Weights
+//!
+//! For the ATT every matched anchor weighs 1 and a candidate weighs the sum,
+//! over the pairs it is in, of `1 / m` with `m` the number of candidates of the
+//! pair's anchor. For the ATC the roles are reversed. A candidate used by two
+//! anchors that each have two candidates weighs `1/2 + 1/2 = 1`. For the ATE
+//! and the ATM every pair adds 1 to both its units. These are the raw weights
+//! of `matchit(normalize = FALSE)`; [`UnitWeightSet::normalized`] divides each
+//! group's positive weights by their mean, as `matchit()` does by default.
+//! Sums run in the order of the unit ids, so they do not depend on the hash
+//! order.
+//!
+//! # Effective sample size
+//!
+//! Kish's effective sample size of weights `w_i` is
+//!
+//! ```text
+//! n_eff = (sum_i w_i)^2 / sum_i w_i^2
+//! ```
+//!
+//! It does not depend on the scale of the weights. A weight of 0 is a unit that
+//! is not in the sample. When the squares overflow or lose precision the
+//! weights are divided by the largest first.
+//!
+//! # References
+//!
+//! 1. Kish L. Survey Sampling. Wiley, 1965, p. 427.
+//! 2. Stuart EA. Matching methods for causal inference: a review and a look
+//!    forward. Statistical Science 2010;25:1-21.
+
 use crate::types::{Estimand, MatchOutcome, MatchedPair};
 use itertools::Itertools;
 use rapidhash::RapidHashMap;

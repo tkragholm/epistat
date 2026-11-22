@@ -1,3 +1,5 @@
+//! Constructors for records, dates and outcomes that tests and examples use.
+
 use crate::types::{BaseRecord, MatchDiagnostics, MatchOutcome, MatchedPair};
 use chrono::NaiveDate;
 

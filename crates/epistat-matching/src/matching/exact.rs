@@ -1,3 +1,25 @@
+//! Exact matching: units are sorted into strata by their values of the
+//! matching variables, and a stratum is a subclass.
+//!
+//! # Algorithm
+//!
+//! The values of each variable are numbered by first appearance, and the
+//! columns of numbers are combined into one stratum number per unit, so two
+//! units share a stratum when they agree on every variable. A unit with no
+//! value for a variable is an error. The anchors and candidates of each
+//! stratum are counted, and a stratum without both groups drops its units.
+//! The weights of a subclass are those of
+//! [`subclassification`](super::subclassification): with `p` the anchor share
+//! of the stratum, an anchor weighs 1 and a candidate `p / (1 - p)` for the
+//! ATT, and the reverse for the ATC.
+//!
+//! The work is `O(n v)` for `n` units and `v` variables.
+//!
+//! # References
+//!
+//! 1. Iacus SM, King G, Porro G. Causal inference without balance checking:
+//!    coarsened exact matching. Political Analysis 2012;20:1-24.
+
 use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::records::MatchingRecord;
 use super::subclassification::{

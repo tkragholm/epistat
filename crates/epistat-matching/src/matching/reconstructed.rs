@@ -1,30 +1,50 @@
 use chrono::NaiveDate;
 use std::collections::{HashMap, HashSet};
 
+/// An episode of one person on one index date.
+/// ///
+/// /// An exposed episode is a case and an unexposed one a control.
 #[derive(Debug, Clone)]
 pub struct ReconstructedEpisode {
+    /// The person.
     pub person_id: String,
+    /// The index date of the episode.
     pub index_date: NaiveDate,
+    /// Whether the person is exposed on the index date.
     pub exposed: bool,
+    /// The sex code, if known.
     pub sex: Option<i32>,
+    /// The municipality, if known.
     pub municipality: Option<String>,
+    /// The region, if known.
     pub region: Option<String>,
+    /// The family, if known. A case and a control of one family are not matched.
     pub family_id: Option<String>,
+    /// The birth date, if known.
     pub birth_date: Option<NaiveDate>,
 }
 
+/// The geographical level at which a pair was matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconstructedMatchingTier {
+    /// The case and the control live in the same municipality.
     Municipality,
+    /// The case and the control live in the same region but not in the same municipality.
     RegionFallback,
 }
 
+/// One control matched to one case.
 #[derive(Debug, Clone)]
 pub struct ReconstructedMatchedPair {
+    /// The case.
     pub case_id: String,
+    /// The control.
     pub control_id: String,
+    /// The index date shared by the two.
     pub index_date: NaiveDate,
+    /// The level at which the pair was matched.
     pub tier: ReconstructedMatchingTier,
+    /// The difference in birth dates in days, when both are known.
     pub birth_date_distance_days: Option<i64>,
 }
 
@@ -61,15 +81,24 @@ impl std::fmt::Display for ReconstructedMatchingError {
 
 impl std::error::Error for ReconstructedMatchingError {}
 
+/// The result of [`reconstruct_case_control_pairs`].
 #[derive(Debug, Default)]
 pub struct ReconstructedMatchingOutput {
+    /// The cases that could be given controls.
     pub eligible_case_ids: HashSet<String>,
+    /// The cases with at least one control.
     pub matched_case_ids: HashSet<String>,
+    /// The controls matched to a case.
     pub matched_control_ids: HashSet<String>,
+    /// The cases that have a control matched by municipality.
     pub municipality_case_ids: HashSet<String>,
+    /// The controls matched by municipality.
     pub municipality_control_ids: HashSet<String>,
+    /// The cases that have a control matched by region.
     pub region_case_ids: HashSet<String>,
+    /// The controls matched by region.
     pub region_control_ids: HashSet<String>,
+    /// Every pair, in the order the controls were read.
     pub matched_pairs: Vec<ReconstructedMatchedPair>,
 }
 

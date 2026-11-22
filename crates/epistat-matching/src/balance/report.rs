@@ -1,3 +1,39 @@
+//! Covariate balance before and after matching.
+//!
+//! # Formulas
+//!
+//! For a covariate with weighted means `m_1` and `m_0` in the case and control
+//! groups, the standardised mean difference is `(m_1 - m_0) / s`. The
+//! standard deviation `s` comes from the records before matching and is the
+//! same before and after: the cases' for the ATT, the controls' for the ATC and
+//! `sqrt((v_1 + v_0) / 2)` for the ATE and the ATM. A continuous variable has
+//! the sample variance, a variable whose values are all 0 or 1 has `p (1 - p)`.
+//! After matching the variance is the reliability-weight estimator of R's
+//! `cov.wt()`.
+//!
+//! The variance ratio is `v_1 / v_0`, and is not given for a variable of 0 and
+//! 1. The eCDF distances are the mean and the maximum over every distinct
+//! value of `|F_1(x) - F_0(x)|`, with the weighted empirical distribution
+//! functions of the two groups. The eQQ distances are the mean and the maximum
+//! absolute difference of the two groups' weighted quantile functions, the
+//! larger group read at the smaller group's cumulative weights as a step
+//! function. For a variable of 0 and 1 these are the absolute difference of
+//! the proportions. Cramér's V of a categorical covariate uses the weights as
+//! counts. The pair distance is the mean absolute difference over matched
+//! pairs in which both units have a value, divided by `s`.
+//!
+//! A statistic whose denominator is not positive and finite is `None`. Sums
+//! run in record order.
+//!
+//! # References
+//!
+//! 1. Austin PC. Balance diagnostics for comparing the distribution of
+//!    baseline covariates between treatment groups in propensity-score matched
+//!    samples. Statistics in Medicine 2009;28:3083-3107.
+//! 2. Greifer N. Assessing balance. MatchIt vignette, and `summary.matchit()`.
+//! 3. Cramér H. Mathematical Methods of Statistics. Princeton University Press,
+//!    1946.
+
 use super::input::{BalanceInputError, BalanceWeights};
 use super::stats::{standard_deviation, standardised_difference};
 use crate::matching::{ColumnReader, CovariateRecord, NameScan, effective_sample_size};

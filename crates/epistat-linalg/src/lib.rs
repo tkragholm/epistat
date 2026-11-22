@@ -23,6 +23,7 @@
 //! - [`basis`] holds the polynomial and B-spline bases.
 //! - [`eigen`] holds a Jacobi eigendecomposition of a small symmetric matrix and
 //!   the generalised inverse and its quadratic form.
+#![warn(missing_docs)]
 
 pub mod basis;
 mod blocks;

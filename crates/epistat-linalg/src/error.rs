@@ -11,13 +11,19 @@ pub enum DesignError {
     /// An argument that should have one entry per row has another length.
     #[error("{what} has {got} entries, expected {expected}")]
     Length {
+        /// The name of the argument.
         what: &'static str,
+        /// The number of entries required.
         expected: usize,
+        /// The number of entries given.
         got: usize,
     },
     /// A weight is negative, infinite or NaN.
     #[error("the weight of row {row} is negative or not finite")]
-    Weight { row: usize },
+    Weight {
+        /// The index of the row with the bad weight.
+        row: usize,
+    },
     /// The tolerance is negative, infinite or NaN.
     #[error("the tolerance is negative or not finite")]
     Tolerance,

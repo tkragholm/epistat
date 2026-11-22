@@ -15,6 +15,7 @@ pub struct UsedControlsVec {
 }
 
 impl UsedControlsVec {
+    /// An empty set for a cohort of `n` controls.
     #[must_use]
     pub fn with_capacity(n: usize) -> Self {
         Self {
@@ -23,6 +24,7 @@ impl UsedControlsVec {
         }
     }
 
+    /// Whether the control is marked as used.
     #[inline]
     #[must_use]
     pub fn contains(&self, idx: ControlIdx) -> bool {
@@ -53,19 +55,24 @@ impl UsedControlsVec {
         }
     }
 
+    /// The number of controls marked as used.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.count
     }
 
+    /// Whether no control is marked as used.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.count == 0
     }
 }
 
+/// A rule that a case and a control must satisfy to be matched.
 pub trait Constraint<R: MatchingRecord>: Send + Sync {
+    /// The reason recorded in the exclusion counts when the rule refuses a pair.
     fn reason(&self) -> &'static str;
+    /// Whether the pair satisfies the rule.
     fn allows(&self, case: &R, control: &R, ctx: &ConstraintContext<'_>) -> bool;
 
     /// Whether the control is in the population at risk as far as this
@@ -177,6 +184,7 @@ fn push_status_rule<'s, R: MatchingRecord, C: Constraint<R> + ?Sized>(
 /// This enables callers to compose constraints as tuples (heterogeneous)
 /// or slices/arrays (homogeneous) without requiring `dyn Constraint`.
 pub trait ConstraintGroup<R: MatchingRecord>: Send + Sync {
+    /// The reason of the first constraint that refuses the pair, or `None` when all allow it.
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -344,7 +352,9 @@ where
 /// The first blocking reason is reported, and `first` is asked before `second`,
 /// so a caller that puts its cheap constraints first keeps them first.
 pub struct Chained<G1, G2> {
+    /// The group asked first.
     pub first: G1,
+    /// The group asked when `first` allows the pair.
     pub second: G2,
 }
 
@@ -442,13 +452,21 @@ impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6);
 impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6, C7: c7);
 impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6, C7: c7, C8: c8);
 
+/// The state of a match that a constraint may read: the criteria, the controls used so far and the strata values of the pair.
 pub struct ConstraintContext<'a> {
+    /// The criteria of the job.
     pub criteria: &'a MatchingCriteria,
+    /// The controls already taken by a case.
     pub used_controls: &'a UsedControlsVec,
+    /// The unique-key values already taken, as ids from `unique_interner`.
     pub used_unique: &'a FxHashSet<UniqueValueId>,
+    /// The ids of the unique-key values.
     pub unique_interner: &'a RapidHashMap<String, UniqueValueId>,
+    /// The position of the control being tested.
     pub control_idx: ControlIdx,
+    /// The case's values of the required strata, in the order of the criteria, when they have been built.
     pub case_strata_values: Option<&'a [Option<&'a str>]>,
+    /// The control's values of the required strata, in the order of the criteria, when they have been built.
     pub control_strata_values: Option<&'a [Option<&'a str>]>,
 }
 
@@ -476,6 +494,7 @@ impl<R: MatchingRecord> Constraint<R> for NoSelfMatchConstraint {
     }
 }
 
+/// Requires the case and the control to agree on every required stratum of the criteria.
 pub struct ExactMatchConstraint;
 
 impl<R: MatchingRecord> Constraint<R> for ExactMatchConstraint {
@@ -494,6 +513,7 @@ impl<R: MatchingRecord> Constraint<R> for ExactMatchConstraint {
     }
 }
 
+/// The name `ExactMatchConstraint` goes by in code that speaks of strata.
 pub type StrataExactConstraint = ExactMatchConstraint;
 
 /// The birth-date window of the criteria, as a constraint, for a job whose
@@ -550,13 +570,17 @@ impl<R: MatchingRecord> Constraint<R> for UniqueKeyConstraint {
 
 /// Generic caliper constraint over a distance channel.
 pub struct CaliperConstraint<'a, R: MatchingRecord, D: DistanceMetric<R>> {
+    /// The distance that is measured.
     pub metric: &'a D,
+    /// The largest distance a pair may have.
     pub max_distance: f64,
+    /// The reason recorded when the pair is refused.
     pub reason: &'static str,
     marker: PhantomData<R>,
 }
 
 impl<'a, R: MatchingRecord, D: DistanceMetric<R>> CaliperConstraint<'a, R, D> {
+    /// A constraint that refuses pairs whose distance under `metric` is above `max_distance`.
     #[must_use]
     pub const fn new(metric: &'a D, max_distance: f64, reason: &'static str) -> Self {
         Self {
