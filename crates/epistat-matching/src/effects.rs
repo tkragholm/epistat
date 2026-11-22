@@ -113,7 +113,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use epistat_glm::{Family, Glm, GlmError, Link};
+use epistat_glm::{Family, Glm, GlmError, Link, expit};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_inference::{Clusters, InferenceError};
@@ -628,15 +628,6 @@ fn check_length(what: &'static str, expected: usize, found: usize) -> Result<(),
             expected,
             found,
         })
-    }
-}
-
-fn expit(eta: f64) -> f64 {
-    if eta >= 0.0 {
-        1.0 / (1.0 + (-eta).exp())
-    } else {
-        let e = eta.exp();
-        e / (1.0 + e)
     }
 }
 

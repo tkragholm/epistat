@@ -312,13 +312,7 @@ fn soft_threshold(value: f64, threshold: f64) -> f64 {
 
 /// The probability at `eta`, kept within `[clip, 1 - clip]`.
 fn sigmoid_clipped(eta: f64, clip: f64) -> f64 {
-    let probability = if eta >= 0.0 {
-        1.0 / (1.0 + (-eta).exp())
-    } else {
-        let e = eta.exp();
-        e / (1.0 + e)
-    };
-    probability.clamp(clip, 1.0 - clip)
+    crate::expit(eta).clamp(clip, 1.0 - clip)
 }
 
 /// What stays fixed across the passes: the design by columns, the scaled

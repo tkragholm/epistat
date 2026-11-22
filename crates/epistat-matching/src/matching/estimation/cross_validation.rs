@@ -159,7 +159,7 @@ pub fn cross_validation_folds(
 }
 
 fn binomial_deviance(y: f64, eta: f64) -> f64 {
-    let p = (1.0 / (1.0 + (-eta).exp())).clamp(DEVIANCE_CLIP, 1.0 - DEVIANCE_CLIP);
+    let p = epistat_glm::expit(eta).clamp(DEVIANCE_CLIP, 1.0 - DEVIANCE_CLIP);
     -2.0 * (y * p.ln() + (1.0 - y) * (1.0 - p).ln())
 }
 
