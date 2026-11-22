@@ -6,8 +6,9 @@
 //! # Algorithm
 //!
 //! Each record is keyed by the first eight bytes of its id as a big-endian
-//! integer and by its index. The keys are sorted, reading the ids themselves
-//! only when two prefixes are equal, so the order is that of `(id, index)`
+//! integer, or by its first sixteen digits at four bits each when every id is
+//! a string of digits, and by its index. The keys are sorted, reading the ids
+//! themselves only when two keys are equal, so the order is that of `(id, index)`
 //! under `str::cmp`. The rank of a record is its position in that order.
 //! Comparing ranks therefore compares ids, and records with equal ids by
 //! index, which is the order a stable sort by id leaves them in.
@@ -21,7 +22,7 @@
 //! of ids for each comparison of equal prefixes; `2 n` words. A subset of `m`
 //! records of a cohort of `n` costs `O(n)` time and `n + 2 m` words.
 
-use crate::matching::{MatchingRecord, id_prefix};
+use crate::matching::{MatchingRecord, id_keys};
 use rayon::slice::ParallelSliceMut;
 
 /// Below this many records the keys are sorted on one thread.
@@ -49,9 +50,8 @@ impl IdOrder {
     /// are more than `u32::MAX` of them.
     pub(crate) fn of_ids<'r>(n: usize, id: impl Fn(usize) -> &'r str + Sync) -> Option<Self> {
         let n = u32::try_from(n).ok()?;
-        let mut keyed: Vec<(u64, u32)> = (0..n)
-            .map(|idx| (id_prefix(id(idx as usize)), idx))
-            .collect();
+        let keys = id_keys((0..n).map(|idx| id(idx as usize)));
+        let mut keyed: Vec<(u64, u32)> = keys.into_iter().zip(0..n).collect();
         let compare = |left: &(u64, u32), right: &(u64, u32)| {
             left.0
                 .cmp(&right.0)
@@ -193,6 +193,29 @@ mod tests {
             assert_eq!(order.first_repeat(&people), repeat, "seed {seed}");
             assert_eq!(order.distinct(), repeat.is_none());
         }
+    }
+
+    /// Ids that are all digit strings, with long shared prefixes, sort as
+    /// strings do.
+    #[test]
+    fn digit_ids_sort_as_strings() {
+        let ids: Vec<String> = (0..5000_u64)
+            .map(|i| {
+                let head = format!("{:010}", (i * 2_654_435_761) % 7);
+                match i % 4 {
+                    0 => format!("{head}{}", i % 13),
+                    1 => head,
+                    2 => format!("{head}{:08}", i % 5),
+                    _ => format!("{}", i % 31),
+                }
+            })
+            .collect();
+        let people = records(&ids.iter().map(String::as_str).collect::<Vec<_>>());
+        let order = IdOrder::of(&people).expect("fits");
+        let mut stable: Vec<usize> = (0..ids.len()).collect();
+        stable.sort_by(|&a, &b| ids[a].cmp(&ids[b]));
+        let got: Vec<usize> = order.by_id().iter().map(|&idx| idx as usize).collect();
+        assert_eq!(got, stable);
     }
 
     #[test]

@@ -17,7 +17,9 @@
 //! their values, most significant first: points whose next bit is 0 go first,
 //! in the order they had, then those whose bit is 1. Each level stores, for
 //! every prefix of its order, how many points have a 0 bit there, which maps a
-//! range at one level to the two ranges its points occupy at the next. A
+//! range at one level to the two ranges its points occupy at the next. The
+//! counts come from a bit vector with a cumulative count per 64 bits and a
+//! popcount. A
 //! Fenwick tree on each level counts the active points of that level's order.
 //! A query descends one level per bit: it counts the active points of the
 //! range whose bit is 0, goes to the zeros if `k` is below that count, and to
@@ -26,7 +28,8 @@
 //! # Complexity
 //!
 //! For `n` points and `L = ceil(log2 n)` levels: building is `O(n L)` time and
-//! `2 (n + 1) L` 32-bit words; switching a point on or off and the `k`-th
+//! about `(n + 1) L` 32-bit words for the Fenwick trees and `3 n L / 64` for
+//! the bit vectors; switching a point on or off and the `k`-th
 //! query are `O(L log n)`. [`Fenwick`] builds in `O(n)` and answers in
 //! `O(log n)`.
 //!
@@ -245,11 +248,65 @@ impl CountTree {
     }
 }
 
+/// A bit vector that counts its set bits in a prefix with a popcount: one
+/// cumulative count per 64-bit word and a popcount of the bits of the word
+/// before the position, which is 1.5 bits per position and `O(1)` per query.
+struct RankBits {
+    words: Vec<u64>,
+    /// `before[w]`: the set bits in the words before word `w`.
+    before: Vec<u32>,
+    total: u32,
+}
+
+impl RankBits {
+    /// The vector of `bits`.
+    fn new(bits: impl Iterator<Item = bool>) -> Self {
+        let mut words = Vec::new();
+        let mut word = 0_u64;
+        let mut length = 0_usize;
+        for bit in bits {
+            word |= u64::from(bit) << (length % 64);
+            length += 1;
+            if length % 64 == 0 {
+                words.push(word);
+                word = 0;
+            }
+        }
+        if length % 64 != 0 {
+            words.push(word);
+        }
+        let mut before = Vec::with_capacity(words.len());
+        let mut total = 0_u32;
+        for &word in &words {
+            before.push(total);
+            total += word.count_ones();
+        }
+        Self {
+            words,
+            before,
+            total,
+        }
+    }
+
+    /// The set bits among the first `position` bits, for a position up to
+    /// and including the length.
+    fn rank(&self, position: usize) -> u32 {
+        let (word, bit) = (position / 64, position % 64);
+        if bit == 0 {
+            return self.before.get(word).copied().unwrap_or(self.total);
+        }
+        self.before[word] + (self.words[word] & ((1_u64 << bit) - 1)).count_ones()
+    }
+
+    fn get(&self, position: usize) -> bool {
+        self.words[position / 64] >> (position % 64) & 1 == 1
+    }
+}
+
 /// One level of a [`WaveletMatrix`].
 struct Level {
-    /// `zeros[i]`: points among the first `i` of this level's order whose bit
-    /// is 0.
-    zeros: Vec<u32>,
+    /// The points of this level's order whose bit is 0, as set bits.
+    zeros: RankBits,
     /// Active points in the order of the next level.
     active_below: Fenwick,
 }
@@ -280,15 +337,7 @@ impl WaveletMatrix {
         let mut next: Vec<(u32, u32)> = Vec::with_capacity(n);
         for level in 0..bits {
             let bit = bits - 1 - level;
-            let mut zeros = Vec::with_capacity(n + 1);
-            let mut count = 0_u32;
-            zeros.push(0);
-            for &(v, _) in &order {
-                if (v >> bit) & 1 == 0 {
-                    count += 1;
-                }
-                zeros.push(count);
-            }
+            let zeros = RankBits::new(order.iter().map(|&(v, _)| (v >> bit) & 1 == 0));
             next.clear();
             next.extend(order.iter().filter(|(v, _)| (v >> bit) & 1 == 0));
             next.extend(order.iter().filter(|(v, _)| (v >> bit) & 1 == 1));
@@ -305,11 +354,11 @@ impl WaveletMatrix {
 
     /// Where the point at `position` of a level goes in the next level.
     fn descend(level: &Level, position: usize) -> usize {
-        let zeros_before = level.zeros[position] as usize;
-        if level.zeros[position + 1] as usize > zeros_before {
+        let zeros_before = level.zeros.rank(position) as usize;
+        if level.zeros.get(position) {
             zeros_before
         } else {
-            *level.zeros.last().expect("one entry per prefix") as usize + position - zeros_before
+            level.zeros.total as usize + position - zeros_before
         }
     }
 
@@ -328,9 +377,9 @@ impl WaveletMatrix {
         let (mut start, mut end, mut k) = (start, end, k);
         let mut value = 0_u32;
         for level in &self.levels {
-            let total_zeros = *level.zeros.last().expect("one entry per prefix") as usize;
-            let zeros_start = level.zeros[start] as usize;
-            let zeros_end = level.zeros[end] as usize;
+            let total_zeros = level.zeros.total as usize;
+            let zeros_start = level.zeros.rank(start) as usize;
+            let zeros_end = level.zeros.rank(end) as usize;
             let active_zeros = level.active_below.range(zeros_start, zeros_end);
             value <<= 1;
             if k < active_zeros {
@@ -424,6 +473,35 @@ mod tests {
                         reference.iter().map(|f| f.range(start, end)).collect();
                     assert_eq!(got, expected, "kinds {kinds}, n {n}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn rank_bits_count_as_a_prefix_sum_does() {
+        let mut rng = Lcg(31);
+        for n in [0_usize, 1, 63, 64, 65, 127, 128, 129, 1000] {
+            for density in [0_usize, 1, 2, 3] {
+                let bits: Vec<bool> = (0..n)
+                    .map(|_| match density {
+                        0 => false,
+                        1 => rng.next(8) == 0,
+                        2 => rng.next(2) == 0,
+                        _ => true,
+                    })
+                    .collect();
+                let ranks = RankBits::new(bits.iter().copied());
+                let mut prefix = vec![0_u32];
+                for &bit in &bits {
+                    prefix.push(prefix[prefix.len() - 1] + u32::from(bit));
+                }
+                for (position, &expected) in prefix.iter().enumerate() {
+                    assert_eq!(ranks.rank(position), expected, "n {n}, at {position}");
+                }
+                for (position, &bit) in bits.iter().enumerate() {
+                    assert_eq!(ranks.get(position), bit);
+                }
+                assert_eq!(ranks.total, prefix[n]);
             }
         }
     }

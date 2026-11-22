@@ -81,7 +81,7 @@
 //! `O(w k + w log w)`. A reached case costs `O((w / C) (k + log C) + C + h log h)`
 //! with `C` the chunk size and `h` the controls the value rule allows. Memory
 //! is `O(n (k + s))` words, with `k + 3` trees and possibly a wavelet matrix of
-//! `2 L` words per record in a counted stratum, and a position, a value and
+//! `L` words per record in a counted stratum, and a position, a value and
 //! `(k + 3) / C` counts per record in a reached one.
 //!
 //! # References

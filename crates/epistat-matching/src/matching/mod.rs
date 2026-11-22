@@ -104,5 +104,5 @@ pub(crate) use index::CandidateIndex;
 
 pub use engine::CandidatePoolRequest;
 pub use engine::{MatchEngine, finalize_estimand_diagnostics, invalid_common_support_outcome};
-pub(crate) use engine::{id_prefix, intern_unique};
+pub(crate) use engine::{id_keys, intern_unique};
 pub use job::MatchJob;

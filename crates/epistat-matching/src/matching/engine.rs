@@ -1313,6 +1313,81 @@ pub(crate) fn id_prefix(id: &str) -> u64 {
     u64::from_be_bytes(word)
 }
 
+/// The sort keys of a list of ids: their first eight bytes as a big-endian
+/// integer, or, when every id is a string of ASCII digits, their first sixteen
+/// digits at four bits each.
+///
+/// Either way `keys[i] < keys[j]` implies `ids[i] < ids[j]` under `str::cmp`
+/// and `ids[i] < ids[j]` implies `keys[i] <= keys[j]`, so a sort reads the ids
+/// only when two keys are equal. The digit key is for ids such as dates or
+/// numbers with a long shared start, which agree in their first eight bytes.
+pub(crate) fn id_keys<'a>(ids: impl Iterator<Item = &'a str> + Clone) -> Vec<u64> {
+    let digits: Option<Vec<u64>> = ids.clone().map(digit_key).collect();
+    digits.unwrap_or_else(|| ids.map(id_prefix).collect())
+}
+
+/// Whether all eight bytes of the word are ASCII digits.
+const fn eight_digits(word: u64) -> bool {
+    const HIGH: u64 = 0xF0F0_F0F0_F0F0_F0F0;
+    const DIGITS: u64 = 0x3030_3030_3030_3030;
+    // Every byte is 0x30 to 0x3F, so adding 6 to each carries into no other
+    // byte and gives a high nibble of 4 or more from 0x3A on.
+    word & HIGH == DIGITS && word.wrapping_add(0x0606_0606_0606_0606) & HIGH == DIGITS
+}
+
+/// The nibble above each digit of eight digit bytes, packed into 32 bits with
+/// the first byte highest.
+const fn pack_eight_digits(word: u64) -> u64 {
+    let mut nibbles = (word & 0x0F0F_0F0F_0F0F_0F0F) + 0x0101_0101_0101_0101;
+    nibbles = (nibbles | nibbles >> 4) & 0x00FF_00FF_00FF_00FF;
+    nibbles = (nibbles | nibbles >> 8) & 0x0000_FFFF_0000_FFFF;
+    (nibbles | nibbles >> 16) & 0xFFFF_FFFF
+}
+
+/// The first sixteen digits of an id, a digit being the nibble above its
+/// value, so that the end of an id sorts before every digit as it does under
+/// `str::cmp`; `None` when the id has a byte that is not an ASCII digit.
+fn digit_key(id: &str) -> Option<u64> {
+    let bytes = id.as_bytes();
+    let (head, tail) = bytes.split_at(bytes.len().min(16));
+    if !tail.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut chunks = head.chunks_exact(8);
+    let mut word = 0_u64;
+    let mut place = 0;
+    for chunk in chunks.by_ref() {
+        let eight = u64::from_be_bytes(chunk.try_into().expect("eight bytes"));
+        if !eight_digits(eight) {
+            return None;
+        }
+        word |= pack_eight_digits(eight) << (32 - 32 * place);
+        place += 1;
+    }
+    for (k, &byte) in chunks.remainder().iter().enumerate() {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        word |= u64::from(byte - b'0' + 1) << (60 - 4 * (8 * place + k));
+    }
+    Some(word)
+}
+
+/// [`digit_key`] one digit at a time.
+#[cfg(test)]
+fn digit_key_by_digits(id: &str) -> Option<u64> {
+    let mut word = 0_u64;
+    for (place, byte) in id.bytes().enumerate() {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        if place < 16 {
+            word |= u64::from(byte - b'0' + 1) << (60 - 4 * place);
+        }
+    }
+    Some(word)
+}
+
 /// Candidates per task when a pool is scanned in parallel.
 const SCAN_CHUNK: usize = 1024;
 
@@ -1489,10 +1564,8 @@ impl IdRanks {
 
 /// Sort control indices by the id of the control, as `str::cmp` orders them.
 fn sort_by_id<R: MatchingRecord>(controls: &[R], indices: &mut Vec<usize>) {
-    let mut keyed: Vec<(u64, usize)> = indices
-        .iter()
-        .map(|&idx| (id_prefix(controls[idx].id()), idx))
-        .collect();
+    let keys = id_keys(indices.iter().map(|&idx| controls[idx].id()));
+    let mut keyed: Vec<(u64, usize)> = keys.into_iter().zip(indices.iter().copied()).collect();
     keyed.sort_unstable_by(|&(left_prefix, left), &(right_prefix, right)| {
         left_prefix
             .cmp(&right_prefix)
@@ -1642,7 +1715,7 @@ mod strata_group_order_tests {
 
 #[cfg(test)]
 mod id_order_tests {
-    use super::{id_prefix, intern_unique, sort_by_id};
+    use super::{digit_key, digit_key_by_digits, id_keys, id_prefix, intern_unique, sort_by_id};
     use crate::types::BaseRecord;
     use chrono::NaiveDate;
     use rapidhash::RapidHashMap;
@@ -1650,6 +1723,71 @@ mod id_order_tests {
     fn records(ids: &[&str]) -> Vec<BaseRecord> {
         let date = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
         ids.iter().map(|id| BaseRecord::new(*id, date)).collect()
+    }
+
+    /// The word-at-a-time key is the digit-at-a-time key, for every length to
+    /// beyond sixteen and with a non-digit byte at every place, including the
+    /// bytes either side of the digits and above ASCII.
+    #[test]
+    fn the_word_key_equals_the_digit_key() {
+        let mut state = 9_u64;
+        let mut next = move |bound: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % bound
+        };
+        let odd = ['/', ':', 'a', '\u{0}', 'é', ' ', '\u{7f}', '9', '0'];
+        for length in 0..40_usize {
+            for _ in 0..300 {
+                let mut id: Vec<char> = (0..length)
+                    .map(|_| char::from(b'0' + next(10) as u8))
+                    .collect();
+                if length > 0 && next(2) == 0 {
+                    let place = next(length as u64) as usize;
+                    id[place] = odd[next(odd.len() as u64) as usize];
+                }
+                let id: String = id.into_iter().collect();
+                assert_eq!(digit_key(&id), digit_key_by_digits(&id), "{id:?}");
+            }
+        }
+    }
+
+    /// The keys of digit strings order them as `str::cmp` does wherever the
+    /// keys differ, for lengths around sixteen, and are the bytes as soon as
+    /// an id is not a digit string.
+    #[test]
+    fn the_digit_keys_order_digit_strings_as_str_does() {
+        let mut state = 5_u64;
+        let mut next = move |bound: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % bound
+        };
+        let ids: Vec<String> = (0..3000)
+            .map(|_| {
+                let length = next(21) as usize;
+                // Few distinct digits, so that long prefixes repeat.
+                (0..length)
+                    .map(|_| char::from(b'0' + [0, 1, 9][next(3) as usize]))
+                    .collect()
+            })
+            .collect();
+        let keys = id_keys(ids.iter().map(String::as_str));
+        for (i, left) in ids.iter().enumerate().take(300) {
+            for (j, right) in ids.iter().enumerate() {
+                if keys[i] < keys[j] {
+                    assert!(left < right, "{left} {right}");
+                }
+                if left < right {
+                    assert!(keys[i] <= keys[j], "{left} {right}");
+                }
+            }
+        }
+        let mixed = ["12", "1a", "7"];
+        assert_eq!(id_keys(mixed.into_iter()), mixed.map(id_prefix).to_vec());
+        assert!(id_keys(std::iter::empty()).is_empty());
     }
 
     /// The prefix order agrees with `str` order wherever the prefixes differ,
