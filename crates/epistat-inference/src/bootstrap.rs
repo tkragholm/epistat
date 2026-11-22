@@ -60,7 +60,7 @@
 //! 4. Efron B, Tibshirani RJ. An introduction to the bootstrap. New York:
 //!    Chapman & Hall; 1993.
 
-use epistat_rng::{Stream, rademacher_sum, replicate_seed, resample_counts};
+use epistat_rng::{Stream, rademacher_sum, rademacher_sums, replicate_seed, resample_counts};
 use rayon::prelude::*;
 
 use crate::{InferenceError, check_length};
@@ -82,11 +82,30 @@ pub fn multiplier(
         return Err(InferenceError::Empty);
     }
     let n = psi.len() as f64;
-    Ok((0..replicates as u64)
-        .into_par_iter()
-        .map(|r| estimate + rademacher_sum(psi, &mut Stream::seeded(replicate_seed(seed, r))) / n)
-        .collect())
+    let mut out = vec![0.0; replicates];
+    out.par_chunks_mut(LANES)
+        .enumerate()
+        .for_each(|(block, chunk)| {
+            let first = (block * LANES) as u64;
+            if chunk.len() == LANES {
+                let mut streams: [Stream; LANES] =
+                    std::array::from_fn(|l| Stream::seeded(replicate_seed(seed, first + l as u64)));
+                let sums = rademacher_sums(psi, &mut streams);
+                for (slot, sum) in chunk.iter_mut().zip(sums) {
+                    *slot = estimate + sum / n;
+                }
+            } else {
+                for (l, slot) in chunk.iter_mut().enumerate() {
+                    let mut stream = Stream::seeded(replicate_seed(seed, first + l as u64));
+                    *slot = estimate + rademacher_sum(psi, &mut stream) / n;
+                }
+            }
+        });
+    Ok(out)
 }
+
+/// Replicates drawn side by side in [`multiplier`].
+const LANES: usize = 8;
 
 /// Totals of per-cluster columns under the pairs cluster bootstrap: each
 /// replicate draws `G` of the `G` clusters with replacement, and a cluster
@@ -166,5 +185,36 @@ mod tests {
         let draws = multiplier(3.0, &psi, 2_000, 1).unwrap();
         let mean = draws.iter().sum::<f64>() / 2_000.0;
         assert!((mean - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn multiplier_equals_one_replicate_at_a_time() {
+        for n in [1usize, 5, 64, 65, 1_000] {
+            let psi: Vec<f64> = (0..n)
+                .map(|i| {
+                    if i % 11 == 3 {
+                        -0.0
+                    } else {
+                        (i as f64).cos() * 1e-2
+                    }
+                })
+                .collect();
+            for replicates in [0usize, 1, 7, 8, 9, 16, 17, 100] {
+                let want: Vec<f64> = (0..replicates as u64)
+                    .map(|r| {
+                        let mut stream = Stream::seeded(replicate_seed(3, r));
+                        0.25 + rademacher_sum(&psi, &mut stream) / n as f64
+                    })
+                    .collect();
+                assert_same_on_threads(|| multiplier(0.25, &psi, replicates, 3).unwrap());
+                let got = multiplier(0.25, &psi, replicates, 3).unwrap();
+                let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(
+                    bits(&got),
+                    bits(&want),
+                    "n = {n}, replicates = {replicates}"
+                );
+            }
+        }
     }
 }
