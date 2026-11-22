@@ -905,4 +905,17 @@ mod tests {
             .build();
         assert!(kinds.is_ok());
     }
+
+    #[test]
+    fn a_reference_to_a_row_names_the_same_table() {
+        let cohort = small();
+        let rows: Vec<_> = cohort.rows().collect();
+        let row = &rows[1];
+        let by_reference: &&CohortRow<'_> = &row;
+        assert!(row.covariate_table().is_some());
+        assert_eq!(by_reference.covariate_table(), row.covariate_table());
+        let slot = by_reference.covariate_slot("c").expect("covariate c");
+        assert_eq!(Some(slot), row.covariate_slot("c"));
+        assert_eq!(by_reference.covariate_in_slot(slot), CovariateRef::Missing);
+    }
 }

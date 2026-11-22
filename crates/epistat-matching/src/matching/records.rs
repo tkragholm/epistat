@@ -295,6 +295,18 @@ impl<R: CovariateRecord> CovariateRecord for RoleTransitionRecord<R> {
     fn covariate_names(&self) -> impl Iterator<Item = &str> {
         self.record.covariate_names()
     }
+
+    fn covariate_table(&self) -> Option<usize> {
+        self.record.covariate_table()
+    }
+
+    fn covariate_slot(&self, name: &str) -> Option<usize> {
+        self.record.covariate_slot(name)
+    }
+
+    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
+        self.record.covariate_in_slot(slot)
+    }
 }
 
 /// A shared reference is a record of the same kind, so a matcher can take
@@ -373,6 +385,78 @@ impl<R: CovariateRecord + ?Sized> CovariateRecord for &R {
 
     fn covariate_names(&self) -> impl Iterator<Item = &str> {
         (**self).covariate_names()
+    }
+
+    fn covariate_table(&self) -> Option<usize> {
+        (**self).covariate_table()
+    }
+
+    fn covariate_slot(&self, name: &str) -> Option<usize> {
+        (**self).covariate_slot(name)
+    }
+
+    fn covariate_in_slot(&self, slot: usize) -> CovariateRef<'_> {
+        (**self).covariate_in_slot(slot)
+    }
+}
+
+/// Reads one covariate from a run of records.
+///
+/// A record that says which table of columns it reads from has the column
+/// found once for every table, so a covariate is then read by position and
+/// not by name.
+pub(crate) struct ColumnReader<'k> {
+    key: &'k str,
+    resolved: Option<(usize, Option<usize>)>,
+}
+
+impl<'k> ColumnReader<'k> {
+    pub(crate) const fn new(key: &'k str) -> Self {
+        Self {
+            key,
+            resolved: None,
+        }
+    }
+
+    pub(crate) const fn key(&self) -> &'k str {
+        self.key
+    }
+
+    pub(crate) fn read<'r, R: CovariateRecord>(&mut self, record: &'r R) -> Option<CovariateRef<'r>> {
+        let Some(table) = record.covariate_table() else {
+            return record.covariate(self.key);
+        };
+        let slot = match self.resolved {
+            Some((known, slot)) if known == table => slot,
+            _ => {
+                let slot = record.covariate_slot(self.key);
+                self.resolved = Some((table, slot));
+                slot
+            }
+        };
+        slot.map(|slot| record.covariate_in_slot(slot))
+    }
+}
+
+
+/// Tells which records of a run need their covariate names read. Records of
+/// one table of columns carry the same names, so only the first record of each
+/// table does; a record that names no table always does.
+#[derive(Default)]
+pub(crate) struct NameScan {
+    tables: Vec<usize>,
+}
+
+impl NameScan {
+    pub(crate) fn needs_names<R: CovariateRecord + ?Sized>(&mut self, record: &R) -> bool {
+        let Some(table) = record.covariate_table() else {
+            return true;
+        };
+        if self.tables.contains(&table) {
+            return false;
+        }
+        self.tables.push(table);
+        true
     }
 }
 
