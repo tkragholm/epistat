@@ -372,6 +372,7 @@ use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
 
+use super::sweep::{RiskSets, Sums, terms};
 use super::{Ties, moments};
 use crate::check::{check_lengths, refuse_non_finite};
 use crate::error::{Error, Result};
@@ -769,41 +770,19 @@ struct Stratum {
     dying_offset: Vec<usize>,
 }
 
-/// The sums `sum c x^r` for `r = 0, 1, 2`, with the lower triangle of `r = 2`.
-struct Moments {
-    m0: f64,
-    m1: Vec<f64>,
-    m2: Vec<f64>,
-}
-
-impl Moments {
-    fn new(p: usize) -> Self {
-        Self {
-            m0: 0.0,
-            m1: vec![0.0; p],
-            m2: vec![0.0; p * p],
+impl Stratum {
+    fn risk_sets(&self) -> RiskSets<'_> {
+        RiskSets {
+            x: &self.x,
+            stop: &self.stop,
+            by_start: &self.by_start,
+            start_sorted: &self.start_sorted,
+            event_times: &self.event_times,
+            dying: &self.dying_rows,
+            dying_offset: &self.dying_offset,
         }
     }
 
-    fn clear(&mut self) {
-        self.m0 = 0.0;
-        self.m1.fill(0.0);
-        self.m2.fill(0.0);
-    }
-
-    fn add(&mut self, c: f64, x: &[f64]) {
-        self.m0 += c;
-        super::moments::add(c, x, &mut self.m1, &mut self.m2);
-    }
-}
-
-/// The risk-set sums and the sums over the tied events at one event time.
-struct Sums {
-    risk: Moments,
-    dying: Moments,
-}
-
-impl Stratum {
     /// Visit every event time in descending order with the sums at the
     /// per-row weights `risk`, which are `w exp(beta' x)`.
     fn sweep(
@@ -812,56 +791,19 @@ impl Stratum {
         risk: &[f64],
         active: &mut Vec<bool>,
         sums: &mut Sums,
-        mut visit: impl FnMut(usize, &Sums),
+        visit: impl FnMut(usize, &Sums),
     ) {
-        let size = self.stop.len();
-        active.clear();
-        active.resize(size, false);
-        sums.risk.clear();
-        let (mut entering, mut leaving) = (0usize, 0usize);
-        for (position, &time) in self.event_times.iter().enumerate() {
-            while entering < size && self.stop[entering] >= time {
-                sums.risk
-                    .add(risk[entering], &self.x[entering * p..(entering + 1) * p]);
-                active[entering] = true;
-                entering += 1;
-            }
-            while leaving < size && self.start_sorted[leaving] >= time {
-                let row = self.by_start[leaving] as usize;
-                if active[row] {
-                    sums.risk.add(-risk[row], &self.x[row * p..(row + 1) * p]);
-                    active[row] = false;
-                }
-                leaving += 1;
-            }
-            sums.dying.clear();
-            for &row in
-                &self.dying_rows[self.dying_offset[position]..self.dying_offset[position + 1]]
-            {
-                let row = row as usize;
-                sums.dying.add(risk[row], &self.x[row * p..(row + 1) * p]);
-            }
-            visit(position, sums);
-        }
+        self.risk_sets().sweep(p, risk, active, sums, visit);
     }
 
     /// The terms of the log partial likelihood at event time `position`, as
     /// `(weight, fraction)`: the term has denominator `S - fraction * E` and
-    /// is multiplied by `weight`.
+    /// is multiplied by `weight`. A single exact event has the Breslow term;
+    /// sets of more are computed by `ExactScratch` before the terms are asked
+    /// for.
     fn terms(&self, position: usize, ties: Ties) -> impl Iterator<Item = (f64, f64)> + use<> {
         let range = self.dying_offset[position]..self.dying_offset[position + 1];
-        let count = range.len();
-        let total: f64 = self.dying_rows[range]
-            .iter()
-            .map(|&row| self.weight[row as usize])
-            .sum();
-        let (terms, weight, spread) = match ties {
-            // A single exact event has the Breslow term; sets of more are
-            // computed by `ExactScratch` before the terms are asked for.
-            Ties::Breslow | Ties::Exact => (1, total, 0.0),
-            Ties::Efron => (count, total / count as f64, 1.0 / count as f64),
-        };
-        (0..terms).map(move |k| (weight, k as f64 * spread))
+        terms(&self.weight, &self.dying_rows[range], ties == Ties::Efron)
     }
 }
 
@@ -970,10 +912,7 @@ impl Model {
         let mut score = vec![0.0f64; p];
         let mut information = vec![0.0f64; p * p];
         let mut active = Vec::new();
-        let mut sums = Sums {
-            risk: Moments::new(p),
-            dying: Moments::new(p),
-        };
+        let mut sums = Sums::new(p, true);
         let mut d1 = vec![0.0f64; p];
         let mut quotient = vec![0.0f64; p];
         let mut scratch = ExactScratch::default();
@@ -1092,10 +1031,7 @@ impl Model {
         let p = self.p;
         let mut residual = vec![0.0f64; p];
         let mut active = Vec::new();
-        let mut sums = Sums {
-            risk: Moments::new(p),
-            dying: Moments::new(p),
-        };
+        let mut sums = Sums::new(p, true);
         for stratum in &self.strata {
             let (_, risk) = Self::row_risk(stratum, p, beta)?;
             let count = stratum.event_times.len();

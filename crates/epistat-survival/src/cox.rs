@@ -21,6 +21,7 @@ pub mod design;
 mod moments;
 pub mod predict;
 pub mod residuals;
+mod sweep;
 pub mod tt;
 pub mod zph;
 pub use anova::{AnovaRow, AnovaTable, anova, anova_terms};
