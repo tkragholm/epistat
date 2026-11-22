@@ -58,6 +58,8 @@
 //! 1. Gelman A, Carlin JB, Stern HS, Dunson DB, Vehtari A, Rubin DB. Bayesian
 //!    Data Analysis. 3rd ed. Boca Raton: CRC Press; 2013.
 
+use crate::lanes;
+
 /// The lag-`lag` autocorrelation of a chain, with the lag-0 sum of squares in
 /// the denominator. `None` when the lag is not shorter than the chain or the
 /// chain is constant.
@@ -148,17 +150,15 @@ fn centred_squares(chain: &[f64]) -> Option<(f64, f64)> {
     if chain.iter().all(|&value| value == first) {
         return None;
     }
-    let mean = chain.iter().sum::<f64>() / chain.len() as f64;
-    let squares: f64 = chain.iter().map(|&v| (v - mean) * (v - mean)).sum();
+    let mean = lanes::sum(chain) / chain.len() as f64;
+    let squares = lanes::centred_squares(chain, mean);
     (squares > 0.0).then_some((mean, squares))
 }
 
 fn lagged_products(chain: &[f64], lag: usize, mean: f64) -> f64 {
-    chain
-        .iter()
-        .zip(&chain[lag..])
-        .map(|(&a, &b)| (a - mean) * (b - mean))
-        .sum()
+    lanes::sum_map2(&chain[..chain.len() - lag], &chain[lag..], |a, b| {
+        (a - mean) * (b - mean)
+    })
 }
 
 #[cfg(test)]

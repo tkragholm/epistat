@@ -167,7 +167,7 @@ pub fn weighted_type1(sorted: &[f64], weights: &[f64], p: f64) -> Option<f64> {
     {
         return None;
     }
-    let total: f64 = weights.iter().sum();
+    let total = crate::lanes::sum(weights);
     if !total.is_finite() || total <= 0.0 {
         return None;
     }

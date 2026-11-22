@@ -77,6 +77,8 @@
 //! 3. Cameron AC, Gelbach JB, Miller DL. Bootstrap-based improvements for
 //!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
+use epistat_stats::lanes;
+
 use crate::{Clusters, InferenceError, check_length};
 
 /// `sqrt(mean((psi - mean(psi))^2)) / sqrt(n)`.
@@ -89,8 +91,8 @@ pub fn standard_error(psi: &[f64]) -> Result<f64, InferenceError> {
         return Err(InferenceError::Empty);
     }
     let n = psi.len() as f64;
-    let mean = psi.iter().sum::<f64>() / n;
-    let mean_square = psi.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n;
+    let mean = lanes::sum(psi) / n;
+    let mean_square = lanes::centred_squares(psi, mean) / n;
     Ok(mean_square.sqrt() / n.sqrt())
 }
 
@@ -114,11 +116,7 @@ pub fn clustered_variance(psi: &[f64], clusters: &Clusters) -> Result<Option<f64
     }
     let n = psi.len() as f64;
     let g = clusters.count() as f64;
-    let squares: f64 = clusters
-        .sums(psi.iter().copied())
-        .iter()
-        .map(|s| s * s)
-        .sum();
+    let squares = lanes::sum_squares(&clusters.sums(psi.iter().copied()));
     let variance = g / (g - 1.0) * squares / (n * n);
     if variance.is_finite() {
         Ok(Some(variance.max(0.0)))
@@ -172,7 +170,7 @@ pub fn clustered_covariance(
     let mut covariance = vec![0.0; k * k];
     for a in 0..k {
         for b in a..k {
-            let cross: f64 = sums[a].iter().zip(&sums[b]).map(|(x, y)| x * y).sum();
+            let cross = lanes::dot(&sums[a], &sums[b]);
             let value = scale * cross / (nf * nf);
             if !value.is_finite() {
                 return Err(InferenceError::NotFinite);

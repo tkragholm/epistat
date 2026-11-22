@@ -89,7 +89,7 @@ use std::f64::consts::PI;
 
 use epistat_linalg::MatRef;
 use epistat_rng::{Stream, replicate_seed};
-use epistat_stats::{normal, quantile};
+use epistat_stats::{lanes, normal, quantile};
 use rayon::prelude::*;
 
 use crate::{Clusters, InferenceError, check_length};
@@ -217,11 +217,7 @@ fn standard_normals(stream: &mut Stream, out: &mut [f64]) {
 /// `out = L z` for a row-major lower triangular `L`.
 fn lower_times(lower: &[f64], dim: usize, z: &[f64], out: &mut [f64]) {
     for (i, slot) in out.iter_mut().enumerate() {
-        let mut sum = 0.0;
-        for j in 0..=i {
-            sum += lower[i * dim + j] * z[j];
-        }
-        *slot = sum;
+        *slot = lanes::dot(&lower[i * dim..=i * dim + i], &z[..=i]);
     }
 }
 
@@ -306,12 +302,7 @@ pub fn multiplier_bands(
                 }
             }
             for (slot, column) in row.iter_mut().zip(&sums) {
-                let mean = column
-                    .iter()
-                    .zip(signs.iter())
-                    .map(|(value, sign)| value * sign)
-                    .fold(0.0, |a, b| a + b)
-                    / groups_f;
+                let mean = lanes::dot(column, signs) / groups_f;
                 *slot = groups_f.sqrt() * mean;
             }
         },
@@ -465,10 +456,7 @@ mod tests {
                 }
             }
             for column in &sums {
-                let mut total = 0.0;
-                for (v, s) in column.iter().zip(&signs) {
-                    total += v * s;
-                }
+                let total = lanes::dot(column, &signs);
                 draws.push((groups as f64).sqrt() * (total / groups as f64));
             }
         }
@@ -642,10 +630,7 @@ mod tests {
                 standard_normals(&mut stream, &mut z);
                 let mut best = 0.0_f64;
                 for i in 0..dim {
-                    let mut sum = 0.0;
-                    for j in 0..=i {
-                        sum += lower[i * dim + j] * z[j];
-                    }
+                    let sum = lanes::dot(&lower[i * dim..=i * dim + i], &z[..=i]);
                     best = best.max(sum.abs());
                 }
                 best

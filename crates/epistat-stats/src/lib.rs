@@ -3,7 +3,7 @@
 //! statistics, MCMC diagnostics, weighted means and variances, direct
 //! standardisation and the Kitagawa decomposition, Poisson confidence intervals,
 //! the gamma quantile, the Student t distribution and the incomplete beta
-//! function and k-means clustering, checked against R and Python and computed
+//! function, k-means clustering and eight-lane sums, checked against R and Python and computed
 //! the same way on every platform.
 
 pub mod balance;
@@ -11,6 +11,7 @@ pub mod cluster;
 pub mod decomposition;
 pub mod evalue;
 pub mod gamma;
+pub mod lanes;
 pub mod likelihood;
 pub mod mcmc;
 pub mod normal;
