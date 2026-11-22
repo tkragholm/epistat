@@ -150,12 +150,12 @@ fn weights_match_weightit_and_psweight() {
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
         let mut worst = 0.0f64;
-        for i in 0..n {
-            if r.weights[i] == 0.0 {
-                assert_eq!(w.weights[i], 0.0, "{} weight {i}", r.name);
+        for (i, &eta_i) in eta.iter().enumerate() {
+            if r.weights[i].to_bits() == 0 {
+                assert_eq!(w.weights[i].to_bits(), 0, "{} weight {i}", r.name);
                 continue;
             }
-            let tol = r.weights[i] * (2.0 * eta[i] + 4.0 * EPS);
+            let tol = r.weights[i] * (2.0 * eta_i + 4.0 * EPS);
             let d = (w.weights[i] - r.weights[i]).abs() / tol;
             assert!(
                 d <= 1.0,
@@ -165,7 +165,7 @@ fn weights_match_weightit_and_psweight() {
                 r.weights[i]
             );
             worst = worst.max(d);
-            let dp = (w.propensity[i] - r.propensity[i]).abs() / (eta[i] / 4.0 + 4.0 * EPS);
+            let dp = (w.propensity[i] - r.propensity[i]).abs() / (eta_i / 4.0 + 4.0 * EPS);
             assert!(dp <= 1.0, "{} propensity {i}", r.name);
         }
         if let Some(alpha) = r.alpha {

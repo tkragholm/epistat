@@ -211,9 +211,9 @@ fn weights_match_ipwtm() {
         }
         if let Some(t) = &c.ipw_truncated {
             assert!(w.untruncated.is_some());
-            for i in 0..n {
+            for (i, &ipw) in t.iter().enumerate() {
                 for (mine, theirs, what) in [
-                    (w.weight[i], t[i], "against ipwtm"),
+                    (w.weight[i], ipw, "against ipwtm"),
                     (w.weight[i], c.truncated[i], "against the by-hand"),
                     (w.weight_before[i], c.truncated_before[i], "before"),
                 ] {
