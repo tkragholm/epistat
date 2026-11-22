@@ -114,6 +114,15 @@ macro_rules! delegate_matching_record {
         fn numeric(&self, name: &str) -> Option<f64> {
             self.$field.numeric(name)
         }
+        fn numeric_table(&self) -> Option<usize> {
+            self.$field.numeric_table()
+        }
+        fn numeric_slot(&self, name: &str) -> Option<usize> {
+            self.$field.numeric_slot(name)
+        }
+        fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
+            self.$field.numeric_in_slot(slot)
+        }
         fn unique_key(&self) -> Option<&str> {
             self.$field.unique_key()
         }
