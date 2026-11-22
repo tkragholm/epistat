@@ -194,10 +194,10 @@ fn quasi_families_match_glm() {
             case.family
         );
         let se = fit.standard_errors();
-        for j in 0..case.coef.len() {
+        for (j, &want) in case.coef.iter().enumerate() {
             let got = fit.coefficients[j].unwrap();
             assert!(
-                (got - case.coef[j]).abs() <= 1e-10 * case.coef[j].abs().max(1e-3),
+                (got - want).abs() <= 1e-10 * want.abs().max(1e-3),
                 "{} {j}",
                 case.family
             );
