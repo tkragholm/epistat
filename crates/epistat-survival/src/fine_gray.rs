@@ -139,6 +139,7 @@ use crate::check::{check_lengths, check_row_count};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
 use crate::metrics::censoring::CensoringKm;
+use crate::order::pick_used;
 use crate::step::Steps;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -459,14 +460,6 @@ impl FineGrayOptions {
     }
 }
 
-/// `values` of the used individuals, or all of them when `index` is `None`.
-fn gather<'a, T: Copy>(values: &'a [T], index: Option<&[u32]>) -> Cow<'a, [T]> {
-    match index {
-        None => Cow::Borrowed(values),
-        Some(index) => Cow::Owned(index.iter().map(|&i| values[i as usize]).collect()),
-    }
-}
-
 /// Run `body` on the Fine-Gray construction for `data` and `cause`, with the
 /// tie rule applied and the rows of weight zero left out.
 ///
@@ -488,11 +481,11 @@ fn with_expansion<T>(
     let fixed = data.clone().with_timefix(timefix)?;
     let surv = fixed.followup()?;
     let index = fixed.used_index();
-    let time = gather(surv.stop(), index.as_deref());
-    let event = gather(surv.status(), index.as_deref());
+    let time = pick_used(surv.stop(), index.as_deref());
+    let event = pick_used(surv.status(), index.as_deref());
     let weight: Cow<'_, [f64]> = match fixed.weight() {
         None => Cow::Owned(vec![1.0; fixed.n_rows()]),
-        Some(weight) => gather(weight, index.as_deref()),
+        Some(weight) => pick_used(weight, index.as_deref()),
     };
     let expansion = Expansion::new(&time, &event, &weight, code)?;
     body(&expansion, index.as_deref())
@@ -547,7 +540,7 @@ pub fn risk_rows(
 ) -> Result<Rows> {
     check_lengths(&[("stop", data.n_rows()), ("level", level.len())])?;
     with_expansion(data, cause, opts.timefix, |expansion, index| {
-        let level = gather(level, index);
+        let level = pick_used(level, index);
         Ok(original_rows(expansion.risk_rows(&level)?, index))
     })
 }

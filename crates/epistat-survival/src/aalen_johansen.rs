@@ -144,7 +144,7 @@ use rayon::prelude::*;
 use crate::check::{check_ascending, check_lengths};
 use crate::error::{Error, Result};
 use crate::multistate::{influence, snapshot_positions};
-use crate::order::{dense_index, dense_of_present};
+use crate::order::{dense_index, dense_of_present, pick_used};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -434,16 +434,16 @@ pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curv
         .map_err(|_| Error::input("n_codes must fit an i32 status"))?;
     let used = data.used_index();
     let index = used.as_deref();
-    let time = pick(surv.stop(), index);
-    let event = pick(surv.status(), index);
-    let entry = surv.start().map(|start| pick(start, index));
+    let time = pick_used(surv.stop(), index);
+    let event = pick_used(surv.status(), index);
+    let entry = surv.start().map(|start| pick_used(start, index));
     let weight = data.weight().map_or_else(
         || Cow::Owned(vec![1.0; data.n_used()]),
-        |weight| pick(weight, index),
+        |weight| pick_used(weight, index),
     );
     let group = data.stratum().map_or_else(
         || Cow::Owned(vec![0u32; data.n_used()]),
-        |stratum| pick(stratum, index),
+        |stratum| pick_used(stratum, index),
     );
     let mut out = curves_checked(
         &time,
@@ -462,15 +462,6 @@ pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curv
     out.n_rows = data.n_rows();
     out.n_used = data.n_used();
     Ok(out)
-}
-
-/// The values of a column at `index`, or the column itself when `index` is
-/// `None` because every row is used.
-fn pick<'a, T: Copy>(column: &'a [T], index: Option<&[u32]>) -> Cow<'a, [T]> {
-    match index {
-        None => Cow::Borrowed(column),
-        Some(index) => Cow::Owned(index.iter().map(|&i| column[i as usize]).collect()),
-    }
 }
 
 /// What [`variance`] reports besides the standard errors at each time.
@@ -598,18 +589,21 @@ pub fn variance(
     let states = k + 1;
     let used = data.used_index();
     let index = used.as_deref();
-    let time = pick(surv.stop(), index);
-    let event = pick(surv.status(), index);
-    let entry = surv.start().map(|start| pick(start, index));
+    let time = pick_used(surv.stop(), index);
+    let event = pick_used(surv.status(), index);
+    let entry = surv.start().map(|start| pick_used(start, index));
     let weight = data.weight().map_or_else(
         || Cow::Owned(vec![1.0; data.n_used()]),
-        |weight| pick(weight, index),
+        |weight| pick_used(weight, index),
     );
     let group = data.stratum().map_or_else(
         || Cow::Owned(vec![0u32; data.n_used()]),
-        |stratum| pick(stratum, index),
+        |stratum| pick_used(stratum, index),
     );
-    let cluster = data.cluster().or_else(|| data.id()).map(|c| pick(c, index));
+    let cluster = data
+        .cluster()
+        .or_else(|| data.id())
+        .map(|c| pick_used(c, index));
     let cluster_levels = if data.cluster().is_some() {
         data.cluster_levels()
     } else {

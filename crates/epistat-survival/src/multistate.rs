@@ -160,7 +160,7 @@ use rayon::prelude::*;
 
 use crate::check::{check_ascending, check_lengths};
 use crate::error::{Error, Result};
-use crate::order::{dense_index, dense_of_present};
+use crate::order::{dense_index, dense_of_present, pick_used};
 use crate::surv::SurvData;
 use crate::survcheck::{Policy, survcheck};
 use crate::timefix::TimeFix;
@@ -757,13 +757,6 @@ struct Prepared<'a> {
     n_states: usize,
 }
 
-/// The column `values` over the rows used.
-fn gather<'a>(values: &'a [f64], index: Option<&[u32]>) -> Cow<'a, [f64]> {
-    index.map_or(Cow::Borrowed(values), |rows| {
-        Cow::Owned(rows.iter().map(|&row| values[row as usize]).collect())
-    })
-}
-
 impl<'a> Prepared<'a> {
     /// Apply the tie rule, check the follow-up of each subject and read the
     /// states of the rows used.
@@ -876,10 +869,10 @@ impl<'a> Prepared<'a> {
             .ok_or_else(|| Error::input("multi-state estimates need a start column"))?;
         let index = self.index.as_deref();
         Ok(Columns {
-            starts: gather(start, index),
-            stops: gather(surv.stop(), index),
+            starts: pick_used(start, index),
+            stops: pick_used(surv.stop(), index),
             weights: match self.data.weight() {
-                Some(weight) => gather(weight, index),
+                Some(weight) => pick_used(weight, index),
                 None => Cow::Owned(vec![1.0; self.data.n_used()]),
             },
         })

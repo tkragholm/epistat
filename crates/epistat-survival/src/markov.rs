@@ -125,6 +125,7 @@ use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
 use crate::error::{Error, Result};
+use crate::step::Steps;
 use crate::surv::SurvData;
 use crate::survcheck::{Policy, survcheck};
 use crate::timefix::TimeFix;
@@ -159,18 +160,8 @@ impl RiskIndex {
             let sorted_keys: Vec<f64> = order.iter().map(|&i| keys[i as usize]).collect();
             (order, sorted_keys)
         };
-        let lower_bound = |keys: &[f64], target: f64| -> u32 {
-            let (mut low, mut high) = (0usize, keys.len());
-            while low < high {
-                let mid = usize::midpoint(low, high);
-                if keys[mid] < target {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
-            low as u32
-        };
+        let lower_bound =
+            |keys: &[f64], target: f64| -> u32 { keys.partition_point(|&key| key < target) as u32 };
         let (exit_order, exit_keys) = sorted(exit);
         let (entry_order, entry_keys) = sorted(entry);
         Self {
@@ -205,52 +196,34 @@ impl RiskIndex {
     }
 }
 
-/// The Nelson-Aalen cumulative intensity as a right-continuous step function.
+/// The Nelson-Aalen cumulative intensity as a right-continuous step function,
+/// 0 before the first time.
 ///
 /// Increments at one instant are summed before the running total: two
 /// transitions recorded at the same time are one jump, and evaluating between
-/// them would return a value the estimator never takes.
-struct StepCumulative {
-    times: Vec<f64>,
-    totals: Vec<f64>,
-}
-
-impl StepCumulative {
-    /// Group first, then accumulate. The increments at each instant are summed
-    /// walking the rows in input order, and then one group total at a time is
-    /// added in sorted time order. Adding the increments one by one in sorted
-    /// order is a different sequence of roundings.
-    fn build(times: &[f64], increments: &[f64]) -> Self {
-        let mut grouped: HashMap<u64, f64> = HashMap::new();
-        for (&time, &increment) in times.iter().zip(increments.iter()) {
-            *grouped.entry(time.to_bits()).or_insert(0.0) += increment;
-        }
-        let mut distinct: Vec<f64> = grouped.keys().map(|&bits| f64::from_bits(bits)).collect();
-        distinct.sort_by(f64::total_cmp);
-
-        let mut totals = Vec::with_capacity(distinct.len());
-        let mut running = 0.0f64;
-        for time in &distinct {
-            running += grouped[&time.to_bits()];
-            totals.push(running);
-        }
-        Self {
-            times: distinct,
-            totals,
-        }
+/// them would return a value the estimator never takes. Group first, then
+/// accumulate. The increments at each instant are summed walking the rows in
+/// input order, and then one group total at a time is added in sorted time
+/// order. Adding the increments one by one in sorted order is a different
+/// sequence of roundings.
+fn cumulative_intensity(times: &[f64], increments: &[f64]) -> Steps {
+    let mut grouped: HashMap<u64, f64> = HashMap::new();
+    for (&time, &increment) in times.iter().zip(increments.iter()) {
+        *grouped.entry(time.to_bits()).or_insert(0.0) += increment;
     }
+    let mut distinct: Vec<f64> = grouped.keys().map(|&bits| f64::from_bits(bits)).collect();
+    distinct.sort_by(f64::total_cmp);
 
-    fn at(&self, when: f64) -> f64 {
-        let (mut low, mut high) = (0usize, self.times.len());
-        while low < high {
-            let mid = usize::midpoint(low, high);
-            if self.times[mid] <= when {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        if low == 0 { 0.0 } else { self.totals[low - 1] }
+    let mut totals = Vec::with_capacity(distinct.len());
+    let mut running = 0.0f64;
+    for time in &distinct {
+        running += grouped[&time.to_bits()];
+        totals.push(running);
+    }
+    Steps {
+        time: distinct,
+        first: 0.0,
+        value: totals,
     }
 }
 
@@ -351,7 +324,7 @@ fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64
         .zip(at_risk_n.iter())
         .map(|(&event, &size)| if size > 0.0 { event / size } else { 0.0 })
         .collect();
-    let cumulative = StepCumulative::build(&t1, &increment);
+    let cumulative = cumulative_intensity(&t1, &increment);
 
     let slots = grid.len() * qualifying;
     let mut centred = vec![0.0f64; slots * n];
