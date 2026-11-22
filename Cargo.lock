@@ -492,6 +492,7 @@ dependencies = [
 name = "epistat-glm"
 version = "0.2.0"
 dependencies = [
+ "epistat-inference",
  "epistat-linalg",
  "epistat-stats",
  "epistat-testkit",
@@ -519,9 +520,11 @@ name = "epistat-linalg"
 version = "0.3.1"
 dependencies = [
  "dyn-stack",
+ "epistat-stats",
  "epistat-testkit",
  "faer",
  "rayon",
+ "serde",
  "thiserror 2.0.21",
 ]
 

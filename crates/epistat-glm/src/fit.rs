@@ -205,7 +205,8 @@ pub enum GlmError {
         /// The length it had.
         found: usize,
     },
-    /// The Tweedie power lies in `(0, 1)` or is not finite.
+    /// The Tweedie power lies in `(0, 1)` or is not finite, or the negative
+    /// binomial `theta` is not finite and positive.
     #[error("the family's parameter is outside its range")]
     Family,
     /// A prior weight is negative or not finite.
@@ -240,6 +241,19 @@ pub enum GlmError {
     /// The normal equations could not be solved.
     #[error(transparent)]
     Solve(#[from] SolveError),
+    /// A sandwich variance or cluster sum could not be formed.
+    #[error(transparent)]
+    Inference(#[from] epistat_inference::InferenceError),
+    /// The link is not one the model is defined for.
+    #[error("the link is not available for this model")]
+    Link,
+    /// The model needs a quantity the fit does not have, such as a dispersion
+    /// that is undefined for lack of residual degrees of freedom.
+    #[error("the fit has no {0}")]
+    Missing(&'static str),
+    /// The cluster labels or counts are not usable.
+    #[error("{0}")]
+    Clusters(&'static str),
 }
 
 /// A fitted model.
@@ -249,6 +263,10 @@ pub struct Fit {
     pub coefficients: Vec<Option<f64>>,
     /// The number of coefficients that are not aliased.
     pub rank: usize,
+    /// The number of rows with positive prior weight less the rank, the
+    /// degrees of freedom of the t distribution of a coefficient when the
+    /// dispersion is estimated.
+    pub residual_df: usize,
     /// The fitted means.
     pub fitted: Vec<f64>,
     /// The linear predictor, offset included.
@@ -478,6 +496,7 @@ impl Glm {
         Ok(Fit {
             coefficients,
             rank,
+            residual_df: used.saturating_sub(rank),
             fitted: mu,
             linear_predictor: eta,
             deviance: current_deviance,

@@ -142,8 +142,7 @@ pub fn digamma(x: f64) -> f64 {
         * (1.0 / 12.0
             + r * (-1.0 / 120.0
                 + r * (1.0 / 252.0
-                    + r * (-1.0 / 240.0
-                        + r * (1.0 / 132.0 + r * (-691.0 / 32760.0 + r / 12.0))))));
+                    + r * (-1.0 / 240.0 + r * (1.0 / 132.0 + r * (-691.0 / 32760.0 + r / 12.0))))));
     x.ln() - 0.5 / x - series - shift
 }
 
@@ -172,7 +171,8 @@ pub fn trigamma(x: f64) -> f64 {
         * (1.0 / 6.0
             + r * (-1.0 / 30.0
                 + r * (1.0 / 42.0
-                    + r * (-1.0 / 30.0 + r * (5.0 / 66.0 + r * (-691.0 / 2730.0 + r * 7.0 / 6.0))))));
+                    + r * (-1.0 / 30.0
+                        + r * (5.0 / 66.0 + r * (-691.0 / 2730.0 + r * 7.0 / 6.0))))));
     1.0 / x + 0.5 * r + series / x + shift
 }
 
@@ -304,9 +304,13 @@ mod tests {
         // The recurrence psi(x + 1) = psi(x) + 1/x holds across the switch to
         // the series at 10, and for negative arguments.
         for x in [0.3, 1.7, 8.9, 9.999, -0.4, -2.5] {
-            assert!((digamma(x + 1.0) - digamma(x) - 1.0 / x).abs() < 1e-13, "{x}");
             assert!(
-                (trigamma(x) - trigamma(x + 1.0) - 1.0 / (x * x)).abs() < 1e-12 * trigamma(x).abs().max(1.0),
+                (digamma(x + 1.0) - digamma(x) - 1.0 / x).abs() < 1e-13,
+                "{x}"
+            );
+            assert!(
+                (trigamma(x) - trigamma(x + 1.0) - 1.0 / (x * x)).abs()
+                    < 1e-12 * trigamma(x).abs().max(1.0),
                 "{x}"
             );
         }
