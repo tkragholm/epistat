@@ -5,8 +5,8 @@
 //! factor, whose level is fixed for each row, or a time-dependent cut, as
 //! `tcut` in R, whose value advances with follow-up, so that a row contributes
 //! time to every cell of an age or calendar-period dimension it passes through.
-//! The expected counts that `pyears` computes from a rate table are not part of
-//! this module.
+//! The expected counts that `pyears` computes from a rate table are in
+//! [`crate::ratetable`], which shares this module's walk over the cells.
 //!
 //! # What is counted
 //!
@@ -195,171 +195,27 @@ struct Walker<'a> {
 /// several event codes or outside them, a row has a negative stop with no
 /// start column, or the tie rule fails, see [`SurvData::with_timefix`].
 pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions) -> Result<Pyears> {
-    if !(opts.scale.is_finite() && opts.scale > 0.0) {
-        return Err(Error::input("scale must be finite and positive"));
-    }
-    let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
-    let code = match opts.cause {
-        Some(code) => data.cause(code)?.code(),
-        None if surv.n_codes() == 1 => 1,
-        None => {
-            return Err(Error::input(format!(
-                "the status has {} event codes, so the cause to count must be given",
-                surv.n_codes()
-            )));
-        }
-    };
-    let code = i32::try_from(code).map_err(|_| Error::input("cause does not fit an i32"))?;
-    let n_rows = data.n_rows();
-
-    let mut sizes = Vec::with_capacity(dims.len());
-    let mut cells = 1_usize;
-    for (d, dim) in dims.iter().enumerate() {
-        let size = match *dim {
-            Dimension::Factor { codes, levels } => {
-                if codes.len() != n_rows {
-                    return Err(length_error(d, codes.len(), n_rows));
-                }
-                if levels == 0 {
-                    return Err(Error::input(format!("dimension {d} has no levels")));
-                }
-                if let Some(row) = codes
-                    .iter()
-                    .position(|&c| usize::try_from(c).map_or(true, |c| c >= levels))
-                {
-                    return Err(Error::input(format!(
-                        "dimension {d}: the code {} in row {row} is not below the {levels} levels",
-                        codes[row]
-                    )));
-                }
-                levels
-            }
-            Dimension::Time { origin, cuts } => {
-                if origin.len() != n_rows {
-                    return Err(length_error(d, origin.len(), n_rows));
-                }
-                if cuts.len() < 2 {
-                    return Err(Error::input(format!(
-                        "dimension {d} needs at least two cut points"
-                    )));
-                }
-                if cuts.iter().any(|c| !c.is_finite()) || cuts.windows(2).any(|w| w[0] > w[1]) {
-                    return Err(Error::input(format!(
-                        "dimension {d}: the cut points must be finite and not decreasing"
-                    )));
-                }
-                let bad = data.used_rows().find(|&r| !origin[r as usize].is_finite());
-                if let Some(row) = bad {
-                    return Err(Error::input(format!(
-                        "dimension {d}: the value in row {row} is not finite"
-                    )));
-                }
-                cuts.len() - 1
-            }
-        };
-        cells = cells
-            .checked_mul(size)
-            .filter(|&c| c <= isize::MAX as usize / 24)
-            .ok_or_else(|| Error::input("the table has too many cells"))?;
-        sizes.push(size);
-    }
-
-    let stop = surv.stop();
-    let start = surv.start();
-    if start.is_none()
-        && let Some(row) = data.used_rows().find(|&r| stop[r as usize] < 0.0)
-    {
-        return Err(Error::input(format!(
-            "row {row} has a negative follow-up time and no start time"
-        )));
-    }
-
-    // Strides, first dimension fastest.
-    let mut strides = Vec::with_capacity(dims.len());
-    let mut stride = 1_usize;
-    for &size in &sizes {
-        strides.push(stride);
-        stride *= size;
-    }
-    let mut factors: Vec<(&[u32], usize)> = Vec::new();
-    let mut walkers: Vec<Walker<'_>> = Vec::new();
-    for (dim, &stride) in dims.iter().zip(&strides) {
-        match *dim {
-            Dimension::Factor { codes, .. } => factors.push((codes, stride)),
-            Dimension::Time { origin, cuts } => walkers.push(Walker {
-                cuts,
-                origin,
-                stride,
-                x0: 0.0,
-                above: 0,
-            }),
-        }
-    }
-
+    let Layout {
+        data,
+        code,
+        sizes,
+        cells,
+        mut cursor,
+    } = Layout::new(data, dims, opts, true)?;
     let mut person_time = vec![0.0; cells];
     let mut count = vec![0_u64; cells];
     let mut events = vec![0.0; cells];
     let mut offtable = 0.0;
-    let status = surv.status();
-    let weight = data.weight();
-
-    for row in data.used_rows() {
-        let i = row as usize;
-        let w = weight.map_or(1.0, |w| w[i]);
-        let begin = start.map_or(0.0, |s| s[i]);
-        let end = stop[i];
-        let duration = end - begin;
-        let base: usize = factors
-            .iter()
-            .map(|&(codes, stride)| codes[i] as usize * stride)
-            .sum();
-        for walker in &mut walkers {
-            walker.x0 = walker.origin[i] + begin;
-            walker.above = walker.cuts.partition_point(|&c| c <= walker.x0);
-        }
-
-        let mut elapsed = 0.0_f64;
-        let mut last: Option<usize> = None;
-        let mut any_piece = false;
-        while elapsed < duration {
-            let mut next = duration;
-            let mut entry = 0.0_f64;
-            let mut below = false;
-            let mut beyond = false;
-            for walker in &walkers {
-                if walker.above == walker.cuts.len() {
-                    beyond = true;
-                    continue;
-                }
-                let cut = walker.cuts[walker.above];
-                let mut offset = cut - walker.x0;
-                let reach = reach(cut, walker.x0, begin, end);
-                if duration - offset <= reach {
-                    offset = duration;
-                }
-                if walker.above == 0 {
-                    below = true;
-                    entry = entry.max(offset);
-                } else if offset < next {
-                    next = offset;
-                }
-            }
-            let to = if beyond {
-                duration
-            } else if below {
-                entry.min(duration)
-            } else {
-                next
-            };
-            let length = to - elapsed;
-            if length > 0.0 {
-                let cell = (!beyond && !below).then(|| {
-                    base + walkers
-                        .iter()
-                        .map(|walker| (walker.above - 1) * walker.stride)
-                        .sum::<usize>()
-                });
+    let n_rows = data.n_rows();
+    {
+        let surv = data.followup()?;
+        let status = surv.status();
+        let weight = data.weight();
+        let weight_of = |i: usize| weight.map_or(1.0, |w| w[i]);
+        cursor.walk(
+            &data,
+            &mut |i, cell, length| {
+                let w = weight_of(i);
                 match cell {
                     Some(cell) => {
                         person_time[cell] += length * w;
@@ -367,38 +223,16 @@ pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions)
                     }
                     None => offtable += length * w,
                 }
-                last = cell;
-                any_piece = true;
-            }
-            elapsed = to;
-            for walker in &mut walkers {
-                while walker.above < walker.cuts.len() {
-                    let cut = walker.cuts[walker.above];
-                    if cut - walker.x0 > elapsed + reach(cut, walker.x0, begin, end) {
-                        break;
-                    }
-                    walker.above += 1;
+            },
+            &mut |i, last| {
+                if status[i] == code
+                    && let Some(cell) = last
+                {
+                    events[cell] += weight_of(i);
                 }
-            }
-        }
-        if !any_piece {
-            let inside = walkers
-                .iter()
-                .all(|walker| walker.above > 0 && walker.above < walker.cuts.len());
-            last = inside.then(|| {
-                base + walkers
-                    .iter()
-                    .map(|walker| (walker.above - 1) * walker.stride)
-                    .sum::<usize>()
-            });
-        }
-        if status[i] == code
-            && let Some(cell) = last
-        {
-            events[cell] += w;
-        }
+            },
+        )?;
     }
-
     for value in &mut person_time {
         *value /= opts.scale;
     }
@@ -411,6 +245,248 @@ pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions)
         n_rows,
         n_used: data.n_used(),
     })
+}
+
+/// The checked data and dimensions of a table.
+pub(crate) struct Layout<'d, 'x> {
+    pub(crate) data: SurvData<'d>,
+    pub(crate) code: i32,
+    pub(crate) sizes: Vec<usize>,
+    pub(crate) cells: usize,
+    pub(crate) cursor: Cursor<'x>,
+}
+
+/// The dimensions of a table and the state of the walk over a row.
+pub(crate) struct Cursor<'x> {
+    factors: Vec<(&'x [u32], usize)>,
+    walkers: Vec<Walker<'x>>,
+}
+
+impl<'d, 'x> Layout<'d, 'x> {
+    /// Checks the data and the dimensions as [`pyears`] documents.
+    pub(crate) fn new(
+        data: &SurvData<'d>,
+        dims: &[Dimension<'x>],
+        opts: &PyearsOptions,
+        needs_cause: bool,
+    ) -> Result<Self> {
+        if !(opts.scale.is_finite() && opts.scale > 0.0) {
+            return Err(Error::input("scale must be finite and positive"));
+        }
+        let data = data.clone().with_timefix(opts.timefix)?;
+        let surv = data.followup()?;
+        let code = match opts.cause {
+            _ if !needs_cause => 0,
+            Some(code) => data.cause(code)?.code(),
+            None if surv.n_codes() == 1 => 1,
+            None => {
+                return Err(Error::input(format!(
+                    "the status has {} event codes, so the cause to count must be given",
+                    surv.n_codes()
+                )));
+            }
+        };
+        let code = i32::try_from(code).map_err(|_| Error::input("cause does not fit an i32"))?;
+        let n_rows = data.n_rows();
+
+        let mut sizes = Vec::with_capacity(dims.len());
+        let mut cells = 1_usize;
+        for (d, dim) in dims.iter().enumerate() {
+            let size = match *dim {
+                Dimension::Factor { codes, levels } => {
+                    if codes.len() != n_rows {
+                        return Err(length_error(d, codes.len(), n_rows));
+                    }
+                    if levels == 0 {
+                        return Err(Error::input(format!("dimension {d} has no levels")));
+                    }
+                    if let Some(row) = codes
+                        .iter()
+                        .position(|&c| usize::try_from(c).map_or(true, |c| c >= levels))
+                    {
+                        return Err(Error::input(format!(
+                            "dimension {d}: the code {} in row {row} is not below the {levels} levels",
+                            codes[row]
+                        )));
+                    }
+                    levels
+                }
+                Dimension::Time { origin, cuts } => {
+                    if origin.len() != n_rows {
+                        return Err(length_error(d, origin.len(), n_rows));
+                    }
+                    if cuts.len() < 2 {
+                        return Err(Error::input(format!(
+                            "dimension {d} needs at least two cut points"
+                        )));
+                    }
+                    if cuts.iter().any(|c| !c.is_finite())
+                        || cuts.windows(2).any(|w| w[0] > w[1])
+                    {
+                        return Err(Error::input(format!(
+                            "dimension {d}: the cut points must be finite and not decreasing"
+                        )));
+                    }
+                    let bad = data.used_rows().find(|&r| !origin[r as usize].is_finite());
+                    if let Some(row) = bad {
+                        return Err(Error::input(format!(
+                            "dimension {d}: the value in row {row} is not finite"
+                        )));
+                    }
+                    cuts.len() - 1
+                }
+            };
+            cells = cells
+                .checked_mul(size)
+                .filter(|&c| c <= isize::MAX as usize / 24)
+                .ok_or_else(|| Error::input("the table has too many cells"))?;
+            sizes.push(size);
+        }
+
+        let stop = surv.stop();
+        if surv.start().is_none()
+            && let Some(row) = data.used_rows().find(|&r| stop[r as usize] < 0.0)
+        {
+            return Err(Error::input(format!(
+                "row {row} has a negative follow-up time and no start time"
+            )));
+        }
+
+        // Strides, first dimension fastest.
+        let mut strides = Vec::with_capacity(dims.len());
+        let mut stride = 1_usize;
+        for &size in &sizes {
+            strides.push(stride);
+            stride *= size;
+        }
+        let mut factors: Vec<(&'x [u32], usize)> = Vec::new();
+        let mut walkers: Vec<Walker<'x>> = Vec::new();
+        for (dim, &stride) in dims.iter().zip(&strides) {
+            match *dim {
+                Dimension::Factor { codes, .. } => factors.push((codes, stride)),
+                Dimension::Time { origin, cuts } => walkers.push(Walker {
+                    cuts,
+                    origin,
+                    stride,
+                    x0: 0.0,
+                    above: 0,
+                }),
+            }
+        }
+        Ok(Self {
+            data,
+            code,
+            sizes,
+            cells,
+            cursor: Cursor { factors, walkers },
+        })
+    }
+}
+
+impl Cursor<'_> {
+    /// Walks the rows of positive weight in row order. `on_piece(row, cell,
+    /// length)` is called for each stretch of follow-up that stays in one
+    /// cell, with `cell` `None` for time off the table and `length` not
+    /// weighted. `on_end(row, last)` is called after each row with the last
+    /// cell it spent time in, or the cell its values at time 0 fall in when it
+    /// spent none.
+    pub(crate) fn walk(
+        &mut self,
+        data: &SurvData<'_>,
+        on_piece: &mut impl FnMut(usize, Option<usize>, f64),
+        on_end: &mut impl FnMut(usize, Option<usize>),
+    ) -> Result<()> {
+        let surv = data.followup()?;
+        let stop = surv.stop();
+        let start = surv.start();
+        let factors = &self.factors;
+        let walkers = &mut self.walkers;
+
+        for row in data.used_rows() {
+            let i = row as usize;
+            let begin = start.map_or(0.0, |s| s[i]);
+            let end = stop[i];
+            let duration = end - begin;
+            let base: usize = factors
+                .iter()
+                .map(|&(codes, stride)| codes[i] as usize * stride)
+                .sum();
+            for walker in walkers.iter_mut() {
+                walker.x0 = walker.origin[i] + begin;
+                walker.above = walker.cuts.partition_point(|&c| c <= walker.x0);
+            }
+
+            let mut elapsed = 0.0_f64;
+            let mut last: Option<usize> = None;
+            let mut any_piece = false;
+            while elapsed < duration {
+                let mut next = duration;
+                let mut entry = 0.0_f64;
+                let mut below = false;
+                let mut beyond = false;
+                for walker in walkers.iter() {
+                    if walker.above == walker.cuts.len() {
+                        beyond = true;
+                        continue;
+                    }
+                    let cut = walker.cuts[walker.above];
+                    let mut offset = cut - walker.x0;
+                    let reach = reach(cut, walker.x0, begin, end);
+                    if duration - offset <= reach {
+                        offset = duration;
+                    }
+                    if walker.above == 0 {
+                        below = true;
+                        entry = entry.max(offset);
+                    } else if offset < next {
+                        next = offset;
+                    }
+                }
+                let to = if beyond {
+                    duration
+                } else if below {
+                    entry.min(duration)
+                } else {
+                    next
+                };
+                let length = to - elapsed;
+                if length > 0.0 {
+                    let cell = (!beyond && !below).then(|| {
+                        base + walkers
+                            .iter()
+                            .map(|walker| (walker.above - 1) * walker.stride)
+                            .sum::<usize>()
+                    });
+                    on_piece(i, cell, length);
+                    last = cell;
+                    any_piece = true;
+                }
+                elapsed = to;
+                for walker in walkers.iter_mut() {
+                    while walker.above < walker.cuts.len() {
+                        let cut = walker.cuts[walker.above];
+                        if cut - walker.x0 > elapsed + reach(cut, walker.x0, begin, end) {
+                            break;
+                        }
+                        walker.above += 1;
+                    }
+                }
+            }
+            if !any_piece {
+                let inside = walkers
+                    .iter()
+                    .all(|walker| walker.above > 0 && walker.above < walker.cuts.len());
+                last = inside.then(|| {
+                    base + walkers
+                        .iter()
+                        .map(|walker| (walker.above - 1) * walker.stride)
+                        .sum::<usize>()
+                });
+            }
+            on_end(i, last);
+        }
+        Ok(())
+    }
 }
 
 /// The rounding error to allow in the offset `cut - x0` of a boundary, whose
