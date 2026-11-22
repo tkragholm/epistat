@@ -61,8 +61,10 @@
 //! levels. The tree does not depend on the thread count: the points of each
 //! node are fixed by the order, and the rows of a leaf are sorted by key.
 //! Nodes and boxes are stored by index as `u32`, a node's box beside the
-//! others in one array, and the live flags and counts are kept apart from
-//! the shape so that a copy of the tree for a search that removes points
+//! others in one array and the boxes of its two children side by side in
+//! another, interleaved by coordinate, so that a visit reads both children's
+//! boxes in one run and computes both bounds in two lanes. The live flags
+//! and counts are kept apart from the shape so that a copy of the tree for a search that removes points
 //! copies only them.
 //!
 //! Deletion costs `O(log n)`. A search costs `O(d)` per node visited. For
@@ -85,7 +87,7 @@
 use std::sync::Arc;
 
 /// The most points a leaf holds.
-pub(crate) const LEAF: usize = 8;
+pub(crate) const LEAF: usize = 32;
 
 /// The fewest points in up to five coordinates searched on a tree.
 const MIN_POINTS: usize = 1024;
@@ -132,11 +134,25 @@ pub(crate) trait Form {
     /// coordinates lie between `low` and `high`, computed so that this holds
     /// for the rounded numbers. A NaN bound prunes nothing.
     fn bound(&self, query: &[f64], low: &[f64], high: &[f64]) -> f64;
+
+    /// The [`Self::bound`] of the boxes of both children of a node, given as
+    /// `[low_left, low_right, high_left, high_right]` for each coordinate in
+    /// turn, left first, each the same number as `bound` gives for that box.
+    fn bound_pair(&self, query: &[f64], boxes: &[f64]) -> (f64, f64);
 }
 
 /// The distance from the query to the nearest point of the box on one
-/// coordinate, zero inside.
+/// coordinate, zero inside. A NaN operand is passed over by `max`, so a NaN
+/// query or edge gives the gap the other edge gives, and none at all gives
+/// zero, as [`gap_by_branches`] does.
+#[inline(always)]
 fn gap(q: f64, low: f64, high: f64) -> f64 {
+    (low - q).max(q - high).max(0.0)
+}
+
+/// [`gap`] by comparisons.
+#[cfg(test)]
+fn gap_by_branches(q: f64, low: f64, high: f64) -> f64 {
     if q < low {
         low - q
     } else if q > high {
@@ -169,6 +185,17 @@ impl Form for Euclidean {
         }
         sum.sqrt()
     }
+
+    fn bound_pair(&self, query: &[f64], boxes: &[f64]) -> (f64, f64) {
+        let mut sum = [0.0_f64; 2];
+        for (q, edges) in query.iter().zip(boxes.chunks_exact(4)) {
+            for (lane, total) in sum.iter_mut().enumerate() {
+                let g = gap(*q, edges[lane], edges[2 + lane]);
+                *total += g * g;
+            }
+        }
+        (sum[0].sqrt(), sum[1].sqrt())
+    }
 }
 
 /// A weighted sum of squared differences, `sum_k w_k (q_k - p_k)^2` summed
@@ -194,6 +221,17 @@ impl Form for WeightedSquares<'_> {
             sum += w * (g * g);
         }
         sum
+    }
+
+    fn bound_pair(&self, query: &[f64], boxes: &[f64]) -> (f64, f64) {
+        let mut sum = [0.0_f64; 2];
+        for ((q, edges), w) in query.iter().zip(boxes.chunks_exact(4)).zip(self.0) {
+            for (lane, total) in sum.iter_mut().enumerate() {
+                let g = gap(*q, edges[lane], edges[2 + lane]);
+                *total += w * (g * g);
+            }
+        }
+        (sum[0], sum[1])
     }
 }
 
@@ -240,6 +278,10 @@ struct Shape {
     nodes: Vec<Node>,
     /// For each node `d` lows then `d` highs.
     boxes: Vec<f64>,
+    /// For each node, the boxes of its two children, `[low_left, low_right,
+    /// high_left, high_right]` for each coordinate in turn, so that a visit
+    /// reads both from one run of memory. Empty for a leaf.
+    child_boxes: Vec<f64>,
 }
 
 /// Which points are live, and how many points of each node are.
@@ -461,6 +503,26 @@ fn append(part: &mut Part, sub: &Part, parent: u32) -> u32 {
     base
 }
 
+/// The paired boxes of the children of every node, `4 * dimension` numbers
+/// per node, zeros for a leaf.
+fn child_boxes(part: &Part, d: usize) -> Vec<f64> {
+    let mut paired = vec![0.0; part.nodes.len() * 4 * d];
+    for (index, node) in part.nodes.iter().enumerate() {
+        if node.is_leaf() {
+            continue;
+        }
+        let (left, right) = (node.left as usize, node.right as usize);
+        for j in 0..d {
+            let at = index * 4 * d + 4 * j;
+            paired[at] = part.boxes[2 * d * left + j];
+            paired[at + 1] = part.boxes[2 * d * right + j];
+            paired[at + 2] = part.boxes[2 * d * left + d + j];
+            paired[at + 3] = part.boxes[2 * d * right + d + j];
+        }
+    }
+    paired
+}
+
 impl KdTree {
     /// A tree over the points `coords`, `dimension` values each and every
     /// value finite, with the keys `keys`, distinct and below `key_space`.
@@ -497,6 +559,7 @@ impl KdTree {
             .iter()
             .map(|node| node.end - node.start)
             .collect();
+        let child_boxes = child_boxes(&part, dimension);
         Self {
             shape: Arc::new(Shape {
                 dimension,
@@ -506,6 +569,7 @@ impl KdTree {
                 leaf_of,
                 nodes: part.nodes,
                 boxes: part.boxes,
+                child_boxes,
             }),
             live: Live {
                 alive: vec![true; n],
@@ -600,6 +664,12 @@ impl KdTree {
 }
 
 impl Shape {
+    /// The bounds of the two children of the internal node `node`.
+    fn bound_pair_of<F: Form>(&self, form: &F, query: &[f64], node: usize) -> (f64, f64) {
+        let width = 4 * self.dimension;
+        form.bound_pair(query, &self.child_boxes[node * width..(node + 1) * width])
+    }
+
     fn bound_of<F: Form>(&self, form: &F, query: &[f64], node: usize) -> f64 {
         let d = self.dimension;
         let at = 2 * d * node;
@@ -640,8 +710,8 @@ impl<F: Form> Search<'_, F> {
         }
         if !entry.is_leaf() {
             let (left, right) = (entry.left, entry.right);
-            let left_bound = shape.bound_of(self.form, self.query, left as usize);
-            let right_bound = shape.bound_of(self.form, self.query, right as usize);
+            let (left_bound, right_bound) =
+                shape.bound_pair_of(self.form, self.query, node as usize);
             // A NaN bound sorts last and prunes nothing.
             let (first, first_bound, second, second_bound) = if right_bound < left_bound {
                 (right, right_bound, left, left_bound)
@@ -764,7 +834,7 @@ mod tests {
     fn search_equals_the_scan() {
         let mut mix = Mix(11);
         for d in 1..=6 {
-            for &n in &[1_usize, 7, 40, 300] {
+            for &n in &[1_usize, 7, 40, 300, 2500] {
                 let coords: Vec<f64> = (0..n * d).map(|_| (mix.next() % 5) as f64).collect();
                 // Keys in a scrambled order, with gaps in the key space.
                 let mut keys: Vec<usize> = (0..n).map(|i| 3 * i + 1).collect();
@@ -831,6 +901,77 @@ mod tests {
         }
     }
 
+    /// The branch-free gap is the gap by comparisons, and the bounds of a pair
+    /// of boxes are those of the two boxes, over finite, infinite and NaN
+    /// queries and edges, and both zeros, for boxes whose low edge is not above
+    /// the high edge.
+    #[test]
+    fn the_branch_free_gap_and_the_paired_bounds_equal_the_single_ones() {
+        let values = [
+            f64::NAN,
+            f64::NEG_INFINITY,
+            -2.5,
+            -0.0,
+            0.0,
+            1.0,
+            2.5,
+            f64::INFINITY,
+        ];
+        for &q in &values {
+            for &low in &values {
+                for &high in &values {
+                    // A box has its low edge at or below its high edge.
+                    if low > high {
+                        continue;
+                    }
+                    let (a, b) = (gap(q, low, high), gap_by_branches(q, low, high));
+                    assert!(
+                        a == b || (a.is_nan() && b.is_nan()),
+                        "gap {q} {low} {high}: {a} {b}"
+                    );
+                    assert_eq!(
+                        (a * a).to_bits(),
+                        (b * b).to_bits(),
+                        "square of the gap {q} {low} {high}"
+                    );
+                }
+            }
+        }
+        let mut mix = Mix(17);
+        let weights = [1.0, 0.0, 2.5, 0.25];
+        for d in 1..=4 {
+            for _ in 0..200 {
+                let mut pick = || values[usize::try_from(mix.next() % 8).expect("small")];
+                let query: Vec<f64> = (0..d).map(|_| pick()).collect();
+                let mut boxes: Vec<f64> = (0..4 * d).map(|_| pick()).collect();
+                for edges in boxes.chunks_exact_mut(4) {
+                    for lane in 0..2 {
+                        if edges[lane] > edges[2 + lane] {
+                            edges.swap(lane, 2 + lane);
+                        }
+                    }
+                }
+                let single = |lane: usize, form: &dyn Fn(&[f64], &[f64]) -> f64| {
+                    let low: Vec<f64> = boxes.chunks_exact(4).map(|c| c[lane]).collect();
+                    let high: Vec<f64> = boxes.chunks_exact(4).map(|c| c[2 + lane]).collect();
+                    form(&low, &high)
+                };
+                let same =
+                    |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+                let (left, right) = Euclidean.bound_pair(&query, &boxes);
+                assert!(same(left, single(0, &|l, h| Euclidean.bound(&query, l, h))));
+                assert!(same(
+                    right,
+                    single(1, &|l, h| Euclidean.bound(&query, l, h))
+                ));
+                let form = WeightedSquares(&weights[..d]);
+                let (left, right) = form.bound_pair(&query, &boxes);
+                assert!(same(left, single(0, &|l, h| form.bound(&query, l, h))));
+                assert!(same(right, single(1, &|l, h| form.bound(&query, l, h))));
+            }
+        }
+    }
+
     /// A tree large enough to be built in parallel has the same points,
     /// nodes and boxes on 1, 2, 4 and 12 threads, and its searches equal the
     /// scan's.
@@ -847,6 +988,7 @@ mod tests {
             let mut out: Vec<f64> = shape.coords.clone();
             out.extend(shape.keys.iter().map(|&k| f64::from(k)));
             out.extend(&shape.boxes);
+            out.extend(&shape.child_boxes);
             for node in &shape.nodes {
                 out.extend(
                     [node.start, node.end, node.left, node.right, node.parent].map(f64::from),
