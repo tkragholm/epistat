@@ -14,8 +14,11 @@
 //! Each case is matched on the required strata, the birth-date window and the
 //! constraints, and the selection strategy chooses among the controls at risk.
 //! A control can be used again when replacement is allowed. When the at-risk
-//! rule is a span of dates for each control, the risk sets are kept by a sweep
-//! over the case dates instead of being rebuilt for each case.
+//! rule is a span of dates for each control, the selection is a seeded random
+//! draw, there is no unique key and every constraint decides from dates or
+//! values the sweep can read, the risk sets are kept by a sweep over the case
+//! dates instead of being rebuilt for each case; any other job scans the
+//! cohort for each case. Both give the same matches.
 //!
 //! With common support set, a case whose score is strictly outside the range
 //! of the scores at risk on its date is not matched, and a candidate whose

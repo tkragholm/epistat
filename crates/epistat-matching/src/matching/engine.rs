@@ -25,8 +25,9 @@
 //! parallel. Otherwise the anchors are grouped by their strata and the groups
 //! run in parallel, since controls of different strata are never
 //! interchangeable. With a unique key the groups share the used values and
-//! run in order. The anchors of one group run in order. A selection strategy that assigns in rounds gives every
-//! anchor its first control before any gets a second.
+//! run in order. The anchors of one group run in order. A selection strategy
+//! that assigns in rounds gives every anchor its first control before any gets
+//! a second.
 //!
 //! An anchor that finds fewer controls than the ratio tries the fallback
 //! ratios in turn. The diagnostics record the exclusions, the unmatched
