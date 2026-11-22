@@ -279,8 +279,14 @@ fn invariants_on_random_data() {
                 .all(|&c| !(c > out.entry[1][k] && c < out.entry[1][k] + end))
         );
         if k + 1 < out.len() && out.row[k + 1] == out.row[k] {
-            assert_eq!(f64::to_bits(out.entry[0][k] + out.length[k]), f64::to_bits(out.entry[0][k + 1]));
-            assert_eq!(f64::to_bits(out.entry[1][k] + out.length[k]), f64::to_bits(out.entry[1][k + 1]));
+            assert_eq!(
+                f64::to_bits(out.entry[0][k] + out.length[k]),
+                f64::to_bits(out.entry[0][k + 1])
+            );
+            assert_eq!(
+                f64::to_bits(out.entry[1][k] + out.length[k]),
+                f64::to_bits(out.entry[1][k + 1])
+            );
             assert_eq!(out.status[k], 0);
         }
     }
@@ -349,7 +355,10 @@ fn fit_on_cells_equals_fit_on_pieces() {
     let cells = aggregate(&keys, &out.length, &events).unwrap();
     assert!(cells.len() <= 36);
     assert_eq!(cells.pieces.iter().sum::<u64>() as usize, out.len());
-    assert_eq!(f64::to_bits(cells.events.iter().sum::<f64>()), f64::to_bits(events.iter().sum::<f64>()));
+    assert_eq!(
+        f64::to_bits(cells.events.iter().sum::<f64>()),
+        f64::to_bits(events.iter().sum::<f64>())
+    );
 
     // The design: intercept and dummies for the levels after the first.
     let design = |codes: [&[u32]; 3], levels: [u32; 3]| -> Vec<Vec<f64>> {
@@ -427,7 +436,10 @@ fn fit_on_cells_equals_fit_on_pieces() {
     );
     assert!(worst_coef < tol_coef, "coefficients differ by {worst_coef}");
     assert!(worst_cov < tol_cov, "covariances differ by {worst_cov}");
-    assert_eq!(f64::to_bits(on_pieces.events), f64::to_bits(on_cells.events));
+    assert_eq!(
+        f64::to_bits(on_pieces.events),
+        f64::to_bits(on_cells.events)
+    );
 }
 
 /// Summing in the same pass gives the cells of summing the pieces: the same

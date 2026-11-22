@@ -9,7 +9,6 @@
 //! off by at most `(k + 4)` units in the last place of the largest magnitude
 //! of the case, which is the tolerance used.
 
-
 use epistat_survival::SurvData;
 use epistat_survival::lexis::rates::{RateOptions, fit_rates};
 use epistat_survival::lexis::{Lexis, LexisOptions, TimeScale, split_lexis};
@@ -202,7 +201,10 @@ fn a_short_last_piece_is_kept() {
     assert_eq!(got.row, vec![0, 0, 1, 1]);
     assert_eq!(got.status, vec![0, 1, 0, 1]);
     assert_eq!(f64::to_bits(got.length[0]), f64::to_bits(5.0));
-    assert_eq!(f64::to_bits(got.length[1]), f64::to_bits((5.0 + 1e-9) - 5.0));
+    assert_eq!(
+        f64::to_bits(got.length[1]),
+        f64::to_bits((5.0 + 1e-9) - 5.0)
+    );
     assert!((got.length[1] - 1e-9).abs() < 1e-15);
 }
 
