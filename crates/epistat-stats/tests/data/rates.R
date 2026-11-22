@@ -89,5 +89,5 @@ for (t in list(c(1, 1), c(1, 3), c(7, 2.5), c(1000, 1300))) {
 
 write(toJSON(list(versions = list(r = R.version.string, popEpi = as.character(packageVersion("popEpi"))),
                   crude = crude, standardised = std, pairs = pairs, exact = exact),
-             auto_unbox = TRUE, digits = NA, null = "null", na = "null"),
+             auto_unbox = TRUE, digits = 17, null = "null", na = "null"),
       "tests/data/rates.json")

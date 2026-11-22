@@ -6,9 +6,9 @@
 //! and the Fay-Feuer gamma interval written out in R with `qchisq`, and
 //! `popEpi::rate` for the standardised point estimate.
 //!
-//! Tolerance. The reference is written with 15 significant digits, a relative
-//! rounding of `5e-15`. The rate, the variance and the Wald limits are a few
-//! dozen additions and products, so they agree to `1e-13`. The gamma limits
+//! Tolerance. The reference is written with 17 significant digits, so it is
+//! exact. The rate, the variance and the Wald limits are a few dozen
+//! additions and products, so they agree to `1e-13`. The gamma limits
 //! add the accuracy of `gamma_quantile` (about `1e-14`) divided by the
 //! sensitivity of the quantile to its probability, which is below 10 for
 //! these shapes, so the bound is `1e-12`. The exact p-values are sums of
