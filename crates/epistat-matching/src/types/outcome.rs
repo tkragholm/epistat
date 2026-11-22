@@ -223,6 +223,26 @@ impl Display for ExclusionReason {
     }
 }
 
+/// The ids of the units that common-support trimming left out, anchors and
+/// candidates apart, each in the order of the units given.
+///
+/// Both lists are empty when nothing was trimmed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrimmedUnits {
+    /// Ids of the trimmed anchors.
+    pub anchors: Vec<String>,
+    /// Ids of the trimmed candidates.
+    pub candidates: Vec<String>,
+}
+
+impl TrimmedUnits {
+    /// Whether no unit was trimmed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.anchors.is_empty() && self.candidates.is_empty()
+    }
+}
+
 /// Matched anchor/candidate pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchedPair {
@@ -284,6 +304,12 @@ impl MatchDiagnostics {
         self.pairs_selected += other.pairs_selected;
         self.common_support_trimmed_anchors += other.common_support_trimmed_anchors;
         self.common_support_trimmed_candidates += other.common_support_trimmed_candidates;
+        self.common_support_trimmed_ids
+            .anchors
+            .extend(other.common_support_trimmed_ids.anchors);
+        self.common_support_trimmed_ids
+            .candidates
+            .extend(other.common_support_trimmed_ids.candidates);
 
         for (reason, count) in other.exclusion_counts {
             *self.exclusion_counts.entry(reason).or_insert(0) += count;
@@ -332,6 +358,11 @@ pub struct MatchDiagnostics {
     /// Number of candidates discarded by common-support trimming.
     #[serde(default)]
     pub common_support_trimmed_candidates: usize,
+    /// Ids of the units that common-support trimming discarded. The debug
+    /// rendering leaves them out, since the counts above say how many there
+    /// are.
+    #[serde(default)]
+    pub common_support_trimmed_ids: TrimmedUnits,
     /// Applied overlap interval from common-support trimming when available.
     #[serde(default)]
     pub common_support_overlap: Option<(f64, f64)>,
@@ -349,10 +380,12 @@ pub struct MatchDiagnostics {
     pub estimand_drift_reasons: Vec<EstimandDriftReason>,
 }
 
-/// The debug rendering lists every field. `anchors_on_lower_tier` is left out
+/// The debug rendering lists every field but the ids of the trimmed units, which
+/// the trimmed counts summarise. `anchors_on_lower_tier` is left out
 /// when it is 0, so that the rendering of a job that matches on no lower tier
 /// is the same as before the field existed and the hashes of renderings that
 /// tests pin stay valid.
+#[expect(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for MatchDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("MatchDiagnostics");

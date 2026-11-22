@@ -194,7 +194,7 @@ pub use matching::{
     match_weights_from_pairs, pair_weights_from_pairs, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs,
-    subclassify_by_propensity_score_map,
+    subclassify_by_propensity_score_map, subclassify_with_set_aside_scores,
 };
 pub use matching::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
@@ -237,7 +237,7 @@ pub use types::{
     EstimandDriftReason, ExclusionReason, InvalidCriteriaReason, MatchDiagnostics, MatchOutcome,
     MatchRatio, MatchedPair, MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck,
     NumericBalanceTransform, RoleTransitionOptions, RoleTransitionRecord,
-    SupplementalBalanceCovariates, UniqueValueId, ValidatedMatchingCriteria,
+    SupplementalBalanceCovariates, TrimmedUnits, UniqueValueId, ValidatedMatchingCriteria,
 };
 pub use types::{
     BalanceImprovement, BalanceSummary, GroupSampleSizes, LevelImprovement, NumericImprovement,
@@ -316,17 +316,18 @@ pub mod prelude {
         SpecError, SpecInput, SpecOutput, StandardMatchRequest, StrataExactConstraint,
         SubclassReferenceGroup, SubclassSpec, SubclassSummary, SubclassificationConfig,
         SubclassificationError, SubclassificationOutcome, SupplementalBalanceCovariates,
-        TransformSpec, TransitionMatchRequest, UniqueValueId, UnitRole, UnitWeightRow,
-        UnitWeightSet, UnitWeightTable, Units, ValidatedMatchingCriteria, balance_diagnostics,
-        balance_report, balance_report_with_options, balance_threshold_summary,
-        build_projected_balance_rows, categorical_max_abs_diff, cross_validation_folds,
-        effective_sample_size, estimate_propensity_and_match, get_matches, get_matches_from_pairs,
-        match_data, match_data_from_weights, match_matrix, match_standard,
+        TransformSpec, TransitionMatchRequest, TrimmedUnits, UniqueValueId, UnitRole,
+        UnitWeightRow, UnitWeightSet, UnitWeightTable, Units, ValidatedMatchingCriteria,
+        balance_diagnostics, balance_report, balance_report_with_options,
+        balance_threshold_summary, build_projected_balance_rows, categorical_max_abs_diff,
+        cross_validation_folds, effective_sample_size, estimate_propensity_and_match, get_matches,
+        get_matches_from_pairs, match_data, match_data_from_weights, match_matrix, match_standard,
         match_standard_with_discard, match_transition, match_weights_from_pairs,
         pair_weights_from_pairs, prepare_euclidean_distance_config,
         prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
         prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs, run_spec,
         smd_numeric_from_values, subclassify_by_propensity_score_map,
+        subclassify_with_set_aside_scores,
     };
     pub use crate::{
         BalanceImprovement, BalanceInputError, BalanceSummary, BalanceWeights, GroupSampleSizes,

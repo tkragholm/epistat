@@ -807,7 +807,11 @@ pub struct MatchSpec {
     /// Trim the units outside the common support of the scores before
     /// matching, `discard` of `matchit()`. Needs a propensity score or a score
     /// of your own as distance, and one of the random, lowest_index,
-    /// nearest_birth_date and nearest methods.
+    /// nearest_birth_date, nearest, subclass, full, optimal, quick and genetic
+    /// methods. The exact and cem methods do not read it. Subclass cutpoints
+    /// are taken over the reference group including the trimmed units, as
+    /// `matchit()` does, except with `reestimate`, where they are taken over
+    /// the kept units because `matchit()` mixes two fits there.
     pub discard: Option<DiscardSpec>,
     /// Fit the propensity model again on the units that remain after
     /// `discard`, `reestimate` of `matchit()`. Needs `discard` and a propensity
@@ -1631,12 +1635,18 @@ impl MatchSpec {
                         | MatchMethod::LowestIndex
                         | MatchMethod::NearestBirthDate
                         | MatchMethod::Nearest
+                        | MatchMethod::Subclass
+                        | MatchMethod::Full
+                        | MatchMethod::Optimal
+                        | MatchMethod::Quick
+                        | MatchMethod::Genetic
                 ));
         if !supported {
             return Err(SpecError::option(
                 "discard",
                 "common support is trimmed in risk-set mode and in standard mode with the \
-                 random, lowest_index, nearest_birth_date and nearest methods; drop it",
+                 random, lowest_index, nearest_birth_date, nearest, subclass, full, optimal, \
+                 quick and genetic methods; drop it",
             ));
         }
         let score_distance = match self.mode {
@@ -2297,6 +2307,28 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         &spec.distance,
         anchors.iter().chain(candidates).map(MatchingRecord::id),
     )?;
+    if spec.discard.is_some()
+        && matches!(
+            spec.method,
+            MatchMethod::Subclass
+                | MatchMethod::Quick
+                | MatchMethod::Optimal
+                | MatchMethod::Full
+                | MatchMethod::Genetic
+        )
+    {
+        return run_trimmed(spec, anchors, candidates);
+    }
+    run_untrimmed(spec, anchors, candidates)
+}
+
+/// The methods of a standard match that do not trim before they run, or that
+/// trim inside the nearest-family engine.
+fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
+    spec: &MatchSpec,
+    anchors: &[R],
+    candidates: &[R],
+) -> Result<SpecOutput, SpecError> {
     match spec.method {
         MatchMethod::Exact => {
             let outcome = exact_match_subclasses(anchors, candidates, &spec.exact)?;
@@ -2505,6 +2537,195 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
         outcome: Box::new(outcome),
         propensity: refitted.or(built.propensity).map(Box::new),
     })
+}
+
+/// Subclass, full, optimal, quick and genetic matching after common-support
+/// trimming.
+///
+/// The distance is fitted on all units and the units outside the other
+/// group's range of it are set aside, as `discard` of `matchit()` does. The
+/// method then runs on the units that remain. Without `reestimate` it uses the
+/// scores of the first fit. With it, the propensity model is fitted again on
+/// the units that remain.
+///
+/// Subclass cutpoints follow `matchit()`: without `reestimate` they are the
+/// quantiles over every unit of the reference group, trimmed ones included.
+/// With it `matchit()` takes them over the first-fit scores of the trimmed
+/// units mixed with the second-fit scores of the kept units, which is the
+/// distribution of neither fit and a defect, so the cutpoints are taken over
+/// the kept units alone.
+fn run_trimmed<R: MatchingRecord + CovariateRecord>(
+    spec: &MatchSpec,
+    anchors: &[R],
+    candidates: &[R],
+) -> Result<SpecOutput, SpecError> {
+    let policy: CommonSupport = spec
+        .discard
+        .map(Into::into)
+        .ok_or_else(|| SpecError::option("discard", "no common support was asked for"))?;
+    let first = build_distance(
+        &spec.distance,
+        anchors,
+        candidates,
+        spec.estimand,
+        spec.seed,
+        false,
+    )?;
+    let scores = first
+        .config
+        .as_ref()
+        .and_then(scores_of)
+        .ok_or_else(|| SpecError::option("distance", "no scores were built"))?;
+    let support = crate::matching::standard_common_support(anchors, candidates, policy, scores)
+        .map_err(|reason| SpecError::Rejected(ExclusionReason::CommonSupportFailure(reason)))?;
+    let kept = |rows: &'_ [R], out: &std::collections::HashSet<usize>| -> Vec<usize> {
+        (0..rows.len()).filter(|idx| !out.contains(idx)).collect()
+    };
+    let kept_anchors = kept(anchors, &support.anchors);
+    let kept_candidates = kept(candidates, &support.candidates);
+    let anchor_rows: Vec<&R> = kept_anchors.iter().map(|&idx| &anchors[idx]).collect();
+    let candidate_rows: Vec<&R> = kept_candidates
+        .iter()
+        .map(|&idx| &candidates[idx])
+        .collect();
+    let mut inner = MatchSpec {
+        discard: None,
+        reestimate: false,
+        ..spec.clone()
+    };
+    if !spec.reestimate {
+        // The units that remain are matched on the scores of the first fit.
+        let table: BTreeMap<String, f64> = anchor_rows
+            .iter()
+            .chain(&candidate_rows)
+            .filter_map(|row| {
+                scores
+                    .get(row.id())
+                    .map(|score| (row.id().to_string(), *score))
+            })
+            .collect();
+        inner.distance = DistanceSpec::Scores {
+            scores: table,
+            caliper: spec.distance.caliper(),
+        };
+    }
+    let trimmed =
+        crate::matching::trimmed_ids(anchors, candidates, &support.anchors, &support.candidates);
+    if spec.method == MatchMethod::Subclass && !spec.reestimate {
+        return run_trimmed_subclass(
+            spec,
+            policy,
+            (anchors, candidates),
+            (&anchor_rows, &candidate_rows),
+            &support,
+            (scores, first.propensity),
+        );
+    }
+    let output = run_untrimmed(&inner, &anchor_rows, &candidate_rows)?;
+    let first_fit = first.propensity.map(Box::new);
+    let with_discarded = |mut estimate: Box<PropensityScoreEstimate>| {
+        estimate.discarded_anchors.clone_from(&trimmed.anchors);
+        estimate
+            .discarded_candidates
+            .clone_from(&trimmed.candidates);
+        estimate
+    };
+    let mut output = match output {
+        SpecOutput::Pairs {
+            outcome,
+            propensity,
+        } => SpecOutput::Pairs {
+            outcome,
+            propensity: if spec.reestimate {
+                propensity.map(with_discarded)
+            } else {
+                first_fit
+            },
+        },
+        SpecOutput::Subclass {
+            outcome,
+            propensity,
+        } => SpecOutput::Subclass {
+            outcome,
+            propensity: if spec.reestimate {
+                propensity.map(with_discarded)
+            } else {
+                first_fit
+            },
+        },
+        other => other,
+    };
+    record_trimming(&mut output, policy, &support, anchors, candidates);
+    Ok(output)
+}
+
+/// Subclassification after trimming, without a refit.
+///
+/// The cutpoints are the quantiles of the reference group over every unit of
+/// the group on the first fit, trimmed units included, as `matchit()` takes
+/// them. Only the kept units are subclassified and weighted. With `reestimate`
+/// `run_trimmed` takes the cutpoints over the kept units alone instead:
+/// `matchit()` then mixes the first-fit scores of the trimmed units with the
+/// second-fit scores of the kept ones in one set of quantiles, which has no
+/// meaning as a distribution of either fit.
+fn run_trimmed_subclass<R: MatchingRecord>(
+    spec: &MatchSpec,
+    policy: CommonSupport,
+    all: (&[R], &[R]),
+    kept: (&[&R], &[&R]),
+    support: &crate::matching::StandardCommonSupport,
+    fit: (&ScoreTable, Option<PropensityScoreEstimate>),
+) -> Result<SpecOutput, SpecError> {
+    let (scores, propensity) = fit;
+    let config = SubclassificationConfig {
+        subclasses: spec.subclass.n,
+        reference_group: spec.subclass.reference.map(Into::into),
+        min_n: spec.subclass.min_n,
+    };
+    let set_aside = |rows: &[R], out: &std::collections::HashSet<usize>| -> Vec<f64> {
+        rows.iter()
+            .enumerate()
+            .filter(|(idx, _)| out.contains(idx))
+            .filter_map(|(_, row)| scores.get(row.id()).copied())
+            .collect()
+    };
+    let outcome = crate::matching::subclassify_with_set_aside_scores(
+        kept.0,
+        kept.1,
+        &scores.to_map(),
+        spec.estimand,
+        &config,
+        &set_aside(all.0, &support.anchors),
+        &set_aside(all.1, &support.candidates),
+    )
+    .map_err(|error| SpecError::option("subclass.n", error.to_string()))?;
+    let mut output = SpecOutput::Subclass {
+        outcome: Box::new(outcome),
+        propensity: propensity.map(Box::new),
+    };
+    record_trimming(&mut output, policy, support, all.0, all.1);
+    Ok(output)
+}
+
+/// Write the trimming into the outcome that `run_trimmed` got.
+fn record_trimming<R: MatchingRecord>(
+    output: &mut SpecOutput,
+    policy: CommonSupport,
+    support: &crate::matching::StandardCommonSupport,
+    anchors: &[R],
+    candidates: &[R],
+) {
+    let trimmed =
+        crate::matching::trimmed_ids(anchors, candidates, &support.anchors, &support.candidates);
+    match output {
+        SpecOutput::Pairs { outcome, .. } | SpecOutput::Genetic { outcome, .. } => {
+            support.record_after_match(&mut outcome.diagnostics, policy, anchors, candidates);
+        }
+        SpecOutput::Subclass { outcome, .. } => outcome.trimmed = trimmed,
+        SpecOutput::Quick(outcome) => outcome.trimmed = trimmed,
+        SpecOutput::Full(outcome) => outcome.trimmed = trimmed,
+        _ => {}
+    }
 }
 
 fn run_cem<R: MatchingRecord + CovariateRecord>(

@@ -270,7 +270,6 @@ impl MatchSpec {
             ("ratio_fallback", !self.ratio_fallback.is_empty()),
             ("unique_by_key", self.unique_by_key.is_some()),
             ("assignment", self.assignment.is_some()),
-            ("discard", self.discard.is_some()),
             (
                 "birth_window_days",
                 self.birth_window_days != MatchingCriteria::default().birth_date_window_days,
@@ -369,6 +368,7 @@ impl MatchSpec {
                 ("antiexact", !self.antiexact.is_empty()),
                 ("match_sex", self.match_sex),
                 ("distance", !self.distance.is_default()),
+                ("discard", self.discard.is_some()),
             ],
         )?;
         let cardinality = &self.cardinality;

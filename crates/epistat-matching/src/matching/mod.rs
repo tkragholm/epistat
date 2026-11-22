@@ -4,7 +4,7 @@ mod codes;
 mod constraints;
 mod distance;
 mod engine;
-pub(crate) use engine::standard_common_support;
+pub(crate) use engine::{StandardCommonSupport, standard_common_support, trimmed_ids};
 mod estimation;
 mod exact;
 mod fine_balance;
@@ -85,6 +85,7 @@ pub use selection::{
 pub use subclassification::{
     SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationError,
     SubclassificationOutcome, subclassify_by_propensity_score_map,
+    subclassify_with_set_aside_scores,
 };
 pub use weights::{
     InvalidWeightError, MatchWeightMethod, PairWeight, PairWeightRow, PairWeightSet,

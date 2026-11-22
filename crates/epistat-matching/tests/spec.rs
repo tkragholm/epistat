@@ -1982,14 +1982,20 @@ fn invalid_support_and_ratio_options_are_errors_that_name_the_option() {
             ..nearest.clone()
         }),
     );
-    named(
-        "discard",
-        run(MatchSpec {
-            discard: Some(DiscardSpec::Both),
-            method: MatchMethod::Optimal,
-            ..nearest.clone()
-        }),
-    );
+    for method in [
+        MatchMethod::Exact,
+        MatchMethod::Cem,
+        MatchMethod::Cardinality,
+    ] {
+        named(
+            "discard",
+            run(MatchSpec {
+                discard: Some(DiscardSpec::Both),
+                method,
+                ..nearest.clone()
+            }),
+        );
+    }
     named(
         "std_caliper",
         run(MatchSpec {

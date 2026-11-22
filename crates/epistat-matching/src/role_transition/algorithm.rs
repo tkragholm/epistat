@@ -581,7 +581,18 @@ fn resolve_transition_common_support<
     Ok(TransitionCommonSupportFilters::default())
 }
 
-fn transition_initial_diagnostics(
+/// The ids of the rows at `indices`, in the order of the cohort.
+fn trimmed_row_ids<R: RoleIndexedRecord>(cohort: &[R], indices: &HashSet<usize>) -> Vec<String> {
+    cohort
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| indices.contains(idx))
+        .map(|(_, row)| row.id().to_string())
+        .collect()
+}
+
+fn transition_initial_diagnostics<R: RoleIndexedRecord>(
+    cohort: &[R],
     criteria: &MatchingCriteria,
     case_count: usize,
     filters: &TransitionCommonSupportFilters,
@@ -592,6 +603,10 @@ fn transition_initial_diagnostics(
         realized_estimand: criteria.estimand,
         common_support_trimmed_anchors: filters.trimmed_case_indices.len(),
         common_support_trimmed_candidates: filters.trimmed_candidate_indices.len(),
+        common_support_trimmed_ids: crate::TrimmedUnits {
+            anchors: trimmed_row_ids(cohort, &filters.trimmed_case_indices),
+            candidates: trimmed_row_ids(cohort, &filters.trimmed_candidate_indices),
+        },
         common_support_overlap: filters.overlap,
         common_support_policy: filters.policy.or(criteria.common_support),
         common_support_anchor_score_bounds: filters.case_score_bounds,
@@ -666,6 +681,7 @@ fn match_with_role_indexing_with_channel_internal<
 
     let mut run_state = TransitionRunState::new(cohort.len());
     run_state.diagnostics = transition_initial_diagnostics(
+        cohort,
         validated.as_ref(),
         case_indices.len(),
         &common_support_filters,
