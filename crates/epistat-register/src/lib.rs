@@ -31,9 +31,11 @@
 
 pub mod age;
 pub mod codes;
+pub mod comorbidity;
 pub mod cpi;
 mod error;
 pub mod events;
+pub mod exposure;
 pub mod icd10;
 pub mod person_time;
 pub mod relations;
