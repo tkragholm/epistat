@@ -30,6 +30,7 @@
 #![warn(missing_docs)]
 
 pub mod age;
+pub mod codes;
 pub mod cpi;
 mod error;
 pub mod icd10;

@@ -566,6 +566,7 @@ dependencies = [
 name = "epistat-register"
 version = "0.1.2"
 dependencies = [
+ "epistat-testkit",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
