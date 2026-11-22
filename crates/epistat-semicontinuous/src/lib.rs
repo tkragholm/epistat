@@ -68,9 +68,9 @@ pub use models::selection::{
 };
 
 pub use models::comparison::{
-    ComparisonTables, FittedComparisonModels, ModelComparison, ModelComparisonError,
+    FittedComparisonModels, ModelComparison, ModelComparisonError,
     ModelComparisonOptions, ModelInformationCriteria, ModelScore, TweedieRankingRow,
-    compare_models_input, compare_models_input_with_fits, render_comparison_tables,
+    compare_models_input, compare_models_input_with_fits,
 };
 
 pub use models::mtp::{

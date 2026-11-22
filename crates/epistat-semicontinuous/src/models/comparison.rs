@@ -11,12 +11,7 @@
 //! Provides in-sample metrics, quasi information criteria, and cross-validation
 //! summaries for two-part, Tweedie, and log-normal models.
 
-use comfy_table::{
-    Attribute, Cell, Color, ContentArrangement, Table, presets::UTF8_FULL_CONDENSED,
-};
-use std::time::Instant;
 use thiserror::Error;
-use tracing::info;
 
 use super::lognormal::{
     LogNormalError, LogNormalModel, LogNormalOptions, fit_lognormal_smearing_input,
@@ -139,17 +134,6 @@ pub struct ModelComparison {
     pub tweedie_cv_ranking: Vec<TweedieRankingRow>,
 }
 
-/// Rendered tables for a comparison report.
-#[derive(Debug, Clone)]
-pub struct ComparisonTables {
-    pub in_sample: String,
-    pub information_criteria: String,
-    pub tweedie_candidates: String,
-    pub cv_summary: String,
-    pub cv_ranking: String,
-    pub tweedie_cv_ranking: String,
-}
-
 #[derive(Debug, Clone, Default)]
 struct InSamplePredictions {
     two_part: Option<super::two_part::TwoPartPrediction>,
@@ -186,9 +170,7 @@ pub fn compare_models_input_with_fits(
 ) -> Result<(ModelComparison, FittedComparisonModels), ModelComparisonError> {
     input.validate()?;
 
-    let total_started_at = Instant::now();
 
-    let base_fits_started_at = Instant::now();
     let two_part_default = options
         .include_two_part
         .then(|| fit_two_part_input(input, options.two_part_options))
@@ -219,28 +201,9 @@ pub fn compare_models_input_with_fits(
     } else {
         None
     };
-    info!(
-        step = "base_fits",
-        rows = input.outcome.nrows(),
-        features = input.design_matrix.ncols(),
-        include_two_part = options.include_two_part,
-        include_tweedie = options.include_tweedie,
-        include_lognormal = options.include_lognormal,
-        tweedie_powers = options.tweedie_powers.len(),
-        duration_ms = base_fits_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison substep complete"
-    );
 
-    let selection_started_at = Instant::now();
     let tweedie_candidates = fit_tweedie_candidates_input(input, &options.tweedie_powers);
-    info!(
-        step = "selection",
-        tweedie_candidates = tweedie_candidates.len(),
-        duration_ms = selection_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison substep complete"
-    );
 
-    let scoring_started_at = Instant::now();
     let predictions = build_in_sample_predictions(
         input,
         two_part_default.as_ref(),
@@ -256,16 +219,7 @@ pub fn compare_models_input_with_fits(
         lognormal_model.as_ref(),
     );
     let tweedie_ic = build_tweedie_candidate_ic(&tweedie_candidates);
-    info!(
-        step = "scoring",
-        in_sample_rows = in_sample.len(),
-        information_criteria_rows = information_criteria.len(),
-        tweedie_ic_rows = tweedie_ic.len(),
-        duration_ms = scoring_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison substep complete"
-    );
 
-    let cv_default_started_at = Instant::now();
     let cv_default = cross_validate_models_input(
         input,
         &options.tweedie_powers,
@@ -278,16 +232,6 @@ pub fn compare_models_input_with_fits(
             ..options.cv_options
         },
     )?;
-    info!(
-        step = "cv_default",
-        folds_used = cv_default.folds_used,
-        tweedie_candidates = cv_default.tweedie_candidates.len(),
-        include_two_part = cv_default.include_two_part,
-        include_lognormal = cv_default.include_lognormal,
-        duration_ms = cv_default_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison substep complete"
-    );
-    let cv_elastic_net_started_at = Instant::now();
     let cv_elastic_net = if let Some(elastic_net_options) = two_part_elastic_net_options {
         Some(cross_validate_models_input(
             input,
@@ -304,29 +248,9 @@ pub fn compare_models_input_with_fits(
     } else {
         None
     };
-    info!(
-        step = "cv_elastic_net",
-        enabled = cv_elastic_net.is_some(),
-        duration_ms = cv_elastic_net_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison substep complete"
-    );
-    let assembly_started_at = Instant::now();
     let cv_summary = build_cv_summary(&cv_default, cv_elastic_net.as_ref());
     let cv_ranking = build_cv_ranking(&cv_summary);
     let tweedie_cv_ranking = build_tweedie_cv_ranking(&cv_default, &tweedie_candidates);
-    info!(
-        step = "assemble_report",
-        cv_summary_rows = cv_summary.len(),
-        cv_ranking_rows = cv_ranking.len(),
-        tweedie_cv_ranking_rows = tweedie_cv_ranking.len(),
-        duration_ms = assembly_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison substep complete"
-    );
-    info!(
-        step = "total",
-        duration_ms = total_started_at.elapsed().as_millis() as u64,
-        "epistat_semicontinuous comparison complete"
-    );
 
     Ok((
         ModelComparison {
@@ -344,85 +268,6 @@ pub fn compare_models_input_with_fits(
             lognormal: lognormal_model,
         },
     ))
-}
-
-/// Render a comparison report to formatted tables using `comfy_table`.
-#[must_use]
-pub fn render_comparison_tables(report: &ModelComparison) -> ComparisonTables {
-    let mut in_sample_table = make_table(&["model", "rmse", "mae", "rmsle", "r2"]);
-    let in_sample_best = best_metrics(&report.in_sample);
-    for score in &report.in_sample {
-        add_metrics_row_highlight(
-            &mut in_sample_table,
-            &score.name,
-            &score.metrics,
-            &in_sample_best,
-        );
-    }
-
-    let mut ic_table = make_table(&["model", "loglik", "aic", "bic"]);
-    let ic_best = best_ic(&report.information_criteria);
-    for item in &report.information_criteria {
-        ic_table.add_row(vec![
-            Cell::new(&item.name),
-            highlight_metric_cell(item.loglik, ic_best.loglik, 2),
-            highlight_metric_cell(item.aic, ic_best.aic, 2),
-            highlight_metric_cell(item.bic, ic_best.bic, 2),
-        ]);
-    }
-
-    let mut tweedie_ic_table = make_table(&["power", "loglik", "aic", "bic"]);
-    let tweedie_ic_best = best_ic(&report.tweedie_ic);
-    for item in &report.tweedie_ic {
-        tweedie_ic_table.add_row(vec![
-            Cell::new(&item.name),
-            highlight_metric_cell(item.loglik, tweedie_ic_best.loglik, 2),
-            highlight_metric_cell(item.aic, tweedie_ic_best.aic, 2),
-            highlight_metric_cell(item.bic, tweedie_ic_best.bic, 2),
-        ]);
-    }
-
-    let mut cv_table = make_table(&["model", "rmse", "mae", "rmsle", "r2"]);
-    let cv_best = best_metrics(&report.cv_summary);
-    for score in &report.cv_summary {
-        add_metrics_row_highlight(&mut cv_table, &score.name, &score.metrics, &cv_best);
-    }
-
-    let mut cv_ranking_table = make_table(&["model", "rmse", "mae", "rmsle", "r2"]);
-    let ranking_best = best_metrics(&report.cv_ranking);
-    for score in &report.cv_ranking {
-        add_metrics_row_highlight(
-            &mut cv_ranking_table,
-            &score.name,
-            &score.metrics,
-            &ranking_best,
-        );
-    }
-
-    let mut tweedie_ranking_table =
-        make_table(&["power", "rmse", "mae", "rmsle", "r2", "dev", "aic", "bic"]);
-    let tweedie_best = best_tweedie_ranking(&report.tweedie_cv_ranking);
-    for row in &report.tweedie_cv_ranking {
-        tweedie_ranking_table.add_row(vec![
-            Cell::new(format!("{:.2}", row.power)),
-            highlight_metric_cell(row.metrics.rmse, tweedie_best.rmse, 4),
-            highlight_metric_cell(row.metrics.mae, tweedie_best.mae, 4),
-            highlight_metric_cell(row.metrics.rmsle, tweedie_best.rmsle, 4),
-            highlight_metric_cell(row.metrics.r2, tweedie_best.r2, 4),
-            highlight_metric_cell(row.metrics.deviance, tweedie_best.deviance, 4),
-            highlight_metric_cell(row.aic, tweedie_best.aic, 2),
-            highlight_metric_cell(row.bic, tweedie_best.bic, 2),
-        ]);
-    }
-
-    ComparisonTables {
-        in_sample: in_sample_table.to_string(),
-        information_criteria: ic_table.to_string(),
-        tweedie_candidates: tweedie_ic_table.to_string(),
-        cv_summary: cv_table.to_string(),
-        cv_ranking: cv_ranking_table.to_string(),
-        tweedie_cv_ranking: tweedie_ranking_table.to_string(),
-    }
 }
 
 fn build_in_sample_predictions(
@@ -670,106 +515,6 @@ fn build_tweedie_cv_ranking(
         .collect()
 }
 
-fn make_table(headers: &[&str]) -> Table {
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL_CONDENSED)
-        .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(headers.iter().map(|h| Cell::new(*h)).collect::<Vec<_>>());
-    table
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MetricBest {
-    rmse: f64,
-    mae: f64,
-    rmsle: f64,
-    r2: f64,
-    deviance: f64,
-    aic: f64,
-    bic: f64,
-    loglik: f64,
-}
-
-impl MetricBest {
-    /// The starting point every row improves on: infinite errors and criteria,
-    /// and negative infinity for r2 and the log-likelihood.
-    const fn worst() -> Self {
-        Self {
-            rmse: f64::INFINITY,
-            mae: f64::INFINITY,
-            rmsle: f64::INFINITY,
-            r2: f64::NEG_INFINITY,
-            deviance: f64::INFINITY,
-            aic: f64::INFINITY,
-            bic: f64::INFINITY,
-            loglik: f64::NEG_INFINITY,
-        }
-    }
-}
-
-fn best_metrics(rows: &[ModelScore]) -> MetricBest {
-    let mut best = MetricBest::worst();
-    for score in rows {
-        best.rmse = best.rmse.min(score.metrics.rmse);
-        best.mae = best.mae.min(score.metrics.mae);
-        best.rmsle = best.rmsle.min(score.metrics.rmsle);
-        best.r2 = best.r2.max(score.metrics.r2);
-        best.deviance = best.deviance.min(score.metrics.deviance);
-    }
-    best
-}
-
-fn best_ic(rows: &[ModelInformationCriteria]) -> MetricBest {
-    let mut best = MetricBest::worst();
-    for ic in rows {
-        best.loglik = best.loglik.max(ic.loglik);
-        best.aic = best.aic.min(ic.aic);
-        best.bic = best.bic.min(ic.bic);
-    }
-    best
-}
-
-fn best_tweedie_ranking(rows: &[TweedieRankingRow]) -> MetricBest {
-    let mut best = MetricBest::worst();
-    for row in rows {
-        best.rmse = best.rmse.min(row.metrics.rmse);
-        best.mae = best.mae.min(row.metrics.mae);
-        best.rmsle = best.rmsle.min(row.metrics.rmsle);
-        best.r2 = best.r2.max(row.metrics.r2);
-        best.deviance = best.deviance.min(row.metrics.deviance);
-        best.aic = best.aic.min(row.aic);
-        best.bic = best.bic.min(row.bic);
-    }
-    best
-}
-
-fn add_metrics_row_highlight(
-    table: &mut Table,
-    label: &str,
-    metrics: &ModelFitMetrics,
-    best: &MetricBest,
-) {
-    table.add_row(vec![
-        Cell::new(label),
-        highlight_metric_cell(metrics.rmse, best.rmse, 4),
-        highlight_metric_cell(metrics.mae, best.mae, 4),
-        highlight_metric_cell(metrics.rmsle, best.rmsle, 4),
-        highlight_metric_cell(metrics.r2, best.r2, 4),
-    ]);
-}
-
-fn highlight_metric_cell(value: f64, best: f64, precision: usize) -> Cell {
-    let is_best = (value - best).abs() < 1e-12;
-    if is_best {
-        Cell::new(format!("{value:.precision$}"))
-            .fg(Color::Green)
-            .add_attribute(Attribute::Bold)
-    } else {
-        Cell::new(format!("{value:.precision$}"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,17 +577,13 @@ mod tests {
     }
 
     #[test]
-    fn compare_models_input_runs_and_renders_tables() {
+    fn compare_models_input_runs() {
         let input = sample_input(80);
         let report =
             compare_models_input(&input, &ModelComparisonOptions::default()).expect("comparison");
         assert!(!report.in_sample.is_empty());
         assert!(!report.information_criteria.is_empty());
         assert!(!report.cv_summary.is_empty());
-        let tables = render_comparison_tables(&report);
-        assert!(tables.in_sample.contains("model"));
-        assert!(tables.information_criteria.contains("aic"));
-        assert!(tables.cv_summary.contains("rmse"));
     }
 
     #[test]
@@ -935,22 +676,5 @@ mod tests {
                 .iter()
                 .any(|row| row.name == "two_part_elastic_net")
         );
-    }
-
-    #[test]
-    fn render_comparison_tables_handles_degenerate_empty_report() {
-        let report = ModelComparison {
-            in_sample: Vec::new(),
-            information_criteria: Vec::new(),
-            cv_summary: Vec::new(),
-            cv_ranking: Vec::new(),
-            tweedie_ic: Vec::new(),
-            tweedie_cv_ranking: Vec::new(),
-        };
-        let tables = render_comparison_tables(&report);
-        assert!(!tables.in_sample.is_empty());
-        assert!(!tables.information_criteria.is_empty());
-        assert!(!tables.cv_summary.is_empty());
-        assert!(!tables.tweedie_cv_ranking.is_empty());
     }
 }

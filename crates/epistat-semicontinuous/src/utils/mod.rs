@@ -14,7 +14,6 @@
 use epistat_linalg::{
     Accum, Attempt, DesignError, Factor, Mat, MatMut, MatRef, Method, Par, ROW_BLOCK, Ridge, matmul,
 };
-use num_traits::ToPrimitive;
 
 use crate::input::LongitudinalModelInput;
 use crate::models::two_part::TwoPartError;
@@ -454,7 +453,13 @@ pub fn calibration_bins_summary(
     let mut grouped: Vec<Vec<usize>> = vec![Vec::new(); bins];
     for (row, probability) in predicted_probability.iter().copied().enumerate() {
         let raw = (probability.clamp(0.0, 1.0) * usize_to_f64(bins)).floor();
-        let idx = raw.to_usize().unwrap_or(0).min(bins.saturating_sub(1));
+        // `raw` lies in [0, bins], or is NaN for a NaN probability, which the cast takes to 0.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a floored value in [0, bins]"
+        )]
+        let idx = (raw as usize).min(bins.saturating_sub(1));
         grouped[idx].push(row);
     }
 
