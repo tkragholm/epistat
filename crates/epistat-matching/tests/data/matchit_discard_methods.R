@@ -9,16 +9,20 @@
 # no two units share a score and no two distances tie. For every run the file
 # holds the units MatchIt discarded (row numbers), the distance MatchIt matched
 # on and the result of the method:
-#   subclass   the subclass of every unit, the weights and the cutpoints q.cut,
-#              from matchit() on the units that were not discarded with the
-#              distance of the run (`subclass`, `weights`, `q_cut`), and the
-#              cutpoints of the call with the discard (`q_cut_with_discard`),
-#              which matchit() takes over all units of the reference group,
-#              discarded ones included. With reestimate the discarded units'
-#              scores are those of the first fit, the others those of the
-#              second, so the cutpoints mix two fits. `matchit()` does not say
-#              that in its documentation, which gives the reference group
-#              without mentioning units that are discarded.
+#   subclass   the subclass of every unit, the weights and the cutpoints q.cut.
+#              Without reestimate these are matchit()'s own, whose cutpoints
+#              are quantiles over all units of the reference group, discarded
+#              ones included; the crate does the same. With reestimate the
+#              discarded units keep their first-fit scores while the kept units
+#              have second-fit scores, and matchit() takes its quantiles over
+#              that mixture of two fits. That is a defect of matchit(): the
+#              mixture is the distribution of neither fit and it moves the
+#              cutpoints and the subclasses with the number of units discarded.
+#              With reestimate the reference is matchit() run on the kept units
+#              alone with their second-fit distance (`subclass`, `weights`,
+#              `q_cut`), which is what the crate computes, and
+#              `q_cut_with_discard` holds the cutpoints of the call with the
+#              discard, so that the test asserts both.
 #   full       the subclass of every unit and the weights; `unique` is TRUE when
 #              four perturbations of the distance by 1e-5 standard deviations
 #              give the same partition, so that the optimum is a single one
@@ -103,6 +107,11 @@ run_one <- function(method, policy, reestimate, extra = list(), link = "logit",
   }
   if (method == "subclass") {
     run$q_cut_with_discard <- unname(m$q.cut)
+    run$subclass <- ifelse(is.na(m$subclass), NA, as.integer(m$subclass))
+    run$weights <- unname(m$weights)
+    run$q_cut <- unname(m$q.cut)
+  }
+  if (method == "subclass" && reestimate) {
     kept <- which(!m$discarded)
     mk <- suppressWarnings(do.call(matchit, c(list(
       formula = f, data = lal[kept, ], method = "subclass",

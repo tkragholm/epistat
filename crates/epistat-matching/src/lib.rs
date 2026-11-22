@@ -194,7 +194,7 @@ pub use matching::{
     match_weights_from_pairs, pair_weights_from_pairs, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs,
-    subclassify_by_propensity_score_map,
+    subclassify_by_propensity_score_map, subclassify_with_set_aside_scores,
 };
 pub use matching::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
@@ -327,6 +327,7 @@ pub mod prelude {
         prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
         prepare_propensity_distance_config_with_discard, reconstruct_case_control_pairs, run_spec,
         smd_numeric_from_values, subclassify_by_propensity_score_map,
+        subclassify_with_set_aside_scores,
     };
     pub use crate::{
         BalanceImprovement, BalanceInputError, BalanceSummary, BalanceWeights, GroupSampleSizes,

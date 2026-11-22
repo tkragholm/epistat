@@ -371,19 +371,18 @@ fn quantiles(mut values: Vec<f64>, k: usize) -> Vec<f64> {
 }
 
 /// `matchit()` takes the cutpoints over all units of the reference group,
-/// discarded ones included; the crate takes them over the units that remain.
-/// The first is asserted here from R's value, the second below.
-fn check_matchit_cutpoints_include_discarded(label: &str, run: &Run, data: &Data) -> bool {
+/// discarded ones included. Without a refit the crate does the same and its
+/// cutpoints are R's. With a refit the distances of the discarded units are
+/// those of the first fit and the others those of the second, so R's cutpoints
+/// are the quantiles of that mixture, which the crate does not reproduce: it
+/// takes them over the kept units. R's value is asserted here, the crate's in
+/// [`check_subclass`] against `matchit()` on the kept units.
+fn check_matchit_cutpoints_include_discarded(label: &str, run: &Run, data: &Data) {
     let theirs = run.q_cut_with_discard.as_ref().expect("q.cut with discard");
     let reference: Vec<f64> = (0..data.treat.len())
         .filter(|idx| run.estimand == "ATE" || data.treat[*idx] == 1)
         .map(|idx| run.distance[idx])
         .collect();
-    // The distances of the units that were discarded are those of the first
-    // fit, so the cutpoints can be rebuilt only without a refit.
-    if run.reestimate {
-        return false;
-    }
     let all = quantiles(reference, theirs.len() - 1);
     for (a, b) in all.iter().zip(theirs) {
         assert!(
@@ -391,7 +390,6 @@ fn check_matchit_cutpoints_include_discarded(label: &str, run: &Run, data: &Data
             "{label}: matchit cutpoint {b} is not the quantile {a} over all units"
         );
     }
-    true
 }
 
 fn check_subclass(label: &str, run: &Run, data: &Data, outcome: &SubclassificationOutcome) {
@@ -574,10 +572,15 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
                 check_trimmed(&label, run, &reference.data, &outcome.trimmed);
                 check_distance(&label, run, propensity.as_ref().expect("fit"), &kept);
                 check_subclass(&label, run, &reference.data, outcome);
-                if check_matchit_cutpoints_include_discarded(&label, run, &reference.data) {
-                    *compared
-                        .entry("subclass cutpoints over all units".into())
-                        .or_default() += 1;
+                check_matchit_cutpoints_include_discarded(&label, run, &reference.data);
+                if run.reestimate
+                    && outcome
+                        .quantile_cuts
+                        .iter()
+                        .zip(run.q_cut_with_discard.as_ref().expect("cuts"))
+                        .any(|(a, b)| (a - b).abs() > 1e-6)
+                {
+                    *compared.entry("mixed cutpoints differ".into()).or_default() += 1;
                 }
             }
             SpecOutput::Full(outcome) => {
@@ -647,6 +650,10 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
         );
         *compared.entry(run.method.clone()).or_default() += 1;
     }
+    assert!(
+        compared.get("mixed cutpoints differ").copied().unwrap_or(0) > 0,
+        "the mixture of fits moves no cutpoint"
+    );
     for method in ["subclass", "full", "optimal", "quick", "genetic"] {
         assert!(compared.get(method).copied().unwrap_or(0) >= 6, "{method}");
     }

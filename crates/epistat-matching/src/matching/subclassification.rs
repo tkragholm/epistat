@@ -241,6 +241,39 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
     estimand: Estimand,
     config: &SubclassificationConfig,
 ) -> Result<SubclassificationOutcome, SubclassificationError> {
+    subclassify_with_set_aside_scores(
+        anchors,
+        candidates,
+        propensity_scores,
+        estimand,
+        config,
+        &[],
+        &[],
+    )
+}
+
+/// As [`subclassify_by_propensity_score_map`], with the scores of units that
+/// were set aside by common-support trimming also entering the reference
+/// group's quantiles.
+///
+/// `set_aside_anchors` and `set_aside_candidates` are the finite scores of the
+/// trimmed anchors and candidates. They are not subclassified and get no
+/// weight. `matchit()` takes the cutpoints over every unit of the reference
+/// group, discarded ones included, and this reproduces that. Non-finite scores
+/// are ignored.
+///
+/// # Errors
+///
+/// As [`subclassify_by_propensity_score_map`].
+pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Sync>(
+    anchors: &[R],
+    candidates: &[R],
+    propensity_scores: &HashMap<String, f64, H>,
+    estimand: Estimand,
+    config: &SubclassificationConfig,
+    set_aside_anchors: &[f64],
+    set_aside_candidates: &[f64],
+) -> Result<SubclassificationOutcome, SubclassificationError> {
     if config.subclasses == 0 {
         return Err(SubclassificationError::NoSubclasses);
     }
@@ -256,7 +289,23 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
                 .filter(|score| score.is_finite())
         })
         .collect();
-    let reference_scores = sorted_reference_scores(&scores, anchors.len(), reference_group);
+    let mut reference_scores = sorted_reference_scores(&scores, anchors.len(), reference_group);
+    let extra = |values: &[f64]| -> Vec<f64> {
+        values
+            .iter()
+            .copied()
+            .filter(|score| score.is_finite())
+            .collect()
+    };
+    match reference_group {
+        SubclassReferenceGroup::Anchors => reference_scores.extend(extra(set_aside_anchors)),
+        SubclassReferenceGroup::Candidates => reference_scores.extend(extra(set_aside_candidates)),
+        SubclassReferenceGroup::Pooled => {
+            reference_scores.extend(extra(set_aside_anchors));
+            reference_scores.extend(extra(set_aside_candidates));
+        }
+    }
+    reference_scores.par_sort_unstable_by(f64::total_cmp);
     if reference_scores.is_empty() {
         return Ok(dropped_only_outcome(
             anchors,

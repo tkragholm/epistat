@@ -85,6 +85,7 @@ pub use selection::{
 pub use subclassification::{
     SubclassReferenceGroup, SubclassSummary, SubclassificationConfig, SubclassificationError,
     SubclassificationOutcome, subclassify_by_propensity_score_map,
+    subclassify_with_set_aside_scores,
 };
 pub use weights::{
     InvalidWeightError, MatchWeightMethod, PairWeight, PairWeightRow, PairWeightSet,
