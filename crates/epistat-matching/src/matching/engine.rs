@@ -211,10 +211,10 @@ fn first_blocking_constraint_reason<R: MatchingRecord, D: DistanceMetric<R> + Sy
             return Some(Blocker::Constraint(constraint.reason()));
         }
     }
-    if let Some(caliper) = caliper_constraint
-        && !caliper.allows(case, control, context)
-    {
-        return Some(Blocker::Caliper(caliper.reason()));
+    if let Some(caliper) = caliper_constraint {
+        if !caliper.allows(case, control, context) {
+            return Some(Blocker::Caliper(caliper.reason()));
+        }
     }
     extra_constraints
         .first_blocking_reason(case, control, context)
