@@ -273,7 +273,7 @@ fn cox_variances_match_finite_differences_of_refits() {
         let keep: Vec<usize> = (0..n).filter(|&i| w.weights[i] > 0.0).collect();
         let stop: Vec<f64> = keep.iter().map(|&i| reference.stop[i]).collect();
         let status: Vec<i32> = keep.iter().map(|&i| reference.status[i]).collect();
-        let subject: Vec<u32> = keep.iter().map(|&i| i as u32).collect();
+        let subject: Vec<u32> = keep.iter().map(|&i| u32::try_from(i).unwrap()).collect();
         let x = Mat::from_fn(keep.len(), p, |k, j| {
             if j == 0 {
                 f64::from(u8::from(treat[keep[k]]))

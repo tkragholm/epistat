@@ -183,7 +183,7 @@ pub fn fit<'a>(
     design: MatRef<'a, f64>,
     opts: &IptwOptions,
 ) -> Result<Iptw<'a>> {
-    fit_with(treatment, design, opts, None)
+    fit_with(treatment, design, *opts, None)
 }
 
 /// Fit the propensity model and weight the subjects of the optimal subset
@@ -210,7 +210,7 @@ pub fn fit_atos<'a>(
         estimand: Estimand::Atos,
         stabilise: false,
     };
-    fit_with(treatment, design, &opts, alpha)
+    fit_with(treatment, design, opts, alpha)
 }
 
 /// The cut-off of Crump et al. as `WeightIt` finds it, 0 if none qualifies.
@@ -248,7 +248,7 @@ fn crump_alpha(propensity: &[f64]) -> f64 {
 fn fit_with<'a>(
     treatment: &'a [bool],
     design: MatRef<'a, f64>,
-    opts: &IptwOptions,
+    opts: IptwOptions,
     alpha: Option<f64>,
 ) -> Result<Iptw<'a>> {
     let n = treatment.len();
@@ -300,20 +300,24 @@ fn fit_with<'a>(
         .iter()
         .zip(&propensity)
         .map(|(&a, &p)| {
-            let base = match (opts.estimand, a) {
-                (Estimand::Ate, true) => 1.0 / p,
-                (Estimand::Ate, false) => 1.0 / (1.0 - p),
-                (Estimand::Att, true) | (Estimand::Atc, false) => 1.0,
+            // The optimal subset weights as the average treatment effect inside it.
+            let estimand = if opts.estimand == Estimand::Atos {
+                Estimand::Ate
+            } else {
+                opts.estimand
+            };
+            let outside = alpha.is_some_and(|al| p < al || p > 1.0 - al);
+            let base = match (estimand, a) {
+                _ if outside => 0.0,
+                (Estimand::Ate | Estimand::Atos, true) => 1.0 / p,
+                (Estimand::Ate | Estimand::Atos, false) => 1.0 / (1.0 - p),
                 (Estimand::Att, false) => p / (1.0 - p),
                 (Estimand::Atc, true) => (1.0 - p) / p,
                 (Estimand::Ato, true) => 1.0 - p,
                 (Estimand::Ato, false) => p,
                 (Estimand::Atm, true) if p > 0.5 => (1.0 - p) / p,
                 (Estimand::Atm, false) if p < 0.5 => p / (1.0 - p),
-                (Estimand::Atm, _) => 1.0,
-                (Estimand::Atos, _) if alpha.is_some_and(|al| p < al || p > 1.0 - al) => 0.0,
-                (Estimand::Atos, true) => 1.0 / p,
-                (Estimand::Atos, false) => 1.0 / (1.0 - p),
+                (Estimand::Att, true) | (Estimand::Atc, false) | (Estimand::Atm, _) => 1.0,
             };
             match marginal {
                 Some(pi) if a => pi * base,
