@@ -388,7 +388,7 @@ use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
 
-use super::Ties;
+use super::{Ties, moments};
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -925,15 +925,8 @@ impl Moments {
     }
 
     fn add(&mut self, c: f64, x: &[f64]) {
-        let p = x.len();
         self.m0 += c;
-        for a in 0..p {
-            let cx = c * x[a];
-            self.m1[a] += cx;
-            for (b, xb) in x.iter().enumerate().take(a + 1) {
-                self.m2[a * p + b] += cx * xb;
-            }
-        }
+        super::moments::add(c, x, &mut self.m1, &mut self.m2);
     }
 }
 
@@ -1115,6 +1108,7 @@ impl Model {
             dying: Moments::new(p),
         };
         let mut d1 = vec![0.0f64; p];
+        let mut quotient = vec![0.0f64; p];
         let mut scratch = ExactScratch::default();
         for stratum in &self.strata {
             let (eta, risk) = Self::row_risk(stratum, p, beta)?;
@@ -1171,12 +1165,17 @@ impl Model {
                         d1[a] = at.risk.m1[a] - fraction * at.dying.m1[a];
                         score[a] -= u * d1[a] / d0;
                     }
-                    for a in 0..p {
-                        for b in 0..=a {
-                            let d2 = at.risk.m2[a * p + b] - fraction * at.dying.m2[a * p + b];
-                            information[a * p + b] += u * (d2 / d0 - (d1[a] / d0) * (d1[b] / d0));
-                        }
-                    }
+                    moments::quotients(&d1, d0, &mut quotient);
+                    moments::add_information(
+                        p,
+                        u,
+                        d0,
+                        fraction,
+                        &at.risk.m2,
+                        &at.dying.m2,
+                        &quotient,
+                        &mut information,
+                    );
                 }
             });
             if failed {

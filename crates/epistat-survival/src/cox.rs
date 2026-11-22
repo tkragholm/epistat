@@ -23,6 +23,7 @@
 
 pub mod anova;
 pub mod design;
+mod moments;
 pub mod predict;
 pub mod residuals;
 mod single;

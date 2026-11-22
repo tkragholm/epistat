@@ -84,6 +84,7 @@ use epistat_linalg::MatRef;
 use epistat_stats::sum::compensated;
 
 use super::design::{ChiSquareTest, CoxModelFit, CoxOptions};
+use super::moments;
 use super::residuals::{Prepared, Sums, prepare, schoenfeld_rows};
 use crate::check::check_lengths;
 use crate::error::{Error, Result};
@@ -446,6 +447,7 @@ pub fn zph(
     let mut sums = Sums::new(p, true);
     let mut mean = vec![0.0f64; p];
     let mut d1 = vec![0.0f64; p];
+    let mut quotient = vec![0.0f64; p];
     for stratum in &prep.strata {
         let mut failed = false;
         stratum.sweep(p, &mut active, &mut sums, |position, at| {
@@ -474,10 +476,11 @@ pub fn zph(
                 for (a, d) in d1.iter_mut().enumerate() {
                     *d = at.risk.m1[a] - fraction * at.dying.m1[a];
                 }
+                moments::quotients(&d1, d0, &mut quotient);
                 for a in 0..p {
                     for b in 0..=a {
                         let d2 = at.risk.m2[a * p + b] - fraction * at.dying.m2[a * p + b];
-                        let v = weight * (d2 / d0 - (d1[a] / d0) * (d1[b] / d0));
+                        let v = weight * (d2 / d0 - quotient[a] * quotient[b]);
                         q[0][a * p + b] += v;
                         q[1][a * p + b] += g * v;
                         q[2][a * p + b] += g * g * v;
