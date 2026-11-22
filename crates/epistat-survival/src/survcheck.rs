@@ -325,8 +325,8 @@ pub fn survcheck(data: &SurvData<'_>) -> Result<SurvCheck> {
         }
     }
     // The dense level of an id is its rank among the caller's codes, so the
-    // mapping keeps every list ascending.
-    if let Some(levels) = data.id_levels() {
+    // mapping keeps every list ascending. Data with no rows has no levels.
+    if let Some(levels) = data.id_levels().filter(|_| n_ids > 0) {
         let original = |level: u32| {
             levels
                 .code(level as usize)
