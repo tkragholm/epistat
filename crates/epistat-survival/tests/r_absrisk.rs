@@ -41,7 +41,7 @@
 //! The bounds are not changed after a run. The worst deviation in units of its
 //! bound is printed for each output.
 
-#![allow(
+#![expect(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
     clippy::float_cmp,

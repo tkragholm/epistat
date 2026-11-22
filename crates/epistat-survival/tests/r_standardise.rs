@@ -24,7 +24,7 @@
 //! and the standard error by the rules of a first-order propagation.
 //! The bounds are not changed after a run.
 
-#![allow(
+#![expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,

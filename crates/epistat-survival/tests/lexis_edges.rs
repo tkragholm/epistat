@@ -8,10 +8,6 @@
     clippy::cast_precision_loss,
     reason = "the grid values and counts are far below the limits of the casts"
 )]
-#![allow(
-    clippy::float_cmp,
-    reason = "sums of quarters and counts of events are exact, so equality is what is asserted"
-)]
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
