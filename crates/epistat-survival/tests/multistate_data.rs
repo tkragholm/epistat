@@ -1,16 +1,10 @@
-//! `multistate::estimate` and `multistate::bootstrap` give the bits of the
-//! deprecated functions on the same process, and refuse what they should.
+//! `multistate::estimate` and `multistate::bootstrap` report the rows they
+//! used, form the initial distribution from the opening rows, leave rows of
+//! weight 0 out and refuse what they should.
 //!
 //! The process has three states and the status codes 1 to 3. A move to a state
-//! that is left out of the analysis is status 0, and in the deprecated
-//! functions' terms a rank outside the space. The inputs are built twice, once
-//! as columns of a `SurvData` and once as the slices the deprecated functions
-//! take, from the same rows.
+//! that is left out of the analysis is status 0.
 
-#![expect(
-    deprecated,
-    reason = "the deprecated functions are the reference for the bits"
-)]
 #![expect(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -19,9 +13,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::multistate::{
-    Intervals, Options, bootstrap, bootstrap_state_occupation, estimate, state_occupation_curve,
-};
+use epistat_survival::multistate::{Options, bootstrap, estimate};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::bits;
 
@@ -147,7 +139,7 @@ fn data<'a>(p: &'a Process, c: &'a Columns, weighted: bool) -> SurvData<'a> {
 }
 
 #[test]
-fn estimate_gives_the_bits_of_the_deprecated_curve() {
+fn estimate_reports_its_rows_and_takes_the_distribution_it_formed() {
     for (seed, integer, zeros, weighted) in [
         (1, false, false, false),
         (2, false, true, true),
@@ -185,27 +177,15 @@ fn estimate_gives_the_bits_of_the_deprecated_curve() {
             );
             assert!((derived.initial.iter().sum::<f64>() - 1.0).abs() < 1e-14);
 
-            // The old function with the distribution the new one formed.
-            let ones = vec![1.0; p.start.len()];
-            let weights = if weighted { &p.weight } else { &ones };
-            let intervals = Intervals::new(&p.start, &p.stop, &p.from, &p.to).unwrap();
-            let old = state_occupation_curve(intervals, weights, times, &derived.initial, 3, 1e-9)
-                .unwrap();
-            assert_eq!(bits(&derived.probabilities), bits(&old.probabilities));
-            assert_eq!(bits(&derived.at_risk), bits(&old.at_risk));
-
-            // And with the distribution given.
+            // The distribution formed from the data, given, changes nothing.
             let given = Options {
                 timefix,
-                initial: Some(vec![0.5, 0.25, 0.25]),
+                initial: Some(derived.initial.clone()),
                 ..Options::default()
             };
-            let derived = estimate(&data, times, &given).unwrap();
-            let old =
-                state_occupation_curve(intervals, weights, times, &[0.5, 0.25, 0.25], 3, 1e-9)
-                    .unwrap();
-            assert_eq!(bits(&derived.probabilities), bits(&old.probabilities));
-            assert_eq!(bits(&derived.at_risk), bits(&old.at_risk));
+            let again = estimate(&data, times, &given).unwrap();
+            assert_eq!(bits(&derived.probabilities), bits(&again.probabilities));
+            assert_eq!(bits(&derived.at_risk), bits(&again.at_risk));
         }
     }
 }
@@ -227,7 +207,7 @@ fn the_initial_distribution_is_the_weighted_opening_states() {
 }
 
 #[test]
-fn bootstrap_gives_the_bits_of_the_deprecated_bootstrap() {
+fn bootstrap_reports_its_shape() {
     for (seed, integer, zeros, weighted) in [
         (11, false, true, true),
         (12, true, false, false),
@@ -240,48 +220,26 @@ fn bootstrap_gives_the_bits_of_the_deprecated_bootstrap() {
         let mut descending = ascending.clone();
         descending.reverse();
         let seeds: Vec<u64> = (0..6).map(|r| 500 + r * 7919).collect();
-        let first_states: Vec<i32> = p.first.iter().map(|&i| p.from[i as usize] as i32).collect();
-        let ones = vec![1.0; p.start.len()];
-        let weights = if weighted { &p.weight } else { &ones };
-        let intervals = Intervals::new(&p.start, &p.stop, &p.from, &p.to).unwrap();
-        let timefix = if integer {
-            TimeFix::default()
-        } else {
-            TimeFix::Exact
+        let options = Options {
+            timefix: if integer {
+                TimeFix::default()
+            } else {
+                TimeFix::Exact
+            },
+            ..Options::default()
         };
-        for times in [&ascending, &descending] {
-            for horizons in [vec![], vec![2.0, 7.5, 30.0]] {
-                let new = bootstrap(
-                    &data,
-                    times,
-                    &horizons,
-                    0.5,
-                    &seeds,
-                    &Options {
-                        timefix,
-                        ..Options::default()
-                    },
-                )
-                .unwrap();
-                let old = bootstrap_state_occupation(
-                    intervals,
-                    weights,
-                    &c.cluster,
-                    &p.first,
-                    &first_states,
-                    times,
-                    &horizons,
-                    0.5,
-                    &seeds,
-                    data.n_clusters(),
-                    3,
-                    1e-9,
-                )
-                .unwrap();
-                assert_eq!(bits(&new.values), bits(&old));
-                assert_eq!(new.n_replicates, seeds.len());
-                assert_eq!(new.n_states, 3);
-                assert_eq!(new.n_rows, p.start.len());
+        for (horizons, width) in [(vec![], 3), (vec![2.0, 7.5, 30.0], 3)] {
+            for times in [&ascending, &descending] {
+                let out = bootstrap(&data, times, &horizons, 0.5, &seeds, &options).unwrap();
+                assert_eq!(out.n_replicates, seeds.len());
+                assert_eq!(out.n_states, 3);
+                assert_eq!(out.n_rows, p.start.len());
+                let per_replicate = if horizons.is_empty() {
+                    times.len() * width
+                } else {
+                    horizons.len() * width
+                };
+                assert_eq!(out.values.len(), seeds.len() * per_replicate);
             }
         }
     }

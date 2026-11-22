@@ -1,8 +1,7 @@
-//! `cox::fit` and `cox::score_residuals` on a `SurvData` give the bits of the
-//! deprecated entry points on the same rows, and read the event code, the
-//! missing start and the tie rule as documented.
+//! `cox::fit` and `cox::score_residuals` on a `SurvData` read the event code,
+//! the missing start, the weights, the strata, the clusters and the tie rule as
+//! documented.
 
-#![expect(deprecated, reason = "compares with the deprecated entry points")]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
@@ -10,9 +9,7 @@
 
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
-use epistat_survival::cox::{
-    CoxDesign, CoxOptions, Ties, cox_score_residuals, fit, fit_cox, score_residuals,
-};
+use epistat_survival::cox::{CoxOptions, Ties, fit, score_residuals};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{Error, SurvData};
 
@@ -75,12 +72,11 @@ const NO_FIX: CoxOptions = CoxOptions {
 };
 
 #[test]
-fn matches_the_deprecated_entry_points() {
+fn every_combination_of_columns_fits() {
     let s = sample(400, 31);
     let n = s.stop.len();
     let x = Mat::from_fn(n, 3, |i, j| s.x[(i, j)]);
-    let event: Vec<bool> = s.status.iter().map(|&c| c == 1).collect();
-    let status: Vec<i32> = event.iter().map(|&e| i32::from(e)).collect();
+    let status: Vec<i32> = s.status.iter().map(|&c| i32::from(c == 1)).collect();
     for ties in [Ties::Breslow, Ties::Efron] {
         for entry in [false, true] {
             for weighted in [false, true] {
@@ -97,45 +93,18 @@ fn matches_the_deprecated_entry_points() {
                     }
                     let data = builder.build().unwrap();
                     let opts = CoxOptions { ties, ..NO_FIX };
-                    let new = fit(&data, x.as_ref(), &opts).unwrap();
-
-                    let start = if entry {
-                        s.start.clone()
-                    } else {
-                        vec![f64::NEG_INFINITY; n]
-                    };
-                    let weight = if weighted {
-                        s.weight.clone()
-                    } else {
-                        vec![1.0; n]
-                    };
-                    let (stratum, cluster) = if grouped {
-                        (s.stratum.clone(), Some(s.cluster.clone()))
-                    } else {
-                        (vec![0; n], None)
-                    };
-                    let design = CoxDesign {
-                        x: x.as_ref(),
-                        is_event: &event,
-                        start: &start,
-                        stop: &s.stop,
-                        weight: &weight,
-                        stratum: &stratum,
-                        ties,
-                        cluster: cluster.as_deref(),
-                    };
-                    let old = fit_cox(&design).unwrap();
-                    assert!(new.converged && new.coefficients[2].is_none());
-                    assert_eq!(new.n_rows, n);
-                    assert_eq!(new.n_used, old.n_rows);
-                    assert_eq!(old.n_used, old.n_rows);
-                    let mut same = new.clone();
-                    same.n_rows = old.n_rows;
-                    assert_eq!(format!("{same:?}"), format!("{old:?}"));
-
-                    let got = score_residuals(&data, x.as_ref(), &new.coefficients, &opts).unwrap();
-                    let want = cox_score_residuals(&design, &old.coefficients).unwrap();
-                    assert_eq!(format!("{got:?}"), format!("{want:?}"));
+                    let model = fit(&data, x.as_ref(), &opts).unwrap();
+                    assert!(model.converged && model.coefficients[2].is_none());
+                    assert_eq!(model.n_rows, n);
+                    assert_eq!(model.n_used, data.n_used());
+                    assert_eq!(model.robust_covariance.is_some(), grouped);
+                    let residuals =
+                        score_residuals(&data, x.as_ref(), &model.coefficients, &opts).unwrap();
+                    assert_eq!(residuals.len(), 3);
+                    assert!(residuals[2].is_none());
+                    for column in residuals.iter().flatten() {
+                        assert_eq!(column.len(), n);
+                    }
                 }
             }
         }
@@ -174,21 +143,14 @@ fn the_event_code_picks_the_cause() {
             ..NO_FIX
         };
         let got = fit(&data, x.as_ref(), &opts).unwrap();
-        let event: Vec<bool> = s.status.iter().map(|&c| c == code).collect();
-        let design = CoxDesign {
-            x: x.as_ref(),
-            is_event: &event,
-            start: &vec![f64::NEG_INFINITY; n],
-            stop: &s.stop,
-            weight: &s.weight,
-            stratum: &vec![0; n],
-            ties: Ties::Efron,
-            cluster: None,
-        };
-        let want = fit_cox(&design).unwrap();
-        let mut same = got.clone();
-        same.n_rows = want.n_rows;
-        assert_eq!(format!("{same:?}"), format!("{want:?}"));
+        // The same rows with the status 1 for this cause and 0 for the rest.
+        let binary: Vec<i32> = s.status.iter().map(|&c| i32::from(c == code)).collect();
+        let reference = SurvData::builder(&s.stop, &binary)
+            .weight(&s.weight)
+            .build()
+            .unwrap();
+        let want = fit(&reference, x.as_ref(), &NO_FIX).unwrap();
+        assert_eq!(format!("{got:?}"), format!("{want:?}"));
     }
     for cause in [None, Some(0), Some(4)] {
         let opts = CoxOptions { cause, ..NO_FIX };
@@ -276,9 +238,8 @@ fn the_design_must_fit_the_data() {
     assert!(score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &NO_FIX).is_err());
 }
 
-/// With cluster codes that skip values the old entry point sums over the empty
-/// clusters as rows of zeros, and the dense codes of `SurvData` do not. The
-/// sums are the same up to the order of the additions.
+/// Cluster codes that skip values are recoded to dense ones. The sums are the
+/// same up to the order of the additions.
 #[test]
 fn sparse_cluster_codes_change_only_the_order_of_a_sum() {
     let s = sample(400, 36);

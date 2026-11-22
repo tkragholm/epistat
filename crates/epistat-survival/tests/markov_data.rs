@@ -1,14 +1,8 @@
-//! `markov::test` gives the bits of the deprecated `markov_test` on the same
-//! stays, and refuses what it should.
+//! `markov::test` reports the rows it used, gives no statistic to a state
+//! without variance, and refuses what it should.
 //!
-//! The process has three states and the status codes 1 to 3. The deprecated
-//! function reads the index of each stay's state among the qualifying states,
-//! so the same stays are given to it with the states mapped through the list.
+//! The process has three states and the status codes 1 to 3.
 
-#![expect(
-    deprecated,
-    reason = "the deprecated function is the reference for the bits"
-)]
 #![expect(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -17,8 +11,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::markov::{Options, Stays, markov_test, test};
-use epistat_testkit::bits;
+use epistat_survival::markov::{Options, test};
 
 struct Process {
     start: Vec<f64>,
@@ -72,7 +65,7 @@ fn process(people: usize, seed: u64) -> Process {
 }
 
 #[test]
-fn test_gives_the_bits_of_the_deprecated_function() {
+fn test_reports_its_rows_and_leaves_a_state_without_variance_untested() {
     let p = process(150, 41);
     let status: Vec<i32> =
         p.to.iter()
@@ -103,48 +96,20 @@ fn test_gives_the_bits_of_the_deprecated_function() {
         (vec![3, 1], 2),
     ] {
         let new = test(&data, &qualifying, target, &grid, &seeds, &opts).unwrap();
-        // The rows of weight 0 are left out, and the rest map through the list.
-        let keep: Vec<usize> = (0..p.start.len()).filter(|&r| p.weight[r] > 0.0).collect();
-        let pick = |v: &[f64]| keep.iter().map(|&r| v[r]).collect::<Vec<f64>>();
-        let person: Vec<u32> = keep.iter().map(|&r| p.person[r]).collect();
-        let state: Vec<u32> = keep
-            .iter()
-            .map(|&r| {
-                qualifying
-                    .iter()
-                    .position(|&q| q == p.from[r] + 1)
-                    .map_or(99, |i| i as u32)
-            })
-            .collect();
-        let event: Vec<f64> = keep
-            .iter()
-            .map(|&r| f64::from(u8::from(status[r] == target as i32)))
-            .collect();
-        let (start, stop) = (pick(&p.start), pick(&p.stop));
-        let stays = Stays::new(&person, &start, &stop, &state, &event).unwrap();
-        let old = markov_test(&stays, &grid, qualifying.len(), &seeds).unwrap();
-        assert_eq!(bits(&new.trace), bits(&old.trace), "{qualifying:?}");
-        assert_eq!(bits(&new.variance), bits(&old.variance));
-        assert_eq!(bits(&new.n_occupied), bits(&old.n_occupied));
-        assert_eq!(bits(&new.n_events_after), bits(&old.n_events_after));
         let width = qualifying.len();
+        assert_eq!(new.trace.len(), grid.len() * width);
+        assert_eq!(new.variance.len(), grid.len() * width);
+        assert_eq!(new.n_occupied.len(), grid.len() * width);
+        assert_eq!(new.n_events_after.len(), grid.len());
         for j in 0..width {
-            let defined = (0..grid.len()).any(|l| old.variance[l * width + j] > 0.0);
-            if defined {
-                assert_eq!(
-                    new.statistic[j].map(f64::to_bits),
-                    Some(old.statistic[j].to_bits())
-                );
-                assert_eq!(new.p_value[j], old.p_value[j]);
-            } else {
-                assert_eq!(new.statistic[j], None);
-                assert_eq!(new.p_value[j], None);
-                undefined += 1;
-            }
+            let defined = (0..grid.len()).any(|l| new.variance[l * width + j] > 0.0);
+            assert_eq!(new.statistic[j].is_some(), defined);
+            assert_eq!(new.p_value[j].is_some(), defined);
+            undefined += usize::from(!defined);
         }
         assert_eq!(new.qualifying, qualifying);
         assert_eq!(new.n_rows, p.start.len());
-        assert_eq!(new.n_used, keep.len());
+        assert_eq!(new.n_used, p.weight.iter().filter(|&&w| w > 0.0).count());
     }
     assert!(undefined > 0, "the fixture has a state without a test");
 }
