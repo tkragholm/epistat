@@ -36,7 +36,7 @@ use epistat_matching::{
     quick_match_subclasses, run_spec,
 };
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -44,13 +44,6 @@ use std::collections::HashMap;
 struct Reference {
     versions: Versions,
     datasets: Vec<Dataset>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-    quickmatch: String,
 }
 
 #[derive(Deserialize)]
@@ -194,9 +187,9 @@ fn assert_constraints(labels: &[Option<usize>], anchor: &[bool], options: &Quick
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
-    assert_eq!(reference.versions.quickmatch, "0.2.3");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
+    assert_eq!(reference.versions["quickmatch"], "0.2.3");
 }
 
 /// The partition equals quickmatch's for every seed method, constraint set and

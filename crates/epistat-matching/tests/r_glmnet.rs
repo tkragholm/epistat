@@ -13,9 +13,8 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use r_reference::{reference as load_reference, split_by_group};
+use r_reference::{covariate_unit, reference as load_reference, split_by_group};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -44,18 +43,20 @@ fn reference() -> Reference {
 }
 
 fn records(design: &Design) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
-    let birth_date = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
-    let mut units = Vec::new();
-    for (idx, (row, label)) in design.x.iter().zip(&design.y).enumerate() {
-        let mut record = BalanceRecord::new(format!("r{idx}"), birth_date);
-        for (col, value) in row.iter().enumerate() {
-            record
-                .covariates
-                .insert(format!("x{}", col + 1), CovariateValue::Numeric(*value));
-        }
-        units.push((*label > 0.5, record));
-    }
-    split_by_group(units)
+    split_by_group(
+        design
+            .x
+            .iter()
+            .zip(&design.y)
+            .enumerate()
+            .map(|(idx, (row, label))| {
+                let covariates = row
+                    .iter()
+                    .enumerate()
+                    .map(|(col, value)| (format!("x{}", col + 1), CovariateValue::Numeric(*value)));
+                (*label > 0.5, covariate_unit(format!("r{idx}"), covariates))
+            }),
+    )
 }
 
 struct Fitted {

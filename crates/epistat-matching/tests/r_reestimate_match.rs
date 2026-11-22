@@ -21,7 +21,7 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{CommonSupport, NearestSelection, estimate_propensity_and_match};
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -30,12 +30,6 @@ struct Reference {
     versions: Versions,
     data: BTreeMap<String, Data>,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -89,8 +83,8 @@ fn policy_of(name: &str) -> CommonSupport {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
 }
 
 #[test]

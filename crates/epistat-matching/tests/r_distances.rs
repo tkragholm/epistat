@@ -42,14 +42,13 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, IdMapEuclideanDistance, IdMapMahalanobisDistance,
     prepare_euclidean_distance_config,
 };
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, covariate_unit, reference as load_reference};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -59,12 +58,6 @@ struct Reference {
     cases: Vec<Case>,
     constant_only: ConstantOnly,
     constant_within_groups: WithinGroups,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -92,12 +85,6 @@ fn reference() -> Reference {
     load_reference("matchit_distances.json")
 }
 
-fn record(id: String, covariates: Vec<(String, CovariateValue)>) -> BalanceRecord {
-    let mut record = BalanceRecord::new(id, NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
-    record.covariates.extend(covariates);
-    record
-}
-
 /// Treated units as anchors and controls as candidates, in data order.
 fn records(case: &Case) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
     let mut anchors = Vec::new();
@@ -115,9 +102,9 @@ fn records(case: &Case) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
             )
         }));
         if *treat == 1 {
-            anchors.push(record(format!("t{row}"), covariates));
+            anchors.push(covariate_unit(format!("t{row}"), covariates));
         } else {
-            candidates.push(record(format!("c{row}"), covariates));
+            candidates.push(covariate_unit(format!("c{row}"), covariates));
         }
     }
     (anchors, candidates)
@@ -182,8 +169,8 @@ fn mahalanobis_ratio(
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
 }
 
 #[test]
@@ -336,7 +323,7 @@ fn only_constant_columns_are_an_error() {
     assert!(!reference.constant_only.error);
     assert!(reference.constant_only.distances.iter().all(|d| *d == 0.0));
     let constant = |id: &str| {
-        record(
+        covariate_unit(
             id.to_string(),
             vec![("k".to_string(), CovariateValue::Numeric(3.0))],
         )
@@ -374,7 +361,7 @@ fn column_without_variance_within_groups_cannot_be_scaled() {
             .all(|value| value == "NaN")
     );
     let unit = |id: &str, a: f64, b: f64| {
-        record(
+        covariate_unit(
             id.to_string(),
             vec![
                 ("a".to_string(), CovariateValue::Numeric(a)),

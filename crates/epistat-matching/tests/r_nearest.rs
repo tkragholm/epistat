@@ -55,7 +55,7 @@ use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_matching::{Assignment, DeterministicSelection, MatchOrder, RapidHashMap};
 use epistat_testkit::load_json;
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -65,12 +65,6 @@ struct Reference {
     tie_cases: TieCases,
     scenarios: BTreeMap<String, Scenario>,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -286,8 +280,8 @@ fn expected(rows: &[Rows]) -> Vec<Vec<usize>> {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
 }
 
 #[test]

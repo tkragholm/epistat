@@ -31,7 +31,7 @@ use epistat_matching::multigroup::{
 };
 use epistat_matching::prelude::*;
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -39,13 +39,6 @@ use std::collections::{HashMap, HashSet};
 struct Reference {
     versions: Versions,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    #[serde(rename = "Matching")]
-    matching: String,
 }
 
 #[derive(Deserialize)]
@@ -66,8 +59,8 @@ fn reference() -> Reference {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let r = reference();
-    assert_r_version(&r.versions.r);
-    assert_eq!(r.versions.matching, "4.10.15");
+    assert_r_version(&r.versions["r"]);
+    assert_eq!(r.versions["Matching"], "4.10.15");
 }
 
 #[test]

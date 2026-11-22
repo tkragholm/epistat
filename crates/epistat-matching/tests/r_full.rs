@@ -32,7 +32,7 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{RapidHashMap, match_full};
 
-use r_reference::reference as load_reference;
+use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -57,14 +57,6 @@ struct Defect {
     largest_group_negative: usize,
     largest_group_transposed: usize,
     r_epsilon: f64,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-    optmatch: String,
-    solver: String,
 }
 
 #[derive(Deserialize)]
@@ -160,10 +152,10 @@ fn subclasses_totals_and_weights_match_matchit() {
     let reference = reference();
     println!(
         "{} / MatchIt {} / optmatch {} / solver {}",
-        reference.versions.r,
-        reference.versions.matchit,
-        reference.versions.optmatch,
-        reference.versions.solver
+        reference.versions["r"],
+        reference.versions["matchit"],
+        reference.versions["optmatch"],
+        reference.versions["solver"]
     );
     let birth = NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date");
     let (mut totals, mut partitions, mut errors) = (0, 0, 0);

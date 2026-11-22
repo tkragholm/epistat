@@ -41,20 +41,13 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{CbpsConfig, CbpsEstimand, CbpsMethod};
 
-use r_reference::{assert_r_version, reference as load_reference, unit_id as id};
+use r_reference::{Versions, assert_r_version, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Reference {
     versions: Versions,
     data: Vec<Data>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    cbps: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -228,9 +221,9 @@ fn balance_bound(data: &Data, fit: &RFit, p: &[f64], delta: f64) -> Vec<f64> {
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.cbps, "0.24");
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["cbps"], "0.24");
+    assert_eq!(reference.versions["matchit"], "4.8.2");
 }
 
 #[test]

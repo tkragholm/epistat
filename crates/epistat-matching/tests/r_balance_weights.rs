@@ -46,7 +46,7 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
-use r_reference::assert_r_version;
+use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -87,12 +87,6 @@ struct Set {
 }
 
 #[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-}
-
-#[derive(Deserialize)]
 struct Reference {
     versions: Versions,
     lalonde: Set,
@@ -119,8 +113,8 @@ fn load() -> Reference {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/balance_weights.json"
     ));
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
     reference
 }
 

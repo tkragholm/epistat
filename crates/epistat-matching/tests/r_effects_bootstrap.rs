@@ -38,7 +38,7 @@ use epistat_matching::effects::{
 };
 use epistat_matching::output::{LongMatches, MatchData};
 use epistat_testkit::load_json;
-use r_reference::assert_r_version;
+use r_reference::{Versions, assert_r_version};
 use serde::{Deserialize, Serialize};
 
 const REPLICATES: usize = 200;
@@ -97,12 +97,6 @@ struct Case {
 struct Reference {
     versions: Versions,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    boot: String,
 }
 
 #[derive(Deserialize)]
@@ -251,8 +245,8 @@ fn bootstrap_agrees_with_boot() {
     );
     let matches: Matches = load_json(data_path("effects.json"));
     let reference: Reference = load_json(data_path("effects_boot.json"));
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.boot, "1.3.32");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["boot"], "1.3.32");
     assert_eq!(reference.runs.len(), 4);
     for run in &reference.runs {
         let case = matches.cases.iter().find(|c| c.name == run.case).unwrap();

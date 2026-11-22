@@ -50,7 +50,7 @@ use epistat_matching::{
     MahalanobisPreparationConfig, MatchOrder, cem_k2k_pairs, cem_strata, cem_subclasses,
 };
 
-use r_reference::{assert_r_version, reference as load_reference, unit_id as id};
+use r_reference::{Versions, assert_r_version, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -60,12 +60,6 @@ struct Reference {
     datasets: BTreeMap<String, BTreeMap<String, Column>>,
     runs: Vec<Run>,
     q2_defect: Q2Defect,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -255,8 +249,8 @@ const WEIGHT_TOLERANCE: f64 = 1e-12;
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
     assert_eq!(reference.runs.len(), 34);
 }
 

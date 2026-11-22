@@ -32,5 +32,9 @@ thiserror = "2"
 epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1.0.200", features = ["derive"] }
 
+[[bench]]
+name = "survival_compare"
+harness = false
+
 [lints]
 workspace = true

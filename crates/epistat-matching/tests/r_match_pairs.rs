@@ -51,7 +51,7 @@ use epistat_matching::DeterministicSelection;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_testkit::Tolerance;
-use r_reference::reference as load_reference;
+use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -60,13 +60,6 @@ struct Reference {
     versions: Versions,
     scenarios: BTreeMap<String, Scenario>,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-    jsonlite: String,
 }
 
 #[derive(Deserialize)]
@@ -301,9 +294,9 @@ struct Tally {
 #[test]
 fn pairs_weights_and_shapes_agree_with_matchit() {
     let reference = reference();
-    assert_eq!(reference.versions.matchit, "4.8.2");
-    assert!(reference.versions.r.starts_with("R version 4."));
-    assert!(reference.versions.jsonlite.starts_with(char::is_numeric));
+    assert_eq!(reference.versions["matchit"], "4.8.2");
+    assert!(reference.versions["r"].starts_with("R version 4."));
+    assert!(reference.versions["jsonlite"].starts_with(char::is_numeric));
 
     let mut tally = Tally::default();
     for run in &reference.runs {

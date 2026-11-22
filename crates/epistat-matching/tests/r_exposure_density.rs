@@ -31,7 +31,7 @@ use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
 use epistat_stats::gamma::chi_square_sf;
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -48,15 +48,6 @@ struct Reference {
     r_chi_square: Vec<f64>,
     heaven_k3_controls_in_several_sets: usize,
     heaven_k3_future_cases_as_controls: usize,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    #[serde(rename = "R")]
-    r: String,
-    heaven: String,
-    #[serde(rename = "Epi")]
-    epi: String,
 }
 
 #[derive(Deserialize)]
@@ -169,9 +160,9 @@ fn by_exposed(sets: &ExposureDensityOutcome) -> BTreeMap<String, Vec<String>> {
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.heaven, "2026.10.30");
-    assert_eq!(reference.versions.epi, "2.66");
+    assert_r_version(&reference.versions["R"]);
+    assert_eq!(reference.versions["heaven"], "2026.10.30");
+    assert_eq!(reference.versions["Epi"], "2.66");
 }
 
 /// With a ratio above every risk set and replacement, the engine returns each

@@ -26,7 +26,7 @@ use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{MatchOrder, PairDistanceMatrix, PairDistanceMatrixError};
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -40,12 +40,6 @@ struct Reference {
     inf: Vec<Vec<Option<f64>>>,
     caliper_exact: f64,
     runs: Vec<Run>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
 }
 
 #[derive(Deserialize)]
@@ -162,8 +156,8 @@ fn units(reference: &Reference, atc: bool) -> (Vec<usize>, Vec<BaseRecord>, Vec<
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.matchit, "4.8.2");
+    assert_r_version(&reference.versions["r"]);
+    assert_eq!(reference.versions["matchit"], "4.8.2");
     assert_eq!(
         reference
             .treat

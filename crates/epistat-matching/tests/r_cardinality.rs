@@ -45,11 +45,15 @@
     reason = "the reference holds whole-number ratios and zero-one columns"
 )]
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use epistat_matching::{
     CardinalityError, CardinalityLimits, CardinalityRequest, Estimand, match_cardinality,
     pair_units,
 };
 use epistat_testkit::{assert_same_on_pools, load_json};
+use r_reference::Versions;
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, HashMap};
 
@@ -90,14 +94,6 @@ struct Tie {
     tol: f64,
     weights_treated_first: Vec<f64>,
     weights_controls_first: Vec<f64>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    r: String,
-    matchit: String,
-    highs: String,
-    optmatch: String,
 }
 
 #[derive(Deserialize)]
@@ -389,10 +385,10 @@ fn selection_sizes_and_balance_agree_with_matchit() {
     let reference = load();
     eprintln!(
         "{} MatchIt {} highs {} optmatch {}",
-        reference.versions.r,
-        reference.versions.matchit,
-        reference.versions.highs,
-        reference.versions.optmatch
+        reference.versions["r"],
+        reference.versions["matchit"],
+        reference.versions["highs"],
+        reference.versions["optmatch"]
     );
     let mut identical = 0;
     let mut compared = 0;

@@ -19,7 +19,7 @@ use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
 use epistat_testkit::{POOLS, assert_same_on_pools};
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -37,14 +37,6 @@ struct Reference {
     outside: Vec<bool>,
     outside_plain: Vec<bool>,
     case_range: Vec<f64>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    #[serde(rename = "R")]
-    r: String,
-    #[serde(rename = "Epi")]
-    epi: String,
 }
 
 fn reference() -> Reference {
@@ -146,8 +138,8 @@ fn scores_of(ids: &[&str], values: &[f64]) -> Vec<(String, f64)> {
 #[test]
 fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_ne!(reference.versions.epi, "");
+    assert_r_version(&reference.versions["R"]);
+    assert_ne!(reference.versions["Epi"], "");
     assert!(reference.outside.iter().any(|&o| o));
     assert!(
         reference

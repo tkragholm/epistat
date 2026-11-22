@@ -37,7 +37,7 @@ use chrono::{Days, NaiveDate};
 use epistat_matching::prelude::*;
 use epistat_stats::gamma::chi_square_sf;
 
-use r_reference::{assert_r_version, reference as load_reference};
+use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -54,16 +54,6 @@ struct Reference {
     risk_sets: BTreeMap<String, Vec<String>>,
     draws: Vec<Draw>,
     r_chi_square: Vec<f64>,
-}
-
-#[derive(Deserialize)]
-struct Versions {
-    #[serde(rename = "R")]
-    r: String,
-    #[serde(rename = "TrialEmulation")]
-    trial_emulation: String,
-    #[serde(rename = "Epi")]
-    epi: String,
 }
 
 #[derive(Deserialize)]
@@ -279,9 +269,9 @@ fn check_expansion(
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert_r_version(&reference.versions.r);
-    assert_eq!(reference.versions.trial_emulation, "0.0.5");
-    assert_eq!(reference.versions.epi, "2.66");
+    assert_r_version(&reference.versions["R"]);
+    assert_eq!(reference.versions["TrialEmulation"], "0.0.5");
+    assert_eq!(reference.versions["Epi"], "2.66");
 }
 
 /// The expansion of `data_censored`, which has one trial for most people, and
