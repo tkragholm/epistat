@@ -2605,7 +2605,9 @@ fn run_trimmed<R: MatchingRecord + CovariateRecord>(
     let first_fit = first.propensity.map(Box::new);
     let with_discarded = |mut estimate: Box<PropensityScoreEstimate>| {
         estimate.discarded_anchors.clone_from(&trimmed.anchors);
-        estimate.discarded_candidates.clone_from(&trimmed.candidates);
+        estimate
+            .discarded_candidates
+            .clone_from(&trimmed.candidates);
         estimate
     };
     let mut output = match output {
