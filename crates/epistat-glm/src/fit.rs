@@ -155,7 +155,7 @@
 //!    Philadelphia: SIAM; 1979. R's `dqrdc2` modifies its `dqrdc` to pivot
 //!    only the columns that fall below the tolerance.
 
-use crate::columns::{columns_of, linear_predictor};
+use crate::columns::{column_slices, contiguous_copy, linear_predictor};
 use epistat_linalg::design::select_columns;
 use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, weighted_xtz};
 use epistat_linalg::{Mat, MatRef};
@@ -346,8 +346,8 @@ impl Glm {
                 .map(|i| family.deviance(y[i], mu[i], weights[i]))
                 .sum()
         };
-        let mut copy = Vec::new();
-        let columns = columns_of(x, &mut copy);
+        let copy = contiguous_copy(x);
+        let columns = column_slices(x, &copy);
         // The linear predictor, the mean and the derivative of the mean.
         let predict = |beta: &[f64]| -> (Vec<f64>, Vec<f64>, Vec<f64>) {
             let eta = linear_predictor(&columns, beta, offset);

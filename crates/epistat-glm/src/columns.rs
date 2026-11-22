@@ -7,19 +7,27 @@ use epistat_linalg::MatRef;
 /// first-level cache while every column is added to it.
 const TILE: usize = 1024;
 
-/// The columns of `x` as slices. A column-major design is read in place; any
-/// other layout is copied into `copy` first.
-pub(crate) fn columns_of<'a>(x: MatRef<'a, f64>, copy: &'a mut Vec<f64>) -> Vec<&'a [f64]> {
+/// The columns of `x` as a column-major copy, empty when `x` is already
+/// column-major and is read in place by [`column_slices`].
+pub(crate) fn contiguous_copy(x: MatRef<'_, f64>) -> Vec<f64> {
+    if x.try_as_col_major().is_some() {
+        return Vec::new();
+    }
+    let (n, p) = (x.nrows(), x.ncols());
+    let mut copy = Vec::with_capacity(n * p);
+    for j in 0..p {
+        copy.extend((0..n).map(|i| x[(i, j)]));
+    }
+    copy
+}
+
+/// The columns of `x` as slices, of `x` itself when it is column-major and
+/// otherwise of `copy`, which [`contiguous_copy`] made.
+pub(crate) fn column_slices<'a>(x: MatRef<'a, f64>, copy: &'a [f64]) -> Vec<&'a [f64]> {
     let (n, p) = (x.nrows(), x.ncols());
     if let Some(major) = x.try_as_col_major() {
         return (0..p).map(|j| major.col(j).as_slice()).collect();
     }
-    copy.clear();
-    copy.reserve(n * p);
-    for j in 0..p {
-        copy.extend((0..n).map(|i| x[(i, j)]));
-    }
-    let copy: &'a [f64] = copy;
     if n == 0 {
         return vec![&[]; p];
     }
@@ -95,8 +103,8 @@ mod tests {
         for n in [0, 1, 3, 7, 1023, 1024, 1025, 5000] {
             for p in [0, 1, 2, 3, 6, 13] {
                 let (x, beta, offset) = design(n, p);
-                let mut copy = Vec::new();
-                let cols = columns_of(x.as_ref(), &mut copy);
+                let copy = contiguous_copy(x.as_ref());
+                let cols = column_slices(x.as_ref(), &copy);
                 assert_eq!(
                     bits(&linear_predictor(&cols, &beta, &offset)),
                     bits(&by_rows(x.as_ref(), &beta, &offset)),
@@ -111,8 +119,8 @@ mod tests {
         let (mut x, beta, offset) = design(100, 4);
         x[(10, 1)] = f64::NAN;
         x[(20, 2)] = f64::INFINITY;
-        let mut copy = Vec::new();
-        let cols = columns_of(x.as_ref(), &mut copy);
+        let copy = contiguous_copy(x.as_ref());
+        let cols = column_slices(x.as_ref(), &copy);
         assert_eq!(
             bits(&linear_predictor(&cols, &beta, &offset)),
             bits(&by_rows(x.as_ref(), &beta, &offset))
@@ -124,8 +132,9 @@ mod tests {
         let (x, beta, offset) = design(300, 5);
         let transposed = Mat::from_fn(5, 300, |j, i| x[(i, j)]);
         let view = transposed.as_ref().transpose();
-        let mut copy = Vec::new();
-        let cols = columns_of(view, &mut copy);
+        let copy = contiguous_copy(view);
+        assert!(!copy.is_empty());
+        let cols = column_slices(view, &copy);
         assert_eq!(
             bits(&linear_predictor(&cols, &beta, &offset)),
             bits(&by_rows(x.as_ref(), &beta, &offset))
