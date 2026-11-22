@@ -148,15 +148,15 @@ fn align_row(
             .take_while(|&&index| rights[index].len() == length)
             .count();
         let (group, tail) = rest.split_at(run);
-        let mut blocks = group.chunks_exact(LANES);
-        for block in blocks.by_ref() {
+        let (blocks, remainder) = group.as_chunks::<LANES>();
+        for block in blocks {
             let lanes: [&[u8]; LANES] = std::array::from_fn(|lane| rights[block[lane]]);
             let costs = align_lanes(left, lanes, substitution, size, indel);
             for (&index, cost) in block.iter().zip(costs) {
                 out[index] = cost;
             }
         }
-        for &index in blocks.remainder() {
+        for &index in remainder {
             out[index] = align(left, rights[index], substitution, size, indel);
         }
         rest = tail;
@@ -817,8 +817,8 @@ mod tests {
         let mut state = 99u64;
         let mut next = move || {
             state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             (state >> 33) as usize
         };
         let alphabet = 5usize;

@@ -345,7 +345,7 @@ fn interleave(a: &[f64], m: usize, n: usize) -> Vec<f64> {
 /// `i`, which is the sum of one column on its own.
 fn block_dots(block: &[f64], x: &[f64]) -> [f64; 4] {
     let mut sum = [0.0_f64; 4];
-    for (&xi, row) in x.iter().zip(block.chunks_exact(4)) {
+    for (&xi, row) in x.iter().zip(block.as_chunks::<4>().0) {
         for lane in 0..4 {
             sum[lane] += xi * row[lane];
         }

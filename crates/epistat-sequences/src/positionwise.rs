@@ -205,12 +205,11 @@ impl<'a> Panel<'a> {
 /// positions.
 fn mismatches(left: &[u8], right: &[u8]) -> u32 {
     const LOW7: u64 = 0x7f7f_7f7f_7f7f_7f7f;
-    let (left_words, right_words) = (left.chunks_exact(8), right.chunks_exact(8));
-    let (left_rest, right_rest) = (left_words.remainder(), right_words.remainder());
+    let ((left_words, left_rest), (right_words, right_rest)) =
+        (left.as_chunks::<8>(), right.as_chunks::<8>());
     let mut count = 0;
-    for (a, b) in left_words.zip(right_words) {
-        let t = u64::from_le_bytes(a.try_into().expect("eight bytes"))
-            ^ u64::from_le_bytes(b.try_into().expect("eight bytes"));
+    for (a, b) in left_words.iter().zip(right_words) {
+        let t = u64::from_le_bytes(*a) ^ u64::from_le_bytes(*b);
         count += (((t & LOW7).wrapping_add(LOW7) | t) & !LOW7).count_ones();
     }
     for (a, b) in left_rest.iter().zip(right_rest) {
@@ -573,8 +572,8 @@ mod tests {
         let mut state = 12345u64;
         let mut next = move || {
             state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             (state >> 33) as u8
         };
         for length in [1usize, 2, 7, 8, 9, 15, 16, 17, 31, 64, 100, 121] {

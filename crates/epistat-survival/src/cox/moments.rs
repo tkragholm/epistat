@@ -45,7 +45,7 @@ fn add_rows(c: f64, x: &[f64], m1: &mut [f64], m2: &mut [f64]) {
     for a in 0..p {
         let cx = c * x[a];
         m1[a] += cx;
-        for (cell, &xb) in m2[a * p..a * p + a + 1].iter_mut().zip(x) {
+        for (cell, &xb) in m2[a * p..=a * p + a].iter_mut().zip(x) {
             *cell += cx * xb;
         }
     }
@@ -72,7 +72,7 @@ pub(super) fn add_information(
 ) {
     for a in 0..p {
         let ea = e[a];
-        let range = a * p..a * p + a + 1;
+        let range = a * p..=a * p + a;
         for (((cell, &r), &d), &eb) in information[range.clone()]
             .iter_mut()
             .zip(&risk[range.clone()])
@@ -124,8 +124,8 @@ mod tests {
         (0..n)
             .map(|_| {
                 *state = state
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 ((*state >> 11) as f64 / (1u64 << 53) as f64) - 0.5
             })
             .collect()
@@ -142,7 +142,7 @@ mod tests {
                 let (mut d1m, mut d2m) = (vec![0.0; p], vec![0.0; size]);
                 for row in 0..50 {
                     let x = values(&mut state, p);
-                    let c = if row % 7 == 3 { -0.75 } else { 1.25 } * (1.0 + row as f64 / 9.0);
+                    let c = if row % 7 == 3 { -0.75 } else { 1.25 } * (1.0 + f64::from(row) / 9.0);
                     add(c, &x, &mut m1, &mut m2);
                     reference_add(c, &x, &mut r1, &mut r2);
                     if row % 5 == 0 {
