@@ -151,6 +151,7 @@ mod kdtree;
 mod matching;
 pub mod multigroup;
 pub mod output;
+mod overlap;
 #[cfg(feature = "reporting")]
 pub mod reporting;
 mod role_transition;

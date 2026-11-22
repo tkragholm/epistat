@@ -7,6 +7,7 @@ use crate::matching::{
     finalize_estimand_diagnostics, intern_unique, invalid_cohort_outcome,
     invalid_common_support_outcome, invalid_criteria_outcome, ratio::RatioPolicy, unique_value,
 };
+use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{
     CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, ExclusionReason,
     InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
@@ -338,44 +339,22 @@ fn score_bounds_for_indices<R: RoleIndexedRecord>(
     indices: &[usize],
     scores: &ScoreTable,
 ) -> Option<(f64, f64)> {
-    let mut min_score = f64::INFINITY;
-    let mut max_score = f64::NEG_INFINITY;
-    let mut found = false;
-
-    for idx in indices {
-        let Some(row) = cohort.get(*idx) else {
-            continue;
-        };
-        let Some(score) = scores.get(row.id()).copied() else {
-            continue;
-        };
-        if !score.is_finite() {
-            continue;
-        }
-
-        min_score = min_score.min(score);
-        max_score = max_score.max(score);
-        found = true;
-    }
-
-    found.then_some((min_score, max_score))
-}
-
-fn support_interval(left: (f64, f64), right: (f64, f64)) -> Option<(f64, f64)> {
-    let lower = left.0.max(right.0);
-    let upper = left.1.min(right.1);
-    (lower <= upper).then_some((lower, upper))
+    finite_bounds(
+        indices
+            .iter()
+            .filter_map(|idx| cohort.get(*idx))
+            .filter_map(|row| scores.get(row.id()).copied()),
+    )
 }
 
 fn score_inside_interval<R: RoleIndexedRecord>(
     row: &R,
     scores: &ScoreTable,
-    interval: (f64, f64),
+    interval: Overlap,
 ) -> bool {
     scores
         .get(row.id())
-        .copied()
-        .is_some_and(|score| score.is_finite() && score >= interval.0 && score <= interval.1)
+        .is_some_and(|score| interval.contains(*score))
 }
 
 /// For each case, the smallest and largest finite score among the records at
@@ -512,17 +491,17 @@ fn transition_common_support_filters<
     let candidate_indices = (0..cohort.len()).collect_vec();
     let case_bounds = score_bounds_for_indices(cohort, case_indices, scores)?;
     let candidate_bounds = score_bounds_for_indices(cohort, &candidate_indices, scores)?;
-    let overlap = support_interval(case_bounds, candidate_bounds)?;
+    let overlap = Overlap::from_bounds(case_bounds, candidate_bounds)?;
 
     let mut filters = TransitionCommonSupportFilters {
-        overlap: Some(overlap),
+        overlap: Some(overlap.bounds()),
         case_score_bounds: Some(case_bounds),
         candidate_score_bounds: Some(candidate_bounds),
         policy: Some(policy),
         ..TransitionCommonSupportFilters::default()
     };
 
-    if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+    if policy.trims_anchors() {
         let ranges =
             at_risk_score_ranges(cohort, case_indices, scores, risk_set_policy, constraints);
         filters.trimmed_case_indices = case_indices
@@ -530,12 +509,13 @@ fn transition_common_support_filters<
             .zip(ranges)
             .filter_map(|(&idx, range)| {
                 let range = range?;
-                (!score_inside_interval(&cohort[idx], scores, range)).then_some(idx)
+                (!score_inside_interval(&cohort[idx], scores, Overlap::of_range(range)))
+                    .then_some(idx)
             })
             .collect();
     }
 
-    if matches!(policy, CommonSupport::Control | CommonSupport::Both) {
+    if policy.trims_candidates() {
         filters.trimmed_candidate_indices = candidate_indices
             .into_iter()
             .filter(|idx| {

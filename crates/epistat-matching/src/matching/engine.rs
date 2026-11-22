@@ -8,6 +8,7 @@ use super::index::{CandidateIndex, StrataValues};
 use super::ratio::RatioPolicy;
 use super::records::MatchingRecord;
 use super::selection::SelectionStrategy;
+use crate::overlap::{Overlap, finite_bounds};
 use crate::role_transition::IdOrder;
 use crate::types::{
     CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, DistanceCaliper,
@@ -1195,13 +1196,7 @@ impl StandardCommonSupport {
 /// The smallest and largest finite score among `rows`, or `None` when no row
 /// has one.
 fn finite_score_bounds<R: MatchingRecord>(rows: &[R], scores: &ScoreTable) -> Option<(f64, f64)> {
-    rows.iter()
-        .filter_map(|row| scores.get(row.id()).copied())
-        .filter(|score| score.is_finite())
-        .fold(None, |bounds, score| match bounds {
-            None => Some((score, score)),
-            Some((low, high)) => Some((low.min(score), high.max(score))),
-        })
+    finite_bounds(rows.iter().filter_map(|row| scores.get(row.id()).copied()))
 }
 
 /// Trim to the region where the anchors' and the candidates' scores overlap.
@@ -1224,34 +1219,31 @@ pub(crate) fn standard_common_support<R: MatchingRecord>(
         finite_score_bounds(anchors, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;
     let candidate_bounds =
         finite_score_bounds(candidates, scores).ok_or(CommonSupportFailureReason::NoOverlap)?;
-    let lower = anchor_bounds.0.max(candidate_bounds.0);
-    let upper = anchor_bounds.1.min(candidate_bounds.1);
-    if lower > upper {
-        return Err(CommonSupportFailureReason::NoOverlap);
-    }
+    let overlap = Overlap::from_bounds(anchor_bounds, candidate_bounds)
+        .ok_or(CommonSupportFailureReason::NoOverlap)?;
     let outside = |rows: &[R]| -> HashSet<usize> {
         rows.iter()
             .enumerate()
             .filter(|(_, row)| {
                 !scores
                     .get(row.id())
-                    .is_some_and(|score| score.is_finite() && *score >= lower && *score <= upper)
+                    .is_some_and(|score| overlap.contains(*score))
             })
             .map(|(idx, _)| idx)
             .collect()
     };
     Ok(StandardCommonSupport {
-        anchors: if matches!(policy, CommonSupport::Treated | CommonSupport::Both) {
+        anchors: if policy.trims_anchors() {
             outside(anchors)
         } else {
             HashSet::new()
         },
-        candidates: if matches!(policy, CommonSupport::Control | CommonSupport::Both) {
+        candidates: if policy.trims_candidates() {
             outside(candidates)
         } else {
             HashSet::new()
         },
-        overlap: (lower, upper),
+        overlap: overlap.bounds(),
         anchor_bounds,
         candidate_bounds,
     })
