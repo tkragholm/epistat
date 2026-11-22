@@ -58,6 +58,10 @@ pub struct SubclassedUnits {
     pub subclass: Vec<Option<usize>>,
     /// Counts and anchor share of each subclass.
     pub subclasses: Vec<SubclassSummary>,
+    /// The units that common-support trimming left out before matching, empty
+    /// when the match did not trim. They are not among the units above.
+    #[serde(default)]
+    pub trimmed: crate::TrimmedUnits,
 }
 
 /// Result of exact matching into strata, and of coarsened exact matching.
@@ -317,6 +321,7 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
             .map(|stratum| subclass_of[*stratum as usize])
             .collect(),
         subclasses: build_subclass_summaries(&kept_anchor_counts, &kept_candidate_counts),
+        trimmed: crate::TrimmedUnits::default(),
     })
 }
 

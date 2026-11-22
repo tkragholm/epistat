@@ -1015,6 +1015,7 @@ where
         anchor_count: anchors.len(),
         subclass,
         subclasses: build_subclass_summaries(&anchor_counts, &candidate_counts),
+        trimmed: crate::TrimmedUnits::default(),
     })
 }
 

@@ -1088,6 +1088,10 @@ pub struct FullMatchOutcome {
     pub atc_weights: HashMap<String, f64>,
     /// Subclass weights for the effect in the whole population.
     pub ate_weights: HashMap<String, f64>,
+    /// The units that common-support trimming left out before matching, empty
+    /// when the match did not trim. They are not among the units above.
+    #[serde(default)]
+    pub trimmed: crate::TrimmedUnits,
 }
 
 impl FullMatchOutcome {
@@ -1266,6 +1270,7 @@ where
         att_weights: anchor_effect,
         atc_weights: candidate_effect,
         ate_weights: population_effect,
+        trimmed: crate::TrimmedUnits::default(),
     })
 }
 

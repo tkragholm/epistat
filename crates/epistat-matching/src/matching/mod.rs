@@ -4,7 +4,7 @@ mod codes;
 mod constraints;
 mod distance;
 mod engine;
-pub(crate) use engine::standard_common_support;
+pub(crate) use engine::{StandardCommonSupport, standard_common_support, trimmed_ids};
 mod estimation;
 mod exact;
 mod fine_balance;

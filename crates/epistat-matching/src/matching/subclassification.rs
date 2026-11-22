@@ -101,6 +101,10 @@ pub struct SubclassificationOutcome {
     pub subclass: Vec<Option<usize>>,
     /// Subclass summaries.
     pub subclasses: Vec<SubclassSummary>,
+    /// The units that common-support trimming left out before matching, empty
+    /// when the match did not trim. They are not among the units above.
+    #[serde(default)]
+    pub trimmed: crate::TrimmedUnits,
 }
 
 impl SubclassificationOutcome {
@@ -321,6 +325,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
         anchor_count: anchors.len(),
         subclass,
         subclasses,
+        trimmed: crate::TrimmedUnits::default(),
     })
 }
 

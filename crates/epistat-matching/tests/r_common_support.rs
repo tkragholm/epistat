@@ -183,6 +183,23 @@ fn trimmed_units_match_matchit() {
                 count_discarded(case, discarded, 0.0),
                 "trimmed control count, {label}"
             );
+            // The ids are the units MatchIt discarded, in the order of the data.
+            let discarded_ids = |group: f64| -> Vec<String> {
+                (0..case.treat.len())
+                    .filter(|idx| (case.treat[*idx] - group).abs() < 0.5 && discarded[*idx])
+                    .map(id)
+                    .collect()
+            };
+            assert_eq!(
+                diagnostics.common_support_trimmed_ids.anchors,
+                discarded_ids(1.0),
+                "trimmed treated ids, {label}"
+            );
+            assert_eq!(
+                diagnostics.common_support_trimmed_ids.candidates,
+                discarded_ids(0.0),
+                "trimmed control ids, {label}"
+            );
             if policy.is_some() {
                 assert_eq!(
                     diagnostics.common_support_overlap,

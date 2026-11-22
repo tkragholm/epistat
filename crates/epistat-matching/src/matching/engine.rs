@@ -1016,6 +1016,8 @@ pub fn match_standard_with_discard<
     if let Some((trimmed_anchors, trimmed_candidates)) = &listed {
         diagnostics.common_support_trimmed_anchors = trimmed_anchors.len();
         diagnostics.common_support_trimmed_candidates = trimmed_candidates.len();
+        diagnostics.common_support_trimmed_ids =
+            trimmed_ids(anchors, candidates, trimmed_anchors, trimmed_candidates);
     }
     let support = match criteria.common_support {
         _ if listed.is_some() => None,
@@ -1032,7 +1034,7 @@ pub fn match_standard_with_discard<
             };
             match standard_common_support(anchors, candidates, policy, scores) {
                 Ok(support) => {
-                    support.record_in(&mut diagnostics);
+                    support.record_in(&mut diagnostics, anchors, candidates);
                     Some(support)
                 }
                 Err(reason) => return invalid_common_support_outcome(anchors.len(), reason),
@@ -1105,6 +1107,26 @@ pub fn match_standard_with_discard<
     }
 }
 
+/// The ids of the trimmed units, in the order of the units given.
+pub(crate) fn trimmed_ids<R: MatchingRecord>(
+    anchors: &[R],
+    candidates: &[R],
+    trimmed_anchors: &HashSet<usize>,
+    trimmed_candidates: &HashSet<usize>,
+) -> crate::TrimmedUnits {
+    let ids = |rows: &[R], trimmed: &HashSet<usize>| -> Vec<String> {
+        rows.iter()
+            .enumerate()
+            .filter(|(idx, _)| trimmed.contains(idx))
+            .map(|(_, row)| row.id().to_string())
+            .collect()
+    };
+    crate::TrimmedUnits {
+        anchors: ids(anchors, trimmed_anchors),
+        candidates: ids(candidates, trimmed_candidates),
+    }
+}
+
 /// The units that common-support trimming removes from a standard match.
 pub(crate) struct StandardCommonSupport {
     pub(crate) anchors: HashSet<usize>,
@@ -1115,9 +1137,33 @@ pub(crate) struct StandardCommonSupport {
 }
 
 impl StandardCommonSupport {
-    fn record_in(&self, diagnostics: &mut MatchDiagnostics) {
+    /// Record the trimming in the diagnostics of a match that ran on the units
+    /// that remain, with the drift it causes in the estimand.
+    pub(crate) fn record_after_match<R: MatchingRecord>(
+        &self,
+        diagnostics: &mut MatchDiagnostics,
+        policy: CommonSupport,
+        anchors: &[R],
+        candidates: &[R],
+    ) {
+        self.record_in(diagnostics, anchors, candidates);
+        diagnostics.common_support_policy = Some(policy);
+        if !self.anchors.is_empty() || !self.candidates.is_empty() {
+            push_drift_reason(diagnostics, EstimandDriftReason::CommonSupportTrimming);
+            diagnostics.realized_estimand = Estimand::Atm;
+        }
+    }
+
+    fn record_in<R: MatchingRecord>(
+        &self,
+        diagnostics: &mut MatchDiagnostics,
+        anchors: &[R],
+        candidates: &[R],
+    ) {
         diagnostics.common_support_trimmed_anchors = self.anchors.len();
         diagnostics.common_support_trimmed_candidates = self.candidates.len();
+        diagnostics.common_support_trimmed_ids =
+            trimmed_ids(anchors, candidates, &self.anchors, &self.candidates);
         diagnostics.common_support_overlap = Some(self.overlap);
         diagnostics.common_support_anchor_score_bounds = Some(self.anchor_bounds);
         diagnostics.common_support_candidate_score_bounds = Some(self.candidate_bounds);

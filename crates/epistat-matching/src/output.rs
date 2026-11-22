@@ -1188,6 +1188,7 @@ mod tests {
                     subclass_propensity: Some(0.5),
                 },
             ],
+            trimmed: crate::TrimmedUnits::default(),
         };
         let weights = units.unit_weights(Estimand::Att).unwrap();
         assert_eq!(weights.anchor.len(), 2);

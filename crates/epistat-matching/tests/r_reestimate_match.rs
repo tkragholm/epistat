@@ -164,6 +164,15 @@ fn matching_after_reestimation_keeps_the_units_matchit_keeps() {
             .collect();
         let expected: Vec<Vec<usize>> = run.matchit.iter().map(Rows::to_vec).collect();
         assert_eq!(ours, expected, "{label}: pairs");
+        let reported = &matched.outcome.diagnostics.common_support_trimmed_ids;
+        let mut reported_rows: Vec<usize> = reported
+            .anchors
+            .iter()
+            .chain(&reported.candidates)
+            .map(|id| id.parse().expect("row"))
+            .collect();
+        reported_rows.sort_unstable();
+        assert_eq!(reported_rows, run.discarded, "{label}: reported ids");
         assert_eq!(
             matched.outcome.diagnostics.common_support_trimmed_anchors
                 + matched
