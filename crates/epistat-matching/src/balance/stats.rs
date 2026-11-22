@@ -1,6 +1,3 @@
-use crate::matching::to_f64;
-use epistat_stats::balance;
-
 /// Standardised difference `difference / sqrt(variance)`, `None` when the
 /// variance is not positive and finite or the difference is not finite.
 ///
@@ -19,148 +16,13 @@ pub(super) fn standard_deviation(variance: f64) -> Option<f64> {
     (variance.is_finite() && variance > 0.0).then(|| variance.sqrt())
 }
 
-/// The eCDF distance summary (mean and maximum absolute difference) between two
-/// weighted groups, `None` when a group has no positive weight.
-///
-/// Each point is a value, whether it belongs to the case group, and a
-/// non-negative weight. The two empirical distribution functions are evaluated
-/// at every distinct value among all points, units of weight zero included, and
-/// each group's weights are scaled to sum to one. A point of weight zero adds an
-/// evaluation point and no mass. Negative and positive zero are one value. This is the definition in the documentation of
-/// MatchIt's `summary.matchit()`.
-#[cfg(test)]
-pub(super) fn weighted_ecdf_distance(points: &[(f64, bool, f64)]) -> Option<(f64, f64)> {
-    let mut order = (0..points.len())
-        .map(|idx| u32::try_from(idx).expect("fewer than 2^32 points"))
-        .collect::<Vec<_>>();
-    order.sort_by(|&left, &right| points[left as usize].0.total_cmp(&points[right as usize].0));
-    weighted_ecdf_distance_ordered(points, &order)
-}
-
-/// [`weighted_ecdf_distance`] with the points' order given: `order` lists the
-/// indices of `points` in ascending order of value under `f64::total_cmp`,
-/// units that tie in their original order. The same order serves any weights
-/// on the same values.
-pub(super) fn weighted_ecdf_distance_ordered(
-    points: &[(f64, bool, f64)],
-    order: &[u32],
-) -> Option<(f64, f64)> {
-    let total = |case: bool| {
-        points
-            .iter()
-            .filter(|(_, is_case, _)| *is_case == case)
-            .map(|(_, _, weight)| *weight)
-            .sum::<f64>()
-    };
-    let (total_case, total_control) = (total(true), total(false));
-    if !(total_case > 0.0 && total_control > 0.0) {
-        return None;
-    }
-
-    let (mut cumulative_case, mut cumulative_control) = (0.0_f64, 0.0_f64);
-    let (mut sum, mut max, mut distinct) = (0.0_f64, 0.0_f64, 0usize);
-    let mut idx = 0;
-    while idx < order.len() {
-        let value = points[order[idx] as usize].0;
-        while idx < order.len()
-            && points[order[idx] as usize].0.partial_cmp(&value) == Some(std::cmp::Ordering::Equal)
-        {
-            let (_, is_case, weight) = points[order[idx] as usize];
-            if is_case {
-                cumulative_case += weight;
-            } else {
-                cumulative_control += weight;
-            }
-            idx += 1;
-        }
-        let gap = (cumulative_case / total_case - cumulative_control / total_control).abs();
-        sum += gap;
-        max = max.max(gap);
-        distinct += 1;
-    }
-    Some((sum / to_f64(distinct), max))
-}
-
-/// Variance ratio (`var_case / var_control`), `None` when either variance is not finite,
-/// the case variance is negative or the control variance is not positive.
-///
-/// Reference:
-/// - Stuart EA, Lee BK, Leacy FP. Prognostic score-based balance measures can be
-///   a useful diagnostic for propensity score methods in comparative effectiveness research.
-///   *J Clin Epidemiol*. 2013.
-pub(super) fn variance_ratio(var_case: f64, var_control: f64) -> Option<f64> {
-    balance::variance_ratio(var_case, var_control)
-}
-
-/// Unweighted eCDF distance summary (mean and max absolute difference), `None`
-/// when a group has no finite value.
-///
-/// Reference:
-/// - Rosenbaum PR, Rubin DB. The central role of the propensity score in observational studies.
-///   *Biometrika*. 1983.
-#[cfg(any(test, feature = "bench-internals"))]
-pub(super) fn ecdf_distance_stats(
-    case_values: &[f64],
-    control_values: &[f64],
-) -> Option<(f64, f64)> {
-    balance::ecdf_distance(case_values, control_values)
-}
-
-/// Weighted eQQ distance summary as `summary.matchit()` reports it, `None`
-/// when a group has no unit of positive weight. See
-/// [`epistat_stats::balance::eqq_distance_weighted`].
-#[cfg(test)]
-pub(super) fn eqq_distance_weighted(
-    case_values: &[f64],
-    case_weights: &[f64],
-    control_values: &[f64],
-    control_weights: &[f64],
-) -> Option<(f64, f64)> {
-    balance::eqq_distance_weighted(case_values, case_weights, control_values, control_weights)
-}
-
-/// [`eqq_distance_weighted`] on groups in ascending order of value with their
-/// total weights, see [`epistat_stats::balance::eqq_distance_weighted_sorted`].
-pub(super) fn eqq_distance_weighted_sorted(
-    case: (&[f64], &[f64], f64),
-    control: (&[f64], &[f64], f64),
-) -> Option<(f64, f64)> {
-    balance::eqq_distance_weighted_sorted(case.0, case.1, case.2, control.0, control.1, control.2)
-}
-
-/// eQQ distance summary (mean and max absolute quantile distance), `None`
-/// when a group has no finite value.
-///
-/// Reference:
-/// - Ho DE, Imai K, King G, Stuart EA. `MatchIt`: Nonparametric preprocessing for
-///   parametric causal inference. *J Stat Softw*. 2011.
-#[cfg(any(test, feature = "bench-internals"))]
-pub(super) fn eqq_distance_stats(
-    case_values: &[f64],
-    control_values: &[f64],
-) -> Option<(f64, f64)> {
-    balance::eqq_distance(case_values, control_values)
-}
-
-/// Cramér's V computed from 2xK contingency counts, `None` when it does not exist.
-///
-/// References:
-/// - Cramér H. *Mathematical Methods of Statistics*. 1946.
-/// - Agresti A. *Categorical Data Analysis*, 3rd ed. 2013.
-#[cfg(test)]
-pub(super) fn cramers_v(case_counts: &[usize], control_counts: &[usize]) -> Option<f64> {
-    balance::cramers_v(case_counts, control_counts)
-}
-
-/// Cramér's V computed from 2xK table of weights, `None` when it does not
-/// exist. There is no R reference for it.
-pub(super) fn cramers_v_weighted(case_weights: &[f64], control_weights: &[f64]) -> Option<f64> {
-    balance::cramers_v_weighted(case_weights, control_weights)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::matching::to_f64;
+    use epistat_stats::balance::{
+        ecdf_distance as ecdf_distance_stats, eqq_distance as eqq_distance_stats,
+    };
     use itertools::Itertools;
 
     fn quantile_from_sorted_reference(sorted: &[f64], numerator: usize, denominator: usize) -> f64 {
@@ -304,69 +166,6 @@ mod tests {
         #[case] expected: Option<f64>,
     ) {
         assert_eq!(standardised_difference(difference, variance), expected);
-    }
-
-    #[rstest]
-    #[case(2.0, 1.0, Some(2.0))]
-    #[case(2.0, 0.0, None)]
-    #[case(f64::NAN, 1.0, None)]
-    fn test_variance_ratio(#[case] v1: f64, #[case] v2: f64, #[case] expected: Option<f64>) {
-        assert_eq!(variance_ratio(v1, v2), expected);
-    }
-
-    #[test]
-    fn weighted_ecdf_with_unit_weights_matches_the_unweighted_distance() {
-        let case = [1.0, 2.0, 2.0, 5.0];
-        let control = [0.5, 2.0, 4.0];
-        let points = case
-            .iter()
-            .map(|value| (*value, true, 1.0))
-            .chain(control.iter().map(|value| (*value, false, 1.0)))
-            .collect_vec();
-        let weighted = weighted_ecdf_distance(&points).unwrap();
-        let plain = ecdf_distance_stats(&case, &control).unwrap();
-        assert!((weighted.0 - plain.0).abs() < 1e-15);
-        assert!((weighted.1 - plain.1).abs() < 1e-15);
-    }
-
-    #[test]
-    fn weighted_ecdf_counts_zero_weight_points_as_evaluation_points() {
-        // The point at 9 carries no mass but is an evaluation point where the
-        // two distribution functions already agree at one, so the mean gap is a third.
-        let points = [(1.0, true, 1.0), (2.0, false, 1.0), (9.0, false, 0.0)];
-        let (mean, max) = weighted_ecdf_distance(&points).unwrap();
-        assert!((max - 1.0).abs() < 1e-15);
-        assert!((mean - 1.0 / 3.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn weighted_ecdf_is_undefined_without_mass_in_a_group() {
-        assert_eq!(weighted_ecdf_distance(&[(1.0, true, 1.0)]), None);
-        assert_eq!(
-            weighted_ecdf_distance(&[(1.0, true, 1.0), (2.0, false, 0.0)]),
-            None
-        );
-    }
-
-    #[test]
-    fn cramers_v_zero_for_identical_distributions() {
-        let case_counts = [10, 20, 30];
-        let control_counts = [20, 40, 60];
-        assert!(cramers_v(&case_counts, &control_counts).unwrap().abs() < 1e-12);
-    }
-
-    #[test]
-    fn cramers_v_is_undefined_without_observations() {
-        assert_eq!(cramers_v(&[0, 0], &[0, 0]), None);
-        assert_eq!(cramers_v(&[], &[]), None);
-    }
-
-    #[test]
-    fn cramers_v_increases_with_stronger_association() {
-        let weak = cramers_v(&[50, 50], &[50, 50]).unwrap();
-        let strong = cramers_v(&[100, 0], &[0, 100]).unwrap();
-        assert!(strong > weak);
-        assert!(strong <= 1.0);
     }
 
     #[test]

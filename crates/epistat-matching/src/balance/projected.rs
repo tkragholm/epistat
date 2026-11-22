@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use crate::matching::to_f64;
+use epistat_stats::{balance, weighted};
 
 /// Numeric projected covariate definition for balance summaries.
 #[derive(Clone, Copy)]
@@ -50,39 +51,21 @@ impl<R> CategoricalCovariateSpec<R> {
     }
 }
 
-/// Sample variance around a supplied mean, `None` for fewer than two values.
-#[must_use]
-pub fn variance(vals: &[f64], mean: f64) -> Option<f64> {
-    if vals.len() < 2 {
-        return None;
-    }
-    let sum_squares = vals
-        .iter()
-        .map(|value| {
-            let delta = *value - mean;
-            delta * delta
-        })
-        .sum::<f64>();
-    Some(sum_squares / to_f64(vals.len().saturating_sub(1)))
-}
-
 /// Standardized mean difference from raw value vectors, `None` when a group
-/// has fewer than two values, the pooled variance is not positive and finite,
-/// or the difference is not finite.
+/// has fewer than two values, a value is not finite, the pooled variance is not
+/// positive and finite, or the difference is not finite.
+///
+/// The means and variances are those of [`epistat_stats::weighted`].
 #[must_use]
 pub fn smd_numeric_from_values(case_vals: &[f64], control_vals: &[f64]) -> Option<f64> {
     if case_vals.len() < 2 || control_vals.len() < 2 {
         return None;
     }
-    let mean_case = case_vals.iter().sum::<f64>() / to_f64(case_vals.len());
-    let mean_control = control_vals.iter().sum::<f64>() / to_f64(control_vals.len());
-    let var_case = variance(case_vals, mean_case)?;
-    let var_control = variance(control_vals, mean_control)?;
-    let pooled_sd = f64::midpoint(var_case, var_control).sqrt();
-    if !(pooled_sd > 0.0 && pooled_sd.is_finite()) {
-        return None;
-    }
-    Some((mean_case - mean_control) / pooled_sd).filter(|value| value.is_finite())
+    let var_case = weighted::variance(case_vals, None).filter(|v| v.is_finite())?;
+    let var_control = weighted::variance(control_vals, None).filter(|v| v.is_finite())?;
+    let mean_case = weighted::mean(case_vals, None)?;
+    let mean_control = weighted::mean(control_vals, None)?;
+    balance::smd(mean_case, mean_control, var_case, var_control).filter(|value| value.is_finite())
 }
 
 /// Maximum absolute difference in category proportions, `None` when a group is empty.

@@ -177,7 +177,7 @@ pub use balance::{
 pub use balance::{
     CategoricalCovariateSpec, NumericCovariateSpec, ProjectedBalanceRow, balance_diagnostics,
     balance_report, balance_report_with_options, balance_threshold_summary,
-    build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values, variance,
+    build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values,
 };
 pub use matching::{
     Assignment, CaliperConstraint, CbpsConfig, CbpsEstimand, CbpsFit, CbpsMethod, Chained,

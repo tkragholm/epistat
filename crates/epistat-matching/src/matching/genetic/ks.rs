@@ -16,6 +16,8 @@
 //! The test is that of R's `ks.test`: exact when `m * n < 10000`, asymptotic
 //! otherwise.
 
+use epistat_stats::balance::ecdf_gaps_sorted;
+
 /// The statistic of two unsorted samples, or `None` when either is empty.
 pub(crate) fn ks_statistic(x: &[f64], y: &[f64]) -> Option<f64> {
     if x.is_empty() || y.is_empty() {
@@ -28,32 +30,9 @@ pub(crate) fn ks_statistic(x: &[f64], y: &[f64]) -> Option<f64> {
     Some(ks_d_sorted(&xs, &ys))
 }
 
-/// The statistic of two sorted samples.
-#[expect(
-    clippy::float_cmp,
-    reason = "runs of tied values are runs of equal floats"
-)]
+/// The statistic of two sorted, non-empty samples.
 pub(crate) fn ks_d_sorted(xs: &[f64], ys: &[f64]) -> f64 {
-    let nx = xs.len() as f64;
-    let ny = ys.len() as f64;
-    let (mut i, mut j) = (0_usize, 0_usize);
-    let mut d: f64 = 0.0;
-    while i < xs.len() || j < ys.len() {
-        let value = match (xs.get(i), ys.get(j)) {
-            (Some(&a), Some(&b)) => a.min(b),
-            (Some(&a), None) => a,
-            (None, Some(&b)) => b,
-            (None, None) => break,
-        };
-        while i < xs.len() && xs[i] == value {
-            i += 1;
-        }
-        while j < ys.len() && ys[j] == value {
-            j += 1;
-        }
-        d = d.max((i as f64 / nx - j as f64 / ny).abs());
-    }
-    d
+    ecdf_gaps_sorted(xs, ys).fold(0.0, f64::max)
 }
 
 /// The statistic and p-value of a two-sample test, exact below `m * n = 10000`

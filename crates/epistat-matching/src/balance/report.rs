@@ -1,8 +1,5 @@
 use super::input::{BalanceInputError, BalanceWeights};
-use super::stats::{
-    cramers_v_weighted, eqq_distance_weighted_sorted, standard_deviation, standardised_difference,
-    variance_ratio, weighted_ecdf_distance_ordered,
-};
+use super::stats::{standard_deviation, standardised_difference};
 use crate::matching::{ColumnReader, CovariateRecord, NameScan, effective_sample_size};
 use crate::types::{
     BalanceImprovement, BalanceReport, BalanceReportOptions, BalanceSummary,
@@ -10,6 +7,10 @@ use crate::types::{
     CovariateRef, CovariateValue, Estimand, GroupSampleSizes, LevelImprovement, MatchOutcome,
     MatchedPair, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
     NumericImprovement, PairDistance, SampleSizeTable,
+};
+use epistat_stats::balance::{
+    cramers_v_weighted, ecdf_distance_weighted_ordered, eqq_distance_weighted_sorted,
+    variance_ratio,
 };
 use epistat_stats::weighted;
 use itertools::Itertools;
@@ -1003,7 +1004,7 @@ fn summarize_numeric_feature<R: CovariateRecord>(
                 .iter()
                 .map(|unit| (unit.value, unit.is_case, unit.weight(matched)))
                 .collect_vec();
-            split_pair(weighted_ecdf_distance_ordered(&points, &sorted.ecdf))
+            split_pair(ecdf_distance_weighted_ordered(&points, &sorted.ecdf))
         } else {
             let gap = difference(case, control).map(f64::abs);
             (gap, gap)
@@ -1016,8 +1017,12 @@ fn summarize_numeric_feature<R: CovariateRecord>(
             let (control_values, control_weights, control_total) =
                 SortedUnits::group_in_order(&units, &sorted.controls, false, matched);
             split_pair(eqq_distance_weighted_sorted(
-                (&case_values, &case_weights, case_total),
-                (&control_values, &control_weights, control_total),
+                &case_values,
+                &case_weights,
+                case_total,
+                &control_values,
+                &control_weights,
+                control_total,
             ))
         } else {
             let gap = difference(case, control).map(f64::abs);
@@ -1363,13 +1368,13 @@ fn covariate_value<'a, R: CovariateRecord>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::balance::stats::{eqq_distance_weighted, weighted_ecdf_distance};
     use crate::matching::MatchingRecord;
     use crate::types::{
         BalanceRecord, BalanceReportOptions, MatchedPair, NumericBalanceTransform,
         SupplementalBalanceCovariates,
     };
     use crate::{date, test_outcome};
+    use epistat_stats::balance::{ecdf_distance_weighted, eqq_distance_weighted};
     use std::collections::HashMap;
 
     fn participant(id: &str) -> BalanceRecord {
@@ -2178,7 +2183,7 @@ mod tests {
                     .iter()
                     .map(|unit| (unit.value, unit.is_case, unit.weight(matched)))
                     .collect_vec();
-                split_pair(weighted_ecdf_distance(&points))
+                split_pair(ecdf_distance_weighted(&points))
             }
         };
         let eqq = |matched: bool, case: GroupMoments, control: GroupMoments| {
