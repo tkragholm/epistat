@@ -748,19 +748,19 @@ dependencies = [
 
 [[package]]
 name = "epistat-did"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bon",
  "clarabel",
  "criterion",
  "dyn-stack",
- "epistat-glm 0.1.1",
- "epistat-inference 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-linalg 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-optim 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-rng 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-stats 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-testkit 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "epistat-glm",
+ "epistat-inference",
+ "epistat-linalg",
+ "epistat-optim",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
  "faer",
  "hotpath",
  "itertools 0.14.0",
@@ -778,22 +778,11 @@ dependencies = [
 
 [[package]]
 name = "epistat-glm"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83403852c974d8ee6c891514e88ba63090b434ca5dd6d13b741941288f113636"
-dependencies = [
- "epistat-linalg 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "faer",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "epistat-glm"
 version = "0.2.0"
 dependencies = [
- "epistat-linalg 0.3.1",
- "epistat-stats 0.2.5",
- "epistat-testkit 0.1.1",
+ "epistat-linalg",
+ "epistat-stats",
+ "epistat-testkit",
  "rayon",
  "serde",
  "thiserror 2.0.21",
@@ -803,10 +792,10 @@ dependencies = [
 name = "epistat-inference"
 version = "0.3.2"
 dependencies = [
- "epistat-linalg 0.3.1",
- "epistat-rng 0.1.3",
- "epistat-stats 0.2.5",
- "epistat-testkit 0.1.1",
+ "epistat-linalg",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
  "rayon",
  "serde",
  "serde_json",
@@ -814,36 +803,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "epistat-inference"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b83577a183cd9eea4e7fa9a8992e450e85e591a4e87ce7e64e5ce220203f5511"
-dependencies = [
- "epistat-linalg 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-rng 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "epistat-stats 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "rayon",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "epistat-linalg"
 version = "0.3.1"
 dependencies = [
  "dyn-stack",
- "epistat-testkit 0.1.1",
- "faer",
- "rayon",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "epistat-linalg"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c19289dcfab81a578b486d534282b569a56539e663e66fa29b2198a51416a71"
-dependencies = [
- "dyn-stack",
+ "epistat-testkit",
  "faer",
  "rayon",
  "thiserror 2.0.21",
@@ -857,14 +821,14 @@ dependencies = [
  "bon",
  "chrono",
  "criterion",
- "epistat-glm 0.2.0",
- "epistat-inference 0.3.2",
- "epistat-linalg 0.3.1",
- "epistat-optim 0.1.1",
+ "epistat-glm",
+ "epistat-inference",
+ "epistat-linalg",
+ "epistat-optim",
  "epistat-register",
- "epistat-rng 0.1.3",
- "epistat-stats 0.2.5",
- "epistat-testkit 0.1.1",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
  "itertools 0.14.0",
  "ordered-float",
  "proptest",
@@ -881,16 +845,10 @@ dependencies = [
 name = "epistat-optim"
 version = "0.1.1"
 dependencies = [
- "epistat-rng 0.1.3",
- "epistat-testkit 0.1.1",
+ "epistat-rng",
+ "epistat-testkit",
  "rayon",
 ]
-
-[[package]]
-name = "epistat-optim"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2313ae7f8ec7decf5b1151a6d3c0d88db650831ac9d4fc9c44f15617f88ecf96"
 
 [[package]]
 name = "epistat-register"
@@ -905,16 +863,7 @@ dependencies = [
 name = "epistat-rng"
 version = "0.1.3"
 dependencies = [
- "epistat-testkit 0.1.1",
- "rand_core 0.10.1",
-]
-
-[[package]]
-name = "epistat-rng"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2382919d48aa9ea183aa9b2033ed705448043fde2cb7fac043514e697894fd76"
-dependencies = [
+ "epistat-testkit",
  "rand_core 0.10.1",
 ]
 
@@ -922,9 +871,9 @@ dependencies = [
 name = "epistat-sequences"
 version = "0.2.0"
 dependencies = [
- "epistat-optim 0.1.1",
- "epistat-rng 0.1.3",
- "epistat-stats 0.2.5",
+ "epistat-optim",
+ "epistat-rng",
+ "epistat-stats",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -933,20 +882,10 @@ dependencies = [
 name = "epistat-stats"
 version = "0.2.5"
 dependencies = [
- "epistat-rng 0.1.3",
- "epistat-testkit 0.1.1",
+ "epistat-rng",
+ "epistat-testkit",
  "rayon",
  "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "epistat-stats"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90cff44820f99875cd64144170a55d5eccb9bd58fc713dce58a5bd03833e5247"
-dependencies = [
- "rayon",
  "thiserror 2.0.21",
 ]
 
@@ -955,12 +894,12 @@ name = "epistat-survival"
 version = "0.4.0"
 dependencies = [
  "arrow-array",
- "epistat-glm 0.2.0",
- "epistat-inference 0.3.2",
- "epistat-linalg 0.3.1",
- "epistat-rng 0.1.3",
- "epistat-stats 0.2.5",
- "epistat-testkit 0.1.1",
+ "epistat-glm",
+ "epistat-inference",
+ "epistat-linalg",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
  "rayon",
  "serde",
  "thiserror 2.0.21",
@@ -969,17 +908,6 @@ dependencies = [
 [[package]]
 name = "epistat-testkit"
 version = "0.1.1"
-dependencies = [
- "rayon",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "epistat-testkit"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb75630a08eba5209c9eb154c0ff08e7655c8078988986f85da50b09b3b63cc5"
 dependencies = [
  "rayon",
  "serde",
