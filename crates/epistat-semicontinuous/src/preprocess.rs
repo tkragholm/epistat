@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::utils::usize_to_f64;
 

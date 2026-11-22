@@ -7,7 +7,7 @@
 //! `w (y - mu) mu^(1-p) x`, so the reference standard errors are that same sandwich
 //! computed in R from the glm fit's fitted means.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{ModelInput, TweedieOptions, fit_tweedie_input};
 use serde::Deserialize;
 

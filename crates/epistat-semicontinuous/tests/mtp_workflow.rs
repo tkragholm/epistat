@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     CounterfactualScenario, LongitudinalModelInput, MtpFitOptions,
     compute_counterfactual_effects_summary, fit_mtp_input_with_posterior,

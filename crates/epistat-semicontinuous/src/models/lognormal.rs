@@ -13,7 +13,7 @@
 
 use std::time::Instant;
 
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::models::covariance::{diag_sqrt, sandwich, score_meat};
 use crate::models::matrix_ops::{map_mat, select_rows, select_values};

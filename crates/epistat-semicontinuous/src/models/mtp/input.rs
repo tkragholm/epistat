@@ -50,7 +50,7 @@ pub(crate) fn prepare_input(
 
 #[cfg(test)]
 mod tests {
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     use super::*;
 

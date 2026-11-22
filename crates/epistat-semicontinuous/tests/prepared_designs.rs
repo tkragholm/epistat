@@ -5,7 +5,7 @@
 //! `1 + |dense value|`, and `LOGIT_AGREEMENT` for the logit part. The dense path with
 //! caller-held buffers is compared bit for bit with the dense path without them.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::models::FitStrategy;
 use epistat_semicontinuous::{
     FitOptions, ModelInput, PreparedFitError, PreparedGammaDesign, PreparedPredictionDesign,

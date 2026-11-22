@@ -4,7 +4,7 @@
 //! These tests compare two paths of the same binary, so unlike `fit_golden` they hold on
 //! every target.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, InputError, LogNormalOptions, Model, ModelInput, ModelInputRef, TweedieError,
     TweedieOptions, TwoPartError, TwoPartWarmStart, fit_lognormal_smearing_input,

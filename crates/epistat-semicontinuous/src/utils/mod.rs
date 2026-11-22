@@ -11,9 +11,9 @@
 //! Shared helpers for solving linear systems, computing summary statistics,
 //! and working with faer matrices.
 
-use epistat_linalg::{Attempt, DesignError, Factor, Method, ROW_BLOCK, Ridge};
-use faer::linalg::matmul::matmul;
-use faer::{Accum, Mat, MatMut, MatRef, Par};
+use epistat_linalg::{
+    Accum, Attempt, DesignError, Factor, Mat, MatMut, MatRef, Method, Par, ROW_BLOCK, Ridge, matmul,
+};
 use num_traits::ToPrimitive;
 
 use crate::input::LongitudinalModelInput;

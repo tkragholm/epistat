@@ -11,7 +11,7 @@
 
 use epistat_rng::Stream as Draws;
 use epistat_testkit::Fingerprint;
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     BootstrapOptions, ConfidenceInterval, FamilyRandomEffects, FitOptions,
     LongitudinalModelInput, ModelComparison, ModelComparisonOptions, ModelFitMetrics,

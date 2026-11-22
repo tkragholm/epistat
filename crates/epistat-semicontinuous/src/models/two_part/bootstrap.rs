@@ -2,7 +2,7 @@
 
 use epistat_inference::interval::{Percentile, percentile};
 use epistat_rng::Stream;
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use super::{
     BootstrapOptions, BootstrapResult, BootstrapSummary, ConfidenceInterval, FitOptions,

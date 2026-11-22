@@ -1,5 +1,5 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::models::two_part::{ConfidenceInterval, bootstrap_percentile_ci};
 
 fn usize_to_f64(value: usize) -> f64 {

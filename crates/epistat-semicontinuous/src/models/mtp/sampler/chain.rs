@@ -1,5 +1,5 @@
 use epistat_rng::Stream;
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::input::LongitudinalModelInput;
 use crate::models::matrix_ops::{select_rows, select_values};

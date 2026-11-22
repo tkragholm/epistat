@@ -4,7 +4,7 @@ use crate::input::LongitudinalModelInput;
 use crate::utils::acceptance_rate;
 #[cfg(feature = "bench-internals")]
 use crate::utils::{weighted_xtx, weighted_xtz};
-use faer::Mat;
+use epistat_linalg::Mat;
 use std::time::Instant;
 
 use super::diagnostics::summarize_multi_chain_convergence_tracking;
@@ -776,7 +776,7 @@ mod tests {
     use super::*;
     use crate::models::mtp::types::MtpProposalTuning;
     use crate::utils::{matrix_is_finite, usize_to_f64, weighted_xtx, weighted_xtz};
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     fn basic_input() -> LongitudinalModelInput {
         LongitudinalModelInput::new(

@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use faer::Mat;
+//! use epistat_linalg::Mat;
 //! use epistat_semicontinuous::ModelInput;
 //!
 //! fn idx_to_f64(idx: usize) -> f64 {
@@ -21,7 +21,7 @@
 //! ```
 //!
 //! ```
-//! use faer::Mat;
+//! use epistat_linalg::Mat;
 //! use epistat_semicontinuous::ModelInput;
 //!
 //! fn idx_to_f64(idx: usize) -> f64 {
@@ -35,7 +35,7 @@
 //! assert!(input.validate().is_err());
 //! ```
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -229,7 +229,7 @@ impl ModelInput {
 /// give the same result for the same data.
 ///
 /// ```
-/// use faer::Mat;
+/// use epistat_linalg::Mat;
 /// use epistat_semicontinuous::{ModelInput, ModelInputRef};
 ///
 /// let design = Mat::from_fn(3, 1, |_, _| 1.0);

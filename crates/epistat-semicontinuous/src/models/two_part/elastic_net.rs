@@ -2,7 +2,7 @@
 //! [`epistat_glm::ElasticNet`] with the Gaussian family.
 
 use epistat_glm::{ElasticNet, Family, ResponseScaling};
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use super::{Regularization, TwoPartError};
 

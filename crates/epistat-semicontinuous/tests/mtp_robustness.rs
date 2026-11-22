@@ -1,5 +1,5 @@
 use epistat_rng::Stream;
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     LongitudinalModelInput, MtpFitOptions, MtpMultiChainOptions, MtpProposalTuning,
     MtpSamplerConfig, fit_mtp_input_multi_chain_with_config, fit_mtp_input_with_posterior_config,

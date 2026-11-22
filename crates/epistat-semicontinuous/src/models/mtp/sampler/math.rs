@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 
-use dyn_stack::{MemBuffer, MemStack};
+use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method};
 use epistat_rng::Stream;
-use faer::linalg::cholesky::llt;
-use faer::linalg::cholesky::llt::factor::LltRegularization;
-use faer::{Mat, MatRef, Par, Side, Spec};
 
 use crate::input::LongitudinalModelInput;
 use crate::models::matrix_ops::select_rows;
@@ -459,16 +456,12 @@ pub(super) fn cholesky_lower(matrix: &Mat<f64>) -> Option<Mat<f64>> {
     if matrix.nrows() != dim {
         return None;
     }
-    let llt = matrix.as_ref().llt(Side::Lower).ok()?;
-    let lower_factor = llt.L();
-    Some(Mat::from_fn(dim, dim, |row, col| {
-        if row >= col {
-            lower_factor[(row, col)]
-        } else {
-            0.0
-        }
-    }))
+    let factor = Factor::new(matrix.as_ref(), &CHOLESKY).ok()?;
+    factor.cholesky_factor().map(|lower| lower.to_owned())
 }
+
+/// The Cholesky factorisation alone, with no ridge and no pivot threshold.
+const CHOLESKY: [Attempt; 1] = [Attempt::plain(Method::Cholesky)];
 
 #[cfg(test)]
 pub(super) fn invert_matrix_with_jitter(matrix: &Mat<f64>) -> Mat<f64> {
@@ -571,64 +564,30 @@ pub(super) fn column_to_vec(column: &Mat<f64>) -> Vec<f64> {
     (0..column.nrows()).map(|row| column[(row, 0)]).collect()
 }
 
+/// Inverts symmetric positive definite matrices of one size by the Cholesky
+/// factor of the lower triangle and a solve against the identity.
 pub(super) struct SpdInverseScratch {
-    dim: usize,
-    factor: Mat<f64>,
-    rhs: Mat<f64>,
-    scratch: MemBuffer,
+    identity: Mat<f64>,
 }
 
 impl SpdInverseScratch {
     #[must_use]
     pub(super) fn new(dim: usize) -> Self {
-        let factor_mem =
-            llt::factor::cholesky_in_place_scratch::<f64>(dim, Par::Seq, Spec::default());
-        let solve_mem = llt::solve::solve_in_place_scratch::<f64>(dim, dim, Par::Seq);
         Self {
-            dim,
-            factor: Mat::zeros(dim, dim),
-            rhs: Mat::zeros(dim, dim),
-            scratch: MemBuffer::new(factor_mem.or(solve_mem)),
+            identity: Mat::identity(dim, dim),
         }
     }
 
     pub(super) fn invert_spd(&mut self, matrix: &Mat<f64>) -> Result<Mat<f64>, MtpError> {
-        if matrix.nrows() != self.dim || matrix.ncols() != self.dim {
+        let dim = self.identity.nrows();
+        if matrix.nrows() != dim || matrix.ncols() != dim {
             return Err(MtpError::SolveFailed);
         }
-
-        self.factor.as_mut().copy_from(matrix.as_ref());
-        for row in 0..self.dim {
-            for col in 0..self.dim {
-                self.rhs[(row, col)] = if row == col { 1.0 } else { 0.0 };
-            }
-        }
-
-        let factor_stack = MemStack::new(&mut self.scratch);
-        if llt::factor::cholesky_in_place(
-            self.factor.as_mut(),
-            LltRegularization::default(),
-            Par::Seq,
-            factor_stack,
-            Spec::default(),
-        )
-        .is_err()
-        {
-            return Err(MtpError::SolveFailed);
-        }
-
-        let solve_stack = MemStack::new(&mut self.scratch);
-        llt::solve::solve_in_place_with_conj(
-            self.factor.as_ref(),
-            faer::Conj::No,
-            self.rhs.as_mut(),
-            Par::Seq,
-            solve_stack,
-        );
-
-        if !matrix_is_finite(&self.rhs) {
-            return Err(MtpError::SolveFailed);
-        }
-        Ok(self.rhs.clone())
+        let factor =
+            Factor::new(matrix.as_ref(), &CHOLESKY).map_err(|_| MtpError::SolveFailed)?;
+        factor
+            .solve(self.identity.as_ref())
+            .map_err(|_| MtpError::SolveFailed)
     }
 }
+

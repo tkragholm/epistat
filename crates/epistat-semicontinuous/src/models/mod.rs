@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 use std::time::Duration;
 
 pub mod comparison;

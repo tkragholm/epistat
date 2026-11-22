@@ -1,5 +1,5 @@
 use approx::assert_relative_eq;
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{ModelInput, TweedieOptions, fit_tweedie_input};
 
 #[test]

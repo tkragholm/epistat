@@ -3,7 +3,7 @@
 //! This module defines a model-agnostic person-period input used by
 //! longitudinal semi-continuous models such as MTP.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 use thiserror::Error;
 
 use crate::utils::matrix_is_finite;

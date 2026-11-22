@@ -12,7 +12,7 @@
 #![cfg(all(target_arch = "aarch64", target_os = "macos"))]
 
 use epistat_testkit::Fingerprint;
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart,
     fit_lognormal_smearing_input, fit_tweedie_input, fit_tweedie_input_warm, fit_two_part_input,

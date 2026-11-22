@@ -1,6 +1,6 @@
 //! The IRLS fits of the logit and gamma log-link parts.
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use super::elastic_net::elastic_net_wls;
 use super::{FitOptions, Regularization, TwoPartError};

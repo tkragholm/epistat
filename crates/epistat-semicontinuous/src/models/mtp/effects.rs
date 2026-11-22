@@ -1,6 +1,6 @@
 //! Counterfactual effect helpers derived from MTP posterior draws.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::utils::{EffectIntervalSummary, dot_row, summarize_draws_in_place, usize_to_f64};
 

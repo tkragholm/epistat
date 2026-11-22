@@ -32,7 +32,7 @@
 //!   110-120.
 
 use epistat_rng::Stream;
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use super::math::{
     adapt_scalar_scale, cholesky_lower, sample_standard_normal,

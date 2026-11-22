@@ -775,7 +775,7 @@ mod tests {
     use super::*;
     use crate::models::two_part::Regularization;
     use crate::utils::usize_to_f64;
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     fn sample_input(n: usize) -> ModelInput {
         let design_matrix = Mat::from_fn(

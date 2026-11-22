@@ -4,7 +4,7 @@ use super::posterior::MtpPosteriorSummary;
 use super::priors::MtpPriorConfig;
 use crate::input::LongitudinalInputError;
 use crate::models::{FitMetadata, Model};
-use faer::Mat;
+use epistat_linalg::Mat;
 use thiserror::Error;
 
 /// Errors returned by MTP configuration, validation, and fitting.

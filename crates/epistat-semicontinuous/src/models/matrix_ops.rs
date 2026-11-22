@@ -1,4 +1,4 @@
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 #[must_use]
 pub fn select_rows(matrix: &Mat<f64>, indices: &[usize]) -> Mat<f64> {

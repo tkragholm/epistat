@@ -43,7 +43,7 @@
 //! # Example
 //!
 //! ```
-//! use faer::Mat;
+//! use epistat_linalg::Mat;
 //! use epistat_semicontinuous::{
 //!     ModelInput, PreparedGammaDesign, PreparedScratch, TweedieOptions,
 //!     fit_tweedie_ref_warm_prevalidated,
@@ -81,7 +81,7 @@
 //! [`fit_two_part_ref_warm_prevalidated`]: crate::fit_two_part_ref_warm_prevalidated
 //! [`FitStrategy::Relaxed`]: crate::models::FitStrategy::Relaxed
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::models::matrix_ops::column_is_constant;
 use crate::models::tweedie::{

@@ -11,7 +11,7 @@
 //! Provides Park test diagnostics and goodness-of-fit metrics for choosing
 //! between Tweedie GLM and log-normal models.
 
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::models::Model;
 use crate::models::matrix_ops::{select_rows, select_values};
@@ -253,7 +253,7 @@ pub(crate) fn select_models(x: &Mat<f64>, y: &Mat<f64>, powers: &[f64]) -> Selec
 /// # Examples
 ///
 /// ```
-/// use faer::Mat;
+/// use epistat_linalg::Mat;
 /// use epistat_semicontinuous::{ModelInput, select_models_input};
 ///
 /// fn idx_to_f64(idx: usize) -> f64 {

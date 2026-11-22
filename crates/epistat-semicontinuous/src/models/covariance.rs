@@ -3,7 +3,7 @@
 use epistat_inference::Clusters;
 use epistat_inference::sandwich as epistat_sandwich;
 use epistat_linalg::Attempt;
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 /// The sandwich meat built from per-row score residuals `r_i = residual(i)`.
 ///

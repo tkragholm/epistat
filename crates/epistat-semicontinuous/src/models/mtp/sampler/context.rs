@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::utils::{dot_row, quadratic_form_vec, solve_linear_system};
 

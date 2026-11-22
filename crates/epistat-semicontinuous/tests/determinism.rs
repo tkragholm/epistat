@@ -8,7 +8,7 @@
 //! standard error bit for bit.
 
 use epistat_testkit::on_threads;
-use faer::Mat;
+use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, ModelInput, TweedieOptions, fit_lognormal_smearing_input,
     fit_tweedie_input, fit_two_part_input,

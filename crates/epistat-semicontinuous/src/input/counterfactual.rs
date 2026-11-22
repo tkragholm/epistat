@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 use thiserror::Error;
 
 use crate::input::ModelInput;

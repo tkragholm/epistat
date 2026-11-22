@@ -7,8 +7,7 @@
 //! clustered fit with one row per cluster must reproduce the unclustered sandwich.
 
 use epistat_rng::{Stream, replicate_seed};
-use faer::prelude::*;
-use faer::{Mat, Side};
+use epistat_linalg::{Attempt, Mat, Method, inverse};
 use rand_distr::{Distribution, Gamma};
 use epistat_semicontinuous::{
     FitOptions, ModelInput, TweedieOptions, fit_tweedie_input, fit_two_part_input,
@@ -63,10 +62,9 @@ fn tweedie_model_based_se(x: &Mat<f64>, beta: &Mat<f64>, power: f64) -> Vec<f64>
             }
         }
     }
-    let inverse = information
-        .llt(Side::Lower)
+    let inverse = inverse(information.as_ref(), &[Attempt::plain(Method::Cholesky)])
         .expect("positive-definite information")
-        .solve(Mat::<f64>::identity(p, p));
+        .x;
     (0..p).map(|j| inverse[(j, j)].sqrt()).collect()
 }
 

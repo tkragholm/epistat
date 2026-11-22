@@ -281,7 +281,7 @@ where
 mod tests {
     use super::*;
     use crate::models::mtp::posterior::MtpPosteriorDraw;
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     #[test]
     fn autocorrelation_is_undefined_for_invalid_lag_and_constant_chain() {

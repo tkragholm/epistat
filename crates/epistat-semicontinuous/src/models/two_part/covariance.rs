@@ -1,6 +1,6 @@
 //! Model-based and sandwich covariance of the two parts.
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use super::irls::{logistic, ridge_from_regularization};
 use super::{FitOptions, TwoPartError};

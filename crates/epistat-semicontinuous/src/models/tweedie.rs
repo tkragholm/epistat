@@ -14,7 +14,7 @@
 
 use std::time::Instant;
 
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::input::{InputError, ModelInput, ModelInputRef};
 use crate::models::covariance::{diag_sqrt, sandwich, score_meat};
