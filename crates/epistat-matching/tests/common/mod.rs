@@ -262,3 +262,23 @@ pub fn two_pass(people: &[Person], seed: u64, with_caliper: bool) -> (MatchOutco
 fn days(n: u64) -> TimeDelta {
     TimeDelta::days(i64::try_from(n).expect("draws are far below i64::MAX"))
 }
+
+/// The debug rendering of an outcome with `avg_controls_per_case` written as
+/// the plain number the golden hashes were taken with: `Some(x)` as `x`, and
+/// `None` as `0.0`.
+pub fn golden_debug(outcome: &MatchOutcome) -> String {
+    let text = format!("{outcome:?}");
+    let marker = "avg_controls_per_case: ";
+    let Some(start) = text.find(marker).map(|at| at + marker.len()) else {
+        return text;
+    };
+    let rest = &text[start..];
+    let (value, length) = match rest.strip_prefix("Some(") {
+        Some(inner) => {
+            let close = inner.find(')').expect("a closed Some");
+            (inner[..close].to_string(), "Some(".len() + close + 1)
+        }
+        None => ("0.0".to_string(), "None".len()),
+    };
+    format!("{}{value}{}", &text[..start], &rest[length..])
+}

@@ -47,7 +47,7 @@ fn hashes(outcome: &MatchOutcome) -> (u64, u64) {
     )
     .to_table();
     (
-        fnv(&format!("{outcome:?}")),
+        fnv(&common::golden_debug(outcome)),
         fnv(&format!("{unit:?}{pair:?}")),
     )
 }
