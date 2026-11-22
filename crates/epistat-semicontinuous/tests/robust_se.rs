@@ -8,7 +8,6 @@
 
 use epistat_rng::{Stream, replicate_seed};
 use epistat_linalg::{Attempt, Mat, Method, inverse};
-use rand_distr::{Distribution, Gamma};
 use epistat_semicontinuous::{
     FitOptions, ModelInput, TweedieOptions, fit_tweedie_input, fit_two_part_input,
 };
@@ -165,9 +164,7 @@ fn tweedie_robust_se_matches_model_based_at_power_one_and_a_half() {
         x[(i, 1)] = 2.0f64.mul_add(stream.uniform(), -1.0);
         x[(i, 2)] = if stream.uniform() < 0.3 { 1.0 } else { 0.0 };
         let mu = 0.3f64.mul_add(x[(i, 1)], 2.0 + 0.2 * x[(i, 2)]).exp();
-        y[(i, 0)] = Gamma::new(mu.sqrt(), mu.sqrt())
-            .expect("gamma parameters")
-            .sample(&mut rng);
+        y[(i, 0)] = rng.gamma(mu.sqrt(), mu.sqrt()).expect("gamma parameters");
     }
     let input = ModelInput::new(x, y);
     let options = TweedieOptions::builder().robust_se(true).build();
