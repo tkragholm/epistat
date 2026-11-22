@@ -488,7 +488,7 @@ pub struct CoxTests {
 }
 
 impl CoxModelFit {
-    fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
+    pub(crate) fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
         Self {
             coefficients: vec![None; p],
             standard_errors: vec![None; p],
@@ -532,7 +532,7 @@ struct Input<'a> {
 /// differ in what they do when the likelihood stops changing during step
 /// halving, and when they run out of iterations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Stepping {
+pub(crate) enum Stepping {
     /// `coxph.fit`, which `coxph` calls for data without entry times.
     RightCensored,
     /// `agreg.fit`, which `coxph` calls for data with entry times.
@@ -855,11 +855,32 @@ impl ExactScratch {
 }
 
 /// The log partial likelihood, the score and the information at one beta.
-struct Evaluation {
-    loglik: f64,
-    score: Vec<f64>,
+pub(crate) struct Evaluation {
+    pub(crate) loglik: f64,
+    pub(crate) score: Vec<f64>,
     /// `p` by `p`, symmetric.
-    information: Vec<f64>,
+    pub(crate) information: Vec<f64>,
+}
+
+/// What the Newton iteration of [`newton`] reads of a model on scaled
+/// covariates.
+pub(crate) trait PartialLikelihood {
+    /// The log partial likelihood, score and information at `beta`, or `None`
+    /// when any of them is not finite.
+    fn evaluate(&self, beta: &[f64]) -> Option<Evaluation>;
+    /// The score residuals at `beta` summed within cluster, `p` per cluster
+    /// code, or `None` when a risk score or a denominator is not finite.
+    fn cluster_scores(&self, beta: &[f64]) -> Option<Vec<f64>>;
+}
+
+impl PartialLikelihood for Model {
+    fn evaluate(&self, beta: &[f64]) -> Option<Evaluation> {
+        Model::evaluate(self, beta)
+    }
+
+    fn cluster_scores(&self, beta: &[f64]) -> Option<Vec<f64>> {
+        Model::cluster_scores(self, beta)
+    }
 }
 
 struct Model {
@@ -1243,25 +1264,43 @@ fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
     }
 }
 
+/// The clusters of a fit: the number of cluster codes, which is the number of
+/// rows of the cluster score sums, and the number of codes some row carries.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Clusters {
+    pub(crate) count: usize,
+    pub(crate) present: usize,
+}
+
+impl Clusters {
+    /// The clusters of the rows `kept`, with codes below `count`.
+    pub(crate) fn of(cluster: &[u32], kept: impl Iterator<Item = usize>, count: usize) -> Self {
+        let mut seen = vec![false; count];
+        for i in kept {
+            seen[cluster[i] as usize] = true;
+        }
+        Self {
+            count,
+            present: seen.iter().filter(|&&seen| seen).count(),
+        }
+    }
+}
+
 /// The sum of the cross-products of the cluster score sums at `beta`, or
-/// `None` with fewer than two clusters or when a score is not finite.
+/// `None` without clusters, with fewer than two, or when a score is not
+/// finite.
 fn cluster_meat(
-    model: &Model,
-    input: &Input<'_>,
-    kept: &[usize],
+    model: &impl PartialLikelihood,
+    p: usize,
+    clusters: Option<Clusters>,
     beta: &[f64],
 ) -> Option<Mat<f64>> {
-    let cluster = input.cluster?;
-    let p = model.p;
-    let mut present = vec![false; model.n_clusters];
-    for &i in kept {
-        present[cluster[i] as usize] = true;
-    }
-    if present.iter().filter(|&&seen| seen).count() < 2 {
+    let clusters = clusters?;
+    if clusters.present < 2 {
         return None;
     }
     let totals = model.cluster_scores(beta)?;
-    let sums = Mat::from_fn(model.n_clusters, p, |g, a| totals[g * p + a]);
+    let sums = Mat::from_fn(clusters.count, p, |g, a| totals[g * p + a]);
     // Every cluster is a row of `sums` already, so the meat is the plain
     // cross-product of the rows, `sum_g U_g U_g'`.
     Some(
@@ -1296,21 +1335,20 @@ fn chi_square(statistic: f64, df: usize, expected_df: usize) -> Option<ChiSquare
 /// `solved` are the score and the solution of `I z = U` there, and `rank` the
 /// rank of the information.
 fn score_tests(
-    model: &Model,
-    input: &Input<'_>,
-    kept: &[usize],
+    model: &impl PartialLikelihood,
+    p: usize,
+    clusters: Option<Clusters>,
     beta0: &[f64],
     score: &[f64],
     solved: &[f64],
     rank: usize,
 ) -> (Option<ChiSquareTest>, Option<ChiSquareTest>) {
-    let p = model.p;
     let plain = chi_square(
         score.iter().zip(solved).map(|(a, b)| a * b).sum(),
         rank,
         rank,
     );
-    let robust = cluster_meat(model, input, kept, beta0).and_then(|meat| {
+    let robust = cluster_meat(model, p, clusters, beta0).and_then(|meat| {
         let flat: Vec<f64> = (0..p * p).map(|k| meat[(k / p, k % p)]).collect();
         let (statistic, df) = quadratic_form(&flat, p, score)?;
         chi_square(statistic, df, rank)
@@ -1338,21 +1376,79 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     }
 
     let Prepared { model, factor } = prepare(input, &kept);
+    let clusters = input
+        .cluster
+        .map(|cluster| Clusters::of(cluster, kept.iter().copied(), model.n_clusters));
+    newton(
+        &model,
+        &Newton {
+            p,
+            factor: &factor,
+            init: input.init,
+            iter_max: input.iter_max,
+            eps: input.eps,
+            stepping: input.stepping,
+            ties: input.ties,
+            n_events,
+            n_rows,
+            clusters,
+        },
+    )
+}
+
+/// What [`newton`] reads besides the model.
+pub(crate) struct Newton<'a> {
+    /// The number of columns.
+    pub(crate) p: usize,
+    /// The factor of each column from the scaled coefficient to the scale of
+    /// the columns given, 0 for a column without variation.
+    pub(crate) factor: &'a [f64],
+    /// Starting coefficients on the scale of the columns given.
+    pub(crate) init: Option<&'a [f64]>,
+    pub(crate) iter_max: u32,
+    pub(crate) eps: f64,
+    pub(crate) stepping: Stepping,
+    pub(crate) ties: Ties,
+    /// The summed weight of the events, and the rows fitted, as reported.
+    pub(crate) n_events: f64,
+    pub(crate) n_rows: usize,
+    /// The clusters of the robust variance, `None` without clusters.
+    pub(crate) clusters: Option<Clusters>,
+}
+
+/// Newton-Raphson with step halving on `model` from the starting
+/// coefficients, with the covariance, the robust covariance and the tests at
+/// the point reported, as the module documentation describes. `model` has
+/// at least one event.
+pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> Result<CoxModelFit> {
+    let Newton {
+        p,
+        factor,
+        init,
+        iter_max,
+        eps,
+        stepping,
+        ties,
+        n_events,
+        n_rows,
+        clusters,
+    } = *settings;
+    let with_clusters = clusters.is_some();
     let undefined = || CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
 
     // The starting coefficients on the scaled covariates.
-    let mut beta: Vec<f64> = input.init.map_or_else(
+    let mut beta: Vec<f64> = init.map_or_else(
         || vec![0.0f64; p],
         |init| {
             init.iter()
-                .zip(&factor)
+                .zip(factor)
                 .map(|(b, &f)| if f == 0.0 { 0.0 } else { b / f })
                 .collect()
         },
     );
     let beta0 = beta.clone();
     let Some(start) = model.evaluate(&beta) else {
-        if input.init.is_some() {
+        if init.is_some() {
             return Err(Error::input(
                 "init: the starting coefficients give a risk score or a partial \
                  likelihood that is not finite",
@@ -1360,7 +1456,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         }
         return Ok(undefined());
     };
-    let null_loglik = if input.init.is_some() {
+    let null_loglik = if init.is_some() {
         model.evaluate(&vec![0.0f64; p]).map(|e| e.loglik)
     } else {
         Some(start.loglik)
@@ -1399,9 +1495,9 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     let mut step = start.score.clone();
     ldl::solve(&matrix, p, &mut step);
     let (score_test, robust_score_test) = score_tests(
-        &model,
-        input,
-        &kept,
+        model,
+        p,
+        clusters,
         &beta0,
         &start.score,
         &step,
@@ -1409,17 +1505,16 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     );
     let mut trial: Vec<f64> = beta.iter().zip(&step).map(|(b, s)| b + s).collect();
 
-    let stepping = input.stepping;
     let mut halvings = 0u32;
     let mut iterations = 0u32;
     let mut converged = false;
     let mut last: Option<Evaluation> = None;
-    if input.iter_max == 0 {
+    if iter_max == 0 {
         // The model at the starting coefficients.
         last = Some(start);
         trial.clone_from(&beta);
     }
-    for count in 1..=input.iter_max {
+    for count in 1..=iter_max {
         iterations = count;
         let evaluation = model.evaluate(&trial);
         // Counting-process data also treat a change of the rank of the
@@ -1433,22 +1528,21 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         if let Some(e) = &evaluation
             && !halving
             && !rank_changed
-            && (1.0 - accepted_loglik / e.loglik).abs() <= input.eps
+            && (1.0 - accepted_loglik / e.loglik).abs() <= eps
         {
             converged = true;
             last = evaluation;
             break;
         }
         let better = !rank_changed && matches!(&evaluation, Some(e) if e.loglik >= accepted_loglik);
-        if count == input.iter_max {
+        if count == iter_max {
             // Out of iterations.
             let keep_trial = match (&evaluation, stepping) {
                 (None, _) => false,
                 (Some(_), Stepping::AgExact) => true,
-                (Some(_), Stepping::ExactRight) => input.iter_max == 1,
+                (Some(_), Stepping::ExactRight) => iter_max == 1,
                 (Some(e), Stepping::Counting) => {
-                    input.iter_max == 1
-                        || (e.loglik - accepted_loglik) / accepted_loglik.abs() >= -input.eps
+                    iter_max == 1 || (e.loglik - accepted_loglik) / accepted_loglik.abs() >= -eps
                 }
                 (Some(_), Stepping::RightCensored) => better,
             };
@@ -1514,21 +1608,18 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     // likelihood has stopped changing is not finite.
     let mut newton = last.score.clone();
     ldl::solve(&final_matrix, p, &mut newton);
-    let monotone_columns: Vec<usize> = if converged && input.ties == Ties::Exact {
+    let monotone_columns: Vec<usize> = if converged && ties == Ties::Exact {
         // The rule of `coxexact.fit` and `agexact.fit`, with `toler.inf` its
         // default `sqrt(eps)`, and no check for `iter.max` of 1 or less.
         (0..p)
             .filter(|&a| {
                 let step = newton[a].abs();
-                input.iter_max > 1
-                    && !aliased(a)
-                    && step > input.eps
-                    && step > input.eps.sqrt() * trial[a].abs()
+                iter_max > 1 && !aliased(a) && step > eps && step > eps.sqrt() * trial[a].abs()
             })
             .collect()
     } else if converged {
         (0..p)
-            .filter(|&a| !aliased(a) && newton[a].abs() > input.eps + input.eps.sqrt())
+            .filter(|&a| !aliased(a) && newton[a].abs() > eps + eps.sqrt())
             .collect()
     } else {
         Vec::new()
@@ -1550,15 +1641,15 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     let standard_errors: Vec<Option<f64>> = (0..p)
         .map(|a| (!aliased(a)).then(|| variance[a * p + a].sqrt() * factor[a]))
         .collect();
-    let covariance = on_input_scale(&variance, &factor, &aliased);
+    let covariance = on_input_scale(&variance, factor, &aliased);
 
-    let robust = cluster_meat(&model, input, &kept, &trial).map(|meat| {
+    let robust = cluster_meat(model, p, clusters, &trial).map(|meat| {
         let sandwich = sandwich(&variance, &meat, p);
         (
             (0..p)
                 .map(|a| (!aliased(a)).then(|| sandwich[a * p + a].sqrt() * factor[a]))
                 .collect::<Vec<_>>(),
-            on_input_scale(&sandwich, &factor, &aliased),
+            on_input_scale(&sandwich, factor, &aliased),
             sandwich,
         )
     });
