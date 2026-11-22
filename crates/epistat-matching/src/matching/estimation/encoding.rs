@@ -2,7 +2,7 @@
 
 use super::EstimationError;
 use super::config::{CovariateEncodingConfig, MissingValuePolicy};
-use crate::matching::{CovariateRecord, to_f64};
+use crate::matching::{ColumnReader, CovariateRecord, NameScan, to_f64};
 use crate::types::CovariateRef;
 use itertools::Itertools;
 use std::collections::BTreeSet;
@@ -31,40 +31,6 @@ impl CovariateMatrix {
         let start = row_idx * self.n_cols;
         let end = start + self.n_cols;
         &self.values[start..end]
-    }
-}
-
-/// Reads one covariate from a run of records.
-///
-/// A record that says which table of columns it reads from has the column
-/// found once for every table, so a covariate is then read by position and
-/// not by name.
-struct ColumnReader<'k> {
-    key: &'k str,
-    resolved: Option<(usize, Option<usize>)>,
-}
-
-impl<'k> ColumnReader<'k> {
-    const fn new(key: &'k str) -> Self {
-        Self {
-            key,
-            resolved: None,
-        }
-    }
-
-    fn read<'r, R: CovariateRecord>(&mut self, record: &'r R) -> Option<CovariateRef<'r>> {
-        let Some(table) = record.covariate_table() else {
-            return record.covariate(self.key);
-        };
-        let slot = match self.resolved {
-            Some((known, slot)) if known == table => slot,
-            _ => {
-                let slot = record.covariate_slot(self.key);
-                self.resolved = Some((table, slot));
-                slot
-            }
-        };
-        slot.map(|slot| record.covariate_in_slot(slot))
     }
 }
 
@@ -206,7 +172,11 @@ fn resolve_covariate_keys<R: CovariateRecord>(records: &[&R], requested: &[Strin
     }
 
     let mut keys = BTreeSet::new();
+    let mut scan = NameScan::default();
     for record in records {
+        if !scan.needs_names(*record) {
+            continue;
+        }
         for name in record.covariate_names() {
             if !keys.contains(name) {
                 keys.insert(name.to_owned());

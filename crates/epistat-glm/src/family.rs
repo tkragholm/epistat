@@ -166,6 +166,31 @@ impl Link {
         }
     }
 
+    /// The mean and `d mu / d eta` at `eta`, as [`Link::inverse`] and
+    /// [`Link::derivative`] give them, with the exponential of the logit link
+    /// computed once.
+    #[must_use]
+    pub fn inverse_and_derivative(self, eta: f64) -> (f64, f64) {
+        match self {
+            Self::Logit => {
+                let e = if eta < -THRESHOLD {
+                    EPS
+                } else if eta > THRESHOLD {
+                    1.0 / EPS
+                } else {
+                    eta.exp()
+                };
+                let derivative = if eta.abs() > THRESHOLD {
+                    EPS
+                } else {
+                    e / ((1.0 + e) * (1.0 + e))
+                };
+                (e / (1.0 + e), derivative)
+            }
+            _ => (self.inverse(eta), self.derivative(eta)),
+        }
+    }
+
     /// `d mu / d eta` at `eta`.
     #[must_use]
     pub fn derivative(self, eta: f64) -> f64 {
@@ -322,5 +347,41 @@ mod tests {
         let h = 1e-6;
         let numeric = (Link::Cloglog.inverse(0.3 + h) - Link::Cloglog.inverse(0.3 - h)) / (2.0 * h);
         assert!((numeric - Link::Cloglog.derivative(0.3)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_mean_and_derivative_together_have_the_bits_of_the_two_calls() {
+        let mut grid = vec![
+            0.0,
+            -0.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            THRESHOLD,
+            -THRESHOLD,
+            THRESHOLD + 1e-12,
+            -THRESHOLD - 1e-12,
+            CLOGLOG_ETA_CAP,
+            800.0,
+            -800.0,
+        ];
+        grid.extend((-400..400).map(|k| f64::from(k) * 0.173));
+        for link in [
+            Link::Identity,
+            Link::Log,
+            Link::Logit,
+            Link::Cloglog,
+            Link::Probit,
+        ] {
+            for &eta in &grid {
+                let (mu, derivative) = link.inverse_and_derivative(eta);
+                assert_eq!(mu.to_bits(), link.inverse(eta).to_bits(), "{link:?} {eta}");
+                assert_eq!(
+                    derivative.to_bits(),
+                    link.derivative(eta).to_bits(),
+                    "{link:?} {eta}"
+                );
+            }
+        }
     }
 }

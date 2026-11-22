@@ -15,6 +15,7 @@
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
 //! variance function and the classic Park test.
 
+mod columns;
 pub mod elastic_net;
 mod family;
 pub mod fit;

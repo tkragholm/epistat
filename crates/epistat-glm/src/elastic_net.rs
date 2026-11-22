@@ -151,6 +151,7 @@
 use epistat_linalg::MatRef;
 
 use crate::Family;
+use crate::columns::{column_slices, contiguous_copy};
 
 /// The largest number of columns for which the fit works from the weighted
 /// moments of the design. A pass over the rows then costs about `p²/2`
@@ -529,6 +530,8 @@ struct Covariance<'a> {
     /// What is taken off each column before the moments: its prior-weighted
     /// mean when there is an intercept, and 0 otherwise.
     shift: Vec<f64>,
+    /// The design as columns when it is not column-major, empty otherwise.
+    copy: Vec<f64>,
 }
 
 impl Covariance<'_> {
@@ -580,6 +583,99 @@ impl Covariance<'_> {
         eta_out: &mut [f64],
         fitted_out: &mut [f64],
     ) -> Evaluation {
+        let (loss, moments) = self.pass(u, want, eta_out, fitted_out);
+        self.scaled(loss, moments)
+    }
+
+    /// The sums of the pass over the rows, before the division by `n`.
+    fn pass(
+        &self,
+        u: &[f64],
+        want: bool,
+        eta_out: &mut [f64],
+        fitted_out: &mut [f64],
+    ) -> (f64, Option<Moments>) {
+        macro_rules! fixed {
+            ($($p:literal => $lanes:literal),* $(,)?) => {
+                match self.p {
+                    $($p => self.pass_blocked::<$p, $lanes>(u, want, eta_out, fitted_out),)*
+                    _ => self.pass_rows(u, want, eta_out, fitted_out),
+                }
+            };
+        }
+        fixed!(
+            1 => 4, 2 => 4, 3 => 4, 4 => 4, 5 => 4, 6 => 4, 7 => 4, 8 => 4,
+            9 => 4, 10 => 4, 11 => 4, 12 => 4, 13 => 4, 14 => 4, 15 => 4, 16 => 4,
+            17 => 8, 18 => 8, 19 => 8, 20 => 8, 21 => 8, 22 => 8, 23 => 8, 24 => 8,
+            25 => 8, 26 => 8, 27 => 8, 28 => 8, 29 => 8, 30 => 8, 31 => 8, 32 => 8,
+        )
+    }
+
+    /// The loss, divided by `n`, and the moments divided by `n`.
+    fn scaled(&self, loss: f64, mut moments: Option<Moments>) -> Evaluation {
+        let loss = if self.binomial {
+            loss * self.n_inv
+        } else {
+            loss * (0.5 * self.n_inv)
+        };
+        if let Some(m) = moments.as_mut() {
+            m.total *= self.n_inv;
+            m.residual *= self.n_inv;
+            for v in m
+                .first
+                .iter_mut()
+                .chain(m.cross.iter_mut())
+                .chain(m.second.iter_mut())
+            {
+                *v *= self.n_inv;
+            }
+        }
+        Evaluation { loss, moments }
+    }
+
+    /// The working weight and residual of one row at `eta`, adding the row's
+    /// loss to `loss` and writing its fitted mean.
+    #[expect(
+        clippy::inline_always,
+        reason = "the block kernels are fast only with the link inlined into their lane loop"
+    )]
+    #[inline(always)]
+    fn row_link(
+        &self,
+        eta: f64,
+        prior: f64,
+        y: f64,
+        loss: &mut f64,
+        fitted: &mut f64,
+    ) -> (f64, f64) {
+        if self.binomial {
+            let decay = (-eta.abs()).exp();
+            let probability = if eta >= 0.0 {
+                1.0 / (1.0 + decay)
+            } else {
+                decay / (1.0 + decay)
+            }
+            .clamp(self.clip, 1.0 - self.clip);
+            *loss += prior * (eta.max(0.0) + decay.ln_1p() - y * eta);
+            *fitted = probability;
+            let variance = (probability * (1.0 - probability)).max(self.clip);
+            (prior * variance, (y - probability) / variance)
+        } else {
+            let d = y - eta;
+            *loss += prior * d * d;
+            *fitted = eta;
+            (prior, d)
+        }
+    }
+
+    /// The pass for any number of columns, one row at a time.
+    fn pass_rows(
+        &self,
+        u: &[f64],
+        want: bool,
+        eta_out: &mut [f64],
+        fitted_out: &mut [f64],
+    ) -> (f64, Option<Moments>) {
         let (n, p) = (self.n, self.p);
         let mut xs = [0.0_f64; COVARIANCE_MAX_COLUMNS];
         let xs = &mut xs[..p];
@@ -597,25 +693,8 @@ impl Covariance<'_> {
             }
             let linear: f64 = xs.iter().zip(u).map(|(x, b)| x * b).sum::<f64>();
             let eta = linear + self.offset[i];
-            let prior = self.prior[i];
-            let (weight, residual) = if self.binomial {
-                let decay = (-eta.abs()).exp();
-                let probability = if eta >= 0.0 {
-                    1.0 / (1.0 + decay)
-                } else {
-                    decay / (1.0 + decay)
-                }
-                .clamp(self.clip, 1.0 - self.clip);
-                loss += prior * (eta.max(0.0) + decay.ln_1p() - self.y[i] * eta);
-                fitted_out[i] = probability;
-                let variance = (probability * (1.0 - probability)).max(self.clip);
-                (prior * variance, (self.y[i] - probability) / variance)
-            } else {
-                let d = self.y[i] - eta;
-                loss += prior * d * d;
-                fitted_out[i] = eta;
-                (prior, d)
-            };
+            let (weight, residual) =
+                self.row_link(eta, self.prior[i], self.y[i], &mut loss, &mut fitted_out[i]);
             eta_out[i] = eta;
             if let Some(m) = moments.as_mut() {
                 if weight == 0.0 {
@@ -635,24 +714,134 @@ impl Covariance<'_> {
                 }
             }
         }
-        let loss = if self.binomial {
-            loss * self.n_inv
-        } else {
-            loss * (0.5 * self.n_inv)
-        };
-        if let Some(m) = moments.as_mut() {
-            m.total *= self.n_inv;
-            m.residual *= self.n_inv;
-            for v in m
-                .first
-                .iter_mut()
-                .chain(m.cross.iter_mut())
-                .chain(m.second.iter_mut())
-            {
-                *v *= self.n_inv;
+        (loss, moments)
+    }
+
+    /// The pass for `P` columns, in blocks of `L` rows. The shifted values,
+    /// the linear predictor and every product are formed for the `L` rows at
+    /// once, and each sum then takes its `L` terms one row after another, so
+    /// every sum adds the same numbers in the same order as
+    /// [`Covariance::pass_rows`] and gives the same bits.
+    fn pass_blocked<const P: usize, const L: usize>(
+        &self,
+        u: &[f64],
+        want: bool,
+        eta_out: &mut [f64],
+        fitted_out: &mut [f64],
+    ) -> (f64, Option<Moments>) {
+        assert_eq!(P, self.p);
+        let n = self.n;
+        let u: [f64; P] = u.try_into().expect("one coefficient per column");
+        let shift: [f64; P] = self.shift[..].try_into().expect("one shift per column");
+        let columns = column_slices(self.x, &self.copy);
+        let cols: [&[f64]; P] = std::array::from_fn(|j| &columns[j][..n]);
+        let mut loss = 0.0_f64;
+        let (mut total, mut residual_sum) = (0.0_f64, 0.0_f64);
+        let mut first = [0.0_f64; P];
+        let mut cross = [0.0_f64; P];
+        let mut second = vec![0.0_f64; P * P];
+        let blocks = n / L;
+        for block in 0..blocks {
+            let at = block * L;
+            let mut xs = [[0.0_f64; L]; P];
+            for j in 0..P {
+                let column: &[f64; L] = cols[j][at..at + L].try_into().expect("a block of L rows");
+                for l in 0..L {
+                    xs[j][l] = column[l] - shift[j];
+                }
+            }
+            let mut linear = [-0.0_f64; L];
+            for j in 0..P {
+                for l in 0..L {
+                    linear[l] += xs[j][l] * u[j];
+                }
+            }
+            let mut weight = [0.0_f64; L];
+            let mut weighted_residual = [0.0_f64; L];
+            for l in 0..L {
+                let eta = linear[l] + self.offset[at + l];
+                eta_out[at + l] = eta;
+                let (w, r) = self.row_link(
+                    eta,
+                    self.prior[at + l],
+                    self.y[at + l],
+                    &mut loss,
+                    &mut fitted_out[at + l],
+                );
+                weight[l] = w;
+                weighted_residual[l] = w * r;
+            }
+            if !want {
+                continue;
+            }
+            let mut wx = [[0.0_f64; L]; P];
+            let mut rx = [[0.0_f64; L]; P];
+            for a in 0..P {
+                for l in 0..L {
+                    wx[a][l] = weight[l] * xs[a][l];
+                    rx[a][l] = weighted_residual[l] * xs[a][l];
+                }
+            }
+            for l in 0..L {
+                if weight[l] == 0.0 {
+                    continue;
+                }
+                total += weight[l];
+                residual_sum += weighted_residual[l];
+                for a in 0..P {
+                    first[a] += wx[a][l];
+                    cross[a] += rx[a][l];
+                }
+            }
+            for a in 0..P {
+                for b in a..P {
+                    let mut product = [0.0_f64; L];
+                    for l in 0..L {
+                        product[l] = wx[a][l] * xs[b][l];
+                    }
+                    let mut cell = second[a * P + b];
+                    for l in 0..L {
+                        if weight[l] != 0.0 {
+                            cell += product[l];
+                        }
+                    }
+                    second[a * P + b] = cell;
+                }
             }
         }
-        Evaluation { loss, moments }
+        for i in blocks * L..n {
+            let xs: [f64; P] = std::array::from_fn(|j| cols[j][i] - shift[j]);
+            let mut linear = -0.0_f64;
+            for j in 0..P {
+                linear += xs[j] * u[j];
+            }
+            let eta = linear + self.offset[i];
+            let (weight, residual) =
+                self.row_link(eta, self.prior[i], self.y[i], &mut loss, &mut fitted_out[i]);
+            eta_out[i] = eta;
+            if !want || weight == 0.0 {
+                continue;
+            }
+            total += weight;
+            let weighted_residual = weight * residual;
+            residual_sum += weighted_residual;
+            for a in 0..P {
+                let wa = weight * xs[a];
+                first[a] += wa;
+                cross[a] += weighted_residual * xs[a];
+                for b in a..P {
+                    second[a * P + b] += wa * xs[b];
+                }
+            }
+        }
+        let moments = want.then(|| Moments {
+            total,
+            residual: residual_sum,
+            first: first.to_vec(),
+            cross: cross.to_vec(),
+            second,
+        });
+        (loss, moments)
     }
 
     /// One penalised weighted least-squares solve on the moments `m`,
@@ -1028,6 +1217,7 @@ impl ElasticNet {
                 clip: self.probability_clip,
                 intercept: intercept.map(|j| (j, x[(0, j)])),
                 shift: Vec::new(),
+                copy: contiguous_copy(x),
             };
             return Ok(moments.run(self, start));
         }
@@ -1522,5 +1712,87 @@ mod tests {
             run(scaled, &[1.0; 20], None, None),
             ElasticNetError::ConstantResponse
         );
+    }
+
+    fn moment_bits(e: &(f64, Option<Moments>)) -> Vec<u64> {
+        let mut out = vec![e.0.to_bits()];
+        if let Some(m) = &e.1 {
+            out.push(m.total.to_bits());
+            out.push(m.residual.to_bits());
+            for v in m.first.iter().chain(&m.cross).chain(&m.second) {
+                out.push(v.to_bits());
+            }
+        }
+        out
+    }
+
+    /// The blocked pass of every column count has the bits of the row-by-row
+    /// pass, in both families, with and without the moments, on row counts that
+    /// are and are not a multiple of the block, with zero weights, signed zeros
+    /// and a non-finite value.
+    #[test]
+    fn the_blocked_pass_has_the_bits_of_the_row_pass() {
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        for p in 1..=COVARIANCE_MAX_COLUMNS {
+            for n in [1, 3, 8, 9, 37] {
+                let mut x = Mat::from_fn(n, p, |_, _| next() * 4.0 - 2.0);
+                for i in (0..n).step_by(4) {
+                    x[(i, p - 1)] = -0.0;
+                }
+                if n > 5 {
+                    x[(5, 0)] = f64::INFINITY;
+                }
+                let y: Vec<f64> = (0..n).map(|_| f64::from(u8::from(next() < 0.4))).collect();
+                let prior: Vec<f64> = (0..n)
+                    .map(|i| if i % 6 == 2 { 0.0 } else { 0.5 + next() })
+                    .collect();
+                let offset: Vec<f64> = (0..n).map(|_| next() - 0.5).collect();
+                let u: Vec<f64> = (0..p).map(|_| next() - 0.5).collect();
+                for binomial in [true, false] {
+                    for transposed in [false, true] {
+                        let backing = Mat::from_fn(p, n, |j, i| x[(i, j)]);
+                        let view = if transposed {
+                            backing.as_ref().transpose()
+                        } else {
+                            x.as_ref()
+                        };
+                        let covariance = Covariance {
+                            x: view,
+                            n,
+                            p,
+                            n_inv: 1.0 / n as f64,
+                            y: &y,
+                            prior: &prior,
+                            offset: &offset,
+                            l1: vec![0.0; p],
+                            l2: vec![0.0; p],
+                            binomial,
+                            clip: 1e-5,
+                            intercept: None,
+                            shift: (0..p).map(|j| 0.1 * j as f64).collect(),
+                            copy: contiguous_copy(view),
+                        };
+                        for want in [true, false] {
+                            let (mut eta_a, mut fit_a) = (vec![0.0; n], vec![0.0; n]);
+                            let (mut eta_b, mut fit_b) = (vec![0.0; n], vec![0.0; n]);
+                            let rows = covariance.pass_rows(&u, want, &mut eta_a, &mut fit_a);
+                            let blocked = covariance.pass(&u, want, &mut eta_b, &mut fit_b);
+                            let label = format!("p {p} n {n} binomial {binomial} want {want}");
+                            assert_eq!(moment_bits(&rows), moment_bits(&blocked), "{label}");
+                            let bits =
+                                |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                            assert_eq!(bits(&eta_a), bits(&eta_b), "{label}");
+                            assert_eq!(bits(&fit_a), bits(&fit_b), "{label}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

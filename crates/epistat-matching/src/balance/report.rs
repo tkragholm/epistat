@@ -3,7 +3,7 @@ use super::stats::{
     cramers_v_weighted, eqq_distance_weighted_sorted, standard_deviation, standardised_difference,
     variance_ratio, weighted_ecdf_distance_ordered,
 };
-use crate::matching::{CovariateRecord, effective_sample_size};
+use crate::matching::{ColumnReader, CovariateRecord, NameScan, effective_sample_size};
 use crate::types::{
     BalanceImprovement, BalanceReport, BalanceReportOptions, BalanceSummary,
     BalanceThresholdSummary, BalanceThresholds, CategoricalBalance, CategoricalLevelBalance,
@@ -363,16 +363,23 @@ impl Column {
         }
     }
 
+    fn key(&self) -> &str {
+        match self {
+            Self::Numeric(key) | Self::Level { key, .. } => key,
+        }
+    }
+
     fn value<R: CovariateRecord>(
         &self,
+        reader: &mut ColumnReader<'_>,
         record: &R,
         supplemental: &SupplementalCovariateMap,
     ) -> Option<f64> {
         match self {
-            Self::Numeric(key) => numeric_covariate(record, key, supplemental),
-            Self::Level { key, level, known } => {
+            Self::Numeric(_) => numeric_covariate(reader, record, supplemental),
+            Self::Level { level, known, .. } => {
                 let found =
-                    map_optional_covariate_to_level(covariate_value(record, key, supplemental));
+                    map_optional_covariate_to_level(covariate_value(reader, record, supplemental));
                 known
                     .contains(&found)
                     .then_some(if found == *level { 1.0 } else { 0.0 })
@@ -394,6 +401,12 @@ enum NumericFeature {
     },
 }
 
+/// The readers of the one or two columns of a [`NumericFeature`].
+struct FeatureReaders<'k> {
+    left: ColumnReader<'k>,
+    right: Option<ColumnReader<'k>>,
+}
+
 type SupplementalCovariateMap = HashMap<String, HashMap<String, CovariateValue>>;
 
 #[derive(Clone, Copy)]
@@ -411,17 +424,38 @@ impl NumericFeature {
         }
     }
 
+    /// The readers of the feature's columns, which find each covariate in a
+    /// table of columns once and not for every record.
+    fn readers(&self) -> FeatureReaders<'_> {
+        match self {
+            Self::Raw { key } => FeatureReaders {
+                left: ColumnReader::new(key),
+                right: None,
+            },
+            Self::Product { left, right } => FeatureReaders {
+                left: ColumnReader::new(left.key()),
+                right: Some(ColumnReader::new(right.key())),
+            },
+        }
+    }
+
     fn value<R: CovariateRecord>(
         &self,
+        readers: &mut FeatureReaders<'_>,
         record: &R,
         supplemental: &SupplementalCovariateMap,
     ) -> Option<f64> {
         match self {
-            Self::Raw { key } => numeric_covariate(record, key, supplemental),
-            Self::Product { left, right } => left
-                .value(record, supplemental)
-                .zip(right.value(record, supplemental))
-                .map(|(left, right)| left * right),
+            Self::Raw { .. } => numeric_covariate(&mut readers.left, record, supplemental),
+            Self::Product { left, right } => {
+                let right_reader = readers
+                    .right
+                    .as_mut()
+                    .expect("a product has a reader for its second column");
+                left.value(&mut readers.left, record, supplemental)
+                    .zip(right.value(right_reader, record, supplemental))
+                    .map(|(left, right)| left * right)
+            }
         }
     }
 }
@@ -433,8 +467,11 @@ fn collect_covariate_keys<R: CovariateRecord>(
     control_supplemental: &SupplementalCovariateMap,
 ) -> Vec<String> {
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut scan = NameScan::default();
     for record in cases.iter().chain(controls) {
-        seen.extend(record.covariate_names());
+        if scan.needs_names(record) {
+            seen.extend(record.covariate_names());
+        }
     }
     seen.into_iter()
         .map(str::to_owned)
@@ -463,17 +500,26 @@ fn split_covariate_keys_by_kind<R: CovariateRecord>(
     // record that carries it: cases before controls, and within each group the
     // record order.
     let mut kinds: HashMap<&str, CovariateKind> = HashMap::new();
+    let mut scan = NameScan::default();
     for (records, supplemental) in [(cases, case_supplemental), (controls, control_supplemental)] {
         for record in records {
             // The record's own covariates, then those the supplemental map
             // adds for this id, in the order `covariate_value` reads them.
-            let supplemental_for_record = supplemental.get(record.id());
-            for key in record.covariate_names() {
-                if !kinds.contains_key(key) {
-                    let value = record.covariate(key);
-                    kinds.insert(key, kind_of(value));
+            // Records of one table carry the same names, and every name is
+            // known after the first of them.
+            if scan.needs_names(record) {
+                for key in record.covariate_names() {
+                    if !kinds.contains_key(key) {
+                        let value = record.covariate(key);
+                        kinds.insert(key, kind_of(value));
+                    }
                 }
             }
+            let supplemental_for_record = if supplemental.is_empty() {
+                None
+            } else {
+                supplemental.get(record.id())
+            };
             for (key, value) in supplemental_for_record
                 .into_iter()
                 .flat_map(|values| values.iter())
@@ -712,14 +758,16 @@ fn is_redundant_term<R: CovariateRecord>(
     };
     let mut all_zero = true;
     let mut equals_left = true;
+    let mut left_reader = ColumnReader::new(left.key());
+    let mut right_reader = ColumnReader::new(right.key());
     for (records, supplemental) in [
         (sample.cases, context.case_supplemental),
         (sample.controls, context.control_supplemental),
     ] {
         for record in records {
             let (Some(first), Some(second)) = (
-                left.value(record, supplemental),
-                right.value(record, supplemental),
+                left.value(&mut left_reader, record, supplemental),
+                right.value(&mut right_reader, record, supplemental),
             ) else {
                 continue;
             };
@@ -741,6 +789,7 @@ fn feature_units<R: CovariateRecord>(
 ) -> (Vec<Unit<f64>>, Vec<Option<f64>>) {
     let mut units = Vec::new();
     let mut values = Vec::with_capacity(sample.cases.len() + sample.controls.len());
+    let mut readers = feature.readers();
     for (records, weights, is_case, supplemental) in [
         (
             sample.cases,
@@ -756,7 +805,7 @@ fn feature_units<R: CovariateRecord>(
         ),
     ] {
         for (record, weights) in records.iter().zip(weights) {
-            let value = feature.value(record, supplemental);
+            let value = feature.value(&mut readers, record, supplemental);
             if let Some(value) = value {
                 units.push(Unit {
                     value,
@@ -1088,6 +1137,7 @@ fn summarize_categorical_feature<R: CovariateRecord>(
     let mut units: Vec<Unit<usize>> = Vec::new();
     let mut positioned: Vec<Option<usize>> =
         Vec::with_capacity(sample.cases.len() + sample.controls.len());
+    let mut reader = ColumnReader::new(key);
     for (records, is_case, supplemental, weights) in [
         (
             sample.cases,
@@ -1103,7 +1153,8 @@ fn summarize_categorical_feature<R: CovariateRecord>(
         ),
     ] {
         for (record, weights) in records.iter().zip(weights) {
-            let level = map_optional_covariate_to_level(covariate_value(record, key, supplemental));
+            let level =
+                map_optional_covariate_to_level(covariate_value(&mut reader, record, supplemental));
             let value = level_position.get(level.as_str()).copied();
             if let Some(value) = value {
                 units.push(Unit {
@@ -1242,11 +1293,11 @@ fn numeric_feature_specs(
 }
 
 fn numeric_covariate<R: CovariateRecord>(
+    reader: &mut ColumnReader<'_>,
     record: &R,
-    key: &str,
     supplemental: &SupplementalCovariateMap,
 ) -> Option<f64> {
-    match covariate_value(record, key, supplemental) {
+    match covariate_value(reader, record, supplemental) {
         Some(CovariateRef::Numeric(value)) if value.is_finite() => Some(value),
         _ => None,
     }
@@ -1263,14 +1314,12 @@ fn collect_levels<R: CovariateRecord>(
     control_supplemental: &SupplementalCovariateMap,
     key: &str,
 ) -> Vec<String> {
+    let mut reader = ColumnReader::new(key);
     let levels = cases
         .iter()
-        .filter_map(|record| covariate_value(record, key, case_supplemental))
-        .chain(
-            controls
-                .iter()
-                .filter_map(|record| covariate_value(record, key, control_supplemental)),
-        )
+        .map(|record| (record, case_supplemental))
+        .chain(controls.iter().map(|record| (record, control_supplemental)))
+        .filter_map(|(record, supplemental)| covariate_value(&mut reader, record, supplemental))
         .map(map_covariate_to_level)
         .sorted()
         .dedup()
@@ -1296,14 +1345,17 @@ fn map_optional_covariate_to_level(value: Option<CovariateRef<'_>>) -> String {
 }
 
 fn covariate_value<'a, R: CovariateRecord>(
+    reader: &mut ColumnReader<'_>,
     record: &'a R,
-    key: &str,
     supplemental: &'a SupplementalCovariateMap,
 ) -> Option<CovariateRef<'a>> {
-    record.covariate(key).or_else(|| {
+    reader.read(record).or_else(|| {
+        if supplemental.is_empty() {
+            return None;
+        }
         supplemental
             .get(record.id())
-            .and_then(|values| values.get(key))
+            .and_then(|values| values.get(reader.key()))
             .map(CovariateRef::from)
     })
 }
@@ -1529,7 +1581,10 @@ mod tests {
         assert_eq!(numeric, vec!["age".to_string()]);
         assert_eq!(categorical, vec!["region".to_string()]);
         let raw_age = Column::Numeric("age".to_string());
-        assert_eq!(raw_age.value(&case_a, &HashMap::new()), None);
+        assert_eq!(
+            raw_age.value(&mut ColumnReader::new("age"), &case_a, &HashMap::new()),
+            None
+        );
 
         let levels = collect_levels(
             &[],
@@ -2041,6 +2096,7 @@ mod tests {
         feature: &NumericFeature,
     ) -> Vec<(Unit<f64>, &'a str)> {
         let mut units = Vec::new();
+        let mut readers = feature.readers();
         for (records, weights, is_case, supplemental) in [
             (
                 sample.cases,
@@ -2056,7 +2112,7 @@ mod tests {
             ),
         ] {
             for (record, weights) in records.iter().zip(weights) {
-                if let Some(value) = feature.value(record, supplemental) {
+                if let Some(value) = feature.value(&mut readers, record, supplemental) {
                     units.push((
                         Unit {
                             value,
