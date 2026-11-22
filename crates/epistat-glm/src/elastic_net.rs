@@ -636,7 +636,14 @@ impl Covariance<'_> {
     /// The working weight and residual of one row at `eta`, adding the row's
     /// loss to `loss` and writing its fitted mean.
     #[inline(always)]
-    fn row_link(&self, eta: f64, prior: f64, y: f64, loss: &mut f64, fitted: &mut f64) -> (f64, f64) {
+    fn row_link(
+        &self,
+        eta: f64,
+        prior: f64,
+        y: f64,
+        loss: &mut f64,
+        fitted: &mut f64,
+    ) -> (f64, f64) {
         if self.binomial {
             let decay = (-eta.abs()).exp();
             let probability = if eta >= 0.0 {
@@ -682,13 +689,8 @@ impl Covariance<'_> {
             }
             let linear: f64 = xs.iter().zip(u).map(|(x, b)| x * b).sum::<f64>();
             let eta = linear + self.offset[i];
-            let (weight, residual) = self.row_link(
-                eta,
-                self.prior[i],
-                self.y[i],
-                &mut loss,
-                &mut fitted_out[i],
-            );
+            let (weight, residual) =
+                self.row_link(eta, self.prior[i], self.y[i], &mut loss, &mut fitted_out[i]);
             eta_out[i] = eta;
             if let Some(m) = moments.as_mut() {
                 if weight == 0.0 {
@@ -726,9 +728,7 @@ impl Covariance<'_> {
         assert_eq!(P, self.p);
         let n = self.n;
         let u: [f64; P] = u.try_into().expect("one coefficient per column");
-        let shift: [f64; P] = self.shift[..]
-            .try_into()
-            .expect("one shift per column");
+        let shift: [f64; P] = self.shift[..].try_into().expect("one shift per column");
         let columns = column_slices(self.x, &self.copy);
         let cols: [&[f64]; P] = std::array::from_fn(|j| &columns[j][..n]);
         let mut loss = 0.0_f64;
@@ -741,9 +741,7 @@ impl Covariance<'_> {
             let at = block * L;
             let mut xs = [[0.0_f64; L]; P];
             for j in 0..P {
-                let column: &[f64; L] = cols[j][at..at + L]
-                    .try_into()
-                    .expect("a block of L rows");
+                let column: &[f64; L] = cols[j][at..at + L].try_into().expect("a block of L rows");
                 for l in 0..L {
                     xs[j][l] = column[l] - shift[j];
                 }
@@ -814,13 +812,8 @@ impl Covariance<'_> {
                 linear += xs[j] * u[j];
             }
             let eta = linear + self.offset[i];
-            let (weight, residual) = self.row_link(
-                eta,
-                self.prior[i],
-                self.y[i],
-                &mut loss,
-                &mut fitted_out[i],
-            );
+            let (weight, residual) =
+                self.row_link(eta, self.prior[i], self.y[i], &mut loss, &mut fitted_out[i]);
             eta_out[i] = eta;
             if !want || weight == 0.0 {
                 continue;
@@ -1788,7 +1781,8 @@ mod tests {
                             let blocked = covariance.pass(&u, want, &mut eta_b, &mut fit_b);
                             let label = format!("p {p} n {n} binomial {binomial} want {want}");
                             assert_eq!(moment_bits(&rows), moment_bits(&blocked), "{label}");
-                            let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                            let bits =
+                                |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
                             assert_eq!(bits(&eta_a), bits(&eta_b), "{label}");
                             assert_eq!(bits(&fit_a), bits(&fit_b), "{label}");
                         }

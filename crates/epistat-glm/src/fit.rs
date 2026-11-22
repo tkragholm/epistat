@@ -351,10 +351,7 @@ impl Glm {
         // The linear predictor, the mean and the derivative of the mean.
         let predict = |beta: &[f64]| -> (Vec<f64>, Vec<f64>, Vec<f64>) {
             let eta = linear_predictor(&columns, beta, offset);
-            let (mu, derivative) = eta
-                .iter()
-                .map(|&e| link.inverse_and_derivative(e))
-                .unzip();
+            let (mu, derivative) = eta.iter().map(|&e| link.inverse_and_derivative(e)).unzip();
             (eta, mu, derivative)
         };
         let valid = |mu: &[f64]| mu.iter().all(|&m| family.valid_mean(m));
@@ -366,10 +363,7 @@ impl Glm {
                 let eta: Vec<f64> = (0..n)
                     .map(|i| link.link(family.start(y[i], weights[i])))
                     .collect();
-                let (mu, derivative) = eta
-                    .iter()
-                    .map(|&e| link.inverse_and_derivative(e))
-                    .unzip();
+                let (mu, derivative) = eta.iter().map(|&e| link.inverse_and_derivative(e)).unzip();
                 (eta, mu, derivative)
             },
             predict,

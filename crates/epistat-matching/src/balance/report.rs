@@ -378,11 +378,8 @@ impl Column {
         match self {
             Self::Numeric(_) => numeric_covariate(reader, record, supplemental),
             Self::Level { level, known, .. } => {
-                let found = map_optional_covariate_to_level(covariate_value(
-                    reader,
-                    record,
-                    supplemental,
-                ));
+                let found =
+                    map_optional_covariate_to_level(covariate_value(reader, record, supplemental));
                 known
                     .contains(&found)
                     .then_some(if found == *level { 1.0 } else { 0.0 })

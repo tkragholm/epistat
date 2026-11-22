@@ -422,7 +422,10 @@ impl<'k> ColumnReader<'k> {
         self.key
     }
 
-    pub(crate) fn read<'r, R: CovariateRecord>(&mut self, record: &'r R) -> Option<CovariateRef<'r>> {
+    pub(crate) fn read<'r, R: CovariateRecord>(
+        &mut self,
+        record: &'r R,
+    ) -> Option<CovariateRef<'r>> {
         let Some(table) = record.covariate_table() else {
             return record.covariate(self.key);
         };
@@ -437,7 +440,6 @@ impl<'k> ColumnReader<'k> {
         slot.map(|slot| record.covariate_in_slot(slot))
     }
 }
-
 
 /// Tells which records of a run need their covariate names read. Records of
 /// one table of columns carry the same names, so only the first record of each

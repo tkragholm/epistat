@@ -366,7 +366,13 @@ mod tests {
             -800.0,
         ];
         grid.extend((-400..400).map(|k| f64::from(k) * 0.173));
-        for link in [Link::Identity, Link::Log, Link::Logit, Link::Cloglog, Link::Probit] {
+        for link in [
+            Link::Identity,
+            Link::Log,
+            Link::Logit,
+            Link::Cloglog,
+            Link::Probit,
+        ] {
             for &eta in &grid {
                 let (mu, derivative) = link.inverse_and_derivative(eta);
                 assert_eq!(mu.to_bits(), link.inverse(eta).to_bits(), "{link:?} {eta}");
