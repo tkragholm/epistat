@@ -34,10 +34,14 @@
 //! reciprocals of small integers rescaled by a mean, so they agree with R's to
 //! a few ulps and are compared to a relative 1e-12.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{RapidHashMap, match_full, match_optimal};
-use epistat_testkit::load_json;
+
+use r_reference::reference as load_reference;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -127,10 +131,7 @@ struct CaliperRun {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_optimal.json"
-    ))
+    load_reference("matchit_optimal.json")
 }
 
 fn euclidean(name: &str) -> bool {

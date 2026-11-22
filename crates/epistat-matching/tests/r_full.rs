@@ -25,10 +25,14 @@
 //! Weights in the file carry 17 digits and the crate's are ratios of small
 //! integers rescaled by a mean, so they are compared to a relative 1e-12.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{RapidHashMap, match_full};
-use epistat_testkit::load_json;
+
+use r_reference::reference as load_reference;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -87,10 +91,7 @@ struct Run {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_full.json"
-    ))
+    load_reference("matchit_full.json")
 }
 
 fn euclidean(name: &str) -> bool {

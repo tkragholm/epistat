@@ -23,11 +23,15 @@
 //! What the engine adds is checked here and not against R: the index date of
 //! each set and the date on which each control is later exposed.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
 use epistat_stats::gamma::chi_square_sf;
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -78,10 +82,7 @@ struct Draw {
 type Rec = RoleTransitionRecord<BalanceRecord>;
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/exposure_density.json"
-    ))
+    load_reference("exposure_density.json")
 }
 
 fn day(days: i64) -> NaiveDate {
@@ -168,7 +169,7 @@ fn by_exposed(sets: &ExposureDensityOutcome) -> BTreeMap<String, Vec<String>> {
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.heaven, "2026.10.30");
     assert_eq!(reference.versions.epi, "2.66");
 }

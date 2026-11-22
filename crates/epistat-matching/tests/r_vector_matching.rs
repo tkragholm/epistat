@@ -21,13 +21,17 @@
 //! focal unit has pairs, the common support drops what its rule says, and the
 //! match is reproducible and improves balance.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::multigroup::{
     GpsConfig, VectorMatchSpec, balance_by_group, generalised_propensity_score,
     match_within_clusters, vector_match,
 };
 use epistat_matching::prelude::*;
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -56,16 +60,13 @@ struct Run {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/vector_matching.json"
-    ))
+    load_reference("vector_matching.json")
 }
 
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let r = reference();
-    assert!(r.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&r.versions.r);
     assert_eq!(r.versions.matching, "4.10.15");
 }
 

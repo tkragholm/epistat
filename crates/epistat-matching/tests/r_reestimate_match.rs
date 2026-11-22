@@ -14,10 +14,14 @@
 //! only where two candidates' distances lie within that of each other, which
 //! the continuous covariates make absent.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{CommonSupport, NearestSelection, estimate_propensity_and_match};
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -70,10 +74,7 @@ impl Rows {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_reestimate_match.json"
-    ))
+    load_reference("matchit_reestimate_match.json")
 }
 
 fn policy_of(name: &str) -> CommonSupport {
@@ -88,7 +89,7 @@ fn policy_of(name: &str) -> CommonSupport {
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
 }
 

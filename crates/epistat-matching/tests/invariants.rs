@@ -210,14 +210,11 @@ fn criteria_builder_validates() {
 
 /// The low-level request types accept an owned, heterogeneous constraint list.
 ///
-/// Two compile-fail cases used to assert the opposite, on the design stance
-/// that the constraint group is statically dispatched. The crate has always
-/// accepted `[&dyn Constraint<R>]`, though, so dynamic dispatch was never
-/// actually excluded -- what `Box` adds is OWNERSHIP. Without it a caller
-/// cannot build its constraints in a helper and return them, which is exactly
+/// They take a list of `[&dyn Constraint<R>]`, so
+/// dynamic dispatch is available. What `Box` adds is ownership. Without it a
+/// caller cannot build its constraints in a helper and return them, which is
 /// the shape a caller has when its matching rules come from configuration
-/// rather than from code. Both entry points are pinned because the two
-/// compile-fail cases covered both.
+/// rather than from code. Both entry points are pinned.
 #[test]
 fn requests_accept_an_owned_list_of_boxed_constraints() {
     use epistat_matching::Constraint;

@@ -28,11 +28,15 @@
 //! equal to about 1e-14, so it is compared at 1e-7 of `se`. The test prints the
 //! worst ratio of deviation to tolerance in each group.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use epistat_matching::abadie_imbens::{
     AbadieImbensData, AbadieImbensSpec, DistanceWeight, abadie_imbens,
 };
 use epistat_matching::effects::Target;
-use epistat_testkit::load_json;
+
+use r_reference::reference as load_reference;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -90,10 +94,7 @@ struct Result {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/abadie_imbens.json"
-    ))
+    load_reference("abadie_imbens.json")
 }
 
 fn data(r: &Reference, name: &str, with_z: bool) -> AbadieImbensData {

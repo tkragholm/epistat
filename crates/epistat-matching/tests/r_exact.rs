@@ -21,9 +21,13 @@
 //! that MatchIt's numbers follow the controls, and compares ours after
 //! renumbering MatchIt's by the anchors.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_testkit::load_json;
+
+use r_reference::{reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -57,14 +61,7 @@ struct RRun {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_exact.json"
-    ))
-}
-
-fn id(idx: usize) -> String {
-    format!("u{idx}")
+    load_reference("matchit_exact.json")
 }
 
 fn ours(data: &Dataset) -> Result<ExactMatchOutcome, ExactMatchError> {

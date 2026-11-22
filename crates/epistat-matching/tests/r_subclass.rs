@@ -18,9 +18,13 @@
 //! unscaled subclass weights, so the test applies the same rescaling before it
 //! compares them.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_testkit::load_json;
+
+use r_reference::{reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
@@ -56,14 +60,7 @@ struct RRun {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_subclass.json"
-    ))
-}
-
-fn id(idx: usize) -> String {
-    format!("u{idx}")
+    load_reference("matchit_subclass.json")
 }
 
 fn estimand_of(name: &str) -> Estimand {

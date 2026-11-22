@@ -21,6 +21,9 @@
 //! preparation's distance values are compared with MatchIt's in
 //! `r_distances.rs`; here the selection is compared.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
@@ -29,7 +32,8 @@ use epistat_matching::{
     MahalanobisPreparationConfig, MahalanobisTransform, MatchOrder,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
 };
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -94,10 +98,7 @@ impl Rows {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_prepared_distances.json"
-    ))
+    load_reference("matchit_prepared_distances.json")
 }
 
 fn order_of(name: &str) -> MatchOrder {
@@ -187,7 +188,7 @@ fn prepared(
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
 }
 

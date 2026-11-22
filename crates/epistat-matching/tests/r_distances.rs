@@ -39,13 +39,17 @@
 //! reference file. The crate adds no ridge to these matrices, and the plain
 //! factorisation succeeds.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, IdMapEuclideanDistance, IdMapMahalanobisDistance,
     prepare_euclidean_distance_config,
 };
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -85,10 +89,7 @@ struct WithinGroups {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_distances.json"
-    ))
+    load_reference("matchit_distances.json")
 }
 
 fn record(id: String, covariates: Vec<(String, CovariateValue)>) -> BalanceRecord {
@@ -181,7 +182,7 @@ fn mahalanobis_ratio(
 #[test]
 fn versions_are_recorded() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
 }
 

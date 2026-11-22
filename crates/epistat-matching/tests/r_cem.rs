@@ -40,13 +40,17 @@
 //! in the script's, after the rescaling to a group size of at most 400, so
 //! the relative error is below 400 roundings, 1e-13. The tolerance is 1e-12.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     CemBinning, CemRule, CemVariable, EuclideanPreparationConfig, EuclideanScale,
     MahalanobisPreparationConfig, MatchOrder, cem_k2k_pairs, cem_strata, cem_subclasses,
 };
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -119,10 +123,7 @@ struct Run {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/matchit_cem.json"
-    ))
+    load_reference("matchit_cem.json")
 }
 
 fn binning(spec: &Binning) -> CemBinning {
@@ -153,10 +154,6 @@ fn variables(run: &Run) -> Vec<CemVariable> {
             }
         })
         .collect()
-}
-
-fn id(row: usize) -> String {
-    format!("u{row}")
 }
 
 /// Every unit as a record with all numeric columns as numeric fields and
@@ -258,7 +255,7 @@ const WEIGHT_TOLERANCE: f64 = 1e-12;
 #[test]
 fn reference_was_made_by_the_documented_versions() {
     let reference = reference();
-    assert!(reference.versions.r.starts_with("R version 4.6"));
+    assert_r_version(&reference.versions.r);
     assert_eq!(reference.versions.matchit, "4.8.2");
     assert_eq!(reference.runs.len(), 34);
 }

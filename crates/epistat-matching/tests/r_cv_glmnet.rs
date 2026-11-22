@@ -15,9 +15,13 @@
 //! MatchIt leaves it, except in the ridge case, which sets
 //! `standardize = FALSE`.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_testkit::load_json;
+use r_reference::{split_by_group, unit_id as id};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -81,14 +85,9 @@ fn folds_path() -> String {
     concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/cv_folds.json").to_string()
 }
 
-fn id(idx: usize) -> String {
-    format!("u{idx}")
-}
-
 fn records(case: &Case) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
-    let mut anchors = Vec::new();
-    let mut candidates = Vec::new();
+    let mut units = Vec::new();
     for (idx, label) in case.y.iter().enumerate() {
         let mut record = BalanceRecord::new(id(idx), birth);
         for (name, value) in case.covariate_names.iter().zip(&case.x[idx]) {
@@ -96,13 +95,9 @@ fn records(case: &Case) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
                 .covariates
                 .insert(name.clone(), CovariateValue::Numeric(*value));
         }
-        if *label > 0.5 {
-            anchors.push(record);
-        } else {
-            candidates.push(record);
-        }
+        units.push((*label > 0.5, record));
     }
-    (anchors, candidates)
+    split_by_group(units)
 }
 
 fn fit_case(case: &Case, rule: LambdaRule) -> PropensityDistancePreparation {

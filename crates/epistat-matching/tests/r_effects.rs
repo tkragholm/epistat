@@ -32,12 +32,16 @@
 //! change of 1e-14, where its default of 1e-8 would add an error of the same
 //! order as the bound.
 
+#[path = "common/r_reference.rs"]
+mod r_reference;
+
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
     Clustering, EffectSpec, MatchedSample, OutcomeModel, Target, UnitData, estimate_effects,
 };
 use epistat_matching::output::{LongMatches, MatchData};
-use epistat_testkit::load_json;
+
+use r_reference::{assert_r_version, reference as load_reference};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -94,10 +98,7 @@ struct Result {
 }
 
 fn reference() -> Reference {
-    load_json(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/data/effects.json"
-    ))
+    load_reference("effects.json")
 }
 
 fn units(r: &Reference, binary: bool, covariates: &[String]) -> UnitData {
@@ -190,7 +191,7 @@ impl Worst {
 #[test]
 fn effects_agree_with_marginaleffects() {
     let r = reference();
-    assert!(r.versions.r.starts_with("R version"));
+    assert_r_version(&r.versions.r);
     assert_eq!(r.versions.marginaleffects, "1.0.0");
     assert_eq!(r.versions.sandwich, "3.1.3");
     let mut worst = Worst(0.0);
