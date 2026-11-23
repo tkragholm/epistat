@@ -199,12 +199,8 @@ fn compare_fit(f: &RFit, got: &FrailtyFit) -> Worst {
         .iter()
         .map(|v| v.unwrap().sqrt())
         .collect();
-    for i in 0..g {
-        worst.check(
-            "log frailty",
-            (got.frailties[i].unwrap() - f.frail[i]).abs() / frail_se[i],
-            b,
-        );
+    for ((w, &want), se) in got.frailties.iter().zip(&f.frail).zip(&frail_se) {
+        worst.check("log frailty", (w.unwrap() - want).abs() / se, b);
     }
     let weighted = got.marginal_log_likelihood.is_none();
     let (cov, cov2) = if f.sparse {
@@ -214,26 +210,18 @@ fn compare_fit(f: &RFit, got: &FrailtyFit) -> Worst {
     };
     let scale = f.var[0].abs().max(f.var[3].abs());
     let var_bound = if f.transcribed { 1e-5 } else { b + 1e-10 };
-    for k in 0..p * p {
-        worst.check("var", (cov[k].unwrap() - f.var[k]).abs() / scale, var_bound);
+    for (c, &want) in cov.iter().zip(&f.var) {
+        worst.check("var", (c.unwrap() - want).abs() / scale, var_bound);
     }
     if let Some(var2) = &f.var2 {
         let scale2 = var2[0].abs().max(var2[3].abs());
-        for k in 0..p * p {
-            worst.check(
-                "var2",
-                (cov2[k].unwrap() - var2[k]).abs() / scale2,
-                b + 1e-10,
-            );
+        for (c, &want) in cov2.iter().zip(var2) {
+            worst.check("var2", (c.unwrap() - want).abs() / scale2, b + 1e-10);
         }
     }
     if let Some(fvar) = &f.fvar {
-        for i in 0..g {
-            worst.check(
-                "fvar",
-                (got.frailty_variances[i].unwrap() - fvar[i]).abs() / fvar[i],
-                b + 1e-10,
-            );
+        for (v, &want) in got.frailty_variances.iter().zip(fvar) {
+            worst.check("fvar", (v.unwrap() - want).abs() / want, b + 1e-10);
         }
     }
     let nu = 1.0 / f.theta;

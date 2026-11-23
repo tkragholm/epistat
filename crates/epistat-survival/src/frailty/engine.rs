@@ -477,7 +477,7 @@ impl Layout {
             let k1p = self.prefix(&k1, 1);
             let m1p = self.prefix(&m1, p);
             let mut dm = vec![0.0; p];
-            for j in 0..n {
+            for (j, &r) in risk.iter().enumerate() {
                 let (pe, ps, te) = (
                     self.pe[j] as usize,
                     self.ps[j] as usize,
@@ -495,7 +495,6 @@ impl Layout {
                     }
                 }
                 let i = self.cluster[j] as usize;
-                let r = risk[j];
                 let mut gw = -r * dh;
                 if ev {
                     gw += self.weight[j];
@@ -612,12 +611,12 @@ impl Layout {
         let (p, g) = (self.p, self.g);
         let (vb, vw) = v.split_at(p);
         let (ob, ow) = out.split_at_mut(p);
-        for r in 0..p {
+        for (r, o) in ob.iter_mut().enumerate() {
             let mut s = 0.0;
-            for c in 0..p {
-                s += ev.a[r * p + c] * vb[c];
+            for (&a, &vc) in ev.a[r * p..(r + 1) * p].iter().zip(vb) {
+                s += a * vc;
             }
-            ob[r] = s;
+            *o = s;
         }
         for i in 0..g {
             let row = &ev.b[i * p..(i + 1) * p];
@@ -701,8 +700,8 @@ impl Layout {
         debug_assert_eq!(m.rank, p);
         let (rb, rw) = r.split_at(p);
         let mut t = rb.to_vec();
-        for i in 0..g {
-            let yw = rw[i] / ev.hdiag[i];
+        for (i, &rwi) in rw.iter().enumerate() {
+            let yw = rwi / ev.hdiag[i];
             for (c, tv) in t.iter_mut().enumerate() {
                 *tv -= ev.b[i * p + c] * yw;
             }
