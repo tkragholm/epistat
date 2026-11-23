@@ -81,6 +81,17 @@
 //! dJ/dbeta_j = 2 (dg/dbeta_j)' v - v' (dV/dbeta_j) v,    v = W g.
 //! ```
 //!
+//! BFGS searches along a line on `J`, and near the minimum `J` changes by less
+//! than its rounding over a range of `beta` of about `sqrt(2 u J / lambda)`, `u`
+//! the unit roundoff and `lambda` the smallest curvature, which reaches 1e-8 for
+//! the flat objectives of the tests. Where the search stops in that range depends
+//! on the last bits of `exp` and so on the platform. The gradient keeps falling
+//! there, so the BFGS result is finished by Newton steps on the gradient, with
+//! the Hessian from central differences of the analytic gradient at a relative
+//! step of 1e-5, accurate to about 1e-10. A step is taken while it reduces the
+//! largest entry of the gradient, until that entry is at most the tolerance, for
+//! at most 20 steps.
+//!
 //! ## Weights
 //!
 //! The weights are `1/e` and `1/(1-e)` (ATE), `n/n_t` and `(n/n_t) e/(1-e)`
@@ -784,6 +795,54 @@ impl Problem {
         )))
     }
 
+    /// Newton steps on the gradient of the continuously updated `J` from a BFGS
+    /// result, with the Hessian from central differences of the analytic
+    /// gradient. Returns the point, `J`, the gradient and the number of steps.
+    fn polish_cu(
+        &self,
+        mut beta: Vec<f64>,
+        mut j: f64,
+        mut grad: Vec<f64>,
+        tolerance: f64,
+    ) -> (Vec<f64>, f64, Vec<f64>, usize) {
+        let k = self.k();
+        let mut steps = 0;
+        while steps < 20 && max_abs(&grad) > tolerance {
+            let mut hess = Mat::zeros(k, k);
+            for c in 0..k {
+                let h = 1e-5 * beta[c].abs().max(1.0);
+                let mut up = beta.clone();
+                up[c] += h;
+                let mut down = beta.clone();
+                down[c] -= h;
+                let gu = self.cu(&up).1;
+                let gd = self.cu(&down).1;
+                for r in 0..k {
+                    hess[(r, c)] = (gu[r] - gd[r]) / (up[c] - down[c]);
+                }
+            }
+            let hess = Mat::from_fn(k, k, |r, c| f64::midpoint(hess[(r, c)], hess[(c, r)]));
+            let rhs = Mat::from_fn(k, 1, |r, _| -grad[r]);
+            let Ok(sol) = solve(
+                hess.as_ref(),
+                rhs.as_ref(),
+                &[Attempt::plain(Method::Cholesky)],
+            ) else {
+                break;
+            };
+            let trial: Vec<f64> = (0..k).map(|c| beta[c] + sol.x[(c, 0)]).collect();
+            let (j2, grad2) = self.cu(&trial);
+            if !j2.is_finite() || max_abs(&grad2) >= max_abs(&grad) {
+                break;
+            }
+            beta = trial;
+            j = j2;
+            grad = grad2;
+            steps += 1;
+        }
+        (beta, j, grad, steps)
+    }
+
     /// `J` and its gradient for the continuously updated weighting matrix.
     fn cu(&self, beta: &[f64]) -> (f64, Vec<f64>) {
         let k = self.k();
@@ -940,13 +999,19 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
                     bfgs.minimize(&s0, |b| prob.cu(b), None)
                         .map_err(|e| Error::NoConvergence(format!("BFGS: {e}")))
                         .and_then(|m| {
-                            if m.converged || m.gradient.iter().all(|g| g.abs() <= 1e-7) {
-                                Ok((m.x, m.value, m.iterations))
+                            let (x, value, gradient, steps) =
+                                prob.polish_cu(m.x, m.value, m.gradient, opts.tolerance);
+                            let iterations = m.iterations + steps;
+                            if m.converged
+                                || max_abs(&gradient) <= opts.tolerance
+                                || gradient.iter().all(|g| g.abs() <= 1e-7)
+                            {
+                                Ok((x, value, iterations))
                             } else {
                                 Err(Error::NoConvergence(format!(
                                     "the continuously updated objective: gradient {:e} after {} iterations",
-                                    max_abs(&m.gradient),
-                                    m.iterations
+                                    max_abs(&gradient),
+                                    iterations
                                 )))
                             }
                         })
