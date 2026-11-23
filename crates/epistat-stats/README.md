@@ -1,7 +1,7 @@
 # epistat-stats
 
 Sample quantiles (R's types 1 and 7, and a weighted type 1), the normal distribution function and
-its inverse with truncated and folded quantiles, the log-gamma and
+its inverse with truncated and folded quantiles, the log-gamma, digamma, trigamma and
 regularised incomplete gamma functions with the chi-square distribution, the
 Student t distribution and the incomplete beta function,
 floating-point sums in the order Python computes them, and log-sum-exp, softmax, information criteria and covariate balance statistics

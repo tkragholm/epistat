@@ -4,6 +4,7 @@ Rust crates for statistics in epidemiology and register research.
 
 | Crate | Contents |
 |---|---|
+| [`epistat-causal`](crates/epistat-causal) | Augmented inverse probability weighting for binary and continuous outcomes, with efficient and stacked variances |
 | [`epistat-glm`](crates/epistat-glm) | Generalised linear models fitted by IRLS as R's `glm.fit` does |
 | [`epistat-inference`](crates/epistat-inference) | Influence-function and sandwich variances, cluster-robust and bootstrap intervals |
 | [`epistat-linalg`](crates/epistat-linalg) | Dense solves with fallbacks and row-blocked regression products on faer, independent of the thread count |

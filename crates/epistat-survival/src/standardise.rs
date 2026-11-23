@@ -85,8 +85,9 @@
 //!   ([`Counterfactual::Design`]), which allows interactions and
 //!   transformations of the exposure.
 //! - Only the g-formula estimator is provided, with the population of the
-//!   fitted data. Inverse probability weighting and augmented estimators are
-//!   in [`weighting`](crate::weighting).
+//!   fitted data. Inverse probability weighting is in
+//!   [`weighting`](crate::weighting), and augmented inverse probability
+//!   weighting is in the `epistat-causal` crate.
 //! - With the product limit the standard error is that of the exact derivative
 //!   of the estimate, not riskRegression's first-order one, unless
 //!   [`InfluenceForm::Exponential`] is chosen.
