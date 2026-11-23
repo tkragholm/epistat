@@ -111,6 +111,7 @@
 
 pub mod aalen_johansen;
 pub mod absrisk;
+pub mod aipw;
 #[cfg(feature = "arrow")]
 pub mod arrow;
 mod check;

@@ -87,7 +87,7 @@
 //! - Only the g-formula estimator is provided, with the population of the
 //!   fitted data. Inverse probability weighting is in
 //!   [`weighting`](crate::weighting), and augmented inverse probability
-//!   weighting is in the `epistat-causal` crate.
+//!   weighting of the risk with censoring is in [`aipw`](crate::aipw).
 //! - With the product limit the standard error is that of the exact derivative
 //!   of the estimate, not riskRegression's first-order one, unless
 //!   [`InfluenceForm::Exponential`] is chosen.
