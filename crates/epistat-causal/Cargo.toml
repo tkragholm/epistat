@@ -36,5 +36,9 @@ harness = false
 name = "tier3_balance"
 harness = false
 
+[[bench]]
+name = "tier3_gformula"
+harness = false
+
 [lints]
 workspace = true
