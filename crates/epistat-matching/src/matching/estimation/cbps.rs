@@ -446,95 +446,6 @@ impl Problem<'_> {
     }
 }
 
-/// Brent's one-dimensional minimiser on `[a, b]`: golden section steps and
-/// parabolic interpolation \[2\], stopping when the interval is within `tol` of
-/// the best point in the sense of the original algorithm.
-#[expect(
-    clippy::float_cmp,
-    reason = "Brent's algorithm tests whether a trial point is exactly one of the stored points"
-)]
-fn brent_minimum(mut f: impl FnMut(f64) -> f64, a: f64, b: f64, tol: f64) -> f64 {
-    let golden = (3.0 - 5.0_f64.sqrt()) * 0.5;
-    let eps = f64::EPSILON.sqrt();
-    let (mut a, mut b) = (a, b);
-    let mut v = a + golden * (b - a);
-    let mut w = v;
-    let mut x = v;
-    let (mut d, mut e) = (0.0_f64, 0.0_f64);
-    let mut fx = f(x);
-    let mut fv = fx;
-    let mut fw = fx;
-    let tol3 = tol / 3.0;
-    loop {
-        let xm = f64::midpoint(a, b);
-        let tol1 = eps * x.abs() + tol3;
-        let t2 = tol1 * 2.0;
-        if (x - xm).abs() <= t2 - (b - a) * 0.5 {
-            return x;
-        }
-        let (mut p, mut q, mut r) = (0.0_f64, 0.0_f64, 0.0_f64);
-        if e.abs() > tol1 {
-            r = (x - w) * (fx - fv);
-            q = (x - v) * (fx - fw);
-            p = (x - v) * q - (x - w) * r;
-            q = (q - r) * 2.0;
-            if q > 0.0 {
-                p = -p;
-            } else {
-                q = -q;
-            }
-            r = e;
-            e = d;
-        }
-        if p.abs() >= (q * 0.5 * r).abs() || p <= q * (a - x) || p >= q * (b - x) {
-            e = if x < xm { b - x } else { a - x };
-            d = golden * e;
-        } else {
-            d = p / q;
-            let trial = x + d;
-            if trial - a < t2 || b - trial < t2 {
-                d = if x < xm { tol1 } else { -tol1 };
-            }
-        }
-        let u = if d.abs() >= tol1 {
-            x + d
-        } else if d > 0.0 {
-            x + tol1
-        } else {
-            x - tol1
-        };
-        let fu = f(u);
-        if fu <= fx {
-            if u < x {
-                b = x;
-            } else {
-                a = x;
-            }
-            v = w;
-            w = x;
-            x = u;
-            fv = fw;
-            fw = fx;
-            fx = fu;
-        } else {
-            if u < x {
-                a = u;
-            } else {
-                b = u;
-            }
-            if fu <= fw || w == x {
-                v = w;
-                fv = fw;
-                w = u;
-                fw = fu;
-            } else if fu <= fv || v == x || v == w {
-                v = u;
-                fv = fu;
-            }
-        }
-    }
-}
-
 /// Fits the covariate balancing propensity score to the design `matrix` and
 /// the treatment `labels` (1 for the anchors), with prior weights `weights`
 /// (1 when `None`).
@@ -615,7 +526,7 @@ pub(super) fn fit_cbps(
         Ok(problem.j_value(&g, &w))
     };
     let mut failure = None;
-    let scale = brent_minimum(
+    let scale = epistat_optim::brent::minimise(
         |a| match objective(a) {
             Ok(value) => value,
             Err(error) => {
@@ -626,7 +537,9 @@ pub(super) fn fit_cbps(
         SCALE_BRACKET.0,
         SCALE_BRACKET.1,
         f64::EPSILON.powf(0.25),
-    );
+    )
+    .expect("the scale bracket and the tolerance are finite and positive")
+    .x;
     if let Some(error) = failure {
         return Err(error);
     }
