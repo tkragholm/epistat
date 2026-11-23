@@ -227,7 +227,7 @@ fn table_estimators_and_tests() {
             1e-7,
         );
         if let (Some(t), Some(k)) = (bd, case.bd.k_pos) {
-            assert_eq!(t.df as f64, k - 1.0, "{name} df");
+            assert_eq!(t.df + 1, k as usize, "{name} df");
         }
         let ta = breslow_day(&tables, true).unwrap();
         worst.check(

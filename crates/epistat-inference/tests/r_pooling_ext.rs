@@ -409,10 +409,10 @@ fn distribution_tails_match_r() {
 
 #[test]
 fn degrees_of_freedom_helpers() {
-    assert_eq!(dfcom_residual(100, 4), 96.0);
-    assert_eq!(dfcom_residual(3, 4), 1.0);
-    assert_eq!(dfcom_events(60, 3), 57.0);
-    assert_eq!(dfcom_events(2, 3), 1.0);
+    assert_eq!(dfcom_residual(100, 4).to_bits(), 96.0_f64.to_bits());
+    assert_eq!(dfcom_residual(3, 4).to_bits(), 1.0_f64.to_bits());
+    assert_eq!(dfcom_events(60, 3).to_bits(), 57.0_f64.to_bits());
+    assert_eq!(dfcom_events(2, 3).to_bits(), 1.0_f64.to_bits());
 }
 
 #[test]
