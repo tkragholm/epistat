@@ -17,6 +17,8 @@ const SCORE_CAP: f64 = 1.0 - 1e-6;
 /// The control outcome regression of the outcome change is weighted by
 /// `w * ps / (1 - ps)`. Comparators with a score of 0.995 or more are trimmed.
 /// `DrDidObservation::covariates` is the finished design, intercept first.
+/// The interval is `att +- 1.96 se` whatever `config.confidence_level` is, and
+/// the bootstrap settings are not used.
 ///
 /// # Errors
 ///

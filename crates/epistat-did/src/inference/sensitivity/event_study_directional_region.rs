@@ -138,6 +138,13 @@ pub(super) fn calibrate_directional_region(
 /// Simultaneous `HonestDiD` region over a finite set of post-treatment linear
 /// functionals.
 ///
+/// Each direction in `directions` is a vector of weights with one entry per
+/// post period, finite and not all zero. Each functional's interval is run at a
+/// pointwise level that `joint_config` calibrates so that the intervals cover
+/// jointly at `inference.confidence_level`. The relative-magnitude settings are
+/// ignored under a smoothness restriction. `null_value` is the value that each
+/// point's `robustly_significant` is tested against.
+///
 /// # Errors
 /// Returns an error if any direction is malformed, if calibration fails, or if
 /// any directional scalar assessment fails.
@@ -357,7 +364,10 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
     })
 }
 
-/// Default wrapper for the finite-direction simultaneous region.
+/// [`assess_honest_event_study_directional_region_with_config`] with the
+/// relative-magnitude settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`] and the
+/// `default_for_production` joint calibration.
 ///
 /// # Errors
 /// Returns an error if direction validation, calibration, or scalar directional

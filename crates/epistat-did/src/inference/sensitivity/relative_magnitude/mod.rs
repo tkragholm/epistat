@@ -1,13 +1,15 @@
 //! Relative-magnitude (`DeltaRM`) sensitivity analysis for event-study `ATT(g,t)`.
 //!
 //! This module implements the `\Delta^{RM}(\bar M)` restrictions from
-//! Rambachan & Roth (2023), where post-period violations are bounded by a
-//! multiple of the largest observed pre-period deviation from linear trend.
+//! Rambachan & Roth (2023), where changes of the violation of parallel trends
+//! between adjacent post-periods are bounded by `Mbar` times the largest such
+//! change between adjacent pre-periods. The linear-trend variants bound second
+//! differences instead.
 //!
 //! The implementation is split into:
 //! - public identified-set and conditional-CS entrypoints in this file
 //! - branch geometry / constraint preparation in [`geometry`]
-//! - Clarabel-backed confidence-set solver machinery in [`confidence_set`]
+//! - Clarabel-backed confidence-set solver machinery in [`conditional_confidence_set`]
 //!
 //! References:
 //! - Rambachan, A. and Roth, J. (2023), "A More Credible Approach to Parallel Trends"
@@ -531,15 +533,15 @@ where
     })
 }
 
-/// Construct the original parallel-trends confidence set for a post-period
-/// linear functional.
+/// Two-sided Wald confidence set of `post_weights' τ_post` under exact parallel
+/// trends, at `inference.confidence_level`.
 ///
-/// This matches `HonestDiD::constructOriginalCS` for a user-supplied
-/// post-treatment weight vector `post_weights`.
+/// This matches `HonestDiD::constructOriginalCS`. The standard error comes from
+/// the post-treatment block of the covariance matrix.
 ///
 /// # Errors
-/// Returns an error if `input` is invalid or `post_weights` does not match the number
-/// of post-treatment periods.
+/// Returns an error if `input` is invalid, or if `post_weights` does not have
+/// one finite weight per post-treatment period.
 pub fn compute_original_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -693,15 +695,17 @@ pub(in crate::inference::sensitivity) fn prepare_relative_magnitude_family_draws
         .collect()
 }
 
-/// Compute the exact `\Delta^{RM}(\bar M)` identified set for a post-period
-/// linear functional.
+/// Identified set of the functional `post_weights' τ_post` under `ΔRM(Mbar)`.
 ///
-/// This matches the LP construction used by `HonestDiD` and aggregates across
-/// the branch decomposition of the relative-magnitude restriction.
+/// `post_weights` has one weight per post period, finite and not all zero.
+/// `mbar` is finite and non-negative. The set is the union over the
+/// restriction's branches of the range of the functional that satisfies the
+/// constraints and the pre-period coefficients. If no branch is feasible the
+/// set is the single point of the estimate.
 ///
 /// # Errors
-/// Returns an error if dimensions are inconsistent or the LP solver fails on
-/// every branch.
+/// Returns an error if the input is invalid, `post_weights` or `mbar` is
+/// invalid, there are too few pre-periods, or a branch program fails.
 pub fn compute_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -730,15 +734,17 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_identified_s
     )
 }
 
-/// Compute a `\Delta^{RM}` conditional confidence set using the default
-/// least-favorable hybrid path.
+/// Conditional confidence set of the functional `post_weights' τ_post` under
+/// `ΔRM(Mbar)`, with the settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
 ///
-/// The current implementation follows the scalar conditional-CS path used for a
-/// fixed post-period functional `post_weights' \tau_{post}`.
+/// The set is the range of accepted values on a grid of 1,000 equally spaced
+/// points, so its ends are grid points. The grid spans the identified set and
+/// the original estimate, widened by 20 standard errors on each side.
 ///
 /// # Errors
-/// Returns an error if `input` is inconsistent, `post_weights` is invalid, or the
-/// underlying LP path fails.
+/// Returns an error if the input, `post_weights` or `mbar` is invalid, or if no
+/// grid point is accepted.
 pub fn compute_relative_magnitude_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -771,19 +777,15 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     )
 }
 
-/// Compute a `\Delta^{RM}` conditional confidence set with an explicit hybrid
-/// configuration.
+/// [`compute_relative_magnitude_confidence_set`] with the hybrid settings given
+/// in `config`.
 ///
-/// This mirrors the `HonestDiD::computeConditionalCS_DeltaRM` interface more
-/// closely than [`compute_relative_magnitude_confidence_set`], which uses the
-/// least-favorable default. In particular:
-///
-/// - [`LeastFavorable`](crate::RelativeMagnitudeHybrid::LeastFavorable) corresponds to `hybrid_flag = "LF"`
-/// - [`ArpOnly`](crate::RelativeMagnitudeHybrid::ArpOnly) corresponds to `hybrid_flag = "ARP"`
+/// `config.hybrid_kappa` must lie in `[0, alpha]` and
+/// `config.least_favorable_draws` must be positive.
 ///
 /// # Errors
-/// Returns an error if `input` is inconsistent, `post_weights` is invalid, or the
-/// underlying LP path fails.
+/// Returns an error if `config` fails validation, if the input, `post_weights`
+/// or `mbar` is invalid, or if no grid point is accepted.
 pub fn compute_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -844,12 +846,18 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     )
 }
 
-/// Compute the exact identified set under a sign-restricted relative-magnitude
-/// bias class.
+/// Identified set of the functional `post_weights' τ_post` under `ΔRM(Mbar)`
+/// with a sign restriction on the bias given by `bias_direction`.
+///
+/// `post_weights` has one weight per post period, finite and not all zero.
+/// `mbar` is finite and non-negative. The set is the union over the
+/// restriction's branches of the range of the functional that satisfies the
+/// constraints and the pre-period coefficients. If no branch is feasible the
+/// set is the single point of the estimate.
 ///
 /// # Errors
-/// Returns an error if the event-study input, functional weights, or bound are
-/// invalid, or if the branch LP setup fails.
+/// Returns an error if the input is invalid, `post_weights` or `mbar` is
+/// invalid, there are too few pre-periods, or a branch program fails.
 pub fn compute_signed_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -881,12 +889,18 @@ pub(in crate::inference::sensitivity) fn compute_signed_relative_magnitude_ident
     )
 }
 
-/// Compute the conditional confidence set under a sign-restricted
-/// relative-magnitude bias class using default hybrid settings.
+/// Conditional confidence set of the functional `post_weights' τ_post` under
+/// `ΔRM(Mbar)` with a sign restriction on the bias given by `bias_direction`,
+/// with the settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
+///
+/// The set is the range of accepted values on a grid of 1,000 equally spaced
+/// points, so its ends are grid points. The grid spans the identified set and
+/// the original estimate, widened by 20 standard errors on each side.
 ///
 /// # Errors
-/// Returns an error if validation fails or the conditional confidence-set
-/// solver cannot produce an interval.
+/// Returns an error if the input, `post_weights` or `mbar` is invalid, or if no
+/// grid point is accepted.
 pub fn compute_signed_relative_magnitude_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -923,12 +937,15 @@ pub(in crate::inference::sensitivity) fn compute_signed_relative_magnitude_confi
     )
 }
 
-/// Compute the conditional confidence set under a sign-restricted
-/// relative-magnitude bias class with explicit hybrid settings.
+/// [`compute_signed_relative_magnitude_confidence_set`] with the hybrid
+/// settings given in `config`.
+///
+/// `config.hybrid_kappa` must lie in `[0, alpha]` and
+/// `config.least_favorable_draws` must be positive.
 ///
 /// # Errors
-/// Returns an error if validation fails or the configured solver cannot
-/// produce an interval.
+/// Returns an error if `config` fails validation, if the input, `post_weights`
+/// or `mbar` is invalid, or if no grid point is accepted.
 pub fn compute_signed_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -968,12 +985,18 @@ pub(in crate::inference::sensitivity) fn compute_signed_relative_magnitude_confi
     )
 }
 
-/// Compute the exact identified set under a monotone relative-magnitude bias
-/// class.
+/// Identified set of the functional `post_weights' τ_post` under `ΔRM(Mbar)`
+/// with a monotonicity restriction given by `monotonicity_direction`.
+///
+/// `post_weights` has one weight per post period, finite and not all zero.
+/// `mbar` is finite and non-negative. The set is the union over the
+/// restriction's branches of the range of the functional that satisfies the
+/// constraints and the pre-period coefficients. If no branch is feasible the
+/// set is the single point of the estimate.
 ///
 /// # Errors
-/// Returns an error if the event-study input, functional weights, or bound are
-/// invalid, or if the branch LP setup fails.
+/// Returns an error if the input is invalid, `post_weights` or `mbar` is
+/// invalid, there are too few pre-periods, or a branch program fails.
 pub fn compute_monotone_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1005,12 +1028,18 @@ pub(in crate::inference::sensitivity) fn compute_monotone_relative_magnitude_ide
     )
 }
 
-/// Compute the conditional confidence set under a monotone
-/// relative-magnitude bias class using default hybrid settings.
+/// Conditional confidence set of the functional `post_weights' τ_post` under
+/// `ΔRM(Mbar)` with a monotonicity restriction given by
+/// `monotonicity_direction`, with the settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
+///
+/// The set is the range of accepted values on a grid of 1,000 equally spaced
+/// points, so its ends are grid points. The grid spans the identified set and
+/// the original estimate, widened by 20 standard errors on each side.
 ///
 /// # Errors
-/// Returns an error if validation fails or the conditional confidence-set
-/// solver cannot produce an interval.
+/// Returns an error if the input, `post_weights` or `mbar` is invalid, or if no
+/// grid point is accepted.
 pub fn compute_monotone_relative_magnitude_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1047,12 +1076,15 @@ pub(in crate::inference::sensitivity) fn compute_monotone_relative_magnitude_con
     )
 }
 
-/// Compute the conditional confidence set under a monotone
-/// relative-magnitude bias class with explicit hybrid settings.
+/// [`compute_monotone_relative_magnitude_confidence_set`] with the hybrid
+/// settings given in `config`.
+///
+/// `config.hybrid_kappa` must lie in `[0, alpha]` and
+/// `config.least_favorable_draws` must be positive.
 ///
 /// # Errors
-/// Returns an error if validation fails or the configured solver cannot
-/// produce an interval.
+/// Returns an error if `config` fails validation, if the input, `post_weights`
+/// or `mbar` is invalid, or if no grid point is accepted.
 pub fn compute_monotone_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1092,12 +1124,18 @@ pub(in crate::inference::sensitivity) fn compute_monotone_relative_magnitude_con
     )
 }
 
-/// Compute the exact identified set under the linear-trend-deviation relative
-/// magnitude class.
+/// Identified set of the functional `post_weights' τ_post` under `ΔSDRM(Mbar)`,
+/// where the bound is on deviations from a linear trend.
+///
+/// `post_weights` has one weight per post period, finite and not all zero.
+/// `mbar` is finite and non-negative. Needs at least two pre-periods. The set
+/// is the union over the restriction's branches of the range of the functional
+/// that satisfies the constraints and the pre-period coefficients. If no branch
+/// is feasible the set is the single point of the estimate.
 ///
 /// # Errors
-/// Returns an error if the event-study input, functional weights, or bound are
-/// invalid, or if the branch LP setup fails.
+/// Returns an error if the input is invalid, `post_weights` or `mbar` is
+/// invalid, there are too few pre-periods, or a branch program fails.
 pub fn compute_linear_trend_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1126,12 +1164,18 @@ pub(in crate::inference::sensitivity) fn compute_linear_trend_relative_magnitude
     )
 }
 
-/// Compute the conditional confidence set under the linear-trend-deviation
-/// relative-magnitude class using default hybrid settings.
+/// Conditional confidence set of the functional `post_weights' τ_post` under
+/// `ΔSDRM(Mbar)`, where the bound is on deviations from a linear trend, with
+/// the settings of [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
+///
+/// The set is the range of accepted values on a grid of 1,000 equally spaced
+/// points, so its ends are grid points. The grid spans the identified set and
+/// the original estimate, widened by 20 standard errors on each side. Needs at
+/// least two pre-periods.
 ///
 /// # Errors
-/// Returns an error if validation fails or the conditional confidence-set
-/// solver cannot produce an interval.
+/// Returns an error if the input, `post_weights` or `mbar` is invalid, or if no
+/// grid point is accepted.
 pub fn compute_linear_trend_relative_magnitude_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1164,12 +1208,15 @@ pub(in crate::inference::sensitivity) fn compute_linear_trend_relative_magnitude
     )
 }
 
-/// Compute the conditional confidence set under the linear-trend-deviation
-/// relative-magnitude class with explicit hybrid settings.
+/// [`compute_linear_trend_relative_magnitude_confidence_set`] with the hybrid
+/// settings given in `config`.
+///
+/// `config.hybrid_kappa` must lie in `[0, alpha]` and
+/// `config.least_favorable_draws` must be positive.
 ///
 /// # Errors
-/// Returns an error if validation fails or the configured solver cannot
-/// produce an interval.
+/// Returns an error if `config` fails validation, if the input, `post_weights`
+/// or `mbar` is invalid, or if no grid point is accepted.
 pub fn compute_linear_trend_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1206,12 +1253,18 @@ pub(in crate::inference::sensitivity) fn compute_linear_trend_relative_magnitude
     )
 }
 
-/// Compute the exact identified set under a sign-restricted linear-trend
-/// relative-magnitude class.
+/// Identified set of the functional `post_weights' τ_post` under `ΔSDRM(Mbar)`
+/// with a sign restriction on the bias given by `bias_direction`.
+///
+/// `post_weights` has one weight per post period, finite and not all zero.
+/// `mbar` is finite and non-negative. Needs at least two pre-periods. The set
+/// is the union over the restriction's branches of the range of the functional
+/// that satisfies the constraints and the pre-period coefficients. If no branch
+/// is feasible the set is the single point of the estimate.
 ///
 /// # Errors
-/// Returns an error if the event-study input, functional weights, or bound are
-/// invalid, or if the branch LP setup fails.
+/// Returns an error if the input is invalid, `post_weights` or `mbar` is
+/// invalid, there are too few pre-periods, or a branch program fails.
 pub fn compute_signed_linear_trend_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1243,12 +1296,19 @@ pub(in crate::inference::sensitivity) fn compute_signed_linear_trend_relative_ma
     )
 }
 
-/// Compute the conditional confidence set under a sign-restricted
-/// linear-trend relative-magnitude class using default hybrid settings.
+/// Conditional confidence set of the functional `post_weights' τ_post` under
+/// `ΔSDRM(Mbar)` with a sign restriction on the bias given by `bias_direction`,
+/// with the settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
+///
+/// The set is the range of accepted values on a grid of 1,000 equally spaced
+/// points, so its ends are grid points. The grid spans the identified set and
+/// the original estimate, widened by 20 standard errors on each side. Needs at
+/// least two pre-periods.
 ///
 /// # Errors
-/// Returns an error if validation fails or the conditional confidence-set
-/// solver cannot produce an interval.
+/// Returns an error if the input, `post_weights` or `mbar` is invalid, or if no
+/// grid point is accepted.
 pub fn compute_signed_linear_trend_relative_magnitude_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1285,12 +1345,15 @@ pub(in crate::inference::sensitivity) fn compute_signed_linear_trend_relative_ma
     )
 }
 
-/// Compute the conditional confidence set under a sign-restricted
-/// linear-trend relative-magnitude class with explicit hybrid settings.
+/// [`compute_signed_linear_trend_relative_magnitude_confidence_set`] with the
+/// hybrid settings given in `config`.
+///
+/// `config.hybrid_kappa` must lie in `[0, alpha]` and
+/// `config.least_favorable_draws` must be positive.
 ///
 /// # Errors
-/// Returns an error if validation fails or the configured solver cannot
-/// produce an interval.
+/// Returns an error if `config` fails validation, if the input, `post_weights`
+/// or `mbar` is invalid, or if no grid point is accepted.
 pub fn compute_signed_linear_trend_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1330,12 +1393,18 @@ pub(in crate::inference::sensitivity) fn compute_signed_linear_trend_relative_ma
     )
 }
 
-/// Compute the exact identified set under a monotone linear-trend
-/// relative-magnitude class.
+/// Identified set of the functional `post_weights' τ_post` under `ΔSDRM(Mbar)`
+/// with a monotonicity restriction given by `monotonicity_direction`.
+///
+/// `post_weights` has one weight per post period, finite and not all zero.
+/// `mbar` is finite and non-negative. Needs at least two pre-periods. The set
+/// is the union over the restriction's branches of the range of the functional
+/// that satisfies the constraints and the pre-period coefficients. If no branch
+/// is feasible the set is the single point of the estimate.
 ///
 /// # Errors
-/// Returns an error if the event-study input, functional weights, or bound are
-/// invalid, or if the branch LP setup fails.
+/// Returns an error if the input is invalid, `post_weights` or `mbar` is
+/// invalid, there are too few pre-periods, or a branch program fails.
 pub fn compute_monotone_linear_trend_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1367,12 +1436,19 @@ pub(in crate::inference::sensitivity) fn compute_monotone_linear_trend_relative_
     )
 }
 
-/// Compute the conditional confidence set under a monotone linear-trend
-/// relative-magnitude class using default hybrid settings.
+/// Conditional confidence set of the functional `post_weights' τ_post` under
+/// `ΔSDRM(Mbar)` with a monotonicity restriction given by
+/// `monotonicity_direction`, with the settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
+///
+/// The set is the range of accepted values on a grid of 1,000 equally spaced
+/// points, so its ends are grid points. The grid spans the identified set and
+/// the original estimate, widened by 20 standard errors on each side. Needs at
+/// least two pre-periods.
 ///
 /// # Errors
-/// Returns an error if validation fails or the conditional confidence-set
-/// solver cannot produce an interval.
+/// Returns an error if the input, `post_weights` or `mbar` is invalid, or if no
+/// grid point is accepted.
 pub fn compute_monotone_linear_trend_relative_magnitude_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1409,12 +1485,15 @@ pub(in crate::inference::sensitivity) fn compute_monotone_linear_trend_relative_
     )
 }
 
-/// Compute the conditional confidence set under a monotone linear-trend
-/// relative-magnitude class with explicit hybrid settings.
+/// [`compute_monotone_linear_trend_relative_magnitude_confidence_set`] with the
+/// hybrid settings given in `config`.
+///
+/// `config.hybrid_kappa` must lie in `[0, alpha]` and
+/// `config.least_favorable_draws` must be positive.
 ///
 /// # Errors
-/// Returns an error if validation fails or the configured solver cannot
-/// produce an interval.
+/// Returns an error if `config` fails validation, if the input, `post_weights`
+/// or `mbar` is invalid, or if no grid point is accepted.
 pub fn compute_monotone_linear_trend_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],

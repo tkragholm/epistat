@@ -12,9 +12,10 @@ pub trait PanelRecord {
 
     /// Identifier of the unit the record belongs to.
     fn unit_id(&self) -> &Self::UnitId;
-    /// Time period of the record.
+    /// Calendar period of the record.
     fn time_period(&self) -> i32;
-    /// Whether the unit is treated in this period.
+    /// Whether the unit is treated in this period. `InferenceDataset::from_panel`
+    /// does not read it and takes the timing from `first_treated_time`.
     fn treatment_status(&self) -> bool;
     /// Period in which the unit is first treated, `None` for never treated.
     fn first_treated_time(&self) -> Option<i32>;
@@ -53,11 +54,13 @@ impl std::fmt::Display for Severity {
 pub struct Diagnostic {
     /// Whether the finding is an error or a warning.
     pub severity: Severity,
-    /// Short label of the kind of problem.
+    /// Short label of the kind of problem: `cluster`, `outcome`, `weight`,
+    /// `treatment_timing`, `balance` or `coverage`.
     pub category: String,
     /// Description of the problem.
     pub message: String,
-    /// Identifiers of the units the finding concerns.
+    /// Identifiers of the units the finding concerns, empty when it does not
+    /// concern particular units.
     pub affected_units: Vec<String>,
 }
 
@@ -70,7 +73,7 @@ pub struct ValidationReport {
     pub row_count: usize,
     /// Number of distinct units.
     pub unit_count: usize,
-    /// Number of distinct time periods.
+    /// Number of distinct calendar periods.
     pub period_count: usize,
 }
 
@@ -106,7 +109,8 @@ pub struct ValidatedInferenceDataset {
 }
 
 impl InferenceDataset {
-    /// Construct from column vectors.
+    /// Construct from column vectors with one entry per row. Weights are 1.0 and
+    /// there are no covariates, clusters or outcome name.
     ///
     /// # Panics
     /// Panics if input vectors have inconsistent lengths.
@@ -135,7 +139,7 @@ impl InferenceDataset {
         }
     }
 
-    /// Construct from an iterator of panel records.
+    /// Construct from an iterator of panel records, with one row per record.
     pub fn from_panel<R: PanelRecord>(records: impl IntoIterator<Item = R>) -> Self {
         let mut unit_ids = Vec::new();
         let mut time_periods = Vec::new();
@@ -173,7 +177,8 @@ impl InferenceDataset {
         self
     }
 
-    /// Add cluster labels to the dataset.
+    /// Add cluster labels to the dataset, one label per row in the order of the
+    /// rows. The length is checked by [`InferenceDataset::validate`].
     #[must_use]
     pub fn with_clusters<L: Eq + Hash + Clone>(mut self, spec: ClusterSpec<L>) -> Self {
         let ClusterSpec::OneWay(labels) = spec;
@@ -198,7 +203,8 @@ impl InferenceDataset {
         self
     }
 
-    /// Opt-in to unbalanced panel support.
+    /// Allow units to be observed in fewer periods than the panel spans. The
+    /// balance check then reports a warning instead of an error.
     #[must_use]
     pub const fn allow_unbalanced(mut self) -> Self {
         self.allow_unbalanced = true;
@@ -207,8 +213,14 @@ impl InferenceDataset {
 
     /// Validate the dataset and ensure internal consistency.
     ///
+    /// The checks are that the cluster labels have one entry per row, that
+    /// outcomes are finite and weights finite and positive, that each unit has
+    /// one `first_treated_time` on all its rows, and, unless
+    /// [`InferenceDataset::allow_unbalanced`] was set, that every unit has as
+    /// many rows as the dataset has distinct periods.
+    ///
     /// # Errors
-    /// Returns [`DatasetError`] if the data fails integrity checks.
+    /// Returns [`DatasetError`] for the first check that fails.
     pub fn validate(self) -> Result<ValidatedInferenceDataset, DatasetError> {
         let n_rows = self.unit_ids.len();
 
@@ -287,7 +299,9 @@ impl InferenceDataset {
         Ok(ValidatedInferenceDataset { inner: self })
     }
 
-    /// Diagnostic report for a dataset.
+    /// Report of every finding of the checks of [`InferenceDataset::validate`],
+    /// plus a warning for units without a pre-treatment period, which
+    /// sensitivity analysis needs.
     pub fn validate_collecting(&self) -> ValidationReport {
         let n_rows = self.unit_ids.len();
         let mut diagnostics = Vec::new();
@@ -441,6 +455,10 @@ impl InferenceDataset {
 
 impl ValidatedInferenceDataset {
     /// Estimate ATT(g,t) using doubly robust repeated cross-section estimators.
+    ///
+    /// Influence functions have one value per row of the dataset. With clusters,
+    /// the standard errors are the clustered ones from the influence functions
+    /// and the confidence intervals are normal intervals around them.
     ///
     /// # Errors
     /// Returns an error if the underlying estimation fails.

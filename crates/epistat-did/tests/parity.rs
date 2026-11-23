@@ -59,7 +59,25 @@ fn parity_drdid_panel_lalonde() {
 
     let config = DrDidConfig::default();
     let result = estimate_drdid_panel(&observations, config).expect("estimate");
+    let worst_influence = result
+        .influence_function
+        .iter()
+        .zip(&reference.influence)
+        .map(|(ours, theirs)| (ours - theirs).abs())
+        .fold(0.0_f64, f64::max);
+    println!(
+        "DRDID panel: att {:e}, se {:e}, influence {worst_influence:e}",
+        (result.att - reference.att).abs(),
+        (result.se - reference.se).abs()
+    );
+    // The outcomes are earnings in dollars, so the ATT is about 2,300, its
+    // standard error about 1,850 and the influence values up to about 4e5.
+    // Both sides stop the propensity score's iteration at a convergence
+    // tolerance, which leaves differences of about 1e-10 relative; the bounds
+    // allow a hundred times that on each scale.
     assert!((result.att - reference.att).abs() < 1e-6);
+    assert!((result.se - reference.se).abs() < 1e-6);
+    assert!(worst_influence < 1e-3);
 }
 
 #[derive(Deserialize)]

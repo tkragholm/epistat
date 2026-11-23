@@ -137,6 +137,21 @@ fn full_estimator_vec(num_pre: usize, post_weights: &[f64], w: &[f64]) -> Vec<f6
     out
 }
 
+/// The constant of the worst-case bias objective at `M = 1`:
+/// `sum_s |l_{T-s+1} + ... + l_T| - sum_t t l_t`.
+///
+/// This is not `HonestDiD`'s constant. Its `.createObjectiveObjectForBias`
+/// weights the tail sums by position,
+/// `sum_s |1 l_{T-s+1} + 2 l_{T-s+2} + ... + s l_T| - sum_t t l_t`. The two
+/// agree when only the first post period has weight and differ otherwise
+/// (for the second of four post periods, 0 here against 1 in `HonestDiD`).
+/// With the smaller bias the fixed-length interval, and the conditional
+/// hybrid built on it, can lie inside the identified set: on
+/// `BCdata_EventStudy` at `M = 0.2` the average of the four post periods has
+/// the interval `(-0.17, 0.97)`, the identified set `(-0.60, 1.40)` and
+/// `HonestDiD`'s interval `(-0.69, 1.49)`. Study I's
+/// smoothness bounds go through this function, so it is kept as it is while
+/// Study I is protected.
 fn bias_objective_constant(post_weights: &[f64]) -> f64 {
     let weighted_sum = weighted_post_sum(post_weights);
     let mut tail_sum = 0.0;

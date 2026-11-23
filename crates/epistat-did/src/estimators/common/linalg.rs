@@ -1,32 +1,43 @@
 //! Small linear-algebra helpers shared by estimator implementations.
 
-use epistat_linalg::{Attempt, CholeskySolver, Mat, MatRef, Method, Solve, solve};
+use epistat_linalg::{Attempt, CholeskySolver, Mat, MatRef, Method, solve};
 
-/// Solve `(A + λI) X = B` for `X`, where `A` is expected to be square.
+/// Solve `(A + lambda I) X = B` for `X` by LU with partial pivoting, the
+/// normal equations of the outcome regressions with a ridge `lambda` on every
+/// diagonal entry, the intercept's included.
 ///
-/// This helper adds a ridge term `lambda` to the diagonal in-place and solves
-/// with LU decomposition.
-///
-/// # Notes
-/// - `lambda` is applied uniformly to every diagonal entry.
+/// The ridge is absolute, not scaled to the diagonal of `A`, and no other
+/// factorisation is tried: a singular or nearly singular `A` plus a small
+/// ridge gives a finite solution that can be far from a least-squares one,
+/// and nothing in the result says so. R's `lm`, which the outcome
+/// regressions of `DRDID` use, has no ridge and reports aliased columns as
+/// `NA`; the parity tests set `lambda` to 0.
 ///
 /// # Errors
-/// Returns an error if the solution contains a non-finite value.
+/// Returns an error if `lambda` is not finite and non-negative, `A` is not
+/// square or `B` has another number of rows, or the solution contains a
+/// non-finite value.
 pub fn ridge_solve_lu(
     mut a: Mat<f64>,
     b: &Mat<f64>,
     lambda: f64,
 ) -> Result<Mat<f64>, &'static str> {
+    if !lambda.is_finite() || lambda < 0.0 {
+        return Err("ridge must be finite and non-negative");
+    }
+    if a.nrows() != a.ncols() || b.nrows() != a.nrows() {
+        return Err(SHAPE);
+    }
     for i in 0..a.ncols() {
         *a.get_mut(i, i) += lambda;
     }
-    let solution = a.partial_piv_lu().solve(b);
-    if (0..solution.nrows()).all(|r| (0..solution.ncols()).all(|c| solution.get(r, c).is_finite()))
-    {
-        Ok(solution)
-    } else {
-        Err(NON_FINITE)
-    }
+    solve(
+        a.as_ref(),
+        b.as_ref(),
+        &[Attempt::plain(Method::PartialPivLu)],
+    )
+    .map(|solution| solution.x)
+    .map_err(|_| NON_FINITE)
 }
 
 /// Solve a dense linear system `A x = b` using Cholesky when possible.
@@ -90,6 +101,7 @@ pub fn solve_dense_system(a: &[f64], b: &[f64]) -> Result<Vec<f64>, &'static str
 }
 
 const NON_FINITE: &str = "dense solve produced a non-finite value";
+const SHAPE: &str = "coefficient matrix shape does not match rhs length";
 
 fn solve_flat(a: &[f64], b: &[f64], attempts: &[Attempt]) -> Result<Vec<f64>, &'static str> {
     let n = b.len();
@@ -137,7 +149,7 @@ impl SpdCholeskyScratch {
 
 const fn validate_square_system_shape(a: &[f64], n: usize) -> Result<(), &'static str> {
     if a.len() != n * n {
-        return Err("coefficient matrix shape does not match rhs length");
+        return Err(SHAPE);
     }
     Ok(())
 }
@@ -145,6 +157,46 @@ const fn validate_square_system_shape(a: &[f64], n: usize) -> Result<(), &'stati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_linalg::Solve;
+
+    /// `ridge_solve_lu` as it called faer directly, kept to show that the
+    /// route through `epistat_linalg::solve` gives the same bits.
+    fn ridge_solve_lu_direct(mut a: Mat<f64>, b: &Mat<f64>, lambda: f64) -> Mat<f64> {
+        for i in 0..a.ncols() {
+            *a.get_mut(i, i) += lambda;
+        }
+        a.partial_piv_lu().solve(b)
+    }
+
+    #[test]
+    fn ridge_solve_lu_gives_the_bits_of_the_direct_faer_call() {
+        let mut stream = epistat_rng::Stream::seeded(41);
+        for (dim, rhs) in [(1, 1), (3, 1), (7, 2), (22, 1), (40, 3)] {
+            let x = Mat::from_fn(4 * dim, dim, |_, _| stream.uniform() - 0.5);
+            let a = x.transpose() * &x;
+            let b = Mat::from_fn(dim, rhs, |_, _| stream.uniform());
+            for lambda in [0.0, 1e-8, 0.5] {
+                let ours = ridge_solve_lu(a.clone(), &b, lambda).expect("finite");
+                let direct = ridge_solve_lu_direct(a.clone(), &b, lambda);
+                for r in 0..dim {
+                    for c in 0..rhs {
+                        assert_eq!(ours[(r, c)].to_bits(), direct[(r, c)].to_bits());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ridge_solve_lu_refuses_an_invalid_ridge_or_shape() {
+        let a = Mat::<f64>::identity(2, 2);
+        let b = Mat::from_fn(2, 1, |_, _| 1.0);
+        assert!(ridge_solve_lu(a.clone(), &b, -1.0).is_err());
+        assert!(ridge_solve_lu(a.clone(), &b, f64::NAN).is_err());
+        assert!(ridge_solve_lu(a.clone(), &b, f64::INFINITY).is_err());
+        assert!(ridge_solve_lu(a, &Mat::from_fn(3, 1, |_, _| 1.0), 0.0).is_err());
+        assert!(ridge_solve_lu(Mat::from_fn(2, 3, |_, _| 1.0), &b, 0.0).is_err());
+    }
 
     #[test]
     fn solve_spd_system_handles_positive_definite_system() {

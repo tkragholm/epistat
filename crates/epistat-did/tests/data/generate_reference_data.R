@@ -1,18 +1,28 @@
-# The did, contdid, triplediff and HonestDiD fixtures.
+# The did, triplediff and HonestDiD fixtures, the continuous-treatment data,
+# the Wald test and, through generate_did_cc_reference_data.R, the
+# compositional-changes fixture.
 #
 # Run from the crate root:  Rscript tests/data/generate_reference_data.R
+#
+# The joint-path, directional and Gaussian-calibration references of HonestDiD
+# are written by generate_joint_directional_reference.R, which gives each
+# direction an explicit confidence grid.
 
 library(did)
-library(contdid)
 library(triplediff)
 library(HonestDiD)
 library(jsonlite)
 
-# Versions: the crate's parity tests match these fixtures with did 2.5.1 and
-# HonestDiD 0.2.8. The versions of contdid and triplediff they were written
-# with are not recorded.
+# Versions: rerun with R 4.6.2, did 2.5.1, triplediff 0.2.4, HonestDiD 0.2.8
+# and jsonlite 2.0.0, every file is written as stored except the ATT(g,t)
+# estimates and standard errors of sections 1 and 2, which differ from the
+# stored ones by at most 2e-13 relative. The stored files date from
+# before versions were recorded; R's linear algebra (OpenBLAS 0.3.34 here)
+# accounts for differences of that size, and the parity tests compare at 1e-8.
 stopifnot(packageVersion("did") == "2.5.1",
-          packageVersion("HonestDiD") == "0.2.8")
+          packageVersion("triplediff") == "0.2.4",
+          packageVersion("HonestDiD") == "0.2.8",
+          packageVersion("jsonlite") == "2.0.0")
 cat(R.version.string, "\n")
 
 base_path <- "tests/data/"
@@ -44,7 +54,7 @@ tryCatch({
   cat("2. did DR Reference generated.\n")
 }, error = function(e) cat("2. did DR Reference FAILED:", e$message, "\n"))
 
-# --- 3. Continuous DiD Reference (Single 2-period cell) ---
+# --- 3. Continuous DiD data (one two-period cell, simulated in base R) ---
 tryCatch({
   set.seed(1234)
   n <- 2000
@@ -119,124 +129,7 @@ tryCatch({
 }, error = function(e) cat("6. Wald Test FAILED:", e$message, "\n"))
 
 
-# --- 7. Honest DiD Joint Path (Bonferroni-adjusted C-LF) ---
-tryCatch({
-  library(HonestDiD)
-  data(BCdata_EventStudy)
-
-  num_pre <- length(BCdata_EventStudy$prePeriodIndices)
-  num_post <- length(BCdata_EventStudy$postPeriodIndices)
-  alpha_joint <- 0.05
-  alpha_pointwise <- alpha_joint / num_post
-  mbar <- 1.0
-
-  l_vecs <- lapply(seq_len(num_post), function(i) {
-    vec <- rep(0, num_post)
-    vec[i] <- 1
-    vec
-  })
-
-  points <- lapply(seq_len(num_post), function(i) {
-    result <- createSensitivityResults_relativeMagnitudes(
-      betahat = BCdata_EventStudy$betahat,
-      sigma = BCdata_EventStudy$sigma,
-      numPrePeriods = num_pre,
-      numPostPeriods = num_post,
-      method = "C-LF",
-      Mbarvec = c(mbar),
-      l_vec = l_vecs[[i]],
-      alpha = alpha_pointwise
-    )
-    list(
-      post_period = i - 1,
-      lb = result$lb[[1]],
-      ub = result$ub[[1]]
-    )
-  })
-
-  joint_ref <- list(
-    meta = list(
-      source = "HonestDiD::createSensitivityResults_relativeMagnitudes",
-      method = "C-LF",
-      delta = "DeltaRM",
-      mbar = mbar,
-      alpha_joint = alpha_joint,
-      alpha_pointwise = alpha_pointwise,
-      pointwise_confidence_level = 1 - alpha_pointwise
-    ),
-    l_vecs = l_vecs,
-    points = points
-  )
-
-  write_json(joint_ref, paste0(base_path, "honest_did_joint_path_ref.json"), digits = 15, auto_unbox = TRUE)
-  cat("7. Honest DiD joint-path reference generated.\n")
-}, error = function(e) cat("7. Honest DiD joint-path reference FAILED:", e$message, "\n"))
-
-# --- 8. Honest DiD Directional (Bonferroni-adjusted C-LF) ---
-tryCatch({
-  library(HonestDiD)
-  data(BCdata_EventStudy)
-
-  num_pre <- length(BCdata_EventStudy$prePeriodIndices)
-  num_post <- length(BCdata_EventStudy$postPeriodIndices)
-  alpha_joint <- 0.05
-  mbar <- 1.0
-
-  basis <- lapply(seq_len(num_post), function(i) {
-    vec <- rep(0, num_post)
-    vec[i] <- 1
-    vec
-  })
-  diff_01 <- rep(0, num_post)
-  diff_01[1] <- 1
-  diff_01[2] <- -1
-
-  directions <- c(
-    list(list(name = "period_0", l_vec = basis[[1]])),
-    list(list(name = "period_1", l_vec = basis[[2]])),
-    list(list(name = "period_2", l_vec = basis[[3]])),
-    list(list(name = "period_3", l_vec = basis[[4]])),
-    list(list(name = "diff_0_1", l_vec = diff_01))
-  )
-
-  alpha_pointwise <- alpha_joint / length(directions)
-  points <- lapply(directions, function(dir) {
-    result <- createSensitivityResults_relativeMagnitudes(
-      betahat = BCdata_EventStudy$betahat,
-      sigma = BCdata_EventStudy$sigma,
-      numPrePeriods = num_pre,
-      numPostPeriods = num_post,
-      method = "C-LF",
-      Mbarvec = c(mbar),
-      l_vec = dir$l_vec,
-      alpha = alpha_pointwise
-    )
-    list(
-      name = dir$name,
-      lb = result$lb[[1]],
-      ub = result$ub[[1]]
-    )
-  })
-
-  directional_ref <- list(
-    meta = list(
-      source = "HonestDiD::createSensitivityResults_relativeMagnitudes",
-      method = "C-LF",
-      delta = "DeltaRM",
-      mbar = mbar,
-      alpha_joint = alpha_joint,
-      alpha_pointwise = alpha_pointwise,
-      pointwise_confidence_level = 1 - alpha_pointwise
-    ),
-    directions = directions,
-    points = points
-  )
-
-  write_json(directional_ref, paste0(base_path, "honest_did_directional_ref.json"), digits = 15, auto_unbox = TRUE)
-  cat("8. Honest DiD directional reference generated.\n")
-}, error = function(e) cat("8. Honest DiD directional reference FAILED:", e$message, "\n"))
-
-# --- 9. Honest DiD Multi-FLCI Scaffold (input vectors for Rust parity harness) ---
+# --- 7. Honest DiD Multi-FLCI Scaffold (input vectors for Rust parity harness) ---
 tryCatch({
   library(HonestDiD)
   data(BCdata_EventStudy)
@@ -262,142 +155,13 @@ tryCatch({
   )
 
   write_json(multi_scaffold, paste0(base_path, "honest_did_multi_flci_scaffold.json"), digits = 15, auto_unbox = TRUE)
-  cat("9. Honest DiD multi-FLCI scaffold generated.\n")
-}, error = function(e) cat("9. Honest DiD multi-FLCI scaffold FAILED:", e$message, "\n"))
+  cat("7. Honest DiD multi-FLCI scaffold generated.\n")
+}, error = function(e) cat("7. Honest DiD multi-FLCI scaffold FAILED:", e$message, "\n"))
 
-# --- 10. Honest DiD Gaussian Calibration Scaffold (non-Bonferroni) ---
-tryCatch({
-  library(HonestDiD)
-  data(BCdata_EventStudy)
-  if (!requireNamespace("MASS", quietly = TRUE)) {
-    stop("MASS package is required for Gaussian scaffold generation")
-  }
-
-  num_pre <- length(BCdata_EventStudy$prePeriodIndices)
-  num_post <- length(BCdata_EventStudy$postPeriodIndices)
-  sigma <- BCdata_EventStudy$sigma
-  sigma_post <- sigma[(num_pre + 1):(num_pre + num_post), (num_pre + 1):(num_pre + num_post)]
-  std_post <- sqrt(diag(sigma_post))
-  corr_post <- sigma_post
-  for (i in seq_len(num_post)) {
-    for (j in seq_len(num_post)) {
-      denom <- std_post[i] * std_post[j]
-      corr_post[i, j] <- if (i == j) {
-        1
-      } else if (denom <= 1e-12) {
-        0
-      } else {
-        max(-1, min(1, sigma_post[i, j] / denom))
-      }
-    }
-  }
-
-  directions <- list(
-    c(1, 0, 0, 0),
-    c(0, 1, 0, 0),
-    c(0, 0, 1, 0),
-    c(0, 0, 0, 1),
-    c(1, -1, 0, 0)
-  )
-  l_mat <- do.call(rbind, directions)
-  cov_dir <- l_mat %*% sigma_post %*% t(l_mat)
-  std_dir <- sqrt(diag(cov_dir))
-  corr_dir <- cov_dir
-  for (i in seq_len(nrow(corr_dir))) {
-    for (j in seq_len(ncol(corr_dir))) {
-      denom <- std_dir[i] * std_dir[j]
-      corr_dir[i, j] <- if (i == j) {
-        1
-      } else if (denom <= 1e-12) {
-        0
-      } else {
-        max(-1, min(1, cov_dir[i, j] / denom))
-      }
-    }
-  }
-
-  confidence_level <- 0.95
-  draws <- 200000
-  set.seed(20260310)
-
-  joint_draws <- MASS::mvrnorm(n = draws, mu = rep(0, ncol(corr_post)), Sigma = corr_post)
-  joint_max_abs <- apply(abs(joint_draws), 1, max)
-  joint_critical <- as.numeric(quantile(joint_max_abs, probs = confidence_level, type = 7))
-  joint_pointwise <- 2 * pnorm(joint_critical) - 1
-
-  directional_draws <- MASS::mvrnorm(n = draws, mu = rep(0, ncol(corr_dir)), Sigma = corr_dir)
-  directional_max_abs <- apply(abs(directional_draws), 1, max)
-  directional_critical <- as.numeric(quantile(directional_max_abs, probs = confidence_level, type = 7))
-  directional_pointwise <- 2 * pnorm(directional_critical) - 1
-
-  mbar <- 1.0
-  joint_points <- lapply(seq_len(num_post), function(i) {
-    l_vec <- rep(0, num_post)
-    l_vec[i] <- 1
-    result <- createSensitivityResults_relativeMagnitudes(
-      betahat = BCdata_EventStudy$betahat,
-      sigma = BCdata_EventStudy$sigma,
-      numPrePeriods = num_pre,
-      numPostPeriods = num_post,
-      method = "C-LF",
-      Mbarvec = c(mbar),
-      l_vec = l_vec,
-      alpha = 1.0 - joint_pointwise
-    )
-    list(
-      post_period = i - 1,
-      lb = result$lb[[1]],
-      ub = result$ub[[1]]
-    )
-  })
-
-  directional_points <- lapply(seq_along(directions), function(i) {
-    result <- createSensitivityResults_relativeMagnitudes(
-      betahat = BCdata_EventStudy$betahat,
-      sigma = BCdata_EventStudy$sigma,
-      numPrePeriods = num_pre,
-      numPostPeriods = num_post,
-      method = "C-LF",
-      Mbarvec = c(mbar),
-      l_vec = directions[[i]],
-      alpha = 1.0 - directional_pointwise
-    )
-    list(
-      name = if (i <= num_post) paste0("period_", i - 1) else "diff_0_1",
-      lb = result$lb[[1]],
-      ub = result$ub[[1]]
-    )
-  })
-
-  gaussian_scaffold <- list(
-    meta = list(
-      source = "R MASS::mvrnorm Gaussian max-|Z| scaffold",
-      confidence_level = confidence_level,
-      simulation_draws = draws,
-      seed = 20260310
-    ),
-    joint = list(
-      calibrated_max_t_critical_value = joint_critical,
-      pointwise_confidence_level = joint_pointwise
-    ),
-    directional = list(
-      calibrated_max_t_critical_value = directional_critical,
-      pointwise_confidence_level = directional_pointwise
-    ),
-    directions = directions,
-    mbar = mbar,
-    joint_points = joint_points,
-    directional_points = directional_points
-  )
-
-  write_json(gaussian_scaffold, paste0(base_path, "honest_did_gaussian_scaffold.json"), digits = 15, auto_unbox = TRUE)
-  cat("10. Honest DiD Gaussian scaffold generated.\n")
-}, error = function(e) cat("10. Honest DiD Gaussian scaffold FAILED:", e$message, "\n"))
-
-# --- 11. DiD_CC external-reference scaffold ---
+# --- 8. DiD_CC external-reference scaffold ---
 tryCatch({
   source("tests/data/generate_did_cc_reference_data.R")
-  cat("11. DiD_CC scaffold generated.\n")
-}, error = function(e) cat("11. DiD_CC scaffold FAILED:", e$message, "\n"))
+  cat("8. DiD_CC scaffold generated.\n")
+}, error = function(e) cat("8. DiD_CC scaffold FAILED:", e$message, "\n"))
 
 cat("All reference data generation attempts complete.\n")
