@@ -936,6 +936,7 @@ impl Glmm {
 
     /// The fit at given `θ` and `β`: the log likelihood, its gradient, the
     /// modes and their variances, and the covariance from the Hessian there.
+    /// The sign of `θ` is ignored, since the likelihood is even in it.
     ///
     /// # Errors
     ///

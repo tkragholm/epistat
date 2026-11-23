@@ -89,7 +89,11 @@ mod tests {
         assert_eq!(gathered, [1.0, 4.0, 3.0, 0.0, 2.0]);
         let mut back = [0.0; 5];
         groups.scatter(&gathered, &mut back);
-        assert_eq!(back, values);
+        assert!(
+            back.iter()
+                .zip(&values)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+        );
         assert!(Groups::new(&[1, 1, 2, 4]).sorted);
     }
 }

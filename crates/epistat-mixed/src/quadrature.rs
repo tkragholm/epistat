@@ -149,8 +149,9 @@ mod tests {
                 );
             }
             for i in 0..k {
-                assert_eq!(z[i], -z[k - 1 - i]);
-                assert_eq!(w[i], w[k - 1 - i]);
+                // Adding 0 turns the middle node's -0 into 0.
+                assert_eq!((z[i] + 0.0).to_bits(), (-z[k - 1 - i] + 0.0).to_bits());
+                assert_eq!(w[i].to_bits(), w[k - 1 - i].to_bits());
             }
         }
         assert_eq!(gauss_hermite(1).unwrap(), (vec![0.0], vec![1.0]));

@@ -125,7 +125,7 @@ fn absent_weights_and_offset_are_ones_and_zeros() {
         .unwrap();
     assert_eq!(a.beta, b.beta);
     assert_eq!(a.theta, b.theta);
-    assert_eq!(a.criterion, b.criterion);
+    assert_eq!(a.criterion.to_bits(), b.criterion.to_bits());
     let d = simulate(200, "binomial", 3);
     let (ones, zeros) = (vec![1.0; d.y.len()], vec![0.0; d.y.len()]);
     let model = Glmm::new(Family::Binomial, Link::Logit, 3);
@@ -136,8 +136,8 @@ fn absent_weights_and_offset_are_ones_and_zeros() {
         .fit(d.x.as_ref(), &d.y, &d.cluster, Some(&ones), Some(&zeros))
         .unwrap();
     assert_eq!(a.beta, b.beta);
-    assert_eq!(a.theta, b.theta);
-    assert_eq!(a.log_likelihood, b.log_likelihood);
+    assert_eq!(a.theta.to_bits(), b.theta.to_bits());
+    assert_eq!(a.log_likelihood.to_bits(), b.log_likelihood.to_bits());
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn a_model_without_cluster_variation_is_singular() {
         .fit(x.as_ref(), &yb, &cluster, None, None)
         .unwrap();
     assert!(fit.singular);
-    assert_eq!(fit.theta, 0.0);
+    assert_eq!(fit.theta.to_bits(), 0.0_f64.to_bits());
     assert_eq!(fit.theta_se, None);
     assert!(fit.beta_covariance.is_some());
 }
