@@ -31,7 +31,8 @@ pub struct HonestResult {
     /// confidence level.
     pub robust_ci: (f64, f64),
     /// Identified set as `(lower, upper)`: the range of values of the effect
-    /// consistent with the restriction, before sampling error.
+    /// consistent with the restriction, before sampling error. Both bounds are
+    /// NaN when the set is empty.
     pub identified_set: (f64, f64),
     /// Value of the sensitivity parameter: `M` for a smoothness restriction,
     /// `Mbar` for a relative-magnitude restriction.
@@ -347,11 +348,12 @@ pub struct HonestAssessment {
     /// exact parallel trends, at the requested confidence level.
     pub original_ci: (f64, f64),
     /// Robust `HonestDiD` confidence interval `(lower, upper)` at the requested
-    /// confidence level. It is `(-inf, inf)` for a smoothness restriction when
-    /// some adjacent pre-treatment coefficients differ by more than `M`.
+    /// confidence level.
     pub robust_ci: (f64, f64),
     /// Identified set `(lower, upper)` of the functional under the restriction.
-    /// It is `(-inf, inf)` in the same case as `robust_ci`.
+    /// Under a smoothness restriction both bounds are NaN when the set is
+    /// empty, that is when a second difference of the pre-treatment
+    /// coefficients exceeds `M`.
     pub identified_set: (f64, f64),
     /// Point estimate of the functional, `post_weights` applied to the
     /// post-treatment coefficients.
@@ -572,7 +574,8 @@ pub struct HonestMultiFlciPoint {
     /// Two-sided Wald interval `(lower, upper)` of the functional under exact
     /// parallel trends, at the requested confidence level.
     pub original_ci: (f64, f64),
-    /// Identified set `(lower, upper)` of the functional under the restriction.
+    /// Identified set `(lower, upper)` of the functional under the restriction,
+    /// NaN at both ends when it is empty.
     pub identified_set: (f64, f64),
     /// Value of the functional that `robustly_significant` is tested against.
     pub null_value: f64,

@@ -172,23 +172,6 @@ impl<'a> SmoothnessThetaEvaluator<'a> {
     }
 }
 
-/// The largest absolute change between adjacent pre-period estimates, 0 for
-/// fewer than two.
-#[must_use]
-pub fn max_adjacent_pre_period_change(pre_period_estimates: &[f64]) -> f64 {
-    pre_period_estimates
-        .windows(2)
-        .map(|window| (window[1] - window[0]).abs())
-        .fold(0.0, f64::max)
-}
-
-/// Whether no adjacent pre-period change exceeds `m`, allowing `1e-8` for
-/// rounding.
-#[must_use]
-pub fn pre_periods_satisfy_smoothness_bound(pre_period_estimates: &[f64], m: f64) -> bool {
-    max_adjacent_pre_period_change(pre_period_estimates) <= m + 1e-8
-}
-
 pub fn build_smoothness_constraint_matrix(
     num_pre_periods: usize,
     num_post_periods: usize,
@@ -717,8 +700,8 @@ fn compute_honest_linear_sensitivity_identified_set(
             ub: estimate - minimum,
         }),
         _ => Ok(HonestIdentifiedSet {
-            lb: f64::NEG_INFINITY,
-            ub: f64::INFINITY,
+            lb: f64::NAN,
+            ub: f64::NAN,
         }),
     }
 }
@@ -929,6 +912,14 @@ fn compute_smoothness_accepted_range_full_grid(
 /// Compute the exact identified set under the smoothness restriction
 /// `\Delta^{SD}(M)`.
 ///
+/// The set is the range of `l' (beta_post - delta_post)` over the violation
+/// paths whose pre-period part equals the pre-period coefficients and whose
+/// second differences, with `delta_0 = 0`, are at most `M`. When a second
+/// difference of the pre-period coefficients and the reference period's 0
+/// exceeds `M` no path qualifies, the set is empty and both bounds are NaN.
+/// `HonestDiD`'s `.compute_IDset_DeltaSD` returns the point estimate there,
+/// with a warning that its solver found no optimum.
+///
 /// # Errors
 /// Returns an error if the event-study input or post weights are invalid, or
 /// if the underlying linear identified-set solve fails.
@@ -960,12 +951,6 @@ pub(in crate::inference::sensitivity) fn compute_smoothness_identified_set_count
         ));
     }
     let num_pre = input.num_pre_periods();
-    if !pre_periods_satisfy_smoothness_bound(&input.betahat[..num_pre], m) {
-        return Ok(HonestIdentifiedSet {
-            lb: f64::NEG_INFINITY,
-            ub: f64::INFINITY,
-        });
-    }
     compute_honest_linear_sensitivity_identified_set(
         input,
         post_weights,
@@ -1095,12 +1080,6 @@ pub(in crate::inference::sensitivity) fn compute_smoothness_confidence_set_with_
     config.validate(inference)?;
 
     let identified = compute_smoothness_identified_set_counted(input, post_weights, m, counter)?;
-    if !identified.lb.is_finite() || !identified.ub.is_finite() {
-        return Ok(HonestConditionalConfidenceSet {
-            lb: identified.lb,
-            ub: identified.ub,
-        });
-    }
 
     let num_pre = input.num_pre_periods();
     let moments = build_smoothness_moment_system(
@@ -1123,6 +1102,9 @@ pub(in crate::inference::sensitivity) fn compute_smoothness_confidence_set_with_
 }
 
 /// Compute the exact identified set under the sign-restricted smoothness class.
+///
+/// Both bounds are NaN when the set is empty, as in
+/// [`compute_smoothness_identified_set`].
 ///
 /// # Errors
 /// Returns an error if the event-study input or post weights are invalid, or
@@ -1163,12 +1145,6 @@ pub(in crate::inference::sensitivity) fn compute_signed_smoothness_identified_se
         ));
     }
     let num_pre = input.num_pre_periods();
-    if !pre_periods_satisfy_smoothness_bound(&input.betahat[..num_pre], m) {
-        return Ok(HonestIdentifiedSet {
-            lb: f64::NEG_INFINITY,
-            ub: f64::INFINITY,
-        });
-    }
     let moments = build_signed_smoothness_moment_system(
         num_pre,
         input.num_post_periods(),
@@ -1319,12 +1295,6 @@ pub(in crate::inference::sensitivity) fn compute_signed_smoothness_confidence_se
         bias_direction,
         counter,
     )?;
-    if !identified.lb.is_finite() || !identified.ub.is_finite() {
-        return Ok(HonestConditionalConfidenceSet {
-            lb: identified.lb,
-            ub: identified.ub,
-        });
-    }
     let moments = build_signed_smoothness_moment_system(
         input.num_pre_periods(),
         input.num_post_periods(),
@@ -1346,6 +1316,9 @@ pub(in crate::inference::sensitivity) fn compute_signed_smoothness_confidence_se
 }
 
 /// Compute the exact identified set under the monotone smoothness class.
+///
+/// Both bounds are NaN when the set is empty, which also happens when the
+/// pre-period coefficients are not monotone in the given direction.
 ///
 /// # Errors
 /// Returns an error if the event-study input or post weights are invalid, or
@@ -1386,12 +1359,6 @@ pub(in crate::inference::sensitivity) fn compute_monotone_smoothness_identified_
         ));
     }
     let num_pre = input.num_pre_periods();
-    if !pre_periods_satisfy_smoothness_bound(&input.betahat[..num_pre], m) {
-        return Ok(HonestIdentifiedSet {
-            lb: f64::NEG_INFINITY,
-            ub: f64::INFINITY,
-        });
-    }
     let moments = build_monotone_smoothness_moment_system(
         num_pre,
         input.num_post_periods(),
@@ -1542,12 +1509,6 @@ pub(in crate::inference::sensitivity) fn compute_monotone_smoothness_confidence_
         monotonicity_direction,
         counter,
     )?;
-    if !identified.lb.is_finite() || !identified.ub.is_finite() {
-        return Ok(HonestConditionalConfidenceSet {
-            lb: identified.lb,
-            ub: identified.ub,
-        });
-    }
     let moments = build_monotone_smoothness_moment_system(
         input.num_pre_periods(),
         input.num_post_periods(),
