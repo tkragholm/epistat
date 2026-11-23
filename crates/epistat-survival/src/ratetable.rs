@@ -529,7 +529,7 @@ mod tests {
             e.per_row[0].to_bits(),
             (2.0_f64 * 0.01 + 2.0 * 0.02).to_bits()
         );
-        assert_eq!(e.offtable, 0.0);
+        assert_eq!(e.offtable.to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod tests {
                 &[1.0, 2.0, 3.0, 4.0, 5.0],
             )
             .unwrap();
-        assert_eq!(k.offtable, 6.0);
+        assert_eq!(k.offtable.to_bits(), 6.0_f64.to_bits());
         assert_eq!(
             k.per_cell,
             vec![0.0, 2.0 * 0.01, 3.0 * 0.02, 4.0 * 0.2, 0.0]

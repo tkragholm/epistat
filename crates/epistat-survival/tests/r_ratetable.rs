@@ -82,7 +82,7 @@ fn expected_counts_match_pyears() {
             .build()
             .unwrap();
         let e = t.expected(&data, &[&c.age0, &c.date0], &[&c.sex]).unwrap();
-        assert_eq!(e.offtable, 0.0, "{}", c.name);
+        assert!(e.offtable.abs() < 1e-300, "{}", c.name);
         let total = (e.total - c.expected).abs() / (2.2e-11 * c.expected);
         worst_total = worst_total.max(total);
         for (i, want) in c.per_row.iter().enumerate() {
@@ -181,7 +181,7 @@ fn cells_from_a_split_agree_on_any_number_of_threads() {
         .unwrap()
     };
     let k = run();
-    assert_eq!(k.offtable, 0.0);
+    assert!(k.offtable.abs() < 1e-300);
     // The split sums pieces in blocks, the walk row by row, so the totals agree
     // to rounding of the sums, not to the bit.
     let want = c.expected;

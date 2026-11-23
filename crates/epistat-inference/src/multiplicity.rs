@@ -224,7 +224,7 @@ mod tests {
             assert_eq!(adjust(&[0.3], m, None).unwrap(), vec![0.3]);
         }
         let tied = adjust(&[0.02, 0.02, 0.5], Adjustment::BenjaminiHochberg, None).unwrap();
-        assert_eq!(tied[0], tied[1]);
+        assert_eq!(tied[0].to_bits(), tied[1].to_bits());
     }
 
     #[test]
