@@ -146,8 +146,8 @@ fn cells_from_a_split_agree_on_any_number_of_threads() {
         .start(&c.start)
         .build()
         .unwrap();
-    let age: Vec<f64> = c.age0.iter().zip(&c.start).map(|(a, s)| a + s).collect();
-    let date: Vec<f64> = c.date0.iter().zip(&c.start).map(|(a, s)| a + s).collect();
+    let age_entry: Vec<f64> = c.age0.iter().zip(&c.start).map(|(a, s)| a + s).collect();
+    let year_entry: Vec<f64> = c.date0.iter().zip(&c.start).map(|(a, s)| a + s).collect();
     let mut age_breaks = r.age_cuts.clone();
     age_breaks.push(1e6);
     let mut year_breaks = r.year_cuts.clone();
@@ -158,11 +158,11 @@ fn cells_from_a_split_agree_on_any_number_of_threads() {
             &data,
             &[
                 TimeScale {
-                    entry: &age,
+                    entry: &age_entry,
                     breaks: &age_breaks,
                 },
                 TimeScale {
-                    entry: &date,
+                    entry: &year_entry,
                     breaks: &year_breaks,
                 },
             ],

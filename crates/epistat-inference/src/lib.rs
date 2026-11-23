@@ -65,6 +65,27 @@ pub enum InferenceError {
         /// The number of p-values.
         p_values: usize,
     },
+    /// A covariance matrix is not symmetric.
+    #[error("a covariance matrix is not symmetric")]
+    NotSymmetric,
+    /// A value is outside the domain of a transformation.
+    #[error("{value} is outside the domain of the {transform} transformation")]
+    Domain {
+        /// The name of the transformation.
+        transform: &'static str,
+        /// The value.
+        value: f64,
+    },
+    /// Too few imputed data sets for a test of several parameters.
+    #[error("{what} needs k (m - 1) > 4, with k = {k} parameters and m = {m} data sets")]
+    Imputations {
+        /// The method that needs more data sets.
+        what: &'static str,
+        /// The number of parameters.
+        k: usize,
+        /// The number of imputed data sets.
+        m: usize,
+    },
     /// A linear system could not be solved.
     #[error(transparent)]
     Solve(#[from] epistat_linalg::SolveError),

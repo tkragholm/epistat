@@ -10,7 +10,12 @@ Cramér's V), and MCMC diagnostics (autocorrelation, effective sample size,
 split R-hat).
 
 Also weighted means and variances with reliability weights, direct
-standardisation and the Kitagawa decomposition, Poisson confidence intervals,
+standardisation and the Kitagawa decomposition, Poisson confidence intervals
+(exact, Anscombe and Byar), rates with exact intervals, rate ratios and
+differences and directly standardised rates with Fay-Feuer intervals,
+Mantel-Haenszel estimators with the Breslow-Day test, standardised incidence
+ratios with exact, Byar, Wald and profile intervals and tests of homogeneity
+and trend, the F tail,
 E-values, Rosenbaum bounds with the signed rank statistic and its ranks, k-means
 clustering from given centres, and sums and dot products over eight fixed lanes.
 

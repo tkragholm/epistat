@@ -13,7 +13,8 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
 - The Titman-Putter test of the Markov property.
 - Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
   pseudo-observations, concordance, Brier scores and calibration, standardised
-  risks, accelerated failure time models, person-time tables and the data tools
+  risks, accelerated failure time models, person-time tables, rate tables with
+  expected counts for standardised incidence ratios, and the data tools
   `survSplit`, `tmerge` and `survcondense`.
 
 Most estimators read a `SurvData`, the checked columns of a follow-up table.

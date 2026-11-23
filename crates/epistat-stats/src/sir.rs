@@ -219,8 +219,8 @@ pub fn sir(
         SirInterval::Profile => {
             let c = normal::two_sided_z(level).powi(2);
             (
-                profile_limit(observed, c, false).map(|m| m / expected),
-                profile_limit(observed, c, true).map(|m| m / expected),
+                Some(profile_limit(observed, c, false) / expected),
+                Some(profile_limit(observed, c, true) / expected),
             )
         }
     };
@@ -237,9 +237,9 @@ pub fn sir(
 }
 
 /// The mean `mu` with `2 [ o ln(o / mu) - o + mu ] = c` above or below `o`.
-fn profile_limit(o: f64, c: f64, upper: bool) -> Option<f64> {
+fn profile_limit(o: f64, c: f64, upper: bool) -> f64 {
     if o == 0.0 {
-        return Some(if upper { c / 2.0 } else { 0.0 });
+        return if upper { c / 2.0 } else { 0.0 };
     }
     let f = |mu: f64| 2.0 * (o * (o / mu).ln() - o + mu) - c;
     let slope = |mu: f64| 2.0 * (1.0 - o / mu);
@@ -265,7 +265,7 @@ fn profile_limit(o: f64, c: f64, upper: bool) -> Option<f64> {
         // The function falls on the lower side and rises on the upper.
         let above = if upper { value > 0.0 } else { value < 0.0 };
         if value == 0.0 {
-            return Some(x);
+            return x;
         }
         if above {
             hi = x;
@@ -280,10 +280,10 @@ fn profile_limit(o: f64, c: f64, upper: bool) -> Option<f64> {
         let done = (next - x).abs() <= 4.0 * f64::EPSILON * next;
         x = next;
         if done {
-            return Some(x);
+            return x;
         }
     }
-    Some(x)
+    x
 }
 
 fn check_strata(observed: &[f64], expected: &[f64]) -> Result<(), SirError> {
@@ -341,6 +341,10 @@ pub fn sir_homogeneity(
 ///
 /// [`SirError`] for slices of different length, a negative or non-finite
 /// count, a stratum with no expected events, or a score that is not finite.
+#[expect(
+    clippy::float_cmp,
+    reason = "equal scores give a model without a slope"
+)]
 pub fn sir_trend(
     observed: &[f64],
     expected: &[f64],

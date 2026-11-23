@@ -49,6 +49,10 @@ fn stirlerr(n: f64) -> f64 {
     (s0 - (s1 - (s2 - (s3 - s4 / n2) / n2) / n2) / n2) / n
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "the series stops when a term no longer changes the sum"
+)]
 fn bd0(x: f64, np: f64) -> f64 {
     if (x - np).abs() < 0.1 * (x + np) {
         let v = (x - np) / (x + np);
@@ -99,6 +103,10 @@ pub(crate) fn ppois_upper(x: f64, m: f64) -> f64 {
 }
 
 /// `P(X = x)` for `X` binomial with `n` trials and probability `p`.
+#[expect(
+    clippy::float_cmp,
+    reason = "the end points of the support are integers"
+)]
 pub(crate) fn dbinom(x: f64, n: f64, p: f64) -> f64 {
     let q = 1.0 - p;
     if p == 0.0 {
@@ -149,6 +157,10 @@ pub(crate) const REL_ERR: f64 = 1.0 + 1e-7;
 /// The two-sided p-value of an exact Poisson test of `x` against the mean
 /// `m > 0`, as `stats::poisson.test`: the total probability of the outcomes
 /// with a probability not above that of `x`, within [`REL_ERR`].
+#[expect(
+    clippy::float_cmp,
+    reason = "R takes the observed count at the mean as the tie of the test"
+)]
 pub(crate) fn poisson_two_sided(x: f64, m: f64) -> f64 {
     let d = dpois(x, m);
     if x == m {
@@ -184,6 +196,10 @@ pub(crate) fn poisson_two_sided(x: f64, m: f64) -> f64 {
 
 /// The two-sided p-value of an exact binomial test of `x` successes in `n`
 /// trials against the probability `p` in `(0, 1)`, as `stats::binom.test`.
+#[expect(
+    clippy::float_cmp,
+    reason = "R takes the observed count at the mean as the tie of the test"
+)]
 pub(crate) fn binomial_two_sided(x: f64, n: f64, p: f64) -> f64 {
     let d = dbinom(x, n, p);
     let m = n * p;

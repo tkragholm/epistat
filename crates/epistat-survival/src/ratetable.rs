@@ -173,7 +173,9 @@ impl RateTable {
                         )));
                     }
                     if cuts.iter().any(|c| !c.is_finite())
-                        || cuts.windows(2).any(|w| !(w[0] < w[1]))
+                        || cuts
+                            .windows(2)
+                            .any(|w| w[0].partial_cmp(&w[1]) != Some(std::cmp::Ordering::Less))
                     {
                         return Err(Error::input(format!(
                             "dimension {d}: the cut points must be finite and strictly increasing"
@@ -261,7 +263,13 @@ impl RateTable {
                     if !(x >= 0.0 && x.fract() == 0.0 && x < *levels as f64) {
                         return None;
                     }
-                    x as usize
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "x is a non-negative integer value below the number of levels"
+                    )]
+                    let level = x as usize;
+                    level
                 }
             };
             position += cell * stride;

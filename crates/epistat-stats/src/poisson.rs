@@ -165,7 +165,7 @@ pub fn cipoisson(
                 Some(0.0)
             } else {
                 let base = 1.0 - 1.0 / (9.0 * count) - z / (3.0 * count.sqrt());
-                (base > 0.0).then(|| count * base * base * base)
+                (base > 0.0).then_some(count * base * base * base)
             };
             let up = count + 1.0;
             let base = 1.0 - 1.0 / (9.0 * up) + z / (3.0 * up.sqrt());

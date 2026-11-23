@@ -42,7 +42,7 @@ struct Pooled {
 }
 
 #[derive(Deserialize)]
-struct Stat {
+struct Outcome {
     stat: Option<f64>,
     p: Option<f64>,
     k_pos: Option<f64>,
@@ -72,9 +72,9 @@ struct TableCase {
     rr: Pooled,
     #[serde(rename = "RD")]
     rd: Pooled,
-    test_uncorrected: Stat,
-    bd: Stat,
-    ta: Stat,
+    test_uncorrected: Outcome,
+    bd: Outcome,
+    ta: Outcome,
     mantelhaen: Option<Hh>,
 }
 
@@ -89,8 +89,8 @@ struct RateCase {
     irr: Pooled,
     #[serde(rename = "IRD")]
     ird: Pooled,
-    test_uncorrected: Stat,
-    test_corrected: Stat,
+    test_uncorrected: Outcome,
+    test_corrected: Outcome,
 }
 
 fn reference() -> Reference {
