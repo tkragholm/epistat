@@ -68,27 +68,37 @@ METHODS="${METHODS:-$(echo "$TABLE" | cut -d: -f1 | tr '\n' ' ')}"
 field() { echo "$TABLE" | awk -F: -v m="$1" -v f="$2" '$1 == m {print $f}'; }
 
 declare -A BIN
-build() { # crate bench: builds the program once and remembers its path
-  local crate=$1 bench=$2
-  [ -n "${BIN[$bench]:-}" ] && return
-  local given="BIN_$bench"
-  if [ -n "${!given:-}" ]; then BIN[$bench]="${!given}"; return; fi
-  BIN[$bench]="$(cd "$ROOT" && cargo bench -p "$crate" --bench "$bench" --no-run --message-format=json 2>/dev/null |
+build_all() { # builds every program once, in one cargo run so features agree
+  local crates="" m benches="" c b
+  for m in $(echo "$TABLE" | cut -d: -f1); do
+    c=$(field "$m" 2); b=$(field "$m" 3)
+    case " $crates " in *" $c "*) ;; *) crates="$crates $c" ;; esac
+    case " $benches " in *" $b "*) ;; *) benches="$benches $b" ;; esac
+  done
+  local pkgs=""
+  for c in $crates; do pkgs="$pkgs -p $c"; done
+  local found
+  found="$(cd "$ROOT" && cargo bench $pkgs --benches --no-run --message-format=json 2>/dev/null |
     python3 -c "
 import json, sys
-last = None
 for line in sys.stdin:
     try:
         j = json.loads(line)
     except ValueError:
         continue
-    if j.get('reason') == 'compiler-artifact' and j.get('executable') and j['target']['name'] == '$bench':
-        last = j['executable']
-print(last)")"
-  echo "built $bench: ${BIN[$bench]}" >&2
+    if j.get('reason') == 'compiler-artifact' and j.get('executable') and j['target']['name'].startswith('tier1_'):
+        print(j['target']['name'], j['executable'])")"
+  while read -r name path; do
+    [ -n "${name:-}" ] && BIN[$name]=$path
+  done <<< "$found"
+  for b in $benches; do
+    local given="BIN_$b"
+    [ -n "${!given:-}" ] && BIN[$b]="${!given}"
+    echo "built $b: ${BIN[$b]:-MISSING}" >&2
+  done
 }
 bin_of() { echo "${BIN[$1]}"; }
-for m in $METHODS; do build "$(field "$m" 2)" "$(field "$m" 3)"; done
+build_all
 
 reps_for() { # n
   if [ -n "${FORCE_REPS:-}" ]; then echo "$FORCE_REPS"
