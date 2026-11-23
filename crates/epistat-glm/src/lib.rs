@@ -21,6 +21,7 @@
 //! variance function and the classic Park test.
 #![warn(missing_docs)]
 
+pub mod attributable;
 mod columns;
 pub mod elastic_net;
 mod family;
