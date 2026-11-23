@@ -41,7 +41,7 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("all stab trunc/weight", 7718, 0x309e_1f60_5009_b6f5),
     ("all stab trunc/weight_before", 7718, 0x03ff_77a7_b61c_6035),
     ("all stab trunc/coefficients", 2, 0xedb6_56d2_9a94_db23),
-    ("all stab trunc/covariance", 4, 0xf6e3_d204_10df_3eb2),
+    ("all stab trunc/covariance", 4, 0xf22c_5db9_ef52_f7a6),
     ("all stab trunc/robust", 4, 0x51d7_2832_70c0_1243),
     ("first stab/weight", 7718, 0x7476_7ee5_a6dd_182e),
     ("first stab/weight_before", 7718, 0xe2ec_3ff1_ab5c_be91),

@@ -59,9 +59,22 @@
 //! `lower` quantile and above the `upper` quantile (type 7, over every row) to
 //! those quantiles. It is applied to the final weights, after the cumulative
 //! product, and the weights before it are in [`PooledIpcw::untruncated`]. The
-//! weight of a row before its own factor is truncated with the same limits. The
-//! variance that accounts for the estimated models takes the truncated weights
-//! as constant and the limits as fixed.
+//! weight of a row before its own factor is truncated with the same limits.
+//!
+//! A truncated weight is its limit, and a limit moves with the parameters of
+//! the models through the two order statistics it interpolates: with the type 7
+//! position `1 + (N - 1) p = j + h` over the `N` sorted weights,
+//!
+//! ```text
+//! q = (1 - h) w_(j) + h w_(j+1),     dq / dtheta = (1 - h) dw_(j) / dtheta + h dw_(j+1) / dtheta,
+//! ```
+//!
+//! and the variance that accounts for the estimated models takes this
+//! derivative for every truncated row. The ranks themselves are held fixed, as
+//! they are under the infinitesimal jackknife with case weights, so the
+//! sampling variation of the quantile from the ranks is not in the variance.
+//! Where rows tie at an order statistic, the first in the sort of the weights
+//! is taken.
 //!
 //! # Edge cases
 //!
@@ -121,6 +134,8 @@ pub struct PooledIpcw<'a> {
     /// Whether the weight through each row, and before it, was set to a limit of
     /// the truncation.
     pub(super) clamped: Option<(Vec<bool>, Vec<bool>)>,
+    /// The lower and upper limit of the truncation.
+    pub(super) limits: Option<[Limit; 2]>,
     pub(super) subject: Vec<u32>,
     /// The rows in the order of their subject and stop.
     pub(super) order: Vec<u32>,
@@ -157,6 +172,48 @@ impl PooledIpcw<'_> {
     pub(super) fn n_params(&self) -> usize {
         self.design.ncols() + self.numerator_design.map_or(0, |m| m.ncols())
     }
+
+    /// The derivative of the log of the weight through `row`, before truncation,
+    /// with respect to the parameters of the models: the sum over the active rows
+    /// of its subject up to it of `(p - o) z` for the denominator and `(o - p) z`
+    /// for the numerator, with `o` the value observed.
+    pub(super) fn log_weight_gradient_into(&self, row: usize, out: &mut [f64]) {
+        out.fill(0.0);
+        let qd = self.design.ncols();
+        let id = self.subject[row];
+        let Some(pos) = self.order.iter().position(|&r| r as usize == row) else {
+            return;
+        };
+        for &r in self.order[..=pos].iter().rev() {
+            let r = r as usize;
+            if self.subject[r] != id {
+                break;
+            }
+            if !self.active[r] {
+                continue;
+            }
+            let o = f64::from(u8::from(self.observed(r)));
+            let pd = self.probability[r] - o;
+            for (j, g) in out.iter_mut().enumerate().take(qd) {
+                *g += pd * self.design[(r, j)];
+            }
+            if let (Some(zn), Some(pn)) = (self.numerator_design, &self.numerator_probability) {
+                let v = o - pn[r];
+                for j in 0..zn.ncols() {
+                    out[qd + j] += v * zn[(r, j)];
+                }
+            }
+        }
+    }
+}
+
+/// A limit of the truncation: a type 7 quantile of the weights through the rows,
+/// `(1 - h) w[rows.0] + h w[rows.1]`, with the rows of the two order statistics.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Limit {
+    pub value: f64,
+    pub rows: (usize, usize),
+    pub h: f64,
 }
 
 fn expit(eta: f64) -> f64 {
@@ -442,20 +499,40 @@ pub fn fit_pooled<'a>(
     }
     let mut untruncated = None;
     let mut clamped = None;
+    let mut limits = None;
     if let Some((lower, upper)) = trunc {
-        let mut sorted = weight.clone();
-        sorted.sort_by(f64::total_cmp);
-        let limit = |p: f64| {
-            epistat_stats::quantile::type7(&sorted, p)
-                .ok_or_else(|| Error::input("trunc: there are no weights"))
+        let mut by_weight: Vec<usize> = (0..n).collect();
+        by_weight.sort_by(|&a, &b| weight[a].total_cmp(&weight[b]));
+        let sorted: Vec<f64> = by_weight.iter().map(|&r| weight[r]).collect();
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the position is between 1 and the number of rows"
+        )]
+        let limit = |p: f64| -> Result<Limit> {
+            let value = epistat_stats::quantile::type7(&sorted, p)
+                .ok_or_else(|| Error::input("trunc: there are no weights"))?;
+            // The position of R's type 7, as epistat_stats::quantile computes it.
+            let index = 1.0 + (n - 1) as f64 * p;
+            let (j, k) = (index.floor() as usize - 1, index.ceil() as usize - 1);
+            Ok(Limit {
+                value,
+                rows: (by_weight[j], by_weight[k]),
+                h: index - index.floor(),
+            })
         };
         let (lo, hi) = (limit(lower)?, limit(upper)?);
-        let outside = |w: &[f64]| w.iter().map(|&v| v < lo || v > hi).collect::<Vec<_>>();
+        let outside = |w: &[f64]| {
+            w.iter()
+                .map(|&v| v < lo.value || v > hi.value)
+                .collect::<Vec<_>>()
+        };
         clamped = Some((outside(&weight), outside(&weight_before)));
         untruncated = Some(weight.clone());
         for w in weight.iter_mut().chain(weight_before.iter_mut()) {
-            *w = w.clamp(lo, hi);
+            *w = w.clamp(lo.value, hi.value);
         }
+        limits = Some([lo, hi]);
     }
     let summary = WeightSummary::new((0..n).filter(|&r| active[r]).map(|r| weight[r]));
     let (numerator_coefficients, numerator_probability) = match numerator_fit {
@@ -469,6 +546,7 @@ pub fn fit_pooled<'a>(
         treated: treated.map(<[bool]>::to_vec),
         untruncated,
         clamped,
+        limits,
         active,
         probability,
         coefficients,
