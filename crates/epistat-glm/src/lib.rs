@@ -23,9 +23,12 @@
 //!
 //! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
-//! variance function and the classic Park test.
+//! variance function and the classic Park test. [`attributable`] gives the
+//! attributable fraction of an exposure from a logistic fit with a sandwich
+//! standard error, as `AFglm` of the R package AF.
 #![warn(missing_docs)]
 
+pub mod attributable;
 mod columns;
 pub mod elastic_net;
 mod family;

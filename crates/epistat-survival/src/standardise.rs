@@ -124,6 +124,7 @@ use crate::par;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
+pub mod attributable;
 mod cox;
 mod csc;
 pub mod yates;

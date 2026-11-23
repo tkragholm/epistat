@@ -33,3 +33,7 @@ The `ordinal` module fits cumulative link models (logit, probit, complementary
 log-log and log-log) as `MASS::polr` and `ordinal::clm` do, with case weights,
 an offset, cluster-robust covariances and category-specific coefficients for the
 partial proportional odds model, and has the Brant test of proportional odds.
+
+The `attributable` module gives the attributable fraction of an
+exposure from a logistic model, cross-sectional or case-control, with a sandwich
+standard error, weights and clusters, as `AFglm` of the R package AF. It is checked against R.

@@ -24,6 +24,11 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   incidence of `TrialEmulation`, and clone-censor-weight for strategies with
   grace periods, with a bootstrap over persons.
 - The Titman-Putter test of the Markov property.
+- The self-controlled case series (conditional Poisson likelihood, risk windows
+  and age bands, robust variance) with the cutting of follow-up into pieces,
+  the windows of the case-crossover and case-time-control designs with the
+  exposure in each, and the attributable fraction function from standardised
+  Cox risks, checked against `SCCS`, `survival::clogit` and `AF`.
 - Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
   pseudo-observations, concordance, Brier scores and calibration, standardised
   risks, accelerated failure time models, person-time tables, rate tables with
