@@ -363,6 +363,7 @@ pub(crate) fn linear_predictor(x: MatRef<'_, f64>, beta: &Mat<f64>) -> Mat<f64> 
 /// [`DesignError::Weight`] for a weight that is negative or not finite, and
 /// [`DesignError::Length`] when `weights` or `response` does not have one entry per row
 /// of `x`.
+#[cfg(any(test, feature = "bench-internals"))]
 pub fn weighted_xtz(
     x: &Mat<f64>,
     weights: &Mat<f64>,
