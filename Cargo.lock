@@ -679,6 +679,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "epistat-impute"
+version = "0.1.0"
+dependencies = [
+ "epistat-glm",
+ "epistat-inference",
+ "epistat-linalg",
+ "epistat-rng",
+ "epistat-survival",
+ "epistat-testkit",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "epistat-inference"
 version = "0.3.2"
 dependencies = [

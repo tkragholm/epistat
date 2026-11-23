@@ -57,14 +57,14 @@ impl Imputed {
         analysis: impl Fn(&[Vec<f64>]) -> std::result::Result<(f64, f64), E>,
     ) -> Result<Pooled>
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let (mut estimates, mut variances) = (Vec::new(), Vec::new());
         for set in 0..self.m {
             let completed = self.completed(data, set)?;
             let (q, u) = analysis(&completed).map_err(|e| ImputeError::Analysis {
                 set,
-                source: Box::new(e),
+                source: e.into(),
             })?;
             estimates.push(q);
             variances.push(u);
@@ -86,14 +86,14 @@ impl Imputed {
         analysis: impl Fn(&[Vec<f64>]) -> std::result::Result<(Vec<f64>, Vec<f64>), E>,
     ) -> Result<PooledVector>
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let (mut estimates, mut covariances) = (Vec::new(), Vec::new());
         for set in 0..self.m {
             let completed = self.completed(data, set)?;
             let (q, u) = analysis(&completed).map_err(|e| ImputeError::Analysis {
                 set,
-                source: Box::new(e),
+                source: e.into(),
             })?;
             estimates.push(q);
             covariances.push(u);
