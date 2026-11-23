@@ -15,6 +15,14 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   the controls, overlap, matching and optimal-subset weights), for censoring and
   for time-varying treatment, with weighted Cox and Kaplan-Meier fits whose
   variance accounts for the estimated weights.
+- The risk by a time with right censoring under each treatment by augmented
+  inverse probability weighting, with a Cox model of the event, a logistic model
+  of the treatment and a Kaplan-Meier or Cox model of the censoring, as
+  `riskRegression::ate`, with the influence-function standard error.
+- Target trial emulation: the weights of treatment switches and of censoring for
+  sequential trials with the weighted logistic outcome model and cumulative
+  incidence of `TrialEmulation`, and clone-censor-weight for strategies with
+  grace periods, with a bootstrap over persons.
 - The Titman-Putter test of the Markov property.
 - Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
   pseudo-observations, concordance, Brier scores and calibration, standardised

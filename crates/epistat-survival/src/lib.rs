@@ -14,6 +14,10 @@
 //! - [`absrisk`]: the absolute risk of a cause from cause-specific Cox models, with
 //!   an influence-function standard error and confidence limits, as riskRegression's
 //!   `CSC` and `predict.CauseSpecificCox`.
+//! - [`aipw`]: the risk by a time with right censoring under each of two
+//!   treatments by augmented inverse probability weighting, as riskRegression's
+//!   `ate`, with an influence-function standard error and an optional grid for
+//!   the integral of the augmentation.
 //! - [`concordance`]: Harrell's C and its relatives for a numeric score, with weights,
 //!   strata, delayed entry, time weights and an infinitesimal jackknife variance.
 //! - [`cox`]: Cox regression on a design matrix, with Breslow or
@@ -90,7 +94,8 @@
 //! - [`weighting`]: inverse probability of treatment and censoring weights, with
 //!   the pooled logistic censoring model, and Cox and Kaplan-Meier estimates with a
 //!   variance that accounts for the estimated weights of treatment, of censoring
-//!   or of both.
+//!   or of both, and the weights and outcome models of target trial emulation
+//!   (sequential trials by protocol, clone-censor-weight).
 //! - `arrow` (feature `arrow`): [`SurvData`] built from Apache Arrow arrays and record batches
 //!   without copying the columns.
 //! - [`standardise`]: standardised risks and average treatment effects of Cox and

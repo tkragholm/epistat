@@ -7,6 +7,9 @@
 //!   [`aipw::aipw_glm`] fits generalised linear models for both and gives the
 //!   variance that accounts for their estimation.
 //!
+//! The risk by a time with right censoring is in `epistat_survival::aipw`, which
+//! has the Cox and censoring models it needs.
+//!
 //! Results do not depend on the number of threads.
 #![warn(missing_docs)]
 
