@@ -9,6 +9,12 @@
 //! - [`balance`]: entropy balancing and the covariate balancing propensity score,
 //!   weights that balance the covariates directly, with outcome estimates whose
 //!   variance accounts for the estimation of the weights.
+//! - [`gformula`]: the parametric g-formula for time-varying treatments and
+//!   confounders on person-period data. It fits a model for each time-varying
+//!   covariate and for the outcome, simulates the natural course and static,
+//!   threshold and dynamic strategies, and gives the risk by each period (with
+//!   a competing event) or the mean at the end of follow-up, with Monte Carlo
+//!   errors and a bootstrap over persons.
 //!
 //! The risk by a time with right censoring is in `epistat_survival::aipw`, which
 //! has the Cox and censoring models it needs.
@@ -19,5 +25,6 @@
 pub mod aipw;
 pub mod balance;
 mod error;
+pub mod gformula;
 
 pub use error::{Error, Result};
