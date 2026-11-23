@@ -1,10 +1,21 @@
+# The did, contdid, triplediff and HonestDiD fixtures.
+#
+# Run from the crate root:  Rscript tests/data/generate_reference_data.R
+
 library(did)
 library(contdid)
 library(triplediff)
 library(HonestDiD)
 library(jsonlite)
 
-base_path <- "crates/methods/did_methods/tests/"
+# Versions: the crate's parity tests match these fixtures with did 2.5.1 and
+# HonestDiD 0.2.8. The versions of contdid and triplediff they were written
+# with are not recorded.
+stopifnot(packageVersion("did") == "2.5.1",
+          packageVersion("HonestDiD") == "0.2.8")
+cat(R.version.string, "\n")
+
+base_path <- "tests/data/"
 
 # --- 1. did Reference (Staggered ATT(g,t)) ---
 tryCatch({
@@ -385,7 +396,7 @@ tryCatch({
 
 # --- 11. DiD_CC external-reference scaffold ---
 tryCatch({
-  source("crates/methods/did_methods/tests/generate_did_cc_reference_data.R")
+  source("tests/data/generate_did_cc_reference_data.R")
   cat("11. DiD_CC scaffold generated.\n")
 }, error = function(e) cat("11. DiD_CC scaffold FAILED:", e$message, "\n"))
 

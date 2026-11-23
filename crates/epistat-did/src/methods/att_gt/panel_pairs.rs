@@ -17,7 +17,7 @@
 //! function `DRDID::drdid_panel` returns has one entry per unit, not per row.
 //!
 //! This matters numerically rather than cosmetically. Measured against
-//! `did` 2.5.1 on `mpdta` (`tests/cs_panel_dr_universal_ref.json`), R's reported
+//! `did` 2.5.1 on `mpdta` (`tests/data/cs_panel_dr_universal_ref.json`), R's reported
 //! standard error is exactly
 //!
 //! ```text

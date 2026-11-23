@@ -1,12 +1,11 @@
 # Callaway-Sant'Anna panel reference fixtures.
 #
-# Run from the crate root:  Rscript tests/generate_cs_panel_reference.R
+# Run from the crate root:  Rscript tests/data/generate_cs_panel_reference.R
 #
-# WHY THIS FILE EXISTS SEPARATELY from generate_reference_data.R: that script
-# writes to a "crates/methods/did_methods/tests/" path from a workspace layout
-# this crate no longer lives in, and it pins att_gt only for the RC-shaped
-# comparison. This one targets the PANEL DR route and records, in the fixture
-# itself, every default that differs between R and what we ask for.
+# This script is separate from generate_reference_data.R, which pins att_gt
+# only for the comparison on repeated cross-sections. This one targets the
+# panel doubly robust route and records, in the fixture itself, every default
+# that differs between R and what we ask for.
 #
 # The five did::att_gt defaults that will otherwise produce spurious parity
 # failures, all set explicitly below rather than relied upon:
@@ -23,9 +22,16 @@ suppressMessages({
   library(did)
   library(DRDID)
   library(jsonlite)
+
+# Versions: reproduces the stored fixtures exactly with R 4.6.2, did 2.5.1, DRDID 1.3.0
+# and jsonlite 2.0.0.
+stopifnot(packageVersion("did") == "2.5.1",
+          packageVersion("DRDID") == "1.3.0",
+          packageVersion("jsonlite") == "2.0.0")
+cat(R.version.string, "\n")
 })
 
-base_path <- "tests/"
+base_path <- "tests/data/"
 data(mpdta)
 
 # att_gt returns inffunc as an n_units x n_cells matrix. Exporting it is the

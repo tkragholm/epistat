@@ -1,6 +1,15 @@
+# The compositional-changes fixture, written by base R.
+#
+# Run from the crate root:  Rscript tests/data/generate_did_cc_reference_data.R
+
 library(jsonlite)
 
-base_path <- "crates/methods/did_methods/tests/"
+# Versions: base R and jsonlite only; reproduces the stored fixture exactly with R 4.6.2
+# and jsonlite 2.0.0.
+stopifnot(packageVersion("jsonlite") == "2.0.0")
+cat(R.version.string, "\n")
+
+base_path <- "tests/data/"
 
 build_rows <- function(n_per_cell, composition_shift = FALSE) {
   rows <- vector("list", n_per_cell * 4)

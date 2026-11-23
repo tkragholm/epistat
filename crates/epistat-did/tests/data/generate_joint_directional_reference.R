@@ -19,6 +19,13 @@
 library(HonestDiD)
 library(jsonlite)
 
+# Versions: the joint-path and directional fixtures are reproduced exactly with R 4.6.2,
+# HonestDiD 0.2.8 and jsonlite 2.0.0; the Gaussian scaffold takes longer
+# than 15 minutes and was not rerun.
+stopifnot(packageVersion("HonestDiD") == "0.2.8",
+          packageVersion("jsonlite") == "2.0.0")
+cat(R.version.string, "\n")
+
 # Each C-LF call simulates 200,000 draws and solves one linear program per draw,
 # so the independent directions run on separate cores.
 n_cores <- max(1, parallel::detectCores() - 2)
@@ -33,7 +40,7 @@ formals(lf_cv_with_more_draws)$sims <- 200000
 assignInNamespace(".compute_least_favorable_cv", lf_cv_with_more_draws, ns = "HonestDiD")
 stopifnot(formals(HonestDiD:::.compute_least_favorable_cv)$sims == 200000)
 
-base_path <- "tests/"
+base_path <- "tests/data/"
 data(BCdata_EventStudy)
 
 num_pre <- length(BCdata_EventStudy$prePeriodIndices)

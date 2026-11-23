@@ -26,7 +26,13 @@
 library(HonestDiD)
 library(jsonlite)
 
-base_path <- "tests/"
+# Versions: reproduces the stored fixture exactly with R 4.6.2, HonestDiD 0.2.8 and
+# jsonlite 2.0.0.
+stopifnot(packageVersion("HonestDiD") == "0.2.8",
+          packageVersion("jsonlite") == "2.0.0")
+cat(R.version.string, "\n")
+
+base_path <- "tests/data/"
 out_path <- paste0(base_path, "honest_did_rm_avg_ref.json")
 
 data(BCdata_EventStudy)

@@ -166,8 +166,8 @@ struct Data {
 }
 
 fn data() -> Data {
-    let mpdta: Mpdta = load_json("tests/cs_panel_dr_universal_ref.json");
-    let honest: HonestRef = load_json("tests/honest_did_ref.json");
+    let mpdta: Mpdta = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    let honest: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods = honest
         .pre_indices
         .iter()
@@ -176,7 +176,7 @@ fn data() -> Data {
     let post_periods = (0..honest.post_indices.len())
         .map(|i| i32::try_from(i).expect("fits"))
         .collect();
-    let triple: TripleRef = load_json("tests/triple_did_ref.json");
+    let triple: TripleRef = load_json("tests/data/triple_did_ref.json");
     let triple = triple
         .data
         .chunks(2)
@@ -192,7 +192,7 @@ fn data() -> Data {
             }
         })
         .collect();
-    let continuous: ContRef = load_json("tests/contdid_ref.json");
+    let continuous: ContRef = load_json("tests/data/contdid_ref.json");
     let continuous = continuous
         .dose
         .iter()
@@ -203,7 +203,7 @@ fn data() -> Data {
             weight: 1.0,
         })
         .collect();
-    let cc: CcRef = load_json("tests/did_cc_ref_scaffold.json");
+    let cc: CcRef = load_json("tests/data/did_cc_ref_scaffold.json");
     let cc = cc
         .composition_shift
         .rows

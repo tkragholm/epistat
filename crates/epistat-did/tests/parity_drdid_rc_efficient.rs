@@ -40,7 +40,7 @@ fn rows(cell: &Cell) -> Vec<DrDidRepeatedObservation> {
 
 #[test]
 fn locally_efficient_rc_matches_drdid_rc() {
-    let cells: Vec<Cell> = load_json("tests/drdid_rc_efficient_ref.json");
+    let cells: Vec<Cell> = load_json("tests/data/drdid_rc_efficient_ref.json");
     assert_eq!(cells.len(), 12);
 
     let mut worst_att = 0.0_f64;
@@ -78,7 +78,7 @@ fn locally_efficient_rc_matches_drdid_rc() {
 /// standard error, which is the whole reason both exist.
 #[test]
 fn the_two_rc_estimators_differ_only_in_precision() {
-    let cells: Vec<Cell> = load_json("tests/drdid_rc_efficient_ref.json");
+    let cells: Vec<Cell> = load_json("tests/data/drdid_rc_efficient_ref.json");
 
     let mut differed = 0_usize;
     for cell in &cells {

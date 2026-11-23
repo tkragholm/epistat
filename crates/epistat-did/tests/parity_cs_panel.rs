@@ -1,6 +1,6 @@
 //! Parity of the panel `ATT(g,t)` route against `did` 2.5.1 and `DRDID` 1.3.0.
 //!
-//! Fixtures are written by `tests/generate_cs_panel_reference.R`, which records
+//! Fixtures are written by `tests/data/generate_cs_panel_reference.R`, which records
 //! every `att_gt` default it overrides. Three of those defaults are the usual
 //! source of a spurious failure here and are worth naming again:
 //! `base_period = "varying"`, `bstrap = TRUE` (so R's headline SEs are bootstrap,
@@ -88,7 +88,7 @@ fn universal_config(comparison_group: ComparisonGroup) -> AttGtDrConfig {
 /// is then in `drdid_panel` rather than in the `ATT(g,t)` loop around it.
 #[test]
 fn drdid_panel_matches_r_on_one_lifted_cell() {
-    let fixture: DrDidCellRef = load_json("tests/drdid_panel_cell_ref.json");
+    let fixture: DrDidCellRef = load_json("tests/data/drdid_panel_cell_ref.json");
 
     let rows = (0..fixture.d.len())
         .map(|i| DrDidObservation {
@@ -124,7 +124,7 @@ fn drdid_panel_matches_r_on_one_lifted_cell() {
 /// The full grid, universal base period, never-treated comparison group.
 #[test]
 fn panel_att_gt_matches_r_universal_never_treated() {
-    let fixture: CsPanelRef = load_json("tests/cs_panel_dr_universal_ref.json");
+    let fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_universal_ref.json");
 
     let out = estimate_att_gt_dr_panel_with_influence(
         &observations(&fixture.data_subset),
@@ -235,8 +235,8 @@ fn panel_att_gt_matches_r_universal_never_treated() {
 /// comparator contamination.
 #[test]
 fn panel_att_gt_matches_r_universal_not_yet_treated() {
-    let fixture: CsPanelRef = load_json("tests/cs_panel_dr_notyet_ref.json");
-    let base_fixture: CsPanelRef = load_json("tests/cs_panel_dr_universal_ref.json");
+    let fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_notyet_ref.json");
+    let base_fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_universal_ref.json");
 
     let out = estimate_att_gt_dr_panel_with_influence(
         &observations(&base_fixture.data_subset),
@@ -276,7 +276,7 @@ fn panel_att_gt_matches_r_universal_not_yet_treated() {
 /// repeated-cross-section answer under a panel name.
 #[test]
 fn panel_route_refuses_rows_without_unit_ids() {
-    let fixture: CsPanelRef = load_json("tests/cs_panel_dr_universal_ref.json");
+    let fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_universal_ref.json");
     let mut rows = observations(&fixture.data_subset);
     rows[17].unit_id = None;
 
@@ -324,7 +324,7 @@ fn universal_run() -> (
     epistat_did::UnitPanel,
     Aggregations,
 ) {
-    let fixture: CsPanelWithAgg = load_json("tests/cs_panel_dr_universal_ref.json");
+    let fixture: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
     let rows = observations(&fixture.data_subset);
     let out = estimate_att_gt_dr_panel_with_influence(
         &rows,
@@ -517,7 +517,7 @@ struct MbootRef {
 /// figures depend on.
 #[test]
 fn mboot_bands_agree_with_did_within_simulation_error() {
-    let fixture: MbootRef = load_json("tests/cs_panel_mboot_ref.json");
+    let fixture: MbootRef = load_json("tests/data/cs_panel_mboot_ref.json");
     let (estimates, influence, _panel, _) = universal_run();
 
     let bands = epistat_did::att_gt_mboot_bands(
@@ -640,7 +640,7 @@ struct ClusteredRef {
 /// mpdta stands in for it with counties clustered into states.
 #[test]
 fn clustered_mboot_bands_agree_with_did() {
-    let fixture: ClusteredRef = load_json("tests/cs_panel_mboot_clustered_ref.json");
+    let fixture: ClusteredRef = load_json("tests/data/cs_panel_mboot_clustered_ref.json");
     let (estimates, influence, _panel, _) = universal_run();
 
     // `unit_order` is the sorted id list, which is exactly our unit index.
@@ -796,8 +796,8 @@ fn weights_flow_through_estimation_and_aggregation() {
         dynamic: AggRef,
     }
 
-    let fixture: WeightedRef = load_json("tests/cs_panel_weighted_ref.json");
-    let base_fixture: CsPanelWithAgg = load_json("tests/cs_panel_dr_universal_ref.json");
+    let fixture: WeightedRef = load_json("tests/data/cs_panel_weighted_ref.json");
+    let base_fixture: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
 
     let by_unit = fixture
         .unit_order
@@ -882,7 +882,8 @@ fn clustered_per_cell_standard_errors_match_did() {
         cluster_of_unit: Vec<i64>,
     }
 
-    let fixture: AnalyticClusteredRef = load_json("tests/cs_panel_clustered_analytic_ref.json");
+    let fixture: AnalyticClusteredRef =
+        load_json("tests/data/cs_panel_clustered_analytic_ref.json");
     let (estimates, influence, panel, _) = universal_run();
     assert_eq!(fixture.unit_order.len(), influence[0].len());
 
@@ -969,7 +970,7 @@ fn aggte_dynamic_trimming_matches_r() {
         se_egt: Option<Vec<Option<f64>>>,
     }
 
-    let fixtures: Vec<TrimmedRef> = load_json("tests/cs_panel_trimmed_ref.json");
+    let fixtures: Vec<TrimmedRef> = load_json("tests/data/cs_panel_trimmed_ref.json");
     let (estimates, influence, panel, _) = universal_run();
     assert_eq!(fixtures.len(), 3);
 
@@ -1050,9 +1051,9 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
         dynamic: AggRef,
     }
 
-    let cells: Vec<RcCell> = load_json("tests/drdid_rc1_cells_ref.json");
-    let did_rc: RcRef = load_json("tests/cs_rc_ref.json");
-    let base: CsPanelWithAgg = load_json("tests/cs_panel_dr_universal_ref.json");
+    let cells: Vec<RcCell> = load_json("tests/data/drdid_rc1_cells_ref.json");
+    let did_rc: RcRef = load_json("tests/data/cs_rc_ref.json");
+    let base: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
 
     let rows = observations(&base.data_subset);
     assert_eq!(rows.len(), did_rc.n_rows);
@@ -1164,7 +1165,7 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
 /// vanishes. That is a wrong answer with no symptom, so it is refused.
 #[test]
 fn a_repeated_panel_row_is_refused() {
-    let fixture: CsPanelWithAgg = load_json("tests/cs_panel_dr_universal_ref.json");
+    let fixture: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
     let mut rows = observations(&fixture.data_subset);
     rows.push(rows[0].clone());
 
@@ -1193,8 +1194,8 @@ fn efficient_rc_route_matches_did_panel_false() {
         dynamic: AggRef,
     }
 
-    let did_rc: RcRef = load_json("tests/cs_rc_ref.json");
-    let base: CsPanelWithAgg = load_json("tests/cs_panel_dr_universal_ref.json");
+    let did_rc: RcRef = load_json("tests/data/cs_rc_ref.json");
+    let base: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
     let rows = observations(&base.data_subset);
 
     // Ridge off, because R fits these regressions unregularised. The crate's

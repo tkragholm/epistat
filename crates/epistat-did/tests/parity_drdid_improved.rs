@@ -1,7 +1,7 @@
 //! Parity of the improved doubly robust estimators against
 //! `DRDID::drdid_imp_rc` and `DRDID::drdid_imp_panel` 1.3.0, which fit the
 //! propensity score by Sant'Anna and Zhao's calibration (`pscore.cal`).
-//! Fixtures from `tests/generate_drdid_improved_reference.R`.
+//! Fixtures from `tests/data/generate_drdid_improved_reference.R`.
 
 use epistat_testkit::load_json;
 
@@ -54,7 +54,7 @@ struct PanelCase {
 }
 
 fn fixture() -> Fixture {
-    load_json("tests/drdid_improved_ref.json")
+    load_json("tests/data/drdid_improved_ref.json")
 }
 
 fn worst(ours: &[f64], theirs: &[f64]) -> f64 {

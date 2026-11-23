@@ -1,6 +1,6 @@
 # Improved doubly robust DiD reference fixtures.
 #
-# Run from the crate root:  Rscript tests/generate_drdid_improved_reference.R
+# Run from the crate root:  Rscript tests/data/generate_drdid_improved_reference.R
 #
 # DRDID::drdid_imp_rc and DRDID::drdid_imp_panel fit the propensity score with
 # pscore.cal (the calibrated fit of Sant'Anna and Zhao, falling back to inverse
@@ -10,6 +10,12 @@
 
 library(DRDID)
 library(jsonlite)
+
+# Versions: reproduces the stored fixture exactly with R 4.6.2, DRDID 1.3.0 and
+# jsonlite 2.0.0.
+stopifnot(packageVersion("DRDID") == "1.3.0",
+          packageVersion("jsonlite") == "2.0.0")
+cat(R.version.string, "\n")
 
 stopifnot(packageVersion("DRDID") == "1.3.0")
 
@@ -54,5 +60,5 @@ out <- list(
             case("rc_weighted", rc_weighted, rc_data(w_rc))),
   panel = list(case("panel_unweighted", panel_plain, panel_data(rep(1, n))),
                case("panel_weighted", panel_weighted, panel_data(w_panel))))
-write_json(out, "tests/drdid_improved_ref.json", digits = NA, auto_unbox = TRUE)
+write_json(out, "tests/data/drdid_improved_ref.json", digits = NA, auto_unbox = TRUE)
 cat("tests/drdid_improved_ref.json written\n")

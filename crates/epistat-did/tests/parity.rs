@@ -41,7 +41,7 @@ struct DrDidRef {
 
 #[test]
 fn parity_drdid_panel_lalonde() {
-    let reference: DrDidRef = load_json("tests/drdid_panel_ref.json");
+    let reference: DrDidRef = load_json("tests/data/drdid_panel_ref.json");
 
     let n = reference.treat.len();
     let mut observations = Vec::with_capacity(n);
@@ -79,7 +79,7 @@ struct DidRef {
 
 #[test]
 fn parity_did_attgt_mpdta() {
-    let reference: DidRef = load_json("tests/did_attgt_ref.json");
+    let reference: DidRef = load_json("tests/data/did_attgt_ref.json");
 
     let mut observations = Vec::new();
     for row in reference.data_subset {
@@ -122,7 +122,7 @@ struct ContDidRef {
 
 #[test]
 fn parity_contdid_simulation() {
-    let reference: ContDidRef = load_json("tests/contdid_ref.json");
+    let reference: ContDidRef = load_json("tests/data/contdid_ref.json");
 
     let mut observations = Vec::new();
     for i in 0..reference.delta_y.len() {
@@ -159,7 +159,7 @@ struct TripleDidRef {
 
 #[test]
 fn parity_triple_did_panel() {
-    let reference: TripleDidRef = load_json("tests/triple_did_ref.json");
+    let reference: TripleDidRef = load_json("tests/data/triple_did_ref.json");
 
     // Reconstruct delta outcomes from 2-period panel
     let mut obs = Vec::new();
@@ -235,7 +235,7 @@ struct DidCcScaffoldFixture {
 
 #[test]
 fn parity_wald_test() {
-    let reference: WaldRef = load_json("tests/wald_test_ref.json");
+    let reference: WaldRef = load_json("tests/data/wald_test_ref.json");
 
     let (stat, p, _) = joint_wald_test(&reference.estimates, &reference.vcov).expect("wald");
     assert!((stat - reference.statistic).abs() < 1e-10);
@@ -244,7 +244,7 @@ fn parity_wald_test() {
 
 #[test]
 fn did_cc_scaffold_fixture_schema_loads() {
-    let fixture: DidCcScaffoldFixture = load_json("tests/did_cc_ref_scaffold.json");
+    let fixture: DidCcScaffoldFixture = load_json("tests/data/did_cc_ref_scaffold.json");
 
     assert!(!fixture.aligned_constant_effect.rows.is_empty());
     assert!(!fixture.composition_shift.rows.is_empty());
@@ -278,7 +278,7 @@ fn did_cc_rows(rows: &[DidCcScaffoldRow]) -> Vec<DrDidRepeatedObservation> {
 
 #[test]
 fn parity_did_cc_authored_reference_fixture() {
-    let fixture: DidCcScaffoldFixture = load_json("tests/did_cc_ref_scaffold.json");
+    let fixture: DidCcScaffoldFixture = load_json("tests/data/did_cc_ref_scaffold.json");
 
     for design in [&fixture.aligned_constant_effect, &fixture.composition_shift] {
         let rows = did_cc_rows(&design.rows);
@@ -416,7 +416,7 @@ struct HonestGaussianScaffold {
 
 #[test]
 fn honest_event_study_scalar_fixture_smoke() {
-    let reference: HonestRef = load_json("tests/honest_did_ref.json");
+    let reference: HonestRef = load_json("tests/data/honest_did_ref.json");
 
     let pre_periods: Vec<i32> = reference
         .pre_indices
@@ -471,8 +471,8 @@ fn honest_event_study_scalar_fixture_smoke() {
 
 #[test]
 fn honest_original_cs_matches_reference_package() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_ref.json");
     assert_eq!(rm_ref.original.method, "Original");
 
     let pre_periods: Vec<i32> = input_ref
@@ -501,7 +501,7 @@ fn honest_original_cs_matches_reference_package() {
 
 #[test]
 fn honest_relative_magnitude_fixture_is_available_for_future_parity() {
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_ref.json");
     assert_eq!(rm_ref.relative_magnitude.len(), 2);
     assert!(
         rm_ref
@@ -527,8 +527,8 @@ fn honest_relative_magnitude_fixture_is_available_for_future_parity() {
 
 #[test]
 fn honest_delta_rm_identified_set_matches_reference_package_first_post() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -557,8 +557,8 @@ fn honest_delta_rm_identified_set_matches_reference_package_first_post() {
 
 #[test]
 fn honest_delta_rm_conditional_cs_matches_reference_package_first_post() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -591,8 +591,8 @@ fn honest_delta_rm_conditional_cs_matches_reference_package_first_post() {
 
 #[test]
 fn honest_delta_rm_average_post_matches_reference_package() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -637,8 +637,8 @@ fn honest_delta_rm_average_post_matches_reference_package() {
 
 #[test]
 fn honest_delta_rm_conditional_default_wrapper_matches_explicit_lf_config() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -673,8 +673,8 @@ fn honest_delta_rm_conditional_default_wrapper_matches_explicit_lf_config() {
 
 #[test]
 fn honest_assessment_average_post_matches_reference_package() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -713,8 +713,8 @@ fn honest_assessment_average_post_matches_reference_package() {
 
 #[test]
 fn honest_assessment_default_wrapper_matches_explicit_lf_config() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -757,8 +757,8 @@ fn honest_assessment_default_wrapper_matches_explicit_lf_config() {
 
 #[test]
 fn honest_post_functional_average_window_matches_reference_package() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -802,7 +802,7 @@ fn honest_post_functional_average_window_matches_reference_package() {
 
 #[test]
 fn honest_post_functional_period_matches_period_wrapper() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -843,8 +843,8 @@ fn honest_post_functional_period_matches_period_wrapper() {
 
 #[test]
 fn honest_post_functional_with_config_matches_explicit_functional_config() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -894,8 +894,8 @@ fn honest_post_functional_with_config_matches_explicit_functional_config() {
 
 #[test]
 fn honest_delta_rm_flci_problem_builder_matches_average_post_reference() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -929,8 +929,8 @@ fn honest_delta_rm_flci_problem_builder_matches_average_post_reference() {
 
 #[test]
 fn honest_delta_rm_flci_matches_average_post_reference_package() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -969,8 +969,8 @@ fn honest_delta_rm_flci_matches_average_post_reference_package() {
 
 #[test]
 fn honest_delta_rm_flci_default_matches_explicit_lf_config() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1009,8 +1009,8 @@ fn honest_delta_rm_flci_default_matches_explicit_lf_config() {
 
 #[test]
 fn honest_post_functional_flci_average_window_matches_reference_package() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/honest_did_rm_avg_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let rm_ref: HonestRelativeMagnitudeFixture = load_json("tests/data/honest_did_rm_avg_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1052,7 +1052,7 @@ fn honest_post_functional_flci_average_window_matches_reference_package() {
 
 #[test]
 fn honest_post_functional_flci_default_matches_explicit_lf_config() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1133,7 +1133,7 @@ fn honest_joint_path_region_single_post_matches_scalar_period() {
 
 #[test]
 fn honest_joint_path_region_default_matches_explicit_lf_config() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1179,7 +1179,7 @@ fn honest_joint_path_region_default_matches_explicit_lf_config() {
 
 #[test]
 fn honest_joint_path_region_gaussian_is_no_wider_than_bonferroni() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1245,7 +1245,7 @@ fn honest_joint_path_region_gaussian_is_no_wider_than_bonferroni() {
 
 #[test]
 fn honest_delta_rm_supports_signed_linear_functionals() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1285,7 +1285,7 @@ fn honest_delta_rm_supports_signed_linear_functionals() {
 
 #[test]
 fn honest_directional_region_basis_matches_joint_path_points() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1462,7 +1462,7 @@ fn check_adaptive_surface_matches_full_grid(random_seed: u64) {
 
 #[test]
 fn honest_delta_rm_multi_flci_single_functional_matches_scalar_flci() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1501,7 +1501,7 @@ fn honest_delta_rm_multi_flci_single_functional_matches_scalar_flci() {
 
 #[test]
 fn honest_delta_rm_multi_flci_gaussian_is_no_wider_than_bonferroni() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1566,7 +1566,7 @@ fn honest_delta_rm_multi_flci_gaussian_is_no_wider_than_bonferroni() {
 
 #[test]
 fn honest_post_functional_multi_flci_wrapper_matches_direct_problem_path() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
         .iter()
@@ -1717,8 +1717,8 @@ fn assert_region_within_monte_carlo_error(
 
 #[test]
 fn honest_joint_path_region_bonferroni_matches_r_fixture() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let fixture: HonestJointPathRef = load_json("tests/honest_did_joint_path_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let fixture: HonestJointPathRef = load_json("tests/data/honest_did_joint_path_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1778,8 +1778,8 @@ fn honest_joint_path_region_bonferroni_matches_r_fixture() {
 
 #[test]
 fn honest_directional_region_bonferroni_matches_r_fixture() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let fixture: HonestDirectionalRef = load_json("tests/honest_did_directional_ref.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let fixture: HonestDirectionalRef = load_json("tests/data/honest_did_directional_ref.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1844,8 +1844,9 @@ fn honest_directional_region_bonferroni_matches_r_fixture() {
 
 #[test]
 fn honest_multi_flci_scaffold_fixture_drives_joint_solver() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let fixture: HonestMultiFlciScaffold = load_json("tests/honest_did_multi_flci_scaffold.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let fixture: HonestMultiFlciScaffold =
+        load_json("tests/data/honest_did_multi_flci_scaffold.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1890,8 +1891,8 @@ fn honest_multi_flci_scaffold_fixture_drives_joint_solver() {
 
 #[test]
 fn honest_joint_gaussian_calibration_matches_r_scaffold() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let fixture: HonestGaussianScaffold = load_json("tests/honest_did_gaussian_scaffold.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let fixture: HonestGaussianScaffold = load_json("tests/data/honest_did_gaussian_scaffold.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
@@ -1944,8 +1945,8 @@ fn honest_joint_gaussian_calibration_matches_r_scaffold() {
 
 #[test]
 fn honest_directional_gaussian_calibration_matches_r_scaffold() {
-    let input_ref: HonestRef = load_json("tests/honest_did_ref.json");
-    let fixture: HonestGaussianScaffold = load_json("tests/honest_did_gaussian_scaffold.json");
+    let input_ref: HonestRef = load_json("tests/data/honest_did_ref.json");
+    let fixture: HonestGaussianScaffold = load_json("tests/data/honest_did_gaussian_scaffold.json");
 
     let pre_periods: Vec<i32> = input_ref
         .pre_indices
