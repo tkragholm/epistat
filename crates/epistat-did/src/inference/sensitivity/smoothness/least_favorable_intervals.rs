@@ -912,10 +912,22 @@ mod tests {
     #[test]
     fn the_bias_constant_weights_each_tail_by_position() {
         // c(l) by hand for four post periods.
-        assert_eq!(bias_objective_constant(&[1.0, 0.0, 0.0, 0.0]), 0.0);
-        assert_eq!(bias_objective_constant(&[0.0, 1.0, 0.0, 0.0]), 1.0);
-        assert_eq!(bias_objective_constant(&[0.25, 0.25, 0.25, 0.25]), 2.5);
-        assert_eq!(bias_objective_constant(&[1.0, -1.0, 0.0, 0.0]), 3.0);
+        assert_eq!(
+            bias_objective_constant(&[1.0, 0.0, 0.0, 0.0]).to_bits(),
+            f64::to_bits(0.0)
+        );
+        assert_eq!(
+            bias_objective_constant(&[0.0, 1.0, 0.0, 0.0]).to_bits(),
+            f64::to_bits(1.0)
+        );
+        assert_eq!(
+            bias_objective_constant(&[0.25, 0.25, 0.25, 0.25]).to_bits(),
+            f64::to_bits(2.5)
+        );
+        assert_eq!(
+            bias_objective_constant(&[1.0, -1.0, 0.0, 0.0]).to_bits(),
+            f64::to_bits(3.0)
+        );
     }
 
     #[test]
@@ -973,8 +985,14 @@ mod tests {
                     assert!((excess - 2.0 * m).abs() <= tolerance + 1e-6 * m);
                 }
                 let centre = dot(a, &input.betahat);
-                assert_eq!(result.flci.0, centre - result.optimal_half_length);
-                assert_eq!(result.flci.1, centre + result.optimal_half_length);
+                assert_eq!(
+                    result.flci.0.to_bits(),
+                    (centre - result.optimal_half_length).to_bits()
+                );
+                assert_eq!(
+                    result.flci.1.to_bits(),
+                    (centre + result.optimal_half_length).to_bits()
+                );
             }
         }
     }
