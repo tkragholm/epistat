@@ -1,6 +1,6 @@
 //! Relative and net survival: the survival of a cohort after the deaths that
 //! the general population would have had are taken out, as `relsurv` and
-//! `popEpi`, and excess hazard regression, as `relsurv::rsadd` and
+//! `popEpi`, and excess hazard regression, as `popEpi::relpois` and
 //! `rstpm2::stpm2` with `bhazard`.
 //!
 //! The observed hazard of a person is the sum of the hazard `lambda*_i(t)` of
@@ -137,6 +137,7 @@
 //! change the estimate. With [`ExcessOptions::aggregate`] a cell is the sum of
 //! the records of one interval and one set of covariate values, the grouped
 //! data of Dickman et al. (2004).
+//!
 //! The model is the generalised linear model with the link `log(mu - d*)` and
 //! the offset `ln y`. The link is not the canonical one, so Fisher scoring,
 //! which `glm` uses, converges only linearly; the fit takes Newton steps with
@@ -156,8 +157,7 @@
 //! with the coefficient minus infinity, and the other parameters are fitted
 //! given it. An interval with events can also have its maximum there, when
 //! its deaths are few for its expected deaths; it is fixed when its fitted
-//! excess events fall below `1e-10` of its events. `glm` instead runs on
-//! until its iteration limit with a large negative coefficient.
+//! excess events fall below `1e-10` of its events.
 //!
 //! # Not covered
 //!
@@ -181,6 +181,9 @@
 //! 5. Nelson CP, Lambert PC, Squire IB, Jones DR. Flexible parametric models
 //!    for relative survival, with application in coronary heart disease. Stat
 //!    Med. 2007;26(30):5486-98.
+//! 6. Esteve J, Benhamou E, Croasdale M, Raymond L. Relative survival and the
+//!    estimation of net survival: elements for further discussion. Stat Med.
+//!    1990;9(5):529-538.
 
 mod estimator;
 mod excess;
