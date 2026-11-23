@@ -16,6 +16,11 @@
 //! fit and risk ratios and differences by modified Poisson regression, and
 //! [`within`] the linear within-family estimator with clustered variance.
 //!
+//! [`gee`] fits generalised estimating equations for clustered outcomes as
+//! `geepack::geeglm` and `gee::gee` do, and [`ordinal`] fits cumulative link
+//! models for ordered outcomes as `MASS::polr` and `ordinal::clm` do, with the
+//! Brant test of proportional odds.
+//!
 //! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
 //! variance function and the classic Park test.
