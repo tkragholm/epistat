@@ -114,8 +114,8 @@ pub fn run(a: &Analysis) -> Outputs {
     if a.use_censor {
         let censored: Vec<bool> = w.censored.iter().map(|&v| v > 0.5).collect();
         let cw = censoring_weights(&data, &censored, &model, Fit::ByPreviousTreatment).unwrap();
-        for i in 0..n {
-            row_weight[i] *= cw.weight[i];
+        for (v, c) in row_weight.iter_mut().zip(&cw.weight) {
+            *v *= c;
         }
         censor_denominator = cw.denominator_probability;
         censor_numerator = cw.numerator_probability;

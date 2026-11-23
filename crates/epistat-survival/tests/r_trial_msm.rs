@@ -86,15 +86,15 @@ fn the_standard_error_of_the_incidence_is_the_delta_method() {
         up[j] += h;
         down[j] -= h;
         let (ru, rd) = (risk_at(&up), risk_at(&down));
-        for t in 0..k {
-            grad[t][j] = (ru[t] - rd[t]) / (2.0 * h);
+        for (g, (u, d)) in grad.iter_mut().zip(ru.iter().zip(&rd)) {
+            g[j] = (u - d) / (2.0 * h);
         }
     }
-    for t in 0..k {
+    for (t, g) in grad.iter().enumerate() {
         let mut var = 0.0;
         for i in 0..p {
             for j in 0..p {
-                var += grad[t][i] * o.msm.covariance[i * p + j] * grad[t][j];
+                var += g[i] * o.msm.covariance[i * p + j] * g[j];
             }
         }
         let se = var.sqrt();

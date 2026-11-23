@@ -415,9 +415,9 @@ pub fn deviation_weights(
             case_weight,
             &format!("strategy {k} denominator"),
         )?;
-        for r in 0..n {
+        for (r, p) in p_d.iter_mut().enumerate() {
             if cloned.arm[r] == k {
-                p_d[r] = probability(model.denominator, &coef, r);
+                *p = probability(model.denominator, &coef, r);
             }
         }
         coefficients.push(coef);
@@ -429,9 +429,9 @@ pub fn deviation_weights(
                 case_weight,
                 &format!("strategy {k} numerator"),
             )?;
-            for r in 0..n {
+            for (r, p) in p_n.iter_mut().enumerate() {
                 if cloned.arm[r] == k {
-                    p_n[r] = probability(num, &c, r);
+                    *p = probability(num, &c, r);
                 }
             }
         }
