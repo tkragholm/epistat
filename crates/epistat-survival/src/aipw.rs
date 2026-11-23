@@ -310,12 +310,7 @@ fn expit(eta: f64) -> f64 {
     1.0 / (1.0 + (-eta).exp())
 }
 
-fn linear_predictor(
-    x: MatRef<'_, f64>,
-    cf: Counterfactual<'_>,
-    beta: &[f64],
-    row: usize,
-) -> Result<f64> {
+fn linear_predictor(x: MatRef<'_, f64>, cf: Counterfactual<'_>, beta: &[f64], row: usize) -> f64 {
     let p = x.ncols();
     let mut eta = 0.0;
     match cf {
@@ -334,7 +329,7 @@ fn linear_predictor(
             }
         }
     }
-    Ok(eta)
+    eta
 }
 
 fn coefficients(fit: &crate::cox::CoxModelFit, what: &str) -> Result<Vec<f64>> {
@@ -496,7 +491,7 @@ impl Model {
         let mut lp = [vec![0.0; n], vec![0.0; n]];
         for (l, v) in lp.iter_mut().enumerate() {
             for (i, slot) in v.iter_mut().enumerate() {
-                let eta = linear_predictor(spec.outcome_x, spec.levels[l], &beta, i)?;
+                let eta = linear_predictor(spec.outcome_x, spec.levels[l], &beta, i);
                 *slot = eta;
             }
         }
@@ -643,7 +638,7 @@ impl Model {
         }
         // The weight of the event at each time.
         let g_t = if d_i == 1 { self.g_before(i, t_i) } else { 1.0 };
-        if d_i == 1 && !(g_t > 0.0) {
+        if d_i == 1 && (g_t.is_nan() || g_t <= 0.0) {
             return Err(Error::input(format!(
                 "the censoring survival is 0 before the event of row {i}"
             )));
@@ -723,7 +718,7 @@ impl Model {
             };
             let surv = (-theta * self.tables.h_before[j]).exp();
             let mut d_m = -d_lambda;
-            if censored_here && u == t_i {
+            if censored_here && u.total_cmp(&t_i).is_eq() {
                 d_m += 1.0;
             }
             let term = d_m / (g * surv);
@@ -1011,7 +1006,7 @@ fn km_tables(
             let at_risk = times.len() - times.partition_point(|&t| t < u);
             let mut d = 0;
             while c < censored.len() && censored[c] <= u {
-                d += usize::from(censored[c] == u);
+                d += usize::from(censored[c].total_cmp(&u).is_eq());
                 c += 1;
             }
             if d > 0 {
