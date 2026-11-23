@@ -64,7 +64,7 @@
 //! A design with a constant column is an error: the thresholds are the
 //! intercepts. A column that is a linear combination of the columns before
 //! it, with the constant counted, is aliased: its coefficient and covariance
-//! are `None` as in [`Glm`](crate::Glm). A category with no row of positive
+//! are `None` as in [`Glm`]. A category with no row of positive
 //! weight is an error, since its threshold would diverge. Complete or
 //! quasi-complete separation sends a coefficient to infinity: the information
 //! becomes singular, which is [`OrdinalError::Separation`] when an observed
