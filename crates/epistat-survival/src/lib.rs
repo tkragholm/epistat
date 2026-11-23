@@ -38,6 +38,10 @@
 //!   scale, with time-varying effects, delayed entry, case weights and cluster-robust
 //!   variance, and survivor, hazard and cumulative hazard curves and contrasts with
 //!   delta-method limits, as `flexsurv::flexsurvspline` and `rstpm2::stpm2`.
+//! - [`frailty`]: shared gamma frailty Cox models by penalised partial likelihood, with
+//!   theta from the profile marginal likelihood or by `coxph`'s own search, the variance
+//!   from the whole information and from its diagonal form, and the EM algorithm as an
+//!   alternative fit, as `coxph` with `frailty()`.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
 //!   groups, weights and delayed entry, its infinitesimal jackknife standard
 //!   errors, and a clustered bootstrap of the incidence in two arms over many
@@ -138,6 +142,7 @@ pub mod crossover;
 mod error;
 pub mod fine_gray;
 pub mod flexpar;
+pub mod frailty;
 pub mod informative;
 mod ldl;
 pub mod lexis;
