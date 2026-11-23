@@ -1,6 +1,6 @@
 # The R side of the imputation benchmark: mice::mice on the data file written
 # by crates/epistat-impute/benches/tier3_impute.rs, one process per method and
-# size, writing the numbers the Rust side writes. See impute_run.sh.
+# size, writing the numbers the Rust side writes. See bench/run.sh.
 #
 # Usage: Rscript impute.R N METHOD SCRATCH
 # Environment: OUT (results, default SCRATCH/out) and REPS (default 3).

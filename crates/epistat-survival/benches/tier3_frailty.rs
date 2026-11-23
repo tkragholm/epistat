@@ -1,7 +1,7 @@
 //! Wall time of the shared gamma frailty Cox model of `epistat_survival::frailty`
 //! set against `survival::coxph` with `frailty()` (`bench/tier3/frailty.R`). The
 //! driver environment is described in `bench/tier1/common.rs`: one process times
-//! one method on one size. `bench/tier3/frailty_run.sh` drives it.
+//! one method on one size. `bench/run.sh` drives it.
 //!
 //! Run by hand, with `SCRATCH` outside the repository, and not above 10^5 rows
 //! on the Mac:

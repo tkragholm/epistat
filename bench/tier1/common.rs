@@ -3,7 +3,7 @@
 //! too, timing, and the result files.
 //!
 //! One process times one method on one size, so that `/usr/bin/time -v`
-//! gives the peak memory of that run alone. `bench/tier1/run.sh` is the
+//! gives the peak memory of that run alone. `bench/run.sh` is the
 //! driver. The environment sets the work:
 //!
 //! * `SCRATCH`: directory for the data files and the results.

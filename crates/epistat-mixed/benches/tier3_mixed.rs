@@ -1,7 +1,7 @@
 //! Wall time of linear and generalised linear mixed models with one grouping
 //! factor, set against `lme4::lmer` and `lme4::glmer` at their default
 //! controls (`bench/tier3/mixed.R`). The driver and the environment are those
-//! of `bench/tier1/common.rs`, run by `bench/tier3/mixed_run.sh`.
+//! of `bench/tier1/common.rs`, run by `bench/run.sh`.
 //!
 //! Data kinds (`METHOD=gen_KIND` writes them): `mix` has clusters of 1 to 9
 //! rows (about `N / 5` clusters), `x1` normal, `x2` binary, `t` uniform on

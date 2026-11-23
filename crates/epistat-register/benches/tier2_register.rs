@@ -1,6 +1,6 @@
 //! Wall time of the Lexis splitting, interval algebra, residence spells and
 //! pedigree methods, set against R (`bench/tier2/bench.R`). The driver and the
-//! environment are those of `bench/tier1/common.rs`; `bench/tier2/run.sh` is
+//! environment are those of `bench/tier1/common.rs`; `bench/run.sh` is
 //! the driver.
 //!
 //! `N` is the number of persons. Methods: `lexis` (follow-up cut at calendar
