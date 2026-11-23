@@ -1,88 +1,39 @@
-# epistat_semicontinuous
+# epistat-semicontinuous
 
-`epistat_semicontinuous` provides reusable model implementations for semi-continuous outcomes:
+Models for semicontinuous outcomes, non-negative with a mass at zero, such as
+costs: the two-part model (a logit for any positive outcome and a gamma
+regression with log link for the positive ones), the Tweedie GLM with log link
+by quasi-likelihood, log-normal regression with Duan's smearing
+retransformation, and the marginalised two-part model for panels, fitted by
+MCMC with correlated subject effects.
 
-- Two-part model (logit + gamma log link)
-- Tweedie GLM (quasi-likelihood)
-- Log-normal regression with smearing retransformation
-- Selection and comparison utilities (Park test, AIC/BIC, cross-validation)
+The regression fits are IRLS with `glm.fit`'s convergence rule and step
+halving, with prior weights, ridge and elastic-net penalties, warm starts and
+a fallback ladder of ridges for fits that fail. Standard errors are
+model-based, robust or cluster-robust. Compact designs refit one design
+under many weight vectors, as a fractional-random-weight bootstrap does,
+without forming the dense products again. Model comparison gives in-sample
+metrics, AIC and BIC, K-fold cross-validation and the Park test.
 
-The crate was originally developed for a healthcare outcome study, but the API is domain-agnostic and can be reused for any non-negative semi-continuous response.
-
-## Installation
-
-```toml
-[dependencies]
-epistat_semicontinuous = "0.5"
-```
-
-## Quick start
+The Tweedie fit agrees with R's `glm` with `statmod::tweedie`, the elastic
+net with glmnet, and the robust standard errors with HC0 sandwiches from R's
+`glm`. The R scripts that write the references are in `tests/r`. Results do
+not depend on the number of threads, and golden hashes pin the fits.
 
 ```rust
-use epistat_semicontinuous::{FitOptions, ModelInput, fit_two_part_input};
 use epistat_linalg::Mat;
-
-fn idx_to_f64(idx: usize) -> f64 {
-    f64::from(u32::try_from(idx).unwrap_or(u32::MAX))
-}
+use epistat_semicontinuous::{FitOptions, Model, ModelInput, fit_two_part_input};
 
 let n = 40;
-let design_matrix = Mat::from_fn(n, 2, |i, j| if j == 0 { 1.0 } else { idx_to_f64(i) / 10.0 });
-let outcome = Mat::from_fn(n, 1, |i, _| if i % 4 == 0 { 0.0 } else { 1.0 + 0.1 * idx_to_f64(i) });
-let input = ModelInput::new(design_matrix, outcome);
+let x = Mat::from_fn(n, 2, |i, j| if j == 0 { 1.0 } else { i as f64 / 10.0 });
+let y = Mat::from_fn(n, 1, |i, _| if i % 4 == 0 { 0.0 } else { 1.0 + 0.1 * i as f64 });
+let input = ModelInput::new(x, y);
 
 let (model, report) = fit_two_part_input(&input, FitOptions::default()).expect("fit");
 let prediction = model.predict(&input.design_matrix);
-
 assert_eq!(prediction.expected_outcome.nrows(), n);
 assert!(report.iterations_logit > 0);
 ```
 
-For more numerically stable defaults on observational data:
-
-```rust
-use epistat_semicontinuous::{FitOptions, LogNormalOptions};
-
-let two_part_options = FitOptions::stable_defaults();
-let lognormal_options = LogNormalOptions::stable_defaults();
-```
-
-## Public entry points
-
-- `fit_two_part_input`
-- `fit_two_part_weighted_input`
-- `fit_two_part_clustered_input`
-- `fit_tweedie_input`
-- `fit_lognormal_smearing_input`
-- `select_models_input`
-- `cross_validate_models_input`
-- `compare_models_input`
-
-Preprocess helpers:
-
-- `drop_constant_columns`
-- `column_has_variation`
-- `outcome_diagnostics`
-
-Repeated fits of one design under different weights, as in a fractional-random-weight bootstrap:
-
-- `PreparedGammaDesign`, `PreparedTwoPartDesign`, `PreparedPredictionDesign`, with `PreparedScratch` and `PreparedFitError`. Results agree with the dense fits up to rounding. The `models::prepared` documentation states when to fall back to them.
-- `fit_tweedie_ref_warm_prevalidated_with_scratch` with `TweedieScratch`, bit-identical to the fit that allocates.
-
-## Data contract
-
-- Provide an intercept column explicitly if you want one.
-- Outcomes are expected to be non-negative and shaped as `n x 1`.
-- Weights (if provided) must be strictly positive and shaped as `n x 1`.
-- Cluster labels (if provided) must have length `n`.
-
-## Examples
-
-From crate root:
-
-```bash
-cargo run --example two_part
-cargo run --example tweedie
-cargo run --example selection
-cargo run --example compare_models
-```
+The `bench-internals` feature exposes the products the benchmarks time. The
+`nightly` feature enables faer's AVX-512 kernels through `epistat-linalg`.

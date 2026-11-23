@@ -11,6 +11,7 @@ Rust crates for statistics in epidemiology and register research.
 | [`epistat-optim`](crates/epistat-optim) | BFGS with a Moré-Thuente line search, Nelder-Mead and a dense simplex method |
 | [`epistat-register`](crates/epistat-register) | Calendar-year person-time, interval merging, connected components over shared keys and constant-price deflation |
 | [`epistat-rng`](crates/epistat-rng) | `SplitMix64` streams and bootstrap draws that reproduce across threads, platforms and languages |
+| [`epistat-semicontinuous`](crates/epistat-semicontinuous) | Two-part, Tweedie, log-normal and marginalised two-part models for semicontinuous outcomes such as costs |
 | [`epistat-sequences`](crates/epistat-sequences) | Optimal-matching and Hamming distances, k-medoids, silhouettes and typology validation for state sequences |
 | [`epistat-stats`](crates/epistat-stats) | Sample quantiles, the normal distribution, sums, log-likelihood helpers and balance statistics, checked against R and Python |
 | [`epistat-survival`](crates/epistat-survival) | Cox, Fine-Gray and multi-state regression, Aalen-Johansen and multi-state occupation with cluster bootstraps, Kaplan-Meier, pseudo-observations and prediction metrics |
