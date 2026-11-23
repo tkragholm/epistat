@@ -63,6 +63,27 @@
 //! [`predict`] refuses to give survival curves of a fit where it is false
 //! unless [`PredictOptions::allow_non_monotone`] is set.
 //!
+//! # Excess hazard
+//!
+//! With [`FlexParOptions::bhazard`] the model is for the excess hazard of
+//! Nelson et al. (2007): the observed hazard is `h*(t) + h_E(t | x)`, with `h*`
+//! the expected hazard of the reference population, given for each row at its
+//! exit time, and `h_E = e^eta eta'(u) / t` the hazard of the model on the
+//! hazard scale. The expected survival does not depend on the parameters, so
+//! a row contributes
+//!
+//! ```text
+//! c [ d ln( h*(t) + h_E(t) ) - H_E(t) + H_E(t_0) ],
+//! ```
+//!
+//! with `H_E = e^eta`. The score of the event term is `r` times that of
+//! `ln h_E`, with `r = h_E / (h* + h_E)`, and its information is
+//! `-r ln h_E'' - r (1 - r) (ln h_E)' (ln h_E)'^T`, which has a cross term
+//! between the two parts of the gradient. It is not positive definite
+//! everywhere, and the Newton step handles that as in the ordinary model. The
+//! fitted `S(t | x) = exp(-H_E)` is the net survival, and [`predict`] gives it
+//! with its limits. With `h* = 0` the likelihood is the ordinary one.
+//!
 //! # Algorithm
 //!
 //! Newton's method with the analytic score and observed information
@@ -124,6 +145,9 @@
 //!    J Stat Softw. 2016;70(8):1-33.
 //! 5. Harrell FE Jr. Regression Modeling Strategies. 2nd ed. Cham: Springer;
 //!    2015. Section 2.4.4.
+//! 6. Nelson CP, Lambert PC, Squire IB, Jones DR. Flexible parametric models
+//!    for relative survival, with application in coronary heart disease. Stat
+//!    Med. 2007;26(30):5486-98.
 
 mod design;
 mod link;
@@ -181,6 +205,11 @@ pub struct FlexParOptions<'a> {
     pub tvc: &'a [TimeVarying],
     /// A term added to the linear predictor of each row, such as a log offset.
     pub offset: Option<&'a [f64]>,
+    /// The expected hazard of the reference population at the exit time of
+    /// each row, for an excess hazard model (Nelson et al. 2007), or `None`
+    /// for an ordinary model. Needs [`Scale::Hazard`]; the model is then for
+    /// the excess hazard, and its survivor function is the net survival.
+    pub bhazard: Option<&'a [f64]>,
     /// Convergence is declared when the Newton decrement is at most
     /// `tolerance (1 + |log likelihood|)`.
     pub tolerance: f64,
@@ -196,6 +225,7 @@ impl Default for FlexParOptions<'_> {
             knots: None,
             tvc: &[],
             offset: None,
+            bhazard: None,
             tolerance: 1e-12,
             max_iterations: 50,
         }
@@ -337,6 +367,18 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
         return Err(Error::input(
             "the offset must be finite and have one value per row",
         ));
+    }
+    if let Some(h) = opts.bhazard {
+        if opts.scale != Scale::Hazard {
+            return Err(Error::input(
+                "an expected hazard needs the hazard scale: the excess hazard is additive on the hazard",
+            ));
+        }
+        if h.len() != n || h.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err(Error::input(
+                "the expected hazard must be finite, not negative and have one value per row",
+            ));
+        }
     }
     if data.n_strata() > 0 {
         return Err(Error::input("strata are not supported by flexpar"));
@@ -483,6 +525,7 @@ pub fn fit(
         event,
         weight,
         offset: opts.offset,
+        bhazard: opts.bhazard,
     };
     let theta0 = start::starting_values(&design, opts.scale, stop, start, event, weight);
     let best = maximise(&model, &theta0, opts.tolerance, opts.max_iterations).ok_or_else(|| {
@@ -511,6 +554,7 @@ pub fn fit(
                 event,
                 weight,
                 offset: None,
+                bhazard: opts.bhazard,
             }
         };
         let s0 = start::starting_values(&null_design, opts.scale, stop, start, event, weight);
