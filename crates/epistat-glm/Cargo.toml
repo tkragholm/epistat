@@ -26,5 +26,9 @@ serde = { version = "1.0.200", features = ["derive"] }
 name = "tier1_glm"
 harness = false
 
+[[bench]]
+name = "tier2_glm"
+harness = false
+
 [lints]
 workspace = true

@@ -23,3 +23,13 @@ gives sandwich covariances of a fit (HC0, HC1, HC3, clustered) as
 outcome by modified Poisson and binomial identity regression. The `within`
 module is the linear within-family estimator with clustered variance as
 `fixest::feols`. Each is checked against R.
+
+The `gee` module fits generalised estimating equations with independence,
+exchangeable, AR(1) and unstructured working correlations, with the robust,
+Mancl and DeRouen and naive covariances. The association parameters are
+estimated either by the equations of `geepack::geeglm` or by the moment
+estimators of the `gee` package, and both are checked against those packages.
+The `ordinal` module fits cumulative link models (logit, probit, complementary
+log-log and log-log) as `MASS::polr` and `ordinal::clm` do, with case weights,
+an offset, cluster-robust covariances and category-specific coefficients for the
+partial proportional odds model, and has the Brant test of proportional odds.

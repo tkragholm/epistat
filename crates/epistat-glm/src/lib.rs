@@ -16,6 +16,11 @@
 //! fit and risk ratios and differences by modified Poisson regression, and
 //! [`within`] the linear within-family estimator with clustered variance.
 //!
+//! [`gee`] fits generalised estimating equations for clustered outcomes as
+//! `geepack::geeglm` and `gee::gee` do, and [`ordinal`] fits cumulative link
+//! models for ordered outcomes as `MASS::polr` and `ordinal::clm` do, with the
+//! Brant test of proportional odds.
+//!
 //! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
 //! variance function and the classic Park test.
@@ -25,8 +30,10 @@ mod columns;
 pub mod elastic_net;
 mod family;
 pub mod fit;
+pub mod gee;
 pub mod multinom;
 pub mod negbin;
+pub mod ordinal;
 pub mod park;
 pub mod robust;
 pub mod within;
@@ -34,7 +41,9 @@ pub mod within;
 pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};
 pub use family::{Family, Link, expit};
 pub use fit::{Fit, Glm, GlmError};
+pub use gee::{Association, Correlation, Gee, GeeError, GeeFit, RobustVariance};
 pub use multinom::{Multinom, MultinomError, MultinomFit};
 pub use negbin::{NegBin, NegBinFit, ThetaRule};
+pub use ordinal::{BrantTest, Ordinal, OrdinalError, OrdinalFit, OrdinalLink, brant};
 pub use robust::{RiskFit, RiskScale, SandwichType, risk_regression, robust_covariance};
 pub use within::{DfRule, Within, WithinFit, between_within};
