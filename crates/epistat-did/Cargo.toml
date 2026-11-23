@@ -93,6 +93,11 @@ path = "tests/parity_drdid_improved.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "parity_smoothness"
+path = "tests/parity_smoothness.rs"
+required-features = ["parity-tests"]
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
