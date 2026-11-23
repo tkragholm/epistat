@@ -1,18 +1,49 @@
-//! Least-favorable confidence intervals for the smoothness restriction
-//! `\Delta^{SD}(M)`.
+//! Fixed-length confidence intervals (FLCIs) for the smoothness restriction
+//! `Delta^SD(M)`, as `HonestDiD`'s `findOptimalFLCI`.
 //!
-//! For a post-treatment linear functional `\theta = l' \tau_{post}`, this
-//! module computes fixed-length confidence intervals by solving the smoothness
-//! worst-case-bias problem over the convex class induced by bounded second
-//! differences of the latent violation path. The implementation follows the
-//! `HonestDiD` smoothness workflow and exposes both scalar and simultaneous
-//! multi-functional results.
+//! # Formulas
 //!
-//! References:
+//! The interval is built on an affine estimator `a' beta_hat` of
+//! `theta = l' tau_post`, with `a = (l_pre, l)` and the pre-period weights
+//! written through `w` as `l_pre,1 = w_1` and `l_pre,k = w_k - w_{k-1}`. Over
+//! `Delta^SD(M)` the estimator's worst-case bias is finite exactly when
+//! `sum_k w_k = sum_t t l_t`, and is then `M b(w)` with
+//!
+//! ```text
+//! b(w) = c(l) + sum_{k=1..K} |w_1 + ... + w_k|
+//! c(l) = sum_{s=1..T} |sum_{j=1..s} j l_{T-s+j}| - sum_{t=1..T} t l_t
+//! ```
+//!
+//! for `K` pre and `T` post periods. With `Sigma = L L'` its standard deviation
+//! is `sd(w) = ||L' a||`, linear in `w` inside the norm. An interval
+//! `a' beta_hat +/- chi(M b / h) h` with `sd(w) <= h` covers at level
+//! `1 - alpha`, where `chi(mu)` is the `1 - alpha` quantile of `|N(mu, 1)|`.
+//!
+//! # Algorithm
+//!
+//! 1. `h_min`: the smallest `sd(w)` under the sum constraint, a second-order
+//!    cone program.
+//! 2. `h_0`: `sd(w)` of the weights of smallest bias, all of the sum on the
+//!    last pre period.
+//! 3. On `num_grid_points` equally spaced `h` from `h_min` to `h_0`, the
+//!    smallest `b(w)` with `sd(w) <= h`, a second-order cone program with
+//!    `u_k >= |w_1 + ... + w_k|` carried as linear constraints, and its
+//!    half-length `chi(M b / h) h`.
+//! 4. The interval of the `h` with the shortest half-length.
+//!
+//! `HonestDiD` searches `h` by bisection on a numerical derivative and takes
+//! `chi` from 10^6 normal draws; here the grid is fixed and `chi` is
+//! [`epistat_stats::normal::folded_quantile`]. The two agree to the Monte
+//! Carlo error of `HonestDiD`'s quantile once the grid is fine.
+//!
+//! # References
+//!
 //! - Rambachan, A. and Roth, J. (2023). "A More Credible Approach to Parallel
 //!   Trends". *Review of Economic Studies* 90(5), 2555-2591.
-//! - `HonestDiD` package source files `flci.R` and `deltasd.R`, which this
-//!   implementation mirrors for the smoothness class.
+//! - Armstrong, T. B. and Kolesar, M. (2018). "Optimal Inference in a Class
+//!   of Regression Models". *Econometrica* 86(2), 655-683.
+//! - `HonestDiD` 0.2.8, `flci.R`: `.createObjectiveObjectForBias`,
+//!   `.findLowestH`, `.findHForMinimumBias`, `.findWorstCaseBiasGivenH`.
 
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::SupportedConeT;
@@ -74,7 +105,8 @@ pub struct SmoothnessFlciResult {
     pub flci: (f64, f64),
     /// Original confidence interval.
     pub original_ci: (f64, f64),
-    /// Identified set.
+    /// Identified set, NaN at both ends when it is empty. The interval does not
+    /// depend on it.
     pub identified_set: (f64, f64),
     /// Weights of the optimal affine estimator.
     pub optimal_vec: Vec<f64>,
@@ -137,33 +169,20 @@ fn full_estimator_vec(num_pre: usize, post_weights: &[f64], w: &[f64]) -> Vec<f6
     out
 }
 
-/// The constant of the worst-case bias objective at `M = 1`:
-/// `sum_s |l_{T-s+1} + ... + l_T| - sum_t t l_t`.
-///
-/// This is not `HonestDiD`'s constant. Its `.createObjectiveObjectForBias`
-/// weights the tail sums by position,
-/// `sum_s |1 l_{T-s+1} + 2 l_{T-s+2} + ... + s l_T| - sum_t t l_t`. The two
-/// agree when only the first post period has weight and differ otherwise
-/// (for the second of four post periods, 0 here against 1 in `HonestDiD`).
-/// With the smaller bias the fixed-length interval, and the conditional
-/// hybrid built on it, can lie inside the identified set: on
-/// `BCdata_EventStudy` at `M = 0.2` the average of the four post periods has
-/// the interval `(-0.17, 0.97)`, the identified set `(-0.60, 1.40)` and
-/// `HonestDiD`'s interval `(-0.69, 1.49)`. Study I's
-/// smoothness bounds go through this function, so it is kept as it is while
-/// Study I is protected.
+/// The constant `c(l)` of the worst-case bias at `M = 1`,
+/// `sum_{s=1..T} |sum_{j=1..s} j l_{T-s+j}| - sum_t t l_t`, as in
+/// `HonestDiD`'s `.createObjectiveObjectForBias`.
 fn bias_objective_constant(post_weights: &[f64]) -> f64 {
-    let weighted_sum = weighted_post_sum(post_weights);
-    let mut tail_sum = 0.0;
-    let sum_abs_tail = post_weights
-        .iter()
-        .rev()
-        .map(|weight| {
-            tail_sum += *weight;
-            tail_sum.abs()
-        })
-        .sum::<f64>();
-    sum_abs_tail - weighted_sum
+    let num_post = post_weights.len();
+    let mut sum_abs = 0.0;
+    for s in 1..=num_post {
+        let mut inner = 0.0;
+        for j in 1..=s {
+            inner += usize_to_f64(j) * post_weights[num_post - s + j - 1];
+        }
+        sum_abs += f64::abs(inner);
+    }
+    sum_abs - weighted_post_sum(post_weights)
 }
 
 fn lower_triangular_ones(num_pre: usize) -> Vec<Vec<f64>> {
@@ -176,6 +195,9 @@ fn lower_triangular_ones(num_pre: usize) -> Vec<Vec<f64>> {
     out
 }
 
+/// The estimator's standard deviation as a norm, `sd(w) = ||d + T w||`, with
+/// `d = L_post' l` and `T w = L_pre' l_pre(w)`. The rows returned are `-T`, so
+/// that a cone row `b - A x` with right-hand side `d` holds `d + T w`.
 fn build_variance_soc_terms(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -201,7 +223,7 @@ fn build_variance_soc_terms(
             if col + 1 < num_pre {
                 acc -= lower[(col + 1, row)];
             }
-            transform[row][col] = acc;
+            transform[row][col] = -acc;
         }
     }
     Ok((transform, d))
@@ -511,7 +533,12 @@ fn find_optimal_flci(
         &problem.post_weights,
         &fallback_w,
     );
-    let half_length = half_length_for_bias(alpha, 0.0, h_zero_bias)?;
+    // The minimum-bias weights put the whole sum on the last pre period, so
+    // the only non-zero partial sum of `w` is that sum itself.
+    let max_bias = problem.m
+        * (bias_objective_constant(&problem.post_weights)
+            + f64::abs(weighted_post_sum(&problem.post_weights)));
+    let half_length = half_length_for_bias(alpha, max_bias, h_zero_bias)?;
     Ok(Some((estimator, half_length)))
 }
 
@@ -612,19 +639,6 @@ pub(in crate::inference::sensitivity) fn compute_smoothness_flci_with_config_cou
             "invalid confidence level {}",
             problem.inference.confidence_level
         ));
-    }
-    if !problem.identified_set.lb.is_finite() || !problem.identified_set.ub.is_finite() {
-        return Ok(SmoothnessFlciResult {
-            flci: (f64::NEG_INFINITY, f64::INFINITY),
-            original_ci: problem.original.ci,
-            identified_set: (problem.identified_set.lb, problem.identified_set.ub),
-            optimal_vec: {
-                let mut vec = vec![0.0; problem.input.num_pre_periods()];
-                vec.extend_from_slice(&problem.post_weights);
-                vec
-            },
-            optimal_half_length: f64::INFINITY,
-        });
     }
     let Some((optimal_vec, optimal_half_length)) = find_optimal_flci(problem, config, counter)?
     else {
@@ -844,4 +858,124 @@ pub(in crate::inference::sensitivity) fn compute_smoothness_multi_flci_with_conf
         method: joint_config.method,
         points,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use clarabel::algebra::CscMatrix;
+    use clarabel::solver::SupportedConeT;
+
+    use super::super::super::conic;
+    use super::super::super::linear_algebra::{build_clarabel_matrix, dot};
+    use super::super::build_smoothness_constraint_matrix;
+    use super::{bias_objective_constant, build_smoothness_flci_problem, compute_smoothness_flci};
+    use crate::inference::sensitivity::{HonestEventStudyInput, SolverCounter};
+    use crate::types::InferenceConfig;
+
+    #[derive(serde::Deserialize)]
+    struct EventStudy {
+        betahat: Vec<f64>,
+        sigma: Vec<Vec<f64>>,
+    }
+
+    /// `HonestDiD`'s `BCdata_EventStudy`, four pre and four post periods.
+    fn bc_input() -> HonestEventStudyInput {
+        let data: EventStudy = epistat_testkit::load_json("tests/data/honest_did_ref.json");
+        HonestEventStudyInput {
+            betahat: data.betahat,
+            covariance: data.sigma,
+            pre_periods: vec![-5, -4, -3, -2],
+            post_periods: vec![0, 1, 2, 3],
+        }
+    }
+
+    /// `sup a' delta` over `|second differences of (delta_pre, 0, delta_post)| <= 1`,
+    /// by a linear program that does not use the closed form of the bias.
+    fn worst_case_bias_at_m_one(num_pre: usize, num_post: usize, a: &[f64]) -> f64 {
+        let rows = build_smoothness_constraint_matrix(num_pre, num_post, false);
+        let rhs = vec![1.0; rows.len()];
+        let objective: Vec<f64> = a.iter().map(|value| -value).collect();
+        let solution = conic::solve(
+            "worst-case bias",
+            &CscMatrix::<f64>::zeros((a.len(), a.len())),
+            &objective,
+            &build_clarabel_matrix(&rows, &[]),
+            &rhs,
+            &[SupportedConeT::NonnegativeConeT(rows.len())],
+            &SolverCounter::new(),
+        )
+        .expect("bias program")
+        .expect("bounded bias");
+        dot(a, &solution)
+    }
+
+    #[test]
+    fn the_bias_constant_weights_each_tail_by_position() {
+        // c(l) by hand for four post periods.
+        assert_eq!(bias_objective_constant(&[1.0, 0.0, 0.0, 0.0]), 0.0);
+        assert_eq!(bias_objective_constant(&[0.0, 1.0, 0.0, 0.0]), 1.0);
+        assert_eq!(bias_objective_constant(&[0.25, 0.25, 0.25, 0.25]), 2.5);
+        assert_eq!(bias_objective_constant(&[1.0, -1.0, 0.0, 0.0]), 3.0);
+    }
+
+    #[test]
+    fn each_interval_covers_with_its_own_weights() {
+        // The half-length must be at least chi(M b / sd) sd for the returned
+        // weights, with b their worst-case bias from a separate linear program
+        // and sd their standard deviation from the covariance, and equal to it
+        // when the weights of the functional are not negative. For weights of
+        // both signs `HonestDiD`'s bias constant exceeds the exact worst case,
+        // for (1, -1, 0, 0) by 2, and the interval is conservative; at these M
+        // the bias dominates the half-length, which then exceeds the exact one
+        // by 2 M. Clarabel solves the cone programs to
+        // gap and feasibility tolerances of 1e-8; 1e-6 of the half-length is a
+        // hundred times that.
+        let input = bc_input();
+        let inference = InferenceConfig::new(0.95);
+        let targets: [&[f64]; 5] = [
+            &[1.0, 0.0, 0.0, 0.0],
+            &[0.0, 0.0, 1.0, 0.0],
+            &[0.25, 0.25, 0.25, 0.25],
+            &[0.4, 0.3, 0.2, 0.1],
+            &[1.0, -1.0, 0.0, 0.0],
+        ];
+        for post_weights in targets {
+            for m in [0.0, 0.025, 0.1, 0.3] {
+                let problem = build_smoothness_flci_problem(&input, post_weights, m, inference)
+                    .expect("problem");
+                let result = compute_smoothness_flci(&problem).expect("flci");
+                let a = &result.optimal_vec;
+                let variance: f64 = (0..a.len())
+                    .map(|i| {
+                        (0..a.len())
+                            .map(|j| a[i] * input.covariance[i][j] * a[j])
+                            .sum::<f64>()
+                    })
+                    .sum();
+                let sd = variance.sqrt();
+                let bias = m * worst_case_bias_at_m_one(4, 4, a);
+                let expected =
+                    epistat_stats::normal::folded_quantile(0.95, bias / sd).expect("quantile") * sd;
+                let tolerance = 1e-6 * expected;
+                assert!(
+                    result.optimal_half_length >= expected - tolerance,
+                    "{post_weights:?} M = {m}: half-length {} below {expected}",
+                    result.optimal_half_length
+                );
+                if post_weights.iter().all(|weight| *weight >= 0.0) {
+                    assert!(
+                        result.optimal_half_length <= expected + tolerance,
+                        "{post_weights:?} M = {m}: half-length {} above {expected}",
+                        result.optimal_half_length
+                    );
+                } else {
+                    let excess = result.optimal_half_length - expected;
+                    assert!((excess - 2.0 * m).abs() <= tolerance + 1e-6 * m);
+                }
+                let centre = dot(a, &input.betahat);
+                assert_eq!(result.flci.0, centre - result.optimal_half_length);
+                assert_eq!(result.flci.1, centre + result.optimal_half_length);
+            }
+        }
+    }
 }
