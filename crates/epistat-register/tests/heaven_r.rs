@@ -17,8 +17,8 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Periods {
     id: Vec<u32>,
-    start: Vec<f64>,
-    end: Vec<f64>,
+    start: Vec<i64>,
+    end: Vec<i64>,
 }
 
 #[derive(Deserialize)]
@@ -100,7 +100,7 @@ fn periods_agree_with_heaven() {
             .collect();
         let want: Vec<(u32, i64, i64)> = (0..want.id.len())
             .filter(|&i| compared(want.id[i]))
-            .map(|i| (want.id[i], want.start[i] as i64, want.end[i] as i64))
+            .map(|i| (want.id[i], want.start[i], want.end[i]))
             .collect();
         assert_eq!(got, want, "{}", case.name);
     }
