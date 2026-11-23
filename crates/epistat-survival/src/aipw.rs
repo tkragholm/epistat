@@ -47,16 +47,60 @@
 //! way to get it. The contrasts and their limits are those of
 //! [`Standardised::contrast`].
 //!
-//! # Cost, and the grid
+//! # Cost: the integral by moment sums
 //!
-//! The integral is a sum over the distinct censoring times up to `T_i ^ t` of
-//! terms that depend on the person through `exp(x_i' b)` and `exp(z_i' c)`, so it
-//! is not a running sum over persons. A person costs `O(J_i)` with `J_i` the
-//! number of censoring times before its exit, for all the times at once, so the
-//! total is `O(n J)`, and `J` grows with `n` for continuous times. The persons
-//! are processed in parallel and the sums over persons are formed in blocks of
-//! fixed size added in order, so the result does not depend on the number of
-//! threads.
+//! The integral is a sum over the distinct censoring times `u_j` up to
+//! `T_i ^ t`. Write `theta_i = exp(x_i(a)' b)`, `x_j = H_0(u_j-)`, `h_j =
+//! H_0(u_j)` and `dx_j = h_j - x_j`. The jump of the person's own censoring is
+//! added directly. Of the compensator, the part `dLambda^C_i(u_j) / G(u_j-)` is
+//! `w_j`, the Kaplan-Meier hazard increment over the survival of the person's
+//! group, or `s_i dLambda^C_0(u_j) exp(s_i y_j)` for a Cox model of the
+//! censoring with `s_i = exp(z_i' c)` and `y_j = Lambda^C_0(u_j-)`, and
+//! `1 / S(u_j-) = exp(theta_i x_j)`. The two sums of the augmentation are
+//! then
+//!
+//! ```text
+//! A_i(P) = sum_{j < P} w_j exp(theta_i x_j + s_i y_j)
+//! B_i(P) = sum_{j < P} w_j exp(s_i y_j) (exp(theta_i x_j) - exp(-theta_i dx_j))
+//! ```
+//!
+//! (with `s_i y_j = 0` for Kaplan-Meier), and a term depends on the person
+//! through `theta_i` and `s_i`, so neither is a running sum over persons.
+//! Summed person by person they cost `O(n J)`, with `J` the number of censoring
+//! times, which grows with `n` for continuous times.
+//!
+//! The persons are therefore put in bins by `theta` (and by `s` within a
+//! `theta` strip for a Cox censoring model) such that `(theta - theta_0) X <=
+//! r_theta` and `(s - s_0) Y <= r_s` for every person of a bin, with
+//! `(theta_0, s_0)` the lowest values of the bin, `X` and `Y` the largest `h_j`
+//! and `y_j` reached, and `r_theta + r_s = 2`. With `delta = theta - theta_0`
+//! and `epsilon = s - s_0`,
+//!
+//! ```text
+//! exp(theta x + s y) = exp(theta_0 x + s_0 y) sum_{m, k} (delta x)^m (epsilon y)^k / (m! k!)
+//! ```
+//!
+//! so `A` and `B` are polynomials in `delta` and `epsilon` whose coefficients
+//! are running sums over the censoring times, the same for every person of the
+//! bin: one pass over the censoring times per bin, and the value of a person
+//! at each time asked for is read from the running sums as the pass reaches
+//! it. The series stops at the total degree `M` for which `r^(M+1) e^r / (M+1)!
+//! <= 2^-57`, `r` the largest `delta X + epsilon Y` of the bin, which is at most
+//! 25 for `r = 2`. The truncation is then below a sixteenth of the rounding
+//! unit of every term. The terms of `A` and of the coefficients of `B` without
+//! tied event and censoring times are positive, so the sums have the rounding
+//! error of a sum of positive terms, which is that of the sum person by person:
+//! the two agree to `(2 P + 4 M^2) eps` relative to the sum of the absolute
+//! terms. The cost is `O(n log n + B M^2 J)` with `B` the number of bins, which
+//! depends on the spread of `theta H_0(t)` and `s Lambda^C_0(t)` over the persons
+//! and not on their number. A bin is summed person by person where that costs
+//! less, as for a bin of a few persons.
+//!
+//! The bins are processed in parallel and the sums over persons are formed in
+//! blocks of fixed size added in order, so the result does not depend on the
+//! number of threads.
+//!
+//! # The grid
 //!
 //! With `grid = Some(K)` the censoring times are pooled into `K` cells of about
 //! equal numbers of times, cut also at every time asked for, and a person costs
@@ -249,7 +293,7 @@ pub fn aipw_cox(
     opts: &AipwSurvOptions,
 ) -> Result<AipwSurv> {
     let model = Model::fit(data, spec, times, opts)?;
-    model.estimate(opts)
+    model.estimate(opts, Route::ByCost)
 }
 
 /// A one-dimensional table of a step function over the censoring times.
@@ -623,8 +667,16 @@ impl Model {
     }
 
     /// The row of the person `i`, its values at each time, for the level of the
-    /// treatment received.
-    fn person(&self, i: usize, aiptw: bool, out: &mut [f64], scratch: &mut Scratch) -> Result<()> {
+    /// treatment received. `aug` is the augmentation of the person at each
+    /// time when it is formed for all persons at once.
+    fn person(
+        &self,
+        i: usize,
+        aiptw: bool,
+        aug: Option<&[f64]>,
+        out: &mut [f64],
+        scratch: &mut Scratch,
+    ) -> Result<()> {
         let k = self.k;
         let a = usize::from(self.treated[i]);
         let w = 1.0 / self.pi[i];
@@ -653,9 +705,13 @@ impl Model {
         }
         scratch.aug.iter_mut().for_each(|v| *v = 0.0);
         if aiptw && !matches!(self.tables.cens, CensTables::None) {
-            match &self.cells {
-                Some(cells) => self.augmentation_cells(i, a, cells, scratch),
-                None => self.augmentation(i, a, scratch),
+            match (&self.cells, aug) {
+                (Some(cells), _) => self.augmentation_cells(i, a, cells, scratch),
+                (None, Some(row)) => scratch.aug.copy_from_slice(row),
+                (None, None) => {
+                    let Scratch { f, aug, .. } = scratch;
+                    self.augmentation(i, a, &f[a], aug);
+                }
             }
         }
         for l in 0..2 {
@@ -682,8 +738,10 @@ impl Model {
         Ok(())
     }
 
-    /// The augmentation of person `i` at each time, from the level `a` received.
-    fn augmentation(&self, i: usize, a: usize, scratch: &mut Scratch) {
+    /// The augmentation of person `i` at each time, from the level `a` received
+    /// with the risk `f` at each time, summed over the censoring times one by
+    /// one.
+    fn augmentation(&self, i: usize, a: usize, f: &[f64], aug: &mut [f64]) {
         let theta = self.lp[a][i].exp();
         let t_i = self.stop[i];
         let last = *self.times.last().unwrap_or(&0.0);
@@ -695,7 +753,7 @@ impl Model {
         for j in 0..j_max {
             let u = self.tables.jump[j];
             while s < self.k && self.times[s] < u {
-                scratch.aug[s] = scratch.f[a][s] * sum_a - sum_b;
+                aug[s] = f[s] * sum_a - sum_b;
                 s += 1;
             }
             let (g, d_lambda) = match &self.tables.cens {
@@ -727,7 +785,7 @@ impl Model {
             sum_b += f_u * term;
         }
         while s < self.k {
-            scratch.aug[s] = scratch.f[a][s] * sum_a - sum_b;
+            aug[s] = f[s] * sum_a - sum_b;
             s += 1;
         }
     }
@@ -812,9 +870,272 @@ impl Model {
         }
     }
 
-    fn estimate(&self, opts: &AipwSurvOptions) -> Result<AipwSurv> {
+    /// The augmentation of every person at each time, `n` rows of `k`, from the
+    /// level received, by the moment sums of the module documentation.
+    fn augmentations(&self, route: Route) -> Vec<f64> {
+        let (n, k) = (self.n, self.k);
+        let mut out = vec![0.0; n * k];
+        let jump = &self.tables.jump;
+        let last = self.times[k - 1];
+        let reach = jump.partition_point(|&u| u <= last);
+        if reach == 0 || matches!(self.tables.cens, CensTables::None) {
+            return out;
+        }
+        let theta: Vec<f64> = (0..n)
+            .map(|i| self.lp[usize::from(self.treated[i])][i].exp())
+            .collect();
+        let j_max: Vec<usize> = (0..n)
+            .map(|i| jump.partition_point(|&u| u <= self.stop[i]).min(reach))
+            .collect();
+        let x_top = self.tables.h_at[reach - 1];
+        let (group, s, y_top): (Vec<usize>, Option<&[f64]>, f64) = match &self.tables.cens {
+            CensTables::Km { group, .. } => {
+                (group.iter().map(|&g| g as usize).collect(), None, 0.0)
+            }
+            CensTables::Cox {
+                score, h_before, ..
+            } => (vec![0; n], Some(score), h_before[reach - 1]),
+            CensTables::None => return out,
+        };
+        let r_s = if s.is_some() && y_top > 0.0 {
+            RADIUS / 2.0
+        } else {
+            0.0
+        };
+        let r_theta = RADIUS - r_s;
+        // The bins: persons who reach a censoring time, by group, in strips of
+        // theta and, within a strip, in bins of s.
+        let n_groups = group.iter().copied().max().map_or(0, |g| g + 1);
+        let mut by_group: Vec<Vec<usize>> = vec![Vec::new(); n_groups];
+        for i in (0..n).filter(|&i| j_max[i] > 0) {
+            by_group[group[i]].push(i);
+        }
+        let mut bins: Vec<Bin> = Vec::new();
+        for (g, mut rows) in by_group.into_iter().enumerate() {
+            rows.sort_by(|&p, &q| theta[p].total_cmp(&theta[q]).then(p.cmp(&q)));
+            for strip in runs(&rows, |i| theta[i], r_theta / x_top) {
+                match s {
+                    None => bins.push(Bin::new(g, strip.to_vec(), &theta, None)),
+                    Some(s) => {
+                        let mut strip = strip.to_vec();
+                        strip.sort_by(|&p, &q| s[p].total_cmp(&s[q]).then(p.cmp(&q)));
+                        for part in runs(&strip, |i| s[i], r_s / y_top) {
+                            bins.push(Bin::new(g, part.to_vec(), &theta, Some(s)));
+                        }
+                    }
+                }
+            }
+        }
+        let h_tau: Vec<f64> = self.times.iter().map(|&tau| self.base.at(tau)).collect();
+        let tau_idx: Vec<usize> = self
+            .times
+            .iter()
+            .map(|&tau| jump.partition_point(|&u| u <= tau))
+            .collect();
+        let ctx = BinContext {
+            theta: &theta,
+            s,
+            j_max: &j_max,
+            h_tau: &h_tau,
+            tau_idx: &tau_idx,
+            x_top,
+            y_top,
+        };
+        let values: Vec<Vec<f64>> = bins
+            .par_iter()
+            .map(|bin| self.bin_augmentation(bin, &ctx, route))
+            .collect();
+        for (bin, v) in bins.iter().zip(values) {
+            for (r, &i) in bin.rows.iter().enumerate() {
+                out[i * k..(i + 1) * k].copy_from_slice(&v[r * k..(r + 1) * k]);
+            }
+        }
+        out
+    }
+
+    /// The augmentation of the persons of a bin at each time, a row of `k` for
+    /// each person in the order of the bin.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one pass over the censoring times that shares its running sums"
+    )]
+    fn bin_augmentation(&self, bin: &Bin, ctx: &BinContext<'_>, route: Route) -> Vec<f64> {
+        let k = self.k;
+        let mut out = vec![0.0; bin.rows.len() * k];
+        let risk = |i: usize| -> Vec<f64> {
+            ctx.h_tau
+                .iter()
+                .map(|&h| 1.0 - (-ctx.theta[i] * h).exp())
+                .collect()
+        };
+        let span = bin.rows.iter().map(|&i| ctx.j_max[i]).max().unwrap_or(0);
+        let radius = bin.d_theta * ctx.x_top + bin.d_s * ctx.y_top;
+        let degree = degree(radius);
+        let m_theta = if bin.d_theta * ctx.x_top > 0.0 {
+            degree
+        } else {
+            0
+        };
+        let m_s = if bin.d_s * ctx.y_top > 0.0 { degree } else { 0 };
+        let width = m_s + 1;
+        let moments: usize = (0..=m_theta).map(|m| (degree - m).min(m_s) + 1).sum();
+        let reached: usize = bin.rows.iter().map(|&i| ctx.j_max[i]).sum();
+        let direct = match route {
+            Route::Direct => true,
+            Route::Moments => false,
+            // A censoring time costs a person about three exponentials summed
+            // one by one, and the bin about four exponentials and two products
+            // per moment.
+            Route::ByCost => 32 * reached < (64 + 2 * moments) * span,
+        };
+        if direct {
+            for (r, &i) in bin.rows.iter().enumerate() {
+                let a = usize::from(self.treated[i]);
+                self.augmentation(i, a, &risk(i), &mut out[r * k..(r + 1) * k]);
+            }
+            return out;
+        }
+        // The queries: each person at each time, by the number of censoring
+        // times it includes.
+        let mut queries: Vec<(usize, usize, usize)> = Vec::with_capacity(bin.rows.len() * k);
+        for (r, &i) in bin.rows.iter().enumerate() {
+            for (t, &idx) in ctx.tau_idx.iter().enumerate() {
+                queries.push((idx.min(ctx.j_max[i]), r, t));
+            }
+        }
+        queries.sort_unstable();
+        let (h_before, h_at) = (&self.tables.h_before, &self.tables.h_at);
+        let mut ma = vec![0.0; (m_theta + 1) * width];
+        let mut mb = vec![0.0; (m_theta + 1) * width];
+        let (mut pm, mut pz, mut qn) = (
+            vec![0.0; m_theta + 1],
+            vec![0.0; m_theta + 1],
+            vec![0.0; width],
+        );
+        let mut next = 0;
+        let answer = |next: &mut usize, upto: usize, ma: &[f64], mb: &[f64], out: &mut [f64]| {
+            while *next < queries.len() && queries[*next].0 == upto {
+                let (p, r, t) = queries[*next];
+                *next += 1;
+                let i = bin.rows[r];
+                let th = ctx.theta[i];
+                let tt = if bin.d_theta > 0.0 {
+                    (th - bin.theta0) / bin.d_theta
+                } else {
+                    0.0
+                };
+                let (si, vv) = match ctx.s {
+                    Some(s) if bin.d_s > 0.0 => (s[i], (s[i] - bin.s0) / bin.d_s),
+                    Some(s) => (s[i], 0.0),
+                    None => (1.0, 0.0),
+                };
+                let (mut ca, mut cb, mut tp) = (0.0, 0.0, 1.0);
+                for m in 0..=m_theta {
+                    let (mut ra, mut rb, mut vp) = (0.0, 0.0, 1.0);
+                    for kk in 0..=(degree - m).min(m_s) {
+                        ra += vp * ma[m * width + kk];
+                        rb += vp * mb[m * width + kk];
+                        vp *= vv;
+                    }
+                    ca += tp * ra;
+                    cb += tp * rb;
+                    tp *= tt;
+                }
+                let (mut sa, mut sb) = (-si * ca, -si * cb);
+                if self.status[i] == 0 {
+                    let own = self.tables.jump.partition_point(|&u| u < self.stop[i]);
+                    if own < p {
+                        let (w, f_own) = self.own_censoring(i, th, own);
+                        sa += w;
+                        sb += f_own * w;
+                    }
+                }
+                let f = 1.0 - (-th * ctx.h_tau[t]).exp();
+                out[r * k + t] = f * sa - sb;
+            }
+        };
+        for j in 0..span {
+            answer(&mut next, j, &ma, &mb, &mut out);
+            let (w, y) = match &self.tables.cens {
+                CensTables::Km {
+                    g_before, d_lambda, ..
+                } => (d_lambda[bin.group][j] / g_before[bin.group][j], 0.0),
+                CensTables::Cox {
+                    d_h, h_before: hc, ..
+                } => (d_h[j], hc[j]),
+                CensTables::None => (0.0, 0.0),
+            };
+            if w == 0.0 {
+                continue;
+            }
+            let (x, ha) = (h_before[j], h_at[j]);
+            let dx = ha - x;
+            let e_s = if y > 0.0 { (bin.s0 * y).exp() } else { 1.0 };
+            let e_x = (bin.theta0 * x).exp();
+            let e_tie = if dx > 0.0 {
+                (-bin.theta0 * dx).exp()
+            } else {
+                1.0
+            };
+            let (xi, zeta, eta) = (bin.d_theta * x, -(bin.d_theta * dx), bin.d_s * y);
+            pm[0] = 1.0;
+            pz[0] = 1.0;
+            for m in 1..=m_theta {
+                pm[m] = pm[m - 1] * xi / m as f64;
+                pz[m] = pz[m - 1] * zeta / m as f64;
+            }
+            qn[0] = 1.0;
+            for kk in 1..width {
+                qn[kk] = qn[kk - 1] * eta / kk as f64;
+            }
+            let wa = w * e_s * e_x;
+            let wb = w * e_s;
+            for m in 0..=m_theta {
+                let coef_b = if m == 0 {
+                    e_x * -(-bin.theta0 * ha).exp_m1()
+                } else if dx > 0.0 {
+                    e_x * pm[m] - e_tie * pz[m]
+                } else {
+                    e_x * pm[m]
+                };
+                let (ca, cb) = (wa * pm[m], wb * coef_b);
+                let len = (degree - m).min(m_s) + 1;
+                let row_a = &mut ma[m * width..m * width + len];
+                for (v, q) in row_a.iter_mut().zip(&qn[..len]) {
+                    *v += ca * q;
+                }
+                let row_b = &mut mb[m * width..m * width + len];
+                for (v, q) in row_b.iter_mut().zip(&qn[..len]) {
+                    *v += cb * q;
+                }
+            }
+        }
+        answer(&mut next, span, &ma, &mb, &mut out);
+        out
+    }
+
+    /// The weight `1 / (G(T_i-) S(T_i-))` of the censoring of person `i` at its
+    /// own time, the censoring time `own`, and the risk `F(T_i)` there, as the
+    /// sum person by person forms them.
+    fn own_censoring(&self, i: usize, theta: f64, own: usize) -> (f64, f64) {
+        let g = match &self.tables.cens {
+            CensTables::None => 1.0,
+            CensTables::Km {
+                group, g_before, ..
+            } => g_before[group[i] as usize][own],
+            CensTables::Cox {
+                score, h_before, ..
+            } => (-score[i] * h_before[own]).exp(),
+        };
+        let surv = (-theta * self.tables.h_before[own]).exp();
+        let f = 1.0 - (-theta * self.tables.h_at[own]).exp();
+        (1.0 / (g * surv), f)
+    }
+
+    fn estimate(&self, opts: &AipwSurvOptions, route: Route) -> Result<AipwSurv> {
         let (n, k) = (self.n, self.k);
         let aiptw = opts.estimator == Estimator::Aiptw;
+        let aug = (aiptw && self.cells.is_none()).then(|| self.augmentations(route));
         // The values phi_i for both levels and every time.
         let mut phi = vec![0.0; n * 2 * k];
         phi.par_chunks_mut(2 * k * BLOCK)
@@ -822,7 +1143,9 @@ impl Model {
             .try_for_each(|(b, chunk)| {
                 let mut scratch = Scratch::new(k);
                 for (r, row) in chunk.chunks_mut(2 * k).enumerate() {
-                    self.person(b * BLOCK + r, aiptw, row, &mut scratch)?;
+                    let i = b * BLOCK + r;
+                    let own = aug.as_ref().map(|v| &v[i * k..(i + 1) * k]);
+                    self.person(i, aiptw, own, row, &mut scratch)?;
                 }
                 Ok::<(), Error>(())
             })?;
@@ -940,6 +1263,122 @@ impl Scratch {
     }
 }
 
+/// The largest `delta X + epsilon Y` of a bin of the moment sums.
+const RADIUS: f64 = 2.0;
+/// The bound on the relative truncation of the series of a bin, `2^-57`.
+const TRUNCATION: f64 = f64::EPSILON / 32.0;
+
+/// How the augmentation of a bin is summed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// By moment sums or person by person, whichever costs less.
+    ByCost,
+    /// By moment sums.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the tests compare the two routes")
+    )]
+    Moments,
+    /// Person by person.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the tests compare the two routes")
+    )]
+    Direct,
+}
+
+/// Persons whose augmentation is formed from the same moment sums.
+struct Bin {
+    /// The group of the Kaplan-Meier censoring curve, 0 for a Cox model.
+    group: usize,
+    rows: Vec<usize>,
+    /// The lowest `theta` and the spread of `theta` above it.
+    theta0: f64,
+    d_theta: f64,
+    /// The lowest censoring score and the spread above it, 0 and 0 without a
+    /// Cox model of the censoring.
+    s0: f64,
+    d_s: f64,
+}
+
+impl Bin {
+    fn new(group: usize, rows: Vec<usize>, theta: &[f64], s: Option<&[f64]>) -> Self {
+        let range = |v: &[f64]| {
+            let lo = rows.iter().map(|&i| v[i]).fold(f64::INFINITY, f64::min);
+            let hi = rows.iter().map(|&i| v[i]).fold(f64::NEG_INFINITY, f64::max);
+            (lo, hi - lo)
+        };
+        let (theta0, d_theta) = range(theta);
+        let (s0, d_s) = s.map_or((0.0, 0.0), range);
+        Self {
+            group,
+            rows,
+            theta0,
+            d_theta,
+            s0,
+            d_s,
+        }
+    }
+}
+
+/// The values shared by the bins of [`Model::augmentations`].
+struct BinContext<'a> {
+    theta: &'a [f64],
+    /// The censoring score of each person for a Cox model of the censoring.
+    s: Option<&'a [f64]>,
+    /// The censoring times each person reaches.
+    j_max: &'a [usize],
+    /// The baseline cumulative hazard of the event at each time asked for.
+    h_tau: &'a [f64],
+    /// The censoring times up to each time asked for.
+    tau_idx: &'a [usize],
+    /// The largest `H_0(u_j)` and `Lambda^C_0(u_j-)` reached.
+    x_top: f64,
+    y_top: f64,
+}
+
+/// The total degree at which the series of `exp(z)` for `0 <= z <= r` stops
+/// with a relative truncation below [`TRUNCATION`]: the remainder after degree
+/// `M` is at most `r^(M+1) e^r / (M+1)!` of the value.
+fn degree(r: f64) -> usize {
+    if r <= 0.0 || !r.is_finite() {
+        return 0;
+    }
+    let mut bound = r.exp();
+    let mut m = 0;
+    loop {
+        bound *= r / (m + 1) as f64;
+        if bound <= TRUNCATION || m == 64 {
+            return m;
+        }
+        m += 1;
+    }
+}
+
+/// Splits `rows`, sorted by `value`, into runs whose values lie within `width`
+/// of the first of the run. A width that is not finite gives one run.
+fn runs(rows: &[usize], value: impl Fn(usize) -> f64, width: f64) -> Vec<&[usize]> {
+    if !width.is_finite() {
+        return if rows.is_empty() {
+            Vec::new()
+        } else {
+            vec![rows]
+        };
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < rows.len() {
+        let lo = value(rows[start]);
+        let mut end = start + 1;
+        while end < rows.len() && value(rows[end]) - lo <= width {
+            end += 1;
+        }
+        out.push(&rows[start..end]);
+        start = end;
+    }
+    out
+}
+
 /// The cells of `k` about equal numbers of censoring times, cut also before the
 /// first censoring time after each of the `times`, so that no cell holds times
 /// on both sides of a time asked for.
@@ -1034,5 +1473,231 @@ fn km_tables(
         lam_before,
         lam_at,
         curve,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use epistat_linalg::Mat;
+    use epistat_rng::Stream;
+
+    struct Cohort {
+        time: Vec<f64>,
+        status: Vec<i32>,
+        treated: Vec<bool>,
+        x: Mat<f64>,
+        z: Mat<f64>,
+        group: Vec<u32>,
+    }
+
+    /// Confounded treatment and censoring that depends on the covariates, with
+    /// times rounded to a quarter for ties of events and censorings, or not.
+    fn cohort(n: usize, seed: u64, rounded: bool) -> Cohort {
+        let mut rng = Stream::seeded(seed);
+        let (mut time, mut status, mut treated, mut cols) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..n {
+            let x1 = rng.normal();
+            let x2 = f64::from(u8::from(rng.uniform() < 0.4));
+            let a = rng.uniform() < expit(0.5 * x1 - 0.4 * x2);
+            let af = f64::from(u8::from(a));
+            let te = -rng.uniform().ln() / (0.12 * (0.5 * x1 - 0.4 * x2 - 0.6 * af).exp());
+            let tc = (-rng.uniform().ln() / (0.06 * (0.3 * x1 + 0.3 * af).exp())).min(12.0);
+            let t = te.min(tc);
+            time.push(if rounded { (t * 4.0).ceil() / 4.0 } else { t });
+            status.push(i32::from(te <= tc));
+            treated.push(a);
+            cols.push([af, x1, x2]);
+        }
+        Cohort {
+            time,
+            status,
+            group: treated.iter().map(|&a| u32::from(a)).collect(),
+            treated,
+            x: Mat::from_fn(n, 3, |i, j| cols[i][j]),
+            z: Mat::from_fn(n, 3, |i, j| [1.0, cols[i][1], cols[i][2]][j]),
+        }
+    }
+
+    fn model(c: &Cohort, km: bool, times: &[f64]) -> Model {
+        let data = SurvData::builder(&c.time, &c.status).build().unwrap();
+        let (c0, c1) = ([(0usize, 0.0)], [(0usize, 1.0)]);
+        let spec = AipwSurvSpec {
+            treatment: &c.treated,
+            outcome_x: c.x.as_ref(),
+            levels: [Counterfactual::Columns(&c0), Counterfactual::Columns(&c1)],
+            propensity_x: c.z.as_ref(),
+            censoring: if km {
+                Censoring::KaplanMeier {
+                    groups: Some(&c.group),
+                }
+            } else {
+                Censoring::Cox { x: c.x.as_ref() }
+            },
+        };
+        let opts = AipwSurvOptions {
+            ties: Ties::Breslow,
+            ..AipwSurvOptions::default()
+        };
+        Model::fit(&data, &spec, times, &opts).unwrap()
+    }
+
+    /// The sum of the absolute terms of the integral of person `i` over the
+    /// first `p` censoring times, the scale of the rounding error of both sums.
+    fn absolute_terms(m: &Model, i: usize, p: usize) -> f64 {
+        let theta = m.lp[usize::from(m.treated[i])][i].exp();
+        (0..p)
+            .map(|j| {
+                let (g, d_lambda) = match &m.tables.cens {
+                    CensTables::Km {
+                        group,
+                        g_before,
+                        d_lambda,
+                        ..
+                    } => (
+                        g_before[group[i] as usize][j],
+                        d_lambda[group[i] as usize][j],
+                    ),
+                    CensTables::Cox {
+                        score,
+                        h_before,
+                        d_h,
+                        ..
+                    } => ((-score[i] * h_before[j]).exp(), score[i] * d_h[j]),
+                    CensTables::None => (1.0, 0.0),
+                };
+                let own = m.status[i] == 0 && m.tables.jump[j].total_cmp(&m.stop[i]).is_eq();
+                (d_lambda + f64::from(u8::from(own))) / (g * (-theta * m.tables.h_before[j]).exp())
+            })
+            .sum()
+    }
+
+    // The moment sums and the sum person by person each have the rounding
+    // error of a sum of positive terms, at most `(P + 3 M + moments + 8) eps`
+    // of the sum of the absolute terms for `P` censoring times, degree `M <=
+    // 25` and at most 351 moments, below `(P + 4 M^2) eps`, and a truncation
+    // below `eps / 32`. The sum `B` has terms below twice those of `A`, and
+    // the augmentation `F A - B` adds `(F + 2)` times the error of `A` and its
+    // own rounding.
+    #[test]
+    fn the_moment_sums_agree_with_the_sum_person_by_person() {
+        let times = [2.0, 5.0, 8.0];
+        for (seed, rounded) in [(7, true), (11, false)] {
+            let c = cohort(3000, seed, rounded);
+            for km in [true, false] {
+                let m = model(&c, km, &times);
+                let (by_moments, direct) = (
+                    m.augmentations(Route::Moments),
+                    m.augmentations(Route::Direct),
+                );
+                let reach = m.tables.jump.partition_point(|&u| u <= 8.0);
+                let mut worst: f64 = 0.0;
+                for i in 0..m.n {
+                    let j_max = m
+                        .tables
+                        .jump
+                        .partition_point(|&u| u <= m.stop[i])
+                        .min(reach);
+                    let theta = m.lp[usize::from(m.treated[i])][i].exp();
+                    for (t, &tau) in times.iter().enumerate() {
+                        let p = m.tables.jump.partition_point(|&u| u <= tau).min(j_max);
+                        let f = 1.0 - (-theta * m.base.at(tau)).exp();
+                        let scale = absolute_terms(&m, i, p);
+                        let tol = (f + 2.0) * (2.0 * p as f64 + 2520.0) * f64::EPSILON * scale;
+                        let (a, b) = (by_moments[i * 3 + t], direct[i * 3 + t]);
+                        assert!(
+                            (a - b).abs() <= tol,
+                            "km {km} rounded {rounded} row {i} time {tau}: {a} {b} tol {tol}"
+                        );
+                        if scale > 0.0 {
+                            worst = worst.max((a - b).abs() / (scale * f64::EPSILON));
+                        }
+                    }
+                }
+                println!(
+                    "km {km} rounded {rounded}: largest difference {worst:.1} eps of the terms"
+                );
+            }
+        }
+    }
+
+    // The estimate is the mean of `phi`, which differs from one route to the
+    // other by `w_i` times the difference of the augmentation, so the
+    // estimates differ by at most the mean of `w_i` times its bound above, and
+    // the standard errors, norms of `(phi - est) / n`, by at most the norm of
+    // the difference of those vectors.
+    #[test]
+    fn the_estimates_agree_between_the_routes() {
+        let times = [2.0, 5.0, 8.0];
+        let c = cohort(3000, 11, false);
+        for km in [true, false] {
+            let m = model(&c, km, &times);
+            let opts = AipwSurvOptions::default();
+            let (a, b) = (
+                m.estimate(&opts, Route::Moments).unwrap(),
+                m.estimate(&opts, Route::Direct).unwrap(),
+            );
+            let aug = m.augmentations(Route::Direct);
+            let reach = m.tables.jump.partition_point(|&u| u <= 8.0);
+            let nf = m.n as f64;
+            for (t, &tau) in times.iter().enumerate() {
+                let mut bound = vec![0.0; m.n];
+                for (i, slot) in bound.iter_mut().enumerate() {
+                    let j_max = m
+                        .tables
+                        .jump
+                        .partition_point(|&u| u <= m.stop[i])
+                        .min(reach);
+                    let p = m.tables.jump.partition_point(|&u| u <= tau).min(j_max);
+                    let theta = m.lp[usize::from(m.treated[i])][i].exp();
+                    let f = 1.0 - (-theta * m.base.at(tau)).exp();
+                    let tol = (f + 2.0) * (2.0 * p as f64 + 2520.0) * f64::EPSILON;
+                    // The rounding of `phi` itself, which both routes share up
+                    // to the augmentation.
+                    let phi = f64::EPSILON * 4.0 * (1.0 + (f + aug[i * 3 + t].abs()) / m.pi[i]);
+                    *slot = tol * absolute_terms(&m, i, p) / m.pi[i] + phi;
+                }
+                let d_est = bound.iter().sum::<f64>() / nf;
+                let d_se = bound
+                    .iter()
+                    .map(|v| (v + d_est) * (v + d_est))
+                    .sum::<f64>()
+                    .sqrt()
+                    / nf;
+                for l in 0..2 {
+                    let idx = l * 3 + t;
+                    let (ea, eb) = (a.risks.risk[idx].unwrap(), b.risks.risk[idx].unwrap());
+                    let se = |r: &AipwSurv| r.risks.std_err.as_ref().unwrap()[idx].unwrap();
+                    assert!(
+                        (ea - eb).abs() <= d_est,
+                        "km {km} level {l} time {tau}: {ea} {eb}"
+                    );
+                    assert!(
+                        (se(&a) - se(&b)).abs() <= d_se * 1.01,
+                        "km {km} level {l} time {tau}: {} {}",
+                        se(&a),
+                        se(&b)
+                    );
+                    println!(
+                        "km {km} level {l} time {tau}: risk {:.1e} of {d_est:.1e}, se {:.1e} of {d_se:.1e}",
+                        (ea - eb).abs(),
+                        (se(&a) - se(&b)).abs()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_degree_bounds_the_truncation() {
+        assert_eq!(degree(0.0), 0);
+        let m = degree(RADIUS);
+        assert!(m <= 25, "{m}");
+        let mut bound = RADIUS.exp();
+        for d in 1..=m + 1 {
+            bound *= RADIUS / d as f64;
+        }
+        assert!(bound <= TRUNCATION);
     }
 }
