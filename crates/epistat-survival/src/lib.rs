@@ -33,6 +33,11 @@
 //! - [`fine_gray`]: the Fine-Gray model on a design matrix, fitted by a sweep
 //!   over the event times with censoring strata, and its weighted rows as
 //!   `survival::finegray` writes them.
+//! - [`flexpar`]: flexible parametric survival models of Royston and Parmar, a restricted
+//!   cubic spline in log time on the log cumulative hazard, log cumulative odds or probit
+//!   scale, with time-varying effects, delayed entry, case weights and cluster-robust
+//!   variance, and survivor, hazard and cumulative hazard curves and contrasts with
+//!   delta-method limits, as `flexsurv::flexsurvspline` and `rstpm2::stpm2`.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
 //!   groups, weights and delayed entry, its infinitesimal jackknife standard
 //!   errors, and a clustered bootstrap of the incidence in two arms over many
@@ -132,6 +137,7 @@ pub mod cox;
 pub mod crossover;
 mod error;
 pub mod fine_gray;
+pub mod flexpar;
 pub mod informative;
 mod ldl;
 pub mod lexis;

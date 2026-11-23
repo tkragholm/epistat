@@ -23,6 +23,12 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   sequential trials with the weighted logistic outcome model and cumulative
   incidence of `TrialEmulation`, and clone-censor-weight for strategies with
   grace periods, with a bootstrap over persons.
+- Flexible parametric survival models of Royston and Parmar on the log cumulative
+  hazard, log cumulative odds and probit scales, with a restricted cubic spline
+  baseline in log time, time-varying effects, delayed entry, case weights and
+  cluster-robust variance, and survivor, hazard and cumulative hazard curves and
+  contrasts with delta-method limits, checked against `survreg`,
+  `flexsurv::flexsurvspline` and `rstpm2::stpm2`.
 - The Titman-Putter test of the Markov property.
 - The self-controlled case series (conditional Poisson likelihood, risk windows
   and age bands, robust variance) with the cutting of follow-up into pieces,

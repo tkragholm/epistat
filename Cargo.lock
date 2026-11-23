@@ -827,6 +827,7 @@ dependencies = [
  "epistat-glm",
  "epistat-inference",
  "epistat-linalg",
+ "epistat-optim",
  "epistat-rng",
  "epistat-stats",
  "epistat-testkit",
