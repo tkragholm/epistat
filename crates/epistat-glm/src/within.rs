@@ -98,8 +98,72 @@ use epistat_linalg::{
 };
 use rayon::prelude::*;
 
-use crate::fit::independent_columns;
 use crate::{Family, Glm, GlmError, Link};
+
+/// The columns of `sqrt(W) X` that R's `dqrdc2` keeps, by the rule `Glm::fit`
+/// applies: true where the norm left after projecting out the kept columns
+/// before it is at least `tol` times the norm of the column, with modified
+/// Gram-Schmidt and a second pass in column order.
+///
+/// Used by the within-family estimator only. The sums run over blocks of
+/// [`ROW_BLOCK`] rows in parallel and are added in block order, so the result
+/// does not depend on the number of threads.
+fn aliased_columns(x: MatRef<'_, f64>, w2: &[f64], epsilon: f64) -> Vec<bool> {
+    let tol = 1e-7_f64.min(epsilon / 1000.0);
+    let n = x.nrows();
+    let mut basis: Vec<Vec<f64>> = Vec::new();
+    (0..x.ncols())
+        .map(|j| {
+            let mut u = vec![0.0; n];
+            u.par_chunks_mut(ROW_BLOCK)
+                .enumerate()
+                .for_each(|(block, chunk)| {
+                    for (k, v) in chunk.iter_mut().enumerate() {
+                        let i = block * ROW_BLOCK + k;
+                        *v = w2[i].sqrt() * x[(i, j)];
+                    }
+                });
+            let original = norm(&u);
+            for _ in 0..2 {
+                for q in &basis {
+                    let dot = blocked_sum(&u, |range, chunk| {
+                        q[range].iter().zip(chunk).map(|(a, b)| a * b).sum::<f64>()
+                    });
+                    u.par_chunks_mut(ROW_BLOCK)
+                        .enumerate()
+                        .for_each(|(block, chunk)| {
+                            for (v, a) in chunk.iter_mut().zip(&q[block * ROW_BLOCK..]) {
+                                *v -= dot * a;
+                            }
+                        });
+                }
+            }
+            let left = norm(&u);
+            // A column of zeros is aliased, as in dqrdc2, which compares with 1.
+            if left < tol * if original > 0.0 { original } else { 1.0 } {
+                return false;
+            }
+            u.par_iter_mut().for_each(|v| *v /= left);
+            basis.push(u);
+            true
+        })
+        .collect()
+}
+
+/// The sum of `term(range, &v[range])` over the blocks of `v`, added in block
+/// order.
+fn blocked_sum(v: &[f64], term: impl Fn(std::ops::Range<usize>, &[f64]) -> f64 + Sync) -> f64 {
+    let partial: Vec<f64> = v
+        .par_chunks(ROW_BLOCK)
+        .enumerate()
+        .map(|(block, chunk)| term(block * ROW_BLOCK..block * ROW_BLOCK + chunk.len(), chunk))
+        .collect();
+    partial.iter().sum()
+}
+
+fn norm(v: &[f64]) -> f64 {
+    blocked_sum(v, |_, chunk| chunk.iter().map(|a| a * a).sum::<f64>()).sqrt()
+}
 
 /// `sum_i term(i)` over `0..n`, added by blocks of [`ROW_BLOCK`] rows in block
 /// order, so it does not depend on the number of threads.
@@ -434,7 +498,7 @@ impl Within {
             .filter(|&c| demeaned.rows[c] >= 2 && demeaned.varies[c])
             .count();
 
-        let keep = independent_columns(
+        let keep = aliased_columns(
             x_tilde,
             w,
             Glm::new(Family::Gaussian, Link::Identity).tolerance,

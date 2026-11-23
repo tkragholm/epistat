@@ -158,8 +158,7 @@
 use crate::columns::{column_slices, contiguous_copy, linear_predictor};
 use epistat_linalg::design::select_columns;
 use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, weighted_xtz};
-use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
-use rayon::prelude::*;
+use epistat_linalg::{Mat, MatRef};
 
 use crate::{Family, Link};
 
@@ -535,38 +534,20 @@ impl Glm {
 /// after projecting out the kept columns before it is at least `tol` times the
 /// norm of the column. Modified Gram-Schmidt with a second pass, in column
 /// order.
-///
-/// The sums run over blocks of [`ROW_BLOCK`] rows in parallel and are added in
-/// block order, so the result does not depend on the number of threads. For
-/// at most one block it is the plain sequential sum.
-pub(crate) fn independent_columns(x: MatRef<'_, f64>, w2: &[f64], epsilon: f64) -> Vec<bool> {
+fn independent_columns(x: MatRef<'_, f64>, w2: &[f64], epsilon: f64) -> Vec<bool> {
     let tol = 1e-7_f64.min(epsilon / 1000.0);
     let n = x.nrows();
     let mut basis: Vec<Vec<f64>> = Vec::new();
     (0..x.ncols())
         .map(|j| {
-            let mut u = vec![0.0; n];
-            u.par_chunks_mut(ROW_BLOCK)
-                .enumerate()
-                .for_each(|(block, chunk)| {
-                    for (k, v) in chunk.iter_mut().enumerate() {
-                        let i = block * ROW_BLOCK + k;
-                        *v = w2[i].sqrt() * x[(i, j)];
-                    }
-                });
+            let mut u: Vec<f64> = (0..n).map(|i| w2[i].sqrt() * x[(i, j)]).collect();
             let original = norm(&u);
             for _ in 0..2 {
                 for q in &basis {
-                    let dot = blocked_sum(&u, |range, chunk| {
-                        q[range].iter().zip(chunk).map(|(a, b)| a * b).sum::<f64>()
-                    });
-                    u.par_chunks_mut(ROW_BLOCK)
-                        .enumerate()
-                        .for_each(|(block, chunk)| {
-                            for (v, a) in chunk.iter_mut().zip(&q[block * ROW_BLOCK..]) {
-                                *v -= dot * a;
-                            }
-                        });
+                    let dot: f64 = q.iter().zip(&u).map(|(a, b)| a * b).sum();
+                    for (v, a) in u.iter_mut().zip(q) {
+                        *v -= dot * a;
+                    }
                 }
             }
             let left = norm(&u);
@@ -574,26 +555,17 @@ pub(crate) fn independent_columns(x: MatRef<'_, f64>, w2: &[f64], epsilon: f64) 
             if left < tol * if original > 0.0 { original } else { 1.0 } {
                 return false;
             }
-            u.par_iter_mut().for_each(|v| *v /= left);
+            for v in &mut u {
+                *v /= left;
+            }
             basis.push(u);
             true
         })
         .collect()
 }
 
-/// The sum of `term(range, &v[range])` over the blocks of `v`, added in block
-/// order.
-fn blocked_sum(v: &[f64], term: impl Fn(std::ops::Range<usize>, &[f64]) -> f64 + Sync) -> f64 {
-    let partial: Vec<f64> = v
-        .par_chunks(ROW_BLOCK)
-        .enumerate()
-        .map(|(block, chunk)| term(block * ROW_BLOCK..block * ROW_BLOCK + chunk.len(), chunk))
-        .collect();
-    partial.iter().sum()
-}
-
 fn norm(v: &[f64]) -> f64 {
-    blocked_sum(v, |_, chunk| chunk.iter().map(|a| a * a).sum::<f64>()).sqrt()
+    v.iter().map(|a| a * a).sum::<f64>().sqrt()
 }
 
 fn check(what: &'static str, expected: usize, found: usize) -> Result<(), GlmError> {
