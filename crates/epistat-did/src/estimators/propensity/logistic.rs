@@ -16,7 +16,6 @@ impl LogisticPS {
 }
 
 impl PropensityEstimator for LogisticPS {
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn fit(
         &self,
         design: MatRef<'_, f64>,
@@ -55,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn logistic_fit_reaches_irls_fallback_on_zero_iters() {
+    fn logistic_fit_fails_with_no_iterations() {
         let design = simple_design();
         let target = Mat::from_fn(5, 1, |row, _| if row < 3 { 0.0 } else { 1.0 });
         // max_iter=0 forces BFGS to fail immediately (no iterations allowed),

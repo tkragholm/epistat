@@ -49,7 +49,6 @@ impl LocalLinearOutcome {
     /// # Errors
     /// Returns an error when the training arrays have inconsistent lengths or
     /// when the local linear system cannot be solved.
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn predict_from_training(
         self,
         train_design: MatRef<'_, f64>,
@@ -104,7 +103,6 @@ impl LocalLinearOutcome {
         )
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn refill_bandwidths(self, train_design: MatRef<'_, f64>, out: &mut Vec<f64>) {
         let row_count = train_design.nrows();
         let feature_count = train_design.ncols().saturating_sub(1);
@@ -133,7 +131,6 @@ impl LocalLinearOutcome {
     }
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn prepare_local_linear_inputs(
     model: LocalLinearOutcome,
     train_design: MatRef<'_, f64>,
@@ -146,11 +143,6 @@ fn prepare_local_linear_inputs(
     scratch.ensure_solver(local_param_count);
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "local-linear kernel prediction needs these inputs"
-)]
 fn predict_query_rows_local_linear(
     model: LocalLinearOutcome,
     train_design: MatRef<'_, f64>,
@@ -191,7 +183,6 @@ fn predict_query_rows_local_linear(
     Ok(predictions)
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_query_covariate_groups(
     query_design: MatRef<'_, f64>,
     feature_count: usize,
@@ -229,8 +220,6 @@ struct QueryCovariateGroups {
     row_to_unique: Vec<usize>,
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn predict_query_covariates(
     model: LocalLinearOutcome,
     train_design: MatRef<'_, f64>,
@@ -288,11 +277,6 @@ fn normalized_f64_bits(value: f64) -> u64 {
     }
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "normal-equation accumulation needs these inputs"
-)]
 fn accumulate_local_linear_system(
     train_design: MatRef<'_, f64>,
     train_outcome: &[f64],
@@ -338,8 +322,6 @@ fn accumulate_local_linear_system(
     weight_sum
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn solve_local_linear_system(
     model: LocalLinearOutcome,
     train_design: MatRef<'_, f64>,
@@ -412,7 +394,6 @@ impl LocalLinearScratch {
         }
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn refill_covariates_flat(&mut self, design: MatRef<'_, f64>, feature_count: usize) {
         self.covariates_flat.clear();
         let needed = design.nrows() * feature_count;
@@ -426,7 +407,6 @@ impl LocalLinearScratch {
     }
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn solve_local_qr_lstsq(
     train_design: MatRef<'_, f64>,
     train_covariates_flat: &[f64],

@@ -101,8 +101,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_coun
 ///
 /// # Errors
 /// Returns an error if any underlying component computation fails.
-#[allow(clippy::too_many_lines)]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn assess_honest_event_study_workflow_with_config(
     input: &HonestEventStudyInput,
     functionals: &[HonestPostFunctional],
@@ -334,7 +332,6 @@ fn directional_region_from_joint_path_region(
     }
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_workflow_directional_region(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,

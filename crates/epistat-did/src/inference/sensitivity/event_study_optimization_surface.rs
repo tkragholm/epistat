@@ -361,12 +361,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
 /// # Errors
 /// Returns an error if adaptive configuration validation, direction generation,
 /// calibration, or directional scalar assessment fails.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::too_many_lines,
-    reason = "surface approximation uses rounded dedup keys and a single orchestration pass"
-)]
 pub fn assess_honest_event_study_optimization_surface_region_adaptive_with_config(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,

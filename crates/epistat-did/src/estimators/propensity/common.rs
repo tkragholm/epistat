@@ -7,7 +7,6 @@ pub fn safe_sigmoid(v: f64) -> f64 {
 }
 
 #[must_use]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn logistic_scores(covariates: MatRef<'_, f64>, beta: MatRef<'_, f64>) -> Vec<f64> {
     let n = covariates.nrows();
     let k = covariates.ncols();
@@ -26,7 +25,6 @@ pub fn logistic_scores(covariates: MatRef<'_, f64>, beta: MatRef<'_, f64>) -> Ve
 }
 
 #[must_use]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn softmax_scores(
     covariates: MatRef<'_, f64>,
     beta: MatRef<'_, f64>,
@@ -65,7 +63,6 @@ pub fn softmax_scores(
 }
 
 #[must_use]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn softmax_scores_fixed4(
     covariates: MatRef<'_, f64>,
     beta: MatRef<'_, f64>,

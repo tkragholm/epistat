@@ -101,7 +101,6 @@ fn validate_direction_set(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(super) fn calibrate_directional_region(
     input: &HonestEventStudyInput,
     directions: &[Vec<f64>],
@@ -190,8 +189,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
     )
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_region_with_optional_prepared_relative_magnitude(
     input: &HonestEventStudyInput,
     directions: &[Vec<f64>],

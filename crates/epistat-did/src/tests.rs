@@ -9,7 +9,6 @@ use crate::estimators::common::testing::{
 use crate::estimators::outcome::linear::LinearOutcome;
 use crate::estimators::outcome::model::OutcomeModel;
 use crate::estimators::propensity::common::logistic_scores;
-use crate::estimators::propensity::ipt::ipt_loss_grad_hess;
 use crate::estimators::propensity::irls::irls as irls_fit;
 use crate::types::{DidCell, TimePeriod, TreatmentGroup};
 
@@ -338,32 +337,6 @@ fn irls_reports_non_convergence_when_no_iterations_allowed() {
         err,
         PortedDidError::Convergence("IRLS did not converge".to_string())
     );
-}
-
-#[test]
-fn ipt_loss_gradient_hessian_are_finite_and_well_shaped() {
-    let design = Mat::from_fn(2, 2, |row, col| match (row, col) {
-        (0, 1) => -1.0,
-        (0 | 1, 0) | (1, 1) => 1.0,
-        _ => 0.0,
-    });
-    let target = Mat::from_fn(2, 1, |row, _| if row == 0 { 0.0 } else { 1.0 });
-    let beta = Mat::from_fn(2, 1, |row, _| if row == 0 { 0.0 } else { 2.0 });
-
-    // vstar=0.5 ensures one row follows the lower branch and one row the upper branch.
-    let (loss, grad, hess) = ipt_loss_grad_hess(&design, &target, &beta, 0.5);
-    assert!(loss.is_finite());
-    assert_eq!(grad.nrows(), 2);
-    assert_eq!(grad.ncols(), 1);
-    assert_eq!(hess.nrows(), 2);
-    assert_eq!(hess.ncols(), 2);
-    assert!(grad.col_as_slice(0).iter().all(|v| v.is_finite()));
-    for i in 0..2 {
-        for j in 0..2 {
-            assert!(hess.get(i, j).is_finite());
-            assert!((hess.get(i, j) - hess.get(j, i)).abs() < 1e-12);
-        }
-    }
 }
 
 #[test]

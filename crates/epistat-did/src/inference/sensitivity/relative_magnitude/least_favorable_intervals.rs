@@ -333,15 +333,6 @@ fn simulated_joint_pointwise_confidence_level(
     )
 }
 
-#[doc(hidden)]
-pub fn benchmark_multi_flci_critical_value(
-    covariance: &[Vec<f64>],
-    simulation_draws: usize,
-    simulation_seed: u64,
-) -> Result<f64, String> {
-    sup_t_critical_value(covariance, 0.95, simulation_draws, simulation_seed)
-}
-
 fn joint_pointwise_confidence_level(
     problem: &RelativeMagnitudeMultiFlciProblem,
     joint_config: HonestJointPathConfig,

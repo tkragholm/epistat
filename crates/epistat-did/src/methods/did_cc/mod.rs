@@ -190,7 +190,6 @@ pub fn test_did_cc_stationarity(
 /// # Errors
 /// Returns [`DidCcError`] when either estimator cannot be formed or the
 /// difference variance is degenerate.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn test_did_cc_stationarity_from_views<T: DidCcObservationView>(
     observations: &[T],
     config: DidCcConfig,
@@ -234,7 +233,6 @@ fn validate_did_cc_config(config: DidCcConfig) -> Result<(), DidCcError> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn prepare_did_cc_data<T: DidCcObservationView>(
     observations: &[T],
 ) -> Result<DidCcPreparedData, DidCcError> {
@@ -322,7 +320,6 @@ fn prepare_did_cc_data<T: DidCcObservationView>(
     })
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_did_cc_nuisance(
     prepared: &DidCcPreparedData,
     config: DidCcConfig,
@@ -375,7 +372,6 @@ fn fit_did_cc_nuisance(
     })
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_cross_fitted_nuisance(
     prepared: &DidCcPreparedData,
     _full_design_matrix: MatRef<'_, f64>,
@@ -549,7 +545,6 @@ fn design_matrix_view(prepared: &DidCcPreparedData) -> MatRef<'_, f64> {
     )
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_outcome_predictions(
     train_outcomes: &[f64],
     train_weights: &[f64],
@@ -608,7 +603,6 @@ fn collect_cell_indices(class_labels: &[usize]) -> [Vec<usize>; 4] {
     cells
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn copy_outcome_subset_into_scratch(
     train_data: &OutcomeTrainData<'_>,
     indices: &[usize],
@@ -625,7 +619,6 @@ fn copy_outcome_subset_into_scratch(
     }
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_cell_outcome(
     train_data: &OutcomeTrainData<'_>,
     query_design: epistat_linalg::MatRef<'_, f64>,
@@ -662,7 +655,6 @@ fn fit_cell_outcome(
         .map_err(|err| DidCcError::InvalidConfig(err.to_string()))
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_generalized_propensity(
     class_labels: &[usize],
     sampling_weights: &[f64],
@@ -705,7 +697,6 @@ fn fit_generalized_propensity(
     ))
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_pooled_treated_propensity(
     treated: &[f64],
     train_design: epistat_linalg::MatRef<'_, f64>,

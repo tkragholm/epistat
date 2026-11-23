@@ -56,7 +56,6 @@ const LEAST_FAVORABLE_CV_MIN_DRAWS_PER_JOB: usize = 32;
 /// # Errors
 /// Returns an error if the covariance is not positive definite or too many
 /// draws fail to solve.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub(in crate::inference::sensitivity) fn compute_least_favorable_cv(
     x_matrix: &[Vec<f64>],
     sigma: &[Vec<f64>],

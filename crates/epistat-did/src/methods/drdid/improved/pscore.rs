@@ -29,19 +29,8 @@ const STEP_TOL: f64 = 1e-12;
 const LOGIT_MAX_ITER: usize = 200;
 const LOGIT_TOLERANCE: f64 = 1e-12;
 
-/// Which fit supplied the coefficients of a propensity score.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PscoreMethod {
-    Calibration,
-    InverseProbabilityTilting,
-    Logit,
-}
-
 pub(super) struct CalibratedPscore {
     pub(super) scores: Vec<f64>,
-    // Which branch produced the scores; read by tests.
-    #[allow(dead_code)]
-    pub(super) method: PscoreMethod,
 }
 
 /// Fit the calibrated propensity score of every row.
@@ -54,14 +43,13 @@ pub(super) fn calibrated_propensity_scores(
     weights: &[f64],
 ) -> Result<CalibratedPscore, DrDidError> {
     let logit = fit_weighted_logit(design, p, treated, weights)?;
-    let (coefficients, method) =
-        if let Some(g) = minimise_calibration(design, p, treated, weights, &logit) {
-            (g, PscoreMethod::Calibration)
-        } else if let Some(g) = minimise_tilting(design, p, treated, weights, &logit) {
-            (g, PscoreMethod::InverseProbabilityTilting)
-        } else {
-            (logit, PscoreMethod::Logit)
-        };
+    let coefficients = if let Some(g) = minimise_calibration(design, p, treated, weights, &logit) {
+        g
+    } else if let Some(g) = minimise_tilting(design, p, treated, weights, &logit) {
+        g
+    } else {
+        logit
+    };
     let scores = linear_index(design, p, &coefficients)
         .into_iter()
         .map(|v| 1.0 / (1.0 + (-v).exp()))
@@ -69,7 +57,7 @@ pub(super) fn calibrated_propensity_scores(
     if scores.iter().any(|s| s.is_nan()) {
         return Err(DrDidError::SingularSystem);
     }
-    Ok(CalibratedPscore { scores, method })
+    Ok(CalibratedPscore { scores })
 }
 
 /// Weighted least squares of `y` on the design over the rows where `keep`

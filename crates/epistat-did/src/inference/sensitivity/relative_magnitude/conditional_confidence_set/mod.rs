@@ -283,7 +283,6 @@ impl<'a> RelativeMagnitudeThetaEvaluator<'a> {
         Ok((lo, eta))
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn accepts(
         &mut self,
         theta: f64,
@@ -688,12 +687,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     )
 }
 
-#[allow(clippy::too_many_lines)]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "prepared branch evaluation carries distinct calibrated inputs"
-)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_set_with_prepared_functional_branches(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1059,7 +1052,6 @@ fn better_anchor_idx(
     Ok(Some(best_idx))
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn compute_relative_magnitude_branch_accepted_range_adaptive(
     grid: &[f64],
     anchor_idx: usize,
@@ -1151,8 +1143,6 @@ pub(in crate::inference::sensitivity) fn solve_relative_magnitude_branch_with_ma
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn relative_magnitude_lp_conditional_test_prepared(
     y_arp: &[f64],
     x_arp: &[Vec<f64>],

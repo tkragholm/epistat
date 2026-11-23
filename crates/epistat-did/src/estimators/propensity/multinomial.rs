@@ -28,7 +28,6 @@ struct MultinomialProblem {
 }
 
 impl MultinomialProblem {
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn evaluate(&self, params: &[f64]) -> (f64, Vec<f64>) {
         let design = self.x.as_ref();
         let coefficients = vec_to_mat(params, design.ncols(), self.class_count);
@@ -82,7 +81,6 @@ impl MultinomialProblem {
 }
 
 impl MultinomialPropensityEstimator for MultinomialSoftmaxPS {
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn fit_multinomial(
         &self,
         x: MatRef<'_, f64>,
@@ -130,7 +128,6 @@ impl MultinomialPropensityEstimator for MultinomialSoftmaxPS {
     }
 }
 
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn build_grouped_problem(
     x: MatRef<'_, f64>,
     class_labels: &[usize],

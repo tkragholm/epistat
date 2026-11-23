@@ -106,7 +106,6 @@ pub(in crate::inference::sensitivity) fn construct_gamma(
 }
 
 type ArpViews = (Vec<Vec<f64>>, Vec<f64>, Vec<f64>, Vec<Vec<f64>>);
-const RREF_NOCLONE_MAX_ROWS: usize = 16;
 
 pub(in crate::inference::sensitivity) enum RelativeMagnitudePreparedFunctionalTransform {
     Basis { target_idx: usize },
@@ -123,119 +122,6 @@ pub(in crate::inference::sensitivity) fn prepare_relative_magnitude_functional_t
         let gamma_inverse = invert_square_matrix(&gamma)?;
         Ok(RelativeMagnitudePreparedFunctionalTransform::General { gamma_inverse })
     }
-}
-
-pub(in crate::inference::sensitivity) fn rref_pivot_columns(
-    matrix: &[Vec<f64>],
-    tol: f64,
-) -> Result<Vec<usize>, String> {
-    if matrix.len() <= RREF_NOCLONE_MAX_ROWS {
-        rref_pivot_columns_noclone(matrix, tol)
-    } else {
-        rref_pivot_columns_clone(matrix, tol)
-    }
-}
-
-fn rref_pivot_columns_noclone(matrix: &[Vec<f64>], tol: f64) -> Result<Vec<usize>, String> {
-    if matrix.is_empty() {
-        return Ok(Vec::new());
-    }
-    let rows = matrix.len();
-    let cols = matrix[0].len();
-    let mut m = matrix.to_vec();
-    let mut pivot_columns = Vec::new();
-    let mut pivot_row = 0usize;
-    for col in 0..cols {
-        if pivot_row >= rows {
-            break;
-        }
-        let Some(best_row) = (pivot_row..rows)
-            .max_by(|&left, &right| m[left][col].abs().total_cmp(&m[right][col].abs()))
-        else {
-            break;
-        };
-        if m[best_row][col].abs() <= tol {
-            continue;
-        }
-        m.swap(pivot_row, best_row);
-        let pivot_value = m[pivot_row][col];
-        for value in &mut m[pivot_row] {
-            *value /= pivot_value;
-        }
-        for row in 0..rows {
-            if row == pivot_row {
-                continue;
-            }
-            let (target_row, pivot_row_ref) = if row < pivot_row {
-                let (before_pivot, pivot_and_after) = m.split_at_mut(pivot_row);
-                (&mut before_pivot[row], &pivot_and_after[0])
-            } else {
-                let (up_to_target, target_and_after) = m.split_at_mut(row);
-                (&mut target_and_after[0], &up_to_target[pivot_row])
-            };
-            let factor = target_row[col];
-            if factor.abs() <= tol {
-                continue;
-            }
-            for c in 0..cols {
-                target_row[c] = factor.mul_add(-pivot_row_ref[c], target_row[c]);
-            }
-        }
-        pivot_columns.push(col);
-        pivot_row += 1;
-    }
-    if pivot_columns.len() != rows {
-        return Err("matrix did not yield a full pivot basis".to_string());
-    }
-    Ok(pivot_columns)
-}
-
-fn rref_pivot_columns_clone(matrix: &[Vec<f64>], tol: f64) -> Result<Vec<usize>, String> {
-    if matrix.is_empty() {
-        return Ok(Vec::new());
-    }
-    let rows = matrix.len();
-    let cols = matrix[0].len();
-    let mut m = matrix.to_vec();
-    let mut pivot_columns = Vec::new();
-    let mut pivot_row = 0usize;
-    for col in 0..cols {
-        if pivot_row >= rows {
-            break;
-        }
-        let Some(best_row) = (pivot_row..rows)
-            .max_by(|&left, &right| m[left][col].abs().total_cmp(&m[right][col].abs()))
-        else {
-            break;
-        };
-        if m[best_row][col].abs() <= tol {
-            continue;
-        }
-        m.swap(pivot_row, best_row);
-        let pivot_value = m[pivot_row][col];
-        for value in &mut m[pivot_row] {
-            *value /= pivot_value;
-        }
-        for row in 0..rows {
-            if row == pivot_row {
-                continue;
-            }
-            let factor = m[row][col];
-            if factor.abs() <= tol {
-                continue;
-            }
-            let pivot_snapshot = m[pivot_row].clone();
-            for (target, pivot_entry) in m[row].iter_mut().zip(pivot_snapshot.iter()) {
-                *target = factor.mul_add(-*pivot_entry, *target);
-            }
-        }
-        pivot_columns.push(col);
-        pivot_row += 1;
-    }
-    if pivot_columns.len() != rows {
-        return Err("matrix did not yield a full pivot basis".to_string());
-    }
-    Ok(pivot_columns)
 }
 
 pub(super) fn find_post_period_constraint_rows(

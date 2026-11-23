@@ -13,7 +13,6 @@ use crate::estimators::common::logit::fit_logit_collapsed;
 /// # Errors
 /// Returns `InternalDidError::Convergence` if the fit fails or does not
 /// converge in `max_iter` iterations.
-#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub fn irls(
     design: MatRef<'_, f64>,
     target: MatRef<'_, f64>,
