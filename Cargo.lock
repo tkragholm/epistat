@@ -635,6 +635,7 @@ dependencies = [
  "epistat-rng",
  "epistat-stats",
  "epistat-testkit",
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]

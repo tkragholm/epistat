@@ -22,6 +22,20 @@ Causal effect estimators for cohort data.
   the weights and the outcome model, valid with clusters. Continuous and
   multi-valued treatments and non-parametric CBPS are not implemented.
 
+- The parametric g-formula for time-varying treatments and confounders on
+  person-period data, as `gfoRmula::gformula`: logistic and linear models for
+  binary and normal covariates with lags, cumulative averages, lagged
+  cumulative averages, interactions and restrictions (absorbing covariates
+  among them), a survival outcome with a competing event or a binary or
+  continuous outcome at the end of follow-up, and the natural course with
+  static, scheduled, threshold and dynamic strategies at all or some periods.
+  It gives the risks or means, their ratios and differences, the Monte Carlo
+  standard error of each, and a nonparametric bootstrap over persons with
+  percentile or normal limits. Every strategy is simulated from the same
+  draws, seeded per person, so the results do not depend on the number of
+  threads. Categorical and truncated covariates, restrictions on the outcome
+  model, censoring weights and hazard ratios are not implemented.
+
 The risk by a time with right censoring is in `epistat-survival::aipw`, since it
 needs the Cox and censoring machinery of that crate.
 
@@ -29,4 +43,8 @@ Case weights and clusters are supported. Results do not depend on the number
 of threads, and are checked against `riskRegression::ate` and against
 estimators written out by hand in R. Entropy balancing is also checked against
 `WeightIt` and `ebal`, and CBPS against `CBPS`, with the variance checked against
-the infinitesimal jackknife of the whole procedure and a bootstrap.
+the infinitesimal jackknife of the whole procedure and a bootstrap. The
+g-formula is checked against `gfoRmula`: exactly where every simulated variable
+is set by the strategy, within the Monte Carlo error elsewhere, and against the
+exact sum over two periods and the truth of a simulated data-generating
+process.
