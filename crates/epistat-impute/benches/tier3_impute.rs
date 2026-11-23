@@ -1,7 +1,7 @@
 //! Wall time of one chain of five iterations of chained equations for a
 //! single incomplete column, set against `mice::mice` (`bench/tier3/impute.R`).
 //! The driver and the environment are those of `bench/tier1/common.rs`, run by
-//! `bench/tier3/impute_run.sh`.
+//! `bench/run.sh`.
 //!
 //! Data kind `imp` (`METHOD=gen_imp` writes it): `x1` and `x2` normal and
 //! `x3` binary, complete, and three incomplete columns about 30 per cent

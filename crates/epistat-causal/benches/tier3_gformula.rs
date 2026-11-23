@@ -1,6 +1,6 @@
 //! Wall time of the parametric g-formula, set against `gfoRmula::gformula` on
 //! the same data (`bench/tier3/gformula.R`). The driver and the environment are
-//! described in `bench/tier1/common.rs`; `bench/tier3/gformula_run.sh` runs
+//! described in `bench/tier1/common.rs`; `bench/run.sh` runs
 //! both sides. `N` is the number of persons, each followed for up to six
 //! periods, so the data have about `4.5 N` rows.
 //!
