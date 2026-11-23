@@ -59,6 +59,9 @@
 //!   generalised estimating equations on them.
 //! - [`rmst`]: restricted mean survival time and time lost in two groups with their
 //!   difference and ratios, and their regression on covariates, as `survRM2::rmst2`.
+//! - [`sccs`]: the self-controlled case series, its conditional Poisson likelihood with robust
+//!   variance and the cutting of follow-up into pieces of age band and risk window, as
+//!   `SCCS::standardsccs`.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`ratetable`]: a table of reference hazards by age, sex and calendar year, and the
@@ -133,6 +136,7 @@ pub mod pseudo;
 pub mod pyears;
 pub mod ratetable;
 pub mod rmst;
+pub mod sccs;
 pub mod split;
 pub mod standardise;
 mod step;
