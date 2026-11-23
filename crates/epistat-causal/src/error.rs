@@ -9,6 +9,14 @@ pub enum Error {
     /// data that contradicts itself. Nothing was estimated.
     #[error("{0}")]
     Input(String),
+    /// The conditions the method asks of the weights cannot be met by any
+    /// weights, for example target moments outside the range of the group.
+    /// Nothing was estimated.
+    #[error("{0}")]
+    Infeasible(String),
+    /// An iteration did not reach its tolerance. Nothing was estimated.
+    #[error("{0}")]
+    NoConvergence(String),
 }
 
 impl Error {
