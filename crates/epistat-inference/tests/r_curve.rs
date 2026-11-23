@@ -114,8 +114,8 @@ fn rcs_curves_match_predict() {
             .iter()
             .position(|&x| x.to_bits() == case.reference.to_bits());
         if let Some(i) = at_reference {
-            assert_eq!(curve.estimate[i], 0.0, "{}", case.name);
-            assert_eq!(curve.se[i], 0.0, "{}", case.name);
+            assert_eq!(curve.estimate[i].to_bits(), 0, "{}", case.name);
+            assert_eq!(curve.se[i].to_bits(), 0, "{}", case.name);
         }
     }
     eprintln!("restricted cubic: worst deviation {worst:.3} of its bound");
