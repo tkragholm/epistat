@@ -899,8 +899,7 @@ fn borgan(
     let mut members = vec![0usize; strata];
     let mut non_cases = vec![0usize; strata];
     let mut cases = vec![0usize; strata];
-    for i in 0..rows {
-        let j = dense[i];
+    for (i, &j) in dense.iter().enumerate() {
         in_stratum[j] += 1;
         if sample.subcohort[i] {
             members[j] += 1;
@@ -912,11 +911,10 @@ fn borgan(
             cases[j] += 1;
         }
     }
-    for j in 0..strata {
-        if opts.cohort_size[j] < in_stratum[j] as f64 {
+    for (j, (&size, &count)) in opts.cohort_size.iter().zip(&in_stratum).enumerate() {
+        if size < count as f64 {
             return Err(Error::input(format!(
-                "cohort_size: stratum {j} has {} rows and a cohort size of {}",
-                in_stratum[j], opts.cohort_size[j]
+                "cohort_size: stratum {j} has {count} rows and a cohort size of {size}"
             )));
         }
     }

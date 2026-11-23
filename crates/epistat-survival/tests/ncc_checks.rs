@@ -247,8 +247,8 @@ fn weighted_estimates_are_unbiased_over_simulated_studies() {
         let base = baseline(&model, &data, x.as_ref(), &w, &opts).unwrap();
         let risk = absolute_risk(&base, &model.coefficients, profile.as_ref(), &at).unwrap()[0][0]
             .unwrap();
-        for j in 0..2 {
-            d_beta[j].push(model.coefficients[j].unwrap() - full.coefficients[j].unwrap());
+        for (j, d) in d_beta.iter_mut().enumerate() {
+            d.push(model.coefficients[j].unwrap() - full.coefficients[j].unwrap());
         }
         d_risk.push(risk - full_risk);
 
@@ -266,8 +266,8 @@ fn weighted_estimates_are_unbiased_over_simulated_studies() {
         }
         let cx = Mat::from_fn(set_rows.len(), 2, |i, j| all_x[(set_rows[i], j)]);
         let cl = clogit(&set_case, &set_id, cx.as_ref(), &ClogitOptions::default()).unwrap();
-        for j in 0..2 {
-            d_clogit[j].push(cl.coefficients[j].unwrap() - model.coefficients[j].unwrap());
+        for (j, d) in d_clogit.iter_mut().enumerate() {
+            d.push(cl.coefficients[j].unwrap() - model.coefficients[j].unwrap());
         }
     }
     let check = |name: &str, d: &[f64]| {
