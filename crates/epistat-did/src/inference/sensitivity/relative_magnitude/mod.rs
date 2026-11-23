@@ -400,11 +400,6 @@ where
     if num_pre == 0 {
         return Err("relative-magnitude sensitivity requires at least one pre-period".to_string());
     }
-    let target_estimate = post_weights
-        .iter()
-        .zip(&input.betahat[num_pre..])
-        .map(|(weight, beta)| weight * beta)
-        .sum::<f64>();
     let branches: Vec<(isize, bool)> = (min_s..=0)
         .flat_map(|s| {
             [true, false]
@@ -436,6 +431,8 @@ where
         global_lower = global_lower.min(branch.lb);
         global_upper = global_upper.max(branch.ub);
     }
+    // No branch admits a violation path through the pre-period coefficients:
+    // the set is empty, which is undefined, as for the smoothness classes.
     if solved_any_branch {
         Ok(HonestIdentifiedSet {
             lb: global_lower,
@@ -443,8 +440,8 @@ where
         })
     } else {
         Ok(HonestIdentifiedSet {
-            lb: target_estimate,
-            ub: target_estimate,
+            lb: f64::NAN,
+            ub: f64::NAN,
         })
     }
 }
@@ -701,7 +698,7 @@ pub(in crate::inference::sensitivity) fn prepare_relative_magnitude_family_draws
 /// `mbar` is finite and non-negative. The set is the union over the
 /// restriction's branches of the range of the functional that satisfies the
 /// constraints and the pre-period coefficients. If no branch is feasible the
-/// set is the single point of the estimate.
+/// set is empty and both bounds are NaN.
 ///
 /// # Errors
 /// Returns an error if the input is invalid, `post_weights` or `mbar` is
@@ -853,7 +850,7 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
 /// `mbar` is finite and non-negative. The set is the union over the
 /// restriction's branches of the range of the functional that satisfies the
 /// constraints and the pre-period coefficients. If no branch is feasible the
-/// set is the single point of the estimate.
+/// set is empty and both bounds are NaN.
 ///
 /// # Errors
 /// Returns an error if the input is invalid, `post_weights` or `mbar` is
@@ -992,7 +989,7 @@ pub(in crate::inference::sensitivity) fn compute_signed_relative_magnitude_confi
 /// `mbar` is finite and non-negative. The set is the union over the
 /// restriction's branches of the range of the functional that satisfies the
 /// constraints and the pre-period coefficients. If no branch is feasible the
-/// set is the single point of the estimate.
+/// set is empty and both bounds are NaN.
 ///
 /// # Errors
 /// Returns an error if the input is invalid, `post_weights` or `mbar` is
@@ -1131,7 +1128,7 @@ pub(in crate::inference::sensitivity) fn compute_monotone_relative_magnitude_con
 /// `mbar` is finite and non-negative. Needs at least two pre-periods. The set
 /// is the union over the restriction's branches of the range of the functional
 /// that satisfies the constraints and the pre-period coefficients. If no branch
-/// is feasible the set is the single point of the estimate.
+/// is feasible the set is empty and both bounds are NaN.
 ///
 /// # Errors
 /// Returns an error if the input is invalid, `post_weights` or `mbar` is
@@ -1260,7 +1257,7 @@ pub(in crate::inference::sensitivity) fn compute_linear_trend_relative_magnitude
 /// `mbar` is finite and non-negative. Needs at least two pre-periods. The set
 /// is the union over the restriction's branches of the range of the functional
 /// that satisfies the constraints and the pre-period coefficients. If no branch
-/// is feasible the set is the single point of the estimate.
+/// is feasible the set is empty and both bounds are NaN.
 ///
 /// # Errors
 /// Returns an error if the input is invalid, `post_weights` or `mbar` is
@@ -1400,7 +1397,7 @@ pub(in crate::inference::sensitivity) fn compute_signed_linear_trend_relative_ma
 /// `mbar` is finite and non-negative. Needs at least two pre-periods. The set
 /// is the union over the restriction's branches of the range of the functional
 /// that satisfies the constraints and the pre-period coefficients. If no branch
-/// is feasible the set is the single point of the estimate.
+/// is feasible the set is empty and both bounds are NaN.
 ///
 /// # Errors
 /// Returns an error if the input is invalid, `post_weights` or `mbar` is

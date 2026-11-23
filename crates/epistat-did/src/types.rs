@@ -1318,10 +1318,7 @@ pub struct AttGtAggregatedEstimate {
     pub ci_high: f64,
     /// Number of ATT(g,t) estimates aggregated.
     pub components: usize,
-    /// Where influence functions are given, the sum of the components'
-    /// `total_weight`. Otherwise the sum of the raw aggregation weights, which
-    /// is the number of components, the treated counts or the components'
-    /// `total_weight` according to the weighting.
+    /// The sum of the components' `total_weight`, whatever the weighting.
     pub total_weight: f64,
 }
 
@@ -1607,6 +1604,10 @@ pub struct EfficientDidEstimate {
     pub treated_n: usize,
     /// Number of never-treated units used in the panel comparison.
     pub control_n: usize,
+    /// Sum of the sampling weights of the observations used, those of the first
+    /// baseline's comparison. [`estimate_att_gt_efficient`](crate::estimate_att_gt_efficient)
+    /// does not use sampling weights, so for it this is the number of units.
+    pub total_weight: f64,
     /// Baseline-specific contributions and efficient weights.
     pub baseline_weights: Vec<EfficientBaselineWeight>,
     /// Combined influence function for the efficient `ATT(g,t)` estimate.

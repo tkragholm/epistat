@@ -56,6 +56,7 @@ struct BaselineSample {
     att: f64,
     treated_n: usize,
     control_n: usize,
+    total_weight: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +236,7 @@ fn estimate_group_time_efficient_dr(
         ci_high,
         treated_n: reference_counts.treated_n,
         control_n: reference_counts.control_n,
+        total_weight: reference_counts.total_weight,
         baseline_weights: baseline_samples
             .samples
             .iter()
@@ -313,6 +315,7 @@ fn collect_dr_baseline_samples(
             att: estimate.att,
             treated_n: estimate.treated_n,
             control_n: estimate.control_n,
+            total_weight: estimate.total_weight,
         });
     }
     Ok(BaselineSamples {
@@ -451,6 +454,7 @@ fn estimate_group_time(
         ci_high,
         treated_n: treated_panel.len(),
         control_n: control_panel.len(),
+        total_weight: usize_to_f64(n_total),
         baseline_weights: baseline_samples
             .samples
             .iter()
@@ -603,7 +607,7 @@ where
             estimate = normalized_weight.mul_add(component.att, estimate);
             variance = (normalized_weight * normalized_weight * component.se)
                 .mul_add(component.se, variance);
-            total_weight += aggregation_weight(component, AttGtAggregationWeighting::ByTotalWeight);
+            total_weight += component.total_weight;
             for (destination, source) in influence_scratch
                 .iter_mut()
                 .zip(&component.influence_function)
@@ -688,6 +692,7 @@ fn build_baseline_sample(
         att: treated_mean - control_mean,
         treated_n: treated_ids.len(),
         control_n: control_ids.len(),
+        total_weight: usize_to_f64(total_n),
     }
 }
 
@@ -824,9 +829,7 @@ fn aggregation_weight(
     match weighting {
         AttGtAggregationWeighting::Equal => 1.0,
         AttGtAggregationWeighting::ByTreatedCount => usize_to_f64(estimate.treated_n),
-        AttGtAggregationWeighting::ByTotalWeight => {
-            usize_to_f64(estimate.treated_n + estimate.control_n)
-        }
+        AttGtAggregationWeighting::ByTotalWeight => estimate.total_weight,
     }
 }
 
@@ -990,6 +993,7 @@ mod tests {
             ci_high: 1.96f64.mul_add(spec.se, spec.att),
             treated_n: spec.treated_n,
             control_n: spec.control_n,
+            total_weight: usize_to_f64(spec.treated_n + spec.control_n),
             baseline_weights: Vec::new(),
             influence_function: spec.influence_function,
             diagnostics: EfficientDidDiagnostics {
