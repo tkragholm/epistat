@@ -180,18 +180,20 @@ fn sorted_keys(p: &[f64], descending: bool) -> Vec<(u64, usize)> {
             (if descending { !key } else { key }, i)
         })
         .collect();
-    let passes = u64::BITS.div_ceil(DIGIT_BITS) as usize;
-    let digit =
-        |key: u64, pass: usize| ((key >> (pass as u32 * DIGIT_BITS)) as usize) & (BUCKETS - 1);
-    let mut counts = vec![[0usize; BUCKETS]; passes];
+    let passes = u64::BITS.div_ceil(DIGIT_BITS);
+    let digit = |key: u64, pass: u32| -> usize {
+        usize::try_from((key >> (pass * DIGIT_BITS)) & (BUCKETS as u64 - 1))
+            .expect("a digit of 11 bits is a position")
+    };
+    let mut counts = vec![[0usize; BUCKETS]; passes as usize];
     for &(key, _) in &items {
-        for (pass, count) in counts.iter_mut().enumerate() {
+        for (pass, count) in (0..passes).zip(counts.iter_mut()) {
             count[digit(key, pass)] += 1;
         }
     }
     let mut buffer = vec![(0u64, 0usize); items.len()];
-    for (pass, count) in counts.iter_mut().enumerate() {
-        if count.iter().any(|&c| c == items.len()) {
+    for (pass, count) in (0..passes).zip(counts.iter_mut()) {
+        if count.contains(&items.len()) {
             continue;
         }
         let mut total = 0;
