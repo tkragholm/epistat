@@ -5,7 +5,8 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
 
 - Cox regression on a design matrix (Breslow, Efron and exact ties, delayed
   entry, strata, case weights, offsets, cluster-robust variance), its tests,
-  residuals, predictions and time-transform covariates, and `clogit`.
+  residuals, predictions and time-transform covariates, and `clogit`, with a count of the matched sets and
+  strata that carry information about a covariate.
 - The Fine-Gray model, Aalen-Johansen cumulative incidence, multi-state
   occupation probabilities and Cox models for multi-state processes, each with
   infinitesimal jackknife standard errors, and clustered bootstraps for the

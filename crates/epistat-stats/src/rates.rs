@@ -40,6 +40,11 @@
 //! two-sided p-value is the total probability of the outcomes not more likely
 //! than the observed one, within a relative `1e-7`, as `stats::poisson.test`
 //! computes it. Its counts must be integers within `1e-7`.
+//! [`rate_ratio_exact`] adds the exact interval of the rate ratio: with
+//! `p = e1 / (e1 + e0)` bounded by the Clopper-Pearson limits
+//! `qbeta(a, e1, e0 + 1)` and `qbeta(1 - a, e1 + 1, e0)`, `a = (1 - level) / 2`,
+//! the limits of the ratio are `p / (1 - p) t0 / t1`, as `poisson.test` has
+//! them. They are 0 for `e1 = 0` and infinite for `e0 = 0`.
 //!
 //! # Undefined values
 //!
@@ -71,6 +76,7 @@ use std::fmt;
 use crate::discrete::binomial_two_sided;
 use crate::normal;
 use crate::poisson::{self, Method, gamma_quantile};
+use crate::student::beta_quantile;
 use crate::sum::compensated;
 
 /// Why a rate was refused.
@@ -402,6 +408,57 @@ pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Optio
         return Ok(None);
     }
     Ok(Some(binomial_two_sided(x1, x1 + x0, t1 / (t1 + t0))))
+}
+
+/// The rate ratio `(e1 / t1) / (e0 / t0)` with its exact conditional interval
+/// at the coverage `level` and the exact two-sided p-value of equal rates, as
+/// `stats::poisson.test(c(e1, e0), c(t1, t0))`.
+///
+/// The estimate is `None` when `e0` is 0, as in [`rate_ratio`], and the upper
+/// limit is `None` there since it is infinite. The lower limit of a ratio with
+/// `e1 = 0` is 0. Everything is `None` when there are no events or a time is 0.
+///
+/// # Errors
+///
+/// [`RateError`] for a negative or non-finite count or time, or a level
+/// outside `(0, 1)`, and [`RateError::NotInteger`] for a count more than `1e-7`
+/// from an integer.
+pub fn rate_ratio_exact(
+    e1: f64,
+    t1: f64,
+    e0: f64,
+    t0: f64,
+    level: f64,
+) -> Result<Contrast, RateError> {
+    check_pair(e1, t1, e0, t0, level)?;
+    let p_value = rate_ratio_exact_test(e1, t1, e0, t0)?;
+    let (x1, x0) = (e1.round(), e0.round());
+    if p_value.is_none() {
+        return Ok(Contrast {
+            estimate: None,
+            lower: None,
+            upper: None,
+            p_value: None,
+        });
+    }
+    let alpha = (1.0 - level) / 2.0;
+    let to_ratio = |p: f64| p / (1.0 - p) * (t0 / t1);
+    let lower = if x1 == 0.0 {
+        Some(0.0)
+    } else {
+        beta_quantile(alpha, x1, x0 + 1.0).map(to_ratio)
+    };
+    let upper = if x0 == 0.0 {
+        None
+    } else {
+        beta_quantile(1.0 - alpha, x1 + 1.0, x0).map(to_ratio)
+    };
+    Ok(Contrast {
+        estimate: (x0 > 0.0).then(|| (e1 / t1) / (e0 / t0)),
+        lower,
+        upper,
+        p_value,
+    })
 }
 
 #[cfg(test)]

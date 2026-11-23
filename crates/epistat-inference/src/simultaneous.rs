@@ -150,7 +150,7 @@ pub fn sup_t_from_covariance(
 }
 
 /// The correlation matrix of the symmetrised covariance, row-major.
-fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, InferenceError> {
+pub(crate) fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, InferenceError> {
     let dim = covariance.nrows();
     let symmetric = |i: usize, j: usize| covariance[(i, j)].midpoint(covariance[(j, i)]);
     let sd: Vec<f64> = (0..dim).map(|i| symmetric(i, i).sqrt()).collect();
@@ -172,7 +172,7 @@ fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, InferenceError> 
 
 /// The lower Cholesky factor of a symmetric positive semidefinite matrix,
 /// row-major, with sums in column order.
-fn lower_cholesky(matrix: &[f64], n: usize) -> Result<Vec<f64>, InferenceError> {
+pub(crate) fn lower_cholesky(matrix: &[f64], n: usize) -> Result<Vec<f64>, InferenceError> {
     cholesky_lower(
         matrix,
         n,

@@ -35,7 +35,7 @@ use epistat_matching::effects::{
     estimate_effects,
 };
 use epistat_matching::imputation::{
-    ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
+    CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::multigroup::{VectorMatchSpec, vector_match};
 use epistat_matching::prelude::*;
@@ -1080,8 +1080,15 @@ fn run_impute_on<R: CovariateRecord>(sets_data: &[Inputs<R>], y: &[f64], reps: u
             &config,
         )
         .expect("matches");
-        estimate_pooled(&sets, &matches, &data, MatchDataOptions::default(), &effect)
-            .expect("pooled")
+        estimate_pooled(
+            &sets,
+            &matches,
+            &data,
+            MatchDataOptions::default(),
+            &effect,
+            CompleteDataDf::Residual,
+        )
+        .expect("pooled")
     });
     Timed {
         times,

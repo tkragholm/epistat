@@ -55,6 +55,16 @@
 //! to which `θ` can be located from a score that is a sum of terms rounded to
 //! 1e-16, so a smaller tolerance cannot be met.
 //!
+//! # The identity link
+//!
+//! The identity link needs positive means at every iterate, and the
+//! likelihood is not defined outside that region. Where the data keep the mean
+//! well above 0, the default start (the Poisson fit of `y + 0.1`) works and
+//! `MASS::glm.nb(link = identity)` agrees with this crate. With an offset the
+//! first Poisson fit can leave the region, in R ("no valid set of coefficients
+//! has been found") and here ([`GlmError::NoValidStart`]), and
+//! [`NegBin::fit_from`] takes starting coefficients, as `glm.nb`'s `start`.
+//!
 //! # Large `θ` and the Poisson limit
 //!
 //! The terms `ψ(θ+y) - ψ(θ)` and `lnΓ(θ+y) - lnΓ(θ)` are differences of nearly
@@ -379,6 +389,28 @@ impl NegBin {
         weights: Option<&[f64]>,
         offset: Option<&[f64]>,
     ) -> Result<NegBinFit, GlmError> {
+        self.fit_from(x, y, weights, offset, None)
+    }
+
+    /// Fits the model as [`fit`](Self::fit) does, with starting coefficients
+    /// `start` (one per column of `x`) for the first fit, as the `start`
+    /// argument of `glm.nb`. The identity link needs them when the default
+    /// start, the fit of `y + 0.1`, gives a negative mean, as it can with an
+    /// offset.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`fit`](Self::fit), and [`GlmError::Length`] when `start`
+    /// does not have one entry per column, and [`GlmError::NoValidStart`] when
+    /// the first fit leaves the domain of the link.
+    pub fn fit_from(
+        &self,
+        x: MatRef<'_, f64>,
+        y: &[f64],
+        weights: Option<&[f64]>,
+        offset: Option<&[f64]>,
+        start: Option<&[f64]>,
+    ) -> Result<NegBinFit, GlmError> {
         if !matches!(self.link, Link::Log | Link::Identity) {
             return Err(GlmError::Link);
         }
@@ -400,9 +432,9 @@ impl NegBin {
             |fit: &Fit| -> Vec<f64> { fit.coefficients.iter().map(|c| c.unwrap_or(0.0)).collect() };
 
         let first = match self.init_theta {
-            None => glm(Family::Poisson).fit(x, y, weights, offset, None)?,
+            None => glm(Family::Poisson).fit(x, y, weights, offset, start)?,
             Some(theta) => {
-                glm(Family::NegativeBinomial { theta }).fit(x, y, weights, offset, None)?
+                glm(Family::NegativeBinomial { theta }).fit(x, y, weights, offset, start)?
             }
         };
         let poisson_ll = self

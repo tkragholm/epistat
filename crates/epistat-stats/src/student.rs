@@ -18,6 +18,22 @@
 //! The functions agree with R's `pt`, `qt` and `pbeta` to about `1e-13`
 //! relative, not bit for bit.
 //!
+//! # The beta quantile
+//!
+//! [`beta_quantile`] inverts `I_x(a, b)` for `x` in `(0, 1)`. The unknown is
+//! the logit `t = ln(x / y)` with `y = 1 - x`, which keeps both `x` and `y`
+//! accurate at either end of the interval and turns a small shape into a
+//! smooth problem. With `F(t) = I_x(a, b)` and the density of `t`,
+//! `x^a y^b / B(a, b)`, the equation is solved for the smaller tail on the
+//! log scale, `ln F = ln p` for `p <= 1/2` and `ln (1 - F) = ln (1 - p)`
+//! above, by Newton's method inside a bracket that is halved when a step
+//! leaves it. The slope of `ln F` is `x^a y^b / (B F)` and that of `ln (1 - F)`
+//! is minus `x^a y^b / (B (1 - F))`. The upper tail is `I_y(b, a)`, formed
+//! from `y` directly. A last Newton step on `ln x` (or on `ln y` when `y` is
+//! the smaller) removes the rounding that `t` carries, which is of the size
+//! `|t| eps` in `x` and matters when `x` is small. The result is `x`; for a
+//! `p` near 1 the information about `y` is in `p` and not in `x`, as in R.
+//!
 //! # References
 //!
 //! 1. Press WH, Teukolsky SA, Vetterling WT, Flannery BP. Numerical Recipes,
@@ -86,19 +102,132 @@ fn beta_fraction(a: f64, b: f64, x: f64) -> Option<f64> {
 /// NaN when the continued fraction does not converge in 10 000 terms.
 #[must_use]
 pub fn regularised_beta(a: f64, b: f64, x: f64, y: f64) -> f64 {
+    regularised_beta_with(a, b, x, y, ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b))
+}
+
+/// [`regularised_beta`] with `ln B(a, b)` given.
+fn regularised_beta_with(a: f64, b: f64, x: f64, y: f64, ln_beta: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
     if y <= 0.0 {
         return 1.0;
     }
-    let ln_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
     let front = (a * x.ln() + b * y.ln() - ln_beta).exp();
     if x < (a + 1.0) / (a + b + 2.0) {
         beta_fraction(a, b, x).map_or(f64::NAN, |cf| front * cf / a)
     } else {
         let front = (b * y.ln() + a * x.ln() - ln_beta).exp();
         beta_fraction(b, a, y).map_or(f64::NAN, |cf| 1.0 - front * cf / b)
+    }
+}
+
+/// The tails of the beta distribution at the logit `t`: `(ln x, ln y, F, S)`
+/// with `x = 1 / (1 + e^-t)`, `F = I_x(a, b)` and `S = 1 - F = I_y(b, a)`.
+/// `F` and `S` are NaN when the continued fraction does not converge.
+fn beta_at_logit(a: f64, b: f64, ln_beta: f64, t: f64) -> (f64, f64, f64, f64) {
+    let (ln_x, ln_y) = (-(-t).exp().ln_1p(), -t.exp().ln_1p());
+    let (x, y) = (ln_x.exp(), ln_y.exp());
+    (
+        ln_x,
+        ln_y,
+        regularised_beta_with(a, b, x, y, ln_beta),
+        regularised_beta_with(b, a, y, x, ln_beta),
+    )
+}
+
+/// `ln B(a, b)`. When a shape is 1000 or more the sum of three log-gamma
+/// values loses `eps` times its size, so the larger shape enters through the
+/// difference of [`ln_gamma_ratio`], `ln B = ln Gamma(small) - (ln Gamma(a + b)
+/// - ln Gamma(large))`.
+fn ln_beta(a: f64, b: f64) -> f64 {
+    let (small, large) = if a < b { (a, b) } else { (b, a) };
+    if large < 1000.0 {
+        ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)
+    } else {
+        ln_gamma(small) - ln_gamma_ratio(large, small)
+    }
+}
+
+/// The quantile of the beta distribution with shapes `a` and `b`: the `x` with
+/// `I_x(a, b) = p`, R's `qbeta(p, a, b)`. It is 0 for `p = 0` and 1 for
+/// `p = 1`. `None` when a shape is not positive and finite, `p` is outside
+/// `[0, 1]`, or the incomplete beta function does not converge. A quantile
+/// below the smallest positive `f64` is 0.
+///
+/// See the module documentation for the method.
+#[must_use]
+pub fn beta_quantile(p: f64, a: f64, b: f64) -> Option<f64> {
+    if !(a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite() && (0.0..=1.0).contains(&p)) {
+        return None;
+    }
+    if p == 0.0 {
+        return Some(0.0);
+    }
+    if p >= 1.0 {
+        return Some(1.0);
+    }
+    let upper = p > 0.5;
+    let ln_target = if upper { (1.0 - p).ln() } else { p.ln() };
+    let ln_beta = ln_beta(a, b);
+    // ln of the tail at t, its excess over the target (positive when t is above
+    // the quantile) and the slope of the excess in t.
+    let evaluate = |t: f64| -> Option<(f64, f64)> {
+        let (ln_x, ln_y, lower, tail) = beta_at_logit(a, b, ln_beta, t);
+        let density = (a * ln_x + b * ln_y - ln_beta).exp();
+        let (value, sign) = if upper { (tail, -1.0) } else { (lower, 1.0) };
+        if value.is_nan() {
+            return None;
+        }
+        Some((sign * (value.ln() - ln_target), density / value))
+    };
+    // x = 0 and x = 1 are reached at |t| of about 745.
+    let (mut lo, mut hi) = (-745.0_f64, 745.0_f64);
+    if evaluate(lo)?.0 > 0.0 {
+        return Some(0.0);
+    }
+    if evaluate(hi)?.0 < 0.0 {
+        return Some(1.0);
+    }
+    let mut t = 0.0;
+    for _ in 0..300 {
+        let (excess, slope) = evaluate(t)?;
+        if excess > 0.0 {
+            hi = t;
+        } else if excess < 0.0 {
+            lo = t;
+        } else {
+            break;
+        }
+        let newton = t - excess / slope;
+        let next = if newton > lo && newton < hi {
+            newton
+        } else {
+            f64::midpoint(lo, hi)
+        };
+        let done = (next - t).abs() <= 8.0 * f64::EPSILON * next.abs().max(1.0);
+        t = next;
+        if done {
+            break;
+        }
+    }
+    // One step on the log of the smaller of x and y. The excess `E` has the
+    // slope density / (y value) in ln x and minus density / (x value) in ln y.
+    let (ln_x, ln_y, lower, tail) = beta_at_logit(a, b, ln_beta, t);
+    let (value, sign) = if upper { (tail, -1.0) } else { (lower, 1.0) };
+    if value.is_nan() {
+        return None;
+    }
+    let density = (a * ln_x + b * ln_y - ln_beta).exp();
+    let excess = sign * (value.ln() - ln_target);
+    if t < 0.0 {
+        let x = ln_x.exp();
+        let step = -excess * ln_y.exp() * value / density;
+        Some(x + x * step.exp_m1())
+    } else {
+        let y = ln_y.exp();
+        let step = excess * ln_x.exp() * value / density;
+        Some(1.0 - (y + y * step.exp_m1()))
     }
 }
 

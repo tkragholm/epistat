@@ -7,6 +7,8 @@ percentile, trimmed and bias-corrected intervals, the joint Wald test, simultane
 Rubin's rules for pooling over multiply imputed data sets, for a scalar, a
 vector and a transformed scale, with the D1, D2 and D3 tests of several
 parameters, and the adjustment of p-values for several tests (Bonferroni,
-Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli).
+Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli), and the
+contrast curve of a spline term against a reference value with pointwise or
+simultaneous bands, checked against `rms::Predict` and `Epi::ci.lin`.
 Clusters are numbered in order of first appearance and every sum runs in a
 fixed order, so results do not depend on hashing or on the number of threads.

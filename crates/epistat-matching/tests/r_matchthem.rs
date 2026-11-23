@@ -28,9 +28,10 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_matching::effects::{Clustering, EffectSpec, OutcomeModel, UnitData};
+use epistat_matching::effects::{Clustering, EffectEstimates, EffectSpec, OutcomeModel, UnitData};
 use epistat_matching::imputation::{
-    ImputationApproach, ImputationError, ImputedSet, estimate_pooled, match_imputed,
+    CompleteDataDf, ImputationApproach, ImputationError, ImputedSet, estimate_pooled,
+    match_imputed, pool_effects,
 };
 use epistat_matching::prelude::*;
 
@@ -183,8 +184,15 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
             reference.name
         );
 
-        let effects =
-            estimate_pooled(&sets, &matches, &units, MatchDataOptions::default(), &spec).unwrap();
+        let effects = estimate_pooled(
+            &sets,
+            &matches,
+            &units,
+            MatchDataOptions::default(),
+            &spec,
+            CompleteDataDf::Residual,
+        )
+        .unwrap();
         for (i, (ours, rs)) in effects.per_set.iter().zip(&reference.sets).enumerate() {
             let se = ours.difference.se.unwrap();
             assert!(
@@ -226,7 +234,61 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
         assert!(close(p.fmi.unwrap(), want.fmi, 1e-9), "fmi");
         assert!(close(p.riv.unwrap(), want.r, 1e-9), "riv");
         assert!(p.between > 0.0, "the sets differ in their outcomes");
+        let rows_rule =
+            pool_effects(&effects.per_set, CompleteDataDf::RowsLessCoefficients).unwrap();
+        assert_eq!(rows_rule, effects.pooled, "the rules agree for many rows");
+        if reference.name == "within" {
+            check_given_degrees_of_freedom(&effects.per_set);
+        }
     }
+}
+
+#[derive(Deserialize)]
+struct DfReference {
+    versions: Versions,
+    cases: Vec<DfCase>,
+}
+
+#[derive(Deserialize)]
+struct DfCase {
+    dfcom: serde_json::Value,
+    df: f64,
+    t: f64,
+    fmi: f64,
+}
+
+/// The pooled difference under a given complete-data degrees of freedom against
+/// `mice::pool.scalar()` with `n` set to `dfcom + 2`, finite and infinite.
+fn check_given_degrees_of_freedom(per_set: &[EffectEstimates]) {
+    let r: DfReference = load_reference("matchthem_df.json");
+    assert_eq!(r.versions["mice"], "3.19.0");
+    for case in &r.cases {
+        let dfcom = match &case.dfcom {
+            serde_json::Value::String(text) => {
+                assert_eq!(text, "Inf");
+                None
+            }
+            number => number.as_f64(),
+        };
+        let pooled = pool_effects(per_set, CompleteDataDf::Given(dfcom)).unwrap();
+        assert_eq!(pooled.complete_data_df, dfcom);
+        let p = pooled.difference.unwrap();
+        assert!(close(p.total, case.t, 1e-9), "total {dfcom:?}");
+        assert!(close(p.df.unwrap(), case.df, 1e-9), "df {dfcom:?}");
+        assert!(close(p.fmi.unwrap(), case.fmi, 1e-9), "fmi {dfcom:?}");
+    }
+    // Sets with no more rows than coefficients: the clamped rule pools with one
+    // degree of freedom, the unclamped rule has none to give.
+    let mut tiny = per_set.to_vec();
+    for e in &mut tiny {
+        e.rows = e.coefficients.len();
+    }
+    let pooled = pool_effects(&tiny, CompleteDataDf::Residual).unwrap();
+    assert_eq!(pooled.complete_data_df, Some(1.0));
+    assert!(matches!(
+        pool_effects(&tiny, CompleteDataDf::RowsLessCoefficients),
+        Err(ImputationError::Pooling(_))
+    ));
 }
 
 #[test]
