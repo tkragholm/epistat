@@ -19,7 +19,6 @@ suppressMessages({
   library(survival)
   library(prodlim)
   library(riskRegression)
-  library(TrialEmulation)
 })
 args <- commandArgs(TRUE)
 n <- as.integer(args[1]); method <- args[2]; scratch <- args[3]
@@ -70,6 +69,7 @@ if (method %in% c("aipw_km", "aipw_cox")) {
   }
   finish(r$times, v)
 } else if (method == "trial_msm") {
+  suppressMessages(library(TrialEmulation))
   d <- as.data.frame(fread(file.path(scratch, sprintf("trial_%d.csv", n))))
   d$treatment <- d$a
   d$eligible <- ave(d$a, d$id, FUN = function(a) as.integer(cumsum(c(0, head(a, -1))) == 0))

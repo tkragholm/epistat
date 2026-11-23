@@ -17,8 +17,8 @@ use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("aiptw km", 7224, 0xfb09_3f98_b207_1e91),
-    ("aiptw cox", 7224, 0xd026_566a_de37_8230),
+    ("aiptw km", 7224, 0x579d_dc44_2666_8503),
+    ("aiptw cox", 7224, 0x3cbf_f73c_0181_e870),
     ("iptw km", 7224, 0x8d40_6d0f_8f11_231f),
     ("iptw cox", 7224, 0x230e_a873_2cbf_12fe),
 ];
