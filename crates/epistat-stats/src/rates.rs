@@ -54,7 +54,7 @@
 //! The rate and the variance are sums of a few dozen terms in stratum order,
 //! compensated, so they agree with a hand computation in R to about `1e-14`
 //! relative. The limits inherit the accuracy of `gamma_quantile`. The exact
-//! test's accuracy is that of the point probabilities of [`crate::discrete`],
+//! test's accuracy is that of the Poisson and binomial point probabilities,
 //! about `1e-13` relative. The tests state the deviation found against R.
 //!
 //! # References

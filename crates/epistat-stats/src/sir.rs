@@ -60,7 +60,7 @@
 //! # Accuracy
 //!
 //! The exact limits and the exact p-value have the accuracy of
-//! [`crate::poisson::gamma_quantile`] and of [`crate::discrete`], about
+//! [`crate::poisson::gamma_quantile`] and of the Poisson point probabilities, about
 //! `1e-13` relative. The profile limits are roots of a function whose
 //! derivative is `2 (E - O / t)` at the root, so their relative error is a few
 //! units of machine epsilon times the condition of the root, which is about
