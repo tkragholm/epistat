@@ -1,7 +1,7 @@
 //! Standard errors, covariances, confidence intervals and tests for
 //! estimators.
 //!
-//! The crate has nine parts. [`influence`] gives variances from an
+//! The crate has ten parts. [`influence`] gives variances from an
 //! influence function, with or without clusters. [`sandwich`] gives the
 //! M-estimator sandwich covariance. [`bootstrap`] draws multiplier and
 //! cluster bootstrap replicates. [`interval`] turns an estimate and a standard
@@ -10,7 +10,8 @@
 //! numbers the clusters the others sum over. [`simultaneous`] gives critical
 //! values for bands that cover several estimates at once. [`pooling`] pools an
 //! estimate over multiply imputed data sets by Rubin's rules. [`multiplicity`]
-//! adjusts p-values for several tests.
+//! adjusts p-values for several tests. [`curve`] gives the contrast of a spline
+//! term against a reference value, with pointwise or simultaneous bands.
 //!
 //! Clusters are numbered in order of first appearance and every sum runs in a
 //! fixed order, so results do not depend on hashing or on the number of
@@ -19,6 +20,7 @@
 
 pub mod bootstrap;
 mod clusters;
+pub mod curve;
 pub mod influence;
 pub mod interval;
 pub mod multiplicity;
