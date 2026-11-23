@@ -207,9 +207,8 @@ fn fit_logistic(
     }
     let mut coefficients = Vec::with_capacity(fit.coefficients.len());
     for (j, c) in fit.coefficients.iter().enumerate() {
-        coefficients.push(
-            c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?,
-        );
+        coefficients
+            .push(c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?);
     }
     Ok((coefficients, fit.fitted))
 }
@@ -488,7 +487,9 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
     .map_err(|e| Error::input(format!("outcome model: {e}")))?;
     let g = clusters.count();
     if g < 2 {
-        return Err(Error::input("outcome model: at least two persons are needed"));
+        return Err(Error::input(
+            "outcome model: at least two persons are needed",
+        ));
     }
     let factor = g as f64 / (g - 1) as f64;
     let covariance: Vec<f64> = cov
@@ -525,10 +526,7 @@ pub struct CumulativeIncidence {
 ///
 /// [`Error::Input`] for no time, designs with another number of columns than the
 /// model or of different numbers of rows, or no row.
-pub fn cumulative_incidence(
-    msm: &Msm,
-    designs: &[MatRef<'_, f64>],
-) -> Result<CumulativeIncidence> {
+pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<CumulativeIncidence> {
     let p = msm.coefficients.len();
     let Some(first) = designs.first() else {
         return Err(Error::input("designs: no times"));

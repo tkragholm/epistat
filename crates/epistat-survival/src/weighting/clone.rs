@@ -217,11 +217,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         }
     }
     starts.push(n);
-    let longest = starts
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .max()
-        .unwrap_or(0);
+    let longest = starts.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
     for s in strategies {
         let reach = match *s {
             Strategy::InitiateWithin { grace, .. } => Some(grace),
@@ -331,9 +327,7 @@ fn fit_deviation(
     }
     let mut coef = Vec::with_capacity(fit.coefficients.len());
     for (j, c) in fit.coefficients.iter().enumerate() {
-        coef.push(
-            c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?,
-        );
+        coef.push(c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?);
     }
     Ok(coef)
 }

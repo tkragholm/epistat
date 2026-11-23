@@ -84,7 +84,10 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
     // The rows of each clone: (arm, source rows, deviation of the last row).
     let mut by: Vec<(usize, usize, Vec<usize>, bool)> = Vec::new();
     for i in 0..c.len() {
-        if by.last().is_none_or(|b| b.0 != c.person[i] as usize || b.1 != c.arm[i]) {
+        if by
+            .last()
+            .is_none_or(|b| b.0 != c.person[i] as usize || b.1 != c.arm[i])
+        {
             by.push((c.person[i] as usize, c.arm[i], Vec::new(), false));
         }
         let last = by.last_mut().unwrap();
@@ -115,12 +118,10 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
     // its outcome.
     assert!(c.outcome.iter().filter(|&&o| o).count() == 1);
     // A grace period beyond the follow-up is an error.
-    let long = [
-        Strategy::InitiateWithin {
-            grace: 9,
-            adherence: Adherence::None,
-        },
-    ];
+    let long = [Strategy::InitiateWithin {
+        grace: 9,
+        adherence: Adherence::None,
+    }];
     assert!(clone_censor(&input, &long).is_err());
     // Rows that are not in order are an error.
     let bad_period = [0, 2, 0, 1, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1];

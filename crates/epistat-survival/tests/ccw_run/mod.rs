@@ -2,19 +2,14 @@
 //! Rust run on it.
 
 #![allow(dead_code)]
-#![expect(
-    clippy::cast_precision_loss,
-    reason = "periods are small integers"
-)]
+#![expect(clippy::cast_precision_loss, reason = "periods are small integers")]
 
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, Cloned, DeviationModel, Strategy, clone_censor, deviation_weights,
     row_counts,
 };
-use epistat_survival::weighting::trials::{
-    MsmInput, Msm, cumulative_incidence, fit_msm,
-};
+use epistat_survival::weighting::trials::{Msm, MsmInput, cumulative_incidence, fit_msm};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 

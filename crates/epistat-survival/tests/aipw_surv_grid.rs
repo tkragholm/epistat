@@ -3,13 +3,13 @@
 //! approaches the exact one as the cells get narrower.
 
 use epistat_linalg::Mat;
+use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::aipw::{
     AipwSurv, AipwSurvOptions, AipwSurvSpec, Censoring, Estimator, aipw_cox,
 };
 use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
-use epistat_rng::Stream;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -82,7 +82,11 @@ fn the_grid_approaches_the_exact_sum() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/aipw_surv.json"
     ));
-    for s in r.scenarios.iter().filter(|s| s.name == "km" || s.name == "cox") {
+    for s in r
+        .scenarios
+        .iter()
+        .filter(|s| s.name == "km" || s.name == "cox")
+    {
         let km = s.name == "km";
         let exact = run(s, km, None);
         // The number of distinct censoring times is below the number of rows, so a
@@ -90,7 +94,12 @@ fn the_grid_approaches_the_exact_sum() {
         let all = run(s, km, Some(s.time.len()));
         // The difference of two sums of the same terms, over at most 500
         // jumps of terms of order 1 with relative error 1e-16.
-        assert!(worst(&exact, &all) < 1e-12, "{}: {}", s.name, worst(&exact, &all));
+        assert!(
+            worst(&exact, &all) < 1e-12,
+            "{}: {}",
+            s.name,
+            worst(&exact, &all)
+        );
         let errors: Vec<f64> = [2, 8, 32]
             .iter()
             .map(|&k| worst(&exact, &run(s, km, Some(k))))
@@ -111,7 +120,9 @@ fn the_error_of_the_grid_falls_with_many_censoring_times() {
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for _ in 0..n {
         let (u, v) = (rng.normal(), f64::from(u8::from(rng.uniform() < 0.4)));
-        let t = f64::from(u8::from(rng.uniform() < 1.0 / (1.0 + (-(0.5 * u - 0.4 * v)).exp())));
+        let t = f64::from(u8::from(
+            rng.uniform() < 1.0 / (1.0 + (-(0.5 * u - 0.4 * v)).exp()),
+        ));
         let te = -rng.uniform().ln() / (0.12 * (0.5 * u - 0.4 * v - 0.6 * t).exp());
         let tc = (-rng.uniform().ln() / (0.06 * (0.3 * u + 0.3 * t).exp())).min(12.0);
         time.push(te.min(tc));

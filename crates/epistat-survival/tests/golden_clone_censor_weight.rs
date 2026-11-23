@@ -29,7 +29,10 @@ fn bits_are_unchanged() {
     let counts = epistat_rng::resample_counts(c.n_persons, 99);
     let got: Vec<(String, usize, u64)> = [
         ("analysis", ccw_run::analyse(&r, &c, None).flatten()),
-        ("replicate", ccw_run::analyse(&r, &c, Some(&counts)).flatten()),
+        (
+            "replicate",
+            ccw_run::analyse(&r, &c, Some(&counts)).flatten(),
+        ),
     ]
     .into_iter()
     .map(|(name, v)| {

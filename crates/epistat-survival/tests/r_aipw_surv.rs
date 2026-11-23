@@ -19,9 +19,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::aipw::{
-    AipwSurvOptions, AipwSurvSpec, Censoring, Estimator, aipw_cox,
-};
+use epistat_survival::aipw::{AipwSurvOptions, AipwSurvSpec, Censoring, Estimator, aipw_cox};
 use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
 use epistat_testkit::load_json;
@@ -78,7 +76,9 @@ fn the_risks_agree_with_ate() {
         let cols = [(0usize, 0.0)];
         let cols1 = [(0usize, 1.0)];
         let censoring = if s.censor == "km" {
-            Censoring::KaplanMeier { groups: Some(&group) }
+            Censoring::KaplanMeier {
+                groups: Some(&group),
+            }
         } else {
             Censoring::Cox { x: cx.as_ref() }
         };
@@ -86,7 +86,10 @@ fn the_risks_agree_with_ate() {
             let spec = AipwSurvSpec {
                 treatment: &treated,
                 outcome_x: x.as_ref(),
-                levels: [Counterfactual::Columns(&cols), Counterfactual::Columns(&cols1)],
+                levels: [
+                    Counterfactual::Columns(&cols),
+                    Counterfactual::Columns(&cols1),
+                ],
                 propensity_x: z.as_ref(),
                 censoring,
             };

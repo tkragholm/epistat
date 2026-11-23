@@ -484,7 +484,9 @@ impl Model {
             if let Counterfactual::Columns(set) = cf
                 && set.iter().any(|&(c, _)| c >= spec.outcome_x.ncols())
             {
-                return Err(Error::input(format!("levels[{l}]: a column is outside the design")));
+                return Err(Error::input(format!(
+                    "levels[{l}]: a column is outside the design"
+                )));
             }
         }
         // The event model, on the data with the times as fixed.
@@ -538,13 +540,14 @@ impl Model {
             pi.push(if spec.treatment[i] { e } else { 1.0 - e });
         }
         // The censoring times and the tables over them.
-        let mut jump: Vec<f64> = (0..n).filter(|&i| status[i] == 0).map(|i| stop[i]).collect();
+        let mut jump: Vec<f64> = (0..n)
+            .filter(|&i| status[i] == 0)
+            .map(|i| stop[i])
+            .collect();
         jump.sort_by(f64::total_cmp);
         jump.dedup();
-        let (h_before, h_at): (Vec<f64>, Vec<f64>) = jump
-            .iter()
-            .map(|&u| (base.before(u), base.at(u)))
-            .unzip();
+        let (h_before, h_at): (Vec<f64>, Vec<f64>) =
+            jump.iter().map(|&u| (base.before(u), base.at(u))).unzip();
         let cens = match spec.censoring {
             Censoring::None => {
                 if !jump.is_empty() {
@@ -646,7 +649,11 @@ impl Model {
             )));
         }
         for (s, &tau) in self.times.iter().enumerate() {
-            let y = if t_i <= tau && d_i == 1 { 1.0 / g_t } else { 0.0 };
+            let y = if t_i <= tau && d_i == 1 {
+                1.0 / g_t
+            } else {
+                0.0
+            };
             scratch.ipcw[s] = y;
         }
         scratch.aug.iter_mut().for_each(|v| *v = 0.0);
@@ -673,7 +680,9 @@ impl Model {
             }
         }
         if out.iter().any(|v| !v.is_finite()) {
-            return Err(Error::input(format!("row {i} has a value that is not finite")));
+            return Err(Error::input(format!(
+                "row {i} has a value that is not finite"
+            )));
         }
         Ok(())
     }
@@ -781,9 +790,12 @@ impl Model {
                     let gr = group[i] as usize;
                     lam_at[gr][j_e] - lam_before[gr][j0]
                 }
-                CensTables::Cox { score, h_before, h_at, .. } => {
-                    score[i] * (h_at[j_e] - h_before[j0])
-                }
+                CensTables::Cox {
+                    score,
+                    h_before,
+                    h_at,
+                    ..
+                } => score[i] * (h_at[j_e] - h_before[j0]),
             };
             let inv = |j: usize| 1.0 / (g_at(j) * (-theta * self.tables.h_before[j]).exp());
             let f_at = |j: usize| 1.0 - (-theta * self.tables.h_at[j]).exp();
@@ -1008,7 +1020,9 @@ fn km_tables(
                 cum += h;
                 surv *= 1.0 - h;
                 steps.time.push(u);
-                steps.value.push(if product_limit { surv.ln() } else { -cum });
+                steps
+                    .value
+                    .push(if product_limit { surv.ln() } else { -cum });
             }
             la[j] = cum;
         }

@@ -157,9 +157,9 @@ pub mod ipcw;
 pub mod iptw;
 pub mod km;
 pub mod pooled;
-pub mod trials;
 mod stack;
 mod summary;
+pub mod trials;
 
 pub use adjust::WeightAt;
 pub use estimated::{Censoring, Estimated};

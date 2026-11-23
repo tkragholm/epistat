@@ -81,7 +81,16 @@ fn generate_periods(kind: &str, n: usize, periods: usize) {
             };
             let a = f64::from(u8::from(rng.bernoulli(pa)));
             let y = rng.bernoulli(expit(-4.0 - 0.6 * a + 0.4 * l + 0.05 * p as f64));
-            out.row(&[id as f64, p as f64, a, prev, l, l0, x1, f64::from(u8::from(y))]);
+            out.row(&[
+                id as f64,
+                p as f64,
+                a,
+                prev,
+                l,
+                l0,
+                x1,
+                f64::from(u8::from(y)),
+            ]);
             prev = a;
             if y {
                 break;
