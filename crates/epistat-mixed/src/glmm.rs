@@ -288,6 +288,16 @@ struct Problem<'a> {
     constant: f64,
 }
 
+/// Buffers reused from cluster to cluster: the node terms, the node sums
+/// of `w (y - μ)`, and the means at the nodes with `b''` and `b'''` at the
+/// mode.
+#[derive(Default)]
+struct Scratch {
+    terms: Vec<f64>,
+    totals: Vec<f64>,
+    mus: Vec<f64>,
+}
+
 /// What one cluster contributes.
 struct Contribution {
     log_l: f64,
@@ -464,19 +474,22 @@ impl<'a> Problem<'a> {
         w: &[f64],
         start: f64,
         coef: Option<&mut [f64]>,
-        mus: &mut Vec<f64>,
+        scratch: &mut Scratch,
     ) -> Option<Contribution> {
         let (u_hat, h_hat, a) = self.mode(theta, eta, y, w, start)?;
         let s = 1.0 / a.sqrt();
         let m = eta.len();
         let k = self.nodes.len();
         let gradient = coef.is_some();
+        let Scratch { terms, totals, mus } = scratch;
         if gradient {
             mus.clear();
             mus.resize(m * (k + 2), 0.0);
         }
-        let mut terms = vec![0.0; k];
-        let mut totals = vec![0.0; k];
+        terms.clear();
+        terms.resize(k, 0.0);
+        totals.clear();
+        totals.resize(k, 0.0);
         for (node, &z) in self.nodes.iter().enumerate() {
             let u = u_hat + s * z;
             let mut total = 0.0;
@@ -499,17 +512,17 @@ impl<'a> Problem<'a> {
         }
         let top = terms.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let mut sum = 0.0;
-        for t in &mut terms {
+        for t in terms.iter_mut() {
             *t = (*t - top).exp();
             sum += *t;
         }
         let log_l = s.ln() + top + sum.ln();
         let mut d_theta = 0.0;
         if let Some(coef) = coef {
-            for t in &mut terms {
+            for t in terms.iter_mut() {
                 *t /= sum;
             }
-            let pi = &terms;
+            let pi = &*terms;
             // The second and third derivatives of b at the mode.
             let (mut big_v, mut big_vp, mut t_hat) = (0.0, 0.0, 0.0);
             for j in 0..m {
@@ -595,7 +608,7 @@ impl<'a> Problem<'a> {
             .enumerate()
             .map(|(b, ((coef, modes), curv))| {
                 let (mut log_l, mut d_theta) = (0.0, 0.0);
-                let mut mus = Vec::new();
+                let mut scratch = Scratch::default();
                 let base = starts[b * BLOCK];
                 for (local, (mode, c)) in modes.iter_mut().zip(curv.iter_mut()).enumerate() {
                     let i = b * BLOCK + local;
@@ -608,7 +621,7 @@ impl<'a> Problem<'a> {
                             &self.w[lo..hi],
                             *mode,
                             gradient.then(|| &mut coef[lo - base..hi - base]),
-                            &mut mus,
+                            &mut scratch,
                         )
                         .ok_or(i)?;
                     log_l += out.log_l;
