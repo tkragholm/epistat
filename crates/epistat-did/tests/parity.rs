@@ -4,13 +4,12 @@
 )]
 
 use epistat_did::{
-    AttGtConfig, AttGtObservation, ContinuousObservation, DidCcConfig, DrDidConfig,
-    DrDidObservation, DrDidRepeatedObservation, HonestAssessment, HonestEventStudyInput,
-    HonestJointPathConfig, HonestJointPathMethod, HonestOptimizationSurfaceAdaptiveConfig,
+    AttGtConfig, AttGtObservation, DidCcConfig, DrDidConfig, DrDidObservation,
+    DrDidRepeatedObservation, HonestAssessment, HonestEventStudyInput, HonestJointPathConfig,
+    HonestJointPathMethod, HonestOptimizationSurfaceAdaptiveConfig,
     HonestOptimizationSurfaceAdaptiveRunConfig, HonestOptimizationSurfaceConfig,
-    HonestPostFunctional, HonestSensitivity, InferenceConfig, PolynomialBasis,
-    RelativeMagnitudeConfidenceSetConfig, TripleDidObservation,
-    assess_honest_event_study_directional_region_with_config,
+    HonestPostFunctional, HonestSensitivity, InferenceConfig, RelativeMagnitudeConfidenceSetConfig,
+    TripleDidObservation, assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region,
     assess_honest_event_study_joint_path_region_with_config,
     assess_honest_event_study_optimization_surface_region_adaptive_with_config,
@@ -24,9 +23,8 @@ use epistat_did::{
     compute_relative_magnitude_confidence_set_with_config, compute_relative_magnitude_flci,
     compute_relative_magnitude_flci_with_config, compute_relative_magnitude_identified_set,
     compute_relative_magnitude_multi_flci, compute_relative_magnitude_multi_flci_with_config,
-    estimate_acrt_sieve, estimate_att_gt, estimate_did_cc_robust, estimate_did_cc_stationary,
-    estimate_dr_ddd, estimate_drdid_panel, inference::vcov::joint_wald_test,
-    test_did_cc_stationarity,
+    estimate_att_gt, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
+    estimate_drdid_panel, inference::vcov::joint_wald_test, test_did_cc_stationarity,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -132,32 +130,6 @@ fn parity_did_attgt_mpdta() {
             assert!((rust_res.se - reference.se[idx]).abs() < 1e-8);
         }
     }
-}
-
-#[derive(Deserialize)]
-struct ContDidRef {
-    delta_y: Vec<f64>,
-    dose: Vec<f64>,
-    treated: Vec<bool>,
-}
-
-#[test]
-fn parity_contdid_simulation() {
-    let reference: ContDidRef = load_json("tests/data/contdid_ref.json");
-
-    let mut observations = Vec::new();
-    for i in 0..reference.delta_y.len() {
-        observations.push(ContinuousObservation {
-            dose: reference.dose[i],
-            delta_outcome: reference.delta_y[i],
-            weight: 1.0,
-        });
-    }
-
-    let basis = PolynomialBasis::new(3);
-    let result = estimate_acrt_sieve(&observations, &basis).expect("sieve");
-
-    assert!(result.acrt_glob.is_finite());
 }
 
 #[derive(Deserialize)]

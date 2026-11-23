@@ -874,7 +874,7 @@ const GOLDEN: &[(&str, u64)] = &[
     ("panel_propensity", 0x0392_1b18_f042_d985),
     ("independent_columns", 0x45f2_030f_bd17_1265),
     ("dr_ddd", 0x8658_3954_e214_b213),
-    ("acrt_sieve", 0x3043_69db_872c_3d81),
+    ("acrt_sieve", 0xdbf7_0235_0d74_2314),
     ("did_cc_robust", 0x4c06_ee7e_0a32_a429),
     ("did_cc_stationary", 0x21ff_0ebd_15c7_0221),
     ("did_cc_test", 0x4c05_eb0a_4dc3_ab4d),

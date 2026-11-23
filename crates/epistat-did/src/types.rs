@@ -1427,9 +1427,11 @@ pub struct ACRTResult {
     pub acrt_glob: f64,
     /// Sieve coefficients, one per basis function in the order of the basis.
     pub coefficients: Vec<f64>,
-    /// Influence function for `acrt_glob`, one value per input observation. It
-    /// is zero for control units, because the contribution of the estimated
-    /// control trend is not included.
+    /// Standard error of `acrt_glob` from its influence function.
+    pub se: f64,
+    /// Influence function for `acrt_glob`, one value per input observation,
+    /// scaled so that the estimate moves by its mean. Units with a negative dose
+    /// have zero influence.
     pub influence_function: Vec<f64>,
 }
 
@@ -1439,9 +1441,15 @@ pub enum ContinuousDidError {
     /// No observations were given.
     #[error("continuous DiD requires at least one observation")]
     EmptyInput,
-    /// No unit has a positive dose, or no unit has dose 0.
+    /// No unit has a positive dose.
     #[error("no treated units found (dose > 0)")]
     NoTreatedUnits,
+    /// No unit with dose 0 has a positive weight.
+    #[error("no control units of positive weight found (dose = 0)")]
+    NoControlUnits,
+    /// A dose, outcome or weight is not finite, or a weight is negative.
+    #[error("a dose, outcome or weight is not finite, or a weight is negative")]
+    InvalidObservation,
     /// The basis matrix is singular.
     #[error("basis matrix is singular")]
     SingularBasis,
