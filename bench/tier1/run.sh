@@ -69,7 +69,15 @@ field() { echo "$TABLE" | awk -F: -v m="$1" -v f="$2" '$1 == m {print $f}'; }
 
 declare -A BIN
 build_all() { # builds every program once, in one cargo run so features agree
-  local crates="" m benches="" c b
+  local crates="" m benches="" c b missing=""
+  for m in $METHODS; do
+    b=$(field "$m" 3); given="BIN_$b"
+    [ -z "${!given:-}" ] && missing=1
+  done
+  if [ -z "$missing" ]; then
+    for m in $METHODS; do b=$(field "$m" 3); given="BIN_$b"; BIN[$b]="${!given}"; done
+    return
+  fi
   for m in $(echo "$TABLE" | cut -d: -f1); do
     c=$(field "$m" 2); b=$(field "$m" 3)
     case " $crates " in *" $c "*) ;; *) crates="$crates $c" ;; esac

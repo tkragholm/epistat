@@ -177,9 +177,9 @@ if (method %in% c("rcs", "ns")) {
   vec <- p$estimate[match(tested, p$term)]
   finish(r$times, c(scalar_estimate = b$estimate, scalar_total = b$t, scalar_df = b$df,
                     indexed("vector_estimate", vec),
-                    d1_statistic = r$value$d1[1, "F.value"], d1_df2 = r$value$d1[1, "df2"],
-                    d1_p = r$value$d1[1, "P(>F)"],
-                    d2_statistic = r$value$d2[1, "F.value"], d2_df2 = r$value$d2[1, "df2"]))
+                    d1_statistic = unname(r$value$d1[1, "F.value"]), d1_df2 = unname(r$value$d1[1, "df2"]),
+                    d1_p = unname(r$value$d1[1, "P(>F)"]),
+                    d2_statistic = unname(r$value$d2[1, "F.value"]), d2_df2 = unname(r$value$d2[1, "df2"])))
 } else if (method == "events") {
   rows <- rd("evt"); persons <- rd("evtp"); persons[, id := .I - 1L]
   rows[persons, `:=`(entry = i.entry, exit = i.exit), on = "id"]

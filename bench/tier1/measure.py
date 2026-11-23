@@ -28,6 +28,8 @@ except subprocess.TimeoutExpired:
     status = 124
 wall = time.monotonic() - start
 peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+if sys.platform == "darwin":
+    peak //= 1024  # macOS reports bytes, Linux kilobytes
 with open(timefile, "w") as f:
     f.write(f"Maximum resident set size (kbytes): {peak}\n")
     f.write(f"Elapsed (wall clock) time (s): {wall:.3f}\n")
