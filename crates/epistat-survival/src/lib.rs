@@ -26,6 +26,8 @@
 //!   likelihood-ratio tests of the coefficients, its residuals as `residuals.coxph`,
 //!   the test of proportional hazards of `cox.zph`, and time-transform
 //!   covariates as `coxph(tt = )` ([`cox::fit_tt`]).
+//! - [`casecohort`]: the Cox model of a case-cohort study with the variance of the sampling of the
+//!   subcohort, by the five methods of `survival::cch`.
 //! - [`clogit`]: conditional logistic regression for matched sets, as `clogit`,
 //!   with the exact partial likelihood of [`cox`] by default.
 //! - [`informative`]: the matched sets and strata that carry information about
@@ -38,6 +40,10 @@
 //!   scale, with time-varying effects, delayed entry, case weights and cluster-robust
 //!   variance, and survivor, hazard and cumulative hazard curves and contrasts with
 //!   delta-method limits, as `flexsurv::flexsurvspline` and `rstpm2::stpm2`.
+//! - [`frailty`]: shared gamma frailty Cox models by penalised partial likelihood, with
+//!   theta from the profile marginal likelihood or by `coxph`'s own search, the variance
+//!   from the whole information and from its diagonal form, and the EM algorithm as an
+//!   alternative fit, as `coxph` with `frailty()`.
 //! - [`aalen_johansen`]: cumulative incidence under competing risks with
 //!   groups, weights and delayed entry, its infinitesimal jackknife standard
 //!   errors, and a clustered bootstrap of the incidence in two arms over many
@@ -45,6 +51,8 @@
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
 //!   product integral, their infinitesimal jackknife standard errors, and their
 //!   clustered bootstrap.
+//! - [`ncc`]: nested case-control data with Samuelsen's inverse probability weights, the weighted Cox
+//!   fit with a robust variance and the absolute risk, as `multipleNCC`.
 //! - [`msreg`]: Cox regression for a multi-state process, a hazard for each transition with
 //!   coefficients specific to a transition or shared, as `coxph` with a multi-state outcome,
 //!   and the cumulative hazards and transition probabilities of a covariate profile, as
@@ -133,6 +141,7 @@ pub mod absrisk;
 pub mod aipw;
 #[cfg(feature = "arrow")]
 pub mod arrow;
+pub mod casecohort;
 mod check;
 pub mod clogit;
 pub mod concordance;
@@ -142,6 +151,7 @@ pub mod crossover;
 mod error;
 pub mod fine_gray;
 pub mod flexpar;
+pub mod frailty;
 pub mod informative;
 mod ldl;
 pub mod lexis;
@@ -149,6 +159,7 @@ pub mod markov;
 pub mod metrics;
 pub mod msreg;
 pub mod multistate;
+pub mod ncc;
 mod order;
 mod par;
 pub mod pseudo;
