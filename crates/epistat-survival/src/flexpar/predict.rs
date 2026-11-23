@@ -179,9 +179,9 @@ fn survival_gradient(scale: Scale, p: &Point) -> (f64, Vec<f64>) {
 ///
 /// [`Error::Input`] for a time that is not positive and finite, an `alpha`
 /// outside `(0, 1)`, covariates that do not have the columns of the fit, a
-/// fit without the covariance asked for, a fit that is not monotone on the
-/// data unless allowed, and a hazard at a time where the derivative in log time
-/// is not positive unless allowed (its limits are then `None`).
+/// fit without the covariance asked for, and a fit that is not monotone on the
+/// data unless allowed. At a time where the derivative in log time is not
+/// positive the hazard is not positive either, and its limits are `None`.
 pub fn predict(
     fit: &FlexParFit,
     x_new: MatRef<'_, f64>,

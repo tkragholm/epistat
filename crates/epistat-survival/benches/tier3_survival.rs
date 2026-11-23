@@ -92,7 +92,10 @@ fn main() {
     if method != "flexpar_tvc" {
         lines.push_all(
             "beta",
-            &f.beta.iter().map(|b| b.unwrap_or(f64::NAN)).collect::<Vec<_>>(),
+            &f.beta
+                .iter()
+                .map(|b| b.unwrap_or(f64::NAN))
+                .collect::<Vec<_>>(),
         );
     }
     let profile = Mat::from_fn(1, 2, |_, j| [0.5, 1.0][j]);
@@ -103,8 +106,15 @@ fn main() {
     }
     if method == "flexpar_tvc" {
         let reference = Mat::from_fn(1, 2, |_, j| [0.5, 0.0][j]);
-        let hr = contrast(&f, profile.as_ref(), reference.as_ref(), &AT, Contrast::HazardRatio, &o)
-            .expect("contrast");
+        let hr = contrast(
+            &f,
+            profile.as_ref(),
+            reference.as_ref(),
+            &AT,
+            Contrast::HazardRatio,
+            &o,
+        )
+        .expect("contrast");
         for (p, &tau) in hr[0].iter().zip(&AT) {
             lines.push(&format!("hr_{tau}"), p.estimate);
         }
