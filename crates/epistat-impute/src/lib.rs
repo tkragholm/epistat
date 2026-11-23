@@ -63,8 +63,9 @@
 //! # Streams
 //!
 //! Every draw comes from a [`SplitMix64`](epistat_rng::Stream) stream seeded
-//! from the seed, the chain, the iteration, the column and the row, by
-//! `replicate_seed` applied in that order. The parameters of a column's model
+//! from the seed, the chain, the iteration, the column and the row: the seed
+//! is mixed by `splitmix64` and then by `replicate_seed` with the chain, the
+//! iteration, the column and the row in turn. The parameters of a column's model
 //! use the row index `u64::MAX`. A draw therefore does not depend on the thread
 //! that makes it or on how the rows are divided, and the chains, the rows of a
 //! column and the regressions of `epistat-glm` all give the same values on any

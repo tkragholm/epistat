@@ -302,7 +302,7 @@ fn options(seed: u64) -> ImputeOptions {
     }
 }
 
-fn sim_full(proper: bool, seed: u64) -> (Incomplete, Imputed) {
+fn sim_full(seed: u64) -> (Incomplete, Imputed) {
     let r = reference().sim;
     let data = sim_columns(&r, [true, true, true]);
     let spec = spec_of(
@@ -311,7 +311,7 @@ fn sim_full(proper: bool, seed: u64) -> (Incomplete, Imputed) {
             None,
             None,
             Some(Method::pmm()),
-            Some(Method::Polyreg { proper }),
+            Some(Method::Polyreg { proper: false }),
             Some(Method::Logreg),
             None,
         ],
@@ -324,7 +324,7 @@ fn sim_full(proper: bool, seed: u64) -> (Incomplete, Imputed) {
 fn simulated_mixed_types_match_mice() {
     let r = reference().sim;
     // mice's polyreg does not draw the coefficients.
-    let (data, imputed) = sim_full(false, 20_261_126);
+    let (data, imputed) = sim_full(20_261_126);
     compare_stats("sim inc", &numeric_stats(&imputed, 2), &r.stats["inc"], K);
     compare_stats("sim edu", &share_stats(&imputed, 3, 3), &r.stats["edu"], K);
     compare_stats("sim smk", &share_stats(&imputed, 4, 2), &r.stats["smk"], K);
