@@ -52,7 +52,8 @@
 //! `ln`, `sqrt`, `cos`, `sin` and `powf` from the platform's maths library, so
 //! they agree between platforms only as far as that library does. No
 //! fused multiply-add is used, so a build does not change them with the
-//! target's instruction set.
+//! target's instruction set, and `sin` and `cos` are always called
+//! separately, so debug and release builds give the same draws.
 //!
 //! # References
 //!
@@ -109,7 +110,9 @@ impl Stream {
             let radius = (-2.0_f64 * u1.ln()).sqrt();
             let theta = 2.0_f64 * PI * u2;
             pair[0] = radius * theta.cos();
-            pair[1] = radius * theta.sin();
+            // An optimised build may otherwise merge the two calls into one
+            // `sincos`, whose last bit can differ from the separate `sin`.
+            pair[1] = radius * std::hint::black_box(theta).sin();
         }
         if let [last] = rest {
             *last = self.normal();

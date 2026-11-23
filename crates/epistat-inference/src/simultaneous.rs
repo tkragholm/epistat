@@ -621,7 +621,7 @@ mod tests {
         for pair in pairs {
             let (radius, theta) = transform(stream);
             pair[0] = radius * theta.cos();
-            pair[1] = radius * theta.sin();
+            pair[1] = radius * std::hint::black_box(theta).sin();
         }
         if let [last] = rest {
             let (radius, theta) = transform(stream);
