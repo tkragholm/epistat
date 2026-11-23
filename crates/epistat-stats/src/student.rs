@@ -12,8 +12,10 @@
 //! converges, using `I_x(a, b) = 1 - I_{1-x}(b, a)` on the other. The tail is
 //! therefore computed directly and keeps its relative precision far out. The
 //! prefactor is formed on the log scale from [`crate::gamma::ln_gamma`], whose
-//! relative error is about `1e-15`. The quantile is found by Newton's method
-//! on the tail inside a bracket.
+//! relative error is about `1e-15`; when a shape is 1000 or more, `ln B(a, b)`
+//! comes from the Stirling series of the difference `ln Gamma(a + b) -
+//! ln Gamma(large)` instead of from three large log-gamma values that cancel.
+//! The quantile is found by Newton's method on the tail inside a bracket.
 //!
 //! The functions agree with R's `pt`, `qt` and `pbeta` to about `1e-13`
 //! relative, not bit for bit.
@@ -100,9 +102,15 @@ fn beta_fraction(a: f64, b: f64, x: f64) -> Option<f64> {
 /// The regularised incomplete beta function `I_x(a, b)`, R's `pbeta(x, a, b)`,
 /// for `x` in `[0, 1]` given with `y = 1 - x` computed without cancellation.
 /// NaN when the continued fraction does not converge in 10 000 terms.
+///
+/// `ln B(a, b)` in the prefactor is that of [`beta_quantile`]: the sum of three
+/// log-gamma values while both shapes are below 1000, and from the difference
+/// of log-gamma values by its Stirling series above, where the sum would lose
+/// `eps ln Gamma(a)` relative, about `1e-8` in a t tail at `1e6` degrees of
+/// freedom.
 #[must_use]
 pub fn regularised_beta(a: f64, b: f64, x: f64, y: f64) -> f64 {
-    regularised_beta_with(a, b, x, y, ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b))
+    regularised_beta_with(a, b, x, y, ln_beta(a, b))
 }
 
 /// [`regularised_beta`] with `ln B(a, b)` given.

@@ -734,11 +734,7 @@ fn assess_relative_magnitude_functional_with_prepared_functional_branches(
             prepared_branches,
             counter,
         )?;
-    let identified = global_identified_set_from_branch_identified_sets(
-        input,
-        post_weights,
-        &branch_identified_sets,
-    )?;
+    let identified = global_identified_set_from_branch_identified_sets(&branch_identified_sets);
     let conditional =
         compute_relative_magnitude_confidence_set_with_prepared_functional_branches_and_identified_sets(
         input,
@@ -816,11 +812,7 @@ pub(in crate::inference::sensitivity) fn assess_relative_magnitude_basis_period_
             prepared_branches,
             counter,
         )?;
-    let identified = global_identified_set_from_branch_identified_sets(
-        input,
-        post_weights,
-        &branch_identified_sets,
-    )?;
+    let identified = global_identified_set_from_branch_identified_sets(&branch_identified_sets);
     let conditional =
         compute_relative_magnitude_confidence_set_with_prepared_functional_branches_and_identified_sets(
         input,

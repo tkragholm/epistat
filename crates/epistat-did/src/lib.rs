@@ -115,7 +115,7 @@ pub use dataset::{
     ValidationReport,
 };
 pub use error::{DatasetError, InternalDidError};
-pub use estimators::common::basis::{BSplineBasis, PolynomialBasis};
+pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
 pub use inference::export::{
     InferenceCovarianceRow, InferenceInfluenceRow, build_clustered_inference_covariance_rows,
     build_inference_covariance_rows, build_inference_influence_rows,

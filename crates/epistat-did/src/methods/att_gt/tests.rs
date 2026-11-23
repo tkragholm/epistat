@@ -5,8 +5,8 @@ use rand::RngExt;
 
 use crate::inference::{quantile_sorted, standard_error_from_influence};
 use crate::types::{
-    AttGtAggregationConfig, AttGtBandConfig, AttGtBandError, AttGtBandEstimate, BasePeriod,
-    DrDidConfig,
+    AttGtAggregatedEstimate, AttGtAggregationConfig, AttGtAggregationWeighting, AttGtBandConfig,
+    AttGtBandError, AttGtBandEstimate, BasePeriod, DrDidConfig,
 };
 
 use super::*;
@@ -328,6 +328,39 @@ fn aggregation_helpers_work() {
 
     let overall = aggregate_att_gt_overall(&estimates, cfg).expect("overall aggregation");
     assert!((overall.estimate - 1.6).abs() < 1e-12);
+
+    // `total_weight` is the sum of the components' total weight under every
+    // weighting and on the route with influence functions as well.
+    let influence = vec![vec![0.1, -0.1]; estimates.len()];
+    for weighting in [
+        AttGtAggregationWeighting::Equal,
+        AttGtAggregationWeighting::ByTreatedCount,
+        AttGtAggregationWeighting::ByTotalWeight,
+    ] {
+        let cfg = AttGtAggregationConfig {
+            weighting,
+            ..AttGtAggregationConfig::default()
+        };
+        let overall = aggregate_att_gt_overall(&estimates, cfg).expect("overall aggregation");
+        assert_eq!(overall.total_weight.to_bits(), 100.0_f64.to_bits());
+        for entry in aggregate_att_gt_by_cohort(&estimates, cfg).expect("cohort aggregation") {
+            let want: f64 = if entry.group == 2 { 60.0 } else { 40.0 };
+            assert_eq!(entry.summary.total_weight.to_bits(), want.to_bits());
+        }
+        let with_influence =
+            aggregate_att_gt_event_time_with_influence(&estimates, &influence, cfg)
+                .expect("event aggregation");
+        for (entry, plain) in with_influence
+            .estimates
+            .iter()
+            .zip(aggregate_att_gt_event_time(&estimates, cfg).expect("event aggregation"))
+        {
+            assert_eq!(
+                entry.summary.total_weight.to_bits(),
+                plain.summary.total_weight.to_bits()
+            );
+        }
+    }
 }
 
 #[test]
@@ -869,4 +902,30 @@ fn simultaneous_bands_reject_invalid_reps() {
     )
     .expect_err("must fail");
     assert_eq!(err, AttGtBandError::InvalidReps);
+}
+
+#[test]
+fn the_lookups_by_event_time_are_none_for_a_missing_event_time() {
+    let summary = AttGtAggregatedEstimate {
+        estimate: 1.0,
+        se: 0.5,
+        ci_low: 0.0,
+        ci_high: 2.0,
+        components: 1,
+        total_weight: 10.0,
+    };
+    let result = EventTimeResult {
+        estimates: vec![AttGtEventTimeEstimate {
+            event_time: 1,
+            summary,
+        }],
+        influence_functions: vec![vec![0.0]],
+        cluster_index: None,
+        config: EventStudyConfig::default(),
+        outcome_name: None,
+    };
+    assert_eq!(result.se_at(1), Some(0.5));
+    assert_eq!(result.ci_at(1), Some((0.0, 2.0)));
+    assert_eq!(result.se_at(2), None);
+    assert_eq!(result.ci_at(2), None);
 }

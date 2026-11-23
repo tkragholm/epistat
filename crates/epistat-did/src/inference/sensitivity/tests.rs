@@ -159,6 +159,35 @@ fn delta_rm_identified_set_matches_single_post_scalar_case() {
     assert!((identified.ub - 12.0).abs() < 1e-6);
 }
 
+/// Pre-period coefficients that are not monotone leave no violation path for
+/// the monotone class: the identified set is empty and undefined, on the direct
+/// and on the prepared-branch route alike.
+#[test]
+fn an_empty_relative_magnitude_identified_set_is_nan() {
+    let input = HonestEventStudyInput {
+        betahat: vec![0.3, -0.5, 1.0],
+        covariance: vec![
+            vec![0.25, 0.0, 0.0],
+            vec![0.0, 0.25, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ],
+        pre_periods: vec![-2, -1],
+        post_periods: vec![0],
+    };
+    let identified = compute_monotone_relative_magnitude_identified_set(
+        &input,
+        &[1.0],
+        1.0,
+        HonestMonotonicityDirection::Increasing,
+    )
+    .expect("an empty set is not an error");
+    assert!(identified.lb.is_nan() && identified.ub.is_nan());
+    let empty = super::relative_magnitude::conditional_confidence_set::global_identified_set_from_branch_identified_sets(
+        &[None, None],
+    );
+    assert!(empty.lb.is_nan() && empty.ub.is_nan());
+}
+
 #[test]
 fn assess_honest_event_study_period_reports_significance_against_zero() {
     let input = HonestEventStudyInput {
@@ -1016,8 +1045,12 @@ fn delta_sdrm_family_results_are_well_formed() {
     )
     .expect("sdrmm idset");
     assert!(sdrm.lb <= sdrm.ub);
-    assert!(signed_linear.lb <= signed_linear.ub);
-    assert!(monotone_linear.lb <= monotone_linear.ub);
+    // At Mbar = 0 the violation continues the last pre-period slope, -0.1 a
+    // period, which a positive bias excludes; an increasing violation is at
+    // most 0 before the reference period, which the coefficient 0.1
+    // contradicts. Both sets are empty.
+    assert!(signed_linear.lb.is_nan() && signed_linear.ub.is_nan());
+    assert!(monotone_linear.lb.is_nan() && monotone_linear.ub.is_nan());
 }
 
 #[test]

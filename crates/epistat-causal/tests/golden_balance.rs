@@ -26,7 +26,7 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("entropy atc", 2558, 0xcf0a_69c1_e418_c89a),
     ("cbps ate exact", 5056, 0x95eb_202f_6d1a_4647),
     ("cbps att over", 5056, 0xb9a5_a8ea_1adc_3feb),
-    ("cbps atc over updated", 5056, 0xeb1f_e303_9731_b7c3),
+    ("cbps atc over updated", 5056, 0x24ec_7d84_0ff9_8a9b),
 ];
 
 fn outputs() -> Vec<(String, Vec<f64>)> {

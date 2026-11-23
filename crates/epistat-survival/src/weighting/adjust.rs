@@ -164,13 +164,74 @@ impl<'a> PooledNuisance<'a> {
     }
 }
 
+impl PooledNuisance<'_> {
+    /// The part of `K` from the truncated rows: for each limit `L`, the sum of `a`
+    /// over the rows set to it times `d log L / d theta`, with `dL / dtheta` the
+    /// interpolation of the derivatives of the weights of its two order
+    /// statistics. As `(parameter, column, value)` entries, `None` without
+    /// truncation.
+    fn limit_terms(&self, a: MatRef<'_, f64>) -> Option<Vec<(usize, usize, f64)>> {
+        let p = self.pooled;
+        let (Some(limits), Some((stop, before)), Some(untruncated)) =
+            (&p.limits, &p.clamped, &p.untruncated)
+        else {
+            return None;
+        };
+        let (flags, values) = if self.at == WeightAt::Stop {
+            (stop, &p.weight)
+        } else {
+            (before, &p.weight_before)
+        };
+        let (q, m) = (p.n_params(), a.ncols());
+        let mut out = Vec::with_capacity(2 * q * m);
+        let mut g = vec![0.0; q];
+        let mut slope = vec![0.0; q];
+        for (which, limit) in limits.iter().enumerate() {
+            // A clamped weight equals one of the two limits exactly: the lower
+            // one when it equals it, else the upper.
+            let at_limit = |r: usize| {
+                flags[r] && (values[r].to_bits() == limits[0].value.to_bits()) == (which == 0)
+            };
+            let sums: Vec<f64> = (0..m)
+                .map(|c| {
+                    (0..a.nrows())
+                        .filter(|&r| at_limit(r))
+                        .map(|r| a[(r, c)])
+                        .sum()
+                })
+                .collect();
+            if sums.iter().all(|&v| v == 0.0) {
+                continue;
+            }
+            slope.fill(0.0);
+            let (j, k) = limit.rows;
+            for (row, share) in [(j, 1.0 - limit.h), (k, limit.h)] {
+                if share == 0.0 {
+                    continue;
+                }
+                p.log_weight_gradient_into(row, &mut g);
+                for (s, &gq) in slope.iter_mut().zip(&g) {
+                    *s += share * untruncated[row] * gq;
+                }
+            }
+            for (jq, &s) in slope.iter().enumerate() {
+                for (c, &sum) in sums.iter().enumerate() {
+                    out.push((jq, c, sum * s / limit.value));
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
 impl Nuisance for PooledNuisance<'_> {
     fn add(&self, a: MatRef<'_, f64>, total: &mut Mat<f64>) -> Result<()> {
         let p = self.pooled;
         let (qd, q, m) = (p.design.ncols(), p.n_params(), a.ncols());
         let n = a.nrows();
-        // A weight set to a limit of the truncation does not move with the
-        // parameters.
+        let limit_terms = self.limit_terms(a);
+        // A weight set to a limit of the truncation moves with the limit, whose
+        // term is added below, not with its own factors.
         let masked;
         let a = match &p.clamped {
             Some((stop, before)) => {
@@ -230,6 +291,11 @@ impl Nuisance for PooledNuisance<'_> {
                 }
             }
             end = start;
+        }
+        if let Some(terms) = limit_terms {
+            for (j, c, v) in terms {
+                big_k[(j, c)] += v;
+            }
         }
         let nn = influence_matrix(&self.factor, &big_k)?;
         let mut psi = vec![0.0; q];
