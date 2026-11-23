@@ -24,5 +24,9 @@ serde = { version = "1.0.200", features = ["derive"] }
 # Parses floats to the nearest double, so the R reference is compared to the bit.
 serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
 
+[[bench]]
+name = "tier1_inference"
+harness = false
+
 [lints]
 workspace = true
