@@ -26,7 +26,7 @@ use epistat_inference::pooling::{
     NegativeRiv, Transform, d1, d2, d3, dfcom_events, dfcom_residual, rubin, rubin_transformed,
     rubin_vector,
 };
-use epistat_testkit::{Fingerprint, load_json};
+use epistat_testkit::load_json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -415,7 +415,11 @@ fn degrees_of_freedom_helpers() {
     assert_eq!(dfcom_events(2, 3).to_bits(), 1.0_f64.to_bits());
 }
 
+/// The p-value goes through `ln`, `exp` and `powf`, whose last bits depend on
+/// the maths library and, on Windows, on the processor the library dispatches
+/// for, so the bits are checked only on aarch64 macOS, where they were recorded.
 #[test]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_the_tests() {
     let case = reference()
         .cases
@@ -428,7 +432,7 @@ fn fingerprint_of_the_tests() {
     let b = d2(&case.wald_stats, case.k).unwrap();
     let w = case.d3.as_ref().unwrap();
     let c = d3(&w.lr_own, &w.lr_pooled, case.k, NegativeRiv::Keep).unwrap();
-    let hash = Fingerprint::new()
+    let hash = epistat_testkit::Fingerprint::new()
         .f64(a.statistic)
         .f64(a.df2)
         .option_f64(a.p_value)
