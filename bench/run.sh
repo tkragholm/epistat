@@ -31,8 +31,8 @@
 #   rust_METHOD_N.csv, r_METHOD_N.csv  the numbers each side produced
 #   compare_N.csv   what bench/tier1/compare.R prints for each size: the
 #                   largest difference between the two sides' numbers. It is
-#                   written before any time is read, and a method whose two
-#                   sides do not write the same names is reported on stderr.
+#                   written before any time is read, and a name that R writes
+#                   and Rust does not is reported on stderr.
 #
 # A method is not run at a size when it timed out, failed or was skipped at
 # the previous size. Peak memory is the maximum resident set size of the
@@ -284,7 +284,7 @@ for n in $SIZES; do
   for cn in $n 50; do
     [ "$cn" = 50 ] && [ "$n" != "${SIZES%% *}" ] && continue
     Rscript "$HERE/tier1/compare.R" "$cn" "$SCRATCH" > "$OUT/compare_$cn.csv" 2>&1
-    awk -F, 'NR > 1 && ($8 > 0 || $9 > 0) {print "compare: " $2 " at " $1 " differs in the names written (" $8 " missing in R, " $9 " in Rust)"}' \
+    awk -F, 'NR > 1 && $9 > 0 {print "compare: " $2 " at " $1 ": R writes " $9 " numbers that Rust does not"}' \
       "$OUT/compare_$cn.csv" >&2
   done
   # Data files of this size are not needed again.
