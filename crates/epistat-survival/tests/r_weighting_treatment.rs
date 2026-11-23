@@ -3,8 +3,8 @@
 //! without a numerator model and with `trunc`, and the variance of a Cox fit
 //! weighted by them that accounts for the estimated models, against the
 //! infinitesimal jackknife of the whole procedure found by numerical derivatives
-//! of refits (`glm` and `coxph` with case weights). See
-//! `data/weighting_treatment.R`.
+//! of refits (`glm` and `coxph` with case weights, the truncation limits taken
+//! again from each refit's weights). See `data/weighting_treatment.R`.
 //!
 //! # The tolerances
 //!

@@ -72,6 +72,10 @@ const OWN_TOLERANCE_UPDATED: f64 = 1e-8;
 /// leaves 5e-12 in the coefficients and, times a sensitivity of at most 6, 3e-11.
 const REFIT_ERROR_JUST: f64 = 3e-13;
 const REFIT_ERROR_OVER: f64 = 3e-11;
+/// The continuously updated refits of `data/balance_cu.R` solve the first-order
+/// condition with a closed-form gradient to 1e-15, as the balance conditions
+/// are solved, so they are accurate to the same 3e-13.
+const REFIT_ERROR_UPDATED: f64 = 3e-13;
 
 #[derive(Deserialize)]
 struct Versions {
@@ -675,6 +679,66 @@ fn the_stacked_variance_of_cbps_is_the_infinitesimal_jackknife() {
                 REFIT_ERROR_JUST
             },
             &format!("cbps {} {}", ij.estimand, ij.ident.as_deref().unwrap()),
+        );
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdatedVersions {
+    r: String,
+    #[serde(rename = "numDeriv")]
+    numderiv: String,
+}
+
+#[derive(Deserialize)]
+struct UpdatedReference {
+    versions: UpdatedVersions,
+    ij_cbps_cu: Vec<Ij>,
+}
+
+/// The continuously updated CBPS against the infinitesimal jackknife of its
+/// whole procedure (`data/balance_cu.R`, on the jackknife data of `balance.R`),
+/// the weighting matrix updated with the coefficients and the case weights.
+#[test]
+fn the_stacked_variance_of_the_continuously_updated_cbps_is_the_infinitesimal_jackknife() {
+    let r = reference();
+    let updated: UpdatedReference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/balance_cu.json"
+    ));
+    assert!(updated.versions.r.starts_with("R version 4."));
+    assert_ne!(updated.versions.numderiv, "");
+    let d = &r.ij_data;
+    let t = d.treatment();
+    let n = t.len();
+    let x = d.design();
+    let reg = Mat::from_fn(n, 3, |i, j| match j {
+        0 => 1.0,
+        1 => d.a[i],
+        _ => d.x1[i],
+    });
+    for ij in &updated.ij_cbps_cu {
+        let res = cbps(
+            &CbpsInput {
+                treatment: &t,
+                design: x.as_ref(),
+                sample_weight: Some(&d.s),
+            },
+            &cbps_opts(&ij.estimand, "over", false, ij.std.unwrap()),
+        )
+        .unwrap();
+        let fit = res
+            .weights
+            .weighted_regression(&d.y, reg.as_ref(), None, WeightVariance::Estimated)
+            .unwrap();
+        assert_covariance(
+            &fit.coefficients,
+            &fit.covariance,
+            ij,
+            &d.s,
+            None,
+            REFIT_ERROR_UPDATED,
+            &format!("cbps {} continuously updated", ij.estimand),
         );
     }
 }

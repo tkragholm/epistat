@@ -155,14 +155,14 @@ impl EventTimeResult {
         self.estimates[index].summary.se
     }
 
-    /// Standard error of the estimate at the given event time, NaN if there is
-    /// none.
+    /// Standard error of the estimate at the given event time, `None` if there
+    /// is no estimate at it.
     #[must_use]
-    pub fn se_at(&self, event_time: i32) -> f64 {
+    pub fn se_at(&self, event_time: i32) -> Option<f64> {
         self.estimates
             .iter()
             .find(|est| est.event_time == event_time)
-            .map_or(f64::NAN, |est| est.summary.se)
+            .map(|est| est.summary.se)
     }
 
     /// Confidence interval `(lower, upper)` of the estimate at position `index`
@@ -177,13 +177,13 @@ impl EventTimeResult {
     }
 
     /// Confidence interval `(lower, upper)` of the estimate at the given event
-    /// time, `(0.0, 0.0)` if there is none.
+    /// time, `None` if there is no estimate at it.
     #[must_use]
-    pub fn ci_at(&self, event_time: i32) -> (f64, f64) {
+    pub fn ci_at(&self, event_time: i32) -> Option<(f64, f64)> {
         self.estimates
             .iter()
             .find(|est| est.event_time == event_time)
-            .map_or((0.0, 0.0), |est| (est.summary.ci_low, est.summary.ci_high))
+            .map(|est| (est.summary.ci_low, est.summary.ci_high))
     }
 
     /// Convert to `HonestEventStudyInput` for sensitivity analysis.

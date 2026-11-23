@@ -387,7 +387,9 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_identified_s
         prepared_branches,
         counter,
     )?;
-    global_identified_set_from_branch_identified_sets(input, post_weights, &branch_sets)
+    Ok(global_identified_set_from_branch_identified_sets(
+        &branch_sets,
+    ))
 }
 
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_branch_identified_sets_with_prepared_branches(
@@ -434,16 +436,9 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_branch_ident
         .collect()
 }
 
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "keeps branch/global solver signatures aligned for the surrounding pipeline"
-)]
 pub(in crate::inference::sensitivity) fn global_identified_set_from_branch_identified_sets(
-    input: &HonestEventStudyInput,
-    post_weights: &[f64],
     branch_sets: &[Option<HonestIdentifiedSet>],
-) -> Result<HonestIdentifiedSet, String> {
-    let num_pre = input.num_pre_periods();
+) -> HonestIdentifiedSet {
     let mut global_lower = f64::INFINITY;
     let mut global_upper = f64::NEG_INFINITY;
     let mut solved_any_branch = false;
@@ -452,22 +447,18 @@ pub(in crate::inference::sensitivity) fn global_identified_set_from_branch_ident
         global_lower = global_lower.min(branch.lb);
         global_upper = global_upper.max(branch.ub);
     }
-    let target_estimate = post_weights
-        .iter()
-        .zip(&input.betahat[num_pre..])
-        .map(|(weight, beta)| weight * beta)
-        .sum::<f64>();
-    Ok(if solved_any_branch {
+    // No feasible branch: the set is empty, which is undefined.
+    if solved_any_branch {
         HonestIdentifiedSet {
             lb: global_lower,
             ub: global_upper,
         }
     } else {
         HonestIdentifiedSet {
-            lb: target_estimate,
-            ub: target_estimate,
+            lb: f64::NAN,
+            ub: f64::NAN,
         }
-    })
+    }
 }
 
 /// Where to start this branch's acceptance search.

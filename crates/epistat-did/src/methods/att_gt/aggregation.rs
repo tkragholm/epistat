@@ -204,7 +204,7 @@ where
                     ci_low,
                     ci_high,
                     components: bucket.len(),
-                    total_weight: raw_total,
+                    total_weight: bucket.iter().map(|entry| entry.total_weight).sum::<f64>(),
                 },
             )
         })

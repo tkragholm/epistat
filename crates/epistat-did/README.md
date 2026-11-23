@@ -12,7 +12,9 @@ Also the two-period doubly robust estimators of `DRDID`, including the
 improved and locally efficient ones; the efficient ATT(g,t) that combines all
 baseline periods (Chen, Sant'Anna and Xie); compositional changes in repeated
 cross-sections (Sant'Anna and Xu); doubly robust triple differences; and the
-average causal response to a continuous treatment by a sieve estimator.
+average causal response to a continuous treatment by a sieve estimator, whose
+standard error comes from the influence function of the whole procedure,
+estimated control trend included.
 
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
@@ -33,6 +35,8 @@ as NaN; the confidence sets are computed there as in HonestDiD. The `nightly`
 feature enables faer's AVX-512 kernels through epistat-linalg.
 
 The tests compare estimates, standard errors and influence functions with
-`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `triplediff` and `contdid`, from
-reference values written by the R scripts in `tests/`. They run with
+`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `triplediff` and `contdid`
+0.1.2, and the continuous treatment's influence function with the
+infinitesimal jackknife of refits in R, from reference values written by the
+R scripts in `tests/`. They run with
 `cargo test --features parity-tests`.

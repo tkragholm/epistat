@@ -10,8 +10,9 @@
 # event indicator. "all": the treatment is a Bernoulli variable in each interval.
 # "first": the treatment is absorbing and rows continue after it starts.
 # The procedure of the variance is: fit the models of treatment with case weights,
-# form the weights, truncate at limits fixed at their unperturbed values, fit the
-# Cox model with the weights times the case weights. The influence of a subject is
+# form the weights, truncate them at their own quantiles (type 7, over every row,
+# not weighted by the case weights, as ipwtm), so that the limits move with the
+# fits, and fit the Cox model with the weights times the case weights. The influence of a subject is
 # the derivative of the coefficients with respect to its case weight at 1, by
 # central differences with Richardson extrapolation (steps h and h / 2).
 # Run: Rscript weighting_treatment.R > weighting_treatment.json
@@ -97,7 +98,7 @@ case <- function(name, dat, type, stab, trunc = NULL, h = 1e-4) {
                                     ties = "efron", control = ctl))))
   }
   wfun <- function(om_sub) {
-    hh <- hand(dat, type, stab, om = om_sub[dat$id], lim = h0$limits, tight = TRUE)
+    hh <- hand(dat, type, stab, om = om_sub[dat$id], trunc = trunc, tight = TRUE)
     if (is.null(trunc)) hh$weights else hh$truncated
   }
   w0 <- wfun(one)
