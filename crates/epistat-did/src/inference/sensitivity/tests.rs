@@ -17,7 +17,9 @@ use crate::{AttGtEstimate, InferenceConfig};
 
 fn assert_same_interval(left: (f64, f64), right: (f64, f64)) {
     for (left_bound, right_bound) in [(left.0, right.0), (left.1, right.1)] {
-        if left_bound.is_infinite() || right_bound.is_infinite() {
+        if left_bound.is_nan() || right_bound.is_nan() {
+            assert!(left_bound.is_nan() && right_bound.is_nan());
+        } else if left_bound.is_infinite() || right_bound.is_infinite() {
             assert_eq!(left_bound.to_bits(), right_bound.to_bits());
         } else {
             assert!((left_bound - right_bound).abs() < 1e-8);
@@ -235,8 +237,11 @@ fn assess_honest_event_study_functional_supports_smoothness_non_basis_functional
     )
     .expect("smoothness should support non-basis functionals");
     assert!((assessment.estimate - 15.0).abs() < 1e-8);
+    assert!(assessment.robust_ci.0.is_finite() && assessment.robust_ci.1.is_finite());
     assert!(assessment.robust_ci.0 <= assessment.robust_ci.1);
-    assert!(assessment.identified_set.0 <= assessment.identified_set.1);
+    // The second difference of (1.0, 1.2) and the reference 0 is -1.4, beyond
+    // M = 0.5, so no violation path fits the pre-period coefficients.
+    assert!(assessment.identified_set.0.is_nan() && assessment.identified_set.1.is_nan());
 }
 
 #[test]
@@ -299,7 +304,10 @@ fn delta_sd_conditional_moments_match_r_post_period_row_filtering() {
 }
 
 #[test]
-fn delta_sd_conditional_cs_returns_unbounded_interval_when_pretrends_violate_bound() {
+fn delta_sd_conditional_cs_is_finite_when_pretrends_violate_bound() {
+    // The pre-period second difference is -20 against M = 1. `HonestDiD`
+    // still returns a finite set, inside its first-stage interval, and so does
+    // this one; only the identified set is empty.
     let input = HonestEventStudyInput {
         betahat: vec![0.0, 10.0, 5.0],
         covariance: vec![
@@ -310,10 +318,19 @@ fn delta_sd_conditional_cs_returns_unbounded_interval_when_pretrends_violate_bou
         pre_periods: vec![-2, -1],
         post_periods: vec![0],
     };
-    let result = compute_smoothness_confidence_set(&input, &[1.0], 1.0, InferenceConfig::new(0.95))
-        .expect("conditional cs");
-    assert_eq!(result.lb.to_bits(), f64::NEG_INFINITY.to_bits());
-    assert_eq!(result.ub.to_bits(), f64::INFINITY.to_bits());
+    let inference = InferenceConfig::new(0.95);
+    let result =
+        compute_smoothness_confidence_set(&input, &[1.0], 1.0, inference).expect("conditional cs");
+    let first_stage = compute_smoothness_flci(
+        &build_smoothness_flci_problem(&input, &[1.0], 1.0, InferenceConfig::new(0.995))
+            .expect("first-stage problem"),
+    )
+    .expect("first stage");
+    assert!(result.lb.is_finite() && result.ub.is_finite());
+    assert!(first_stage.flci.0 <= result.lb && result.lb <= result.ub);
+    assert!(result.ub <= first_stage.flci.1);
+    let identified = compute_smoothness_identified_set(&input, &[1.0], 1.0).expect("identified");
+    assert!(identified.lb.is_nan() && identified.ub.is_nan());
 }
 
 #[test]
@@ -775,12 +792,11 @@ fn delta_sdb_and_sdm_identified_sets_are_well_formed() {
         HonestMonotonicityDirection::Increasing,
     )
     .expect("sdm idset");
+    assert!(sdb.lb.is_finite() && sdb.ub.is_finite());
     assert!(sdb.lb <= sdb.ub);
-    assert!(sdm.lb <= sdm.ub);
-    assert!(sdb.lb.is_finite() || sdb.lb == f64::NEG_INFINITY);
-    assert!(sdb.ub.is_finite() || sdb.ub == f64::INFINITY);
-    assert!(sdm.lb.is_finite() || sdm.lb == f64::NEG_INFINITY);
-    assert!(sdm.ub.is_finite() || sdm.ub == f64::INFINITY);
+    // An increasing path ends at the reference 0, which the pre-period
+    // coefficient 0.1 exceeds, so the monotone set is empty.
+    assert!(sdm.lb.is_nan() && sdm.ub.is_nan());
 }
 
 #[test]
