@@ -16,4 +16,7 @@ fn estimators_are_the_same_on_every_pool() {
     for case in tmle_sim::CASES {
         assert_same_on_pools(&POOLS, || tmle_sim::run(&s, case));
     }
+    for horizon in [3, 5] {
+        assert_same_on_pools(&POOLS, || tmle_sim::run_survival(&s, horizon));
+    }
 }

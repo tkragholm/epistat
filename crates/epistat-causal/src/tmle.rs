@@ -1,5 +1,6 @@
 //! Targeted maximum likelihood estimation for binary and bounded continuous
-//! outcomes, as the R package `tmle` does it.
+//! outcomes, as the R package `tmle` does it. The risk by a time with right
+//! censoring, in discrete time, is in [`survival`].
 //!
 //! # Algorithm
 //!
@@ -120,6 +121,8 @@
 //!    Biostat. 2016;12(1):351-78.
 //! 5. Schuler MS, Rose S. Targeted maximum likelihood estimation for causal
 //!    inference in observational studies. Am J Epidemiol. 2017;185(1):65-73.
+
+pub mod survival;
 
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};

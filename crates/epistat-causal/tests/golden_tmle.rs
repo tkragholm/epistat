@@ -26,17 +26,28 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("glm atc by arm", 9028, 0x3e1b_6330_252d_af3a),
     ("core ate", 9029, 0x7696_aa07_a432_de04),
     ("core att", 9028, 0x7231_f2fe_0ded_fdd2),
+    ("survival horizon 3", 3030, 0xf543_2985_0e42_f1b7),
+    ("survival horizon 5", 3029, 0x6428_78ac_8c97_f602),
 ];
 
 #[test]
 fn bits_are_unchanged() {
     let s = sim::simulate();
-    let got: Vec<(String, usize, u64)> = tmle_sim::CASES
+    let mut outputs: Vec<(String, Vec<f64>)> = tmle_sim::CASES
         .iter()
-        .map(|&case| {
-            let v = tmle_sim::run(&s, case);
+        .map(|&case| (case.0.to_string(), tmle_sim::run(&s, case)))
+        .collect();
+    for horizon in [3, 5] {
+        outputs.push((
+            format!("survival horizon {horizon}"),
+            tmle_sim::run_survival(&s, horizon),
+        ));
+    }
+    let got: Vec<(String, usize, u64)> = outputs
+        .into_iter()
+        .map(|(name, v)| {
             let digest = Fingerprint::new().u64(v.len() as u64).f64s(&v).finish();
-            (case.0.to_string(), v.len(), digest)
+            (name, v.len(), digest)
         })
         .collect();
     if std::env::var_os("GOLDEN_RECORD").is_some() {

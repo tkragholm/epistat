@@ -30,7 +30,9 @@ Causal effect estimators for cohort data.
   the two models, or fits a main-terms or per-arm generalised linear model of the
   outcome and a logistic model of the treatment, and gives the variance of the
   efficient influence function. The estimates stay inside the range of the
-  outcome.
+  outcome. The risk by a time with right censoring is estimated in discrete
+  time, on given predictions of the event and censoring hazards, with iterated
+  logistic fluctuation of the hazards of each arm.
 
 The risk by a time with right censoring is in `epistat-survival::aipw`, since it
 needs the Cox and censoring machinery of that crate.
@@ -38,6 +40,7 @@ needs the Cox and censoring machinery of that crate.
 Case weights and clusters are supported. Results do not depend on the number
 of threads, and are checked against `riskRegression::ate` and against
 estimators written out by hand in R. TMLE is checked against `tmle` with its
-learners replaced by `glm`. Entropy balancing is also checked against `WeightIt`
+learners replaced by `glm`, and its survival form against the estimator written
+out in R. Entropy balancing is also checked against `WeightIt`
 and `ebal`, and CBPS against `CBPS`, with the variance checked against the
 infinitesimal jackknife of the whole procedure and a bootstrap.

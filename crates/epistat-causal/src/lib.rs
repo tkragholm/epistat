@@ -12,7 +12,9 @@
 //! - [`tmle`]: targeted maximum likelihood estimation for a binary or bounded
 //!   continuous outcome, as the R package `tmle` does it, on given predictions
 //!   ([`tmle::tmle`]) or with fitted generalised linear models
-//!   ([`tmle::tmle_glm`]), with the variance of the efficient influence function.
+//!   ([`tmle::tmle_glm`]), with the variance of the efficient influence function;
+//!   and [`tmle::survival`], the risk by a time with right censoring in discrete
+//!   time.
 //!
 //! The risk by a time with right censoring is in `epistat_survival::aipw`, which
 //! has the Cox and censoring models it needs.

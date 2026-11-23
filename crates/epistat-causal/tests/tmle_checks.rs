@@ -378,3 +378,153 @@ fn refusals() {
         .is_err()
     );
 }
+
+/// With one interval and no censoring the risk is a binary outcome, and the
+/// survival estimator targets each arm with the clever covariate `-1 / g_a` of
+/// the binary estimator of the effect in the population, whose two clever
+/// covariates have disjoint support and so are fitted as two separate
+/// regressions. The two solve the same score equations, each to the stopping
+/// rule of the logistic fit: at the start of the last step `|U_a| <= sqrt(1e-8
+/// (D + 0.1) I_aa)` (see `fluctuation_solves_its_score_equations`), so each
+/// coefficient is within `sqrt(1e-8 (D + 0.1) / I_aa)` of the root, and a mean
+/// moves by at most `max(1 / g_a) / 4` times that, the derivative of a mean of
+/// `expit(logit q + e / g_a)` in `e`.
+#[test]
+fn survival_with_one_interval_is_the_binary_estimator() {
+    use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
+    let d = simulate(35, 2000);
+    let n = d.y.len();
+    let z: Vec<f64> = d.a.iter().map(|&t| f64::from(u8::from(t))).collect();
+    let logistic = epistat_glm::Glm::new(Family::Binomial, epistat_glm::Link::Logit);
+    let g = logistic
+        .fit(d.x.as_ref(), &z, None, None, None)
+        .unwrap()
+        .fitted;
+    let q = Mat::from_fn(n, 4, |i, j| if j < 3 { d.x[(i, j)] } else { z[i] });
+    let fit = logistic.fit(q.as_ref(), &d.y, None, None, None).unwrap();
+    let beta: Vec<f64> = fit.coefficients.iter().map(|c| c.unwrap()).collect();
+    let pred = |treated: f64| -> Vec<f64> {
+        (0..n)
+            .map(|i| expit((0..3).map(|j| d.x[(i, j)] * beta[j]).sum::<f64>() + treated * beta[3]))
+            .collect()
+    };
+    let (m1, m0) = (pred(1.0), pred(0.0));
+    let binary = tmle(
+        &AipwInput {
+            outcome: &d.y,
+            treatment: &d.a,
+            mu1: &m1,
+            mu0: &m0,
+            propensity: &g,
+            weight: None,
+            cluster: None,
+        },
+        Target::Ate,
+        &TmleOptions::default(),
+    )
+    .unwrap();
+    let h1 = Mat::from_fn(n, 1, |i, _| m1[i]);
+    let h0 = Mat::from_fn(n, 1, |i, _| m0[i]);
+    let none = Mat::<f64>::zeros(n, 0);
+    let time = vec![1usize; n];
+    let event: Vec<bool> = d.y.iter().map(|&y| y > 0.5).collect();
+    let survival = tmle_survival(
+        &SurvivalInput {
+            time: &time,
+            event: &event,
+            treatment: &d.a,
+            hazard1: h1.as_ref(),
+            hazard0: h0.as_ref(),
+            censoring1: none.as_ref(),
+            censoring0: none.as_ref(),
+            propensity: &g,
+            weight: None,
+            cluster: None,
+        },
+        &SurvivalOptions::new(1),
+    )
+    .unwrap();
+    assert_eq!(survival.iterations, [1, 1]);
+    for (arm, (risk, mean)) in [
+        (survival.risk1, binary.mean1),
+        (survival.risk0, binary.mean0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let treated = arm == 0;
+        let (mut deviance, mut info, mut slope) = (0.0, 0.0, 0.0f64);
+        for i in 0..n {
+            let ga = if treated { g[i] } else { 1.0 - g[i] };
+            slope = slope.max(1.0 / ga / 4.0);
+            if d.a[i] == treated {
+                let qs = if treated {
+                    binary.targeted1[i].unwrap()
+                } else {
+                    binary.targeted0[i].unwrap()
+                };
+                deviance += binomial_deviance(d.y[i], qs);
+                info += qs * (1.0 - qs) / (ga * ga);
+            }
+        }
+        let tol = 2.0 * (1e-8 * (deviance + 0.1) / info).sqrt() * slope;
+        assert!(
+            (risk.estimate - mean.estimate).abs() <= tol,
+            "arm {arm}: {} against {} (tolerance {tol:e})",
+            risk.estimate,
+            mean.estimate
+        );
+        assert!((risk.se - mean.se).abs() <= tol, "arm {arm}: se");
+        println!(
+            "arm {arm}: {:e} apart, tolerance {tol:e}",
+            (risk.estimate - mean.estimate).abs()
+        );
+    }
+}
+
+#[test]
+fn survival_refusals() {
+    use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
+    let n = 40;
+    let time: Vec<usize> = (0..n).map(|i| 1 + i % 3).collect();
+    let event: Vec<bool> = (0..n).map(|i| i % 2 == 0).collect();
+    let a: Vec<bool> = (0..n).map(|i| i % 4 < 2).collect();
+    let g = vec![0.5; n];
+    let h = Mat::from_fn(n, 3, |_, _| 0.2);
+    let c = Mat::from_fn(n, 2, |_, _| 0.1);
+    let run = |time: &[usize], h: &Mat<f64>, c: &Mat<f64>, horizon: usize| {
+        tmle_survival(
+            &SurvivalInput {
+                time,
+                event: &event,
+                treatment: &a,
+                hazard1: h.as_ref(),
+                hazard0: h.as_ref(),
+                censoring1: c.as_ref(),
+                censoring0: c.as_ref(),
+                propensity: &g,
+                weight: None,
+                cluster: None,
+            },
+            &SurvivalOptions::new(horizon),
+        )
+    };
+    let ok = run(&time, &h, &c, 3).unwrap();
+    for r in [ok.risk1.estimate, ok.risk0.estimate] {
+        assert!(r > 0.0 && r < 1.0);
+    }
+    assert!(run(&time, &h, &c, 0).is_err());
+    assert!(run(&time, &h, &c, 4).is_err());
+    let mut zero = time.clone();
+    zero[0] = 0;
+    assert!(run(&zero, &h, &c, 3).is_err());
+    let mut bad = h.clone();
+    bad[(1, 0)] = 0.0;
+    assert!(run(&time, &bad, &c, 3).is_err());
+    let mut full = c.clone();
+    full[(1, 1)] = 1.0;
+    assert!(run(&time, &h, &full, 3).is_err());
+    // Censoring hazards of 0, no censoring, are allowed.
+    let none = Mat::from_fn(n, 2, |_, _| 0.0);
+    assert!(run(&time, &h, &none, 3).is_ok());
+}

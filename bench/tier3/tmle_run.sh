@@ -10,14 +10,15 @@
 # METHODS (default every method of crates/epistat-causal/benches/tier3_tmle.rs),
 # LIMIT (seconds for one process, default 600), MEMORY (default 11G), IMPLS
 # ("rust r", the default, or one of them), OUT (default SCRATCH/out), and
-# BIN_tier3_tmle (an already built program). Results go to OUT as
-# bench/tier2/run.sh writes them. Not for the Mac above 10^5 rows.
+# BIN_tier3_tmle (an already built program). tmle_survival runs on the Rust
+# side only. Results go to OUT as bench/tier2/run.sh writes them. Not for the
+# Mac above 10^5 rows.
 set -u
 : "${SCRATCH:?set SCRATCH to a directory outside the repository}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 SIZES="${SIZES:-10000 100000 1000000 10000000}"
-METHODS="${METHODS:-tmle_ate_binary tmle_ate_gaussian tmle_all_binary}"
+METHODS="${METHODS:-tmle_ate_binary tmle_ate_gaussian tmle_all_binary tmle_survival}"
 OUT="${OUT:-$SCRATCH/out}"
 LIMIT="${LIMIT:-600}"
 MEMORY="${MEMORY:-11G}"
@@ -60,6 +61,8 @@ for n in $SIZES; do
   [ -f "$SCRATCH/tml_$n.csv" ] || N=$n METHOD=gen_tml SCRATCH="$SCRATCH" OUT="$OUT" "$BIN" > "$OUT/log_gen_tml_$n.txt" 2>&1
   for m in $METHODS; do
     for impl in $IMPLS; do
+      # R has no implementation of the survival estimator to time.
+      [ "$impl" = r ] && [ "$m" = tmle_survival ] && continue
       tf="$OUT/time_${impl}_${m}_${n}.txt"
       if [ "$impl" = rust ]; then
         N=$n METHOD=$m REPS="$(reps_for "$n")" SCRATCH="$SCRATCH" OUT="$OUT" \
