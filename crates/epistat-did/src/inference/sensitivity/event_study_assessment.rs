@@ -18,7 +18,6 @@ use super::relative_magnitude::conditional_confidence_set::{
 use super::relative_magnitude::geometry::{
     RelativeMagnitudePreparedBranch, basis_post_weights, prepare_relative_magnitude_branches,
 };
-use super::smoothness::pre_periods_satisfy_smoothness_bound;
 use super::{
     HonestAssessment, HonestEventStudyInput, HonestEventStudyPoint, HonestJointPathConfig,
     HonestMultiFlciResult, HonestPostFunctional, HonestResult, HonestSensitivity,
@@ -295,9 +294,9 @@ pub(in crate::inference::sensitivity) fn compute_honest_event_study_scalar_for_i
 /// confidence set are exact for any `post_weights`, with the settings of
 /// [`RelativeMagnitudeConfidenceSetConfig::from_inference`]. Under
 /// `Smoothness(M)` the conditional confidence set uses the settings of
-/// [`SmoothnessConfidenceSetConfig::from_inference`]. If some adjacent
-/// pre-period coefficients differ by more than `M`, the robust interval and the
-/// identified set are `(-inf, inf)` and the result is not significant.
+/// [`SmoothnessConfidenceSetConfig::from_inference`]. Its identified set is
+/// NaN where it is empty, as in
+/// [`compute_smoothness_identified_set`](super::compute_smoothness_identified_set).
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent or if the chosen
@@ -418,25 +417,19 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_functional_wi
                         .to_string(),
                 );
             }
-            if pre_periods_satisfy_smoothness_bound(&input.betahat[..input.num_pre_periods()], m) {
-                let identified = crate::inference::sensitivity::smoothness::compute_smoothness_identified_set_counted(input, post_weights, m, counter)?;
-                let conditional = crate::inference::sensitivity::smoothness::compute_smoothness_confidence_set_with_config_counted(
-                    input,
-                    post_weights,
-                    m,
-                    inference,
-                    SmoothnessConfidenceSetConfig::from_inference(inference), LeastFavorableSimulation::default(), counter,
-                )?;
-                let identified_ci = (identified.lb, identified.ub);
-                let robust_ci = (conditional.lb, conditional.ub);
-                (robust_ci, identified_ci, m)
-            } else {
-                (
-                    (f64::NEG_INFINITY, f64::INFINITY),
-                    (f64::NEG_INFINITY, f64::INFINITY),
-                    m,
-                )
-            }
+            let identified = crate::inference::sensitivity::smoothness::compute_smoothness_identified_set_counted(input, post_weights, m, counter)?;
+            let conditional = crate::inference::sensitivity::smoothness::compute_smoothness_confidence_set_with_config_counted(
+                input,
+                post_weights,
+                m,
+                inference,
+                SmoothnessConfidenceSetConfig::from_inference(inference), LeastFavorableSimulation::default(), counter,
+            )?;
+            (
+                (conditional.lb, conditional.ub),
+                (identified.lb, identified.ub),
+                m,
+            )
         }
     };
     Ok(HonestAssessment {
