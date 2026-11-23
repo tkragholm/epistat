@@ -244,6 +244,10 @@ fn stratum_of(t: i64, unit: StratumUnit) -> (i64, i64) {
 
 /// The shifts of the referent windows of an event on day `t`, in increasing
 /// order.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "the number of referent windows is a small count"
+)]
 fn shifts(t: i64, referent: Referent) -> Vec<i64> {
     match referent {
         Referent::Unidirectional { n, step } => (1..=n as i64).rev().map(|k| -k * step).collect(),
@@ -278,6 +282,10 @@ fn shifts(t: i64, referent: Referent) -> Vec<i64> {
 /// `hazard_days` (below 7 days for a time-stratified referent, whose smallest
 /// shift is 7), an observation period ends before it starts, or there are more
 /// events than a `u32` addresses.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the number of events is checked against u32 first"
+)]
 pub fn build_windows(
     event_day: &[i64],
     person: &[u32],
@@ -449,9 +457,7 @@ pub fn case_time_control_design(exposure: &[f64], case_group: &[bool]) -> Result
         ));
     }
     Ok(Mat::from_fn(exposure.len(), 2, |i, j| {
-        if j == 0 {
-            exposure[i]
-        } else if case_group[i] {
+        if j == 0 || case_group[i] {
             exposure[i]
         } else {
             0.0

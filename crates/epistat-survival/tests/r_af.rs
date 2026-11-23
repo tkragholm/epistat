@@ -79,7 +79,6 @@ fn the_attributable_fraction_function_matches_afcoxph() {
     assert!(reference.versions.af.starts_with("0.1.5"));
     assert_eq!(reference.versions.survival, "3.8.12");
     for c in &reference.cases {
-        let tied = c.label.starts_with("tied");
         let data = SurvData::builder(&c.time, &c.status).build().unwrap();
         let x = matrix(&c.design);
         let x0 = matrix(&c.design0);
@@ -133,7 +132,6 @@ fn the_attributable_fraction_function_matches_afcoxph() {
             let v0 = cov[k * 4].unwrap();
             worst[2] = worst[2].max((v1 - c.jk_s_var[k]).abs() / c.jk_s_var[k]);
             worst[3] = worst[3].max((v0 - c.jk_s0_var[k]).abs() / c.jk_s0_var[k]);
-            let _ = (c.s_var[k], c.s0_var[k]);
             let ratio = c.af_var[k] / var;
             af_package_ratio = (af_package_ratio.0.min(ratio), af_package_ratio.1.max(ratio));
         }

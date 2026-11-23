@@ -430,8 +430,10 @@ fn check_data(data: &SccsData<'_>, x: MatRef<'_, f64>) -> Result<()> {
 /// semi-definite.
 pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Result<SccsFit> {
     check_data(data, x)?;
-    if !(opts.tolerance.is_finite() && opts.tolerance > 0.0)
-        || !(opts.alias_tolerance.is_finite() && opts.alias_tolerance > 0.0)
+    if !opts.tolerance.is_finite()
+        || opts.tolerance <= 0.0
+        || !opts.alias_tolerance.is_finite()
+        || opts.alias_tolerance <= 0.0
         || opts.max_iterations == 0
     {
         return Err(invalid(
@@ -774,6 +776,10 @@ fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
 }
 
 /// One person's pieces appended to the output.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "window and age band counts are small"
+)]
 fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
     let (start, end) = (spec.start[i], spec.end[i]);
     let events = &spec.events[spec.event_offsets[i]..spec.event_offsets[i + 1]];

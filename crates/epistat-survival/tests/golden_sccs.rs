@@ -61,15 +61,16 @@ fn sccs_bits_are_recorded() {
     let (mut exposure_offsets, mut exposures) = (vec![0_usize], vec![]);
     for _ in 0..n {
         let a = rng.below(100) as f64;
-        let b = a + 300.0 + rng.below(400) as f64;
+        let length = 300 + rng.below(400);
+        let b = a + length as f64;
         start.push(a);
         end.push(b);
         for _ in 0..rng.below(3) {
             exposures.push(a + rng.below(300) as f64);
         }
         exposure_offsets.push(exposures.len());
-        for _ in 0..1 + rng.below(3) {
-            events.push(a + rng.below((b - a) as usize) as f64);
+        for _ in 0..=rng.below(3) {
+            events.push(a + rng.below(length) as f64);
         }
         event_offsets.push(events.len());
     }

@@ -74,7 +74,7 @@ fn attributable_fraction_bits_are_recorded() {
         })
         .collect();
     let w: Vec<f64> = (0..n).map(|_| 0.5 + rng.unit()).collect();
-    let cluster: Vec<u32> = (0..n).map(|i| (i / 3) as u32).collect();
+    let cluster: Vec<u32> = (0..n).map(|i| u32::try_from(i / 3).unwrap()).collect();
     let x = Mat::from_fn(n, 4, |i, j| [1.0, e[i], z[i], e[i] * z[i]][j]);
     let x0 = Mat::from_fn(n, 4, |i, j| if j == 1 || j == 3 { 0.0 } else { x[(i, j)] });
     let model = Glm::new(Family::Binomial, Link::Logit);

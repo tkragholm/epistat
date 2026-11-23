@@ -210,25 +210,18 @@ pub fn attributable_logistic(
     if !(opts.level > 0.0 && opts.level < 1.0) {
         return Err(invalid("level must be in (0, 1)"));
     }
-    if let Some(i) = y.iter().position(|&v| v != 0.0 && v != 1.0) {
+    if let Some(i) = y.iter().position(|&v| !matches!(v, 0.0 | 1.0)) {
         return Err(invalid(format!("y[{i}] is {}, not 0 or 1", y[i])));
     }
-    let ones;
-    let w: &[f64] = match opts.weights {
-        Some(w) => {
-            if w.len() != n {
-                return Err(invalid("weights must have one entry per row"));
-            }
-            if let Some(i) = w.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
-                return Err(invalid(format!("weight {i} is negative or not finite")));
-            }
-            w
-        }
-        None => {
-            ones = vec![1.0; n];
-            &ones
-        }
-    };
+    let ones = vec![1.0; if opts.weights.is_some() { 0 } else { n }];
+    let w: &[f64] = opts.weights.unwrap_or(&ones);
+    if w.len() != n {
+        return Err(invalid("weights must have one entry per row"));
+    }
+    if let Some(i) = w.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
+        return Err(invalid(format!("weight {i} is negative or not finite")));
+    }
+    let event: Vec<bool> = y.iter().map(|&v| matches!(v, 1.0)).collect();
     if let Some(c) = opts.cluster
         && c.len() != n
     {
@@ -262,7 +255,7 @@ pub fn attributable_logistic(
     let n_f = n as f64;
     let sum_w: f64 = w.iter().sum();
     let wbar = sum_w / n_f;
-    let cases = (0..n).filter(|&i| y[i] == 1.0 && w[i] > 0.0).count();
+    let cases = (0..n).filter(|&i| event[i] && w[i] > 0.0).count();
     let mut result = Attributable {
         af: None,
         se: None,
@@ -297,7 +290,7 @@ pub fn attributable_logistic(
     if case_control {
         let (mut num, mut den) = (0.0, 0.0);
         for i in 0..n {
-            if y[i] == 1.0 {
+            if event[i] {
                 num += w[i] * (-delta[i]).exp();
                 den += w[i];
             }
@@ -309,7 +302,7 @@ pub fn attributable_logistic(
         af = 1.0 - num / den;
         let mut h = vec![0.0; q];
         for i in 0..n {
-            if y[i] == 1.0 {
+            if event[i] {
                 let e = w[i] * (-delta[i]).exp();
                 for (a, &j) in kept.iter().enumerate() {
                     h[a] += e * (x_unexposed[(i, j)] - x[(i, j)]);

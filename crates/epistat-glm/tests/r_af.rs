@@ -41,7 +41,8 @@ struct Versions {
 #[derive(Deserialize)]
 struct Case {
     label: String,
-    case_control: bool,
+    #[serde(rename = "case_control")]
+    is_case_control: bool,
     y: Vec<f64>,
     x: Vec<Vec<f64>>,
     x0: Vec<Vec<f64>>,
@@ -68,7 +69,7 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
     let reference: Reference = load_json("tests/data/af.json");
     assert!(reference.versions.r.starts_with("R version 4.6"));
     assert!(reference.versions.af.starts_with("0.1.5"));
-    assert!(!reference.versions.num_deriv.is_empty());
+    assert_ne!(reference.versions.num_deriv, "");
     let mut model = Glm::new(Family::Binomial, Link::Logit);
     model.tolerance = 1e-14;
     model.max_iterations = 100;
@@ -79,7 +80,7 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
         let fit = model
             .fit(x.as_ref(), &c.y, c.weights.as_deref(), None, None)
             .unwrap();
-        let design = if c.case_control {
+        let design = if c.is_case_control {
             Design::CaseControl
         } else {
             Design::CrossSectional

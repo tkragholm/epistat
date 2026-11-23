@@ -88,7 +88,7 @@ fn observation_drops_referents_then_sets() {
         Some((T - 1, T + 30)),
     );
     assert_eq!(w.sets_case_outside_observation, vec![0]);
-    assert!(w.sets_without_referent.is_empty());
+    assert_eq!(w.sets_without_referent, Vec::<u32>::new());
 }
 
 #[test]

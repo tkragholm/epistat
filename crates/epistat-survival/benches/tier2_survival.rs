@@ -18,6 +18,9 @@
 
 #![allow(
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::range_plus_one,
     reason = "a benchmark program: sizes, codes and days are small whole numbers"
 )]
 

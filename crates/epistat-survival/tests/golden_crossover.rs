@@ -3,6 +3,13 @@
 //! They are integers, so the digest does not depend on the platform. To record
 //! again, run with `GOLDEN_RECORD=1 -- --nocapture` and paste the lines.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "the data are seeded days and counts of a few thousand, far below the limits of the casts"
+)]
+
 use epistat_rng::Stream;
 use epistat_survival::crossover::{
     ExposureIntervals, Measure, Observation, Referent, StratumUnit, build_windows,

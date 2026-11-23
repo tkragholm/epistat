@@ -4,6 +4,13 @@
 //! The data are seeded, with 5,000 events so that the construction runs in
 //! five tasks of 1,024 events, and 3,000 exposure intervals.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "the data are seeded days and counts of a few thousand, far below the limits of the casts"
+)]
+
 use epistat_rng::Stream;
 use epistat_survival::crossover::{
     ExposureIntervals, Measure, Observation, Referent, StratumUnit, build_windows,

@@ -34,7 +34,7 @@ fn main() {
             f64::from(u8::from(rng.bernoulli(1.0 / (1.0 + (-eta).exp()))))
         })
         .collect();
-    let cluster: Vec<u32> = (0..n).map(|i| (i / 4) as u32).collect();
+    let cluster: Vec<u32> = (0..n).map(|i| u32::try_from(i / 4).unwrap()).collect();
     let x = Mat::from_fn(n, 4, |i, j| [1.0, e[i], z[i], e[i] * z[i]][j]);
     let x0 = Mat::from_fn(n, 4, |i, j| if j == 1 || j == 3 { 0.0 } else { x[(i, j)] });
     let fit = Glm::new(Family::Binomial, Link::Logit)

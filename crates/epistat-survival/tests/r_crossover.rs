@@ -176,7 +176,7 @@ fn windows_and_exposure_equal_the_explicit_loops() {
         assert!(
             any.iter()
                 .zip(&days)
-                .all(|(&a, &d)| a == f64::from(u8::from(d > 0.0)))
+                .all(|(&a, &d)| a.to_bits() == f64::from(u8::from(d > 0.0)).to_bits())
         );
     }
 }
