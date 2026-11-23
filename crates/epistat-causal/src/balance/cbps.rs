@@ -92,10 +92,9 @@
 //!
 //! The coefficients have the influence `phi_i = -n^-1 A^-1 G'W psi_i` with `A =
 //! G'WG`, `G` the derivative of `g`: the influence function of a GMM estimator
-//! with weighting matrix `W`, valid for any positive definite `W`, and
-//! first-order equivalent to `W = V(beta)^-1` for the continuously updated
-//! estimator. For the just identified estimator it is `-n^-1 G_b^-1 psi_bal,i`,
-//! with `G_b` the balance block of `G`.
+//! with weighting matrix `W`, valid for any positive definite `W`. For the just
+//! identified estimator it is `-n^-1 G_b^-1 psi_bal,i`, with `G_b` the balance
+//! block of `G`.
 //!
 //! For the two-step estimator the influence is instead the exact derivative of the
 //! minimiser with respect to the case weight of the person (the infinitesimal
@@ -115,6 +114,31 @@
 //! the derivative of the moments of person `i` alone, and `a_1` and `a_2` are the
 //! contributions of the score and balance blocks to `G' v`.
 //!
+//! For the continuously updated estimator the influence is also the exact
+//! derivative of the minimiser. With `v = W g`, `r_i = (x_i' v_1, x_i' v_2)` for
+//! the score and balance halves of `v`, the score and balance terms `u = t - e`
+//! and `wt`, the blocks `a, b, c` of `V` per person and primes for derivatives
+//! in `eta`, half the gradient of `J` is `Q = n^-1 sum s_i x_i f_i` with
+//!
+//! ```text
+//! f = u' r_1 + wt' r_2 - (a' r_1^2 + 2 b' r_1 r_2 + c' r_2^2) / 2,
+//! ```
+//!
+//! and with `p = u' - a' r_1 - b' r_2`, `m = wt' - b' r_1 - c' r_2` and
+//! `D = n^-1 sum s_i [x_i p_i; x_i m_i] x_i'`, half its Hessian is `H = n^-1
+//! sum s_i (d f_i / d eta) x_i x_i' + D'WD`. The weighting matrix moves with
+//! the case weight of person `i` as `v` does, by `n^-1 W (psi_i - M_i v)` with
+//! `psi_i` the moments of the person at unit weight and `M_i` its block of `V`,
+//! so the influence of the coefficients is
+//!
+//! ```text
+//! phi_i = -n^-1 s_i H^-1 [ x_i f_i - Q + D'W (psi_i - M_i v) ].
+//! ```
+//!
+//! For the ATT the balance moments and their rows of `V` carry the factor `n /
+//! n_t`, which cancels in `J`, so it does not enter. Where `H` is not positive
+//! definite the first form is used.
+//!
 //! The derivative of the log weight is `-(1-e) x` for a treated person and `e x`
 //! for a control (ATE), 0 for the treated and `x` for the controls (ATT).
 //! Standardising divides the weights of a group by their sum, which is estimated
@@ -125,9 +149,9 @@
 //! # Limits
 //!
 //! `J` can have several minima, which is why the result states the start it came
-//! from. The variance for the continuously updated estimator is the first-order
-//! sandwich above, which is checked against nothing but the theory; the
-//! two-step and just identified variances are checked against the jackknife. The treatment is binary. A continuous treatment, the non-parametric
+//! from. The variances of the just identified, two-step and continuously updated
+//! estimators are checked against the infinitesimal jackknife of the whole
+//! procedure. The treatment is binary. A continuous treatment, the non-parametric
 //! CBPS and the multi-valued treatment are not implemented. A fitted probability
 //! numerically 0 or 1 is an error.
 //!
@@ -437,6 +461,118 @@ impl Problem {
                     .collect(),
             ]
         }
+    }
+
+    /// The second derivatives with respect to `eta` of [`Problem::vparts`].
+    fn d2vparts(&self, e: &[f64]) -> [Vec<f64>; 3] {
+        let m = e.len();
+        let d2a: Vec<f64> = (0..m)
+            .map(|i| e[i] * (1.0 - e[i]) * (1.0 - 6.0 * e[i] + 6.0 * e[i] * e[i]))
+            .collect();
+        if self.att {
+            [
+                d2a,
+                (0..m)
+                    .map(|i| self.c * e[i] * (1.0 - e[i]) * (1.0 - 2.0 * e[i]))
+                    .collect(),
+                (0..m)
+                    .map(|i| self.c * self.c * e[i] / (1.0 - e[i]))
+                    .collect(),
+            ]
+        } else {
+            [
+                d2a,
+                vec![0.0; m],
+                (0..m)
+                    .map(|i| {
+                        let f = e[i] * (1.0 - e[i]);
+                        let d = 1.0 - 2.0 * e[i];
+                        2.0 + d * d / f
+                    })
+                    .collect(),
+            ]
+        }
+    }
+
+    /// The influence of the continuously updated coefficients: the exact
+    /// derivative of the minimiser with respect to the case weight of each
+    /// person, times its sample weight, as rows of an `n x k` matrix. `None`
+    /// when the Hessian of `J` is not positive definite there. See the module
+    /// documentation for the formulas.
+    fn cu_influence(&self, e: &[f64]) -> Result<Option<Mat<f64>>> {
+        let (k, m) = (self.k(), e.len());
+        let w = self.v_inverse(e)?;
+        let g = self.moments(e);
+        let (_, v) = quad(&w, &g);
+        let (r1, r2) = (self.eta(&v[..k]), self.eta(&v[k..]));
+        let [a, b, cc] = self.vparts(e);
+        let [da, db, dc] = self.dvparts(e);
+        let [d2a, d2b, d2c] = self.d2vparts(e);
+        let (wb, dw, d2w) = (self.wbal(e), self.dwbal(e), self.d2wbal(e));
+        let mut phi = vec![0.0; m];
+        let mut h_eta = vec![0.0; m];
+        let mut hp = vec![0.0; m];
+        let mut hm = vec![0.0; m];
+        let mut alpha = vec![0.0; m];
+        let mut beta = vec![0.0; m];
+        for i in 0..m {
+            let (p1, p2) = (r1[i], r2[i]);
+            let f = e[i] * (1.0 - e[i]);
+            let (du, d2u) = (-f, -f * (1.0 - 2.0 * e[i]));
+            phi[i] = du * p1 + dw[i] * p2
+                - 0.5 * (da[i] * p1 * p1 + 2.0 * db[i] * p1 * p2 + dc[i] * p2 * p2);
+            let dphi = d2u * p1 + d2w[i] * p2
+                - 0.5 * (d2a[i] * p1 * p1 + 2.0 * d2b[i] * p1 * p2 + d2c[i] * p2 * p2);
+            h_eta[i] = self.s[i] * dphi;
+            hp[i] = self.s[i] * (du - da[i] * p1 - db[i] * p2);
+            hm[i] = self.s[i] * (dw[i] - db[i] * p1 - dc[i] * p2);
+            let u = f64::from(u8::from(self.t[i])) - e[i];
+            alpha[i] = u - a[i] * p1 - b[i] * p2;
+            beta[i] = wb[i] - b[i] * p1 - cc[i] * p2;
+        }
+        // Q = n^-1 sum s x phi, half the gradient of J; zero at the minimum up to
+        // the solver's tolerance.
+        let xq = xtv(self.x.as_ref(), &self.sw(&phi));
+        let q: Vec<f64> = (0..k).map(|j| xq[(j, 0)] / self.n).collect();
+        // D = n^-1 sum s [x p; x m] x' and half the Hessian C_eta + D' W D.
+        let (top, bottom) = (self.signed_gram(&hp), self.signed_gram(&hm));
+        let d = Mat::from_fn(2 * k, k, |r, c| {
+            if r < k {
+                top[(r, c)]
+            } else {
+                bottom[(r - k, c)]
+            }
+        });
+        let wd = Mat::from_fn(2 * k, k, |r, c| {
+            compensated((0..2 * k).map(|j| w[(r, j)] * d[(j, c)]))
+        });
+        let c_eta = self.signed_gram(&h_eta);
+        let half = Mat::from_fn(k, k, |r, c| {
+            c_eta[(r, c)] + compensated((0..2 * k).map(|j| d[(j, r)] * wd[(j, c)]))
+        });
+        if cholesky_factor(half.as_ref(), Regularisation::default()).is_none() {
+            return Ok(None);
+        }
+        let hinv = inverse(half.as_ref(), &Attempt::SYMMETRIC)
+            .map_err(|err| {
+                Error::Input(format!("the Hessian of the objective is singular: {err}"))
+            })?
+            .x;
+        let mut out = Mat::<f64>::zeros(m, k);
+        let mut z = vec![0.0; k];
+        for i in 0..m {
+            for (j, zj) in z.iter_mut().enumerate() {
+                let via: f64 = (0..k)
+                    .map(|r| self.x[(i, r)] * (alpha[i] * wd[(r, j)] + beta[i] * wd[(k + r, j)]))
+                    .sum();
+                *zj = self.x[(i, j)] * phi[i] - q[j] + via;
+            }
+            for r in 0..k {
+                let v: f64 = (0..k).map(|c| hinv[(r, c)] * z[c]).sum();
+                out[(i, r)] = -self.s[i] * v / self.n;
+            }
+        }
+        Ok(Some(out))
     }
 
     /// `V`, `2k x 2k`.
@@ -1095,33 +1231,45 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
             }
         }
     }
-    let mut beta_influence = Mat::<f64>::zeros(n, k);
-    for i in 0..n {
-        let ti = f64::from(u8::from(t[i]));
-        let kappa = if opts.target == Target::Ate {
-            1.0
-        } else {
-            prob.c * ti
-        };
-        let mut psi = vec![0.0; 2 * k];
-        for c in 0..k {
-            psi[c] = s[i] * prob.x[(i, c)] * (ti - e[i]);
-            psi[k + c] = s[i] * prob.x[(i, c)] * wbal[i];
-            if exact {
-                psi[c] -= s[i] * gbar[c];
-                psi[k + c] -= s[i] * kappa * gbar[k + c];
+    // The continuously updated fit: the exact derivative of its minimiser, where
+    // the Hessian of `J` is positive definite, else the first-order form below.
+    let updated = if opts.identification == Identification::Over && !opts.two_step {
+        prob.cu_influence(e_final)?
+    } else {
+        None
+    };
+    let beta_influence = if let Some(exact_cu) = updated {
+        exact_cu
+    } else {
+        let mut beta_influence = Mat::<f64>::zeros(n, k);
+        for i in 0..n {
+            let ti = f64::from(u8::from(t[i]));
+            let kappa = if opts.target == Target::Ate {
+                1.0
+            } else {
+                prob.c * ti
+            };
+            let mut psi = vec![0.0; 2 * k];
+            for c in 0..k {
+                psi[c] = s[i] * prob.x[(i, c)] * (ti - e[i]);
+                psi[k + c] = s[i] * prob.x[(i, c)] * wbal[i];
+                if exact {
+                    psi[c] -= s[i] * gbar[c];
+                    psi[k + c] -= s[i] * kappa * gbar[k + c];
+                }
+            }
+            for r in 0..k {
+                let mut v: f64 = (0..2 * k).map(|c| kmat[(r, c)] * psi[c]).sum();
+                if exact {
+                    v += (0..k)
+                        .map(|c| kmat_extra[(r, c)] * extra[i][c])
+                        .sum::<f64>();
+                }
+                beta_influence[(i, r)] = v;
             }
         }
-        for r in 0..k {
-            let mut v: f64 = (0..2 * k).map(|c| kmat[(r, c)] * psi[c]).sum();
-            if exact {
-                v += (0..k)
-                    .map(|c| kmat_extra[(r, c)] * extra[i][c])
-                    .sum::<f64>();
-            }
-            beta_influence[(i, r)] = v;
-        }
-    }
+        beta_influence
+    };
     let nuisance = nuisance(
         opts.standardise,
         &prob,
