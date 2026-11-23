@@ -82,11 +82,11 @@ fn fluctuation_solves_its_score_equations() {
     let b = r.propensity_bound;
     let g = propensity(&d);
     let (mut u, mut info, mut deviance) = ([0.0f64; 2], [0.0f64; 2], 0.0);
-    for i in 0..d.y.len() {
+    for (i, &gi) in g.iter().enumerate() {
         let (q, cov) = if d.a[i] {
-            (r.targeted1[i].unwrap(), 1.0 / g[i].max(b))
+            (r.targeted1[i].unwrap(), 1.0 / gi.max(b))
         } else {
-            (r.targeted0[i].unwrap(), 1.0 / (1.0 - g[i]).max(b))
+            (r.targeted0[i].unwrap(), 1.0 / (1.0 - gi).max(b))
         };
         let k = usize::from(d.a[i]);
         u[k] += cov * (d.y[i] - q);
@@ -454,8 +454,8 @@ fn survival_with_one_interval_is_the_binary_estimator() {
     {
         let treated = arm == 0;
         let (mut deviance, mut info, mut slope) = (0.0, 0.0, 0.0f64);
-        for i in 0..n {
-            let ga = if treated { g[i] } else { 1.0 - g[i] };
+        for (i, &gi) in g.iter().enumerate() {
+            let ga = if treated { gi } else { 1.0 - gi };
             slope = slope.max(1.0 / ga / 4.0);
             if d.a[i] == treated {
                 let qs = if treated {
