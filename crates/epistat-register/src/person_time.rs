@@ -91,6 +91,49 @@ pub fn year_from_days(z: i64) -> i64 {
     civil_from_days(z).0
 }
 
+/// The day `years` calendar years after `day`, on the same month and day.
+///
+/// A 29 February that has no counterpart in the target year goes to 1 March
+/// or to 28 February, as `leap` says, the two conventions of
+/// [`crate::age::age_in_years`]. A negative `years` goes back. The result is
+/// the day on which a person born on `day` has completed `years` years under
+/// [`crate::AgeRule::CivilYears`] with the same `leap`.
+#[must_use]
+pub fn add_years(day: i64, years: i64, leap: crate::LeapBirthday) -> i64 {
+    let (y, m, d) = civil_from_days(day);
+    let target = y + years;
+    if m == 2 && d == 29 && !is_leap_year(target) {
+        return match leap {
+            crate::LeapBirthday::March1 => days_from_civil(target, 3, 1),
+            crate::LeapBirthday::February28 => days_from_civil(target, 2, 28),
+        };
+    }
+    days_from_civil(target, m, d)
+}
+
+/// The day `months` calendar months after `day`, on the same day of the month
+/// or on the last day of the target month when it is shorter. A negative
+/// `months` goes back.
+#[must_use]
+pub fn add_months(day: i64, months: i64) -> i64 {
+    let (y, m, d) = civil_from_days(day);
+    let index = y * 12 + (m - 1) + months;
+    let (ty, tm) = (index.div_euclid(12), index.rem_euclid(12) + 1);
+    days_from_civil(ty, tm, d.min(days_in_month(ty, tm)))
+}
+
+const fn is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+const fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        2 => 28 + is_leap_year(year) as i64,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
 /// Days from 1960-01-01, the SAS date epoch, to 1970-01-01: 3 653.
 pub const SAS_EPOCH_OFFSET_DAYS: i64 = 3_653;
 
@@ -193,6 +236,31 @@ pub fn calendar_year_overlaps(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn adding_years_and_months() {
+        use crate::LeapBirthday::{February28, March1};
+        let leap_day = days_from_civil(2000, 2, 29);
+        assert_eq!(add_years(leap_day, 4, March1), days_from_civil(2004, 2, 29));
+        assert_eq!(add_years(leap_day, 18, March1), days_from_civil(2018, 3, 1));
+        assert_eq!(
+            add_years(leap_day, 18, February28),
+            days_from_civil(2018, 2, 28)
+        );
+        assert_eq!(
+            add_years(days_from_civil(2020, 5, 17), -3, March1),
+            days_from_civil(2017, 5, 17)
+        );
+        let jan31 = days_from_civil(2021, 1, 31);
+        assert_eq!(add_months(jan31, 1), days_from_civil(2021, 2, 28));
+        assert_eq!(add_months(jan31, 13), days_from_civil(2022, 2, 28));
+        assert_eq!(
+            add_months(days_from_civil(2020, 1, 31), 1),
+            days_from_civil(2020, 2, 29)
+        );
+        assert_eq!(add_months(jan31, -2), days_from_civil(2020, 11, 30));
+        assert_eq!(add_months(jan31, 0), jan31);
+    }
+
     use super::*;
 
     fn split(start: i64, end: i64, floor: Option<i64>, keep_empty: bool) -> Vec<YearOverlap> {

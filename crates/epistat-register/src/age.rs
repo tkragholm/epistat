@@ -80,6 +80,35 @@ pub fn age_in_years(birth_day: i64, at_day: i64, rule: AgeRule) -> Option<u32> {
     u32::try_from(years).ok()
 }
 
+/// The day on which a person born on `birth_day` reaches `age` whole years: the
+/// first day on which [`age_in_years`] gives `age`.
+///
+/// Under [`AgeRule::CivilYears`] this is the birthday, with the convention of
+/// the rule for a 29 February birth. Under [`AgeRule::DaysOver365_25`] it is
+/// `birth_day + ceil(1461 age / 4)`. Returns [`None`] when the day does not
+/// fit in an `i64`.
+#[must_use]
+pub fn birthday_on_age(birth_day: i64, age: u32, rule: AgeRule) -> Option<i64> {
+    match rule {
+        AgeRule::CivilYears(leap) => {
+            // Years beyond this are not days an i64 can hold, and the civil
+            // arithmetic below would overflow on its way to saying so.
+            if age > 1_000_000_000 || birth_day.unsigned_abs() > 100_000_000_000 {
+                return None;
+            }
+            Some(crate::person_time::add_years(
+                birth_day,
+                i64::from(age),
+                leap,
+            ))
+        }
+        AgeRule::DaysOver365_25 => {
+            let days = (1461 * u64::from(age)).div_ceil(4);
+            birth_day.checked_add(i64::try_from(days).ok()?)
+        }
+    }
+}
+
 fn civil_years(birth: i64, at: i64, leap: LeapBirthday) -> i64 {
     let (birth_year, birth_month, birth_dom) = civil_from_days(birth);
     let (year, month, dom) = civil_from_days(at);
