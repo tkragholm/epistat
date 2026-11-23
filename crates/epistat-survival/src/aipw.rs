@@ -96,9 +96,12 @@
 //! and not on their number. A bin is summed person by person where that costs
 //! less, as for a bin of a few persons.
 //!
-//! The bins are processed in parallel and the sums over persons are formed in
-//! blocks of fixed size added in order, so the result does not depend on the
-//! number of threads.
+//! The bins, the chunks of 1024 censoring times of a bin and the persons are
+//! processed in parallel. The running sums at a censoring time are the sums of
+//! the chunks before it added in order plus the censoring times of its own
+//! chunk added in order, and the sums over persons are formed in blocks of
+//! fixed size added in order, so the result does not depend on the number of
+//! threads.
 //!
 //! # The grid
 //!
@@ -882,9 +885,11 @@ impl Model {
             return out;
         }
         let theta: Vec<f64> = (0..n)
+            .into_par_iter()
             .map(|i| self.lp[usize::from(self.treated[i])][i].exp())
             .collect();
         let j_max: Vec<usize> = (0..n)
+            .into_par_iter()
             .map(|i| jump.partition_point(|&u| u <= self.stop[i]).min(reach))
             .collect();
         let x_top = self.tables.h_at[reach - 1];
@@ -904,7 +909,8 @@ impl Model {
         };
         let r_theta = RADIUS - r_s;
         // The bins: persons who reach a censoring time, by group, in strips of
-        // theta and, within a strip, in bins of s.
+        // theta and, within a strip, in bins of s. The orders are total, so the
+        // bins do not depend on the sort.
         let n_groups = group.iter().copied().max().map_or(0, |g| g + 1);
         let mut by_group: Vec<Vec<usize>> = vec![Vec::new(); n_groups];
         for i in (0..n).filter(|&i| j_max[i] > 0) {
@@ -912,13 +918,13 @@ impl Model {
         }
         let mut bins: Vec<Bin> = Vec::new();
         for (g, mut rows) in by_group.into_iter().enumerate() {
-            rows.sort_by(|&p, &q| theta[p].total_cmp(&theta[q]).then(p.cmp(&q)));
+            rows.par_sort_unstable_by(|&p, &q| theta[p].total_cmp(&theta[q]).then(p.cmp(&q)));
             for strip in runs(&rows, |i| theta[i], r_theta / x_top) {
                 match s {
                     None => bins.push(Bin::new(g, strip.to_vec(), &theta, None)),
                     Some(s) => {
                         let mut strip = strip.to_vec();
-                        strip.sort_by(|&p, &q| s[p].total_cmp(&s[q]).then(p.cmp(&q)));
+                        strip.par_sort_unstable_by(|&p, &q| s[p].total_cmp(&s[q]).then(p.cmp(&q)));
                         for part in runs(&strip, |i| s[i], r_s / y_top) {
                             bins.push(Bin::new(g, part.to_vec(), &theta, Some(s)));
                         }
@@ -945,172 +951,172 @@ impl Model {
             .par_iter()
             .map(|bin| self.bin_augmentation(bin, &ctx, route))
             .collect();
-        for (bin, v) in bins.iter().zip(values) {
+        // Where each person's row is in the values of its bin.
+        let mut at: Vec<Option<(usize, usize)>> = vec![None; n];
+        for (b, bin) in bins.iter().enumerate() {
             for (r, &i) in bin.rows.iter().enumerate() {
-                out[i * k..(i + 1) * k].copy_from_slice(&v[r * k..(r + 1) * k]);
+                at[i] = Some((b, r));
             }
         }
+        out.par_chunks_mut(k).zip(&at).for_each(|(row, at)| {
+            if let Some((b, r)) = *at {
+                row.copy_from_slice(&values[b][r * k..(r + 1) * k]);
+            }
+        });
         out
     }
 
     /// The augmentation of the persons of a bin at each time, a row of `k` for
     /// each person in the order of the bin.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one pass over the censoring times that shares its running sums"
-    )]
+    ///
+    /// The running sums at `P` censoring times are those at the start of its
+    /// chunk of [`CHUNK`] censoring times, themselves the sums of the chunks
+    /// before added in order, plus the censoring times of the chunk before `P`
+    /// added in order. They are the same whichever thread forms them, so the
+    /// chunks and the persons are processed in parallel.
     fn bin_augmentation(&self, bin: &Bin, ctx: &BinContext<'_>, route: Route) -> Vec<f64> {
         let k = self.k;
-        let mut out = vec![0.0; bin.rows.len() * k];
-        let risk = |i: usize| -> Vec<f64> {
-            ctx.h_tau
-                .iter()
-                .map(|&h| 1.0 - (-ctx.theta[i] * h).exp())
-                .collect()
-        };
-        let span = bin.rows.iter().map(|&i| ctx.j_max[i]).max().unwrap_or(0);
-        let radius = bin.d_theta * ctx.x_top + bin.d_s * ctx.y_top;
-        let degree = degree(radius);
-        let m_theta = if bin.d_theta * ctx.x_top > 0.0 {
-            degree
-        } else {
-            0
-        };
-        let m_s = if bin.d_s * ctx.y_top > 0.0 { degree } else { 0 };
-        let width = m_s + 1;
-        let moments: usize = (0..=m_theta).map(|m| (degree - m).min(m_s) + 1).sum();
-        let reached: usize = bin.rows.iter().map(|&i| ctx.j_max[i]).sum();
+        let rows = &bin.rows;
+        let span = rows.iter().map(|&i| ctx.j_max[i]).max().unwrap_or(0);
+        let series = Series::new(self, bin, ctx);
+        let reached: usize = rows.iter().map(|&i| ctx.j_max[i]).sum();
         let direct = match route {
             Route::Direct => true,
             Route::Moments => false,
             // A censoring time costs a person about three exponentials summed
             // one by one, and the bin about four exponentials and two products
             // per moment.
-            Route::ByCost => 32 * reached < (64 + 2 * moments) * span,
+            Route::ByCost => 32 * reached < (64 + 2 * series.moments()) * span,
         };
+        let mut out = vec![0.0; rows.len() * k];
         if direct {
-            for (r, &i) in bin.rows.iter().enumerate() {
+            out.par_chunks_mut(k).zip(rows).for_each(|(row, &i)| {
                 let a = usize::from(self.treated[i]);
-                self.augmentation(i, a, &risk(i), &mut out[r * k..(r + 1) * k]);
-            }
+                let f: Vec<f64> = ctx
+                    .h_tau
+                    .iter()
+                    .map(|&h| 1.0 - (-ctx.theta[i] * h).exp())
+                    .collect();
+                self.augmentation(i, a, &f, row);
+            });
             return out;
         }
-        // The queries: each person at each time, by the number of censoring
-        // times it includes.
-        let mut queries: Vec<(usize, usize, usize)> = Vec::with_capacity(bin.rows.len() * k);
-        for (r, &i) in bin.rows.iter().enumerate() {
-            for (t, &idx) in ctx.tau_idx.iter().enumerate() {
-                queries.push((idx.min(ctx.j_max[i]), r, t));
+        // The sums at the start of each chunk.
+        let n_chunks = span.div_ceil(CHUNK);
+        let totals: Vec<Sums> = (0..n_chunks)
+            .into_par_iter()
+            .map(|c| {
+                let (mut sums, mut powers) = (series.zero(), series.powers());
+                for j in c * CHUNK..((c + 1) * CHUNK).min(span) {
+                    series.add(j, &mut sums, &mut powers);
+                }
+                sums
+            })
+            .collect();
+        let mut starts: Vec<Sums> = Vec::with_capacity(n_chunks + 1);
+        starts.push(series.zero());
+        for t in &totals {
+            let mut next = starts[starts.len() - 1].clone();
+            next.add_sums(t);
+            starts.push(next);
+        }
+        drop(totals);
+        // The queries, each person at each time as an index into `out`, by the
+        // number of censoring times included: a counting sort in row order.
+        let p_of = |r: usize, t: usize| ctx.tau_idx[t].min(ctx.j_max[rows[r]]);
+        let mut first = vec![0_usize; span + 2];
+        for r in 0..rows.len() {
+            for t in 0..k {
+                first[p_of(r, t) + 1] += 1;
             }
         }
-        queries.sort_unstable();
-        let (h_before, h_at) = (&self.tables.h_before, &self.tables.h_at);
-        let mut ma = vec![0.0; (m_theta + 1) * width];
-        let mut mb = vec![0.0; (m_theta + 1) * width];
-        let (mut pm, mut pz, mut qn) = (
-            vec![0.0; m_theta + 1],
-            vec![0.0; m_theta + 1],
-            vec![0.0; width],
-        );
-        let mut next = 0;
-        let answer = |next: &mut usize, upto: usize, ma: &[f64], mb: &[f64], out: &mut [f64]| {
-            while *next < queries.len() && queries[*next].0 == upto {
-                let (p, r, t) = queries[*next];
-                *next += 1;
-                let i = bin.rows[r];
+        for p in 0..=span {
+            first[p + 1] += first[p];
+        }
+        let mut fill = first.clone();
+        let mut queries = vec![0_usize; rows.len() * k];
+        for r in 0..rows.len() {
+            for t in 0..k {
+                let p = p_of(r, t);
+                queries[fill[p]] = r * k + t;
+                fill[p] += 1;
+            }
+        }
+        drop(fill);
+        // The values a person needs at every time: its offsets in the bin and
+        // the jump of its own censoring.
+        let person: Vec<Person> = rows
+            .par_iter()
+            .map(|&i| {
                 let th = ctx.theta[i];
-                let tt = if bin.d_theta > 0.0 {
-                    (th - bin.theta0) / bin.d_theta
-                } else {
-                    0.0
-                };
-                let (si, vv) = match ctx.s {
-                    Some(s) if bin.d_s > 0.0 => (s[i], (s[i] - bin.s0) / bin.d_s),
-                    Some(s) => (s[i], 0.0),
-                    None => (1.0, 0.0),
-                };
-                let (mut ca, mut cb, mut tp) = (0.0, 0.0, 1.0);
-                for m in 0..=m_theta {
-                    let (mut ra, mut rb, mut vp) = (0.0, 0.0, 1.0);
-                    for kk in 0..=(degree - m).min(m_s) {
-                        ra += vp * ma[m * width + kk];
-                        rb += vp * mb[m * width + kk];
-                        vp *= vv;
-                    }
-                    ca += tp * ra;
-                    cb += tp * rb;
-                    tp *= tt;
-                }
-                let (mut sa, mut sb) = (-si * ca, -si * cb);
-                if self.status[i] == 0 {
+                let own = (self.status[i] == 0).then(|| {
                     let own = self.tables.jump.partition_point(|&u| u < self.stop[i]);
-                    if own < p {
-                        let (w, f_own) = self.own_censoring(i, th, own);
+                    let (w, f) = self.own_censoring(i, th, own);
+                    (own, w, f)
+                });
+                Person {
+                    theta: th,
+                    t: if bin.d_theta > 0.0 {
+                        (th - bin.theta0) / bin.d_theta
+                    } else {
+                        0.0
+                    },
+                    scale: ctx.s.map_or(1.0, |s| s[i]),
+                    v: match ctx.s {
+                        Some(s) if bin.d_s > 0.0 => (s[i] - bin.s0) / bin.d_s,
+                        _ => 0.0,
+                    },
+                    own,
+                }
+            })
+            .collect();
+        let values: Vec<Vec<f64>> = (0..queries.len().div_ceil(QUERIES))
+            .into_par_iter()
+            .map(|b| {
+                let (q0, q1) = (b * QUERIES, ((b + 1) * QUERIES).min(queries.len()));
+                let mut p = first.partition_point(|&f| f <= q0) - 1;
+                let mut j = (p / CHUNK) * CHUNK;
+                let (mut sums, mut powers) = (starts[j / CHUNK].clone(), series.powers());
+                let mut v = Vec::with_capacity(q1 - q0);
+                let mut at = None;
+                for (q, &query) in (q0..q1).zip(&queries[q0..q1]) {
+                    while first[p + 1] <= q {
+                        p += 1;
+                    }
+                    if at != Some(p) {
+                        while j < p {
+                            if j.is_multiple_of(CHUNK) {
+                                sums.clone_from(&starts[j / CHUNK]);
+                            }
+                            series.add(j, &mut sums, &mut powers);
+                            j += 1;
+                        }
+                        if p.is_multiple_of(CHUNK) {
+                            sums.clone_from(&starts[p / CHUNK]);
+                        }
+                        at = Some(p);
+                    }
+                    let (r, t) = (query / k, query % k);
+                    let who = &person[r];
+                    let (ca, cb) = series.value(&sums, who.t, who.v);
+                    let (mut sa, mut sb) = (-who.scale * ca, -who.scale * cb);
+                    if let Some((own, w, f_own)) = who.own
+                        && own < p
+                    {
                         sa += w;
                         sb += f_own * w;
                     }
+                    let f = 1.0 - (-who.theta * ctx.h_tau[t]).exp();
+                    v.push(f * sa - sb);
                 }
-                let f = 1.0 - (-th * ctx.h_tau[t]).exp();
-                out[r * k + t] = f * sa - sb;
-            }
-        };
-        for j in 0..span {
-            answer(&mut next, j, &ma, &mb, &mut out);
-            let (w, y) = match &self.tables.cens {
-                CensTables::Km {
-                    g_before, d_lambda, ..
-                } => (d_lambda[bin.group][j] / g_before[bin.group][j], 0.0),
-                CensTables::Cox {
-                    d_h, h_before: hc, ..
-                } => (d_h[j], hc[j]),
-                CensTables::None => (0.0, 0.0),
-            };
-            if w == 0.0 {
-                continue;
-            }
-            let (x, ha) = (h_before[j], h_at[j]);
-            let dx = ha - x;
-            let e_s = if y > 0.0 { (bin.s0 * y).exp() } else { 1.0 };
-            let e_x = (bin.theta0 * x).exp();
-            let e_tie = if dx > 0.0 {
-                (-bin.theta0 * dx).exp()
-            } else {
-                1.0
-            };
-            let (xi, zeta, eta) = (bin.d_theta * x, -(bin.d_theta * dx), bin.d_s * y);
-            pm[0] = 1.0;
-            pz[0] = 1.0;
-            for m in 1..=m_theta {
-                pm[m] = pm[m - 1] * xi / m as f64;
-                pz[m] = pz[m - 1] * zeta / m as f64;
-            }
-            qn[0] = 1.0;
-            for kk in 1..width {
-                qn[kk] = qn[kk - 1] * eta / kk as f64;
-            }
-            let wa = w * e_s * e_x;
-            let wb = w * e_s;
-            for m in 0..=m_theta {
-                let coef_b = if m == 0 {
-                    e_x * -(-bin.theta0 * ha).exp_m1()
-                } else if dx > 0.0 {
-                    e_x * pm[m] - e_tie * pz[m]
-                } else {
-                    e_x * pm[m]
-                };
-                let (ca, cb) = (wa * pm[m], wb * coef_b);
-                let len = (degree - m).min(m_s) + 1;
-                let row_a = &mut ma[m * width..m * width + len];
-                for (v, q) in row_a.iter_mut().zip(&qn[..len]) {
-                    *v += ca * q;
-                }
-                let row_b = &mut mb[m * width..m * width + len];
-                for (v, q) in row_b.iter_mut().zip(&qn[..len]) {
-                    *v += cb * q;
-                }
+                v
+            })
+            .collect();
+        for (b, v) in values.iter().enumerate() {
+            for (q, &x) in v.iter().enumerate() {
+                out[queries[b * QUERIES + q]] = x;
             }
         }
-        answer(&mut next, span, &ma, &mb, &mut out);
         out
     }
 
@@ -1285,6 +1291,190 @@ enum Route {
         expect(dead_code, reason = "the tests compare the two routes")
     )]
     Direct,
+}
+
+/// The censoring times per chunk of the running sums of a bin.
+const CHUNK: usize = 1024;
+/// The queries per parallel task of a bin.
+const QUERIES: usize = 8192;
+
+/// The running sums of a bin: the coefficients of `A` and of `B`, row `m` of
+/// the powers of `delta` and column `k` of the powers of `epsilon`.
+#[derive(Clone)]
+struct Sums {
+    a: Vec<f64>,
+    b: Vec<f64>,
+}
+
+impl Sums {
+    fn add_sums(&mut self, other: &Self) {
+        for (x, y) in self.a.iter_mut().zip(&other.a) {
+            *x += y;
+        }
+        for (x, y) in self.b.iter_mut().zip(&other.b) {
+            *x += y;
+        }
+    }
+}
+
+/// The scaled powers `xi^m / m!`, `(-zeta)^m / m!` and `eta^k / k!` of one
+/// censoring time.
+struct Powers {
+    xi: Vec<f64>,
+    zeta: Vec<f64>,
+    eta: Vec<f64>,
+}
+
+/// What a person of a bin needs at each time.
+struct Person {
+    theta: f64,
+    /// The offsets `delta / d_theta` and `epsilon / d_s` in `[0, 1]`.
+    t: f64,
+    v: f64,
+    /// The censoring score of a Cox model of the censoring, 1 for Kaplan-Meier.
+    scale: f64,
+    /// The person's own censoring time, its weight and the risk there.
+    own: Option<(usize, f64, f64)>,
+}
+
+/// The series of a bin: its degree in each offset and the terms each censoring
+/// time adds to the running sums.
+struct Series<'a> {
+    model: &'a Model,
+    group: usize,
+    theta0: f64,
+    d_theta: f64,
+    s0: f64,
+    d_s: f64,
+    degree: usize,
+    m_theta: usize,
+    m_s: usize,
+}
+
+impl<'a> Series<'a> {
+    fn new(model: &'a Model, bin: &Bin, ctx: &BinContext<'_>) -> Self {
+        let degree = degree(bin.d_theta * ctx.x_top + bin.d_s * ctx.y_top);
+        Self {
+            model,
+            group: bin.group,
+            theta0: bin.theta0,
+            d_theta: bin.d_theta,
+            s0: bin.s0,
+            d_s: bin.d_s,
+            degree,
+            m_theta: if bin.d_theta * ctx.x_top > 0.0 {
+                degree
+            } else {
+                0
+            },
+            m_s: if bin.d_s * ctx.y_top > 0.0 { degree } else { 0 },
+        }
+    }
+
+    /// The powers of `epsilon` in row `m`.
+    fn len(&self, m: usize) -> usize {
+        (self.degree - m).min(self.m_s) + 1
+    }
+
+    fn width(&self) -> usize {
+        self.m_s + 1
+    }
+
+    fn moments(&self) -> usize {
+        (0..=self.m_theta).map(|m| self.len(m)).sum()
+    }
+
+    fn zero(&self) -> Sums {
+        let size = (self.m_theta + 1) * self.width();
+        Sums {
+            a: vec![0.0; size],
+            b: vec![0.0; size],
+        }
+    }
+
+    fn powers(&self) -> Powers {
+        Powers {
+            xi: vec![0.0; self.m_theta + 1],
+            zeta: vec![0.0; self.m_theta + 1],
+            eta: vec![0.0; self.width()],
+        }
+    }
+
+    /// Adds the terms of censoring time `j`.
+    fn add(&self, j: usize, sums: &mut Sums, p: &mut Powers) {
+        let tables = &self.model.tables;
+        let (w, y) = match &tables.cens {
+            CensTables::Km {
+                g_before, d_lambda, ..
+            } => (d_lambda[self.group][j] / g_before[self.group][j], 0.0),
+            CensTables::Cox { d_h, h_before, .. } => (d_h[j], h_before[j]),
+            CensTables::None => (0.0, 0.0),
+        };
+        if w == 0.0 {
+            return;
+        }
+        let (x, ha) = (tables.h_before[j], tables.h_at[j]);
+        let dx = ha - x;
+        let e_s = if y > 0.0 { (self.s0 * y).exp() } else { 1.0 };
+        let e_x = (self.theta0 * x).exp();
+        let e_tie = if dx > 0.0 {
+            (-self.theta0 * dx).exp()
+        } else {
+            1.0
+        };
+        let (xi, zeta, eta) = (self.d_theta * x, -(self.d_theta * dx), self.d_s * y);
+        p.xi[0] = 1.0;
+        p.zeta[0] = 1.0;
+        for m in 1..=self.m_theta {
+            p.xi[m] = p.xi[m - 1] * xi / m as f64;
+            p.zeta[m] = p.zeta[m - 1] * zeta / m as f64;
+        }
+        p.eta[0] = 1.0;
+        for kk in 1..self.width() {
+            p.eta[kk] = p.eta[kk - 1] * eta / kk as f64;
+        }
+        let wa = w * e_s * e_x;
+        let wb = w * e_s;
+        let width = self.width();
+        for m in 0..=self.m_theta {
+            let coef_b = if m == 0 {
+                e_x * -(-self.theta0 * ha).exp_m1()
+            } else if dx > 0.0 {
+                e_x * p.xi[m] - e_tie * p.zeta[m]
+            } else {
+                e_x * p.xi[m]
+            };
+            let (ca, cb) = (wa * p.xi[m], wb * coef_b);
+            let len = self.len(m);
+            let row_a = &mut sums.a[m * width..m * width + len];
+            for (v, q) in row_a.iter_mut().zip(&p.eta[..len]) {
+                *v += ca * q;
+            }
+            let row_b = &mut sums.b[m * width..m * width + len];
+            for (v, q) in row_b.iter_mut().zip(&p.eta[..len]) {
+                *v += cb * q;
+            }
+        }
+    }
+
+    /// The sums `A` and `B` without the factor of the censoring score, at the
+    /// offsets `t` and `v` from the running sums.
+    fn value(&self, sums: &Sums, t: f64, v: f64) -> (f64, f64) {
+        let width = self.width();
+        let (mut ca, mut cb, mut tp) = (0.0, 0.0, 1.0);
+        for m in 0..=self.m_theta {
+            let (mut ra, mut rb, mut vp) = (0.0, 0.0, 1.0);
+            for kk in 0..self.len(m) {
+                ra += vp * sums.a[m * width + kk];
+                rb += vp * sums.b[m * width + kk];
+                vp *= v;
+            }
+            ca += tp * ra;
+            cb += tp * rb;
+            tp *= t;
+        }
+        (ca, cb)
+    }
 }
 
 /// Persons whose augmentation is formed from the same moment sums.
@@ -1583,8 +1773,10 @@ mod tests {
     #[test]
     fn the_moment_sums_agree_with_the_sum_person_by_person() {
         let times = [2.0, 5.0, 8.0];
-        for (seed, rounded) in [(7, true), (11, false)] {
-            let c = cohort(3000, seed, rounded);
+        // The last cohort has several chunks of censoring times and several
+        // tasks of queries in its largest bins.
+        for (n, seed, rounded) in [(3000, 7, true), (3000, 11, false), (12_000, 13, false)] {
+            let c = cohort(n, seed, rounded);
             for km in [true, false] {
                 let m = model(&c, km, &times);
                 let (by_moments, direct) = (
@@ -1616,7 +1808,8 @@ mod tests {
                     }
                 }
                 println!(
-                    "km {km} rounded {rounded}: largest difference {worst:.1} eps of the terms"
+                    "n {n} km {km}: {} censoring times, largest difference {worst:.1} eps of the terms",
+                    m.tables.jump.len()
                 );
             }
         }
@@ -1686,6 +1879,18 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_moment_sums_are_the_same_on_every_pool() {
+        // Several chunks of censoring times and several tasks of queries.
+        let c = cohort(12_000, 13, false);
+        for km in [true, false] {
+            let m = model(&c, km, &[2.0, 5.0, 8.0]);
+            epistat_testkit::assert_same_on_pools(&epistat_testkit::POOLS, || {
+                m.augmentations(Route::Moments)
+            });
         }
     }
 
