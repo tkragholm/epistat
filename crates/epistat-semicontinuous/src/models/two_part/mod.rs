@@ -1351,12 +1351,19 @@ mod tests {
         let (model_b, report_b) =
             fit_two_part(x.as_ref(), y.as_ref(), without_cov).expect("fit without covariance");
 
-        // Coefficients are identical — the optimization only removes discarded work.
+        // The coefficients are bit-identical: skipping the covariance skips only work
+        // whose result is discarded.
         for j in 0..model_a.beta_logit.nrows() {
-            assert_eq!(model_a.beta_logit[(j, 0)], model_b.beta_logit[(j, 0)]);
+            assert_eq!(
+                model_a.beta_logit[(j, 0)].to_bits(),
+                model_b.beta_logit[(j, 0)].to_bits()
+            );
         }
         for j in 0..model_a.beta_gamma.nrows() {
-            assert_eq!(model_a.beta_gamma[(j, 0)], model_b.beta_gamma[(j, 0)]);
+            assert_eq!(
+                model_a.beta_gamma[(j, 0)].to_bits(),
+                model_b.beta_gamma[(j, 0)].to_bits()
+            );
         }
 
         // Default fit reports SEs; the covariance-free fit reports none.
