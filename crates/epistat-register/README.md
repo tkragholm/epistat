@@ -14,3 +14,17 @@ Small methods for register data on plain slices.
   register prefix, and their 22 chapters. Serde support with the cargo feature
   `serde`.
 - `age`: age in whole years at a date, by civil years or by days over 365.25.
+- `codes`: sets of codes as prefixes and ranges (`I21, C00-C26, E10.2-E10.5`),
+  classified once per distinct code, with ATC levels, ICD-10 levels, labelled
+  blocks from a table the caller supplies, ICD-8 beside ICD-10 and a crosswalk
+  structure that holds no data.
+- `events`: first event in a window, washout and look-back, prior status with a
+  separate state for a history that is too short, and confirmation by a second
+  date or contact.
+- `comorbidity`: the Charlson index (Quan 2005 coding, Charlson 1987 or Quan
+  2011 weights) and the Elixhauser measure (Quan 2005 coding, van Walraven
+  weights), checked against the R package `comorbidity`. National code lists
+  are supplied by the caller.
+- `exposure`: exposure periods from dispensings with a fixed, default or
+  observed dose, grace period, stockpiling with a cap, paused days and
+  cumulative dose, checked against `AdhereR`. No dose is built in.

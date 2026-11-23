@@ -1,7 +1,8 @@
 //! Tools for register data: person-time by calendar year, merging of
 //! overlapping intervals, connected components of rows that share a key,
-//! constant-price deflation, normalisation of ICD-10 codes and age in whole
-//! years.
+//! constant-price deflation, normalisation of ICD-10 codes, age in whole
+//! years, code sets for ICD-10, ICD-8 and ATC, event definitions, comorbidity
+//! indices and drug exposure episodes.
 //!
 //! Each module is one small, self-contained method on plain slices and integers,
 //! with no dependence on a data-frame library.
@@ -17,6 +18,16 @@
 //! - [`icd10`] normalizes ICD-10 diagnosis codes, including the Danish register
 //!   prefix, and classifies them into the 22 chapters.
 //! - [`age`] computes age in whole years from a birth date under a named rule.
+//! - [`codes`] holds sets of codes written as prefixes and ranges, with
+//!   classification of the distinct codes of a column, the levels of ATC and
+//!   ICD-10, and ICD-8 beside ICD-10.
+//! - [`events`] finds the first event of a definition in a window, whether a
+//!   person was already a case before it, and whether a second record confirms
+//!   it.
+//! - [`comorbidity`] scores the Charlson index and the Elixhauser measure from
+//!   diagnosis codes, with look-back windows and hierarchy rules.
+//! - [`exposure`] turns dispensings into periods of drug exposure and
+//!   cumulative doses, under assumptions the caller declares.
 //! - [`cpi`] deflates nominal values to the prices of a reference year with an
 //!   annual price index the caller supplies. The Statistics Denmark index is
 //!   available behind the cargo feature `denmark`.
@@ -30,8 +41,12 @@
 #![warn(missing_docs)]
 
 pub mod age;
+pub mod codes;
+pub mod comorbidity;
 pub mod cpi;
 mod error;
+pub mod events;
+pub mod exposure;
 pub mod icd10;
 pub mod person_time;
 pub mod relations;
