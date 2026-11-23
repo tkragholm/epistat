@@ -221,13 +221,10 @@ pub fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).unwrap_or(u32::MAX))
 }
 
+/// The share of proposals accepted, or `None` when there were no proposals.
 #[must_use]
-pub fn acceptance_rate(accepted: usize, proposed: usize) -> f64 {
-    if proposed == 0 {
-        0.0
-    } else {
-        usize_to_f64(accepted) / usize_to_f64(proposed)
-    }
+pub fn acceptance_rate(accepted: usize, proposed: usize) -> Option<f64> {
+    (proposed != 0).then(|| usize_to_f64(accepted) / usize_to_f64(proposed))
 }
 
 #[must_use]
@@ -508,6 +505,13 @@ mod tests {
     use super::*;
 
     use approx::assert_relative_eq;
+
+    #[test]
+    fn an_acceptance_rate_without_proposals_is_undefined() {
+        assert_eq!(acceptance_rate(0, 0), None);
+        assert_eq!(acceptance_rate(0, 4), Some(0.0));
+        assert_eq!(acceptance_rate(1, 4), Some(0.25));
+    }
 
     #[test]
     fn max_abs_diff_matches_expected_value() {

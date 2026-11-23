@@ -1,10 +1,9 @@
 //! Robust standard errors against references that do not share this crate's code.
 //!
-//! In a correctly specified model with unit dispersion the sandwich and the
-//! model-based covariance estimate the same thing, so on a large sample the two
-//! standard errors must be close. The fixed fixture below is also checked against
-//! HC0 standard errors computed in R from `glm` fits on the same rows, and a
-//! clustered fit with one row per cluster must reproduce the unclustered sandwich.
+//! The fixtures below are checked against model-based and HC0 standard errors
+//! computed in R from `glm` fits on the same rows (tests/r/robust_se_reference.R),
+//! and a clustered fit with one row per cluster must reproduce the unclustered
+//! sandwich.
 
 use epistat_linalg::{Attempt, Mat, Method, inverse};
 use epistat_rng::{Stream, replicate_seed};
@@ -88,8 +87,29 @@ fn assert_close(label: &str, got: &[f64], want: &[f64], rel_tol: f64) {
 const R_HC0_LOGIT: [f64; 3] = [0.017_497_413_181, 0.025_828_785_236, 0.031_797_081_066];
 const R_HC0_GAMMA: [f64; 3] = [0.011_792_762_166, 0.018_088_586_845, 0.022_420_902_035];
 
+/// Model-based standard errors with dispersion fixed at 1, from the same R fits
+/// (R 4.6.2, statmod 1.5.2).
+const R_MODEL_LOGIT: [f64; 3] = [0.017_465_963_733, 0.025_869_203_396, 0.031_874_374_141];
+const R_MODEL_GAMMA: [f64; 3] = [0.011_592_833_511, 0.017_520_811_121, 0.022_584_796_660];
+
+/// Model-based and HC0 standard errors of `glm(y ~ x1 + x2, tweedie(var.power = 1.5, link.power = 0))`
+/// on the rows of the power 1.5 test below.
+const R_MODEL_TWEEDIE_1_5: [f64; 3] = [0.005_147_139_437, 0.007_259_768_307, 0.008_985_563_551];
+const R_HC0_TWEEDIE_1_5: [f64; 3] = [0.005_147_950_007, 0.007_327_893_604, 0.008_974_668_756];
+
+/// Convergence tolerance of the Tweedie fits compared with R. The default 1e-6
+/// stops on a small step and leaves the standard errors about 1e-7 from R's.
+const TIGHT_TOLERANCE: f64 = 1e-12;
+
+/// Relative tolerance against R. Both sides solve the same estimating equations
+/// to a step near 1e-12, and a standard error varies with the coefficients at
+/// order one, so the fits agree to about 1e-9. R reads the
+/// fixture rows with its own decimal parser, a further 1e-16. The R values are
+/// printed to twelve digits. 1e-8 leaves a margin of a factor ten over both.
+const R_TOLERANCE: f64 = 1e-8;
+
 #[test]
-fn two_part_logit_robust_se_matches_model_based_and_r() {
+fn two_part_standard_errors_match_r() {
     let (x, y) = two_part_fixture();
     let input = ModelInput::new(x, y);
     let (_, model_based) = fit_two_part_input(&input, FitOptions::default()).expect("fit");
@@ -98,13 +118,24 @@ fn two_part_logit_robust_se_matches_model_based_and_r() {
 
     let model_se = column(model_based.se_logit.as_ref().expect("model-based SE"));
     let robust_se = column(robust.se_logit.as_ref().expect("robust SE"));
-    assert_close("logit robust vs model-based", &robust_se, &model_se, 0.1);
-    assert_close("logit robust vs R", &robust_se, &R_HC0_LOGIT, 1e-6);
+    assert_close(
+        "logit model-based vs R",
+        &model_se,
+        &R_MODEL_LOGIT,
+        R_TOLERANCE,
+    );
+    assert_close("logit robust vs R", &robust_se, &R_HC0_LOGIT, R_TOLERANCE);
     assert_close(
         "gamma robust vs R",
         &column(robust.se_gamma.as_ref().expect("robust SE")),
         &R_HC0_GAMMA,
-        1e-6,
+        R_TOLERANCE,
+    );
+    assert_close(
+        "gamma model-based vs R",
+        &column(model_based.se_gamma.as_ref().expect("model-based SE")),
+        &R_MODEL_GAMMA,
+        R_TOLERANCE,
     );
 }
 
@@ -133,26 +164,34 @@ fn two_part_singleton_clusters_reproduce_the_unclustered_sandwich() {
 }
 
 #[test]
-fn tweedie_gamma_robust_se_matches_model_based_and_r() {
+fn tweedie_gamma_standard_errors_match_r() {
     let (x, y) = two_part_fixture();
     let (x_pos, y_pos) = positive_rows(&x, &y);
     let input = ModelInput::new(x_pos, y_pos);
-    let options = TweedieOptions::builder().robust_se(true).build();
+    let options = TweedieOptions::builder()
+        .robust_se(true)
+        .tolerance(TIGHT_TOLERANCE)
+        .build();
     let (model, report) = fit_tweedie_input(&input, 2.0, options).expect("fit");
 
     let robust_se = column(report.se.as_ref().expect("robust SE"));
     let model_se = tweedie_model_based_se(&input.design_matrix, &model.beta, 2.0);
     assert_close(
-        "tweedie(2) robust vs model-based",
-        &robust_se,
+        "tweedie(2) model-based vs R",
         &model_se,
-        0.1,
+        &R_MODEL_GAMMA,
+        R_TOLERANCE,
     );
-    assert_close("tweedie(2) robust vs R", &robust_se, &R_HC0_GAMMA, 1e-6);
+    assert_close(
+        "tweedie(2) robust vs R",
+        &robust_se,
+        &R_HC0_GAMMA,
+        R_TOLERANCE,
+    );
 }
 
 #[test]
-fn tweedie_robust_se_matches_model_based_at_power_one_and_a_half() {
+fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
     // Gamma(shape = sqrt(mu), scale = sqrt(mu)) has mean mu and variance mu^1.5,
     // the Tweedie variance function at power 1.5 with unit dispersion.
     let mut stream = Stream::seeded(20_261_003);
@@ -167,15 +206,24 @@ fn tweedie_robust_se_matches_model_based_at_power_one_and_a_half() {
         y[(i, 0)] = rng.gamma(mu.sqrt(), mu.sqrt()).expect("gamma parameters");
     }
     let input = ModelInput::new(x, y);
-    let options = TweedieOptions::builder().robust_se(true).build();
+    let options = TweedieOptions::builder()
+        .robust_se(true)
+        .tolerance(TIGHT_TOLERANCE)
+        .build();
     let (model, report) = fit_tweedie_input(&input, 1.5, options).expect("fit");
     let robust_se = column(report.se.as_ref().expect("robust SE"));
     let model_se = tweedie_model_based_se(&input.design_matrix, &model.beta, 1.5);
     assert_close(
-        "tweedie(1.5) robust vs model-based",
-        &robust_se,
+        "tweedie(1.5) model-based vs R",
         &model_se,
-        0.1,
+        &R_MODEL_TWEEDIE_1_5,
+        R_TOLERANCE,
+    );
+    assert_close(
+        "tweedie(1.5) robust vs R",
+        &robust_se,
+        &R_HC0_TWEEDIE_1_5,
+        R_TOLERANCE,
     );
 
     let clusters: Vec<u64> = (0..N_ROWS as u64).collect();

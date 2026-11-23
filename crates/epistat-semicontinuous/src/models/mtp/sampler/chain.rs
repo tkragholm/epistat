@@ -452,26 +452,18 @@ pub(super) fn adapt_proposal_scales(
     proposal_scales.adaptations += 1;
     let step = proposal_scales.adaptations;
     // `alpha`, `beta` and `omega_sq` share the block's acceptance rate.
-    if counts.proposed_alpha > 0 {
-        proposal_scales
-            .fixed_effects
-            .adapt_scale(rates.alpha, tuning);
+    if let Some(rate) = rates.alpha {
+        proposal_scales.fixed_effects.adapt_scale(rate, tuning);
     }
-    if counts.proposed_random_effects > 0 {
-        adapt_vector_scale(
-            &mut proposal_scales.random_effects,
-            rates.random_effects,
-            step,
-            tuning,
-        );
+    if let Some(rate) = rates.random_effects {
+        adapt_vector_scale(&mut proposal_scales.random_effects, rate, step, tuning);
     }
-    if counts.proposed_family_effects > 0 {
+    if let Some(rate) = rates.family_effects {
         for scale in &mut proposal_scales.family_effects {
-            *scale = adapt_scalar_scale(*scale, rates.family_effects, step, tuning);
+            *scale = adapt_scalar_scale(*scale, rate, step, tuning);
         }
     }
-    if counts.proposed_kappa > 0 {
-        proposal_scales.kappa =
-            adapt_scalar_scale(proposal_scales.kappa, rates.kappa, step, tuning);
+    if let Some(rate) = rates.kappa {
+        proposal_scales.kappa = adapt_scalar_scale(proposal_scales.kappa, rate, step, tuning);
     }
 }

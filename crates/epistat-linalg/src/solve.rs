@@ -410,7 +410,13 @@ pub struct Regularisation {
 /// or `None` when a pivot is not positive after `regularisation`.
 ///
 /// Only the lower triangle of `a` is read. The factorisation is faer's in-place
-/// one on one thread, the one [`Method::Cholesky`] uses.
+/// one on one thread, the one [`Method::Cholesky`] uses. With an active
+/// regularisation, faer's factor is used when every diagonal entry is finite
+/// and positive. faer's blocked kernels do not apply the regularisation in
+/// every case, and can return a zero or negative diagonal entry. The factor is
+/// then computed again entry by entry, with each pivot at or below `epsilon`
+/// replaced by `delta`, so a regularised pivot always gives the diagonal entry
+/// `sqrt(delta)`. `None` is returned when that factor has a non-finite entry.
 ///
 /// # Panics
 ///
@@ -446,7 +452,42 @@ pub fn cholesky_factor(a: MatRef<'_, f64>, regularisation: Regularisation) -> Op
             lower[(i, j)] = 0.0;
         }
     }
+    let active = regularisation.delta > 0.0 && regularisation.epsilon > 0.0;
+    if active && !(0..n).all(|i| lower[(i, i)].is_finite() && lower[(i, i)] > 0.0) {
+        return regularised_cholesky(a, regularisation);
+    }
     Some(lower)
+}
+
+/// The lower Cholesky factor with each pivot at or below `epsilon` set to
+/// `delta`, computed row by row from `a`'s lower triangle.
+fn regularised_cholesky(a: MatRef<'_, f64>, regularisation: Regularisation) -> Option<Mat<f64>> {
+    let n = a.nrows();
+    let mut lower = Mat::<f64>::zeros(n, n);
+    for j in 0..n {
+        let mut pivot = a[(j, j)];
+        for k in 0..j {
+            pivot -= lower[(j, k)] * lower[(j, k)];
+        }
+        if !pivot.is_finite() {
+            return None;
+        }
+        if pivot <= regularisation.epsilon {
+            pivot = regularisation.delta;
+        }
+        let diagonal = pivot.sqrt();
+        lower[(j, j)] = diagonal;
+        for i in j + 1..n {
+            let mut value = a[(i, j)];
+            for k in 0..j {
+                value -= lower[(i, k)] * lower[(j, k)];
+            }
+            lower[(i, j)] = value / diagonal;
+        }
+    }
+    (0..n)
+        .all(|j| (0..n).all(|i| lower[(i, j)].is_finite()))
+        .then_some(lower)
 }
 
 /// Repeated Cholesky solves of systems of one size, each `A x = b` with one
@@ -684,7 +725,53 @@ mod tests {
             [lower[(0, 0)], lower[(1, 0)], lower[(0, 1)]].map(f64::to_bits),
             [1.0_f64, 1.0, 0.0].map(f64::to_bits)
         );
-        assert!(lower[(1, 1)].is_finite());
+        assert_eq!(lower[(1, 1)].to_bits(), 1e-6_f64.sqrt().to_bits());
+    }
+
+    #[test]
+    fn a_regularised_factor_has_a_positive_diagonal_and_is_usable() {
+        let regularisation = Regularisation {
+            delta: 1e-6,
+            epsilon: 1e-12,
+        };
+        let cases = [
+            mat![[1.0, 2.0], [2.0, 4.0]],
+            mat![[0.0, 0.0], [0.0, 0.0]],
+            mat![[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+            mat![[4.0, 2.0, 0.0], [2.0, 1.0, 0.0], [0.0, 0.0, 3.0]],
+        ];
+        for a in &cases {
+            let lower = cholesky_factor(a.as_ref(), regularisation).unwrap();
+            let n = a.nrows();
+            for i in 0..n {
+                assert!(lower[(i, i)] > 0.0);
+            }
+            // L L' reproduces A up to the regularised pivots, at most delta
+            // per diagonal entry.
+            let product = &lower * lower.transpose();
+            for i in 0..n {
+                for j in 0..n {
+                    let tolerance = if i == j { 3e-6 } else { 2e-3 };
+                    assert!((product[(i, j)] - a[(i, j)]).abs() <= tolerance);
+                }
+            }
+            let solved = cholesky_solve(lower.as_ref(), column(&vec![1.0; n]).as_ref());
+            assert!(solved.col(0).iter().all(|v| v.is_finite()));
+        }
+    }
+
+    #[test]
+    fn an_indefinite_matrix_is_regularised_not_returned_with_a_negative_pivot() {
+        let a = mat![[1.0, 2.0], [2.0, 1.0]];
+        let lower = cholesky_factor(
+            a.as_ref(),
+            Regularisation {
+                delta: 1e-6,
+                epsilon: 1e-12,
+            },
+        )
+        .unwrap();
+        assert_eq!(lower[(1, 1)].to_bits(), 1e-6_f64.sqrt().to_bits());
     }
 
     #[test]

@@ -516,7 +516,8 @@ fn mtp(out: &mut Golden) {
                 rates.kappa,
                 rates.omega_sq,
             ] {
-                h.f(value);
+                // A rate without proposals hashes as zero, its value before it was undefined.
+                h.f(value.unwrap_or(0.0));
             }
         }
         h.posterior(chain.posterior_summary.as_ref());
