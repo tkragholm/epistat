@@ -22,10 +22,11 @@
 //! pools the effects over the sets by Rubin's rules with the Barnard-Rubin
 //! degrees of freedom ([`epistat_inference::pooling`]). Each set's variance is
 //! the squared standard error of its effect, cluster-robust as the
-//! [`EffectSpec`] says. The complete-data degrees of freedom are the smallest,
-//! over the sets, of the number of rows of the fit less the number of
-//! coefficients, which is what `mice::pool()` takes from the first fit of
-//! sets of equal size.
+//! [`EffectSpec`] says. The caller chooses the complete-data degrees of freedom
+//! with a [`CompleteDataDf`]. The usual rule, [`CompleteDataDf::Residual`], is
+//! the smallest, over the sets, of the number of rows of the fit less the
+//! number of coefficients, which is what `mice::pool()` takes from the first
+//! fit of sets of equal size.
 //!
 //! A ratio or an odds ratio is pooled on the log scale, so [`PooledEffects`]
 //! holds the pooled log ratio and log odds ratio. Rubin's rules assume that
@@ -53,7 +54,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use epistat_inference::InferenceError;
-use epistat_inference::pooling::{Pooled, rubin};
+use epistat_inference::pooling::{Pooled, dfcom_residual, rubin};
 
 use crate::effects::{
     Effect, EffectError, EffectEstimates, EffectSpec, MatchedSample, UnitData, estimate_effects,
@@ -336,6 +337,40 @@ fn average_scores<R: MatchingRecord>(
     Ok(ScoreTable::new(Arc::clone(&first.ids), total.into()))
 }
 
+/// The complete-data degrees of freedom that the Barnard-Rubin correction
+/// of the pooled degrees of freedom uses.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CompleteDataDf {
+    /// The smallest over the sets of the rows of the fit less the number of
+    /// coefficients, at least 1 ([`dfcom_residual`]).
+    Residual,
+    /// The smallest over the sets of the rows of the fit less the number of
+    /// coefficients, not limited below. A set with no more rows than
+    /// coefficients makes the pooling fail with
+    /// [`ImputationError::Pooling`].
+    RowsLessCoefficients,
+    /// A value of the caller's, for a model whose information is not in its
+    /// rows (the events of a Cox model, see
+    /// [`epistat_inference::pooling::dfcom_events`]), or `None` for infinite
+    /// degrees of freedom.
+    Given(Option<f64>),
+}
+
+impl CompleteDataDf {
+    fn value(self, estimates: &[EffectEstimates]) -> Option<f64> {
+        let smallest = |df: fn(&EffectEstimates) -> f64| {
+            estimates.iter().map(df).fold(f64::INFINITY, f64::min)
+        };
+        match self {
+            Self::Residual => Some(smallest(|e| dfcom_residual(e.rows, e.coefficients.len()))),
+            Self::RowsLessCoefficients => {
+                Some(smallest(|e| e.rows as f64 - e.coefficients.len() as f64))
+            }
+            Self::Given(df) => df,
+        }
+    }
+}
+
 /// The effects of a treatment pooled over the imputed data sets.
 ///
 /// An effect is `None` when a data set gives no standard error for it, or the
@@ -352,8 +387,9 @@ pub struct PooledEffects {
     pub odds_ratio: Option<Pooled>,
     /// The log of the odds ratio.
     pub log_odds_ratio: Option<Pooled>,
-    /// The complete-data degrees of freedom given to the pooling.
-    pub complete_data_df: f64,
+    /// The complete-data degrees of freedom given to the pooling, `None` for
+    /// infinite.
+    pub complete_data_df: Option<f64>,
 }
 
 /// The effects of every data set and their pooled value.
@@ -365,23 +401,25 @@ pub struct ImputedEffects {
     pub pooled: PooledEffects,
 }
 
-/// Pools the effects of the data sets by Rubin's rules.
+/// Pools the effects of the data sets by Rubin's rules, with the
+/// complete-data degrees of freedom `df`.
 ///
 /// # Errors
 ///
 /// [`ImputationError::TooFewSets`] for fewer than two sets and
-/// [`ImputationError::Pooling`] when the pooling fails, for instance when a
-/// data set has no more rows than coefficients.
-pub fn pool_effects(estimates: &[EffectEstimates]) -> Result<PooledEffects, ImputationError> {
+/// [`ImputationError::Pooling`] when the pooling fails, for instance when
+/// `df` is [`CompleteDataDf::RowsLessCoefficients`] and a data set has no more
+/// rows than coefficients.
+pub fn pool_effects(
+    estimates: &[EffectEstimates],
+    df: CompleteDataDf,
+) -> Result<PooledEffects, ImputationError> {
     if estimates.len() < 2 {
         return Err(ImputationError::TooFewSets {
             found: estimates.len(),
         });
     }
-    let dfcom = estimates
-        .iter()
-        .map(|e| e.rows as f64 - e.coefficients.len() as f64)
-        .fold(f64::INFINITY, f64::min);
+    let dfcom = df.value(estimates);
     let pool =
         |pick: fn(&EffectEstimates) -> Option<Effect>| -> Result<Option<Pooled>, ImputationError> {
             let mut q = Vec::with_capacity(estimates.len());
@@ -396,7 +434,7 @@ pub fn pool_effects(estimates: &[EffectEstimates]) -> Result<PooledEffects, Impu
                 q.push(effect.estimate);
                 u.push(se * se);
             }
-            Ok(Some(rubin(&q, &u, Some(dfcom))?))
+            Ok(Some(rubin(&q, &u, dfcom)?))
         };
     Ok(PooledEffects {
         difference: pool(|e| Some(e.difference))?,
@@ -411,7 +449,8 @@ pub fn pool_effects(estimates: &[EffectEstimates]) -> Result<PooledEffects, Impu
 /// Estimates the effect in every matched data set and pools it.
 ///
 /// `data` holds the treatment, outcome and covariates of each set, which may
-/// differ between sets when the outcome or the covariates were imputed.
+/// differ between sets when the outcome or the covariates were imputed. `df`
+/// is the rule for the complete-data degrees of freedom of the pooling.
 ///
 /// # Errors
 ///
@@ -422,6 +461,7 @@ pub fn estimate_pooled<R: MatchingRecord>(
     data: &[UnitData],
     options: MatchDataOptions,
     spec: &EffectSpec,
+    df: CompleteDataDf,
 ) -> Result<ImputedEffects, ImputationError> {
     let check = |what, found| {
         if found == sets.len() {
@@ -445,7 +485,7 @@ pub fn estimate_pooled<R: MatchingRecord>(
             })
             .collect(),
     )?;
-    let pooled = pool_effects(&per_set)?;
+    let pooled = pool_effects(&per_set, df)?;
     Ok(ImputedEffects { per_set, pooled })
 }
 

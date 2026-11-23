@@ -8,7 +8,7 @@
 use chrono::NaiveDate;
 use epistat_matching::effects::{EffectSpec, OutcomeModel, UnitData};
 use epistat_matching::imputation::{
-    ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
+    CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::multigroup::{VectorMatchSpec, vector_match};
 use epistat_matching::prelude::*;
@@ -148,6 +148,7 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
                 &outcomes,
                 MatchDataOptions::default(),
                 &EffectSpec::new(OutcomeModel::Linear),
+                CompleteDataDf::Residual,
             )
             .unwrap();
             let p = effects.pooled.difference.unwrap();
