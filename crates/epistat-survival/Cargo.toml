@@ -58,6 +58,10 @@ name = "tier3_relsurv"
 harness = false
 
 [[bench]]
+name = "tier3_frailty"
+harness = false
+
+[[bench]]
 name = "tier3_designs"
 harness = false
 

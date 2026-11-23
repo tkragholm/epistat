@@ -41,6 +41,12 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
 - Nested case-control data with Samuelsen's inverse probability weights, computed in
   `O(N log N)` with the risk-set sizes, the weighted Cox fit with a robust variance and
   the absolute risk from its baseline hazard, checked against `multipleNCC`.
+- Shared gamma frailty Cox models by penalised partial likelihood with Breslow or
+  Efron ties, strata, entry times, offsets and case weights, theta from the
+  profile marginal likelihood or by `coxph`'s own search, the variance from the
+  whole information and from its diagonal form, and EM as a second route, for
+  hundreds of thousands of clusters without a dense information matrix, checked
+  against `coxph` with `frailty()`.
 - The Titman-Putter test of the Markov property.
 - The self-controlled case series (conditional Poisson likelihood, risk windows
   and age bands, robust variance) with the cutting of follow-up into pieces,
