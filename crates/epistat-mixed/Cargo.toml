@@ -1,0 +1,32 @@
+[package]
+name = "epistat-mixed"
+description = "Linear and generalised linear mixed models with one grouping factor, fitted as lme4 fits them, in time linear in rows and groups and with results that do not depend on the number of threads"
+keywords = ["mixed-models", "lme4", "glmm", "statistics", "epidemiology"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+epistat-glm = { path = "../epistat-glm", version = "0.2.0" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
+epistat-optim = { path = "../epistat-optim", version = "0.1.1" }
+epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
+rayon = "1.10"
+thiserror = "2"
+
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[[bench]]
+name = "tier3_mixed"
+harness = false
+
+[lints]
+workspace = true

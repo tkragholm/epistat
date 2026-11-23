@@ -11,6 +11,7 @@ Rust crates for statistics in epidemiology and register research.
 | [`epistat-inference`](crates/epistat-inference) | Influence-function and sandwich variances, cluster-robust and bootstrap intervals |
 | [`epistat-linalg`](crates/epistat-linalg) | Dense solves with fallbacks and row-blocked regression products on faer, independent of the thread count |
 | [`epistat-matching`](crates/epistat-matching) | Nearest-neighbour and risk-set matching under calipers and register constraints, with weights, exclusion reasons and balance statistics |
+| [`epistat-mixed`](crates/epistat-mixed) | Linear and generalised linear mixed models with one grouping factor, by REML, ML, the Laplace approximation and adaptive Gauss-Hermite quadrature, as `lme4` fits them |
 | [`epistat-optim`](crates/epistat-optim) | BFGS with a Moré-Thuente line search, Nelder-Mead and a dense simplex method |
 | [`epistat-register`](crates/epistat-register) | Calendar-year person-time, interval merging, connected components over shared keys and constant-price deflation |
 | [`epistat-rng`](crates/epistat-rng) | `SplitMix64` streams and bootstrap draws that reproduce across threads, platforms and languages |
