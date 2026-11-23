@@ -49,5 +49,9 @@ harness = false
 name = "tier2_designs"
 harness = false
 
+[[bench]]
+name = "tier3_survival"
+harness = false
+
 [lints]
 workspace = true
