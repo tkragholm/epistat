@@ -23,6 +23,11 @@
 //!   or `"all")`, with truncation. Its fit goes into [`Estimated`] as a
 //!   [`Censoring::Pooled`], since the variance treats it as any other pooled
 //!   model of weights.
+//! - [`trials`] gives the weights of treatment switches and of censoring of
+//!   sequential trial emulation, the weight of each row of the stacked trials, the
+//!   weighted logistic outcome model with its person-clustered covariance and the
+//!   cumulative incidence it implies, as `TrialEmulation::initiators(estimand_type =
+//!   "PP")`.
 //! - [`estimated`] names the estimated weights of an outcome model, of treatment,
 //!   of censoring or both, and [`cox::fit_estimated`] and
 //!   [`km::estimate_estimated`] give the variance that accounts for every model
@@ -147,6 +152,7 @@ pub mod ipcw;
 pub mod iptw;
 pub mod km;
 pub mod pooled;
+pub mod trials;
 mod stack;
 mod summary;
 
