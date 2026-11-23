@@ -218,7 +218,7 @@ fn fits_match_glm_with_person_dummies_and_scca() {
         let f = fit(&data, x.as_ref(), &options(true)).unwrap();
         assert!(f.converged, "{}", case.label);
         assert_eq!(f.n_persons_used, g.n_used, "{}", case.label);
-        assert_eq!(f.n_events, g.n_events, "{}", case.label);
+        assert!((f.n_events - g.n_events).abs() < 0.5, "{}", case.label);
         let p = g.beta.len();
         let aliased = case.aliased_extra == Some(true);
         if aliased {

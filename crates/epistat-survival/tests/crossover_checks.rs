@@ -172,6 +172,7 @@ fn exposure_counts_a_day_once_and_only_for_the_person() {
 fn the_case_time_control_design_has_the_exposure_and_its_product_with_the_group() {
     let x = case_time_control_design(&[1.0, 0.0, 1.0], &[true, true, false]).unwrap();
     assert_eq!((x.nrows(), x.ncols()), (3, 2));
-    assert_eq!([x[(0, 0)], x[(1, 0)], x[(2, 0)]], [1.0, 0.0, 1.0]);
-    assert_eq!([x[(0, 1)], x[(1, 1)], x[(2, 1)]], [1.0, 0.0, 0.0]);
+    let col = |j: usize| vec![x[(0, j)], x[(1, j)], x[(2, j)]];
+    assert_eq!(col(0), vec![1.0, 0.0, 1.0]);
+    assert_eq!(col(1), vec![1.0, 0.0, 0.0]);
 }
