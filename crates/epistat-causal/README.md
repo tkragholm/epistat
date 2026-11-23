@@ -41,6 +41,6 @@ Case weights and clusters are supported. Results do not depend on the number
 of threads, and are checked against `riskRegression::ate` and against
 estimators written out by hand in R. TMLE is checked against `tmle` with its
 learners replaced by `glm`, and its survival form against the estimator written
-out in R. Entropy balancing is also checked against `WeightIt`
-and `ebal`, and CBPS against `CBPS`, with the variance checked against the
-infinitesimal jackknife of the whole procedure and a bootstrap.
+out in R. Entropy balancing is also checked against `WeightIt` and `ebal`, and
+CBPS against `CBPS`, with the variance checked against the infinitesimal
+jackknife of the whole procedure and a bootstrap.
