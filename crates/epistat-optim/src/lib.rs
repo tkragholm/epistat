@@ -3,6 +3,8 @@
 //!
 //! - [`bfgs`]: BFGS with the line search of Moré and Thuente, for smooth
 //!   functions with a gradient.
+//! - [`brent`]: Brent's one-dimensional minimiser on an interval, as R's
+//!   `optimize`.
 //! - [`nelder_mead`]: the Nelder-Mead simplex method, for functions with values
 //!   only.
 //! - [`simplex`]: a dense primal simplex method for linear programs
@@ -24,6 +26,7 @@
 pub mod bfgs;
 pub mod bounded_simplex;
 pub mod branch_and_bound;
+pub mod brent;
 pub mod min_cost_flow;
 pub mod multistart;
 pub mod nelder_mead;
