@@ -28,5 +28,9 @@ epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
+[[bench]]
+name = "tier1_register"
+harness = false
+
 [lints]
 workspace = true
