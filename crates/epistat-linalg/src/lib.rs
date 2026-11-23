@@ -6,9 +6,10 @@
 //! [`Mat`] and [`MatRef`] are faer's matrix types, re-exported so that a crate
 //! that takes or returns them need not depend on faer itself. [`Side`] is
 //! faer's triangle selector for symmetric routines, re-exported for the same
-//! reason. [`matmul`], [`Accum`], [`MatMut`] and [`get_global_parallelism`] are
-//! faer's general matrix product and the types it takes, for callers that
-//! need the product of faer's kernel into their own buffers.
+//! reason. [`matmul`], [`Accum`], [`MatMut`], [`Par`] and
+//! [`get_global_parallelism`] are faer's general matrix product and the types
+//! it takes, for callers that need the product of faer's kernel into their own
+//! buffers.
 //!
 //! The modules, each with its own method notes:
 //!
@@ -37,7 +38,7 @@ mod solve;
 pub use blocks::{ROW_BLOCK, matvec_into, row_scaled_gram, weighted_gram, weighted_xtz, xtv};
 pub use error::DesignError;
 pub use faer::linalg::matmul::matmul;
-pub use faer::{Accum, Mat, MatMut, MatRef, Side, get_global_parallelism, mat};
+pub use faer::{Accum, Mat, MatMut, MatRef, Par, Side, get_global_parallelism, mat};
 pub use solve::{Attempt, Factor, Method, Ridge, Solution, SolveError, inverse, solve};
 
 /// Whether every entry of `matrix` is finite.
