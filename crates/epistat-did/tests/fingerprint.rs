@@ -893,6 +893,10 @@ const GOLDEN: &[(&str, u64)] = &[
 ];
 
 #[test]
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    ignore = "the hashes were recorded on aarch64 macOS; other platforms' maths libraries differ in the last bits"
+)]
 fn estimator_outputs_are_bit_identical_to_the_recorded_hashes() {
     let data = data();
     let runs = on_threads(&[1, 4, 12], || cases(&data));

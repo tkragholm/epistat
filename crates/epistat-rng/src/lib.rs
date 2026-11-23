@@ -495,6 +495,12 @@ mod tests {
         assert_eq!(stream, reference);
     }
 
+    /// Equal bits, or both NaN: the sign of a NaN produced by arithmetic is
+    /// not specified and differs between x86 and ARM.
+    fn same(a: f64, b: f64) -> bool {
+        a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
+    }
+
     #[test]
     fn lanes_equal_the_single_stream_draw() {
         let specials = [f64::NAN, -0.0, 0.0, f64::INFINITY, -f64::INFINITY, 1e308];
@@ -514,7 +520,7 @@ mod tests {
             let got = rademacher_sums(&values, &mut lanes);
             for l in 0..8 {
                 let want = rademacher_sum(&values, &mut singles[l]);
-                assert_eq!(got[l].to_bits(), want.to_bits(), "n = {n}, lane {l}");
+                assert!(same(got[l], want), "n = {n}, lane {l}");
                 assert_eq!(lanes[l], singles[l]);
             }
             let mut four: [Stream; 4] = std::array::from_fn(|l| Stream::seeded(l as u64 + 100));
@@ -522,7 +528,7 @@ mod tests {
             let got = rademacher_sums(&values, &mut four);
             for l in 0..4 {
                 let want = rademacher_sum(&values, &mut ref_four[l]);
-                assert_eq!(got[l].to_bits(), want.to_bits());
+                assert!(same(got[l], want));
             }
         }
     }
