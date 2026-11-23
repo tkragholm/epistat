@@ -59,8 +59,12 @@
 //! The rate and the variance are sums of a few dozen terms in stratum order,
 //! compensated, so they agree with a hand computation in R to about `1e-14`
 //! relative. The limits inherit the accuracy of `gamma_quantile`. The exact
-//! test's accuracy is that of the Poisson and binomial point probabilities,
-//! about `1e-13` relative. The tests state the deviation found against R.
+//! test's accuracy is that of the binomial point probabilities, which are
+//! exponentials of sums of log-gamma terms. The error of the exponent is the
+//! machine epsilon times the size of those terms, so the relative error of a
+//! probability grows with the counts: about `1e-13` at a hundred events,
+//! `1e-12` at a thousand and `1e-10` at `10^5`. The tests state the deviation
+//! found against R.
 //!
 //! # References
 //!
