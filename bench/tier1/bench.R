@@ -79,8 +79,25 @@ if (method == "gen_pool") {
 if (method %in% c("rcs", "ns")) {
   x <- rd("spl")$x
   if (method == "rcs") {
-    suppressMessages(library(Hmisc))
-    r <- timed(function() rcspline.eval(x, nk = 5, inclx = TRUE))
+    # Hmisc::rcspline.eval(x, nk = 5, inclx = TRUE) with its default knots and
+    # norm = 2, written out here because Hmisc did not install on the Linux
+    # machine (no Fortran compiler). The knots are the quantiles of Harrell.
+    rcs_basis <- function(x) {
+      knots <- unname(quantile(x, c(0.05, 0.275, 0.5, 0.725, 0.95), type = 7))
+      k <- length(knots)
+      kd <- (knots[k] - knots[1])^2
+      cube <- function(z) pmax(z, 0)^3
+      b <- matrix(0, length(x), k - 1)
+      b[, 1] <- x
+      for (j in 1:(k - 2)) {
+        b[, j + 1] <- (cube(x - knots[j]) -
+                         cube(x - knots[k - 1]) * (knots[k] - knots[j]) / (knots[k] - knots[k - 1]) +
+                         cube(x - knots[k]) * (knots[k - 1] - knots[j]) / (knots[k] - knots[k - 1])) / kd
+      }
+      attr(b, "knots") <- knots
+      b
+    }
+    r <- timed(function() rcs_basis(x))
     finish(r$times, basis_summary(r$value, attr(r$value, "knots")))
   } else {
     suppressMessages(library(splines))

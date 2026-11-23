@@ -12,6 +12,7 @@
 #   LIMIT     seconds allowed to one process, default 120
 #   MEMORY    memory cap of one process, default 11G (systemd-run when it
 #             works, ulimit otherwise)
+#   BIN_<bench>  path of an already built program, instead of cargo bench
 #   IMPLS     "rust r" (default), or just one of them
 #   OUT       results directory, default SCRATCH/out
 #
@@ -70,6 +71,8 @@ declare -A BIN
 build() { # crate bench: builds the program once and remembers its path
   local crate=$1 bench=$2
   [ -n "${BIN[$bench]:-}" ] && return
+  local given="BIN_$bench"
+  if [ -n "${!given:-}" ]; then BIN[$bench]="${!given}"; return; fi
   BIN[$bench]="$(cd "$ROOT" && cargo bench -p "$crate" --bench "$bench" --no-run --message-format=json 2>/dev/null |
     python3 -c "
 import json, sys
@@ -101,7 +104,7 @@ guarded() { # timefile command...
     systemd-run --user --scope -q -p MemoryMax="$MEMORY" -p MemorySwapMax=0 -- \
       python3 "$HERE/measure.py" "$tf" "$LIMIT" "$@"
   else
-    ( ulimit -v 12000000; python3 "$HERE/measure.py" "$tf" "$LIMIT" "$@" )
+    ( ulimit -v 12000000 2>/dev/null; python3 "$HERE/measure.py" "$tf" "$LIMIT" "$@" )
   fi
 }
 
