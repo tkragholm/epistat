@@ -90,6 +90,32 @@ fn pchisq_and_lgamma() {
     }
 }
 
+mod digamma_values {
+    include!("data/digamma.rs");
+}
+
+#[test]
+fn digamma_and_trigamma() {
+    // The series and the recurrence each add about one rounding error per step,
+    // at most ten steps, so 1e-14 relative. Near the zero of digamma at 1.4616
+    // the value is small against its terms, so an absolute 1e-15 is allowed.
+    let close = Tolerance::exact().rel(1e-14).abs(1e-15);
+    for &(x, psi, psi1) in digamma_values::DIGAMMA {
+        let x = f64::from_bits(x);
+        let (got, got1) = (gamma::digamma(x), gamma::trigamma(x));
+        assert!(
+            close.accepts(got, f64::from_bits(psi)),
+            "digamma({x}) = {got:e}, R {:e}",
+            f64::from_bits(psi)
+        );
+        assert!(
+            close.accepts(got1, f64::from_bits(psi1)),
+            "trigamma({x}) = {got1:e}, R {:e}",
+            f64::from_bits(psi1)
+        );
+    }
+}
+
 mod cipoisson_values {
     include!("data/cipoisson.rs");
 }

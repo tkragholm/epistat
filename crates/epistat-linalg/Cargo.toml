@@ -18,12 +18,14 @@ nightly = ["faer/nightly"]
 
 [dependencies]
 dyn-stack = "0.13"
+epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
 faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }
 rayon = "1.10"
 thiserror = "2"
 
 [dev-dependencies]
 epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1.0.200", features = ["derive"] }
 
 [lints]
 workspace = true
