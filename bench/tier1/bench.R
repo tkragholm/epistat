@@ -41,7 +41,7 @@ finish <- function(times, values) {
 }
 v <- function(...) c(...)
 indexed <- function(prefix, x) setNames(as.numeric(x), paste0(prefix, seq_along(x) - 1))
-at <- function(i, x) setNames(x[i + 1], paste0("at", i))
+at <- function(i, x) setNames(x[i + 1], paste0("at", format(i, scientific = FALSE)))
 
 # 5 knots of Harrell, linear column included, as the Rust side
 basis_summary <- function(b, knots) {
@@ -307,7 +307,7 @@ if (method %in% c("rcs", "ns")) {
   finish(r$times, c(indexed("coef_den", coef(r$value$den.mod)), indexed("coef_num", coef(r$value$num.mod)),
                     sum_w = sum(w), sum_w_square = sum(w^2), max_w = max(w),
                     setNames(w[c(1, 8, 9, rows %/% 2 + 1, rows)],
-                             paste0("w", c(0, 7, 8, rows %/% 2, rows - 1)))))
+                             paste0("w", format(c(0, 7, 8, rows %/% 2, rows - 1), scientific = FALSE, trim = TRUE)))))
 } else if (method == "aipw") {
   d <- rd("aipw")
   r <- timed(function() {
