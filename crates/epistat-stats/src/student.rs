@@ -164,7 +164,7 @@ pub fn beta_quantile(p: f64, a: f64, b: f64) -> Option<f64> {
     if p == 0.0 {
         return Some(0.0);
     }
-    if p == 1.0 {
+    if p >= 1.0 {
         return Some(1.0);
     }
     let upper = p > 0.5;
