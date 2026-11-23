@@ -200,7 +200,7 @@ struct Core {
     influence: [Vec<f64>; 2],
 }
 
-fn check_len(name: &str, found: usize, n: usize) -> Result<()> {
+pub(crate) fn check_len(name: &str, found: usize, n: usize) -> Result<()> {
     if found == n {
         Ok(())
     } else {
@@ -210,7 +210,7 @@ fn check_len(name: &str, found: usize, n: usize) -> Result<()> {
     }
 }
 
-fn check_alpha(alpha: f64) -> Result<()> {
+pub(crate) fn check_alpha(alpha: f64) -> Result<()> {
     if alpha > 0.0 && alpha < 1.0 {
         Ok(())
     } else {
@@ -218,7 +218,7 @@ fn check_alpha(alpha: f64) -> Result<()> {
     }
 }
 
-fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
+pub(crate) fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
     epistat_stats::sum::compensated(values)
 }
 
@@ -332,7 +332,7 @@ fn core(input: &AipwInput<'_>, target: Target, opts: &AipwOptions) -> Result<Cor
 
 /// The variance of a sum of influences: the sum of squares, or with clusters
 /// `G / (G - 1)` times the sum of squares of the sums over clusters.
-fn variance_of(influence: &[f64], cluster: Option<&[u32]>) -> Result<f64> {
+pub(crate) fn variance_of(influence: &[f64], cluster: Option<&[u32]>) -> Result<f64> {
     let v = match cluster {
         None => compensated(influence.iter().map(|x| x * x)),
         Some(c) => {
@@ -358,7 +358,7 @@ fn variance_of(influence: &[f64], cluster: Option<&[u32]>) -> Result<f64> {
     }
 }
 
-fn estimate(value: f64, variance: f64, null: f64, alpha: f64) -> Result<Estimate> {
+pub(crate) fn estimate(value: f64, variance: f64, null: f64, alpha: f64) -> Result<Estimate> {
     let se = variance.sqrt();
     let (lower, upper) = epistat_inference::interval::normal(value, se, alpha)
         .map_err(|e| Error::input(format!("alpha: {e}")))?;
@@ -479,12 +479,12 @@ fn canonical(family: Family) -> Result<(Link, VarianceFunction)> {
     }
 }
 
-struct Fitted {
+pub(crate) struct Fitted {
     /// The prediction for every row, from the coefficients.
-    mean: Vec<f64>,
+    pub(crate) mean: Vec<f64>,
 }
 
-fn fit_model(
+pub(crate) fn fit_model(
     glm: &Glm,
     x: MatRef<'_, f64>,
     y: &[f64],

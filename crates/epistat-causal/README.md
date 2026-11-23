@@ -35,16 +35,28 @@ Causal effect estimators for cohort data.
   draws, seeded per person, so the results do not depend on the number of
   threads. Categorical and truncated covariates, restrictions on the outcome
   model, censoring weights and hazard ratios are not implemented.
+- Targeted maximum likelihood estimation (TMLE) for a binary or bounded
+  continuous outcome, as the R package `tmle` does it: the effect in the
+  population by logistic fluctuation, on the treated and on the controls by the
+  one-step estimator with `tmle`'s support rule, with the outcome mapped to
+  `[0, 1]` and the propensity bounded as `tmle` does. It takes the predictions of
+  the two models, or fits a main-terms or per-arm generalised linear model of the
+  outcome and a logistic model of the treatment, and gives the variance of the
+  efficient influence function. The estimates stay inside the range of the
+  outcome. The risk by a time with right censoring is estimated in discrete
+  time, on given predictions of the event and censoring hazards, with iterated
+  logistic fluctuation of the hazards of each arm.
 
 The risk by a time with right censoring is in `epistat-survival::aipw`, since it
 needs the Cox and censoring machinery of that crate.
 
 Case weights and clusters are supported. Results do not depend on the number
 of threads, and are checked against `riskRegression::ate` and against
-estimators written out by hand in R. Entropy balancing is also checked against
-`WeightIt` and `ebal`, and CBPS against `CBPS`, with the variance checked against
-the infinitesimal jackknife of the whole procedure and a bootstrap. The
-g-formula is checked against `gfoRmula`: exactly where every simulated variable
-is set by the strategy, within the Monte Carlo error elsewhere, and against the
-exact sum over two periods and the truth of a simulated data-generating
-process.
+estimators written out by hand in R. TMLE is checked against `tmle` with its
+learners replaced by `glm`, and its survival form against the estimator written
+out in R. Entropy balancing is also checked against `WeightIt` and `ebal`, and
+CBPS against `CBPS`, with the variance checked against the infinitesimal
+jackknife of the whole procedure and a bootstrap. The g-formula is checked
+against `gfoRmula`: exactly where every simulated variable is set by the
+strategy, within the Monte Carlo error elsewhere, and against the exact sum over
+two periods and the truth of a simulated data-generating process.
