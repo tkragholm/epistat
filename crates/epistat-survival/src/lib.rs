@@ -47,6 +47,8 @@
 //! - [`multistate`]: occupation probabilities of a multi-state process by the
 //!   product integral, their infinitesimal jackknife standard errors, and their
 //!   clustered bootstrap.
+//! - [`ncc`]: nested case-control data with Samuelsen's inverse probability weights, the weighted Cox
+//!   fit with a robust variance and the absolute risk, as `multipleNCC`.
 //! - [`msreg`]: Cox regression for a multi-state process, a hazard for each transition with
 //!   coefficients specific to a transition or shared, as `coxph` with a multi-state outcome,
 //!   and the cumulative hazards and transition probabilities of a covariate profile, as
@@ -152,6 +154,7 @@ pub mod markov;
 pub mod metrics;
 pub mod msreg;
 pub mod multistate;
+pub mod ncc;
 mod order;
 mod par;
 pub mod pseudo;
