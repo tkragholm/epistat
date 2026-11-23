@@ -20,15 +20,16 @@
 //! note has 10,000 and 500, so that a debug build of the test stays short.
 //! mice's `polyreg` does not draw the coefficients; `Polyreg { proper: false }`
 //! is compared with it, and the proper draw is checked to leave the mean
-//! where it is and to raise the between-imputation spread.
+//! where it is and to raise the between-imputation spread (600 data sets of
+//! `edu` alone in 600 rows, so that the spread is measured precisely).
 
 mod common;
 
 use common::{
-    PooledStats, compare_pooled, compare_stats, lm, numeric_stats, pooled_stats, share_stats,
-    column_of, variance,
+    PooledStats, column_of, compare_pooled, compare_stats, lm, numeric_stats, pooled_stats,
+    share_stats, variance,
 };
-use epistat_impute::{Column, Imputed, ImputeOptions, ImputeSpec, Incomplete, Method, impute};
+use epistat_impute::{Column, ImputeOptions, ImputeSpec, Imputed, Incomplete, Method, impute};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -112,7 +113,12 @@ fn nhanes_data(n: &Nhanes) -> Incomplete {
             Column::Binary(n.hyp.iter().map(|v| v.unwrap_or(0)).collect()),
             Column::Continuous(n.chl.iter().map(|v| v.unwrap_or(0.0)).collect()),
         ],
-        &[vec![false; 25], flags(&miss_bmi), flags(&miss_hyp), flags(&miss_chl)],
+        &[
+            vec![false; 25],
+            flags(&miss_bmi),
+            flags(&miss_hyp),
+            flags(&miss_chl),
+        ],
     )
     .unwrap()
 }
@@ -148,7 +154,12 @@ fn nhanes2_pmm_and_logreg_match_mice() {
     let data = nhanes_data(&r);
     let spec = spec_of(
         &data,
-        vec![None, Some(Method::pmm()), Some(Method::Logreg), Some(Method::pmm())],
+        vec![
+            None,
+            Some(Method::pmm()),
+            Some(Method::Logreg),
+            Some(Method::pmm()),
+        ],
     );
     let imputed = impute(
         &data,
@@ -160,9 +171,24 @@ fn nhanes2_pmm_and_logreg_match_mice() {
         },
     )
     .unwrap();
-    compare_stats("nhanes bmi", &numeric_stats(&imputed, 1), &r.stats["bmi"], K);
-    compare_stats("nhanes chl", &numeric_stats(&imputed, 3), &r.stats["chl"], K);
-    compare_stats("nhanes hyp", &share_stats(&imputed, 2, 2), &r.stats["hyp"], K);
+    compare_stats(
+        "nhanes bmi",
+        &numeric_stats(&imputed, 1),
+        &r.stats["bmi"],
+        K,
+    );
+    compare_stats(
+        "nhanes chl",
+        &numeric_stats(&imputed, 3),
+        &r.stats["chl"],
+        K,
+    );
+    compare_stats(
+        "nhanes hyp",
+        &share_stats(&imputed, 2, 2),
+        &r.stats["hyp"],
+        K,
+    );
     let ours = nhanes_analysis(&imputed, &data);
     let theirs = reference_pooled(&r.analysis);
     for t in 0..2 {
@@ -176,7 +202,12 @@ fn nhanes2_norm_matches_mice() {
     let data = nhanes_data(&r);
     let spec = spec_of(
         &data,
-        vec![None, Some(Method::Norm), Some(Method::Logreg), Some(Method::Norm)],
+        vec![
+            None,
+            Some(Method::Norm),
+            Some(Method::Logreg),
+            Some(Method::Norm),
+        ],
     );
     let imputed = impute(
         &data,
@@ -188,29 +219,55 @@ fn nhanes2_norm_matches_mice() {
         },
     )
     .unwrap();
-    compare_stats("nhanes norm bmi", &numeric_stats(&imputed, 1), &r.norm.stats["bmi"], K);
-    compare_stats("nhanes norm chl", &numeric_stats(&imputed, 3), &r.norm.stats["chl"], K);
+    compare_stats(
+        "nhanes norm bmi",
+        &numeric_stats(&imputed, 1),
+        &r.norm.stats["bmi"],
+        K,
+    );
+    compare_stats(
+        "nhanes norm chl",
+        &numeric_stats(&imputed, 3),
+        &r.norm.stats["chl"],
+        K,
+    );
     let ours = nhanes_analysis(&imputed, &data);
     let theirs = reference_pooled(&r.norm.analysis);
     for t in 0..2 {
-        compare_pooled(&format!("nhanes norm coefficient {t}"), &ours[t], &theirs[t], K);
+        compare_pooled(
+            &format!("nhanes norm coefficient {t}"),
+            &ours[t],
+            &theirs[t],
+            K,
+        );
     }
 }
 
 fn sim_columns(s: &Sim, incomplete: [bool; 3]) -> Incomplete {
-    let n = s.y.len();
-    let mask = |flag: bool, m: &[bool]| if flag { m.to_vec() } else { vec![false; n] };
+    sim_prefix(s, s.y.len(), incomplete)
+}
+
+/// The first `n` rows of the simulated data, with the masks of the columns
+/// flagged in `incomplete`.
+fn sim_prefix(s: &Sim, n: usize, incomplete: [bool; 3]) -> Incomplete {
+    let mask = |flag: bool, m: &[bool]| {
+        if flag {
+            m[..n].to_vec()
+        } else {
+            vec![false; n]
+        }
+    };
     Incomplete::new(
         vec![
-            Column::Continuous(s.x1.clone()),
-            Column::Binary(s.x2.clone()),
-            Column::Continuous(s.inc.clone()),
+            Column::Continuous(s.x1[..n].to_vec()),
+            Column::Binary(s.x2[..n].to_vec()),
+            Column::Continuous(s.inc[..n].to_vec()),
             Column::Nominal {
-                codes: s.edu.clone(),
+                codes: s.edu[..n].to_vec(),
                 levels: 3,
             },
-            Column::Binary(s.smk.clone()),
-            Column::Continuous(s.y.clone()),
+            Column::Binary(s.smk[..n].to_vec()),
+            Column::Continuous(s.y[..n].to_vec()),
         ],
         &[
             vec![false; n],
@@ -237,10 +294,6 @@ fn sim_analysis(imputed: &Imputed, data: &Incomplete) -> Vec<PooledStats> {
     (0..2).map(|t| pooled_stats(&est[t], &var[t])).collect()
 }
 
-fn imputed_sets(imputed: &Imputed) -> usize {
-    imputed.m
-}
-
 fn options(seed: u64) -> ImputeOptions {
     ImputeOptions {
         m: 200,
@@ -254,7 +307,14 @@ fn sim_full(proper: bool, seed: u64) -> (Incomplete, Imputed) {
     let data = sim_columns(&r, [true, true, true]);
     let spec = spec_of(
         &data,
-        vec![None, None, Some(Method::pmm()), Some(Method::Polyreg { proper }), Some(Method::Logreg), None],
+        vec![
+            None,
+            None,
+            Some(Method::pmm()),
+            Some(Method::Polyreg { proper }),
+            Some(Method::Logreg),
+            None,
+        ],
     );
     let imputed = impute(&data, &spec, &options(seed)).unwrap();
     (data, imputed)
@@ -277,10 +337,42 @@ fn simulated_mixed_types_match_mice() {
 
 #[test]
 fn proper_polyreg_keeps_the_mean_and_widens_the_spread() {
+    // `edu` alone is incomplete, in the first 600 rows, so the only difference
+    // between the runs is whether the coefficients are drawn, and the
+    // parameter uncertainty is large. 600 data sets give the spread of a
+    // share a relative standard error of sqrt(2 / 599) = 0.058.
     let r = reference().sim;
-    let (_, improper) = sim_full(false, 20_261_126);
-    let (_, proper) = sim_full(true, 20_261_129);
-    compare_stats("proper edu", &share_stats(&proper, 3, 3), &r.stats["edu"], K);
+    let data = sim_prefix(&r, 600, [false, true, false]);
+    let run = |proper: bool, seed: u64| {
+        let spec = spec_of(
+            &data,
+            vec![
+                None,
+                None,
+                None,
+                Some(Method::Polyreg { proper }),
+                None,
+                None,
+            ],
+        );
+        impute(
+            &data,
+            &spec,
+            &ImputeOptions {
+                m: 600,
+                max_iterations: 3,
+                seed,
+            },
+        )
+        .unwrap()
+    };
+    let (improper, proper) = (run(false, 20_261_130), run(true, 20_261_131));
+    compare_stats(
+        "proper against improper edu",
+        &share_stats(&proper, 3, 3),
+        &share_stats(&improper, 3, 3),
+        K,
+    );
     let spread = |imputed: &Imputed| {
         let stats = share_stats(imputed, 3, 3);
         (0..2)
@@ -289,12 +381,17 @@ fn proper_polyreg_keeps_the_mean_and_widens_the_spread() {
     };
     let (vi, vp) = (spread(&improper), spread(&proper));
     eprintln!("between-set variance of the level shares: improper {vi:?} proper {vp:?}");
-    // A sample variance of m normal values has relative standard error
-    // sqrt(2 / (m - 1)), so the ratio of two has sqrt(4 / (m - 1)); a ratio
-    // above 1 plus four of those is a real excess.
-    let bound = 1.0 + 4.0 * (4.0 / (imputed_sets(&proper) as f64 - 1.0)).sqrt();
+    // The ratio of two sample variances of 600 values has relative standard
+    // error sqrt(4 / 599); a ratio above 1 plus three of those is an excess (one-sided,
+    // probability 0.0013 under no difference).
+    let bound = 1.0 + 3.0 * (4.0 / 599.0_f64).sqrt();
     for c in 0..2 {
-        assert!(vp[c] > vi[c] * bound, "level {c}: {} against {}", vp[c], vi[c]);
+        assert!(
+            vp[c] > vi[c] * bound,
+            "level {c}: {} against {}",
+            vp[c],
+            vi[c]
+        );
     }
 }
 
@@ -308,11 +405,21 @@ fn simulated_norm_and_pmm_of_a_single_column_match_mice() {
     ] {
         let spec = spec_of(&data, vec![None, None, Some(method), None, None, None]);
         let imputed = impute(&data, &spec, &options(seed)).unwrap();
-        compare_stats(&format!("sim {label} inc"), &numeric_stats(&imputed, 2), &block.stats["inc"], K);
+        compare_stats(
+            &format!("sim {label} inc"),
+            &numeric_stats(&imputed, 2),
+            &block.stats["inc"],
+            K,
+        );
         let ours = sim_analysis(&imputed, &data);
         let theirs = reference_pooled(&block.analysis);
         for t in 0..2 {
-            compare_pooled(&format!("sim {label} coefficient {t}"), &ours[t], &theirs[t], K);
+            compare_pooled(
+                &format!("sim {label} coefficient {t}"),
+                &ours[t],
+                &theirs[t],
+                K,
+            );
         }
     }
 }

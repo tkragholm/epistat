@@ -30,8 +30,9 @@ impl Imputed {
         }
         Ok((0..data.n_columns())
             .map(|j| {
-                let mut column: Vec<f64> =
-                    (0..data.rows()).map(|r| data.columns()[j].value(r)).collect();
+                let mut column: Vec<f64> = (0..data.rows())
+                    .map(|r| data.columns()[j].value(r))
+                    .collect();
                 for (&row, &value) in self.missing_rows[j].iter().zip(&self.values[j][set]) {
                     column[row] = value;
                 }

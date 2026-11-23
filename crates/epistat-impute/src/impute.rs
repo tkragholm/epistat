@@ -81,7 +81,11 @@ pub fn impute(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> 
     validate(data, spec, options)?;
     let n_columns = data.n_columns();
     let observed: Vec<Vec<usize>> = (0..n_columns)
-        .map(|j| (0..data.rows()).filter(|&r| !data.missing(j).get(r)).collect())
+        .map(|j| {
+            (0..data.rows())
+                .filter(|&r| !data.missing(j).get(r))
+                .collect()
+        })
         .collect();
     let missing: Vec<Vec<usize>> = (0..n_columns).map(|j| data.missing(j).rows()).collect();
     let ctx = Context {
@@ -251,7 +255,11 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
     let n_columns = data.n_columns();
     let maxit = options.max_iterations;
     let mut completed: Vec<Vec<f64>> = (0..n_columns)
-        .map(|j| (0..data.rows()).map(|r| data.columns()[j].value(r)).collect())
+        .map(|j| {
+            (0..data.rows())
+                .map(|r| data.columns()[j].value(r))
+                .collect()
+        })
         .collect();
     // Starting values: a random observed value for each missing cell.
     for j in 0..n_columns {
@@ -318,7 +326,12 @@ fn predictor_columns(
             Column::Nominal { levels, .. } => {
                 for level in 1..*levels {
                     let target = level as f64;
-                    out.push(completed[k].iter().map(|&v| f64::from(u8::from(v == target))).collect());
+                    out.push(
+                        completed[k]
+                            .iter()
+                            .map(|&v| f64::from(u8::from(v == target)))
+                            .collect(),
+                    );
                 }
             }
             _ => out.push(completed[k].clone()),
@@ -414,7 +427,8 @@ fn impute_column(
             let mut stream = Stream::seeded(replicate_seed(seed, PARAMETER_ROW));
             let mut z = vec![0.0; fit.active.iter().filter(|&&a| a).count()];
             stream.fill_normals(&mut z);
-            let beta = draw_coefficients(&fit.coefficients, &fit.active, &fit.covariance, &z, 1.0, j)?;
+            let beta =
+                draw_coefficients(&fit.coefficients, &fit.active, &fit.covariance, &z, 1.0, j)?;
             let eta = predict(&cols, mis, &beta);
             Ok(mis
                 .par_iter()

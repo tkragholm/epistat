@@ -50,7 +50,9 @@ pub fn share_stats(imputed: &Imputed, column: usize, levels: usize) -> Vec<Vec<f
         .iter()
         .map(|cells| {
             (1..levels)
-                .map(|l| cells.iter().filter(|&&v| v == l as f64).count() as f64 / cells.len() as f64)
+                .map(|l| {
+                    cells.iter().filter(|&&v| v == l as f64).count() as f64 / cells.len() as f64
+                })
                 .collect()
         })
         .collect()
@@ -122,7 +124,10 @@ pub fn compare_pooled(label: &str, a: &PooledStats, b: &PooledStats, k: f64) {
         ("between", &a.b, &b.b),
         ("fmi", &a.fmi, &b.fmi),
     ] {
-        eprintln!("{label} {name}: epistat {:.6} (se {:.6}) mice {:.6} (se {:.6})", x.0, x.1, y.0, y.1);
+        eprintln!(
+            "{label} {name}: epistat {:.6} (se {:.6}) mice {:.6} (se {:.6})",
+            x.0, x.1, y.0, y.1
+        );
         assert_within_standard_errors(x.0, x.1, y.0, y.1, k);
     }
 }
@@ -131,7 +136,9 @@ pub fn compare_pooled(label: &str, a: &PooledStats, b: &PooledStats, k: f64) {
 /// their variances.
 pub fn lm(columns: &[&[f64]], y: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let n = y.len();
-    let x = Mat::from_fn(n, columns.len() + 1, |i, k| if k == 0 { 1.0 } else { columns[k - 1][i] });
+    let x = Mat::from_fn(n, columns.len() + 1, |i, k| {
+        if k == 0 { 1.0 } else { columns[k - 1][i] }
+    });
     let fit = Glm::new(Family::Gaussian, Link::Identity)
         .fit(x.as_ref(), y, None, None, None)
         .unwrap();

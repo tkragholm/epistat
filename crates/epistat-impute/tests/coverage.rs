@@ -22,12 +22,12 @@
 //! unbiasedness.
 
 use epistat_impute::{
-    Column, Ties, ImputeOptions, ImputeSpec, Incomplete, Method, impute, nelson_aalen,
+    Column, ImputeOptions, ImputeSpec, Incomplete, Method, Ties, impute, nelson_aalen,
 };
 use epistat_inference::pooling::{Pooled, dfcom_events, dfcom_residual};
 use epistat_linalg::Mat;
-use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::SurvData;
+use epistat_survival::cox::{CoxOptions, fit};
 use epistat_testkit::{SplitMix64, assert_within_standard_errors, load_json};
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -131,7 +131,10 @@ fn coverage_se(p: f64) -> f64 {
 
 #[test]
 fn linear_regression_is_unbiased_with_nominal_coverage() {
-    let r: LinearReference = load_json(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/impute_linear.json"));
+    let r: LinearReference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/impute_linear.json"
+    ));
     for (label, method, reference) in [
         ("norm", Method::Norm, &r.results.norm),
         ("pmm", Method::pmm(), &r.results.pmm),
@@ -152,7 +155,13 @@ fn linear_regression_is_unbiased_with_nominal_coverage() {
         );
         // Both implementations give the same mean and coverage.
         assert_within_standard_errors(s.mean, s.se, theirs.mean, theirs.se, 4.0);
-        assert_within_standard_errors(s.coverage, coverage_se(s.coverage), theirs.coverage, coverage_se(theirs.coverage), 4.0);
+        assert_within_standard_errors(
+            s.coverage,
+            coverage_se(s.coverage),
+            theirs.coverage,
+            coverage_se(theirs.coverage),
+            4.0,
+        );
         if label == "norm" {
             // Normal imputation of a normal covariate is correct: unbiased and nominal.
             assert_within_standard_errors(s.mean, s.se, 0.5, 0.0, 4.0);
@@ -193,7 +202,13 @@ fn cox_study(study: usize, with_outcome: bool) -> (f64, bool) {
             Column::Continuous(hazard),
             Column::Continuous(time.clone()),
         ],
-        &[missing, vec![false; n], vec![false; n], vec![false; n], vec![false; n]],
+        &[
+            missing,
+            vec![false; n],
+            vec![false; n],
+            vec![false; n],
+            vec![false; n],
+        ],
     )
     .unwrap();
     let mut spec = ImputeSpec::default_for(&data);
@@ -244,7 +259,10 @@ struct CoxReference {
 
 #[test]
 fn cox_log_hazard_ratio_needs_the_outcome_in_the_imputation_model() {
-    let r: CoxReference = load_json(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/impute_cox.json"));
+    let r: CoxReference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/impute_cox.json"
+    ));
     assert!((r.beta - BETA).abs() == 0.0 && r.n == 300);
     let run = |with_outcome: bool| -> Summary {
         let results: Vec<(f64, bool)> = (0..STUDIES)
@@ -275,10 +293,18 @@ fn cox_log_hazard_ratio_needs_the_outcome_in_the_imputation_model() {
     // With the outcome the estimate is within a tenth of the truth, without it
     // is biased towards 0 by more than a fifth and more than the other.
     assert!((with.mean - BETA).abs() < 0.1 * BETA, "with: {}", with.mean);
-    assert!(BETA - without.mean > 0.2 * BETA, "without: {}", without.mean);
+    assert!(
+        BETA - without.mean > 0.2 * BETA,
+        "without: {}",
+        without.mean
+    );
     assert!(BETA - without.mean > 2.0 * (BETA - with.mean));
     // With the outcome the interval covers at about the nominal rate, without it
     // clearly less often.
     assert!(with.coverage > 0.92, "with: {}", with.coverage);
-    assert!(without.coverage < with.coverage - 0.04, "without: {}", without.coverage);
+    assert!(
+        without.coverage < with.coverage - 0.04,
+        "without: {}",
+        without.coverage
+    );
 }

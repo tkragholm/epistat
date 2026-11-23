@@ -28,7 +28,9 @@ fn generate(n: usize) {
         let (x1, x2) = (rng.normal(), rng.normal());
         let x3 = f64::from(u8::from(rng.bernoulli(0.4)));
         let inc = (3.0 + 0.3 * x1 + 0.2 * x2 + 0.5 * rng.normal()).exp();
-        let flag = f64::from(u8::from(rng.bernoulli(1.0 / (1.0 + (-(0.4 * x1 - 0.3 * x3)).exp()))));
+        let flag = f64::from(u8::from(
+            rng.bernoulli(1.0 / (1.0 + (-(0.4 * x1 - 0.3 * x3)).exp())),
+        ));
         let cat = match rng.uniform() {
             u if u < 0.4 => 0.0,
             u if u < 0.4 + 0.3 + 0.1 * x1.tanh() => 1.0,
@@ -62,7 +64,10 @@ fn main() {
     };
     let y = table.col(target);
     let missing: Vec<bool> = y.iter().map(|v| v.is_nan()).collect();
-    let filled: Vec<f64> = y.iter().map(|v| if v.is_nan() { 0.0 } else { *v }).collect();
+    let filled: Vec<f64> = y
+        .iter()
+        .map(|v| if v.is_nan() { 0.0 } else { *v })
+        .collect();
     let column = match target {
         "inc" => Column::Continuous(filled),
         "flag" => Column::Binary(filled.iter().map(|&v| v as u8).collect()),

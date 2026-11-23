@@ -41,48 +41,90 @@ fn error_of(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Im
 fn invalid_requests_are_errors() {
     let (data, spec) = small(60);
     let zero_m = ImputeOptions { m: 0, ..OPTIONS };
-    assert!(matches!(error_of(&data, &spec, &zero_m), ImputeError::Count { what: "m" }));
-    let zero_it = ImputeOptions { max_iterations: 0, ..OPTIONS };
-    assert!(matches!(error_of(&data, &spec, &zero_it), ImputeError::Count { .. }));
+    assert!(matches!(
+        error_of(&data, &spec, &zero_m),
+        ImputeError::Count { what: "m" }
+    ));
+    let zero_it = ImputeOptions {
+        max_iterations: 0,
+        ..OPTIONS
+    };
+    assert!(matches!(
+        error_of(&data, &spec, &zero_it),
+        ImputeError::Count { .. }
+    ));
 
     let mut bad = spec.clone();
     bad.methods[0] = None;
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Method { column: 0, .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Method { column: 0, .. }
+    ));
     let mut bad = spec.clone();
     bad.methods[1] = Some(Method::Norm);
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Method { column: 1, .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Method { column: 1, .. }
+    ));
     let mut bad = spec.clone();
     bad.predictors[0] = vec![0];
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Predictor { .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Predictor { .. }
+    ));
     let mut bad = spec.clone();
     bad.predictors[0] = vec![1, 1];
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Predictor { .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Predictor { .. }
+    ));
     let mut bad = spec.clone();
     bad.predictors[0] = vec![7];
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Predictor { .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Predictor { .. }
+    ));
     let mut bad = spec.clone();
     bad.visit_order = vec![];
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::VisitOrder));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::VisitOrder
+    ));
     let mut bad = spec.clone();
     bad.methods.pop();
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Length { what: "methods", .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Length {
+            what: "methods",
+            ..
+        }
+    ));
     // A continuous column cannot be imputed by logistic regression.
     let mut bad = spec.clone();
     bad.methods[0] = Some(Method::Logreg);
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Unsupported { column: 0 }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Unsupported { column: 0 }
+    ));
     let mut bad = spec;
     bad.methods[0] = Some(Method::Pmm {
         donors: 0,
         match_type: epistat_impute::MatchType::Mixed,
     });
-    assert!(matches!(error_of(&data, &bad, &OPTIONS), ImputeError::Method { .. }));
+    assert!(matches!(
+        error_of(&data, &bad, &OPTIONS),
+        ImputeError::Method { .. }
+    ));
 }
 
 #[test]
 fn invalid_data_are_errors() {
     let col = |v: Vec<f64>| Column::Continuous(v);
     assert!(matches!(
-        Incomplete::new(vec![col(vec![1.0, 2.0]), col(vec![1.0])], &[vec![false; 2], vec![false]]),
+        Incomplete::new(
+            vec![col(vec![1.0, 2.0]), col(vec![1.0])],
+            &[vec![false; 2], vec![false]]
+        ),
         Err(ImputeError::Length { .. })
     ));
     assert!(matches!(
@@ -97,14 +139,20 @@ fn invalid_data_are_errors() {
     ));
     assert!(matches!(
         Incomplete::new(
-            vec![Column::Nominal { codes: vec![0, 3], levels: 3 }],
+            vec![Column::Nominal {
+                codes: vec![0, 3],
+                levels: 3
+            }],
             &[vec![false; 2]]
         ),
         Err(ImputeError::Value { .. })
     ));
     assert!(matches!(
         Incomplete::new(
-            vec![Column::Nominal { codes: vec![0, 0], levels: 1 }],
+            vec![Column::Nominal {
+                codes: vec![0, 0],
+                levels: 1
+            }],
             &[vec![false; 2]]
         ),
         Err(ImputeError::Levels { .. })
@@ -116,7 +164,10 @@ fn invalid_data_are_errors() {
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
-    assert!(matches!(error_of(&data, &spec, &OPTIONS), ImputeError::NothingObserved { column: 0 }));
+    assert!(matches!(
+        error_of(&data, &spec, &OPTIONS),
+        ImputeError::NothingObserved { column: 0 }
+    ));
     // Too few observed rows for the model: two observed rows, two parameters.
     let data = Incomplete::new(
         vec![col(vec![1.0, 2.0, 0.0, 0.0]), col(vec![1.0, 2.0, 3.0, 4.0])],
@@ -124,36 +175,63 @@ fn invalid_data_are_errors() {
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
-    assert!(matches!(error_of(&data, &spec, &OPTIONS), ImputeError::TooFewObserved { .. }));
+    assert!(matches!(
+        error_of(&data, &spec, &OPTIONS),
+        ImputeError::TooFewObserved { .. }
+    ));
     // A nominal level that never occurs among the observed values.
     let data = Incomplete::new(
         vec![
-            Column::Nominal { codes: vec![0, 1, 0, 1, 0, 0], levels: 3 },
+            Column::Nominal {
+                codes: vec![0, 1, 0, 1, 0, 0],
+                levels: 3,
+            },
             col(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ],
-        &[vec![false, false, false, false, false, true], vec![false; 6]],
+        &[
+            vec![false, false, false, false, false, true],
+            vec![false; 6],
+        ],
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
-    assert!(matches!(error_of(&data, &spec, &OPTIONS), ImputeError::EmptyLevel { column: 0, level: 2 }));
+    assert!(matches!(
+        error_of(&data, &spec, &OPTIONS),
+        ImputeError::EmptyLevel {
+            column: 0,
+            level: 2
+        }
+    ));
     // An incomplete ordered column cannot be imputed.
     let data = Incomplete::new(
         vec![
-            Column::Ordered { codes: vec![0, 1, 0, 1, 0, 1], levels: 2 },
+            Column::Ordered {
+                codes: vec![0, 1, 0, 1, 0, 1],
+                levels: 2,
+            },
             col(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ],
-        &[vec![false, false, false, false, false, true], vec![false; 6]],
+        &[
+            vec![false, false, false, false, false, true],
+            vec![false; 6],
+        ],
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
-    assert!(matches!(error_of(&data, &spec, &OPTIONS), ImputeError::Method { column: 0, .. }));
+    assert!(matches!(
+        error_of(&data, &spec, &OPTIONS),
+        ImputeError::Method { column: 0, .. }
+    ));
 }
 
 #[test]
 fn a_passive_function_of_the_wrong_length_is_an_error() {
     let (data, mut spec) = small(60);
     spec.methods[0] = Some(Method::Passive(PassiveFn::new(|_| vec![1.0])));
-    assert!(matches!(error_of(&data, &spec, &OPTIONS), ImputeError::Passive { column: 0 }));
+    assert!(matches!(
+        error_of(&data, &spec, &OPTIONS),
+        ImputeError::Passive { column: 0 }
+    ));
 }
 
 #[test]
@@ -173,11 +251,23 @@ fn imputed_values_are_valid_for_their_column() {
     let n = 400;
     let mut rng = SplitMix64::new(3);
     let a: Vec<f64> = (0..n).map(|_| normal(&mut rng)).collect();
-    let income: Vec<f64> = a.iter().map(|v| (0.4 * v + 0.5 * normal(&mut rng)).exp()).collect();
-    let flag: Vec<u8> = a.iter().map(|v| u8::from(*v + 0.5 * normal(&mut rng) > 0.0)).collect();
+    let income: Vec<f64> = a
+        .iter()
+        .map(|v| (0.4 * v + 0.5 * normal(&mut rng)).exp())
+        .collect();
+    let flag: Vec<u8> = a
+        .iter()
+        .map(|v| u8::from(*v + 0.5 * normal(&mut rng) > 0.0))
+        .collect();
     let level: Vec<u32> = a
         .iter()
-        .map(|v| if *v + 0.7 * normal(&mut rng) > 0.5 { 2 } else { u32::from(rng.unit() < 0.5) })
+        .map(|v| {
+            if *v + 0.7 * normal(&mut rng) > 0.5 {
+                2
+            } else {
+                u32::from(rng.unit() < 0.5)
+            }
+        })
         .collect();
     let sampled: Vec<f64> = (0..n).map(|i| (i % 7) as f64).collect();
     let miss = |rng: &mut SplitMix64| (0..n).map(|_| rng.unit() < 0.3).collect::<Vec<bool>>();
@@ -193,7 +283,10 @@ fn imputed_values_are_valid_for_their_column() {
             Column::Continuous(a),
             Column::Continuous(income.clone()),
             Column::Binary(flag),
-            Column::Nominal { codes: level, levels: 3 },
+            Column::Nominal {
+                codes: level,
+                levels: 3,
+            },
             Column::Continuous(sampled.clone()),
         ],
         &masks,
@@ -202,9 +295,21 @@ fn imputed_values_are_valid_for_their_column() {
     let mut spec = ImputeSpec::default_for(&data);
     spec.methods[4] = Some(Method::Sample);
     spec.predictors[4] = vec![];
-    let imputed = impute(&data, &spec, &ImputeOptions { m: 5, max_iterations: 4, seed: 9 }).unwrap();
+    let imputed = impute(
+        &data,
+        &spec,
+        &ImputeOptions {
+            m: 5,
+            max_iterations: 4,
+            seed: 9,
+        },
+    )
+    .unwrap();
 
-    let observed_income: Vec<f64> = (0..n).filter(|&i| !masks[1][i]).map(|i| income[i]).collect();
+    let observed_income: Vec<f64> = (0..n)
+        .filter(|&i| !masks[1][i])
+        .map(|i| income[i])
+        .collect();
     for set in &imputed.values[1] {
         assert_eq!(set.len(), masks[1].iter().filter(|&&m| m).count());
         // Predictive mean matching only returns observed values.
@@ -265,7 +370,16 @@ fn passive_columns_follow_the_columns_they_are_computed_from() {
     // The incomplete columns use each other but not the passive column.
     spec.predictors[0] = vec![1, 3];
     spec.predictors[1] = vec![0, 3];
-    let imputed = impute(&data, &spec, &ImputeOptions { m: 3, max_iterations: 3, seed: 8 }).unwrap();
+    let imputed = impute(
+        &data,
+        &spec,
+        &ImputeOptions {
+            m: 3,
+            max_iterations: 3,
+            seed: 8,
+        },
+    )
+    .unwrap();
     for s in 0..3 {
         let c = imputed.completed(&data, s).unwrap();
         for i in 0..n {
@@ -283,13 +397,20 @@ fn a_collinear_predictor_is_dropped_and_counted() {
     let y: Vec<f64> = a.iter().map(|v| v + normal(&mut rng)).collect();
     let miss: Vec<bool> = (0..n).map(|_| rng.unit() < 0.3).collect();
     let data = Incomplete::new(
-        vec![Column::Continuous(y), Column::Continuous(a), Column::Continuous(copy)],
+        vec![
+            Column::Continuous(y),
+            Column::Continuous(a),
+            Column::Continuous(copy),
+        ],
         &[miss, vec![false; n], vec![false; n]],
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
     let imputed = impute(&data, &spec, &OPTIONS).unwrap();
-    assert_eq!(imputed.n_aliased_dropped, OPTIONS.m * OPTIONS.max_iterations);
+    assert_eq!(
+        imputed.n_aliased_dropped,
+        OPTIONS.m * OPTIONS.max_iterations
+    );
     assert!(imputed.values[0].iter().flatten().all(|v| v.is_finite()));
 }
 
@@ -307,7 +428,16 @@ fn perfect_prediction_is_handled_by_augmentation() {
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
-    let imputed = impute(&data, &spec, &ImputeOptions { m: 20, max_iterations: 3, seed: 1 }).unwrap();
+    let imputed = impute(
+        &data,
+        &spec,
+        &ImputeOptions {
+            m: 20,
+            max_iterations: 3,
+            seed: 1,
+        },
+    )
+    .unwrap();
     assert_eq!(imputed.n_augmented, 20 * 3);
     // The imputed value follows the sign of x for almost every cell.
     let rows = &imputed.missing_rows[0];
@@ -342,7 +472,11 @@ fn chains_started_at_the_observed_distribution_stay_there() {
     let miss = |rng: &mut SplitMix64| (0..n).map(|_| rng.unit() < 0.4).collect::<Vec<bool>>();
     let masks = vec![miss(&mut rng), miss(&mut rng), vec![false; n]];
     let data = Incomplete::new(
-        vec![Column::Continuous(x1), Column::Continuous(x2), Column::Continuous(x3)],
+        vec![
+            Column::Continuous(x1),
+            Column::Continuous(x2),
+            Column::Continuous(x3),
+        ],
         &masks,
     )
     .unwrap();
@@ -350,7 +484,16 @@ fn chains_started_at_the_observed_distribution_stay_there() {
     spec.methods[0] = Some(Method::Norm);
     spec.methods[1] = Some(Method::Norm);
     let (m, maxit) = (200, 8);
-    let imputed = impute(&data, &spec, &ImputeOptions { m, max_iterations: maxit, seed: 21 }).unwrap();
+    let imputed = impute(
+        &data,
+        &spec,
+        &ImputeOptions {
+            m,
+            max_iterations: maxit,
+            seed: 21,
+        },
+    )
+    .unwrap();
     for j in 0..2 {
         // The mean over data sets of the imputed variance, by iteration.
         let at = |t: usize| -> (f64, f64) {

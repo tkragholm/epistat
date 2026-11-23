@@ -42,7 +42,10 @@ impl Mask {
     /// The number of rows that are set.
     #[must_use]
     pub fn count(&self) -> usize {
-        self.bits.iter().map(|word| word.count_ones() as usize).sum()
+        self.bits
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
     }
 
     /// The rows that are set, in increasing order.
@@ -173,15 +176,15 @@ impl Incomplete {
                     }
                 };
                 if !ok {
-                    return Err(ImputeError::Value {
-                        column: j,
-                        row,
-                    });
+                    return Err(ImputeError::Value { column: j, row });
                 }
             }
         }
         Ok(Self {
-            missing: missing.iter().map(|flags| Mask::from_flags(flags)).collect(),
+            missing: missing
+                .iter()
+                .map(|flags| Mask::from_flags(flags))
+                .collect(),
             columns,
             rows,
         })

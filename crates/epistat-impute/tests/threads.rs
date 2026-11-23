@@ -49,7 +49,10 @@ fn problem(n: usize) -> (Incomplete, ImputeSpec) {
             Column::Binary(b),
             Column::Continuous(c),
             Column::Continuous(d),
-            Column::Nominal { codes: e, levels: 3 },
+            Column::Nominal {
+                codes: e,
+                levels: 3,
+            },
             Column::Binary(f),
             Column::Continuous(g),
         ],
@@ -75,7 +78,11 @@ fn flatten(imputed: &Imputed) -> Vec<f64> {
             out.extend_from_slice(set);
         }
         out.extend_from_slice(&imputed.chain_mean[j]);
-        out.extend(imputed.chain_variance[j].iter().map(|v| v.unwrap_or(f64::NAN)));
+        out.extend(
+            imputed.chain_variance[j]
+                .iter()
+                .map(|v| v.unwrap_or(f64::NAN)),
+        );
     }
     out.push(imputed.n_aliased_dropped as f64);
     out.push(imputed.n_augmented as f64);

@@ -15,7 +15,7 @@
 //! of the hazard, a few units in the last place: 1e-13 relative.
 
 use epistat_impute::parts::{
-    SortedDonors, augmentation, linear_fit, draw_coefficients, draw_linear, logistic_fit,
+    SortedDonors, augmentation, draw_coefficients, draw_linear, linear_fit, logistic_fit,
     multinomial_fit,
 };
 use epistat_impute::{Ties, nelson_aalen};
@@ -118,7 +118,10 @@ struct Reference {
 }
 
 fn reference() -> Reference {
-    let r: Reference = load_json(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/impute_parts.json"));
+    let r: Reference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/impute_parts.json"
+    ));
     assert!(r.versions.r.starts_with("R version"), "{}", r.versions.r);
     assert_eq!(r.versions.mice, "3.19.0");
     assert_eq!(r.versions.nnet, "7.3.21");
@@ -141,7 +144,11 @@ fn norm_draw_matches_mice() {
     let r = reference().norm;
     let cols = columns(&r.x);
     let n = r.y.len();
-    let x = Mat::from_fn(n, cols.len() + 1, |i, k| if k == 0 { 1.0 } else { cols[k - 1][i] });
+    let x = Mat::from_fn(
+        n,
+        cols.len() + 1,
+        |i, k| if k == 0 { 1.0 } else { cols[k - 1][i] },
+    );
     let fit = linear_fit(x.as_ref(), &r.y, 0).unwrap();
     let tol = Tolerance::exact().rel(1e-10).abs(1e-12);
     assert_close(&fit.coefficients, &r.coef, tol);
@@ -200,7 +207,15 @@ fn logistic_draw_matches_mice() {
     let tol = Tolerance::exact().rel(1e-8).abs(1e-10);
     assert_close(&fit.coefficients, &r.coef, tol);
     assert_close(&fit.covariance, &flatten(&r.v), tol);
-    let beta = draw_coefficients(&fit.coefficients, &fit.active, &fit.covariance, &r.z, 1.0, 0).unwrap();
+    let beta = draw_coefficients(
+        &fit.coefficients,
+        &fit.active,
+        &fit.covariance,
+        &r.z,
+        1.0,
+        0,
+    )
+    .unwrap();
     assert_close(&beta, &r.beta, tol);
 }
 
@@ -229,7 +244,11 @@ fn multinomial_fit_matches_nnet() {
     let fit = multinomial_fit(x.as_ref(), &y, r.classes, &w).unwrap();
     let tol = Tolerance::exact().rel(1e-6).abs(1e-6);
     assert_close(&fit.coefficients, &flatten(&r.coef), tol);
-    assert_close(&fit.covariance, &flatten(&r.vcov), Tolerance::exact().rel(1e-5).abs(1e-6));
+    assert_close(
+        &fit.covariance,
+        &flatten(&r.vcov),
+        Tolerance::exact().rel(1e-5).abs(1e-6),
+    );
     assert!(fit.active.iter().all(|&a| a));
 }
 
@@ -244,8 +263,14 @@ fn matching_sets_match_mice() {
             got.sort_unstable();
             assert_eq!(&got, expected, "donors {} target {target}", case.donors);
             // A uniform near 0 and near 1 pick the first and last eligible donor.
-            assert_eq!(donors.pick(*target, case.donors, 0.0), donors.donor_at(range.start));
-            assert_eq!(donors.pick(*target, case.donors, 1.0 - 1e-16), donors.donor_at(range.end - 1));
+            assert_eq!(
+                donors.pick(*target, case.donors, 0.0),
+                donors.donor_at(range.start)
+            );
+            assert_eq!(
+                donors.pick(*target, case.donors, 1.0 - 1e-16),
+                donors.donor_at(range.end - 1)
+            );
         }
     }
 }

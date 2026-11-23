@@ -56,14 +56,10 @@ pub enum Ties {
 /// a time that is negative or not finite, and a status other than 0 and 1.
 pub fn nelson_aalen(time: &[f64], status: &[i32], ties: Ties) -> Result<Vec<f64>> {
     if time.len() != status.len() {
-        return Err(ImputeError::Survival(
-            "time and status differ in length",
-        ));
+        return Err(ImputeError::Survival("time and status differ in length"));
     }
     if time.iter().any(|t| !(t.is_finite() && *t >= 0.0)) {
-        return Err(ImputeError::Survival(
-            "a time is negative or not finite",
-        ));
+        return Err(ImputeError::Survival("a time is negative or not finite"));
     }
     if status.iter().any(|&s| s != 0 && s != 1) {
         return Err(ImputeError::Survival("a status is not 0 or 1"));

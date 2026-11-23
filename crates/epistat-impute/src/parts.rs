@@ -168,7 +168,14 @@ pub fn draw_linear(
     let beta = if sigma == 0.0 {
         fit.coefficients.clone()
     } else {
-        draw_coefficients(&fit.coefficients, &fit.active, &fit.covariance, z, sigma, column)?
+        draw_coefficients(
+            &fit.coefficients,
+            &fit.active,
+            &fit.covariance,
+            z,
+            sigma,
+            column,
+        )?
     };
     Ok(ParameterDraw { beta, sigma })
 }
@@ -198,8 +205,8 @@ pub fn draw_coefficients(
             found: z.len(),
         });
     }
-    let lower = cholesky_lower(covariance, k, Pivot::Strict)
-        .ok_or(ImputeError::Covariance { column })?;
+    let lower =
+        cholesky_lower(covariance, k, Pivot::Strict).ok_or(ImputeError::Covariance { column })?;
     let mut out = vec![0.0; coefficients.len()];
     let mut a = 0;
     for (j, slot) in out.iter_mut().enumerate() {
@@ -265,7 +272,8 @@ impl SortedDonors {
         let mut cut = 0.0;
         for _ in 0..k {
             let take_left = left > 0
-                && (right >= len || distance(self.values[left - 1]) <= distance(self.values[right]));
+                && (right >= len
+                    || distance(self.values[left - 1]) <= distance(self.values[right]));
             if take_left {
                 left -= 1;
                 cut = distance(self.values[left]);
@@ -491,11 +499,7 @@ impl MultinomialFit {
             });
         }
         let compact: Vec<f64> = (0..self.classes - 1)
-            .flat_map(|class| {
-                (0..p)
-                    .filter(|&j| self.active[j])
-                    .map(move |j| (class, j))
-            })
+            .flat_map(|class| (0..p).filter(|&j| self.active[j]).map(move |j| (class, j)))
             .map(|(class, j)| self.coefficients[class * p + j])
             .collect();
         let all_active = vec![true; q];
