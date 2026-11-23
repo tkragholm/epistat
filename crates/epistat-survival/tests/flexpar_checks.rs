@@ -50,7 +50,7 @@ fn simulate(n: usize, seed: u64) -> Sim {
     }
 }
 
-fn data<'a>(s: &'a Sim, entry: bool) -> SurvData<'a> {
+fn data(s: &Sim, entry: bool) -> SurvData<'_> {
     let mut b = SurvData::builder(&s.time, &s.status);
     if entry {
         b = b.start(&s.start);
@@ -218,7 +218,7 @@ fn integer_weights_are_repeated_rows_and_zero_weights_are_absent_rows() {
     // the same data written out
     let (mut time, mut status, mut rows) = (Vec::new(), Vec::new(), Vec::new());
     for i in 0..120 {
-        for _ in 0..(weights[i] as usize) {
+        for _ in 0..usize::from([0_u8, 1, 2, 3][i % 4]) {
             time.push(s.time[i]);
             status.push(s.status[i]);
             rows.push(i);
