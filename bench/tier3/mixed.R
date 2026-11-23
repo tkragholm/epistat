@@ -1,7 +1,7 @@
 # The R side of the mixed model benchmark: lme4::lmer and lme4::glmer at their
 # default controls on the data files written by
 # crates/epistat-mixed/benches/tier3_mixed.rs, one process per method and size,
-# writing the numbers the Rust side writes. See mixed_run.sh.
+# writing the numbers the Rust side writes. See bench/run.sh.
 #
 # Usage: Rscript mixed.R N METHOD SCRATCH
 # Environment: OUT (results, default SCRATCH/out) and REPS (default 3).

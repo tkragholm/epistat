@@ -1,7 +1,7 @@
 //! Wall time of the self-controlled case series, the case-crossover windows
 //! with their exposure, and the attributable fraction function of a Cox model.
 //! The driver and the environment are those of `bench/tier1/common.rs`, run by
-//! `bench/tier2/run.sh`; the data are generated in the process from a fixed
+//! `bench/run.sh`; the data are generated in the process from a fixed
 //! seed and are not timed.
 //!
 //! Methods:

@@ -1,6 +1,6 @@
 # The R side of the tier 1 benchmarks: one process runs one method on one size
 # and writes the numbers the Rust side writes, so that compare.R can check that
-# both solved the same problem. See run.sh for the driver and common.rs for the
+# both solved the same problem. See bench/run.sh for the driver and common.rs for the
 # Rust side and the data files.
 #
 # Usage: Rscript bench.R N METHOD SCRATCH

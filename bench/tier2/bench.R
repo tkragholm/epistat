@@ -1,6 +1,6 @@
 # The R side of the tier 2 benchmarks: one process runs one method on one size
 # and writes the numbers the Rust side writes, so that ../tier1/compare.R can
-# check that both solved the same problem. See run.sh for the driver. The data
+# check that both solved the same problem. See bench/run.sh for the driver. The data
 # files come from the Rust programs (crates/epistat-register/benches/
 # tier2_register.rs).
 #
