@@ -23,6 +23,15 @@
 //!   or `"all")`, with truncation. Its fit goes into [`Estimated`] as a
 //!   [`Censoring::Pooled`], since the variance treats it as any other pooled
 //!   model of weights.
+//! - [`clone`] clones persons under treatment strategies with grace periods,
+//!   censors the clones at their first deviation, weights the artificial censoring
+//!   by pooled logistic models of the deviation and resamples persons for the
+//!   bootstrap, the clone-censor-weight analysis of target trial emulation.
+//! - [`trials`] gives the weights of treatment switches and of censoring of
+//!   sequential trial emulation, the weight of each row of the stacked trials, the
+//!   weighted logistic outcome model with its person-clustered covariance and the
+//!   cumulative incidence it implies, as `TrialEmulation::initiators(estimand_type =
+//!   "PP")`.
 //! - [`estimated`] names the estimated weights of an outcome model, of treatment,
 //!   of censoring or both, and [`cox::fit_estimated`] and
 //!   [`km::estimate_estimated`] give the variance that accounts for every model
@@ -141,6 +150,7 @@
 
 mod adjust;
 mod censoring;
+pub mod clone;
 pub mod cox;
 pub mod estimated;
 pub mod ipcw;
@@ -149,6 +159,7 @@ pub mod km;
 pub mod pooled;
 mod stack;
 mod summary;
+pub mod trials;
 
 pub use adjust::WeightAt;
 pub use estimated::{Censoring, Estimated};
