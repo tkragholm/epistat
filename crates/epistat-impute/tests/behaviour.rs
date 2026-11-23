@@ -1,6 +1,11 @@
 //! Input checks, the counted repairs, passive and sampled columns, the
 //! stationarity of the chains and the hand-off to pooling.
 
+#![allow(
+    clippy::float_cmp,
+    reason = "exact comparisons of imputed values with their sources are intended"
+)]
+
 use epistat_impute::{
     Column, ImputeError, ImputeOptions, ImputeSpec, Incomplete, Method, PassiveFn, Ties, impute,
     nelson_aalen,
@@ -243,7 +248,7 @@ fn survival_inputs_are_checked() {
     // Three people, events at 1 and 3, censoring at 2.
     let h = nelson_aalen(&[1.0, 2.0, 3.0], &[1, 0, 1], Ties::Breslow).unwrap();
     assert_eq!(h, vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0 + 1.0]);
-    assert!(nelson_aalen(&[], &[], Ties::Efron).unwrap().is_empty());
+    assert_eq!(nelson_aalen(&[], &[], Ties::Efron).unwrap().len(), 0);
 }
 
 #[test]
@@ -325,14 +330,16 @@ fn imputed_values_are_valid_for_their_column() {
     for set in &imputed.values[4] {
         assert!(set.iter().all(|v| sampled.contains(v)));
     }
-    assert!(imputed.values[0].iter().all(Vec::is_empty));
+    for set in &imputed.values[0] {
+        assert_eq!(set.len(), 0);
+    }
     assert!(imputed.n_augmented > 0);
     // chain statistics: one entry per set and iteration for each incomplete column.
     for j in 1..5 {
         assert_eq!(imputed.chain_mean[j].len(), 5 * 4);
         assert_eq!(imputed.chain_variance[j].len(), 5 * 4);
     }
-    assert!(imputed.chain_mean[0].is_empty());
+    assert_eq!(imputed.chain_mean[0].len(), 0);
     // Completed data hold the observed values where they exist.
     let done = imputed.completed(&data, 2).unwrap();
     for i in (0..n).filter(|&i| !masks[1][i]) {
@@ -382,8 +389,8 @@ fn passive_columns_follow_the_columns_they_are_computed_from() {
     .unwrap();
     for s in 0..3 {
         let c = imputed.completed(&data, s).unwrap();
-        for i in 0..n {
-            assert_eq!(c[2][i], c[0][i] * c[1][i], "set {s} row {i}");
+        for (i, ((p, a), b)) in c[2].iter().zip(&c[0]).zip(&c[1]).enumerate() {
+            assert_eq!(*p, a * b, "set {s} row {i}");
         }
     }
 }

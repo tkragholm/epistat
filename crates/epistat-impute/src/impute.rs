@@ -155,11 +155,11 @@ fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Re
     if visited != incomplete {
         return Err(ImputeError::VisitOrder);
     }
-    for j in 0..n {
+    for (j, method) in spec.methods.iter().enumerate() {
         let missing = data.missing(j).count();
         let column = &data.columns()[j];
-        match (&spec.methods[j], missing) {
-            (None, 0) => continue,
+        match (method, missing) {
+            (None, 0) => {}
             (Some(_), 0) => {
                 return Err(ImputeError::Method {
                     column: j,
@@ -188,20 +188,18 @@ fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Re
                 if !fits {
                     return Err(ImputeError::Unsupported { column: j });
                 }
-                if let Method::Pmm { donors, .. } = method {
-                    if *donors == 0 {
-                        return Err(ImputeError::Method {
-                            column: j,
-                            reason: "predictive mean matching needs at least one donor",
-                        });
-                    }
+                if matches!(method, Method::Pmm { donors: 0, .. }) {
+                    return Err(ImputeError::Method {
+                        column: j,
+                        reason: "predictive mean matching needs at least one donor",
+                    });
                 }
             }
         }
     }
-    for j in 0..n {
+    for (j, predictors) in spec.predictors.iter().enumerate() {
         let mut seen = vec![false; n];
-        for &k in &spec.predictors[j] {
+        for &k in predictors {
             if k >= n || k == j || seen[k] {
                 return Err(ImputeError::Predictor {
                     column: j,
@@ -233,6 +231,16 @@ fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Re
     Ok(())
 }
 
+/// The level of a categorical code stored as a number.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a code is a small non-negative whole number"
+)]
+const fn code(value: f64) -> usize {
+    value as usize
+}
+
 /// The seed of one column in one iteration of one chain.
 fn column_seed(seed: u64, chain: usize, iteration: usize, column: usize) -> u64 {
     let mut s = splitmix64(seed);
@@ -262,20 +270,19 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
         })
         .collect();
     // Starting values: a random observed value for each missing cell.
-    for j in 0..n_columns {
+    for (j, column) in completed.iter_mut().enumerate() {
         let (obs, mis) = (&ctx.observed[j], &ctx.missing[j]);
         if mis.is_empty() {
             continue;
         }
         let seed = column_seed(options.seed, chain, 0, j);
-        let source = &completed[j];
         let draws: Vec<f64> = mis
             .par_iter()
             .with_min_len(4096)
-            .map(|&r| source[obs[row_stream(seed, r).below(obs.len())]])
+            .map(|&r| column[obs[row_stream(seed, r).below(obs.len())]])
             .collect();
         for (&r, v) in mis.iter().zip(draws) {
-            completed[j][r] = v;
+            column[r] = v;
         }
     }
     let mut out = ChainOutput {
@@ -297,8 +304,8 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
             out.variance[j].push(variance);
         }
     }
-    for j in 0..n_columns {
-        out.values[j] = ctx.missing[j].iter().map(|&r| completed[j][r]).collect();
+    for (j, column) in completed.iter().enumerate() {
+        out.values[j] = ctx.missing[j].iter().map(|&r| column[r]).collect();
     }
     Ok(out)
 }
@@ -329,7 +336,7 @@ fn predictor_columns(
                     out.push(
                         completed[k]
                             .iter()
-                            .map(|&v| f64::from(u8::from(v == target)))
+                            .map(|&v| f64::from(u8::from((v - target).abs() < 0.5)))
                             .collect(),
                     );
                 }
@@ -371,7 +378,7 @@ fn impute_column(
             .map(|&r| y_obs[row_stream(seed, r).below(y_obs.len())])
             .collect()),
         Method::Passive(f) => {
-            let column = (f.0)(completed);
+            let column = f.call(completed);
             if column.len() != data.rows() || mis.iter().any(|&r| !column[r].is_finite()) {
                 return Err(ImputeError::Passive { column: j });
             }
@@ -445,7 +452,7 @@ fn impute_column(
             let outcomes: Vec<f64> = (0..*levels).map(|l| l as f64).collect();
             let (x_aug, y_aug, w_aug, used) = augmented_problem(&cols, obs, &y_obs, &outcomes);
             out.augmented += usize::from(used);
-            let y_class: Vec<usize> = y_aug.iter().map(|&v| v as usize).collect();
+            let y_class: Vec<usize> = y_aug.iter().map(|&v| code(v)).collect();
             let fit = multinomial_fit(x_aug.as_ref(), &y_class, *levels, &w_aug)?;
             out.aliased += usize::from(fit.active.iter().any(|&a| !a));
             let coefficients = if *proper {

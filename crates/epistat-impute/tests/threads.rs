@@ -28,7 +28,7 @@ fn problem(n: usize) -> (Incomplete, ImputeSpec) {
         b[i] = u8::from(rng.unit() < 0.5);
         c[i] = (0.3 * a[i] + 0.5 * normal(&mut rng)).exp();
         d[i] = 1.0 + 0.5 * a[i] - 0.3 * f64::from(b[i]) + normal(&mut rng);
-        e[i] = (rng.below(3)) as u32;
+        e[i] = u32::try_from(rng.below(3)).unwrap();
         f[i] = u8::from(rng.unit() < 1.0 / (1.0 + (-(0.4 * a[i] - 0.2)).exp()));
         g[i] = a[i] * 2.0;
     }

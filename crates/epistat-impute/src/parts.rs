@@ -308,9 +308,19 @@ impl SortedDonors {
     pub fn pick(&self, target: f64, donors: usize, u: f64) -> usize {
         let range = self.eligible(target, donors);
         let count = range.len();
-        let offset = ((u * count as f64) as usize).min(count - 1);
+        let offset = position_from_uniform(u, count);
         self.order[range.start + offset]
     }
+}
+
+/// The position `floor(u * count)` among `count` items, for `u` in `[0, 1)`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "u is not negative and the result is clamped below count"
+)]
+fn position_from_uniform(u: f64, count: usize) -> usize {
+    ((u * count as f64) as usize).min(count - 1)
 }
 
 /// The rows `mice:::augment` adds to the predictors of a logistic or
@@ -357,12 +367,15 @@ pub fn augmentation(x: &[Vec<f64>], outcomes: &[f64]) -> Option<Augmentation> {
     // (0.5, -0.5) repeated k times followed by nr zeros, recycled.
     let cycle = 2 * k + nr;
     let mut values = Vec::with_capacity(nr * p);
-    for j in 0..p {
-        let (mean, sd, min, max) = stats[j];
+    for (j, &(mean, sd, min, max)) in stats.iter().enumerate() {
         for i in 0..nr {
             let position = (j * nr + i) % cycle;
             let b = if position < 2 * k {
-                if position % 2 == 0 { 0.5 } else { -0.5 }
+                if position.is_multiple_of(2) {
+                    0.5
+                } else {
+                    -0.5
+                }
             } else {
                 0.0
             };

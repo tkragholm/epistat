@@ -75,7 +75,7 @@ pub fn nelson_aalen(time: &[f64], status: &[i32], ties: Ties) -> Result<Vec<f64>
         let t = time[order[start]];
         let mut end = start;
         let mut events = 0_usize;
-        while end < n && time[order[end]] == t {
+        while end < n && time[order[end]].total_cmp(&t).is_eq() {
             events += usize::from(status[order[end]] == 1);
             end += 1;
         }

@@ -1,7 +1,13 @@
 //! Shared by the distribution and coverage tests: statistics of imputed values
 //! per data set and comparisons within Monte Carlo error.
 
-#![allow(dead_code, reason = "each test program uses part of this module")]
+#![allow(
+    dead_code,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    reason = "each test program uses part of this module; indices are small whole numbers"
+)]
 
 use epistat_glm::{Family, Glm, Link};
 use epistat_impute::Imputed;

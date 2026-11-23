@@ -13,6 +13,13 @@
 //! cells (the share of each level for `cat`), which agree between the two
 //! implementations only in distribution.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    reason = "test code: codes and counts are small whole numbers, and exact comparisons are intended"
+)]
+
 #[path = "../../../bench/tier1/common.rs"]
 mod common;
 

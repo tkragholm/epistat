@@ -14,6 +14,13 @@
 //! Matching sets and the Nelson-Aalen hazard are exact up to the sum order
 //! of the hazard, a few units in the last place: 1e-13 relative.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    reason = "test code: codes and counts are small whole numbers, and exact comparisons are intended"
+)]
+
 use epistat_impute::parts::{
     SortedDonors, augmentation, draw_coefficients, draw_linear, linear_fit, logistic_fit,
     multinomial_fit,
@@ -125,7 +132,7 @@ fn reference() -> Reference {
     assert!(r.versions.r.starts_with("R version"), "{}", r.versions.r);
     assert_eq!(r.versions.mice, "3.19.0");
     assert_eq!(r.versions.nnet, "7.3.21");
-    assert!(!r.versions.survival.is_empty());
+    assert_ne!(r.versions.survival, "");
     r
 }
 
@@ -154,7 +161,7 @@ fn norm_draw_matches_mice() {
     assert_close(&fit.coefficients, &r.coef, tol);
     assert_close(&fit.covariance, &flatten(&r.v), tol);
     assert_close(&[fit.rss], &[r.rss], tol);
-    assert!((fit.df - r.df).abs() == 0.0);
+    assert_close(&[fit.df], &[r.df], Tolerance::exact());
     let draw = draw_linear(&fit, r.chi, &r.z, 0).unwrap();
     assert_close(&[draw.sigma], &[r.sigma], tol);
     assert_close(&draw.beta, &r.beta, tol);

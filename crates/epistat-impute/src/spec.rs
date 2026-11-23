@@ -9,12 +9,20 @@ use crate::data::{Column, Incomplete};
 /// all missing cells filled in, and returns a column with one value per row.
 /// Only the values at the column's missing cells are used.
 #[derive(Clone)]
-pub struct PassiveFn(pub Arc<dyn Fn(&[Vec<f64>]) -> Vec<f64> + Send + Sync>);
+pub struct PassiveFn(Arc<PassiveBody>);
+
+type PassiveBody = dyn Fn(&[Vec<f64>]) -> Vec<f64> + Send + Sync;
 
 impl PassiveFn {
     /// Wraps `f`.
     pub fn new(f: impl Fn(&[Vec<f64>]) -> Vec<f64> + Send + Sync + 'static) -> Self {
         Self(Arc::new(f))
+    }
+
+    /// The column for the completed data `columns`.
+    #[must_use]
+    pub fn call(&self, columns: &[Vec<f64>]) -> Vec<f64> {
+        (self.0)(columns)
     }
 }
 

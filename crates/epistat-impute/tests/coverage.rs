@@ -21,6 +21,13 @@
 //! 0.02 low, and the test records that rather than demanding exact
 //! unbiasedness.
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    reason = "test code: codes and counts are small whole numbers, and exact comparisons are intended"
+)]
+
 use epistat_impute::{
     Column, ImputeOptions, ImputeSpec, Incomplete, Method, Ties, impute, nelson_aalen,
 };
