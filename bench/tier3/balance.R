@@ -3,7 +3,7 @@
 # ../tier1/compare.R can check that both solved the same problem. The data file
 # comes from the Rust program (crates/epistat-causal/benches/tier3_balance.rs).
 #
-# Usage: Rscript bench.R N METHOD SCRATCH
+# Usage: Rscript balance.R N METHOD SCRATCH
 # Environment: OUT (results, default SCRATCH/out) and REPS (timed repetitions,
 # default 3).
 suppressMessages({library(data.table); library(WeightIt); library(CBPS)})

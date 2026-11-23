@@ -1,5 +1,5 @@
 //! Wall time of entropy balancing and CBPS, set against `WeightIt` and `CBPS`
-//! on the same data (`bench/tier3/bench.R`). The driver and the environment are
+//! on the same data (`bench/tier3/balance.R`). The driver and the environment are
 //! described in `bench/tier1/common.rs`.
 //!
 //! The data (`bal`) have four covariates (two continuous, one binary, one
