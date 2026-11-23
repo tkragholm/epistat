@@ -89,6 +89,7 @@
 )]
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::{RegisterError, relations::connected_components};
 
@@ -472,33 +473,7 @@ impl Pedigree {
                 "{n} persons is more than a pedigree takes"
             )));
         }
-        let mut node_of: HashMap<u64, u32> = HashMap::with_capacity(n * 2);
-        let mut ids = person_id.to_vec();
-        for (row, &id) in person_id.iter().enumerate() {
-            if node_of.insert(id, row as u32).is_some() {
-                return Err(RegisterError::input(format!("person {id} occurs twice")));
-            }
-        }
-        let mut code = |id: u64, ids: &mut Vec<u64>| -> u32 {
-            *node_of.entry(id).or_insert_with(|| {
-                ids.push(id);
-                (ids.len() - 1) as u32
-            })
-        };
-        let mut mother = vec![None; n];
-        let mut father = vec![None; n];
-        for row in 0..n {
-            if let (Some(m), Some(f)) = (mother_id[row], father_id[row])
-                && m == f
-            {
-                return Err(RegisterError::input(format!(
-                    "person {} has the same mother and father, {m}",
-                    person_id[row]
-                )));
-            }
-            mother[row] = mother_id[row].map(|id| code(id, &mut ids));
-            father[row] = father_id[row].map(|id| code(id, &mut ids));
-        }
+        let (ids, mut mother, mut father) = code_nodes(person_id, mother_id, father_id)?;
         mother.resize(ids.len(), None);
         father.resize(ids.len(), None);
         let mut pedigree = Self {
@@ -646,13 +621,18 @@ impl Pedigree {
         // a column holds at most one distinct parent per person, so each
         // column is renumbered from 0 and stays below the number of rows.
         let dense = |parent: &[Option<u32>]| -> Vec<Option<u32>> {
-            let mut map: HashMap<u32, u32> = HashMap::new();
+            let mut map = vec![u32::MAX; self.ids.len()];
+            let mut next = 0_u32;
             parent[..self.persons]
                 .iter()
                 .map(|p| {
                     p.map(|node| {
-                        let next = map.len() as u32;
-                        *map.entry(node).or_insert(next)
+                        let slot = &mut map[node as usize];
+                        if *slot == u32::MAX {
+                            *slot = next;
+                            next += 1;
+                        }
+                        *slot
                     })
                 })
                 .collect()
@@ -665,12 +645,20 @@ impl Pedigree {
     /// first and then fathers, each in order of identifier.
     #[must_use]
     pub fn large_groups(&self, threshold: usize) -> Vec<LargeGroup> {
+        let nodes = self.ids.len();
+        let by_mother = Groups::new(&self.mother[..self.persons], nodes);
+        let by_father = Groups::new(&self.father[..self.persons], nodes);
+        self.large_groups_of([&by_mother, &by_father], threshold)
+    }
+
+    /// [`Pedigree::large_groups`] from the groups of the mother and the father
+    /// column.
+    fn large_groups_of(&self, groups: [&Groups; 2], threshold: usize) -> Vec<LargeGroup> {
         let mut out = Vec::new();
-        for (role, column) in [
-            (ParentRole::Mother, &self.mother),
-            (ParentRole::Father, &self.father),
-        ] {
-            let groups = Groups::new(&column[..self.persons], self.ids.len());
+        for (role, groups) in [ParentRole::Mother, ParentRole::Father]
+            .into_iter()
+            .zip(groups)
+        {
             let mut part: Vec<LargeGroup> = (0..self.ids.len())
                 .filter(|&node| groups.members(node).len() > threshold)
                 .map(|node| LargeGroup {
@@ -717,15 +705,18 @@ impl Pedigree {
         max_group_size: usize,
         mut emit: impl FnMut(u32, u32, SiblingKind),
     ) -> Result<(), RegisterError> {
-        if let Some(g) = self.large_groups(max_group_size).first() {
+        let nodes = self.ids.len();
+        let by_mother = Groups::new(&self.mother[..self.persons], nodes);
+        let by_father = Groups::new(&self.father[..self.persons], nodes);
+        if let Some(g) = self
+            .large_groups_of([&by_mother, &by_father], max_group_size)
+            .first()
+        {
             return Err(RegisterError::input(format!(
                 "{:?} {} has {} children among the rows, more than the limit {max_group_size}",
                 g.role, g.parent, g.size
             )));
         }
-        let nodes = self.ids.len();
-        let by_mother = Groups::new(&self.mother[..self.persons], nodes);
-        let by_father = Groups::new(&self.father[..self.persons], nodes);
         let mut found: Vec<(u32, SiblingKind)> = Vec::new();
         for a in 0..self.persons as u32 {
             let (ma, fa) = (self.mother[a as usize], self.father[a as usize]);
@@ -844,26 +835,29 @@ impl Pedigree {
             ));
         }
         let top = degree as usize + 1;
-        // levels[k - 1][x] holds the distinct ancestors of x exactly k
+        // levels[k - 1] holds the distinct ancestors of each person exactly k
         // generations up, sorted.
         let levels = self.ancestors_by_generation(top);
+        let last = &levels[top - 1];
         let nodes = self.ids.len();
-        let mut flat: Vec<(u32, u32)> = Vec::new();
-        for (x, ancestors) in levels[top - 1].iter().enumerate() {
-            for &anc in ancestors {
-                flat.push((anc, x as u32));
-            }
-        }
-        flat.sort_unstable();
-        // Members of each ancestor's group, ascending by row.
+        // Members of each ancestor's group, ascending by row: a counting sort
+        // of the persons by ancestor, filled in row order.
         let mut group_start = vec![0_usize; nodes + 1];
-        for &(anc, _) in &flat {
+        for &anc in &last.node {
             group_start[anc as usize + 1] += 1;
         }
         for i in 0..nodes {
             group_start[i + 1] += group_start[i];
         }
-        let members: Vec<u32> = flat.iter().map(|&(_, x)| x).collect();
+        let mut fill = group_start.clone();
+        let mut members = vec![0_u32; last.node.len()];
+        for x in 0..self.persons {
+            for &anc in last.of(x) {
+                members[fill[anc as usize]] = x as u32;
+                fill[anc as usize] += 1;
+            }
+        }
+        drop(fill);
         if let Some(anc) =
             (0..nodes).find(|&a| group_start[a + 1] - group_start[a] > max_group_size)
         {
@@ -876,7 +870,7 @@ impl Pedigree {
         let mut candidates: Vec<u32> = Vec::new();
         for a in 0..self.persons as u32 {
             candidates.clear();
-            for &anc in &levels[top - 1][a as usize] {
+            for &anc in last.of(a as usize) {
                 let group = &members[group_start[anc as usize]..group_start[anc as usize + 1]];
                 candidates.extend_from_slice(later(group, a));
             }
@@ -891,7 +885,7 @@ impl Pedigree {
                 let shared = j - i;
                 i = j;
                 let closer = (0..top - 1)
-                    .any(|k| intersects(&levels[k][a as usize], &levels[k][b as usize]));
+                    .any(|k| intersects(levels[k].of(a as usize), levels[k].of(b as usize)));
                 if closer {
                     continue;
                 }
@@ -912,36 +906,32 @@ impl Pedigree {
 
     /// For generations 1 to `top`, the distinct ancestors of each person exactly
     /// that many generations up, sorted by node.
-    fn ancestors_by_generation(&self, top: usize) -> Vec<Vec<Vec<u32>>> {
-        let mut levels: Vec<Vec<Vec<u32>>> = Vec::with_capacity(top);
-        let first: Vec<Vec<u32>> = (0..self.persons)
-            .map(|x| {
-                let mut v: Vec<u32> = [self.mother[x], self.father[x]]
-                    .into_iter()
-                    .flatten()
-                    .collect();
-                v.sort_unstable();
-                v
-            })
-            .collect();
-        levels.push(first);
-        for k in 1..top {
-            let next: Vec<Vec<u32>> = (0..self.persons)
-                .map(|x| {
-                    let mut v: Vec<u32> = levels[k - 1][x]
-                        .iter()
-                        .flat_map(|&y| {
-                            [self.mother[y as usize], self.father[y as usize]]
-                                .into_iter()
-                                .flatten()
-                        })
-                        .collect();
-                    v.sort_unstable();
-                    v.dedup();
-                    v
-                })
-                .collect();
-            levels.push(next);
+    fn ancestors_by_generation(&self, top: usize) -> Vec<PerPerson> {
+        let parents = |y: usize| [self.mother[y], self.father[y]].into_iter().flatten();
+        let mut levels: Vec<PerPerson> = Vec::with_capacity(top);
+        let mut scratch: Vec<u32> = Vec::new();
+        for k in 0..top {
+            let mut level = PerPerson {
+                start: Vec::with_capacity(self.persons + 1),
+                node: Vec::new(),
+            };
+            level.start.push(0);
+            for x in 0..self.persons {
+                scratch.clear();
+                match levels.last() {
+                    Some(below) if k > 0 => {
+                        for &y in below.of(x) {
+                            scratch.extend(parents(y as usize));
+                        }
+                    }
+                    _ => scratch.extend(parents(x)),
+                }
+                scratch.sort_unstable();
+                scratch.dedup();
+                level.node.extend_from_slice(&scratch);
+                level.start.push(level.node.len());
+            }
+            levels.push(level);
         }
         levels
     }
@@ -1025,6 +1015,103 @@ impl Pedigree {
     }
 }
 
+/// The node of each identifier: the persons are nodes `0..n` in row order and a
+/// parent who is not a person takes the next node at its first occurrence, in
+/// row order with the mother before the father. Returns the identifier of each
+/// node and the mother and father node of each row.
+///
+/// Identifiers below four times the number of rows, as identifiers numbered
+/// from 0 or 1 are, are looked up in a table indexed by the identifier, and
+/// larger ones in a hash map.
+#[expect(
+    clippy::type_complexity,
+    reason = "the three columns of the coded pedigree"
+)]
+fn code_nodes(
+    person_id: &[u64],
+    mother_id: &[Option<u64>],
+    father_id: &[Option<u64>],
+) -> Result<(Vec<u64>, Vec<Option<u32>>, Vec<Option<u32>>), RegisterError> {
+    let n = person_id.len();
+    let dense = (n as u64).saturating_mul(4).saturating_add(64);
+    let mut table: Vec<u32> = Vec::new();
+    let mut sparse: HashMap<u64, u32, BuildHasherDefault<IdHasher>> = HashMap::default();
+    let mut ids = person_id.to_vec();
+    for (row, &id) in person_id.iter().enumerate() {
+        let fresh = if id < dense {
+            let slot = id as usize;
+            if table.len() <= slot {
+                table.resize(slot + 1, u32::MAX);
+            }
+            std::mem::replace(&mut table[slot], row as u32) == u32::MAX
+        } else {
+            sparse.insert(id, row as u32).is_none()
+        };
+        if !fresh {
+            return Err(RegisterError::input(format!("person {id} occurs twice")));
+        }
+    }
+    let mut code = |id: u64, ids: &mut Vec<u64>| -> u32 {
+        let next = ids.len() as u32;
+        let node = if id < dense {
+            let slot = id as usize;
+            if table.len() <= slot {
+                table.resize(slot + 1, u32::MAX);
+            }
+            if table[slot] == u32::MAX {
+                table[slot] = next;
+            }
+            table[slot]
+        } else {
+            *sparse.entry(id).or_insert(next)
+        };
+        if node == next {
+            ids.push(id);
+        }
+        node
+    };
+    let mut mother = vec![None; n];
+    let mut father = vec![None; n];
+    for row in 0..n {
+        if let (Some(m), Some(f)) = (mother_id[row], father_id[row])
+            && m == f
+        {
+            return Err(RegisterError::input(format!(
+                "person {} has the same mother and father, {m}",
+                person_id[row]
+            )));
+        }
+        mother[row] = mother_id[row].map(|id| code(id, &mut ids));
+        father[row] = father_id[row].map(|id| code(id, &mut ids));
+    }
+    Ok((ids, mother, father))
+}
+
+/// A hash of a `u64` identifier by the finaliser of SplitMix64, which spreads
+/// consecutive identifiers over all bits; the keys are not chosen by an
+/// adversary, so a keyed hash is not needed.
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(b);
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.0 = v;
+    }
+}
+
 /// The members of `group` after `a`; a group is ascending.
 fn later(group: &[u32], a: u32) -> &[u32] {
     &group[group.partition_point(|&b| b <= a)..]
@@ -1040,6 +1127,19 @@ fn intersects(x: &[u32], y: &[u32]) -> bool {
         }
     }
     false
+}
+
+/// Nodes listed for each person: those of person `x` are
+/// `node[start[x]..start[x + 1]]`.
+struct PerPerson {
+    start: Vec<usize>,
+    node: Vec<u32>,
+}
+
+impl PerPerson {
+    fn of(&self, x: usize) -> &[u32] {
+        &self.node[self.start[x]..self.start[x + 1]]
+    }
 }
 
 /// Rows grouped by the node in one parent column, ascending within a group.
@@ -1076,6 +1176,217 @@ impl Groups {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The coding of the nodes by one hash map, the form `code_nodes` replaces.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the three columns of the coded pedigree"
+    )]
+    fn reference_nodes(
+        person_id: &[u64],
+        mother_id: &[Option<u64>],
+        father_id: &[Option<u64>],
+    ) -> Option<(Vec<u64>, Vec<Option<u32>>, Vec<Option<u32>>)> {
+        let n = person_id.len();
+        let mut node_of: HashMap<u64, u32> = HashMap::with_capacity(n * 2);
+        let mut ids = person_id.to_vec();
+        for (row, &id) in person_id.iter().enumerate() {
+            if node_of.insert(id, row as u32).is_some() {
+                return None;
+            }
+        }
+        let mut code = |id: u64, ids: &mut Vec<u64>| -> u32 {
+            *node_of.entry(id).or_insert_with(|| {
+                ids.push(id);
+                (ids.len() - 1) as u32
+            })
+        };
+        let mut mother = vec![None; n];
+        let mut father = vec![None; n];
+        for row in 0..n {
+            mother[row] = mother_id[row].map(|id| code(id, &mut ids));
+            father[row] = father_id[row].map(|id| code(id, &mut ids));
+        }
+        Some((ids, mother, father))
+    }
+
+    /// The family clusters with the parents renumbered by a hash map.
+    fn reference_family_clusters(p: &Pedigree) -> Vec<u32> {
+        let dense = |parent: &[Option<u32>]| -> Vec<Option<u32>> {
+            let mut map: HashMap<u32, u32> = HashMap::new();
+            parent[..p.persons]
+                .iter()
+                .map(|q| {
+                    q.map(|node| {
+                        let next = map.len() as u32;
+                        *map.entry(node).or_insert(next)
+                    })
+                })
+                .collect()
+        };
+        let (m, f) = (dense(&p.mother), dense(&p.father));
+        connected_components(&[&m, &f]).unwrap()
+    }
+
+    /// The cousin pairs from ancestors in a vector per person and groups by a
+    /// sort of (ancestor, person), the forms the flat lists replace.
+    fn reference_cousin_pairs(p: &Pedigree, degree: u32, kinds: CousinKinds) -> CousinPairs {
+        let top = degree as usize + 1;
+        let mut levels: Vec<Vec<Vec<u32>>> = Vec::with_capacity(top);
+        let first: Vec<Vec<u32>> = (0..p.persons)
+            .map(|x| {
+                let mut v: Vec<u32> = [p.mother[x], p.father[x]].into_iter().flatten().collect();
+                v.sort_unstable();
+                v
+            })
+            .collect();
+        levels.push(first);
+        for k in 1..top {
+            let next: Vec<Vec<u32>> = (0..p.persons)
+                .map(|x| {
+                    let mut v: Vec<u32> = levels[k - 1][x]
+                        .iter()
+                        .flat_map(|&y| {
+                            [p.mother[y as usize], p.father[y as usize]]
+                                .into_iter()
+                                .flatten()
+                        })
+                        .collect();
+                    v.sort_unstable();
+                    v.dedup();
+                    v
+                })
+                .collect();
+            levels.push(next);
+        }
+        let nodes = p.ids.len();
+        let mut flat: Vec<(u32, u32)> = Vec::new();
+        for (x, ancestors) in levels[top - 1].iter().enumerate() {
+            for &anc in ancestors {
+                flat.push((anc, x as u32));
+            }
+        }
+        flat.sort_unstable();
+        let mut group_start = vec![0_usize; nodes + 1];
+        for &(anc, _) in &flat {
+            group_start[anc as usize + 1] += 1;
+        }
+        for i in 0..nodes {
+            group_start[i + 1] += group_start[i];
+        }
+        let members: Vec<u32> = flat.iter().map(|&(_, x)| x).collect();
+        let mut out = CousinPairs::default();
+        let mut candidates: Vec<u32> = Vec::new();
+        for a in 0..p.persons as u32 {
+            candidates.clear();
+            for &anc in &levels[top - 1][a as usize] {
+                let group = &members[group_start[anc as usize]..group_start[anc as usize + 1]];
+                candidates.extend_from_slice(later(group, a));
+            }
+            candidates.sort_unstable();
+            let mut i = 0;
+            while i < candidates.len() {
+                let b = candidates[i];
+                let mut j = i;
+                while j < candidates.len() && candidates[j] == b {
+                    j += 1;
+                }
+                let shared = j - i;
+                i = j;
+                let closer = (0..top - 1)
+                    .any(|k| intersects(&levels[k][a as usize], &levels[k][b as usize]));
+                if closer {
+                    continue;
+                }
+                let kind = if shared >= 2 {
+                    CousinKind::Full
+                } else {
+                    CousinKind::Half
+                };
+                if (kind == CousinKind::Full && kinds.full)
+                    || (kind == CousinKind::Half && kinds.half)
+                {
+                    out.a.push(a);
+                    out.b.push(b);
+                    out.kind.push(kind);
+                }
+            }
+        }
+        out
+    }
+
+    /// Generations of persons whose parents are drawn from a few couples of the
+    /// generation before, some unknown and some outside the rows, with the
+    /// identifiers `id(row)`.
+    fn random_pedigree(
+        n: usize,
+        seed: u64,
+        id: impl Fn(u64) -> u64,
+    ) -> (Vec<u64>, Vec<Option<u64>>, Vec<Option<u64>>) {
+        let mut state = seed;
+        let mut below = |k: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % k
+        };
+        let per = n / 4;
+        let (mut ids, mut mother, mut father) = (Vec::new(), Vec::new(), Vec::new());
+        for row in 0..n as u64 {
+            ids.push(id(row));
+            let g = row / per as u64;
+            if g == 0 {
+                mother.push(None);
+                father.push(None);
+                continue;
+            }
+            let base = (g - 1) * per as u64;
+            let couple = below(per as u64 / 3);
+            let m = base + (couple * 7) % per as u64;
+            let f = base + (couple * 13 + 1) % per as u64;
+            let pick = |p: u64, r: u64| match r {
+                0 => None,
+                1 => Some(id(n as u64 + p)),
+                _ => Some(id(p)),
+            };
+            let (rm, rf) = (below(12), below(12));
+            mother.push(pick(m, rm));
+            father.push(if m == f { None } else { pick(f, rf) });
+        }
+        (ids, mother, father)
+    }
+
+    #[test]
+    fn the_flat_forms_equal_the_references() {
+        type Identifier = fn(u64) -> u64;
+        let forms: [(&str, Identifier); 3] = [
+            ("small", |r| r + 1),
+            ("large", |r| r.wrapping_mul(1_000_003) + 1_000_000_000_000),
+            (
+                "mixed",
+                |r| if r % 3 == 0 { r } else { r * 977 + (1 << 40) },
+            ),
+        ];
+        for (name, id) in forms {
+            for seed in 1..4 {
+                let (ids, mother, father) = random_pedigree(4000, seed, id);
+                let p = Pedigree::new(&ids, &mother, &father).unwrap();
+                let (rid, rm, rf) = reference_nodes(&ids, &mother, &father).unwrap();
+                assert_eq!(p.ids, rid, "{name}");
+                assert_eq!(&p.mother[..p.persons], &rm[..], "{name}");
+                assert_eq!(&p.father[..p.persons], &rf[..], "{name}");
+                assert_eq!(p.family_clusters().unwrap(), reference_family_clusters(&p));
+                for degree in 1..4 {
+                    let got = p.cousin_pairs(degree, CousinKinds::ALL, 100_000).unwrap();
+                    assert!(degree > 1 || !got.a.is_empty(), "{name}: no cousins");
+                    assert_eq!(got, reference_cousin_pairs(&p, degree, CousinKinds::ALL));
+                }
+            }
+        }
+        // A person twice is refused on both routes.
+        assert!(Pedigree::new(&[5, 1 << 50, 5], &[None; 3], &[None; 3]).is_err());
+        assert!(Pedigree::new(&[1 << 50, 5, 1 << 50], &[None; 3], &[None; 3]).is_err());
+    }
 
     // Persons: 1 and 2 are the founders. 3, 4 and 5 are their children, 6 is
     // the child of 3 and an outside father 90, 7 is the child of 4 and 91.
