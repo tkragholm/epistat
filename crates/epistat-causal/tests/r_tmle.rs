@@ -106,7 +106,7 @@ fn options(s: &Scenario) -> TmleOptions {
     TmleOptions {
         propensity_bound: match s.gbound {
             None => PropensityBound::Tmle,
-            Some(b) if b == 0.0 => PropensityBound::None,
+            Some(0.0) => PropensityBound::None,
             Some(b) => PropensityBound::At(b),
         },
         range: if s.range_kind == "known" {

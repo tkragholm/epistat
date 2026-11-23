@@ -1,6 +1,6 @@
 [package]
 name = "epistat-causal"
-description = "Causal effect estimators for cohort data: augmented inverse probability weighting for binary and continuous outcomes, with influence-function and stacked variances that do not depend on the number of threads"
+description = "Causal effect estimators for cohort data: augmented inverse probability weighting, targeted maximum likelihood estimation, entropy balancing and CBPS, with variances that do not depend on the number of threads"
 keywords = ["statistics", "causal-inference", "doubly-robust", "epidemiology", "aipw"]
 categories = ["mathematics", "science"]
 readme = "README.md"
@@ -33,6 +33,10 @@ harness = false
 
 [[bench]]
 name = "tier3_balance"
+harness = false
+
+[[bench]]
+name = "tier3_tmle"
 harness = false
 
 [lints]

@@ -60,9 +60,13 @@
 //! after the step, and `psi'` the target two steps back (one step back at the
 //! first step), as `tmle` computes it. The steps continue while the loss `-mean(w
 //! [Y* ln Q(A) + (1 - Y*) ln(1 - Q(A)) + A ln g1 + (1 - A) ln g0])` falls; the
-//! estimate is the one before the first step that does not lower it, so `|P_n
-//! IC|` is of the order of `h` ([`Tmle::score`]). At most `max(1000, 2 / h)`
-//! steps are taken. The effect on the controls ([`Target::Atc`]) is minus the
+//! estimate is the one before the first step that does not lower it. At most
+//! `max(1000, 2 / h)` steps are taken. As `h` goes to 0 the mean of `IC` at the
+//! estimate ([`Tmle::score`]) tends to `psi (q - mean(w g1)) / q` and not to 0:
+//! the derivative of the loss along the path has `(A - g)(Q_1 - Q_0 - psi)`
+//! where `IC` has `A (Q_1 - Q_0 - psi)`, and the plug-in divides by `q` and not
+//! by the mean of the moved `g`. The remainder is of the order of the movement
+//! of `g`; it is `tmle`'s estimator and is kept for agreement with it. The effect on the controls ([`Target::Atc`]) is minus the
 //! effect on the treated with the roles of the arms swapped. The influence of the
 //! difference is `IC (u - l) / m` over the `m` persons used. The mean of the
 //! treated arm is the weighted mean of `Y` among the treated, and that of the
@@ -249,7 +253,9 @@ pub struct Tmle {
     /// How the predictions were moved.
     pub targeting: Targeting,
     /// The sum of [`Tmle::influence`], the mean of the efficient influence
-    /// function at the targeted predictions, which targeting brings to 0.
+    /// function at the targeted predictions: 0 up to the tolerance of the
+    /// fluctuation for the effect in the population, and up to the step and the
+    /// remainder described in the module documentation for the one-step path.
     pub score: f64,
     /// The range `(l, u)` that mapped the outcome to `[0, 1]`.
     pub range: (f64, f64),
