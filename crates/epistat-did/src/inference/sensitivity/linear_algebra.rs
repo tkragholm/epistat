@@ -62,7 +62,7 @@ pub(super) fn cholesky_lower(matrix: &[Vec<f64>]) -> Result<Mat<f64>, String> {
         return Ok(Mat::zeros(0, 0));
     }
     let sym = Mat::from_fn(matrix.len(), matrix.len(), |row, col| {
-        0.5 * (matrix[row][col] + matrix[col][row])
+        f64::midpoint(matrix[row][col], matrix[col][row])
     });
     if let Some(lower) = cholesky_factor(sym.as_ref(), Regularisation::default()) {
         return Ok(lower);
@@ -132,12 +132,12 @@ pub(super) fn lower_mat_vec_mul_into(lower: &Mat<f64>, vec: &[f64], out: &mut [f
     }
 }
 
-pub(super) fn pointwise_confidence_level_from_critical(critical: f64) -> Result<f64, String> {
-    Ok((2.0 * normal::cdf(critical) - 1.0).clamp(1e-12, 1.0 - 1e-12))
+pub(super) fn pointwise_confidence_level_from_critical(critical: f64) -> f64 {
+    (2.0 * normal::cdf(critical) - 1.0).clamp(1e-12, 1.0 - 1e-12)
 }
 
-pub(super) fn critical_value_from_pointwise_confidence(pointwise: f64) -> Result<f64, String> {
-    Ok(normal::quantile((1.0 + pointwise) * 0.5))
+pub(super) fn critical_value_from_pointwise_confidence(pointwise: f64) -> f64 {
+    normal::quantile(f64::midpoint(1.0, pointwise))
 }
 
 /// The sup-t critical value of the estimator whose covariance is `covariance`,
@@ -580,6 +580,10 @@ pub(super) fn dense_rows_to_csc(rows: &[Vec<f64>]) -> CscMatrix<f64> {
 /// `l == u` gives that point, as `TruncatedNormal::norminvp` does in R. An
 /// interval with `l > u`, a `NaN` bound, a probability outside `[0, 1]` or an
 /// interval whose probability underflows is an error.
+#[expect(
+    clippy::float_cmp,
+    reason = "an interval of one point has that point as every quantile"
+)]
 pub(super) fn truncated_normal_quantile(p: f64, l: f64, u: f64) -> Result<f64, String> {
     let undefined =
         || format!("truncated normal quantile is undefined for p = {p}, interval [{l}, {u}]");

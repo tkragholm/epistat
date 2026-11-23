@@ -237,6 +237,10 @@ impl<'a> DualMaxLpWorkspace<'a> {
         {
             *f_value = c.mul_add(*sigma_gamma_value / sigma_b2, *s_value);
         }
+        #[expect(
+            clippy::float_cmp,
+            reason = "the cached family is reused only for the same values to the bit"
+        )]
         let same_family = self.has_family
             && self.f0 == s_t
             && self
@@ -413,7 +417,7 @@ mod tests {
 
     #[test]
     fn conditional_workspace_matches_clarabel_with_nuisance_columns_across_rhs_changes() {
-        let mut rng = Stream::seeded(20260905);
+        let mut rng = Stream::seeded(20_260_905);
         for _ in 0..40 {
             let rows = rng.random_range(6..30);
             let k = rng.random_range(1..rows.min(8));

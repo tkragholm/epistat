@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn matches_clarabel_on_random_feasible_bounded_programs() {
-        let mut rng = Stream::seeded(20260904);
+        let mut rng = Stream::seeded(20_260_904);
         for trial in 0..200 {
             let m = rng.random_range(2..9);
             let n = rng.random_range(m..m + 24);
@@ -195,7 +195,7 @@ mod tests {
                 (Ok(()), Some(reference)) => {
                     assert!((lp.objective() - reference).abs() < 1e-6);
                 }
-                (Err(LpError::Infeasible), None) | (Err(LpError::Unbounded), None) => {}
+                (Err(LpError::Infeasible | LpError::Unbounded), None) => {}
                 (result, reference) => panic!("simplex {result:?} vs clarabel {reference:?}"),
             }
             // A hundred further cost changes from the same basis.

@@ -82,7 +82,7 @@ struct CellScratch<'a> {
     design: Vec<f64>,
 }
 
-impl<'a> CellScratch<'a> {
+impl CellScratch<'_> {
     fn new(unit_count: usize) -> Self {
         let mut slots = Vec::new();
         slots.resize_with(unit_count, || None);
@@ -246,7 +246,7 @@ fn collect_cell_units<'a>(
 /// outcome from a singular design without parsing prose. `panel_fit` on its
 /// own was the label for all of them, and on a run that lost 315 of 325 cells
 /// it said nothing about which.
-fn panel_fit_reason(error: crate::types::DrDidError) -> &'static str {
+fn panel_fit_reason(error: &crate::types::DrDidError) -> &'static str {
     use crate::types::DrDidError as E;
     match error {
         E::EmptyInput => "panel_fit:empty",
@@ -327,7 +327,7 @@ fn estimate_panel_cell(
         },
         config.drdid,
     )
-    .map_err(panel_fit_reason)?;
+    .map_err(|error| panel_fit_reason(&error))?;
     if fit.influence_function.len() != scratch.units.len() {
         return Err("influence_length");
     }
@@ -666,12 +666,15 @@ mod tests {
             ]
         );
         for (with, without) in full.estimates.iter().zip(&reduced.estimates).skip(1) {
-            assert_eq!(with.att, without.att);
-            assert_eq!(with.se, without.se);
+            assert_eq!(with.att.to_bits(), without.att.to_bits());
+            assert_eq!(with.se.to_bits(), without.se.to_bits());
         }
         // The cell that kept the indicator is a different fit.
-        assert_ne!(full.estimates[0].att, reduced.estimates[0].att);
-        assert!(reduced.pruned.is_empty());
+        assert_ne!(
+            full.estimates[0].att.to_bits(),
+            reduced.estimates[0].att.to_bits()
+        );
+        assert_eq!(reduced.pruned.len(), 0);
     }
 
     /// Three matched sets, indexed at periods 3, 4 and 5, each with treated

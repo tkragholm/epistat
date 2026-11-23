@@ -39,10 +39,12 @@ fn column(values: &[f64]) -> Col<f64> {
 /// A simple polynomial basis: [1, x, x^2, ..., x^(degree)]
 #[derive(Debug, Clone, Copy)]
 pub struct PolynomialBasis {
+    /// Highest power of the polynomial.
     pub degree: usize,
 }
 
 impl PolynomialBasis {
+    /// Builds a polynomial basis of the given degree.
     #[must_use]
     pub const fn new(degree: usize) -> Self {
         Self { degree }
@@ -72,8 +74,11 @@ impl Basis for PolynomialBasis {
 /// B-Spline basis implementation, evaluated by the Cox-de Boor recursion.
 #[derive(Debug, Clone)]
 pub struct BSplineBasis {
+    /// Degree of the spline pieces.
     pub degree: usize,
+    /// Interior knot positions.
     pub internal_knots: Vec<f64>,
+    /// Lower and upper boundary knots.
     pub boundary_knots: (f64, f64),
     spline: BSpline,
 }

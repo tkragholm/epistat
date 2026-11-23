@@ -5,17 +5,19 @@ use std::hash::Hash;
 
 use thiserror::Error;
 
+/// Long-form export of influence functions and covariances.
 pub mod export;
 // Gated: the HonestDiD sensitivity machinery is the only consumer of the
 // `clarabel` conic solver. Off by default so the register pipeline does not
 // link it. Enable with `--features honest`.
 #[cfg(feature = "honest")]
 pub mod sensitivity;
+/// Variance and covariance estimators from influence functions.
 pub mod vcov;
 
 use crate::types::{BootstrapConfig, InferenceConfig};
 
-/// Typed cluster specification — prevents label/data misalignment.
+/// The cluster labels of the rows, typed so labels and data stay aligned.
 #[derive(Debug, Clone)]
 pub enum ClusterSpec<L: Eq + Hash + Clone> {
     /// One-way clustering (e.g., by person ID).
@@ -23,6 +25,7 @@ pub enum ClusterSpec<L: Eq + Hash + Clone> {
 }
 
 impl<L: Eq + Hash + Clone> ClusterSpec<L> {
+    /// Builds a one-way clustering from one label per row.
     #[must_use]
     pub const fn one_way(labels: Vec<L>) -> Self {
         Self::OneWay(labels)
@@ -32,7 +35,9 @@ impl<L: Eq + Hash + Clone> ClusterSpec<L> {
 /// Internal compact cluster index mapping rows to integer group IDs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterIndex {
+    /// Cluster number of each row, from 0 to `n_groups - 1`.
     pub group_assignments: Vec<usize>,
+    /// Number of distinct clusters.
     pub n_groups: usize,
 }
 
@@ -42,25 +47,34 @@ impl ClusterIndex {
     }
 }
 
+/// Errors from clustered inference.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum InferenceError {
+    /// The influence-function vector is empty.
     #[error("clustered variance requires non-empty influence-function values")]
     EmptyInfluenceFunction,
+    /// The influence-function vector and the cluster labels differ in length.
     #[error(
         "clustered variance requires aligned influence/cluster lengths ({influence_len} vs {cluster_len})"
     )]
     MisalignedClusterLengths {
+        /// Length of the influence-function vector.
         influence_len: usize,
+        /// Number of cluster labels.
         cluster_len: usize,
     },
+    /// The clustered variance is not finite.
     #[error("clustered variance is not finite")]
     NonFiniteClusteredVariance,
+    /// There are fewer than two clusters.
     #[error("clustered variance needs at least two clusters")]
     TooFewClusters,
+    /// The confidence level is not strictly between 0 and 1.
     #[error("invalid confidence level for clustered CI: {0}")]
     InvalidConfidenceLevel(f64),
 }
 
+/// Whether the confidence level is finite and strictly between 0 and 1.
 #[must_use]
 pub fn validate_confidence_level(confidence_level: f64) -> bool {
     confidence_level.is_finite() && confidence_level > 0.0 && confidence_level < 1.0

@@ -89,7 +89,7 @@ pub fn estimate_att_gt_dr(
 
 /// `ATT(g,t)` through the LOCALLY EFFICIENT repeated-cross-section estimator.
 ///
-/// [`estimate_att_gt_dr_with_influence`] uses the traditional one,
+/// [`estimate_att_gt_dr_with_influence`](crate::estimate_att_gt_dr_with_influence) uses the traditional one,
 /// `DRDID::drdid_rc1`. `did::att_gt(est_method = "dr", panel = FALSE)` uses this
 /// one, `DRDID::drdid_rc`, so this is the route to take when the numbers have to
 /// match `did` on repeated cross sections.
@@ -98,7 +98,7 @@ pub fn estimate_att_gt_dr(
 /// about 2.8% on `mpdta`.
 ///
 /// # Errors
-/// As [`estimate_att_gt_dr_with_influence`].
+/// As [`estimate_att_gt_dr_with_influence`](crate::estimate_att_gt_dr_with_influence).
 pub fn estimate_att_gt_dr_efficient_with_influence(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,

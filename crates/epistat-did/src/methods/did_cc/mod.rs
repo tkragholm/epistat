@@ -62,11 +62,17 @@ struct DidCcNuisance {
 
 type CrossFitNuisance = (OutcomePredictions, Vec<[f64; 4]>, Vec<f64>);
 
+/// Read access to the fields of a `DiD_CC` observation.
 pub trait DidCcObservationView {
+    /// Whether the observation is in the treated group.
     fn treated(&self) -> bool;
+    /// Whether the observation is from the post-treatment period.
     fn post_period(&self) -> bool;
+    /// Observed outcome value.
     fn outcome(&self) -> f64;
+    /// Sampling weight.
     fn weight(&self) -> f64;
+    /// Covariate values.
     fn covariates(&self) -> &[f64];
 }
 

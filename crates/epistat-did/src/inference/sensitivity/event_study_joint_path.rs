@@ -91,7 +91,7 @@ fn joint_pointwise_confidence_level(
     if num_post == 1 {
         return Ok((
             inference.confidence_level,
-            critical_value_from_pointwise_confidence(inference.confidence_level)?,
+            critical_value_from_pointwise_confidence(inference.confidence_level),
         ));
     }
     let alpha = 1.0 - inference.confidence_level;
@@ -105,7 +105,7 @@ fn joint_pointwise_confidence_level(
             }
             Ok((
                 pointwise,
-                critical_value_from_pointwise_confidence(pointwise)?,
+                critical_value_from_pointwise_confidence(pointwise),
             ))
         }
         HonestJointPathMethod::GaussianSimulated => {
@@ -115,10 +115,7 @@ fn joint_pointwise_confidence_level(
                 joint_config.simulation_draws,
                 joint_config.simulation_seed,
             )?;
-            Ok((
-                pointwise_confidence_level_from_critical(critical)?,
-                critical,
-            ))
+            Ok((pointwise_confidence_level_from_critical(critical), critical))
         }
     }
 }
@@ -170,7 +167,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_joint_path_re
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity::event_study_assessment) fn assess_honest_event_study_joint_path_region_with_optional_prepared_relative_magnitude(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,

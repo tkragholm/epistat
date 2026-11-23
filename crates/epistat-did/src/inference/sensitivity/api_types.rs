@@ -124,21 +124,30 @@ pub enum SmoothnessHybrid {
     ArpOnly,
 }
 
+/// Sign restriction on the bias in a sensitivity analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestBiasDirection {
+    /// The bias is restricted to be non-negative.
     Positive,
+    /// The bias is restricted to be non-positive.
     Negative,
 }
 
+/// Monotonicity restriction on the trend deviation in a sensitivity analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestMonotonicityDirection {
+    /// The post-treatment trend deviation is restricted to be non-decreasing.
     Increasing,
+    /// The post-treatment trend deviation is restricted to be non-increasing.
     Decreasing,
 }
 
+/// Reference deviation that the relative-magnitude bound is scaled by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestRelativeMagnitudeBound {
+    /// Post-period deviations are bounded relative to the largest pre-period deviation from parallel trends.
     ParallelTrendsDeviation,
+    /// Post-period deviations are bounded relative to the largest pre-period deviation from a linear trend.
     LinearTrendDeviation,
 }
 
@@ -458,6 +467,7 @@ pub struct HonestDirectionalRegionDiagnostics {
 }
 
 impl HonestDirectionalRegionDiagnostics {
+    /// Diagnostics for a fixed direction set, with no adaptive iterations.
     #[must_use]
     pub const fn fixed(direction_count: usize, random_direction_count: usize) -> Self {
         Self {
@@ -478,6 +488,7 @@ impl HonestDirectionalRegionDiagnostics {
         self
     }
 
+    /// Diagnostics for an adaptive direction set.
     #[must_use]
     pub const fn adaptive(
         direction_count: usize,
@@ -529,9 +540,13 @@ pub struct HonestMultiFlciResult {
     pub points: Vec<HonestMultiFlciPoint>,
 }
 
+/// One functional of a simultaneous relative-magnitude interval result.
 pub type RelativeMagnitudeMultiFlciPoint = HonestMultiFlciPoint;
+/// Simultaneous interval result under a relative-magnitude restriction.
 pub type RelativeMagnitudeMultiFlciResult = HonestMultiFlciResult;
+/// One functional of a simultaneous smoothness interval result.
 pub type SmoothnessMultiFlciPoint = HonestMultiFlciPoint;
+/// Simultaneous interval result under a smoothness restriction.
 pub type SmoothnessMultiFlciResult = HonestMultiFlciResult;
 
 /// Direction-set construction for optimization-surface joint regions.
@@ -686,7 +701,9 @@ pub enum HonestWorkflowDirectionMode {
     OptimizationSurface(HonestOptimizationSurfaceConfig),
     /// Auto-generated adaptive optimization-surface directions.
     OptimizationSurfaceAdaptive {
+        /// Settings of the finite optimization surface.
         surface: HonestOptimizationSurfaceConfig,
+        /// Settings of the adaptive enrichment.
         adaptive: HonestOptimizationSurfaceAdaptiveConfig,
     },
 }
@@ -759,7 +776,12 @@ pub enum HonestPostFunctional {
     /// Select a single post-treatment period.
     Period(i32),
     /// Uniform average over an inclusive post-treatment window.
-    AverageWindow { start_period: i32, end_period: i32 },
+    AverageWindow {
+        /// First post-treatment period of the window.
+        start_period: i32,
+        /// Last post-treatment period of the window.
+        end_period: i32,
+    },
     /// Arbitrary weighted linear functional over named post periods.
     Weighted(Vec<(i32, f64)>),
 }
@@ -800,11 +822,13 @@ impl HonestEventStudyInput {
         Ok(())
     }
 
+    /// Number of pre-treatment periods.
     #[must_use]
     pub const fn num_pre_periods(&self) -> usize {
         self.pre_periods.len()
     }
 
+    /// Number of post-treatment periods.
     #[must_use]
     pub const fn num_post_periods(&self) -> usize {
         self.post_periods.len()

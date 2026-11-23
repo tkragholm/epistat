@@ -12,7 +12,6 @@ pub(super) struct RepeatedPreparedData {
     pub(super) design_matrix_flat: Vec<f64>,
 }
 
-#[allow(clippy::too_many_lines)]
 pub(super) fn prepare_repeated_data(
     observations: &[DrDidRepeatedObservation],
 ) -> Result<RepeatedPreparedData, DrDidError> {

@@ -21,15 +21,21 @@ use rayon::prelude::*;
 use crate::inference::validate_confidence_level;
 use crate::types::InferenceConfig;
 
+/// Method behind a sensitivity summary row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensitivitySummaryMethod {
+    /// Fixed-length confidence interval.
     Flci,
+    /// Conditional confidence set.
     Conditional,
+    /// Conditional confidence set hybridised with the fixed-length interval.
     ConditionalFlci,
+    /// Conditional confidence set hybridised with the least-favorable critical value.
     ConditionalLeastFavorable,
 }
 
 impl SensitivitySummaryMethod {
+    /// Short label of the method, as printed by the R package.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -41,13 +47,20 @@ impl SensitivitySummaryMethod {
     }
 }
 
+/// One interval of a sensitivity summary.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SensitivitySummaryRow {
+    /// Lower bound of the interval.
     pub lb: f64,
+    /// Upper bound of the interval.
     pub ub: f64,
+    /// Method that produced the interval.
     pub method: SensitivitySummaryMethod,
+    /// Label of the restriction on the trend, such as `DeltaSDPB`.
     pub delta: &'static str,
+    /// Name of the sensitivity parameter, such as `M`.
     pub sensitivity_name: &'static str,
+    /// Value of the sensitivity parameter.
     pub sensitivity_value: f64,
     /// The identified set this row's interval was built around, where the
     /// restriction family has a closed form for one.
@@ -65,8 +78,10 @@ pub struct SensitivitySummaryRow {
     pub identified: Option<HonestIdentifiedSet>,
 }
 
+/// Robust intervals over a range of sensitivity values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SensitivitySummary {
+    /// One row per method and sensitivity value.
     pub rows: Vec<SensitivitySummaryRow>,
     /// Conic programs that needed the retry with looser tolerances, and programs
     /// that ended `AlmostSolved`, while the summary was computed. See
@@ -75,17 +90,25 @@ pub struct SensitivitySummary {
     pub solver: SolverCounts,
 }
 
+/// Family of restrictions a sensitivity analysis varies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensitivityRestrictionKind {
+    /// Bound on the change of slope of the trend.
     Smoothness,
+    /// Bound on post-period deviations relative to pre-period deviations.
     RelativeMagnitude,
 }
 
+/// Sensitivity summary for one post-treatment period.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PostPeriodSensitivitySummary {
+    /// Robust confidence sets over the sensitivity values.
     pub robust_ci: SensitivitySummary,
+    /// Original confidence set of the post-period effect.
     pub orig_ci: HonestOriginalConfidenceSet,
+    /// Restriction family the sensitivity analysis used.
     pub sensitivity_type: SensitivityRestrictionKind,
+    /// Post-treatment period the summary is for.
     pub post_period: i32,
 }
 
@@ -325,7 +348,6 @@ pub fn summarize_smoothness_sensitivity(
 /// # Errors
 /// Returns an error under the conditions of [`summarize_smoothness_sensitivity`], or if `simulation` is
 /// invalid.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_smoothness_sensitivity_with_simulation(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -350,7 +372,6 @@ pub fn summarize_smoothness_sensitivity_with_simulation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn summarize_smoothness_sensitivity_counted(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -461,7 +482,6 @@ pub(in crate::inference::sensitivity) fn summarize_smoothness_sensitivity_counte
 /// Returns an error if the event-study input is invalid, the wrapper options
 /// are inconsistent, or any underlying identified-set / confidence-set solve
 /// fails.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_relative_magnitude_sensitivity(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -491,7 +511,6 @@ pub fn summarize_relative_magnitude_sensitivity(
 /// # Errors
 /// Returns an error under the conditions of [`summarize_relative_magnitude_sensitivity`], or if `simulation` is
 /// invalid.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_relative_magnitude_sensitivity_with_simulation(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -518,7 +537,6 @@ pub fn summarize_relative_magnitude_sensitivity_with_simulation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivity_counted(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -561,7 +579,6 @@ pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivit
 /// Returns an error if the event-study input is invalid for any functional,
 /// the wrapper options are inconsistent, or any underlying identified-set /
 /// confidence-set solve fails.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_relative_magnitude_sensitivity_many(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -591,7 +608,6 @@ pub fn summarize_relative_magnitude_sensitivity_many(
 /// # Errors
 /// Returns an error under the conditions of [`summarize_relative_magnitude_sensitivity_many`], or if `simulation` is
 /// invalid.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_relative_magnitude_sensitivity_many_with_simulation(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -618,7 +634,6 @@ pub fn summarize_relative_magnitude_sensitivity_many_with_simulation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivity_many_counted(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
@@ -768,7 +783,6 @@ pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivit
 /// # Errors
 /// Returns an error if the requested post period is absent, the input is
 /// invalid, or the underlying summary routine fails.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_post_period_sensitivity(
     input: &HonestEventStudyInput,
     post_period: i32,
@@ -800,7 +814,6 @@ pub fn summarize_post_period_sensitivity(
 /// # Errors
 /// Returns an error under the conditions of [`summarize_post_period_sensitivity`], or if `simulation` is
 /// invalid.
-#[allow(clippy::too_many_arguments)]
 pub fn summarize_post_period_sensitivity_with_simulation(
     input: &HonestEventStudyInput,
     post_period: i32,
@@ -829,7 +842,6 @@ pub fn summarize_post_period_sensitivity_with_simulation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn summarize_post_period_sensitivity_counted(
     input: &HonestEventStudyInput,
     post_period: i32,

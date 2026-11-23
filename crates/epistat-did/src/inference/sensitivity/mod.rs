@@ -1,8 +1,7 @@
 //! `HonestDiD` sensitivity analysis helpers.
 //!
 //! This module implements the parts of the Rambachan and Roth sensitivity
-//! framework that are currently used by this workspace for event-study
-//! robustness analysis.
+//! framework that an event-study robustness analysis needs.
 //!
 //! Implemented scope:
 //! - Original confidence sets for linear functionals of post-treatment

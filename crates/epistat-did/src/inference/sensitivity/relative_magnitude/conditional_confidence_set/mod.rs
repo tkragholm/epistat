@@ -203,7 +203,6 @@ const fn is_full_grid_range(range: AcceptedGridRange, grid_len: usize) -> bool {
 }
 
 impl<'a> RelativeMagnitudeThetaEvaluator<'a> {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         y_arp_base: &'a [f64],
         a_target_arp: &'a [f64],
@@ -435,7 +434,7 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_branch_ident
         .collect()
 }
 
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "keeps branch/global solver signatures aligned for the surrounding pipeline"
 )]
@@ -482,7 +481,7 @@ pub(in crate::inference::sensitivity) fn global_identified_set_from_branch_ident
 /// under `DeltaRM` the branch index names which pre-period attains the largest
 /// violation, so at any one realised `betahat_pre` exactly one branch can be
 /// feasible: on Study I's shape, one of eight. The CONFIDENCE set is not
-/// conditioned on the realised pre-trend — the pre-period coefficients are
+/// conditioned on the realised pre-trend. The pre-period coefficients are
 /// random, every branch's moment inequalities are tested against their sampling
 /// covariance, and the confidence set is the union over all of them. Dropping
 /// the branches that the realised pre-trend rules out is conditioning on that
@@ -509,7 +508,7 @@ fn branch_anchor_idx(
     let anchor_value = if (identified.lb..=identified.ub).contains(&original_estimate) {
         original_estimate
     } else {
-        0.5 * (identified.lb + identified.ub)
+        f64::midpoint(identified.lb, identified.ub)
     };
     nearest_grid_index(grid, anchor_value)
 }
@@ -529,7 +528,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_identified_s
     )
 }
 
-#[allow(clippy::too_many_lines)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_set_for_basis_period_with_prepared_input(
     input: &HonestEventStudyInput,
     post_idx: usize,
@@ -656,7 +654,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     })
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(test)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_set_with_prepared_branches(
     input: &HonestEventStudyInput,
@@ -721,11 +718,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     )
 }
 
-#[allow(clippy::too_many_lines)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "identified-set variant threads calibrated branch state explicitly"
-)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_set_with_prepared_functional_branches_and_identified_sets(
     _input: &HonestEventStudyInput,
     _post_weights: &[f64],
@@ -818,7 +810,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_lines)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_set_with_prepared_functional_branches_full_grid(
     inference: InferenceConfig,
     config: RelativeMagnitudeConfidenceSetConfig,
@@ -883,7 +874,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     })
 }
 
-#[allow(clippy::too_many_lines)]
 /// The least-favorable simulation draws for one branch, from its constraint
 /// matrix alone. See [`prepare_relative_magnitude_branch_draws`]'s caller for
 /// why they are made once per branch rather than once per functional.
@@ -976,7 +966,6 @@ fn normalized_f64_bits(value: f64) -> u64 {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compute_relative_magnitude_branch_accepted_range_for_branch(
     grid: &[f64],
     anchor_idx: usize,

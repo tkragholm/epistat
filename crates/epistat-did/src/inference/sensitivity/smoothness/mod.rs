@@ -51,7 +51,6 @@ use super::{
 };
 use crate::types::InferenceConfig;
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SmoothnessMomentSystem {
     pub(crate) constraint_matrix: Vec<Vec<f64>>,
@@ -91,7 +90,6 @@ struct SmoothnessThetaEvaluator<'a> {
 }
 
 impl<'a> SmoothnessThetaEvaluator<'a> {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         y_arp_base: &'a [f64],
         y_full_base: &'a [f64],
@@ -174,6 +172,8 @@ impl<'a> SmoothnessThetaEvaluator<'a> {
     }
 }
 
+/// The largest absolute change between adjacent pre-period estimates, 0 for
+/// fewer than two.
 #[must_use]
 pub fn max_adjacent_pre_period_change(pre_period_estimates: &[f64]) -> f64 {
     pre_period_estimates
@@ -182,6 +182,8 @@ pub fn max_adjacent_pre_period_change(pre_period_estimates: &[f64]) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// Whether no adjacent pre-period change exceeds `m`, allowing `1e-8` for
+/// rounding.
 #[must_use]
 pub fn pre_periods_satisfy_smoothness_bound(pre_period_estimates: &[f64], m: f64) -> bool {
     max_adjacent_pre_period_change(pre_period_estimates) <= m + 1e-8
@@ -301,7 +303,6 @@ pub fn build_monotonicity_restriction_matrix(
     monotonicity_rows
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn find_post_period_constraint_rows(
     a_matrix: &[Vec<f64>],
     num_pre_periods: usize,
@@ -318,7 +319,6 @@ pub fn find_post_period_constraint_rows(
         .collect()
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_smoothness_moment_system(
     num_pre_periods: usize,
     num_post_periods: usize,
@@ -565,7 +565,6 @@ fn fill_sigma_projection(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_smoothness_flci_hybrid_data(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -594,7 +593,6 @@ fn build_smoothness_flci_hybrid_data(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn smoothness_dual_conditional_test(
     y_arp: &[f64],
     y_full: &[f64],
@@ -725,8 +723,6 @@ fn compute_honest_linear_sensitivity_identified_set(
     }
 }
 
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
 fn compute_honest_linear_sensitivity_conditional_cs(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -820,7 +816,6 @@ fn compute_honest_linear_sensitivity_conditional_cs(
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn compute_honest_linear_sensitivity_conditional_cs_full_grid(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1287,7 +1282,6 @@ pub fn compute_signed_smoothness_confidence_set_with_simulation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn compute_signed_smoothness_confidence_set_with_config_counted(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -1511,7 +1505,6 @@ pub fn compute_monotone_smoothness_confidence_set_with_simulation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn compute_monotone_smoothness_confidence_set_with_config_counted(
     input: &HonestEventStudyInput,
     post_weights: &[f64],

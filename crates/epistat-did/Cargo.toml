@@ -96,3 +96,6 @@ required-features = ["parity-tests"]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
+
+[lints]
+workspace = true

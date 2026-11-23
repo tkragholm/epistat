@@ -120,7 +120,6 @@ pub fn assess_honest_event_study_workflow_with_config(
     )
 }
 
-#[allow(clippy::too_many_lines)]
 pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with_config_counted(
     input: &HonestEventStudyInput,
     functionals: &[HonestPostFunctional],
@@ -399,7 +398,6 @@ fn build_workflow_directional_region(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_workflow_multi_function_intervals(
     input: &HonestEventStudyInput,
     post_weight_sets: &[Vec<f64>],

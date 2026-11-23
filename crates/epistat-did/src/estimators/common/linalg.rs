@@ -130,7 +130,7 @@ impl SpdCholeskyScratch {
                 epistat_linalg::SolveError::Shape { .. } => {
                     "coefficient matrix shape does not match rhs length"
                 }
-                _ => NON_FINITE,
+                epistat_linalg::SolveError::NotFinite => NON_FINITE,
             })
     }
 }

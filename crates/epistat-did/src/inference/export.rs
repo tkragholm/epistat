@@ -7,16 +7,22 @@ use crate::inference::vcov::{
 /// Canonical long-form influence row keyed by a stable estimate identifier.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferenceInfluenceRow {
+    /// Identifier of the estimate the influence value belongs to.
     pub estimate_id: String,
+    /// Identifier of the unit.
     pub unit_id: String,
+    /// Influence of the unit on the estimate.
     pub influence_value: f64,
 }
 
 /// Canonical pairwise covariance row keyed by stable estimate identifiers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferenceCovarianceRow {
+    /// Identifier of the first estimate.
     pub estimate_id_left: String,
+    /// Identifier of the second estimate.
     pub estimate_id_right: String,
+    /// Covariance between the two estimates.
     pub covariance: f64,
 }
 

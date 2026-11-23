@@ -280,7 +280,7 @@ fn deduplicate_unit_directions(directions: &mut Vec<Vec<f64>>, is_random: &mut V
     random_direction_count
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "rounded direction buckets intentionally map onto compact integer dedup keys"
 )]
@@ -325,7 +325,6 @@ pub fn assess_honest_event_study_optimization_surface_region_with_config(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_surface_region_with_config_counted(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,
@@ -446,10 +445,9 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
         );
         let calibrate_started = Instant::now();
         // Only the pointwise level is read here: it is what the convergence
-        // test compares. The critical value used to be carried out of the loop
-        // as well, and is not any more -- the region is recomputed at the chosen
-        // count once the loop has decided, so this calibration exists purely to
-        // answer "draw more?".
+        // test compares. The region is recomputed at the chosen count once the
+        // loop has decided, so this calibration only answers whether to draw
+        // more.
         let (current_pointwise, _) =
             calibrate_directional_region(input, &directions, inference, config.joint)?;
         emit_optimization_surface_timing(

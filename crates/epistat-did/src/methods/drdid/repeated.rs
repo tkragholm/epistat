@@ -37,7 +37,7 @@ use crate::types::{DidCell, DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeate
 ///
 /// The implementation here follows the standard doubly robust repeated-cross-
 /// section score and treats the improved / calibrated repeated estimator as a
-/// separate surface in [`super::improved`].
+/// separate surface, [`estimate_drdid_improved_repeated_cross_section`](crate::estimate_drdid_improved_repeated_cross_section).
 ///
 /// References:
 /// - Callaway, B. and Sant'Anna, P. H. C. (2021). "Difference-in-Differences

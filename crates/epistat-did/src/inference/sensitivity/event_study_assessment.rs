@@ -349,7 +349,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_functional_co
 /// # Errors
 /// Returns an error if the event-study input is inconsistent or if the chosen
 /// sensitivity routine fails.
-#[allow(clippy::too_many_lines)]
 pub fn assess_honest_event_study_functional_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -369,7 +368,6 @@ pub fn assess_honest_event_study_functional_with_config(
     )
 }
 
-#[allow(clippy::too_many_lines)]
 pub(in crate::inference::sensitivity) fn assess_honest_event_study_functional_with_config_counted(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -723,7 +721,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_post_function
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn assess_relative_magnitude_functional_with_prepared_functional_branches(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -775,7 +772,6 @@ fn assess_relative_magnitude_functional_with_prepared_functional_branches(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn assess_relative_magnitude_basis_period_with_prepared_input(
     input: &HonestEventStudyInput,
     post_idx: usize,
@@ -807,7 +803,6 @@ fn assess_relative_magnitude_basis_period_with_prepared_input(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn assess_relative_magnitude_basis_period_with_prepared_functional_branches(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -885,9 +880,8 @@ fn prepare_relative_magnitude_base_context(
 /// Assess a typed post-treatment functional using the current least-favorable
 /// `DeltaRM` interval surface.
 ///
-/// This is the study-facing FLCI entrypoint for `DeltaRM`. It currently
-/// surfaces the validated least-favorable conditional interval for the target
-/// functional, packaged into the same [`HonestAssessment`] shape used by the
+/// This is the study-facing FLCI entry point for `DeltaRM`. It returns the
+/// least-favorable conditional interval for the target functional, packaged into the same [`HonestAssessment`] shape used by the
 /// other event-study sensitivity helpers.
 ///
 /// # Errors

@@ -352,7 +352,7 @@ fn estimate_pair_panel(
             continue;
         }
         let delta = cell.post_outcome - cell.pre_outcome;
-        let weight = 0.5 * (cell.pre_weight + cell.post_weight);
+        let weight = f64::midpoint(cell.pre_weight, cell.post_weight);
         if is_treated {
             treated.add(weight, delta);
         } else {

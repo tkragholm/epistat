@@ -57,15 +57,12 @@ mod tests {
     fn logistic_fit_fails_with_no_iterations() {
         let design = simple_design();
         let target = Mat::from_fn(5, 1, |row, _| if row < 3 { 0.0 } else { 1.0 });
-        // max_iter=0 forces BFGS to fail immediately (no iterations allowed),
-        // so the IRLS fallback is exercised.
         let cfg = Config {
             max_iter: 0,
             tol: 1e-8,
             min_weight: 1e-8,
         };
         let est = LogisticPS::new(cfg);
-        // IRLS with 0 iters returns Convergence error
         assert!(est.fit(design.as_ref(), target.as_ref()).is_err());
     }
 }

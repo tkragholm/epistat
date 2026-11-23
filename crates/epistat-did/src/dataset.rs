@@ -7,16 +7,24 @@ use std::hash::Hash;
 
 /// Trait for panel data records that can be consumed by `InferenceDataset`.
 pub trait PanelRecord {
+    /// Type of the unit identifier.
     type UnitId: Eq + Hash + Clone + ToString;
 
+    /// Identifier of the unit the record belongs to.
     fn unit_id(&self) -> &Self::UnitId;
+    /// Time period of the record.
     fn time_period(&self) -> i32;
+    /// Whether the unit is treated in this period.
     fn treatment_status(&self) -> bool;
+    /// Period in which the unit is first treated, `None` for never treated.
     fn first_treated_time(&self) -> Option<i32>;
+    /// Outcome value.
     fn outcome(&self) -> f64;
+    /// Sampling weight, 1.0 unless overridden.
     fn weight(&self) -> f64 {
         1.0
     }
+    /// Covariate values, empty unless overridden.
     fn covariates(&self) -> &[f64] {
         &[]
     }
@@ -25,7 +33,9 @@ pub trait PanelRecord {
 /// Diagnostic severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    /// A problem that prevents analysis.
     Error,
+    /// A problem that does not prevent analysis.
     Warning,
 }
 
@@ -41,18 +51,26 @@ impl std::fmt::Display for Severity {
 /// A single diagnostic finding during dataset validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// Whether the finding is an error or a warning.
     pub severity: Severity,
+    /// Short label of the kind of problem.
     pub category: String,
+    /// Description of the problem.
     pub message: String,
+    /// Identifiers of the units the finding concerns.
     pub affected_units: Vec<String>,
 }
 
 /// A comprehensive validation report for a dataset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationReport {
+    /// All findings from validation.
     pub diagnostics: Vec<Diagnostic>,
+    /// Number of rows in the dataset.
     pub row_count: usize,
+    /// Number of distinct units.
     pub unit_count: usize,
+    /// Number of distinct time periods.
     pub period_count: usize,
 }
 
@@ -270,7 +288,6 @@ impl InferenceDataset {
     }
 
     /// Diagnostic report for a dataset.
-    #[allow(clippy::too_many_lines)]
     pub fn validate_collecting(&self) -> ValidationReport {
         let n_rows = self.unit_ids.len();
         let mut diagnostics = Vec::new();

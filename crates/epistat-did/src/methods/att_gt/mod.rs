@@ -38,10 +38,15 @@ pub use panel_pairs::{
 /// Consolidated result of an event-study estimation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventStudyResult {
+    /// ATT(g,t) estimates.
     pub estimates: Vec<AttGtEstimate>,
+    /// Influence function of each estimate, one vector per estimate.
     pub influence_functions: Vec<Vec<f64>>,
+    /// Cluster membership of the units, if clustered inference was requested.
     pub cluster_index: Option<ClusterIndex>,
+    /// Configuration the estimates were produced with.
     pub config: EventStudyConfig,
+    /// Name of the outcome variable, if known.
     pub outcome_name: Option<String>,
 }
 
@@ -75,8 +80,11 @@ impl EventStudyResult {
 #[cfg(feature = "honest")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowAssessment {
+    /// Robust assessment of the window average.
     pub assessment: HonestAssessment,
+    /// Requested periods that exist in the data.
     pub matched_periods: Vec<i32>,
+    /// Inclusive range of post-treatment periods requested.
     pub requested_range: (i32, i32),
 }
 
@@ -102,10 +110,15 @@ impl WindowAssessment {
 /// Consolidated result of an event-time aggregated event-study.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventTimeResult {
+    /// Event-time aggregated estimates.
     pub estimates: Vec<AttGtEventTimeEstimate>,
+    /// Influence function of each aggregated estimate, one vector per estimate.
     pub influence_functions: Vec<Vec<f64>>,
+    /// Cluster membership of the units, if clustered inference was requested.
     pub cluster_index: Option<ClusterIndex>,
+    /// Configuration the estimates were produced with.
     pub config: EventStudyConfig,
+    /// Name of the outcome variable, if known.
     pub outcome_name: Option<String>,
 }
 

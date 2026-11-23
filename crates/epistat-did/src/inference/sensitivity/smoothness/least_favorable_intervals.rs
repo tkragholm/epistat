@@ -33,12 +33,15 @@ use super::super::{
 use super::super::{SmoothnessMultiFlciPoint, compute_original_confidence_set};
 use crate::util::usize_to_f64;
 
+/// Numerical settings of the smoothness fixed-length interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmoothnessFlciConfig {
+    /// Number of grid points used to search for the optimal interval.
     pub num_grid_points: usize,
 }
 
 impl SmoothnessFlciConfig {
+    /// The settings used in production runs.
     #[must_use]
     pub const fn default_for_production() -> Self {
         Self {
@@ -47,32 +50,52 @@ impl SmoothnessFlciConfig {
     }
 }
 
+/// Inputs of a fixed-length confidence interval under a smoothness restriction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SmoothnessFlciProblem {
+    /// Event-study coefficients and covariance.
     pub input: HonestEventStudyInput,
+    /// Weights of the post-period functional.
     pub post_weights: Vec<f64>,
+    /// Smoothness bound on the second differences of the trend.
     pub m: f64,
+    /// Confidence level settings.
     pub inference: InferenceConfig,
+    /// Original confidence set of the functional.
     pub original: HonestOriginalConfidenceSet,
+    /// Identified set of the functional under the smoothness bound.
     pub identified_set: HonestIdentifiedSet,
 }
 
+/// Fixed-length confidence interval under a smoothness restriction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SmoothnessFlciResult {
+    /// Fixed-length confidence interval.
     pub flci: (f64, f64),
+    /// Original confidence interval.
     pub original_ci: (f64, f64),
+    /// Identified set.
     pub identified_set: (f64, f64),
+    /// Weights of the optimal affine estimator.
     pub optimal_vec: Vec<f64>,
+    /// Half-length of the interval.
     pub optimal_half_length: f64,
 }
 
+/// Inputs of simultaneous fixed-length intervals under a smoothness restriction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SmoothnessMultiFlciProblem {
+    /// Event-study coefficients and covariance.
     pub input: HonestEventStudyInput,
+    /// Weights of each post-period functional.
     pub post_weight_sets: Vec<Vec<f64>>,
+    /// Smoothness bound on the second differences of the trend.
     pub m: f64,
+    /// Confidence level settings.
     pub inference: InferenceConfig,
+    /// Original confidence set of each functional.
     pub originals: Vec<HonestOriginalConfidenceSet>,
+    /// Identified set of each functional.
     pub identified_sets: Vec<HonestIdentifiedSet>,
 }
 
@@ -693,7 +716,7 @@ fn joint_pointwise_confidence_level(
     if n == 1 {
         return Ok((
             problem.inference.confidence_level,
-            critical_value_from_pointwise_confidence(problem.inference.confidence_level)?,
+            critical_value_from_pointwise_confidence(problem.inference.confidence_level),
         ));
     }
     let alpha = 1.0 - problem.inference.confidence_level;
@@ -702,7 +725,7 @@ fn joint_pointwise_confidence_level(
             let pointwise = 1.0 - alpha / usize_to_f64(n);
             Ok((
                 pointwise,
-                critical_value_from_pointwise_confidence(pointwise)?,
+                critical_value_from_pointwise_confidence(pointwise),
             ))
         }
         HonestJointPathMethod::GaussianSimulated => {
@@ -713,10 +736,7 @@ fn joint_pointwise_confidence_level(
                 joint_config.simulation_draws,
                 joint_config.simulation_seed,
             )?;
-            Ok((
-                pointwise_confidence_level_from_critical(critical)?,
-                critical,
-            ))
+            Ok((pointwise_confidence_level_from_critical(critical), critical))
         }
     }
 }

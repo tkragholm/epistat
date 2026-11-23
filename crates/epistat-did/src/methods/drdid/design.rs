@@ -45,7 +45,10 @@ use epistat_linalg::DesignError;
 pub enum DesignPruning<'a> {
     /// Within each arm separately, `treated` giving each row's arm. This is
     /// the rule the panel estimator applies to every fit.
-    PerArm { treated: &'a [bool] },
+    PerArm {
+        /// Whether each row is in the treated arm.
+        treated: &'a [bool],
+    },
     /// On all rows together.
     Pooled,
 }
@@ -161,7 +164,7 @@ pub(super) fn prune_design(
             expected,
             actual: got,
         },
-        other => DrDidError::InvalidConfig(other.to_string()),
+        other @ DesignError::Tolerance => DrDidError::InvalidConfig(other.to_string()),
     })?;
     let kept: Vec<usize> = (0..feature_count).filter(|&c| kept_flags[c]).collect();
 

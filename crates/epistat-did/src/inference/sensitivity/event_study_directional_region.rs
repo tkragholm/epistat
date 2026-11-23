@@ -119,7 +119,7 @@ pub(super) fn calibrate_directional_region(
             }
             Ok((
                 pointwise,
-                critical_value_from_pointwise_confidence(pointwise)?,
+                critical_value_from_pointwise_confidence(pointwise),
             ))
         }
         HonestJointPathMethod::GaussianSimulated => {
@@ -130,10 +130,7 @@ pub(super) fn calibrate_directional_region(
                 joint_config.simulation_seed,
                 directions,
             )?;
-            Ok((
-                pointwise_confidence_level_from_critical(critical)?,
-                critical,
-            ))
+            Ok((pointwise_confidence_level_from_critical(critical), critical))
         }
     }
 }
@@ -165,7 +162,6 @@ pub fn assess_honest_event_study_directional_region_with_config(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_region_with_config_counted(
     input: &HonestEventStudyInput,
     directions: &[Vec<f64>],
@@ -224,7 +220,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
     )
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_region_with_precalibrated_pointwise(
     input: &HonestEventStudyInput,
     directions: &[Vec<f64>],

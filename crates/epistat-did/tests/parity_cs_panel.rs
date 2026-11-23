@@ -7,8 +7,6 @@
 //! not analytic) and `cband = TRUE` (so its intervals are simultaneous, not
 //! pointwise). The fixtures set all three explicitly.
 
-#![allow(clippy::float_cmp)]
-
 use epistat_testkit::load_json;
 
 use epistat_did::{
@@ -603,11 +601,14 @@ fn aggregated_variance_uses_the_influence_functions_not_the_diagonal() {
             .iter()
             .filter(|e| e.event_time == key)
             .collect::<Vec<_>>();
-        let total: f64 = members.iter().map(|e| f64::from(e.treated_n as u32)).sum();
+        let total: f64 = members
+            .iter()
+            .map(|e| f64::from(u32::try_from(e.treated_n).expect("a small count")))
+            .sum();
         members
             .iter()
             .map(|e| {
-                let w = f64::from(e.treated_n as u32) / total;
+                let w = f64::from(u32::try_from(e.treated_n).expect("a small count")) / total;
                 w * w * e.se * e.se
             })
             .sum::<f64>()
@@ -729,7 +730,9 @@ fn clustered_mboot_bands_agree_with_did() {
 fn clustering_by_unit_reproduces_the_unclustered_standard_error() {
     let (estimates, influence, panel, _) = universal_run();
     let n = influence[0].len();
-    let singleton = (0..n).map(|i| i as i64).collect::<Vec<i64>>();
+    let singleton = (0..n)
+        .map(|i| i64::try_from(i).expect("a small index"))
+        .collect::<Vec<i64>>();
 
     let plain = epistat_did::aggregate_att_gt(
         &estimates,
@@ -1017,12 +1020,10 @@ fn aggte_dynamic_trimming_matches_r() {
     }
 }
 
-/// The repeated-cross-section route, which previously had no reference at all.
+/// The repeated-cross-section route.
 ///
-/// `did_attgt_dr_ref.json` has sat in this directory since before the panel route
-/// existed and was consumed by nothing: it was generated with `att_gt`'s default
-/// `panel = TRUE` while the only Rust path available was RC, so it could never
-/// have passed.
+/// `did_attgt_dr_ref.json` is `att_gt`'s default `panel = TRUE` output, a
+/// panel estimate, so this test does not compare against it.
 ///
 /// # These are two different estimators, not two implementations of one
 ///

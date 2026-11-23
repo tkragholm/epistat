@@ -341,7 +341,7 @@ fn joint_pointwise_confidence_level(
     if n == 1 {
         return Ok((
             problem.inference.confidence_level,
-            critical_value_from_pointwise_confidence(problem.inference.confidence_level)?,
+            critical_value_from_pointwise_confidence(problem.inference.confidence_level),
         ));
     }
     let alpha = 1.0 - problem.inference.confidence_level;
@@ -355,7 +355,7 @@ fn joint_pointwise_confidence_level(
             }
             Ok((
                 pointwise,
-                critical_value_from_pointwise_confidence(pointwise)?,
+                critical_value_from_pointwise_confidence(pointwise),
             ))
         }
         HonestJointPathMethod::GaussianSimulated => {
@@ -366,10 +366,7 @@ fn joint_pointwise_confidence_level(
                 joint_config.simulation_draws,
                 joint_config.simulation_seed,
             )?;
-            Ok((
-                pointwise_confidence_level_from_critical(critical)?,
-                critical,
-            ))
+            Ok((pointwise_confidence_level_from_critical(critical), critical))
         }
     }
 }

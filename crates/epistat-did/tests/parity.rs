@@ -1,4 +1,7 @@
-#![allow(dead_code, clippy::float_cmp)]
+#![expect(
+    dead_code,
+    reason = "the fixtures carry fields that only some tests read"
+)]
 
 use epistat_did::{
     AttGtConfig, AttGtObservation, ContinuousObservation, DidCcConfig, DrDidConfig,
@@ -330,10 +333,8 @@ struct HonestRelativeMagnitudeRef {
 #[derive(Deserialize)]
 struct HonestRelativeMagnitudeFixture {
     // `l_vec` is the R name for this vector, and what generate_reference_data.R
-    // writes. Without the alias serde found no `post_weights`, `default` handed
-    // back an empty Vec, and eight tests died downstream at "post_weights length
-    // 0 does not match number of post periods 4" — a fixture-schema mismatch
-    // wearing the costume of an estimator bug.
+    // writes. Without the alias serde would find no `post_weights` and
+    // `default` would hand back an empty Vec.
     //
     // `default` stays: honest_did_rm_ref.json genuinely carries no weight vector
     // and the tests reading it supply their own.
@@ -521,8 +522,14 @@ fn honest_relative_magnitude_fixture_is_available_for_future_parity() {
             .iter()
             .all(|row| row.id_lb <= row.id_ub)
     );
-    assert_eq!(rm_ref.relative_magnitude[0].mbar, 0.5);
-    assert_eq!(rm_ref.relative_magnitude[1].mbar, 1.0);
+    assert_eq!(
+        rm_ref.relative_magnitude[0].mbar.to_bits(),
+        0.5_f64.to_bits()
+    );
+    assert_eq!(
+        rm_ref.relative_magnitude[1].mbar.to_bits(),
+        1.0_f64.to_bits()
+    );
 }
 
 #[test]
@@ -1862,7 +1869,7 @@ fn honest_multi_flci_scaffold_fixture_drives_joint_solver() {
         pre_periods,
         post_periods,
     };
-    assert!(!fixture.post_weight_sets.is_empty());
+    assert_ne!(fixture.post_weight_sets.len(), 0);
     assert!(
         fixture
             .post_weight_sets

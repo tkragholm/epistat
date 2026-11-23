@@ -1,5 +1,3 @@
-#![allow(clippy::float_cmp)]
-
 use super::relative_magnitude::geometry::{
     build_target_and_design, build_target_and_design_from_transform,
     prepare_relative_magnitude_branches, prepare_relative_magnitude_functional_transform,
@@ -20,7 +18,7 @@ use crate::{AttGtEstimate, InferenceConfig};
 fn assert_same_interval(left: (f64, f64), right: (f64, f64)) {
     for (left_bound, right_bound) in [(left.0, right.0), (left.1, right.1)] {
         if left_bound.is_infinite() || right_bound.is_infinite() {
-            assert_eq!(left_bound, right_bound);
+            assert_eq!(left_bound.to_bits(), right_bound.to_bits());
         } else {
             assert!((left_bound - right_bound).abs() < 1e-8);
         }
@@ -139,8 +137,8 @@ fn construct_honest_original_cs_matches_manual_single_post_period() {
     };
     let result = compute_original_confidence_set(&input, &[1.0, 0.0], InferenceConfig::new(0.95))
         .expect("original cs");
-    assert_eq!(result.estimate, 10.0);
-    assert_eq!(result.se, 1.0);
+    assert_eq!(result.estimate.to_bits(), 10.0_f64.to_bits());
+    assert_eq!(result.se.to_bits(), 1.0_f64.to_bits());
     assert!(result.ci.0 < 10.0);
     assert!(result.ci.1 > 10.0);
 }
@@ -182,7 +180,7 @@ fn assess_honest_event_study_period_reports_significance_against_zero() {
     )
     .expect("period assessment");
 
-    assert_eq!(assessment.null_value, 0.0);
+    assert_eq!(assessment.null_value.to_bits(), 0.0_f64.to_bits());
     assert!(assessment.robust_ci.0 <= assessment.robust_ci.1);
     assert!(assessment.robustly_significant);
 }
@@ -314,8 +312,8 @@ fn delta_sd_conditional_cs_returns_unbounded_interval_when_pretrends_violate_bou
     };
     let result = compute_smoothness_confidence_set(&input, &[1.0], 1.0, InferenceConfig::new(0.95))
         .expect("conditional cs");
-    assert_eq!(result.lb, f64::NEG_INFINITY);
-    assert_eq!(result.ub, f64::INFINITY);
+    assert_eq!(result.lb.to_bits(), f64::NEG_INFINITY.to_bits());
+    assert_eq!(result.ub.to_bits(), f64::INFINITY.to_bits());
 }
 
 #[test]
@@ -421,8 +419,8 @@ fn delta_sd_least_favorable_simulation_size_is_honoured() {
         compute_smoothness_confidence_set_with_config(&input, &[1.0], 0.5, inference, config)
             .expect("default lf conditional cs");
     assert_eq!(
-        default.ub - default.lb,
-        width(LeastFavorableSimulation::default())
+        (default.ub - default.lb).to_bits(),
+        width(LeastFavorableSimulation::default()).to_bits()
     );
 
     let draws: Vec<f64> = (0..10)
@@ -435,7 +433,7 @@ fn delta_sd_least_favorable_simulation_size_is_honoured() {
         sd > 0.0,
         "the simulation seed must reach the critical value"
     );
-    assert_ne!(large, default.ub - default.lb);
+    assert_ne!(large.to_bits(), (default.ub - default.lb).to_bits());
     epistat_testkit::assert_within_standard_errors(
         default.ub - default.lb,
         sd,
@@ -960,7 +958,7 @@ fn honest_did_returns_original_and_robust_results_for_requested_post_period() {
         result.sensitivity_type,
         SensitivityRestrictionKind::RelativeMagnitude
     );
-    assert_eq!(result.orig_ci.estimate, 0.4);
+    assert_eq!(result.orig_ci.estimate.to_bits(), 0.4_f64.to_bits());
     assert_eq!(result.robust_ci.rows.len(), 2);
     assert!(
         result
@@ -1756,9 +1754,9 @@ fn a_near_tie_of_the_two_largest_pre_steps_solves_on_the_joint_path() {
             let mut post_weights = vec![0.0; input.num_post_periods()];
             post_weights[idx] = 1.0;
             let (lb, ub) = closed_form_identified_set(&input, &post_weights, mbar);
-            let (got_lb, got_ub) = point.assessment.identified_set;
-            assert!((got_lb - lb).abs() < 1e-6, "t+{idx} Mbar {mbar}");
-            assert!((got_ub - ub).abs() < 1e-6, "t+{idx} Mbar {mbar}");
+            let (lower, upper) = point.assessment.identified_set;
+            assert!((lower - lb).abs() < 1e-6, "t+{idx} Mbar {mbar}");
+            assert!((upper - ub).abs() < 1e-6, "t+{idx} Mbar {mbar}");
         }
     }
 }

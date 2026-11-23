@@ -1,14 +1,9 @@
 //! Doubly robust difference-in-differences estimators.
 //!
-//! Current ownership:
-//! - [`improved`] contains the explicit locally efficient / improved entrypoints.
-//! - [`panel`] contains the panel-data implementation backing the improved panel estimator.
-//! - [`repeated`] contains the traditional repeated-cross-section estimator.
-//!
-//! Historical note:
-//! - `estimate_drdid_panel` is retained as a compatibility name, but it currently
-//!   implements the improved / locally efficient panel estimator matching
-//!   `DRDID::drdid_panel`.
+//! - [`improved`] holds the improved, locally efficient entry points.
+//! - [`panel`] holds the panel estimator. `estimate_drdid_panel` is the
+//!   locally efficient panel estimator of `DRDID::drdid_panel`.
+//! - [`repeated`] holds the traditional repeated cross-section estimator.
 
 mod design;
 pub mod improved;

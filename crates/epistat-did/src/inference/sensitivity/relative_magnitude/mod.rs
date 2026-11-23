@@ -447,7 +447,6 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compute_relative_magnitude_confidence_set_with_builder<F>(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -625,7 +624,6 @@ fn compute_relative_magnitude_family_conditional_cs_with_config(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_family_conditional_cs_with_precomputed_sets(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -780,8 +778,8 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
 /// closely than [`compute_relative_magnitude_confidence_set`], which uses the
 /// least-favorable default. In particular:
 ///
-/// - [`RelativeMagnitudeHybrid::LeastFavorable`] corresponds to `hybrid_flag = "LF"`
-/// - [`RelativeMagnitudeHybrid::ArpOnly`] corresponds to `hybrid_flag = "ARP"`
+/// - [`LeastFavorable`](crate::RelativeMagnitudeHybrid::LeastFavorable) corresponds to `hybrid_flag = "LF"`
+/// - [`ArpOnly`](crate::RelativeMagnitudeHybrid::ArpOnly) corresponds to `hybrid_flag = "ARP"`
 ///
 /// # Errors
 /// Returns an error if `input` is inconsistent, `post_weights` is invalid, or the
@@ -822,7 +820,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_set_with_precomputed_sets(
     input: &HonestEventStudyInput,
     post_weights: &[f64],

@@ -48,6 +48,7 @@ pub enum AggteType {
 /// Configuration for [`aggregate_att_gt`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AggteConfig {
+    /// Which summary to produce.
     pub aggregation: AggteType,
     /// Restrict the dynamic path to a FIXED cohort composition: keep only
     /// cohorts observed for at least this many post-treatment periods, and only
@@ -65,6 +66,7 @@ pub struct AggteConfig {
     pub min_e: Option<i32>,
     /// Drop event times above this, inclusive bound. `did::aggte(max_e = )`.
     pub max_e: Option<i32>,
+    /// Confidence level settings for the intervals.
     pub confidence_level: InferenceConfig,
 }
 
@@ -85,10 +87,15 @@ impl Default for AggteConfig {
 pub struct AggteEstimate {
     /// Event time, cohort or calendar period, depending on the type.
     pub key: i32,
+    /// Estimated average treatment effect on the treated.
     pub att: f64,
+    /// Standard error of the estimate.
     pub se: f64,
+    /// Lower bound of the confidence interval.
     pub ci_low: f64,
+    /// Upper bound of the confidence interval.
     pub ci_high: f64,
+    /// Influence function of the aggregated estimate, one value per unit.
     pub influence: Vec<f64>,
 }
 
@@ -96,10 +103,15 @@ pub struct AggteEstimate {
 /// one, the path behind it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AggteResult {
+    /// Overall aggregated effect.
     pub overall_att: f64,
+    /// Standard error of the overall effect.
     pub overall_se: f64,
+    /// Lower bound of the overall confidence interval.
     pub overall_ci_low: f64,
+    /// Upper bound of the overall confidence interval.
     pub overall_ci_high: f64,
+    /// Influence function of the overall effect, one value per unit.
     pub overall_influence: Vec<f64>,
     /// Empty for [`AggteType::Simple`], which has no path.
     pub by_key: Vec<AggteEstimate>,
@@ -108,14 +120,34 @@ pub struct AggteResult {
 /// Errors from aggregation.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum AggteError {
+    /// No ATT(g,t) estimates were given.
     #[error("aggregation requires at least one ATT(g,t) estimate")]
     EmptyInput,
+    /// The number of influence vectors differs from the number of estimates.
     #[error("influence matrix has {influence} vectors for {estimates} estimates")]
-    ShapeMismatch { influence: usize, estimates: usize },
+    ShapeMismatch {
+        /// Number of influence vectors.
+        influence: usize,
+        /// Number of ATT(g,t) estimates.
+        estimates: usize,
+    },
+    /// The influence vectors differ in length.
     #[error("influence vectors must all have the unit count; got {actual}, expected {expected}")]
-    RaggedInfluence { expected: usize, actual: usize },
+    RaggedInfluence {
+        /// Number of units, taken from the first vector.
+        expected: usize,
+        /// Length of the offending vector.
+        actual: usize,
+    },
+    /// The number of `unit_groups` entries differs from the influence vector length.
     #[error("unit_groups has {actual} entries but the influence vectors have {expected}")]
-    UnitGroupMismatch { expected: usize, actual: usize },
+    UnitGroupMismatch {
+        /// Length of the influence vectors.
+        expected: usize,
+        /// Number of entries in `unit_groups`.
+        actual: usize,
+    },
+    /// No post-treatment cells remain after the requested restrictions.
     #[error("no post-treatment cells survive the requested aggregation")]
     NoPostTreatmentCells,
 }

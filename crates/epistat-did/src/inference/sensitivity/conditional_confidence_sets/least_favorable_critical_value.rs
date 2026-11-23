@@ -23,13 +23,10 @@ use super::ConditionalMomentLpWorkspace;
 
 /// Draw count above which the simulation splits across rayon.
 ///
-/// Every call site asks for 1,000 draws, so this used to be unreachable: the
-/// gate was 2,048 and the parallel arm was dead code. It is 512 now, which the
-/// production call does cross. Nested inside an outer parallel loop over
-/// functionals this buys little — rayon's pool is already saturated and the
-/// work is merely re-divided — but a caller assessing ONE functional had every
-/// core but one idle for the whole simulation, and that is the shape a test and
-/// the tail of a fan-out both have.
+/// The call sites ask for 1,000 draws, above this threshold. Nested inside an
+/// outer parallel loop over functionals the split buys little, since rayon's
+/// pool is already busy, but a caller assessing one functional would otherwise
+/// leave every core but one idle for the whole simulation.
 const LEAST_FAVORABLE_CV_PARALLEL_MIN_DRAWS: usize = 512;
 const LEAST_FAVORABLE_CV_PARALLEL_MIN_DIM: usize = 16;
 /// Fewest draws a rayon job takes. Without a floor, nested parallelism split a
@@ -38,14 +35,10 @@ const LEAST_FAVORABLE_CV_MIN_DRAWS_PER_JOB: usize = 32;
 
 /// Compute the least-favorable critical value for an ARP design.
 ///
-/// There is no memo. A process-wide `OnceMap` keyed on the bit patterns of
-/// `x_matrix` and `sigma` sat here until 4 September 2026 and nothing evicted
-/// from it. It could not: every analysis slice carries its own covariance, so a
-/// key is only ever reachable again inside the slice that made it. Measured on
-/// Study I's shape it answered 140 of 1,440 calls — 9.7% — and retained 15.3 MB
-/// per slice-anchor for good. Resident memory grew 16 MB per slice and stayed
-/// grown (157 MB after eight, against a flat 30 MB with the memo off), and the
-/// production stage runs 108 slices at two anchors in one process.
+/// There is no process-wide memo. Every analysis slice carries its own
+/// covariance, so a key would only be reached again inside the slice that made
+/// it, and a memo that nothing evicts grows with every slice: on Study I's
+/// shape it answered about one call in ten and kept 15 MB per slice.
 ///
 /// The 9.7% is real and is now paid. It is the cheaper side of the trade: the
 /// key was two boxed bit-vectors built and hashed on every call including the

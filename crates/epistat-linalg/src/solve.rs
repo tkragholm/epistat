@@ -494,7 +494,7 @@ impl CholeskySolver {
         if a.len() != n * n || b.len() != n || out.len() != n {
             return Err(SolveError::Shape {
                 rows: n,
-                cols: if n == 0 { 0 } else { a.len() / n },
+                cols: a.len().checked_div(n).unwrap_or(0),
                 rhs: b.len(),
             });
         }
@@ -681,8 +681,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            [lower[(0, 0)], lower[(1, 0)], lower[(0, 1)]],
-            [1.0, 1.0, 0.0]
+            [lower[(0, 0)], lower[(1, 0)], lower[(0, 1)]].map(f64::to_bits),
+            [1.0_f64, 1.0, 0.0].map(f64::to_bits)
         );
         assert!(lower[(1, 1)].is_finite());
     }

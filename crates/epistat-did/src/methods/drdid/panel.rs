@@ -43,9 +43,8 @@ use crate::util::usize_to_f64;
 ///   Differences Estimators". *Journal of Econometrics*.
 /// - `DRDID::drdid_panel` (R), used as the numerical parity reference.
 ///
-/// This function is retained under the historical `estimate_drdid_panel` name for
-/// compatibility, but the implemented estimator is the improved / locally efficient
-/// panel estimator corresponding to `DRDID::drdid_panel`.
+/// The estimator is the locally efficient panel estimator of
+/// `DRDID::drdid_panel`.
 ///
 /// # Errors
 ///
@@ -60,7 +59,7 @@ pub fn estimate_drdid_panel(
     }
 
     let prepared = prepare_panel_data(observations)?;
-    estimate_from_prepared(prepared, config)
+    estimate_from_prepared(&prepared, config)
 }
 
 /// One row's worth of the design, laid out flat.
@@ -114,7 +113,7 @@ pub fn estimate_drdid_panel_flat(
         return Err(DrDidError::EmptyInput);
     }
     let prepared = prepare_panel_flat(input)?;
-    estimate_from_prepared(prepared, config)
+    estimate_from_prepared(&prepared, config)
 }
 
 /// The panel DR estimator's two nuisance models, as
@@ -244,12 +243,12 @@ pub struct PanelNuisanceFit {
 }
 
 fn estimate_from_prepared(
-    prepared: PanelPreparedData,
+    prepared: &PanelPreparedData,
     config: DrDidConfig,
 ) -> Result<DrDidEstimate, DrDidError> {
-    let nuisance = fit_panel_nuisance_models(&prepared, config)?;
+    let nuisance = fit_panel_nuisance_models(prepared, config)?;
     let panel_att = estimate_panel_att_and_influence(
-        &prepared,
+        prepared,
         &nuisance.normalized_weights,
         &nuisance.propensity_scores,
         &nuisance.outcome_predictions,
@@ -1366,7 +1365,7 @@ mod tests {
             },
         )
         .expect("fit");
-        assert_eq!(fit.coefficients[1], 0.0);
+        assert_eq!(fit.coefficients[1].abs().to_bits(), 0.0_f64.to_bits());
         assert!((fit.coefficients[0] - (0.5_f64).ln()).abs() < 1e-8);
     }
 
@@ -1403,6 +1402,11 @@ mod tests {
 
     /// Study II's shape: an intercept, period and cell dummies that are
     /// sparse in one arm, and one that only the treated arm has.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a uniform draw in [0, 1) scaled to a period index"
+    )]
     fn dummy_design(n: usize, seed: u64) -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f64>, usize) {
         let mut next = stream(seed);
         let k = 9;
@@ -1479,15 +1483,16 @@ mod tests {
     fn propensity_coefficients_equal_the_full_fits_bit_for_bit() {
         let mut compared = 0;
         for seed in 1..=12_u64 {
-            let (t, d, w, x, k) = dummy_design(400 + 37 * seed as usize, seed);
+            let seed_index = usize::try_from(seed).expect("a small seed");
+            let (t, d, w, x, k) = dummy_design(400 + 37 * seed_index, seed);
             for config in [
                 DrDidConfig::default(),
                 DrDidConfig::builder().tol(1e-5).build(),
             ] {
                 compared += usize::from(assert_same_coefficients(&t, &d, &w, &x, k, config));
             }
-            let kc = 2 + (seed as usize % 6);
-            let (t, d, w, x) = continuous_design(300 + 50 * seed as usize, kc, 100 + seed);
+            let kc = 2 + (seed_index % 6);
+            let (t, d, w, x) = continuous_design(300 + 50 * seed_index, kc, 100 + seed);
             compared += usize::from(assert_same_coefficients(
                 &t,
                 &d,

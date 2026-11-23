@@ -351,14 +351,14 @@ fn ported_error_display_is_stable() {
 fn weights_trim_stabilize_and_normalize_cover_edge_cases() {
     assert_eq!(trim(&[0.0, 0.5, 1.0], 0.1), vec![0.1, 0.5, 0.9]);
 
-    assert!(stabilize(&[]).is_empty());
+    assert_eq!(stabilize(&[]).len(), 0);
     assert_eq!(stabilize(&[1.0, -1.0]), vec![1.0, -1.0]);
     let stabilized = stabilize(&[1.0, 3.0]);
     assert!((stabilized[0] - 0.5).abs() < 1e-12);
     assert!((stabilized[1] - 1.5).abs() < 1e-12);
 
     let empty = Mat::<f64>::zeros(0, 1);
-    assert!(normalize_weights(&empty).is_empty());
+    assert_eq!(normalize_weights(&empty).len(), 0);
 
     let zero_sum = Mat::from_fn(2, 1, |row, _| if row == 0 { 1.0 } else { -1.0 });
     assert_eq!(normalize_weights(&zero_sum), vec![1.0, 1.0]);

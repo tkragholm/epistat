@@ -2,8 +2,6 @@
 //! `DRDID::drdid_rc` 1.3.0, which is what `did::att_gt(est_method = "dr")` calls
 //! on repeated cross sections.
 
-#![allow(clippy::float_cmp)]
-
 use epistat_testkit::load_json;
 
 use epistat_did::{DrDidConfig, DrDidRepeatedObservation, estimate_drdid_repeated_efficient};

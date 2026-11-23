@@ -26,7 +26,6 @@ pub(in crate::inference::sensitivity) struct DualAcceptanceRegion {
     pub(in crate::inference::sensitivity) vup: f64,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn dual_acceptance_region(
     y_arp: &[f64],
     sigma_arp: &[Vec<f64>],
@@ -71,7 +70,6 @@ pub(in crate::inference::sensitivity) fn dual_acceptance_region(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::inference::sensitivity) fn dual_conditional_test(
     y_arp: &[f64],
     sigma_arp: &[Vec<f64>],
@@ -332,7 +330,6 @@ fn compute_dual_vlo_vup(
     Ok((vlo, vup))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn bisect_dual_boundary(
     mut high: f64,
     mut low: f64,
@@ -345,9 +342,9 @@ fn bisect_dual_boundary(
 ) -> Result<f64, String> {
     for _ in 0..10_000 {
         if (high - low).abs() <= DUAL_BOUNDARY_TOL {
-            return Ok((high + low) * 0.5);
+            return Ok(f64::midpoint(high, low));
         }
-        let mid = (high + low) * 0.5;
+        let mid = f64::midpoint(high, low);
         let honest = check_dual_solution(
             mid,
             DUAL_FEASIBILITY_TOL,
@@ -369,7 +366,7 @@ fn bisect_dual_boundary(
             low = mid;
         }
     }
-    Ok((high + low) * 0.5)
+    Ok(f64::midpoint(high, low))
 }
 
 fn check_dual_solution(
