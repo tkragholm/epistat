@@ -6,11 +6,14 @@
 //! multinomial regression, a sampled column and a passive column. Every
 //! imputed value and every chain statistic goes into the comparison, so a
 //! draw that depended on how rows or chains were divided would show.
+//!
+//! The fingerprint depends on the platform's `ln`, `exp` and `cos`, so it is
+//! checked only on aarch64 macOS, where it was recorded.
 
 use epistat_impute::{
     Column, ImputeOptions, ImputeSpec, Imputed, Incomplete, Method, PassiveFn, impute,
 };
-use epistat_testkit::{Fingerprint, SplitMix64, assert_same_on_pools, assert_same_on_threads};
+use epistat_testkit::{SplitMix64, assert_same_on_pools, assert_same_on_threads};
 
 fn normal(rng: &mut SplitMix64) -> f64 {
     let (u, v) = (1.0 - rng.unit(), rng.unit());
@@ -117,10 +120,12 @@ fn the_seed_changes_the_values_and_a_repeat_does_not() {
 }
 
 #[test]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn golden_fingerprint() {
     let values = flatten(&run(20_261_123));
-    let hash = Fingerprint::new().f64s(&values).finish();
+    let hash = epistat_testkit::Fingerprint::new().f64s(&values).finish();
     assert_eq!(hash, GOLDEN, "{hash:#018x}");
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const GOLDEN: u64 = 0x302e_bd21_86b8_c47c;
