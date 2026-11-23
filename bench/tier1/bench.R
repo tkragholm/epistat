@@ -13,7 +13,13 @@ n <- as.integer(args[1]); method <- args[2]; scratch <- args[3]
 out <- Sys.getenv("OUT", file.path(scratch, "out"))
 reps <- as.integer(Sys.getenv("REPS", "3"))
 dir.create(out, showWarnings = FALSE, recursive = TRUE)
-rd <- function(kind) fread(file.path(scratch, sprintf("%s_%d.csv", kind, n)))
+# Integer columns are read as doubles, as the Rust side reads them: survival's
+# pyears treats integer dates and ages differently from numeric ones.
+rd <- function(kind) {
+  d <- fread(file.path(scratch, sprintf("%s_%d.csv", kind, n)))
+  for (j in names(d)) if (is.integer(d[[j]])) set(d, j = j, value = as.numeric(d[[j]]))
+  d
+}
 setDTthreads(0)
 
 timed <- function(f, reps = get("reps", envir = globalenv())) {
@@ -26,8 +32,8 @@ timed <- function(f, reps = get("reps", envir = globalenv())) {
   list(times = times, value = value)
 }
 finish <- function(times, values) {
-  d <- data.table(name = names(values), value = as.numeric(values))
-  fwrite(d, file.path(out, sprintf("r_%s_%d.csv", method, n)), digits = 17)
+  d <- data.table(name = names(values), value = sprintf("%.17g", as.numeric(values)))
+  fwrite(d, file.path(out, sprintf("r_%s_%d.csv", method, n)), quote = FALSE)
   path <- file.path(out, "r_times.csv")
   row <- data.table(n = n, method = method, reps = length(times),
                     median_s = median(times), min_s = min(times))
@@ -72,7 +78,7 @@ if (method == "gen_pool") {
       bq = unname(coef(f)["bmi"]), bu = unname(vcov(f)["bmi", "bmi"]),
       wald = drop(t(q) %*% solve(u) %*% q), dfcom = f$df.residual)
   })
-  fwrite(as.data.table(do.call(rbind, rows)), file.path(scratch, "pool_50.csv"), digits = 17)
+  fwrite(as.data.table(do.call(rbind, rows)), file.path(scratch, "pool_50.csv"))
   quit(save = "no")
 }
 
@@ -266,7 +272,7 @@ if (method %in% c("rcs", "ns")) {
     rt <- structure(rates, dimnames = list(age = as.character(age_cuts[1:120]), sex = c("male", "female"),
                                            year = as.character(year_cuts[1:40])),
                     dimid = c("age", "sex", "year"),
-                    cutpoints = list(age_cuts[1:120], NULL, year_cuts[1:40]),
+                    cutpoints = list(age_cuts[1:120], NULL, as.Date(year_cuts[1:40], origin = "1970-01-01")),
                     type = c(2L, 1L, 3L), class = "ratetable")
     d$sexc <- d$sex + 1L
     observed <- sum(d$ev)

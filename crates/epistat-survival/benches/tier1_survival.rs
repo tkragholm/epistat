@@ -63,7 +63,10 @@ fn generate_pyr(n: usize) {
     let mut rng = Rng(SEED);
     let mut out = Writer::create(&common::data_path("pyr", n), "age0,date0,dur,ev,sex");
     for _ in 0..n {
-        let age0 = (rng.uniform() * 80.0 * YEAR_DAYS).floor();
+        // A fraction of a day, so that the age and the calendar date never reach
+        // a cut point at the same instant, which R and this crate may order
+        // differently.
+        let age0 = (rng.uniform() * 80.0 * YEAR_DAYS).floor() + 0.37;
         let date0 = days_from_civil(2000, 1, 1) as f64 + (rng.uniform() * 4747.0).floor();
         let dur = 30.0 + (rng.uniform() * 2800.0).floor();
         let ev = f64::from(u8::from(
