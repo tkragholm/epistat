@@ -244,7 +244,8 @@ if (method %in% c("rcs", "ns")) {
   suppressMessages(library(survival))
   d <- as.data.frame(rd("pyr"))
   if (method == "pyears_rates") {
-    age_cuts <- round((0:18) * 5 * 365.25)
+    # Cut points rounded half up, as f64::round does on the Rust side.
+    age_cuts <- floor((0:18) * 5 * 365.25 + 0.5)
     year_cuts <- as.numeric(as.Date(sprintf("%d-01-01", 2000:2023)))
     w <- 1:18
     r <- timed(function() {
@@ -264,7 +265,7 @@ if (method %in% c("rcs", "ns")) {
     vals["rate_ratio"] <- (s[[2]]$events / s[[2]]$time) / (s[[1]]$events / s[[1]]$time)
     finish(r$times, vals)
   } else {
-    age_cuts <- round((0:120) * 365.25)
+    age_cuts <- floor((0:120) * 365.25 + 0.5)
     year_cuts <- as.numeric(as.Date(sprintf("%d-01-01", 1990:2030)))
     rates <- array(0, c(120, 2, 40))
     for (a in 1:120) for (s in 1:2) for (y in 1:40)
