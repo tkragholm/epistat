@@ -583,10 +583,7 @@ pub(crate) fn independent_columns(x: MatRef<'_, f64>, w2: &[f64], epsilon: f64) 
 
 /// The sum of `term(range, &v[range])` over the blocks of `v`, added in block
 /// order.
-fn blocked_sum(
-    v: &[f64],
-    term: impl Fn(std::ops::Range<usize>, &[f64]) -> f64 + Sync,
-) -> f64 {
+fn blocked_sum(v: &[f64], term: impl Fn(std::ops::Range<usize>, &[f64]) -> f64 + Sync) -> f64 {
     let partial: Vec<f64> = v
         .par_chunks(ROW_BLOCK)
         .enumerate()

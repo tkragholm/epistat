@@ -142,12 +142,20 @@ pub fn adjust(p: &[f64], method: Adjustment, n: Option<usize>) -> Result<Vec<f64
 /// A p-value in the order of [`f64::total_cmp`], as an unsigned integer.
 fn order_key(v: f64) -> u64 {
     let bits = v.to_bits();
-    if bits >> 63 == 1 { !bits } else { bits | 1 << 63 }
+    if bits >> 63 == 1 {
+        !bits
+    } else {
+        bits | 1 << 63
+    }
 }
 
 /// The p-value of an [`order_key`].
 fn key_value(key: u64) -> f64 {
-    f64::from_bits(if key >> 63 == 1 { key & !(1 << 63) } else { !key })
+    f64::from_bits(if key >> 63 == 1 {
+        key & !(1 << 63)
+    } else {
+        !key
+    })
 }
 
 /// Bits of one pass of the radix sort.
@@ -173,7 +181,8 @@ fn sorted_keys(p: &[f64], descending: bool) -> Vec<(u64, usize)> {
         })
         .collect();
     let passes = u64::BITS.div_ceil(DIGIT_BITS) as usize;
-    let digit = |key: u64, pass: usize| ((key >> (pass as u32 * DIGIT_BITS)) as usize) & (BUCKETS - 1);
+    let digit =
+        |key: u64, pass: usize| ((key >> (pass as u32 * DIGIT_BITS)) as usize) & (BUCKETS - 1);
     let mut counts = vec![[0usize; BUCKETS]; passes];
     for &(key, _) in &items {
         for (pass, count) in counts.iter_mut().enumerate() {
@@ -253,7 +262,10 @@ fn hommel(p: &[f64], n: usize) -> Vec<f64> {
     let lp = p.len();
     let mut padded = p.to_vec();
     padded.resize(n, 1.0);
-    let order: Vec<usize> = sorted_keys(&padded, false).iter().map(|&(_, i)| i).collect();
+    let order: Vec<usize> = sorted_keys(&padded, false)
+        .iter()
+        .map(|&(_, i)| i)
+        .collect();
     let sorted: Vec<f64> = order.iter().map(|&i| padded[i]).collect();
     let nf = n as f64;
     let start = sorted
@@ -429,7 +441,11 @@ mod tests {
                 let n = len + extra;
                 let got = hommel(&p, n);
                 let expected = hommel_reference(&p, n);
-                assert!(got.iter().zip(&expected).all(|(a, b)| a.to_bits() == b.to_bits()));
+                assert!(
+                    got.iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
             }
         }
     }

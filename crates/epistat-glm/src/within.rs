@@ -271,47 +271,47 @@ fn demean(
             constant,
         })
         .collect();
-    blocks
-        .into_par_iter()
-        .enumerate()
-        .for_each(|(block, out)| {
-            let first_cluster = block * CLUSTERS_PER_TASK;
-            let mut first = vec![0.0; columns];
-            let mut sums = vec![0.0; columns];
-            for c in 0..out.rows.len() {
-                let (lo, hi) = (groups.bounds[first_cluster + c], groups.bounds[first_cluster + c + 1]);
-                let flags = &mut out.constant[c * columns..(c + 1) * columns];
-                sums.fill(0.0);
-                let (mut count, mut total) = (0usize, 0.0);
-                for k in lo..hi {
-                    let i = groups.row(k);
-                    if weights[i] > 0.0 {
-                        for j in 0..columns {
-                            let v = value(i, j);
-                            if count == 0 {
-                                first[j] = v;
-                            } else if v.to_bits() != first[j].to_bits() {
-                                flags[j] = false;
-                            }
-                            sums[j] += weights[i] * v;
+    blocks.into_par_iter().enumerate().for_each(|(block, out)| {
+        let first_cluster = block * CLUSTERS_PER_TASK;
+        let mut first = vec![0.0; columns];
+        let mut sums = vec![0.0; columns];
+        for c in 0..out.rows.len() {
+            let (lo, hi) = (
+                groups.bounds[first_cluster + c],
+                groups.bounds[first_cluster + c + 1],
+            );
+            let flags = &mut out.constant[c * columns..(c + 1) * columns];
+            sums.fill(0.0);
+            let (mut count, mut total) = (0usize, 0.0);
+            for k in lo..hi {
+                let i = groups.row(k);
+                if weights[i] > 0.0 {
+                    for j in 0..columns {
+                        let v = value(i, j);
+                        if count == 0 {
+                            first[j] = v;
+                        } else if v.to_bits() != first[j].to_bits() {
+                            flags[j] = false;
                         }
-                        total += weights[i];
-                        count += 1;
+                        sums[j] += weights[i] * v;
                     }
+                    total += weights[i];
+                    count += 1;
                 }
-                out.rows[c] = count;
-                for j in 0..columns {
-                    out.means[c * columns + j] = if count == 0 {
-                        0.0
-                    } else if flags[j] {
-                        first[j]
-                    } else {
-                        sums[j] / total
-                    };
-                }
-                out.varies[c] = flags[..covariates].iter().any(|&f| !f);
             }
-        });
+            out.rows[c] = count;
+            for j in 0..columns {
+                out.means[c * columns + j] = if count == 0 {
+                    0.0
+                } else if flags[j] {
+                    first[j]
+                } else {
+                    sums[j] / total
+                };
+            }
+            out.varies[c] = flags[..covariates].iter().any(|&f| !f);
+        }
+    });
     let mut deviations = Mat::<f64>::zeros(n, columns);
     for j in 0..columns {
         deviations
@@ -358,7 +358,9 @@ pub fn between_within(
     let ones = vec![1.0; x.nrows()];
     let demeaned = demean(x.ncols(), x.ncols(), |i, j| x[(i, j)], &ones, clusters);
     let columns = x.ncols();
-    let means = Mat::from_fn(clusters.count(), columns, |c, j| demeaned.means[c * columns + j]);
+    let means = Mat::from_fn(clusters.count(), columns, |c, j| {
+        demeaned.means[c * columns + j]
+    });
     Ok((means, demeaned.deviations))
 }
 
@@ -432,7 +434,11 @@ impl Within {
             .filter(|&c| demeaned.rows[c] >= 2 && demeaned.varies[c])
             .count();
 
-        let keep = independent_columns(x_tilde, w, Glm::new(Family::Gaussian, Link::Identity).tolerance);
+        let keep = independent_columns(
+            x_tilde,
+            w,
+            Glm::new(Family::Gaussian, Link::Identity).tolerance,
+        );
         let columns: Vec<usize> = (0..p).filter(|&j| keep[j]).collect();
         let rank = columns.len();
         let dropped_columns: Vec<usize> = (0..p).filter(|&j| !keep[j]).collect();
@@ -585,7 +591,11 @@ mod tests {
                 .map(|k| {
                     let u = (next() >> 11) as f64 / (1u64 << 53) as f64;
                     // Some columns repeat within families.
-                    if k % columns == 2 { (labels[k / columns] % 7) as f64 } else { u }
+                    if k % columns == 2 {
+                        (labels[k / columns] % 7) as f64
+                    } else {
+                        u
+                    }
                 })
                 .collect();
             let weights: Vec<f64> = (0..n)
@@ -601,10 +611,16 @@ mod tests {
             assert_eq!(got.rows, rows);
             for j in 0..columns {
                 for i in 0..n {
-                    assert_eq!(got.deviations[(i, j)].to_bits(), deviations[(i, j)].to_bits());
+                    assert_eq!(
+                        got.deviations[(i, j)].to_bits(),
+                        deviations[(i, j)].to_bits()
+                    );
                 }
                 for c in 0..clusters.count() {
-                    assert_eq!(got.means[c * columns + j].to_bits(), means[(c, j)].to_bits());
+                    assert_eq!(
+                        got.means[c * columns + j].to_bits(),
+                        means[(c, j)].to_bits()
+                    );
                 }
             }
         }
