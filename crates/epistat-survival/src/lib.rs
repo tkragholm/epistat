@@ -62,6 +62,8 @@
 //! - [`sccs`]: the self-controlled case series, its conditional Poisson likelihood with robust
 //!   variance and the cutting of follow-up into pieces of age band and risk window, as
 //!   `SCCS::standardsccs`.
+//! - [`crossover`]: the hazard and referent windows of the case-crossover and case-time-control
+//!   designs, with the exposure in each window, for [`clogit`].
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`ratetable`]: a table of reference hazards by age, sex and calendar year, and the
@@ -121,6 +123,7 @@ pub mod clogit;
 pub mod concordance;
 pub mod condense;
 pub mod cox;
+pub mod crossover;
 mod error;
 pub mod fine_gray;
 pub mod informative;
