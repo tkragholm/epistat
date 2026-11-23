@@ -35,6 +35,12 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   hazard models, piecewise constant on split or aggregated follow-up and
   flexible parametric with the expected hazard at each exit, checked against
   `relsurv::rs.surv`, `popEpi::relpois` and `rstpm2::stpm2`.
+- Case-cohort analysis by the five methods of `survival::cch` (Prentice, Self-Prentice,
+  Lin-Ying with Barlow's robust variance, and Borgan's two methods for a stratified
+  subcohort), with the variance of the sampling of the subcohort.
+- Nested case-control data with Samuelsen's inverse probability weights, computed in
+  `O(N log N)` with the risk-set sizes, the weighted Cox fit with a robust variance and
+  the absolute risk from its baseline hazard, checked against `multipleNCC`.
 - The Titman-Putter test of the Markov property.
 - The self-controlled case series (conditional Poisson likelihood, risk windows
   and age bands, robust variance) with the cutting of follow-up into pieces,
