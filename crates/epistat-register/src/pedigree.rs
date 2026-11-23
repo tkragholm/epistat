@@ -850,10 +850,12 @@ impl Pedigree {
             group_start[i + 1] += group_start[i];
         }
         let mut fill = group_start.clone();
-        let mut members = vec![0_u32; last.node.len()];
+        // Each member carries its parents, which the test for a closer shared
+        // ancestor reads first, so that it does not look them up at random.
+        let mut members = vec![(0_u32, [NO_NODE; 2]); last.node.len()];
         for x in 0..self.persons {
             for &anc in last.of(x) {
-                members[fill[anc as usize]] = x as u32;
+                members[fill[anc as usize]] = (x as u32, self.parent_pair(x));
                 fill[anc as usize] += 1;
             }
         }
@@ -867,25 +869,30 @@ impl Pedigree {
                 group_start[anc + 1] - group_start[anc]
             )));
         }
-        let mut candidates: Vec<u32> = Vec::new();
+        let mut candidates: Vec<(u32, [u32; 2])> = Vec::new();
         for a in 0..self.persons as u32 {
             candidates.clear();
             for &anc in last.of(a as usize) {
                 let group = &members[group_start[anc as usize]..group_start[anc as usize + 1]];
-                candidates.extend_from_slice(later(group, a));
+                candidates.extend_from_slice(&group[group.partition_point(|m| m.0 <= a)..]);
             }
-            candidates.sort_unstable();
+            // Equal rows carry equal parents, so the order is unique.
+            candidates.sort_unstable_by_key(|c| c.0);
+            let parents_a = self.parent_pair(a as usize);
             let mut i = 0;
             while i < candidates.len() {
-                let b = candidates[i];
+                let (b, parents_b) = candidates[i];
                 let mut j = i;
-                while j < candidates.len() && candidates[j] == b {
+                while j < candidates.len() && candidates[j].0 == b {
                     j += 1;
                 }
                 let shared = j - i;
                 i = j;
-                let closer = (0..top - 1)
-                    .any(|k| intersects(levels[k].of(a as usize), levels[k].of(b as usize)));
+                let closer = parents_a
+                    .iter()
+                    .any(|&x| x != NO_NODE && parents_b.contains(&x))
+                    || (1..top - 1)
+                        .any(|k| intersects(levels[k].of(a as usize), levels[k].of(b as usize)));
                 if closer {
                     continue;
                 }
@@ -902,6 +909,15 @@ impl Pedigree {
             }
         }
         Ok(())
+    }
+
+    /// The known parents of `x`, sorted, with [`NO_NODE`] for an unknown one.
+    fn parent_pair(&self, x: usize) -> [u32; 2] {
+        let (m, f) = (
+            self.mother[x].unwrap_or(NO_NODE),
+            self.father[x].unwrap_or(NO_NODE),
+        );
+        [m.min(f), m.max(f)]
     }
 
     /// For generations 1 to `top`, the distinct ancestors of each person exactly
@@ -1128,6 +1144,9 @@ fn intersects(x: &[u32], y: &[u32]) -> bool {
     }
     false
 }
+
+/// No node, for an unknown parent.
+const NO_NODE: u32 = u32::MAX;
 
 /// Nodes listed for each person: those of person `x` are
 /// `node[start[x]..start[x + 1]]`.
