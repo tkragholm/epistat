@@ -26,5 +26,9 @@ serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
 name = "tier1_stats"
 harness = false
 
+[[bench]]
+name = "tier2_bias"
+harness = false
+
 [lints]
 workspace = true

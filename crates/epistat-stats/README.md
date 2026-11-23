@@ -16,7 +16,9 @@ differences and directly standardised rates with Fay-Feuer intervals,
 Mantel-Haenszel estimators with the Breslow-Day test, standardised incidence
 ratios with exact, Byar, Wald and profile intervals and tests of homogeneity
 and trend, the F tail,
-E-values, Rosenbaum bounds with the signed rank statistic and its ranks, k-means
+E-values, quantitative bias analysis (misclassification of exposure or
+outcome, selection and an unmeasured binary confounder, simple and
+probabilistic, checked against `episensr`), Rosenbaum bounds with the signed rank statistic and its ranks, k-means
 clustering from given centres, and sums and dot products over eight fixed lanes.
 
 The quantiles and the normal distribution function give the same doubles as

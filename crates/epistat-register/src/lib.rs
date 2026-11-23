@@ -2,7 +2,8 @@
 //! overlapping intervals, connected components of rows that share a key,
 //! constant-price deflation, normalisation of ICD-10 codes, age in whole
 //! years, code sets for ICD-10, ICD-8 and ATC, event definitions, comorbidity
-//! indices and drug exposure episodes.
+//! indices, drug exposure episodes, interval sets, Lexis splitting, pedigrees and
+//! residence spells.
 //!
 //! Each module is one small, self-contained method on plain slices and integers,
 //! with no dependence on a data-frame library.
@@ -28,6 +29,14 @@
 //!   diagnosis codes, with look-back windows and hierarchy rules.
 //! - [`exposure`] turns dispensings into periods of drug exposure and
 //!   cumulative doses, under assumptions the caller declares.
+//! - [`intervals`] intersects, subtracts, complements and clips per-key sets of
+//!   half-open intervals.
+//! - [`lexis`] cuts follow-up on integer days at calendar years, civil
+//!   birthdays, periods and times since entry.
+//! - [`pedigree`] finds siblings, cousins, multiple births, family clusters and
+//!   relatedness from the mother and father of each person.
+//! - [`residence`] turns dated emigrations and immigrations into residence
+//!   spells and gives the end of observation.
 //! - [`cpi`] deflates nominal values to the prices of a reference year with an
 //!   annual price index the caller supplies. The Statistics Denmark index is
 //!   available behind the cargo feature `denmark`.
@@ -48,11 +57,15 @@ mod error;
 pub mod events;
 pub mod exposure;
 pub mod icd10;
+pub mod intervals;
+pub mod lexis;
+pub mod pedigree;
 pub mod person_time;
 pub mod relations;
+pub mod residence;
 pub mod spans;
 
-pub use age::{AgeRule, LeapBirthday, age_in_years};
+pub use age::{AgeRule, LeapBirthday, age_in_years, birthday_on_age};
 pub use cpi::CpiTable;
 #[cfg(feature = "denmark")]
 pub use cpi::DENMARK_ANNUAL_CPI;
@@ -62,9 +75,9 @@ pub use icd10::{
     normalize_diagnosis_code,
 };
 pub use person_time::{
-    SAS_EPOCH_OFFSET_DAYS, SAS_EPOCH_OFFSET_SECONDS, YearOverlap, calendar_year_overlaps,
-    civil_from_days, civil_from_days_sas, civil_from_sas_seconds, days_from_civil,
-    days_from_civil_sas, sas_days_to_unix, sas_seconds_to_unix, unix_days_to_sas,
+    SAS_EPOCH_OFFSET_DAYS, SAS_EPOCH_OFFSET_SECONDS, YearOverlap, add_months, add_years,
+    calendar_year_overlaps, civil_from_days, civil_from_days_sas, civil_from_sas_seconds,
+    days_from_civil, days_from_civil_sas, sas_days_to_unix, sas_seconds_to_unix, unix_days_to_sas,
     unix_seconds_to_sas, year_from_days,
 };
 pub use relations::connected_components;
