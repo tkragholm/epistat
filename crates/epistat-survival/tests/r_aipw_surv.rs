@@ -71,7 +71,7 @@ fn the_risks_agree_with_ate() {
         let x = Mat::from_fn(n, 3, |i, j| [s.a[i], s.x1[i], s.x2[i]][j]);
         let z = Mat::from_fn(n, 3, |i, j| [1.0, s.x1[i], s.x2[i]][j]);
         let cx = Mat::from_fn(n, 3, |i, j| [s.a[i], s.x1[i], s.x2[i]][j]);
-        let group: Vec<u32> = s.a.iter().map(|&a| a as u32).collect();
+        let group: Vec<u32> = s.a.iter().map(|&a| u32::from(a > 0.5)).collect();
         let data = SurvData::builder(&s.time, &s.status).build().unwrap();
         let cols = [(0usize, 0.0)];
         let cols1 = [(0usize, 1.0)];

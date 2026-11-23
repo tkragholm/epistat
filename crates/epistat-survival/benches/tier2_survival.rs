@@ -74,7 +74,7 @@ fn generate_periods(kind: &str, n: usize, periods: usize) {
         let (mut l, mut prev) = (l0, 0.0);
         for p in 0..periods {
             l = 0.5 * l + 0.4 * prev + 0.7 * rng.normal();
-            let pa = if prev == 1.0 {
+            let pa = if prev > 0.5 {
                 expit(2.4 - 0.5 * l)
             } else {
                 expit(-2.2 + 0.7 * l + 0.1 * p as f64 + 0.3 * x1)

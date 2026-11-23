@@ -39,7 +39,7 @@ fn the_weights_and_the_outcome_model_agree_with_trial_emulation() {
         let n = w.id.len();
         let (mut pd, mut pn) = (Vec::new(), Vec::new());
         for i in 0..n {
-            if w.am_1[i] == 1.0 {
+            if w.am_1[i] > 0.5 {
                 pd.push(w.p1_d[i].unwrap());
                 pn.push(w.p1_n[i].unwrap());
             } else {

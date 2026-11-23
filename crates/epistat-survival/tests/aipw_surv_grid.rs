@@ -34,7 +34,7 @@ fn run(s: &Scenario, km: bool, grid: Option<usize>) -> AipwSurv {
     let treated: Vec<bool> = s.a.iter().map(|&a| a > 0.5).collect();
     let x = Mat::from_fn(n, 3, |i, j| [s.a[i], s.x1[i], s.x2[i]][j]);
     let z = Mat::from_fn(n, 3, |i, j| [1.0, s.x1[i], s.x2[i]][j]);
-    let group: Vec<u32> = s.a.iter().map(|&a| a as u32).collect();
+    let group: Vec<u32> = s.a.iter().map(|&a| u32::from(a > 0.5)).collect();
     let data = SurvData::builder(&s.time, &s.status).build().unwrap();
     let (c0, c1) = ([(0usize, 0.0)], [(0usize, 1.0)]);
     let spec = AipwSurvSpec {

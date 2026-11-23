@@ -116,7 +116,7 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
     assert_eq!(c.n_without_follow_up, 0);
     // The deviation row carries no outcome and the never clone of person 0 keeps
     // its outcome.
-    assert!(c.outcome.iter().filter(|&&o| o).count() == 1);
+    assert_eq!(c.outcome.iter().filter(|&&o| o).count(), 1);
     // A grace period beyond the follow-up is an error.
     let long = [Strategy::InitiateWithin {
         grace: 9,
@@ -185,5 +185,5 @@ fn a_bootstrap_of_counts_of_one_is_the_data_and_depends_on_the_seed_only() {
         assert!(a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()));
     }
     // The replicates differ from each other.
-    assert!(one[0] != one[1]);
+    assert_ne!(one[0], one[1]);
 }
