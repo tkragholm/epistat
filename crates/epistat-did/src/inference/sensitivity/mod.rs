@@ -134,7 +134,6 @@ pub use smoothness::{
     compute_signed_smoothness_identified_set, compute_smoothness_confidence_set,
     compute_smoothness_confidence_set_with_config,
     compute_smoothness_confidence_set_with_simulation, compute_smoothness_identified_set,
-    max_adjacent_pre_period_change, pre_periods_satisfy_smoothness_bound,
 };
 pub(crate) use solver_tally::SolverCounter;
 pub use solver_tally::SolverCounts;

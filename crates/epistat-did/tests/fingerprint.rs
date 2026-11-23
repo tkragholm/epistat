@@ -14,12 +14,13 @@ use epistat_did::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtObservation, BasePeriod, ClusterIndex,
     ComparisonGroup, ContinuousObservation, DesignPruning, DidCcConfig, DidConfig, DrDidConfig,
     DrDidObservation, DrDidRepeatedObservation, EfficientDidConfig, HonestEventStudyInput,
-    HonestJointPathConfig, HonestJointPathMethod, HonestPostFunctional,
-    HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
-    PanelFlatInput, PanelObservation, PolynomialBasis, RelativeMagnitudeConfidenceSetConfig,
-    TripleDidObservation, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
-    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
-    aggregate_att_gt_overall, aggregate_efficient_att_gt_event_time,
+    HonestJointPathConfig, HonestJointPathMethod, HonestMonotonicityDirection,
+    HonestPostFunctional, HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig,
+    LeastFavorableSimulation, PanelFlatInput, PanelObservation, PolynomialBasis,
+    RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod, TripleDidObservation,
+    aggregate_att_gt, aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort,
+    aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
+    aggregate_efficient_att_gt_event_time,
     assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
     att_gt_clustered_standard_errors, att_gt_mboot_bands, att_gt_simultaneous_bands,
@@ -706,6 +707,35 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
             simulation,
         )),
     ));
+    // The fixed-length interval of a contrast, whose weights have both signs,
+    // and the conditional-FLCI hybrid under a monotone restriction at an M the
+    // pre-period coefficients contradict and one they do not.
+    out.push((
+        "honest_smoothness_flci",
+        digest(&summarize_smoothness_sensitivity_with_simulation(
+            honest,
+            inference,
+            &[1.0, -1.0, 0.0, 0.0],
+            Some(SensitivitySummaryMethod::Flci),
+            Some(&[0.0, 0.05]),
+            None,
+            None,
+            simulation,
+        )),
+    ));
+    out.push((
+        "honest_smoothness_conditional",
+        digest(&summarize_smoothness_sensitivity_with_simulation(
+            honest,
+            inference,
+            &average,
+            None,
+            Some(&[0.05, 0.2]),
+            None,
+            Some(HonestMonotonicityDirection::Decreasing),
+            simulation,
+        )),
+    ));
     out.push((
         "honest_rm_summary_many",
         digest(
@@ -852,11 +882,13 @@ const GOLDEN: &[(&str, u64)] = &[
     ("honest_rm_identified", 0xfb67_64de_8a7f_f5f5),
     ("honest_rm_conditional", 0x045a_d121_20ee_75ac),
     ("honest_smoothness_m", 0xefb8_e9c8_0987_2f59),
-    ("honest_smoothness_summary", 0xdea5_be26_ca16_ec1c),
+    ("honest_smoothness_summary", 0x74cf_3a3e_4526_d589),
+    ("honest_smoothness_flci", 0x0a0d_3085_b508_3e3d),
+    ("honest_smoothness_conditional", 0x6807_6f48_f895_fb2b),
     ("honest_rm_summary_many", 0x9b83_003d_f87a_07e8),
     ("honest_joint_bonferroni", 0x3dac_f805_663e_d12e),
     ("honest_joint_gaussian", 0xc186_649e_b5d3_2cfd),
-    ("honest_workflow", 0x92cc_2cd5_dfad_dc54),
+    ("honest_workflow", 0x5f2a_2dea_d42c_dd95),
     ("honest_directional_gaussian", 0x5ac6_f9d4_2bfd_fd45),
 ];
 
