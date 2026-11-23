@@ -46,10 +46,7 @@ const CONTROLS: usize = 3;
 /// The case-cohort sample of a cohort of `n`: cases and a 5% subcohort.
 fn generate_cc(n: usize) {
     let mut rng = Rng(SEED);
-    let mut out = Writer::create(
-        &common::data_path("cc", n),
-        "time,status,sub,stratum,x1,x2",
-    );
+    let mut out = Writer::create(&common::data_path("cc", n), "time,status,sub,stratum,x1,x2");
     let mut sizes = [0.0_f64; 3];
     for _ in 0..n {
         let x1 = rng.normal();

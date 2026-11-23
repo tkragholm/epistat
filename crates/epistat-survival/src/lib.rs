@@ -141,8 +141,8 @@ pub mod absrisk;
 pub mod aipw;
 #[cfg(feature = "arrow")]
 pub mod arrow;
-mod check;
 pub mod casecohort;
+mod check;
 pub mod clogit;
 pub mod concordance;
 pub mod condense;

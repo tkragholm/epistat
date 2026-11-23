@@ -64,7 +64,8 @@ fn case_cohort_methods() {
         let strata = (sized.len() > 1).then_some(stratum.as_slice());
         let options = CaseCohortOptions::new(method, sized);
         assert_same_on_pools(&POOLS, || {
-            let model = fit(&data, x.as_ref(), &sub, strata, &options).unwrap_or_else(|e| panic!("{method:?}: {e}"));
+            let model = fit(&data, x.as_ref(), &sub, strata, &options)
+                .unwrap_or_else(|e| panic!("{method:?}: {e}"));
             let mut out: Vec<f64> = Vec::new();
             for m in [
                 &model.coefficients,

@@ -699,9 +699,7 @@ fn check_inputs(
                 ));
             }
             if opts.cohort_size[0] < rows as f64 {
-                return Err(Error::input(
-                    "cohort_size: smaller than the number of rows",
-                ));
+                return Err(Error::input("cohort_size: smaller than the number of rows"));
             }
         }
         (true, Some(stratum)) => {
@@ -819,9 +817,7 @@ fn lin_ying(
     }
     let cases = counts.cases as f64;
     if cohort <= cases {
-        return Err(Error::input(
-            "cohort_size: must exceed the number of cases",
-        ));
+        return Err(Error::input("cohort_size: must exceed the number of cases"));
     }
     let weight = (cohort - cases) / non_cases as f64;
     let all: Vec<(usize, bool, f64, f64)> = (0..rows)

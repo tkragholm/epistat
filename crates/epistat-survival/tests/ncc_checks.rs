@@ -88,7 +88,11 @@ fn cohort(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>, Vec<bool>, Vec<u32>) {
         let t = rng.exp1() / 0.1;
         let c = rng.exp1() / 0.04;
         exit.push(t.min(c).min(6.0));
-        entry.push(if rng.below(3) == 0 { rng.uniform() * 0.5 * exit[exit.len() - 1] } else { 0.0 });
+        entry.push(if rng.below(3) == 0 {
+            rng.uniform() * 0.5 * exit[exit.len() - 1]
+        } else {
+            0.0
+        });
         case.push(t <= c.min(6.0));
         stratum.push(rng.below(3) as u32);
     }
@@ -134,7 +138,11 @@ fn prefix_sums_match_a_direct_loop() {
             let term = (-(m as f64) / (size[j] - 1) as f64).ln_1p();
             // Neumaier summation.
             let t = sum + term;
-            comp += if sum.abs() >= term.abs() { (sum - t) + term } else { (term - t) + sum };
+            comp += if sum.abs() >= term.abs() {
+                (sum - t) + term
+            } else {
+                (term - t) + sum
+            };
             sum = t;
         }
         let p = -(sum + comp).exp_m1();
@@ -202,19 +210,28 @@ fn weighted_estimates_are_unbiased_over_simulated_studies() {
             let t = rng.exp1() / (0.1 * (0.5 * a - 0.4 * b).exp());
             let c = rng.exp1() / 0.04;
             exit.push(t.min(c).min(6.0));
-            entry.push(if rng.below(3) == 0 { rng.uniform() * 0.5 * exit[exit.len() - 1] } else { 0.0 });
+            entry.push(if rng.below(3) == 0 {
+                rng.uniform() * 0.5 * exit[exit.len() - 1]
+            } else {
+                0.0
+            });
             case.push(t <= c.min(6.0));
             x1.push(a);
             x2.push(b);
         }
         let all_x = Mat::from_fn(n, 2, |i, j| if j == 0 { x1[i] } else { x2[i] });
         let status: Vec<i32> = case.iter().map(|&c| i32::from(c)).collect();
-        let full_data = SurvData::builder(&exit, &status).start(&entry).build().unwrap();
+        let full_data = SurvData::builder(&exit, &status)
+            .start(&entry)
+            .build()
+            .unwrap();
         let opts = CoxOptions::default();
         let full = fit(&full_data, all_x.as_ref(), &opts).unwrap();
         let ones = vec![1.0; n];
         let full_base = baseline(&full, &full_data, all_x.as_ref(), &ones, &opts).unwrap();
-        let full_risk = absolute_risk(&full_base, &full.coefficients, profile.as_ref(), &at).unwrap()[0][0].unwrap();
+        let full_risk = absolute_risk(&full_base, &full.coefficients, profile.as_ref(), &at)
+            .unwrap()[0][0]
+            .unwrap();
 
         let (sampled, sets) = sample(&entry, &exit, &case, m, &mut rng);
         let inc = inclusion_probabilities(&design(&exit, &case, m, Some(&entry))).unwrap();
@@ -228,7 +245,8 @@ fn weighted_estimates_are_unbiased_over_simulated_studies() {
         let data = SurvData::builder(&stop, &st).start(&start).build().unwrap();
         let model = fit_weighted(&data, x.as_ref(), &w, &opts).unwrap();
         let base = baseline(&model, &data, x.as_ref(), &w, &opts).unwrap();
-        let risk = absolute_risk(&base, &model.coefficients, profile.as_ref(), &at).unwrap()[0][0].unwrap();
+        let risk = absolute_risk(&base, &model.coefficients, profile.as_ref(), &at).unwrap()[0][0]
+            .unwrap();
         for j in 0..2 {
             d_beta[j].push(model.coefficients[j].unwrap() - full.coefficients[j].unwrap());
         }
@@ -256,7 +274,10 @@ fn weighted_estimates_are_unbiased_over_simulated_studies() {
         let mean = d.iter().sum::<f64>() / d.len() as f64;
         let var = d.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (d.len() - 1) as f64;
         let se = (var / d.len() as f64).sqrt();
-        eprintln!("{name}: mean difference {mean:.5}, Monte Carlo SE {se:.5}, ratio {:.2}", mean / se);
+        eprintln!(
+            "{name}: mean difference {mean:.5}, Monte Carlo SE {se:.5}, ratio {:.2}",
+            mean / se
+        );
         assert!(mean.abs() < 3.0 * se, "{name}: bias {mean} against {se}");
     };
     check("weighted beta 1 less full cohort", &d_beta[0]);

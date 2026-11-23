@@ -111,8 +111,10 @@ fn fits_match_cch() {
         }
         let data = builder.build().unwrap();
         let method = method_of(&r.method);
-        let sizes: Vec<f64> = if matches!(method, CaseCohortMethod::BorganI | CaseCohortMethod::BorganII)
-        {
+        let sizes: Vec<f64> = if matches!(
+            method,
+            CaseCohortMethod::BorganI | CaseCohortMethod::BorganII
+        ) {
             ds.cohort_sizes.clone()
         } else {
             vec![reference.n_cohort]
@@ -124,9 +126,11 @@ fn fits_match_cch() {
         } else {
             Ties::Efron
         };
-        let stratum =
-            (matches!(method, CaseCohortMethod::BorganI | CaseCohortMethod::BorganII))
-                .then_some(ds.stratum.as_slice());
+        let stratum = (matches!(
+            method,
+            CaseCohortMethod::BorganI | CaseCohortMethod::BorganII
+        ))
+        .then_some(ds.stratum.as_slice());
         let got: CaseCohortFit = fit(&data, x.as_ref(), &subcohort, stratum, &opts).unwrap();
         assert!(got.converged, "{}", r.name);
         assert_eq!(got.iterations, r.iter, "{}", r.name);
@@ -171,7 +175,11 @@ fn fits_match_cch() {
             "{:<26} coefficient {coefficient:.3} model {model:.3} phase2 {phase2:.3} var {var:.3} opt {opt:.3}",
             r.name
         );
-        assert!(worst <= 1.0, "{}: deviation {worst} of its tolerance", r.name);
+        assert!(
+            worst <= 1.0,
+            "{}: deviation {worst} of its tolerance",
+            r.name
+        );
         worst_all = worst_all.max(worst);
     }
     eprintln!("worst deviation over tolerance: {worst_all:.3}");

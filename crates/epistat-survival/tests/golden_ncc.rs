@@ -68,7 +68,11 @@ fn nested_case_control_outputs_are_recorded() {
         let t = rng.exp1() / (0.1 * (0.5 * x1 - 0.4 * x2).exp());
         let c = rng.exp1() / 0.04;
         let e = t.min(c).min(6.0);
-        entry.push(if rng.below(3) == 0 { rng.uniform() * 0.5 * e } else { 0.0 });
+        entry.push(if rng.below(3) == 0 {
+            rng.uniform() * 0.5 * e
+        } else {
+            0.0
+        });
         exit.push(e);
         case.push(t <= c.min(6.0));
         stratum.push(rng.below(3) as u32);
@@ -92,18 +96,36 @@ fn nested_case_control_outputs_are_recorded() {
         check(&format!("{name}/probability"), &inc.probability);
         check(
             &format!("{name}/risk_set_size"),
-            &inc.risk_set_size.iter().map(|&s| s as f64).collect::<Vec<_>>(),
+            &inc.risk_set_size
+                .iter()
+                .map(|&s| s as f64)
+                .collect::<Vec<_>>(),
         );
-        let rows: Vec<usize> = (0..n).filter(|&i| sampled[i] && (case[i] || inc.probability[i] > 0.0)).collect();
+        let rows: Vec<usize> = (0..n)
+            .filter(|&i| sampled[i] && (case[i] || inc.probability[i] > 0.0))
+            .collect();
         let w: Vec<f64> = rows
             .iter()
-            .map(|&i| if case[i] { 1.0 } else { 1.0 / inc.probability[i] })
+            .map(|&i| {
+                if case[i] {
+                    1.0
+                } else {
+                    1.0 / inc.probability[i]
+                }
+            })
             .collect();
         let stop: Vec<f64> = rows.iter().map(|&i| exit[i]).collect();
         let start: Vec<f64> = rows.iter().map(|&i| entry[i]).collect();
         let status: Vec<i32> = rows.iter().map(|&i| i32::from(case[i])).collect();
-        let x = Mat::from_fn(rows.len(), 2, |i, j| if j == 0 { a[rows[i]] } else { b[rows[i]] });
-        let data = SurvData::builder(&stop, &status).start(&start).build().unwrap();
+        let x = Mat::from_fn(
+            rows.len(),
+            2,
+            |i, j| if j == 0 { a[rows[i]] } else { b[rows[i]] },
+        );
+        let data = SurvData::builder(&stop, &status)
+            .start(&start)
+            .build()
+            .unwrap();
         let opts = CoxOptions::default();
         let model = fit_weighted(&data, x.as_ref(), &w, &opts).unwrap();
         let flat = |v: &[Option<f64>]| v.iter().copied().map(absent).collect::<Vec<f64>>();
@@ -115,7 +137,13 @@ fn nested_case_control_outputs_are_recorded() {
         let base = baseline(&model, &data, x.as_ref(), &w, &opts).unwrap();
         check(&format!("{name}/baseline"), &base.cumulative_hazard);
         let profile = Mat::from_fn(2, 2, |i, j| [[0.0, 0.0], [1.0, 1.0]][i][j]);
-        let risk = absolute_risk(&base, &model.coefficients, profile.as_ref(), &[1.0, 3.0, 5.0]).unwrap();
+        let risk = absolute_risk(
+            &base,
+            &model.coefficients,
+            profile.as_ref(),
+            &[1.0, 3.0, 5.0],
+        )
+        .unwrap();
         let flat_risk: Vec<f64> = risk.iter().flatten().copied().map(absent).collect();
         check(&format!("{name}/risk"), &flat_risk);
     }

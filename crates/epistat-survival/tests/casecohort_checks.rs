@@ -18,7 +18,9 @@ struct Rows {
 fn rows() -> Rows {
     let stop = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let status = vec![1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
-    let sub = vec![true, true, false, false, false, true, true, true, true, true];
+    let sub = vec![
+        true, true, false, false, false, true, true, true, true, true,
+    ];
     let a = [0.3, -1.0, 0.7, 1.2, -0.4, 0.1, 0.9, -0.8, 0.5, -0.2];
     let b = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0];
     Rows {
@@ -81,7 +83,10 @@ fn refuses_exact_ties_and_repeated_ids() {
     options.ties = Ties::Exact;
     assert!(fit(&data, r.x.as_ref(), &r.sub, None, &options).is_err());
     let ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 9];
-    let data = SurvData::builder(&r.stop, &r.status).id(&ids).build().unwrap();
+    let data = SurvData::builder(&r.stop, &r.status)
+        .id(&ids)
+        .build()
+        .unwrap();
     let options = CaseCohortOptions::new(CaseCohortMethod::LinYing, &[100.0]);
     let text = fit(&data, r.x.as_ref(), &r.sub, None, &options)
         .unwrap_err()
@@ -115,7 +120,12 @@ fn a_fully_sampled_single_member_stratum_adds_nothing() {
     let data = SurvData::builder(&r.stop, &r.status).build().unwrap();
     let options = CaseCohortOptions::new(CaseCohortMethod::BorganI, &[40.0, 1.0]);
     let model = fit(&data, r.x.as_ref(), &sub, Some(&stratum), &options).unwrap();
-    assert!(model.covariance.iter().all(|v| v.is_some_and(f64::is_finite)));
+    assert!(
+        model
+            .covariance
+            .iter()
+            .all(|v| v.is_some_and(f64::is_finite))
+    );
     // The same row with a cohort size of 2 has one member and a weight of 2.
     let options = CaseCohortOptions::new(CaseCohortMethod::BorganI, &[40.0, 2.0]);
     let text = fit(&data, r.x.as_ref(), &sub, Some(&stratum), &options)
@@ -127,7 +137,13 @@ fn a_fully_sampled_single_member_stratum_adds_nothing() {
 #[test]
 fn an_aliased_column_is_none() {
     let r = rows();
-    let x = Mat::from_fn(10, 3, |i, j| if j == 2 { r.x[(i, 0)] * 2.0 } else { r.x[(i, j)] });
+    let x = Mat::from_fn(10, 3, |i, j| {
+        if j == 2 {
+            r.x[(i, 0)] * 2.0
+        } else {
+            r.x[(i, j)]
+        }
+    });
     let data = SurvData::builder(&r.stop, &r.status).build().unwrap();
     let options = CaseCohortOptions::new(CaseCohortMethod::LinYing, &[100.0]);
     let model = fit(&data, x.as_ref(), &r.sub, None, &options).unwrap();
@@ -161,7 +177,11 @@ fn a_case_without_a_subcohort_member_at_risk_adds_nothing() {
     stop.push(20.0);
     status.push(1);
     sub.push(false);
-    let x = Mat::from_fn(11, 2, |i, j| if i < 10 { r.x[(i, j)] } else { [0.4, 1.0][j] });
+    let x = Mat::from_fn(
+        11,
+        2,
+        |i, j| if i < 10 { r.x[(i, j)] } else { [0.4, 1.0][j] },
+    );
     let with = SurvData::builder(&stop, &status).build().unwrap();
     let without = SurvData::builder(&r.stop, &r.status).build().unwrap();
     let options = CaseCohortOptions::new(CaseCohortMethod::SelfPrentice, &[100.0]);

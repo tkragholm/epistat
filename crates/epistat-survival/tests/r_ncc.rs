@@ -72,7 +72,8 @@ fn matrix_deviation(name: &str, got: &[Option<f64>], expected: &[Vec<f64>], boun
 
 #[test]
 fn weights_fit_and_absolute_risk_match_r() {
-    let reference: Reference = load_json(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ncc.json"));
+    let reference: Reference =
+        load_json(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ncc.json"));
     let v = &reference.versions;
     eprintln!(
         "reference: {}, survival {}, multipleNCC {}, jsonlite {}",
@@ -102,7 +103,10 @@ fn weights_fit_and_absolute_risk_match_r() {
         for (g, e) in inc.probability.iter().zip(&s.p) {
             worst_p = worst_p.max((g - e).abs() / (k * eps * e.abs().max(1e-300)));
         }
-        eprintln!("{}: inclusion probability deviation over tolerance {worst_p:.3}", s.name);
+        eprintln!(
+            "{}: inclusion probability deviation over tolerance {worst_p:.3}",
+            s.name
+        );
         assert!(worst_p <= 1.0, "{}: p deviates {worst_p}", s.name);
 
         // The fit of the cases and the sampled controls.
@@ -116,7 +120,10 @@ fn weights_fit_and_absolute_risk_match_r() {
         let x = Mat::from_fn(rows.len(), 2, |i, j| {
             if j == 0 { s.x1[rows[i]] } else { s.x2[rows[i]] }
         });
-        let data = SurvData::builder(&stop, &status).start(&start).build().unwrap();
+        let data = SurvData::builder(&stop, &status)
+            .start(&start)
+            .build()
+            .unwrap();
         let opts = CoxOptions::default();
         let model = fit_weighted(&data, x.as_ref(), &w, &opts).unwrap();
         assert_eq!(model.iterations, s.iter, "{}", s.name);
@@ -133,8 +140,8 @@ fn weights_fit_and_absolute_risk_match_r() {
             &s.var_robust,
             cov_bound,
         );
-        let loglik = (model.log_partial_likelihood.unwrap() - s.loglik).abs()
-            / (bound * s.loglik.abs());
+        let loglik =
+            (model.log_partial_likelihood.unwrap() - s.loglik).abs() / (bound * s.loglik.abs());
         let null = (model.null_log_partial_likelihood.unwrap() - s.loglik_null).abs()
             / (bound * s.loglik_null.abs());
 
@@ -158,7 +165,8 @@ fn weights_fit_and_absolute_risk_match_r() {
         let mut absolute = 0.0f64;
         for (g_row, e_row) in risk.iter().zip(&s.risk) {
             for (g, e) in g_row.iter().zip(e_row) {
-                absolute = absolute.max((g.unwrap() - e).abs() / (bound * 4.0 * base.times.len() as f64));
+                absolute =
+                    absolute.max((g.unwrap() - e).abs() / (bound * 4.0 * base.times.len() as f64));
             }
         }
         eprintln!(
@@ -174,7 +182,11 @@ fn weights_fit_and_absolute_risk_match_r() {
             ("baseline hazard", hazard),
             ("absolute risk", absolute),
         ] {
-            assert!(dev <= 1.0, "{}: {what} deviates {dev} of its tolerance", s.name);
+            assert!(
+                dev <= 1.0,
+                "{}: {what} deviates {dev} of its tolerance",
+                s.name
+            );
         }
     }
 }

@@ -188,7 +188,9 @@ pub fn inclusion_probabilities(design: &NccDesign<'_>) -> Result<InclusionProbab
         check_lengths(&[("exit", n), ("entry", entry.len())])?;
         refuse_non_finite(entry, "entry")?;
         if entry.iter().zip(design.exit).any(|(a, b)| a >= b) {
-            return Err(Error::input("entry: a person enters at or after their exit"));
+            return Err(Error::input(
+                "entry: a person enters at or after their exit",
+            ));
         }
     }
     if let Some(stratum) = design.stratum {
@@ -294,9 +296,9 @@ fn stratum_probabilities(
             probability[i] = 1.0;
             continue;
         }
-        let lo = design.entry.map_or(0, |entry| {
-            times.partition_point(|&t| t <= entry[i])
-        });
+        let lo = design
+            .entry
+            .map_or(0, |entry| times.partition_point(|&t| t <= entry[i]));
         let hi = times.partition_point(|&t| t <= design.exit[i]);
         probability[i] = if hi <= lo {
             0.0
@@ -323,7 +325,11 @@ pub fn weights(
     case: &[bool],
 ) -> Result<Vec<f64>> {
     let n = probabilities.probability.len();
-    check_lengths(&[("probabilities", n), ("sampled", sampled.len()), ("case", case.len())])?;
+    check_lengths(&[
+        ("probabilities", n),
+        ("sampled", sampled.len()),
+        ("case", case.len()),
+    ])?;
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         out.push(if case[i] {
@@ -488,7 +494,10 @@ pub fn absolute_risk(
     new_x: MatRef<'_, f64>,
     times: &[f64],
 ) -> Result<Vec<Vec<Option<f64>>>> {
-    check_lengths(&[("coefficients", coefficients.len()), ("new_x columns", new_x.ncols())])?;
+    check_lengths(&[
+        ("coefficients", coefficients.len()),
+        ("new_x columns", new_x.ncols()),
+    ])?;
     refuse_non_finite_matrix(new_x, "new_x")?;
     refuse_non_finite(times, "times")?;
     let hazard: Vec<Option<f64>> = times
