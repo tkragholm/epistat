@@ -40,9 +40,11 @@ pub use panel_pairs::{
 pub struct EventStudyResult {
     /// ATT(g,t) estimates.
     pub estimates: Vec<AttGtEstimate>,
-    /// Influence function of each estimate, one vector per estimate.
+    /// Influence function of each estimate, one vector per estimate and one
+    /// value per input observation.
     pub influence_functions: Vec<Vec<f64>>,
     /// Cluster membership of the units, if clustered inference was requested.
+    /// Aggregated results use it for their standard errors.
     pub cluster_index: Option<ClusterIndex>,
     /// Configuration the estimates were produced with.
     pub config: EventStudyConfig,
@@ -51,7 +53,10 @@ pub struct EventStudyResult {
 }
 
 impl EventStudyResult {
-    /// Aggregate estimates by event-time.
+    /// Aggregate estimates by event-time with
+    /// [`aggregate_att_gt_event_time_with_influence`]. With a cluster index, the
+    /// standard errors and intervals are recomputed from the clustered
+    /// influence functions.
     ///
     /// # Errors
     ///
@@ -82,18 +87,21 @@ impl EventStudyResult {
 pub struct WindowAssessment {
     /// Robust assessment of the window average.
     pub assessment: HonestAssessment,
-    /// Requested periods that exist in the data.
+    /// Post-treatment event times within the requested window that have an
+    /// estimate. The assessment averages these, with equal weights.
     pub matched_periods: Vec<i32>,
-    /// Inclusive range of post-treatment periods requested.
+    /// Inclusive range `(start, end)` of the requested event times.
     pub requested_range: (i32, i32),
 }
 
 #[cfg(feature = "honest")]
 impl WindowAssessment {
-    /// Require that all requested periods in the window are present in the data.
+    /// The assessment, if every integer event time in the requested window has
+    /// an estimate.
     ///
     /// # Errors
-    /// Returns an error if any integer in `[start, end]` is missing from the period grid.
+    /// Returns an error if any integer in `[start, end]` is not in
+    /// `matched_periods`.
     pub fn require_full_window(self) -> Result<HonestAssessment, String> {
         let (start, end) = self.requested_range;
         for p in start..=end {
@@ -110,9 +118,10 @@ impl WindowAssessment {
 /// Consolidated result of an event-time aggregated event-study.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventTimeResult {
-    /// Event-time aggregated estimates.
+    /// Event-time aggregated estimates, in increasing event time.
     pub estimates: Vec<AttGtEventTimeEstimate>,
-    /// Influence function of each aggregated estimate, one vector per estimate.
+    /// Influence function of each aggregated estimate, one vector per estimate
+    /// and one value per input observation.
     pub influence_functions: Vec<Vec<f64>>,
     /// Cluster membership of the units, if clustered inference was requested.
     pub cluster_index: Option<ClusterIndex>,
@@ -137,15 +146,17 @@ impl EventTimeResult {
         }
     }
 
-    /// Access the standard error for a specific event-time estimate by index.
+    /// Standard error of the estimate at position `index` in `estimates`.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of range.
     #[must_use]
     pub fn se(&self, index: usize) -> f64 {
         self.estimates[index].summary.se
     }
 
-    /// Access the standard error for a specific event-time estimate.
-    ///
-    /// Returns NaN if the event time is not present in the results.
+    /// Standard error of the estimate at the given event time, NaN if there is
+    /// none.
     #[must_use]
     pub fn se_at(&self, event_time: i32) -> f64 {
         self.estimates
@@ -154,16 +165,19 @@ impl EventTimeResult {
             .map_or(f64::NAN, |est| est.summary.se)
     }
 
-    /// Access the confidence interval for a specific event-time estimate by index.
+    /// Confidence interval `(lower, upper)` of the estimate at position `index`
+    /// in `estimates`.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of range.
     #[must_use]
     pub fn ci(&self, index: usize) -> (f64, f64) {
         let est = &self.estimates[index].summary;
         (est.ci_low, est.ci_high)
     }
 
-    /// Access the confidence interval for a specific event-time estimate.
-    ///
-    /// Returns (0.0, 0.0) if the event time is not present in the results.
+    /// Confidence interval `(lower, upper)` of the estimate at the given event
+    /// time, `(0.0, 0.0)` if there is none.
     #[must_use]
     pub fn ci_at(&self, event_time: i32) -> (f64, f64) {
         self.estimates
@@ -173,6 +187,11 @@ impl EventTimeResult {
     }
 
     /// Convert to `HonestEventStudyInput` for sensitivity analysis.
+    ///
+    /// The estimates are ordered by event time. Negative event times are
+    /// pre-periods and the others post-periods. The covariance matrix is
+    /// computed from the influence functions, clustered when a cluster index is
+    /// present.
     ///
     /// # Errors
     ///
@@ -221,10 +240,16 @@ impl EventTimeResult {
         })
     }
 
-    /// Assess sensitivity for an average window of post-treatment periods.
+    /// Sensitivity assessment of the equal-weight average of the post-treatment
+    /// estimates with event times in `start..=end`.
+    ///
+    /// The null value is 0, the confidence level is that of the result's
+    /// configuration, and only `config.relative_magnitude` is read from
+    /// `config`.
     ///
     /// # Errors
-    /// Returns an error if the honest input construction or assessment fails.
+    /// Returns an error if the honest input construction or assessment fails, or
+    /// if no post-treatment estimate has an event time in the window.
     #[cfg(feature = "honest")]
     #[expect(
         clippy::needless_pass_by_value,
@@ -275,7 +300,9 @@ impl EventTimeResult {
         })
     }
 
-    /// Export a specific event-time estimate to a reporting summary.
+    /// Reporting summary of the estimate at the given event time, `None` if
+    /// there is none. `n_obs` is the number of ATT(g,t) estimates aggregated at
+    /// that event time and the estimator label is `DR-DiD`.
     #[must_use]
     pub fn to_summary(
         &self,
@@ -303,7 +330,9 @@ impl EventTimeResult {
             })
     }
 
-    /// Export all event-time estimates to reporting summaries.
+    /// Reporting summaries of all estimates, in the order of `estimates`, with
+    /// the outcome name `unnamed_outcome` if none is set. `n_obs` is the number
+    /// of ATT(g,t) estimates aggregated at the event time.
     #[must_use]
     pub fn to_summaries(&self, subgroup: &str) -> Vec<ReportingSummary> {
         let outcome = self
@@ -332,7 +361,13 @@ impl EventTimeResult {
     }
 }
 
-/// Estimate staggered-adoption `ATT(g,t)` effects.
+/// Estimate staggered-adoption `ATT(g,t)` effects without covariates, from
+/// weighted cell means.
+///
+/// Where rows carry `unit_id`, a cell is estimated as a panel, from each unit's
+/// change in outcome. Otherwise it is estimated from repeated cross-sections.
+/// The standard error is analytic and the interval a two-sided normal one.
+/// `ComparisonGroup::MatchedNeverTreated` is refused.
 ///
 /// # Errors
 ///
@@ -345,8 +380,9 @@ pub fn estimate_att_gt(
     core::estimate_att_gt(observations, config)
 }
 
-/// Estimate staggered-adoption `ATT(g,t)` effects using DR repeated cross-section
-/// `DiD` estimators for each `(g, t)` pair.
+/// Estimate staggered-adoption `ATT(g,t)` effects with the doubly robust
+/// repeated cross-section `DiD` estimator for each `(g, t)` pair, adjusting for
+/// the covariates of the rows.
 ///
 /// # Errors
 ///

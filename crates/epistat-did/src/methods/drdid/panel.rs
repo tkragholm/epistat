@@ -62,25 +62,13 @@ pub fn estimate_drdid_panel(
     estimate_from_prepared(&prepared, config)
 }
 
-/// One row's worth of the design, laid out flat.
+/// Panel DR-DiD input as parallel slices, one entry per row, with the design
+/// matrix in a single flat row-major buffer.
 ///
-/// `DrDidObservation` owns a `Vec<f64>` per row, and `prepare_panel_data`'s
-/// first act is to copy every one of them into a single flat buffer. A caller
-/// that already has the numbers -- or that is about to build them anyway --
-/// pays for that vector twice: once to fill it, once to read it out.
-///
-/// `estimate_att_gt_dr_panel_with_influence` is such a caller, and it is the hot
-/// one. It runs this estimator once per `(g, t)` cell, and it was allocating a
-/// vector per unit per cell to hand over covariates it had already collected.
-/// On Study I's shape -- tens of thousands of units, a few hundred cells, 22
-/// covariates -- that is millions of small allocations per slice, and the cost
-/// showed: a fit grew LINEARLY in the covariate count, which is the signature of
-/// copying rather than of the linear algebra, whose Gram matrix is quadratic in
-/// it and whose solve is cubic.
-///
-/// `design_matrix_flat` is row-major and INCLUDES whatever intercept the caller
-/// wants; nothing is prepended here. That matches `estimate_drdid_panel`'s
-/// treatment of `DrDidObservation::covariates`, which is a finished design.
+/// The flat layout avoids a covariate vector per row. `design_matrix_flat`
+/// includes whatever intercept the caller wants and nothing is prepended, as for
+/// `DrDidObservation::covariates` in [`estimate_drdid_panel`], which is a
+/// finished design.
 #[derive(Debug, Clone, Copy)]
 pub struct PanelFlatInput<'a> {
     /// One per row.
@@ -206,7 +194,8 @@ pub struct PanelPropensityCoefficients {
     pub coefficients: Vec<f64>,
     /// Newton steps the propensity score took, counting the last.
     pub iterations: usize,
-    /// Whether the iterations stopped at the maximum.
+    /// Whether the iterations stopped at the maximum of the likelihood, as
+    /// [`PanelNuisanceFit::converged`].
     pub converged: bool,
 }
 
@@ -225,11 +214,11 @@ pub struct PanelNuisanceFit {
     pub propensity_se: Vec<f64>,
     /// Newton steps the propensity score took, counting the last.
     pub iterations: usize,
-    /// Whether the iterations stopped at the maximum: on a step within
-    /// `config.tol`, or where no step along the last direction raised the
-    /// likelihood, on a Newton decrement within a relative `config.tol` of
-    /// it. False when the iteration budget ran out, or when the line search
-    /// failed with more of the likelihood still to gain.
+    /// Whether the iterations stopped at the maximum of the likelihood: on a
+    /// step within `config.tol`, or where no step along the last direction
+    /// raised the likelihood, on a Newton decrement within a relative
+    /// `config.tol` of it. False when the iteration budget ran out, or when the
+    /// line search failed with more of the likelihood still to gain.
     pub converged: bool,
     /// The fitted propensity score of every row, capped at
     /// `1 - propensity_clip`.

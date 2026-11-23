@@ -11,33 +11,40 @@ use crate::types::InferenceConfig;
 /// violation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HonestSensitivity {
-    /// Smoothness restriction `ΔSD(M)`.
+    /// Smoothness restriction `ΔSD(M)`. The value is `M >= 0`, the bound on the
+    /// change of slope between adjacent event times.
     Smoothness(f64),
-    /// Relative-magnitude restriction `ΔRM(Mbar)`.
+    /// Relative-magnitude restriction `ΔRM(Mbar)`. The value is `Mbar >= 0`, the
+    /// factor applied to the largest pre-treatment violation.
     RelativeMagnitude(f64),
 }
 
 /// Result of a scalar `HonestDiD` robustness calculation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestResult {
-    /// Original point estimate.
+    /// Point estimate of the post-treatment coefficient, without any
+    /// correction for violations of parallel trends.
     pub original_estimate: f64,
-    /// Original standard error.
+    /// Standard error of `original_estimate`.
     pub original_se: f64,
-    /// Robust confidence interval.
+    /// Robust confidence interval as `(lower, upper)` at the requested
+    /// confidence level.
     pub robust_ci: (f64, f64),
-    /// Identified set implied by the sensitivity restriction.
+    /// Identified set as `(lower, upper)`: the range of values of the effect
+    /// consistent with the restriction, before sampling error.
     pub identified_set: (f64, f64),
-    /// Sensitivity parameter used in the calculation.
+    /// Value of the sensitivity parameter: `M` for a smoothness restriction,
+    /// `Mbar` for a relative-magnitude restriction.
     pub m: f64,
 }
 
 /// `HonestDiD` result for one post-treatment event-study period.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestEventStudyPoint {
-    /// User-facing post-period label.
+    /// Label of the post-treatment period, as listed in
+    /// [`HonestEventStudyInput::post_periods`].
     pub post_period: i32,
-    /// `HonestDiD` scalar result for that period.
+    /// `HonestDiD` scalar result for the coefficient of that period.
     pub result: HonestResult,
 }
 
@@ -49,11 +56,14 @@ pub struct HonestEventStudyPoint {
 pub struct HonestEventStudyInput {
     /// Event-study coefficient vector in pre-then-post order.
     pub betahat: Vec<f64>,
-    /// Covariance matrix matching `betahat`.
+    /// Covariance matrix of `betahat`, square with one row per coefficient.
     pub covariance: Vec<Vec<f64>>,
-    /// Labels for pre-treatment coefficients.
+    /// Event-time labels of the pre-treatment coefficients. Only their number
+    /// enters the calculations, which split `betahat` after that many entries.
     pub pre_periods: Vec<i32>,
-    /// Labels for post-treatment coefficients.
+    /// Event-time labels of the post-treatment coefficients, in the order of the
+    /// post part of `betahat`. Functionals and period arguments are matched
+    /// against these labels.
     pub post_periods: Vec<i32>,
 }
 
@@ -61,20 +71,25 @@ pub struct HonestEventStudyInput {
 /// functional.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestOriginalConfidenceSet {
-    /// Point estimate of the target linear functional.
+    /// Point estimate of the linear functional, `post_weights` applied to the
+    /// post-treatment coefficients.
     pub estimate: f64,
-    /// Standard error of the target functional.
+    /// Standard error of the functional, from the post-treatment block of the
+    /// covariance matrix.
     pub se: f64,
-    /// Two-sided original confidence interval.
+    /// Two-sided Wald interval `(lower, upper)` for the functional at the
+    /// requested confidence level.
     pub ci: (f64, f64),
 }
 
 /// Exact `ΔRM(Mbar)` identified set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestIdentifiedSet {
-    /// Lower bound.
+    /// Smallest value of the effect functional consistent with the restriction
+    /// and the estimated pre- and post-treatment coefficients.
     pub lb: f64,
-    /// Upper bound.
+    /// Largest value of the effect functional consistent with the restriction
+    /// and the estimated pre- and post-treatment coefficients.
     pub ub: f64,
 }
 
@@ -82,9 +97,9 @@ pub struct HonestIdentifiedSet {
 /// restriction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestConditionalConfidenceSet {
-    /// Lower bound.
+    /// Lower end of the confidence set.
     pub lb: f64,
-    /// Upper bound.
+    /// Upper end of the confidence set.
     pub ub: f64,
 }
 
@@ -96,8 +111,8 @@ pub struct HonestConditionalConfidenceSet {
 /// - `LeastFavorable` corresponds to `"LF"`
 /// - `ArpOnly` corresponds to `"ARP"`
 ///
-/// The least-favorable mode is the current default because it matches the
-/// study-facing conditional confidence-set path used elsewhere in this crate.
+/// The least-favorable mode is the default of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelativeMagnitudeHybrid {
     /// Least-favorable hybrid conditional confidence set (`"LF"` in R).
@@ -124,30 +139,41 @@ pub enum SmoothnessHybrid {
     ArpOnly,
 }
 
-/// Sign restriction on the bias in a sensitivity analysis.
+/// Sign restriction on the post-treatment bias, that is the deviation from
+/// parallel trends, in a sensitivity analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestBiasDirection {
-    /// The bias is restricted to be non-negative.
+    /// The post-treatment bias is restricted to be non-negative (`PB`).
     Positive,
-    /// The bias is restricted to be non-positive.
+    /// The post-treatment bias is restricted to be non-positive (`NB`).
     Negative,
 }
 
-/// Monotonicity restriction on the trend deviation in a sensitivity analysis.
+/// Monotonicity restriction on the deviation from parallel trends in a
+/// sensitivity analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestMonotonicityDirection {
-    /// The post-treatment trend deviation is restricted to be non-decreasing.
+    /// The deviation from parallel trends is restricted to be non-decreasing in
+    /// event time, across the pre- and post-treatment periods (`ΔI`). The
+    /// deviation at the reference period is zero, so the pre-period deviations
+    /// are at most 0 and the post-period deviations at least 0.
     Increasing,
-    /// The post-treatment trend deviation is restricted to be non-increasing.
+    /// The deviation from parallel trends is restricted to be non-increasing in
+    /// event time, across the pre- and post-treatment periods (`ΔD`).
     Decreasing,
 }
 
-/// Reference deviation that the relative-magnitude bound is scaled by.
+/// Which pre-treatment violation the relative-magnitude bound `Mbar` is
+/// multiplied by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestRelativeMagnitudeBound {
-    /// Post-period deviations are bounded relative to the largest pre-period deviation from parallel trends.
+    /// Post-period changes in the deviation from parallel trends are bounded by
+    /// `Mbar` times the largest such change between adjacent pre-periods
+    /// (`ΔRM`). This is the default.
     ParallelTrendsDeviation,
-    /// Post-period deviations are bounded relative to the largest pre-period deviation from a linear trend.
+    /// Post-period deviations from a linear trend are bounded by `Mbar` times
+    /// the largest pre-period deviation from a linear trend, the largest second
+    /// difference of the pre-period coefficients (`ΔSDRM`).
     LinearTrendDeviation,
 }
 
@@ -195,13 +221,20 @@ impl LeastFavorableSimulation {
 /// Configuration for `DeltaSD` conditional confidence-set construction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SmoothnessConfidenceSetConfig {
-    /// Hybrid conditional confidence-set mode.
+    /// Hybrid conditional confidence-set mode. The default is
+    /// [`SmoothnessHybrid::Flci`].
     pub hybrid: SmoothnessHybrid,
-    /// First-stage hybrid size parameter `κ`.
+    /// Size `κ` of the first-stage test of the hybrid, a probability in
+    /// `[0, alpha]` where `alpha = 1 - confidence_level`. The default is
+    /// `alpha / 10`.
     pub hybrid_kappa: f64,
-    /// Whether ARP should exclude moments involving only pre periods.
+    /// Whether the ARP test uses only the moments that involve a post-treatment
+    /// coefficient. It has no effect when there is a single post period. The
+    /// default is `true`.
     pub post_period_moments_only: bool,
-    /// Number of points in the theta inversion grid.
+    /// Number of equally spaced values of the target parameter at which the
+    /// test is inverted to form the confidence set. At least 2. The default is
+    /// 1,000.
     pub grid_points: usize,
 }
 
@@ -251,38 +284,28 @@ impl SmoothnessConfidenceSetConfig {
 /// as a typed Rust configuration object.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RelativeMagnitudeConfidenceSetConfig {
-    /// Hybrid conditional confidence-set mode.
+    /// Hybrid conditional confidence-set mode. The default is
+    /// [`RelativeMagnitudeHybrid::LeastFavorable`].
     pub hybrid: RelativeMagnitudeHybrid,
-    /// First-stage hybrid size parameter `κ`.
+    /// Size `κ` of the first-stage test of the hybrid, a probability in
+    /// `[0, alpha]` where `alpha = 1 - confidence_level`. The default is
+    /// `alpha / 10`.
     pub hybrid_kappa: f64,
-    /// Number of simulated draws behind the least-favorable critical value.
-    /// The default is 1,000, the value `HonestDiD` uses.
+    /// Number of simulated draws behind the least-favorable critical value,
+    /// positive. The default is 1,000.
     pub least_favorable_draws: usize,
     /// Seed of the simulation behind the least-favorable critical value. The
-    /// default is 0, the seed of the `HonestDiD` default.
+    /// default is 0.
     pub least_favorable_seed: u64,
 }
 
 impl RelativeMagnitudeConfidenceSetConfig {
     /// Build the default conditional-CS configuration for a target confidence
     /// level.
-    /// `hybrid_kappa` is `alpha / 10`, which is what `HonestDiD` uses.
     ///
-    /// It was `alpha / 20` until 4 September 2026, which is not a defensible
-    /// place to differ: the whole point of this surface is to answer a question
-    /// about parallel trends in the terms the literature states it in, and a
-    /// first stage calibrated differently from the reference package is not
-    /// comparable with the numbers a reader has seen elsewhere. The smoothness
-    /// configuration next door was already `alpha / 10`, so the two families
-    /// also disagreed with each other.
-    ///
-    /// It was not a free choice numerically either. `kappa` selects the
-    /// `1 - kappa` quantile of the simulated least-favorable distribution from
-    /// a fixed 1,000 draws, so `alpha / 20` asked for the 0.9975 quantile --
-    /// effectively the third largest draw of a thousand -- where `alpha / 10`
-    /// asks for the tenth. The tail estimate the whole first stage rests on was
-    /// three times noisier for no stated reason. A fixed seed makes that
-    /// reproducible, not accurate.
+    /// `hybrid_kappa` is `alpha / 10`, with `alpha = 1 - confidence_level`. The
+    /// first stage selects the `1 - kappa` quantile of the simulated
+    /// least-favorable distribution from the fixed number of draws.
     #[must_use]
     pub fn from_inference(inference: InferenceConfig) -> Self {
         Self {
@@ -320,21 +343,27 @@ impl RelativeMagnitudeConfidenceSetConfig {
 /// distinguishable from a null value under a given sensitivity restriction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestAssessment {
-    /// Original parallel-trends confidence interval.
+    /// Two-sided Wald interval `(lower, upper)` for the functional, valid under
+    /// exact parallel trends, at the requested confidence level.
     pub original_ci: (f64, f64),
-    /// Robust `HonestDiD` confidence interval.
+    /// Robust `HonestDiD` confidence interval `(lower, upper)` at the requested
+    /// confidence level. It is `(-inf, inf)` for a smoothness restriction when
+    /// some adjacent pre-treatment coefficients differ by more than `M`.
     pub robust_ci: (f64, f64),
-    /// Identified set implied by the sensitivity restriction.
+    /// Identified set `(lower, upper)` of the functional under the restriction.
+    /// It is `(-inf, inf)` in the same case as `robust_ci`.
     pub identified_set: (f64, f64),
-    /// Point estimate of the target functional.
+    /// Point estimate of the functional, `post_weights` applied to the
+    /// post-treatment coefficients.
     pub estimate: f64,
-    /// Standard error of the target functional.
+    /// Standard error of the estimate.
     pub se: f64,
-    /// Null value used for the significance assessment.
+    /// Value of the functional that `robustly_significant` is tested against.
     pub null_value: f64,
-    /// Sensitivity parameter value (`M` or `Mbar`).
+    /// Value of the sensitivity parameter: `M` for a smoothness restriction,
+    /// `Mbar` for a relative-magnitude restriction.
     pub sensitivity_value: f64,
-    /// Whether the robust confidence interval excludes `null_value`.
+    /// Whether `null_value` lies outside `robust_ci`.
     pub robustly_significant: bool,
 }
 
@@ -345,37 +374,45 @@ pub struct HonestAssessment {
 /// confidence region for the whole post-treatment path.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestJointPathPoint {
-    /// User-facing post-period label.
+    /// Label of the post-treatment period, as listed in
+    /// [`HonestEventStudyInput::post_periods`].
     pub post_period: i32,
-    /// Scalar assessment for this post period under the joint-region
-    /// confidence level.
+    /// Scalar assessment of this period's coefficient, run at the region's
+    /// `pointwise_confidence_level` rather than at the requested level.
     pub assessment: HonestAssessment,
 }
 
-/// Method used to calibrate a simultaneous joint post-treatment path region.
+/// Method used to calibrate the simultaneous coverage of a set of post-treatment
+/// intervals, one per period or per functional.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HonestJointPathMethod {
-    /// Bonferroni-adjusted per-period intervals.
+    /// Each interval is run at pointwise level `1 - alpha / k`, where `k` is the
+    /// number of intervals. Ignores the covariance between them.
     Bonferroni,
-    /// Covariance-aware simulated max-`t` critical value over the
-    /// post-treatment covariance block.
+    /// The pointwise level is set from a max-`|t|` critical value simulated from
+    /// a multivariate normal with the covariance of the `k` functionals, so that
+    /// the intervals cover jointly at the requested level.
     GaussianSimulated,
 }
 
 /// Configuration for simultaneous joint post-treatment path regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HonestJointPathConfig {
-    /// Method used to control family-wise error.
-    pub method: HonestJointPathMethod,
-    /// Number of Gaussian simulation draws when using
+    /// Method used to set the pointwise level so that the family of intervals
+    /// has the requested joint coverage. The default is
     /// [`HonestJointPathMethod::GaussianSimulated`].
+    pub method: HonestJointPathMethod,
+    /// Number of simulated draws behind the max-`|t|` critical value, positive.
+    /// Used only by [`HonestJointPathMethod::GaussianSimulated`]. The default is
+    /// 20,000.
     pub simulation_draws: usize,
-    /// RNG seed used for simulated critical values.
+    /// Seed of the simulation behind the max-`|t|` critical value. Used only by
+    /// [`HonestJointPathMethod::GaussianSimulated`]. The default is 42.
     pub simulation_seed: u64,
 }
 
 impl HonestJointPathConfig {
-    /// Default joint-path configuration for study-facing use.
+    /// Gaussian-simulated calibration with 20,000 draws and seed 42.
     #[must_use]
     pub const fn default_for_production() -> Self {
         Self {
@@ -397,15 +434,18 @@ impl HonestJointPathConfig {
 /// optimization surface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestJointPathRegion {
-    /// Requested family-wise confidence level.
+    /// Requested joint confidence level, a probability such as 0.95.
     pub confidence_level: f64,
-    /// Per-period confidence level actually used for the scalar intervals.
+    /// Confidence level of each period's scalar interval, a probability at least
+    /// `confidence_level`.
     pub pointwise_confidence_level: f64,
-    /// Two-sided max-`|t|` critical value implied by the calibration.
+    /// Two-sided critical value of the max-`|t|` statistic across periods that
+    /// corresponds to `pointwise_confidence_level`.
     pub calibrated_max_t_critical_value: f64,
     /// Method used to calibrate the simultaneous region.
     pub method: HonestJointPathMethod,
-    /// Joint region points in post-period order.
+    /// One point per post-treatment period, in the order of
+    /// [`HonestEventStudyInput::post_periods`].
     pub points: Vec<HonestJointPathPoint>,
 }
 
@@ -416,10 +456,11 @@ pub struct HonestJointPathRegion {
 /// `τ_post`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestDirectionalFunctionalPoint {
-    /// Post-treatment linear-functional weights in `τ_post` order.
+    /// Weights of the functional on the post-treatment coefficients, one per
+    /// post period in the order of [`HonestEventStudyInput::post_periods`].
     pub post_weights: Vec<f64>,
-    /// Scalar assessment for this functional under the simultaneous
-    /// confidence level.
+    /// Scalar assessment of the functional, run at the region's
+    /// `pointwise_confidence_level` rather than at the requested level.
     pub assessment: HonestAssessment,
 }
 
@@ -431,15 +472,18 @@ pub struct HonestDirectionalFunctionalPoint {
 /// supplied, but still finite-direction rather than continuum-tight.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestDirectionalRegion {
-    /// Requested family-wise confidence level.
+    /// Requested joint confidence level, a probability such as 0.95.
     pub confidence_level: f64,
-    /// Scalar confidence level used for each directional assessment.
+    /// Confidence level of each functional's scalar interval, a probability at
+    /// least `confidence_level`.
     pub pointwise_confidence_level: f64,
-    /// Two-sided max-`|t|` critical value implied by the calibration.
+    /// Two-sided critical value of the max-`|t|` statistic across the
+    /// functionals that corresponds to `pointwise_confidence_level`.
     pub calibrated_max_t_critical_value: f64,
     /// Method used to calibrate the simultaneous region.
     pub method: HonestJointPathMethod,
-    /// Directional functional assessments.
+    /// One assessment per direction, in the order the directions were given or
+    /// generated.
     pub points: Vec<HonestDirectionalFunctionalPoint>,
     /// Calibration and convergence diagnostics for this region.
     pub diagnostics: HonestDirectionalRegionDiagnostics,
@@ -448,13 +492,18 @@ pub struct HonestDirectionalRegion {
 /// Diagnostics emitted for directional/surface joint-region calibration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HonestDirectionalRegionDiagnostics {
-    /// Number of directions used in the final calibration.
+    /// Number of distinct directions in the region, after duplicates are
+    /// removed.
     pub direction_count: usize,
-    /// Number of random directions used in the final calibration.
+    /// Number of those directions that were drawn at random rather than being
+    /// basis or pairwise-contrast directions.
     pub random_direction_count: usize,
-    /// Number of enrichment iterations performed.
+    /// Number of direction sets built. It is 1 for a fixed direction set and
+    /// counts the enrichment rounds for an adaptive one.
     pub iterations_run: usize,
-    /// Whether adaptive enrichment reported convergence before hitting limits.
+    /// Whether the calibrated pointwise level stabilised within the tolerance
+    /// before the random directions or iterations ran out. It is `true` for a
+    /// fixed direction set.
     pub converged: bool,
     /// Conic programs that needed the retry with looser tolerances while the
     /// region was computed, adaptive iterations included. A retried program is
@@ -467,7 +516,8 @@ pub struct HonestDirectionalRegionDiagnostics {
 }
 
 impl HonestDirectionalRegionDiagnostics {
-    /// Diagnostics for a fixed direction set, with no adaptive iterations.
+    /// Diagnostics for a fixed direction set: one iteration, converged, and
+    /// zero solver counts.
     #[must_use]
     pub const fn fixed(direction_count: usize, random_direction_count: usize) -> Self {
         Self {
@@ -480,7 +530,8 @@ impl HonestDirectionalRegionDiagnostics {
         }
     }
 
-    /// The same diagnostics with the solver counts of a computation.
+    /// The same diagnostics with `solver_retries` and `solver_almost_solved`
+    /// taken from `counts`.
     #[must_use]
     pub const fn with_solver_counts(mut self, counts: SolverCounts) -> Self {
         self.solver_retries = counts.retried;
@@ -488,7 +539,7 @@ impl HonestDirectionalRegionDiagnostics {
         self
     }
 
-    /// Diagnostics for an adaptive direction set.
+    /// Diagnostics for an adaptive direction set, with zero solver counts.
     #[must_use]
     pub const fn adaptive(
         direction_count: usize,
@@ -511,32 +562,38 @@ impl HonestDirectionalRegionDiagnostics {
 /// result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestMultiFlciPoint {
-    /// Functional weights in post-period order.
+    /// Weights of the functional on the post-treatment coefficients, one per
+    /// post period in the order of [`HonestEventStudyInput::post_periods`].
     pub post_weights: Vec<f64>,
-    /// Simultaneous least-favorable confidence interval.
+    /// Least-favorable confidence interval `(lower, upper)` of the functional,
+    /// run at the result's `pointwise_confidence_level` so that the intervals
+    /// cover jointly at the requested level.
     pub flci: (f64, f64),
-    /// Original confidence interval.
+    /// Two-sided Wald interval `(lower, upper)` of the functional under exact
+    /// parallel trends, at the requested confidence level.
     pub original_ci: (f64, f64),
-    /// Identified set.
+    /// Identified set `(lower, upper)` of the functional under the restriction.
     pub identified_set: (f64, f64),
-    /// Null value tested for robust significance.
+    /// Value of the functional that `robustly_significant` is tested against.
     pub null_value: f64,
-    /// Whether the simultaneous FLCI excludes `null_value`.
+    /// Whether `null_value` lies outside `flci`.
     pub robustly_significant: bool,
 }
 
 /// Simultaneous least-favorable result over a functional set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestMultiFlciResult {
-    /// Requested family-wise confidence level.
+    /// Requested joint confidence level, a probability such as 0.95.
     pub confidence_level: f64,
-    /// Pointwise confidence level used for each scalar FLCI.
+    /// Confidence level of each functional's interval, a probability at least
+    /// `confidence_level`.
     pub pointwise_confidence_level: f64,
-    /// Two-sided max-`|t|` critical value implied by the calibration.
+    /// Two-sided critical value of the max-`|t|` statistic across the
+    /// functionals that corresponds to `pointwise_confidence_level`.
     pub calibrated_max_t_critical_value: f64,
-    /// Joint calibration method.
+    /// Method used to calibrate the joint coverage.
     pub method: HonestJointPathMethod,
-    /// Functional points.
+    /// One point per functional, in the order the functionals were given.
     pub points: Vec<HonestMultiFlciPoint>,
 }
 
@@ -556,23 +613,24 @@ pub type SmoothnessMultiFlciResult = HonestMultiFlciResult;
 /// envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HonestOptimizationSurfaceConfig {
-    /// Include canonical basis directions `e_t` for all post periods.
+    /// Include the basis direction `e_t` of each post period, which selects a
+    /// single period's coefficient.
     pub include_basis: bool,
-    /// Include pairwise contrast directions `(e_i - e_j) / sqrt(2)`.
+    /// Include the contrast `(e_i - e_j) / sqrt(2)` of every pair of post
+    /// periods `i < j`. Has no effect with a single post period.
     pub include_pairwise_contrasts: bool,
-    /// Number of random unit directions to sample.
+    /// Number of directions drawn at random, each normalised to unit length with
+    /// the sign fixed so that its first non-zero weight is positive. Directions
+    /// that duplicate an earlier one are dropped. In the adaptive variant this
+    /// is the cap on random directions.
     pub random_unit_directions: usize,
-    /// RNG seed for random direction generation.
+    /// Seed of the random direction draw.
     pub random_seed: u64,
 }
 
 impl HonestOptimizationSurfaceConfig {
-    /// Default reduced direction-set configuration for study-facing production use.
-    ///
-    /// This keeps a deterministic backbone of basis and pairwise-contrast
-    /// directions, then adds a moderate random tail. It is intended to give a
-    /// practical directional approximation without making full pipeline reruns
-    /// dominated by optimization-surface work.
+    /// Basis and pairwise-contrast directions plus 250 random directions, seed
+    /// 1729.
     #[must_use]
     pub const fn default_for_production() -> Self {
         Self {
@@ -583,7 +641,8 @@ impl HonestOptimizationSurfaceConfig {
         }
     }
 
-    /// Default dense direction-set configuration for explicit slow/full runs.
+    /// Basis and pairwise-contrast directions plus 2,000 random directions, seed
+    /// 1729.
     #[must_use]
     pub const fn default_for_full_surface() -> Self {
         Self {
@@ -597,23 +656,28 @@ impl HonestOptimizationSurfaceConfig {
 
 /// Adaptive enrichment settings for optimization-surface direction sets.
 ///
-/// The adaptive routine incrementally increases random directions and stops
-/// when the calibrated pointwise confidence level stabilizes within
-/// `pointwise_tolerance`, or when limits are reached.
+/// The adaptive routine adds random directions in batches, up to the
+/// `random_unit_directions` of the surface configuration. It stops when the
+/// calibrated pointwise confidence level changes by no more than
+/// `pointwise_tolerance` between two rounds, or when a limit is reached.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HonestOptimizationSurfaceAdaptiveConfig {
-    /// Number of random directions added per iteration.
+    /// Number of random directions added per iteration, positive.
     pub random_batch_size: usize,
-    /// Minimum number of random directions before convergence checks apply.
+    /// Number of random directions the set must hold before a change in the
+    /// pointwise level below the tolerance counts as convergence.
     pub min_random_for_convergence: usize,
-    /// Absolute convergence tolerance on calibrated pointwise confidence level.
+    /// Largest absolute change in the calibrated pointwise confidence level,
+    /// a probability, between two iterations that counts as convergence.
+    /// Finite and non-negative.
     pub pointwise_tolerance: f64,
-    /// Maximum number of enrichment iterations.
+    /// Maximum number of enrichment iterations, positive.
     pub max_iterations: usize,
 }
 
 impl HonestOptimizationSurfaceAdaptiveConfig {
-    /// Default adaptive settings for study-facing production use.
+    /// Batches of 100, convergence checked from 250 random directions, tolerance
+    /// 5e-4, at most 6 iterations.
     #[must_use]
     pub const fn default_for_production() -> Self {
         Self {
@@ -624,7 +688,8 @@ impl HonestOptimizationSurfaceAdaptiveConfig {
         }
     }
 
-    /// Default adaptive settings for explicit slow/full runs.
+    /// Batches of 500, convergence checked from 1,000 random directions,
+    /// tolerance 5e-4, at most 20 iterations.
     #[must_use]
     pub const fn default_for_full_surface() -> Self {
         Self {
@@ -662,23 +727,24 @@ impl HonestOptimizationSurfaceAdaptiveConfig {
 
 /// Bundled configuration for the adaptive optimization-surface region API.
 ///
-/// This groups the calibration and direction-set controls that previously
-/// traveled as separate arguments, keeping the public API estimand-first while
-/// avoiding oversized function signatures.
+/// This groups the confidence-set, calibration and direction-set controls of
+/// the adaptive region computation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HonestOptimizationSurfaceAdaptiveRunConfig {
     /// `DeltaRM` conditional confidence-set construction settings.
     pub relative_magnitude: RelativeMagnitudeConfidenceSetConfig,
-    /// Simultaneous calibration settings for the final region.
+    /// Calibration of the joint coverage across the directions.
     pub joint: HonestJointPathConfig,
-    /// Direction-set construction settings.
+    /// Direction-set construction settings. Its `random_unit_directions` is the
+    /// cap of the adaptive enrichment.
     pub surface: HonestOptimizationSurfaceConfig,
     /// Adaptive enrichment settings.
     pub adaptive: HonestOptimizationSurfaceAdaptiveConfig,
 }
 
 impl HonestOptimizationSurfaceAdaptiveRunConfig {
-    /// Build study-facing defaults for the supplied inference level.
+    /// The `from_inference` defaults of the relative-magnitude configuration,
+    /// and the `default_for_production` joint, surface and adaptive settings.
     #[must_use]
     pub fn from_inference(inference: InferenceConfig) -> Self {
         Self {
@@ -690,18 +756,22 @@ impl HonestOptimizationSurfaceAdaptiveRunConfig {
     }
 }
 
-/// Direction-set strategy for the high-level `HonestDiD` workflow API.
+/// Which directions the directional region of the `HonestDiD` workflow covers.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HonestWorkflowDirectionMode {
-    /// Canonical basis directions over post periods.
+    /// One direction per post period, which is the joint path region reported
+    /// as a directional region without a separate computation.
     Basis,
-    /// User-supplied custom directions.
+    /// The given directions. Each has one finite weight per post period, not
+    /// all zero.
     Custom(Vec<Vec<f64>>),
-    /// Auto-generated finite optimization-surface directions.
+    /// A fixed direction set generated from the configuration.
     OptimizationSurface(HonestOptimizationSurfaceConfig),
-    /// Auto-generated adaptive optimization-surface directions.
+    /// A direction set generated from the configuration whose random part is
+    /// grown adaptively.
     OptimizationSurfaceAdaptive {
-        /// Settings of the finite optimization surface.
+        /// Direction-set construction settings. Its `random_unit_directions` caps
+        /// the random directions.
         surface: HonestOptimizationSurfaceConfig,
         /// Settings of the adaptive enrichment.
         adaptive: HonestOptimizationSurfaceAdaptiveConfig,
@@ -709,7 +779,8 @@ pub enum HonestWorkflowDirectionMode {
 }
 
 impl HonestWorkflowDirectionMode {
-    /// Default direction mode for study-facing production workflow use.
+    /// Adaptive optimization-surface directions with the
+    /// `default_for_production` surface and adaptive settings.
     #[must_use]
     pub const fn default_for_production() -> Self {
         Self::OptimizationSurfaceAdaptive {
@@ -722,16 +793,20 @@ impl HonestWorkflowDirectionMode {
 /// Bundled configuration for the high-level `HonestDiD` workflow API.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestWorkflowConfig {
-    /// `DeltaRM` conditional confidence-set construction settings.
+    /// `DeltaRM` conditional confidence-set construction settings. Ignored under
+    /// a smoothness restriction.
     pub relative_magnitude: RelativeMagnitudeConfidenceSetConfig,
-    /// Simultaneous path calibration settings.
+    /// Calibration of the joint coverage of the path region, the directional
+    /// region and the simultaneous intervals.
     pub joint: HonestJointPathConfig,
-    /// Direction-set strategy for the directional region.
+    /// Which directions the directional region covers.
     pub direction_mode: HonestWorkflowDirectionMode,
 }
 
 impl HonestWorkflowConfig {
-    /// Build study-facing defaults for the supplied inference level.
+    /// The `from_inference` defaults of the relative-magnitude configuration,
+    /// the `default_for_production` joint calibration, and adaptive
+    /// optimization-surface directions.
     #[must_use]
     pub fn from_inference(inference: InferenceConfig) -> Self {
         Self {
@@ -746,43 +821,55 @@ impl HonestWorkflowConfig {
 /// result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestFunctionalAssessmentPoint {
-    /// Functional descriptor.
+    /// The requested functional.
     pub functional: HonestPostFunctional,
-    /// Scalar assessment for this functional.
+    /// Scalar assessment of the functional at the requested confidence level.
     pub assessment: HonestAssessment,
 }
 
 /// Consolidated high-level `HonestDiD` workflow result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HonestStudyWorkflowResult {
-    /// Scalar assessments for requested functionals.
+    /// One scalar assessment per requested functional, in the order given.
     pub functional_assessments: Vec<HonestFunctionalAssessmentPoint>,
-    /// Simultaneous joint post-treatment path region.
+    /// Simultaneous region over the post-treatment coefficients, one interval
+    /// per post period.
     pub joint_path_region: HonestJointPathRegion,
-    /// Simultaneous directional region.
+    /// Simultaneous region over the directions chosen by the workflow's
+    /// direction mode.
     pub directional_region: HonestDirectionalRegion,
-    /// Optional simultaneous multi-functional least-favorable interval result.
+    /// Simultaneous least-favorable intervals for the requested functionals.
+    /// The workflow always fills it.
     pub multi_flci: Option<HonestMultiFlciResult>,
 }
 
 /// Typed post-treatment linear functionals for event-study robustness
 /// assessment.
 ///
-/// These functionals are converted to the `post_weights` weight representation used
-/// by the lower-level `HonestDiD` routines for a post-treatment parameter
-/// vector `τ_post`.
+/// Each functional is converted to a vector of weights over the post-treatment
+/// coefficients `τ_post`, which is what the lower-level `HonestDiD` routines
+/// take. Periods are matched against the labels in
+/// [`HonestEventStudyInput::post_periods`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum HonestPostFunctional {
-    /// Select a single post-treatment period.
+    /// The coefficient of the post period with this label. It is an error if the
+    /// label is not in the input.
     Period(i32),
-    /// Uniform average over an inclusive post-treatment window.
+    /// Equal-weight average of the post periods whose labels lie in
+    /// `start_period..=end_period`. Only periods present in the input count, so
+    /// a window with gaps averages the periods it does contain. It is an error
+    /// if `start_period` exceeds `end_period` or the window contains no post
+    /// period.
     AverageWindow {
-        /// First post-treatment period of the window.
+        /// Smallest label in the window, inclusive.
         start_period: i32,
-        /// Last post-treatment period of the window.
+        /// Largest label in the window, inclusive.
         end_period: i32,
     },
-    /// Arbitrary weighted linear functional over named post periods.
+    /// Weighted sum of the coefficients of the given `(post period label,
+    /// weight)` pairs. The weights are used as given, not normalised, and
+    /// weights for the same label are added. It is an error if the list is
+    /// empty or a label is not in the input.
     Weighted(Vec<(i32, f64)>),
 }
 

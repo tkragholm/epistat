@@ -18,130 +18,141 @@ const fn method_label(method: HonestJointPathMethod) -> &'static str {
 /// One row of a joint-path report, for one post period.
 #[derive(Debug, Clone, Serialize)]
 pub struct HonestJointPathReportRow {
-    /// Version label of the report schema.
+    /// Version label of the report schema, `honestdid_joint_report_v1`.
     pub schema_version: &'static str,
-    /// Calibration method of the joint region.
+    /// Calibration method of the joint region: `bonferroni` or
+    /// `gaussian_simulated`.
     pub method: &'static str,
-    /// Confidence level as a probability, such as 0.95.
+    /// Requested joint confidence level, a probability such as 0.95.
     pub confidence_level: f64,
-    /// Pointwise confidence level used for each functional.
+    /// Confidence level of each period's scalar interval, a probability at least
+    /// `confidence_level`.
     pub pointwise_confidence_level: f64,
-    /// Two-sided max-`|t|` critical value implied by the calibration.
+    /// Two-sided max-`|t|` critical value that corresponds to the pointwise
+    /// level.
     pub calibrated_max_t_critical_value: f64,
-    /// Post-treatment period the row is for.
+    /// Label of the post-treatment period the row is for.
     pub post_period: i32,
-    /// Point estimate.
+    /// Point estimate of the post-period coefficient.
     pub estimate: f64,
-    /// Standard error of the estimate.
+    /// Standard error of `estimate`.
     pub se: f64,
-    /// Null value tested for robust significance.
+    /// Value that `robustly_significant` is tested against.
     pub null_value: f64,
-    /// Value of the sensitivity parameter.
+    /// Value of the sensitivity parameter, `M` or `Mbar`.
     pub sensitivity_value: f64,
-    /// Lower bound of the original confidence interval.
+    /// Lower end of the Wald interval under exact parallel trends.
     pub original_ci_low: f64,
-    /// Upper bound of the original confidence interval.
+    /// Upper end of the Wald interval under exact parallel trends.
     pub original_ci_high: f64,
-    /// Lower bound of the identified set.
+    /// Lower end of the identified set.
     pub identified_lb: f64,
-    /// Upper bound of the identified set.
+    /// Upper end of the identified set.
     pub identified_ub: f64,
-    /// Lower bound of the robust confidence interval.
+    /// Lower end of the robust confidence interval, run at the pointwise level.
     pub robust_ci_low: f64,
-    /// Upper bound of the robust confidence interval.
+    /// Upper end of the robust confidence interval, run at the pointwise level.
     pub robust_ci_high: f64,
-    /// Whether the robust interval excludes the null value.
+    /// Whether the robust interval excludes `null_value`.
     pub robustly_significant: bool,
 }
 
 /// One row of a directional-region report, for one functional.
 #[derive(Debug, Clone, Serialize)]
 pub struct HonestDirectionalReportRow {
-    /// Version label of the report schema.
+    /// Version label of the report schema, `honestdid_joint_report_v1`.
     pub schema_version: &'static str,
-    /// Calibration method of the joint region.
+    /// Calibration method of the joint region: `bonferroni` or
+    /// `gaussian_simulated`.
     pub method: &'static str,
-    /// Confidence level as a probability, such as 0.95.
+    /// Requested joint confidence level, a probability such as 0.95.
     pub confidence_level: f64,
-    /// Pointwise confidence level used for each functional.
+    /// Confidence level of each functional's scalar interval, a probability at
+    /// least `confidence_level`.
     pub pointwise_confidence_level: f64,
-    /// Two-sided max-`|t|` critical value implied by the calibration.
+    /// Two-sided max-`|t|` critical value that corresponds to the pointwise
+    /// level.
     pub calibrated_max_t_critical_value: f64,
-    /// Number of directions used in the final calibration.
+    /// Number of distinct directions in the region.
     pub direction_count: usize,
-    /// Number of random directions used in the final calibration.
+    /// Number of those directions drawn at random.
     pub random_direction_count: usize,
-    /// Number of enrichment iterations performed.
+    /// Number of direction sets built: 1 for a fixed set, the enrichment rounds
+    /// for an adaptive one.
     pub iterations_run: usize,
-    /// Whether adaptive enrichment converged before hitting its limits.
+    /// Whether the calibrated pointwise level stabilised before the limits were
+    /// reached. `true` for a fixed direction set.
     pub converged: bool,
-    /// Position of the functional within the set.
+    /// Zero-based position of the functional in the region's points.
     pub functional_id: usize,
     /// Functional weights in post-period order.
     pub post_weights: Vec<f64>,
-    /// Point estimate.
+    /// Point estimate of the functional.
     pub estimate: f64,
-    /// Standard error of the estimate.
+    /// Standard error of `estimate`.
     pub se: f64,
-    /// Null value tested for robust significance.
+    /// Value that `robustly_significant` is tested against.
     pub null_value: f64,
-    /// Value of the sensitivity parameter.
+    /// Value of the sensitivity parameter, `M` or `Mbar`.
     pub sensitivity_value: f64,
-    /// Lower bound of the original confidence interval.
+    /// Lower end of the Wald interval under exact parallel trends.
     pub original_ci_low: f64,
-    /// Upper bound of the original confidence interval.
+    /// Upper end of the Wald interval under exact parallel trends.
     pub original_ci_high: f64,
-    /// Lower bound of the identified set.
+    /// Lower end of the identified set.
     pub identified_lb: f64,
-    /// Upper bound of the identified set.
+    /// Upper end of the identified set.
     pub identified_ub: f64,
-    /// Lower bound of the robust confidence interval.
+    /// Lower end of the robust confidence interval, run at the pointwise level.
     pub robust_ci_low: f64,
-    /// Upper bound of the robust confidence interval.
+    /// Upper end of the robust confidence interval, run at the pointwise level.
     pub robust_ci_high: f64,
-    /// Whether the robust interval excludes the null value.
+    /// Whether the robust interval excludes `null_value`.
     pub robustly_significant: bool,
 }
 
 /// One row of a simultaneous interval report, for one functional.
 #[derive(Debug, Clone, Serialize)]
 pub struct HonestMultiFlciReportRow {
-    /// Version label of the report schema.
+    /// Version label of the report schema, `honestdid_joint_report_v1`.
     pub schema_version: &'static str,
-    /// Calibration method of the joint region.
+    /// Calibration method of the joint region: `bonferroni` or
+    /// `gaussian_simulated`.
     pub method: &'static str,
-    /// Confidence level as a probability, such as 0.95.
+    /// Requested joint confidence level, a probability such as 0.95.
     pub confidence_level: f64,
-    /// Pointwise confidence level used for each functional.
+    /// Confidence level of each functional's scalar interval, a probability at
+    /// least `confidence_level`.
     pub pointwise_confidence_level: f64,
-    /// Two-sided max-`|t|` critical value implied by the calibration.
+    /// Two-sided max-`|t|` critical value that corresponds to the pointwise
+    /// level.
     pub calibrated_max_t_critical_value: f64,
-    /// Position of the functional within the set.
+    /// Zero-based position of the functional in the result's points.
     pub functional_id: usize,
     /// Functional weights in post-period order.
     pub post_weights: Vec<f64>,
-    /// Lower bound of the simultaneous least-favorable interval.
+    /// Lower end of the least-favorable interval, run at the pointwise level.
     pub interval_low: f64,
-    /// Upper bound of the simultaneous least-favorable interval.
+    /// Upper end of the least-favorable interval, run at the pointwise level.
     pub interval_high: f64,
-    /// Lower bound of the original confidence interval.
+    /// Lower end of the Wald interval under exact parallel trends.
     pub original_ci_low: f64,
-    /// Upper bound of the original confidence interval.
+    /// Upper end of the Wald interval under exact parallel trends.
     pub original_ci_high: f64,
-    /// Lower bound of the identified set.
+    /// Lower end of the identified set.
     pub identified_lb: f64,
-    /// Upper bound of the identified set.
+    /// Upper end of the identified set.
     pub identified_ub: f64,
-    /// Null value tested for robust significance.
+    /// Value that `robustly_significant` is tested against.
     pub null_value: f64,
-    /// Whether the robust interval excludes the null value.
+    /// Whether the interval excludes `null_value`.
     pub robustly_significant: bool,
 }
 
 /// Joint-path report with its schema version.
 #[derive(Debug, Clone, Serialize)]
 pub struct HonestJointPathReport {
-    /// Version label of the report schema.
+    /// Version label of the report schema, `honestdid_joint_report_v1`.
     pub schema_version: &'static str,
     /// Report rows.
     pub rows: Vec<HonestJointPathReportRow>,
@@ -150,7 +161,7 @@ pub struct HonestJointPathReport {
 /// Directional-region report with its schema version.
 #[derive(Debug, Clone, Serialize)]
 pub struct HonestDirectionalReport {
-    /// Version label of the report schema.
+    /// Version label of the report schema, `honestdid_joint_report_v1`.
     pub schema_version: &'static str,
     /// Report rows.
     pub rows: Vec<HonestDirectionalReportRow>,
@@ -159,13 +170,14 @@ pub struct HonestDirectionalReport {
 /// Simultaneous interval report with its schema version.
 #[derive(Debug, Clone, Serialize)]
 pub struct HonestMultiFlciReport {
-    /// Version label of the report schema.
+    /// Version label of the report schema, `honestdid_joint_report_v1`.
     pub schema_version: &'static str,
     /// Report rows.
     pub rows: Vec<HonestMultiFlciReportRow>,
 }
 
-/// Flattens a joint-path region into one report row per post period.
+/// One report row per post period of a joint-path region, in the order of its
+/// points.
 #[must_use]
 pub fn build_honest_joint_path_report_rows(
     region: &HonestJointPathRegion,
@@ -195,7 +207,8 @@ pub fn build_honest_joint_path_report_rows(
         .collect()
 }
 
-/// Flattens a directional region into one report row per functional.
+/// One report row per functional of a directional region, in the order of its
+/// points.
 #[must_use]
 pub fn build_honest_directional_report_rows(
     region: &HonestDirectionalRegion,
@@ -231,7 +244,8 @@ pub fn build_honest_directional_report_rows(
         .collect()
 }
 
-/// Flattens a simultaneous interval result into one report row per functional.
+/// One report row per functional of a simultaneous interval result, in the
+/// order of its points.
 #[must_use]
 pub fn build_honest_multi_flci_report_rows(
     result: &HonestMultiFlciResult,
@@ -260,7 +274,8 @@ pub fn build_honest_multi_flci_report_rows(
         .collect()
 }
 
-/// Renders the joint-path report rows as CSV text with a header line.
+/// Renders the joint-path report rows as CSV text with a header line. Floating
+/// point values have six decimals.
 #[must_use]
 pub fn render_honest_joint_path_report_csv(region: &HonestJointPathRegion) -> String {
     let rows = build_honest_joint_path_report_rows(region);
@@ -294,6 +309,8 @@ pub fn render_honest_joint_path_report_csv(region: &HonestJointPathRegion) -> St
 }
 
 /// Renders the directional-region report rows as CSV text with a header line.
+/// Floating point values have six decimals. The `post_weights` column of the
+/// rows is not included.
 #[must_use]
 pub fn render_honest_directional_report_csv(region: &HonestDirectionalRegion) -> String {
     let rows = build_honest_directional_report_rows(region);
@@ -331,6 +348,8 @@ pub fn render_honest_directional_report_csv(region: &HonestDirectionalRegion) ->
 }
 
 /// Renders the simultaneous interval report rows as CSV text with a header line.
+/// Floating point values have six decimals. The `post_weights` column of the
+/// rows is not included.
 #[must_use]
 pub fn render_honest_multi_flci_report_csv(result: &HonestMultiFlciResult) -> String {
     let rows = build_honest_multi_flci_report_rows(result);

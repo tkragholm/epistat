@@ -15,7 +15,9 @@ use crate::types::{DrDidConfig, DrDidObservation, TripleDidObservation, TripleDi
 ///
 /// Each comparison runs a panel DR-DiD on subgroup `4` against one comparator
 /// subgroup, then rescales the resulting influence function by `n / n_k`, matching
-/// `triplediff::att_dr`.
+/// `triplediff::att_dr`. The subgroup of an observation comes from `group_s` and
+/// `partition_q`, and its `treated` field is not read. The confidence interval is
+/// the multiplier-bootstrap interval of `config`.
 ///
 /// # Errors
 /// Returns an error string if:

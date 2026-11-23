@@ -576,10 +576,13 @@ pub(super) fn dense_rows_to_csc(rows: &[Vec<f64>]) -> CscMatrix<f64> {
     build_clarabel_matrix(rows, &[])
 }
 
-/// Quantile of a standard normal truncated to `[l, u]`. A degenerate interval
-/// `l == u` gives that point, as `TruncatedNormal::norminvp` does in R. An
-/// interval with `l > u`, a `NaN` bound, a probability outside `[0, 1]` or an
-/// interval whose probability underflows is an error.
+/// Quantile of a standard normal truncated to `[l, u]`, as
+/// `TruncatedNormal::norminvp` in R. A degenerate interval `l == u` gives that
+/// point. An interval so far in a tail that its probability underflows, which
+/// the conditional tests meet when the truncation region lies dozens of
+/// standard deviations from zero, goes to [`far_tail_truncated_quantile`]. An
+/// interval with `l > u`, a `NaN` bound or a probability outside `[0, 1]` is an
+/// error.
 #[expect(
     clippy::float_cmp,
     reason = "an interval of one point has that point as every quantile"
@@ -593,7 +596,108 @@ pub(super) fn truncated_normal_quantile(p: f64, l: f64, u: f64) -> Result<f64, S
     if l == u {
         return Ok(l);
     }
-    epistat_stats::normal::truncated_quantile(p, l, u).ok_or_else(undefined)
+    epistat_stats::normal::truncated_quantile(p, l, u)
+        .or_else(|| far_tail_truncated_quantile(p, l, u))
+        .ok_or_else(undefined)
+}
+
+/// The `p` quantile of a standard normal truncated to `[l, u]`, for an
+/// interval on one side of zero, computed without the normal distribution
+/// function so that it holds where that function underflows.
+///
+/// # Algorithm
+///
+/// An interval below zero is mirrored to `[a, b] = [-u, -l]` with the
+/// quantile `1 - p`, so that `0 <= a < b`. With `Q(x) = 1 - Phi(x)` the upper
+/// tail and `r(x) = Q(x) / Q(a)`, the quantile `x` solves
+///
+/// ```text
+/// r(x) = 1 - p (1 - r(b)),
+/// ln r(x) = (a - x)(a + x) / 2 + ln M(x) - ln M(a),
+/// ```
+///
+/// where `M(x) = Q(x) / phi(x)` is Mills' ratio, evaluated by Laplace's
+/// continued fraction `M(x) = 1 / (x + 1 / (x + 2 / (x + 3 / (x + ...))))`
+/// with [`MILLS_TERMS`] terms from the inside out. Every quantity stays a
+/// ratio or a logarithm, so nothing underflows. Since
+/// `d ln r(x) / dx = -1 / M(x)`, Newton's step is `x + (ln r(x) - target)
+/// M(x)`, started from `sqrt(a^2 - 2 target)`, the root when `M` is taken as
+/// constant, and kept inside `[a, b]`. `M` decreases, so the start lies above
+/// the root, and `ln r` is concave and decreasing, so from there every step
+/// stays above the root and moves down to it. The iteration stops when a step
+/// no longer moves `x`.
+///
+/// `None` for an interval that contains zero, whose probability cannot
+/// underflow, or for `a` infinite.
+///
+/// # References
+///
+/// - Laplace, P. S. (1805). *Traité de mécanique céleste*, vol. 4, the
+///   continued fraction of the normal tail.
+/// - Botev, Z. I. (2017). The normal law under linear restrictions:
+///   simulation and estimation via minimax tilting. *Journal of the Royal
+///   Statistical Society B* 79, 125-148, whose `TruncatedNormal::norminvp`
+///   inverts the truncated normal in the tails by Newton's method on the same
+///   logarithmic scale.
+#[expect(
+    clippy::float_cmp,
+    reason = "Newton's iteration stops when a step leaves x unchanged"
+)]
+fn far_tail_truncated_quantile(p: f64, l: f64, u: f64) -> Option<f64> {
+    let (a, b, q, sign) = if l >= 0.0 {
+        (l, u, p, 1.0)
+    } else if u <= 0.0 {
+        (-u, -l, 1.0 - p, -1.0)
+    } else {
+        return None;
+    };
+    if !a.is_finite() || a >= b {
+        return None;
+    }
+    if q == 0.0 {
+        return Some(sign * a);
+    }
+    if q == 1.0 {
+        return Some(sign * b);
+    }
+    let ln_mills_a = mills_ratio(a).ln();
+    let ln_ratio = |x: f64| {
+        if x == f64::INFINITY {
+            f64::NEG_INFINITY
+        } else {
+            (a - x) * (a + x) / 2.0 + mills_ratio(x).ln() - ln_mills_a
+        }
+    };
+    // ln(1 - q (1 - r(b))), with 1 - r(b) = -expm1(ln r(b)).
+    let target = (-q * -ln_ratio(b).exp_m1()).ln_1p();
+    let mut x = (a * a - 2.0 * target).sqrt().clamp(a, b);
+    for _ in 0..MAX_NEWTON_STEPS {
+        let next = (x + (ln_ratio(x) - target) * mills_ratio(x)).clamp(a, b);
+        if next == x {
+            break;
+        }
+        x = next;
+    }
+    Some(sign * x)
+}
+
+/// Terms of the continued fraction in [`mills_ratio`]. The far-tail quantile
+/// meets it above about 37 standard deviations, where a few terms reach full
+/// precision; with 200 the relative error stays below `1e-15` down to `x = 2`.
+const MILLS_TERMS: u32 = 200;
+
+/// Newton steps allowed in [`far_tail_truncated_quantile`]; it converges in
+/// under ten.
+const MAX_NEWTON_STEPS: usize = 100;
+
+/// Mills' ratio `Q(x) / phi(x)` of the standard normal for `x > 0`, by
+/// Laplace's continued fraction evaluated from the inside out.
+fn mills_ratio(x: f64) -> f64 {
+    let mut denominator = x;
+    for k in (1..=MILLS_TERMS).rev() {
+        denominator = x + f64::from(k) / denominator;
+    }
+    1.0 / denominator
 }
 
 #[cfg(test)]
@@ -607,5 +711,83 @@ mod tests {
         assert!(truncated_normal_quantile(0.9, 1.0, 0.0).is_err());
         assert!(truncated_normal_quantile(0.9, f64::NAN, 1.0).is_err());
         assert!(truncated_normal_quantile(1.5, 0.0, 1.0).is_err());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct NorminvpCase {
+        p: f64,
+        l: f64,
+        u: f64,
+        quantile: f64,
+    }
+
+    /// Against `TruncatedNormal::norminvp`, on intervals where the normal
+    /// distribution function underflows and on moderate tails where it does
+    /// not. Beyond 35 standard deviations R inverts by Newton's method and
+    /// stops once a step falls below `1e-10`, so its quantile is within that
+    /// of the root; the quantiles here are between 20 and 80 in size, so
+    /// `1e-10` relative is at least that bound.
+    #[test]
+    fn truncated_quantile_matches_norminvp_in_the_tails() {
+        let cases: Vec<NorminvpCase> =
+            epistat_testkit::load_json("tests/data/truncated_normal_quantile_ref.json");
+        assert!(!cases.is_empty());
+        let mut worst = 0.0_f64;
+        for case in &cases {
+            let ours = truncated_normal_quantile(case.p, case.l, case.u).expect("defined");
+            let relative = ((ours - case.quantile) / case.quantile).abs();
+            worst = worst.max(relative);
+            assert!(
+                relative < 1e-10,
+                "p = {}, [{}, {}]: {ours} against R's {}",
+                case.p,
+                case.l,
+                case.u,
+                case.quantile
+            );
+        }
+        println!("worst relative deviation from norminvp: {worst:e}");
+    }
+
+    /// Where the distribution function does not underflow, the far-tail
+    /// route agrees with the direct one, which inverts `Phi` and so loses
+    /// relative precision in proportion to the tail's depth: `1e-12`
+    /// relative holds to 30 standard deviations.
+    #[test]
+    fn far_tail_route_agrees_with_the_direct_inversion() {
+        for &(p, l, u) in &[
+            (0.5, 5.0, 6.0),
+            (0.9, 10.0, 12.0),
+            (0.1, -30.0, -20.0),
+            (0.7, 20.0, f64::INFINITY),
+            (0.3, f64::NEG_INFINITY, -8.0),
+        ] {
+            let direct = epistat_stats::normal::truncated_quantile(p, l, u).expect("direct");
+            let tail = super::far_tail_truncated_quantile(p, l, u).expect("tail");
+            assert!(
+                ((direct - tail) / direct).abs() < 1e-12,
+                "p = {p}, [{l}, {u}]: direct {direct}, far tail {tail}"
+            );
+        }
+    }
+
+    #[test]
+    fn mills_ratio_matches_the_normal_tail() {
+        // Q(x) / phi(x): at 2, 5 and 8 R's pnorm(x, lower.tail = FALSE) /
+        // dnorm(x); at 40, where pnorm underflows, the asymptotic series
+        // (1 / x) sum_k (-1)^k (2k - 1)!! / x^(2k) to eight terms, whose
+        // truncation error is below 1e-20.
+        for &(x, expected) in &[
+            (2.0, 0.421_369_229_288_054_5),
+            (5.0, 0.192_808_104_715_315_76),
+            (8.0, 0.123_131_963_257_932_3),
+            (40.0, 0.024_984_404_205_720_574),
+        ] {
+            let ours = super::mills_ratio(x);
+            assert!(
+                ((ours - expected) / expected).abs() < 1e-15,
+                "x = {x}: {ours}"
+            );
+        }
     }
 }

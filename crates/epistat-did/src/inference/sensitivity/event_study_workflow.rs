@@ -44,14 +44,19 @@ fn emit_workflow_timing(
     );
 }
 
-/// High-level one-shot `HonestDiD` workflow for study-facing robustness outputs.
+/// All study-facing `HonestDiD` outputs for one event study in one call.
 ///
 /// This computes:
-/// - scalar assessments for requested functionals
-/// - a simultaneous joint post-treatment path region
-/// - a simultaneous directional region
-/// - optional multi-functional `DeltaRM` least-favorable intervals (when
-///   `sensitivity` is `RelativeMagnitude`)
+/// - a scalar assessment for each functional in `functionals`, at the requested
+///   confidence level
+/// - a simultaneous region over the post-treatment coefficients, one interval
+///   per post period
+/// - a simultaneous directional region over adaptively generated
+///   optimization-surface directions
+/// - simultaneous least-favorable intervals for `functionals`, under either
+///   restriction
+///
+/// The settings are those of [`HonestWorkflowConfig::from_inference`].
 ///
 /// # Errors
 /// Returns an error if any underlying component computation fails.
@@ -97,7 +102,8 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_coun
     )
 }
 
-/// Configurable version of [`assess_honest_event_study_workflow`].
+/// [`assess_honest_event_study_workflow`] with the settings given explicitly in
+/// `config`.
 ///
 /// # Errors
 /// Returns an error if any underlying component computation fails.

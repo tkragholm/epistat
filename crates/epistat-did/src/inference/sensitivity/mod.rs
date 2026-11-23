@@ -6,7 +6,8 @@
 //! Implemented scope:
 //! - Original confidence sets for linear functionals of post-treatment
 //!   event-study coefficients.
-//! - Scalar smoothness-based robustness (`ΔSD(M)`).
+//! - Smoothness-based robustness (`ΔSD(M)`), with sign and monotonicity
+//!   variants.
 //! - Exact relative-magnitude identified sets (`ΔRM(Mbar)`).
 //! - Relative-magnitude conditional confidence sets for arbitrary
 //!   post-treatment linear functionals `l' τ_post`.
@@ -16,11 +17,11 @@
 //!   `HonestDiD` intervals, either with a conservative Bonferroni correction or
 //!   a tighter covariance-aware simulated max-`t` critical value.
 //!
-//! Current limitation:
-//! - The crate exposes a dense directional approximation to the multi-period
-//!   optimization surface, including adaptive enrichment and covariance-aware
-//!   Gaussian calibration, but it does not yet reproduce the full R
-//!   `HonestDiD` optimization surface for every sensitivity class.
+//! Limitation:
+//! - Joint regions over several post-treatment functionals use a finite set of
+//!   directions, optionally grown adaptively, with Bonferroni or simulated
+//!   Gaussian calibration. They approximate, and do not reproduce, the full R
+//!   `HonestDiD` optimization surface.
 //!
 //! Mathematical setup:
 //! Let `β̂ = (β̂_pre, β̂_post)` denote the event-study coefficient vector and
@@ -32,11 +33,12 @@
 //! Var(θ̂) = l' Σ_post l
 //! ```
 //!
-//! Under `ΔRM(Mbar)`, post-treatment violations are bounded relative to the
-//! largest admissible pre-period violation:
+//! Under `ΔRM(Mbar)`, each change of the violation `δ` between adjacent
+//! post-treatment periods is bounded by `Mbar` times the largest such change
+//! between adjacent pre-treatment periods:
 //!
 //! ```text
-//! |δ_post| ≤ Mbar · max_t |δ_t|
+//! |δ_{t+1} − δ_t| ≤ Mbar · max_{s<0} |δ_{s+1} − δ_s|    for t ≥ 0
 //! ```
 //!
 //! The exact identified set implemented here follows the LP construction used
@@ -46,8 +48,7 @@
 //! References:
 //! - Rambachan, A. and Roth, J. (2023). "A More Credible Approach to Parallel
 //!   Trends". *Review of Economic Studies*.
-//! - `HonestDiD` R package / GitHub implementation, used here as the parity
-//!   reference for the implemented `ΔRM` paths.
+//! - `HonestDiD` R package, the reference for the implemented `ΔRM` paths.
 
 mod adaptive_grid;
 mod api_types;

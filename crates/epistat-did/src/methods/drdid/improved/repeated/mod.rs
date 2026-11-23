@@ -36,7 +36,9 @@ use nuisance::fit_improved_repeated_nuisance_models;
 /// estimator.
 ///
 /// `DrDidRepeatedObservation::covariates` holds the covariates without an
-/// intercept, which the estimator prepends.
+/// intercept, which the estimator prepends. The interval is `att +- 1.96 se`
+/// whatever `config.confidence_level` is, and the bootstrap settings are not
+/// used.
 ///
 /// # Errors
 ///

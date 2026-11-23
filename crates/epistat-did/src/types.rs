@@ -76,10 +76,11 @@ impl PanelObservation {
     }
 }
 
-/// Configuration for 2x2 `DiD` estimation.
+/// Confidence level shared by the inference procedures of this crate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InferenceConfig {
-    /// Confidence level as a probability, such as 0.95.
+    /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
+    /// The default is 0.95.
     pub confidence_level: f64,
 }
 
@@ -99,12 +100,12 @@ impl InferenceConfig {
     }
 }
 
-/// Shared bootstrap configuration for inference procedures.
+/// Settings of the multiplier bootstrap behind bootstrap confidence intervals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootstrapConfig {
-    /// Number of bootstrap replications.
+    /// Number of bootstrap replications. The default is 999.
     pub reps: usize,
-    /// Seed of the random number generator.
+    /// Seed of the bootstrap random number generator. The default is 17,431.
     pub seed: u64,
 }
 
@@ -120,7 +121,8 @@ impl Default for BootstrapConfig {
 /// Configuration of the 2x2 `DiD` estimator.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DidConfig {
-    /// Confidence level as a probability, such as 0.95.
+    /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
+    /// The default is 0.95.
     pub confidence_level: f64,
 }
 
@@ -230,11 +232,12 @@ pub struct CellSummary {
     pub observations: usize,
     /// Sum of the weights.
     pub weight_sum: f64,
-    /// Effective sample size implied by the weights.
+    /// Effective sample size implied by the weights, `(sum w)^2 / sum w^2`. It
+    /// equals `observations` when all weights are equal.
     pub effective_n: f64,
     /// Weighted mean outcome.
     pub mean_outcome: f64,
-    /// Weighted variance of the outcome.
+    /// Weighted variance of the outcome with divisor `sum w`, not `sum w - 1`.
     pub variance: f64,
 }
 
@@ -282,7 +285,9 @@ pub struct EventTimePoint {
     pub estimate: f64,
     /// Standard error of the point estimate.
     pub se: f64,
-    /// Weight of the point in the aggregate, 1.0 by default.
+    /// Weight of the point in the aggregate under
+    /// [`EventTimeWeighting::ByWeight`], finite and positive, 1.0 by default.
+    /// It is validated but not used under [`EventTimeWeighting::Equal`].
     #[builder(default = 1.0)]
     pub weight: f64,
 }
@@ -300,12 +305,12 @@ impl EventTimePoint {
     }
 }
 
-/// Weighting strategy used when aggregating multiple points at the same event time.
+/// How points at the same event time are weighted when they are aggregated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventTimeWeighting {
-    /// Every point has the same weight.
+    /// Every point has the same weight, so the aggregate is the simple mean.
     Equal,
-    /// Points are weighted by their `weight`.
+    /// Points are weighted by their `weight`, normalised to sum to 1.
     ByWeight,
 }
 
@@ -314,17 +319,18 @@ pub enum EventTimeWeighting {
 pub struct EventTimeEstimate {
     /// Event time, the calendar period minus the first treated period.
     pub event_time: i32,
-    /// Aggregated estimate.
+    /// Weighted mean of the point estimates at this event time.
     pub estimate: f64,
-    /// Standard error of the estimate.
+    /// Standard error of the estimate, taking the points as independent.
     pub se: f64,
-    /// Lower bound of the confidence interval.
+    /// Lower bound of the two-sided normal confidence interval.
     pub ci_low: f64,
-    /// Upper bound of the confidence interval.
+    /// Upper bound of the two-sided normal confidence interval.
     pub ci_high: f64,
     /// Number of points aggregated.
     pub points: usize,
-    /// Sum of the weights of the points aggregated.
+    /// Sum of the weights used, which is `points` under
+    /// [`EventTimeWeighting::Equal`].
     pub total_weight: f64,
 }
 
@@ -437,25 +443,31 @@ impl DrDidRepeatedObservation {
 /// Configuration for panel `DR-DiD` estimation.
 #[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
 pub struct DrDidConfig {
-    /// Confidence level as a probability, such as 0.95.
+    /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
+    /// The default is 0.95.
     #[builder(default = 0.95)]
     pub confidence_level: f64,
-    /// Bound that propensity scores are clipped to, away from 0 and 1.
+    /// Propensity scores are clipped to `[propensity_clip, 1 - propensity_clip]`.
+    /// It must lie in `(0, 0.5)`. The default is 1e-6.
     #[builder(default = 1e-6)]
     pub propensity_clip: f64,
-    /// Ridge penalty added to the outcome regressions.
+    /// Ridge penalty added to the diagonal of the outcome regressions' normal
+    /// equations, finite and non-negative. The default is 1e-8.
     #[builder(default = 1e-8)]
     pub ridge: f64,
-    /// Maximum number of iterations of the propensity fit.
+    /// Maximum number of iterations of the propensity fit, positive. The default
+    /// is 200.
     #[builder(default = 200_usize)]
     pub max_iter: usize,
-    /// Convergence tolerance of the propensity fit.
+    /// Convergence tolerance of the propensity fit, positive. The default is
+    /// 1e-8.
     #[builder(default = 1e-8)]
     pub tol: f64,
-    /// Number of bootstrap replications.
+    /// Number of replications of the multiplier bootstrap behind the confidence
+    /// interval, positive. The default is 999.
     #[builder(default = 999_usize)]
     pub bootstrap_reps: usize,
-    /// Seed of the bootstrap random number generator.
+    /// Seed of the multiplier bootstrap. The default is 17,431.
     #[builder(default = 17_431_u64)]
     pub bootstrap_seed: u64,
 }
@@ -498,11 +510,16 @@ impl DrDidConfig {
 pub struct DrDidEstimate {
     /// Estimated average treatment effect on the treated.
     pub att: f64,
-    /// Standard error of the estimate.
+    /// Standard error from the influence function, not accounting for
+    /// clustering.
     pub se: f64,
-    /// Lower bound of the confidence interval.
+    /// Lower end of the multiplier-bootstrap percentile confidence interval.
+    /// The improved estimators return `att - 1.96 * se` instead, whatever the
+    /// confidence level.
     pub ci_low: f64,
-    /// Upper bound of the confidence interval.
+    /// Upper end of the multiplier-bootstrap percentile confidence interval.
+    /// The improved estimators return `att + 1.96 * se` instead, whatever the
+    /// confidence level.
     pub ci_high: f64,
     /// Number of treated units used.
     pub treated_n: usize,
@@ -512,26 +529,32 @@ pub struct DrDidEstimate {
     pub total_weight: f64,
     /// Influence function of the estimate, one value per input observation.
     pub influence_function: Vec<f64>,
-    /// Covariate columns this fit could not identify on its own rows and
-    /// dropped before fitting: constant within an arm, or a combination of
-    /// the columns before them. Zero on a full-rank design. The estimate is
-    /// the one the remaining columns give, which is what R's `did` would
-    /// give on that formula where it returns `NA` on the full one.
+    /// Number of covariate columns dropped before fitting because the fit's own
+    /// rows could not identify them: constant within an arm, or a combination
+    /// of the columns before them. It is zero for a full-rank design. The
+    /// estimate uses the remaining columns.
     pub design_columns_dropped: usize,
 }
 
 /// Configuration for `DiD_CC` estimators and the stationarity Hausman test.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DidCcConfig {
-    /// Settings of the doubly robust estimator.
+    /// Settings of the doubly robust estimator, including the confidence level
+    /// and the bootstrap settings.
     pub drdid: DrDidConfig,
-    /// Significance level of the Hausman test.
+    /// Significance level of the Hausman test, strictly between 0 and 1. The
+    /// default is 0.05.
     pub hausman_alpha: f64,
-    /// Whether confidence intervals come from the bootstrap.
+    /// Whether the confidence intervals are multiplier-bootstrap percentile
+    /// intervals, using `drdid.bootstrap_reps` and `drdid.bootstrap_seed`, or
+    /// otherwise normal intervals from the standard error. The default is
+    /// `true`.
     pub bootstrap_confidence_intervals: bool,
-    /// Number of cross-fitting folds, 1 for none.
+    /// Number of cross-fitting folds, at least 1. One means no cross-fitting.
+    /// The default is 1.
     pub cross_fit_folds: usize,
-    /// Seed of the cross-fitting fold assignment.
+    /// Seed of the cross-fitting fold assignment. The default is the default
+    /// bootstrap seed.
     pub cross_fit_seed: u64,
 }
 
@@ -552,11 +575,14 @@ impl Default for DidCcConfig {
 pub struct DidCcEstimate {
     /// Estimated average treatment effect on the treated.
     pub att: f64,
-    /// Standard error of the estimate.
+    /// Standard error from the influence function, not accounting for
+    /// clustering.
     pub se: f64,
-    /// Lower bound of the confidence interval.
+    /// Lower end of the confidence interval, bootstrap or normal according to
+    /// `DidCcConfig::bootstrap_confidence_intervals`.
     pub ci_low: f64,
-    /// Upper bound of the confidence interval.
+    /// Upper end of the confidence interval, bootstrap or normal according to
+    /// `DidCcConfig::bootstrap_confidence_intervals`.
     pub ci_high: f64,
     /// Number of treated observations in the post period.
     pub treated_post_n: usize,
@@ -580,15 +606,18 @@ pub struct DidCcHausmanTest {
     pub robust: DidCcEstimate,
     /// Estimate under the stationarity restriction.
     pub stationary: DidCcEstimate,
-    /// Difference between the two estimates.
+    /// Stationary estimate minus robust estimate.
     pub difference: f64,
-    /// Standard error of the difference.
+    /// Standard error of the difference, from the difference of the two
+    /// influence functions.
     pub difference_se: f64,
-    /// Test statistic.
+    /// Test statistic, `(difference / difference_se)^2`.
     pub statistic: f64,
-    /// p-value of the test.
+    /// p-value of the statistic against a chi-square distribution with one
+    /// degree of freedom.
     pub p_value: f64,
-    /// Whether the stationarity restriction is rejected at level `hausman_alpha`.
+    /// Whether `p_value` is below `DidCcConfig::hausman_alpha`, so that the
+    /// stationarity restriction is rejected.
     pub reject_null: bool,
 }
 
@@ -778,17 +807,12 @@ pub enum ComparisonGroup {
     NotYetTreated,
     /// Never-treated units tagged with the cell's own cohort, and no others.
     ///
-    /// For a risk-set matched panel, where every never-treated unit was
-    /// sampled to match a treated unit of one cohort and is observed on that
-    /// cohort's calendar. Pooling all never-treated units, as `NeverTreated`
-    /// does, compares a cohort with comparators from every other cohort's
-    /// sets at whatever point in their own follow-up the calendar year finds
-    /// them: on Study I's panel that pool is older in the life cycle than the
-    /// cohort, and the leads came out as a straight line of −570 EUR a year.
-    /// Each never-treated row says which cohort it was matched to in
-    /// [`AttGtDrObservation::comparison_cohort`], and this mode admits it as
-    /// a control for that cohort's cells only. Not-yet-treated units are never
-    /// controls here. The basic route has no cohort tag and refuses the mode.
+    /// For a risk-set matched panel, where each never-treated unit was sampled
+    /// to match a treated unit of one cohort and is observed on that cohort's
+    /// calendar. Each never-treated row names its cohort in
+    /// [`AttGtDrObservation::comparison_cohort`], and the row is a control for
+    /// that cohort's cells only. Not-yet-treated units are never controls. The
+    /// basic route has no cohort tag and refuses this mode.
     MatchedNeverTreated,
 }
 
@@ -805,19 +829,24 @@ pub enum BasePeriod {
 /// Configuration for `ATT(g,t)` estimation.
 #[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
 pub struct AttGtConfig {
-    /// Confidence level settings for the intervals.
+    /// Confidence level of the intervals. The default is 0.95.
     #[builder(default = InferenceConfig::default())]
     pub confidence_level: InferenceConfig,
-    /// Which units serve as comparison for each cohort.
+    /// Which units serve as comparison for each cohort. The default is
+    /// [`ComparisonGroup::NeverTreated`].
     #[builder(default = ComparisonGroup::NeverTreated)]
     pub comparison_group: ComparisonGroup,
-    /// How the baseline period is chosen.
+    /// How the baseline period is chosen. The default is
+    /// [`BasePeriod::Varying`].
     #[builder(default = BasePeriod::Varying)]
     pub base_period: BasePeriod,
-    /// Number of periods before treatment in which effects may already occur.
+    /// Number of periods before first treatment in which effects may already
+    /// occur, non-negative. The baseline of post-treatment cells is
+    /// `g - 1 - anticipation_periods`. The default is 0.
     #[builder(default = 0_i32)]
     pub anticipation_periods: i32,
-    /// Whether cells that cannot be fitted are skipped instead of causing an error.
+    /// Whether cells that cannot be fitted are skipped and reported, instead of
+    /// causing an error. The default is `true`.
     #[builder(default = true)]
     pub skip_incomplete_pairs: bool,
 }
@@ -845,15 +874,22 @@ pub struct AttGtEstimate {
     pub event_time: i32,
     /// Estimated average treatment effect on the treated.
     pub att: f64,
-    /// Standard error of the estimate.
+    /// Standard error of the estimate, not accounting for clustering. It is
+    /// analytic for the no-covariate estimator and comes from the influence
+    /// function for the doubly robust, outcome-regression and weighting
+    /// estimators.
     pub se: f64,
-    /// Lower bound of the confidence interval.
+    /// Lower bound of the confidence interval. It is a two-sided normal interval
+    /// for the no-covariate estimator and a multiplier-bootstrap percentile
+    /// interval for the covariate-adjusted ones.
     pub ci_low: f64,
-    /// Upper bound of the confidence interval.
+    /// Upper bound of the confidence interval, as `ci_low`.
     pub ci_high: f64,
-    /// Number of treated units used.
+    /// Number of treated observations used. The no-covariate estimator counts
+    /// those of the later period, the repeated cross-section DR estimators those
+    /// of both periods, and the panel estimators count units.
     pub treated_n: usize,
-    /// Number of comparison units used.
+    /// Number of comparison observations used, counted as `treated_n`.
     pub control_n: usize,
     /// Sum of the weights of the observations used.
     pub total_weight: f64,
@@ -900,20 +936,16 @@ pub struct AttGtInfluenceOutput {
     pub estimates: Vec<AttGtEstimate>,
     /// Influence vectors aligned to the full input sample index.
     pub influence_functions: Vec<Vec<f64>>,
-    /// The cells that were attempted and could not be fitted. Empty when
-    /// every cell fitted, and always empty when `skip_incomplete_pairs` is
-    /// off, because then the first failure is an error instead.
-    ///
-    /// A caller that aggregates `estimates` into a curve should read this
-    /// first: a curve over ten cells of a possible three hundred is not a
-    /// curve, and until this existed nothing said how many had been dropped.
+    /// The cells that were attempted and could not be fitted, so they are
+    /// missing from `estimates`. Empty when every cell fitted, and always empty
+    /// when `skip_incomplete_pairs` is off, because then the first failure is
+    /// an error. It shows how many of the possible cells an aggregate of
+    /// `estimates` is built on.
     pub skipped: Vec<SkippedCell>,
     /// The cells fitted on a design pruned to what their own sample could
     /// identify, with how many columns each lost. A cell's sample is the units
     /// observed at both of its periods, and a covariate that varies across the
-    /// input can be constant, or a combination of the others, inside it. Such a
-    /// cell was skipped as singular until the pruning existed, and on an
-    /// unbalanced panel with one rare indicator that was most of them.
+    /// input can be constant, or a combination of the others, inside it.
     pub pruned: Vec<PrunedCell>,
 }
 
@@ -1243,18 +1275,20 @@ pub struct AttGtDrConfig {
 pub enum AttGtAggregationWeighting {
     /// Every estimate has the same weight.
     Equal,
-    /// Estimates are weighted by the number of treated units.
+    /// Estimates are weighted by `treated_n`, the number of treated units.
     ByTreatedCount,
-    /// Estimates are weighted by the total weight of the observations.
+    /// Estimates are weighted by `total_weight`, the sum of the sampling weights
+    /// of the observations used.
     ByTotalWeight,
 }
 
 /// Configuration for ATT(g,t) aggregation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttGtAggregationConfig {
-    /// Confidence level settings for the intervals.
+    /// Confidence level of the intervals. The default is 0.95.
     pub confidence_level: InferenceConfig,
-    /// Weighting rule of the aggregation.
+    /// Weighting rule of the aggregation. The default is
+    /// [`AttGtAggregationWeighting::ByTreatedCount`].
     pub weighting: AttGtAggregationWeighting,
 }
 
@@ -1270,17 +1304,24 @@ impl Default for AttGtAggregationConfig {
 /// Aggregated ATT result for a keyed dimension.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttGtAggregatedEstimate {
-    /// Aggregated estimate.
+    /// Weighted mean of the ATT(g,t) estimates, with the weights of
+    /// [`AttGtAggregationConfig::weighting`] normalised to sum to 1.
     pub estimate: f64,
-    /// Standard error of the estimate.
+    /// Standard error of the estimate. Where influence functions are given it
+    /// comes from the combined influence function. Otherwise it combines the
+    /// components' standard errors as if they were independent, which
+    /// understates it when the components share units.
     pub se: f64,
-    /// Lower bound of the confidence interval.
+    /// Lower bound of the two-sided normal confidence interval.
     pub ci_low: f64,
-    /// Upper bound of the confidence interval.
+    /// Upper bound of the two-sided normal confidence interval.
     pub ci_high: f64,
     /// Number of ATT(g,t) estimates aggregated.
     pub components: usize,
-    /// Sum of the weights of the observations used.
+    /// Where influence functions are given, the sum of the components'
+    /// `total_weight`. Otherwise the sum of the raw aggregation weights, which
+    /// is the number of components, the treated counts or the components'
+    /// `total_weight` according to the weighting.
     pub total_weight: f64,
 }
 
@@ -1330,16 +1371,16 @@ pub enum AttGtAggregationError {
 
 /// Configuration for simultaneous confidence bands over ATT(g,t) estimates.
 ///
-/// Used by both:
-/// - influence-based multiplier bootstrap bands (preferred), and
-/// - Gaussian-max approximation bands (fallback).
+/// Used by the multiplier-bootstrap bands built from influence functions and by
+/// the Gaussian-max bands built from standard errors alone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttGtBandConfig {
-    /// Confidence level settings for the bands.
+    /// Joint confidence level of the bands. The default is 0.95.
     pub confidence_level: InferenceConfig,
-    /// Number of bootstrap replications.
+    /// Number of replications of the draw of the maximum absolute t statistic,
+    /// positive. The default is 999.
     pub reps: usize,
-    /// Seed of the random number generator.
+    /// Seed of the random draws. The default is 17,431.
     pub seed: u64,
 }
 
@@ -1356,11 +1397,12 @@ impl Default for AttGtBandConfig {
 /// One row for continuous treatment `DiD` (CGBS 2024).
 #[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
 pub struct ContinuousObservation {
-    /// Treatment dose (D). D=0 means control.
+    /// Treatment dose (D). A dose of exactly 0 marks a control unit and a
+    /// positive dose a treated unit.
     pub dose: f64,
-    /// Change in outcome (ΔY).
+    /// Change in outcome (ΔY) between the post and pre period.
     pub delta_outcome: f64,
-    /// Sampling weight.
+    /// Sampling weight, 1.0 by default.
     #[builder(default = 1.0)]
     pub weight: f64,
 }
@@ -1380,11 +1422,14 @@ impl ContinuousObservation {
 /// Result of an ACRT (Average Causal Response) Sieve estimation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ACRTResult {
-    /// Average derivative over the treated units.
+    /// Unweighted mean over the treated units of the derivative of the fitted
+    /// dose-response function at their dose.
     pub acrt_glob: f64,
-    /// Sieve coefficients.
+    /// Sieve coefficients, one per basis function in the order of the basis.
     pub coefficients: Vec<f64>,
-    /// Influence function for `acrt_glob`.
+    /// Influence function for `acrt_glob`, one value per input observation. It
+    /// is zero for control units, because the contribution of the estimated
+    /// control trend is not included.
     pub influence_function: Vec<f64>,
 }
 
@@ -1394,7 +1439,7 @@ pub enum ContinuousDidError {
     /// No observations were given.
     #[error("continuous DiD requires at least one observation")]
     EmptyInput,
-    /// No unit has a positive dose.
+    /// No unit has a positive dose, or no unit has dose 0.
     #[error("no treated units found (dose > 0)")]
     NoTreatedUnits,
     /// The basis matrix is singular.
@@ -1405,18 +1450,21 @@ pub enum ContinuousDidError {
 /// One row for Triple-Difference `DiD` (OVS 2025).
 #[derive(bon::Builder, Debug, Clone, PartialEq)]
 pub struct TripleDidObservation {
-    /// Treatment indicator (D).
+    /// Treatment indicator. The estimator does not read it: the subgroup is
+    /// fixed by `group_s` and `partition_q`.
     pub treated: bool,
-    /// Group indicator (S). e.g., region or cohort enabled.
+    /// Group indicator (S): whether the unit is in the group that is treated,
+    /// such as an enabled region or cohort.
     pub group_s: bool,
-    /// Partition indicator (Q). e.g., eligible age group.
+    /// Partition indicator (Q): whether the unit is in the eligible partition,
+    /// such as an eligible age group.
     pub partition_q: bool,
-    /// Change in outcome (ΔY).
+    /// Change in outcome (ΔY) between the post and pre period.
     pub delta_outcome: f64,
-    /// Sampling weight.
+    /// Sampling weight, 1.0 by default.
     #[builder(default = 1.0)]
     pub weight: f64,
-    /// Covariates for Doubly Robust estimation.
+    /// Covariate values of the doubly robust estimation, empty by default.
     #[builder(default)]
     pub covariates: Vec<f64>,
 }
@@ -1424,13 +1472,14 @@ pub struct TripleDidObservation {
 /// Result of a Triple-Difference estimation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TripleDidResult {
-    /// Estimated triple-difference effect.
+    /// Estimated triple-difference effect, the ATT of the focal group `S = 1,
+    /// Q = 1` against the three comparison groups.
     pub att_ddd: f64,
-    /// Standard error of the estimate.
+    /// Standard error from the influence function.
     pub se: f64,
-    /// Lower bound of the confidence interval.
+    /// Lower end of the multiplier-bootstrap percentile confidence interval.
     pub ci_low: f64,
-    /// Upper bound of the confidence interval.
+    /// Upper end of the multiplier-bootstrap percentile confidence interval.
     pub ci_high: f64,
     /// Influence function of the estimate, one value per input observation.
     pub influence_function: Vec<f64>,
@@ -1447,11 +1496,17 @@ pub struct AttGtBandEstimate {
     pub event_time: i32,
     /// Estimated ATT(g,t).
     pub att: f64,
-    /// Standard error of the estimate.
+    /// Standard error the band is built on. It comes from the influence
+    /// function where one is given, and is the estimate's own standard error
+    /// for the bands without influence functions. It is `NaN` where
+    /// [`att_gt_mboot_bands`](crate::att_gt_mboot_bands) found the draws
+    /// degenerate.
     pub se: f64,
-    /// Lower bound of the simultaneous band.
+    /// Lower end of the simultaneous band, `att` minus the critical value times
+    /// `se`.
     pub band_low: f64,
-    /// Upper bound of the simultaneous band.
+    /// Upper end of the simultaneous band, `att` plus the critical value times
+    /// `se`.
     pub band_high: f64,
 }
 
@@ -1536,9 +1591,9 @@ pub struct EfficientDidEstimate {
     pub att: f64,
     /// Standard error from the combined efficient influence function.
     pub se: f64,
-    /// Lower confidence bound.
+    /// Lower bound of the two-sided normal confidence interval.
     pub ci_low: f64,
-    /// Upper confidence bound.
+    /// Upper bound of the two-sided normal confidence interval.
     pub ci_high: f64,
     /// Number of treated units used in the panel comparison.
     pub treated_n: usize,

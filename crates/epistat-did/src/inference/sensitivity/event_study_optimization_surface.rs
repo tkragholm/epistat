@@ -297,8 +297,13 @@ fn direction_dedup_key(direction: &[f64]) -> Vec<i64> {
         .collect()
 }
 
-/// Approximate the full multi-period `HonestDiD` optimization surface via a
-/// dense directional envelope and return a simultaneous joint region.
+/// Simultaneous region over a fixed direction set built from `surface_config`:
+/// the basis directions, the pairwise contrasts and random unit directions, with
+/// duplicates removed. This approximates the joint region over all linear
+/// functionals of the post-treatment coefficients by a finite set of them.
+///
+/// The diagnostics report one iteration and the number of directions and
+/// random directions after duplicates are removed.
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent, the implied
@@ -354,8 +359,15 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
     Ok(region)
 }
 
-/// Approximate the full optimization surface with adaptive direction-set
-/// enrichment.
+/// Simultaneous region over a direction set whose random part is grown in
+/// batches until the calibrated pointwise level settles.
+///
+/// The batches are those of `config.adaptive`, up to
+/// `config.surface.random_unit_directions` random directions. The returned
+/// region is computed with the number of random directions at which the loop
+/// stopped, and its diagnostics give the iterations run and whether the level
+/// converged. With no random directions in `config.surface` it is the fixed
+/// region.
 ///
 /// # Errors
 /// Returns an error if adaptive configuration validation, direction generation,
@@ -540,7 +552,8 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
     Ok(region)
 }
 
-/// Default wrapper for the adaptive optimization-surface region.
+/// [`assess_honest_event_study_optimization_surface_region_adaptive_with_config`]
+/// with [`HonestOptimizationSurfaceAdaptiveRunConfig::from_inference`].
 ///
 /// # Errors
 /// Returns an error if adaptive configuration validation, direction generation,
@@ -577,7 +590,11 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
     )
 }
 
-/// Default wrapper for the fixed optimization-surface region.
+/// [`assess_honest_event_study_optimization_surface_region_with_config`] with the
+/// relative-magnitude settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`], the
+/// `default_for_production` joint calibration and the `default_for_production`
+/// surface configuration.
 ///
 /// # Errors
 /// Returns an error if direction generation, calibration, or directional
