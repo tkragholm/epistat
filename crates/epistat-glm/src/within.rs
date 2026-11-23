@@ -93,10 +93,27 @@
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::design::select_columns;
-use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
+use epistat_linalg::{
+    Attempt, Factor, Mat, MatRef, ROW_BLOCK, matvec_into, weighted_gram, weighted_xtz,
+};
+use rayon::prelude::*;
 
-use crate::robust::kept_columns;
+use crate::fit::independent_columns;
 use crate::{Family, Glm, GlmError, Link};
+
+/// `sum_i term(i)` over `0..n`, added by blocks of [`ROW_BLOCK`] rows in block
+/// order, so it does not depend on the number of threads.
+fn blocked_total(n: usize, term: impl Fn(usize) -> f64 + Sync) -> f64 {
+    let partial: Vec<f64> = (0..n.div_ceil(ROW_BLOCK))
+        .into_par_iter()
+        .map(|block| {
+            (block * ROW_BLOCK..((block + 1) * ROW_BLOCK).min(n))
+                .map(&term)
+                .sum::<f64>()
+        })
+        .collect();
+    partial.iter().sum()
+}
 
 /// The small-sample factor of the clustered covariance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,59 +189,145 @@ struct Demeaned {
     /// Whether any of the first `covariates` columns varies within each
     /// cluster.
     varies: Vec<bool>,
-    means: Mat<f64>,
+    /// The family means, cluster by cluster, `columns` values each.
+    means: Vec<f64>,
+}
+
+/// The rows of each cluster: the ranges `bounds[c]..bounds[c + 1]` of `order`,
+/// or of the rows themselves when `order` is `None` because the cluster
+/// numbers do not decrease along the rows. Rows keep their order within a
+/// cluster.
+struct Groups {
+    bounds: Vec<usize>,
+    order: Option<Vec<usize>>,
+}
+
+impl Groups {
+    fn new(clusters: &Clusters) -> Self {
+        let (g, of) = (clusters.count(), clusters.of());
+        let mut bounds = vec![0usize; g + 1];
+        for &c in of {
+            bounds[c + 1] += 1;
+        }
+        for c in 0..g {
+            bounds[c + 1] += bounds[c];
+        }
+        let sorted = of.windows(2).all(|pair| pair[0] <= pair[1]);
+        let order = (!sorted).then(|| {
+            let mut next = bounds.clone();
+            let mut order = vec![0usize; of.len()];
+            for (i, &c) in of.iter().enumerate() {
+                order[next[c]] = i;
+                next[c] += 1;
+            }
+            order
+        });
+        Self { bounds, order }
+    }
+
+    fn row(&self, k: usize) -> usize {
+        self.order.as_ref().map_or(k, |order| order[k])
+    }
+}
+
+/// The clusters handled by one task of [`demean`].
+const CLUSTERS_PER_TASK: usize = 4096;
+
+/// The statistics of the clusters `first..first + rows.len()`, written to the
+/// slices that belong to them.
+struct ClusterBlock<'a> {
+    rows: &'a mut [usize],
+    varies: &'a mut [bool],
+    means: &'a mut [f64],
+    constant: &'a mut [bool],
 }
 
 fn demean(
     columns: usize,
     covariates: usize,
-    value: impl Fn(usize, usize) -> f64,
+    value: impl Fn(usize, usize) -> f64 + Sync,
     weights: &[f64],
     clusters: &Clusters,
 ) -> Demeaned {
     let (n, g) = (clusters.len(), clusters.count());
     let of = clusters.of();
-    let mut total = vec![0.0; g];
+    let groups = Groups::new(clusters);
     let mut rows = vec![0usize; g];
-    let mut sums = Mat::<f64>::zeros(g, columns);
-    let mut first = Mat::<f64>::zeros(g, columns);
+    let mut varies = vec![false; g];
+    let mut means = vec![0.0; g * columns];
     let mut constant = vec![true; g * columns];
-    for i in 0..n {
-        if weights[i] > 0.0 {
-            let c = of[i];
-            for j in 0..columns {
-                let v = value(i, j);
-                if rows[c] == 0 {
-                    first[(c, j)] = v;
-                } else if v.to_bits() != first[(c, j)].to_bits() {
-                    constant[c * columns + j] = false;
-                }
-                sums[(c, j)] += weights[i] * v;
-            }
-            total[c] += weights[i];
-            rows[c] += 1;
-        }
-    }
-    let means = Mat::from_fn(g, columns, |c, j| {
-        if rows[c] == 0 {
-            0.0
-        } else if constant[c * columns + j] {
-            first[(c, j)]
-        } else {
-            sums[(c, j)] / total[c]
-        }
-    });
-    let deviations = Mat::from_fn(n, columns, |i, j| {
-        let c = of[i];
-        if weights[i] > 0.0 && !constant[c * columns + j] {
-            value(i, j) - means[(c, j)]
-        } else {
-            0.0
-        }
-    });
-    let varies = (0..g)
-        .map(|c| (0..covariates).any(|j| !constant[c * columns + j]))
+    // Each cluster is summed by one task over its rows in row order, so the
+    // sums do not depend on the number of threads and equal the sums of one
+    // pass over the rows.
+    let blocks: Vec<ClusterBlock<'_>> = rows
+        .chunks_mut(CLUSTERS_PER_TASK)
+        .zip(varies.chunks_mut(CLUSTERS_PER_TASK))
+        .zip(means.chunks_mut((CLUSTERS_PER_TASK * columns).max(1)))
+        .zip(constant.chunks_mut((CLUSTERS_PER_TASK * columns).max(1)))
+        .map(|(((rows, varies), means), constant)| ClusterBlock {
+            rows,
+            varies,
+            means,
+            constant,
+        })
         .collect();
+    blocks
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(block, out)| {
+            let first_cluster = block * CLUSTERS_PER_TASK;
+            let mut first = vec![0.0; columns];
+            let mut sums = vec![0.0; columns];
+            for c in 0..out.rows.len() {
+                let (lo, hi) = (groups.bounds[first_cluster + c], groups.bounds[first_cluster + c + 1]);
+                let flags = &mut out.constant[c * columns..(c + 1) * columns];
+                sums.fill(0.0);
+                let (mut count, mut total) = (0usize, 0.0);
+                for k in lo..hi {
+                    let i = groups.row(k);
+                    if weights[i] > 0.0 {
+                        for j in 0..columns {
+                            let v = value(i, j);
+                            if count == 0 {
+                                first[j] = v;
+                            } else if v.to_bits() != first[j].to_bits() {
+                                flags[j] = false;
+                            }
+                            sums[j] += weights[i] * v;
+                        }
+                        total += weights[i];
+                        count += 1;
+                    }
+                }
+                out.rows[c] = count;
+                for j in 0..columns {
+                    out.means[c * columns + j] = if count == 0 {
+                        0.0
+                    } else if flags[j] {
+                        first[j]
+                    } else {
+                        sums[j] / total
+                    };
+                }
+                out.varies[c] = flags[..covariates].iter().any(|&f| !f);
+            }
+        });
+    let mut deviations = Mat::<f64>::zeros(n, columns);
+    for j in 0..columns {
+        deviations
+            .col_as_slice_mut(j)
+            .par_chunks_mut(ROW_BLOCK)
+            .enumerate()
+            .for_each(|(block, chunk)| {
+                for (k, out) in chunk.iter_mut().enumerate() {
+                    let i = block * ROW_BLOCK + k;
+                    let c = of[i];
+                    if weights[i] > 0.0 && !constant[c * columns + j] {
+                        *out = value(i, j) - means[c * columns + j];
+                    }
+                }
+            });
+    }
     Demeaned {
         deviations,
         rows,
@@ -254,7 +357,9 @@ pub fn between_within(
     }
     let ones = vec![1.0; x.nrows()];
     let demeaned = demean(x.ncols(), x.ncols(), |i, j| x[(i, j)], &ones, clusters);
-    Ok((demeaned.means, demeaned.deviations))
+    let columns = x.ncols();
+    let means = Mat::from_fn(clusters.count(), columns, |c, j| demeaned.means[c * columns + j]);
+    Ok((means, demeaned.deviations))
 }
 
 impl Within {
@@ -292,20 +397,23 @@ impl Within {
             }
         }
         if let Some((index, &value)) = w
-            .iter()
+            .par_iter()
             .enumerate()
-            .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
+            .find_first(|&(_, &v)| !(v.is_finite() && v >= 0.0))
         {
             return Err(GlmError::Weight { index, value });
         }
         if let Some((index, &value)) = y
-            .iter()
+            .par_iter()
             .enumerate()
-            .find(|&(i, &v)| w[i] > 0.0 && !v.is_finite())
+            .find_first(|&(i, &v)| w[i] > 0.0 && !v.is_finite())
         {
             return Err(GlmError::Response { index, value });
         }
-        if (0..n).any(|i| w[i] > 0.0 && (0..p).any(|j| !x[(i, j)].is_finite())) {
+        if (0..n)
+            .into_par_iter()
+            .any(|i| w[i] > 0.0 && (0..p).any(|j| !x[(i, j)].is_finite()))
+        {
             return Err(GlmError::Clusters("a covariate is not finite"));
         }
         let demeaned = demean(
@@ -316,7 +424,7 @@ impl Within {
             clusters,
         );
         let x_tilde = demeaned.deviations.as_ref().subcols(0, p);
-        let y_tilde: Vec<f64> = (0..n).map(|i| demeaned.deviations[(i, p)]).collect();
+        let y_tilde = demeaned.deviations.col_as_slice(p);
         let n_rows = w.iter().filter(|&&v| v > 0.0).count();
         let n_clusters = demeaned.rows.iter().filter(|&&r| r > 0).count();
         let n_singleton_clusters = demeaned.rows.iter().filter(|&&r| r == 1).count();
@@ -324,22 +432,35 @@ impl Within {
             .filter(|&c| demeaned.rows[c] >= 2 && demeaned.varies[c])
             .count();
 
-        let fit = Glm::new(Family::Gaussian, Link::Identity)
-            .fit(x_tilde, &y_tilde, weights, None, None)?;
-        let columns = kept_columns(&fit);
+        let keep = independent_columns(x_tilde, w, Glm::new(Family::Gaussian, Link::Identity).tolerance);
+        let columns: Vec<usize> = (0..p).filter(|&j| keep[j]).collect();
         let rank = columns.len();
-        let dropped_columns: Vec<usize> = (0..p).filter(|j| !columns.contains(j)).collect();
-        let keep: Vec<bool> = (0..p).map(|j| columns.contains(&j)).collect();
-        let reduced = select_columns(x_tilde, &keep);
+        let dropped_columns: Vec<usize> = (0..p).filter(|&j| !keep[j]).collect();
+        let reduced = if rank == p {
+            None
+        } else {
+            Some(select_columns(x_tilde, &keep))
+        };
+        let reduced_ref = reduced.as_ref().map_or(x_tilde, Mat::as_ref);
 
-        let gram = weighted_gram(reduced.as_ref(), w)?;
+        // Least squares on the deviations through the normal equations.
+        let gram = weighted_gram(reduced_ref, w)?;
         let inverse = Factor::new(gram.as_ref(), &Attempt::SYMMETRIC)?
             .solve(Mat::<f64>::identity(rank, rank).as_ref())?;
-        let residual: Vec<f64> = (0..n)
-            .map(|i| y_tilde[i] - fit.linear_predictor[i])
-            .collect();
-        let rss: f64 = (0..n).map(|i| w[i] * residual[i] * residual[i]).sum();
-        let tss: f64 = (0..n).map(|i| w[i] * y_tilde[i] * y_tilde[i]).sum();
+        let solution = epistat_linalg::solve(
+            gram.as_ref(),
+            weighted_xtz(reduced_ref, w, y_tilde)?.as_ref(),
+            &Attempt::SYMMETRIC,
+        )?;
+        let mut fitted = vec![0.0; n];
+        matvec_into(&mut fitted, reduced_ref, solution.x.as_ref());
+        let residual: Vec<f64> = y_tilde.iter().zip(&fitted).map(|(y, f)| y - f).collect();
+        let mut coefficients = vec![None; p];
+        for (a, &j) in columns.iter().enumerate() {
+            coefficients[j] = Some(solution.x[(a, 0)]);
+        }
+        let rss = blocked_total(n, |i| w[i] * residual[i] * residual[i]);
+        let tss = blocked_total(n, |i| w[i] * y_tilde[i] * y_tilde[i]);
 
         // The rows and families that remain when families with one row are
         // removed.
@@ -363,7 +484,7 @@ impl Within {
         let covariance = expand(&inverse, sigma2);
 
         let scores = |i: usize| w[i] * residual[i];
-        let middle = meat(reduced.as_ref(), scores, Some(clusters))?;
+        let middle = meat(reduced_ref, scores, Some(clusters))?;
         let sandwich = sandwich_with_inverse(inverse.as_ref(), middle.as_ref());
         let factor = match self.df_rule {
             DfRule::Unadjusted => Some(1.0),
@@ -375,7 +496,7 @@ impl Within {
         let robust_covariance = expand(&sandwich, factor);
 
         Ok(WithinFit {
-            coefficients: fit.coefficients,
+            coefficients,
             covariance,
             robust_covariance,
             sigma2,
@@ -387,5 +508,105 @@ impl Within {
             n_singleton_clusters,
             dropped_columns,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The family means and deviations from one pass over the rows.
+    fn demean_reference(
+        columns: usize,
+        value: impl Fn(usize, usize) -> f64,
+        weights: &[f64],
+        clusters: &Clusters,
+    ) -> (Mat<f64>, Mat<f64>, Vec<usize>) {
+        let (n, g) = (clusters.len(), clusters.count());
+        let of = clusters.of();
+        let mut total = vec![0.0; g];
+        let mut rows = vec![0usize; g];
+        let mut sums = Mat::<f64>::zeros(g, columns);
+        let mut first = Mat::<f64>::zeros(g, columns);
+        let mut constant = vec![true; g * columns];
+        for i in 0..n {
+            if weights[i] > 0.0 {
+                let c = of[i];
+                for j in 0..columns {
+                    let v = value(i, j);
+                    if rows[c] == 0 {
+                        first[(c, j)] = v;
+                    } else if v.to_bits() != first[(c, j)].to_bits() {
+                        constant[c * columns + j] = false;
+                    }
+                    sums[(c, j)] += weights[i] * v;
+                }
+                total[c] += weights[i];
+                rows[c] += 1;
+            }
+        }
+        let means = Mat::from_fn(g, columns, |c, j| {
+            if rows[c] == 0 {
+                0.0
+            } else if constant[c * columns + j] {
+                first[(c, j)]
+            } else {
+                sums[(c, j)] / total[c]
+            }
+        });
+        let deviations = Mat::from_fn(n, columns, |i, j| {
+            let c = of[i];
+            if weights[i] > 0.0 && !constant[c * columns + j] {
+                value(i, j) - means[(c, j)]
+            } else {
+                0.0
+            }
+        });
+        (means, deviations, rows)
+    }
+
+    #[test]
+    fn demeaning_equals_one_pass_over_the_rows_to_the_bit() {
+        let mut state = 0x1234_5678_9abc_def1_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (n, columns) = (30_000, 3);
+        for sorted in [true, false] {
+            let mut labels: Vec<u64> = (0..n).map(|_| next() % 9_000).collect();
+            if sorted {
+                labels.sort_unstable();
+            }
+            let clusters = Clusters::from_labels(&labels);
+            let data: Vec<f64> = (0..n * columns)
+                .map(|k| {
+                    let u = (next() >> 11) as f64 / (1u64 << 53) as f64;
+                    // Some columns repeat within families.
+                    if k % columns == 2 { (labels[k / columns] % 7) as f64 } else { u }
+                })
+                .collect();
+            let weights: Vec<f64> = (0..n)
+                .map(|_| match next() % 5 {
+                    0 => 0.0,
+                    1 => 2.5,
+                    _ => 1.0,
+                })
+                .collect();
+            let value = |i: usize, j: usize| data[i * columns + j];
+            let got = demean(columns, columns - 1, value, &weights, &clusters);
+            let (means, deviations, rows) = demean_reference(columns, value, &weights, &clusters);
+            assert_eq!(got.rows, rows);
+            for j in 0..columns {
+                for i in 0..n {
+                    assert_eq!(got.deviations[(i, j)].to_bits(), deviations[(i, j)].to_bits());
+                }
+                for c in 0..clusters.count() {
+                    assert_eq!(got.means[c * columns + j].to_bits(), means[(c, j)].to_bits());
+                }
+            }
+        }
     }
 }
