@@ -65,17 +65,21 @@
 //! # Inference
 //!
 //! Each estimator returns the influence function `psi_i` of every unit, and
-//! the standard error is `sqrt(mean((psi_i - mean(psi))^2) / n)`. In the
-//! aggregations and bands, clusters replace the units by the sums of the
-//! centred `psi_i` within each cluster, divided by `n`, without the factor
-//! `G / (G - 1)`, as in `did`; [`clustered_variance_from_index`] and its
-//! siblings are the cluster-robust variance with that factor. The multiplier bootstrap draws a
-//! Rademacher weight per unit or cluster and replicate, each replicate seeded
-//! from the caller's seed and its index, and a simultaneous band uses the
-//! `1 - alpha` quantile of the largest studentised deviation, with the
-//! bootstrap standard error from the interquartile range as `did::mboot`
-//! does. Sums run in a fixed order, so the results do not depend on the
-//! number of threads.
+//! the standard error is `sqrt(mean((psi_i - mean(psi))^2) / n)`. The intervals
+//! of the doubly robust estimators are percentile intervals of a Rademacher
+//! multiplier bootstrap, and the intervals of the improved two-period
+//! estimators are `att +- 1.96 se`. In [`aggregate_att_gt`],
+//! [`att_gt_clustered_standard_errors`] and the bands, clusters replace the
+//! units by the sums of the centred `psi_i` within each cluster, divided by
+//! `n`, without the factor `G / (G - 1)`, as in `did`. [`EventStudyResult`] and
+//! the validated dataset use [`clustered_variance_from_index`] and its
+//! siblings, which are the cluster-robust variance with that factor. The
+//! multiplier bootstrap draws a Rademacher weight per unit or cluster and
+//! replicate, each replicate seeded from the caller's seed and its index, and
+//! a simultaneous band uses the `1 - alpha` quantile of the largest
+//! studentised deviation, with the bootstrap standard error from the
+//! interquartile range as `did::mboot` does. Sums run in a fixed order, so the
+//! results do not depend on the number of threads.
 //!
 //! # References
 //!

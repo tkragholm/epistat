@@ -30,7 +30,8 @@ pub enum DatasetError {
     /// The panel is unbalanced.
     #[error("unbalanced panel: units missing observations in periods {missing:?}")]
     UnbalancedPanel {
-        /// Periods in which some units have no observation.
+        /// All distinct periods of the dataset, in increasing order. The unit that
+        /// failed the check has fewer rows than this has entries.
         missing: Vec<i32>,
     },
 
@@ -50,7 +51,7 @@ pub enum DatasetError {
         cohort: i32,
     },
 
-    /// A unit has no outcome in a period.
+    /// An outcome is not finite, for a unit in a period.
     #[error("missing outcome for unit {unit} in period {period}")]
     MissingOutcome {
         /// Identifier of the unit.

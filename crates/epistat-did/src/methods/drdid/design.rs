@@ -3,37 +3,29 @@
 //! A doubly robust fit regresses the outcome on the covariates within the
 //! comparison arm and models treatment on them across both arms. Either model
 //! is singular when a column is constant, or a combination of the others,
-//! inside the rows that model reads: a rare indicator whose only holders are
-//! treated is all zero in the comparison arm, and eleven region dummies whose
+//! inside the rows that model reads. A rare indicator whose only holders are
+//! treated is all zero in the comparison arm, and region dummies whose
 //! reference level has no member in a cell sum to the intercept.
 //!
-//! A caller that prunes its covariates against the whole sample cannot see
-//! this. Study I's staggered estimator fits one design per ATT(g,t) cell on
-//! the units observed at both of the cell's periods, so a column that varies
-//! in the slice is all zero in every cell that none of its holders reaches,
-//! and on the 4 September 2026 run that was 315 of the pooled mothers' 325
-//! cells: the survivors were exactly the cells one comparator holder of one
-//! rare indicator was observed in. The pairwise route prunes per pair for
-//! the same reason and never lost one.
-//!
-//! So the pruning is done here, per fit, on the rows the fit reads. A column
-//! is kept when it is linearly independent of the intercept and the columns
-//! kept before it within EVERY group the fit models separately, so that the
-//! outcome regression on any one group is full rank and no combination of
-//! columns separates the arms. Greedy in column order: which of a dependent
-//! set survives is then a property of the caller's column order and not of
-//! the rows.
+//! Pruning covariates against the whole sample does not catch this when each
+//! fit reads only a slice of it, as the staggered estimator does with one design
+//! per ATT(g,t) cell on the units observed at both of the cell's periods. So the
+//! pruning is done per fit, on the rows the fit reads. A column is kept when it
+//! is linearly independent of the intercept and the columns kept before it
+//! within every group the fit models separately, so that the outcome regression
+//! on any one group is full rank and no combination of columns separates the
+//! arms. The rule is greedy in column order, so which of a dependent set
+//! survives depends on the caller's column order and not on the rows.
 //!
 //! Dropping such a column changes nothing the fit could have estimated. A
 //! column constant within a group carries no information about that group's
-//! outcome; a column that is a combination of kept ones gives the same fitted
-//! values without it. R's `did` returns `NA` for the cell instead.
+//! outcome, and a column that is a combination of kept ones gives the same
+//! fitted values without it. R's `did` returns `NA` for the cell instead.
 //!
 //! [`independent_design_columns`] applies the same rule for a caller, either
-//! per arm, as the panel estimator does, or on the pooled rows, which is the
-//! weaker test a caller pruning a whole sample before estimation applies. A
-//! column that passes the pooled test can still fail within one arm, and the
-//! estimator then drops it as well.
+//! per arm, as the panel estimator does, or on the pooled rows, which is a
+//! weaker test. A column that passes the pooled test can still fail within one
+//! arm, and the estimator then drops it as well.
 
 use epistat_linalg::MatRef;
 

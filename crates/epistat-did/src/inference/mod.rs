@@ -1,4 +1,6 @@
-//! Shared statistical inference utilities (critical values, IF-based SE, bootstrap CI).
+//! Shared inference utilities: influence-function standard errors, clustered
+//! variances and intervals, a multiplier bootstrap interval, quantiles and
+//! normal critical values.
 
 use epistat_inference::Clusters;
 use std::hash::Hash;
@@ -17,7 +19,7 @@ pub mod vcov;
 
 use crate::types::{BootstrapConfig, InferenceConfig};
 
-/// The cluster labels of the rows, typed so labels and data stay aligned.
+/// The cluster labels of the rows, one label per row.
 #[derive(Debug, Clone)]
 pub enum ClusterSpec<L: Eq + Hash + Clone> {
     /// One-way clustering (e.g., by person ID).
@@ -32,12 +34,14 @@ impl<L: Eq + Hash + Clone> ClusterSpec<L> {
     }
 }
 
-/// Internal compact cluster index mapping rows to integer group IDs.
+/// Cluster membership of the rows as integer group numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterIndex {
-    /// Cluster number of each row, from 0 to `n_groups - 1`.
+    /// Cluster number of each row, one entry per row. Rows with the same number
+    /// are in the same cluster.
     pub group_assignments: Vec<usize>,
-    /// Number of distinct clusters.
+    /// Number of distinct clusters. The variance functions count the clusters
+    /// from `group_assignments` and do not read this field.
     pub n_groups: usize,
 }
 
@@ -94,8 +98,8 @@ pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
 }
 
 /// Standard error of an estimate from its influence function: the standard
-/// deviation of the values divided by `sqrt(n)`. NaN for an empty influence
-/// function.
+/// deviation of the values, with divisor `n`, divided by `sqrt(n)`. NaN for an
+/// empty influence function.
 #[must_use]
 pub fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
     epistat_inference::influence::standard_error(influence_function).unwrap_or(f64::NAN)
@@ -115,12 +119,16 @@ fn map_influence_error(error: &epistat_inference::InferenceError) -> InferenceEr
     }
 }
 
-/// Computes the clustered variance from influence function values using a pre-computed index.
+/// Cluster-robust variance of an estimate from its influence function, with
+/// the clusters given by a pre-computed index. With `G` clusters and `n` rows
+/// it is `G / (G - 1) * sum_g (sum_{i in g} psi_i)^2 / n^2`, where `psi` is the
+/// influence function. The cluster sums are not centred.
 ///
 /// # Errors
 /// Returns an error if:
 /// - Influence function is empty.
 /// - Influence function and cluster index have different lengths.
+/// - There are fewer than two clusters.
 /// - The resulting variance is not finite.
 pub fn clustered_variance_from_index(
     influence_function: &[f64],
@@ -131,10 +139,10 @@ pub fn clustered_variance_from_index(
         .ok_or(InferenceError::TooFewClusters)
 }
 
-/// Computes the clustered standard error from influence function values using a pre-computed index.
+/// Square root of [`clustered_variance_from_index`].
 ///
 /// # Errors
-/// Returns an error if clustered variance computation fails.
+/// Returns an error under the conditions of [`clustered_variance_from_index`].
 pub fn clustered_standard_error_from_index(
     influence_function: &[f64],
     cluster_index: &ClusterIndex,
@@ -142,11 +150,13 @@ pub fn clustered_standard_error_from_index(
     clustered_variance_from_index(influence_function, cluster_index).map(f64::sqrt)
 }
 
-/// Computes the clustered confidence interval from influence function values using a pre-computed index.
+/// Two-sided Wald interval of `estimate` with the clustered standard error from
+/// a pre-computed index, at `inference.confidence_level`. Returns
+/// `(se, lower, upper)`.
 ///
 /// # Errors
 /// Returns an error if:
-/// - Confidence level is invalid.
+/// - Confidence level is not strictly between 0 and 1.
 /// - Clustered standard error computation fails.
 pub fn clustered_ci_from_index(
     estimate: f64,
@@ -164,7 +174,8 @@ pub fn clustered_ci_from_index(
     Ok((se, low, high))
 }
 
-/// Computes the clustered variance from influence function values. Clusters
+/// Cluster-robust variance of an estimate from its influence function, with
+/// one cluster label per row, as in [`clustered_variance_from_index`]. Clusters
 /// are numbered in order of first appearance, so the sum does not depend on
 /// hashing.
 ///
@@ -172,6 +183,7 @@ pub fn clustered_ci_from_index(
 /// Returns an error if:
 /// - Influence function is empty.
 /// - Influence function and cluster labels have different lengths.
+/// - There are fewer than two clusters.
 /// - The resulting variance is not finite.
 pub fn clustered_variance_from_influence<L: Eq + Hash>(
     influence_function: &[f64],
@@ -185,10 +197,11 @@ pub fn clustered_variance_from_influence<L: Eq + Hash>(
     .ok_or(InferenceError::TooFewClusters)
 }
 
-/// Computes the clustered standard error from influence function values.
+/// Square root of [`clustered_variance_from_influence`].
 ///
 /// # Errors
-/// Returns an error if clustered variance computation fails.
+/// Returns an error under the conditions of
+/// [`clustered_variance_from_influence`].
 pub fn clustered_standard_error_from_influence<L: Eq + Hash>(
     influence_function: &[f64],
     cluster_labels: &[L],
@@ -196,11 +209,13 @@ pub fn clustered_standard_error_from_influence<L: Eq + Hash>(
     clustered_variance_from_influence(influence_function, cluster_labels).map(f64::sqrt)
 }
 
-/// Computes the clustered confidence interval from influence function values.
+/// Two-sided Wald interval of `estimate` with the clustered standard error from
+/// cluster labels, at `inference.confidence_level`. Returns `(se, lower,
+/// upper)`.
 ///
 /// # Errors
 /// Returns an error if:
-/// - Confidence level is invalid.
+/// - Confidence level is not strictly between 0 and 1.
 /// - Clustered standard error computation fails.
 pub fn clustered_ci_from_influence<L: Eq + Hash>(
     estimate: f64,
@@ -219,9 +234,11 @@ pub fn clustered_ci_from_influence<L: Eq + Hash>(
 }
 
 /// Percentile interval of the Rademacher multiplier bootstrap of an estimate
-/// with the given influence function. Replicate `r` is seeded with
-/// `replicate_seed(seed, r)`, so the interval does not depend on the number of
-/// threads. An empty influence function gives `(NaN, NaN)`.
+/// with the given influence function: the `alpha / 2` and `1 - alpha / 2`
+/// quantiles of the replicates, with `alpha = 1 - inference.confidence_level`.
+/// Replicate `r` is seeded with `replicate_seed(seed, r)`, so the interval does
+/// not depend on the number of threads. An empty influence function gives
+/// `(NaN, NaN)`.
 #[must_use]
 pub fn multiplier_bootstrap_ci(
     estimate: f64,

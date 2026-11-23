@@ -33,7 +33,12 @@ use crate::types::{ACRTResult, ContinuousDidError, ContinuousObservation};
 use crate::util::usize_to_f64;
 use epistat_linalg::{Col, Mat};
 
-/// Estimates the Average Causal Response (ACRT) curve using a Sieve regression.
+/// Estimates the global Average Causal Response on the Treated (ACRT) with a
+/// sieve regression of the outcome change on the dose.
+///
+/// Units with dose exactly 0 are the control group and units with a positive
+/// dose are treated. Units with a negative dose enter neither group, and are
+/// only given a zero influence value.
 ///
 /// # Mathematical Implementation (CGBS 2024)
 /// 1. Estimate control trend: m0 = E[ΔY | D=0].
@@ -42,11 +47,16 @@ use epistat_linalg::{Col, Mat};
 /// 4. Solve for sieve coefficients θ̂ via Weighted Least Squares (WLS) on treated units:
 ///    θ̂ = (Ψ'WΨ)⁻¹ Ψ'WΔY*
 /// 5. Compute ACRT at each treated unit's dose: `ACRT(D_i)` = ∂_d `ψ(D_i)`' θ̂.
-/// 6. Aggregate to get `ACRT_glob` = (`1/n_T`) Σ `ACRT(D_i)`.
+/// 6. Aggregate to get `ACRT_glob` = (`1/n_T`) Σ `ACRT(D_i)`, the unweighted mean
+///    over the treated units.
+///
+/// The returned influence function holds the treated units' contributions, and
+/// does not include the contribution of the estimated control trend `m0`.
 ///
 /// # Errors
 /// Returns `ContinuousDidError::EmptyInput` if observations are empty.
-/// Returns `ContinuousDidError::NoTreatedUnits` if no treated units are found.
+/// Returns `ContinuousDidError::NoTreatedUnits` if no unit has a positive dose,
+/// and also if no unit has dose 0.
 /// Returns `ContinuousDidError::SingularBasis` if the design matrix is singular.
 ///
 /// # Panics

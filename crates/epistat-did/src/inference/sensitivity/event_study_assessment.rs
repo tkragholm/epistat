@@ -45,25 +45,30 @@ pub use workflow::{
     assess_honest_event_study_workflow, assess_honest_event_study_workflow_with_config,
 };
 
-/// Compute "Honest" confidence intervals for a scalar ATT.
+/// Simple sensitivity interval for one post-treatment estimate, from the
+/// estimates alone.
 ///
-/// This implements the Rambachan and Roth (2023) robust inference for a single
-/// post-treatment period, given pre-trend estimates.
+/// This is a closed-form approximation, not the conditional confidence set of
+/// the event-study functions. The identified set is built around the target
+/// estimate `tau`:
 ///
-/// # Mathematical implementation (scalar case)
-/// 1. Identify the maximum possible bias `δ` in the post-treatment period
-///    consistent with the pre-trends and the restriction `M`.
-/// 2. Construct the identified set `[τ - δ_max, τ - δ_min]`.
-/// 3. Construct the robust confidence interval by adding uncertainty to the
-///    identified set.
+/// - `Smoothness(M)`: `[tau + b - M, tau + b + M]`, where `b` is the estimate of
+///   the last pre-period.
+/// - `RelativeMagnitude(Mbar)`: `[tau - d, tau + d]`, where
+///   `d = Mbar * max |pre-period estimate|`.
+///
+/// The robust interval runs from the lower end of the two-sided Wald interval
+/// around the lower end of the identified set to the upper end of the Wald
+/// interval around the upper end, using `target_estimate.se`.
 ///
 /// # Arguments
-/// * `target_estimate` - The ATT estimate for the period of interest.
-/// * `pre_period_estimates` - Estimates for the pre-treatment periods.
-/// * `vcov` - Variance-covariance matrix of
-///   `(pre_period_estimates..., target_estimate)`.
-/// * `sensitivity` - The sensitivity bound.
-/// * `inference` - Confidence level.
+/// * `target_estimate` - The post-treatment estimate and its standard error.
+/// * `pre_period_estimates` - Estimates for the pre-treatment periods, the last
+///   one adjacent to treatment.
+/// * `vcov` - Matrix of side `pre_period_estimates.len() + 1`. Only its
+///   dimensions are checked.
+/// * `sensitivity` - The restriction and its parameter.
+/// * `inference` - The confidence level.
 ///
 /// # Errors
 /// Returns an error if covariance dimensions are inconsistent or the
@@ -123,11 +128,14 @@ pub fn compute_honest_ci_scalar(
     })
 }
 
-/// Compute scalar `HonestDiD` results for each post-treatment event-study
-/// coefficient.
+/// Compute a scalar `HonestDiD` result for each post-treatment event-study
+/// coefficient, each period on its own.
 ///
-/// This assumes the event-study coefficient vector is ordered as pre-period
-/// estimates followed by post-period estimates.
+/// `betahat` holds the pre-period estimates followed by the post-period
+/// estimates, and `covariance` is its covariance matrix. The labels in
+/// `pre_periods` and `post_periods` give the split, and the post labels are
+/// returned in the results. The robust interval is the conditional confidence
+/// set with the default configuration for the restriction.
 ///
 /// # Errors
 /// Returns an error if dimensions are inconsistent or covariance entries are
@@ -169,8 +177,9 @@ pub(in crate::inference::sensitivity) fn compute_honest_event_study_scalar_count
     compute_honest_event_study_scalar_for_input_counted(&input, sensitivity, inference, counter)
 }
 
-/// Compute scalar `HonestDiD` results for each post-treatment coefficient in a
-/// typed event-study input.
+/// Compute a scalar `HonestDiD` result for each post-treatment coefficient of
+/// `input`, in the order of its post periods. See
+/// [`compute_honest_event_study_scalar`].
 ///
 /// # Errors
 /// Returns an error if `input` is inconsistent.
@@ -274,22 +283,21 @@ pub(in crate::inference::sensitivity) fn compute_honest_event_study_scalar_for_i
         .collect()
 }
 
-/// Assess whether a post-treatment event-study linear functional remains
-/// statistically distinguishable from `null_value` under the requested
-/// `HonestDiD` sensitivity restriction.
+/// Assess whether a linear functional of the post-treatment coefficients
+/// remains distinguishable from `null_value` under the `HonestDiD`
+/// sensitivity restriction.
 ///
-/// This is the study-facing entrypoint for robustness claims about aggregated
-/// post-treatment effects, for example:
+/// `post_weights` has one weight per post period, finite and not all zero. For
+/// one period it is the unit vector `e_t`. For an average over five periods it
+/// is `1/5` on those periods and 0 elsewhere.
 ///
-/// - one specific post period: `post_weights = e_t`
-/// - an average over years 11--15: `post_weights = (0, ..., 0, 1/5, ..., 1/5)`
-/// - any other fixed linear functional of `τ_post`
-///
-/// Under `RelativeMagnitude(Mbar)`, this function already uses the exact
-/// `ΔRM(Mbar)` identified-set and conditional confidence-set path for the
-/// supplied `post_weights`; it is not restricted to basis-vector / first-post
-/// functionals. The conditional confidence set uses the default
-/// least-favorable hybrid configuration.
+/// Under `RelativeMagnitude(Mbar)` the identified set and the conditional
+/// confidence set are exact for any `post_weights`, with the settings of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`]. Under
+/// `Smoothness(M)` the conditional confidence set uses the settings of
+/// [`SmoothnessConfidenceSetConfig::from_inference`]. If some adjacent
+/// pre-period coefficients differ by more than `M`, the robust interval and the
+/// identified set are `(-inf, inf)` and the result is not significant.
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent or if the chosen
@@ -330,21 +338,14 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_functional_co
     )
 }
 
-/// Assess whether a post-treatment event-study linear functional remains
-/// statistically distinguishable from `null_value`.
+/// [`assess_honest_event_study_functional`] with the `DeltaRM` conditional
+/// confidence-set settings given explicitly.
 ///
-/// This variant uses the requested `HonestDiD` sensitivity restriction with
-/// explicit `DeltaRM` hybrid control.
-///
-/// This is the same study-facing assessment as
-/// [`assess_honest_event_study_functional`], but it allows callers to choose
-/// the `DeltaRM` conditional confidence-set hybrid mode explicitly. This only
-/// affects [`HonestSensitivity::RelativeMagnitude`]; smoothness calculations
-/// ignore `relative_magnitude_config`.
-///
-/// The default wrapper uses
-/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`] which corresponds to the
-/// least-favorable (`LF`) hybrid path in the reference `HonestDiD` package.
+/// `relative_magnitude_config` applies only to
+/// [`HonestSensitivity::RelativeMagnitude`]. A smoothness restriction ignores
+/// it. The default of [`assess_honest_event_study_functional`] is
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`], the least-favorable
+/// (`LF`) hybrid of the reference `HonestDiD` package.
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent or if the chosen
@@ -450,7 +451,8 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_functional_wi
     })
 }
 
-/// Convenience wrapper for a single post-treatment event-study period.
+/// [`assess_honest_event_study_functional`] for the coefficient of the post
+/// period with the label `post_period`.
 ///
 /// # Errors
 /// Returns an error if `post_period` is not present in the event-study input or
@@ -501,8 +503,9 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_period_counte
     )
 }
 
-/// Version of [`assess_honest_event_study_period`] with explicit `DeltaRM`
-/// conditional confidence-set hybrid control.
+/// [`assess_honest_event_study_period`] with the `DeltaRM` conditional
+/// confidence-set settings given explicitly. A smoothness restriction ignores
+/// them.
 ///
 /// # Errors
 /// Returns an error if `post_period` is not present in the event-study input or
@@ -625,14 +628,10 @@ fn post_weights_for_functional(
     Ok(post_weights)
 }
 
-/// Assess a typed post-treatment linear functional under `HonestDiD`
-/// sensitivity restrictions.
-///
-/// This is the preferred study-facing surface for multi-period claims such as:
-///
-/// - one specific post-treatment year
-/// - an average over years 11--15
-/// - a custom weighted long-run effect
+/// [`assess_honest_event_study_functional`] for a functional given by period
+/// labels instead of weights, such as one period, an average over a window of
+/// periods or a weighted sum. See [`HonestPostFunctional`] for how the labels
+/// become weights.
 ///
 /// # Errors
 /// Returns an error if the requested functional cannot be represented on the
@@ -674,8 +673,9 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_post_function
     )
 }
 
-/// Version of [`assess_honest_event_study_post_functional`] with explicit
-/// `DeltaRM` conditional confidence-set hybrid control.
+/// [`assess_honest_event_study_post_functional`] with the `DeltaRM` conditional
+/// confidence-set settings given explicitly. A smoothness restriction ignores
+/// them.
 ///
 /// # Errors
 /// Returns an error if the requested functional cannot be represented on the
@@ -877,12 +877,12 @@ fn prepare_relative_magnitude_base_context(
     })
 }
 
-/// Assess a typed post-treatment functional using the current least-favorable
-/// `DeltaRM` interval surface.
+/// Least-favorable interval of a post-treatment functional under
+/// `ΔRM(Mbar)`, returned as an [`HonestAssessment`] whose `robust_ci` is that
+/// interval.
 ///
-/// This is the study-facing FLCI entry point for `DeltaRM`. It returns the
-/// least-favorable conditional interval for the target functional, packaged into the same [`HonestAssessment`] shape used by the
-/// other event-study sensitivity helpers.
+/// The hybrid settings are those of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`].
 ///
 /// # Errors
 /// Returns an error if the functional is invalid for the supplied event-study
@@ -923,8 +923,8 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_post_function
     )
 }
 
-/// Assess a typed post-treatment functional using the current least-favorable
-/// `DeltaRM` interval surface with an explicit hybrid configuration.
+/// [`assess_honest_event_study_post_functional_flci`] with the hybrid settings
+/// given explicitly.
 ///
 /// # Errors
 /// Returns an error if the functional is invalid for the supplied event-study
@@ -972,8 +972,14 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_post_function
     })
 }
 
-/// Assess multiple typed post-treatment functionals simultaneously using a
-/// jointly calibrated least-favorable `DeltaRM` interval surface.
+/// Least-favorable intervals under `ΔRM(Mbar)` for several post-treatment
+/// functionals at once, each run at a pointwise level calibrated so that the
+/// intervals cover jointly at `inference.confidence_level`.
+///
+/// The hybrid settings are those of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`] and the joint
+/// calibration is [`HonestJointPathConfig::default_for_production`]. There must
+/// be at least one functional.
 ///
 /// # Errors
 /// Returns an error if any functional is invalid for the supplied input or if
@@ -1011,8 +1017,8 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_post_function
     )
 }
 
-/// Version of [`assess_honest_event_study_post_functional_multi_flci`] with
-/// explicit scalar-hybrid and joint-calibration controls.
+/// [`assess_honest_event_study_post_functional_multi_flci`] with the hybrid
+/// settings and the joint calibration given explicitly.
 ///
 /// # Errors
 /// Returns an error if any functional is invalid for the supplied input or if

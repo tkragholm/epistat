@@ -24,18 +24,22 @@ use crate::types::InferenceConfig;
 /// Method behind a sensitivity summary row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensitivitySummaryMethod {
-    /// Fixed-length confidence interval.
+    /// Fixed-length confidence interval. Supported for smoothness restrictions
+    /// only, and it does not apply a sign or monotonicity restriction.
     Flci,
-    /// Conditional confidence set.
+    /// Conditional confidence set without a hybrid first stage (ARP only).
     Conditional,
-    /// Conditional confidence set hybridised with the fixed-length interval.
+    /// Conditional confidence set with a fixed-length-interval first stage
+    /// (`SmoothnessHybrid::Flci`). Available only for smoothness restrictions.
     ConditionalFlci,
-    /// Conditional confidence set hybridised with the least-favorable critical value.
+    /// Conditional confidence set with a least-favorable first stage. Available
+    /// for smoothness and relative-magnitude restrictions.
     ConditionalLeastFavorable,
 }
 
 impl SensitivitySummaryMethod {
-    /// Short label of the method, as printed by the R package.
+    /// Short label of the method: `FLCI`, `Conditional`, `C-F` or `C-LF`, as
+    /// printed by the R package.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -50,38 +54,32 @@ impl SensitivitySummaryMethod {
 /// One interval of a sensitivity summary.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SensitivitySummaryRow {
-    /// Lower bound of the interval.
+    /// Lower end of the confidence set.
     pub lb: f64,
-    /// Upper bound of the interval.
+    /// Upper end of the confidence set.
     pub ub: f64,
     /// Method that produced the interval.
     pub method: SensitivitySummaryMethod,
-    /// Label of the restriction on the trend, such as `DeltaSDPB`.
+    /// Name of the restriction class in `HonestDiD` notation, such as `DeltaSD`,
+    /// `DeltaSDPB` or `DeltaRMI`. The suffix letters give the bound
+    /// (`SDRM` for a relative-magnitude bound on linear-trend deviations) and
+    /// the sign (`PB`, `NB`) or monotonicity (`I`, `D`) restriction.
     pub delta: &'static str,
-    /// Name of the sensitivity parameter, such as `M`.
+    /// Name of the sensitivity parameter: `M` for smoothness, `Mbar` for
+    /// relative magnitude.
     pub sensitivity_name: &'static str,
-    /// Value of the sensitivity parameter.
+    /// Value of the sensitivity parameter at which the row was computed.
     pub sensitivity_value: f64,
-    /// The identified set this row's interval was built around, where the
-    /// restriction family has a closed form for one.
-    ///
-    /// It is on the row because the caller would otherwise ask for it again.
-    /// Constructing the confidence set requires the identified set -- it is what
-    /// the inversion grid is centred on -- so it has already been solved by the
-    /// time the row exists, and a consumer that wants to report "a loss of up to
-    /// this much remains consistent with the data" beside the interval was
-    /// re-running eight branch LPs to learn something this function had just
-    /// thrown away. Study I's bridge did exactly that, which made three
-    /// identified-set solves per row where one was needed.
-    ///
-    /// `None` on the smoothness path, which does not compute one here.
+    /// Identified set at this row's sensitivity value, which the interval was
+    /// built around. `Some` on relative-magnitude rows and `None` on
+    /// smoothness rows, which do not compute it.
     pub identified: Option<HonestIdentifiedSet>,
 }
 
 /// Robust intervals over a range of sensitivity values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SensitivitySummary {
-    /// One row per method and sensitivity value.
+    /// One row per sensitivity value, in the order of the values.
     pub rows: Vec<SensitivitySummaryRow>,
     /// Conic programs that needed the retry with looser tolerances, and programs
     /// that ended `AlmostSolved`, while the summary was computed. See
@@ -93,22 +91,24 @@ pub struct SensitivitySummary {
 /// Family of restrictions a sensitivity analysis varies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensitivityRestrictionKind {
-    /// Bound on the change of slope of the trend.
+    /// Bound `M` on the change of slope of the deviation from parallel trends.
     Smoothness,
-    /// Bound on post-period deviations relative to pre-period deviations.
+    /// Bound `Mbar` on post-period deviations as a multiple of the largest
+    /// pre-period deviation.
     RelativeMagnitude,
 }
 
 /// Sensitivity summary for one post-treatment period.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PostPeriodSensitivitySummary {
-    /// Robust confidence sets over the sensitivity values.
+    /// Robust confidence sets over the grid of sensitivity values.
     pub robust_ci: SensitivitySummary,
-    /// Original confidence set of the post-period effect.
+    /// Wald confidence set of the post-period coefficient under exact parallel
+    /// trends.
     pub orig_ci: HonestOriginalConfidenceSet,
     /// Restriction family the sensitivity analysis used.
     pub sensitivity_type: SensitivityRestrictionKind,
-    /// Post-treatment period the summary is for.
+    /// Label of the post-treatment period, as listed in the event-study input.
     pub post_period: i32,
 }
 
@@ -168,12 +168,13 @@ fn validate_api_inputs(
     Ok(())
 }
 
-/// Estimate an upper end for the default smoothness grid from the observed
-/// pre-treatment second differences.
+/// Upper end of the default grid of `M` values: the largest over the
+/// pre-treatment second differences of `difference + z * se`, with `z` the
+/// `1 - alpha` quantile of the standard normal, floored at 0.
 ///
 /// # Errors
-/// Returns an error if the event-study input is invalid, contains too few
-/// pre-periods, or `alpha` lies outside `(0, 1)`.
+/// Returns an error if the event-study input is invalid, has fewer than two
+/// pre-periods, or `alpha` is outside `[0, 1)`.
 pub fn estimate_smoothness_upper_bound_from_pretrends(
     input: &HonestEventStudyInput,
     alpha: f64,
@@ -316,6 +317,14 @@ const fn collect_interval(
 
 /// Summarize smoothness-based sensitivity intervals over an `M` grid for one
 /// post-treatment functional.
+///
+/// `post_weights` has one weight per post period. `method` defaults to
+/// `Flci` without a sign or monotonicity restriction and to `ConditionalFlci`
+/// with one. `m_values` defaults to ten equally spaced values from 0 to the
+/// bound of [`estimate_smoothness_upper_bound_from_pretrends`] at `alpha =
+/// 0.05` (the standard error of the pre-period coefficient with one pre
+/// period). At most one of `bias_direction` and `monotonicity_direction` may be
+/// given. The least-favorable simulation uses its default settings.
 ///
 /// # Errors
 /// Returns an error if the event-study input is invalid, the wrapper options
@@ -476,7 +485,12 @@ pub(in crate::inference::sensitivity) fn summarize_smoothness_sensitivity_counte
 /// Summarize relative-magnitude sensitivity intervals over an `Mbar` grid for
 /// one post-treatment functional.
 ///
-/// One functional of [`summarize_relative_magnitude_sensitivity_many`].
+/// This is [`summarize_relative_magnitude_sensitivity_many`] with a single
+/// functional. `post_weights` has one weight per post period. `method` defaults
+/// to `ConditionalLeastFavorable` and may be only that or `Conditional`.
+/// `mbar_values` defaults to ten equally spaced values from 0 to 2. `bound`
+/// defaults to [`HonestRelativeMagnitudeBound::ParallelTrendsDeviation`]. At
+/// most one of `bias_direction` and `monotonicity_direction` may be given.
 ///
 /// # Errors
 /// Returns an error if the event-study input is invalid, the wrapper options
@@ -567,13 +581,12 @@ pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivit
 /// Summarize relative-magnitude sensitivity intervals over an `Mbar` grid for
 /// several post-treatment functionals of one event study, in the order given.
 ///
-/// The functionals share everything that does not depend on the weights: at
-/// each `Mbar`, every branch's constraint matrix, its ARP covariance, and the
-/// thousand simulation draws behind its least-favorable critical value. Those
-/// draws were the tenth of the surface's CPU that twenty functionals spent
-/// making the same numbers twenty times. Made once here and handed to each
-/// functional, they give the same critical values. The functionals themselves
-/// run in parallel.
+/// Each entry of `functionals` has one weight per post period. The functionals
+/// share the branch constraint matrices, the ARP covariances and the simulated
+/// draws behind the least-favorable critical value at each `Mbar`, which are
+/// computed once. The functionals run in parallel. The other arguments are as
+/// in [`summarize_relative_magnitude_sensitivity`]. The `solver` counts of each
+/// returned summary cover the whole call.
 ///
 /// # Errors
 /// Returns an error if the event-study input is invalid for any functional,
@@ -777,8 +790,12 @@ pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivit
         .collect())
 }
 
-/// Summarize sensitivity results for a named post-treatment period by
-/// converting it to the corresponding basis functional.
+/// Summarize sensitivity results for the post-treatment period with the given
+/// label, as the basis functional of that period.
+///
+/// `sensitivity_values` is the grid of `M` or `Mbar` values according to
+/// `sensitivity_type`, with the defaults of the summarize function for that
+/// type. `bound` is read only for a relative-magnitude restriction.
 ///
 /// # Errors
 /// Returns an error if the requested post period is absent, the input is

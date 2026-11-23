@@ -4,32 +4,35 @@ use crate::inference::vcov::{
     clustered_covariance_matrix_from_influence_matrix, covariance_matrix_from_influence_matrix,
 };
 
-/// Canonical long-form influence row keyed by a stable estimate identifier.
+/// One influence value of a unit for an estimate, as a row of a long-form
+/// table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferenceInfluenceRow {
     /// Identifier of the estimate the influence value belongs to.
     pub estimate_id: String,
-    /// Identifier of the unit.
+    /// Identifier of the unit, as given in `unit_ids`.
     pub unit_id: String,
-    /// Influence of the unit on the estimate.
+    /// Value of the estimate's influence function at the unit.
     pub influence_value: f64,
 }
 
-/// Canonical pairwise covariance row keyed by stable estimate identifiers.
+/// One covariance between two estimates, as a row of a long-form table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InferenceCovarianceRow {
     /// Identifier of the first estimate.
     pub estimate_id_left: String,
     /// Identifier of the second estimate.
     pub estimate_id_right: String,
-    /// Covariance between the two estimates.
+    /// Covariance between the two estimates, from their influence functions.
     pub covariance: f64,
 }
 
-/// Expand aligned influence vectors into a stable long-form export surface.
+/// One row per estimate and unit, with the influence vectors as given: all rows
+/// of the first estimate in the order of `unit_ids`, then the next estimate.
 ///
 /// # Errors
-/// Returns an error if estimate ids, unit ids, and influence vectors are not aligned.
+/// Returns an error if there is not one influence vector per estimate id, or if
+/// a vector does not have one value per unit id.
 pub fn build_inference_influence_rows(
     estimate_ids: &[String],
     unit_ids: &[String],
@@ -62,11 +65,16 @@ pub fn build_inference_influence_rows(
     Ok(rows)
 }
 
-/// Build pairwise covariance rows from aligned influence vectors.
+/// Covariances of the estimates from their influence functions, assuming
+/// independent units (see [`covariance_matrix_from_influence_matrix`]). There is
+/// one row for each pair of estimates with the left estimate not after the right
+/// one in `estimate_ids`, so the diagonal is included and each off-diagonal pair
+/// appears once.
 ///
 /// # Errors
-/// Returns an error if estimate ids and influence vectors are not aligned or
-/// covariance computation fails.
+/// Returns an error if there is not one influence vector per estimate id, or if
+/// the covariance computation fails, for example for empty, unequal-length or
+/// non-finite influence vectors.
 pub fn build_inference_covariance_rows(
     estimate_ids: &[String],
     influence_functions: &[Vec<f64>],
@@ -75,11 +83,14 @@ pub fn build_inference_covariance_rows(
     Ok(flatten_covariance_rows(estimate_ids, &covariance))
 }
 
-/// Build cluster-robust pairwise covariance rows from aligned influence vectors.
+/// As [`build_inference_covariance_rows`], with the covariances clustered by
+/// `cluster_labels`, one label per unit (see
+/// [`clustered_covariance_matrix_from_influence_matrix`]).
 ///
 /// # Errors
-/// Returns an error if estimate ids and influence vectors are not aligned or
-/// covariance computation fails.
+/// Returns an error if there is not one influence vector per estimate id, if
+/// `cluster_labels` does not have one label per unit, if there are fewer than
+/// two clusters, or if the covariance computation fails.
 pub fn build_clustered_inference_covariance_rows(
     estimate_ids: &[String],
     influence_functions: &[Vec<f64>],

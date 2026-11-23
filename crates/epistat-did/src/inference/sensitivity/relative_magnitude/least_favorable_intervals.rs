@@ -1,17 +1,15 @@
-//! Typed problem surface for `DeltaRM` least-favorable confidence intervals.
+//! Least-favorable intervals under `DeltaRM` for post-treatment linear
+//! functionals, as typed problems and results.
 //!
-//! This module exposes the current least-favorable `DeltaRM` interval as a
-//! typed FLCI result. The implementation reuses the validated scalar
-//! `DeltaRM` conditional confidence-set path already present in this crate:
+//! A problem bundles the event-study input with, for each functional `l' τ_post`:
 //!
-//! - the original parallel-trends confidence set for `l' τ_post`
-//! - the exact `DeltaRM(Mbar)` identified set for the same linear functional
-//! - the least-favorable conditional confidence interval for the same target
+//! - the original parallel-trends confidence set
+//! - the exact `DeltaRM(Mbar)` identified set
 //!
-//! This is not yet the full multi-period FLCI optimizer surface of the R
-//! `HonestDiD` package. It is the current scalar/linear-functional
-//! least-favorable interval for `DeltaRM`, expressed as a first-class Rust API
-//! instead of an internal conditional-CS detail.
+//! and the interval is the `DeltaRM` conditional confidence set of the same
+//! functional with a least-favorable (or ARP-only) first stage. It is computed
+//! functional by functional, and does not use the optimization over the
+//! multi-period surface that the R `HonestDiD` package uses for its FLCI.
 //!
 //! References:
 //! - Rambachan, A. and Roth, J. (2023), "A More Credible Approach to Parallel
@@ -52,13 +50,14 @@ use crate::util::usize_to_f64;
 /// under the relative-magnitude restriction `ΔRM(Mbar)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelativeMagnitudeFlciProblem {
-    /// Typed event-study input.
+    /// Event-study coefficients and covariance matrix.
     pub input: HonestEventStudyInput,
-    /// Post-treatment linear functional weights.
+    /// Weights of the functional on the post-treatment coefficients, one per
+    /// post period.
     pub post_weights: Vec<f64>,
-    /// Relative-magnitude bound `Mbar`.
+    /// Relative-magnitude bound `Mbar`, finite and non-negative.
     pub mbar: f64,
-    /// Inference configuration used for the original confidence set.
+    /// Confidence level of the original confidence set and of the interval.
     pub inference: InferenceConfig,
     /// Original parallel-trends confidence set for `l' τ_post`.
     pub original: HonestOriginalConfidenceSet,
@@ -69,16 +68,15 @@ pub struct RelativeMagnitudeFlciProblem {
 /// Least-favorable `DeltaRM` interval result for a post-treatment linear
 /// functional.
 ///
-/// The `flci` field is the current least-favorable `DeltaRM` conditional
-/// confidence interval for `l' τ_post`, exposed as a typed result alongside
-/// the original and identified-set quantities.
+/// The `flci` field is the `DeltaRM` conditional confidence interval for
+/// `l' τ_post`, given with the original interval and the identified set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelativeMagnitudeFlciResult {
-    /// Least-favorable confidence interval.
+    /// Conditional confidence interval `(lower, upper)` under `DeltaRM(Mbar)`.
     pub flci: (f64, f64),
-    /// Original parallel-trends confidence interval.
+    /// Original parallel-trends confidence interval `(lower, upper)`.
     pub original_ci: (f64, f64),
-    /// Exact `DeltaRM(Mbar)` identified set.
+    /// Exact `DeltaRM(Mbar)` identified set `(lower, upper)`.
     pub identified_set: (f64, f64),
 }
 
@@ -86,30 +84,32 @@ pub struct RelativeMagnitudeFlciResult {
 /// linear functionals.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelativeMagnitudeMultiFlciProblem {
-    /// Typed event-study input.
+    /// Event-study coefficients and covariance matrix.
     pub input: HonestEventStudyInput,
-    /// Functional weights in post-period order.
+    /// One weight vector per functional, each with one weight per post period.
     pub post_weight_sets: Vec<Vec<f64>>,
-    /// Relative-magnitude bound `Mbar`.
+    /// Relative-magnitude bound `Mbar`, finite and non-negative.
     pub mbar: f64,
-    /// Family-wise inference configuration.
+    /// Requested joint confidence level of the intervals.
     pub inference: InferenceConfig,
-    /// Original parallel-trends confidence sets for each functional.
+    /// Original parallel-trends confidence set of each functional, in the order
+    /// of `post_weight_sets`.
     pub originals: Vec<HonestOriginalConfidenceSet>,
-    /// Exact identified sets for each functional.
+    /// Exact identified set of each functional, in the order of
+    /// `post_weight_sets`.
     pub identified_sets: Vec<HonestIdentifiedSet>,
 }
 
 /// Build a typed `DeltaRM` FLCI problem for a post-treatment linear
 /// functional.
 ///
-/// This packages the exact quantities the future least-favorable optimizer
-/// needs, while reusing the validated original-CS and identified-set paths.
+/// The problem holds the original confidence set and the identified set of the
+/// functional.
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent, `post_weights` is
-/// incompatible with the post-period support, or the underlying original-CS /
-/// identified-set calculations fail.
+/// not one finite weight per post period with at least one non-zero, or the
+/// identified set cannot be computed.
 pub fn build_relative_magnitude_flci_problem(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
@@ -144,12 +144,13 @@ pub(in crate::inference::sensitivity) fn build_relative_magnitude_flci_problem_c
     })
 }
 
-/// Solve the current least-favorable `DeltaRM` interval for a typed problem
-/// using the default least-favorable hybrid configuration implied by
+/// Conditional confidence interval of the problem's functional, with the
+/// settings of [`RelativeMagnitudeConfidenceSetConfig::from_inference`] at
 /// `problem.inference`.
 ///
 /// # Errors
-/// Returns an error if the underlying `DeltaRM` conditional interval fails.
+/// Returns an error if the conditional confidence set fails, for example when no
+/// grid point is accepted.
 pub fn compute_relative_magnitude_flci(
     problem: &RelativeMagnitudeFlciProblem,
 ) -> Result<RelativeMagnitudeFlciResult, String> {
@@ -170,15 +171,15 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_flci_counted
     )
 }
 
-/// Solve the current least-favorable `DeltaRM` interval for a typed problem
-/// with an explicit hybrid configuration.
-///
-/// This surfaces the same scalar/linear-functional least-favorable interval as
-/// the lower-level `DeltaRM` conditional confidence-set path, but packages the
-/// result with the original confidence interval and identified set.
+/// [`compute_relative_magnitude_flci`] with the hybrid settings given in
+/// `config`. The interval is that of
+/// [`super::compute_relative_magnitude_confidence_set_with_config`], returned
+/// with the
+/// original interval and the identified set.
 ///
 /// # Errors
-/// Returns an error if the underlying `DeltaRM` conditional interval fails.
+/// Returns an error if `config` fails validation or the conditional confidence
+/// set fails.
 pub fn compute_relative_magnitude_flci_with_config(
     problem: &RelativeMagnitudeFlciProblem,
     config: RelativeMagnitudeConfidenceSetConfig,
@@ -210,11 +211,12 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_flci_with_co
     })
 }
 
-/// Build a typed simultaneous `DeltaRM` FLCI problem over multiple functionals.
+/// Build a simultaneous `DeltaRM` problem over several functionals, computing
+/// the original confidence set and the identified set of each.
 ///
 /// # Errors
-/// Returns an error if any functional is invalid or if the underlying original
-/// and identified-set builders fail.
+/// Returns an error if `post_weight_sets` is empty, any functional is invalid,
+/// or an identified set cannot be computed.
 pub fn build_relative_magnitude_multi_flci_problem(
     input: &HonestEventStudyInput,
     post_weight_sets: &[Vec<f64>],
@@ -264,12 +266,13 @@ pub(in crate::inference::sensitivity) fn build_relative_magnitude_multi_flci_pro
     })
 }
 
-/// Build a typed simultaneous `DeltaRM` FLCI problem from precomputed
-/// original confidence sets and identified sets.
+/// Build a simultaneous `DeltaRM` problem from original confidence sets and
+/// identified sets computed elsewhere. Neither the weights nor the sets are
+/// checked against the input.
 ///
 /// # Errors
-/// Returns an error if the inputs are empty or if the supplied precomputed
-/// vectors do not match `post_weight_sets`.
+/// Returns an error if `post_weight_sets` is empty or if `originals` or
+/// `identified_sets` does not have one entry per set of weights.
 pub fn build_relative_magnitude_multi_flci_problem_with_precomputed_sets(
     input: &HonestEventStudyInput,
     post_weight_sets: &[Vec<f64>],
@@ -371,11 +374,15 @@ fn joint_pointwise_confidence_level(
     }
 }
 
-/// Compute simultaneous `DeltaRM` FLCIs over a functional set using default
-/// least-favorable and production joint calibration settings.
+/// Simultaneous `DeltaRM` intervals for the problem's functionals, with the
+/// settings of [`RelativeMagnitudeConfidenceSetConfig::from_inference`] and
+/// [`HonestJointPathConfig::default_for_production`]. Each interval is run at a
+/// pointwise level calibrated so that they cover jointly at
+/// `problem.inference.confidence_level`.
 ///
 /// # Errors
-/// Returns an error if joint calibration or any scalar FLCI solve fails.
+/// Returns an error if the joint calibration fails or any interval cannot be
+/// computed.
 pub fn compute_relative_magnitude_multi_flci(
     problem: &RelativeMagnitudeMultiFlciProblem,
 ) -> Result<RelativeMagnitudeMultiFlciResult, String> {
@@ -397,11 +404,12 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_multi_flci_c
     )
 }
 
-/// Compute simultaneous `DeltaRM` FLCIs over a functional set with explicit
-/// scalar hybrid and joint-calibration configurations.
+/// [`compute_relative_magnitude_multi_flci`] with the hybrid settings and the
+/// joint calibration given explicitly.
 ///
 /// # Errors
-/// Returns an error if joint calibration or any scalar FLCI solve fails.
+/// Returns an error if the joint calibration fails or any interval cannot be
+/// computed.
 pub fn compute_relative_magnitude_multi_flci_with_config(
     problem: &RelativeMagnitudeMultiFlciProblem,
     config: RelativeMagnitudeConfidenceSetConfig,

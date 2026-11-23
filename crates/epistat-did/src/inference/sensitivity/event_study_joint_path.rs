@@ -12,14 +12,15 @@ use crate::types::InferenceConfig;
 use crate::util::usize_to_f64;
 use rayon::prelude::*;
 
-/// Construct a conservative joint confidence region for the full
-/// post-treatment path.
+/// Simultaneous confidence region for the post-treatment path: one `HonestDiD`
+/// interval per post period, each run at a pointwise confidence level adjusted
+/// so that the intervals cover jointly at `inference.confidence_level`.
 ///
-/// The current implementation computes a simultaneous rectangle across all
-/// post-treatment periods and then evaluates the corresponding scalar
-/// `HonestDiD` interval for each period at an adjusted pointwise confidence
-/// level. The adjustment can be Bonferroni or a tighter covariance-aware
-/// simulated max-`t` calibration.
+/// The adjustment is the Gaussian-simulated max-`t` calibration with 20,000
+/// draws and seed 42, and the relative-magnitude settings are those of
+/// [`RelativeMagnitudeConfidenceSetConfig::from_inference`]. With a single post
+/// period the pointwise level is the requested level. `null_value` is the value
+/// that each point's `robustly_significant` is tested against.
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent or if any scalar
@@ -120,8 +121,9 @@ fn joint_pointwise_confidence_level(
     }
 }
 
-/// Version of [`assess_honest_event_study_joint_path_region`] with explicit
-/// `DeltaRM` hybrid control and joint-path calibration control.
+/// Version of [`assess_honest_event_study_joint_path_region`] with the
+/// relative-magnitude settings and the joint calibration given explicitly. The
+/// relative-magnitude settings are ignored under a smoothness restriction.
 ///
 /// # Errors
 /// Returns an error if the event-study input is inconsistent, the implied
