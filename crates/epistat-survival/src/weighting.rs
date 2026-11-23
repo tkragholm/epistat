@@ -23,6 +23,10 @@
 //!   or `"all")`, with truncation. Its fit goes into [`Estimated`] as a
 //!   [`Censoring::Pooled`], since the variance treats it as any other pooled
 //!   model of weights.
+//! - [`clone`] clones persons under treatment strategies with grace periods,
+//!   censors the clones at their first deviation, weights the artificial censoring
+//!   by pooled logistic models of the deviation and resamples persons for the
+//!   bootstrap, the clone-censor-weight analysis of target trial emulation.
 //! - [`trials`] gives the weights of treatment switches and of censoring of
 //!   sequential trial emulation, the weight of each row of the stacked trials, the
 //!   weighted logistic outcome model with its person-clustered covariance and the
@@ -146,6 +150,7 @@
 
 mod adjust;
 mod censoring;
+pub mod clone;
 pub mod cox;
 pub mod estimated;
 pub mod ipcw;
