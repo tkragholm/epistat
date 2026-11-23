@@ -126,6 +126,12 @@
 //! 5. Mancl LA, DeRouen TA. A covariance estimator for GEE with improved
 //!    small-sample properties. Biometrics. 2001;57(1):126-34.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "waves, cluster sizes and lags are small whole numbers"
+)]
+
 use epistat_inference::sandwich::sandwich_with_inverse;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, Regularisation, SolveError};
 use rayon::prelude::*;
@@ -272,7 +278,9 @@ pub enum GeeError {
     NotPositiveDefinite,
     /// The estimated correlation is outside the range for which the working
     /// correlation matrix is positive definite.
-    #[error("the estimated correlation {0} gives a working correlation that is not positive definite")]
+    #[error(
+        "the estimated correlation {0} gives a working correlation that is not positive definite"
+    )]
     CorrelationRange(f64),
     /// The AR(1) estimating equation has no root in `(-1, 1)`.
     #[error("the AR(1) estimating equation has no root in (-1, 1)")]
@@ -418,10 +426,6 @@ impl Gee {
     /// # Errors
     ///
     /// See [`GeeError`].
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one iteration loop with its setup and final passes"
-    )]
     pub fn fit(
         &self,
         x: MatRef<'_, f64>,
@@ -439,7 +443,9 @@ impl Gee {
         let o_in = offset.unwrap_or(&zeros);
 
         let start = Glm::new(self.family, self.link).fit(x, y, weights, offset, None)?;
-        let kept: Vec<usize> = (0..p).filter(|&j| start.coefficients[j].is_some()).collect();
+        let kept: Vec<usize> = (0..p)
+            .filter(|&j| start.coefficients[j].is_some())
+            .collect();
         let mut beta: Vec<f64> = kept
             .iter()
             .map(|&j| start.coefficients[j].unwrap_or(0.0))
@@ -532,7 +538,6 @@ impl Gee {
 }
 
 impl Gee {
-    #[allow(clippy::too_many_arguments, reason = "the inputs of one fit")]
     fn check(
         &self,
         n: usize,
@@ -631,7 +636,7 @@ impl Gee {
             ssq += w * s * s;
         }
         let moment = self.association == Association::Moment;
-        if !(sum_w > 0.0) || (moment && panel.n <= q) {
+        if not_positive(sum_w) || (moment && panel.n <= q) {
             return Err(GeeError::Degrees);
         }
         let phi_n = ssq / sum_w;
@@ -639,24 +644,24 @@ impl Gee {
         let scale = self
             .fix_scale
             .unwrap_or(if moment { phi_np } else { phi_n });
-        let phi = self.fix_scale.unwrap_or(
-            if moment && self.correlation == Correlation::Exchangeable {
-                phi_np
-            } else {
-                phi_n
-            },
-        );
+        let phi =
+            self.fix_scale
+                .unwrap_or(if moment && self.correlation == Correlation::Exchangeable {
+                    phi_np
+                } else {
+                    phi_n
+                });
         let sums = panel.association_sums(self.correlation, &rows.s, &panel.w);
         let alpha = match self.correlation {
             Correlation::Independence => Vec::new(),
             Correlation::Exchangeable => {
                 let pairs = counts[0];
                 let denominator = if moment { pairs - q as f64 } else { pairs };
-                if !(denominator > 0.0) {
+                if not_positive(denominator) {
                     return Err(GeeError::NoPairs);
                 }
                 let alpha = sums[0] / (phi * denominator);
-                if !(alpha < 1.0 && alpha > -1.0 / (max_cluster as f64 - 1.0)) {
+                if alpha.is_nan() || alpha >= 1.0 || alpha <= -1.0 / (max_cluster as f64 - 1.0) {
                     return Err(GeeError::CorrelationRange(alpha));
                 }
                 vec![alpha]
@@ -666,7 +671,7 @@ impl Gee {
                     return Err(GeeError::NoPairs);
                 }
                 let alpha = if moment {
-                    if !(counts[1] > 0.0) {
+                    if not_positive(counts[1]) {
                         return Err(GeeError::NoPairs);
                     }
                     sums[1] / (phi * counts[1])
@@ -674,7 +679,7 @@ impl Gee {
                     let z: Vec<f64> = sums.iter().map(|s| s / phi).collect();
                     ar1_root(&z, counts)?
                 };
-                if !(alpha.abs() < 1.0) {
+                if alpha.is_nan() || alpha.abs() >= 1.0 {
                     return Err(GeeError::CorrelationRange(alpha));
                 }
                 vec![alpha]
@@ -685,7 +690,7 @@ impl Gee {
                 for j in 0..m {
                     for k in j + 1..m {
                         let c = counts[j * m + k];
-                        if !(c > 0.0) {
+                        if not_positive(c) {
                             return Err(GeeError::MissingPair {
                                 first: j,
                                 second: k,
@@ -753,6 +758,10 @@ fn correlation_matrix(alpha: &[f64], m: usize) -> Mat<f64> {
 
 /// The root of `Σ_d d α^{d-1} (z_d - C_d α^d)` in `(-1, 1)` nearest the
 /// adjacent-wave estimate `z_1 / C_1`.
+/// Grid points and the largest `|α|` searched for the AR(1) root.
+const GRID: usize = 2000;
+const EDGE: f64 = 0.9999;
+
 fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, GeeError> {
     let g = |a: f64| -> f64 {
         let mut total = 0.0;
@@ -764,9 +773,11 @@ fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, GeeError> {
         }
         total
     };
-    let target = if counts[1] > 0.0 { z[1] / counts[1] } else { 0.0 };
-    const GRID: usize = 2000;
-    const EDGE: f64 = 0.9999;
+    let target = if counts[1] > 0.0 {
+        z[1] / counts[1]
+    } else {
+        0.0
+    };
     let point = |i: usize| -EDGE + 2.0 * EDGE * i as f64 / GRID as f64;
     let mut best: Option<(f64, f64, f64)> = None;
     let mut previous = g(point(0));
@@ -774,7 +785,7 @@ fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, GeeError> {
         let (lo, hi) = (point(i - 1), point(i));
         let current = g(hi);
         if previous == 0.0 || (previous < 0.0) != (current < 0.0) {
-            let distance = (0.5 * (lo + hi) - target).abs();
+            let distance = (lo.midpoint(hi) - target).abs();
             if best.is_none_or(|(d, _, _)| distance < d) {
                 best = Some((distance, lo, hi));
             }
@@ -799,6 +810,10 @@ fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, GeeError> {
     Ok(lo.midpoint(hi))
 }
 
+fn not_positive(v: f64) -> bool {
+    v.is_nan() || v <= 0.0
+}
+
 fn symmetric(v: &[f64], q: usize) -> Mat<f64> {
     Mat::from_fn(q, q, |a, b| v[a * q + b].midpoint(v[b * q + a]))
 }
@@ -820,7 +835,6 @@ fn solve_information(total: &Moments, q: usize) -> Result<Vec<f64>, GeeError> {
 }
 
 impl Panel {
-    #[allow(clippy::too_many_arguments, reason = "the inputs of one fit")]
     fn new(
         correlation: Correlation,
         x: MatRef<'_, f64>,
@@ -1020,8 +1034,8 @@ impl Panel {
                     for col in 0..c {
                         let mut value = diagonal * scratch[j * c + col];
                         if j > 0 {
-                            value -=
-                                rho[j - 1] / (1.0 - rho[j - 1] * rho[j - 1]) * scratch[(j - 1) * c + col];
+                            value -= rho[j - 1] / (1.0 - rho[j - 1] * rho[j - 1])
+                                * scratch[(j - 1) * c + col];
                         }
                         if j + 1 < m {
                             value -= rho[j] / (1.0 - rho[j] * rho[j]) * scratch[(j + 1) * c + col];
@@ -1119,7 +1133,12 @@ impl Panel {
 
     /// The covariance with the Mancl and DeRouen correction, `None` when a
     /// cluster has a singular `I - H`.
-    fn mancl_de_rouen(&self, rows: &Rows, working: &Working, inverse: &Mat<f64>) -> Option<Mat<f64>> {
+    fn mancl_de_rouen(
+        &self,
+        rows: &Rows,
+        working: &Working,
+        inverse: &Mat<f64>,
+    ) -> Option<Mat<f64>> {
         let q = self.q;
         let blocks = self.clusters().div_ceil(BLOCK);
         let parts: Vec<Option<Vec<f64>>> = (0..blocks)

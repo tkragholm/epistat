@@ -22,6 +22,11 @@
 //! relative change of `1e-8` in the deviance and so leaves the covariance
 //! about `1e-7` from the fixed point, at `1e-6`.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "the test panels have a few thousand rows"
+)]
+
 use epistat_glm::{
     Association, Correlation, Family, Gee, GeeError, Glm, Link, RobustVariance, SandwichType,
     robust_covariance,
@@ -214,7 +219,9 @@ fn moment_fits_match_gee() {
             } else {
                 worst(&got.alpha, &alpha, &label)
             };
-            eprintln!("{label}: coef {a:.1e} robust {b:.1e} naive {c:.1e} scale {d:.1e} alpha {e:.1e}");
+            eprintln!(
+                "{label}: coef {a:.1e} robust {b:.1e} naive {c:.1e} scale {d:.1e} alpha {e:.1e}"
+            );
             assert!(a < 1e-10 && d < 1e-10 && e < 1e-10, "{label}");
             assert!(b < 1e-9 && c < 1e-9, "{label}");
             overall = overall.max(a).max(b).max(c).max(d).max(e);
@@ -280,17 +287,33 @@ fn an_aliased_column_is_none() {
     let r = reference();
     let case = &r.cases[0];
     let n = case.x.len();
-    let x = Mat::from_fn(n, 4, |i, j| if j < 3 { case.x[i][j] } else { 2.0 * case.x[i][1] });
+    let x = Mat::from_fn(n, 4, |i, j| {
+        if j < 3 {
+            case.x[i][j]
+        } else {
+            2.0 * case.x[i][1]
+        }
+    });
     let gee = model(case, "exchangeable");
     let got = gee
-        .fit(x.as_ref(), &case.y, &case.cluster, Some(&case.wave), None, None)
+        .fit(
+            x.as_ref(),
+            &case.y,
+            &case.cluster,
+            Some(&case.wave),
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(got.rank, 3);
     assert!(got.coefficients[3].is_none());
     assert!(got.covariance[3 * 4 + 3].is_none() && got.covariance[3].is_none());
     let plain = fit(case, &gee);
     assert_eq!(
-        got.coefficients[..3].iter().map(|v| v.unwrap()).collect::<Vec<_>>(),
+        got.coefficients[..3]
+            .iter()
+            .map(|v| v.unwrap())
+            .collect::<Vec<_>>(),
         some(&plain.coefficients)
     );
 }
@@ -302,21 +325,31 @@ fn bad_input_is_an_error() {
     let x = matrix(&case.x);
     let gee = model(case, "exchangeable");
     let run = |gee: &Gee, cluster: &[u32], wave: Option<&[u32]>, w: Option<&[f64]>| {
-        gee.fit(x.as_ref(), &case.y, cluster, wave, w, case.offset.as_deref())
+        gee.fit(
+            x.as_ref(),
+            &case.y,
+            cluster,
+            wave,
+            w,
+            case.offset.as_deref(),
+        )
     };
     let ones = vec![1.0; case.y.len()];
     // A second row at one wave.
     let mut dup = case.wave.clone();
     dup[1] = dup[0];
     let first = case.cluster[0];
-    assert!(case.cluster[1] == first);
+    assert_eq!(case.cluster[1], first);
     assert!(matches!(
         run(&gee, &case.cluster, Some(&dup), None),
         Err(GeeError::DuplicateWave { .. })
     ));
     // Unstructured without waves, and the moment estimator with weights.
     let un = model(case, "unstructured");
-    assert!(matches!(run(&un, &case.cluster, None, None), Err(GeeError::WavesRequired)));
+    assert!(matches!(
+        run(&un, &case.cluster, None, None),
+        Err(GeeError::WavesRequired)
+    ));
     let mut moment = gee;
     moment.association = Association::Moment;
     assert!(matches!(
@@ -347,9 +380,7 @@ fn unstructured_waves_that_never_meet_are_an_error() {
     // Clusters hold waves {0, 1} or {2, 3}, so the pair (0, 2) has no data.
     let n = 40;
     let cluster: Vec<u32> = (0..n as u32).map(|i| i / 2).collect();
-    let wave: Vec<u32> = (0..n as u32)
-        .map(|i| (i % 2) + 2 * ((i / 2) % 2))
-        .collect();
+    let wave: Vec<u32> = (0..n as u32).map(|i| (i % 2) + 2 * ((i / 2) % 2)).collect();
     let y: Vec<f64> = (0..n).map(|i| f64::from((i * 7 % 5) as u8)).collect();
     let x = Mat::from_fn(n, 1, |_, _| 1.0);
     let gee = Gee::new(Family::Gaussian, Link::Identity, Correlation::Unstructured);
@@ -380,7 +411,11 @@ fn all_bits() -> Vec<f64> {
         ("ohio", "unstructured", RobustVariance::Sandwich),
         ("sim_gauss", "exchangeable", RobustVariance::ManclDeRouen),
         ("sim_gauss", "ar1", RobustVariance::Sandwich),
-        ("sim_unstructured", "unstructured", RobustVariance::ManclDeRouen),
+        (
+            "sim_unstructured",
+            "unstructured",
+            RobustVariance::ManclDeRouen,
+        ),
     ] {
         let case = r.cases.iter().find(|c| c.name == name).unwrap();
         out.extend(bits(case, structure, variance));
@@ -396,6 +431,8 @@ fn results_do_not_depend_on_the_number_of_threads() {
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn the_fits_have_their_recorded_bits() {
-    let hash = epistat_testkit::Fingerprint::new().f64s(&all_bits()).finish();
+    let hash = epistat_testkit::Fingerprint::new()
+        .f64s(&all_bits())
+        .finish();
     assert_eq!(hash, 3_781_498_169_942_712_397, "recorded hash");
 }
