@@ -53,7 +53,7 @@ fn case_cohort_methods() {
         CaseCohortMethod::BorganII,
     ] {
         let total = [cohort as f64];
-        let sized: &[f64] = if matches!(
+        let cohort_size: &[f64] = if matches!(
             method,
             CaseCohortMethod::BorganI | CaseCohortMethod::BorganII
         ) {
@@ -61,8 +61,8 @@ fn case_cohort_methods() {
         } else {
             &total
         };
-        let strata = (sized.len() > 1).then_some(stratum.as_slice());
-        let options = CaseCohortOptions::new(method, sized);
+        let strata = (cohort_size.len() > 1).then_some(stratum.as_slice());
+        let options = CaseCohortOptions::new(method, cohort_size);
         assert_same_on_pools(&POOLS, || {
             let model = fit(&data, x.as_ref(), &sub, strata, &options)
                 .unwrap_or_else(|e| panic!("{method:?}: {e}"));

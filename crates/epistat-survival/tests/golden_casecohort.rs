@@ -96,14 +96,14 @@ fn case_cohort_outputs_are_recorded() {
             method,
             CaseCohortMethod::BorganI | CaseCohortMethod::BorganII
         );
-        let sized: &[f64] = if stratified { &sizes } else { &total };
+        let cohort_size: &[f64] = if stratified { &sizes } else { &total };
         let strata = stratified.then_some(stratum.as_slice());
         let model = fit(
             &data,
             x.as_ref(),
             &sub,
             strata,
-            &CaseCohortOptions::new(method, sized),
+            &CaseCohortOptions::new(method, cohort_size),
         )
         .unwrap();
         let flat = |v: &[Option<f64>]| v.iter().copied().map(absent).collect::<Vec<f64>>();

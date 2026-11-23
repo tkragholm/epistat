@@ -155,7 +155,7 @@ fn weights_fit_and_absolute_risk_match_r() {
             let k = s
                 .base_time
                 .iter()
-                .position(|r| r == t)
+                .position(|r| r.to_bits() == t.to_bits())
                 .unwrap_or_else(|| panic!("{}: event time {t} is not in basehaz", s.name));
             let e = s.base_hazard[k];
             hazard = hazard.max((g - e).abs() / (bound * 4.0 * base.times.len() as f64 * e.abs()));

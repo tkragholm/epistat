@@ -51,8 +51,8 @@ fn generate_cc(n: usize) {
     for _ in 0..n {
         let x1 = rng.normal();
         let x2 = f64::from(u8::from(rng.bernoulli(0.4)));
-        let stratum = rng.below(3);
-        sizes[stratum as usize] += 1.0;
+        let stratum = usize::try_from(rng.below(3)).expect("a small code");
+        sizes[stratum] += 1.0;
         let t = (-rng.uniform().ln()) / (0.02 * (0.5 * x1 - 0.4 * x2).exp());
         let c = (-rng.uniform().ln()) / 0.03;
         let time = t.min(c).min(10.0);
@@ -106,7 +106,7 @@ fn generate_ncc(n: usize) {
         assert!(after > CONTROLS, "too few people at risk after a case");
         let mut chosen = Vec::new();
         while chosen.len() < CONTROLS {
-            let k = r + 1 + rng.below(after as u64) as usize;
+            let k = r + 1 + usize::try_from(rng.below(after as u64)).expect("an index");
             if !chosen.contains(&k) {
                 chosen.push(k);
                 sampled[order[k]] = true;

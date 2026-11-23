@@ -149,7 +149,7 @@ fn prefix_sums_match_a_direct_loop() {
         if p > 0.0 {
             worst = worst.max((inc.probability[i] - p).abs() / p);
         } else {
-            assert!(inc.probability[i] == 0.0);
+            assert_eq!(inc.probability[i].to_bits(), 0.0f64.to_bits());
         }
     }
     // The direct sum is compensated, so the difference is that of the prefix

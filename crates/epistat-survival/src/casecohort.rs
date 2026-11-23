@@ -374,16 +374,12 @@ impl Sample<'_> {
     fn stacked(&self, weight: Option<&dyn Fn(usize) -> f64>) -> (Stack, usize) {
         let mut rows = Vec::new();
         let at_risk = self.subcohort_at_risk();
-        for i in 0..self.rows() {
-            if self.event[i] {
-                rows.push((i, at_risk(i), OUT_OF_RISK_SETS, 1.0));
-            }
+        for (i, _) in self.event.iter().enumerate().filter(|&(_, &e)| e) {
+            rows.push((i, at_risk(i), OUT_OF_RISK_SETS, 1.0));
         }
         let cases = rows.len();
-        for i in 0..self.rows() {
-            if self.subcohort[i] {
-                rows.push((i, false, 0.0, weight.map_or(1.0, |w| w(i))));
-            }
+        for (i, _) in self.subcohort.iter().enumerate().filter(|&(_, &s)| s) {
+            rows.push((i, false, 0.0, weight.map_or(1.0, |w| w(i))));
         }
         (self.stack(&rows, weight.is_some(), true), cases)
     }
@@ -1013,10 +1009,12 @@ fn borgan(
                     "stratum: stratum {j} has one member and a weight other than 1, so its covariance is not defined"
                 )));
             }
-            s.iter_mut().for_each(|v| *v = 0.0);
+            s.fill(0.0);
         } else {
             let d = (divisor[j] - 1) as f64;
-            s.iter_mut().for_each(|v| *v /= d);
+            for v in &mut s {
+                *v /= d;
+            }
         }
         for k in 0..q * q {
             delta[k] += (weight[j] - 1.0) * size[j] * s[k];

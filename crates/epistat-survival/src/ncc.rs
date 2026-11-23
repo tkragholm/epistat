@@ -92,6 +92,13 @@
 //! 4. Stoer NC, Samuelsen SO. multipleNCC: inverse probability weighting of
 //!    nested case-control data. R J 2016;8(2):5-18.
 
+// Rows are indexed in `u32`; `inclusion_probabilities` refuses more rows than
+// that, and `SurvData` does the same for the fit.
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "the row counts are checked to fit in u32"
+)]
+
 use epistat_linalg::MatRef;
 
 use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
