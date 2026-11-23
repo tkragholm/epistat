@@ -167,8 +167,8 @@ impl Layout {
             times.sort_by(|a, b| b.total_cmp(a));
             times.dedup();
             let k = times.len();
-            let time0 = layout.n_times;
-            let base = time0 + s;
+            let first = layout.n_times;
+            let base = first + s;
             // (exit index, entry index, row)
             let mut keyed: Vec<(usize, usize, usize)> = members
                 .iter()
@@ -184,7 +184,7 @@ impl Layout {
                     .then(rows.event[b.2].cmp(&rows.event[a.2]))
                     .then(a.2.cmp(&b.2))
             });
-            let first = layout.weight.len();
+            let first_row = layout.weight.len();
             let mut dying = vec![0u32; k];
             for &(e, st, i) in &keyed {
                 layout.x.extend(
@@ -201,19 +201,19 @@ impl Layout {
                 layout.cluster.push(rows.cluster[i]);
                 layout.pe.push(to_u32(base + e));
                 layout.ps.push(to_u32(base + st));
-                layout.te.push(to_u32(time0 + e.min(k.saturating_sub(1))));
+                layout.te.push(to_u32(first + e.min(k.saturating_sub(1))));
                 if rows.event[i] {
                     dying[e] += 1;
                 }
             }
             let last = layout.weight.len();
-            let mut removal: Vec<u32> = (first..last)
+            let mut removal: Vec<u32> = (first_row..last)
                 .filter(|&pos| (layout.ps[pos] as usize - base) < k)
                 .map(to_u32)
                 .collect();
             removal.sort_by_key(|&pos| (layout.ps[pos as usize], pos));
             // Change points of each cluster in this stratum.
-            let mut by_cluster: Vec<usize> = (first..last).collect();
+            let mut by_cluster: Vec<usize> = (first_row..last).collect();
             by_cluster.sort_by_key(|&pos| (layout.cluster[pos], pos));
             let mut start = 0;
             while start < by_cluster.len() {
@@ -237,8 +237,8 @@ impl Layout {
                 start = end;
             }
             layout.strata.push(StratumLayout {
-                rows: first..last,
-                time0,
+                rows: first_row..last,
+                time0: first,
                 base,
                 times: k,
                 removal,
@@ -1020,7 +1020,7 @@ impl Layout {
 fn symmetrise(m: &mut [f64], p: usize) {
     for r in 0..p {
         for c in 0..r {
-            let v = 0.5 * (m[r * p + c] + m[c * p + r]);
+            let v = f64::midpoint(m[r * p + c], m[c * p + r]);
             m[r * p + c] = v;
             m[c * p + r] = v;
         }

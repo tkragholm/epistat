@@ -84,6 +84,10 @@ impl std::error::Error for BrentError {}
     reason = "Brent's algorithm tests whether a trial point is exactly one of the stored points"
 )]
 #[expect(
+    clippy::manual_midpoint,
+    reason = "the midpoint is R's (a + b) * .5, kept for the same points"
+)]
+#[expect(
     clippy::many_single_char_names,
     reason = "the names of Brent's algorithm, kept for comparison with its published form"
 )]

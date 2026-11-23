@@ -29,6 +29,12 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   cluster-robust variance, and survivor, hazard and cumulative hazard curves and
   contrasts with delta-method limits, checked against `survreg`,
   `flexsurv::flexsurvspline` and `rstpm2::stpm2`.
+- Shared gamma frailty Cox models by penalised partial likelihood with Breslow or
+  Efron ties, strata, entry times, offsets and case weights, theta from the
+  profile marginal likelihood or by `coxph`'s own search, the variance from the
+  whole information and from its diagonal form, and EM as a second route, for
+  hundreds of thousands of clusters without a dense information matrix, checked
+  against `coxph` with `frailty()`.
 - The Titman-Putter test of the Markov property.
 - The self-controlled case series (conditional Poisson likelihood, risk windows
   and age bands, robust variance) with the cutting of follow-up into pieces,

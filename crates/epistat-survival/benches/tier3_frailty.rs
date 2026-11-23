@@ -55,7 +55,7 @@ fn generate(n: usize) {
     let mut cluster = 0u32;
     while row < n {
         cluster += 1;
-        let size = (2 + rng.below(5) as usize).min(n - row);
+        let size = (2 + usize::try_from(rng.below(5)).expect("small")).min(n - row);
         let z = rng.gamma(1.0 / THETA) * THETA;
         let x2 = f64::from(u8::from(rng.bernoulli(0.4)));
         for _ in 0..size {
@@ -114,31 +114,28 @@ fn main() {
     let value = |v: Option<f64>| v.unwrap_or(f64::NAN);
     let mut lines = Lines::default();
     let dense = method == "frailty_dense";
-    match method.as_str() {
-        "frailty_profile" => {
-            lines.push_opt("c_loglik", f.marginal_log_likelihood);
-            lines.push("info_theta", f.theta);
-        }
-        _ => {
-            lines.push_all(
-                "beta",
-                &f.coefficients.iter().map(|&b| value(b)).collect::<Vec<_>>(),
-            );
-            let (se, other) = if dense {
-                (&f.standard_errors, &f.diagonal_standard_errors)
-            } else {
-                (&f.diagonal_standard_errors, &f.standard_errors)
-            };
-            lines.push_all("se", &se.iter().map(|&s| value(s)).collect::<Vec<_>>());
-            lines.push_all(
-                "info_se_other",
-                &other.iter().map(|&s| value(s)).collect::<Vec<_>>(),
-            );
-            lines.push("loglik", f.log_partial_likelihood);
-            lines.push_opt("c_loglik", f.marginal_log_likelihood);
-            if method == "frailty_search" {
-                lines.push("theta", f.theta);
-            }
+    if method == "frailty_profile" {
+        lines.push_opt("c_loglik", f.marginal_log_likelihood);
+        lines.push("info_theta", f.theta);
+    } else {
+        lines.push_all(
+            "beta",
+            &f.coefficients.iter().map(|&b| value(b)).collect::<Vec<_>>(),
+        );
+        let (se, other) = if dense {
+            (&f.standard_errors, &f.diagonal_standard_errors)
+        } else {
+            (&f.diagonal_standard_errors, &f.standard_errors)
+        };
+        lines.push_all("se", &se.iter().map(|&s| value(s)).collect::<Vec<_>>());
+        lines.push_all(
+            "info_se_other",
+            &other.iter().map(|&s| value(s)).collect::<Vec<_>>(),
+        );
+        lines.push("loglik", f.log_partial_likelihood);
+        lines.push_opt("c_loglik", f.marginal_log_likelihood);
+        if method == "frailty_search" {
+            lines.push("theta", f.theta);
         }
     }
     common::finish(&method, n, &times, &lines);

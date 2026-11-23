@@ -23,7 +23,7 @@ fn simulate(g: usize, seed: u64) -> Sim {
     let mut rows = Vec::new();
     for c in 0..g {
         let z = rng.exp1() * 0.6 + 0.4;
-        let size = 2 + usize::try_from(rng.below(4)).unwrap();
+        let size = 2 + rng.below(4);
         let b = f64::from(u8::from(rng.below(2) == 0));
         for _ in 0..size {
             let a = rng.normal();

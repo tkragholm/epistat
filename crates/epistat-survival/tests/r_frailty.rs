@@ -131,7 +131,7 @@ fn run(d: &Dataset, ties: Ties, theta: Theta, method: Method) -> FrailtyFit {
     if d.stratum.iter().any(|&s| s != 0.0) {
         b = b.stratum(d.stratum.iter().map(|&s| s as u32).collect());
     }
-    if d.weight.iter().any(|&w| w != 1.0) {
+    if d.weight.iter().any(|&w| w - 1.0 != 0.0) {
         b = b.weight(d.weight.clone());
     }
     let buf = b.build().unwrap();

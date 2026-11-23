@@ -1,7 +1,235 @@
 //! Shared gamma frailty Cox models, as `survival::coxph` with
 //! `frailty(cluster, distribution = "gamma")`.
 //!
-//! DOC PLACEHOLDER
+//! # The model
+//!
+//! Row `j` of cluster `i` has the hazard `z_i h_0(t) exp(x_j' beta + o_j)`,
+//! where the frailty `z_i` is gamma distributed with mean 1 and variance
+//! `theta`, shared by the rows of the cluster \[1\] \[2\]. The coefficients are
+//! conditional on the cluster. `theta` measures the dependence within clusters,
+//! and Kendall's tau of two members of a cluster is `theta / (theta + 2)`
+//! \[6\]. Clusters are the cluster column of the [`SurvData`], which is
+//! required. Strata give each stratum its own `h_0` with the frailties shared
+//! across strata, entry times make rows (start, stop] intervals of a counting
+//! process, and case weights and an offset enter as in [`crate::cox::fit`].
+//!
+//! # Penalised partial likelihood
+//!
+//! With `w_i = ln z_i` as parameters and `nu = 1 / theta`, the fit maximises
+//!
+//! ```text
+//! PPL(beta, w) = l(beta, w) - nu sum_i (e^{w_i} - w_i),
+//! ```
+//!
+//! where `l` is the Cox partial log likelihood (Breslow or Efron) with linear
+//! predictor `x_j' beta + o_j + w_{i(j)}` \[4\] \[5\]. `l` does not change when
+//! the same constant is added to every `w_i`, and the penalty is smallest when
+//! the frailties have mean 1, so after every step the `w_i` are shifted to
+//! `mean(e^w) = 1`, which is also where the maximum lies. At the maximum the
+//! score of `w_i` gives `e^{w_i} = (nu + D_i) / (nu + Lambda_i)`, with `D_i` the
+//! weighted events of the cluster and `Lambda_i` its Breslow cumulative hazard
+//! without the frailty, which is the E-step of the EM algorithm below, so for
+//! Breslow ties the two fits have the same solution \[5\].
+//!
+//! # Score and information
+//!
+//! At an event time `t` of a stratum with `d` events, Efron's approximation has
+//! terms `k = 0, ..., d - 1` with weight `u` (the mean case weight of the events)
+//! and fraction `f_k = k / d`, Breslow's one term with `u` the summed weight and
+//! `f = 0`. With `r_j = c_j exp(eta_j)` and the sums `S_0`, `S_1`, `S_2` over the
+//! risk set and `E_0`, `E_1`, `E_2` over the events at `t`, a term has the
+//! denominators `D_r = S_r - f E_r`, as in [`crate::cox`]. The coefficient
+//! block of the information is that of the Cox model. For the frailties, form at
+//! each event time
+//!
+//! ```text
+//! h = sum_k u / D_0          g = sum_k u f_k / D_0
+//! k1 = sum_k u / D_0^2       k2 = sum_k u f_k / D_0^2     k3 = sum_k u f_k^2 / D_0^2
+//! m1 = sum_k u D_1 / D_0^2   m2 = sum_k u f_k D_1 / D_0^2
+//! ```
+//!
+//! and their sums `H`, `M_1` and `K_1` over the event times of the stratum. A row
+//! is in the risk set of every term at a time except its own event time, where
+//! Efron's `k`-th term counts it with weight `1 - f_k`. With `dH_j` the sum of `h`
+//! over the times the row is at risk less `g` at its own event time, and `dM_j`
+//! likewise from `m1` and `m2`, both differences of the running sums:
+//!
+//! ```text
+//! U_{w_i}         = sum_{j in i} (c_j delta_j - r_j dH_j) - nu (e^{w_i} - 1)
+//! I_{beta, w_i}   = sum_{j in i} r_j (x_j dH_j - dM_j)
+//! I_{w_i, w_i}    = sum_{j in i} r_j dH_j - sum_t (k1 R_i^2 - 2 k2 R_i E_i + k3 E_i^2) + nu e^{w_i}
+//! I_{w_i, w_m}    = - sum_t sum_k u (R_i - f_k E_i)(R_m - f_k E_m) / D_0^2
+//! ```
+//!
+//! with `R_i(t)` the risk-set total of cluster `i` and `E_i(t)` its total over
+//! the events at `t`. `R_i` is constant between the entry and exit times of the
+//! cluster's own rows, so the sum over `t` of `k1 R_i^2` is a sum over those
+//! segments of `R_i^2` times the increase of `K_1`, a pass over the cluster's
+//! rows. The frailty block is dense, but its product with a vector `v` needs
+//! only one pass: `q(t) = sum` over the risk set of `r_j v_{i(j)}` is a running
+//! sum, and the product for cluster `i` is a difference of running sums of
+//! `q k1` and `q k2` over the times its rows are at risk. Nothing of size `G^2`
+//! is formed.
+//!
+//! # Algorithm
+//!
+//! Newton's method on `PPL` with the whole information `H`. The step `H^{-1} U`
+//! is solved by conjugate gradients on the `p + G` parameters, preconditioned by
+//! the information with its frailty block replaced by its diagonal `Delta`,
+//! which is solved exactly through the Schur complement
+//! `A - B' Delta^{-1} B` of the coefficient block `A` and the cross block `B`.
+//! The off-diagonal part of the frailty block is small when clusters are small
+//! against the risk sets, so few iterations are needed; the solve stops at a
+//! relative residual of `1e-12` in the norm of the preconditioner. A step that
+//! lowers `PPL` is halved, up to 40 times. The iteration has converged when the
+//! decrement `U' H^{-1} U` at the last accepted point is at most
+//! `FrailtyOptions::tolerance`; the step it predicts is then taken. The
+//! decrement is the squared length of the step in standard errors. At theta = 0
+//! the model is the Cox model, fitted by Newton's method on the coefficients
+//! alone with the frailties at 0. Each fit of a search starts from the fit at
+//! the nearest theta already fitted.
+//!
+//! `coxph` iterates with the diagonal form of the frailty block (`sparse = TRUE`,
+//! its default for more than five clusters) or with the whole information as
+//! ordinary penalised columns (`sparse = FALSE`). Both solve the same score
+//! equations, so the estimates are the same; the first converges linearly, and
+//! the second needs `G^2` memory.
+//!
+//! # Covariance matrices
+//!
+//! `covariance` is the coefficient block of `H^{-1}`, found by `p` solves of the
+//! conjugate gradient method, `var` of `coxph(sparse = FALSE)`, and
+//! `covariance_sandwich` is that of `H^{-1} (H - P) H^{-1}` with `P` the
+//! penalty's curvature `nu e^{w_i}`, its `var2`. `diagonal_covariance` is
+//! `(A - B' Delta^{-1} B)^{-1}`, the variance of `coxph(sparse = TRUE)`, with its
+//! own sandwich and the frailty variances `1 / Delta_i + b_i' V b_i / Delta_i^2`
+//! (`fvar`). The two forms differ by a few percent \[5\]; on `kidney` the diagonal
+//! form's standard errors are 2 percent larger. Both condition on theta and
+//! ignore its uncertainty. When a conjugate gradient solve does not meet its
+//! tolerance in 500 iterations the exact covariances are `None`.
+//!
+//! # The profile likelihood of theta
+//!
+//! For Breslow ties and case weights of 1 the marginal likelihood, with the
+//! frailties integrated out and the baseline hazard profiled out, is
+//!
+//! ```text
+//! sum over events (x'beta + o + ln dH_0) + sum_i [ln Gamma(nu + D_i) - ln Gamma(nu)
+//!     + D_i ln theta - (nu + D_i) ln(1 + theta Lambda_i)]
+//! ```
+//!
+//! \[2\] \[3\] \[6\]. At the maximum over `beta` and `h_0` it equals the corrected
+//! likelihood of `coxph`,
+//!
+//! ```text
+//! c(theta) = l + nu sum_i w_i + sum_i [D_i - nu ln(1 + D_i / nu) + sum_{m=1}^{D_i} ln(1 - m / (nu + D_i))],
+//! ```
+//!
+//! (`frailty.gammacon`) with `D_i` the unweighted events, up to the constant
+//! `sum_k (d_k ln d_k - d_k)` over the event times, which `c` leaves out so that
+//! `c(0)` is the Cox partial log likelihood. `marginal_log_likelihood` is `c`, on
+//! that scale. The two forms of the correction are computed without
+//! cancellation for large `nu`. With Efron ties `c` is the same expression with
+//! Efron's `l`, as in `coxph`, and is not a likelihood. With case weights other
+//! than 1 there is no marginal likelihood: `marginal_log_likelihood` is `None`,
+//! and theta can only be fixed.
+//!
+//! [`Theta::Profile`] maximises `c` over `ln theta`: it fits theta = 0, 1 and
+//! 1/4, steps by factors of 4 until the maximum is bracketed, and then runs
+//! Brent's method ([`epistat_optim::brent`]) on the bracket. When `c` still rises
+//! towards 0 at the last power of 4 above `1e-6`, about `4e-6`, the estimate is
+//! 0 (`ThetaStatus::Boundary`), so a maximum below that is reported as 0; when it
+//! still rises at `1e4` the fit is at `1e4` and not an estimate
+//! (`ThetaStatus::Unbounded`). [`Theta::Coxph`] repeats `coxph`'s search, whose
+//! estimate is the last theta tried and need not be the maximum: on `kidney` with
+//! Efron ties it stops at 0.4122 where the maximum is at 0.4078. The likelihood
+//! ratio test of theta = 0 compares `c` with the Cox model on the boundary of the
+//! parameter space, with the 50:50 mixture of 0 and chi-square on one degree of
+//! freedom of Self and Liang \[8\].
+//!
+//! # EM
+//!
+//! [`Method::Em`] alternates a Cox fit of [`crate::cox::fit`] with the offset
+//! `o_j + ln z_i` (the M-step for `beta` and the Breslow `h_0`) and the E-step
+//! `z_i = (nu + D_i) / (nu + Lambda_i)` \[2\] \[3\], and computes the marginal
+//! likelihood above from the gamma integral, on the scale of `c`. It stops when
+//! the marginal likelihood changes by less than its tolerance, relative. It
+//! converges linearly, often in tens of steps, each a Cox fit, and is offered as
+//! an independent route to the same estimate and likelihood, for Breslow ties
+//! and case weights of 1 only. Its covariance is that of the penalised fit at
+//! the EM solution.
+//!
+//! # Entry times
+//!
+//! Entry times are the start of the rows' intervals at risk, as in `coxph`. The
+//! gamma distribution of the frailties is then that of the clusters as they are
+//! observed. This is right for follow-up split into intervals and for
+//! time-varying covariates; it is not right when clusters enter late and are
+//! selected by having survived to entry, whose frailties are then not gamma
+//! with mean 1 \[7\]. The likelihood corrected for such selection is not built.
+//!
+//! # Results that are not numbers, and invalid input
+//!
+//! An aliased column, constant or a linear combination of those before it over
+//! the rows used (by the `L D L'` factorisation of their weighted correlation
+//! matrix with a pivot floor of `1e-10`), has `None` for its coefficient and its
+//! covariances. A cluster whose rows all have weight zero has no frailty. A
+//! missing cluster column, exact ties, a theta that is negative or not finite,
+//! an estimated theta or EM with case weights other than 1, EM with Efron ties,
+//! no event, and an information that is not positive definite at a trial point
+//! are errors.
+//!
+//! # Scale
+//!
+//! An evaluation is one sweep over the rows in each stratum, `O(n p^2)`, a pass
+//! over the rows for the frailty terms, `O(n p)`, and a pass over the clusters'
+//! rows in time order. A conjugate gradient iteration is `O(n + G p)`. The
+//! memory is `O(n p + G p + T p)` with `T` event times. Rows are sorted once.
+//! The work is serial and in a fixed order, so the result does not depend on the
+//! number of threads. At `10^5` rows in `2.5 10^4` clusters a fit at a fixed
+//! theta takes about 0.15 s on an M-series Mac and the profile search 1.3 s.
+//!
+//! # Agreement with R
+//!
+//! The tests compare with `coxph` from `survival` 3.8.12 at fixed theta with
+//! both variance forms, Breslow and Efron ties, strata, entry times, offsets and
+//! case weights, up to 5,000 clusters, with `coxph`'s search step by step, and
+//! with `optimize` on its corrected likelihood. Coefficients and frailties agree
+//! to well within bounds derived from R's stopping rule, about `1e-12` standard
+//! errors against the dense fits. Two defects of `coxph`'s C code are avoided
+//! there: with case weights the diagonal form of `coxph(sparse = TRUE)` leaves
+//! out the case weights of the events from the diagonal of the frailty block,
+//! so its standard errors are wrong, and with case weights, Efron ties and
+//! entry times `coxph` sums the squared weights into Efron's correction and does
+//! not converge; that case is compared with a transcription of the penalised
+//! likelihood on `coxph`'s own unpenalised fit.
+//!
+//! # Not built
+//!
+//! The log-normal frailty of `coxme`, the standard error and the profile
+//! interval of theta, the exact variances of the frailties, and the correction
+//! for late entry.
+//!
+//! # References
+//!
+//! 1. Vaupel JW, Manton KG, Stallard E. The impact of heterogeneity in individual
+//!    frailty on the dynamics of mortality. Demography. 1979;16(3):439-54.
+//! 2. Nielsen GG, Gill RD, Andersen PK, Sorensen TIA. A counting process approach
+//!    to maximum likelihood estimation in frailty models. Scand J Stat.
+//!    1992;19(1):25-43.
+//! 3. Klein JP. Semiparametric estimation of random effects using the Cox model
+//!    based on the EM algorithm. Biometrics. 1992;48(3):795-806.
+//! 4. Ripatti S, Palmgren J. Estimation of multivariate frailty models using
+//!    penalized partial likelihood. Biometrics. 2000;56(4):1016-22.
+//! 5. Therneau TM, Grambsch PM, Pankratz VS. Penalized survival models and
+//!    frailty. J Comput Graph Stat. 2003;12(1):156-75.
+//! 6. Hougaard P. Analysis of Multivariate Survival Data. New York: Springer;
+//!    2000.
+//! 7. van den Berg GJ, Drepper B. Inference for shared-frailty survival models
+//!    with left-truncated data. Econom Rev. 2016;35(6):1075-98.
+//! 8. Self SG, Liang KY. Asymptotic properties of maximum likelihood estimators
+//!    and likelihood ratio tests under nonstandard conditions. J Am Stat Assoc.
+//!    1987;82(398):605-10.
 
 mod em;
 mod engine;
@@ -21,8 +249,8 @@ use crate::ldl;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
-/// Smallest theta the profile search tries; below it the variance is
-/// reported as 0.
+/// The profile search reports theta as 0 when the profile still rises at the
+/// last power of 4 above this.
 const THETA_MIN: f64 = 1e-6;
 /// Largest theta the profile search tries.
 const THETA_MAX: f64 = 1e4;
@@ -127,8 +355,8 @@ pub enum ThetaStatus {
     Fixed,
     /// A maximum of the profile inside the range searched.
     Interior,
-    /// The profile rises towards theta = 0, and theta is reported as 0: the
-    /// model is the Cox model and every frailty is 1.
+    /// The profile rises towards theta = 0 down to about `4e-6`, and theta is
+    /// reported as 0: the model is the Cox model and every log frailty is 0.
     Boundary,
     /// The profile was still rising at the largest theta tried, `1e4`; the
     /// fit is at that theta and is not an estimate.
@@ -450,7 +678,7 @@ impl Search<'_, '_> {
 /// The maximum of the profile marginal log likelihood on `ln theta`. Returns
 /// the index of the chosen fit and its status.
 fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaStatus)> {
-    let m0 = search.run(0.0)?;
+    search.run(0.0)?;
     let step = 4.0_f64.ln();
     let (t_min, t_max) = (THETA_MIN.ln(), THETA_MAX.ln());
     let f = |s: &mut Search<'_, '_>, t: f64| -> Result<f64> { Ok(-s.run(t.exp())?) };
@@ -460,13 +688,7 @@ fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaS
         loop {
             let t2 = t1 - step;
             if t2 < t_min {
-                let best = if m0 >= -f1 { 0 } else { search.fits.len() - 1 };
-                let status = if best == 0 {
-                    ThetaStatus::Boundary
-                } else {
-                    ThetaStatus::Interior
-                };
-                return Ok((best, status));
+                return Ok((0, ThetaStatus::Boundary));
             }
             let f2 = f(search, t2)?;
             if f2 > f1 {
@@ -584,7 +806,7 @@ fn coxph_search(
             1 => (1.0, false),
             2 => {
                 if values[1] < values[0] + 1.0 {
-                    (0.5 * (thetas[0] + thetas[1]), false)
+                    (f64::midpoint(thetas[0], thetas[1]), false)
                 } else {
                     (2.0 * thetas[1], false)
                 }
@@ -686,6 +908,10 @@ fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
 /// estimated or EM is asked for and a case weight is not 1, when EM is asked
 /// for with Efron ties, and when a fit meets a risk score that is not finite
 /// or an information that is not positive definite.
+///
+/// # Panics
+///
+/// Only on a broken internal invariant.
 #[expect(
     clippy::too_many_lines,
     reason = "the checks, the search and the assembly of the result in order"

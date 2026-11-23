@@ -86,7 +86,7 @@ fn run(entry: bool, weights: bool, strata: bool, opts: &FrailtyOptions<'_>) -> u
         });
         status.push(i32::from(t <= c));
         cluster.push(u32::try_from(i / 3).unwrap());
-        weight.push([0.5, 1.0, 2.0][usize::try_from(rng.below(3)).unwrap()]);
+        weight.push([0.5, 1.0, 2.0][rng.below(3)]);
         stratum.push(u32::try_from(rng.below(2)).unwrap());
         x[(i, 0)] = a;
         x[(i, 1)] = b;

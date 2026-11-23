@@ -12,6 +12,12 @@
 //! the spacing below which the search does not tell points apart, and the
 //! minimum within `tol1`.
 
+#![expect(
+    clippy::excessive_precision,
+    clippy::approx_constant,
+    reason = "R's values as R printed them, with 17 significant digits"
+)]
+
 use epistat_optim::brent::minimise;
 
 type Case = (&'static str, f64, f64, f64, f64, &'static [f64]);
