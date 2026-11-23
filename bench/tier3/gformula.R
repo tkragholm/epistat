@@ -1,7 +1,7 @@
 # The R side of the g-formula benchmark: gfoRmula::gformula on the data file
 # written by crates/epistat-causal/benches/tier3_gformula.rs, one process per
 # method and size, writing the numbers the Rust side writes. See
-# gformula_run.sh.
+# bench/run.sh.
 #
 # Usage: Rscript gformula.R N METHOD SCRATCH
 # Environment: OUT (results, default SCRATCH/out) and REPS (default 3).

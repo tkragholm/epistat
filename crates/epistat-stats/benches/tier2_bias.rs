@@ -1,6 +1,6 @@
 //! Wall time of the probabilistic bias analysis, set against
 //! `episensr::probsens` (`bench/tier2/bench.R`). The driver and the
-//! environment are those of `bench/tier1/common.rs`; `bench/tier2/run.sh` is
+//! environment are those of `bench/tier1/common.rs`; `bench/run.sh` is
 //! the driver.
 //!
 //! `N` is the number of draws. Methods: `bias_exposure` (non-differential

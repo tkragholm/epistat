@@ -1,7 +1,7 @@
 //! Wall time of the attributable fraction of a logistic model, cross-sectional
 //! and case-control, with a confounder, an interaction and clusters of four
 //! rows. The driver and the environment are those of `bench/tier1/common.rs`,
-//! run by `bench/tier2/run.sh`; the data are generated in the process from a
+//! run by `bench/run.sh`; the data are generated in the process from a
 //! fixed seed and the fit is not timed.
 //!
 //! Methods: `af_cross` and `af_case_control`, `N` rows.
