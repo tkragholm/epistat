@@ -135,7 +135,7 @@ pub fn informative_strata(data: &SurvData<'_>, x: MatRef<'_, f64>) -> Result<Inf
     }
 }
 
-#[allow(
+#[expect(
     clippy::float_cmp,
     reason = "two covariate values are the same when they are equal as numbers"
 )]

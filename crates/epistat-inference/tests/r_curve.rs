@@ -109,7 +109,10 @@ fn rcs_curves_match_predict() {
             units(&mut worst, curve.lower[i], case.lower[i], 1e-10, 1e-10);
             units(&mut worst, curve.upper[i], case.upper[i], 1e-10, 1e-10);
         }
-        let at_reference = case.grid.iter().position(|&x| x == case.reference);
+        let at_reference = case
+            .grid
+            .iter()
+            .position(|&x| x.to_bits() == case.reference.to_bits());
         if let Some(i) = at_reference {
             assert_eq!(curve.estimate[i], 0.0, "{}", case.name);
             assert_eq!(curve.se[i], 0.0, "{}", case.name);

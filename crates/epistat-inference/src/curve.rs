@@ -201,7 +201,8 @@ pub fn contrast_curve<B: Basis + ?Sized>(
             if free.is_empty() {
                 z
             } else {
-                sup_t(&rows, &free, &se, &v, p, alpha, draws, seed)?
+                let a = scaled_rows(&rows, &free, &se, &v, p)?;
+                sup_t(&a, p, alpha, draws, seed)?
             }
         }
     };
@@ -225,32 +226,24 @@ pub fn contrast_curve<B: Basis + ?Sized>(
     })
 }
 
-/// The `1 - alpha` quantile of the maximum over the points `free` of
-/// `|d' beta| / se`, with `beta` normal with covariance `v` (`p x p`). With
-/// the correlation `C = L L'` of `v` and its standard deviations `s`, `beta`
-/// is `diag(s) L z` for `z` standard normal in `p` dimensions, so the matrix
-/// `A = diag(1 / se) D diag(s) L` has the curve's deviations `A z`. The curve
-/// has at most rank `p`, which a factor of its own covariance over the grid
-/// could not express.
-#[allow(clippy::too_many_arguments)]
-fn sup_t(
+/// The matrix `A = diag(1 / se) D diag(s) L` of the points `free`, row-major
+/// with `p` columns, where `D` holds the contrast rows, `s` the standard
+/// deviations of the coefficients (covariance `v`, `p x p`) and `L L'` their
+/// correlation. With `z` standard normal in `p` dimensions the standardised
+/// deviations of the curve are `A z`, since the coefficients are
+/// `diag(s) L z`. The curve has at most rank `p`, which a factor of its own
+/// covariance over the grid could not express.
+fn scaled_rows(
     rows: &[f64],
     free: &[usize],
     se: &[f64],
     v: &[f64],
     p: usize,
-    alpha: f64,
-    draws: usize,
-    seed: u64,
-) -> Result<f64, InferenceError> {
-    if draws == 0 {
-        return Err(InferenceError::Empty);
-    }
+) -> Result<Vec<f64>, InferenceError> {
     let covariance = epistat_linalg::Mat::from_fn(p, p, |i, j| v[i * p + j]);
     let lower = lower_cholesky(&correlation(covariance.as_ref())?, p)?;
     let sd: Vec<f64> = (0..p).map(|i| v[i * p + i].sqrt()).collect();
-    let m = free.len();
-    let mut a = vec![0.0; m * p];
+    let mut a = vec![0.0; free.len() * p];
     for (k, &r) in free.iter().enumerate() {
         let d = &rows[r * p..(r + 1) * p];
         for c in 0..p {
@@ -261,6 +254,17 @@ fn sup_t(
             a[k * p + c] = s / se[r];
         }
     }
+    Ok(a)
+}
+
+/// The `1 - alpha` quantile of the largest `|A z|` over `draws` standard
+/// normal vectors `z` of length `p`, replicate `r` drawn from
+/// `replicate_seed(seed, r)`.
+fn sup_t(a: &[f64], p: usize, alpha: f64, draws: usize, seed: u64) -> Result<f64, InferenceError> {
+    if draws == 0 {
+        return Err(InferenceError::Empty);
+    }
+    let m = a.len() / p;
     let mut maxima: Vec<f64> = (0..draws as u64)
         .into_par_iter()
         .map_init(
