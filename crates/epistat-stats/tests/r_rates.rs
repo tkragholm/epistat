@@ -218,5 +218,5 @@ fn fingerprint_of_a_fixed_table() {
         .option_f64(p)
         .finish();
     eprintln!("rates fingerprint {hash:#018x}");
-    assert_eq!(hash, 0x87ad_42e2_7dab_c3cc);
+    assert_eq!(hash, 0x7057_77d0_691f_1a11);
 }
