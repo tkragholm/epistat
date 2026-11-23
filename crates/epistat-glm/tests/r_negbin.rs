@@ -15,10 +15,12 @@ struct Reference {
 #[derive(Deserialize)]
 struct Scenario {
     name: String,
+    link: String,
     x: Vec<Vec<f64>>,
     y: Vec<f64>,
     weights: Option<Vec<f64>>,
     offset: Option<Vec<f64>>,
+    start: Option<Vec<f64>>,
     runs: Vec<Run>,
 }
 
@@ -78,8 +80,13 @@ fn negative_binomial_matches_glm_nb() {
             } else {
                 ThetaRule::RParity
             };
+            let link = match scenario.link.as_str() {
+                "identity" => Link::Identity,
+                _ => Link::Log,
+            };
             let model = if run.tight {
                 NegBin {
+                    link,
                     tolerance: 1e-14,
                     max_iterations: 200,
                     theta_rule: rule,
@@ -87,16 +94,18 @@ fn negative_binomial_matches_glm_nb() {
                 }
             } else {
                 NegBin {
+                    link,
                     theta_rule: rule,
                     ..NegBin::new()
                 }
             };
             let fit = model
-                .fit(
+                .fit_from(
                     x.as_ref(),
                     &scenario.y,
                     scenario.weights.as_deref(),
                     scenario.offset.as_deref(),
+                    scenario.start.as_deref(),
                 )
                 .unwrap();
             let label = format!("{} tight {}", scenario.name, run.tight);
@@ -168,6 +177,33 @@ fn negative_binomial_matches_glm_nb() {
         "worst relative deviation of theta: default {:e}, tight {:e}",
         worst[0], worst[1]
     );
+}
+
+/// With an offset the identity link has no valid first fit from the default
+/// start, in R and here, and starting coefficients make it fit.
+#[test]
+fn identity_link_with_an_offset_needs_starting_coefficients() {
+    let r = reference();
+    let scenario = r
+        .scenarios
+        .iter()
+        .find(|s| s.name == "identity_link_offset")
+        .unwrap();
+    let x = matrix(&scenario.x);
+    let model = NegBin {
+        link: Link::Identity,
+        ..NegBin::new()
+    };
+    let without = model.fit(x.as_ref(), &scenario.y, None, scenario.offset.as_deref());
+    assert!(matches!(without, Err(epistat_glm::GlmError::NoValidStart)));
+    let short = model.fit_from(
+        x.as_ref(),
+        &scenario.y,
+        None,
+        scenario.offset.as_deref(),
+        Some(&[1.0]),
+    );
+    assert!(matches!(short, Err(epistat_glm::GlmError::Length { .. })));
 }
 
 #[test]

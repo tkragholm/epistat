@@ -28,7 +28,7 @@ run_nb <- function(sc, tight, link = "log") {
   fit <- tryCatch(
     withCallingHandlers(
       eval(bquote(glm.nb(sc$y ~ sc$x - 1, weights = sc$weights, offset = sc$offset,
-                         control = ctrl, link = .(as.name(link))))),
+                         control = ctrl, link = .(as.name(link)), start = .(sc$start)))),
       message = function(m) {
         if (grepl("^Theta\\(", conditionMessage(m))) steps <<- steps + 1
         invokeRestart("muffleMessage")
@@ -54,7 +54,7 @@ scenarios <- list()
 add <- function(name, sc, link = "log") {
   scenarios[[length(scenarios) + 1]] <<- list(
     name = name, link = link, x = unname(sc$x), y = sc$y,
-    weights = sc$weights, offset = sc$offset,
+    weights = sc$weights, offset = sc$offset, start = sc$start,
     runs = list(run_nb(sc, FALSE, link), run_nb(sc, TRUE, link)))
 }
 
@@ -85,6 +85,26 @@ for (nm in c("quasipoisson", "quasibinomial")) {
     dispersion = sm$dispersion, df_residual = fit$df.residual,
     deviance = fit$deviance, iter = fit$iter)
 }
+
+# The identity link needs positive means, so the covariates are non-negative
+# and the coefficients positive; R then fits it from its default start, the
+# Poisson fit of y + 0.1. With an offset it cannot find a start and the
+# true coefficients are given as `start`. Drawn after everything else so that the earlier
+# scenarios keep their random numbers.
+sim_identity <- function(n, theta, beta) {
+  x1 <- rbinom(n, 1, 0.4)
+  x2 <- runif(n, 0, 3)
+  x <- cbind(1, x1, x2)
+  list(x = x, y = rnbinom(n, mu = drop(x %*% beta), size = theta))
+}
+add("identity_link", sim_identity(n, 3, c(2, 1.5, 0.8)), "identity")
+add("identity_link_offset", {
+  s <- sim_identity(n, 1.5, c(1, 2, 0.5))
+  s$offset <- runif(n, 0, 2)
+  s$y <- rnbinom(n, mu = drop(s$x %*% c(1, 2, 0.5)) + s$offset, size = 1.5)
+  s$start <- c(1, 2, 0.5)
+  s
+}, "identity")
 
 cat(toJSON(list(r = R.version.string, mass = as.character(packageVersion("MASS")),
                 scenarios = scenarios, quasi = quasi),
