@@ -379,20 +379,21 @@ pub struct MtpModel {
 /// Component-wise acceptance rates from the MCMC sampler, over all iterations.
 ///
 /// `alpha`, `beta` and `omega_sq` are proposed together, so the three rates are equal.
+/// A rate is `None` when its component had no proposals.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MtpAcceptanceRates {
     /// Acceptance rate of the binary-part coefficients.
-    pub alpha: f64,
+    pub alpha: Option<f64>,
     /// Acceptance rate of the mean coefficients.
-    pub beta: f64,
+    pub beta: Option<f64>,
     /// Acceptance rate of the subject effects.
-    pub random_effects: f64,
+    pub random_effects: Option<f64>,
     /// Acceptance rate of the family effects.
-    pub family_effects: f64,
+    pub family_effects: Option<f64>,
     /// Acceptance rate of kappa.
-    pub kappa: f64,
+    pub kappa: Option<f64>,
     /// Acceptance rate of omega squared.
-    pub omega_sq: f64,
+    pub omega_sq: Option<f64>,
 }
 
 /// Sampler diagnostics summary.

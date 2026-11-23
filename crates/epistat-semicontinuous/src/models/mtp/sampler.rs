@@ -990,7 +990,7 @@ mod tests {
             .diagnostics
             .acceptance_rates
             .expect("acceptance rates should be present");
-        assert!(rates.family_effects > 0.0);
+        assert!(rates.family_effects.expect("family effects were proposed") > 0.0);
     }
 
     #[test]
