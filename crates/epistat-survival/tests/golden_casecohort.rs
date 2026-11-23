@@ -2,7 +2,11 @@
 //! seeded data, as an FNV-1a digest of the `to_bits` of each output with its
 //! length. To record again, run with `GOLDEN_RECORD=1 -- --nocapture` and paste
 //! the lines.
+//!
+//! The bits depend on the platform's `ln` and `exp`, so the test runs only on
+//! aarch64 macOS, where it was recorded.
 
+#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "the inputs are a few thousand rows, far below the limits of the casts"

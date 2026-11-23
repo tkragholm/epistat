@@ -53,7 +53,14 @@ fn a_small_cohort_by_hand() {
     assert!(weights(&inc, &sampled, &case).is_err());
     let sampled = [false, false, true, false, true];
     let w = weights(&inc, &sampled, &case).unwrap();
-    assert_eq!(w, [0.0, 1.0, 3.0, 1.0, 1.0]);
+    // The probability of person 2 is `-expm1(ln1p(-q))` with `q` the double
+    // nearest 1/3. Each call is within one unit in the last place in the maths
+    // libraries of the platforms, and both are well conditioned here, so the
+    // inverse is within a relative 4 epsilon of 3, and its last bit depends on
+    // the platform.
+    for (g, e) in w.iter().zip([0.0, 1.0, 3.0, 1.0, 1.0]) {
+        assert!((g - e).abs() <= 4.0 * f64::EPSILON * e, "{g} {e}");
+    }
 }
 
 #[test]
