@@ -41,6 +41,10 @@ fn hash_fit(f: &FlexParFit) -> Fingerprint {
         .f64(f.n_events)
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a table of which features each pinned case switches on"
+)]
 struct Case {
     name: &'static str,
     entry: bool,
