@@ -24,6 +24,8 @@
 //!   covariates as `coxph(tt = )` ([`cox::fit_tt`]).
 //! - [`clogit`]: conditional logistic regression for matched sets, as `clogit`,
 //!   with the exact partial likelihood of [`cox`] by default.
+//! - [`informative`]: the matched sets and strata that carry information about
+//!   a covariate, and their counts.
 //! - [`fine_gray`]: the Fine-Gray model on a design matrix, fitted by a sweep
 //!   over the event times with censoring strata, and its weighted rows as
 //!   `survival::finegray` writes them.
@@ -118,6 +120,7 @@ pub mod condense;
 pub mod cox;
 mod error;
 pub mod fine_gray;
+pub mod informative;
 mod ldl;
 pub mod lexis;
 pub mod markov;
