@@ -1,7 +1,7 @@
 //! Dense linear algebra on [faer] whose results do not depend on the number
 //! of threads: solves that fall back through a chosen sequence of
 //! factorisations, and products over the rows of a design matrix computed in
-//! fixed blocks, and the B-spline and polynomial bases of series estimators.
+//! fixed blocks, and the polynomial, B-spline and spline bases of series and regression estimators.
 //!
 //! [`Mat`], [`MatRef`] and [`Col`] are faer's matrix and column types,
 //! re-exported so that a crate that takes or returns them need not depend on
@@ -26,7 +26,8 @@
 //!   rule.
 //! - [`design`] finds linearly independent columns and selects rows and
 //!   columns.
-//! - [`basis`] holds the polynomial and B-spline bases.
+//! - [`basis`] holds the polynomial, B-spline, restricted cubic spline and
+//!   natural cubic spline bases, Harrell's knot rules and design matrices.
 //! - [`eigen`] holds a Jacobi eigendecomposition of a small symmetric matrix and
 //!   the generalised inverse and its quadratic form.
 #![warn(missing_docs)]

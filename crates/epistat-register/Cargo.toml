@@ -1,6 +1,6 @@
 [package]
 name = "epistat-register"
-description = "Calendar-year person-time, interval merging, connected components over shared keys, constant-price deflation, ICD-10 normalisation and age for register data"
+description = "Calendar-year person-time, interval merging, connected components over shared keys, constant-price deflation, ICD-10 normalisation, age, code sets for ICD-10, ICD-8 and ATC, event definitions, comorbidity indices and drug exposure episodes for register data"
 keywords = ["register-data", "person-time", "intervals", "cpi", "epidemiology"]
 categories = ["algorithms", "science"]
 readme = "README.md"
@@ -24,6 +24,8 @@ thiserror = "2"
 serde = { version = "1", optional = true }
 
 [dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [lints]

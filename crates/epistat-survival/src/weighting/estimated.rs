@@ -42,7 +42,10 @@ pub enum Censoring<'a> {
         at: WeightAt,
     },
     /// The pooled logistic model of [`pooled::fit`](super::pooled::fit), whose
-    /// rows are those of the data.
+    /// rows are those of the data. A fit of
+    /// [`pooled::fit_pooled`](super::pooled::fit_pooled) to a treatment that
+    /// changes over time goes here too: its weights multiply the rows and its
+    /// models add their terms in the same way.
     Pooled {
         /// The fit.
         fit: &'a PooledIpcw<'a>,

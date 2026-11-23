@@ -14,7 +14,10 @@
 //! and `c_i` is `-(1 - p_i)` for a treated and `p_i` for a control subject
 //! under the average treatment effect, 1 for a control subject under the
 //! effect on the treated, `-1` for a treated subject under the effect on the
-//! controls, and 0 otherwise.
+//! controls, `-p_i` for a treated and `1 - p_i` for a control subject under overlap
+//! weights, `-1` for a treated subject with `p_i > 1/2` and 1 for a control subject
+//! with `p_i < 1/2` under matching weights, as the average treatment effect inside
+//! the optimal subset and 0 outside it, and 0 otherwise.
 
 use epistat_linalg::{Attempt, Mat, Method, weighted_gram};
 
@@ -43,6 +46,12 @@ impl Iptw<'_> {
             (Estimand::Ate, false) => p,
             (Estimand::Att, false) => 1.0,
             (Estimand::Atc, true) => -1.0,
+            (Estimand::Ato, true) => -p,
+            (Estimand::Ato, false) => 1.0 - p,
+            (Estimand::Atm, true) if p > 0.5 => -1.0,
+            (Estimand::Atm, false) if p < 0.5 => 1.0,
+            (Estimand::Atos, true) if self.weights[i] != 0.0 => -(1.0 - p),
+            (Estimand::Atos, false) if self.weights[i] != 0.0 => p,
             _ => 0.0,
         }
     }

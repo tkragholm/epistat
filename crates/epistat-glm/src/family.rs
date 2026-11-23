@@ -17,7 +17,16 @@
 //! Poisson     μ         2 [y ln(y/μ) - (y - μ)]                        y + 0.1
 //! Gamma       μ²        -2 [ln(y/μ) - (y - μ)/μ]                      y
 //! Tweedie(p)  μ^p       see below                                      y, or 0.1 if y = 0
+//! NegBin(θ)   μ + μ²/θ  2 [y ln(max(1,y)/μ) - (y+θ) ln((y+θ)/(μ+θ))]  y, or 1/6 if y = 0
 //! ```
+//!
+//! The negative binomial family of type 2 \[4\] has variance `μ + μ²/θ` for a
+//! given `θ`, and its deviance is that of `MASS::negative.binomial`. `θ` is
+//! estimated by [`crate::negbin`]. The quasi-Poisson and quasi-binomial
+//! families have the variance and deviance of the Poisson and binomial
+//! families, with the dispersion estimated by the Pearson statistic instead of
+//! fixed at 1, so the standard errors are scaled by its square root and the
+//! fit has no likelihood.
 //!
 //! A term `y ln(y/μ)` is 0 when `y = 0`. For the Poisson family with `y = 0` the
 //! deviance is `2 μ`. In the gamma deviance a response of 0 is treated as
@@ -46,11 +55,13 @@
 //! Tweedie, p < 2     finite, y >= 0                 finite, μ > 0
 //! Tweedie, p >= 2    finite, y > 0                  finite, μ > 0
 //! Gamma              finite, y > 0                  finite, μ > 0
+//! NegBin, QuasiPoisson   finite, y >= 0             finite, μ > 0
+//! QuasiBinomial      0 <= y <= 1                    0 < μ < 1
 //! ```
 //!
 //! An invalid response is an error before fitting. An invalid mean during
-//! fitting triggers step halving. The binomial and Poisson dispersion is fixed
-//! at 1, and that of the other families is estimated.
+//! fitting triggers step halving. The binomial, Poisson and negative binomial
+//! dispersion is fixed at 1, and that of the other families is estimated.
 //!
 //! # Links
 //!
@@ -82,6 +93,8 @@
 //!    model densities. Stat Comput. 2005;15(4):267-80.
 //! 3. McCullagh P, Nelder JA. Generalized Linear Models. 2nd ed. London: Chapman
 //!    and Hall; 1989. Chapter 2.
+//! 4. Venables WN, Ripley BD. Modern Applied Statistics with S. 4th ed. New
+//!    York: Springer; 2002. Section 7.4.
 
 #![expect(
     clippy::float_cmp,
@@ -122,6 +135,16 @@ pub enum Family {
         /// The exponent of the variance function.
         power: f64,
     },
+    /// Negative binomial of type 2: variance `mu + mu^2 / theta` for a given
+    /// finite `theta > 0`. The dispersion is fixed at 1.
+    NegativeBinomial {
+        /// The shape `theta`.
+        theta: f64,
+    },
+    /// The Poisson variance with the dispersion estimated.
+    QuasiPoisson,
+    /// The binomial variance with the dispersion estimated.
+    QuasiBinomial,
 }
 
 const EPS: f64 = f64::EPSILON;
@@ -232,10 +255,11 @@ impl Family {
     pub(crate) fn variance(self, mu: f64) -> f64 {
         match self {
             Self::Gaussian => 1.0,
-            Self::Binomial => mu * (1.0 - mu),
-            Self::Poisson => mu,
+            Self::Binomial | Self::QuasiBinomial => mu * (1.0 - mu),
+            Self::Poisson | Self::QuasiPoisson => mu,
             Self::Gamma => mu * mu,
             Self::Tweedie { power } => mu.powf(power),
+            Self::NegativeBinomial { theta } => mu + mu * mu / theta,
         }
     }
 
@@ -244,8 +268,14 @@ impl Family {
         let y_log_y = |a: f64, b: f64| if a > 0.0 { a * (a / b).ln() } else { 0.0 };
         match self {
             Self::Gaussian => weight * (y - mu) * (y - mu),
-            Self::Binomial => 2.0 * weight * (y_log_y(y, mu) + y_log_y(1.0 - y, 1.0 - mu)),
-            Self::Poisson => {
+            Self::Binomial | Self::QuasiBinomial => {
+                2.0 * weight * (y_log_y(y, mu) + y_log_y(1.0 - y, 1.0 - mu))
+            }
+            Self::NegativeBinomial { theta } => {
+                2.0 * weight
+                    * (y * (y.max(1.0) / mu).ln() - (y + theta) * ((y + theta) / (mu + theta)).ln())
+            }
+            Self::Poisson | Self::QuasiPoisson => {
                 if y > 0.0 {
                     2.0 * weight * (y * (y / mu).ln() - (y - mu))
                 } else {
@@ -282,8 +312,15 @@ impl Family {
     pub(crate) fn start(self, y: f64, weight: f64) -> f64 {
         match self {
             Self::Gaussian | Self::Gamma => y,
-            Self::Binomial => (weight * y + 0.5) / (weight + 1.0),
-            Self::Poisson => y + 0.1,
+            Self::Binomial | Self::QuasiBinomial => (weight * y + 0.5) / (weight + 1.0),
+            Self::Poisson | Self::QuasiPoisson => y + 0.1,
+            Self::NegativeBinomial { .. } => {
+                if y == 0.0 {
+                    1.0 / 6.0
+                } else {
+                    y
+                }
+            }
             Self::Tweedie { .. } => {
                 if y == 0.0 {
                     y + 0.1
@@ -298,8 +335,10 @@ impl Family {
     pub(crate) fn valid_response(self, y: f64) -> bool {
         match self {
             Self::Gaussian => y.is_finite(),
-            Self::Binomial => (0.0..=1.0).contains(&y),
-            Self::Poisson => y.is_finite() && y >= 0.0,
+            Self::Binomial | Self::QuasiBinomial => (0.0..=1.0).contains(&y),
+            Self::Poisson | Self::QuasiPoisson | Self::NegativeBinomial { .. } => {
+                y.is_finite() && y >= 0.0
+            }
             // Zero has probability mass only for powers between 1 and 2.
             Self::Tweedie { power } => y.is_finite() && (y > 0.0 || (y == 0.0 && power < 2.0)),
             Self::Gamma => y.is_finite() && y > 0.0,
@@ -309,23 +348,32 @@ impl Family {
     pub(crate) fn valid_mean(self, mu: f64) -> bool {
         match self {
             Self::Gaussian => mu.is_finite(),
-            Self::Binomial => mu.is_finite() && mu > 0.0 && mu < 1.0,
-            Self::Poisson | Self::Gamma | Self::Tweedie { .. } => mu.is_finite() && mu > 0.0,
+            Self::Binomial | Self::QuasiBinomial => mu.is_finite() && mu > 0.0 && mu < 1.0,
+            Self::Poisson
+            | Self::QuasiPoisson
+            | Self::NegativeBinomial { .. }
+            | Self::Gamma
+            | Self::Tweedie { .. } => mu.is_finite() && mu > 0.0,
         }
     }
 
     /// Whether the family's parameter is in its range: a Tweedie power not in
-    /// `(0, 1)`, where no Tweedie distribution exists.
+    /// `(0, 1)`, where no Tweedie distribution exists, and a finite positive
+    /// negative binomial `theta`.
     pub(crate) fn valid(self) -> bool {
         match self {
             Self::Tweedie { power } => power.is_finite() && !(power > 0.0 && power < 1.0),
+            Self::NegativeBinomial { theta } => theta.is_finite() && theta > 0.0,
             _ => true,
         }
     }
 
     /// Whether the dispersion is fixed at 1 rather than estimated.
     pub(crate) const fn fixed_dispersion(self) -> bool {
-        matches!(self, Self::Binomial | Self::Poisson)
+        matches!(
+            self,
+            Self::Binomial | Self::Poisson | Self::NegativeBinomial { .. }
+        )
     }
 }
 
