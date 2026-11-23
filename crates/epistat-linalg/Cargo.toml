@@ -27,5 +27,9 @@ thiserror = "2"
 epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1.0.200", features = ["derive"] }
 
+[[bench]]
+name = "tier1_linalg"
+harness = false
+
 [lints]
 workspace = true

@@ -97,5 +97,9 @@ name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
 
+[[bench]]
+name = "tier1_did"
+harness = false
+
 [lints]
 workspace = true

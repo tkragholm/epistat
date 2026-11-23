@@ -26,5 +26,9 @@ epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
 epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1.0.200", features = ["derive"] }
 
+[[bench]]
+name = "tier1_causal"
+harness = false
+
 [lints]
 workspace = true
