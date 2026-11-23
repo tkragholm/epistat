@@ -1,11 +1,3 @@
-/////////////////////////////////////////////////////////////////////////////////////////////\
-//
-// Shared linear algebra and statistics utilities for model implementations.
-//
-// Created on: 24 Jan 2026     Author: Tobias Kragholm
-//
-/////////////////////////////////////////////////////////////////////////////////////////////
-
 //! # Utilities
 //!
 //! Shared helpers for solving linear systems, computing summary statistics,
@@ -21,20 +13,30 @@ use crate::models::two_part::TwoPartError;
 /// Calibration summary for one predicted-probability bin.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CalibrationBinSummary {
+    /// The bin, from 0.
     pub bin_index: usize,
+    /// The bin's lower probability bound.
     pub lower: f64,
+    /// The bin's upper probability bound.
     pub upper: f64,
+    /// Rows in the bin.
     pub count: usize,
+    /// The mean predicted probability of a positive outcome in the bin.
     pub mean_predicted_probability: f64,
+    /// The share of positive outcomes in the bin.
     pub observed_positive_rate: f64,
 }
 
 /// Posterior summary interval for a scalar effect quantity.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EffectIntervalSummary {
+    /// The posterior mean.
     pub mean: f64,
+    /// The 2.5% posterior quantile.
     pub q025: f64,
+    /// The posterior median.
     pub q50: f64,
+    /// The 97.5% posterior quantile.
     pub q975: f64,
 }
 
@@ -188,7 +190,7 @@ pub fn std_vector(betas: &[Mat<f64>], mean: &Mat<f64>) -> Mat<f64> {
 ///
 /// Panics if the view's rows are not contiguous.
 #[must_use]
-pub(crate) fn col_slice<'a>(matrix: MatRef<'a, f64>, j: usize) -> &'a [f64] {
+pub(crate) fn col_slice(matrix: MatRef<'_, f64>, j: usize) -> &[f64] {
     matrix
         .col(j)
         .try_as_col_major()
@@ -411,32 +413,6 @@ pub fn weighted_xtz_ref_with_buffer(
     epistat_linalg::xtv(x, &weighted_buffer[..n])
 }
 
-/// Add a scaled outer-product row contribution to a sandwich "meat" matrix.
-pub fn add_row_outer_product_scaled(meat: &mut Mat<f64>, x: &Mat<f64>, row: usize, scale: f64) {
-    let p = x.ncols();
-    for j in 0..p {
-        let scaled_xj = scale * x[(row, j)];
-        for k in 0..p {
-            meat[(j, k)] = scaled_xj.mul_add(x[(row, k)], meat[(j, k)]);
-        }
-    }
-}
-
-/// Add the scaled outer product `scale * v vᵀ` of a vector into a "meat" matrix.
-///
-/// Slice-based companion to [`add_row_outer_product_scaled`] for cluster-robust
-/// sandwich estimators, where the contribution is the outer product of a
-/// per-cluster residual-sum vector rather than a design-matrix row.
-pub fn add_outer_product_scaled(meat: &mut Mat<f64>, v: &[f64], scale: f64) {
-    let p = v.len();
-    for j in 0..p {
-        let scaled_vj = scale * v[j];
-        for k in 0..p {
-            meat[(j, k)] = scaled_vj.mul_add(v[k], meat[(j, k)]);
-        }
-    }
-}
-
 /// The type 7 quantile of sorted values, `None` for no values. `quantile` is clamped to
 /// `[0, 1]`.
 #[must_use]
@@ -497,12 +473,6 @@ pub fn calibration_bins_summary(
             }
         })
         .collect()
-}
-
-#[must_use]
-pub fn summarize_draws(values: &[f64]) -> EffectIntervalSummary {
-    let mut sorted = values.to_vec();
-    summarize_draws_in_place(&mut sorted)
 }
 
 /// `summarize_draws` over a buffer the caller owns.

@@ -143,7 +143,8 @@ pub(super) fn update_kappa_block(
         * (log_skew_variance_factor(previous_kappa) - log_skew_variance_factor(candidate_kappa))
             .exp();
     if !candidate_kappa_prior.is_finite()
-        || !(candidate_omega_sq.is_finite() && candidate_omega_sq > 0.0)
+        || !candidate_omega_sq.is_finite()
+        || candidate_omega_sq <= 0.0
     {
         return false;
     }
@@ -289,7 +290,6 @@ pub(super) fn evaluate_subject_proposals(
     evaluations
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn update_random_effects_block(
     context: &SamplerContext<'_>,
     rng: &mut Stream,
@@ -348,7 +348,6 @@ pub(super) fn update_random_effects_block(
     (accepted, proposed)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn update_family_effects_block(
     context: &SamplerContext<'_>,
     rng: &mut Stream,

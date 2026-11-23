@@ -1,11 +1,3 @@
-/////////////////////////////////////////////////////////////////////////////////////////////\
-//
-// Model selection utilities for semi-continuous outcome data.
-//
-// Created on: 24 Jan 2026     Author: Tobias Kragholm
-//
-/////////////////////////////////////////////////////////////////////////////////////////////
-
 //! # Selection workflow
 //!
 //! Provides Park test diagnostics and goodness-of-fit metrics for choosing
@@ -49,78 +41,110 @@ pub struct ModelFitMetrics {
 /// Park test coefficients (variance function slope).
 #[derive(Debug, Clone)]
 pub struct ParkTestResult {
+    /// The intercept of the regression of the log squared residual on the log mean.
     pub intercept: f64,
+    /// The slope, the estimated power of the mean in the variance.
     pub slope: f64,
 }
 
 /// Tweedie model candidate with metrics.
 #[derive(Debug, Clone)]
 pub struct TweedieCandidate {
+    /// The Tweedie power.
     pub power: f64,
+    /// The fitted model.
     pub model: TweedieModel,
+    /// In-sample metrics.
     pub metrics: ModelFitMetrics,
+    /// Information criteria from the quasi-likelihood.
     pub information_criteria: InformationCriteria,
 }
 
 /// Log-normal model candidate with metrics.
 #[derive(Debug, Clone)]
 pub struct LogNormalCandidate {
+    /// The fitted model.
     pub model: LogNormalModel,
+    /// In-sample metrics.
     pub metrics: ModelFitMetrics,
+    /// Information criteria on the positive outcomes.
     pub information_criteria: InformationCriteria,
 }
 
 /// Combined model selection output.
 #[derive(Debug, Clone)]
 pub struct SelectionResult {
+    /// The classic Park test.
     pub park_test: ParkTestResult,
+    /// The Tweedie fits that succeeded, one per power.
     pub tweedie_candidates: Vec<TweedieCandidate>,
+    /// The log-normal fit, if it succeeded.
     pub lognormal_candidate: Option<LogNormalCandidate>,
+    /// The candidate with the smallest AIC.
     pub recommended_by_aic: Option<String>,
+    /// The candidate with the smallest BIC.
     pub recommended_by_bic: Option<String>,
 }
 
 /// Information criteria values for a fitted model.
 #[derive(Debug, Clone, Copy)]
 pub struct InformationCriteria {
+    /// The log-likelihood.
     pub loglik: f64,
+    /// Akaike's information criterion, `2k - 2 loglik`.
     pub aic: f64,
+    /// The Bayesian information criterion, `k ln n - 2 loglik`.
     pub bic: f64,
 }
 
 /// Tweedie cross-validation entry.
 #[derive(Debug, Clone)]
 pub struct TweedieCvCandidate {
+    /// The Tweedie power.
     pub power: f64,
+    /// Cross-validated metrics.
     pub metrics: ModelFitMetrics,
 }
 
 /// Cross-validation summary for candidate models.
 #[derive(Debug, Clone)]
 pub struct CrossValidationResult {
+    /// Whether the two-part model was cross-validated.
     pub include_two_part: bool,
+    /// The number of folds.
     pub folds_used: usize,
+    /// Cross-validated metrics of the two-part model.
     pub two_part_metrics: ModelFitMetrics,
+    /// Cross-validated metrics of each Tweedie power.
     pub tweedie_candidates: Vec<TweedieCvCandidate>,
+    /// Whether the log-normal model was cross-validated.
     pub include_lognormal: bool,
+    /// Cross-validated metrics of the log-normal model.
     pub lognormal_metrics: Option<ModelFitMetrics>,
 }
 
 /// Options for K-fold cross-validation.
 #[derive(bon::Builder, Debug, Clone, Copy)]
 pub struct CrossValidationOptions {
+    /// The number of folds, at least 2 and at most the number of rows.
     #[builder(default = 5_usize)]
     pub k_folds: usize,
+    /// The seed of the fold assignment.
     #[builder(default = 42_u64)]
     pub seed: u64,
+    /// Options of the two-part fits.
     #[builder(default)]
     pub two_part_options: FitOptions,
+    /// Options of the Tweedie fits.
     #[builder(default)]
     pub tweedie_options: TweedieOptions,
+    /// Options of the log-normal fits.
     #[builder(default)]
     pub lognormal_options: LogNormalOptions,
+    /// Whether to cross-validate the two-part model.
     #[builder(default = true)]
     pub include_two_part: bool,
+    /// Whether to cross-validate the log-normal model.
     #[builder(default = true)]
     pub include_lognormal: bool,
 }
@@ -142,14 +166,19 @@ impl Default for CrossValidationOptions {
 /// Errors returned by cross-validation.
 #[derive(Debug, Error)]
 pub enum CrossValidationError {
+    /// Invalid model input.
     #[error("invalid model input: {0}")]
     Input(#[from] InputError),
+    /// K-fold must be at least 2 and no more than the number of rows.
     #[error("k-fold must be at least 2 and no more than the number of rows")]
     InvalidFolds,
+    /// Two-part fit failed.
     #[error("two-part fit failed: {0}")]
     TwoPart(#[from] TwoPartError),
+    /// Tweedie fit failed.
     #[error("tweedie fit failed: {0}")]
     Tweedie(#[from] TweedieError),
+    /// Log-normal fit failed.
     #[error("log-normal fit failed: {0}")]
     LogNormal(#[from] LogNormalError),
 }
@@ -272,6 +301,7 @@ pub fn select_models_input(input: &ModelInput, powers: &[f64]) -> SelectionResul
     select_models(&input.design_matrix, &input.outcome, powers)
 }
 
+/// Tweedie fits at each power, with in-sample metrics and quasi-likelihood information criteria. Powers whose fit fails are left out.
 #[must_use]
 pub fn fit_tweedie_candidates_input(input: &ModelInput, powers: &[f64]) -> Vec<TweedieCandidate> {
     powers
@@ -406,8 +436,7 @@ pub fn recommend_from_cv(cv: &CrossValidationResult) -> Option<String> {
 /// # Errors
 ///
 /// Returns `CrossValidationError` if any fold fit fails or `k_folds` is invalid.
-#[allow(
-    clippy::too_many_lines,
+#[expect(
     clippy::items_after_statements,
     reason = "cross-validation keeps fold-local helpers scoped with the orchestration logic"
 )]

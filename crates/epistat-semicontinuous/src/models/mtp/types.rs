@@ -3,53 +3,90 @@
 use super::posterior::MtpPosteriorSummary;
 use super::priors::MtpPriorConfig;
 use crate::input::LongitudinalInputError;
-use crate::models::{FitMetadata, Model};
-use epistat_linalg::Mat;
+use crate::models::FitMetadata;
+
 use thiserror::Error;
 
 /// Errors returned by MTP configuration, validation, and fitting.
 #[derive(Debug, Error)]
 pub enum MtpError {
+    /// The longitudinal input is invalid.
     #[error(transparent)]
     InvalidInput(#[from] LongitudinalInputError),
+    /// Iterations must be positive.
     #[error("iterations must be positive")]
     InvalidIterations,
+    /// Burn-in must be smaller than iterations.
     #[error("burn-in ({burn_in}) must be smaller than iterations ({iterations})")]
-    InvalidBurnIn { burn_in: usize, iterations: usize },
+    InvalidBurnIn {
+        /// The burn-in.
+        burn_in: usize,
+        /// The number of iterations.
+        iterations: usize,
+    },
+    /// Thinning interval must be positive.
     #[error("thinning interval must be positive")]
     InvalidThinning,
+    /// Design columns must match coefficient length.
     #[error("design columns ({design_cols}) must match coefficient length ({coef_len})")]
-    DesignCoefficientMismatch { design_cols: usize, coef_len: usize },
+    DesignCoefficientMismatch {
+        /// The number of design columns.
+        design_cols: usize,
+        /// The number of coefficients.
+        coef_len: usize,
+    },
+    /// Counterfactual design row counts must match.
     #[error("counterfactual design row counts must match")]
     CounterfactualRowMismatch,
+    /// Counterfactual design matrices must be non-empty.
     #[error("counterfactual design matrices must be non-empty")]
     EmptyCounterfactualDesign,
+    /// Posterior draws are required.
     #[error("posterior draws are required")]
     EmptyPosterior,
+    /// Calibration bin count must be positive.
     #[error("calibration bin count must be positive")]
     InvalidCalibrationBins,
+    /// Fewer chains than a multi-chain fit needs.
     #[error("multi-chain workflows require at least {min} chains; found {found}")]
-    InvalidChainCount { min: usize, found: usize },
+    InvalidChainCount {
+        /// The fewest chains allowed.
+        min: usize,
+        /// The number of chains given.
+        found: usize,
+    },
+    /// A chain retains fewer draws than the summary needs.
     #[error("each chain must retain at least {minimum} draws; minimum found {found}")]
-    InsufficientChainDraws { minimum: usize, found: usize },
+    InsufficientChainDraws {
+        /// The fewest retained draws allowed.
+        minimum: usize,
+        /// The fewest retained draws of any chain.
+        found: usize,
+    },
+    /// Posterior dimensions differ across chains.
     #[error("posterior dimensions differ across chains")]
     InconsistentPosteriorDimensions,
+    /// Invalid MTP prior configuration.
     #[error("invalid MTP prior configuration")]
     InvalidPriorConfig,
+    /// Invalid MTP proposal tuning configuration.
     #[error("invalid MTP proposal tuning configuration")]
     InvalidProposalTuning,
+    /// Family random-effects layer requires family ids in longitudinal input.
     #[error("family random-effects layer requires family ids in longitudinal input")]
     MissingFamilyIds,
+    /// MTP fitting requires at least one positive outcome.
     #[error("MTP fitting requires at least one positive outcome")]
     NoPositiveOutcomes,
+    /// MTP solver failed.
     #[error("MTP solver failed")]
     SolveFailed,
+    /// Invalid weights in a weighted product.
     #[error("invalid weights in a weighted product: {0}")]
     InvalidWeights(#[from] epistat_linalg::DesignError),
+    /// MTP fitting did not converge.
     #[error("MTP fitting did not converge")]
     NonConvergence,
-    #[error("MTP sampler not implemented yet: {0}")]
-    NotImplemented(&'static str),
 }
 
 /// # Errors
@@ -267,14 +304,19 @@ impl MtpProposalTuning {
 /// Full sampler configuration for MTP fitting.
 #[derive(bon::Builder, Debug, Clone, Copy, Default)]
 pub struct MtpSamplerConfig {
+    /// Iterations, burn-in, thinning, seed and random-effects structure.
     #[builder(default)]
     pub fit_options: MtpFitOptions,
+    /// The priors.
     #[builder(default)]
     pub prior_config: MtpPriorConfig,
+    /// The proposal scales and their adaptation.
     #[builder(default)]
     pub proposal_tuning: MtpProposalTuning,
+    /// The distribution of the positive part.
     #[builder(default)]
     pub positive_part_distribution: PositivePartDistribution,
+    /// Whether to add family-level random intercepts.
     #[builder(default)]
     pub family_random_effects: FamilyRandomEffects,
 }
@@ -334,42 +376,33 @@ pub struct MtpModel {
     pub report: MtpReport,
 }
 
-/// MTP predictions.
-///
-/// NOTE: Full longitudinal prediction for MTP is complex and involves
-/// integration over random effects. This is currently a placeholder.
-#[derive(Debug, Clone)]
-pub struct MtpPrediction {
-    pub expected_outcome: Mat<f64>,
-}
-
-impl MtpPrediction {
-    #[must_use]
-    pub fn new(nrows: usize) -> Self {
-        Self {
-            expected_outcome: Mat::zeros(nrows, 1),
-        }
-    }
-}
-
 /// Component-wise acceptance rates from the MCMC sampler, over all iterations.
 ///
 /// `alpha`, `beta` and `omega_sq` are proposed together, so the three rates are equal.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MtpAcceptanceRates {
+    /// Acceptance rate of the binary-part coefficients.
     pub alpha: f64,
+    /// Acceptance rate of the mean coefficients.
     pub beta: f64,
+    /// Acceptance rate of the subject effects.
     pub random_effects: f64,
+    /// Acceptance rate of the family effects.
     pub family_effects: f64,
+    /// Acceptance rate of kappa.
     pub kappa: f64,
+    /// Acceptance rate of omega squared.
     pub omega_sq: f64,
 }
 
 /// Sampler diagnostics summary.
 #[derive(Debug, Clone, Default)]
 pub struct MtpSamplerDiagnostics {
+    /// Iterations run.
     pub iterations_completed: usize,
+    /// Draws kept after burn-in and thinning.
     pub retained_draws: usize,
+    /// Acceptance rates over all iterations.
     pub acceptance_rates: Option<MtpAcceptanceRates>,
 }
 
@@ -378,28 +411,10 @@ pub struct MtpSamplerDiagnostics {
 pub struct MtpReport {
     /// Standardized fit metadata.
     pub meta: FitMetadata,
+    /// Sampler diagnostics.
     pub diagnostics: MtpSamplerDiagnostics,
+    /// Summaries of the retained draws.
     pub posterior_summary: Option<MtpPosteriorSummary>,
-}
-
-impl Model for MtpModel {
-    type Prediction = MtpPrediction;
-    type Report = MtpReport;
-
-    fn predict(&self, x: &Mat<f64>) -> Self::Prediction {
-        let mut out = MtpPrediction::new(x.nrows());
-        self.predict_into(x, &mut out);
-        out
-    }
-
-    fn predict_into(&self, _x: &Mat<f64>, _out: &mut Self::Prediction) {
-        // Implementation requires posterior draws and integration.
-        unimplemented!("MtpModel prediction not yet implemented via Model trait")
-    }
-
-    fn report(&self) -> &Self::Report {
-        &self.report
-    }
 }
 
 /// Multi-chain split-R-hat diagnostics summary.

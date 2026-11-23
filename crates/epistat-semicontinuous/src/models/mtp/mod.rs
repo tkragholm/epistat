@@ -1,11 +1,26 @@
-//! Correlated marginalized two-part (MTP) model scaffold.
+//! The marginalised two-part model for person-period panels, fitted by MCMC.
 //!
-//! This module provides a structured, publication-ready API surface for
-//! longitudinal MTP modeling.
+//! A logit gives the probability of a positive outcome and a log link the marginal
+//! mean over zeros and positives, each with subject random intercepts and, optionally,
+//! time slopes, correlated across the two parts, and optional family intercepts. The
+//! positive part is log-skew-normal or log-normal. The posterior draws give period
+//! effects of a counterfactual exposure, posterior predictive checks and split R-hat
+//! over several chains \[1, 2\].
 //!
-//! Current implementation supports correlated random intercepts and optional
-//! time slopes, with posterior simulation workflows for downstream effects
-//! and diagnostics.
+//! # Algorithm
+//!
+//! Metropolis-Hastings in blocks: the fixed effects and the scale of the positive part
+//! together, the skewness, the subject effects, the family effects and their
+//! covariance. Proposal scales adapt during burn-in only, by a Robbins-Monro rule on
+//! the log step size towards an acceptance band, so the retained draws come from a
+//! fixed kernel. Chain `i` draws from `epistat_rng::replicate_seed(seed, i)`.
+//!
+//! # References
+//!
+//! 1. Smith VA, Preisser JS, Neelon B, Maciejewski ML. A marginalized two-part model
+//!    for semicontinuous data. Stat Med. 2014;33:4891-903.
+//! 2. Smith VA, Neelon B, Preisser JS, Maciejewski ML. A marginalized two-part model
+//!    for longitudinal semicontinuous data. Stat Methods Med Res. 2017;26:1949-68.
 
 pub mod diagnostics;
 pub mod effects;

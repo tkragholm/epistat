@@ -3,12 +3,12 @@
 //! The results are pinned as bit patterns and must not depend on the rayon thread count
 //! or on `RAYON_NUM_THREADS`.
 
-use epistat_testkit::{Fingerprint, on_threads};
 use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart, fit_tweedie_input_warm,
     fit_two_part_input_warm,
 };
+use epistat_testkit::{Fingerprint, on_threads};
 use std::process::Command;
 
 const N_ROWS: usize = 20_000;

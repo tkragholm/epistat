@@ -2,7 +2,9 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use epistat_linalg::Mat;
-use epistat_semicontinuous::models::mtp::sampler::{benchmark_weighted_xtx, benchmark_weighted_xtz};
+use epistat_semicontinuous::models::mtp::sampler::{
+    benchmark_weighted_xtx, benchmark_weighted_xtz,
+};
 use epistat_semicontinuous::models::two_part::benchmark_two_part_weighted_xtz;
 
 fn usize_to_f64(value: usize) -> f64 {

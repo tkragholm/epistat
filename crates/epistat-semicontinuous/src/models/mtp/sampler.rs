@@ -23,10 +23,13 @@ mod context;
 mod math;
 mod updates;
 
-#[allow(clippy::wildcard_imports)]
-use self::chain::*;
-#[allow(clippy::wildcard_imports)]
-use self::math::*;
+use self::chain::{
+    combine_posteriors, estimate_correlated_random_effects, simulate_posterior_draws,
+};
+use self::math::{
+    build_row_to_group_map, build_row_to_subject_map, linear_predictor, random_binary_component,
+    random_mean_component,
+};
 
 const MIN_WEIGHT: f64 = 1.0e-8;
 const RIDGE_L2: f64 = 1.0e-8;
@@ -55,17 +58,6 @@ pub fn benchmark_weighted_xtz(
     response: &Mat<f64>,
 ) -> Result<Mat<f64>, epistat_linalg::DesignError> {
     weighted_xtz(x, weights, response)
-}
-
-#[cfg(feature = "bench-internals")]
-#[must_use]
-pub fn benchmark_sample_standard_normals(count: usize, seed: u64) -> f64 {
-    let mut rng = epistat_rng::Stream::seeded(seed);
-    let mut sum = 0.0;
-    for _ in 0..count {
-        sum += sample_standard_normal(&mut rng);
-    }
-    sum
 }
 
 fn chain_seed(seed: u64, chain_index: usize) -> u64 {
@@ -170,7 +162,10 @@ struct RowLikelihoodCache {
     total: f64,
 }
 
-#[allow(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are the log-density terms of the posterior"
+)]
 #[derive(Debug, Clone, Copy)]
 struct PosteriorCache {
     log_likelihood: f64,
@@ -627,7 +622,6 @@ pub fn fit_mtp_input_multi_chain_with_posterior(
 /// # Errors
 ///
 /// Returns `MtpError` if input/options are invalid or chain fitting fails.
-#[allow(clippy::too_many_lines)]
 pub fn fit_mtp_input_multi_chain_with_posterior_config(
     input: &LongitudinalModelInput,
     config: MtpSamplerConfig,
@@ -772,6 +766,7 @@ pub fn fit_mtp_input_multi_chain_with_posterior_config(
 
 #[cfg(test)]
 mod tests {
+    use super::math::{fit_logistic_irls_with_offset, invert_matrix_with_jitter};
     use super::updates::update_fixed_effects_block;
     use super::*;
     use crate::models::mtp::types::MtpProposalTuning;

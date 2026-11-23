@@ -11,45 +11,65 @@ use super::types::{MtpError, validate_draw_dimensions};
 /// Exposed/unexposed design scenarios for posterior contrast calculations.
 #[derive(Debug, Clone)]
 pub struct CounterfactualScenario {
+    /// The binary-part design with every row exposed.
     pub binary_design_exposed: Mat<f64>,
+    /// The mean design with every row exposed.
     pub mean_design_exposed: Mat<f64>,
+    /// The binary-part design with every row unexposed.
     pub binary_design_unexposed: Mat<f64>,
+    /// The mean design with every row unexposed.
     pub mean_design_unexposed: Mat<f64>,
 }
 
 /// Per-period effect estimates.
 #[derive(Debug, Clone, Copy)]
 pub struct PeriodEffect {
+    /// The period, in the order of the input's times.
     pub period_index: usize,
+    /// The mean outcome with every row exposed.
     pub mean_exposed: f64,
+    /// The mean outcome with every row unexposed.
     pub mean_unexposed: f64,
+    /// The difference of the exposed and unexposed means.
     pub additive_effect: f64,
+    /// The ratio of the exposed to the unexposed mean.
     pub multiplicative_effect: f64,
+    /// The odds ratio of a positive outcome, exposed against unexposed.
     pub odds_ratio_positive: f64,
 }
 
 /// Counterfactual effects across all periods in a scenario.
 #[derive(Debug, Clone, Default)]
 pub struct CounterfactualEffects {
+    /// The effects in each period.
     pub per_period: Vec<PeriodEffect>,
+    /// The sum of the additive effects over the periods.
     pub cumulative_additive_effect: f64,
 }
 
 /// Posterior summaries for period-specific effects.
 #[derive(Debug, Clone)]
 pub struct PeriodEffectSummary {
+    /// The period, in the order of the input's times.
     pub period_index: usize,
+    /// The posterior of the exposed mean.
     pub mean_exposed: EffectIntervalSummary,
+    /// The posterior of the unexposed mean.
     pub mean_unexposed: EffectIntervalSummary,
+    /// The posterior of the additive effect.
     pub additive_effect: EffectIntervalSummary,
+    /// The posterior of the multiplicative effect.
     pub multiplicative_effect: EffectIntervalSummary,
+    /// The posterior of the odds ratio of a positive outcome.
     pub odds_ratio_positive: EffectIntervalSummary,
 }
 
 /// Posterior summaries for all counterfactual effects.
 #[derive(Debug, Clone, Default)]
 pub struct CounterfactualEffectsSummary {
+    /// The posterior summaries in each period.
     pub per_period: Vec<PeriodEffectSummary>,
+    /// The posterior of the cumulative additive effect.
     pub cumulative_additive_effect: EffectIntervalSummary,
 }
 

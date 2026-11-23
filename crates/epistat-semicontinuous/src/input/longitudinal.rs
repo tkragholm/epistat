@@ -11,30 +11,58 @@ use crate::utils::matrix_is_finite;
 /// Errors returned when validating longitudinal model inputs.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum LongitudinalInputError {
+    /// Binary design matrix must have at least one column.
     #[error("binary design matrix must have at least one column")]
     EmptyBinaryDesign,
+    /// Mean design matrix must have at least one column.
     #[error("mean design matrix must have at least one column")]
     EmptyMeanDesign,
+    /// Outcome must be a single-column matrix.
     #[error("outcome must be a single-column matrix")]
     InvalidOutcomeShape,
+    /// The designs and the outcome have different numbers of rows.
     #[error(
         "binary design rows ({binary_rows}), mean design rows ({mean_rows}), and outcome rows ({outcome_rows}) must match"
     )]
     DimensionMismatch {
+        /// The number of rows of the binary-part design.
         binary_rows: usize,
+        /// The number of rows of the mean-part design.
         mean_rows: usize,
+        /// The number of rows of the outcome.
         outcome_rows: usize,
     },
+    /// Subject id length must equal number of rows.
     #[error("subject id length ({len}) must equal number of rows ({rows})")]
-    InvalidSubjectLength { len: usize, rows: usize },
+    InvalidSubjectLength {
+        /// The number of subject ids.
+        len: usize,
+        /// The number of rows.
+        rows: usize,
+    },
+    /// Time length must equal number of rows.
     #[error("time length ({len}) must equal number of rows ({rows})")]
-    InvalidTimeLength { len: usize, rows: usize },
+    InvalidTimeLength {
+        /// The number of times.
+        len: usize,
+        /// The number of rows.
+        rows: usize,
+    },
+    /// Family id length must equal number of rows.
     #[error("family id length ({len}) must equal number of rows ({rows})")]
-    InvalidFamilyLength { len: usize, rows: usize },
+    InvalidFamilyLength {
+        /// The number of family ids.
+        len: usize,
+        /// The number of rows.
+        rows: usize,
+    },
+    /// Input matrices contain non-finite values.
     #[error("input matrices contain non-finite values")]
     NonFiniteMatrix,
+    /// Time contains non-finite values.
     #[error("time contains non-finite values")]
     NonFiniteTime,
+    /// Outcome contains negative values.
     #[error("outcome contains negative values")]
     NegativeOutcome,
 }
@@ -42,15 +70,22 @@ pub enum LongitudinalInputError {
 /// Generic longitudinal input for person-period semi-continuous models.
 #[derive(Debug, Clone)]
 pub struct LongitudinalModelInput {
+    /// The outcome, one row per person-period, `n x 1`.
     pub outcome: Mat<f64>,
+    /// The design of the binary part, `Pr(y > 0)`.
     pub x_binary: Mat<f64>,
+    /// The design of the marginal mean.
     pub x_mean: Mat<f64>,
+    /// The subject of each row.
     pub subject_ids: Vec<u64>,
+    /// The time of each row.
     pub time: Vec<f64>,
+    /// The family of each row, for a family-level random effect.
     pub family_ids: Option<Vec<u64>>,
 }
 
 impl LongitudinalModelInput {
+    /// An input without family ids.
     #[must_use]
     pub const fn new(
         outcome: Mat<f64>,
@@ -69,6 +104,7 @@ impl LongitudinalModelInput {
         }
     }
 
+    /// The input with the family of each row.
     #[must_use]
     pub fn with_family_ids(mut self, family_ids: Vec<u64>) -> Self {
         self.family_ids = Some(family_ids);

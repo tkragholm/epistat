@@ -1,19 +1,62 @@
-/////////////////////////////////////////////////////////////////////////////////////////////\\\
-//
-// Two-part model for semi-continuous outcome data.
-//
-// Created on: 24 Jan 2026     Author: Tobias Kragholm
-//
-/////////////////////////////////////////////////////////////////////////////////////////////
-
-//! # Two-part model
+//! The two-part model of a semicontinuous outcome.
 //!
-//! Implements a two-part model for semi-continuous outcome data with many zeros:
-//! - Part 1: logistic regression for any positive outcome (> 0).
-//! - Part 2: gamma regression with log link for positive outcomes.
+//! # The model
 //!
-//! The module includes optional L2 regularization, robust or cluster-robust
-//! standard errors, and bootstrap utilities for inference.
+//! The mean of an outcome `y >= 0` is split into the probability that it is
+//! positive and the mean of the positive values,
+//!
+//! ```text
+//! E[y | x] = Pr(y > 0 | x) E[y | y > 0, x]
+//!          = expit(x' a) exp(x' b),
+//! ```
+//!
+//! a logit fitted to the indicator `y > 0` on every row and a gamma regression
+//! with log link fitted to the positive rows \[1, 2\]. The two likelihoods
+//! separate, so each part is fitted on its own.
+//!
+//! # Algorithm
+//!
+//! Each part is IRLS with prior weights `w_i`. The logit has working weights
+//! `w_i p_i (1 - p_i)`, with `p_i (1 - p_i)` floored at `min_weight`, and
+//! working response `eta_i + (y_i - p_i) / (p_i (1 - p_i))`. A logit step that
+//! makes the deviance worse or non-finite is halved, up to `max_step_halvings`
+//! times, and the logit stops when the relative change of the deviance,
+//! `|D_new - D| / (|D_new| + 0.1)`, falls below `deviance_tolerance`, as R's
+//! `glm.fit` does \[3\], or when no coefficient moves by more than `tolerance`.
+//! A logit whose smaller class has no more rows than the design has columns is
+//! separable, and it is replaced by the intercept-only prevalence model.
+//!
+//! The gamma part has working weights `w_i`, so that without an elastic net
+//! `X' W X` is factorised once, and working response `eta_i + (y_i - mu_i) / mu_i`. It is fitted on a
+//! design whose non-intercept columns are centred, stops when no coefficient
+//! moves by more than `tolerance`, and maps its coefficients back to the design
+//! as given. The linear predictors are clamped, at 40 for the logit and at
+//! 30 for the gamma part, and a gamma fit that ends at
+//! the clamp is reported as not converged. A ridge, an elastic-net or a normal
+//! prior penalty can be added ([`Regularization`]), and
+//! [`FitStrategy::Relaxed`] retries a fit
+//! that fails with a growing ridge.
+//!
+//! # Standard errors
+//!
+//! The model-based covariance of each part is the inverse of its information
+//! `X' W X` at the final coefficients, at unit dispersion for the gamma part. With
+//! `robust_se` it is the sandwich `B M B`, `B` that inverse and `M` the sum of
+//! the outer products of the score contributions `x_i w_i (y_i - p_i)` and
+//! `x_i w_i (y_i - mu_i) / mu_i`, summed within clusters first when cluster
+//! labels are given (HC0 without and CR0 with clusters) \[4\].
+//!
+//! # References
+//!
+//! 1. Duan N, Manning WG, Morris CN, Newhouse JP. A comparison of alternative
+//!    models for the demand for medical care. J Bus Econ Stat. 1983;1:115-26.
+//! 2. Mihaylova B, Briggs A, O'Hagan A, Thompson SG. Review of statistical
+//!    methods for analysing healthcare resources and costs. Health Econ.
+//!    2011;20:897-916.
+//! 3. R Core Team. Fitting generalized linear models: `glm.fit`. Help pages of
+//!    the stats package of R.
+//! 4. Zeileis A. Object-oriented computation of sandwich estimators. J Stat
+//!    Softw. 2006;16(9):1-16.
 
 mod bootstrap;
 mod covariance;
@@ -37,8 +80,8 @@ use crate::models::{
 use crate::utils::linear_predictor;
 #[cfg(feature = "bench-internals")]
 use crate::utils::weighted_xtz;
-use epistat_stats::gamma::ln_gamma;
 use epistat_linalg::{Mat, MatRef};
+use epistat_stats::gamma::ln_gamma;
 use std::collections::HashSet;
 use std::time::Instant;
 use thiserror::Error;
@@ -50,18 +93,25 @@ pub enum Regularization {
     None,
     /// L2 (ridge) penalty.
     Ridge {
+        /// The penalty on the sum scale of the weights.
         lambda: f64,
+        /// Whether the first column is left unpenalised.
         exclude_intercept: bool,
     },
     /// Elastic net penalty (L1 + L2).
     ElasticNet {
+        /// The overall penalty on the sum scale of the weights.
         lambda: f64,
+        /// The share of the penalty on the L1 norm, in `[0, 1]`.
         alpha: f64,
+        /// Whether the first column is left unpenalised.
         exclude_intercept: bool,
     },
     /// Bayesian ridge (Normal prior), equivalent to an L2 penalty.
     BayesianRidge {
+        /// The standard deviation of the normal prior, giving an L2 penalty of `1 / prior_scale^2`.
         prior_scale: f64,
+        /// Whether the first column is left unpenalised.
         exclude_intercept: bool,
     },
 }
@@ -166,41 +216,65 @@ impl FitOptions {
 /// Errors returned by two-part model fitting.
 #[derive(Debug, Error)]
 pub enum TwoPartError {
+    /// Design matrix rows must match outcome length.
     #[error("design matrix rows ({rows}) must match outcome length ({len})")]
-    DimensionMismatch { rows: usize, len: usize },
+    DimensionMismatch {
+        /// The number of rows of the design matrix.
+        rows: usize,
+        /// The number of rows of the outcome.
+        len: usize,
+    },
+    /// Design matrix must have at least one column.
     #[error("design matrix must have at least one column")]
     EmptyDesign,
+    /// Weights must be a single column matrix with the same number of rows as outcome.
     #[error("weights must be a single column matrix with the same number of rows as outcome")]
     InvalidWeightShape,
+    /// Weighted fit requires weights in ModelInput.
     #[error("weighted fit requires weights in ModelInput")]
     MissingWeights,
+    /// Clustered fit requires cluster labels in ModelInput.
     #[error("clustered fit requires cluster labels in ModelInput")]
     MissingClusters,
+    /// Inputs contain non-finite values.
     #[error("inputs contain non-finite values")]
     NonFiniteInput,
+    /// Outcome contains negative values.
     #[error("outcome contains negative values")]
     NegativeOutcome,
+    /// Weights must be strictly positive.
     #[error("weights must be strictly positive")]
     NonPositiveWeights,
+    /// Positive outcome values required for gamma model.
     #[error("positive outcome values required for gamma model")]
     NonPositiveOutcome,
+    /// Model failed to converge.
     #[error("model failed to converge")]
     NonConvergence,
+    /// Linear solve failed.
     #[error("linear solve failed")]
     SolveFailed,
+    /// Invalid weights in a weighted product.
     #[error("invalid weights in a weighted product: {0}")]
     InvalidWeights(#[from] epistat_linalg::DesignError),
+    /// Bootstrap iterations must be positive.
     #[error("bootstrap iterations must be positive")]
     InvalidBootstrapIterations,
+    /// Bootstrap requires at least one row.
     #[error("bootstrap requires at least one row")]
     EmptyBootstrapSample,
+    /// More bootstrap replicates failed than allowed, with the number that failed.
     #[error("too many bootstrap failures ({0})")]
     TooManyBootstrapFailures(usize),
+    /// Outcome must be a single column matrix.
     #[error("outcome must be a single column matrix")]
     InvalidOutcomeShape,
 }
 
-#[allow(clippy::fallible_impl_from)]
+#[expect(
+    clippy::fallible_impl_from,
+    reason = "validation rejects duplicate labels before any conversion, so the panic marks a broken invariant"
+)]
 impl From<InputError> for TwoPartError {
     fn from(value: InputError) -> Self {
         match value {
@@ -393,7 +467,9 @@ pub struct BootstrapResult {
 /// Confidence interval for a coefficient.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfidenceInterval {
+    /// The lower bound.
     pub lower: f64,
+    /// The upper bound.
     pub upper: f64,
 }
 
@@ -430,7 +506,9 @@ pub(crate) fn fit_two_part(
 /// not match (the leaf fitters fall back to their cold start).
 #[derive(Clone, Debug)]
 pub struct TwoPartWarmStart {
+    /// Logit coefficients.
     pub beta_logit: Mat<f64>,
+    /// Gamma coefficients.
     pub beta_gamma: Mat<f64>,
 }
 
@@ -980,9 +1058,9 @@ mod tests {
 
     #[test]
     fn gamma_fit_survives_heavy_tailed_outcome() {
-        // A mass of small positive values with a few extreme outliers. Before
-        // clamping the log-link predictor, the IRLS could drive mu = exp(eta) to
-        // +inf and diverge on this shape; it must now fit to finite coefficients.
+        // A mass of small positive values with a few extreme outliers, on which an
+        // unclamped log-link predictor drives mu = exp(eta) to +inf. The fit must give
+        // finite coefficients.
         let n = 80;
         let x = Mat::from_fn(n, 2, |i, j| {
             if j == 0 {
@@ -1178,7 +1256,7 @@ mod tests {
         let summary = bootstrap_summary(&[], 0.05);
         assert_eq!(summary.mean.nrows(), 0);
         assert_eq!(summary.se.nrows(), 0);
-        assert!(summary.ci.is_empty());
+        assert_eq!(summary.ci, []);
     }
 
     #[test]
@@ -1341,13 +1419,9 @@ mod tests {
         // A problem that is hard to converge without regularization, via high
         // collinearity and a hard iteration cap.
         //
-        // This used to put a SINGLE zero against two parameters, which is not a
-        // hard fit -- it is a separated one, where the logit MLE is at infinity.
-        // The separation guard now returns the intercept-only prevalence model
-        // for that shape in zero iterations, so there was nothing left to retry
-        // and this test failed on `fallback_attempts > 0`. The minority class is
-        // now larger than the parameter count, which keeps the logit identified
-        // and leaves `max_iter: 1` as the thing that forces the retry.
+        // The minority class is larger than the parameter count, so the logit is
+        // identified and the separation guard does not apply, and `max_iter: 1` is
+        // what forces the retry.
         let n = 10;
         let x = Mat::from_fn(n, 2, |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) });
         let y = Mat::from_fn(n, 1, |i, _| if i % 3 == 0 { 0.0 } else { 1.0 });

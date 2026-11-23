@@ -1,20 +1,18 @@
-#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
-//! # `epistat_semicontinuous`
-//!
-//! Reusable models and diagnostics for non-negative semi-continuous outcomes:
-//! two-part, Tweedie GLM, and log-normal with smearing.
-//!
-//! The crate was initially developed for healthcare outcome analyses, but the API is
-//! intentionally domain-agnostic and can be reused in other settings.
+//! Models for semicontinuous outcomes, non-negative with a mass at zero, such as
+//! costs: the two-part model, the Tweedie GLM, log-normal regression with smearing,
+//! and the marginalised two-part model for panels ([`models::mtp`]), with model
+//! comparison and selection. The [`models`] modules explain each method.
 
-pub mod inference;
+/// Model inputs and their validation.
 pub mod input;
+/// The models, their fits, comparison and selection.
 pub mod models;
+/// Outcome counts and the removal of constant design columns.
 pub mod preprocess;
-pub mod utils;
+pub(crate) mod utils;
 
-pub use inference::{InferenceError, McmcConfig, ProposalStats};
 pub use input::{
     CounterfactualInputBuildError, InputError, LongitudinalInputError, LongitudinalModelInput,
     ModelInput, ModelInputRef, PreparedCounterfactualInput, TWO_PART_NOT_APPLICABLE_POSITIVE_SHARE,
@@ -23,12 +21,6 @@ pub use input::{
 pub use preprocess::{
     OutcomeDiagnostics, column_has_variation, drop_constant_columns, outcome_diagnostics,
 };
-pub mod comparison {
-    pub use crate::models::comparison::*;
-}
-pub mod matrix_ops {
-    pub use crate::models::matrix_ops::*;
-}
 
 pub use crate::models::{FitMetadata, Model, SolverKind};
 
@@ -68,9 +60,9 @@ pub use models::selection::{
 };
 
 pub use models::comparison::{
-    FittedComparisonModels, ModelComparison, ModelComparisonError,
-    ModelComparisonOptions, ModelInformationCriteria, ModelScore, TweedieRankingRow,
-    compare_models_input, compare_models_input_with_fits,
+    FittedComparisonModels, ModelComparison, ModelComparisonError, ModelComparisonOptions,
+    ModelInformationCriteria, ModelScore, TweedieRankingRow, compare_models_input,
+    compare_models_input_with_fits,
 };
 
 pub use models::mtp::{

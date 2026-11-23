@@ -44,23 +44,11 @@ pub(super) fn fit_logit_weighted(
     // Minority-class count, which decides whether a logit is identified at all.
     let minority = count_positive.min(y.nrows() - count_positive);
 
-    // A constant outcome has no logit to fit. NEITHER does one whose minority
-    // class is no larger than the parameter count: with p parameters and m <= p
-    // observations in the smaller class a separating hyperplane always exists, so
-    // the MLE is at infinity and IRLS chases it until `max_iter`.
-    //
-    // Measured on the SCD cost components: `primary_sector` has 0 zeros in 1664,
-    // hits the constant-outcome branch below, and fits in 0.10s with no failures.
-    // `lmdb` and `lpr_kontakt` have ONE zero in 1664 against 31 parameters, miss
-    // the branch, and spend 4.5s each while 45% of their bootstrap replicates
-    // report non-convergence. `lpr_sghforlob` has two, and every one of its 1000
-    // replicates "converged" to the identical coefficient 349.9 -- a fitted
-    // probability of 1 to machine precision, and a logit contributing no
-    // bootstrap variability whatever.
-    //
-    // All four are the same degeneracy. This widens the guard from "no variation"
-    // to "not enough variation to identify a slope", and they all take the
-    // intercept-only prevalence model that the first case already took.
+    // A constant outcome has no logit to fit, and neither has one whose minority class
+    // is no larger than the parameter count: with p parameters and m <= p observations
+    // in the smaller class a separating hyperplane always exists, so the maximum
+    // likelihood estimate is at infinity and IRLS would chase it until `max_iter`. Both
+    // take the intercept-only prevalence model.
     if !saw_positive || !saw_zero || minority <= x.ncols() {
         let mut beta = Mat::<f64>::zeros(x.ncols(), 1);
         if weighted_sum > 0.0 && x.ncols() > 0 {
@@ -92,13 +80,9 @@ pub(super) fn fit_logit_weighted(
             variance.max(options.min_weight) * prior[(i, 0)]
         });
 
-        // Working response. The residual is divided by the VARIANCE FUNCTION, not
-        // by the IRLS weight: dividing by `variance * prior` cancels the prior
-        // weight out of `X'Wz`, leaving the score equation `X'(y - p) = 0` -- the
-        // UNWEIGHTED one. The gamma loop below already divides by its variance
-        // term rather than by `W`; this makes the two agree. Inert while every
-        // prior weight is 1, which is the case whenever the panel carries no
-        // weight column, and wrong the moment one does.
+        // Working response. The residual is divided by the variance function, not by
+        // the IRLS weight, so that `X'Wz` keeps the prior weights and the score
+        // equation is the weighted `X'diag(prior)(y - p) = 0`, as in the gamma loop.
         let z = Mat::from_fn(eta.nrows(), 1, |i, _| {
             let variance = (p[(i, 0)] * (1.0 - p[(i, 0)])).max(options.min_weight);
             eta[(i, 0)] + (y[(i, 0)] - p[(i, 0)]) / variance
@@ -135,10 +119,8 @@ pub(super) fn fit_logit_weighted(
             }
         };
 
-        // Relative change in deviance, `glm.fit`'s criterion. The absolute
-        // coefficient test is kept as a secondary: it is what a well-conditioned
-        // fit used to stop on, and keeping it means such a fit stops no later
-        // than it did before.
+        // Relative change in deviance, `glm.fit`'s criterion, or an absolute change in
+        // the coefficients below `tolerance`, whichever comes first.
         let converged_deviance = (deviance_next - deviance).abs() / (deviance_next.abs() + 0.1)
             < options.deviance_tolerance;
         let converged_step = max_abs_diff(&beta_next, &beta) < options.tolerance;
@@ -160,9 +142,7 @@ pub(super) fn fit_logit_weighted(
 ///
 /// `logistic(36)` is already 1.0 in f64, so beyond this the fitted probability
 /// carries no information and only the working response keeps growing. The gamma
-/// loop has had such a clamp since heavy-tailed outcomes were found to drive
-/// `exp(eta)` to infinity; the logit loop -- the one that actually diverges on
-/// this data -- had none.
+/// loop clamps its linear predictor for the same reason.
 pub(crate) const LOGIT_ETA_CLAMP: f64 = 40.0;
 
 fn logit_eta(x: MatRef<'_, f64>, beta: &Mat<f64>) -> Mat<f64> {

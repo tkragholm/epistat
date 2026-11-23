@@ -41,7 +41,9 @@ use thiserror::Error;
 
 use crate::utils::{col_slice, matrix_ref_is_finite};
 
+/// Inputs with the exposure set to 1 and to 0 for counterfactual contrasts.
 pub mod counterfactual;
+/// Person-period inputs for the marginalised two-part model.
 pub mod longitudinal;
 
 pub use counterfactual::{
@@ -70,42 +72,76 @@ macro_rules! impl_input_error_from {
 /// Errors returned when validating model inputs.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum InputError {
+    /// Design matrix must have at least one column.
     #[error("design matrix must have at least one column")]
     EmptyDesign,
+    /// Outcome must be a single column matrix.
     #[error("outcome must be a single column matrix")]
     InvalidOutcomeShape,
+    /// Design matrix rows must match outcome rows.
     #[error("design matrix rows ({rows}) must match outcome rows ({len})")]
-    DimensionMismatch { rows: usize, len: usize },
+    DimensionMismatch {
+        /// The number of rows of the design matrix.
+        rows: usize,
+        /// The number of rows of the outcome.
+        len: usize,
+    },
+    /// Weights must be a single column matrix with the same number of rows as outcome.
     #[error("weights must be a single column matrix with the same number of rows as outcome")]
     InvalidWeightShape,
+    /// Cluster labels length must match outcome rows.
     #[error("cluster labels length ({labels}) must match outcome rows ({rows})")]
-    InvalidClusterLength { labels: usize, rows: usize },
+    InvalidClusterLength {
+        /// The number of cluster labels.
+        labels: usize,
+        /// The number of rows of the outcome.
+        rows: usize,
+    },
+    /// Design matrix contains non-finite values.
     #[error("design matrix contains non-finite values")]
     NonFiniteDesign,
+    /// Outcome contains non-finite values.
     #[error("outcome contains non-finite values")]
     NonFiniteOutcome,
+    /// Outcome contains negative values.
     #[error("outcome contains negative values")]
     NegativeOutcome,
+    /// Weights contain non-finite values.
     #[error("weights contain non-finite values")]
     NonFiniteWeights,
+    /// Weights must be strictly positive.
     #[error("weights must be strictly positive")]
     NonPositiveWeights,
+    /// Column labels length must match design matrix columns.
     #[error("column labels length ({labels}) must match design matrix columns ({cols})")]
-    InvalidLabelLength { labels: usize, cols: usize },
+    InvalidLabelLength {
+        /// The number of column labels.
+        labels: usize,
+        /// The number of columns of the design matrix.
+        cols: usize,
+    },
+    /// Column labels must be unique.
     #[error("column labels must be unique; duplicates found: {0}")]
     DuplicateLabels(String),
 }
 
+/// A design matrix and outcome, with optional prior weights, cluster labels and column labels.
 #[derive(Debug, Clone)]
 pub struct ModelInput {
+    /// The design matrix, `n x p`, with an intercept column if one is wanted.
     pub design_matrix: Mat<f64>,
+    /// The non-negative outcome, `n x 1`.
     pub outcome: Mat<f64>,
+    /// Strictly positive prior weights, `n x 1`.
     pub sample_weights: Option<Mat<f64>>,
+    /// The cluster of each row, for cluster-robust standard errors.
     pub cluster_ids: Option<Vec<u64>>,
+    /// Unique names of the design columns.
     pub column_labels: Option<Vec<String>>,
 }
 
 impl ModelInput {
+    /// An input with no weights, clusters or labels.
     #[must_use]
     pub const fn new(design_matrix: Mat<f64>, outcome: Mat<f64>) -> Self {
         Self {
@@ -117,12 +153,14 @@ impl ModelInput {
         }
     }
 
+    /// The input with prior weights.
     #[must_use]
     pub fn with_sample_weights(mut self, sample_weights: Mat<f64>) -> Self {
         self.sample_weights = Some(sample_weights);
         self
     }
 
+    /// The input with cluster labels.
     #[must_use]
     pub fn with_cluster_ids(self, cluster_ids: Vec<u64>) -> Self {
         Self {
@@ -131,6 +169,7 @@ impl ModelInput {
         }
     }
 
+    /// The input with column labels.
     #[must_use]
     pub fn with_column_labels(mut self, labels: Vec<String>) -> Self {
         self.column_labels = Some(labels);
@@ -162,26 +201,31 @@ impl ModelInput {
         self
     }
 
+    /// The design matrix.
     #[must_use]
     pub const fn design_matrix(&self) -> &Mat<f64> {
         &self.design_matrix
     }
 
+    /// The outcome.
     #[must_use]
     pub const fn outcome(&self) -> &Mat<f64> {
         &self.outcome
     }
 
+    /// The prior weights, if any.
     #[must_use]
     pub const fn sample_weights(&self) -> Option<&Mat<f64>> {
         self.sample_weights.as_ref()
     }
 
+    /// The cluster labels, if any.
     #[must_use]
     pub const fn cluster_ids(&self) -> Option<&Vec<u64>> {
         self.cluster_ids.as_ref()
     }
 
+    /// The column labels, if any.
     #[must_use]
     pub const fn column_labels(&self) -> Option<&Vec<String>> {
         self.column_labels.as_ref()
@@ -241,14 +285,20 @@ impl ModelInput {
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ModelInputRef<'a> {
+    /// The design matrix, `n x p`.
     pub design_matrix: MatRef<'a, f64>,
+    /// The non-negative outcome, `n x 1`.
     pub outcome: MatRef<'a, f64>,
+    /// Strictly positive prior weights, `n x 1`.
     pub sample_weights: Option<MatRef<'a, f64>>,
+    /// The cluster of each row.
     pub cluster_ids: Option<&'a [u64]>,
+    /// Unique names of the design columns.
     pub column_labels: Option<&'a [String]>,
 }
 
 impl<'a> ModelInputRef<'a> {
+    /// A view with no weights, clusters or labels.
     #[must_use]
     pub const fn new(design_matrix: MatRef<'a, f64>, outcome: MatRef<'a, f64>) -> Self {
         Self {
@@ -260,18 +310,21 @@ impl<'a> ModelInputRef<'a> {
         }
     }
 
+    /// The view with prior weights.
     #[must_use]
     pub const fn with_sample_weights(mut self, sample_weights: MatRef<'a, f64>) -> Self {
         self.sample_weights = Some(sample_weights);
         self
     }
 
+    /// The view with cluster labels.
     #[must_use]
     pub const fn with_cluster_ids(mut self, cluster_ids: &'a [u64]) -> Self {
         self.cluster_ids = Some(cluster_ids);
         self
     }
 
+    /// The view with column labels.
     #[must_use]
     pub const fn with_column_labels(mut self, labels: &'a [String]) -> Self {
         self.column_labels = Some(labels);

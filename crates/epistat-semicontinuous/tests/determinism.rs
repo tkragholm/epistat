@@ -7,12 +7,12 @@
 //! rayon pools of 1, 2 and 8 threads, and compare every coefficient and every
 //! standard error bit for bit.
 
-use epistat_testkit::on_threads;
 use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, ModelInput, TweedieOptions, fit_lognormal_smearing_input,
     fit_tweedie_input, fit_two_part_input,
 };
+use epistat_testkit::on_threads;
 
 const N_ROWS: usize = 12_000;
 const N_COLS: usize = 8;

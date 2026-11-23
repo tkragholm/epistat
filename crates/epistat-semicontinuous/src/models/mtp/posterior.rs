@@ -5,24 +5,31 @@ use crate::utils::{calculate_quantile, usize_to_f64};
 /// A single posterior draw from the MTP parameter space.
 #[derive(Debug, Clone)]
 pub struct MtpPosteriorDraw {
+    /// Coefficients of the binary part.
     pub alpha: Vec<f64>,
+    /// Coefficients of the marginal mean.
     pub beta: Vec<f64>,
+    /// The skewness of the log-skew-normal positive part, 0 for log-normal.
     pub kappa: f64,
+    /// The scale of the positive part on the log scale.
     pub omega_sq: f64,
 }
 
 /// Posterior draw collection.
 #[derive(Debug, Clone, Default)]
 pub struct MtpPosteriorSamples {
+    /// The retained draws in sampling order.
     pub draws: Vec<MtpPosteriorDraw>,
 }
 
 impl MtpPosteriorSamples {
+    /// Whether there are no draws.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.draws.is_empty()
     }
 
+    /// The number of draws.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.draws.len()
@@ -32,20 +39,30 @@ impl MtpPosteriorSamples {
 /// Scalar posterior summary statistics.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParameterSummary {
+    /// The posterior mean.
     pub mean: f64,
+    /// The posterior standard deviation.
     pub std_dev: f64,
+    /// The 2.5% posterior quantile.
     pub q025: f64,
+    /// The posterior median.
     pub q50: f64,
+    /// The 97.5% posterior quantile.
     pub q975: f64,
 }
 
 /// Posterior summary for the MTP parameter blocks.
 #[derive(Debug, Clone, Default)]
 pub struct MtpPosteriorSummary {
+    /// Summaries of the binary-part coefficients.
     pub alpha: Vec<ParameterSummary>,
+    /// Summaries of the mean coefficients.
     pub beta: Vec<ParameterSummary>,
+    /// The summary of kappa, `None` when it is fixed.
     pub kappa: Option<ParameterSummary>,
+    /// The summary of omega squared.
     pub omega_sq: Option<ParameterSummary>,
+    /// The number of draws summarised.
     pub draw_count: usize,
 }
 

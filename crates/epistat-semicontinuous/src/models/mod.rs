@@ -4,7 +4,7 @@ use std::time::Duration;
 pub mod comparison;
 pub(crate) mod covariance;
 pub mod lognormal;
-pub mod matrix_ops;
+pub(crate) mod matrix_ops;
 pub mod mtp;
 pub mod prepared;
 pub mod selection;
@@ -42,24 +42,37 @@ pub trait Model {
     fn report(&self) -> &Self::Report;
 }
 
+/// The algorithm that produced a fit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SolverKind {
+    /// Iteratively reweighted least squares.
     Irls,
+    /// Limited-memory BFGS.
     LBfgs,
+    /// Newton-Raphson.
     NewtonRaphson,
+    /// Markov chain Monte Carlo.
     Mcmc,
 }
 
 /// Standardized metadata for all model fits.
 #[derive(Debug, Clone)]
 pub struct FitMetadata {
+    /// Iterations taken.
     pub iterations: usize,
+    /// Whether the fit met its convergence rule.
     pub converged: bool,
+    /// Wall-clock time of the fit.
     pub execution_time: Duration,
+    /// The algorithm used.
     pub solver: SolverKind,
+    /// Gradient evaluations, for gradient-based solvers.
     pub gradient_evaluations: usize,
+    /// Line-search or step-halving steps.
     pub line_search_steps: usize,
+    /// Matrix factorisations computed.
     pub factorization_count: usize,
+    /// The index of the attempt that succeeded under a relaxed strategy, 0 for the first.
     pub fallback_attempts: usize,
 }
 
@@ -97,20 +110,29 @@ pub enum FitStrategy {
     },
 }
 
+/// How one attempt of a retried fit ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttemptOutcome {
+    /// The attempt converged.
     Converged,
+    /// The attempt failed to converge or its solve failed.
     Diverged,
+    /// The time budget was spent before the attempt.
     TimedOut,
+    /// The attempt was stopped early.
     EarlyAbort,
 }
 
 /// Diagnostics for each attempt in a multi-retry fit.
 #[derive(Debug, Clone)]
 pub struct AttemptDiagnostics {
+    /// The attempt's index, 0 for the first.
     pub attempt: usize,
+    /// The ridge penalty of the attempt.
     pub lambda_used: f64,
+    /// Metadata of the attempt.
     pub meta: FitMetadata,
+    /// How the attempt ended.
     pub outcome: AttemptOutcome,
 }
 

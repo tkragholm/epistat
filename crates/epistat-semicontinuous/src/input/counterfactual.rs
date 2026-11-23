@@ -25,14 +25,19 @@ pub struct PreparedCounterfactualInput {
 /// Input-build errors for counterfactual model preparation.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum CounterfactualInputBuildError {
+    /// No rows.
     #[error("no rows")]
     NoRows,
+    /// Exposure column index is out of bounds for design matrix.
     #[error("exposure column index is out of bounds for design matrix")]
     InvalidExposureColumn,
+    /// Non-finite outcome values.
     #[error("non-finite outcome values")]
     NonFiniteOutcome,
+    /// Insufficient exposure variation.
     #[error("insufficient exposure variation")]
     InsufficientExposureVariation,
+    /// Exposure column dropped unexpectedly.
     #[error("exposure column dropped unexpectedly")]
     ExposureColumnDropped,
 }

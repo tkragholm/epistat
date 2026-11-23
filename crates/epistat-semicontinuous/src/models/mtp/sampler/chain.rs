@@ -1,5 +1,5 @@
-use epistat_rng::Stream;
 use epistat_linalg::Mat;
+use epistat_rng::Stream;
 
 use crate::input::LongitudinalModelInput;
 use crate::models::matrix_ops::{select_rows, select_values};
@@ -15,10 +15,18 @@ use super::{
     SamplerContext, SamplingResult, SubjectUpdateContext,
 };
 
-#[allow(clippy::wildcard_imports)]
-use super::math::*;
-#[allow(clippy::wildcard_imports)]
-use super::updates::*;
+use super::math::{
+    SpdInverseScratch, adapt_scalar_scale, adapt_vector_scale, approximate_alpha_covariance,
+    approximate_beta_covariance, build_family_rows, column_to_vec, covariance_from_subject_effects,
+    fit_linear_ols, fit_logistic_irls_with_offset, identity_matrix,
+    invert_matrix_with_jitter_and_scratch, max_slice_abs_diff, max_subject_effect_change,
+    random_binary_component, random_mean_component, residual_variance_with_subject_offsets,
+    usize_to_f64_reexport,
+};
+use super::updates::{
+    fixed_effect_block_into, update_family_effects_block, update_fixed_effects_block,
+    update_kappa_block, update_random_effects_block, update_sigma_block,
+};
 
 pub(super) fn estimate_correlated_random_effects(
     prepared: &MtpPreparedInput<'_>,
@@ -297,7 +305,6 @@ const fn covariance_windows(burn_in: usize) -> [usize; 3] {
 /// Run one chain. Every adaptation, of the step sizes and of the fixed-effect
 /// covariance, happens in iterations before `burn_in`, so the retained draws come from
 /// one fixed Markov kernel.
-#[allow(clippy::too_many_lines)]
 pub(super) fn run_mcmc_chain(
     context: &SamplerContext<'_>,
     rng: &mut Stream,

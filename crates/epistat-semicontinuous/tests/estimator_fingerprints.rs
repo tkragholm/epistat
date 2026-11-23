@@ -9,23 +9,22 @@
 //! `GOLDEN_PRINT=1 cargo test --test estimator_fingerprints -- --nocapture`.
 #![cfg(all(target_arch = "aarch64", target_os = "macos"))]
 
-use epistat_rng::Stream as Draws;
-use epistat_testkit::Fingerprint;
 use epistat_linalg::Mat;
+use epistat_rng::Stream as Draws;
 use epistat_semicontinuous::{
-    BootstrapOptions, ConfidenceInterval, FamilyRandomEffects, FitOptions,
-    LongitudinalModelInput, ModelComparison, ModelComparisonOptions, ModelFitMetrics,
-    ModelInput, MtpFitOptions, MtpMultiChainOptions, MtpPosteriorSummary, MtpSamplerConfig,
-    ParameterSummary, PreparedGammaDesign, PreparedPredictionDesign, PreparedScratch,
-    PreparedTwoPartDesign, Regularization, TweedieOptions, TweedieScratch, TwoPartModel,
-    TwoPartReport, TwoPartWarmStart, autocorrelation, bootstrap_percentile_ci,
-    bootstrap_summary, bootstrap_two_part, coefficient_confidence_intervals,
-    compare_models_input, effective_sample_size, fit_lognormal_smearing_input,
-    fit_mtp_input_multi_chain_with_posterior_config, fit_tweedie_input,
-    fit_tweedie_ref_warm_prevalidated_with_scratch, fit_two_part_clustered_input,
-    fit_two_part_input, fit_two_part_ref_warm_prevalidated, posterior_predictive_summary,
-    select_models_input,
+    BootstrapOptions, ConfidenceInterval, FamilyRandomEffects, FitOptions, LogNormalOptions,
+    LongitudinalModelInput, ModelComparison, ModelComparisonOptions, ModelFitMetrics, ModelInput,
+    MtpFitOptions, MtpMultiChainOptions, MtpPosteriorSummary, MtpSamplerConfig, ParameterSummary,
+    PreparedGammaDesign, PreparedPredictionDesign, PreparedScratch, PreparedTwoPartDesign,
+    Regularization, TweedieOptions, TweedieScratch, TwoPartModel, TwoPartReport, TwoPartWarmStart,
+    autocorrelation, bootstrap_percentile_ci, bootstrap_summary, bootstrap_two_part,
+    coefficient_confidence_intervals, compare_models_input, effective_sample_size,
+    fit_lognormal_smearing_input, fit_mtp_input_multi_chain_with_posterior_config,
+    fit_tweedie_input, fit_tweedie_ref_warm_prevalidated_with_scratch,
+    fit_two_part_clustered_input, fit_two_part_input, fit_two_part_ref_warm_prevalidated,
+    posterior_predictive_summary, select_models_input,
 };
+use epistat_testkit::Fingerprint;
 
 const N_ROWS: usize = 2_000;
 const N_COLS: usize = 6;
@@ -303,7 +302,11 @@ fn two_part_variants(out: &mut Golden, input: &ModelInput) -> TwoPartWarmStart {
     let mut h = Hasher::new();
     h.two_part(&model, &report);
     let cov = report.cov_gamma.as_ref().expect("covariance");
-    h.intervals(&coefficient_confidence_intervals(&model.beta_gamma, cov, 0.05));
+    h.intervals(&coefficient_confidence_intervals(
+        &model.beta_gamma,
+        cov,
+        0.05,
+    ));
     out.push(("two_part/clustered/robust", h.finish()));
 
     let elastic = FitOptions::builder()
@@ -366,11 +369,12 @@ fn compact(out: &mut Golden, input: &ModelInput, warm: &TwoPartWarmStart) {
     h.mat(&fit.beta);
     h.n(fit.iterations);
     let mut tweedie_scratch = TweedieScratch::default();
-    let weighted = positive
-        .clone()
-        .with_sample_weights(Mat::from_fn(positive_weights.len(), 1, |i, _| {
-            positive_weights[i]
-        }));
+    let weighted =
+        positive
+            .clone()
+            .with_sample_weights(Mat::from_fn(positive_weights.len(), 1, |i, _| {
+                positive_weights[i]
+            }));
     let (dense, _) = fit_tweedie_ref_warm_prevalidated_with_scratch(
         weighted.as_ref(),
         2.0,
@@ -380,8 +384,8 @@ fn compact(out: &mut Golden, input: &ModelInput, warm: &TwoPartWarmStart) {
     )
     .expect("dense gamma");
     h.mat(&dense.beta);
-    let prediction = PreparedPredictionDesign::new(positive.design_matrix.as_ref())
-        .expect("prediction design");
+    let prediction =
+        PreparedPredictionDesign::new(positive.design_matrix.as_ref()).expect("prediction design");
     h.f(prediction.mean_gamma(&fit.beta, positive_weights));
     out.push(("compact/gamma", h.finish()));
 
@@ -445,7 +449,8 @@ fn selection(out: &mut Golden, input: &ModelInput) {
     }
     out.push(("selection", h.finish()));
 
-    let (model, report) = fit_lognormal_smearing_input(input, Default::default()).expect("ln");
+    let (model, report) =
+        fit_lognormal_smearing_input(input, LogNormalOptions::default()).expect("ln");
     let mut h = Hasher::new();
     h.mat(&model.beta);
     h.f(model.smearing_factor);
@@ -561,21 +566,21 @@ fn collect() -> Golden {
 }
 
 const GOLDEN: &[(&str, u64)] = &[
-    ("bootstrap/draws", 0x1665116b57fac17c),
-    ("bootstrap/summary", 0xda0e70c42c70b7ca),
-    ("two_part/clustered/robust", 0x6a615d52a469116e),
-    ("two_part/elastic_net", 0x7aa9a058c6c773e0),
-    ("two_part/prevalidated/warm", 0x45cb44511f4c3630),
-    ("compact/gamma", 0xfbca6c2d3c43fbf8),
-    ("compact/two_part", 0xbc06d03e59d9f18a),
-    ("comparison/default", 0xa7aabf741b04d9aa),
-    ("comparison/elastic_net", 0xa7bb6818a8e46428),
-    ("selection", 0x33593df6d30b6785),
-    ("lognormal/weighted", 0x22f8bede7fbf6966),
-    ("mtp/draws", 0xf0902e04a16ea2fd),
-    ("mtp/convergence", 0x062bdb420fa8775c),
-    ("mtp/posterior_predictive", 0x2a818f18ff31a831),
-    ("mtp/autocorrelation", 0xe7e846cfe5a1e143),
+    ("bootstrap/draws", 0x1665_116b_57fa_c17c),
+    ("bootstrap/summary", 0xda0e_70c4_2c70_b7ca),
+    ("two_part/clustered/robust", 0x6a61_5d52_a469_116e),
+    ("two_part/elastic_net", 0x7aa9_a058_c6c7_73e0),
+    ("two_part/prevalidated/warm", 0x45cb_4451_1f4c_3630),
+    ("compact/gamma", 0xfbca_6c2d_3c43_fbf8),
+    ("compact/two_part", 0xbc06_d03e_59d9_f18a),
+    ("comparison/default", 0xa7aa_bf74_1b04_d9aa),
+    ("comparison/elastic_net", 0xa7bb_6818_a8e4_6428),
+    ("selection", 0x3359_3df6_d30b_6785),
+    ("lognormal/weighted", 0x22f8_bede_7fbf_6966),
+    ("mtp/draws", 0xf090_2e04_a16e_a2fd),
+    ("mtp/convergence", 0x062b_db42_0fa8_775c),
+    ("mtp/posterior_predictive", 0x2a81_8f18_ff31_a831),
+    ("mtp/autocorrelation", 0xe7e8_46cf_e5a1_e143),
 ];
 
 #[test]

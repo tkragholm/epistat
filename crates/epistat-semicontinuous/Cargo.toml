@@ -47,7 +47,5 @@ required-features = ["bench-internals"]
 name = "two_part_bootstrap"
 harness = false
 
-[[bench]]
-name = "mtp_rng_kernels"
-harness = false
-required-features = ["bench-internals"]
+[lints]
+workspace = true

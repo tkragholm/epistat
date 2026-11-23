@@ -1,15 +1,33 @@
-/////////////////////////////////////////////////////////////////////////////////////////////\\\
-//
-// Log-normal regression with smearing retransformation.
-//
-// Created on: 24 Jan 2026     Author: Tobias Kragholm
-//
-/////////////////////////////////////////////////////////////////////////////////////////////
-
-//! # Log-normal with smearing
+//! Log-normal regression with Duan's smearing retransformation.
 //!
-//! Fits a log-normal regression on positive outcomes and applies a smearing
-//! factor for unbiased retransformation to the original scale.
+//! # The model
+//!
+//! On the positive outcomes, `ln y = x' b + e` with errors of mean zero, fitted
+//! by least squares with an optional ridge. The mean on the original scale is
+//! not `exp(x' b)` but `exp(x' b) E[exp(e)]`, and the smearing estimate of the
+//! second factor is the mean of the exponentiated residuals \[1\],
+//!
+//! ```text
+//! s = (1/n) sum_i exp(ln y_i - x_i' b),     E[y | x] = s exp(x' b),
+//! ```
+//!
+//! which needs no normality of the errors. The fit does not use prior weights.
+//! The log-likelihood reported for information criteria is the normal one of
+//! `ln y` on the positive rows at the maximum-likelihood variance, with the
+//! Jacobian `-sum ln y_i`.
+//!
+//! # Standard errors
+//!
+//! Standard errors are reported only with `robust_se`: the HC0 sandwich on the
+//! positive rows, summed within clusters first when cluster labels are given
+//! \[2\].
+//!
+//! # References
+//!
+//! 1. Duan N. Smearing estimate: a nonparametric retransformation method. J Am
+//!    Stat Assoc. 1983;78:605-10.
+//! 2. Zeileis A. Object-oriented computation of sandwich estimators. J Stat
+//!    Softw. 2006;16(9):1-16.
 
 use std::time::Instant;
 
@@ -85,22 +103,41 @@ impl LogNormalOptions {
 /// Errors returned by log-normal fitting.
 #[derive(Debug, Error)]
 pub enum LogNormalError {
+    /// Design matrix rows must match outcome length.
     #[error("design matrix rows ({rows}) must match outcome length ({len})")]
-    DimensionMismatch { rows: usize, len: usize },
+    DimensionMismatch {
+        /// The number of rows of the design matrix.
+        rows: usize,
+        /// The number of rows of the outcome.
+        len: usize,
+    },
+    /// Design matrix must have at least one column.
     #[error("design matrix must have at least one column")]
     EmptyDesign,
+    /// Outcome must be a single column matrix.
     #[error("outcome must be a single column matrix")]
     InvalidOutcomeShape,
+    /// Cluster labels length must match outcome rows.
     #[error("cluster labels length ({labels}) must match outcome rows ({rows})")]
-    InvalidClusterLength { labels: usize, rows: usize },
+    InvalidClusterLength {
+        /// The number of cluster labels.
+        labels: usize,
+        /// The number of rows of the outcome.
+        rows: usize,
+    },
+    /// Inputs contain non-finite values.
     #[error("inputs contain non-finite values")]
     NonFiniteInput,
+    /// Outcome contains negative values.
     #[error("outcome contains negative values")]
     NegativeOutcome,
+    /// No positive outcomes.
     #[error("no positive outcomes")]
     NoPositiveOutcomes,
+    /// Linear solve failed.
     #[error("linear solve failed")]
     SolveFailed,
+    /// Model failed to converge.
     #[error("model failed to converge")]
     NonConvergence,
 }
@@ -155,6 +192,7 @@ pub struct LogNormalReport {
 /// Log-normal predictions on the original scale.
 #[derive(Debug, Clone)]
 pub struct LogNormalPrediction {
+    /// The predicted mean on the original scale, the smeared retransformation.
     pub mean: Mat<f64>,
 }
 

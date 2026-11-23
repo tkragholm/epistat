@@ -29,12 +29,10 @@ pub fn map_mat(values: &Mat<f64>, f: impl Fn(f64) -> f64) -> Mat<f64> {
 
 // ── Design-matrix centering ──────────────────────────────────────────────────────────
 //
-// Log-link GLMs (Tweedie / gamma) are fit on an UNCENTERED design whose intercept column
-// then absorbs the whole offset — pushing the fitted intercept far above `ln(mean y)`
-// (observed: 27–78 on cost data). When the intercept nears the `exp_clamped` saturation
-// ceiling (η = ±30), IRLS iterates and the marginal-standardisation prediction both start
-// clamping η, which corrupts the fit (a degenerate "converged" solution) and collapses the
-// counterfactual means (exposed ≈ unexposed, ratio → 1 instead of exp(β_exposed)).
+// On an uncentered design the intercept of a log-link GLM (Tweedie or gamma) absorbs the
+// whole offset and can sit far above `ln(mean y)`, near the `exp_clamped` bound
+// (η = ±30). IRLS and the marginal standardisation then clamp η, which gives a degenerate
+// fit and counterfactual means that collapse onto each other.
 //
 // Centering the non-intercept columns is a reparametrisation that leaves `Xβ`, the fitted
 // means, and the deviance invariant, but keeps the intercept at ≈ `ln(mean y)` and the
@@ -66,6 +64,9 @@ pub(crate) fn weighted_column_means(
     x: MatRef<'_, f64>,
     weights: Option<MatRef<'_, f64>>,
 ) -> Option<Vec<f64>> {
+    // Each column is one sequential fused-multiply-add chain over the rows. A group
+    // of columns shares a pass over the weights, so the independent chains overlap.
+    const GROUP: usize = 8;
     let (n, p) = (x.nrows(), x.ncols());
     if n == 0 || p == 0 || !column_is_constant(x, 0) {
         return None;
@@ -77,16 +78,12 @@ pub(crate) fn weighted_column_means(
     let mut means = vec![0.0_f64; p];
     let varying: Vec<usize> = (1..p).filter(|&j| !column_is_constant(x, j)).collect();
     let unit_weights;
-    let weight_column: &[f64] = match weights {
-        Some(weights) => crate::utils::col_slice(weights, 0),
-        None => {
-            unit_weights = vec![1.0_f64; n];
-            &unit_weights
-        }
+    let weight_column: &[f64] = if let Some(weights) = weights {
+        crate::utils::col_slice(weights, 0)
+    } else {
+        unit_weights = vec![1.0_f64; n];
+        &unit_weights
     };
-    // Each column is still one sequential fused-multiply-add chain over the rows. A group
-    // of columns shares a pass over the weights, so the independent chains overlap.
-    const GROUP: usize = 8;
     for group in varying.chunks(GROUP) {
         let columns: Vec<&[f64]> = group
             .iter()

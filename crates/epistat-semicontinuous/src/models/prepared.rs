@@ -169,12 +169,19 @@ struct Products {
 }
 
 impl CompactRows {
-    #[allow(clippy::float_cmp, clippy::cast_precision_loss)]
+    #[expect(
+        clippy::float_cmp,
+        reason = "a column is the intercept or binary when its entries are exactly 1 or 0"
+    )]
     fn new(x: MatRef<'_, f64>) -> Option<Self> {
         let (n, p) = (x.nrows(), x.ncols());
         if n == 0 || p == 0 || p > MAX_COLUMNS {
             return None;
         }
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method's path names faer, which the crate takes through epistat-linalg"
+        )]
         let columns: Vec<&[f64]> = (0..p)
             .map(|j| x.col(j).try_as_col_major().map(|column| column.as_slice()))
             .collect::<Option<_>>()?;
@@ -572,7 +579,6 @@ impl PreparedGammaDesign {
     ///
     /// A [`PreparedFitError`] when these weights give no reliable compact fit. The caller
     /// runs the dense fit for them.
-    #[allow(clippy::too_many_lines)]
     pub fn fit(
         &self,
         weights: &[f64],
@@ -842,7 +848,6 @@ impl PreparedTwoPartDesign {
         })
     }
 
-    #[allow(clippy::too_many_lines)]
     fn fit_logit(
         &self,
         weights: &[f64],
@@ -978,7 +983,6 @@ impl PreparedTwoPartDesign {
         Ok((column_vector(shifted), iterations))
     }
 
-    #[allow(clippy::too_many_lines)]
     fn fit_gamma_part(
         &self,
         weights: &[f64],

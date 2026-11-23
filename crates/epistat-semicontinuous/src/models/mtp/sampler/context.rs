@@ -9,8 +9,10 @@ use super::{
     SubjectUpdateContext, likelihood, priors,
 };
 
-#[allow(clippy::wildcard_imports)]
-use super::math::*;
+use super::math::{
+    add_scaled_basis, add_scaled_outer_product, column_to_vec, dot_basis_effect,
+    random_binary_basis, random_binary_component, random_mean_basis, random_mean_component,
+};
 
 impl SubjectUpdateContext<'_> {
     pub(super) fn optimize(
@@ -390,7 +392,6 @@ impl SamplerContext<'_> {
     /// Replaces the previous allocating `family_candidate_rows_with_terms`.
     /// Returns `false` (leaving `out` partially filled) if any contribution is
     /// non-finite. The family update loop reuses a single scratch buffer.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn family_candidate_rows_into(
         &self,
         out: &mut Vec<f64>,

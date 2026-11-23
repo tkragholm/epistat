@@ -27,6 +27,10 @@ pub fn autocorrelation(series: &[f64], lag: usize) -> Option<f64> {
 /// The check for equal draws is exact. The variance test inside epistat does not catch
 /// a constant chain whose mean rounds away from the draws, such as three copies of 0.1.
 #[must_use]
+#[expect(
+    clippy::float_cmp,
+    reason = "a chain is constant when its draws are exactly equal"
+)]
 pub fn effective_sample_size(series: &[f64]) -> Option<f64> {
     let first = *series.first()?;
     if series.len() < 2 || series.iter().all(|&value| value == first) {
@@ -137,11 +141,17 @@ pub fn summarize_multi_chain_convergence_tracking(
 /// Posterior predictive diagnostics summary.
 #[derive(Debug, Clone, Default)]
 pub struct PosteriorPredictiveSummary {
+    /// The share of zero outcomes.
     pub observed_zero_rate: f64,
+    /// The mean outcome.
     pub observed_mean: f64,
+    /// The posterior of the mean predicted probability of a zero.
     pub predicted_zero_rate: EffectIntervalSummary,
+    /// The posterior of the mean predicted outcome.
     pub predicted_mean: EffectIntervalSummary,
+    /// The posterior of the Brier score of the predicted probability of a positive outcome.
     pub brier_score: EffectIntervalSummary,
+    /// Observed against predicted rates of a positive outcome, by bins of the posterior-mean probability.
     pub calibration_bins: Vec<CalibrationBinSummary>,
 }
 

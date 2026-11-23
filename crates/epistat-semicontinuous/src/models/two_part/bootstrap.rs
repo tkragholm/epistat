@@ -1,8 +1,8 @@
 //! Row-resampling bootstrap and its percentile summaries.
 
 use epistat_inference::interval::{Percentile, percentile};
-use epistat_rng::Stream;
 use epistat_linalg::Mat;
+use epistat_rng::Stream;
 
 use super::{
     BootstrapOptions, BootstrapResult, BootstrapSummary, ConfidenceInterval, FitOptions,

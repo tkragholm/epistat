@@ -1,11 +1,3 @@
-/////////////////////////////////////////////////////////////////////////////////////////////\
-//
-// Model comparison utilities (metrics, information criteria, and CV summaries).
-//
-// Created on: 25 Jan 2026     Author: Tobias Kragholm
-//
-/////////////////////////////////////////////////////////////////////////////////////////////
-
 //! # Model comparison utilities
 //!
 //! Provides in-sample metrics, quasi information criteria, and cross-validation
@@ -37,32 +29,46 @@ type TwoPartFit = (
     super::two_part::TwoPartReport,
 );
 
+/// The models a comparison fitted on the full sample.
 #[derive(Debug, Clone, Default)]
 pub struct FittedComparisonModels {
+    /// The two-part model and its report.
     pub two_part: Option<TwoPartFit>,
+    /// The two-part model with the elastic-net options, when they were given.
     pub two_part_elastic_net: Option<TwoPartFit>,
+    /// The Tweedie model at the comparison's power.
     pub tweedie: Option<TweedieModel>,
+    /// The log-normal model.
     pub lognormal: Option<LogNormalModel>,
 }
 
 /// Configuration for model comparisons.
 #[derive(bon::Builder, Debug, Clone)]
 pub struct ModelComparisonOptions {
+    /// The Tweedie powers to fit. The comparison's Tweedie model takes 1.5 when listed, else the first.
     #[builder(default = vec![1.2, 1.5, 1.8])]
     pub tweedie_powers: Vec<f64>,
+    /// Options of the two-part fit.
     #[builder(default)]
     pub two_part_options: FitOptions,
+    /// Options of a second two-part fit with an elastic-net penalty.
     pub two_part_elastic_net_options: Option<FitOptions>,
+    /// Options of the Tweedie fits.
     #[builder(default)]
     pub tweedie_options: TweedieOptions,
+    /// Options of the log-normal fit.
     #[builder(default)]
     pub lognormal_options: LogNormalOptions,
+    /// The folds and seed of the cross-validation.
     #[builder(default)]
     pub cv_options: CrossValidationOptions,
+    /// Whether to fit the two-part model.
     #[builder(default = true)]
     pub include_two_part: bool,
+    /// Whether to fit the Tweedie model.
     #[builder(default = true)]
     pub include_tweedie: bool,
+    /// Whether to fit the log-normal model.
     #[builder(default = true)]
     pub include_lognormal: bool,
 }
@@ -86,14 +92,19 @@ impl Default for ModelComparisonOptions {
 /// Errors returned by the comparison workflow.
 #[derive(Debug, Error)]
 pub enum ModelComparisonError {
+    /// Invalid model input.
     #[error("invalid model input: {0}")]
     Input(#[from] InputError),
+    /// Two-part fit failed.
     #[error("two-part fit failed: {0}")]
     TwoPart(#[from] TwoPartError),
+    /// Tweedie fit failed.
     #[error("tweedie fit failed: {0}")]
     Tweedie(#[from] TweedieError),
+    /// Log-normal fit failed.
     #[error("log-normal fit failed: {0}")]
     LogNormal(#[from] LogNormalError),
+    /// Cross-validation failed.
     #[error("cross-validation failed: {0}")]
     CrossValidation(#[from] CrossValidationError),
 }
@@ -101,36 +112,52 @@ pub enum ModelComparisonError {
 /// Per-model metrics with a descriptive label.
 #[derive(Debug, Clone)]
 pub struct ModelScore {
+    /// The model's label.
     pub name: String,
+    /// The fit metrics.
     pub metrics: ModelFitMetrics,
 }
 
 /// Per-model information criteria with a descriptive label.
 #[derive(Debug, Clone)]
 pub struct ModelInformationCriteria {
+    /// The model's label.
     pub name: String,
+    /// The log-likelihood, a quasi-likelihood for Tweedie.
     pub loglik: f64,
+    /// Akaike's information criterion.
     pub aic: f64,
+    /// The Bayesian information criterion.
     pub bic: f64,
 }
 
 /// Tweedie CV ranking row (metrics + in-sample IC).
 #[derive(Debug, Clone)]
 pub struct TweedieRankingRow {
+    /// The Tweedie power.
     pub power: f64,
+    /// The cross-validated metrics.
     pub metrics: ModelFitMetrics,
+    /// Akaike's information criterion in the full sample.
     pub aic: f64,
+    /// The Bayesian information criterion in the full sample.
     pub bic: f64,
 }
 
 /// Comparison output for model evaluation.
 #[derive(Debug, Clone)]
 pub struct ModelComparison {
+    /// Metrics of each model in the full sample.
     pub in_sample: Vec<ModelScore>,
+    /// Information criteria of each model in the full sample.
     pub information_criteria: Vec<ModelInformationCriteria>,
+    /// Cross-validated metrics of each model.
     pub cv_summary: Vec<ModelScore>,
+    /// The cross-validated metrics ordered from best to worst.
     pub cv_ranking: Vec<ModelScore>,
+    /// Information criteria of each Tweedie power.
     pub tweedie_ic: Vec<ModelInformationCriteria>,
+    /// The Tweedie powers ordered by their cross-validated metrics.
     pub tweedie_cv_ranking: Vec<TweedieRankingRow>,
 }
 
@@ -158,18 +185,16 @@ pub fn compare_models_input(
     compare_models_input_with_fits(input, options).map(|(comparison, _)| comparison)
 }
 
-#[allow(
-    clippy::missing_errors_doc,
-    clippy::too_many_lines,
-    clippy::cast_possible_truncation,
-    reason = "comparison orchestration logs millisecond timings and returns a single aggregated report"
-)]
+/// [`compare_models_input`], returning the fitted models with the comparison.
+///
+/// # Errors
+///
+/// As [`compare_models_input`].
 pub fn compare_models_input_with_fits(
     input: &ModelInput,
     options: &ModelComparisonOptions,
 ) -> Result<(ModelComparison, FittedComparisonModels), ModelComparisonError> {
     input.validate()?;
-
 
     let two_part_default = options
         .include_two_part

@@ -6,8 +6,8 @@
 //! HC0 standard errors computed in R from `glm` fits on the same rows, and a
 //! clustered fit with one row per cluster must reproduce the unclustered sandwich.
 
-use epistat_rng::{Stream, replicate_seed};
 use epistat_linalg::{Attempt, Mat, Method, inverse};
+use epistat_rng::{Stream, replicate_seed};
 use epistat_semicontinuous::{
     FitOptions, ModelInput, TweedieOptions, fit_tweedie_input, fit_two_part_input,
 };

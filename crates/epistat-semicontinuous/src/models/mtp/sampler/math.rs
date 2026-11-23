@@ -84,7 +84,7 @@ pub(super) fn should_accept(log_acceptance: f64, rng: &mut Stream) -> bool {
 /// on the log step size, with `target` the midpoint of the acceptance band and `step`
 /// the 1-based count of adaptations of that scale.
 pub(super) fn robbins_monro_factor(acceptance: f64, step: usize, tuning: MtpProposalTuning) -> f64 {
-    let target = 0.5 * (tuning.acceptance_target_low + tuning.acceptance_target_high);
+    let target = f64::midpoint(tuning.acceptance_target_low, tuning.acceptance_target_high);
     let gain = tuning.adaptation_gain / usize_to_f64(step.max(1)).sqrt();
     (gain * (acceptance - target)).exp()
 }
@@ -383,7 +383,7 @@ pub(super) fn covariance_from_subject_effects(subject_effects: &[Vec<f64>]) -> M
 
     for row in 0..dim {
         for col in 0..dim {
-            let symmetric = 0.5 * (covariance[(row, col)] + covariance[(col, row)]);
+            let symmetric = f64::midpoint(covariance[(row, col)], covariance[(col, row)]);
             covariance[(row, col)] = symmetric;
             covariance[(col, row)] = symmetric;
         }
@@ -413,7 +413,7 @@ pub(super) fn posterior_scale_matrix(
     }
     for row in 0..dim {
         for col in 0..dim {
-            let symmetric = 0.5 * (scale[(row, col)] + scale[(col, row)]);
+            let symmetric = f64::midpoint(scale[(row, col)], scale[(col, row)]);
             scale[(row, col)] = symmetric;
             scale[(col, row)] = symmetric;
         }
@@ -583,11 +583,9 @@ impl SpdInverseScratch {
         if matrix.nrows() != dim || matrix.ncols() != dim {
             return Err(MtpError::SolveFailed);
         }
-        let factor =
-            Factor::new(matrix.as_ref(), &CHOLESKY).map_err(|_| MtpError::SolveFailed)?;
+        let factor = Factor::new(matrix.as_ref(), &CHOLESKY).map_err(|_| MtpError::SolveFailed)?;
         factor
             .solve(self.identity.as_ref())
             .map_err(|_| MtpError::SolveFailed)
     }
 }
-

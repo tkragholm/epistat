@@ -1,16 +1,49 @@
-/////////////////////////////////////////////////////////////////////////////////////////////\\\
-//
-// Tweedie GLM (quasi-likelihood) for semi-continuous outcome data.
-//
-// Created on: 24 Jan 2026     Author: Tobias Kragholm
-//
-/////////////////////////////////////////////////////////////////////////////////////////////
-
-//! # Tweedie GLM
+//! The Tweedie GLM with log link, fitted by quasi-likelihood.
 //!
-//! Implements a Tweedie GLM with log link using quasi-likelihood IRLS.
-//! The Tweedie power (p) should be in [1, 2] to allow exact zeros with
-//! continuous positive outcomes.
+//! # The model
+//!
+//! The mean is `mu = exp(x' b)` and the variance `phi mu^p`, with the power
+//! `p` in `[1, 2]`: at `p = 1` the quasi-Poisson, at `p = 2` the gamma, and in
+//! between the compound Poisson-gamma, which has a mass at zero and a
+//! continuous positive part \[1\]. Only the mean and variance are used, so the
+//! fit is the solution of the quasi-score equations
+//!
+//! ```text
+//! sum_i w_i x_i (y_i - mu_i) mu_i^(1 - p) = 0.
+//! ```
+//!
+//! # Algorithm
+//!
+//! IRLS on a design whose non-intercept columns are centred, with working
+//! weights `w_i mu_i^(2 - p)` and working response `eta_i + (y_i - mu_i) / mu_i`.
+//! At `p = 2` the working weights are the prior weights and the factorisation
+//! of `X' W X` is computed once. A step that does not lower the deviance
+//!
+//! ```text
+//! D = 2 sum_i w_i [ y_i^(2-p) / ((1-p)(2-p)) - y_i mu_i^(1-p) / (1-p) + mu_i^(2-p) / (2-p) ],
+//! ```
+//!
+//! with its limits at `p = 1` and `p = 2`, is halved, up to 12 times. The fit
+//! stops when no coefficient moves by more than `tolerance` or the deviance
+//! changes by less than `tolerance` relative to `max(|D|, 1)`. The
+//! quasi-likelihood used for information criteria is `-D / 2` \[2\].
+//!
+//! # Standard errors
+//!
+//! The reported covariance is the sandwich with bread `(X' diag(w mu^(2-p)) X)^-1`
+//! and meat from the quasi-score residual `w_i (y_i - mu_i) mu_i^(1-p)`, summed
+//! within clusters first when cluster labels are given \[3\]. The fit agrees
+//! with R's `glm` with `statmod::tweedie(var.power = p, link.power = 0)` and
+//! with that sandwich computed in R (`tests/tweedie_reference.rs`).
+//!
+//! # References
+//!
+//! 1. Jorgensen B. The Theory of Dispersion Models. London: Chapman & Hall;
+//!    1997.
+//! 2. McCullagh P, Nelder JA. Generalized Linear Models. 2nd ed. London:
+//!    Chapman & Hall; 1989. Chapter 9.
+//! 3. Zeileis A. Object-oriented computation of sandwich estimators. J Stat
+//!    Softw. 2006;16(9):1-16.
 
 use std::time::Instant;
 
@@ -143,30 +176,53 @@ impl TweedieScratch {
 /// Errors returned by Tweedie fitting.
 #[derive(Debug, thiserror::Error)]
 pub enum TweedieError {
+    /// Design matrix rows must match outcome length.
     #[error("design matrix rows ({rows}) must match outcome length ({len})")]
-    DimensionMismatch { rows: usize, len: usize },
+    DimensionMismatch {
+        /// The number of rows of the design matrix.
+        rows: usize,
+        /// The number of rows of the outcome.
+        len: usize,
+    },
+    /// Design matrix must have at least one column.
     #[error("design matrix must have at least one column")]
     EmptyDesign,
+    /// Tweedie power must be between 1 and 2.
     #[error("tweedie power must be between 1 and 2")]
     InvalidPower,
+    /// Outcome must be a single column matrix.
     #[error("outcome must be a single column matrix")]
     InvalidOutcomeShape,
+    /// Weights must be a single column matrix with the same number of rows as outcome.
     #[error("weights must be a single column matrix with the same number of rows as outcome")]
     InvalidWeightShape,
+    /// Cluster labels length must match outcome rows.
     #[error("cluster labels length ({labels}) must match outcome rows ({rows})")]
-    InvalidClusterLength { labels: usize, rows: usize },
+    InvalidClusterLength {
+        /// The number of cluster labels.
+        labels: usize,
+        /// The number of rows of the outcome.
+        rows: usize,
+    },
+    /// Inputs contain non-finite values.
     #[error("inputs contain non-finite values")]
     NonFiniteInput,
+    /// Outcome contains negative values.
     #[error("outcome contains negative values")]
     NegativeOutcome,
+    /// Weights contain non-finite values.
     #[error("weights contain non-finite values")]
     NonFiniteWeights,
+    /// Weights must be strictly positive.
     #[error("weights must be strictly positive")]
     NonPositiveWeights,
+    /// Model failed to converge.
     #[error("model failed to converge")]
     NonConvergence,
+    /// Linear solve failed.
     #[error("linear solve failed")]
     SolveFailed,
+    /// Invalid weights in a weighted product.
     #[error("invalid weights in a weighted product: {0}")]
     InvalidWeights(#[from] epistat_linalg::DesignError),
 }
@@ -221,6 +277,7 @@ pub struct TweedieReport {
 /// Tweedie predictions (mean on original scale).
 #[derive(Debug, Clone)]
 pub struct TweediePrediction {
+    /// The predicted mean.
     pub mean: Mat<f64>,
 }
 
@@ -283,7 +340,6 @@ impl Model for TweedieModel {
 /// # Errors
 ///
 /// Returns `TweedieError` if inputs are malformed or the solver fails.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn fit_tweedie(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
@@ -306,7 +362,6 @@ pub(crate) fn fit_tweedie(
     )
 }
 
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn fit_tweedie_weighted(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
@@ -431,8 +486,8 @@ fn fit_tweedie_with_lambda(
     // drifting into the `exp_clamped` saturation ceiling. `col_means` is `None` when the
     // design has no usable intercept in column 0, in which case `cx == x` (no centering).
     // The converged coefficients are un-centered back to the raw-x scale before
-    // `finalize_fit`, which then computes SE/cov (and everything downstream — predict, the
-    // marginal standardisation) on the original design exactly as before.
+    // `finalize_fit`, which computes the standard errors and covariance, and everything
+    // downstream, on the original design.
     let col_means = weighted_column_means(x, sample_weights);
     scratch.fit_shape(x.nrows());
     if let Some(means) = &col_means {
@@ -520,20 +575,15 @@ fn fit_tweedie_with_lambda(
             // Constant-weight path: reuse the cached factor; only the RHS changes.
             let xtw_rhs =
                 weighted_xtz_ref_with_buffer(cx, constant_weights.as_ref(), z.as_ref(), xtz_buffer);
-            match factor.solve(xtw_rhs.as_ref()) {
-                Ok(candidate) => candidate,
-                Err(_) => {
-                    // Pathological RHS: stabilized solve on the (constant) matrix.
-                    let mut xtwx = weighted_xtx_ref(cx, constant_weights.as_ref())?;
-                    if lambda > 0.0 {
-                        add_ridge_to_diagonal(
-                            &mut xtwx,
-                            lambda,
-                            options.l2_penalty_exclude_intercept,
-                        );
-                    }
-                    solve_with_stabilization(xtwx.as_ref(), xtw_rhs.as_ref())?
+            if let Ok(candidate) = factor.solve(xtw_rhs.as_ref()) {
+                candidate
+            } else {
+                // Pathological RHS: stabilized solve on the (constant) matrix.
+                let mut xtwx = weighted_xtx_ref(cx, constant_weights.as_ref())?;
+                if lambda > 0.0 {
+                    add_ridge_to_diagonal(&mut xtwx, lambda, options.l2_penalty_exclude_intercept);
                 }
+                solve_with_stabilization(xtwx.as_ref(), xtw_rhs.as_ref())?
             }
         } else {
             // Variable-weight path (1 < power < 2): the weight depends on μ, so the
@@ -648,7 +698,6 @@ fn sample_weight_at(sample_weights: Option<MatRef<'_, f64>>, row: usize) -> f64 
     sample_weights.map_or(1.0, |weights| weights[(row, 0)])
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finalize_fit(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
@@ -955,7 +1004,6 @@ fn robust_covariance(
 /// computed for the returned beta inside the line search, so the caller reuses it
 /// instead of recomputing `x*beta`, `exp`, and the deviance a second time per IRLS
 /// iteration (the value is identical — same beta, same deviance function).
-#[allow(clippy::too_many_arguments)]
 fn backtracking_update(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,

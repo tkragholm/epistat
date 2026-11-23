@@ -2,18 +2,28 @@ use epistat_linalg::Mat;
 
 use crate::utils::usize_to_f64;
 
+/// Counts of an outcome's values by sign and finiteness.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutcomeDiagnostics {
+    /// Rows.
     pub n_rows: usize,
+    /// Finite values.
     pub n_finite: usize,
+    /// NaN or infinite values.
     pub n_non_finite: usize,
+    /// Finite negative values.
     pub n_negative: usize,
+    /// Zeros.
     pub n_zero: usize,
+    /// Positive values.
     pub n_positive: usize,
+    /// The share of the finite values that are positive.
     pub positive_share: f64,
+    /// The share of the finite values that are zero.
     pub zero_share: f64,
 }
 
+/// Counts of the first column of `outcome`.
 #[must_use]
 pub fn outcome_diagnostics(outcome: &Mat<f64>) -> OutcomeDiagnostics {
     let n_rows = outcome.nrows();
@@ -61,6 +71,7 @@ pub fn outcome_diagnostics(outcome: &Mat<f64>) -> OutcomeDiagnostics {
     }
 }
 
+/// Whether the range of `column` exceeds `|tolerance|`. False for a column out of range or fewer than two rows.
 #[must_use]
 pub fn column_has_variation(x: &Mat<f64>, column: usize, tolerance: f64) -> bool {
     if column >= x.ncols() || x.nrows() < 2 {
@@ -95,6 +106,7 @@ fn select_columns(x: &Mat<f64>, columns: &[usize]) -> Mat<f64> {
     Mat::from_fn(x.nrows(), columns.len(), |row, col| x[(row, columns[col])])
 }
 
+/// The columns of `x` with variation above `tolerance`, and those in `always_keep`, with their indices.
 #[must_use]
 pub fn drop_constant_columns(
     x: &Mat<f64>,

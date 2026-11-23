@@ -11,13 +11,13 @@
 //! -- --nocapture` after a change that is meant to alter results.
 #![cfg(all(target_arch = "aarch64", target_os = "macos"))]
 
-use epistat_testkit::Fingerprint;
 use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart,
     fit_lognormal_smearing_input, fit_tweedie_input, fit_tweedie_input_warm, fit_two_part_input,
     fit_two_part_input_warm,
 };
+use epistat_testkit::Fingerprint;
 
 const N_ROWS: usize = 10_000;
 const N_COLS: usize = 12;
@@ -111,7 +111,7 @@ impl Hasher {
         }
     }
 
-    fn opt(&mut self, m: &Option<Mat<f64>>) {
+    fn opt(&mut self, m: Option<&Mat<f64>>) {
         match m {
             Some(m) => self.mat(m),
             None => self.word(u64::MAX),
@@ -132,10 +132,10 @@ fn two_part(
     let mut h = Hasher::new();
     h.mat(&model.beta_logit);
     h.mat(&model.beta_gamma);
-    h.opt(&report.se_logit);
-    h.opt(&report.se_gamma);
-    h.opt(&report.cov_logit);
-    h.opt(&report.cov_gamma);
+    h.opt(report.se_logit.as_ref());
+    h.opt(report.se_gamma.as_ref());
+    h.opt(report.cov_logit.as_ref());
+    h.opt(report.cov_gamma.as_ref());
     h.word(report.iterations_logit as u64);
     h.word(report.iterations_gamma as u64);
     h.word(report.meta.fallback_attempts as u64);
@@ -161,8 +161,8 @@ fn tweedie(
     let (model, report) = fit_tweedie_input_warm(input, power, options, warm).expect(name);
     let mut h = Hasher::new();
     h.mat(&model.beta);
-    h.opt(&report.se);
-    h.opt(&report.cov);
+    h.opt(report.se.as_ref());
+    h.opt(report.cov.as_ref());
     h.word(report.meta.iterations as u64);
     h.word(report.meta.fallback_attempts as u64);
     h.mat(&model.predict(&input.design_matrix).mean);
@@ -298,8 +298,8 @@ fn collect() -> Golden {
     .expect("lognormal");
     let mut h = Hasher::new();
     h.mat(&model.beta);
-    h.opt(&report.se);
-    h.opt(&report.cov);
+    h.opt(report.se.as_ref());
+    h.opt(report.cov.as_ref());
     out.push(("lognormal/weighted/robust/clustered", h.finish()));
 
     // The plain-API wrappers used elsewhere.
@@ -318,22 +318,28 @@ fn collect() -> Golden {
 }
 
 const GOLDEN: &[(&str, u64)] = &[
-    ("two_part/unweighted/robust/clustered", 0x005fca9846ef4ac6),
-    ("two_part/unweighted/model_se", 0x7238922a71787077),
-    ("two_part/weighted/model_se", 0x288fd34eb86d1456),
-    ("two_part/weighted/robust/clustered", 0x67d24eae4970d5b5),
-    ("two_part/weighted/stable", 0x18cb2aa04df1f58e),
-    ("two_part/weighted/warm/no_cov", 0xc925fead5cba18f0),
-    ("two_part/weighted/warm/model_se", 0xa90112d7dbe6f2b5),
-    ("tweedie2/weighted/robust/clustered", 0x00c1506a4a885bb7),
-    ("tweedie2/unweighted/plain", 0x66ca3ead887a50d8),
-    ("tweedie2/weighted/warm", 0x169946344253d936),
-    ("tweedie2/weighted/ridge/warm/robust", 0xd152025892edd8f1),
-    ("tweedie1.5/weighted/robust/clustered", 0x6c27f84b95f4274a),
-    ("tweedie1.5/unweighted/plain", 0x7366d249674b0c28),
-    ("lognormal/weighted/robust/clustered", 0xb9bacb987d7e837d),
-    ("two_part/input/default", 0x50443c256527acf3),
-    ("tweedie2/input/default", 0xfeca4cccd30d521c),
+    (
+        "two_part/unweighted/robust/clustered",
+        0x005f_ca98_46ef_4ac6,
+    ),
+    ("two_part/unweighted/model_se", 0x7238_922a_7178_7077),
+    ("two_part/weighted/model_se", 0x288f_d34e_b86d_1456),
+    ("two_part/weighted/robust/clustered", 0x67d2_4eae_4970_d5b5),
+    ("two_part/weighted/stable", 0x18cb_2aa0_4df1_f58e),
+    ("two_part/weighted/warm/no_cov", 0xc925_fead_5cba_18f0),
+    ("two_part/weighted/warm/model_se", 0xa901_12d7_dbe6_f2b5),
+    ("tweedie2/weighted/robust/clustered", 0x00c1_506a_4a88_5bb7),
+    ("tweedie2/unweighted/plain", 0x66ca_3ead_887a_50d8),
+    ("tweedie2/weighted/warm", 0x1699_4634_4253_d936),
+    ("tweedie2/weighted/ridge/warm/robust", 0xd152_0258_92ed_d8f1),
+    (
+        "tweedie1.5/weighted/robust/clustered",
+        0x6c27_f84b_95f4_274a,
+    ),
+    ("tweedie1.5/unweighted/plain", 0x7366_d249_674b_0c28),
+    ("lognormal/weighted/robust/clustered", 0xb9ba_cb98_7d7e_837d),
+    ("two_part/input/default", 0x5044_3c25_6527_acf3),
+    ("tweedie2/input/default", 0xfeca_4ccc_d30d_521c),
 ];
 
 #[test]

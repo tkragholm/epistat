@@ -31,8 +31,8 @@
 //!   scaling of random walk Metropolis algorithms. Annals of Applied Probability 7(1),
 //!   110-120.
 
-use epistat_rng::Stream;
 use epistat_linalg::Mat;
+use epistat_rng::Stream;
 
 use super::math::{
     adapt_scalar_scale, cholesky_lower, sample_standard_normal,
@@ -216,7 +216,7 @@ impl CovarianceWindow {
         let dim = self.mean.len();
         let denominator = usize_to_f64(self.count.saturating_sub(1).max(1));
         Mat::from_fn(dim, dim, |row, col| {
-            0.5 * (self.deviations[(row, col)] + self.deviations[(col, row)]) / denominator
+            f64::midpoint(self.deviations[(row, col)], self.deviations[(col, row)]) / denominator
         })
     }
 }
