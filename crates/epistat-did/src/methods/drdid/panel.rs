@@ -1,0 +1,1541 @@
+use epistat_linalg::SolveLstsq;
+use epistat_linalg::{Mat, MatRef};
+use epistat_linalg::{weighted_gram as linalg_weighted_gram, weighted_xtz};
+use itertools::izip;
+
+use super::design::{DEPENDENCE_TOLERANCE, prune_design};
+use crate::estimators::common::linalg::{solve_spd_system, solve_spd_system_multi_rhs};
+use crate::estimators::common::logit::fit_logit;
+use crate::inference::{
+    multiplier_bootstrap_ci, standard_error_from_influence, validate_confidence_level,
+};
+use crate::methods::drdid::moments::normalize_weights_to_n as normalize_weights_to_n_shared;
+use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidObservation};
+use crate::util::usize_to_f64;
+
+/// Estimate the improved / locally efficient panel `DR-DiD` ATT from outcome deltas.
+///
+/// This is the panel estimator in Sant'Anna and Zhao (2020), corresponding to
+/// the locally efficient / improved specification used by
+/// `DRDID::drdid_panel`. Let `ΔY_i = Y_{i1} - Y_{i0}` and let `D_i` denote
+/// treatment. The estimator combines:
+///
+/// - a propensity score model `π(X_i) = P(D_i = 1 | X_i)`,
+/// - a control-group outcome regression `m_0(X_i) = E[ΔY_i | D_i = 0, X_i]`,
+/// - and the augmented inverse-probability weighted score
+///
+/// ```text
+/// ATT = E[w_1(D_i) {ΔY_i - m_0(X_i)}] - E[w_0(D_i, X_i) {ΔY_i - m_0(X_i)}]
+/// ```
+///
+/// where the weights follow the improved `DRDID` normalization.
+///
+/// Comparators whose fitted propensity score is 0.995 or higher are trimmed:
+/// their weight in both terms of the ATT, and in its influence function, is
+/// zero. This is `DRDID::drdid_panel` at its default `trim.level = 0.995`.
+/// Treated units are never trimmed, and the nuisance models are fitted on
+/// every row before the trim applies. The score itself is capped at
+/// `1 - propensity_clip`. [`fit_drdid_panel_nuisance`] returns the fitted
+/// scores, so a caller can count the comparators the trim removes.
+///
+/// References:
+/// - Sant'Anna, P. H. C. and Zhao, J. (2020). "Doubly Robust Difference-in-
+///   Differences Estimators". *Journal of Econometrics*.
+/// - `DRDID::drdid_panel` (R), used as the numerical parity reference.
+///
+/// The estimator is the locally efficient panel estimator of
+/// `DRDID::drdid_panel`.
+///
+/// # Errors
+///
+/// Returns [`DrDidError`] when inputs/configuration are invalid or nuisance models cannot be fit.
+pub fn estimate_drdid_panel(
+    observations: &[DrDidObservation],
+    config: DrDidConfig,
+) -> Result<DrDidEstimate, DrDidError> {
+    validate_drdid_config(config)?;
+    if observations.is_empty() {
+        return Err(DrDidError::EmptyInput);
+    }
+
+    let prepared = prepare_panel_data(observations)?;
+    estimate_from_prepared(&prepared, config)
+}
+
+/// One row's worth of the design, laid out flat.
+///
+/// `DrDidObservation` owns a `Vec<f64>` per row, and `prepare_panel_data`'s
+/// first act is to copy every one of them into a single flat buffer. A caller
+/// that already has the numbers -- or that is about to build them anyway --
+/// pays for that vector twice: once to fill it, once to read it out.
+///
+/// `estimate_att_gt_dr_panel_with_influence` is such a caller, and it is the hot
+/// one. It runs this estimator once per `(g, t)` cell, and it was allocating a
+/// vector per unit per cell to hand over covariates it had already collected.
+/// On Study I's shape -- tens of thousands of units, a few hundred cells, 22
+/// covariates -- that is millions of small allocations per slice, and the cost
+/// showed: a fit grew LINEARLY in the covariate count, which is the signature of
+/// copying rather than of the linear algebra, whose Gram matrix is quadratic in
+/// it and whose solve is cubic.
+///
+/// `design_matrix_flat` is row-major and INCLUDES whatever intercept the caller
+/// wants; nothing is prepended here. That matches `estimate_drdid_panel`'s
+/// treatment of `DrDidObservation::covariates`, which is a finished design.
+#[derive(Debug, Clone, Copy)]
+pub struct PanelFlatInput<'a> {
+    /// One per row.
+    pub treated: &'a [bool],
+    /// Follow-up outcome minus baseline outcome, one per row.
+    pub delta_outcome: &'a [f64],
+    /// Sampling weight, one per row. Must be finite and positive.
+    pub weight: &'a [f64],
+    /// Row-major, `treated.len() * feature_count`.
+    pub design_matrix_flat: &'a [f64],
+    /// Columns per row, at least one.
+    pub feature_count: usize,
+}
+
+/// The panel DR estimator on a design that is already flat.
+///
+/// Identical arithmetic to [`estimate_drdid_panel`] -- the same validation, the
+/// same nuisance fits, the same influence function -- reached without building a
+/// vector per row. See [`PanelFlatInput`].
+///
+/// # Errors
+/// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
+/// if `design_matrix_flat` is not `rows * feature_count` long.
+pub fn estimate_drdid_panel_flat(
+    input: PanelFlatInput<'_>,
+    config: DrDidConfig,
+) -> Result<DrDidEstimate, DrDidError> {
+    validate_drdid_config(config)?;
+    if input.treated.is_empty() {
+        return Err(DrDidError::EmptyInput);
+    }
+    let prepared = prepare_panel_flat(input)?;
+    estimate_from_prepared(&prepared, config)
+}
+
+/// The panel DR estimator's two nuisance models, as
+/// [`estimate_drdid_panel_flat`] fits them for its ATT.
+///
+/// The fits are the estimator's own: the same pruning of `input`'s design, the
+/// same weighted logistic propensity score by maximum likelihood, and the same
+/// weighted least squares outcome regression among comparators, which carries
+/// `config.ridge` on its diagonal. The standard errors are
+/// computed here and play no part in the ATT. Neither accounts for clustering.
+///
+/// # Errors
+/// As [`estimate_drdid_panel_flat`], and [`DrDidError::SingularSystem`] when
+/// an information matrix cannot be inverted for the standard errors.
+pub fn fit_drdid_panel_nuisance(
+    input: PanelFlatInput<'_>,
+    config: DrDidConfig,
+) -> Result<PanelNuisanceFit, DrDidError> {
+    validate_drdid_config(config)?;
+    if input.treated.is_empty() {
+        return Err(DrDidError::EmptyInput);
+    }
+    let prepared = prepare_panel_flat(input)?;
+    let fits = fit_panel_nuisance_models(&prepared, config)?;
+    let propensity_se = propensity_model_standard_errors(&prepared, &fits)?;
+    let outcome_se = outcome_hc0_standard_errors(&prepared, &fits)?;
+    Ok(PanelNuisanceFit {
+        kept_columns: prepared.kept_columns,
+        propensity_coefficients: fits.propensity.coefficients,
+        propensity_se,
+        iterations: fits.propensity.iterations,
+        converged: fits.propensity.converged,
+        propensity_scores: fits.propensity_scores,
+        outcome_coefficients: fits.outcome_coefficients,
+        outcome_se,
+        outcome_predictions: fits.outcome_predictions,
+    })
+}
+
+/// The propensity score of [`fit_drdid_panel_nuisance`], without the rest.
+///
+/// Runs the same validation, the same per-arm pruning of `input`'s design and
+/// the same weighted logistic iterations as [`fit_drdid_panel_nuisance`], so
+/// the coefficients, the iteration count and the convergence flag equal its
+/// bit for bit whenever that fit succeeds. It skips the propensity and outcome
+/// standard errors and the outcome regression. A design for which those would
+/// fail with [`DrDidError::SingularSystem`] therefore succeeds here.
+///
+/// # Errors
+/// As [`estimate_drdid_panel_flat`], and the errors of the propensity
+/// iterations.
+pub fn fit_drdid_panel_propensity_coefficients(
+    input: PanelFlatInput<'_>,
+    config: DrDidConfig,
+) -> Result<PanelPropensityCoefficients, DrDidError> {
+    validate_drdid_config(config)?;
+    if input.treated.is_empty() {
+        return Err(DrDidError::EmptyInput);
+    }
+    let prepared = prepare_panel_flat(input)?;
+    let normalized_weights = normalize_weights_to_n(&prepared.sampling_weights)?;
+    let propensity = fit_logistic_irls(
+        LogisticIrlsInputs {
+            design_matrix_flat: &prepared.design_matrix_flat,
+            feature_count: prepared.feature_count,
+            treated_indicator: &prepared.treated_indicator,
+            normalized_weights: &normalized_weights,
+        },
+        LogisticIrlsSettings {
+            max_iter: config.max_iter,
+            tol: config.tol,
+        },
+    )?;
+    Ok(PanelPropensityCoefficients {
+        kept_columns: prepared.kept_columns,
+        coefficients: propensity.coefficients,
+        iterations: propensity.iterations,
+        converged: propensity.converged,
+    })
+}
+
+/// The result of [`fit_drdid_panel_propensity_coefficients`]; the fields are
+/// those of [`PanelNuisanceFit`] by the names `kept_columns`,
+/// `propensity_coefficients`, `iterations` and `converged`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelPropensityCoefficients {
+    /// One flag per column of the caller's design, true where the fit kept it.
+    pub kept_columns: Vec<bool>,
+    /// Propensity score coefficients, over the kept columns.
+    pub coefficients: Vec<f64>,
+    /// Newton steps the propensity score took, counting the last.
+    pub iterations: usize,
+    /// Whether the iterations stopped at the maximum.
+    pub converged: bool,
+}
+
+/// The two nuisance models of one panel DR fit; see [`fit_drdid_panel_nuisance`].
+///
+/// The coefficient vectors cover the kept columns only, in the input's order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelNuisanceFit {
+    /// One flag per column of the caller's design, true where the fit kept it.
+    /// See [`crate::independent_design_columns`], whose per-arm rule this is.
+    pub kept_columns: Vec<bool>,
+    /// Propensity score coefficients.
+    pub propensity_coefficients: Vec<f64>,
+    /// Their model-based standard errors: the root of the diagonal of the
+    /// inverse information matrix at the solution, without the ridge.
+    pub propensity_se: Vec<f64>,
+    /// Newton steps the propensity score took, counting the last.
+    pub iterations: usize,
+    /// Whether the iterations stopped at the maximum: on a step within
+    /// `config.tol`, or where no step along the last direction raised the
+    /// likelihood, on a Newton decrement within a relative `config.tol` of
+    /// it. False when the iteration budget ran out, or when the line search
+    /// failed with more of the likelihood still to gain.
+    pub converged: bool,
+    /// The fitted propensity score of every row, capped at
+    /// `1 - propensity_clip`.
+    pub propensity_scores: Vec<f64>,
+    /// Outcome regression coefficients, fitted among comparators.
+    pub outcome_coefficients: Vec<f64>,
+    /// Their heteroskedasticity-robust (HC0) standard errors.
+    pub outcome_se: Vec<f64>,
+    /// The outcome regression's prediction for every row.
+    pub outcome_predictions: Vec<f64>,
+}
+
+fn estimate_from_prepared(
+    prepared: &PanelPreparedData,
+    config: DrDidConfig,
+) -> Result<DrDidEstimate, DrDidError> {
+    let nuisance = fit_panel_nuisance_models(prepared, config)?;
+    let panel_att = estimate_panel_att_and_influence(
+        prepared,
+        &nuisance.normalized_weights,
+        &nuisance.propensity_scores,
+        &nuisance.outcome_predictions,
+    )?;
+
+    let se = standard_error_from_influence(&panel_att.influence_function);
+    let (ci_low, ci_high) = multiplier_bootstrap_ci(
+        panel_att.att,
+        &panel_att.influence_function,
+        config.inference(),
+        config.bootstrap(),
+    );
+
+    Ok(DrDidEstimate {
+        att: panel_att.att,
+        se,
+        ci_low,
+        ci_high,
+        treated_n: prepared.treated_n,
+        control_n: prepared.control_n,
+        total_weight: prepared.total_weight,
+        influence_function: panel_att.influence_function,
+        design_columns_dropped: prepared.design_columns_dropped,
+    })
+}
+
+fn prepare_panel_flat(input: PanelFlatInput<'_>) -> Result<PanelPreparedData, DrDidError> {
+    let observation_count = input.treated.len();
+    let feature_count = input.feature_count.max(1);
+    if input.delta_outcome.len() != observation_count
+        || input.weight.len() != observation_count
+        || input.design_matrix_flat.len() != observation_count * feature_count
+    {
+        return Err(DrDidError::InconsistentCovariateCount {
+            expected: observation_count * feature_count,
+            actual: input.design_matrix_flat.len(),
+        });
+    }
+
+    let mut treated_n = 0_usize;
+    let mut control_n = 0_usize;
+    let mut total_weight = 0.0_f64;
+    let mut treated_indicator = Vec::with_capacity(observation_count);
+
+    for row in 0..observation_count {
+        if !input.delta_outcome[row].is_finite() {
+            return Err(DrDidError::InvalidOutcome {
+                value: input.delta_outcome[row],
+            });
+        }
+        let weight = input.weight[row];
+        if !weight.is_finite() || weight <= 0.0 {
+            return Err(DrDidError::InvalidWeight { value: weight });
+        }
+        if input.treated[row] {
+            treated_n += 1;
+            treated_indicator.push(1.0);
+        } else {
+            control_n += 1;
+            treated_indicator.push(0.0);
+        }
+        total_weight += weight;
+    }
+    for value in input.design_matrix_flat {
+        if !value.is_finite() {
+            return Err(DrDidError::InvalidCovariate { value: *value });
+        }
+    }
+
+    if treated_n == 0 {
+        return Err(DrDidError::NoTreated);
+    }
+    if control_n == 0 {
+        return Err(DrDidError::NoControl);
+    }
+
+    let design = prune_design(
+        input.design_matrix_flat,
+        feature_count,
+        &arms(&treated_indicator),
+        input.weight,
+        DEPENDENCE_TOLERANCE,
+    )?;
+    Ok(PanelPreparedData {
+        feature_count: design.feature_count,
+        treated_n,
+        control_n,
+        total_weight,
+        treated_indicator,
+        outcome_delta: input.delta_outcome.to_vec(),
+        sampling_weights: input.weight.to_vec(),
+        design_matrix_flat: design.design_flat,
+        design_columns_dropped: design.dropped,
+        kept_columns: design.kept,
+    })
+}
+
+/// Row groups for [`prune_design`]: the comparison arm is 0, the treated arm 1.
+fn arms(treated_indicator: &[f64]) -> Vec<usize> {
+    treated_indicator
+        .iter()
+        .map(|&treated| usize::from(treated > 0.5))
+        .collect()
+}
+
+struct PanelPreparedData {
+    /// Columns of `design_matrix_flat` per row, AFTER pruning: the intercept
+    /// plus the covariates this sample can identify. See [`prune_design`].
+    feature_count: usize,
+    design_columns_dropped: usize,
+    /// One flag per input column, true where pruning kept it.
+    kept_columns: Vec<bool>,
+    treated_n: usize,
+    control_n: usize,
+    total_weight: f64,
+    treated_indicator: Vec<f64>,
+    outcome_delta: Vec<f64>,
+    sampling_weights: Vec<f64>,
+    design_matrix_flat: Vec<f64>,
+}
+
+struct PanelNuisanceFits {
+    normalized_weights: Vec<f64>,
+    propensity: LogisticIrlsFit,
+    propensity_scores: Vec<f64>,
+    outcome_coefficients: Vec<f64>,
+    outcome_predictions: Vec<f64>,
+}
+
+struct PanelAttEstimate {
+    att: f64,
+    influence_function: Vec<f64>,
+}
+
+/// Comparators at or above this propensity score are trimmed from the ATT, as
+/// at `DRDID::drdid_panel`'s default `trim.level`.
+const PANEL_TRIM_LEVEL: f64 = 0.995;
+
+fn prepare_panel_data(observations: &[DrDidObservation]) -> Result<PanelPreparedData, DrDidError> {
+    let covariate_count = observations.first().map_or(0, |row| row.covariates.len());
+    let feature_count = covariate_count.max(1);
+    let observation_count = observations.len();
+
+    let mut treated_n = 0_usize;
+    let mut control_n = 0_usize;
+    let mut total_weight = 0.0_f64;
+
+    let mut treated_indicator = Vec::with_capacity(observation_count);
+    let mut outcome_delta = Vec::with_capacity(observation_count);
+    let mut sampling_weights = Vec::with_capacity(observation_count);
+    let mut design_matrix_flat = Vec::with_capacity(observation_count * feature_count);
+
+    for row in observations {
+        if row.covariates.len() != covariate_count {
+            return Err(DrDidError::InconsistentCovariateCount {
+                expected: covariate_count,
+                actual: row.covariates.len(),
+            });
+        }
+        if !row.delta_outcome.is_finite() {
+            return Err(DrDidError::InvalidOutcome {
+                value: row.delta_outcome,
+            });
+        }
+        if !row.weight.is_finite() || row.weight <= 0.0 {
+            return Err(DrDidError::InvalidWeight { value: row.weight });
+        }
+        for covariate in &row.covariates {
+            if !covariate.is_finite() {
+                return Err(DrDidError::InvalidCovariate { value: *covariate });
+            }
+        }
+
+        if row.treated {
+            treated_n += 1;
+            treated_indicator.push(1.0);
+        } else {
+            control_n += 1;
+            treated_indicator.push(0.0);
+        }
+        outcome_delta.push(row.delta_outcome);
+        total_weight += row.weight;
+        sampling_weights.push(row.weight);
+        if covariate_count == 0 {
+            design_matrix_flat.push(1.0);
+        } else {
+            design_matrix_flat.extend_from_slice(&row.covariates);
+        }
+    }
+
+    if treated_n == 0 {
+        return Err(DrDidError::NoTreated);
+    }
+    if control_n == 0 {
+        return Err(DrDidError::NoControl);
+    }
+
+    let design = prune_design(
+        &design_matrix_flat,
+        feature_count,
+        &arms(&treated_indicator),
+        &sampling_weights,
+        DEPENDENCE_TOLERANCE,
+    )?;
+    Ok(PanelPreparedData {
+        feature_count: design.feature_count,
+        treated_n,
+        control_n,
+        total_weight,
+        treated_indicator,
+        outcome_delta,
+        sampling_weights,
+        design_matrix_flat: design.design_flat,
+        design_columns_dropped: design.dropped,
+        kept_columns: design.kept,
+    })
+}
+
+fn fit_panel_nuisance_models(
+    prepared: &PanelPreparedData,
+    config: DrDidConfig,
+) -> Result<PanelNuisanceFits, DrDidError> {
+    let normalized_weights = normalize_weights_to_n(&prepared.sampling_weights)?;
+    let observation_count = prepared.treated_indicator.len();
+    let propensity = fit_logistic_irls(
+        LogisticIrlsInputs {
+            design_matrix_flat: &prepared.design_matrix_flat,
+            feature_count: prepared.feature_count,
+            treated_indicator: &prepared.treated_indicator,
+            normalized_weights: &normalized_weights,
+        },
+        LogisticIrlsSettings {
+            max_iter: config.max_iter,
+            tol: config.tol,
+        },
+    )?;
+    let propensity_scores = predict_logistic_scores(
+        &prepared.design_matrix_flat,
+        prepared.feature_count,
+        &propensity.coefficients,
+        config.propensity_clip,
+    );
+
+    let mut control_design = Vec::with_capacity(prepared.control_n * prepared.feature_count);
+    let mut control_outcome = Vec::with_capacity(prepared.control_n);
+    let mut control_weights = Vec::with_capacity(prepared.control_n);
+    for (row_index, normalized_weight) in normalized_weights
+        .iter()
+        .enumerate()
+        .take(observation_count)
+    {
+        if prepared.treated_indicator[row_index] < 0.5 {
+            let row_start = row_index * prepared.feature_count;
+            let row_end = row_start + prepared.feature_count;
+            control_design.extend_from_slice(&prepared.design_matrix_flat[row_start..row_end]);
+            control_outcome.push(prepared.outcome_delta[row_index]);
+            control_weights.push(*normalized_weight);
+        }
+    }
+
+    let beta_outcome = fit_weighted_linear(
+        &control_design,
+        prepared.feature_count,
+        &control_outcome,
+        &control_weights,
+        config.ridge,
+    )?;
+    let outcome_predictions = predict_linear(
+        &prepared.design_matrix_flat,
+        prepared.feature_count,
+        &beta_outcome,
+    );
+
+    Ok(PanelNuisanceFits {
+        normalized_weights,
+        propensity,
+        propensity_scores,
+        outcome_coefficients: beta_outcome,
+        outcome_predictions,
+    })
+}
+
+/// The model-based standard errors of the propensity score: the root of the
+/// diagonal of `(X' diag(w p (1 - p)) X)^-1` over every row.
+fn propensity_model_standard_errors(
+    prepared: &PanelPreparedData,
+    fits: &PanelNuisanceFits,
+) -> Result<Vec<f64>, DrDidError> {
+    let information = weighted_gram(prepared, |row| {
+        let p = fits.propensity_scores[row];
+        fits.normalized_weights[row] * p * (1.0 - p)
+    });
+    let inverse = spd_inverse(&information, prepared.feature_count)?;
+    Ok((0..prepared.feature_count)
+        .map(|i| inverse[(i, i)].max(0.0).sqrt())
+        .collect())
+}
+
+/// The HC0 standard errors of the outcome regression among comparators:
+/// `B^-1 M B^-1` with `B = X'WX` and `M = X' diag((w r)^2) X` over comparators,
+/// `r` the residual.
+fn outcome_hc0_standard_errors(
+    prepared: &PanelPreparedData,
+    fits: &PanelNuisanceFits,
+) -> Result<Vec<f64>, DrDidError> {
+    let comparator = |row: usize| prepared.treated_indicator[row] < 0.5;
+    let bread = weighted_gram(prepared, |row| {
+        if comparator(row) {
+            fits.normalized_weights[row]
+        } else {
+            0.0
+        }
+    });
+    let meat = weighted_gram(prepared, |row| {
+        if comparator(row) {
+            let scaled = fits.normalized_weights[row]
+                * (prepared.outcome_delta[row] - fits.outcome_predictions[row]);
+            scaled * scaled
+        } else {
+            0.0
+        }
+    });
+    let feature_count = prepared.feature_count;
+    let bread_inverse = spd_inverse(&bread, feature_count)?;
+    let meat = Mat::from_fn(feature_count, feature_count, |row, col| {
+        meat[row * feature_count + col]
+    });
+    let covariance = &bread_inverse * &meat * &bread_inverse;
+    Ok((0..feature_count)
+        .map(|i| covariance[(i, i)].max(0.0).sqrt())
+        .collect())
+}
+
+/// `X' diag(weight) X` over every row, row-major. The weights are not negative.
+fn weighted_gram(prepared: &PanelPreparedData, weight: impl Fn(usize) -> f64) -> Vec<f64> {
+    let feature_count = prepared.feature_count;
+    let row_count = prepared.treated_indicator.len();
+    let weights: Vec<f64> = (0..row_count).map(weight).collect();
+    let design =
+        MatRef::from_row_major_slice(&prepared.design_matrix_flat, row_count, feature_count);
+    let gram = linalg_weighted_gram(design, &weights)
+        .expect("the weights are products of non-negative factors");
+    let mut out = vec![0.0; feature_count * feature_count];
+    for row in 0..feature_count {
+        for col in 0..feature_count {
+            out[row * feature_count + col] = gram[(row, col)];
+        }
+    }
+    out
+}
+
+fn spd_inverse(matrix: &[f64], size: usize) -> Result<Mat<f64>, DrDidError> {
+    solve_spd_system_multi_rhs(matrix, &Mat::identity(size, size))
+        .map_err(|_| DrDidError::SingularSystem)
+}
+
+fn estimate_panel_att_and_influence(
+    prepared: &PanelPreparedData,
+    normalized_weights: &[f64],
+    propensity_scores: &[f64],
+    outcome_predictions: &[f64],
+) -> Result<PanelAttEstimate, DrDidError> {
+    let observation_count = prepared.treated_indicator.len();
+    let observation_count_f64 = usize_to_f64(observation_count);
+
+    let mut trim_indicator = vec![1.0; observation_count];
+    let mut treated_weights = Vec::with_capacity(observation_count);
+    let mut control_ipw_weights = Vec::with_capacity(observation_count);
+    let mut treated_dr_contributions = Vec::with_capacity(observation_count);
+    let mut control_dr_contributions = Vec::with_capacity(observation_count);
+    let mut hessian_weights = Vec::with_capacity(observation_count);
+
+    for (
+        row_index,
+        (treated, outcome_delta, propensity_score, normalized_weight, outcome_prediction),
+    ) in izip!(
+        prepared.treated_indicator.iter(),
+        prepared.outcome_delta.iter(),
+        propensity_scores.iter(),
+        normalized_weights.iter(),
+        outcome_predictions.iter()
+    )
+    .enumerate()
+    {
+        let residual = outcome_delta - outcome_prediction;
+        if *treated < 0.5 && *propensity_score >= PANEL_TRIM_LEVEL {
+            trim_indicator[row_index] = 0.0;
+        }
+        let treated_weight = normalized_weight * treated;
+        let control_weight =
+            trim_indicator[row_index] * normalized_weight * propensity_score * (1.0 - treated)
+                / (1.0 - propensity_score);
+        let trimmed_treated_weight = trim_indicator[row_index] * treated_weight;
+        treated_weights.push(trimmed_treated_weight);
+        control_ipw_weights.push(control_weight);
+        treated_dr_contributions.push(trimmed_treated_weight * residual);
+        control_dr_contributions.push(control_weight * residual);
+        hessian_weights.push(propensity_score * (1.0 - propensity_score) * normalized_weight);
+    }
+
+    let mean_treated_weight = treated_weights.iter().sum::<f64>() / observation_count_f64;
+    let mean_control_weight = control_ipw_weights.iter().sum::<f64>() / observation_count_f64;
+    if mean_treated_weight <= 0.0 {
+        return Err(DrDidError::NoTreated);
+    }
+    if mean_control_weight <= 0.0 {
+        return Err(DrDidError::NoControl);
+    }
+
+    let treated_eta = (treated_dr_contributions.iter().sum::<f64>() / observation_count_f64)
+        / mean_treated_weight;
+    let control_eta = (control_dr_contributions.iter().sum::<f64>() / observation_count_f64)
+        / mean_control_weight;
+    let att = treated_eta - control_eta;
+
+    let wols_influence =
+        weighted_outcome_influence(prepared, normalized_weights, outcome_predictions)?;
+    let propensity_influence = propensity_score_influence(
+        prepared,
+        normalized_weights,
+        &hessian_weights,
+        propensity_scores,
+    )?;
+
+    let treated_moment = column_means(prepared, &treated_weights, &vec![1.0; observation_count]);
+    let control_ps_moment = column_means(
+        prepared,
+        &control_ipw_weights,
+        &prepared
+            .outcome_delta
+            .iter()
+            .zip(outcome_predictions.iter())
+            .map(|(outcome_delta, prediction)| outcome_delta - prediction - control_eta)
+            .collect::<Vec<_>>(),
+    );
+    let control_reg_moment = column_means(
+        prepared,
+        &control_ipw_weights,
+        &vec![1.0; observation_count],
+    );
+
+    let mut influence_function = Vec::with_capacity(observation_count);
+    for row_index in 0..observation_count {
+        let treated_main =
+            treated_weights[row_index].mul_add(-treated_eta, treated_dr_contributions[row_index]);
+        let treated_nuisance = dot(&wols_influence[row_index], &treated_moment);
+        let treated_component = (treated_main - treated_nuisance) / mean_treated_weight;
+
+        let control_main = control_ipw_weights[row_index]
+            .mul_add(-control_eta, control_dr_contributions[row_index]);
+        let control_ps_nuisance = dot(&propensity_influence[row_index], &control_ps_moment);
+        let control_reg_nuisance = dot(&wols_influence[row_index], &control_reg_moment);
+        let control_component =
+            (control_main + control_ps_nuisance - control_reg_nuisance) / mean_control_weight;
+
+        influence_function.push(treated_component - control_component);
+    }
+
+    Ok(PanelAttEstimate {
+        att,
+        influence_function,
+    })
+}
+
+fn weighted_outcome_influence(
+    prepared: &PanelPreparedData,
+    normalized_weights: &[f64],
+    outcome_predictions: &[f64],
+) -> Result<Vec<Vec<f64>>, DrDidError> {
+    let observation_count = prepared.treated_indicator.len();
+    let feature_count = prepared.feature_count;
+    let n_f = observation_count_f64(observation_count);
+    let design = Mat::from_fn(observation_count, feature_count, |row, col| {
+        prepared.design_matrix_flat[row * feature_count + col]
+    });
+    let weighted_residual_features = Mat::from_fn(observation_count, feature_count, |row, col| {
+        let weight = normalized_weights[row] * (1.0 - prepared.treated_indicator[row]);
+        let residual = prepared.outcome_delta[row] - outcome_predictions[row];
+        weight * residual * design[(row, col)]
+    });
+    let weighted_design = Mat::from_fn(observation_count, feature_count, |row, col| {
+        let weight = normalized_weights[row] * (1.0 - prepared.treated_indicator[row]);
+        design[(row, col)] * (weight / n_f).sqrt()
+    });
+    let xp_x_mat = weighted_design.transpose() * &weighted_design;
+    let mut xp_x = vec![0.0; feature_count * feature_count];
+    for row in 0..feature_count {
+        for col in 0..feature_count {
+            xp_x[row * feature_count + col] = xp_x_mat[(row, col)];
+        }
+    }
+
+    let weighted_residual_features_t = weighted_residual_features.transpose().to_owned();
+    let solved = solve_spd_system_multi_rhs(&xp_x, &weighted_residual_features_t)
+        .map_err(|_| DrDidError::SingularSystem)?;
+    let influence = solved.transpose().to_owned();
+    Ok(mat_rows_to_nested(&influence))
+}
+
+fn propensity_score_influence(
+    prepared: &PanelPreparedData,
+    normalized_weights: &[f64],
+    hessian_weights: &[f64],
+    propensity_scores: &[f64],
+) -> Result<Vec<Vec<f64>>, DrDidError> {
+    let observation_count = prepared.treated_indicator.len();
+    let feature_count = prepared.feature_count;
+    let design = Mat::from_fn(observation_count, feature_count, |row, col| {
+        prepared.design_matrix_flat[row * feature_count + col]
+    });
+    let score_rows = Mat::from_fn(observation_count, feature_count, |row, col| {
+        let score_scalar =
+            normalized_weights[row] * (prepared.treated_indicator[row] - propensity_scores[row]);
+        score_scalar * design[(row, col)]
+    });
+    let weighted_design = Mat::from_fn(observation_count, feature_count, |row, col| {
+        design[(row, col)] * hessian_weights[row].sqrt()
+    });
+    let hessian_mat = weighted_design.transpose() * &weighted_design;
+    let mut hessian = vec![0.0; feature_count * feature_count];
+    for row in 0..feature_count {
+        for col in 0..feature_count {
+            hessian[row * feature_count + col] = hessian_mat[(row, col)];
+        }
+    }
+
+    let scale = usize_to_f64(observation_count);
+    let score_rows_t = score_rows.transpose().to_owned();
+    let solved = solve_spd_system_multi_rhs(&hessian, &score_rows_t)
+        .map_err(|_| DrDidError::SingularSystem)?;
+    let mut influence = solved.transpose().to_owned();
+    for row in 0..influence.nrows() {
+        for col in 0..influence.ncols() {
+            influence[(row, col)] *= scale;
+        }
+    }
+    Ok(mat_rows_to_nested(&influence))
+}
+
+fn mat_rows_to_nested(matrix: &Mat<f64>) -> Vec<Vec<f64>> {
+    (0..matrix.nrows())
+        .map(|row| {
+            (0..matrix.ncols())
+                .map(|col| matrix[(row, col)])
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+}
+
+fn column_means(prepared: &PanelPreparedData, row_weights: &[f64], row_values: &[f64]) -> Vec<f64> {
+    let observation_count = prepared.treated_indicator.len();
+    let feature_count = prepared.feature_count;
+    let mut means = vec![0.0; feature_count];
+    for row_index in 0..observation_count {
+        let row_start = row_index * feature_count;
+        let row = &prepared.design_matrix_flat[row_start..row_start + feature_count];
+        let scalar = row_weights[row_index] * row_values[row_index]
+            / observation_count_f64(observation_count);
+        for feature_index in 0..feature_count {
+            means[feature_index] = scalar.mul_add(row[feature_index], means[feature_index]);
+        }
+    }
+    means
+}
+
+fn observation_count_f64(observation_count: usize) -> f64 {
+    usize_to_f64(observation_count)
+}
+
+fn validate_drdid_config(config: DrDidConfig) -> Result<(), DrDidError> {
+    if !validate_confidence_level(config.confidence_level) {
+        return Err(DrDidError::InvalidConfig(
+            "confidence_level must be finite and in (0, 1)".to_string(),
+        ));
+    }
+    if !config.propensity_clip.is_finite()
+        || config.propensity_clip <= 0.0
+        || config.propensity_clip >= 0.5
+    {
+        return Err(DrDidError::InvalidConfig(
+            "propensity_clip must be finite and in (0, 0.5)".to_string(),
+        ));
+    }
+    if !config.ridge.is_finite() || config.ridge < 0.0 {
+        return Err(DrDidError::InvalidConfig(
+            "ridge must be finite and non-negative".to_string(),
+        ));
+    }
+    if config.max_iter == 0 {
+        return Err(DrDidError::InvalidConfig(
+            "max_iter must be > 0".to_string(),
+        ));
+    }
+    if !config.tol.is_finite() || config.tol <= 0.0 {
+        return Err(DrDidError::InvalidConfig(
+            "tol must be finite and > 0".to_string(),
+        ));
+    }
+    if config.bootstrap_reps == 0 {
+        return Err(DrDidError::InvalidConfig(
+            "bootstrap_reps must be > 0".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_weights_to_n(weights: &[f64]) -> Result<Vec<f64>, DrDidError> {
+    normalize_weights_to_n_shared(weights)
+        .map_err(|_| DrDidError::InvalidConfig("sum of weights must be > 0".to_string()))
+}
+
+fn dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter()
+        .zip(right.iter())
+        .map(|(a, b)| a * b)
+        .sum::<f64>()
+}
+
+#[derive(Clone, Copy)]
+struct LogisticIrlsInputs<'a> {
+    design_matrix_flat: &'a [f64],
+    feature_count: usize,
+    treated_indicator: &'a [f64],
+    normalized_weights: &'a [f64],
+}
+
+/// The propensity score's coefficients and how the iterations ended.
+#[derive(Debug)]
+struct LogisticIrlsFit {
+    coefficients: Vec<f64>,
+    iterations: usize,
+    converged: bool,
+}
+
+#[derive(Clone, Copy)]
+struct LogisticIrlsSettings {
+    max_iter: usize,
+    tol: f64,
+}
+
+fn fit_weighted_linear(
+    design_matrix_flat: &[f64],
+    feature_count: usize,
+    outcome: &[f64],
+    normalized_weights: &[f64],
+    ridge: f64,
+) -> Result<Vec<f64>, DrDidError> {
+    let observation_count = outcome.len();
+    let design = MatRef::from_row_major_slice(design_matrix_flat, observation_count, feature_count);
+    let normal_matrix_mat =
+        linalg_weighted_gram(design, normalized_weights).map_err(|_| DrDidError::SingularSystem)?;
+    let rhs_mat = weighted_xtz(design, normalized_weights, outcome)
+        .map_err(|_| DrDidError::SingularSystem)?;
+
+    let mut normal_matrix = vec![0.0; feature_count * feature_count];
+    for row in 0..feature_count {
+        for col in 0..feature_count {
+            normal_matrix[row * feature_count + col] = normal_matrix_mat[(row, col)];
+        }
+    }
+    for feature_index in 0..feature_count {
+        normal_matrix[feature_index * feature_count + feature_index] += ridge;
+    }
+    let mut rhs_vector = vec![0.0; feature_count];
+    for feature_index in 0..feature_count {
+        rhs_vector[feature_index] = rhs_mat[(feature_index, 0)];
+    }
+
+    match solve_spd_system(&normal_matrix, &rhs_vector) {
+        Ok(solution) => Ok(solution),
+        Err(_) if ridge > 0.0 && ridge <= 1e-6 => {
+            let weighted_design = Mat::from_fn(observation_count, feature_count, |row, col| {
+                design[(row, col)] * normalized_weights[row].sqrt()
+            });
+            let weighted_outcome = Mat::from_fn(observation_count, 1, |row, _| {
+                normalized_weights[row].sqrt() * outcome[row]
+            });
+            let solution = weighted_design.col_piv_qr().solve_lstsq(&weighted_outcome);
+            let mut out = vec![0.0; feature_count];
+            for feature_index in 0..feature_count {
+                let value = solution[(feature_index, 0)];
+                if !value.is_finite() {
+                    return Err(DrDidError::SingularSystem);
+                }
+                out[feature_index] = value;
+            }
+            Ok(out)
+        }
+        Err(_) => Err(DrDidError::SingularSystem),
+    }
+}
+
+/// The weighted logit maximum likelihood fit, `glm(family = binomial)` with
+/// `epsilon = tol` and `maxit = max_iter`.
+fn fit_logistic_irls(
+    inputs: LogisticIrlsInputs<'_>,
+    settings: LogisticIrlsSettings,
+) -> Result<LogisticIrlsFit, DrDidError> {
+    let observation_count = inputs.treated_indicator.len();
+    let design = MatRef::from_row_major_slice(
+        inputs.design_matrix_flat,
+        observation_count,
+        inputs.feature_count,
+    );
+    let fit = fit_logit(
+        design,
+        inputs.treated_indicator,
+        Some(inputs.normalized_weights),
+        settings.tol,
+        settings.max_iter.max(1),
+    )
+    .map_err(|_| DrDidError::SingularSystem)?;
+    Ok(LogisticIrlsFit {
+        coefficients: fit.coefficients,
+        iterations: fit.iterations,
+        converged: fit.converged,
+    })
+}
+
+fn predict_linear(x: &[f64], p: usize, beta: &[f64]) -> Vec<f64> {
+    let n = x.len() / p;
+    let mut out = Vec::with_capacity(n);
+    for row_idx in 0..n {
+        let x_row = &x[row_idx * p..(row_idx + 1) * p];
+        out.push(dot(x_row, beta));
+    }
+    out
+}
+
+fn predict_logistic_scores(x: &[f64], p: usize, beta: &[f64], clip: f64) -> Vec<f64> {
+    predict_linear(x, p, beta)
+        .into_iter()
+        .map(|value| sigmoid(value).min(1.0 - clip))
+        .collect()
+}
+
+fn sigmoid(value: f64) -> f64 {
+    let clipped = value.clamp(-35.0, 35.0);
+    1.0 / (1.0 + (-clipped).exp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two strata of a binary covariate: two cases of ten at x = 0, six of
+    /// ten at x = 1, so a saturated score is 0.2 and 0.6.
+    fn strata() -> (Vec<bool>, Vec<f64>, Vec<f64>) {
+        let mut treated = Vec::new();
+        let mut delta = Vec::new();
+        let mut design = Vec::new();
+        for (x, cases) in [(0.0, 2), (1.0, 6)] {
+            for unit in 0..10_i32 {
+                let case = unit < cases;
+                treated.push(case);
+                delta.push(
+                    3.0_f64.mul_add(x, 5.0)
+                        + if case { -2.0 } else { 0.0 }
+                        + f64::from(unit) * f64::from(unit) * 0.01,
+                );
+                design.extend_from_slice(&[1.0, x]);
+            }
+        }
+        (treated, delta, design)
+    }
+
+    fn flat<'a>(
+        treated: &'a [bool],
+        delta: &'a [f64],
+        weight: &'a [f64],
+        design: &'a [f64],
+        feature_count: usize,
+    ) -> PanelFlatInput<'a> {
+        PanelFlatInput {
+            treated,
+            delta_outcome: delta,
+            weight,
+            design_matrix_flat: design,
+            feature_count,
+        }
+    }
+
+    #[test]
+    fn a_saturated_nuisance_fit_has_the_closed_form_coefficients_and_errors() {
+        let (treated, delta, design) = strata();
+        let weight = vec![1.0; treated.len()];
+        let fit = fit_drdid_panel_nuisance(
+            flat(&treated, &delta, &weight, &design, 2),
+            DrDidConfig::default(),
+        )
+        .unwrap();
+        assert!(fit.converged);
+        assert!(fit.iterations > 0);
+        assert_eq!(fit.kept_columns, vec![true, true]);
+
+        // logit(0.2) and logit(0.6) - logit(0.2), with variances
+        // 1 / (n p (1 - p)) per stratum.
+        let ps = &fit.propensity_coefficients;
+        assert!((ps[0] - 0.25_f64.ln()).abs() < 1e-7);
+        assert!((ps[1] - (1.5_f64.ln() - 0.25_f64.ln())).abs() < 1e-7);
+        assert!((fit.propensity_scores[0] - 0.2).abs() < 1e-8);
+        assert!((fit.propensity_scores[10] - 0.6).abs() < 1e-8);
+        let var0: f64 = 1.0 / (10.0 * 0.2 * 0.8);
+        let var1: f64 = 1.0 / (10.0 * 0.6 * 0.4);
+        assert!((fit.propensity_se[0] - var0.sqrt()).abs() < 1e-7);
+        assert!((fit.propensity_se[1] - (var0 + var1).sqrt()).abs() < 1e-7);
+
+        // Comparator means per stratum, and HC0 variances sum(r^2) / n^2.
+        let comparators = |lo: usize, hi: usize| -> (f64, f64) {
+            let rows: Vec<f64> = (lo..hi).map(|r| delta[r]).collect();
+            let n = usize_to_f64(rows.len());
+            let mean = rows.iter().sum::<f64>() / n;
+            let ss = rows.iter().map(|v| (v - mean).powi(2)).sum::<f64>();
+            (mean, ss / (n * n))
+        };
+        let (mean0, hc0) = comparators(2, 10);
+        let (mean1, hc1) = comparators(16, 20);
+        let or = &fit.outcome_coefficients;
+        // The outcome regression carries `config.ridge` on its diagonal.
+        assert!((or[0] - mean0).abs() < 1e-7);
+        assert!((or[1] - (mean1 - mean0)).abs() < 1e-7);
+        assert!((fit.outcome_se[0] - hc0.sqrt()).abs() < 1e-7);
+        assert!((fit.outcome_se[1] - (hc0 + hc1).sqrt()).abs() < 1e-7);
+        assert!((fit.outcome_predictions[0] - mean0).abs() < 1e-7);
+        assert!((fit.outcome_predictions[19] - mean1).abs() < 1e-7);
+    }
+
+    /// The ATT from a nuisance fit, comparators at or above `trim` given no
+    /// weight.
+    fn att_from(
+        fit: &PanelNuisanceFit,
+        treated: &[bool],
+        delta: &[f64],
+        weight: &[f64],
+        trim: f64,
+    ) -> f64 {
+        let (mut case_sum, mut case_weight) = (0.0, 0.0);
+        let (mut comp_sum, mut comp_weight) = (0.0, 0.0);
+        for row in 0..treated.len() {
+            let residual = delta[row] - fit.outcome_predictions[row];
+            let p = fit.propensity_scores[row];
+            if treated[row] {
+                case_sum += weight[row] * residual;
+                case_weight += weight[row];
+            } else if p < trim {
+                let odds = weight[row] * p / (1.0 - p);
+                comp_sum += odds * residual;
+                comp_weight += odds;
+            }
+        }
+        case_sum / case_weight - comp_sum / comp_weight
+    }
+
+    /// A panel with a stratum of 400 units of which one is a comparator, so
+    /// its score is above the trim, a column held only by cases, and a column
+    /// that repeats another.
+    fn panel_with_a_trimmed_comparator() -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        let mut state = 7_u64;
+        let mut uniform = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize_to_f64(usize::try_from(state >> 40).unwrap()) / usize_to_f64(1 << 24)
+        };
+        let (mut treated, mut delta, mut weight, mut design) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for row in 0..600_usize {
+            let x = if row < 200 { 0.0 } else { 1.0 };
+            let case = if row < 200 {
+                uniform() < 0.4
+            } else {
+                row != 302
+            };
+            let z = uniform() - 0.5;
+            let rare = if case && row % 5 == 0 { 1.0 } else { 0.0 };
+            treated.push(case);
+            delta.push(2.0f64.mul_add(x, z) + if case { 1.0 } else { 0.0 } + uniform());
+            weight.push([1.0, 0.5, 0.25][row % 3]);
+            design.extend_from_slice(&[1.0, x, z, rare, 2.0 * x]);
+        }
+        (treated, delta, weight, design)
+    }
+
+    #[test]
+    fn the_nuisance_fit_is_the_one_the_att_is_computed_from() {
+        let (treated, delta, weight, design) = panel_with_a_trimmed_comparator();
+        let config = DrDidConfig::default();
+        let input = flat(&treated, &delta, &weight, &design, 5);
+        let fit = fit_drdid_panel_nuisance(input, config).unwrap();
+        let estimate = estimate_drdid_panel_flat(input, config).unwrap();
+
+        // The rare column is zero among comparators and the last repeats x.
+        assert_eq!(fit.kept_columns, vec![true, true, true, false, false]);
+        assert_eq!(estimate.design_columns_dropped, 2);
+        assert_eq!(fit.propensity_coefficients.len(), 3);
+        assert_eq!(fit.outcome_coefficients.len(), 3);
+
+        // Some comparators sit above the trim, and the ATT is the one the
+        // fitted models give with those comparators left out.
+        assert!(
+            treated
+                .iter()
+                .zip(&fit.propensity_scores)
+                .any(|(&t, &p)| !t && p >= PANEL_TRIM_LEVEL)
+        );
+        let trimmed = att_from(&fit, &treated, &delta, &weight, PANEL_TRIM_LEVEL);
+        let untrimmed = att_from(&fit, &treated, &delta, &weight, f64::INFINITY);
+        assert!(
+            (estimate.att - trimmed).abs() < 1e-10,
+            "{} {trimmed}",
+            estimate.att
+        );
+        assert!((estimate.att - untrimmed).abs() > 1e-6);
+    }
+
+    /// Twelve indicators, an age and a spline term of it, and an indicator
+    /// held by one case in twenty and one comparator in two thousand, which
+    /// nearly separates the arms.
+    fn registry_like_panel(seed: u64, n: usize) -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        let mut state = seed;
+        let mut uniform = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize_to_f64(usize::try_from(state >> 40).unwrap()) / usize_to_f64(1 << 24)
+        };
+        let (mut treated, mut delta, mut weight, mut design) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..n {
+            let case = uniform() < 0.2;
+            let age = 10.0f64.mul_add(uniform(), -5.0);
+            design.push(1.0);
+            for _ in 0..12 {
+                design.push(f64::from(u8::from(
+                    uniform() < if case { 0.25 } else { 0.2 },
+                )));
+            }
+            let rare = uniform() < if case { 0.05 } else { 0.0005 };
+            design.extend_from_slice(&[
+                age,
+                (age - 2.0).max(0.0).powi(3) / 9.0,
+                f64::from(u8::from(rare)),
+            ]);
+            treated.push(case);
+            delta.push(uniform());
+            weight.push(if case { 1.0 } else { 0.25 });
+        }
+        (treated, delta, weight, design)
+    }
+
+    #[test]
+    fn the_default_tolerance_converges_to_the_maximum_likelihood_coefficients() {
+        let (treated, delta, weight, design) = registry_like_panel(1, 4000);
+        let input = flat(&treated, &delta, &weight, &design, 16);
+        let fit = fit_drdid_panel_nuisance(input, DrDidConfig::default()).unwrap();
+        assert!(fit.converged);
+        assert!(fit.iterations < DrDidConfig::default().max_iter);
+        let tight =
+            fit_drdid_panel_nuisance(input, DrDidConfig::builder().tol(1e-13).build()).unwrap();
+        for (a, b) in fit
+            .propensity_coefficients
+            .iter()
+            .zip(&tight.propensity_coefficients)
+        {
+            assert!((a - b).abs() < 1e-5, "{a} {b}");
+        }
+    }
+
+    #[test]
+    fn a_score_that_runs_out_of_iterations_has_not_converged() {
+        let (treated, delta, weight, design) = registry_like_panel(1, 4000);
+        let fit = fit_drdid_panel_nuisance(
+            flat(&treated, &delta, &weight, &design, 16),
+            DrDidConfig::builder().max_iter(2).build(),
+        )
+        .unwrap();
+        assert!(!fit.converged);
+        assert_eq!(fit.iterations, 2);
+    }
+
+    #[test]
+    fn computes_standard_error_from_influence_function() {
+        let influence = [2.0, -1.0, 0.0, 1.0];
+        let se = standard_error_from_influence(&influence);
+        assert!((se - 0.559_016_994_374_947_5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_values() {
+        assert!(matches!(
+            validate_drdid_config(DrDidConfig::builder().confidence_level(1.0).build()),
+            Err(DrDidError::InvalidConfig(msg)) if msg.contains("confidence_level")
+        ));
+        assert!(matches!(
+            validate_drdid_config(DrDidConfig::builder().propensity_clip(0.5).build()),
+            Err(DrDidError::InvalidConfig(msg)) if msg.contains("propensity_clip")
+        ));
+        assert!(matches!(
+            validate_drdid_config(DrDidConfig::builder().ridge(-1.0).build()),
+            Err(DrDidError::InvalidConfig(msg)) if msg.contains("ridge")
+        ));
+        assert!(matches!(
+            validate_drdid_config(DrDidConfig::builder().max_iter(0).build()),
+            Err(DrDidError::InvalidConfig(msg)) if msg.contains("max_iter")
+        ));
+        assert!(matches!(
+            validate_drdid_config(DrDidConfig::builder().tol(0.0).build()),
+            Err(DrDidError::InvalidConfig(msg)) if msg.contains("tol")
+        ));
+        assert!(matches!(
+            validate_drdid_config(DrDidConfig::builder().bootstrap_reps(0).build()),
+            Err(DrDidError::InvalidConfig(msg)) if msg.contains("bootstrap_reps")
+        ));
+    }
+
+    #[test]
+    fn normalize_weights_to_n_scales_and_rejects_invalid_totals() {
+        let out = normalize_weights_to_n(&[2.0, 2.0, 4.0]).expect("normalized");
+        assert!((out.iter().sum::<f64>() - 3.0).abs() < 1e-12);
+
+        let err = normalize_weights_to_n(&[0.0, 0.0]).expect_err("must fail");
+        assert!(matches!(
+            err,
+            DrDidError::InvalidConfig(msg) if msg.contains("sum of weights")
+        ));
+
+        let err = normalize_weights_to_n(&[f64::INFINITY, 1.0]).expect_err("must fail");
+        assert!(matches!(
+            err,
+            DrDidError::InvalidConfig(msg) if msg.contains("sum of weights")
+        ));
+    }
+
+    #[test]
+    fn shared_dense_solver_handles_regular_and_singular_cases() {
+        let a = vec![2.0, 1.0, 1.0, 3.0];
+        let b = vec![1.0, 2.0];
+        let sol = crate::estimators::common::linalg::solve_dense_system(&a, &b).expect("solve");
+        assert!((sol[0] - 0.2).abs() < 1e-12);
+        assert!((sol[1] - 0.6).abs() < 1e-12);
+
+        let singular = vec![1.0, 2.0, 2.0, 4.0];
+        let err = crate::estimators::common::linalg::solve_dense_system(&singular, &b)
+            .expect_err("must fail");
+        assert!(err.contains("non-finite"));
+    }
+
+    #[test]
+    fn fit_weighted_linear_and_predict_helpers_work() {
+        let x = vec![1.0, 0.0, 1.0, 1.0, 1.0, 2.0];
+        let y = vec![1.0, 3.0, 5.0];
+        let w = vec![1.0, 2.0, 1.0];
+        let beta = fit_weighted_linear(&x, 2, &y, &w, 1e-8).expect("fit");
+        assert!((beta[0] - 1.0).abs() < 1e-6);
+        assert!((beta[1] - 2.0).abs() < 1e-6);
+
+        let pred = predict_linear(&x, 2, &beta);
+        assert_eq!(pred.len(), 3);
+        assert!((pred[0] - 1.0).abs() < 1e-6);
+        assert!((pred[2] - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fit_weighted_linear_rejects_singular_system_without_ridge() {
+        let x = vec![1.0, 0.0, 1.0, 0.0];
+        let y = vec![1.0, 2.0];
+        let w = vec![1.0, 1.0];
+        let err = fit_weighted_linear(&x, 2, &y, &w, 0.0).expect_err("must fail");
+        assert_eq!(err, DrDidError::SingularSystem);
+    }
+
+    #[test]
+    fn fit_logistic_and_prediction_helpers_are_finite_and_clipped() {
+        let x = vec![1.0, -2.0, 1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 2.0];
+        let d = vec![0.0, 0.0, 0.0, 1.0, 1.0];
+        let w = vec![1.0; 5];
+        let beta = fit_logistic_irls(
+            LogisticIrlsInputs {
+                design_matrix_flat: &x,
+                feature_count: 2,
+                treated_indicator: &d,
+                normalized_weights: &w,
+            },
+            LogisticIrlsSettings {
+                max_iter: 200,
+                tol: 1e-8,
+            },
+        )
+        .expect("irls")
+        .coefficients;
+        assert_eq!(beta.len(), 2);
+        assert!(beta.iter().all(|value| value.is_finite()));
+
+        let ps = predict_logistic_scores(&x, 2, &beta, 0.1);
+        assert_eq!(ps.len(), 5);
+        assert!(ps.iter().all(|value| *value > 0.0 && *value <= 0.9));
+    }
+
+    #[test]
+    fn fit_logistic_irls_gives_an_aliased_column_the_coefficient_zero() {
+        let x = vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        let d = vec![0.0, 1.0, 0.0];
+        let w = vec![1.0; 3];
+        let fit = fit_logistic_irls(
+            LogisticIrlsInputs {
+                design_matrix_flat: &x,
+                feature_count: 2,
+                treated_indicator: &d,
+                normalized_weights: &w,
+            },
+            LogisticIrlsSettings {
+                max_iter: 25,
+                tol: 1e-12,
+            },
+        )
+        .expect("fit");
+        assert_eq!(fit.coefficients[1].abs().to_bits(), 0.0_f64.to_bits());
+        assert!((fit.coefficients[0] - (0.5_f64).ln()).abs() < 1e-8);
+    }
+
+    #[test]
+    fn bootstrap_and_quantile_helpers_are_stable() {
+        let influence = [1.0, -1.0, 2.0, -2.0];
+        let config = DrDidConfig::builder()
+            .bootstrap_reps(200)
+            .bootstrap_seed(42)
+            .build();
+        let ci_a = multiplier_bootstrap_ci(1.0, &influence, config.inference(), config.bootstrap());
+        let ci_b = multiplier_bootstrap_ci(1.0, &influence, config.inference(), config.bootstrap());
+        assert_eq!(ci_a, ci_b);
+        assert!(ci_a.0 <= ci_a.1);
+    }
+
+    #[test]
+    fn small_numeric_helpers_cover_edge_branches() {
+        assert!((dot(&[1.0, 2.0], &[3.0, 4.0]) - 11.0).abs() < 1e-12);
+        assert!(sigmoid(-1_000.0) > 0.0);
+        assert!(sigmoid(1_000.0) < 1.0);
+    }
+
+    /// A deterministic stream in [0, 1).
+    fn stream(seed: u64) -> impl FnMut() -> f64 {
+        let mut state = seed;
+        move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        }
+    }
+
+    /// Study II's shape: an intercept, period and cell dummies that are
+    /// sparse in one arm, and one that only the treated arm has.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a uniform draw in [0, 1) scaled to a period index"
+    )]
+    fn dummy_design(n: usize, seed: u64) -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f64>, usize) {
+        let mut next = stream(seed);
+        let k = 9;
+        let (mut treated, mut delta, mut weight, mut design) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for row in 0..n {
+            let case = next() < 0.4;
+            let period = (next() * 6.0) as usize;
+            treated.push(case);
+            delta.push(0.0);
+            weight.push(0.2 + 3.0 * next());
+            let mut x = vec![0.0; k];
+            x[0] = 1.0;
+            x[1 + period] = 1.0;
+            x[7] = if case && row % 3 == 0 { 1.0 } else { 0.0 };
+            x[8] = 1.0 - x[1];
+            design.extend(x);
+        }
+        (treated, delta, weight, design, k)
+    }
+
+    fn continuous_design(
+        n: usize,
+        k: usize,
+        seed: u64,
+    ) -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f64>) {
+        let mut next = stream(seed);
+        let (mut treated, mut delta, mut weight, mut design) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..n {
+            let x: Vec<f64> = (1..k).map(|_| next() * 4.0 - 2.0).collect();
+            let case = next() < 1.0 / (1.0 + (-(0.5 * x[0] - 0.3)).exp());
+            treated.push(case);
+            delta.push(next() - 0.5 + if case { 0.3 } else { 0.0 });
+            weight.push(0.3 + 2.0 * next());
+            design.push(1.0);
+            design.extend(x);
+        }
+        (treated, delta, weight, design)
+    }
+
+    fn assert_same_coefficients(
+        treated: &[bool],
+        delta: &[f64],
+        weight: &[f64],
+        design: &[f64],
+        k: usize,
+        config: DrDidConfig,
+    ) -> bool {
+        let input = PanelFlatInput {
+            treated,
+            delta_outcome: delta,
+            weight,
+            design_matrix_flat: design,
+            feature_count: k,
+        };
+        let full = fit_drdid_panel_nuisance(input, config);
+        let lean = fit_drdid_panel_propensity_coefficients(input, config);
+        let Ok(full) = full else {
+            return false;
+        };
+        let lean = lean.expect("the coefficients-only fit succeeds when the full fit does");
+        assert_eq!(lean.kept_columns, full.kept_columns);
+        assert_eq!(lean.iterations, full.iterations);
+        assert_eq!(lean.converged, full.converged);
+        assert_eq!(lean.coefficients.len(), full.propensity_coefficients.len());
+        for (a, b) in lean.coefficients.iter().zip(&full.propensity_coefficients) {
+            assert_eq!(a.to_bits(), b.to_bits());
+        }
+        true
+    }
+
+    #[test]
+    fn propensity_coefficients_equal_the_full_fits_bit_for_bit() {
+        let mut compared = 0;
+        for seed in 1..=12_u64 {
+            let seed_index = usize::try_from(seed).expect("a small seed");
+            let (t, d, w, x, k) = dummy_design(400 + 37 * seed_index, seed);
+            for config in [
+                DrDidConfig::default(),
+                DrDidConfig::builder().tol(1e-5).build(),
+            ] {
+                compared += usize::from(assert_same_coefficients(&t, &d, &w, &x, k, config));
+            }
+            let kc = 2 + (seed_index % 6);
+            let (t, d, w, x) = continuous_design(300 + 50 * seed_index, kc, 100 + seed);
+            compared += usize::from(assert_same_coefficients(
+                &t,
+                &d,
+                &w,
+                &x,
+                kc,
+                DrDidConfig::default(),
+            ));
+        }
+        assert!(compared >= 30, "only {compared} designs were compared");
+    }
+
+    #[test]
+    fn propensity_coefficients_keep_the_pruning_of_the_full_fit() {
+        let (t, d, w, x, k) = dummy_design(500, 7);
+        let input = PanelFlatInput {
+            treated: &t,
+            delta_outcome: &d,
+            weight: &w,
+            design_matrix_flat: &x,
+            feature_count: k,
+        };
+        let lean = fit_drdid_panel_propensity_coefficients(input, DrDidConfig::default()).unwrap();
+        assert!(lean.kept_columns.iter().any(|&kept| !kept));
+        assert_eq!(
+            lean.coefficients.len(),
+            lean.kept_columns.iter().filter(|&&kept| kept).count()
+        );
+    }
+
+    #[test]
+    fn propensity_coefficients_reject_what_the_full_fit_rejects_up_front() {
+        let config = DrDidConfig::default();
+        let input = PanelFlatInput {
+            treated: &[true, true],
+            delta_outcome: &[0.0, 1.0],
+            weight: &[1.0, 1.0],
+            design_matrix_flat: &[1.0, 1.0],
+            feature_count: 1,
+        };
+        assert_eq!(
+            fit_drdid_panel_propensity_coefficients(input, config).unwrap_err(),
+            fit_drdid_panel_nuisance(input, config).unwrap_err()
+        );
+    }
+}

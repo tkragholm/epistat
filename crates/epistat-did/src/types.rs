@@ -1,0 +1,1632 @@
+/// Whether a unit is in the treated or the control group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TreatmentGroup {
+    /// Not treated.
+    Control,
+    /// Treated.
+    Treated,
+}
+
+impl TreatmentGroup {
+    /// Treated when `treated` is true, otherwise control.
+    #[must_use]
+    pub const fn from_bool(treated: bool) -> Self {
+        if treated {
+            Self::Treated
+        } else {
+            Self::Control
+        }
+    }
+
+    /// Whether this is the treated group.
+    #[must_use]
+    pub const fn is_treated(self) -> bool {
+        matches!(self, Self::Treated)
+    }
+}
+
+/// Whether an observation is before or after treatment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TimePeriod {
+    /// Before treatment.
+    Pre,
+    /// After treatment.
+    Post,
+}
+
+impl TimePeriod {
+    /// Post when `post_period` is true, otherwise pre.
+    #[must_use]
+    pub const fn from_bool(post_period: bool) -> Self {
+        if post_period { Self::Post } else { Self::Pre }
+    }
+
+    /// Whether this is the post-treatment period.
+    #[must_use]
+    pub const fn is_post(self) -> bool {
+        matches!(self, Self::Post)
+    }
+}
+
+/// One 2x2 `DiD` panel observation.
+#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+pub struct PanelObservation {
+    /// Whether the unit is in the treated group.
+    pub treated: bool,
+    /// Whether the observation is from the post-treatment period.
+    pub post_period: bool,
+    /// Observed outcome value.
+    pub outcome: f64,
+    /// Sampling weight, 1.0 by default.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+}
+
+impl PanelObservation {
+    /// Builds an observation in the given cell with weight 1.0.
+    #[must_use]
+    pub const fn new(cell: DidCell, outcome: f64) -> Self {
+        let (treated, post_period) = cell.flags();
+        Self {
+            treated,
+            post_period,
+            outcome,
+            weight: 1.0,
+        }
+    }
+}
+
+/// Configuration for 2x2 `DiD` estimation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InferenceConfig {
+    /// Confidence level as a probability, such as 0.95.
+    pub confidence_level: f64,
+}
+
+impl Default for InferenceConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: 0.95,
+        }
+    }
+}
+
+impl InferenceConfig {
+    /// Builds a configuration with the given confidence level.
+    #[must_use]
+    pub const fn new(confidence_level: f64) -> Self {
+        Self { confidence_level }
+    }
+}
+
+/// Shared bootstrap configuration for inference procedures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootstrapConfig {
+    /// Number of bootstrap replications.
+    pub reps: usize,
+    /// Seed of the random number generator.
+    pub seed: u64,
+}
+
+impl Default for BootstrapConfig {
+    fn default() -> Self {
+        Self {
+            reps: 999,
+            seed: 17_431,
+        }
+    }
+}
+
+/// Configuration of the 2x2 `DiD` estimator.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DidConfig {
+    /// Confidence level as a probability, such as 0.95.
+    pub confidence_level: f64,
+}
+
+impl Default for DidConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: InferenceConfig::default().confidence_level,
+        }
+    }
+}
+
+impl DidConfig {
+    /// The confidence level as an [`InferenceConfig`].
+    #[must_use]
+    pub const fn inference(self) -> InferenceConfig {
+        InferenceConfig {
+            confidence_level: self.confidence_level,
+        }
+    }
+}
+
+/// 2x2 ATT estimate with a normal-approximation confidence interval.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DidEstimate {
+    /// Estimated average treatment effect on the treated.
+    pub att: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+}
+
+/// Canonical 2x2 cell identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DidCell {
+    /// Treated units before treatment.
+    TreatedPre,
+    /// Treated units after treatment.
+    TreatedPost,
+    /// Control units before treatment.
+    ControlPre,
+    /// Control units after treatment.
+    ControlPost,
+}
+
+impl DidCell {
+    /// The cell for a treatment group and time period.
+    #[must_use]
+    pub const fn from_parts(group: TreatmentGroup, period: TimePeriod) -> Self {
+        match (group, period) {
+            (TreatmentGroup::Treated, TimePeriod::Pre) => Self::TreatedPre,
+            (TreatmentGroup::Treated, TimePeriod::Post) => Self::TreatedPost,
+            (TreatmentGroup::Control, TimePeriod::Pre) => Self::ControlPre,
+            (TreatmentGroup::Control, TimePeriod::Post) => Self::ControlPost,
+        }
+    }
+
+    /// Snake-case label of the cell, such as `treated_pre`.
+    #[must_use]
+    pub const fn as_label(self) -> &'static str {
+        match self {
+            Self::TreatedPre => "treated_pre",
+            Self::TreatedPost => "treated_post",
+            Self::ControlPre => "control_pre",
+            Self::ControlPost => "control_post",
+        }
+    }
+
+    /// The cell as `(treated, post_period)`.
+    #[must_use]
+    pub const fn flags(self) -> (bool, bool) {
+        match self {
+            Self::TreatedPre => (true, false),
+            Self::TreatedPost => (true, true),
+            Self::ControlPre => (false, false),
+            Self::ControlPost => (false, true),
+        }
+    }
+
+    /// Treatment group of the cell.
+    #[must_use]
+    pub const fn treatment_group(self) -> TreatmentGroup {
+        match self {
+            Self::TreatedPre | Self::TreatedPost => TreatmentGroup::Treated,
+            Self::ControlPre | Self::ControlPost => TreatmentGroup::Control,
+        }
+    }
+
+    /// Time period of the cell.
+    #[must_use]
+    pub const fn time_period(self) -> TimePeriod {
+        match self {
+            Self::TreatedPre | Self::ControlPre => TimePeriod::Pre,
+            Self::TreatedPost | Self::ControlPost => TimePeriod::Post,
+        }
+    }
+}
+
+/// Summary statistics for one 2x2 cell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellSummary {
+    /// The 2x2 cell concerned.
+    pub cell: DidCell,
+    /// Number of observations in the cell.
+    pub observations: usize,
+    /// Sum of the weights.
+    pub weight_sum: f64,
+    /// Effective sample size implied by the weights.
+    pub effective_n: f64,
+    /// Weighted mean outcome.
+    pub mean_outcome: f64,
+    /// Weighted variance of the outcome.
+    pub variance: f64,
+}
+
+/// Input diagnostics across all 2x2 cells.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DidInputSummary {
+    /// Summary of the treated pre-period cell.
+    pub treated_pre: CellSummary,
+    /// Summary of the treated post-period cell.
+    pub treated_post: CellSummary,
+    /// Summary of the control pre-period cell.
+    pub control_pre: CellSummary,
+    /// Summary of the control post-period cell.
+    pub control_post: CellSummary,
+}
+
+impl DidInputSummary {
+    /// Total number of observations over the four cells.
+    #[must_use]
+    pub const fn total_observations(self) -> usize {
+        self.treated_pre.observations
+            + self.treated_post.observations
+            + self.control_pre.observations
+            + self.control_post.observations
+    }
+
+    /// Summary of the given cell.
+    #[must_use]
+    pub const fn cell(self, cell: DidCell) -> CellSummary {
+        match cell {
+            DidCell::TreatedPre => self.treated_pre,
+            DidCell::TreatedPost => self.treated_post,
+            DidCell::ControlPre => self.control_pre,
+            DidCell::ControlPost => self.control_post,
+        }
+    }
+}
+
+/// One event-time estimate point for dynamic `DiD` aggregation.
+#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+pub struct EventTimePoint {
+    /// Event time, the calendar period minus the first treated period.
+    pub event_time: i32,
+    /// Point estimate at this event time.
+    pub estimate: f64,
+    /// Standard error of the point estimate.
+    pub se: f64,
+    /// Weight of the point in the aggregate, 1.0 by default.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+}
+
+impl EventTimePoint {
+    /// Builds a point with weight 1.0.
+    #[must_use]
+    pub const fn new(event_time: i32, estimate: f64, se: f64) -> Self {
+        Self {
+            event_time,
+            estimate,
+            se,
+            weight: 1.0,
+        }
+    }
+}
+
+/// Weighting strategy used when aggregating multiple points at the same event time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventTimeWeighting {
+    /// Every point has the same weight.
+    Equal,
+    /// Points are weighted by their `weight`.
+    ByWeight,
+}
+
+/// Aggregated event-time estimate with confidence interval.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EventTimeEstimate {
+    /// Event time, the calendar period minus the first treated period.
+    pub event_time: i32,
+    /// Aggregated estimate.
+    pub estimate: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+    /// Number of points aggregated.
+    pub points: usize,
+    /// Sum of the weights of the points aggregated.
+    pub total_weight: f64,
+}
+
+/// Errors returned by event-time aggregation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EventTimeError {
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
+    /// A point estimate is not finite.
+    #[error("event-time point estimate must be finite")]
+    InvalidPointEstimate,
+    /// A standard error is not finite or is negative.
+    #[error("event-time point standard error must be finite and non-negative")]
+    InvalidPointSe,
+    /// A weight is not finite and positive.
+    #[error("event-time point weight must be finite and positive")]
+    InvalidPointWeight,
+}
+
+/// Errors returned by `DiD` estimation.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum DidError {
+    /// A 2x2 cell has no observations.
+    #[error("missing observations for cell={cell:?}")]
+    EmptyCell {
+        /// The empty 2x2 cell.
+        cell: DidCell,
+    },
+    /// A weight is not finite and positive.
+    #[error("weights must be finite and positive, got {value}")]
+    InvalidWeight {
+        /// The offending value.
+        value: f64,
+    },
+    /// An outcome is not finite.
+    #[error("outcomes must be finite, got {value}")]
+    InvalidOutcome {
+        /// The offending value.
+        value: f64,
+    },
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1), got {value}")]
+    InvalidConfidenceLevel {
+        /// The offending value.
+        value: f64,
+    },
+}
+
+/// One panel-level row for doubly robust `DiD` with outcome deltas.
+#[derive(bon::Builder, Debug, Clone, PartialEq)]
+pub struct DrDidObservation {
+    /// Whether the unit is in the treated group.
+    pub treated: bool,
+    /// Change in outcome between the post and pre period.
+    pub delta_outcome: f64,
+    /// Sampling weight, 1.0 by default.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+    /// Covariate values, empty by default.
+    #[builder(default)]
+    pub covariates: Vec<f64>,
+}
+
+impl DrDidObservation {
+    /// Builds an observation with weight 1.0 and no covariates.
+    #[must_use]
+    pub const fn new(group: TreatmentGroup, delta_outcome: f64) -> Self {
+        Self {
+            treated: group.is_treated(),
+            delta_outcome,
+            weight: 1.0,
+            covariates: Vec::new(),
+        }
+    }
+}
+
+/// One repeated cross-section row for doubly robust `DiD`.
+#[derive(bon::Builder, Debug, Clone, PartialEq)]
+pub struct DrDidRepeatedObservation {
+    /// Whether the unit is in the treated group.
+    pub treated: bool,
+    /// Whether the observation is from the post-treatment period.
+    pub post_period: bool,
+    /// Observed outcome value.
+    pub outcome: f64,
+    /// Sampling weight, 1.0 by default.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+    /// Covariate values, empty by default.
+    #[builder(default)]
+    pub covariates: Vec<f64>,
+}
+
+impl DrDidRepeatedObservation {
+    /// Builds an observation in the given cell with weight 1.0 and no covariates.
+    #[must_use]
+    pub const fn new(cell: DidCell, outcome: f64) -> Self {
+        let (treated, post_period) = cell.flags();
+        Self {
+            treated,
+            post_period,
+            outcome,
+            weight: 1.0,
+            covariates: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for panel `DR-DiD` estimation.
+#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+pub struct DrDidConfig {
+    /// Confidence level as a probability, such as 0.95.
+    #[builder(default = 0.95)]
+    pub confidence_level: f64,
+    /// Bound that propensity scores are clipped to, away from 0 and 1.
+    #[builder(default = 1e-6)]
+    pub propensity_clip: f64,
+    /// Ridge penalty added to the outcome regressions.
+    #[builder(default = 1e-8)]
+    pub ridge: f64,
+    /// Maximum number of iterations of the propensity fit.
+    #[builder(default = 200_usize)]
+    pub max_iter: usize,
+    /// Convergence tolerance of the propensity fit.
+    #[builder(default = 1e-8)]
+    pub tol: f64,
+    /// Number of bootstrap replications.
+    #[builder(default = 999_usize)]
+    pub bootstrap_reps: usize,
+    /// Seed of the bootstrap random number generator.
+    #[builder(default = 17_431_u64)]
+    pub bootstrap_seed: u64,
+}
+
+impl Default for DrDidConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: InferenceConfig::default().confidence_level,
+            propensity_clip: 1e-6,
+            ridge: 1e-8,
+            max_iter: 200,
+            tol: 1e-8,
+            bootstrap_reps: BootstrapConfig::default().reps,
+            bootstrap_seed: BootstrapConfig::default().seed,
+        }
+    }
+}
+
+impl DrDidConfig {
+    /// The confidence level as an [`InferenceConfig`].
+    #[must_use]
+    pub const fn inference(self) -> InferenceConfig {
+        InferenceConfig {
+            confidence_level: self.confidence_level,
+        }
+    }
+
+    /// The bootstrap settings as a [`BootstrapConfig`].
+    #[must_use]
+    pub const fn bootstrap(self) -> BootstrapConfig {
+        BootstrapConfig {
+            reps: self.bootstrap_reps,
+            seed: self.bootstrap_seed,
+        }
+    }
+}
+
+/// `DR-DiD` ATT estimate and uncertainty summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrDidEstimate {
+    /// Estimated average treatment effect on the treated.
+    pub att: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+    /// Number of treated units used.
+    pub treated_n: usize,
+    /// Number of comparison units used.
+    pub control_n: usize,
+    /// Sum of the weights of the observations used.
+    pub total_weight: f64,
+    /// Influence function of the estimate, one value per input observation.
+    pub influence_function: Vec<f64>,
+    /// Covariate columns this fit could not identify on its own rows and
+    /// dropped before fitting: constant within an arm, or a combination of
+    /// the columns before them. Zero on a full-rank design. The estimate is
+    /// the one the remaining columns give, which is what R's `did` would
+    /// give on that formula where it returns `NA` on the full one.
+    pub design_columns_dropped: usize,
+}
+
+/// Configuration for `DiD_CC` estimators and the stationarity Hausman test.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DidCcConfig {
+    /// Settings of the doubly robust estimator.
+    pub drdid: DrDidConfig,
+    /// Significance level of the Hausman test.
+    pub hausman_alpha: f64,
+    /// Whether confidence intervals come from the bootstrap.
+    pub bootstrap_confidence_intervals: bool,
+    /// Number of cross-fitting folds, 1 for none.
+    pub cross_fit_folds: usize,
+    /// Seed of the cross-fitting fold assignment.
+    pub cross_fit_seed: u64,
+}
+
+impl Default for DidCcConfig {
+    fn default() -> Self {
+        Self {
+            drdid: DrDidConfig::default(),
+            hausman_alpha: 0.05,
+            bootstrap_confidence_intervals: true,
+            cross_fit_folds: 1,
+            cross_fit_seed: BootstrapConfig::default().seed,
+        }
+    }
+}
+
+/// ATT estimate from the compositional-change `DiD_CC` family.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DidCcEstimate {
+    /// Estimated average treatment effect on the treated.
+    pub att: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+    /// Number of treated observations in the post period.
+    pub treated_post_n: usize,
+    /// Number of treated observations in the pre period.
+    pub treated_pre_n: usize,
+    /// Number of control observations in the post period.
+    pub control_post_n: usize,
+    /// Number of control observations in the pre period.
+    pub control_pre_n: usize,
+    /// Sum of the weights of the observations used.
+    pub total_weight: f64,
+    /// Influence function of the estimate, one value per input observation.
+    pub influence_function: Vec<f64>,
+}
+
+/// Hausman-style comparison between robust and stationarity-based `DiD_CC` ATT
+/// estimators.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DidCcHausmanTest {
+    /// Composition-robust estimate.
+    pub robust: DidCcEstimate,
+    /// Estimate under the stationarity restriction.
+    pub stationary: DidCcEstimate,
+    /// Difference between the two estimates.
+    pub difference: f64,
+    /// Standard error of the difference.
+    pub difference_se: f64,
+    /// Test statistic.
+    pub statistic: f64,
+    /// p-value of the test.
+    pub p_value: f64,
+    /// Whether the stationarity restriction is rejected at level `hausman_alpha`.
+    pub reject_null: bool,
+}
+
+/// Errors returned by `DiD_CC` estimation and testing.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum DidCcError {
+    /// No observations were given.
+    #[error("DiD_CC requires at least one observation")]
+    EmptyInput,
+    /// The sample has no treated units.
+    #[error("DiD_CC sample has no treated units")]
+    NoTreated,
+    /// The sample has no control units.
+    #[error("DiD_CC sample has no control units")]
+    NoControl,
+    /// The repeated cross-section sample is missing a 2x2 cell.
+    #[error("DiD_CC repeated cross-section sample is missing cell={cell:?}")]
+    MissingCell {
+        /// The 2x2 cell concerned.
+        cell: DidCell,
+    },
+    /// A weight is not finite and positive.
+    #[error("weights must be finite and positive, got {value}")]
+    InvalidWeight {
+        /// The offending value.
+        value: f64,
+    },
+    /// An outcome is not finite.
+    #[error("outcomes must be finite, got {value}")]
+    InvalidOutcome {
+        /// The offending value.
+        value: f64,
+    },
+    /// A covariate is not finite.
+    #[error("covariates must be finite, got {value}")]
+    InvalidCovariate {
+        /// The offending value.
+        value: f64,
+    },
+    /// The rows differ in their number of covariates.
+    #[error(
+        "all DiD_CC rows must have the same covariate count; expected {expected}, got {actual}"
+    )]
+    InconsistentCovariateCount {
+        /// Number of covariates the rows should have.
+        expected: usize,
+        /// Number of covariates on the offending row.
+        actual: usize,
+    },
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
+    /// The Hausman significance level is not strictly between 0 and 1.
+    #[error("hausman_alpha must be finite and in (0, 1)")]
+    InvalidHausmanAlpha,
+    /// The configuration is invalid, with a description.
+    #[error("invalid DiD_CC config: {0}")]
+    InvalidConfig(String),
+    /// The number of cross-fitting folds is zero.
+    #[error("cross_fit_folds must be at least 1")]
+    InvalidCrossFitFolds,
+    /// A cell has fewer observations than cross-fitting folds.
+    #[error(
+        "cross-fitting with {folds} folds requires at least {folds} observations in cell={cell:?}"
+    )]
+    InsufficientCellForCrossFit {
+        /// Number of cross-fitting folds requested.
+        folds: usize,
+        /// The cell with too few observations.
+        cell: DidCell,
+    },
+    /// A linear system could not be solved.
+    #[error("could not solve linear system")]
+    SingularSystem,
+    /// The variance of the Hausman difference is not positive.
+    #[error("Hausman difference variance must be strictly positive")]
+    DegenerateHausmanVariance,
+}
+
+/// Errors returned by panel `DR-DiD` estimation.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum DrDidError {
+    /// No observations were given.
+    #[error("DR-DiD requires at least one observation")]
+    EmptyInput,
+    /// The sample has no treated units.
+    #[error("DR-DiD sample has no treated units")]
+    NoTreated,
+    /// The sample has no control units.
+    #[error("DR-DiD sample has no control units")]
+    NoControl,
+    /// The repeated cross-section sample is missing a 2x2 cell.
+    #[error("DR-DiD repeated cross-section sample is missing cell={cell:?}")]
+    MissingCell {
+        /// The 2x2 cell concerned.
+        cell: DidCell,
+    },
+    /// A weight is not finite and positive.
+    #[error("weights must be finite and positive, got {value}")]
+    InvalidWeight {
+        /// The offending value.
+        value: f64,
+    },
+    /// A change in outcome is not finite.
+    #[error("delta outcomes must be finite, got {value}")]
+    InvalidOutcome {
+        /// The offending value.
+        value: f64,
+    },
+    /// A covariate is not finite.
+    #[error("covariates must be finite, got {value}")]
+    InvalidCovariate {
+        /// The offending value.
+        value: f64,
+    },
+    /// The rows differ in their number of covariates.
+    #[error(
+        "all DR-DiD rows must have the same covariate count; expected {expected}, got {actual}"
+    )]
+    InconsistentCovariateCount {
+        /// Number of covariates the rows should have.
+        expected: usize,
+        /// Number of covariates on the offending row.
+        actual: usize,
+    },
+    /// The configuration is invalid, with a description.
+    #[error("invalid DR-DiD config: {0}")]
+    InvalidConfig(String),
+    /// A linear system could not be solved.
+    #[error("could not solve linear system")]
+    SingularSystem,
+}
+
+/// One row for staggered-adoption `ATT(g,t)` estimation.
+#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+pub struct AttGtObservation {
+    /// Panel identifier, required by the panel route.
+    pub unit_id: Option<i64>,
+    /// Period in which the unit is first treated, `None` for never treated.
+    pub first_treated_time: Option<i32>,
+    /// Calendar period of the observation.
+    pub time: i32,
+    /// Observed outcome value.
+    pub outcome: f64,
+    /// Sampling weight, 1.0 by default.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+}
+
+impl AttGtObservation {
+    /// Builds an observation without a unit identifier and with weight 1.0.
+    #[must_use]
+    pub const fn new(first_treated_time: Option<i32>, time: i32, outcome: f64) -> Self {
+        Self {
+            unit_id: None,
+            first_treated_time,
+            time,
+            outcome,
+            weight: 1.0,
+        }
+    }
+
+    /// Builds an observation carrying its panel identifier, with weight 1.0.
+    #[must_use]
+    pub const fn with_unit_id(
+        unit_id: i64,
+        first_treated_time: Option<i32>,
+        time: i32,
+        outcome: f64,
+    ) -> Self {
+        Self {
+            unit_id: Some(unit_id),
+            first_treated_time,
+            time,
+            outcome,
+            weight: 1.0,
+        }
+    }
+}
+
+/// Comparison-group strategy for staggered `ATT(g,t)` estimators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparisonGroup {
+    /// Units never treated in the sample.
+    NeverTreated,
+    /// Units not yet treated at the period concerned.
+    NotYetTreated,
+    /// Never-treated units tagged with the cell's own cohort, and no others.
+    ///
+    /// For a risk-set matched panel, where every never-treated unit was
+    /// sampled to match a treated unit of one cohort and is observed on that
+    /// cohort's calendar. Pooling all never-treated units, as `NeverTreated`
+    /// does, compares a cohort with comparators from every other cohort's
+    /// sets at whatever point in their own follow-up the calendar year finds
+    /// them: on Study I's panel that pool is older in the life cycle than the
+    /// cohort, and the leads came out as a straight line of −570 EUR a year.
+    /// Each never-treated row says which cohort it was matched to in
+    /// [`AttGtDrObservation::comparison_cohort`], and this mode admits it as
+    /// a control for that cohort's cells only. Not-yet-treated units are never
+    /// controls here. The basic route has no cohort tag and refuses the mode.
+    MatchedNeverTreated,
+}
+
+/// Base-period convention for staggered `ATT(g,t)` estimators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BasePeriod {
+    /// Pre-treatment cells use the previous period as baseline, and
+    /// post-treatment cells the period `g - 1 - anticipation`.
+    Varying,
+    /// Every cell uses the period `g - 1 - anticipation` as baseline.
+    Universal,
+}
+
+/// Configuration for `ATT(g,t)` estimation.
+#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+pub struct AttGtConfig {
+    /// Confidence level settings for the intervals.
+    #[builder(default = InferenceConfig::default())]
+    pub confidence_level: InferenceConfig,
+    /// Which units serve as comparison for each cohort.
+    #[builder(default = ComparisonGroup::NeverTreated)]
+    pub comparison_group: ComparisonGroup,
+    /// How the baseline period is chosen.
+    #[builder(default = BasePeriod::Varying)]
+    pub base_period: BasePeriod,
+    /// Number of periods before treatment in which effects may already occur.
+    #[builder(default = 0_i32)]
+    pub anticipation_periods: i32,
+    /// Whether cells that cannot be fitted are skipped instead of causing an error.
+    #[builder(default = true)]
+    pub skip_incomplete_pairs: bool,
+}
+
+impl Default for AttGtConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: InferenceConfig::default(),
+            comparison_group: ComparisonGroup::NeverTreated,
+            base_period: BasePeriod::Varying,
+            anticipation_periods: 0,
+            skip_incomplete_pairs: true,
+        }
+    }
+}
+
+/// One identified group-time effect estimate.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AttGtEstimate {
+    /// Cohort, the period in which the group is first treated.
+    pub group: i32,
+    /// Calendar period of the estimate.
+    pub time: i32,
+    /// Event time, the calendar period minus the first treated period.
+    pub event_time: i32,
+    /// Estimated average treatment effect on the treated.
+    pub att: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+    /// Number of treated units used.
+    pub treated_n: usize,
+    /// Number of comparison units used.
+    pub control_n: usize,
+    /// Sum of the weights of the observations used.
+    pub total_weight: f64,
+}
+
+/// An ATT(g,t) cell the estimator could not fit and left out, which it does
+/// when [`AttGtConfig::skip_incomplete_pairs`] is set.
+///
+/// `reason` is the estimator's own word for it: `treated_panel` or
+/// `control_panel` when the cell has no units on one side, `covariate_count`
+/// when a unit's covariates do not match the cell's, `panel_fit` when the
+/// doubly-robust fit did not converge, `influence_length` when it returned the
+/// wrong shape. On the repeated-cross-section route the reasons are the
+/// missing-pair kinds of that route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkippedCell {
+    /// Cohort of the skipped cell.
+    pub group: i32,
+    /// Calendar period of the skipped cell.
+    pub time: i32,
+    /// Baseline period of the skipped cell.
+    pub baseline_time: i32,
+    /// Short label of why the cell was skipped.
+    pub reason: &'static str,
+}
+
+/// An ATT(g,t) cell fitted on fewer covariates than it was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrunedCell {
+    /// Cohort of the cell.
+    pub group: i32,
+    /// Calendar period of the cell.
+    pub time: i32,
+    /// Baseline period of the cell.
+    pub baseline_time: i32,
+    /// How many covariate columns the cell's own sample could not identify.
+    pub columns_dropped: usize,
+}
+
+/// ATT(g,t) estimates with aligned influence-function vectors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttGtInfluenceOutput {
+    /// ATT(g,t) estimates.
+    pub estimates: Vec<AttGtEstimate>,
+    /// Influence vectors aligned to the full input sample index.
+    pub influence_functions: Vec<Vec<f64>>,
+    /// The cells that were attempted and could not be fitted. Empty when
+    /// every cell fitted, and always empty when `skip_incomplete_pairs` is
+    /// off, because then the first failure is an error instead.
+    ///
+    /// A caller that aggregates `estimates` into a curve should read this
+    /// first: a curve over ten cells of a possible three hundred is not a
+    /// curve, and until this existed nothing said how many had been dropped.
+    pub skipped: Vec<SkippedCell>,
+    /// The cells fitted on a design pruned to what their own sample could
+    /// identify, with how many columns each lost. A cell's sample is the units
+    /// observed at both of its periods, and a covariate that varies across the
+    /// input can be constant, or a combination of the others, inside it. Such a
+    /// cell was skipped as singular until the pruning existed, and on an
+    /// unbalanced panel with one rare indicator that was most of them.
+    pub pruned: Vec<PrunedCell>,
+}
+
+/// Event-time aggregated ATT estimates with aligned influence-function vectors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttGtEventTimeInfluenceOutput {
+    /// Event-time aggregated estimates.
+    pub estimates: Vec<AttGtEventTimeEstimate>,
+    /// Influence vectors aligned to the full input sample index.
+    pub influence_functions: Vec<Vec<f64>>,
+}
+
+/// Errors returned by `ATT(g,t)` estimation.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum AttGtError {
+    /// No observations were given.
+    #[error("ATT(g,t) requires at least one observation")]
+    EmptyInput,
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
+    /// The number of anticipation periods is negative.
+    #[error("anticipation_periods must be >= 0")]
+    InvalidAnticipationPeriods,
+    /// A weight is not finite and positive.
+    #[error("weights must be finite and positive, got {value}")]
+    InvalidWeight {
+        /// The offending value.
+        value: f64,
+    },
+    /// An outcome is not finite.
+    #[error("outcomes must be finite, got {value}")]
+    InvalidOutcome {
+        /// The offending value.
+        value: f64,
+    },
+    /// A covariate is not finite.
+    #[error("covariates must be finite, got {value}")]
+    InvalidCovariate {
+        /// The offending value.
+        value: f64,
+    },
+    /// The rows differ in their number of covariates.
+    #[error(
+        "all ATT(g,t) rows must have the same covariate count; expected {expected}, got {actual}"
+    )]
+    InconsistentCovariateCount {
+        /// Number of covariates the rows should have.
+        expected: usize,
+        /// Number of covariates on the offending row.
+        actual: usize,
+    },
+    /// The comparison group is never-treated and the sample has none.
+    #[error("never-treated comparison group is required but missing")]
+    MissingNeverTreatedGroup,
+    /// The matched comparison group was requested on a route that cannot carry it.
+    #[error(
+        "the matched comparison group needs a comparison cohort on every never-treated \
+         row, which only the doubly robust routes carry"
+    )]
+    MatchedComparisonUnsupported,
+    /// A row has no unit identifier on the panel route.
+    #[error(
+        "panel ATT(g,t) requires a unit_id on every row: a unit cannot be \
+         differenced across periods unless it can be named"
+    )]
+    MissingUnitId,
+    /// A unit has more than one row in one period of a cell.
+    #[error(
+        "unit {unit_id} has more than one row for a period in cell (group {group}, time \
+         {time}); a panel unit is observed once per period, and repeating rows to express \
+         a frequency weight silently collapses to one unit. Use the weight field."
+    )]
+    DuplicatePanelRow {
+        /// Identifier of the unit.
+        unit_id: i64,
+        /// Cohort of the cell.
+        group: i32,
+        /// Calendar period of the cell.
+        time: i32,
+    },
+    /// No ATT(g,t) cell could be estimated.
+    #[error("no estimable ATT(g,t) pairs found")]
+    NoEstimablePairs,
+    /// A required 2x2 cell is missing for a group, period and baseline.
+    #[error(
+        "missing required cell for group={group}, time={time}, baseline={baseline_time}, cell={cell}"
+    )]
+    MissingCell {
+        /// Cohort, the period in which the group is first treated.
+        group: i32,
+        /// Calendar period of the estimate.
+        time: i32,
+        /// Baseline period the effect is measured against.
+        baseline_time: i32,
+        /// Label of the missing 2x2 cell.
+        cell: &'static str,
+    },
+    /// The estimator failed for a group and period.
+    #[error("ATT(g,t) pair estimation failed for method={method}, group={group}, time={time}")]
+    PairEstimationFailure {
+        /// Name of the estimator.
+        method: &'static str,
+        /// Cohort, the period in which the group is first treated.
+        group: i32,
+        /// Calendar period of the estimate.
+        time: i32,
+    },
+    /// The estimator returned an influence vector of the wrong length.
+    #[error(
+        "ATT(g,t) pair influence length mismatch for method={method}, group={group}, time={time}: expected {expected}, got {actual}"
+    )]
+    InfluenceLengthMismatch {
+        /// Name of the estimator.
+        method: &'static str,
+        /// Cohort, the period in which the group is first treated.
+        group: i32,
+        /// Calendar period of the estimate.
+        time: i32,
+        /// Expected length of the influence vector.
+        expected: usize,
+        /// Length of the influence vector returned.
+        actual: usize,
+    },
+}
+
+/// One row for DR staggered-adoption `ATT(g,t)` estimation with covariates.
+#[derive(bon::Builder, Debug, Clone, PartialEq)]
+pub struct AttGtDrObservation {
+    /// Panel identifier. Required by the panel route
+    /// ([`estimate_att_gt_dr_panel`](crate::estimate_att_gt_dr_panel)), which
+    /// differences a unit against itself; ignored by the repeated-cross-section
+    /// route, where one row is one observation.
+    pub unit_id: Option<i64>,
+    /// Period in which the unit is first treated, `None` for never treated.
+    pub first_treated_time: Option<i32>,
+    /// Calendar period of the observation.
+    pub time: i32,
+    /// Observed outcome value.
+    pub outcome: f64,
+    /// Sampling weight, 1.0 by default.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+    /// Covariate values, empty by default.
+    #[builder(default)]
+    pub covariates: Vec<f64>,
+    /// For a never-treated unit, the cohort it is a comparator for: the first
+    /// treated time of the treated unit it was matched to. Read only under
+    /// [`ComparisonGroup::MatchedNeverTreated`]; `None` there means the row is
+    /// a control for no cell.
+    pub comparison_cohort: Option<i32>,
+}
+
+impl AttGtDrObservation {
+    /// Builds an observation without a unit identifier, with weight 1.0 and no covariates.
+    #[must_use]
+    pub const fn new(first_treated_time: Option<i32>, time: i32, outcome: f64) -> Self {
+        Self {
+            unit_id: None,
+            first_treated_time,
+            time,
+            outcome,
+            weight: 1.0,
+            covariates: Vec::new(),
+            comparison_cohort: None,
+        }
+    }
+
+    /// The same row carrying its panel identifier.
+    #[must_use]
+    pub const fn with_unit_id(
+        unit_id: i64,
+        first_treated_time: Option<i32>,
+        time: i32,
+        outcome: f64,
+    ) -> Self {
+        Self {
+            unit_id: Some(unit_id),
+            first_treated_time,
+            time,
+            outcome,
+            weight: 1.0,
+            covariates: Vec::new(),
+            comparison_cohort: None,
+        }
+    }
+}
+
+/// Unified configuration surface for event-study estimation and inference.
+///
+/// This groups settings for DR-DiD pair estimation, ATT(g,t) identification,
+/// and subsequent aggregation/inference into a single hierarchical object.
+#[derive(bon::Builder, Debug, Clone, PartialEq)]
+pub struct EventStudyConfig {
+    /// Confidence level as a probability, such as 0.95.
+    #[builder(default = 0.95)]
+    pub confidence_level: f64,
+    /// Settings of the doubly robust pair estimator.
+    #[builder(default)]
+    pub drdid: DrDidConfig,
+    /// Settings of the ATT(g,t) estimation.
+    #[builder(default)]
+    pub att_gt: AttGtConfig,
+    /// Settings of the aggregation of ATT(g,t) estimates.
+    #[builder(default)]
+    pub aggregation: AttGtAggregationConfig,
+}
+
+impl Default for EventStudyConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: 0.95,
+            drdid: DrDidConfig::default(),
+            att_gt: AttGtConfig::default(),
+            aggregation: AttGtAggregationConfig::default(),
+        }
+    }
+}
+
+impl EventStudyConfig {
+    /// Validate the configuration and ensure no internal conflicts.
+    ///
+    /// # Errors
+    /// Returns an error string if sub-configs contradict top-level settings.
+    pub fn validate(&self) -> Result<(), String> {
+        // The sub-configurations must agree with the top-level settings.
+        if (self.drdid.confidence_level - self.confidence_level).abs() > 1e-9 {
+            return Err(format!(
+                "Conflicting confidence_level: top-level {} vs drdid {}",
+                self.confidence_level, self.drdid.confidence_level
+            ));
+        }
+        if (self.att_gt.confidence_level.confidence_level - self.confidence_level).abs() > 1e-9 {
+            return Err(format!(
+                "Conflicting confidence_level: top-level {} vs att_gt {}",
+                self.confidence_level, self.att_gt.confidence_level.confidence_level
+            ));
+        }
+        if (self.aggregation.confidence_level.confidence_level - self.confidence_level).abs() > 1e-9
+        {
+            return Err(format!(
+                "Conflicting confidence_level: top-level {} vs aggregation {}",
+                self.confidence_level, self.aggregation.confidence_level.confidence_level
+            ));
+        }
+        Ok(())
+    }
+
+    /// Synchronize all leaf configurations to match the top-level settings.
+    #[must_use]
+    pub const fn sync(mut self) -> Self {
+        self.drdid.confidence_level = self.confidence_level;
+        self.att_gt.confidence_level = self.inference();
+        self.aggregation.confidence_level = self.inference();
+        self
+    }
+
+    /// The confidence level as an [`InferenceConfig`].
+    #[must_use]
+    pub const fn inference(&self) -> InferenceConfig {
+        InferenceConfig {
+            confidence_level: self.confidence_level,
+        }
+    }
+}
+
+/// Human-readable summary of an estimation result for reporting.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub struct ReportingSummary {
+    /// Schema version for downstream pipeline compatibility.
+    pub schema_version: u32,
+    /// Version of this crate that produced the result.
+    pub crate_version: String,
+    /// Hash of the configuration, if one was computed.
+    pub config_hash: Option<String>,
+
+    // Raw numeric fields
+    /// Point estimate.
+    pub estimate: f64,
+    /// Standard error of the estimate.
+    pub std_error: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_lower: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_upper: f64,
+    /// p-value of the estimate, if computed.
+    pub p_value: Option<f64>,
+
+    // Context
+    /// Name of the outcome.
+    pub outcome: String,
+    /// Name of the subgroup.
+    pub subgroup: String,
+    /// Name of the estimator.
+    pub estimator: String,
+    /// Number of observations.
+    pub n_obs: usize,
+    /// Number of clusters, if clustered.
+    pub n_clusters: Option<usize>,
+}
+
+impl ReportingSummary {
+    /// Display-formatted estimate string (4 decimal places).
+    #[must_use]
+    pub fn estimate_display(&self) -> String {
+        format!("{:.4}", self.estimate)
+    }
+
+    /// Display-formatted CI string: "[lower, upper]".
+    #[must_use]
+    pub fn ci_display(&self) -> String {
+        format!("[{:.4}, {:.4}]", self.ci_lower, self.ci_upper)
+    }
+}
+
+/// Configuration for DR `ATT(g,t)` estimation.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AttGtDrConfig {
+    /// Settings of the ATT(g,t) estimation.
+    pub att_gt: AttGtConfig,
+    /// Settings of the doubly robust pair estimator.
+    pub drdid: DrDidConfig,
+}
+
+/// Weighting rule for ATT(g,t) aggregation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttGtAggregationWeighting {
+    /// Every estimate has the same weight.
+    Equal,
+    /// Estimates are weighted by the number of treated units.
+    ByTreatedCount,
+    /// Estimates are weighted by the total weight of the observations.
+    ByTotalWeight,
+}
+
+/// Configuration for ATT(g,t) aggregation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtAggregationConfig {
+    /// Confidence level settings for the intervals.
+    pub confidence_level: InferenceConfig,
+    /// Weighting rule of the aggregation.
+    pub weighting: AttGtAggregationWeighting,
+}
+
+impl Default for AttGtAggregationConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: InferenceConfig::default(),
+            weighting: AttGtAggregationWeighting::ByTreatedCount,
+        }
+    }
+}
+
+/// Aggregated ATT result for a keyed dimension.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtAggregatedEstimate {
+    /// Aggregated estimate.
+    pub estimate: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+    /// Number of ATT(g,t) estimates aggregated.
+    pub components: usize,
+    /// Sum of the weights of the observations used.
+    pub total_weight: f64,
+}
+
+/// Event-time aggregated ATT result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtEventTimeEstimate {
+    /// Event time, the calendar period minus the first treated period.
+    pub event_time: i32,
+    /// Aggregated estimate for this event time.
+    pub summary: AttGtAggregatedEstimate,
+}
+
+/// Cohort aggregated ATT result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtCohortEstimate {
+    /// Cohort, the period in which the group is first treated.
+    pub group: i32,
+    /// Aggregated estimate for this cohort.
+    pub summary: AttGtAggregatedEstimate,
+}
+
+/// Calendar-time aggregated ATT result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtCalendarEstimate {
+    /// Calendar period of the estimate.
+    pub time: i32,
+    /// Aggregated estimate for this calendar period.
+    pub summary: AttGtAggregatedEstimate,
+}
+
+/// Errors returned by ATT(g,t) aggregation helpers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AttGtAggregationError {
+    /// No estimates were given.
+    #[error("ATT(g,t) aggregation requires at least one estimate")]
+    EmptyInput,
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
+    /// An estimate is not finite.
+    #[error("ATT(g,t) estimate value must be finite")]
+    InvalidEstimate,
+    /// A standard error is not finite or is negative.
+    #[error("ATT(g,t) standard error must be finite and non-negative")]
+    InvalidSe,
+}
+
+/// Configuration for simultaneous confidence bands over ATT(g,t) estimates.
+///
+/// Used by both:
+/// - influence-based multiplier bootstrap bands (preferred), and
+/// - Gaussian-max approximation bands (fallback).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtBandConfig {
+    /// Confidence level settings for the bands.
+    pub confidence_level: InferenceConfig,
+    /// Number of bootstrap replications.
+    pub reps: usize,
+    /// Seed of the random number generator.
+    pub seed: u64,
+}
+
+impl Default for AttGtBandConfig {
+    fn default() -> Self {
+        Self {
+            confidence_level: InferenceConfig::default(),
+            reps: 999,
+            seed: 17_431,
+        }
+    }
+}
+
+/// One row for continuous treatment `DiD` (CGBS 2024).
+#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+pub struct ContinuousObservation {
+    /// Treatment dose (D). D=0 means control.
+    pub dose: f64,
+    /// Change in outcome (ΔY).
+    pub delta_outcome: f64,
+    /// Sampling weight.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+}
+
+impl ContinuousObservation {
+    /// Builds an observation with weight 1.0.
+    #[must_use]
+    pub const fn new(dose: f64, delta_outcome: f64) -> Self {
+        Self {
+            dose,
+            delta_outcome,
+            weight: 1.0,
+        }
+    }
+}
+
+/// Result of an ACRT (Average Causal Response) Sieve estimation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ACRTResult {
+    /// Average derivative over the treated units.
+    pub acrt_glob: f64,
+    /// Sieve coefficients.
+    pub coefficients: Vec<f64>,
+    /// Influence function for `acrt_glob`.
+    pub influence_function: Vec<f64>,
+}
+
+/// Errors returned by continuous `DiD` estimation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ContinuousDidError {
+    /// No observations were given.
+    #[error("continuous DiD requires at least one observation")]
+    EmptyInput,
+    /// No unit has a positive dose.
+    #[error("no treated units found (dose > 0)")]
+    NoTreatedUnits,
+    /// The basis matrix is singular.
+    #[error("basis matrix is singular")]
+    SingularBasis,
+}
+
+/// One row for Triple-Difference `DiD` (OVS 2025).
+#[derive(bon::Builder, Debug, Clone, PartialEq)]
+pub struct TripleDidObservation {
+    /// Treatment indicator (D).
+    pub treated: bool,
+    /// Group indicator (S). e.g., region or cohort enabled.
+    pub group_s: bool,
+    /// Partition indicator (Q). e.g., eligible age group.
+    pub partition_q: bool,
+    /// Change in outcome (ΔY).
+    pub delta_outcome: f64,
+    /// Sampling weight.
+    #[builder(default = 1.0)]
+    pub weight: f64,
+    /// Covariates for Doubly Robust estimation.
+    #[builder(default)]
+    pub covariates: Vec<f64>,
+}
+
+/// Result of a Triple-Difference estimation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TripleDidResult {
+    /// Estimated triple-difference effect.
+    pub att_ddd: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the confidence interval.
+    pub ci_low: f64,
+    /// Upper bound of the confidence interval.
+    pub ci_high: f64,
+    /// Influence function of the estimate, one value per input observation.
+    pub influence_function: Vec<f64>,
+}
+
+/// Simultaneous-band result for one ATT(g,t) entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtBandEstimate {
+    /// Cohort, the period in which the group is first treated.
+    pub group: i32,
+    /// Calendar period of the estimate.
+    pub time: i32,
+    /// Event time, the calendar period minus the first treated period.
+    pub event_time: i32,
+    /// Estimated ATT(g,t).
+    pub att: f64,
+    /// Standard error of the estimate.
+    pub se: f64,
+    /// Lower bound of the simultaneous band.
+    pub band_low: f64,
+    /// Upper bound of the simultaneous band.
+    pub band_high: f64,
+}
+
+/// Errors returned by ATT(g,t) simultaneous-band helpers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AttGtBandError {
+    /// No estimates were given.
+    #[error("ATT(g,t) simultaneous bands require at least one estimate")]
+    EmptyInput,
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
+    /// The number of replications is zero.
+    #[error("reps must be > 0")]
+    InvalidReps,
+    /// An estimate is not finite.
+    #[error("ATT(g,t) estimate value must be finite")]
+    InvalidEstimate,
+    /// A standard error is not finite or is negative.
+    #[error("ATT(g,t) standard error must be finite and non-negative")]
+    InvalidSe,
+    /// The number of influence vectors differs from the number of estimates.
+    #[error("number of influence vectors must match estimate count")]
+    InfluenceCountMismatch,
+    /// An influence vector is empty.
+    #[error("influence vectors must be non-empty")]
+    EmptyInfluence,
+    /// The influence vectors differ in length.
+    #[error("all influence vectors must share the same sample length")]
+    InconsistentInfluenceLength,
+    /// An influence vector contains a non-finite value.
+    #[error("influence vectors must contain only finite values")]
+    InvalidInfluence,
+    /// An influence vector has zero variance.
+    #[error("influence vectors must have non-zero variance")]
+    DegenerateInfluence,
+}
+
+/// Configuration for the baseline no-covariate `Efficient_DiD` panel path.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EfficientDidConfig {
+    /// Confidence interval level.
+    pub confidence_level: InferenceConfig,
+}
+
+/// One baseline contribution to an efficient `ATT(g,t)` estimate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EfficientBaselineWeight {
+    /// Pre-treatment baseline period used by the underlying `DiD`.
+    pub baseline_time: i32,
+    /// Baseline-specific `ATT(g,t)` estimate.
+    pub att: f64,
+    /// Efficient aggregation weight attached to that baseline.
+    pub weight: f64,
+    /// Treated units with complete observations for this baseline pair.
+    pub treated_n: usize,
+    /// Never-treated units with complete observations for this baseline pair.
+    pub control_n: usize,
+}
+
+/// Diagnostics for the baseline no-covariate `Efficient_DiD` weighting step.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EfficientDidDiagnostics {
+    /// Baseline-by-baseline covariance matrix of the influence-function inputs.
+    pub baseline_covariance: Vec<Vec<f64>>,
+    /// Raw precision-system solution before normalization.
+    pub raw_precision_solution: Vec<f64>,
+    /// Ridge penalty used to stabilize the covariance inversion, if any.
+    pub ridge_penalty: Option<f64>,
+}
+
+/// Efficient baseline-weighted `ATT(g,t)` estimate for panel data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EfficientDidEstimate {
+    /// Treatment cohort.
+    pub group: i32,
+    /// Post-treatment calendar time.
+    pub time: i32,
+    /// Event time `time - group`.
+    pub event_time: i32,
+    /// Efficiently weighted `ATT(g,t)`.
+    pub att: f64,
+    /// Standard error from the combined efficient influence function.
+    pub se: f64,
+    /// Lower confidence bound.
+    pub ci_low: f64,
+    /// Upper confidence bound.
+    pub ci_high: f64,
+    /// Number of treated units used in the panel comparison.
+    pub treated_n: usize,
+    /// Number of never-treated units used in the panel comparison.
+    pub control_n: usize,
+    /// Baseline-specific contributions and efficient weights.
+    pub baseline_weights: Vec<EfficientBaselineWeight>,
+    /// Combined influence function for the efficient `ATT(g,t)` estimate.
+    pub influence_function: Vec<f64>,
+    /// Diagnostics for the efficient weighting step.
+    pub diagnostics: EfficientDidDiagnostics,
+}
+
+/// Event-time aggregated efficient `DiD` estimate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EfficientDidEventTimeEstimate {
+    /// Event time `e = t - g`.
+    pub event_time: i32,
+    /// Aggregated summary for this event time.
+    pub summary: AttGtAggregatedEstimate,
+}
+
+/// Event-time aggregated efficient `DiD` estimates with aligned influence
+/// vectors.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EfficientDidEventTimeInfluenceOutput {
+    /// Event-time aggregated estimates.
+    pub estimates: Vec<EfficientDidEventTimeEstimate>,
+    /// Influence function of each aggregated estimate, one vector per estimate.
+    pub influence_functions: Vec<Vec<f64>>,
+}
+
+/// Errors returned by the baseline no-covariate `Efficient_DiD` path.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum EfficientDidError {
+    /// No observations were given.
+    #[error("efficient DiD requires at least one observation")]
+    EmptyInput,
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
+    /// A row has no unit identifier.
+    #[error("efficient DiD requires panel unit_id values on every row")]
+    MissingUnitId,
+    /// A weight is not finite and positive.
+    #[error("weights must be finite and positive, got {value}")]
+    InvalidWeight {
+        /// The offending value.
+        value: f64,
+    },
+    /// An outcome is not finite.
+    #[error("outcomes must be finite, got {value}")]
+    InvalidOutcome {
+        /// The offending value.
+        value: f64,
+    },
+    /// The sample has no never-treated units.
+    #[error("never-treated comparison group is required but missing")]
+    MissingNeverTreatedGroup,
+    /// A treated cohort has no pre-treatment baseline periods.
+    #[error("treated cohort {group} has no pre-treatment baseline periods")]
+    NoPrePeriods {
+        /// Treated cohort.
+        group: i32,
+    },
+    /// A treated cohort has no post-treatment periods.
+    #[error("treated cohort {group} has no post-treatment periods")]
+    NoPostPeriods {
+        /// Treated cohort.
+        group: i32,
+    },
+    /// A cell has no treated units observed in every baseline.
+    #[error("group {group} time {time} has no complete treated units across all baselines")]
+    MissingTreatedPanel {
+        /// Treated cohort.
+        group: i32,
+        /// Calendar period.
+        time: i32,
+    },
+    /// A cell has no never-treated units observed in every baseline.
+    #[error("group {group} time {time} has no complete never-treated units across all baselines")]
+    MissingControlPanel {
+        /// Treated cohort.
+        group: i32,
+        /// Calendar period.
+        time: i32,
+    },
+    /// The baseline weighting system is singular.
+    #[error("could not solve efficient baseline weighting system")]
+    SingularWeightingSystem,
+}
