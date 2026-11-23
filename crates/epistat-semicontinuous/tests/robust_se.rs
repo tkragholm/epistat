@@ -118,7 +118,12 @@ fn two_part_standard_errors_match_r() {
 
     let model_se = column(model_based.se_logit.as_ref().expect("model-based SE"));
     let robust_se = column(robust.se_logit.as_ref().expect("robust SE"));
-    assert_close("logit model-based vs R", &model_se, &R_MODEL_LOGIT, R_TOLERANCE);
+    assert_close(
+        "logit model-based vs R",
+        &model_se,
+        &R_MODEL_LOGIT,
+        R_TOLERANCE,
+    );
     assert_close("logit robust vs R", &robust_se, &R_HC0_LOGIT, R_TOLERANCE);
     assert_close(
         "gamma robust vs R",
