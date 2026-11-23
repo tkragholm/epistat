@@ -61,8 +61,6 @@ struct Case {
     af_var: Vec<f64>,
     s: Vec<f64>,
     s0: Vec<f64>,
-    s_var: Vec<f64>,
-    s0_var: Vec<f64>,
     jk_s_var: Vec<f64>,
     jk_s0_var: Vec<f64>,
     jk_af_var: Vec<f64>,
