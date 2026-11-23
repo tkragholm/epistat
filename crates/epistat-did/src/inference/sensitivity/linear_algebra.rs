@@ -778,13 +778,16 @@ mod tests {
         // (1 / x) sum_k (-1)^k (2k - 1)!! / x^(2k) to eight terms, whose
         // truncation error is below 1e-20.
         for &(x, expected) in &[
-            (2.0, 0.421_369_229_288_054_48),
+            (2.0, 0.421_369_229_288_054_5),
             (5.0, 0.192_808_104_715_315_76),
             (8.0, 0.123_131_963_257_932_3),
             (40.0, 0.024_984_404_205_720_574),
         ] {
             let ours = super::mills_ratio(x);
-            assert!(((ours - expected) / expected).abs() < 1e-15, "x = {x}: {ours}");
+            assert!(
+                ((ours - expected) / expected).abs() < 1e-15,
+                "x = {x}: {ours}"
+            );
         }
     }
 }
