@@ -59,6 +59,9 @@
 //!   difference and ratios, and their regression on covariates, as `survRM2::rmst2`.
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
+//! - [`ratetable`]: a table of reference hazards by age, sex and calendar year, and the
+//!   events expected in a cohort that had them, as `survival::ratetable` and
+//!   `pyears(expect = "event")`.
 //! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
 //!   number of events, terms and predicted survival curves of a Cox fit, as
 //!   `basehaz`, `predict.coxph` and `survfit.coxph`, including the
@@ -125,6 +128,7 @@ mod order;
 mod par;
 pub mod pseudo;
 pub mod pyears;
+pub mod ratetable;
 pub mod rmst;
 pub mod split;
 pub mod standardise;

@@ -24,7 +24,17 @@
 //!
 //! with `z_a` the `a` quantile of the standard normal distribution, which is
 //! negative for `a < 1/2`. The lower limit is undefined below `k = 1/8`, so
-//! it is `None` there.
+//! it is `None` there. The interval of Byar, also in \[2\], is
+//!
+//! ```text
+//! lower = k (1 - 1/(9k) - z / (3 sqrt(k)))^3        0 for k = 0
+//! upper = (k+1) (1 - 1/(9(k+1)) + z / (3 sqrt(k+1)))^3
+//! ```
+//!
+//! with `z = -z_a` the upper `a` quantile. It is the Wilson-Hilferty
+//! approximation of the exact limits. The lower limit is `None` when the base of
+//! the cube is not positive, which happens for very small counts at levels
+//! above 99.9%.
 //!
 //! [`gamma_quantile`] inverts the regularised incomplete gamma function of
 //! [`crate::gamma`]. It solves `ln F(x) = ln p` for the tail that is smaller,
@@ -62,6 +72,8 @@ pub enum Method {
     Exact,
     /// The limits of Anscombe, from the normal quantile.
     Anscombe,
+    /// The limits of Byar, the cube-root approximation of the exact limits.
+    Byar,
 }
 
 /// The limits of an interval. A limit that is undefined is `None`.
@@ -146,6 +158,18 @@ pub fn cipoisson(
             });
             let root = (count + 0.875).sqrt() - half_z;
             (lower, Some(root * root))
+        }
+        Method::Byar => {
+            let z = -normal::quantile(a);
+            let lower = if count == 0.0 {
+                Some(0.0)
+            } else {
+                let base = 1.0 - 1.0 / (9.0 * count) - z / (3.0 * count.sqrt());
+                (base > 0.0).then_some(count * base * base * base)
+            };
+            let up = count + 1.0;
+            let base = 1.0 - 1.0 / (9.0 * up) + z / (3.0 * up.sqrt());
+            (lower, Some(up * base * base * base))
         }
     };
     Ok(Interval {

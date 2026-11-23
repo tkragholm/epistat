@@ -102,6 +102,71 @@ pub fn regularised_beta(a: f64, b: f64, x: f64, y: f64) -> f64 {
     }
 }
 
+/// `ln Gamma(a + b) - ln Gamma(a)`, without the cancellation of two large
+/// log-gamma values when `a` is large. From `a = 1000` the difference of the
+/// Stirling series is formed term by term:
+/// `b ln a + (a + b - 1/2) ln(1 + b / a) - b + c(a + b) - c(a)`, with
+/// `c(z) = 1/(12 z) - 1/(360 z^3) + 1/(1260 z^5) - 1/(1680 z^7)`.
+fn ln_gamma_ratio(a: f64, b: f64) -> f64 {
+    if a < 1000.0 {
+        return ln_gamma(a + b) - ln_gamma(a);
+    }
+    let c = |z: f64| {
+        let z2 = z * z;
+        (1.0 / 12.0 - (1.0 / 360.0 - (1.0 / 1260.0 - 1.0 / (1680.0 * z2)) / z2) / z2) / z
+    };
+    b * a.ln() + (a + b - 0.5) * (b / a).ln_1p() - b + c(a + b) - c(a)
+}
+
+/// The upper tail `P(F > f)` of the F distribution on `df1` and `df2` degrees
+/// of freedom, R's `pf(f, df1, df2, lower.tail = FALSE)`, from the incomplete
+/// beta function `I_x(df2 / 2, df1 / 2)` with `x = df2 / (df2 + df1 f)`, and from
+/// the chi-square distribution of `df1 f` when `df2` is infinite. It is 1 for
+/// `f <= 0`. NaN when a degree of freedom is not positive or the continued
+/// fraction does not converge.
+///
+/// The factor `x^a y^b / B(a, b)` of the incomplete beta function is formed
+/// from `y = 1 - x` given exactly, with `a ln x = a ln(1 - y)` by `ln_1p`, and
+/// from a log-gamma difference that does not cancel, so that the tail keeps
+/// its accuracy for the very large `df2` that multiple imputation gives. For
+/// two-sided t tails, `P(|T| > z)` on `nu` degrees of freedom is
+/// `f_sf(z^2, 1, nu)`.
+///
+/// From `df2 = 1e7` the incomplete beta function is evaluated at an `x` within
+/// `eps` of 1, whose rounding gives a relative error of `eps / y`, with
+/// `y = df1 f / (df2 + df1 f)`. There the tail is the chi-square tail of
+/// `c = df1 f / 2` with the first term of its expansion in `1 / df2`, from
+/// `W / df2` having mean 1 and variance `2 / df2` for `W` chi-square on `df2`
+/// degrees of freedom:
+/// `Q(df1 / 2, c) + g(c) c (c - df1 / 2 + 1) / df2`, with `g` the gamma density.
+/// The next term is of order `c^4 / df2^2`.
+#[must_use]
+pub fn f_sf(f: f64, df1: f64, df2: f64) -> f64 {
+    if !(df1 > 0.0 && df2 > 0.0) || f.is_nan() {
+        return f64::NAN;
+    }
+    if f <= 0.0 {
+        return 1.0;
+    }
+    if df2.is_infinite() {
+        return crate::gamma::chi_square_sf(df1 * f, df1);
+    }
+    let (a, b) = (0.5 * df2, 0.5 * df1);
+    if df2 >= 1e7 {
+        let c = 0.5 * df1 * f;
+        let density = ((b - 1.0) * c.ln() - c - ln_gamma(b)).exp();
+        return crate::gamma::chi_square_sf(df1 * f, df1) + density * c * (c - b + 1.0) / df2;
+    }
+    let denominator = df2 + df1 * f;
+    let (x, y) = (df2 / denominator, df1 * f / denominator);
+    let front = (a * (-y).ln_1p() + b * y.ln() + ln_gamma_ratio(a, b) - ln_gamma(b)).exp();
+    if x < (a + 1.0) / (a + b + 2.0) {
+        beta_fraction(a, b, x).map_or(f64::NAN, |cf| front * cf / a)
+    } else {
+        beta_fraction(b, a, y).map_or(f64::NAN, |cf| 1.0 - front * cf / b)
+    }
+}
+
 /// `P(T > |z|)`, half the two-sided tail.
 fn upper_tail(z: f64, nu: f64) -> f64 {
     if z.is_infinite() {
