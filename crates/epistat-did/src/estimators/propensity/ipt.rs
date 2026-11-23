@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 
 #[must_use]
 pub fn ipt_loss_grad_hess(

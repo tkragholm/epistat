@@ -12,8 +12,8 @@
 //!   Applications*.
 //! - Sant'Anna, P. H. C. and Xu, L. (2026). `DiD_CC`.
 
-use faer::prelude::SolveLstsq;
-use faer::{Mat, MatRef};
+use epistat_linalg::SolveLstsq;
+use epistat_linalg::{Mat, MatRef};
 use std::collections::HashMap;
 
 use crate::estimators::common::linalg::{SpdCholeskyScratch, solve_spd_system};

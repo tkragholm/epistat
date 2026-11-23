@@ -1,6 +1,6 @@
 use epistat_inference::Clusters;
-use faer::linalg::matmul::matmul;
-use faer::{Accum, Mat, MatRef, Par};
+use epistat_linalg::matmul;
+use epistat_linalg::{Accum, Mat, MatRef, Par};
 use std::hash::Hash;
 
 use crate::util::usize_to_f64;

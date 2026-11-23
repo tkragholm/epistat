@@ -24,8 +24,8 @@ use epistat_did::{
     estimate_att_gt_dr, estimate_did_cc_robust, estimate_did_cc_stationary,
     estimate_drdid_improved_repeated_cross_section, estimate_drdid_panel, test_did_cc_stationarity,
 };
-use faer::Mat;
-use faer::prelude::Solve;
+use epistat_linalg::Mat;
+use epistat_linalg::Solve;
 
 fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).expect("benchmark size fits u32"))

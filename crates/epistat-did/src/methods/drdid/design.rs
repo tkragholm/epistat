@@ -35,7 +35,7 @@
 //! column that passes the pooled test can still fail within one arm, and the
 //! estimator then drops it as well.
 
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use crate::types::DrDidError;
 use epistat_linalg::DesignError;

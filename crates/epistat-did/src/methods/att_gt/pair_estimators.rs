@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use faer::Mat;
+use epistat_linalg::Mat;
 use itertools::izip;
 
 use crate::estimators::outcome::linear::LinearOutcome;

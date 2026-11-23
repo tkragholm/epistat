@@ -1,11 +1,8 @@
 use clarabel::algebra::CscMatrix;
-use dyn_stack::{MemBuffer, MemStack};
+use epistat_linalg::{
+    Accum, Mat, MatMut, MatRef, Par, Regularisation, Side, Solve, cholesky_factor, matmul,
+};
 use epistat_stats::normal;
-use faer::linalg::cholesky::llt;
-use faer::linalg::cholesky::llt::factor::LltRegularization;
-use faer::linalg::matmul::matmul;
-use faer::prelude::Solve;
-use faer::{Accum, Mat, MatMut, MatRef, Par, Side, Spec};
 
 use crate::util::usize_to_f64;
 
@@ -67,13 +64,18 @@ pub(super) fn cholesky_lower(matrix: &[Vec<f64>]) -> Result<Mat<f64>, String> {
     let sym = Mat::from_fn(matrix.len(), matrix.len(), |row, col| {
         0.5 * (matrix[row][col] + matrix[col][row])
     });
-    let scratch =
-        llt::factor::cholesky_in_place_scratch::<f64>(matrix.len(), Par::Seq, Spec::default());
-    let mut buffer = MemBuffer::new(scratch);
-    if let Some(lower) = try_dense_cholesky(&sym, LltRegularization::default(), &mut buffer) {
+    if let Some(lower) = cholesky_factor(sym.as_ref(), Regularisation::default()) {
         return Ok(lower);
     }
-    if let Some(lower) = try_dense_cholesky_with_diagonal_jitter(&sym, &mut buffer) {
+    let max_diag = (0..sym.nrows())
+        .map(|idx| sym[(idx, idx)].abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let jitter = Regularisation {
+        delta: max_diag * 1e-12,
+        epsilon: 1e-12,
+    };
+    if let Some(lower) = cholesky_factor(sym.as_ref(), jitter) {
         return Ok(lower);
     }
     cholesky_lower_tolerant(&sym)
@@ -103,51 +105,6 @@ fn cholesky_lower_tolerant(matrix: &Mat<f64>) -> Result<Mat<f64>, String> {
         }
     }
     Ok(lower)
-}
-
-fn try_dense_cholesky(
-    matrix: &Mat<f64>,
-    regularization: LltRegularization<f64>,
-    buffer: &mut MemBuffer,
-) -> Option<Mat<f64>> {
-    let n = matrix.nrows();
-    let mut dense = matrix.to_owned();
-    llt::factor::cholesky_in_place(
-        dense.as_mut(),
-        regularization,
-        Par::Seq,
-        MemStack::new(buffer),
-        Spec::default(),
-    )
-    .ok()?;
-    for row in 0..n {
-        for col in (row + 1)..n {
-            dense[(row, col)] = 0.0;
-        }
-    }
-    Some(dense)
-}
-
-fn try_dense_cholesky_with_diagonal_jitter(
-    matrix: &Mat<f64>,
-    buffer: &mut MemBuffer,
-) -> Option<Mat<f64>> {
-    let n = matrix.nrows();
-    if n == 0 {
-        return Some(Mat::zeros(0, 0));
-    }
-    let max_diag = (0..n)
-        .map(|idx| matrix[(idx, idx)].abs())
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let reg = LltRegularization {
-        dynamic_regularization_delta: max_diag * 1e-12,
-        dynamic_regularization_epsilon: 1e-12,
-    };
-    if let Some(lower) = try_dense_cholesky(matrix, reg, buffer) {
-        return Some(lower);
-    }
-    None
 }
 
 pub(super) fn lower_mat_vec_mul_into(lower: &Mat<f64>, vec: &[f64], out: &mut [f64]) {

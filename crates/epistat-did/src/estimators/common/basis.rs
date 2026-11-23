@@ -16,8 +16,8 @@
 //! - standard sieve / series-estimation treatments in semiparametric
 //!   econometrics.
 
+use epistat_linalg::Col;
 use epistat_linalg::basis::{BSpline, Basis as SharedBasis, Polynomial};
-use faer::Col;
 
 /// Trait for functional basis expansions (e.g., B-Splines, Polynomials).
 pub trait Basis {

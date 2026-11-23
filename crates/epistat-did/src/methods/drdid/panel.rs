@@ -1,6 +1,6 @@
+use epistat_linalg::SolveLstsq;
+use epistat_linalg::{Mat, MatRef};
 use epistat_linalg::{weighted_gram as linalg_weighted_gram, weighted_xtz};
-use faer::prelude::SolveLstsq;
-use faer::{Mat, MatRef};
 use itertools::izip;
 
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};

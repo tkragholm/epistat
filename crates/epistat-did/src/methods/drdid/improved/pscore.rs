@@ -15,8 +15,8 @@
 //! minimised from the same start. When that fails as well, the logit
 //! coefficients are used. Designs are row-major with the intercept in column 0.
 
+use epistat_linalg::MatRef;
 use epistat_linalg::{weighted_gram, weighted_xtz};
-use faer::MatRef;
 
 use crate::estimators::common::linalg::solve_dense_system;
 use crate::estimators::common::logit::fit_logit;

@@ -1,5 +1,5 @@
+use epistat_linalg::{Mat, MatRef};
 use epistat_optim::bfgs::Bfgs;
-use faer::{Mat, MatRef};
 use std::collections::HashMap;
 
 use super::common::softmax_scores;

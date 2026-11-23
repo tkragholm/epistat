@@ -1,11 +1,6 @@
 //! Small linear-algebra helpers shared by estimator implementations.
 
-use dyn_stack::{MemBuffer, MemStack};
-use epistat_linalg::{Attempt, Method, solve};
-use faer::linalg::cholesky::llt;
-use faer::linalg::cholesky::llt::factor::LltRegularization;
-use faer::prelude::*;
-use faer::{Conj, Mat, MatRef, Par, Spec};
+use epistat_linalg::{Attempt, CholeskySolver, Mat, MatRef, Method, Solve, solve};
 
 /// Solve `(A + λI) X = B` for `X`, where `A` is expected to be square.
 ///
@@ -105,79 +100,38 @@ fn solve_flat(a: &[f64], b: &[f64], attempts: &[Attempt]) -> Result<Vec<f64>, &'
     Ok((0..n).map(|row| solution.x[(row, 0)]).collect())
 }
 
-/// Scratch-backed SPD solver for repeated single-RHS solves with fixed dimension.
+/// Repeated SPD solves of one size, reusing the factor and work memory.
 pub struct SpdCholeskyScratch {
-    dim: usize,
-    factor: Mat<f64>,
-    rhs: Mat<f64>,
-    scratch: MemBuffer,
+    solver: CholeskySolver,
 }
 
 impl SpdCholeskyScratch {
     #[must_use]
     pub fn new(dim: usize) -> Self {
-        let factor_mem =
-            llt::factor::cholesky_in_place_scratch::<f64>(dim, Par::Seq, Spec::default());
-        let solve_mem = llt::solve::solve_in_place_scratch::<f64>(dim, 1, Par::Seq);
         Self {
-            dim,
-            factor: Mat::zeros(dim, dim),
-            rhs: Mat::zeros(dim, 1),
-            scratch: MemBuffer::new(factor_mem.or(solve_mem)),
+            solver: CholeskySolver::new(dim),
         }
     }
 
-    /// Solve `A x = b` using in-place LLT with reusable scratch memory.
+    /// Solve `A x = b` by Cholesky, `A` row-major.
     ///
     /// # Errors
-    /// Returns an error if dimensions mismatch, LLT fails, or the solution is non-finite.
+    /// Returns an error if dimensions mismatch, the factorisation fails, or the
+    /// solution is non-finite.
     pub fn solve_single_rhs_into(
         &mut self,
         a: &[f64],
         b: &[f64],
         out: &mut [f64],
     ) -> Result<(), &'static str> {
-        validate_square_system_shape(a, self.dim)?;
-        if b.len() != self.dim || out.len() != self.dim {
-            return Err("coefficient matrix shape does not match rhs length");
-        }
-
-        self.factor
-            .as_mut()
-            .copy_from(MatRef::from_row_major_slice(a, self.dim, self.dim));
-        self.rhs
-            .as_mut()
-            .copy_from(MatRef::from_column_major_slice(b, self.dim, 1));
-
-        let factor_stack = MemStack::new(&mut self.scratch);
-        if llt::factor::cholesky_in_place(
-            self.factor.as_mut(),
-            LltRegularization::default(),
-            Par::Seq,
-            factor_stack,
-            Spec::default(),
-        )
-        .is_err()
-        {
-            return Err("dense solve produced a non-finite value");
-        }
-
-        let solve_stack = MemStack::new(&mut self.scratch);
-        llt::solve::solve_in_place_with_conj(
-            self.factor.as_ref(),
-            Conj::No,
-            self.rhs.as_mut(),
-            Par::Seq,
-            solve_stack,
-        );
-        for (row, value) in out.iter_mut().enumerate().take(self.dim) {
-            let solved = self.rhs[(row, 0)];
-            if !solved.is_finite() {
-                return Err("dense solve produced a non-finite value");
-            }
-            *value = solved;
-        }
-        Ok(())
+        self.solver
+            .solve_into(a, b, out)
+            .map_err(|error| match error {
+                epistat_linalg::SolveError::Shape { .. } => {
+                    "coefficient matrix shape does not match rhs length"
+                }
+                _ => NON_FINITE,
+            })
     }
 }
 

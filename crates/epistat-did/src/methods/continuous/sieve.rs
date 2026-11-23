@@ -31,7 +31,7 @@ use crate::estimators::common::basis::Basis;
 use crate::estimators::common::linalg::{solve_spd_system, solve_spd_system_multi_rhs};
 use crate::types::{ACRTResult, ContinuousDidError, ContinuousObservation};
 use crate::util::usize_to_f64;
-use faer::{Col, Mat};
+use epistat_linalg::{Col, Mat};
 
 /// Estimates the Average Causal Response (ACRT) curve using a Sieve regression.
 ///

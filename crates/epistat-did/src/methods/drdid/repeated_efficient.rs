@@ -33,8 +33,8 @@
 //!   THAT regression's own fitted values, not the period-combined control
 //!   prediction used in the `eta` terms.
 
+use epistat_linalg::Mat;
 use epistat_linalg::weighted_gram;
-use faer::Mat;
 
 use crate::estimators::common::linalg::solve_spd_system_multi_rhs;
 use crate::estimators::outcome::linear::LinearOutcome;

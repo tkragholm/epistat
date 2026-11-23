@@ -1,5 +1,5 @@
 use super::*;
-use faer::Mat;
+use epistat_linalg::Mat;
 
 use crate::error::InternalDidError as PortedDidError;
 use crate::estimators::common::linalg::ridge_solve_lu;

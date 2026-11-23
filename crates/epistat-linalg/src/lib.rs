@@ -3,17 +3,23 @@
 //! factorisations, and products over the rows of a design matrix computed in
 //! fixed blocks, and the B-spline and polynomial bases of series estimators.
 //!
-//! [`Mat`] and [`MatRef`] are faer's matrix types, re-exported so that a crate
-//! that takes or returns them need not depend on faer itself. [`Side`] is
-//! faer's triangle selector for symmetric routines, re-exported for the same
-//! reason. [`matmul`], [`Accum`], [`MatMut`] and [`get_global_parallelism`] are
-//! faer's general matrix product and the types it takes, for callers that
-//! need the product of faer's kernel into their own buffers.
+//! [`Mat`], [`MatRef`] and [`Col`] are faer's matrix and column types,
+//! re-exported so that a crate that takes or returns them need not depend on
+//! faer itself. [`Side`] is faer's triangle selector for symmetric routines,
+//! re-exported for the same reason. [`matmul`], [`Accum`], [`MatMut`], [`Par`]
+//! and [`get_global_parallelism`] are faer's general matrix product and the
+//! types it takes, for callers that need the product of faer's kernel into
+//! their own buffers. [`Solve`] and [`SolveLstsq`] are the traits of faer's
+//! factorisation objects, for callers that solve with one directly, such as
+//! a column-pivoted QR for least squares.
 //!
 //! The modules, each with its own method notes:
 //!
 //! - [`solve`](crate::solve()) solves with a fallback sequence of
 //!   factorisations, each on one thread.
+//!   [`cholesky_factor`] is its Cholesky step alone, with faer's dynamic
+//!   regularisation as an option, and [`CholeskySolver`] repeats it for many
+//!   systems of one size without allocating.
 //! - `blocks` holds the products over the rows of a design matrix, computed
 //!   in blocks of [`ROW_BLOCK`] rows and added in block order.
 //! - [`cholesky`] holds the lower Cholesky factor with a caller-chosen pivot
@@ -36,8 +42,12 @@ mod solve;
 pub use blocks::{ROW_BLOCK, matvec_into, row_scaled_gram, weighted_gram, weighted_xtz, xtv};
 pub use error::DesignError;
 pub use faer::linalg::matmul::matmul;
-pub use faer::{Accum, Mat, MatMut, MatRef, Side, get_global_parallelism, mat};
-pub use solve::{Attempt, Factor, Method, Ridge, Solution, SolveError, inverse, solve};
+pub use faer::prelude::{Solve, SolveLstsq};
+pub use faer::{Accum, Col, Mat, MatMut, MatRef, Par, Side, get_global_parallelism, mat};
+pub use solve::{
+    Attempt, CholeskySolver, Factor, Method, Regularisation, Ridge, Solution, SolveError,
+    cholesky_factor, inverse, solve,
+};
 
 /// Whether every entry of `matrix` is finite.
 #[must_use]

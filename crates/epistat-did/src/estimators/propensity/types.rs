@@ -1,4 +1,4 @@
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::error::InternalDidError;
 

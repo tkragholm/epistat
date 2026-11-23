@@ -1,4 +1,4 @@
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 #[must_use]
 pub fn safe_sigmoid(v: f64) -> f64 {

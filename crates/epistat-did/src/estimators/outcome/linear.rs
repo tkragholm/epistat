@@ -1,5 +1,5 @@
+use epistat_linalg::{Mat, MatRef};
 use epistat_linalg::{weighted_gram, weighted_xtz};
-use faer::{Mat, MatRef};
 
 use crate::estimators::common::linalg::ridge_solve_lu;
 use crate::estimators::outcome::model::OutcomeModel;

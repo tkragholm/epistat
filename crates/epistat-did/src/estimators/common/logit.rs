@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use epistat_glm::{Family, Glm, GlmError, Link};
 use epistat_linalg::{Attempt, solve};
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 /// The coefficients of a logistic fit and how the iterations ended.
 #[derive(Debug, Clone)]

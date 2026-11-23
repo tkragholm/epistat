@@ -26,8 +26,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use faer::linalg::matmul::matmul;
-use faer::{Accum, Mat, MatRef, Par};
+use epistat_linalg::matmul;
+use epistat_linalg::{Accum, Mat, MatRef, Par};
 
 use crate::inference::{normal_interval, validate_confidence_level};
 use crate::methods::att_gt::pair_estimators::{

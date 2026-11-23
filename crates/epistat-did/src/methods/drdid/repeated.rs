@@ -1,4 +1,4 @@
-use faer::Mat;
+use epistat_linalg::Mat;
 use itertools::izip;
 
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};

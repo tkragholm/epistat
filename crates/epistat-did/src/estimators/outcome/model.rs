@@ -1,4 +1,4 @@
-use faer::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef};
 
 pub trait OutcomeModel {
     /// Fit the model and return its coefficients.

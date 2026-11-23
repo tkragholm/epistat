@@ -8,9 +8,9 @@
 //! treated weighting rule. A Hausman-style comparison test reports whether the
 //! stationarity restriction materially shifts the ATT target.
 
+use epistat_linalg::{Mat, MatRef};
 use epistat_rng::Stream;
 use epistat_stats::gamma::chi_square_sf;
-use faer::{Mat, MatRef};
 
 use crate::estimators::outcome::nonparametric::{LocalLinearOutcome, LocalLinearScratch};
 use crate::estimators::propensity::logistic::LogisticPS;
@@ -554,8 +554,8 @@ fn fit_outcome_predictions(
     train_outcomes: &[f64],
     train_weights: &[f64],
     cell_indices: &[Vec<usize>; 4],
-    train_design: faer::MatRef<'_, f64>,
-    query_design: faer::MatRef<'_, f64>,
+    train_design: epistat_linalg::MatRef<'_, f64>,
+    query_design: epistat_linalg::MatRef<'_, f64>,
     ridge: f64,
 ) -> Result<OutcomePredictions, DidCcError> {
     let train_data = OutcomeTrainData {
@@ -628,7 +628,7 @@ fn copy_outcome_subset_into_scratch(
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_cell_outcome(
     train_data: &OutcomeTrainData<'_>,
-    query_design: faer::MatRef<'_, f64>,
+    query_design: epistat_linalg::MatRef<'_, f64>,
     indices: &[usize],
     class_idx: usize,
     ridge: f64,
@@ -666,8 +666,8 @@ fn fit_cell_outcome(
 fn fit_generalized_propensity(
     class_labels: &[usize],
     sampling_weights: &[f64],
-    train_design: faer::MatRef<'_, f64>,
-    query_design: faer::MatRef<'_, f64>,
+    train_design: epistat_linalg::MatRef<'_, f64>,
+    query_design: epistat_linalg::MatRef<'_, f64>,
     config: crate::types::DrDidConfig,
 ) -> Result<Vec<[f64; 4]>, DidCcError> {
     let estimator = MultinomialSoftmaxPS::new(propensity_cfg(config)?, config.ridge);
@@ -708,8 +708,8 @@ fn fit_generalized_propensity(
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn fit_pooled_treated_propensity(
     treated: &[f64],
-    train_design: faer::MatRef<'_, f64>,
-    query_design: faer::MatRef<'_, f64>,
+    train_design: epistat_linalg::MatRef<'_, f64>,
+    query_design: epistat_linalg::MatRef<'_, f64>,
     config: crate::types::DrDidConfig,
 ) -> Result<Vec<f64>, DidCcError> {
     let target = MatRef::from_column_major_slice(treated, treated.len(), 1);

@@ -1,4 +1,4 @@
-use faer::MatRef;
+use epistat_linalg::MatRef;
 
 use super::irls::irls;
 use super::types::{Config, Params, PropensityEstimator};
@@ -34,7 +34,7 @@ impl PropensityEstimator for LogisticPS {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faer::Mat;
+    use epistat_linalg::Mat;
 
     fn simple_design() -> Mat<f64> {
         let x = [-2.0, -1.0, 0.0, 1.0, 2.0];

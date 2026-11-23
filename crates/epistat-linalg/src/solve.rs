@@ -391,6 +391,37 @@ fn candidates(
 
 /// The lower Cholesky factor of `a`'s lower triangle, on this thread.
 fn cholesky(a: MatRef<'_, f64>) -> Option<Mat<f64>> {
+    cholesky_factor(a, Regularisation::default())
+}
+
+/// faer's dynamic regularisation of a Cholesky factorisation, its
+/// `LltRegularization`: while `A` is factorised, a pivot at or below `epsilon`
+/// is regularised to `delta`. It applies only when both are positive; the
+/// default, both zero, factorises `A` as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Regularisation {
+    /// The value a regularised pivot takes.
+    pub delta: f64,
+    /// The threshold at or below which a pivot is regularised.
+    pub epsilon: f64,
+}
+
+/// The lower Cholesky factor `L` of `A = L L'`, with zeros above the diagonal,
+/// or `None` when a pivot is not positive after `regularisation`.
+///
+/// Only the lower triangle of `a` is read. The factorisation is faer's in-place
+/// one on one thread, the one [`Method::Cholesky`] uses.
+///
+/// # Panics
+///
+/// Panics when `a` is not square.
+#[must_use]
+pub fn cholesky_factor(a: MatRef<'_, f64>, regularisation: Regularisation) -> Option<Mat<f64>> {
+    assert_eq!(
+        a.nrows(),
+        a.ncols(),
+        "a Cholesky factor of a non-square matrix"
+    );
     let n = a.nrows();
     let mut lower = Mat::<f64>::zeros(n, n);
     lower.copy_from_triangular_lower(a);
@@ -401,7 +432,10 @@ fn cholesky(a: MatRef<'_, f64>) -> Option<Mat<f64>> {
     ));
     llt::factor::cholesky_in_place(
         lower.as_mut(),
-        llt::factor::LltRegularization::default(),
+        llt::factor::LltRegularization {
+            dynamic_regularization_delta: regularisation.delta,
+            dynamic_regularization_epsilon: regularisation.epsilon,
+        },
         Par::Seq,
         MemStack::new(&mut memory),
         Spec::default(),
@@ -413,6 +447,87 @@ fn cholesky(a: MatRef<'_, f64>) -> Option<Mat<f64>> {
         }
     }
     Some(lower)
+}
+
+/// Repeated Cholesky solves of systems of one size, each `A x = b` with one
+/// right-hand side, reusing the factor and the work memory between them.
+///
+/// The arithmetic is that of [`solve`] with [`Method::Cholesky`]: faer's
+/// in-place factorisation and triangular solves on one thread.
+pub struct CholeskySolver {
+    dim: usize,
+    factor: Mat<f64>,
+    rhs: Mat<f64>,
+    memory: MemBuffer,
+}
+
+impl CholeskySolver {
+    /// A solver for systems of `dim` unknowns.
+    #[must_use]
+    pub fn new(dim: usize) -> Self {
+        let factor = llt::factor::cholesky_in_place_scratch::<f64>(dim, Par::Seq, Spec::default());
+        let solve = llt::solve::solve_in_place_scratch::<f64>(dim, 1, Par::Seq);
+        Self {
+            dim,
+            factor: Mat::zeros(dim, dim),
+            rhs: Mat::zeros(dim, 1),
+            memory: MemBuffer::new(factor.or(solve)),
+        }
+    }
+
+    /// The number of unknowns.
+    #[must_use]
+    pub const fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Solves `A x = b` for `A` given row-major in `a`, reading its lower
+    /// triangle, and writes `x` to `out`.
+    ///
+    /// # Errors
+    ///
+    /// [`SolveError::Shape`] when `a`, `b` or `out` does not have the solver's
+    /// size, and [`SolveError::NotFinite`] when a pivot is not positive or the
+    /// solution has a non-finite entry. `out` is then unspecified.
+    pub fn solve_into(&mut self, a: &[f64], b: &[f64], out: &mut [f64]) -> Result<(), SolveError> {
+        let n = self.dim;
+        if a.len() != n * n || b.len() != n || out.len() != n {
+            return Err(SolveError::Shape {
+                rows: n,
+                cols: if n == 0 { 0 } else { a.len() / n },
+                rhs: b.len(),
+            });
+        }
+        self.factor
+            .as_mut()
+            .copy_from(MatRef::from_row_major_slice(a, n, n));
+        self.rhs
+            .as_mut()
+            .copy_from(MatRef::from_column_major_slice(b, n, 1));
+        llt::factor::cholesky_in_place(
+            self.factor.as_mut(),
+            llt::factor::LltRegularization::default(),
+            Par::Seq,
+            MemStack::new(&mut self.memory),
+            Spec::default(),
+        )
+        .map_err(|_| SolveError::NotFinite)?;
+        llt::solve::solve_in_place_with_conj(
+            self.factor.as_ref(),
+            Conj::No,
+            self.rhs.as_mut(),
+            Par::Seq,
+            MemStack::new(&mut self.memory),
+        );
+        for (row, value) in out.iter_mut().enumerate() {
+            let solved = self.rhs[(row, 0)];
+            if !solved.is_finite() {
+                return Err(SolveError::NotFinite);
+            }
+            *value = solved;
+        }
+        Ok(())
+    }
 }
 
 fn cholesky_solve(lower: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Mat<f64> {
@@ -513,6 +628,63 @@ mod tests {
         )
         .unwrap();
         assert!(solution.ridge > 0.0);
+    }
+
+    #[test]
+    fn the_reused_cholesky_solver_agrees_with_solve() {
+        let a = mat![[4.0, 1.0, 0.5], [1.0, 3.0, 0.2], [0.5, 0.2, 2.0]];
+        let b = [1.0, -2.0, 0.5];
+        let expected = solve(
+            a.as_ref(),
+            column(&b).as_ref(),
+            &[Attempt::plain(Method::Cholesky)],
+        )
+        .unwrap();
+        let flat: Vec<f64> = (0..3)
+            .flat_map(|i| (0..3).map(move |j| (i, j)))
+            .map(|(i, j)| a[(i, j)])
+            .collect();
+        let mut solver = CholeskySolver::new(3);
+        let mut out = [0.0; 3];
+        for _ in 0..2 {
+            solver.solve_into(&flat, &b, &mut out).unwrap();
+            assert_eq!(
+                out.map(f64::to_bits).to_vec(),
+                values(&expected.x)
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+        let singular = [1.0, 2.0, 2.0, 1.0];
+        let mut two = CholeskySolver::new(2);
+        assert_eq!(
+            two.solve_into(&singular, &[1.0, 1.0], &mut [0.0; 2]),
+            Err(SolveError::NotFinite)
+        );
+        assert!(matches!(
+            two.solve_into(&flat, &b, &mut out),
+            Err(SolveError::Shape { .. })
+        ));
+    }
+
+    #[test]
+    fn regularisation_factorises_a_singular_matrix() {
+        let a = mat![[1.0, 1.0], [1.0, 1.0]];
+        assert!(cholesky_factor(a.as_ref(), Regularisation::default()).is_none());
+        let lower = cholesky_factor(
+            a.as_ref(),
+            Regularisation {
+                delta: 1e-6,
+                epsilon: 1e-12,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            [lower[(0, 0)], lower[(1, 0)], lower[(0, 1)]],
+            [1.0, 1.0, 0.0]
+        );
+        assert!(lower[(1, 1)].is_finite());
     }
 
     #[test]

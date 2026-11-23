@@ -3,7 +3,7 @@
 //! These are compiled only under `cfg(test)` via `common::mod`.
 
 use crate::util::usize_to_f64;
-use faer::Mat;
+use epistat_linalg::Mat;
 use tracing::warn;
 
 /// Compute `X' W X` given a precomputed `X' W`.
