@@ -94,8 +94,8 @@ pub struct Outputs {
 pub fn run(a: &Analysis) -> Outputs {
     let w = &a.rows;
     let n = w.id.len();
-    let treatment: Vec<bool> = w.treatment.iter().map(|&v| v == 1.0).collect();
-    let previous: Vec<bool> = w.am_1.iter().map(|&v| v == 1.0).collect();
+    let treatment: Vec<bool> = w.treatment.iter().map(|&v| v > 0.5).collect();
+    let previous: Vec<bool> = w.am_1.iter().map(|&v| v > 0.5).collect();
     let data = PersonPeriod {
         id: &w.id,
         period: &w.period,
@@ -112,7 +112,7 @@ pub fn run(a: &Analysis) -> Outputs {
     let mut row_weight = sw.weight.clone();
     let (mut censor_denominator, mut censor_numerator) = (Vec::new(), Vec::new());
     if a.use_censor {
-        let censored: Vec<bool> = w.censored.iter().map(|&v| v == 1.0).collect();
+        let censored: Vec<bool> = w.censored.iter().map(|&v| v > 0.5).collect();
         let cw = censoring_weights(&data, &censored, &model, Fit::ByPreviousTreatment).unwrap();
         for i in 0..n {
             row_weight[i] *= cw.weight[i];
@@ -145,7 +145,7 @@ pub fn run(a: &Analysis) -> Outputs {
             t.age_s[i],
         ][j]
     });
-    let outcome: Vec<bool> = t.outcome.iter().map(|&v| v == 1.0).collect();
+    let outcome: Vec<bool> = t.outcome.iter().map(|&v| v > 0.5).collect();
     let msm = fit_msm(&MsmInput {
         design: design.as_ref(),
         outcome: &outcome,

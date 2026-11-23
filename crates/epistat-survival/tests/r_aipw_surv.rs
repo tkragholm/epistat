@@ -67,7 +67,7 @@ fn the_risks_agree_with_ate() {
     ));
     for s in &r.scenarios {
         let n = s.time.len();
-        let treated: Vec<bool> = s.a.iter().map(|&a| a == 1.0).collect();
+        let treated: Vec<bool> = s.a.iter().map(|&a| a > 0.5).collect();
         let x = Mat::from_fn(n, 3, |i, j| [s.a[i], s.x1[i], s.x2[i]][j]);
         let z = Mat::from_fn(n, 3, |i, j| [1.0, s.x1[i], s.x2[i]][j]);
         let cx = Mat::from_fn(n, 3, |i, j| [s.a[i], s.x1[i], s.x2[i]][j]);

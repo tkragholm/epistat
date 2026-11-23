@@ -60,8 +60,8 @@ pub struct Data {
 
 pub fn data(r: &Reference) -> Data {
     Data {
-        treatment: r.input.treatment.iter().map(|&v| v == 1.0).collect(),
-        outcome: r.input.outcome.iter().map(|&v| v == 1.0).collect(),
+        treatment: r.input.treatment.iter().map(|&v| v > 0.5).collect(),
+        outcome: r.input.outcome.iter().map(|&v| v > 0.5).collect(),
     }
 }
 
