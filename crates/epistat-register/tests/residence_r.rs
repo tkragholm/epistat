@@ -68,7 +68,10 @@ fn spells_residence_and_departures_agree_with_r() {
 
     let mut person = Vec::new();
     for p in 0..r.persons {
-        person.extend(std::iter::repeat_n(p, s.person_offsets[p + 1] - s.person_offsets[p]));
+        person.extend(std::iter::repeat_n(
+            p,
+            s.person_offsets[p + 1] - s.person_offsets[p],
+        ));
     }
     assert_eq!(person, r.spells.person);
     assert_eq!(s.from, r.spells.from);

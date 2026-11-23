@@ -74,6 +74,7 @@ fn reference() -> Reference {
 }
 
 #[test]
+#[expect(clippy::cast_possible_truncation, reason = "fewer than 200 persons")]
 fn relatedness_equals_twice_kinship2() {
     let k = reference().kinship;
     let n = k.person.len();
@@ -163,7 +164,7 @@ fn pair_kinds_clusters_and_births_agree_with_r() {
     let births = multiple_birth_groups(&opt(&k.birth_mother), &opt_i(&k.birth_day)).unwrap();
     assert_eq!(births.group, k.group);
     assert_eq!(births.size, k.size);
-    assert!(k.size.iter().any(|s| *s == Some(2)));
+    assert!(k.size.contains(&Some(2)));
     let order = delivery_order(&opt(&k.birth_mother), &opt_i(&k.birth_day)).unwrap();
     assert_eq!(order, k.order);
     assert!(k.order.iter().any(|o| *o >= Some(2)));

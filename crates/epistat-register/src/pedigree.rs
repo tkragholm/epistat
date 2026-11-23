@@ -1075,11 +1075,6 @@ impl Groups {
 
 #[cfg(test)]
 mod tests {
-    #![expect(
-        clippy::cast_possible_truncation,
-        reason = "small row numbers in test data"
-    )]
-
     use super::*;
 
     // Persons: 1 and 2 are the founders. 3, 4 and 5 are their children, 6 is

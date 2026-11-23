@@ -32,5 +32,9 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 name = "tier1_register"
 harness = false
 
+[[bench]]
+name = "tier2_register"
+harness = false
+
 [lints]
 workspace = true

@@ -28,3 +28,16 @@ Small methods for register data on plain slices.
 - `exposure`: exposure periods from dispensings with a fixed, default or
   observed dose, grace period, stockpiling with a cap, paused days and
   cumulative dose, checked against `AdhereR`. No dose is built in.
+- `intervals`: intersection, difference, complement within a window and
+  clipping of per-key sets of half-open intervals, checked against day arrays
+  in base R.
+- `lexis`: cuts follow-up on integer days at calendar years, civil birthdays,
+  periods and time since entry, checked against `Epi::splitLexis` and
+  `popEpi::splitMulti`.
+- `pedigree`: full and half siblings, cousins of any degree, multiple births,
+  birth order, family clusters and the coefficient of relationship from the
+  mother and father of each person, checked against `kinship2`. Parents of
+  unknown paternity are a kind of their own.
+- `residence`: residence spells from dated emigrations and immigrations, with
+  the reading of a same-day pair named by the caller, residence on a day, the
+  first departure after a day and the end of observation.

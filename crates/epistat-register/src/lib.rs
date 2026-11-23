@@ -2,7 +2,8 @@
 //! overlapping intervals, connected components of rows that share a key,
 //! constant-price deflation, normalisation of ICD-10 codes, age in whole
 //! years, code sets for ICD-10, ICD-8 and ATC, event definitions, comorbidity
-//! indices and drug exposure episodes.
+//! indices, drug exposure episodes, interval sets, Lexis splitting, pedigrees and
+//! residence spells.
 //!
 //! Each module is one small, self-contained method on plain slices and integers,
 //! with no dependence on a data-frame library.
@@ -28,6 +29,14 @@
 //!   diagnosis codes, with look-back windows and hierarchy rules.
 //! - [`exposure`] turns dispensings into periods of drug exposure and
 //!   cumulative doses, under assumptions the caller declares.
+//! - [`intervals`] intersects, subtracts, complements and clips per-key sets of
+//!   half-open intervals.
+//! - [`lexis`] cuts follow-up on integer days at calendar years, civil
+//!   birthdays, periods and times since entry.
+//! - [`pedigree`] finds siblings, cousins, multiple births, family clusters and
+//!   relatedness from the mother and father of each person.
+//! - [`residence`] turns dated emigrations and immigrations into residence
+//!   spells and gives the end of observation.
 //! - [`cpi`] deflates nominal values to the prices of a reference year with an
 //!   annual price index the caller supplies. The Statistics Denmark index is
 //!   available behind the cargo feature `denmark`.
