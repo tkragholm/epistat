@@ -99,6 +99,10 @@ pub(super) fn aliased_columns(x: MatRef<'_, f64>, weight: Option<&[f64]>) -> Vec
 /// The Nelson-Aalen cumulative hazard at each distinct event time, from the
 /// weights and the entry times, as pairs of the time and the cumulative hazard
 /// with the weighted number of events at it.
+#[expect(
+    clippy::float_cmp,
+    reason = "rows with the same exit time are grouped by exact equality"
+)]
 fn nelson_aalen(
     stop: &[f64],
     start: Option<&[f64]>,
@@ -208,13 +212,13 @@ pub(super) fn starting_values(
                 w.iter().zip(&gamma[1..]).map(|(a, b)| a * b).sum::<f64>() > 0.0
             })
     };
-    if usable.len() > df {
-        if let Some(gamma) = fit(df) {
-            if gamma.iter().all(|v| v.is_finite()) && monotone(&gamma) {
-                theta[..=df].copy_from_slice(&gamma);
-                return theta;
-            }
-        }
+    if usable.len() > df
+        && let Some(gamma) = fit(df)
+        && gamma.iter().all(|v| v.is_finite())
+        && monotone(&gamma)
+    {
+        theta[..=df].copy_from_slice(&gamma);
+        return theta;
     }
     // A straight line in ln t.
     let (mut sw, mut su, mut sy, mut suu, mut suy) = (0.0, 0.0, 0.0, 0.0, 0.0);

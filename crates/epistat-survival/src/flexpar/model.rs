@@ -75,7 +75,7 @@ impl Totals {
         }
     }
 
-    fn add(&mut self, other: Self) {
+    fn add(&mut self, other: &Self) {
         self.ll += other.ll;
         for (a, b) in self.score.iter_mut().zip(&other.score) {
             *a += b;
@@ -102,7 +102,7 @@ fn rank_one(info: &mut [f64], q: usize, coefficient: f64, v: &[f64]) {
     for i in 0..q {
         let c = coefficient * v[i];
         if c != 0.0 {
-            let row = &mut info[i * q..i * q + i + 1];
+            let row = &mut info[i * q..=i * q + i];
             for (slot, vj) in row.iter_mut().zip(v) {
                 *slot += c * vj;
             }
@@ -216,7 +216,7 @@ impl Model<'_> {
             Ok(t)
         };
         let mut total =
-            par::try_ordered_reduce(self.n(), BLOCK, WAVE, make, |t: &mut Totals, p| t.add(p))
+            par::try_ordered_reduce(self.n(), BLOCK, WAVE, make, |t: &mut Totals, p| t.add(&p))
                 .ok()?;
         if derivatives {
             total.symmetrise(q);
@@ -259,12 +259,14 @@ pub(super) fn maximise(
             ..Bfgs::default()
         }
         .minimize(&best.theta, f, None);
-        if let Ok(m) = minimum {
-            if m.value.is_finite() && m.value < 1e299 && -m.value >= best.totals.ll {
-                let mut again = m.x;
-                if let Some(n) = newton(model, &mut again, tolerance, max_iterations, &mut used) {
-                    best = n;
-                }
+        if let Ok(m) = minimum
+            && m.value.is_finite()
+            && m.value < 1e299
+            && -m.value >= best.totals.ll
+        {
+            let mut again = m.x;
+            if let Some(n) = newton(model, &mut again, tolerance, max_iterations, &mut used) {
+                best = n;
             }
         }
     }
@@ -296,12 +298,12 @@ fn newton(
                 .zip(&delta)
                 .map(|(t, d)| t + alpha * d)
                 .collect();
-            if let Some(t) = model.evaluate(&candidate, false) {
-                if t.ll >= current.ll || (finishing && t.ll >= current.ll - 1e-12 * scale) {
-                    theta.copy_from_slice(&candidate);
-                    accepted = true;
-                    break;
-                }
+            if let Some(t) = model.evaluate(&candidate, false)
+                && (t.ll >= current.ll || (finishing && t.ll >= current.ll - 1e-12 * scale))
+            {
+                theta.copy_from_slice(&candidate);
+                accepted = true;
+                break;
             }
             alpha *= 0.5;
         }

@@ -4,6 +4,12 @@
 //! quantity is compared to a stated bound, and the worst ratio of deviation to
 //! bound of each kind is printed with `--nocapture`.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "statuses and clusters are small whole numbers written by R as doubles"
+)]
+
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{

@@ -88,15 +88,6 @@ pub(super) fn cumulative(scale: Scale, eta: f64) -> (f64, f64, f64) {
     }
 }
 
-/// `H(eta)` alone.
-pub(super) fn cumulative_value(scale: Scale, eta: f64) -> f64 {
-    match scale {
-        Scale::Hazard => eta.exp(),
-        Scale::Odds => softplus(eta),
-        Scale::Probit => -log_upper_tail(eta).0,
-    }
-}
-
 /// `ln m(eta)` and its first two derivatives, where the hazard is
 /// `m(eta) eta'(u) / t`.
 pub(super) fn log_hazard_factor(scale: Scale, eta: f64) -> (f64, f64, f64) {
@@ -156,8 +147,7 @@ mod tests {
             for &eta in &[-6.0, -1.3, 0.0, 0.7, 4.0, 5.5, 9.0] {
                 let h = 1e-5;
                 let (_, h1, h2) = cumulative(scale, eta);
-                let d1 = (cumulative_value(scale, eta + h) - cumulative_value(scale, eta - h))
-                    / (2.0 * h);
+                let d1 = (cumulative(scale, eta + h).0 - cumulative(scale, eta - h).0) / (2.0 * h);
                 let d2 = (cumulative(scale, eta + h).1 - cumulative(scale, eta - h).1) / (2.0 * h);
                 assert!(close(h1, d1, 1e-7), "{scale:?} {eta} {h1} {d1}");
                 assert!(close(h2, d2, 1e-6), "{scale:?} {eta} {h2} {d2}");
@@ -179,7 +169,7 @@ mod tests {
         for scale in [Scale::Hazard, Scale::Odds, Scale::Probit] {
             for &eta in &[-3.0, 0.0, 2.0] {
                 let s = survival(scale, eta);
-                assert!(close(s, (-cumulative_value(scale, eta)).exp(), 1e-14));
+                assert!(close(s, (-cumulative(scale, eta).0).exp(), 1e-14));
             }
         }
     }

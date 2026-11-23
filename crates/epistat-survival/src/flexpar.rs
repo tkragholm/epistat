@@ -326,17 +326,17 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
             "the baseline needs at least one degree of freedom",
         ));
     }
-    if !(opts.tolerance > 0.0) || opts.max_iterations == 0 {
+    if opts.tolerance.is_nan() || opts.tolerance <= 0.0 || opts.max_iterations == 0 {
         return Err(Error::input(
             "tolerance and max_iterations must be positive",
         ));
     }
-    if let Some(o) = opts.offset {
-        if o.len() != n || o.iter().any(|v| !v.is_finite()) {
-            return Err(Error::input(
-                "the offset must be finite and have one value per row",
-            ));
-        }
+    if let Some(o) = opts.offset
+        && (o.len() != n || o.iter().any(|v| !v.is_finite()))
+    {
+        return Err(Error::input(
+            "the offset must be finite and have one value per row",
+        ));
     }
     if data.n_strata() > 0 {
         return Err(Error::input("strata are not supported by flexpar"));
@@ -394,14 +394,14 @@ pub fn fit(
             return Err(Error::input(format!("row {i} has a negative entry time")));
         }
     }
-    if opts.scale != Scale::Hazard {
-        if let Some(id) = data.id() {
-            let mut seen = HashSet::new();
-            if (0..n).filter(|&i| used(i)).any(|i| !seen.insert(id[i])) {
-                return Err(Error::input(
-                    "a subject has several rows: only the hazard scale accepts split follow-up",
-                ));
-            }
+    if opts.scale != Scale::Hazard
+        && let Some(id) = data.id()
+    {
+        let mut seen = HashSet::new();
+        if (0..n).filter(|&i| used(i)).any(|i| !seen.insert(id[i])) {
+            return Err(Error::input(
+                "a subject has several rows: only the hazard scale accepts split follow-up",
+            ));
         }
     }
     let mut events: Vec<f64> = (0..n)
@@ -606,9 +606,9 @@ fn robust_variance(
     let q = theta.len();
     let mut sums = Mat::<f64>::zeros(n_clusters, q);
     let mut work = Work::new(q);
-    for i in 0..model.n() {
+    for (i, &group) in cluster.iter().enumerate() {
         if let Ok(Some(r)) = model.row(i, theta, &mut work) {
-            let g = cluster[i] as usize;
+            let g = group as usize;
             for k in 0..q {
                 sums[(g, k)] += r.sz * work.z[k]
                     + r.sw * work.w[k]
@@ -649,8 +649,8 @@ fn monotone_on_data(
     let knots = design.baseline.knots();
     let (lo, hi) = (knots[0], knots[knots.len() - 1]);
     let rows: Vec<usize> = (0..n).filter(|&i| used(i)).collect();
-    let step = rows.len().div_ceil(200).max(1);
-    rows.iter().step_by(step).all(|&i| {
+    let stride = rows.len().div_ceil(200).max(1);
+    rows.iter().step_by(stride).all(|&i| {
         (0..=100).all(|g| {
             let u = lo + (hi - lo) * f64::from(g) / 100.0;
             positive(i, u)
