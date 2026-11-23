@@ -26,6 +26,8 @@
 //!   likelihood-ratio tests of the coefficients, its residuals as `residuals.coxph`,
 //!   the test of proportional hazards of `cox.zph`, and time-transform
 //!   covariates as `coxph(tt = )` ([`cox::fit_tt`]).
+//! - [`casecohort`]: the Cox model of a case-cohort study with the variance of the sampling of the
+//!   subcohort, by the five methods of `survival::cch`.
 //! - [`clogit`]: conditional logistic regression for matched sets, as `clogit`,
 //!   with the exact partial likelihood of [`cox`] by default.
 //! - [`informative`]: the matched sets and strata that carry information about
@@ -134,6 +136,7 @@ pub mod aipw;
 #[cfg(feature = "arrow")]
 pub mod arrow;
 mod check;
+pub mod casecohort;
 pub mod clogit;
 pub mod concordance;
 pub mod condense;
