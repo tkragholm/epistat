@@ -21,12 +21,12 @@ use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("entropy att", 2558, 0x31cebc0dd1199adc),
-    ("entropy ate", 2566, 0x1067f5e4fc15e8ba),
-    ("entropy atc", 2558, 0xcf0a69c1e418c89a),
-    ("cbps ate exact", 5056, 0x95eb202f6d1a4647),
-    ("cbps att over", 5056, 0xb9a5a8ea1adc3feb),
-    ("cbps atc over updated", 5056, 0x2001a1fd3c1b2bfc),
+    ("entropy att", 2558, 0x31ce_bc0d_d119_9adc),
+    ("entropy ate", 2566, 0x1067_f5e4_fc15_e8ba),
+    ("entropy atc", 2558, 0xcf0a_69c1_e418_c89a),
+    ("cbps ate exact", 5056, 0x95eb_202f_6d1a_4647),
+    ("cbps att over", 5056, 0xb9a5_a8ea_1adc_3feb),
+    ("cbps atc over updated", 5056, 0x2001_a1fd_3c1b_2bfc),
 ];
 
 fn outputs() -> Vec<(String, Vec<f64>)> {
