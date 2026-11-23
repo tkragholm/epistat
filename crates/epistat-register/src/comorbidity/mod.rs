@@ -5,7 +5,8 @@
 //! index \[1\] weights 17 conditions, and its ICD-10 coding is the algorithm of
 //! Quan et al. \[2\] with the weights of Charlson \[1\] or the updated weights of
 //! Quan et al. \[3\]. The Elixhauser measure \[4\] flags 31 conditions in the ICD-10
-//! coding of Quan et al. \[2\], and van Walraven et al. \[5\] give it a point
+//! coding of Quan et al. \[2\] (Tables 1 and 2 for the Charlson and the Elixhauser
+//! conditions), and van Walraven et al. \[5\] give it a point
 //! score.
 //!
 //! # What is built in
@@ -238,7 +239,7 @@ impl ComorbidityMap {
     }
 
     /// The 17 conditions of the Charlson index in the ICD-10 coding of Quan et
-    /// al. 2005, with no ICD-8 codes.
+    /// al. 2005 (Table 1), with no ICD-8 codes.
     #[must_use]
     pub fn charlson_quan_icd10() -> Self {
         let supersedes = |key: &str| -> &[&str] {
@@ -257,7 +258,7 @@ impl ComorbidityMap {
     }
 
     /// The 31 conditions of the Elixhauser measure in the ICD-10 coding of Quan
-    /// et al. 2005, with no ICD-8 codes.
+    /// et al. 2005 (Table 2), with no ICD-8 codes.
     #[must_use]
     pub fn elixhauser_quan_icd10() -> Self {
         let supersedes = |key: &str| -> &[&str] {

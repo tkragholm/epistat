@@ -86,6 +86,23 @@
 //! the function is serial and the output is ordered by person, group and
 //! start.
 //!
+//! # Other implementations
+//!
+//! The tests compare the periods with `AdhereR::compute.treatment.episodes`
+//! and with `heaven::medicinMacro` (type `"dynamic"`), and agree exactly where
+//! the rules coincide: whole-day durations with AdhereR, and with heaven a
+//! fixed daily dose (equal minimum, maximum and default), no permitted gap,
+//! with or without a cap on stock. They differ elsewhere:
+//!
+//! - heaven estimates the daily dose from the purchases around a supply, and
+//!   uses its default dose before the second purchase. Its cap on stock is a
+//!   quantity, here a number of days. It has no permitted gap.
+//! - heaven reads an admission as the span from the admission day to the
+//!   discharge day, discharge day excluded, as a pause here. When an admission
+//!   starts while a supply is running, heaven's periods end later than here
+//!   and can join periods that are separate here, so the comparison uses the
+//!   persons whose admissions start with no supply running.
+//!
 //! # Not covered
 //!
 //! PRE2DUP \[3\], the person-specific model of drug use periods, is not here.
