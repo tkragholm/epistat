@@ -40,5 +40,9 @@ harness = false
 name = "tier1_survival"
 harness = false
 
+[[bench]]
+name = "tier2_survival"
+harness = false
+
 [lints]
 workspace = true

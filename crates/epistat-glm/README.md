@@ -22,4 +22,7 @@ gives sandwich covariances of a fit (HC0, HC1, HC3, clustered) as
 `sandwich::vcovHC` and `vcovCL`, and risk ratios and risk differences of a binary
 outcome by modified Poisson and binomial identity regression. The `within`
 module is the linear within-family estimator with clustered variance as
-`fixest::feols`. Each is checked against R.
+`fixest::feols`. The `attributable` module gives the attributable fraction of an
+exposure from a logistic model, cross-sectional or case-control, with a sandwich
+standard error, weights and clusters, as `AFglm` of the R package AF. Each is
+checked against R.
