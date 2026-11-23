@@ -23,6 +23,9 @@ pub(super) struct Model<'a> {
     pub event: &'a [i32],
     pub weight: Option<&'a [f64]>,
     pub offset: Option<&'a [f64]>,
+    /// The expected hazard of each row at its exit time, for an excess hazard
+    /// model.
+    pub bhazard: Option<&'a [f64]>,
 }
 
 /// Buffers for one row.
@@ -45,7 +48,7 @@ impl Work {
 /// One row's log likelihood and the coefficients with which its score and
 /// information are built from `z`, `w` and `z0`:
 /// `score = sz z + sw w + s0 z0` and
-/// `information = a z z' + b w w' + a0 z0 z0'`.
+/// `information = a z z' + b w w' + a0 z0 z0' + cross (z w' + w z')`.
 pub(super) struct RowTerms {
     pub ll: f64,
     pub sz: f64,
@@ -54,6 +57,7 @@ pub(super) struct RowTerms {
     pub a: f64,
     pub b: f64,
     pub a0: f64,
+    pub cross: f64,
     pub has_entry: bool,
 }
 
@@ -110,6 +114,15 @@ fn rank_one(info: &mut [f64], q: usize, coefficient: f64, v: &[f64]) {
     }
 }
 
+/// Adds `coefficient (z w' + w z')` to the lower triangle.
+fn cross_one(info: &mut [f64], q: usize, coefficient: f64, z: &[f64], w: &[f64]) {
+    for i in 0..q {
+        for j in 0..=i {
+            info[i * q + j] += coefficient * (z[i] * w[j] + w[i] * z[j]);
+        }
+    }
+}
+
 impl Model<'_> {
     pub(super) fn n(&self) -> usize {
         self.stop.len()
@@ -146,17 +159,34 @@ impl Model<'_> {
         let (h, h1, h2) = link::cumulative(self.scale, eta);
         let mut ll = -h;
         let (mut sz, mut sw, mut a, mut b) = (-h1, 0.0, h2, 0.0);
+        let mut cross = 0.0;
         if event {
             let ws = dot(&work.w, theta);
             if ws.is_nan() || ws <= 0.0 {
                 return Err(());
             }
             let (g, g1, g2) = link::log_hazard_factor(self.scale, eta);
-            ll += g + ws.ln() - u;
-            sz += g1;
-            sw = 1.0 / ws;
-            a -= g2;
-            b = 1.0 / (ws * ws);
+            let log_excess = g + ws.ln() - u;
+            match self.bhazard.map(|h| h[i]) {
+                Some(expected) if expected > 0.0 => {
+                    // ln(h* + h_E) with h_E = exp(log_excess), and r the share
+                    // of the excess in the observed hazard.
+                    let r = 1.0 / (1.0 + expected * (-log_excess).exp());
+                    ll += log_excess + (expected * (-log_excess).exp()).ln_1p();
+                    sz += r * g1;
+                    sw = r / ws;
+                    a += -r * (1.0 - r) * g1 * g1 - r * g2;
+                    b = r * r / (ws * ws);
+                    cross = -r * (1.0 - r) * g1 / ws;
+                }
+                _ => {
+                    ll += log_excess;
+                    sz += g1;
+                    sw = 1.0 / ws;
+                    a -= g2;
+                    b = 1.0 / (ws * ws);
+                }
+            }
         }
         let start = self.start.map_or(0.0, |s| s[i]);
         let has_entry = start > 0.0;
@@ -181,6 +211,7 @@ impl Model<'_> {
             a: c * a,
             b: c * b,
             a0: c * a0,
+            cross: c * cross,
             has_entry,
         }))
     }
@@ -210,6 +241,9 @@ impl Model<'_> {
                     }
                     if r.has_entry {
                         rank_one(&mut t.info, q, r.a0, &work.z0);
+                    }
+                    if r.cross != 0.0 {
+                        cross_one(&mut t.info, q, r.cross, &work.z, &work.w);
                     }
                 }
             }

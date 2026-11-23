@@ -29,6 +29,12 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   cluster-robust variance, and survivor, hazard and cumulative hazard curves and
   contrasts with delta-method limits, checked against `survreg`,
   `flexsurv::flexsurvspline` and `rstpm2::stpm2`.
+- Relative survival: net survival by Pohar Perme and by Ederer II with
+  variances and limits, by group, exactly at every entry and exit time or on a
+  grid of intervals, from the reference hazards of a rate table, and excess
+  hazard models, piecewise constant on split or aggregated follow-up and
+  flexible parametric with the expected hazard at each exit, checked against
+  `relsurv::rs.surv`, `popEpi::relpois` and `rstpm2::stpm2`.
 - The Titman-Putter test of the Markov property.
 - The self-controlled case series (conditional Poisson likelihood, risk windows
   and age bands, robust variance) with the cutting of follow-up into pieces,
