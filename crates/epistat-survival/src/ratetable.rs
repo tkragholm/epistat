@@ -394,25 +394,12 @@ impl RateTable {
         })
     }
 
-    /// The expected count of the follow-up in `data`, by the walk of
-    /// [`crate::pyears::pyears`]. `origins` has one slice for each time
-    /// dimension of the table, in order, with the value of the dimension at
-    /// time 0 of the follow-up scale for every row, such as age at the origin,
-    /// and `factors` one slice of levels for each factor, in order. Rows of
-    /// weight 0 are not used.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Input`] when the number of slices does not match the table's
-    /// dimensions, a slice has the wrong length, a level is outside its
-    /// factor, a value used is not finite, or the follow-up is invalid as in
-    /// [`crate::pyears::pyears`].
-    pub fn expected(
-        &self,
-        data: &SurvData<'_>,
-        origins: &[&[f64]],
-        factors: &[&[u32]],
-    ) -> Result<Expected> {
+    /// The dimensions of the table with the values of the rows attached.
+    pub(crate) fn dimensions<'a>(
+        &'a self,
+        origins: &'a [&'a [f64]],
+        factors: &'a [&'a [u32]],
+    ) -> Result<Vec<Dimension<'a>>> {
         let n_time = self
             .dims
             .iter()
@@ -427,7 +414,7 @@ impl RateTable {
             )));
         }
         let (mut next_time, mut next_factor) = (0, 0);
-        let dims: Vec<Dimension<'_>> = self
+        Ok(self
             .dims
             .iter()
             .map(|d| match d {
@@ -448,7 +435,29 @@ impl RateTable {
                     dim
                 }
             })
-            .collect();
+            .collect())
+    }
+
+    /// The expected count of the follow-up in `data`, by the walk of
+    /// [`crate::pyears::pyears`]. `origins` has one slice for each time
+    /// dimension of the table, in order, with the value of the dimension at
+    /// time 0 of the follow-up scale for every row, such as age at the origin,
+    /// and `factors` one slice of levels for each factor, in order. Rows of
+    /// weight 0 are not used.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when the number of slices does not match the table's
+    /// dimensions, a slice has the wrong length, a level is outside its
+    /// factor, a value used is not finite, or the follow-up is invalid as in
+    /// [`crate::pyears::pyears`].
+    pub fn expected(
+        &self,
+        data: &SurvData<'_>,
+        origins: &[&[f64]],
+        factors: &[&[u32]],
+    ) -> Result<Expected> {
+        let dims = self.dimensions(origins, factors)?;
         let Layout {
             data,
             cells,
