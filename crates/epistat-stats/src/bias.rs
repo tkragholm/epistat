@@ -1554,7 +1554,7 @@ mod tests {
         )
         .unwrap();
         assert!(close(r.risk_ratio.median, simple.risk_ratio.unwrap()));
-        assert_eq!(r.risk_ratio.lower, r.risk_ratio.upper);
+        assert_eq!(r.risk_ratio.lower.to_bits(), r.risk_ratio.upper.to_bits());
         assert_eq!((r.n_draws_used, r.n_discarded), (50, 0));
         assert!(r.risk_ratio_total.is_none());
     }

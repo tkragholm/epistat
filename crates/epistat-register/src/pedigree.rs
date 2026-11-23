@@ -518,9 +518,9 @@ impl Pedigree {
         let m = self.ids.len();
         let mut pending = vec![0_u8; m];
         let mut child_count = vec![0_usize; m + 1];
-        for x in 0..m {
+        for (x, waiting) in pending.iter_mut().enumerate() {
             for p in [self.mother[x], self.father[x]].into_iter().flatten() {
-                pending[x] += 1;
+                *waiting += 1;
                 child_count[p as usize + 1] += 1;
             }
         }
@@ -1116,20 +1116,20 @@ mod tests {
     fn expected_coefficients() {
         let p = family();
         // Rows: 0 -> id 1, 2 -> id 3, 3 -> id 4, 5 -> id 6, 6 -> id 7.
-        assert_eq!(r(&p, 2, 3), 0.5); // full siblings
-        assert_eq!(r(&p, 2, 8), 0.25); // half siblings
-        assert_eq!(r(&p, 0, 2), 0.5); // parent and child
-        assert_eq!(r(&p, 5, 6), 0.125); // first cousins
-        assert_eq!(r(&p, 3, 5), 0.25); // uncle and nephew
-        assert_eq!(r(&p, 5, 5), 1.0);
-        assert_eq!(r(&p, 0, 1), 0.0);
+        assert_eq!(r(&p, 2, 3).to_bits(), 0.5_f64.to_bits()); // full siblings
+        assert_eq!(r(&p, 2, 8).to_bits(), 0.25_f64.to_bits()); // half siblings
+        assert_eq!(r(&p, 0, 2).to_bits(), 0.5_f64.to_bits()); // parent and child
+        assert_eq!(r(&p, 5, 6).to_bits(), 0.125_f64.to_bits()); // first cousins
+        assert_eq!(r(&p, 3, 5).to_bits(), 0.25_f64.to_bits()); // uncle and nephew
+        assert_eq!(r(&p, 5, 5).to_bits(), 1.0_f64.to_bits());
+        assert_eq!(r(&p, 0, 1).to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
     fn inbreeding_enters_the_diagonal() {
         let p = family();
         // Person 8 has parents 6 and 7, first cousins, so F = 1/16.
-        assert_eq!(r(&p, 7, 7), 1.0625);
+        assert_eq!(r(&p, 7, 7).to_bits(), 1.0625_f64.to_bits());
     }
 
     #[test]
