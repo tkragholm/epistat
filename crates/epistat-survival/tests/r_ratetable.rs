@@ -212,7 +212,8 @@ fn fingerprint_of_the_expected_counts() {
     let hash = Fingerprint::new()
         .f64(e.total)
         .f64s(&e.cells[..500])
+        .f64s(&e.per_row)
         .finish();
     eprintln!("ratetable fingerprint {hash:#018x}");
-    assert_eq!(hash, 0x15f6_e437_3881_f719);
+    assert_eq!(hash, 0x6ead_1275_33cd_2924);
 }
