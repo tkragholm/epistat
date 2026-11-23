@@ -27,4 +27,4 @@ out <- list(
   versions = list(r = R.version.string, mice = as.character(packageVersion("mice"))),
   cases = lapply(c(36, 120, 1000, Inf), pool_at)
 )
-write(toJSON(out, auto_unbox = TRUE, digits = NA), "tests/data/matchthem_df.json")
+write(toJSON(out, auto_unbox = TRUE, digits = 17), "tests/data/matchthem_df.json")

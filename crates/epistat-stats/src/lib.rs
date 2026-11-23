@@ -3,7 +3,7 @@
 //! statistics, MCMC diagnostics, weighted means and variances, direct
 //! standardisation and the Kitagawa decomposition, Poisson confidence intervals,
 //! the gamma quantile, the Student t distribution and the incomplete beta
-//! function, k-means clustering and eight-lane sums, checked against R and Python and computed
+//! function with its quantile, k-means clustering and eight-lane sums, checked against R and Python and computed
 //! the same way on every platform.
 #![warn(missing_docs)]
 
