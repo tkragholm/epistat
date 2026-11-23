@@ -37,3 +37,7 @@ assert!(report.iterations_logit > 0);
 
 The `bench-internals` feature exposes the products the benchmarks time. The
 `nightly` feature enables faer's AVX-512 kernels through `epistat-linalg`.
+
+Unlike the other epistat crates, the fits use fused multiply-add, so results
+are the same on any number of threads but can differ between platforms in
+the last bits.
