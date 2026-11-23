@@ -1,54 +1,35 @@
-# did_methods
+# epistat-did
 
-Difference-in-differences estimators in Rust.
+Difference-in-differences. Group-time average treatment effects ATT(g,t) for
+staggered adoption (Callaway and Sant'Anna), by outcome regression, inverse
+probability weighting or the doubly robust estimator, on panels and repeated
+cross-sections, with never-treated or not-yet-treated comparison groups,
+varying or universal base periods, anticipation and sampling weights. The
+effects aggregate by event time, cohort, calendar time or overall, as `aggte`
+of R's `did` does.
 
-## Estimators
+Also the two-period doubly robust estimators of `DRDID`, including the
+improved and locally efficient ones; the efficient ATT(g,t) that combines all
+baseline periods (Chen, Sant'Anna and Xie); compositional changes in repeated
+cross-sections (Sant'Anna and Xu); doubly robust triple differences; and the
+average causal response to a continuous treatment by a sieve estimator.
 
-- Callaway and Sant'Anna group-time effects, ATT(g,t), by outcome regression,
-  inverse probability weighting or doubly robust estimation, for panel data
-  and repeated cross-sections. Effects aggregate by event time, cohort,
-  calendar time or overall.
-- Doubly robust two-period DiD (DRDID), including the locally efficient
-  estimators for panels and repeated cross-sections.
-- Efficient ATT(g,t) that combines all baseline periods (Chen, Sant'Anna and
-  Xie).
-- DiD with compositional changes in repeated cross-sections (Sant'Anna and
-  Xu).
-- Doubly robust triple differences.
-- Continuous treatments, by a sieve estimator of the average causal response.
-- HonestDiD sensitivity analysis (Rambachan and Roth), behind the `honest`
-  feature.
+Inference uses influence functions: analytic and cluster-robust standard
+errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
+Every bootstrap replicate is seeded from the caller's seed, and results do not
+depend on the number of threads. A fingerprint test pins the outputs of the
+main estimators.
 
-Inference uses influence functions: cluster-robust standard errors and
-multiplier-bootstrap simultaneous confidence bands.
+The `honest` feature adds the HonestDiD sensitivity analysis of Rambachan and
+Roth: smoothness and relative-magnitude restrictions on violations of
+parallel trends, fixed-length and conditional confidence sets, and regions for
+the whole post-treatment path. Its second-order cone programs are solved by
+[Clarabel](https://crates.io/crates/clarabel), a pure Rust solver and the
+only dependency the feature adds; its linear programs run on the crate's own
+dense simplex. An own cone solver may replace Clarabel later. The `nightly`
+feature enables faer's AVX-512 kernels through epistat-linalg.
 
-## Checked against R
-
-The parity tests compare estimates and standard errors with the R packages
-`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD`, `triplediff` and `contdid`. The
-reference values come from the R scripts in `tests/`. Run them with
-
-```sh
-cargo test --features parity-tests
-```
-
-## Use
-
-The crate is on crates.io. Its shared numerical code comes from the
-`epistat-*` crates, also on crates.io.
-
-```toml
-[dependencies]
-did_methods = "0.2"
-```
-
-`examples/att_gt_basic.rs` estimates ATT(g,t) on a small panel and
-aggregates it by event time:
-
-```sh
-cargo run --example att_gt_basic
-```
-
-## Licence
-
-MIT or Apache-2.0, at your option.
+The tests compare estimates, standard errors and influence functions with
+`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD`, `triplediff` and `contdid`, from
+reference values written by the R scripts in `tests/`. They run with
+`cargo test --features parity-tests`.
