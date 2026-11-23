@@ -45,7 +45,7 @@ struct Pooled {
 struct Outcome {
     stat: Option<f64>,
     p: Option<f64>,
-    k_pos: Option<f64>,
+    k_pos: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -209,7 +209,7 @@ fn table_estimators_and_tests() {
         }
 
         let bd = breslow_day(&tables, false).unwrap();
-        if case.bd.k_pos.is_some_and(|k| k < 2.0) {
+        if case.bd.k_pos.is_some_and(|k| k < 2) {
             // R reports rounding noise on no degrees of freedom.
             assert_eq!(bd, None, "{name}");
             continue;
@@ -227,7 +227,7 @@ fn table_estimators_and_tests() {
             1e-7,
         );
         if let (Some(t), Some(k)) = (bd, case.bd.k_pos) {
-            assert_eq!(t.df + 1, k as usize, "{name} df");
+            assert_eq!(t.df + 1, k, "{name} df");
         }
         let ta = breslow_day(&tables, true).unwrap();
         worst.check(
