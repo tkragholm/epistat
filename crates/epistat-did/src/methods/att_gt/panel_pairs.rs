@@ -114,9 +114,9 @@ impl CellScratch<'_> {
     }
 }
 
-/// Whether kept row `k` of `prepared` is in the cell `(group, time)` against
-/// `baseline_time`, and as treated (`Some(true)`) or comparison
-/// (`Some(false)`).
+/// Whether `row`, of cohort `cohort` after the pre-processing, is in the cell
+/// `(group, time)` against `baseline_time`, and as treated (`Some(true)`) or
+/// comparison (`Some(false)`).
 ///
 /// Not-yet-treated eligibility is judged at the later of the two periods, as
 /// in `did`: under a universal base a pre-treatment cell has its base after
