@@ -1,7 +1,8 @@
 //! Wall time of the risk by a time with censoring by augmented inverse
 //! probability weighting, the per-protocol weights and marginal structural model
 //! of sequential trials, and clone-censor-weight, set against
-//! `riskRegression::ate` and `TrialEmulation` (`bench/tier2/survival.R`). The
+//! `riskRegression::ate`, `TrialEmulation` and a written-out R estimator for
+//! clone-censor-weight (`bench/tier2/survival.R`). The
 //! driver environment is described in `bench/tier1/common.rs`: one process times
 //! one method on one size.
 //!

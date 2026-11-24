@@ -11,7 +11,7 @@
 # VGAM's parallel = FALSE); and the same data for the Brant test.
 suppressMessages({
   library(MASS); library(ordinal); library(sandwich); library(rms); library(VGAM)
-  library(jsonlite)
+  library(jsonlite); library(brant)
 })
 vec <- function(m) as.vector(t(m))
 ctl <- clm.control(gradTol = 1e-10, maxIter = 500)
@@ -152,9 +152,25 @@ w5 <- sample(1:3, n, replace = TRUE)
 brant_weighted <- c(list(x = cbind(x, z1, z2), y = y4 - 1L, weights = w5, classes = 4L),
                     brant(cbind(x, z1, z2), y4, w5, 4))
 
+# The package brant (Schlegel and Steenbergen) on a polr fit. Frequency weights
+# are given to it as repeated rows, which has the same likelihood. Rows of the
+# result: Omnibus, then the covariates in the order of the model.
+package_brant <- function(X, y, w) {
+  colnames(X) <- paste0("v", seq_len(ncol(X)))   # brant overwrites columns named z1, z2, ...
+  d <- data.frame(y = factor(y, ordered = TRUE), X)
+  d <- d[rep(seq_len(nrow(d)), w), ]
+  m <- MASS::polr(y ~ v1 + v2 + v3, data = d, Hess = TRUE, method = "logistic")
+  utils::capture.output(tab <- suppressWarnings(brant::brant(m)))   # it also prints the table
+  list(pkg_omnibus = unname(tab["Omnibus", "X2"]), pkg_omnibus_df = unname(tab["Omnibus", "df"]),
+       pkg_per_covariate = unname(tab[-1, "X2"]), pkg_per_df = unname(tab[-1, "df"]))
+}
+brant_case <- c(brant_case, package_brant(cbind(x, z1, z2), y4, rep(1, n)))
+brant_weighted <- c(brant_weighted, package_brant(cbind(x, z1, z2), y4, w5))
+
 versions <- list(r = R.version.string, ordinal = as.character(packageVersion("ordinal")),
                  MASS = as.character(packageVersion("MASS")), rms = as.character(packageVersion("rms")),
-                 VGAM = as.character(packageVersion("VGAM")), sandwich = as.character(packageVersion("sandwich")))
+                 VGAM = as.character(packageVersion("VGAM")), sandwich = as.character(packageVersion("sandwich")),
+                 brant = as.character(packageVersion("brant")))
 cat(toJSON(list(versions = versions, housing = housing_case, sim = sim_case, ppo = ppo_case,
                 brant = list(brant_case, brant_weighted)),
            digits = NA, auto_unbox = TRUE, na = "null"))

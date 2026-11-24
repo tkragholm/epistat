@@ -1,18 +1,19 @@
 //! Wall time of the self-controlled case series, the case-crossover windows
 //! with their exposure, and the attributable fraction function of a Cox model.
 //! The driver and the environment are those of `bench/tier1/common.rs`, run by
-//! `bench/run.sh`; the data are generated in the process from a fixed
-//! seed and are not timed.
+//! `bench/run.sh`; the data are written by `METHOD=gen_KIND` from a fixed seed
+//! and read by both sides, and are not timed. The R side is
+//! `bench/tier2/designs.R`.
 //!
 //! Methods:
 //!
-//! * `sccs`: `N` people with one to three events, up to two exposure dates,
-//!   three risk windows and four age bands: the pieces and the fit with the
-//!   robust variance.
-//! * `crossover`: `N` events of 600 people with time-stratified referents by
+//! * `sccs` (data `scc`): `N` people with one to three events, at most one
+//!   exposure date, three risk windows and four age bands: the pieces and the
+//!   fit with the robust variance.
+//! * `crossover` (data `cxo`): `N` events of 600 people with time-stratified referents by
 //!   month, a three-day hazard window and observation periods, and the days of
 //!   exposure in each window from `N / 4` intervals.
-//! * `af_cox`: `N` people, a Cox model with an interaction, the standardised
+//! * `af_cox` (data `afc`): `N` people, a Cox model with an interaction, the standardised
 //!   risks at five times with standard errors, and the attributable fraction
 //!   function from them (the fit is not timed).
 
@@ -27,7 +28,7 @@
 #[path = "../../../bench/tier1/common.rs"]
 mod common;
 
-use common::{Lines, Rng};
+use common::{Lines, Rng, Table, Writer};
 use epistat_glm::attributable::IntervalScale;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
@@ -42,26 +43,98 @@ use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, s
 
 const SEED: u64 = 20_261_207;
 
+fn generate_sccs(n: usize) {
+    let mut rng = Rng(SEED);
+    let mut out = Writer::create(
+        &common::data_path("scc", n),
+        "id,start,end,expo,ev1,ev2,ev3",
+    );
+    for id in 0..n {
+        let a = rng.below(100) as f64;
+        let b = a + 300.0 + rng.below(700) as f64;
+        let expo = if rng.below(2) == 1 {
+            a + rng.below(500) as f64
+        } else {
+            f64::NAN
+        };
+        let mut ev = [f64::NAN; 3];
+        for k in 0..1 + rng.below(3) as usize {
+            // distinct days: standardsccs keeps one event per person and day
+            ev[k] = loop {
+                let day = a + rng.below((b - a) as u64) as f64;
+                if !ev[..k].contains(&day) {
+                    break day;
+                }
+            };
+        }
+        out.row(&[id as f64, a, b, expo, ev[0], ev[1], ev[2]]);
+    }
+}
+
+fn generate_crossover(n: usize) {
+    let mut rng = Rng(SEED + 1);
+    let mut out = Writer::create(&common::data_path("cxo", n), "set,person,event,start,end");
+    let people = 600_u64;
+    let event: Vec<i64> = (0..n).map(|_| 17_532 + rng.below(1_461) as i64).collect();
+    let person: Vec<u64> = (0..n).map(|_| rng.below(people)).collect();
+    let start: Vec<i64> = event.iter().map(|&t| t - rng.below(400) as i64).collect();
+    let end: Vec<i64> = event.iter().map(|&t| t + rng.below(400) as i64).collect();
+    for i in 0..n {
+        out.row(&[
+            0.0,
+            person[i] as f64,
+            event[i] as f64,
+            start[i] as f64,
+            end[i] as f64,
+        ]);
+    }
+    for _ in 0..n / 4 {
+        let p = rng.below(people);
+        let s = 17_000 + rng.below(2_500) as i64;
+        let e = s + rng.below(40) as i64;
+        out.row(&[1.0, p as f64, f64::NAN, s as f64, e as f64]);
+    }
+}
+
+fn generate_af_cox(n: usize) {
+    let mut rng = Rng(SEED + 2);
+    let mut out = Writer::create(&common::data_path("afc", n), "time,status,e,z");
+    for _ in 0..n {
+        let z = rng.normal();
+        let e = f64::from(u8::from(rng.bernoulli(1.0 / (1.0 + (-0.4 * z).exp()))));
+        let t = -rng.uniform().ln() / (0.1 * (0.6 * e + 0.4 * z).exp());
+        let time = t.min(3.0 + 30.0 * rng.uniform());
+        let status = f64::from(u8::from(rng.bernoulli(0.7)));
+        out.row(&[time, status, e, z]);
+    }
+}
+
 fn main() {
     let (method, n) = (common::method(), common::size());
-    let mut rng = Rng(SEED);
+    match method.as_str() {
+        "gen_scc" => return generate_sccs(n),
+        "gen_cxo" => return generate_crossover(n),
+        "gen_afc" => return generate_af_cox(n),
+        _ => {}
+    }
     let mut lines = Lines::default();
     let times = match method.as_str() {
         "sccs" => {
-            let (mut start, mut end) = (Vec::new(), Vec::new());
+            let t = Table::read(&common::data_path("scc", n));
+            let (start, end) = (t.col("start"), t.col("end"));
             let (mut event_offsets, mut events) = (vec![0_usize], Vec::new());
             let (mut exposure_offsets, mut exposures) = (vec![0_usize], Vec::new());
-            for _ in 0..n {
-                let a = rng.below(100) as f64;
-                let b = a + 300.0 + rng.below(700) as f64;
-                start.push(a);
-                end.push(b);
-                for _ in 0..rng.below(3) {
-                    exposures.push(a + rng.below(500) as f64);
+            for i in 0..n {
+                let expo = t.col("expo")[i];
+                if !expo.is_nan() {
+                    exposures.push(expo);
                 }
                 exposure_offsets.push(exposures.len());
-                for _ in 0..1 + rng.below(3) {
-                    events.push(a + rng.below((b - a) as u64) as f64);
+                for name in ["ev1", "ev2", "ev3"] {
+                    let e = t.col(name)[i];
+                    if !e.is_nan() {
+                        events.push(e);
+                    }
                 }
                 event_offsets.push(events.len());
             }
@@ -80,8 +153,8 @@ fn main() {
                 },
             ];
             let spec = PieceSpec {
-                start: &start,
-                end: &end,
+                start,
+                end,
                 event_offsets: &event_offsets,
                 events: &events,
                 exposure_offsets: &exposure_offsets,
@@ -109,15 +182,26 @@ fn main() {
             times
         }
         "crossover" => {
-            let people = 600_u64;
-            let event: Vec<i64> = (0..n).map(|_| 17_532 + rng.below(1_461) as i64).collect();
-            let person: Vec<u32> = (0..n).map(|_| rng.below(people) as u32).collect();
-            let start: Vec<i64> = event.iter().map(|&t| t - rng.below(400) as i64).collect();
-            let end: Vec<i64> = event.iter().map(|&t| t + rng.below(400) as i64).collect();
-            let m = n / 4;
-            let ex_person: Vec<u32> = (0..m).map(|_| rng.below(people) as u32).collect();
-            let ex_start: Vec<i64> = (0..m).map(|_| 17_000 + rng.below(2_500) as i64).collect();
-            let ex_end: Vec<i64> = ex_start.iter().map(|&s| s + rng.below(40) as i64).collect();
+            let t = Table::read(&common::data_path("cxo", n));
+            let set: Vec<u8> = t.ints("set");
+            let rows_of = |k: u8| -> Vec<usize> { (0..t.len()).filter(|&i| set[i] == k).collect() };
+            let (case_rows, interval_rows) = (rows_of(0), rows_of(1));
+            let pick_i64 = |name: &str, rows: &[usize]| -> Vec<i64> {
+                rows.iter().map(|&i| t.col(name)[i] as i64).collect()
+            };
+            let event = pick_i64("event", &case_rows);
+            let person: Vec<u32> = pick_i64("person", &case_rows)
+                .iter()
+                .map(|&p| p as u32)
+                .collect();
+            let start = pick_i64("start", &case_rows);
+            let end = pick_i64("end", &case_rows);
+            let ex_person: Vec<u32> = pick_i64("person", &interval_rows)
+                .iter()
+                .map(|&p| p as u32)
+                .collect();
+            let ex_start = pick_i64("start", &interval_rows);
+            let ex_end = pick_i64("end", &interval_rows);
             let referent = Referent::TimeStratified {
                 unit: StratumUnit::Month,
             };
@@ -151,20 +235,12 @@ fn main() {
             times
         }
         "af_cox" => {
-            let z: Vec<f64> = (0..n).map(|_| rng.normal()).collect();
-            let e: Vec<f64> = (0..n)
-                .map(|i| f64::from(u8::from(rng.bernoulli(1.0 / (1.0 + (-0.4 * z[i]).exp())))))
-                .collect();
-            let time: Vec<f64> = (0..n)
-                .map(|i| {
-                    let t = -rng.uniform().ln() / (0.1 * (0.6 * e[i] + 0.4 * z[i]).exp());
-                    t.min(3.0 + 30.0 * rng.uniform())
-                })
-                .collect();
-            let status: Vec<i32> = (0..n).map(|_| i32::from(rng.bernoulli(0.7))).collect();
+            let t = Table::read(&common::data_path("afc", n));
+            let (e, z, time) = (t.col("e"), t.col("z"), t.col("time"));
+            let status: Vec<i32> = t.ints("status");
             let x = Mat::from_fn(n, 3, |i, j| [e[i], z[i], e[i] * z[i]][j]);
             let x0 = Mat::from_fn(n, 3, |i, j| if j == 1 { x[(i, j)] } else { 0.0 });
-            let data = SurvData::builder(&time, &status).build().expect("data");
+            let data = SurvData::builder(time, &status).build().expect("data");
             let options = CoxOptions {
                 ties: Ties::Breslow,
                 ..CoxOptions::default()

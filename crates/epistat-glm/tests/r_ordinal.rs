@@ -67,6 +67,7 @@ struct Versions {
     rms: String,
     #[serde(rename = "VGAM")]
     vgam: String,
+    brant: String,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +135,10 @@ struct BrantCase {
     per_covariate: Vec<f64>,
     per_df: usize,
     coefficients: Vec<f64>,
+    pkg_omnibus: f64,
+    pkg_omnibus_df: usize,
+    pkg_per_covariate: Vec<f64>,
+    pkg_per_df: Vec<usize>,
 }
 
 fn reference() -> Reference {
@@ -184,6 +189,7 @@ fn reference_was_made_by_the_documented_versions() {
     assert_eq!(v.mass, "7.3.66");
     assert_eq!(v.rms, "8.2.1");
     assert_eq!(v.vgam, "1.1.14");
+    assert_eq!(v.brant, "0.3.0");
 }
 
 fn check_panel(panel: &Panel, name: &str, with_offset: bool) {
@@ -342,6 +348,37 @@ fn brant_test_matches_the_transcription() {
         assert_eq!(got.omnibus.df, case.omnibus_df);
         assert!(got.per_covariate.iter().all(|w| w.df == case.per_df));
         assert!(b < 1e-9 && o < 1e-9 && c < 1e-9);
+    }
+}
+
+// The R package brant 0.3.0 on a MASS::polr fit (frequency weights as repeated
+// rows). It differs from Brant's formulas in two ways, both visible against the
+// transcription above. The lower-triangle blocks of the covariance of the
+// stacked estimates are copies of the upper blocks without the transpose, which
+// changes the omnibus statistic by 1.5e-4 relative here. The diagonal blocks are
+// glm's vcov, formed from the working weights of the step before the last of
+// IRLS, whose parameter error at the default epsilon of 1e-8 is about 1e-4 and
+// moves the variance by about 5e-4 relative. The statistics are therefore
+// compared to 2e-3 relative, ten times the largest difference seen in the two
+// cases (1.8e-4 for the omnibus statistic, 1.2e-4 per covariate), and the
+// degrees of freedom exactly.
+#[test]
+fn brant_test_matches_the_brant_package() {
+    for case in &reference().brant {
+        let x = matrix(&case.x);
+        let got = brant(x.as_ref(), &case.y, Some(&case.weights)).unwrap();
+        let o = (got.omnibus.statistic - case.pkg_omnibus).abs() / case.pkg_omnibus;
+        let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
+        let c = per
+            .iter()
+            .zip(&case.pkg_per_covariate)
+            .map(|(a, b)| (a - b).abs() / b)
+            .fold(0.0_f64, f64::max);
+        eprintln!("brant package: omnibus {o:.1e} per covariate {c:.1e}");
+        assert_eq!(got.omnibus.df, case.pkg_omnibus_df);
+        let dfs: Vec<usize> = got.per_covariate.iter().map(|w| w.df).collect();
+        assert_eq!(dfs, case.pkg_per_df);
+        assert!(o < 2e-3 && c < 2e-3);
     }
 }
 

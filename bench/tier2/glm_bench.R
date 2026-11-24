@@ -7,7 +7,14 @@
 #
 # Usage: Rscript glm_bench.R N METHOD SCRATCH
 # Environment: OUT (results, default SCRATCH/out) and REPS (timed repetitions,
-# default 3). The method brant has no R counterpart.
+# default 3).
+#
+# brant: brant::brant on a MASS::polr fit. The package differs from Brant's
+# formulas in the fifth digit (it copies the upper blocks of the covariance of the
+# stacked estimates into the lower ones without transposing, and takes the diagonal
+# blocks from glm's vcov at the working weights of the step before the last), so
+# the omnibus statistic agrees to about 1e-3 relative; see
+# crates/epistat-glm/tests/r_ordinal.rs.
 suppressMessages({ library(data.table); library(geepack); library(ordinal) })
 args <- commandArgs(TRUE)
 n <- as.integer(args[1]); method <- args[2]; scratch <- args[3]
@@ -69,5 +76,15 @@ if (method %in% c("gee_exch", "gee_ar1", "gee_unstr")) {
          setNames(f$beta, paste0("coef_", nm)), setNames(se[names(f$beta)], paste0("se_", nm)))
   finish(r$times, v)
 } else if (method == "brant") {
-  quit(status = 0)
+  suppressMessages({ library(MASS); library(brant) })
+  d <- as.data.frame(rd("gord"))
+  # brant adds columns named z1, z2, ... to the model frame, so the covariates are renamed
+  names(d)[1:7] <- paste0("v", 1:7)
+  d$y <- factor(d$y, ordered = TRUE)
+  m <- polr(y ~ v1 + v2 + v3 + v4 + v5 + v6 + v7, data = d, Hess = TRUE, method = "logistic")
+  r <- timed(function() {
+    capture.output(tab <- suppressWarnings(brant(m)))
+    tab
+  })
+  finish(r$times, c(omnibus = r$value["Omnibus", "X2"]))
 } else stop("unknown method ", method)

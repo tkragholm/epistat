@@ -8,9 +8,10 @@
 //! terms and a five-category outcome `y`. Methods: `gee_exch` (`b`, logit,
 //! exchangeable), `gee_ar1` (`y`, log, AR(1)), `gee_unstr` (`y`, log,
 //! unstructured), `ordinal` (proportional odds, logit), `ordinal_ppo` (the
-//! last two covariates category-specific) and `brant`. `brant` has no R
-//! counterpart, and `geeglm` has none for `gee_unstr` because it stops with a
-//! segmentation fault when the waves of a cluster have gaps.
+//! last two covariates category-specific) and `brant`. `brant` is set
+//! against `brant::brant`, and `geeglm` has no counterpart for `gee_unstr`
+//! because it stops with a segmentation fault when the waves of a cluster have
+//! gaps.
 
 #![allow(
     clippy::cast_possible_truncation,

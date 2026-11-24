@@ -23,6 +23,9 @@
 #             10^5 rows, 3 below 10^6 and 1 above
 #   KEEP_DATA   keep the data files of a size after it has been run
 #   OUT       results directory, default SCRATCH/out
+#   AF_SRC    the directory AF/R of the unpacked tarball of the R package AF
+#             0.1.5 (archived from CRAN), which the R side of af_cross,
+#             af_case_control and af_cox sources; those R runs fail without it
 #
 # Results, in OUT:
 #   runs.csv        impl,n,method,status,process_wall_s,peak_rss_kb
@@ -92,16 +95,16 @@ gee_ar1:epistat-glm:tier2_glm:gpanel:10000000:tier2/glm_bench.R:120
 gee_unstr:epistat-glm:tier2_glm:gpanel:10000000:-:120
 ordinal:epistat-glm:tier2_glm:gord:10000000:tier2/glm_bench.R:120
 ordinal_ppo:epistat-glm:tier2_glm:gord:10000000:tier2/glm_bench.R:120
-brant:epistat-glm:tier2_glm:gord:10000000:-:120
+brant:epistat-glm:tier2_glm:gord:10000000:tier2/glm_bench.R:120
 aipw_km:epistat-survival:tier2_survival:surv:10000000:tier2/survival.R:120
 aipw_cox:epistat-survival:tier2_survival:surv:10000000:tier2/survival.R:120
 trial_msm:epistat-survival:tier2_survival:trial:1000000:tier2/survival.R:120
-ccw:epistat-survival:tier2_survival:ccw:1000000:-:120
-sccs:epistat-survival:tier2_designs:none:3000000:-:300
-crossover:epistat-survival:tier2_designs:none:10000000:-:300
-af_cox:epistat-survival:tier2_designs:none:1000000:-:300
-af_cross:epistat-glm:tier2_af:none:10000000:-:300
-af_case_control:epistat-glm:tier2_af:none:10000000:-:300
+ccw:epistat-survival:tier2_survival:ccw:1000000:tier2/survival.R:120
+sccs:epistat-survival:tier2_designs:scc:3000000:tier2/designs.R:300
+crossover:epistat-survival:tier2_designs:cxo:10000000:tier2/designs.R:300
+af_cox:epistat-survival:tier2_designs:afc:1000000:tier2/designs.R:300
+af_cross:epistat-glm:tier2_af:afd:10000000:tier2/af_bench.R:300
+af_case_control:epistat-glm:tier2_af:afd:10000000:tier2/af_bench.R:300
 ebal_att:epistat-causal:tier3_balance:bal:10000000:tier3/balance.R:120
 ebal_ate_m2:epistat-causal:tier3_balance:bal:10000000:tier3/balance.R:120
 cbps_exact:epistat-causal:tier3_balance:bal:1000000:tier3/balance.R:120
