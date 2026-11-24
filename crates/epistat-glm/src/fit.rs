@@ -641,10 +641,26 @@ impl Glm {
 /// on the columns it kept. At a second such column, or when the screen cannot
 /// resume, Gram-Schmidt decides every column.
 fn independent_columns(columns: &[&[f64]], w2: &[f64], epsilon: f64, gram: &Mat<f64>) -> Vec<bool> {
-    let p = columns.len();
+    screened_columns(gram, w2.len(), epsilon, |m| {
+        exact_independent_columns(&columns[..m], w2, epsilon)
+    })
+}
+
+/// The aliased columns of a design of `n` rows whose weighted Gram matrix is
+/// `gram`, settled by the screen of the module documentation where its bound
+/// allows. `exact(m)` gives the decisions of modified Gram-Schmidt for the
+/// first `m` columns, which are those of a test of all columns, since each
+/// column's decision depends on the columns before it only.
+pub(crate) fn screened_columns(
+    gram: &Mat<f64>,
+    n: usize,
+    epsilon: f64,
+    mut exact: impl FnMut(usize) -> Vec<bool>,
+) -> Vec<bool> {
+    let p = gram.ncols();
     let tol = 1e-7_f64.min(epsilon / 1000.0);
-    let Some(bounds) = Bounds::new(w2.len(), tol) else {
-        return exact_independent_columns(columns, w2, epsilon);
+    let Some(bounds) = Bounds::new(n, tol) else {
+        return exact(p);
     };
     let mut keep = vec![false; p];
     let mut screen = Screen::default();
@@ -656,15 +672,14 @@ fn independent_columns(columns: &[&[f64]], w2: &[f64], epsilon: f64, gram: &Mat<
             continue;
         }
         if fallen_back {
-            return exact_independent_columns(columns, w2, epsilon);
+            return exact(p);
         }
         fallen_back = true;
-        let exact = exact_independent_columns(&columns[..=j], w2, epsilon);
-        keep[..=j].copy_from_slice(&exact);
+        keep[..=j].copy_from_slice(&exact(j + 1));
         screen = Screen::default();
         for k in (0..=j).filter(|&k| keep[k]) {
             if !screen.usable(gram, k, &bounds) {
-                return exact_independent_columns(columns, w2, epsilon);
+                return exact(p);
             }
             screen.push(gram, k);
         }
