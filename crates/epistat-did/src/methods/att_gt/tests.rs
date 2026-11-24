@@ -300,6 +300,10 @@ fn aggregation_helpers_work() {
     ];
 
     let cfg = AttGtAggregationConfig::default();
+    // One unit in each cohort: equal cohort shares, so treated-count weighting
+    // weights every cell equally.
+    let influence = vec![vec![0.1, -0.1]; estimates.len()];
+    let panel = UnitPanel::unweighted(vec![Some(2), Some(3)]);
     let by_event = aggregate_att_gt_event_time(&estimates, cfg).expect("event aggregation");
     let event_map = by_event
         .into_iter()
@@ -309,7 +313,8 @@ fn aggregation_helpers_work() {
     assert!((event_map[&1] - 1.5).abs() < 1e-12);
     assert!((event_map[&2] - 2.0).abs() < 1e-12);
 
-    let by_group = aggregate_att_gt_by_cohort(&estimates, cfg).expect("cohort aggregation");
+    let by_group = aggregate_att_gt_by_cohort(&estimates, &influence, &panel, cfg)
+        .expect("cohort aggregation");
     let group_map = by_group
         .into_iter()
         .map(|entry| (entry.group, entry.summary.estimate))
@@ -317,7 +322,8 @@ fn aggregation_helpers_work() {
     assert!((group_map[&2] - 2.0).abs() < 1e-12);
     assert!((group_map[&3] - 1.0).abs() < 1e-12);
 
-    let by_time = aggregate_att_gt_by_calendar_time(&estimates, cfg).expect("calendar aggregation");
+    let by_time = aggregate_att_gt_by_calendar_time(&estimates, &influence, &panel, cfg)
+        .expect("calendar aggregation");
     let time_map = by_time
         .into_iter()
         .map(|entry| (entry.time, entry.summary.estimate))
@@ -326,12 +332,12 @@ fn aggregation_helpers_work() {
     assert!((time_map[&3] - 1.5).abs() < 1e-12);
     assert!((time_map[&4] - 1.5).abs() < 1e-12);
 
-    let overall = aggregate_att_gt_overall(&estimates, cfg).expect("overall aggregation");
+    let overall =
+        aggregate_att_gt_overall(&estimates, &influence, &panel, cfg).expect("overall aggregation");
     assert!((overall.estimate - 1.6).abs() < 1e-12);
 
     // `total_weight` is the sum of the components' total weight under every
     // weighting and on the route with influence functions as well.
-    let influence = vec![vec![0.1, -0.1]; estimates.len()];
     for weighting in [
         AttGtAggregationWeighting::Equal,
         AttGtAggregationWeighting::ByTreatedCount,
@@ -341,9 +347,12 @@ fn aggregation_helpers_work() {
             weighting,
             ..AttGtAggregationConfig::default()
         };
-        let overall = aggregate_att_gt_overall(&estimates, cfg).expect("overall aggregation");
+        let overall = aggregate_att_gt_overall(&estimates, &influence, &panel, cfg)
+            .expect("overall aggregation");
         assert_eq!(overall.total_weight.to_bits(), 100.0_f64.to_bits());
-        for entry in aggregate_att_gt_by_cohort(&estimates, cfg).expect("cohort aggregation") {
+        for entry in aggregate_att_gt_by_cohort(&estimates, &influence, &panel, cfg)
+            .expect("cohort aggregation")
+        {
             let want: f64 = if entry.group == 2 { 60.0 } else { 40.0 };
             assert_eq!(entry.summary.total_weight.to_bits(), want.to_bits());
         }

@@ -1275,7 +1275,10 @@ pub struct AttGtDrConfig {
 pub enum AttGtAggregationWeighting {
     /// Every estimate has the same weight.
     Equal,
-    /// Estimates are weighted by `treated_n`, the number of treated units.
+    /// Estimates are weighted by `treated_n`, the number of treated units. In
+    /// the cohort, calendar and overall summaries of `ATT(g,t)` it is the
+    /// cohort's share `P(G = g)` estimated from the unit panel's sampling
+    /// weights, with its estimation in the influence function, as `did::aggte`.
     ByTreatedCount,
     /// Estimates are weighted by `total_weight`, the sum of the sampling weights
     /// of the observations used.
