@@ -90,16 +90,75 @@
 //! coefficient, the standard error and the covariance entries of an aliased
 //! column are `None`, and [`Fit::rank`] counts the others.
 //!
-//! The columns are tested by modified Gram-Schmidt with a second pass of
+//! The decisions are those of modified Gram-Schmidt with a second pass of
 //! orthogonalisation on `U` at the working weights of the first iteration, in
-//! order. Each projection is a sum over the rows in row order. The first-pass
-//! projections on a kept column are made on all later columns at once, one
-//! thread per column, which changes no operation of any column. The second pass keeps the residual norm accurate to the
-//! rounding of `U` itself, far below `tol`, so exactly aliased columns are
-//! found. The set is fixed from then on, where R tests again in each iteration,
-//! so a column whose aliasing depends on the weights as they change between
-//! iterations is not treated as R does. The test is skipped when `ridge` is
-//! positive, since the penalised system is not singular.
+//! order, which keeps the residual norm accurate to the rounding of `U`
+//! itself, far below `tol`, so exactly aliased columns are found. The set is
+//! fixed from then on, where R tests again in each iteration, so a column
+//! whose aliasing depends on the weights as they change between iterations is
+//! not treated as R does. The test is skipped when `ridge` is positive, since
+//! the penalised system is not singular.
+//!
+//! Gram-Schmidt holds the `n` values of every column it tests. A column whose
+//! decision is clear from the weighted Gram matrix `G = U'U`, which the first
+//! iteration forms anyway, is settled from `G` without it; Gram-Schmidt runs
+//! only up to a column the bound below does not settle. The decisions are the
+//! same either way. The derivation follows.
+//!
+//! Let `u` be the unit roundoff, `γ_m = m u / (1 - m u)`, `K` the `k` columns
+//! kept before column `j`, and `ρ` the exact relative distance of `u_j` from
+//! the span of `U_K`. With `C` the Gram matrix of the columns of `K` and `j`
+//! scaled to unit norm, `ρ²` is the Schur complement of `C_KK` in `C`.
+//!
+//! *Gram-Schmidt keeps a column with `ρ` large enough.* Each update
+//! `v ← fl(v - d q)` of the two passes errs by at most `7 u |u_j|` when the
+//! kept columns have norm at most `1 + γ_n` and `|v| <= 2 |u_j|`, which holds
+//! while `4 k γ_n <= 1`, since an inexact projection on a vector of norm
+//! below `√2` does not increase the norm by more than the error of its
+//! coefficient. The `2k` updates err by `14 k u |u_j|` in all. The computed
+//! columns `q_a` span the columns `u_a + e_a` with `|e_a| <= c |u_a|`,
+//! `c = (14 k + 2) u`, the two counting the normalisation. A vector of the form
+//! `u_j - Q c` is then at least `dist(u_j, span(U_K + E)) >= ρ |u_j| - c √k
+//! |u_j| / σ` from zero, with `σ = sqrt(λ_min(C_KK)) - c √k`, by comparing the
+//! two spans at the minimiser over the perturbed one. The computed norm of
+//! the residual is at least `1 - γ_n - u` times its true norm, and the
+//! column's own norm at most `1 + γ_n + u` times its true one. Gram-Schmidt
+//! therefore keeps column `j` when
+//!
+//! ```text
+//! ρ - c √k / σ - 14 k u  >=  tol (1 + γ_n + u) / (1 - γ_n - u).
+//! ```
+//!
+//! *The Gram matrix bounds `ρ` from below.* Each entry of the computed `G` errs
+//! by at most `γ_n |u_a| |u_b|`, in any order of summation, so the computed
+//! normalised entries err by at most `η = 2.01 γ_n + 5 u`. The Cholesky factor
+//! `L` computed from them is the exact factor of a matrix within
+//! `γ_{k+2} |L| |L'|` of them, and the rows of `L` have norm near one. The
+//! computed factor is thus the exact factor of `M = C + F` with
+//! `|F|_2 <= φ = (k + 1) (η + 2 γ_{k+2})`. As `C >= M - φ I` and Schur
+//! complements keep the order of positive definite matrices,
+//! `ρ² >= s(M - φ I) >= s(M) - φ (1 + 2 |y|²)` when `λ_min(M_KK) >= 2 φ`, with
+//! `s(M) = 1 - |l|²` the square of the last pivot, `l` the solution of
+//! `L_KK l = c_Kj` and `y = L_KK^{-T} l` the minimiser of the Schur form. The
+//! inverse `Z` of `L_KK` is built row by row as columns are kept; when
+//! `k u |L|_F |Z|_F <= 1/4` the inverse of `L_KK` has a norm at most twice
+//! `|Z|_F` (Higham 2002, section 8.2), which bounds `|y| <= 2 |l| |Z|_F` and
+//! `λ_min(M_KK) >= 1 / (2 |Z|_F)²`, and also `λ_min(C_KK) >= λ_min(M_KK) - φ`
+//! for `σ` above. The rounding of `1 - |l|²` adds `(k + 2) u (1 + |l|²)`.
+//!
+//! A column is kept without Gram-Schmidt when the lower bound on `ρ` from the
+//! second part meets the condition of the first, with a further `4 u` of
+//! margin. Otherwise, at the first such column, Gram-Schmidt decides the
+//! columns up to it and the screen resumes on the columns it kept; at a second
+//! such column, or when the conditions on `Z` and `λ_min` fail, Gram-Schmidt
+//! decides all columns. An aliased column is never settled by the screen: at
+//! `n = 10^7` rows the bounds settle only columns with `ρ` above about
+//! `10^-4`, and an aliased column has `ρ` at the rounding level, so it always
+//! goes to Gram-Schmidt, which holds the columns up to it.
+//!
+//! In Gram-Schmidt each projection is a sum over the rows in row order. The
+//! first-pass projections on a kept column are made on all later columns at
+//! once, one thread per column, which changes no operation of any column.
 //!
 //! # Dispersion and covariance
 //!
@@ -160,6 +219,9 @@
 //! 5. Dongarra JJ, Bunch JR, Moler CB, Stewart GW. LINPACK Users' Guide.
 //!    Philadelphia: SIAM; 1979. R's `dqrdc2` modifies its `dqrdc` to pivot
 //!    only the columns that fall below the tolerance.
+//! 6. Higham NJ. Accuracy and Stability of Numerical Algorithms. 2nd ed.
+//!    Philadelphia: SIAM; 2002. Chapters 3, 8 and 10: the error bounds of
+//!    inner products, triangular inversion and the Cholesky factorisation.
 
 use crate::columns::{column_slices, contiguous_copy, linear_predictor_into, rows};
 use epistat_linalg::design::select_columns;
@@ -426,15 +488,25 @@ impl Glm {
                     (0.0, 0.0)
                 };
             });
+            // The Gram matrix of the first iteration settles the aliased
+            // columns, and is that of the normal equations when none is.
+            let mut first_gram = None;
             if iteration == 1 && self.ridge == 0.0 {
-                let keep = independent_columns(&columns, &w2, self.tolerance);
+                let gram = self.information(x, &w2)?;
+                let keep = independent_columns(&columns, &w2, self.tolerance, &gram);
                 if keep.iter().any(|&k| !k) {
                     let columns = (0..p).filter(|&j| keep[j]).collect();
                     active = Some((columns, select_columns(x, &keep)));
+                } else {
+                    first_gram = Some(gram);
                 }
             }
             let design = active.as_ref().map_or(x, |(_, reduced)| reduced.as_ref());
-            let (solution, gram) = self.least_squares(design, &w2, &mut z)?;
+            let gram = match first_gram {
+                Some(gram) => gram,
+                None => self.information(design, &w2)?,
+            };
+            let (solution, gram) = Self::least_squares(design, gram, &w2, &mut z)?;
             last_gram = gram;
             beta = vec![0.0; p];
             match &active {
@@ -541,15 +613,15 @@ impl Glm {
         Ok(gram)
     }
 
-    /// The solution of the normal equations and `X'WX` with the ridge. `z`
-    /// holds the working response and is left holding `w z`.
+    /// The solution of the normal equations with `gram`, `X'WX` with the
+    /// ridge, and `gram`. `z` holds the working response and is left holding
+    /// `w z`.
     fn least_squares(
-        &self,
         x: MatRef<'_, f64>,
+        gram: Mat<f64>,
         w2: &[f64],
         z: &mut [f64],
     ) -> Result<(Vec<f64>, Mat<f64>), GlmError> {
-        let gram = self.information(x, w2)?;
         // `X'Wz` as `weighted_xtz` forms it, from the products `w z`, which
         // are formed in place. `weighted_gram` has checked the weights.
         rows::each(z, |i, v| *v *= w2[i]);
@@ -559,10 +631,228 @@ impl Glm {
     }
 }
 
+/// The columns of `sqrt(W) X` that R's `dqrdc2` keeps, as
+/// [`exact_independent_columns`] decides them, settled from the weighted Gram
+/// matrix `gram` where its error bound allows and by Gram-Schmidt otherwise.
+///
+/// The columns are screened in order, as the module documentation describes.
+/// At the first column the screen cannot settle, Gram-Schmidt decides the
+/// columns up to it, holding the basis of only those, and the screen resumes
+/// on the columns it kept. At a second such column, or when the screen cannot
+/// resume, Gram-Schmidt decides every column.
+fn independent_columns(columns: &[&[f64]], w2: &[f64], epsilon: f64, gram: &Mat<f64>) -> Vec<bool> {
+    let p = columns.len();
+    let tol = 1e-7_f64.min(epsilon / 1000.0);
+    let Some(bounds) = Bounds::new(w2.len(), tol) else {
+        return exact_independent_columns(columns, w2, epsilon);
+    };
+    let mut keep = vec![false; p];
+    let mut screen = Screen::default();
+    let mut fallen_back = false;
+    for j in 0..p {
+        if screen.certifies(gram, j, &bounds) {
+            keep[j] = true;
+            screen.push(gram, j);
+            continue;
+        }
+        if fallen_back {
+            return exact_independent_columns(columns, w2, epsilon);
+        }
+        fallen_back = true;
+        let exact = exact_independent_columns(&columns[..=j], w2, epsilon);
+        keep[..=j].copy_from_slice(&exact);
+        screen = Screen::default();
+        for k in (0..=j).filter(|&k| keep[k]) {
+            if !screen.usable(gram, k, &bounds) {
+                return exact_independent_columns(columns, w2, epsilon);
+            }
+            screen.push(gram, k);
+        }
+    }
+    keep
+}
+
+/// The constants of the error bounds of the screen.
+struct Bounds {
+    /// The unit roundoff `u`.
+    u: f64,
+    /// The bound `eta` on an entry of the normalised Gram matrix.
+    eta: f64,
+    /// The relative norm a column must keep for Gram-Schmidt to keep it, with
+    /// the rounding of its two norms.
+    need: f64,
+}
+
+impl Bounds {
+    /// `None` when `n u` is too large for the bounds, `gamma_n > 1 / 64`.
+    fn new(n: usize, tol: f64) -> Option<Self> {
+        let u = f64::EPSILON / 2.0;
+        let gamma = gamma(n as f64, u)?;
+        (gamma <= 1.0 / 64.0).then(|| Self {
+            u,
+            eta: 2.01 * gamma + 5.0 * u,
+            need: tol * (1.0 + gamma + u) / (1.0 - gamma - u),
+        })
+    }
+
+    /// `phi`, the bound on the norm of the error of the normalised Gram
+    /// matrix and of its Cholesky factor over `k + 1` columns.
+    fn phi(&self, k: usize) -> f64 {
+        let size = k as f64 + 1.0;
+        size * (self.eta + 2.0 * gamma(size + 1.0, self.u).unwrap_or(f64::INFINITY))
+    }
+}
+
+/// `gamma_m = m u / (1 - m u)`, `None` when `m u >= 1`.
+fn gamma(m: f64, u: f64) -> Option<f64> {
+    (m * u < 1.0).then(|| m * u / (1.0 - m * u))
+}
+
+/// The Cholesky factor `L` of the normalised Gram matrix over the kept
+/// columns, its inverse `Z`, and the Frobenius norms of both.
+#[derive(Default)]
+struct Screen {
+    kept: Vec<usize>,
+    /// Row-major lower triangles, `k` by `k`.
+    l: Vec<f64>,
+    z: Vec<f64>,
+    l_norm2: f64,
+    z_norm2: f64,
+}
+
+/// The row of a column against the kept ones, `l = L^{-1} c`, and the square
+/// of its last pivot, `1 - |l|^2` on the normalised scale.
+struct Row {
+    l: Vec<f64>,
+    pivot2: f64,
+}
+
+impl Screen {
+    fn k(&self) -> usize {
+        self.kept.len()
+    }
+
+    /// The normalised Gram entry of columns `a` and `b`.
+    fn entry(gram: &Mat<f64>, a: usize, b: usize) -> f64 {
+        gram[(a, b)] / (gram[(a, a)].sqrt() * gram[(b, b)].sqrt())
+    }
+
+    /// The row of column `j`, `None` when its squared norm is not positive
+    /// and finite.
+    fn row(&self, gram: &Mat<f64>, j: usize) -> Option<Row> {
+        let g = gram[(j, j)];
+        if !(g > 0.0 && g.is_finite()) {
+            return None;
+        }
+        let k = self.k();
+        let mut l = vec![0.0; k];
+        for a in 0..k {
+            let mut value = Self::entry(gram, self.kept[a], j);
+            for (factor, solved) in self.l[a * k..a * k + a].iter().zip(&l) {
+                value -= factor * solved;
+            }
+            l[a] = value / self.l[a * k + a];
+        }
+        let pivot2 = Self::entry(gram, j, j) - l.iter().map(|v| v * v).sum::<f64>();
+        Some(Row { l, pivot2 })
+    }
+
+    /// Whether the bounds that the screen rests on hold for the kept columns:
+    /// `k u |L|_F |Z|_F <= 1/4`, so that the computed `Z` bounds `L^{-1}`, and
+    /// `lambda_low >= 2 phi`.
+    fn holds(&self, bounds: &Bounds) -> Option<(f64, f64)> {
+        let k = self.k();
+        if k == 0 {
+            return Some((f64::INFINITY, 0.0));
+        }
+        let (l_norm, z_norm) = (self.l_norm2.sqrt(), self.z_norm2.sqrt());
+        let phi = bounds.phi(k);
+        // |L^{-1}|_2 <= 2 |Z|_F, so lambda_min(L L') >= 1 / (2 |Z|_F)^2.
+        let lambda = 1.0 / (4.0 * self.z_norm2);
+        let sound = k as f64 * bounds.u * l_norm * z_norm <= 0.25
+            && lambda.is_finite()
+            && lambda >= 2.0 * phi;
+        sound.then_some((lambda, 2.0 * z_norm))
+    }
+
+    /// Whether column `j` can be added to the kept columns with the bounds
+    /// still holding.
+    fn usable(&self, gram: &Mat<f64>, j: usize, bounds: &Bounds) -> bool {
+        self.holds(bounds).is_some() && self.row(gram, j).is_some_and(|row| row.pivot2 > 0.0)
+    }
+
+    /// Whether the bound shows that Gram-Schmidt keeps column `j`, as the
+    /// module documentation derives it.
+    fn certifies(&self, gram: &Mat<f64>, j: usize, bounds: &Bounds) -> bool {
+        let Some((lambda, inverse_norm)) = self.holds(bounds) else {
+            return false;
+        };
+        let Some(row) = self.row(gram, j) else {
+            return false;
+        };
+        let k = self.k() as f64;
+        let u = bounds.u;
+        let phi = bounds.phi(self.k());
+        let l2: f64 = row.l.iter().map(|v| v * v).sum();
+        // |y*| <= |l| |L^{-1}|_2.
+        let y2 = l2 * inverse_norm * inverse_norm;
+        let s_low = row.pivot2 - phi * (1.0 + 2.0 * y2) - (k + 2.0) * u * (1.0 + l2);
+        if s_low.is_nan() || s_low <= 0.0 {
+            return false;
+        }
+        let rho_low = s_low.sqrt() * (1.0 - u);
+        let mgs = if self.k() == 0 {
+            0.0
+        } else {
+            let c = (14.0 * k + 2.0) * u;
+            let sigma = (lambda - phi).sqrt() - c * k.sqrt();
+            if sigma.is_nan() || sigma <= 0.0 {
+                return false;
+            }
+            c * k.sqrt() / sigma + 14.0 * k * u
+        };
+        rho_low - mgs >= bounds.need * (1.0 + 4.0 * u)
+    }
+
+    /// Adds column `j`, whose pivot is positive, to the kept columns.
+    fn push(&mut self, gram: &Mat<f64>, j: usize) {
+        let row = self.row(gram, j).expect("a column the screen has accepted");
+        let k = self.k();
+        let pivot = row.pivot2.sqrt();
+        let grow = |old: &[f64], fill: &dyn Fn(usize, usize) -> f64| {
+            let mut new = vec![0.0; (k + 1) * (k + 1)];
+            for a in 0..k {
+                new[a * (k + 1)..=a * (k + 1) + a].copy_from_slice(&old[a * k..=a * k + a]);
+            }
+            for b in 0..=k {
+                new[k * (k + 1) + b] = fill(k, b);
+            }
+            new
+        };
+        let l = grow(&self.l, &|_, b| if b < k { row.l[b] } else { pivot });
+        // The new row of L^{-1}: z_jj = 1 / pivot and, for b < k,
+        // z_jb = -(sum over a >= b of l_a z_ab) / pivot.
+        let z_old = &self.z;
+        let z = grow(z_old, &|_, b| {
+            if b == k {
+                1.0 / pivot
+            } else {
+                -(b..k).map(|a| row.l[a] * z_old[a * k + b]).sum::<f64>() / pivot
+            }
+        });
+        let last = |m: &[f64]| m[k * (k + 1)..].iter().map(|v| v * v).sum::<f64>();
+        self.l_norm2 += last(&l);
+        self.z_norm2 += last(&z);
+        self.l = l;
+        self.z = z;
+        self.kept.push(j);
+    }
+}
+
 /// The columns of `sqrt(W) X` that R's `dqrdc2` keeps: true where the norm left
 /// after projecting out the kept columns before it is at least `tol` times the
 /// norm of the column. Modified Gram-Schmidt with a second pass, in column
-/// order.
+/// order. It holds the columns, `n` values each, while it runs.
 ///
 /// Column `j` is projected on the kept columns before it in their order, twice
 /// over, and each projection is the sum over the rows in row order. The
@@ -573,7 +863,7 @@ impl Glm {
 /// projection is made in the same pass over the rows as the sum of the next,
 /// which reads the updated value, so every value has the bits of the plain
 /// sequence.
-fn independent_columns(columns: &[&[f64]], w2: &[f64], epsilon: f64) -> Vec<bool> {
+fn exact_independent_columns(columns: &[&[f64]], w2: &[f64], epsilon: f64) -> Vec<bool> {
     let tol = 1e-7_f64.min(epsilon / 1000.0);
     let p = columns.len();
     // Each column scaled, its norm, and the projection last summed on it
@@ -667,6 +957,155 @@ fn check(what: &'static str, expected: usize, found: usize) -> Result<(), GlmErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream of standard normal draws from a fixed seed.
+    struct Normals(u64);
+
+    impl Normals {
+        fn next(&mut self) -> f64 {
+            let mut unit = || {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                ((z ^ (z >> 31)) >> 11) as f64 / (1_u64 << 53) as f64
+            };
+            let (a, b) = (1.0 - unit(), unit());
+            (-2.0 * a.ln()).sqrt() * (std::f64::consts::TAU * b).cos()
+        }
+    }
+
+    /// The decisions of the screen and of Gram-Schmidt alone, and whether the
+    /// screen settled every column without Gram-Schmidt.
+    fn decisions(x: &Mat<f64>, w: &[f64], epsilon: f64) -> (Vec<bool>, Vec<bool>, bool) {
+        let copy = contiguous_copy(x.as_ref());
+        let columns = column_slices(x.as_ref(), &copy);
+        let gram = weighted_gram(x.as_ref(), w).unwrap();
+        let screened = independent_columns(&columns, w, epsilon, &gram);
+        let exact = exact_independent_columns(&columns, w, epsilon);
+        let bounds = Bounds::new(w.len(), 1e-7_f64.min(epsilon / 1000.0)).unwrap();
+        let mut screen = Screen::default();
+        let mut settled = true;
+        for j in 0..x.ncols() {
+            if screen.certifies(&gram, j, &bounds) {
+                screen.push(&gram, j);
+            } else {
+                settled = false;
+                break;
+            }
+        }
+        (screened, exact, settled)
+    }
+
+    fn design(n: usize, p: usize, seed: u64) -> Mat<f64> {
+        let mut rng = Normals(seed);
+        Mat::from_fn(n, p, |_, j| if j == 0 { 1.0 } else { rng.next() })
+    }
+
+    fn weights(n: usize) -> Vec<f64> {
+        (0..n)
+            .map(|i| match i % 9 {
+                0 => 0.0,
+                1 => 3.5,
+                _ => 0.25 + (i % 5) as f64 / 4.0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_well_conditioned_design_is_settled_without_gram_schmidt() {
+        for (n, p) in [(2_000, 3), (5_000, 8), (20_000, 25)] {
+            let x = design(n, p, 7);
+            let (screened, exact, settled) = decisions(&x, &weights(n), 1e-8);
+            assert_eq!(screened, exact);
+            assert!(settled, "n {n}, p {p}");
+            assert!(screened.iter().all(|&k| k));
+        }
+    }
+
+    #[test]
+    fn near_collinear_columns_get_the_decisions_of_gram_schmidt() {
+        // Column 3 is column 1 plus delta times an independent column, so
+        // its relative distance from the span of the others is about delta;
+        // the tolerance is 1e-11, and a further column follows it.
+        let n = 4_000;
+        let w = weights(n);
+        let mut aliased = 0;
+        for delta in [
+            0.0, 1e-16, 1e-14, 1e-13, 5e-13, 1e-12, 3e-12, 6e-12, 9e-12, 1e-11, 1.1e-11, 1.5e-11,
+            2e-11, 5e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2,
+        ] {
+            let base = design(n, 6, 11);
+            let x = Mat::from_fn(n, 6, |i, j| {
+                if j == 3 {
+                    base[(i, 1)] + delta * base[(i, 3)]
+                } else {
+                    base[(i, j)]
+                }
+            });
+            for epsilon in [1e-8, 1e-6, 1e-10] {
+                let (screened, exact, _) = decisions(&x, &w, epsilon);
+                assert_eq!(screened, exact, "delta {delta}, epsilon {epsilon}");
+                aliased += usize::from(!exact[3]);
+            }
+        }
+        // Both sides of the tolerance are reached.
+        assert!(aliased > 0 && aliased < 69);
+    }
+
+    #[test]
+    fn scaled_zero_and_dependent_columns_get_the_decisions_of_gram_schmidt() {
+        let n = 3_000;
+        let w = weights(n);
+        let base = design(n, 8, 13);
+        let mut groups = Normals(17);
+        // A dummy set of three that adds up to the intercept, columns scaled
+        // far from one, a column of zeros and a scaled copy.
+        let group: Vec<usize> = (0..n)
+            .map(|_| {
+                let draw = groups.next();
+                usize::from(draw > -0.43) + usize::from(draw > 0.43)
+            })
+            .collect();
+        let x = Mat::from_fn(n, 12, |i, j| match j {
+            0..=2 => base[(i, j)],
+            3..=5 => f64::from(u8::from(group[i] == j - 3)),
+            6 => base[(i, 3)] * 1e8,
+            7 => base[(i, 4)] * 1e-8,
+            8 => 0.0,
+            9 => base[(i, 6)] * 1e-150,
+            10 => base[(i, 1)] * -3e5,
+            _ => base[(i, 7)],
+        });
+        let (screened, exact, _) = decisions(&x, &w, 1e-8);
+        assert_eq!(screened, exact);
+        assert_eq!(
+            exact,
+            [
+                true, true, true, true, true, false, true, true, false, true, false, true
+            ]
+        );
+    }
+
+    #[test]
+    fn many_columns_with_dependencies_get_the_decisions_of_gram_schmidt() {
+        let n = 6_000;
+        let w = weights(n);
+        let base = design(n, 60, 19);
+        // Every seventh column a combination of two earlier ones, with a
+        // perturbation that ranges over both sides of the tolerance.
+        let x = Mat::from_fn(n, 60, |i, j| {
+            if j > 7 && j % 7 == 0 {
+                let delta = [0.0, 1e-13, 8e-12, 1.2e-11, 1e-9, 1e-6, 1e-3][j / 7 % 7];
+                base[(i, j - 3)] - 2.0 * base[(i, j - 5)] + delta * base[(i, j)]
+            } else {
+                base[(i, j)]
+            }
+        });
+        let (screened, exact, _) = decisions(&x, &w, 1e-8);
+        assert_eq!(screened, exact);
+        assert!(exact.iter().any(|&k| !k));
+    }
 
     fn data() -> (Mat<f64>, Vec<f64>) {
         let x = Mat::from_fn(40, 2, |i, j| {
