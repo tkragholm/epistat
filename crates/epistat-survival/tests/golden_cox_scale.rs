@@ -4,8 +4,10 @@
 //! risk scores, and the problems take the paths of a fit: tied times, delayed
 //! entry, strata, case weights with zeros, an offset, starting values, clusters,
 //! a column without variation, more than sixteen columns, and Breslow, Efron
-//! and exact ties. The hashes were recorded before the preparation of the fit
-//! was parallelised, so they show that it takes the same floating-point steps.
+//! and exact ties. The first problem has more rows than a block of the
+//! parallel sweep over the risk sets, so its hash is that of the blocked
+//! sweep; the others are swept as one running sum, as before the sweep ran in
+//! blocks.
 //!
 //! The bits depend on the platform's `ln` and `exp`, so the test runs only on
 //! the target it was recorded on, aarch64 macOS.
@@ -232,7 +234,7 @@ fn fits() -> Vec<u64> {
 #[test]
 fn the_fits_keep_their_bits_on_every_pool() {
     let expected: [u64; 8] = [
-        17_115_416_038_368_620_704,
+        11_701_549_807_329_737_045,
         9_480_662_531_853_594_351,
         1_634_127_325_466_869_148,
         3_913_290_817_384_065_141,
