@@ -18,7 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-features --no-fail-fast
+      - uses: Swatinem/rust-cache@v2
+      # The `ci` profile in Cargo.toml: optimised, with debug assertions and
+      # overflow checks, so the suite runs several times faster than in the
+      # unoptimised `test` profile.
+      - run: cargo test --profile ci --workspace --all-features --no-fail-fast
 
   lint:
     runs-on: ubuntu-latest
