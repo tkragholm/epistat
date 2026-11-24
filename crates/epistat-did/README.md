@@ -16,6 +16,13 @@ average causal response to a continuous treatment by a sieve estimator, whose
 standard error comes from the influence function of the whole procedure,
 estimated control trend included.
 
+The efficient ATT(g,t) on a panel without covariates uses the sampling
+weights, which must be constant within a unit, and indexes every cell's
+influence function by unit over the whole panel, so the cells of an
+unbalanced panel line up. Its aggregations take their standard errors from the
+combined influence function, which counts the covariance between cells that
+share units.
+
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
 Every bootstrap replicate is seeded from the caller's seed, and results do not
@@ -36,7 +43,8 @@ feature enables faer's AVX-512 kernels through epistat-linalg.
 
 The tests compare estimates, standard errors and influence functions with
 `did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `triplediff` and `contdid`
-0.1.2, and the continuous treatment's influence function with the
-infinitesimal jackknife of refits in R, from reference values written by the
-R scripts in `tests/`. They run with
+0.1.2, the continuous treatment's influence function with the
+infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
+aggregations with the estimator written out in R and with the jackknife of the
+whole procedure, from reference values written by the R scripts in `tests/`. They run with
 `cargo test --features parity-tests`.

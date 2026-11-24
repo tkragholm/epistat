@@ -1,28 +1,77 @@
-//! Baseline no-covariate `Efficient_DiD` estimators.
+//! The efficient `ATT(g,t)` of Chen, Sant'Anna and Xie, which combines every
+//! pre-treatment baseline, under parallel trends in all periods (`PT-All`) with
+//! never-treated controls, and its aggregations.
 //!
-//! This module implements the first production slice of Chen, Sant'Anna, and
-//! Xie (2025): panel-data `ATT(g,t)` estimation under unconditional `PT-All`
-//! with never-treated controls. Efficiency is achieved by combining all
-//! baseline-specific panel `DiD` estimators for a fixed `(g, t)` using the
-//! inverse covariance of their influence functions.
+//! # Algorithm
 //!
-//! Concretely, for each pre-treatment baseline `b < g`, define the baseline-
-//! specific panel estimator
-//!
-//! ```text
-//! θ_b(g, t) = E[Y_t - Y_b | G = g] - E[Y_t - Y_b | G = ∞].
-//! ```
-//!
-//! Let `IF_b(g, t)` denote its influence function. The implemented efficient
-//! estimator uses the generalized least-squares combination
+//! [`estimate_att_gt_efficient`] works on a panel without covariates. Its units
+//! are numbered `i = 1, ..., N` in ascending order of identifier, and unit `i`
+//! carries one sampling weight `w_i`, the same on all of its rows. For the
+//! cohort `g`, a period `t >= g` and the cohort's pre-treatment periods
+//! `B = {b < g}`, the cell uses the units of `g` (the set `T`) and the never
+//! treated units (`C`) that are observed at `t` and at every `b` in `B`. For
+//! each baseline `b`, with `D_ib = Y_it - Y_ib`,
 //!
 //! ```text
-//! w(g, t) ∝ Ω(g, t)^{-1} 1,
-//! ATT_eff(g, t) = Σ_b w_b(g, t) θ_b(g, t),
+//! theta_b = mu_Tb - mu_Cb,      mu_Sb = sum_{i in S} w_i D_ib / W_S,
+//!                               W_S   = sum_{i in S} w_i,
+//! psi_ib  =  N w_i (D_ib - mu_Tb) / W_T     for i in T,
+//!         = -N w_i (D_ib - mu_Cb) / W_C     for i in C,
+//!         =  0                              for every other unit.
 //! ```
 //!
-//! where `Ω(g, t) = Cov(IF(g, t))` is the covariance matrix over baseline-
-//! specific influence functions.
+//! `psi_ib` is `N` times the derivative of `theta_b` in `log w_i`, and it is
+//! the influence function that `did::att_gt` returns for the same comparison
+//! (the panel `DRDID` estimator with an intercept only, scaled by `n / n_cell`).
+//! With every weight 1 it is `(D_ib - mu_Tb) / (n_T / N)` and
+//! `-(D_ib - mu_Cb) / (n_C / N)`. The baselines are then combined by
+//! generalised least squares,
+//!
+//! ```text
+//! Omega_bc  = sum_i psi_ib psi_ic / N,       v = Omega^{-1} 1,   a_b = v_b / sum_c v_c,
+//! ATT(g,t)  = sum_b a_b theta_b,             psi_i(g,t) = sum_b a_b psi_ib,
+//! se(g,t)   = sqrt(sum_i psi_i(g,t)^2 / N) / sqrt(N).
+//! ```
+//!
+//! The weights `a_b` are estimated but add nothing to the influence function
+//! to first order: since `sum_b a_b = 1`, `ATT - theta = sum_b a_b (theta_b -
+//! theta)`, and the error in `a` multiplies `theta_b - theta`, which is of
+//! order `N^{-1/2}` under `PT-All`, so the product is of order `1 / N`. Every
+//! `psi_i(g,t)` is indexed by unit over the whole panel, so the influence
+//! vectors of all cells of one call line up unit by unit. A singular `Omega`
+//! is solved with a ridge, and an `Omega` of zero gives equal weights.
+//!
+//! [`estimate_att_gt_efficient_dr`] replaces `theta_b` by the doubly robust
+//! repeated cross-section estimator of each baseline pair. Its `psi` is
+//! indexed by row of the input, `N` is the number of rows, and `Omega`, `a` and
+//! the standard error are formed in the same way.
+//!
+//! # Aggregation
+//!
+//! An aggregate over a set `K` of cells takes weights `c_k` (equal, the
+//! treated count or the cell's weight sum), normalised to sum to one:
+//!
+//! ```text
+//! theta_K   = sum_k c_k ATT_k,               psi_Ki = sum_k c_k psi_ik,
+//! Var       = sum_i psi_Ki^2 / N^2 = sum_k sum_l c_k c_l V_kl,
+//! V_kl      = sum_i psi_ik psi_il / N^2.
+//! ```
+//!
+//! The cells share units: the never-treated units enter every cell, and the
+//! units of a cohort enter all of its periods with the same baselines. So
+//! `V_kl` is not zero off the diagonal, and `sum_k c_k^2 se_k^2`, its diagonal
+//! alone, is not the variance of `theta_K`. The `c_k` are taken as fixed. The
+//! variance therefore leaves out the influence of estimated cohort shares that
+//! `did::aggte` adds, and with weighting by weight sum it is conditional on
+//! those sums. [`aggregate_efficient_att_gt_event_time_with_influence`]
+//! returns `psi_K`, from which a cluster-robust variance can be formed.
+//!
+//! # References
+//!
+//! 1. Chen X, Sant'Anna PHC, Xie H. Efficient difference-in-differences and
+//!    event study estimators. Working paper, 2025.
+//! 2. Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
+//!    periods. J Econom 2021;225(2):200-30. doi:10.1016/j.jeconom.2020.12.001
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,8 +96,13 @@ use epistat_linalg::{Attempt, Method, Ridge, solve};
 #[derive(Debug, Clone)]
 struct UnitSeries {
     first_treated_time: Option<i32>,
+    weight: f64,
     outcomes_by_time: BTreeMap<i32, f64>,
 }
+
+/// The units in ascending order of identifier. A unit's position here is its
+/// index in every influence vector of the panel route.
+type Panel = Vec<UnitSeries>;
 
 #[derive(Debug, Clone)]
 struct BaselineSample {
@@ -78,10 +132,16 @@ type AggregatedEfficientInfluenceOutput = (BTreeMap<i32, AttGtAggregatedEstimate
 /// Estimate efficient baseline-weighted `ATT(g,t)` effects for unconditional
 /// panel-data `PT-All` designs with never-treated controls.
 ///
+/// Each unit's sampling weight weights its outcome changes and its influence
+/// value, and it must be the same on all of the unit's rows. The influence
+/// vector of every estimate has one entry per unit of the panel, in ascending
+/// order of identifier, zero for the units the cell does not use.
+///
 /// # Errors
 /// Returns [`EfficientDidError`] if inputs are invalid, no never-treated group
-/// exists, panel identifiers are missing, or the baseline-weighting covariance
-/// system is singular.
+/// exists, panel identifiers are missing, a unit has two rows in one period or
+/// rows that disagree on its cohort or weight, or the baseline-weighting
+/// covariance system is singular.
 pub fn estimate_att_gt_efficient(
     observations: &[AttGtObservation],
     config: EfficientDidConfig,
@@ -95,7 +155,7 @@ pub fn estimate_att_gt_efficient(
 
     let panel = build_panel(observations)?;
     let treated_groups = collect_treated_groups(&panel);
-    let never_treated_ids = collect_never_treated_ids(&panel);
+    let never_treated_ids = collect_group_positions(&panel, None);
     if never_treated_ids.is_empty() {
         return Err(EfficientDidError::MissingNeverTreatedGroup);
     }
@@ -111,7 +171,7 @@ pub fn estimate_att_gt_efficient(
             return Err(EfficientDidError::NoPostPeriods { group });
         }
 
-        let treated_ids = collect_group_ids(&panel, Some(group));
+        let treated_ids = collect_group_positions(&panel, Some(group));
         for time in post_times {
             estimates.push(estimate_group_time(
                 &panel,
@@ -325,9 +385,7 @@ fn collect_dr_baseline_samples(
     })
 }
 
-fn build_panel(
-    observations: &[AttGtObservation],
-) -> Result<BTreeMap<i64, UnitSeries>, EfficientDidError> {
+fn build_panel(observations: &[AttGtObservation]) -> Result<Panel, EfficientDidError> {
     let mut panel = BTreeMap::<i64, UnitSeries>::new();
     for row in observations {
         if !row.weight.is_finite() || row.weight <= 0.0 {
@@ -339,37 +397,50 @@ fn build_panel(
         let unit_id = row.unit_id.ok_or(EfficientDidError::MissingUnitId)?;
         let entry = panel.entry(unit_id).or_insert_with(|| UnitSeries {
             first_treated_time: row.first_treated_time,
+            weight: row.weight,
             outcomes_by_time: BTreeMap::new(),
         });
-        entry.first_treated_time = row.first_treated_time;
-        entry.outcomes_by_time.insert(row.time, row.outcome);
+        if entry.first_treated_time != row.first_treated_time {
+            return Err(EfficientDidError::TimeVaryingCohort { unit_id });
+        }
+        if entry.weight.to_bits() != row.weight.to_bits() {
+            return Err(EfficientDidError::TimeVaryingWeight { unit_id });
+        }
+        if entry
+            .outcomes_by_time
+            .insert(row.time, row.outcome)
+            .is_some()
+        {
+            return Err(EfficientDidError::DuplicateObservation {
+                unit_id,
+                time: row.time,
+            });
+        }
     }
-    Ok(panel)
+    Ok(panel.into_values().collect())
 }
 
-fn collect_treated_groups(panel: &BTreeMap<i64, UnitSeries>) -> Vec<i32> {
+fn collect_treated_groups(panel: &Panel) -> Vec<i32> {
     panel
-        .values()
+        .iter()
         .filter_map(|series| series.first_treated_time)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
 }
 
-fn collect_never_treated_ids(panel: &BTreeMap<i64, UnitSeries>) -> Vec<i64> {
-    collect_group_ids(panel, None)
-}
-
-fn collect_group_ids(panel: &BTreeMap<i64, UnitSeries>, group: Option<i32>) -> Vec<i64> {
+/// The positions of the units of cohort `group`, `None` for never treated.
+fn collect_group_positions(panel: &Panel, group: Option<i32>) -> Vec<usize> {
     panel
         .iter()
-        .filter_map(|(unit_id, series)| (series.first_treated_time == group).then_some(*unit_id))
+        .enumerate()
+        .filter_map(|(position, series)| (series.first_treated_time == group).then_some(position))
         .collect()
 }
 
-fn collect_pre_times(panel: &BTreeMap<i64, UnitSeries>, group: i32) -> Vec<i32> {
+fn collect_pre_times(panel: &Panel, group: i32) -> Vec<i32> {
     panel
-        .values()
+        .iter()
         .filter(|series| series.first_treated_time == Some(group))
         .flat_map(|series| series.outcomes_by_time.keys().copied())
         .filter(|time| *time < group)
@@ -378,9 +449,9 @@ fn collect_pre_times(panel: &BTreeMap<i64, UnitSeries>, group: i32) -> Vec<i32> 
         .collect()
 }
 
-fn collect_post_times(panel: &BTreeMap<i64, UnitSeries>, group: i32) -> Vec<i32> {
+fn collect_post_times(panel: &Panel, group: i32) -> Vec<i32> {
     panel
-        .values()
+        .iter()
         .filter(|series| series.first_treated_time == Some(group))
         .flat_map(|series| series.outcomes_by_time.keys().copied())
         .filter(|time| *time >= group)
@@ -390,9 +461,9 @@ fn collect_post_times(panel: &BTreeMap<i64, UnitSeries>, group: i32) -> Vec<i32>
 }
 
 fn estimate_group_time(
-    panel: &BTreeMap<i64, UnitSeries>,
-    treated_ids: &[i64],
-    control_ids: &[i64],
+    panel: &Panel,
+    treated_ids: &[usize],
+    control_ids: &[usize],
     group: i32,
     time: i32,
     baselines: &[i32],
@@ -407,12 +478,12 @@ fn estimate_group_time(
         return Err(EfficientDidError::MissingControlPanel { group, time });
     }
 
-    let total_n = treated_panel.len() + control_panel.len();
+    let unit_count = panel.len();
     let mut baseline_rows = Vec::with_capacity(baselines.len());
-    let mut influence_matrix_flat = vec![0.0; baselines.len() * total_n];
+    let mut influence_matrix_flat = vec![0.0; baselines.len() * unit_count];
     for (baseline_idx, baseline_time) in baselines.iter().copied().enumerate() {
-        let row_start = baseline_idx * total_n;
-        let influence_row = &mut influence_matrix_flat[row_start..row_start + total_n];
+        let row_start = baseline_idx * unit_count;
+        let influence_row = &mut influence_matrix_flat[row_start..row_start + unit_count];
         baseline_rows.push(build_baseline_sample(
             panel,
             &treated_panel,
@@ -425,7 +496,7 @@ fn estimate_group_time(
     let baseline_samples = BaselineSamples {
         samples: baseline_rows,
         influence_matrix_flat,
-        influence_len: total_n,
+        influence_len: unit_count,
     };
 
     let covariance = influence_covariance_matrix(&baseline_samples);
@@ -437,12 +508,11 @@ fn estimate_group_time(
         .zip(weights.iter())
         .map(|(sample, weight)| sample.att * weight)
         .sum::<f64>();
-    let n_total = treated_panel.len() + control_panel.len();
-    let mut influence = vec![0.0; n_total];
+    let mut influence = vec![0.0; unit_count];
     combine_influences_into(&baseline_samples, weights, &mut influence);
-    let variance = influence.iter().map(|value| value * value).sum::<f64>() / usize_to_f64(n_total);
-    let se = (variance / usize_to_f64(n_total)).sqrt();
+    let se = standard_error_uncentred(&influence);
     let (ci_low, ci_high) = normal_interval(att, se, config.confidence_level.confidence_level);
+    let reference = &baseline_samples.samples[0];
 
     Ok(EfficientDidEstimate {
         group,
@@ -454,7 +524,7 @@ fn estimate_group_time(
         ci_high,
         treated_n: treated_panel.len(),
         control_n: control_panel.len(),
-        total_weight: usize_to_f64(n_total),
+        total_weight: reference.total_weight,
         baseline_weights: baseline_samples
             .samples
             .iter()
@@ -479,7 +549,21 @@ fn estimate_group_time(
     })
 }
 
+/// `sqrt(sum psi_i^2 / n) / sqrt(n)`, the standard error of an estimate whose
+/// influence function `psi` has mean zero by construction.
+fn standard_error_uncentred(influence: &[f64]) -> f64 {
+    let n = usize_to_f64(influence.len());
+    let variance = influence.iter().map(|value| value * value).sum::<f64>() / n;
+    (variance / n).sqrt()
+}
+
 /// Aggregate efficient `ATT(g,t)` estimates by event time.
+///
+/// The standard error is that of the combined influence function, so it
+/// counts the covariance between cells that share units. The estimates must
+/// come from one call of [`estimate_att_gt_efficient`] or
+/// [`estimate_att_gt_efficient_dr`], whose influence vectors index the same
+/// units or rows.
 ///
 /// # Errors
 /// Returns [`AttGtAggregationError`] if estimates/configuration are invalid.
@@ -493,6 +577,12 @@ pub fn aggregate_efficient_att_gt_event_time(
 
 /// Aggregate efficient `ATT(g,t)` estimates by event time while preserving
 /// aligned influence vectors.
+///
+/// The standard error is that of the combined influence function, so it
+/// counts the covariance between cells that share units. The estimates must
+/// come from one call of [`estimate_att_gt_efficient`] or
+/// [`estimate_att_gt_efficient_dr`], whose influence vectors index the same
+/// units or rows.
 ///
 /// # Errors
 /// Returns [`AttGtAggregationError`] if estimates/configuration are invalid or
@@ -517,6 +607,12 @@ pub fn aggregate_efficient_att_gt_event_time_with_influence(
 
 /// Aggregate efficient `ATT(g,t)` estimates by treatment cohort.
 ///
+/// The standard error is that of the combined influence function, so it
+/// counts the covariance between cells that share units. The estimates must
+/// come from one call of [`estimate_att_gt_efficient`] or
+/// [`estimate_att_gt_efficient_dr`], whose influence vectors index the same
+/// units or rows.
+///
 /// # Errors
 /// Returns [`AttGtAggregationError`] if estimates/configuration are invalid.
 pub fn aggregate_efficient_att_gt_by_cohort(
@@ -533,6 +629,12 @@ pub fn aggregate_efficient_att_gt_by_cohort(
 
 /// Aggregate efficient `ATT(g,t)` estimates by calendar time.
 ///
+/// The standard error is that of the combined influence function, so it
+/// counts the covariance between cells that share units. The estimates must
+/// come from one call of [`estimate_att_gt_efficient`] or
+/// [`estimate_att_gt_efficient_dr`], whose influence vectors index the same
+/// units or rows.
+///
 /// # Errors
 /// Returns [`AttGtAggregationError`] if estimates/configuration are invalid.
 pub fn aggregate_efficient_att_gt_by_calendar_time(
@@ -548,6 +650,12 @@ pub fn aggregate_efficient_att_gt_by_calendar_time(
 }
 
 /// Aggregate efficient `ATT(g,t)` estimates into one overall summary.
+///
+/// The standard error is that of the combined influence function, so it
+/// counts the covariance between cells that share units. The estimates must
+/// come from one call of [`estimate_att_gt_efficient`] or
+/// [`estimate_att_gt_efficient_dr`], whose influence vectors index the same
+/// units or rows.
 ///
 /// # Errors
 /// Returns [`AttGtAggregationError`] if estimates/configuration are invalid.
@@ -599,23 +707,22 @@ where
             .map(|estimate| aggregation_weight(estimate, config.weighting))
             .sum::<f64>();
         let mut estimate = 0.0;
-        let mut variance = 0.0;
         influence_scratch.fill(0.0);
         let mut total_weight = 0.0;
         for component in bucket {
             let normalized_weight = aggregation_weight(component, config.weighting) / raw_total;
-            estimate = normalized_weight.mul_add(component.att, estimate);
-            variance = (normalized_weight * normalized_weight * component.se)
-                .mul_add(component.se, variance);
+            estimate += normalized_weight * component.att;
             total_weight += component.total_weight;
             for (destination, source) in influence_scratch
                 .iter_mut()
                 .zip(&component.influence_function)
             {
-                *destination = normalized_weight.mul_add(*source, *destination);
+                *destination += normalized_weight * *source;
             }
         }
-        let se = variance.sqrt();
+        // The cells share units, so the variance is that of the combined
+        // influence function, cross-covariances included; see the module docs.
+        let se = standard_error_uncentred(&influence_scratch);
         let (ci_low, ci_high) =
             normal_interval(estimate, se, config.confidence_level.confidence_level);
         grouped_estimates.insert(
@@ -635,64 +742,97 @@ where
 }
 
 fn filter_complete_ids(
-    panel: &BTreeMap<i64, UnitSeries>,
-    unit_ids: &[i64],
+    panel: &Panel,
+    positions: &[usize],
     time: i32,
     baselines: &[i32],
-) -> Vec<i64> {
-    unit_ids
+) -> Vec<usize> {
+    positions
         .iter()
         .copied()
-        .filter(|unit_id| {
-            panel[unit_id].outcomes_by_time.contains_key(&time)
+        .filter(|position| {
+            let outcomes = &panel[*position].outcomes_by_time;
+            outcomes.contains_key(&time)
                 && baselines
                     .iter()
-                    .all(|baseline| panel[unit_id].outcomes_by_time.contains_key(baseline))
+                    .all(|baseline| outcomes.contains_key(baseline))
         })
         .collect()
 }
 
+/// The weighted mean of `Y_t - Y_b` over `positions` and the sum of their weights.
+fn weighted_change(
+    panel: &Panel,
+    positions: &[usize],
+    time: i32,
+    baseline_time: i32,
+) -> (f64, f64) {
+    let mut weight_sum = 0.0;
+    let mut weighted_sum = 0.0;
+    for position in positions {
+        let series = &panel[*position];
+        let delta = series.outcomes_by_time[&time] - series.outcomes_by_time[&baseline_time];
+        weight_sum += series.weight;
+        weighted_sum += series.weight * delta;
+    }
+    (weighted_sum / weight_sum, weight_sum)
+}
+
+/// Writes `sign N w_i (D_ib - mean) / W` at the position of each unit in
+/// `positions`; `influence_out` holds one entry per unit of the panel.
+fn write_group_influence(
+    panel: &Panel,
+    positions: &[usize],
+    time: i32,
+    baseline_time: i32,
+    (mean, weight_sum): (f64, f64),
+    sign: f64,
+    influence_out: &mut [f64],
+) {
+    let scale = sign * usize_to_f64(panel.len()) / weight_sum;
+    for position in positions {
+        let series = &panel[*position];
+        let delta = series.outcomes_by_time[&time] - series.outcomes_by_time[&baseline_time];
+        influence_out[*position] = scale * (series.weight * (delta - mean));
+    }
+}
+
 fn build_baseline_sample(
-    panel: &BTreeMap<i64, UnitSeries>,
-    treated_ids: &[i64],
-    control_ids: &[i64],
+    panel: &Panel,
+    treated_ids: &[usize],
+    control_ids: &[usize],
     time: i32,
     baseline_time: i32,
     influence_out: &mut [f64],
 ) -> BaselineSample {
-    debug_assert_eq!(influence_out.len(), treated_ids.len() + control_ids.len());
-    let mut treated_sum = 0.0;
-    let mut control_sum = 0.0;
-    for (idx, unit_id) in treated_ids.iter().enumerate() {
-        let series = &panel[unit_id];
-        let delta = series.outcomes_by_time[&time] - series.outcomes_by_time[&baseline_time];
-        influence_out[idx] = delta;
-        treated_sum += delta;
-    }
-    for (idx, unit_id) in control_ids.iter().enumerate() {
-        let series = &panel[unit_id];
-        let delta = series.outcomes_by_time[&time] - series.outcomes_by_time[&baseline_time];
-        influence_out[treated_ids.len() + idx] = delta;
-        control_sum += delta;
-    }
-    let treated_mean = treated_sum / usize_to_f64(treated_ids.len());
-    let control_mean = control_sum / usize_to_f64(control_ids.len());
-    let total_n = treated_ids.len() + control_ids.len();
-    let treated_share = usize_to_f64(treated_ids.len()) / usize_to_f64(total_n);
-    let control_share = usize_to_f64(control_ids.len()) / usize_to_f64(total_n);
-    for value in &mut influence_out[..treated_ids.len()] {
-        *value = (*value - treated_mean) / treated_share;
-    }
-    for value in &mut influence_out[treated_ids.len()..] {
-        *value = -(*value - control_mean) / control_share;
-    }
+    debug_assert_eq!(influence_out.len(), panel.len());
+    let treated = weighted_change(panel, treated_ids, time, baseline_time);
+    let control = weighted_change(panel, control_ids, time, baseline_time);
+    write_group_influence(
+        panel,
+        treated_ids,
+        time,
+        baseline_time,
+        treated,
+        1.0,
+        influence_out,
+    );
+    write_group_influence(
+        panel,
+        control_ids,
+        time,
+        baseline_time,
+        control,
+        -1.0,
+        influence_out,
+    );
 
     BaselineSample {
         baseline_time,
-        att: treated_mean - control_mean,
+        att: treated.0 - control.0,
         treated_n: treated_ids.len(),
         control_n: control_ids.len(),
-        total_weight: usize_to_f64(total_n),
+        total_weight: treated.1 + control.1,
     }
 }
 
