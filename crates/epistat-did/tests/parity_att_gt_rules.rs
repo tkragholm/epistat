@@ -21,11 +21,11 @@
 //! for every route, which also covers the doubly robust ridge.
 
 use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtInfluenceOutput, BasePeriod,
-    ComparisonGroup, DrDidConfig, UnbalancedPanel, estimate_att_gt_dr_efficient_with_influence,
-    estimate_att_gt_dr_panel_with_influence, estimate_att_gt_ipw_panel_with_influence,
-    estimate_att_gt_ipw_with_influence, estimate_att_gt_or_panel_with_influence,
-    estimate_att_gt_or_with_influence,
+    AggteConfig, AggteType, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtInfluenceOutput,
+    BasePeriod, ComparisonGroup, DrDidConfig, InferenceConfig, UnbalancedPanel, aggregate_att_gt,
+    estimate_att_gt_dr_efficient_with_influence, estimate_att_gt_dr_panel_with_influence,
+    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
+    estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -59,6 +59,23 @@ struct Run {
     n: usize,
     inffunc: Option<Vec<Vec<f64>>>,
     ids: Vec<i64>,
+    aggregates: Option<Aggregates>,
+}
+
+#[derive(Deserialize)]
+struct Aggregate {
+    overall_att: f64,
+    overall_se: f64,
+    egt: Vec<i32>,
+    att_egt: Vec<f64>,
+    se_egt: Vec<Option<f64>>,
+}
+
+#[derive(Deserialize)]
+struct Aggregates {
+    simple: Aggregate,
+    group: Aggregate,
+    dynamic: Aggregate,
 }
 
 #[derive(Deserialize)]
@@ -262,6 +279,76 @@ fn gaps_and_cohorts_at_the_edges_are_handled_as_att_gt() {
             reference.gaps_counts.after_last
         );
         assert_eq!(out.sample.periods, vec![1, 2, 4, 5, 7]);
+    }
+}
+
+/// `aggte(max_e = 1)` on the gapped panel. `did` counts `max_e` in steps of
+/// its list of periods and cohorts for the simple and group summaries, and in
+/// calendar periods for the dynamic one; the cells and the sample's unit panel
+/// of the pre-processed fit give the same summaries. R's universal-base path
+/// also carries the base cells, att 0 without a standard error, which are not
+/// cells here.
+#[test]
+fn aggregates_with_max_e_on_gapped_periods_match_aggte() {
+    let reference = reference();
+    for (index, run) in reference.gaps_runs.iter().enumerate() {
+        let Some(aggregates) = &run.aggregates else {
+            continue;
+        };
+        let out = estimate(&reference.gaps, run);
+        let panel = out.sample.unit_panel();
+        for (aggregation, want) in [
+            (AggteType::Simple, &aggregates.simple),
+            (AggteType::Group, &aggregates.group),
+            (AggteType::Dynamic, &aggregates.dynamic),
+        ] {
+            let got = aggregate_att_gt(
+                &out.estimates,
+                &out.influence_functions,
+                &panel,
+                AggteConfig {
+                    aggregation,
+                    balance_e: None,
+                    min_e: None,
+                    max_e: Some(1),
+                    confidence_level: InferenceConfig::default(),
+                    bootstrap: None,
+                },
+            )
+            .expect("aggte");
+            let label = format!("gaps {index} {aggregation:?}");
+            assert!(
+                (got.overall_att - want.overall_att).abs() < ESTIMATE_TOLERANCE,
+                "{label}: att {} vs R {}",
+                got.overall_att,
+                want.overall_att
+            );
+            assert!(
+                (got.overall_se - want.overall_se).abs() < ESTIMATE_TOLERANCE,
+                "{label}: se {} vs R {}",
+                got.overall_se,
+                want.overall_se
+            );
+            let points: Vec<usize> = (0..want.egt.len())
+                .filter(|&i| want.se_egt[i].is_some())
+                .collect();
+            let keys: Vec<i32> = got.by_key.iter().map(|point| point.key).collect();
+            if aggregation != AggteType::Simple {
+                assert_eq!(
+                    keys,
+                    points.iter().map(|&i| want.egt[i]).collect::<Vec<_>>(),
+                    "{label}: keys"
+                );
+            }
+            for (point, &i) in got.by_key.iter().zip(&points) {
+                assert!(
+                    (point.att - want.att_egt[i]).abs() < ESTIMATE_TOLERANCE,
+                    "{label}"
+                );
+                let se = want.se_egt[i].expect("se");
+                assert!((point.se - se).abs() < ESTIMATE_TOLERANCE, "{label}");
+            }
+        }
     }
 }
 

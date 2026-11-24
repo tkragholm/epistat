@@ -52,7 +52,7 @@ sim_panel <- function(n, periods, cohorts, seed, varying_x = FALSE,
 
 run <- function(data, panel = TRUE, est_method = "dr", control_group = "nevertreated",
                 base_period = "varying", anticipation = 0,
-                allow_unbalanced_panel = FALSE, xformla = ~ x1 + x2) {
+                allow_unbalanced_panel = FALSE, xformla = ~ x1 + x2, aggregate = FALSE) {
   notes <- character(0)
   out <- withCallingHandlers(
     att_gt(yname = "y", tname = "period", idname = if (panel) "id" else NULL,
@@ -71,7 +71,21 @@ run <- function(data, panel = TRUE, est_method = "dr", control_group = "nevertre
     })
   dp <- out$DIDparams
   ids <- unique(dp$time_invariant_data[[dp$idname]])
+  # aggte with max_e = 1, which did counts in steps of its period list for the
+  # simple and group summaries and in calendar periods for the dynamic one.
+  aggregates <- NULL
+  if (aggregate) {
+    grab <- function(type) {
+      a <- suppressWarnings(aggte(out, type = type, max_e = 1, bstrap = FALSE, cband = FALSE))
+      vec <- function(x) I(if (is.null(x)) numeric(0) else as.numeric(x))
+      list(overall_att = a$overall.att, overall_se = a$overall.se, egt = vec(a$egt),
+           att_egt = vec(a$att.egt), se_egt = vec(a$se.egt))
+    }
+    aggregates <- list(simple = grab("simple"), group = grab("group"),
+                       dynamic = grab("dynamic"))
+  }
   list(
+    aggregates = aggregates,
     panel = panel, est_method = est_method, control_group = control_group,
     base_period = base_period, anticipation = anticipation,
     allow_unbalanced_panel = allow_unbalanced_panel,
@@ -119,8 +133,8 @@ ref$gaps_counts <- list(
   after_last = length(unique(gaps$id[gaps$g == 9]))
 )
 ref$gaps_runs <- list(
-  run(gaps),
-  run(gaps, base_period = "universal", control_group = "notyettreated"),
+  run(gaps, aggregate = TRUE),
+  run(gaps, base_period = "universal", control_group = "notyettreated", aggregate = TRUE),
   run(gaps, anticipation = 1),
   run(gaps, anticipation = 1, base_period = "universal",
       control_group = "notyettreated", est_method = "reg")
