@@ -81,30 +81,145 @@ pub fn row_scaled_gram(x: MatRef<'_, f64>, scale: impl Fn(usize) -> f64 + Sync) 
     let p = x.ncols();
     let mut gram = sum_over_row_blocks(x.nrows(), p, p, |rows, out| {
         let factors: Vec<f64> = rows.clone().map(&scale).collect();
-        let mut scaled = Mat::<f64>::zeros(rows.len(), p);
-        for j in 0..p {
-            for (k, i) in rows.clone().enumerate() {
-                scaled[(k, j)] = x[(i, j)] * factors[k];
-            }
-        }
-        triangular::matmul(
-            out,
-            BlockStructure::TriangularLower,
-            Accum::Replace,
-            scaled.transpose(),
-            BlockStructure::Rectangular,
-            scaled.as_ref(),
-            BlockStructure::Rectangular,
-            1.0,
-            Par::Seq,
-        );
+        scaled_gram_into(x.subrows(rows.start, rows.len()), &factors, out);
     });
+    mirror_lower(&mut gram);
+    gram
+}
+
+/// Writes the lower triangle of `sum_i s_i^2 x_i x_i'` over the rows of `x`
+/// into `out`, with `s_i = factors[i]`: the term of one block of
+/// [`row_scaled_gram`].
+fn scaled_gram_into(x: MatRef<'_, f64>, factors: &[f64], out: MatMut<'_, f64>) {
+    let p = x.ncols();
+    let mut scaled = Mat::<f64>::zeros(x.nrows(), p);
+    for j in 0..p {
+        for (k, &f) in factors.iter().enumerate() {
+            scaled[(k, j)] = x[(k, j)] * f;
+        }
+    }
+    triangular::matmul(
+        out,
+        BlockStructure::TriangularLower,
+        Accum::Replace,
+        scaled.transpose(),
+        BlockStructure::Rectangular,
+        scaled.as_ref(),
+        BlockStructure::Rectangular,
+        1.0,
+        Par::Seq,
+    );
+}
+
+fn mirror_lower(gram: &mut Mat<f64>) {
+    let p = gram.ncols();
     for j in 0..p {
         for i in (j + 1)..p {
             gram[(j, i)] = gram[(i, j)];
         }
     }
-    gram
+}
+
+/// The term of one block of rows of [`row_scaled_gram`]: the lower triangle
+/// of `sum_i s_i^2 x_i x_i'` over the rows of `x`, which are the rows of the
+/// block, with `s_i = factors[i]`, and zeros above it. Added in block order
+/// by [`BlockSum`] and mirrored by [`BlockSum::finish_symmetric`], the terms of
+/// the blocks of [`ROW_BLOCK`] rows of a design give [`row_scaled_gram`] of it
+/// bit for bit, for rows formed block by block instead of held in full.
+///
+/// # Panics
+///
+/// If `factors` does not have one entry per row of `x`.
+#[must_use]
+pub fn block_scaled_gram(x: MatRef<'_, f64>, factors: &[f64]) -> Mat<f64> {
+    assert_eq!(factors.len(), x.nrows(), "one factor per row");
+    let mut out = Mat::<f64>::zeros(x.ncols(), x.ncols());
+    scaled_gram_into(x, factors, out.as_mut());
+    out
+}
+
+/// The term of one block of rows of [`xtv`]: `X_b' v_b` for the rows `x` of
+/// the block and their values `v`. Added in block order by [`BlockSum`], the
+/// terms of the blocks of [`ROW_BLOCK`] rows give [`xtv`] bit for bit.
+///
+/// # Panics
+///
+/// If `v` does not have one entry per row of `x`.
+#[must_use]
+pub fn block_xtv(x: MatRef<'_, f64>, v: &[f64]) -> Mat<f64> {
+    assert_eq!(v.len(), x.nrows(), "one value per row");
+    let mut out = Mat::<f64>::zeros(x.ncols(), 1);
+    xtv_into(x, v, out.as_mut());
+    out
+}
+
+fn xtv_into(x: MatRef<'_, f64>, v: &[f64], out: MatMut<'_, f64>) {
+    let len = x.nrows();
+    matmul(
+        out,
+        Accum::Replace,
+        x.transpose(),
+        MatRef::from_column_major_slice(v, len, 1),
+        1.0,
+        Par::Seq,
+    );
+}
+
+/// The sum of the terms of the blocks of `n` rows, added in block order as
+/// [`row_scaled_gram`] and [`xtv`] add them: a single block is the sum, and
+/// more are added one after another to a zero matrix.
+#[derive(Clone, Debug)]
+pub struct BlockSum {
+    single: bool,
+    total: Mat<f64>,
+}
+
+impl BlockSum {
+    /// The sum of the `rows x cols` terms of the blocks of `n` rows.
+    #[must_use]
+    pub fn new(n: usize, rows: usize, cols: usize) -> Self {
+        Self {
+            single: n <= ROW_BLOCK,
+            total: Mat::zeros(rows, cols),
+        }
+    }
+
+    /// Adds the term of the next block.
+    ///
+    /// # Panics
+    ///
+    /// If the term is not of the shape of the sum.
+    pub fn add(&mut self, term: &Mat<f64>) {
+        assert_eq!(
+            (term.nrows(), term.ncols()),
+            (self.total.nrows(), self.total.ncols()),
+            "a term of the shape of the sum"
+        );
+        if self.single {
+            self.total.clone_from(term);
+            return;
+        }
+        for j in 0..term.ncols() {
+            for i in 0..term.nrows() {
+                self.total[(i, j)] += term[(i, j)];
+            }
+        }
+    }
+
+    /// The sum.
+    #[must_use]
+    pub fn finish(self) -> Mat<f64> {
+        self.total
+    }
+
+    /// The sum with its lower triangle copied to the upper, as
+    /// [`row_scaled_gram`] gives it.
+    #[must_use]
+    pub fn finish_symmetric(self) -> Mat<f64> {
+        let mut total = self.total;
+        mirror_lower(&mut total);
+        total
+    }
 }
 
 /// `X' W X` for the diagonal `W` of `weights`.
@@ -128,16 +243,7 @@ pub fn weighted_gram(x: MatRef<'_, f64>, weights: &[f64]) -> Result<Mat<f64>, De
 pub fn xtv(x: MatRef<'_, f64>, v: &[f64]) -> Mat<f64> {
     assert_eq!(v.len(), x.nrows(), "one value per row");
     sum_over_row_blocks(x.nrows(), x.ncols(), 1, |rows, out| {
-        let len = rows.len();
-        let start = rows.start;
-        matmul(
-            out,
-            Accum::Replace,
-            x.subrows(start, len).transpose(),
-            MatRef::from_column_major_slice(&v[rows], len, 1),
-            1.0,
-            Par::Seq,
-        );
+        xtv_into(x.subrows(rows.start, rows.len()), &v[rows], out);
     })
 }
 
@@ -296,6 +402,70 @@ mod tests {
             out.extend(eta);
             out
         });
+    }
+
+    /// The products over a design formed block by block, each block copied
+    /// into its own matrix and vector, against those over the design held in
+    /// full. `offset` places the copy of `v` that many values into its buffer,
+    /// to show whether the alignment of the copy matters.
+    fn by_blocks(x: MatRef<'_, f64>, w: &[f64], v: &[f64], offset: usize) -> (Mat<f64>, Mat<f64>) {
+        let (n, p) = (x.nrows(), x.ncols());
+        let mut gram = BlockSum::new(n, p, p);
+        let mut cross = BlockSum::new(n, p, 1);
+        let mut start = 0;
+        while start < n || (n == 0 && start == 0) {
+            let len = ROW_BLOCK.min(n - start);
+            let block = Mat::from_fn(len, p, |i, j| x[(start + i, j)]);
+            let factors: Vec<f64> = w[start..start + len].iter().map(|v| v.sqrt()).collect();
+            gram.add(&block_scaled_gram(block.as_ref(), &factors));
+            let mut buffer = vec![0.0; offset];
+            buffer.extend_from_slice(&v[start..start + len]);
+            cross.add(&block_xtv(block.as_ref(), &buffer[offset..]));
+            if n == 0 {
+                break;
+            }
+            start += len;
+        }
+        (gram.finish_symmetric(), cross.finish())
+    }
+
+    #[test]
+    fn products_formed_by_blocks_have_the_bits_of_the_whole() {
+        for n in [
+            0,
+            1,
+            7,
+            ROW_BLOCK - 1,
+            ROW_BLOCK,
+            ROW_BLOCK + 1,
+            9_001,
+            20_000,
+        ] {
+            for p in [1, 2, 3, 5, 8] {
+                let x = design(n, p);
+                let w: Vec<f64> = (0..n)
+                    .map(|i| 0.5 + f64::from(u32::try_from(i % 13).unwrap()) * 0.37)
+                    .collect();
+                let v: Vec<f64> = (0..n)
+                    .map(|i| (f64::from(u32::try_from(i % 17).unwrap()) - 8.3) * 1.7)
+                    .collect();
+                let gram = weighted_gram(x.as_ref(), &w).unwrap();
+                let cross = xtv(x.as_ref(), &v);
+                for offset in [0, 1, 3] {
+                    let (g, c) = by_blocks(x.as_ref(), &w, &v, offset);
+                    assert_eq!(
+                        epistat_testkit::bits(&flat(&g)),
+                        epistat_testkit::bits(&flat(&gram)),
+                        "gram n {n} p {p} offset {offset}"
+                    );
+                    assert_eq!(
+                        epistat_testkit::bits(&flat(&c)),
+                        epistat_testkit::bits(&flat(&cross)),
+                        "xtv n {n} p {p} offset {offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
