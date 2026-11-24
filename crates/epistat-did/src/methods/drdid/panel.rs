@@ -6,9 +6,7 @@ use itertools::izip;
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};
 use crate::estimators::common::linalg::{solve_spd_system, solve_spd_system_multi_rhs};
 use crate::estimators::common::logit::fit_logit;
-use crate::inference::{
-    multiplier_bootstrap_ci, standard_error_from_influence, validate_confidence_level,
-};
+use crate::inference::{standard_error_from_influence, validate_confidence_level};
 use crate::methods::drdid::moments::normalize_weights_to_n as normalize_weights_to_n_shared;
 use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidObservation};
 use crate::util::usize_to_f64;
@@ -244,11 +242,11 @@ fn estimate_from_prepared(
     )?;
 
     let se = standard_error_from_influence(&panel_att.influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
+    let (ci_low, ci_high) = crate::methods::drdid::confidence_interval(
         panel_att.att,
+        se,
         &panel_att.influence_function,
-        config.inference(),
-        config.bootstrap(),
+        config,
     );
 
     Ok(DrDidEstimate {
@@ -807,7 +805,7 @@ fn observation_count_f64(observation_count: usize) -> f64 {
     usize_to_f64(observation_count)
 }
 
-fn validate_drdid_config(config: DrDidConfig) -> Result<(), DrDidError> {
+pub(super) fn validate_drdid_config(config: DrDidConfig) -> Result<(), DrDidError> {
     if !validate_confidence_level(config.confidence_level) {
         return Err(DrDidError::InvalidConfig(
             "confidence_level must be finite and in (0, 1)".to_string(),
@@ -836,11 +834,6 @@ fn validate_drdid_config(config: DrDidConfig) -> Result<(), DrDidError> {
             "tol must be finite and > 0".to_string(),
         ));
     }
-    if config.bootstrap_reps == 0 {
-        return Err(DrDidError::InvalidConfig(
-            "bootstrap_reps must be > 0".to_string(),
-        ));
-    }
     Ok(())
 }
 
@@ -857,28 +850,28 @@ fn dot(left: &[f64], right: &[f64]) -> f64 {
 }
 
 #[derive(Clone, Copy)]
-struct LogisticIrlsInputs<'a> {
-    design_matrix_flat: &'a [f64],
-    feature_count: usize,
-    treated_indicator: &'a [f64],
-    normalized_weights: &'a [f64],
+pub(super) struct LogisticIrlsInputs<'a> {
+    pub(super) design_matrix_flat: &'a [f64],
+    pub(super) feature_count: usize,
+    pub(super) treated_indicator: &'a [f64],
+    pub(super) normalized_weights: &'a [f64],
 }
 
 /// The propensity score's coefficients and how the iterations ended.
 #[derive(Debug)]
-struct LogisticIrlsFit {
-    coefficients: Vec<f64>,
+pub(super) struct LogisticIrlsFit {
+    pub(super) coefficients: Vec<f64>,
     iterations: usize,
     converged: bool,
 }
 
 #[derive(Clone, Copy)]
-struct LogisticIrlsSettings {
-    max_iter: usize,
-    tol: f64,
+pub(super) struct LogisticIrlsSettings {
+    pub(super) max_iter: usize,
+    pub(super) tol: f64,
 }
 
-fn fit_weighted_linear(
+pub(super) fn fit_weighted_linear(
     design_matrix_flat: &[f64],
     feature_count: usize,
     outcome: &[f64],
@@ -932,7 +925,7 @@ fn fit_weighted_linear(
 
 /// The weighted logit maximum likelihood fit, `glm(family = binomial)` with
 /// `epsilon = tol` and `maxit = max_iter`.
-fn fit_logistic_irls(
+pub(super) fn fit_logistic_irls(
     inputs: LogisticIrlsInputs<'_>,
     settings: LogisticIrlsSettings,
 ) -> Result<LogisticIrlsFit, DrDidError> {
@@ -957,7 +950,7 @@ fn fit_logistic_irls(
     })
 }
 
-fn predict_linear(x: &[f64], p: usize, beta: &[f64]) -> Vec<f64> {
+pub(super) fn predict_linear(x: &[f64], p: usize, beta: &[f64]) -> Vec<f64> {
     let n = x.len() / p;
     let mut out = Vec::with_capacity(n);
     for row_idx in 0..n {
@@ -967,7 +960,7 @@ fn predict_linear(x: &[f64], p: usize, beta: &[f64]) -> Vec<f64> {
     out
 }
 
-fn predict_logistic_scores(x: &[f64], p: usize, beta: &[f64], clip: f64) -> Vec<f64> {
+pub(super) fn predict_logistic_scores(x: &[f64], p: usize, beta: &[f64], clip: f64) -> Vec<f64> {
     predict_linear(x, p, beta)
         .into_iter()
         .map(|value| sigmoid(value).min(1.0 - clip))
@@ -1247,10 +1240,7 @@ mod tests {
             validate_drdid_config(DrDidConfig::builder().tol(0.0).build()),
             Err(DrDidError::InvalidConfig(msg)) if msg.contains("tol")
         ));
-        assert!(matches!(
-            validate_drdid_config(DrDidConfig::builder().bootstrap_reps(0).build()),
-            Err(DrDidError::InvalidConfig(msg)) if msg.contains("bootstrap_reps")
-        ));
+        assert!(validate_drdid_config(DrDidConfig::builder().bootstrap_reps(0).build()).is_ok());
     }
 
     #[test]
@@ -1365,8 +1355,18 @@ mod tests {
             .bootstrap_reps(200)
             .bootstrap_seed(42)
             .build();
-        let ci_a = multiplier_bootstrap_ci(1.0, &influence, config.inference(), config.bootstrap());
-        let ci_b = multiplier_bootstrap_ci(1.0, &influence, config.inference(), config.bootstrap());
+        let ci_a = crate::inference::multiplier_bootstrap_ci(
+            1.0,
+            &influence,
+            config.inference(),
+            config.bootstrap(),
+        );
+        let ci_b = crate::inference::multiplier_bootstrap_ci(
+            1.0,
+            &influence,
+            config.inference(),
+            config.bootstrap(),
+        );
         assert_eq!(ci_a, ci_b);
         assert!(ci_a.0 <= ci_a.1);
     }

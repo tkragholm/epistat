@@ -4,9 +4,14 @@ Difference-in-differences. Group-time average treatment effects ATT(g,t) for
 staggered adoption (Callaway and Sant'Anna), by outcome regression, inverse
 probability weighting or the doubly robust estimator, on panels and repeated
 cross-sections, with never-treated or not-yet-treated comparison groups,
-varying or universal base periods, anticipation and sampling weights. The
-effects aggregate by event time, cohort, calendar time or overall, as `aggte`
-of R's `did` does.
+varying or universal base periods, anticipation and sampling weights. As
+`att_gt` of R's `did`, they recode cohorts treated after the last period as
+never treated, drop units treated at the start, use the last cohort as
+comparison group when no unit is never treated, take base periods from the
+observed periods, which need not be consecutive, and balance an unbalanced
+panel or estimate it as repeated cross-sections; what they changed is
+reported with the estimates. The effects aggregate by event time, cohort,
+calendar time or overall, as `aggte` does.
 
 Also the two-period doubly robust estimators of `DRDID`, including the
 improved and locally efficient ones; the efficient ATT(g,t) that combines all

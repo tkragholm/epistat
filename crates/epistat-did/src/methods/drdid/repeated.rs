@@ -7,9 +7,7 @@ use crate::estimators::outcome::model::OutcomeModel;
 use crate::estimators::propensity::common::logistic_scores;
 use crate::estimators::propensity::logistic::LogisticPS;
 use crate::estimators::propensity::types::{Config as PropensityConfig, PropensityEstimator};
-use crate::inference::{
-    multiplier_bootstrap_ci, standard_error_from_influence, validate_confidence_level,
-};
+use crate::inference::{standard_error_from_influence, validate_confidence_level};
 use crate::methods::drdid::moments::{
     RepeatedMomentError, RepeatedMomentEstimate, RepeatedMomentInputs,
     normalize_weights_to_n as normalize_weights_to_n_shared, repeated_att_moments,
@@ -35,9 +33,15 @@ use crate::types::{DidCell, DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeate
 /// - `m_{0,pre}(X_i) = E[Y_i | D_i = 0, T_i = 0, X_i]`,
 /// - `m_{0,post}(X_i) = E[Y_i | D_i = 0, T_i = 1, X_i]`.
 ///
-/// The implementation here follows the standard doubly robust repeated-cross-
-/// section score and treats the improved / calibrated repeated estimator as a
-/// separate surface, [`estimate_drdid_improved_repeated_cross_section`](crate::estimate_drdid_improved_repeated_cross_section).
+/// This is `DRDID::drdid_rc1`: the propensity score is fitted with the
+/// sampling weights, comparators with a score of 0.995 or more are trimmed,
+/// and the influence function includes the estimation of the propensity score
+/// and of both outcome regressions. With
+/// [`DrDidConfig::legacy_repeated_cross_section`] it is the computation of
+/// `epistat-did` 0.1 instead: an unweighted propensity score clipped to
+/// `[propensity_clip, 1 - propensity_clip]`, no trimming, and only the
+/// cell-mean terms in the influence function. The improved estimator is
+/// [`estimate_drdid_improved_repeated_cross_section`](crate::estimate_drdid_improved_repeated_cross_section).
 ///
 /// References:
 /// - Callaway, B. and Sant'Anna, P. H. C. (2021). "Difference-in-Differences
@@ -57,6 +61,9 @@ pub fn estimate_drdid_repeated_cross_section(
     if observations.is_empty() {
         return Err(DrDidError::EmptyInput);
     }
+    if !config.legacy_repeated_cross_section {
+        return super::ipw_or::estimate_dr_did_repeated_traditional(observations, config);
+    }
 
     let prepared = prepare(observations)?;
     let nuisance = fit_repeated_nuisance_models(&prepared, config)?;
@@ -71,12 +78,8 @@ pub fn estimate_drdid_repeated_cross_section(
     let influence_function = moments.influence_function;
 
     let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        att,
-        &influence_function,
-        config.inference(),
-        config.bootstrap(),
-    );
+    let (ci_low, ci_high) =
+        crate::methods::drdid::confidence_interval(att, se, &influence_function, config);
 
     Ok(DrDidEstimate {
         att,
@@ -412,11 +415,6 @@ pub(super) fn validate_config(config: DrDidConfig) -> Result<(), DrDidError> {
     if !config.tol.is_finite() || config.tol <= 0.0 {
         return Err(DrDidError::InvalidConfig(
             "tol must be finite and > 0".to_string(),
-        ));
-    }
-    if config.bootstrap_reps == 0 {
-        return Err(DrDidError::InvalidConfig(
-            "bootstrap_reps must be > 0".to_string(),
         ));
     }
     Ok(())

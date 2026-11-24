@@ -15,16 +15,17 @@ use std::fmt::Debug;
 
 use epistat_did::{
     AggteBootstrap, AggteConfig, AggteType, AttGtAggregationConfig, AttGtAggregationWeighting,
-    AttGtBandConfig, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtObservation, BasePeriod,
-    ClusterIndex, ComparisonGroup, ContinuousObservation, DesignPruning, DidCcConfig, DidConfig,
-    DrDidConfig, DrDidObservation, DrDidRepeatedObservation, EfficientDidConfig,
-    HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
-    HonestMonotonicityDirection, HonestPostFunctional, HonestRelativeMagnitudeBound,
-    HonestSensitivity, InferenceConfig, LeastFavorableSimulation, PanelFlatInput, PanelObservation,
-    PolynomialBasis, RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod,
-    TripleDidObservation, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
-    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
-    aggregate_att_gt_overall, aggregate_efficient_att_gt_event_time,
+    AttGtBandConfig, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtError,
+    AttGtInfluenceOutput, AttGtObservation, BasePeriod, ClusterIndex, ComparisonGroup,
+    ContinuousObservation, DesignPruning, DidCcConfig, DidConfig, DrDidConfig, DrDidObservation,
+    DrDidRepeatedObservation, EfficientDidConfig, HonestEventStudyInput, HonestJointPathConfig,
+    HonestJointPathMethod, HonestMonotonicityDirection, HonestPostFunctional,
+    HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
+    PanelFlatInput, PanelObservation, PolynomialBasis, RelativeMagnitudeConfidenceSetConfig,
+    SensitivitySummaryMethod, TripleDidObservation, UnbalancedPanel, aggregate_att_gt,
+    aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort,
+    aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
+    aggregate_efficient_att_gt_event_time,
     assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
     att_gt_clustered_standard_errors, att_gt_mboot_bands, att_gt_simultaneous_bands,
@@ -32,14 +33,16 @@ use epistat_did::{
     compute_relative_magnitude_confidence_set, compute_relative_magnitude_identified_set,
     estimate_acrt_sieve, estimate_att_gt, estimate_att_gt_dr_efficient_with_influence,
     estimate_att_gt_dr_panel_with_influence, estimate_att_gt_dr_with_influence,
-    estimate_att_gt_efficient, estimate_att_gt_efficient_dr, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or_with_influence, estimate_att_two_by_two, estimate_did_cc_robust,
-    estimate_did_cc_stationary, estimate_dr_ddd, estimate_drdid_improved_panel,
-    estimate_drdid_improved_repeated_cross_section, estimate_drdid_panel,
-    estimate_drdid_repeated_cross_section, estimate_drdid_repeated_efficient,
-    estimate_smoothness_upper_bound_from_pretrends, fit_drdid_panel_nuisance,
-    fit_drdid_panel_propensity_coefficients, independent_design_columns, pretrend_wald_test,
-    summarize_relative_magnitude_sensitivity_many_with_simulation,
+    estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
+    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
+    estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
+    estimate_att_two_by_two, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
+    estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
+    estimate_drdid_panel, estimate_drdid_repeated_cross_section, estimate_drdid_repeated_efficient,
+    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
+    estimate_or_did_repeated_cross_section, estimate_smoothness_upper_bound_from_pretrends,
+    fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients, independent_design_columns,
+    pretrend_wald_test, summarize_relative_magnitude_sensitivity_many_with_simulation,
     summarize_smoothness_sensitivity_with_simulation, test_did_cc_stationarity, unit_panel,
 };
 use epistat_testkit::{Fingerprint, load_json, on_threads};
@@ -98,6 +101,19 @@ fn digest(value: &impl Debug) -> u64 {
     Fingerprint::new()
         .f64s(&numbers(&format!("{value:?}")))
         .finish()
+}
+
+/// The digest of an ATT(g,t) route's cells, without the sample, which
+/// `att_gt_dr_panel_sample` pins on its own.
+fn attgt_digest(output: &Result<AttGtInfluenceOutput, AttGtError>) -> u64 {
+    digest(&output.as_ref().map(|out| {
+        (
+            &out.estimates,
+            &out.influence_functions,
+            &out.skipped,
+            &out.pruned,
+        )
+    }))
 }
 
 #[derive(Deserialize)]
@@ -266,8 +282,33 @@ fn dr_config(comparison_group: ComparisonGroup, base_period: BasePeriod) -> AttG
             base_period,
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
+            unbalanced_panel: UnbalancedPanel::Balance,
+            refuse_small_never_treated: true,
+            refuse_poor_overlap: true,
         },
-        drdid: DrDidConfig::builder().build(),
+        drdid: drdid_config(),
+    }
+}
+
+/// The estimators' settings with a 999-replicate bootstrap interval, so the
+/// hashes pin the bootstrap path, and the legacy repeated cross-section
+/// doubly robust computation, which `drdid_rc` and `att_gt_dr_rc` pin.
+/// `drdid_panel_analytic` pins the default analytic interval, and
+/// `drdid_rc1` and `att_gt_dr_rc1` the default `drdid_rc1` estimator.
+fn drdid_config() -> DrDidConfig {
+    DrDidConfig::builder()
+        .bootstrap_reps(999)
+        .legacy_repeated_cross_section(true)
+        .build()
+}
+
+/// The compositional-change settings with bootstrap intervals, for the same
+/// reason as [`drdid_config`].
+fn did_cc_config() -> DidCcConfig {
+    DidCcConfig {
+        drdid: drdid_config(),
+        bootstrap_confidence_intervals: true,
+        ..DidCcConfig::default()
     }
 }
 
@@ -350,7 +391,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ] {
         out.push((
             name,
-            digest(&estimate_att_gt_dr_panel_with_influence(
+            attgt_digest(&estimate_att_gt_dr_panel_with_influence(
                 &panel_rows,
                 dr_config(comparison, base),
             )),
@@ -589,21 +630,21 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     let rc_config = dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying);
     out.push((
         "att_gt_dr_rc",
-        digest(&estimate_att_gt_dr_with_influence(&rc_rows, rc_config)),
+        attgt_digest(&estimate_att_gt_dr_with_influence(&rc_rows, rc_config)),
     ));
     out.push((
         "att_gt_dr_rc_efficient",
-        digest(&estimate_att_gt_dr_efficient_with_influence(
+        attgt_digest(&estimate_att_gt_dr_efficient_with_influence(
             &rc_rows, rc_config,
         )),
     ));
     out.push((
         "att_gt_ipw_rc",
-        digest(&estimate_att_gt_ipw_with_influence(&rc_rows, rc_config)),
+        attgt_digest(&estimate_att_gt_ipw_with_influence(&rc_rows, rc_config)),
     ));
     out.push((
         "att_gt_or_rc",
-        digest(&estimate_att_gt_or_with_influence(&rc_rows, rc_config)),
+        attgt_digest(&estimate_att_gt_or_with_influence(&rc_rows, rc_config)),
     ));
     let efficient = estimate_att_gt_efficient_dr(
         &panel_rows,
@@ -625,10 +666,14 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
 
     // Two-period estimators on one cell.
     let (panel_cell, rc_cell) = cell(&data.mpdta);
-    let drdid = DrDidConfig::builder().build();
+    let drdid = drdid_config();
     out.push((
         "drdid_panel",
         digest(&estimate_drdid_panel(&panel_cell, drdid)),
+    ));
+    out.push((
+        "drdid_panel_analytic",
+        digest(&estimate_drdid_panel(&panel_cell, DrDidConfig::default())),
     ));
     out.push((
         "drdid_improved_panel",
@@ -713,18 +758,15 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ));
     out.push((
         "did_cc_robust",
-        digest(&estimate_did_cc_robust(&data.cc, DidCcConfig::default())),
+        digest(&estimate_did_cc_robust(&data.cc, did_cc_config())),
     ));
     out.push((
         "did_cc_stationary",
-        digest(&estimate_did_cc_stationary(
-            &data.cc,
-            DidCcConfig::default(),
-        )),
+        digest(&estimate_did_cc_stationary(&data.cc, did_cc_config())),
     ));
     out.push((
         "did_cc_test",
-        digest(&test_did_cc_stationarity(&data.cc, DidCcConfig::default())),
+        digest(&test_did_cc_stationarity(&data.cc, did_cc_config())),
     ));
 
     // HonestDiD, on the paths Study I calls.
@@ -890,6 +932,92 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
             },
         )),
     ));
+
+    // The panel IPW and outcome-regression routes, the sample of the panel
+    // route, and an unbalanced panel under the two rules that keep it.
+    out.push((
+        "att_gt_ipw_panel",
+        attgt_digest(&estimate_att_gt_ipw_panel_with_influence(
+            &panel_rows,
+            dr_config(ComparisonGroup::NeverTreated, BasePeriod::Universal),
+        )),
+    ));
+    out.push((
+        "att_gt_or_panel",
+        attgt_digest(&estimate_att_gt_or_panel_with_influence(
+            &panel_rows,
+            dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying),
+        )),
+    ));
+    out.push(("att_gt_dr_panel_sample", digest(&fitted.sample)));
+    let unbalanced_rows = panel_rows
+        .iter()
+        .filter(|row| !(row.unit_id.is_some_and(|id| id % 7 == 0) && row.time == 2005))
+        .cloned()
+        .collect::<Vec<_>>();
+    for (name, unbalanced_panel) in [
+        (
+            "att_gt_dr_panel_unbalanced_rc",
+            UnbalancedPanel::RepeatedCrossSection,
+        ),
+        (
+            "att_gt_dr_panel_unbalanced_per_cell",
+            UnbalancedPanel::PerCell,
+        ),
+    ] {
+        let base = dr_config(ComparisonGroup::NeverTreated, BasePeriod::Universal);
+        out.push((
+            name,
+            attgt_digest(&estimate_att_gt_dr_panel_with_influence(
+                &unbalanced_rows,
+                AttGtDrConfig {
+                    att_gt: AttGtConfig {
+                        unbalanced_panel,
+                        ..base.att_gt
+                    },
+                    ..base
+                },
+            )),
+        ));
+    }
+    let (panel_cell, rc_cell) = cell(&data.mpdta);
+    out.push((
+        "ipw_did_panel",
+        digest(&estimate_ipw_did_panel(&panel_cell, drdid)),
+    ));
+    out.push((
+        "or_did_panel",
+        digest(&estimate_or_did_panel(&panel_cell, drdid)),
+    ));
+    out.push((
+        "ipw_did_rc",
+        digest(&estimate_ipw_did_repeated_cross_section(&rc_cell, drdid)),
+    ));
+    out.push((
+        "or_did_rc",
+        digest(&estimate_or_did_repeated_cross_section(&rc_cell, drdid)),
+    ));
+    let rc1 = DrDidConfig {
+        legacy_repeated_cross_section: false,
+        ..drdid
+    };
+    out.push((
+        "drdid_rc1",
+        digest(&estimate_drdid_repeated_cross_section(&rc_cell, rc1)),
+    ));
+    let rc_rows = dr_rows(&data.mpdta, false, true);
+    let rc_config = dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying);
+    out.push((
+        "att_gt_dr_rc1",
+        attgt_digest(&estimate_att_gt_dr_with_influence(
+            &rc_rows,
+            AttGtDrConfig {
+                drdid: rc1,
+                ..rc_config
+            },
+        )),
+    ));
+    out.push(("att_gt_dr_panel_overlap", digest(&fitted.overlap)));
     out
 }
 
@@ -897,7 +1025,7 @@ const GOLDEN: &[(&str, u64)] = &[
     ("att_gt", 0x6772_d367_5b0d_fc97),
     ("att_gt_efficient", 0x201f_58e9_78ec_8f24),
     ("att_gt_dr_panel_universal_never", 0xcc70_fa0b_a55a_a346),
-    ("att_gt_dr_panel_varying_notyet", 0xa43a_8b6e_21a5_fcaf),
+    ("att_gt_dr_panel_varying_notyet", 0xc9c4_06f6_5f4b_9158),
     ("aggte_simple", 0xda55_7f26_63da_48c7),
     ("aggte_dynamic", 0x50a1_8f2f_2fe8_c5f5),
     ("aggte_dynamic_balanced", 0x4f35_2b2d_2722_852a),
@@ -925,17 +1053,18 @@ const GOLDEN: &[(&str, u64)] = &[
     ("simultaneous_bands", 0xc259_eb6c_1fd4_c655),
     ("clustered_standard_errors", 0x121c_5c2e_b2b8_f6f3),
     ("clustered_standard_error_from_index", 0xc62a_1ff2_fb3a_07c3),
-    ("att_gt_dr_rc", 0x8bc4_96e7_9ac1_89c3),
-    ("att_gt_dr_rc_efficient", 0x9b01_50e0_964a_97e5),
-    ("att_gt_ipw_rc", 0xf21a_dd79_195a_712f),
-    ("att_gt_or_rc", 0x2ee9_cccd_9fa4_11dd),
+    ("att_gt_dr_rc", 0x37ef_b315_808d_1e84),
+    ("att_gt_dr_rc_efficient", 0x4944_165b_8d88_f9b4),
+    ("att_gt_ipw_rc", 0x56f7_d6ad_d427_e4d3),
+    ("att_gt_or_rc", 0x6872_5381_68cf_3c11),
     ("att_gt_efficient_dr", 0x74b6_3e4f_4e86_2f51),
     ("aggregate_efficient_event_time", 0x0b45_6585_4366_2606),
     ("drdid_panel", 0x9a35_5276_7786_14a9),
+    ("drdid_panel_analytic", 0x3a8b_258f_748f_a7e0),
     ("drdid_improved_panel", 0x9731_c94f_9fdd_c514),
     ("drdid_rc", 0x5e65_35b6_1358_8f15),
     ("drdid_improved_rc", 0x922c_d1a0_99dc_b53a),
-    ("drdid_rc_efficient", 0xad58_a807_f94f_69fd),
+    ("drdid_rc_efficient", 0xfb43_938e_d94e_12eb),
     ("two_by_two", 0x3614_ceb4_ac37_7093),
     ("panel_nuisance", 0xd088_7cbd_b32a_d261),
     ("panel_propensity", 0x0392_1b18_f042_d985),
@@ -957,6 +1086,18 @@ const GOLDEN: &[(&str, u64)] = &[
     ("honest_joint_gaussian", 0xc186_649e_b5d3_2cfd),
     ("honest_workflow", 0x5f2a_2dea_d42c_dd95),
     ("honest_directional_gaussian", 0x5ac6_f9d4_2bfd_fd45),
+    ("att_gt_ipw_panel", 0x1bdd_03b5_e8bb_b591),
+    ("att_gt_or_panel", 0x896f_8af5_dfa0_267f),
+    ("att_gt_dr_panel_sample", 0x8d2e_1d4c_fe74_6ac0),
+    ("att_gt_dr_panel_unbalanced_rc", 0x4321_bd02_5d7b_9825),
+    ("att_gt_dr_panel_unbalanced_per_cell", 0x2677_bd8f_04da_c3f9),
+    ("ipw_did_panel", 0xb52f_6a05_a082_a566),
+    ("or_did_panel", 0x1a96_d211_3058_aac8),
+    ("ipw_did_rc", 0x05db_71a0_55cd_b5c6),
+    ("or_did_rc", 0xf733_191b_2d7f_a9fd),
+    ("drdid_rc1", 0x0473_5319_db10_7207),
+    ("att_gt_dr_rc1", 0x4789_4f8f_bb24_580a),
+    ("att_gt_dr_panel_overlap", 0xdb27_39b9_9043_05a9),
 ];
 
 #[test]

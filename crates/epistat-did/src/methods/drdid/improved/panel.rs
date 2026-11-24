@@ -172,10 +172,5 @@ fn validate_config(config: DrDidConfig) -> Result<(), DrDidError> {
             "tol must be finite and > 0".to_string(),
         ));
     }
-    if config.bootstrap_reps == 0 {
-        return Err(DrDidError::InvalidConfig(
-            "bootstrap_reps must be > 0".to_string(),
-        ));
-    }
     Ok(())
 }

@@ -236,6 +236,11 @@ fn validate_did_cc_config(config: DidCcConfig) -> Result<(), DidCcError> {
     if config.cross_fit_folds == 0 {
         return Err(DidCcError::InvalidCrossFitFolds);
     }
+    if config.bootstrap_confidence_intervals && config.drdid.bootstrap_reps == 0 {
+        return Err(DidCcError::InvalidConfig(
+            "bootstrap confidence intervals need drdid.bootstrap_reps > 0".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -1255,6 +1260,7 @@ mod tests {
                         tol: 1e-6,
                         ..crate::types::DrDidConfig::default()
                     },
+                    bootstrap_confidence_intervals: true,
                     cross_fit_folds: 4,
                     cross_fit_seed: 91,
                     ..DidCcConfig::default()
@@ -1302,6 +1308,7 @@ mod tests {
                     tol: 1e-6,
                     ..crate::types::DrDidConfig::default()
                 },
+                bootstrap_confidence_intervals: true,
                 cross_fit_folds: 4,
                 cross_fit_seed: 17,
                 ..DidCcConfig::default()

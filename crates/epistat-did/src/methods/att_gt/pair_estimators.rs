@@ -1,34 +1,38 @@
+//! Repeated cross-section `ATT(g,t)` with covariate adjustment,
+//! `did::att_gt(panel = FALSE)`.
+//!
+//! Each cell takes the rows of its two periods, the cohort's as treated and
+//! the comparison group's as controls, and fits a two-period repeated
+//! cross-section estimator. The input is first pre-processed as `did` does it
+//! (see [`crate::AttGtSample`]). Influence vectors have one entry per kept row,
+//! indexed by [`crate::AttGtSample::ids`], and a cell fitted on `n_cell` of the
+//! `n` rows has its vector scaled by `n / n_cell`, so that
+//! `sqrt(sum(psi^2)) / n` is its standard error.
+
 use std::collections::BTreeSet;
 
-use epistat_linalg::Mat;
-use itertools::izip;
-
-use crate::estimators::outcome::linear::LinearOutcome;
-use crate::estimators::outcome::model::OutcomeModel;
-use crate::estimators::propensity::common::logistic_scores;
-use crate::estimators::propensity::logistic::LogisticPS;
-use crate::estimators::propensity::types::{Config as PropensityConfig, PropensityEstimator};
-use crate::inference::{multiplier_bootstrap_ci, standard_error_from_influence};
-use crate::methods::drdid::moments::{
-    RepeatedMomentInputs, normalize_weights_to_n, repeated_att_moments,
+use crate::methods::drdid::ipw_or::{
+    estimate_ipw_did_repeated_cross_section, estimate_or_did_repeated_cross_section,
 };
 use crate::methods::drdid::repeated::estimate_drdid_repeated_cross_section;
+use crate::methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
 use crate::types::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtError, AttGtEstimate,
-    AttGtInfluenceOutput, BasePeriod, DidCell, DrDidConfig, DrDidRepeatedObservation, PrunedCell,
+    AttGtInfluenceOutput, DidCell, DrDidEstimate, DrDidRepeatedObservation, PrunedCell,
     SkippedCell, TimePeriod, TreatmentGroup,
 };
 use crate::util::usize_to_f64;
 
-#[derive(Debug, Clone)]
-pub struct PairEstimateWithInfluence {
-    pub estimate: AttGtEstimate,
-    pub influence_function: Vec<f64>,
-    /// Covariate columns the pair's own sample could not identify; see
-    /// [`DrDidEstimate::design_columns_dropped`](crate::types::DrDidEstimate).
-    pub design_columns_dropped: usize,
-}
+use super::preprocess::{Prepared, Route, cell_grid, preprocess};
 
+/// A two-period repeated cross-section estimator.
+type PairEstimator = fn(
+    &[DrDidRepeatedObservation],
+    crate::types::DrDidConfig,
+) -> Result<DrDidEstimate, crate::types::DrDidError>;
+
+/// `ATT(g,t)` through the traditional doubly robust repeated cross-section
+/// estimator, `DRDID::drdid_rc1`.
 pub fn estimate_att_gt_dr_with_influence(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,
@@ -37,26 +41,7 @@ pub fn estimate_att_gt_dr_with_influence(
         observations,
         config,
         "dr",
-        |pair_rows, group, time, method_cfg| {
-            let dr = estimate_drdid_repeated_cross_section(pair_rows, method_cfg.drdid)
-                .map_err(|_| ())?;
-            Ok(PairEstimateWithInfluence {
-                estimate: AttGtEstimate {
-                    group,
-                    time,
-                    event_time: time - group,
-                    att: dr.att,
-                    se: dr.se,
-                    ci_low: dr.ci_low,
-                    ci_high: dr.ci_high,
-                    treated_n: dr.treated_n,
-                    control_n: dr.control_n,
-                    total_weight: dr.total_weight,
-                },
-                influence_function: dr.influence_function,
-                design_columns_dropped: dr.design_columns_dropped,
-            })
-        },
+        estimate_drdid_repeated_cross_section,
     )
 }
 
@@ -64,27 +49,7 @@ pub fn estimate_att_gt_dr(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,
 ) -> Result<Vec<AttGtEstimate>, AttGtError> {
-    estimate_att_gt_pair(
-        observations,
-        config,
-        "dr",
-        |pair_rows, group, time, method_cfg| {
-            let dr = estimate_drdid_repeated_cross_section(pair_rows, method_cfg.drdid)
-                .map_err(|_| ())?;
-            Ok(AttGtEstimate {
-                group,
-                time,
-                event_time: time - group,
-                att: dr.att,
-                se: dr.se,
-                ci_low: dr.ci_low,
-                ci_high: dr.ci_high,
-                treated_n: dr.treated_n,
-                control_n: dr.control_n,
-                total_weight: dr.total_weight,
-            })
-        },
-    )
+    estimate_att_gt_dr_with_influence(observations, config).map(|out| out.estimates)
 }
 
 /// `ATT(g,t)` through the LOCALLY EFFICIENT repeated-cross-section estimator.
@@ -107,32 +72,11 @@ pub fn estimate_att_gt_dr_efficient_with_influence(
         observations,
         config,
         "dr_efficient",
-        |pair_rows, group, time, method_cfg| {
-            let dr = crate::methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient(
-                pair_rows,
-                method_cfg.drdid,
-            )
-            .map_err(|_| ())?;
-            Ok(PairEstimateWithInfluence {
-                estimate: AttGtEstimate {
-                    group,
-                    time,
-                    event_time: time - group,
-                    att: dr.att,
-                    se: dr.se,
-                    ci_low: dr.ci_low,
-                    ci_high: dr.ci_high,
-                    treated_n: dr.treated_n,
-                    control_n: dr.control_n,
-                    total_weight: dr.total_weight,
-                },
-                influence_function: dr.influence_function,
-                design_columns_dropped: dr.design_columns_dropped,
-            })
-        },
+        estimate_drdid_repeated_efficient,
     )
 }
 
+/// `ATT(g,t)` by outcome regression, `DRDID::reg_did_rc` in every cell.
 pub fn estimate_att_gt_or_with_influence(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,
@@ -141,12 +85,12 @@ pub fn estimate_att_gt_or_with_influence(
         observations,
         config,
         "or",
-        |pair_rows, group, time, method_cfg| {
-            estimate_pair_or(pair_rows, group, time, method_cfg.att_gt, method_cfg.drdid)
-        },
+        estimate_or_did_repeated_cross_section,
     )
 }
 
+/// `ATT(g,t)` by inverse probability weighting, `DRDID::std_ipw_did_rc` in
+/// every cell.
 pub fn estimate_att_gt_ipw_with_influence(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,
@@ -155,52 +99,103 @@ pub fn estimate_att_gt_ipw_with_influence(
         observations,
         config,
         "ipw",
-        |pair_rows, group, time, method_cfg| {
-            estimate_pair_ipw(pair_rows, group, time, method_cfg.att_gt, method_cfg.drdid)
-        },
+        estimate_ipw_did_repeated_cross_section,
     )
 }
 
-fn estimate_att_gt_pair_with_influence<F>(
+/// The design (intercept first), its column count and the arm of a cell's
+/// rows, for the overlap check.
+pub(super) fn overlap_design(rows: &[DrDidRepeatedObservation]) -> (Vec<f64>, usize, Vec<f64>) {
+    let feature_count = rows.first().map_or(1, |row| row.covariates.len() + 1);
+    let mut design = Vec::with_capacity(rows.len() * feature_count);
+    for row in rows {
+        design.push(1.0);
+        design.extend_from_slice(&row.covariates);
+    }
+    let treated = rows
+        .iter()
+        .map(|row| f64::from(u8::from(row.treated)))
+        .collect();
+    (design, feature_count, treated)
+}
+
+/// The rows of cell `(group, time)` against `baseline_time`, with their
+/// influence positions.
+fn build_prepared_pair_rows(
+    observations: &[AttGtDrObservation],
+    prepared: &Prepared,
+    group: i32,
+    time: i32,
+    baseline_time: i32,
+    config: AttGtConfig,
+    rows: &mut Vec<DrDidRepeatedObservation>,
+    positions: &mut Vec<usize>,
+) {
+    rows.clear();
+    positions.clear();
+    for (k, &i) in prepared.rows.iter().enumerate() {
+        let row = &observations[i];
+        if row.time != baseline_time && row.time != time {
+            continue;
+        }
+        let cohort = prepared.cohort[k];
+        let arm = if cohort == Some(group) {
+            TreatmentGroup::Treated
+        } else if super::is_control_for_pair(
+            cohort,
+            row.comparison_cohort,
+            group,
+            // The later of the two periods, as in `did`; see
+            // `panel_pairs::cell_role`.
+            time.max(baseline_time),
+            config.comparison_group,
+            config.anticipation_periods,
+        ) {
+            TreatmentGroup::Control
+        } else {
+            continue;
+        };
+        rows.push(DrDidRepeatedObservation {
+            weight: row.weight,
+            covariates: row.covariates.clone(),
+            ..DrDidRepeatedObservation::new(
+                DidCell::from_parts(arm, TimePeriod::from_bool(row.time == time)),
+                row.outcome,
+            )
+        });
+        positions.push(prepared.position[k]);
+    }
+}
+
+fn estimate_att_gt_pair_with_influence(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,
     method: &'static str,
-    mut pair_estimator: F,
-) -> Result<AttGtInfluenceOutput, AttGtError>
-where
-    F: FnMut(
-        &[DrDidRepeatedObservation],
-        i32,
-        i32,
-        AttGtDrConfig,
-    ) -> Result<PairEstimateWithInfluence, ()>,
-{
-    let (all_times, treated_groups) = prepare_att_gt_dr_inputs(observations, config)?;
+    pair_estimator: PairEstimator,
+) -> Result<AttGtInfluenceOutput, AttGtError> {
+    // `did` checks overlap for its doubly robust and weighting estimators.
+    let uses_propensity = method != "or";
+    let prepared = preprocess(observations, config.att_gt, Route::RepeatedCrossSection)?;
+    let full_n = prepared.position_count();
     let mut estimates = Vec::new();
     let mut influence_functions = Vec::new();
     let mut skipped = Vec::new();
     let mut pruned = Vec::new();
-    let full_n = observations.len();
+    let mut overlap = Vec::new();
     let mut pair_rows = Vec::new();
-    let mut pair_indices = Vec::new();
+    let mut pair_positions = Vec::new();
 
-    for group in treated_groups {
-        let universal_baseline_time = group - config.att_gt.anticipation_periods - 1;
-        for &time in &all_times {
-            let baseline_time =
-                baseline_time_for_pair(time, group, universal_baseline_time, config.att_gt);
-            if time == baseline_time {
-                continue;
-            }
-
-            build_pair_rows_into(
+    for &group in &prepared.sample.cohorts {
+        for (time, baseline_time) in cell_grid(&prepared.sample.periods, group, config.att_gt) {
+            build_prepared_pair_rows(
                 observations,
+                &prepared,
                 group,
                 time,
                 baseline_time,
                 config.att_gt,
                 &mut pair_rows,
-                &mut pair_indices,
+                &mut pair_positions,
             );
             if let Some(cell) = missing_pair_cell(&pair_rows) {
                 if config.att_gt.skip_incomplete_pairs {
@@ -220,45 +215,75 @@ where
                 });
             }
 
-            let pair = pair_estimator(&pair_rows, group, time, config).map_err(|()| {
+            let (design, feature_count, treated) = overlap_design(&pair_rows);
+            if let Err(cell) = super::panel_pairs::check_overlap(
+                &design,
+                feature_count,
+                &treated,
+                (group, time, baseline_time),
+                config,
+                uses_propensity,
+                &mut overlap,
+            ) {
+                if config.att_gt.skip_incomplete_pairs {
+                    skipped.push(SkippedCell {
+                        group,
+                        time,
+                        baseline_time,
+                        reason: cell,
+                    });
+                    continue;
+                }
+                return Err(AttGtError::MissingCell {
+                    group,
+                    time,
+                    baseline_time,
+                    cell,
+                });
+            }
+
+            let fit = pair_estimator(&pair_rows, config.drdid).map_err(|_| {
                 AttGtError::PairEstimationFailure {
                     method,
                     group,
                     time,
                 }
             })?;
-            if pair.influence_function.len() != pair_rows.len() {
+            if fit.influence_function.len() != pair_rows.len() {
                 return Err(AttGtError::InfluenceLengthMismatch {
                     method,
                     group,
                     time,
                     expected: pair_rows.len(),
-                    actual: pair.influence_function.len(),
+                    actual: fit.influence_function.len(),
                 });
             }
 
-            // Rescale from the cell's own sample to the full one, for the same
-            // reason as `panel_pairs::estimate_panel_cell`: psi is normalised so
-            // that sqrt(sum(psi^2)) / n_cell is the cell's standard error, and
-            // padding to full_n without rescaling shrinks each cell by a
-            // different factor. Any consumer that recomputes a standard error
-            // from these vectors, which is what a correlation-aware aggregation
-            // must do, would otherwise get a number that depends on how large the
-            // cell happened to be.
             let scale = usize_to_f64(full_n) / usize_to_f64(pair_rows.len());
             let mut aligned = vec![0.0; full_n];
-            for (local_idx, global_idx) in pair_indices.iter().enumerate() {
-                aligned[*global_idx] = pair.influence_function[local_idx] * scale;
+            for (local, &position) in pair_positions.iter().enumerate() {
+                aligned[position] = fit.influence_function[local] * scale;
             }
-            if pair.design_columns_dropped > 0 {
+            if fit.design_columns_dropped > 0 {
                 pruned.push(PrunedCell {
                     group,
                     time,
                     baseline_time,
-                    columns_dropped: pair.design_columns_dropped,
+                    columns_dropped: fit.design_columns_dropped,
                 });
             }
-            estimates.push(pair.estimate);
+            estimates.push(AttGtEstimate {
+                group,
+                time,
+                event_time: time - group,
+                att: fit.att,
+                se: fit.se,
+                ci_low: fit.ci_low,
+                ci_high: fit.ci_high,
+                treated_n: fit.treated_n,
+                control_n: fit.control_n,
+                total_weight: fit.total_weight,
+            });
             influence_functions.push(aligned);
         }
     }
@@ -271,68 +296,9 @@ where
         influence_functions,
         skipped,
         pruned,
+        sample: prepared.sample,
+        overlap,
     })
-}
-
-fn estimate_att_gt_pair<F>(
-    observations: &[AttGtDrObservation],
-    config: AttGtDrConfig,
-    method: &'static str,
-    mut pair_estimator: F,
-) -> Result<Vec<AttGtEstimate>, AttGtError>
-where
-    F: FnMut(&[DrDidRepeatedObservation], i32, i32, AttGtDrConfig) -> Result<AttGtEstimate, ()>,
-{
-    let (all_times, treated_groups) = prepare_att_gt_dr_inputs(observations, config)?;
-    let mut estimates = Vec::new();
-    let mut pair_rows = Vec::new();
-    let mut pair_indices = Vec::new();
-
-    for group in treated_groups {
-        let universal_baseline_time = group - config.att_gt.anticipation_periods - 1;
-        for &time in &all_times {
-            let baseline_time =
-                baseline_time_for_pair(time, group, universal_baseline_time, config.att_gt);
-            if time == baseline_time {
-                continue;
-            }
-
-            build_pair_rows_into(
-                observations,
-                group,
-                time,
-                baseline_time,
-                config.att_gt,
-                &mut pair_rows,
-                &mut pair_indices,
-            );
-            if let Some(cell) = missing_pair_cell(&pair_rows) {
-                if config.att_gt.skip_incomplete_pairs {
-                    continue;
-                }
-                return Err(AttGtError::MissingCell {
-                    group,
-                    time,
-                    baseline_time,
-                    cell,
-                });
-            }
-
-            let pair = pair_estimator(&pair_rows, group, time, config).map_err(|()| {
-                AttGtError::PairEstimationFailure {
-                    method,
-                    group,
-                    time,
-                }
-            })?;
-            estimates.push(pair);
-        }
-    }
-
-    if estimates.is_empty() {
-        return Err(AttGtError::NoEstimablePairs);
-    }
-    Ok(estimates)
 }
 
 pub fn prepare_att_gt_dr_inputs(
@@ -385,19 +351,6 @@ pub fn prepare_att_gt_dr_inputs(
         times.into_iter().collect::<Vec<_>>(),
         treated_groups.into_iter().collect::<Vec<_>>(),
     ))
-}
-
-pub(super) const fn baseline_time_for_pair(
-    time: i32,
-    group: i32,
-    universal_baseline_time: i32,
-    config: AttGtConfig,
-) -> i32 {
-    if time < group && matches!(config.base_period, BasePeriod::Varying) {
-        time - 1
-    } else {
-        universal_baseline_time
-    }
 }
 
 pub fn missing_pair_cell(rows: &[DrDidRepeatedObservation]) -> Option<&'static str> {
@@ -511,329 +464,4 @@ fn cell_counts(rows: &[DrDidRepeatedObservation]) -> (usize, usize, usize, usize
     }
 
     (treated_pre, treated_post, control_pre, control_post)
-}
-
-pub fn estimate_pair_or(
-    rows: &[DrDidRepeatedObservation],
-    group: i32,
-    time: i32,
-    config: AttGtConfig,
-    drdid_cfg: DrDidConfig,
-) -> Result<PairEstimateWithInfluence, ()> {
-    let feature_count = rows.first().map_or(1, |row| row.covariates.len() + 1);
-    let observation_count = rows.len();
-    let design_matrix = Mat::from_fn(
-        observation_count,
-        feature_count,
-        |row_index, column_index| {
-            if column_index == 0 {
-                1.0
-            } else {
-                rows[row_index].covariates[column_index - 1]
-            }
-        },
-    );
-    let outcomes = rows.iter().map(|row| row.outcome).collect::<Vec<_>>();
-
-    let (control_pre_idx, control_post_idx, treated_post_n) = split_or_cells(rows);
-    let nuisance_predictions = fit_or_nuisance_predictions(
-        rows,
-        &design_matrix,
-        &outcomes,
-        &control_pre_idx,
-        &control_post_idx,
-        drdid_cfg.ridge,
-    )?;
-
-    let sample_weights = rows.iter().map(|row| row.weight).collect::<Vec<_>>();
-    let normalized_weights = normalize_weights_to_n(&sample_weights).map_err(|_| ())?;
-    let (att, influence_function) = compute_or_att_and_influence(
-        rows,
-        &outcomes,
-        &nuisance_predictions.predicted_pre_outcomes,
-        &nuisance_predictions.predicted_post_outcomes,
-        &normalized_weights,
-    )?;
-
-    let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        att,
-        &influence_function,
-        config.confidence_level,
-        drdid_cfg.bootstrap(),
-    );
-
-    Ok(PairEstimateWithInfluence {
-        estimate: AttGtEstimate {
-            group,
-            time,
-            event_time: time - group,
-            att,
-            se,
-            ci_low,
-            ci_high,
-            treated_n: treated_post_n,
-            control_n: control_post_idx.len(),
-            total_weight: rows.iter().map(|row| row.weight).sum::<f64>(),
-        },
-        influence_function,
-        design_columns_dropped: 0,
-    })
-}
-
-struct OrNuisancePredictions {
-    predicted_pre_outcomes: Vec<f64>,
-    predicted_post_outcomes: Vec<f64>,
-}
-
-fn split_or_cells(rows: &[DrDidRepeatedObservation]) -> (Vec<usize>, Vec<usize>, usize) {
-    let control_pre_idx = rows
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, row)| (!row.treated && !row.post_period).then_some(idx))
-        .collect::<Vec<_>>();
-    let control_post_idx = rows
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, row)| (!row.treated && row.post_period).then_some(idx))
-        .collect::<Vec<_>>();
-    let treated_post_n = rows
-        .iter()
-        .filter(|row| row.treated && row.post_period)
-        .count();
-    (control_pre_idx, control_post_idx, treated_post_n)
-}
-
-fn fit_or_nuisance_predictions(
-    rows: &[DrDidRepeatedObservation],
-    design_matrix: &Mat<f64>,
-    outcomes: &[f64],
-    control_pre_idx: &[usize],
-    control_post_idx: &[usize],
-    ridge: f64,
-) -> Result<OrNuisancePredictions, ()> {
-    let (control_pre_design, control_pre_outcome, control_pre_weights) =
-        design_outcome_weights_subset(rows, design_matrix, outcomes, control_pre_idx);
-    let (control_post_design, control_post_outcome, control_post_weights) =
-        design_outcome_weights_subset(rows, design_matrix, outcomes, control_post_idx);
-
-    let model = LinearOutcome { ridge };
-    let control_pre_coefficients = model
-        .fit(
-            control_pre_design.as_ref(),
-            control_pre_outcome.as_ref(),
-            Some(&control_pre_weights),
-        )
-        .map_err(|_| ())?;
-    let control_post_coefficients = model
-        .fit(
-            control_post_design.as_ref(),
-            control_post_outcome.as_ref(),
-            Some(&control_post_weights),
-        )
-        .map_err(|_| ())?;
-
-    Ok(OrNuisancePredictions {
-        predicted_pre_outcomes: model
-            .predict(design_matrix.as_ref(), control_pre_coefficients.as_ref()),
-        predicted_post_outcomes: model
-            .predict(design_matrix.as_ref(), control_post_coefficients.as_ref()),
-    })
-}
-
-fn design_outcome_weights_subset(
-    rows: &[DrDidRepeatedObservation],
-    design_matrix: &Mat<f64>,
-    outcomes: &[f64],
-    indices: &[usize],
-) -> (Mat<f64>, Mat<f64>, Vec<f64>) {
-    let design_submatrix = Mat::from_fn(indices.len(), design_matrix.ncols(), |row, col| {
-        *design_matrix.get(indices[row], col)
-    });
-    let outcome_subvector = Mat::from_fn(indices.len(), 1, |row, _| outcomes[indices[row]]);
-    let sample_weights = indices
-        .iter()
-        .map(|idx| rows[*idx].weight)
-        .collect::<Vec<_>>();
-    (design_submatrix, outcome_subvector, sample_weights)
-}
-
-fn compute_or_att_and_influence(
-    rows: &[DrDidRepeatedObservation],
-    outcomes: &[f64],
-    predicted_pre_outcomes: &[f64],
-    predicted_post_outcomes: &[f64],
-    normalized_weights: &[f64],
-) -> Result<(f64, Vec<f64>), ()> {
-    let observation_count = rows.len();
-    let observation_count_f64 = usize_to_f64(observation_count);
-
-    let mut treated_post_weights = vec![0.0; observation_count];
-    let mut treated_pre_weights = vec![0.0; observation_count];
-    let mut treated_post_contributions = vec![0.0; observation_count];
-    let mut treated_pre_contributions = vec![0.0; observation_count];
-
-    for (
-        row,
-        outcome,
-        predicted_pre_outcome,
-        predicted_post_outcome,
-        normalized_weight,
-        treated_post_weight,
-        treated_pre_weight,
-        treated_post_contribution,
-        treated_pre_contribution,
-    ) in izip!(
-        rows.iter(),
-        outcomes.iter(),
-        predicted_pre_outcomes.iter(),
-        predicted_post_outcomes.iter(),
-        normalized_weights.iter(),
-        treated_post_weights.iter_mut(),
-        treated_pre_weights.iter_mut(),
-        treated_post_contributions.iter_mut(),
-        treated_pre_contributions.iter_mut()
-    ) {
-        if row.treated && row.post_period {
-            let residual = outcome - predicted_post_outcome;
-            *treated_post_weight = *normalized_weight;
-            *treated_post_contribution = *normalized_weight * residual;
-        } else if row.treated && !row.post_period {
-            let residual = outcome - predicted_pre_outcome;
-            *treated_pre_weight = *normalized_weight;
-            *treated_pre_contribution = *normalized_weight * residual;
-        }
-    }
-
-    let mean_treated_post_weight = treated_post_weights.iter().sum::<f64>() / observation_count_f64;
-    let mean_treated_pre_weight = treated_pre_weights.iter().sum::<f64>() / observation_count_f64;
-    if mean_treated_post_weight <= 0.0 || mean_treated_pre_weight <= 0.0 {
-        return Err(());
-    }
-
-    let treated_post_mean = (treated_post_contributions.iter().sum::<f64>()
-        / observation_count_f64)
-        / mean_treated_post_weight;
-    let treated_pre_mean = (treated_pre_contributions.iter().sum::<f64>() / observation_count_f64)
-        / mean_treated_pre_weight;
-    let att = treated_post_mean - treated_pre_mean;
-
-    let influence_function = izip!(
-        treated_post_weights.iter(),
-        treated_post_contributions.iter(),
-        treated_pre_weights.iter(),
-        treated_pre_contributions.iter()
-    )
-    .map(
-        |(
-            treated_post_weight,
-            treated_post_contribution,
-            treated_pre_weight,
-            treated_pre_contribution,
-        )| {
-            let treated_post_term = treated_post_mean
-                .mul_add(-treated_post_weight, *treated_post_contribution)
-                / mean_treated_post_weight;
-            let treated_pre_term = treated_pre_mean
-                .mul_add(-treated_pre_weight, *treated_pre_contribution)
-                / mean_treated_pre_weight;
-            treated_post_term - treated_pre_term
-        },
-    )
-    .collect::<Vec<_>>();
-
-    Ok((att, influence_function))
-}
-
-pub fn estimate_pair_ipw(
-    rows: &[DrDidRepeatedObservation],
-    group: i32,
-    time: i32,
-    config: AttGtConfig,
-    drdid_cfg: DrDidConfig,
-) -> Result<PairEstimateWithInfluence, ()> {
-    let observation_count = rows.len();
-    let feature_count = rows.first().map_or(1, |row| row.covariates.len() + 1);
-
-    let mut design_matrix_flat = Vec::with_capacity(observation_count * feature_count);
-    let mut treated_indicator = Vec::with_capacity(observation_count);
-    let mut post_indicator = Vec::with_capacity(observation_count);
-    let mut outcomes = Vec::with_capacity(observation_count);
-    let mut sample_weights = Vec::with_capacity(observation_count);
-
-    for row in rows {
-        treated_indicator.push(if row.treated { 1.0 } else { 0.0 });
-        post_indicator.push(if row.post_period { 1.0 } else { 0.0 });
-        outcomes.push(row.outcome);
-        sample_weights.push(row.weight);
-        design_matrix_flat.push(1.0);
-        design_matrix_flat.extend_from_slice(&row.covariates);
-    }
-
-    let normalized_weights = normalize_weights_to_n(&sample_weights).map_err(|_| ())?;
-    let design_matrix = Mat::from_fn(
-        observation_count,
-        feature_count,
-        |row_index, column_index| design_matrix_flat[row_index * feature_count + column_index],
-    );
-    let treated_target = Mat::from_fn(observation_count, 1, |row_index, _| {
-        treated_indicator[row_index]
-    });
-
-    let ps_cfg = PropensityConfig {
-        max_iter: u64::try_from(drdid_cfg.max_iter).map_err(|_| ())?,
-        tol: drdid_cfg.tol,
-        min_weight: drdid_cfg.propensity_clip,
-    };
-    let est = LogisticPS::new(ps_cfg);
-    let params = est
-        .fit(design_matrix.as_ref(), treated_target.as_ref())
-        .map_err(|_| ())?;
-    let propensity_scores = logistic_scores(design_matrix.as_ref(), params.beta.as_ref())
-        .into_iter()
-        .map(|value| value.clamp(drdid_cfg.propensity_clip, 1.0 - drdid_cfg.propensity_clip))
-        .collect::<Vec<_>>();
-
-    let moments = repeated_att_moments(RepeatedMomentInputs {
-        normalized_weights: &normalized_weights,
-        treated: &treated_indicator,
-        post_period: &post_indicator,
-        propensity: &propensity_scores,
-        signal: &outcomes,
-    })
-    .map_err(|_| ())?;
-
-    let se = standard_error_from_influence(&moments.influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        moments.att,
-        &moments.influence_function,
-        config.confidence_level,
-        drdid_cfg.bootstrap(),
-    );
-
-    let treated_n = rows
-        .iter()
-        .filter(|row| row.treated && row.post_period)
-        .count();
-    let control_n = rows
-        .iter()
-        .filter(|row| !row.treated && row.post_period)
-        .count();
-
-    Ok(PairEstimateWithInfluence {
-        estimate: AttGtEstimate {
-            group,
-            time,
-            event_time: time - group,
-            att: moments.att,
-            se,
-            ci_low,
-            ci_high,
-            treated_n,
-            control_n,
-            total_weight: rows.iter().map(|row| row.weight).sum::<f64>(),
-        },
-        influence_function: moments.influence_function,
-        design_columns_dropped: 0,
-    })
 }

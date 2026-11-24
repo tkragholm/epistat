@@ -118,18 +118,23 @@ fn parity_did_attgt_mpdta() {
     let config = AttGtConfig::default();
     let results = estimate_att_gt(&observations, config).expect("estimate");
 
+    // Every cell R reports must be among ours and agree; a cell of ours that
+    // R does not report fails as well.
+    let mut matched = 0;
     for rust_res in &results {
-        let ref_idx = reference
+        let idx = reference
             .group
             .iter()
             .zip(reference.t.iter())
-            .position(|(&g, &t)| g == rust_res.group && t == rust_res.time);
-
-        if let Some(idx) = ref_idx {
-            assert!((rust_res.att - reference.att[idx]).abs() < 1e-8);
-            assert!((rust_res.se - reference.se[idx]).abs() < 1e-8);
-        }
+            .position(|(&g, &t)| g == rust_res.group && t == rust_res.time)
+            .unwrap_or_else(|| {
+                panic!("cell ({}, {}) is not in R's", rust_res.group, rust_res.time)
+            });
+        assert!((rust_res.att - reference.att[idx]).abs() < 1e-8);
+        assert!((rust_res.se - reference.se[idx]).abs() < 1e-8);
+        matched += 1;
     }
+    assert_eq!(matched, reference.group.len(), "R's cells without a match");
 }
 
 #[derive(Deserialize)]

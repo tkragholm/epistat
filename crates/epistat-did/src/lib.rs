@@ -6,11 +6,16 @@
 //! # The estimators
 //!
 //! - ATT(g,t), the average effect at time `t` on the cohort first treated at
-//!   `g` \[1\]: [`estimate_att_gt`] without covariates, and
-//!   [`estimate_att_gt_or_with_influence`], [`estimate_att_gt_ipw_with_influence`]
-//!   and [`estimate_att_gt_dr_with_influence`] by outcome regression, inverse
-//!   probability weighting and the doubly robust estimator, on repeated
-//!   cross-sections; [`estimate_att_gt_dr_panel_with_influence`] on a panel.
+//!   `g` \[1\]: [`estimate_att_gt`] without covariates;
+//!   [`estimate_att_gt_dr_panel_with_influence`],
+//!   [`estimate_att_gt_ipw_panel_with_influence`] and
+//!   [`estimate_att_gt_or_panel_with_influence`] by the doubly robust
+//!   estimator, inverse probability weighting and outcome regression on a
+//!   panel; [`estimate_att_gt_dr_efficient_with_influence`],
+//!   [`estimate_att_gt_ipw_with_influence`] and
+//!   [`estimate_att_gt_or_with_influence`] on repeated cross-sections, with
+//!   [`estimate_att_gt_dr_with_influence`] for the traditional doubly robust
+//!   one. These apply `did::att_gt`'s pre-processing first ([`AttGtSample`]).
 //! - Their aggregations as `aggte` of R's `did`: [`aggregate_att_gt`] by
 //!   event time, cohort, calendar time or overall, with the influence of the
 //!   estimated cohort shares, with the multiplier bootstrap and uniform bands
@@ -18,7 +23,9 @@
 //!   [`att_gt_mboot_bands`] for simultaneous bands over the cells.
 //!   [`pretrend_wald_test`] is the Wald pre-test of `att_gt`.
 //! - The two-period estimators of `DRDID` \[2\]: [`estimate_drdid_panel`],
-//!   [`estimate_drdid_repeated_cross_section`], the improved estimators
+//!   [`estimate_drdid_repeated_cross_section`], [`estimate_ipw_did_panel`],
+//!   [`estimate_or_did_panel`], [`estimate_ipw_did_repeated_cross_section`],
+//!   [`estimate_or_did_repeated_cross_section`], the improved estimators
 //!   [`estimate_drdid_improved_panel`] and
 //!   [`estimate_drdid_improved_repeated_cross_section`], and the locally
 //!   efficient [`estimate_drdid_repeated_efficient`].
@@ -36,9 +43,9 @@
 //! # The estimate
 //!
 //! For the cohort `g`, a comparison group `C` (never treated, or not yet
-//! treated by `t`) and the base period `b` (`g - 1 - anticipation` for a
-//! universal base, `t - 1` before treatment for a varying one), the doubly
-//! robust ATT(g,t) is
+//! treated by `t`) and the base period `b` (the last period before
+//! `g - anticipation` for a universal base, and before treatment the period
+//! before `t` for a varying one), the doubly robust ATT(g,t) is
 //!
 //! ```text
 //! ATT(g,t) = E[ (w_g - w_C(X)) (Y_t - Y_b - m_C(X)) ],
@@ -68,9 +75,9 @@
 //!
 //! Each estimator returns the influence function `psi_i` of every unit, and
 //! the standard error is `sqrt(mean((psi_i - mean(psi))^2) / n)`. The intervals
-//! of the doubly robust estimators are percentile intervals of a Rademacher
-//! multiplier bootstrap, and the intervals of the improved two-period
-//! estimators are `att +- 1.96 se`. In [`aggregate_att_gt`],
+//! are `att +- z se`, or percentile intervals of a Rademacher multiplier
+//! bootstrap when [`DrDidConfig::bootstrap_reps`] is positive; those of the
+//! improved two-period estimators are `att +- 1.96 se`. In [`aggregate_att_gt`],
 //! [`att_gt_clustered_standard_errors`] and the bands, clusters replace the
 //! units by the sums of the centred `psi_i` within each cluster, divided by
 //! `n`, without the factor `G / (G - 1)`, as in `did`; [`did_standard_error`] and
@@ -197,9 +204,10 @@ pub use methods::att_gt::{
     aggregate_att_gt_overall, att_gt_clustered_standard_errors, att_gt_mboot_bands,
     estimate_att_gt, estimate_att_gt_dr, estimate_att_gt_dr_efficient_with_influence,
     estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence,
-    estimate_att_gt_dr_with_influence, estimate_att_gt_ipw, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or, estimate_att_gt_or_with_influence, pretrend_wald_test, row_panel,
-    unit_panel,
+    estimate_att_gt_dr_with_influence, estimate_att_gt_ipw,
+    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
+    estimate_att_gt_or, estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
+    pretrend_wald_test, row_panel, unit_panel,
 };
 #[expect(
     deprecated,
@@ -217,6 +225,10 @@ pub use methods::did_cc::{
 };
 pub use methods::drdid::improved::{
     estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
+};
+pub use methods::drdid::ipw_or::{
+    estimate_ipw_did_panel, estimate_ipw_did_panel_flat, estimate_ipw_did_repeated_cross_section,
+    estimate_or_did_panel, estimate_or_did_panel_flat, estimate_or_did_repeated_cross_section,
 };
 pub use methods::drdid::panel::{
     PanelFlatInput, PanelNuisanceFit, PanelPropensityCoefficients, estimate_drdid_panel,

@@ -39,10 +39,7 @@ use epistat_linalg::weighted_gram;
 use crate::estimators::common::linalg::solve_spd_system_multi_rhs;
 use crate::estimators::outcome::linear::LinearOutcome;
 use crate::estimators::outcome::model::OutcomeModel;
-use crate::estimators::propensity::common::logistic_scores;
-use crate::estimators::propensity::logistic::LogisticPS;
-use crate::estimators::propensity::types::{Config as PropensityConfig, PropensityEstimator};
-use crate::inference::{multiplier_bootstrap_ci, standard_error_from_influence};
+use crate::inference::standard_error_from_influence;
 use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeatedObservation};
 use crate::util::usize_to_f64;
 
@@ -198,21 +195,26 @@ pub fn estimate_drdid_repeated_efficient(
     let post = &prepared.post_indicator;
     let outcome = &prepared.outcome;
 
-    // Propensity score, clipped as the reference clips it.
-    let propensity_config = PropensityConfig {
-        max_iter: u64::try_from(config.max_iter)
-            .map_err(|_| DrDidError::InvalidConfig("max_iter exceeds u64".to_string()))?,
-        tol: config.tol,
-        min_weight: config.propensity_clip,
-    };
-    let target = Mat::from_fn(n, 1, |row, _| treated[row]);
-    let fitted_ps = LogisticPS::new(propensity_config)
-        .fit(design.as_ref(), target.as_ref())
-        .map_err(|err| DrDidError::InvalidConfig(err.to_string()))?;
-    let propensity = logistic_scores(design.as_ref(), fitted_ps.beta.as_ref())
-        .into_iter()
-        .map(|score| score.clamp(config.propensity_clip, 1.0 - 1e-6))
-        .collect::<Vec<f64>>();
+    // Propensity score, fitted with the sampling weights and capped at
+    // `1 - propensity_clip`, as the reference caps it at `1 - 1e-6`.
+    let fitted_ps = super::panel::fit_logistic_irls(
+        super::panel::LogisticIrlsInputs {
+            design_matrix_flat: &prepared.design_matrix_flat,
+            feature_count: k,
+            treated_indicator: treated,
+            normalized_weights: &weights,
+        },
+        super::panel::LogisticIrlsSettings {
+            max_iter: config.max_iter,
+            tol: config.tol,
+        },
+    )?;
+    let propensity = super::panel::predict_logistic_scores(
+        &prepared.design_matrix_flat,
+        k,
+        &fitted_ps.coefficients,
+        config.propensity_clip,
+    );
 
     // Asymmetric trimming: treated rows are always kept.
     let trim = (0..n)
@@ -433,12 +435,8 @@ pub fn estimate_drdid_repeated_efficient(
         .collect::<Vec<f64>>();
 
     let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        att,
-        &influence_function,
-        config.inference(),
-        config.bootstrap(),
-    );
+    let (ci_low, ci_high) =
+        crate::methods::drdid::confidence_interval(att, se, &influence_function, config);
 
     Ok(DrDidEstimate {
         att,
