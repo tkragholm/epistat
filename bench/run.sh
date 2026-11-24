@@ -97,6 +97,8 @@ aipw_km:epistat-survival:tier2_survival:surv:10000000:tier2/survival.R:120
 aipw_cox:epistat-survival:tier2_survival:surv:10000000:tier2/survival.R:120
 trial_msm:epistat-survival:tier2_survival:trial:1000000:tier2/survival.R:120
 ccw:epistat-survival:tier2_survival:ccw:1000000:-:120
+trial_msm_rows:epistat-survival:tier2_survival:trial:10000000:-:1200
+ccw_rows:epistat-survival:tier2_survival:ccw:10000000:-:1200
 sccs:epistat-survival:tier2_designs:none:3000000:-:300
 crossover:epistat-survival:tier2_designs:none:10000000:-:300
 af_cox:epistat-survival:tier2_designs:none:1000000:-:300

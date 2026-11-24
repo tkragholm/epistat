@@ -23,6 +23,12 @@
 //!   timing, which `TrialEmulation` includes in its time.
 //! * `ccw` (data `ccw`, `N` persons with ten periods): the clones, the weights of
 //!   the artificial censoring and the weighted outcome model.
+//! * `trial_msm_rows`, `ccw_rows`: the same with the outcome model fitted by
+//!   `fit_msm_trials` and `fit_msm_clones`, which form the rows of the trials
+//!   or clones block by block instead of holding them. The data are read into
+//!   columns of their final size and the table is dropped before the timing,
+//!   so that the peak memory is that of the method. The numbers are those of
+//!   `trial_msm` and `ccw` bit for bit.
 
 #[path = "../../../bench/tier1/common.rs"]
 mod common;
@@ -35,9 +41,11 @@ use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, DeviationModel, Strategy, clone_censor, deviation_weights,
+    fit_msm_clones,
 };
 use epistat_survival::weighting::trials::{
-    MsmInput, PersonPeriod, TrialRows, WeightModel, fit_msm, switch_weights, trial_weights,
+    MsmInput, PersonPeriod, TrialRows, TrialSpans, WeightModel, fit_msm, fit_msm_trials,
+    switch_weights, trial_weights,
 };
 
 const SEED: u64 = 20_261_207;
@@ -286,6 +294,125 @@ fn main() {
                     outcome: &y,
                     weight: &wt,
                     person: &person,
+                })
+                .expect("msm")
+            });
+            lines.push("rows", rows as f64);
+            lines.push_all("coef", &msm.coefficients);
+            lines.push_all("se", &msm.std_err());
+            times
+        }
+        "trial_msm_rows" => {
+            let (id, period, a, am1, l, x1, outcome) = {
+                let t = Table::read_sized(&common::data_path("trial", n));
+                (
+                    t.ints::<u32>("id"),
+                    t.ints::<i64>("period"),
+                    t.flags("a"),
+                    t.flags("am1"),
+                    t.col("l").to_vec(),
+                    t.col("x1").to_vec(),
+                    t.flags("outcome"),
+                )
+            };
+            let rows = id.len();
+            let den = Mat::from_fn(rows, 3, |i, j| [1.0, l[i], x1[i]][j]);
+            let num = Mat::from_fn(rows, 2, |i, j| [1.0, x1[i]][j]);
+            drop(l);
+            // Every period starts a trial that lasts until the person's last row.
+            let mut end = vec![0; rows];
+            let mut first = 0;
+            while first < rows {
+                let mut last = first;
+                while last + 1 < rows && id[last + 1] == id[first] {
+                    last += 1;
+                }
+                end[first..=last].fill(last + 1);
+                first = last + 1;
+            }
+            let start: Vec<usize> = (0..rows).collect();
+            let m: usize = end.iter().zip(&start).map(|(e, s)| e - s).sum();
+            let data = PersonPeriod {
+                id: &id,
+                period: &period,
+                treatment: &a,
+                previous: &am1,
+            };
+            let model = WeightModel {
+                numerator: num.as_ref(),
+                denominator: den.as_ref(),
+            };
+            let (times, msm) = common::timed(common::reps(), || {
+                let w = switch_weights(&data, &model).expect("switch weights");
+                fit_msm_trials(
+                    &data,
+                    &w.weight,
+                    &TrialSpans {
+                        start: &start,
+                        end: &end,
+                    },
+                    &outcome,
+                    5,
+                    &|s, r, out| {
+                        let f = (period[r] - period[s]) as f64;
+                        out.copy_from_slice(&[1.0, f64::from(u8::from(a[s])), f, f * f, x1[s]]);
+                    },
+                )
+                .expect("msm")
+            });
+            lines.push("rows", m as f64);
+            lines.push_all("coef", &msm.coefficients);
+            lines.push_all("se", &msm.std_err());
+            times
+        }
+        "ccw_rows" => {
+            let (id, period, a, outcome, l, l0) = {
+                let t = Table::read_sized(&common::data_path("ccw", n));
+                (
+                    t.ints::<u32>("id"),
+                    t.ints::<u32>("period"),
+                    t.flags("a"),
+                    t.flags("outcome"),
+                    t.col("l").to_vec(),
+                    t.col("l0").to_vec(),
+                )
+            };
+            let rows = id.len();
+            let strategies = [
+                Strategy::InitiateWithin {
+                    grace: 3,
+                    adherence: Adherence::Continuous,
+                },
+                Strategy::NeverInitiate { until: None },
+            ];
+            let (times, msm) = common::timed(common::reps(), || {
+                let c = clone_censor(
+                    &CloneInput {
+                        id: &id,
+                        period: &period,
+                        treatment: &a,
+                        outcome: &outcome,
+                    },
+                    &strategies,
+                )
+                .expect("clones");
+                let m = c.len();
+                let den = Mat::from_fn(m, 5, |i, j| {
+                    let s = c.source[i];
+                    let p = f64::from(period[s]);
+                    [1.0, l[s], l0[s], p, p * p][j]
+                });
+                let num = Mat::from_fn(m, 2, |i, j| [1.0, f64::from(period[c.source[i]])][j]);
+                let model = DeviationModel {
+                    denominator: den.as_ref(),
+                    numerator: Some(num.as_ref()),
+                };
+                let w = deviation_weights(&c, &[model, model], None).expect("weights");
+                drop((den, num));
+                fit_msm_clones(&c, &w.weight, 5, &|i, out| {
+                    let p = f64::from(period[c.source[i]]);
+                    let arm = c.arm[i] as f64;
+                    out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
                 })
                 .expect("msm")
             });

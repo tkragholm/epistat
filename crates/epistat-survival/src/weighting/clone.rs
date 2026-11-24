@@ -70,7 +70,9 @@
 //! cumulative incidence of each strategy comes from
 //! [`trials::cumulative_incidence`](super::trials::cumulative_incidence). The
 //! two clones of a person are two rows at each period, so the covariance is
-//! clustered by person. It treats the weights as known. [`bootstrap_persons`]
+//! clustered by person. It treats the weights as known. [`fit_msm_clones`] fits
+//! the same model without building its design, from the clones and a function
+//! that forms the design of a clone row. [`bootstrap_persons`]
 //! gives the person bootstrap that refits everything, which is the variance to
 //! report.
 //!
@@ -86,10 +88,12 @@
 //!    methods: trial emulation in the presence of immortal-time bias. Int J
 //!    Epidemiol 2020;49(5):1719-29.
 
+use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
-use epistat_linalg::{Mat, MatRef};
+use epistat_linalg::{MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
+use super::trials::Subset;
 use crate::error::{Error, Result};
 
 /// Whether a person who has started treatment must stay on it.
@@ -299,10 +303,6 @@ pub struct DeviationModel<'a> {
     pub numerator: Option<MatRef<'a, f64>>,
 }
 
-fn subset(x: MatRef<'_, f64>, rows: &[usize]) -> Mat<f64> {
-    Mat::from_fn(rows.len(), x.ncols(), |i, j| x[(rows[i], j)])
-}
-
 fn fit_deviation(
     x: MatRef<'_, f64>,
     d: &[bool],
@@ -316,11 +316,13 @@ fn fit_deviation(
             "{what}: the rows at risk need both deviations and rows that are not"
         )));
     }
-    let xs = subset(x, rows);
-    let ys: Vec<f64> = rows.iter().map(|&r| f64::from(u8::from(d[r]))).collect();
-    let ws: Option<Vec<f64>> = case.map(|c| rows.iter().map(|&r| c[r]).collect());
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(xs.as_ref(), &ys, ws.as_deref(), None, None)
+        .fit_rows(&Subset {
+            x,
+            y: d,
+            rows,
+            weight: case,
+        })
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
     if !fit.converged {
         return Err(Error::input(format!("{what}: no convergence")));
@@ -453,6 +455,141 @@ pub fn deviation_weights(
         probability: p_d,
         coefficients,
     })
+}
+
+/// [`trials::fit_msm`](super::trials::fit_msm) on the clone rows that are not a
+/// deviation without building their design: the rows in order, with the design
+/// that `design(row, out)` writes into `out` for clone row `row`, the outcome
+/// of the row, its `weight` (one per clone row, such as
+/// [`DeviationWeights::weight`]) and its person as its cluster.
+///
+/// The result has the bits of building the design, outcomes, weights and
+/// persons of those rows and fitting them with `fit_msm`, and the memory is
+/// that of the clones: the rows are formed block by block as the fit needs
+/// them, by [`Glm::fit_rows`](epistat_glm::Glm::fit_rows). See
+/// [`epistat_glm::rows`].
+///
+/// # Errors
+///
+/// [`Error::Input`] for a `weight` of another length than the clone rows,
+/// clone rows whose persons are not in order, `columns` of 0, and the errors
+/// of `fit_msm`.
+pub fn fit_msm_clones(
+    cloned: &Cloned,
+    weight: &[f64],
+    columns: usize,
+    design: &(dyn Fn(usize, &mut [f64]) + Sync),
+) -> Result<super::trials::Msm> {
+    let n = cloned.len();
+    if weight.len() != n {
+        return Err(Error::input(format!(
+            "weight: {} values for {n} clone rows",
+            weight.len()
+        )));
+    }
+    for (name, len) in [
+        ("arm", cloned.arm.len()),
+        ("person", cloned.person.len()),
+        ("deviation", cloned.deviation.len()),
+        ("outcome", cloned.outcome.len()),
+    ] {
+        if len != n {
+            return Err(Error::input(format!(
+                "{name}: {len} values for {n} clone rows"
+            )));
+        }
+    }
+    let mut blocks = Vec::new();
+    let (mut kept, mut clusters) = (0_usize, 0_usize);
+    let mut last: Option<u32> = None;
+    for r in 0..n {
+        if cloned.deviation[r] {
+            continue;
+        }
+        let person = cloned.person[r];
+        if let Some(l) = last
+            && person < l
+        {
+            return Err(Error::input(format!(
+                "person: clone row {r} is before the rows of an earlier person"
+            )));
+        }
+        if last != Some(person) {
+            clusters += 1;
+            last = Some(person);
+        }
+        if kept % ROW_BLOCK == 0 {
+            blocks.push((r, clusters - 1));
+        }
+        kept += 1;
+    }
+    let rows = CloneRows {
+        cloned,
+        weight,
+        columns,
+        design,
+        blocks,
+        rows: kept,
+        clusters,
+    };
+    super::trials::fit_msm_rows(&rows, columns)
+}
+
+/// The clone rows that are not a deviation, formed from the clones.
+struct CloneRows<'a> {
+    cloned: &'a Cloned,
+    weight: &'a [f64],
+    columns: usize,
+    design: &'a (dyn Fn(usize, &mut [f64]) + Sync),
+    /// The clone row and the cluster of the first row of each block.
+    blocks: Vec<(usize, usize)>,
+    rows: usize,
+    clusters: usize,
+}
+
+impl Rows for CloneRows<'_> {
+    fn n_rows(&self) -> usize {
+        self.rows
+    }
+
+    fn n_columns(&self) -> usize {
+        self.columns
+    }
+
+    fn fill(&self, start: usize, mut block: Block<'_>) {
+        assert_eq!(
+            start % ROW_BLOCK,
+            0,
+            "a block starts at a multiple of ROW_BLOCK"
+        );
+        let (mut r, mut cluster) = self.blocks[start / ROW_BLOCK];
+        let c = self.cloned;
+        let mut values = vec![0.0; self.columns];
+        let mut person = c.person[r];
+        for i in 0..block.y.len() {
+            while c.deviation[r] {
+                r += 1;
+            }
+            if c.person[r] != person {
+                cluster += 1;
+                person = c.person[r];
+            }
+            (self.design)(r, &mut values);
+            for (j, &v) in values.iter().enumerate() {
+                block.x[(i, j)] = v;
+            }
+            block.y[i] = f64::from(u8::from(c.outcome[r]));
+            block.weight[i] = self.weight[r];
+            block.cluster[i] = cluster;
+            r += 1;
+        }
+    }
+}
+
+impl super::trials::Clustered for CloneRows<'_> {
+    fn n_clusters(&self) -> usize {
+        self.clusters
+    }
 }
 
 /// Apply `analysis` to resamples of the persons: for each seed the number of

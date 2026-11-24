@@ -57,6 +57,16 @@
 //! `TrialEmulation` gives limits by drawing coefficients from the same
 //! covariance.
 //!
+//! # Memory
+//!
+//! The stacked trials have about `T (T + 1) / 2` rows for each person followed
+//! for `T` periods, so a design built for them is several times the data.
+//! [`fit_msm_trials`] takes the trials as spans of the rows of the data and
+//! forms their rows block by block while it fits, with the bits of
+//! [`fit_msm`] on the built rows, so that the memory is that of the
+//! person-period data and its weights. The models of the weights read their
+//! rows from the design given, without a copy of the rows of each fit.
+//!
 //! # What the variance leaves out
 //!
 //! The covariance of the outcome model treats the weights as known, as
@@ -79,9 +89,11 @@
 //!    2020;95(1):1-36.
 
 use epistat_glm::robust::{SandwichType, robust_covariance};
+use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Clusters;
-use epistat_linalg::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
+use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 
@@ -163,10 +175,6 @@ pub struct RowWeights {
     pub denominator_coefficients: Vec<Vec<f64>>,
 }
 
-fn subset(x: MatRef<'_, f64>, rows: &[usize]) -> Mat<f64> {
-    Mat::from_fn(rows.len(), x.ncols(), |i, j| x[(rows[i], j)])
-}
-
 fn check_design(name: &str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
     if x.nrows() != n {
         return Err(Error::input(format!(
@@ -197,10 +205,14 @@ fn fit_logistic(
             "{what}: the rows of the fit need both values of the response"
         )));
     }
-    let xs = subset(x, rows);
-    let ys: Vec<f64> = rows.iter().map(|&r| f64::from(u8::from(y[r]))).collect();
+    let subset = Subset {
+        x,
+        y,
+        rows,
+        weight: None,
+    };
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(xs.as_ref(), &ys, None, None, None)
+        .fit_rows(&subset)
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
     if !fit.converged {
         return Err(Error::input(format!("{what}: no convergence")));
@@ -210,7 +222,38 @@ fn fit_logistic(
         coefficients
             .push(c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?);
     }
-    Ok((coefficients, fit.fitted))
+    Ok((coefficients, fit.fitted(&subset)))
+}
+
+/// The rows `rows` of a design and a binary response, with prior weights of
+/// the rows or 1, as the rows of a fit, in place of a copy of them.
+pub(crate) struct Subset<'a> {
+    pub(crate) x: MatRef<'a, f64>,
+    pub(crate) y: &'a [bool],
+    pub(crate) rows: &'a [usize],
+    pub(crate) weight: Option<&'a [f64]>,
+}
+
+impl Rows for Subset<'_> {
+    fn n_rows(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn n_columns(&self) -> usize {
+        self.x.ncols()
+    }
+
+    fn fill(&self, start: usize, mut block: Block<'_>) {
+        for k in 0..block.y.len() {
+            let r = self.rows[start + k];
+            for j in 0..self.x.ncols() {
+                block.x[(k, j)] = self.x[(r, j)];
+            }
+            block.y[k] = f64::from(u8::from(self.y[r]));
+            block.weight[k] = self.weight.map_or(1.0, |w| w[r]);
+            block.cluster[k] = 0;
+        }
+    }
 }
 
 /// The weights `p_n / p_d` of the value observed (`observed = true`) or of the
@@ -506,6 +549,284 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         n_rows: n,
         n_persons: clusters.count(),
     })
+}
+
+/// The trials of a stacked analysis as spans of the rows of the person-period
+/// data: trial `k` starts at row `start[k]` and follows its person through the
+/// rows before `end[k]`.
+///
+/// The trials are ordered by their first row, so that the rows of a person are
+/// next to each other in the stack. A trial that runs to the last row of its
+/// person and one censored at a deviation are both a span.
+#[derive(Debug, Clone, Copy)]
+pub struct TrialSpans<'a> {
+    /// The row of the data at which each trial starts.
+    pub start: &'a [usize],
+    /// The row after the last row of each trial.
+    pub end: &'a [usize],
+}
+
+/// [`fit_msm`] on the stacked trials of `trials` without building them: the
+/// rows of the trials in order, trial by trial and in each from its first row,
+/// with the design that `design(start, row, out)` writes into `out` for the
+/// trial that starts at row `start` of the data and its row `row`, the outcome
+/// `outcome[row]`, the weight [`trial_weights`] gives the row and the person of
+/// the row as its cluster.
+///
+/// The result has the bits of building the rows of the trials with
+/// [`TrialRows`], weighting them with [`trial_weights`] and fitting them with
+/// [`fit_msm`], and the memory is that of the data: the rows of the trials are
+/// formed block by block as the fit needs them, by
+/// [`Glm::fit_rows`](epistat_glm::Glm::fit_rows). The time is that of the
+/// rows of the trials formed about `2 i + p^2` times for `i` iterations and `p`
+/// columns, which the fit of a built design does not spend. See
+/// [`epistat_glm::rows`].
+///
+/// # Errors
+///
+/// [`Error::Input`] for rows that are not ordered by person and period, a
+/// `row_weight` or `outcome` of another length than the rows, spans of
+/// different lengths, a trial that is empty, ends beyond the data or leaves
+/// its person, trials not ordered by their first row, `columns` of 0, and the
+/// errors of [`fit_msm`].
+pub fn fit_msm_trials(
+    data: &PersonPeriod<'_>,
+    row_weight: &[f64],
+    trials: &TrialSpans<'_>,
+    outcome: &[bool],
+    columns: usize,
+    design: &(dyn Fn(usize, usize, &mut [f64]) + Sync),
+) -> Result<Msm> {
+    let n = data.check()?;
+    if row_weight.len() != n {
+        return Err(Error::input(format!(
+            "row_weight: {} values for {n} rows",
+            row_weight.len()
+        )));
+    }
+    if outcome.len() != n {
+        return Err(Error::input(format!(
+            "outcome: {} values for {n} rows",
+            outcome.len()
+        )));
+    }
+    if trials.start.len() != trials.end.len() {
+        return Err(Error::input("trial spans: columns of different lengths"));
+    }
+    for (k, (&a, &b)) in trials.start.iter().zip(trials.end).enumerate() {
+        if !(a < b && b <= n) {
+            return Err(Error::input(format!(
+                "trial {k}: the rows {a} to {b} are not a span of the {n} rows"
+            )));
+        }
+        if data.id[a] != data.id[b - 1] {
+            return Err(Error::input(format!(
+                "trial {k}: the rows {a} to {b} have more than one person"
+            )));
+        }
+        if k > 0 && a < trials.start[k - 1] {
+            return Err(Error::input(format!(
+                "trial {k}: the trials must be ordered by their first row"
+            )));
+        }
+    }
+    let mut cumulative = vec![0.0; n];
+    for i in 0..n {
+        cumulative[i] = if i > 0 && data.id[i] == data.id[i - 1] {
+            cumulative[i - 1] * row_weight[i]
+        } else {
+            row_weight[i]
+        };
+    }
+    let stack = Stack::new(
+        trials.start.len(),
+        |k| trials.end[k] - trials.start[k],
+        |k| data.id[trials.start[k]],
+    );
+    let rows = TrialStack {
+        trials,
+        outcome,
+        cumulative,
+        person: data.id,
+        columns,
+        design,
+        stack,
+    };
+    fit_msm_rows(&rows, columns)
+}
+
+/// Where each block of rows of a stack of spans starts: the span, the row in
+/// it and the cluster of that row, with the number of rows and of clusters.
+struct Stack {
+    blocks: Vec<(usize, usize, usize)>,
+    rows: usize,
+    clusters: usize,
+}
+
+impl Stack {
+    /// The stack of `spans` spans of `length(k)` rows each, with the clusters
+    /// numbered in the order in which the `label` of a span first appears, the
+    /// labels of a cluster being next to each other.
+    fn new(spans: usize, length: impl Fn(usize) -> usize, label: impl Fn(usize) -> u32) -> Self {
+        let mut blocks = Vec::new();
+        let (mut rows, mut clusters) = (0_usize, 0_usize);
+        let mut next = 0_usize;
+        let mut last: Option<u32> = None;
+        for k in 0..spans {
+            let len = length(k);
+            if len == 0 {
+                continue;
+            }
+            if last != Some(label(k)) {
+                clusters += 1;
+                last = Some(label(k));
+            }
+            while next < rows + len {
+                blocks.push((k, next - rows, clusters - 1));
+                next += ROW_BLOCK;
+            }
+            rows += len;
+        }
+        Self {
+            blocks,
+            rows,
+            clusters,
+        }
+    }
+
+    /// The span, row in it and cluster of the first row of the block that
+    /// starts at `start`, a multiple of [`ROW_BLOCK`].
+    fn at(&self, start: usize) -> (usize, usize, usize) {
+        assert_eq!(
+            start % ROW_BLOCK,
+            0,
+            "a block starts at a multiple of ROW_BLOCK"
+        );
+        self.blocks[start / ROW_BLOCK]
+    }
+}
+
+/// The rows of the trials, formed from the data.
+struct TrialStack<'a> {
+    trials: &'a TrialSpans<'a>,
+    outcome: &'a [bool],
+    cumulative: Vec<f64>,
+    person: &'a [u32],
+    columns: usize,
+    design: &'a (dyn Fn(usize, usize, &mut [f64]) + Sync),
+    stack: Stack,
+}
+
+impl Rows for TrialStack<'_> {
+    fn n_rows(&self) -> usize {
+        self.stack.rows
+    }
+
+    fn n_columns(&self) -> usize {
+        self.columns
+    }
+
+    fn fill(&self, start: usize, mut block: Block<'_>) {
+        let (mut k, mut offset, mut cluster) = self.stack.at(start);
+        let mut values = vec![0.0; self.columns];
+        for i in 0..block.y.len() {
+            while offset == self.trials.end[k] - self.trials.start[k] {
+                let next = k + 1;
+                if self.person[self.trials.start[next]] != self.person[self.trials.start[k]] {
+                    cluster += 1;
+                }
+                (k, offset) = (next, 0);
+            }
+            let first = self.trials.start[k];
+            let row = first + offset;
+            (self.design)(first, row, &mut values);
+            for (j, &v) in values.iter().enumerate() {
+                block.x[(i, j)] = v;
+            }
+            block.y[i] = f64::from(u8::from(self.outcome[row]));
+            block.weight[i] = self.cumulative[row] / self.cumulative[first];
+            block.cluster[i] = cluster;
+            offset += 1;
+        }
+    }
+}
+
+/// [`fit_msm`] on rows formed by `rows`, each clustered by the person its
+/// cluster numbers, with the number of persons `rows` has.
+pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Result<Msm> {
+    if columns == 0 {
+        return Err(Error::input("design: no columns"));
+    }
+    let n = rows.n_rows();
+    let finite = (0..n.div_ceil(ROW_BLOCK)).into_par_iter().all(|b| {
+        let start = b * ROW_BLOCK;
+        let len = ROW_BLOCK.min(n - start);
+        let mut x = Mat::<f64>::zeros(len, columns);
+        let (mut y, mut w, mut c) = (vec![0.0; len], vec![0.0; len], vec![0; len]);
+        rows.fill(
+            start,
+            Block {
+                x: x.as_mut(),
+                y: &mut y,
+                weight: &mut w,
+                cluster: &mut c,
+            },
+        );
+        epistat_linalg::is_finite(x.as_ref())
+    });
+    if !finite {
+        return Err(Error::input("design: a value is not finite"));
+    }
+    let model = Glm::new(Family::Binomial, Link::Logit);
+    let fit = model
+        .fit_rows(rows)
+        .map_err(|e| Error::input(format!("outcome model: {e}")))?;
+    if !fit.converged {
+        return Err(Error::input("outcome model: no convergence"));
+    }
+    let coefficients: Vec<f64> = fit
+        .coefficients
+        .iter()
+        .enumerate()
+        .map(|(j, c)| {
+            c.ok_or_else(|| Error::input(format!("outcome model: design column {j} is aliased")))
+        })
+        .collect::<Result<_>>()?;
+    let cov = fit
+        .robust_covariance(rows, true, SandwichType::Hc0)
+        .map_err(|e| Error::input(format!("outcome model: {e}")))?;
+    let g = rows.n_clusters();
+    if g < 2 {
+        return Err(Error::input(
+            "outcome model: at least two persons are needed",
+        ));
+    }
+    let factor = g as f64 / (g - 1) as f64;
+    let covariance: Vec<f64> = cov
+        .iter()
+        .map(|v| {
+            v.map(|v| v * factor)
+                .ok_or_else(|| Error::input("outcome model: the covariance is not defined"))
+        })
+        .collect::<Result<_>>()?;
+    Ok(Msm {
+        coefficients,
+        covariance,
+        n_rows: n,
+        n_persons: g,
+    })
+}
+
+/// Rows whose clusters are counted in advance.
+pub(crate) trait Clustered {
+    /// The number of clusters among the rows.
+    fn n_clusters(&self) -> usize;
+}
+
+impl Clustered for TrialStack<'_> {
+    fn n_clusters(&self) -> usize {
+        self.stack.clusters
+    }
 }
 
 /// The cumulative incidence at each follow-up time, with its standard error.
