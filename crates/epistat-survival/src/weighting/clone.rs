@@ -239,7 +239,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
     let mut rows = 0_usize;
     let mut without = 0_usize;
     for_each_clone_row(input, strategies, &starts, &mut |_| rows += 1, &mut || {
-        without += 1
+        without += 1;
     });
     let mut out = Cloned {
         source: Vec::with_capacity(rows),
