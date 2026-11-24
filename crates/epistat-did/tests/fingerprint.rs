@@ -832,7 +832,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
 
 const GOLDEN: &[(&str, u64)] = &[
     ("att_gt", 0x6772_d367_5b0d_fc97),
-    ("att_gt_efficient", 0x2ae1_6498_5619_147e),
+    ("att_gt_efficient", 0x201f_58e9_78ec_8f24),
     ("att_gt_dr_panel_universal_never", 0xcc70_fa0b_a55a_a346),
     ("att_gt_dr_panel_varying_notyet", 0xa43a_8b6e_21a5_fcaf),
     ("aggte_simple", 0xe092_59f2_e199_9f54),
@@ -863,7 +863,7 @@ const GOLDEN: &[(&str, u64)] = &[
     ("att_gt_ipw_rc", 0xf21a_dd79_195a_712f),
     ("att_gt_or_rc", 0x2ee9_cccd_9fa4_11dd),
     ("att_gt_efficient_dr", 0x74b6_3e4f_4e86_2f51),
-    ("aggregate_efficient_event_time", 0x0b51_4321_2e51_0992),
+    ("aggregate_efficient_event_time", 0x7693_9d38_4755_f4ab),
     ("drdid_panel", 0x9a35_5276_7786_14a9),
     ("drdid_improved_panel", 0x9731_c94f_9fdd_c514),
     ("drdid_rc", 0x5e65_35b6_1358_8f15),

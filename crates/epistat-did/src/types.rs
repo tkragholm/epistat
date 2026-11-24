@@ -1605,12 +1605,17 @@ pub struct EfficientDidEstimate {
     /// Number of never-treated units used in the panel comparison.
     pub control_n: usize,
     /// Sum of the sampling weights of the observations used, those of the first
-    /// baseline's comparison. [`estimate_att_gt_efficient`](crate::estimate_att_gt_efficient)
-    /// does not use sampling weights, so for it this is the number of units.
+    /// baseline's comparison. For [`estimate_att_gt_efficient`](crate::estimate_att_gt_efficient)
+    /// it is the sum of the weights of the cell's units, each counted once.
     pub total_weight: f64,
     /// Baseline-specific contributions and efficient weights.
     pub baseline_weights: Vec<EfficientBaselineWeight>,
-    /// Combined influence function for the efficient `ATT(g,t)` estimate.
+    /// Combined influence function for the efficient `ATT(g,t)` estimate,
+    /// scaled so that the standard error is `sqrt(sum psi_i^2) / n`. It has one
+    /// entry per unit of the panel, in ascending order of identifier, for
+    /// [`estimate_att_gt_efficient`](crate::estimate_att_gt_efficient), and one
+    /// per input row for
+    /// [`estimate_att_gt_efficient_dr`](crate::estimate_att_gt_efficient_dr).
     pub influence_function: Vec<f64>,
     /// Diagnostics for the efficient weighting step.
     pub diagnostics: EfficientDidDiagnostics,
@@ -1693,4 +1698,24 @@ pub enum EfficientDidError {
     /// The baseline weighting system is singular.
     #[error("could not solve efficient baseline weighting system")]
     SingularWeightingSystem,
+    /// A unit has two rows in the same period.
+    #[error("unit {unit_id} has more than one row at time {time}")]
+    DuplicateObservation {
+        /// The unit.
+        unit_id: i64,
+        /// The period.
+        time: i32,
+    },
+    /// A unit's rows give different first treatment periods.
+    #[error("unit {unit_id} has rows with different first treatment periods")]
+    TimeVaryingCohort {
+        /// The unit.
+        unit_id: i64,
+    },
+    /// A unit's rows give different sampling weights.
+    #[error("unit {unit_id} has rows with different sampling weights")]
+    TimeVaryingWeight {
+        /// The unit.
+        unit_id: i64,
+    },
 }
