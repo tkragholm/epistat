@@ -7,7 +7,6 @@ use std::hash::Hash;
 
 use thiserror::Error;
 
-/// Cluster-robust variance in the convention of R's `did`.
 pub mod did_clusters;
 /// Long-form export of influence functions and covariances.
 pub mod export;

@@ -12,7 +12,7 @@ use crate::types::{
     EventStudyConfig, ReportingSummary,
 };
 
-mod aggregation;
+pub(crate) mod aggregation;
 pub mod aggte;
 mod bands;
 mod core;
@@ -20,25 +20,37 @@ pub mod pair_estimators;
 pub mod panel_pairs;
 mod pretest;
 
+#[expect(
+    deprecated,
+    reason = "re-exports a deprecated function until it is removed"
+)]
+pub use aggregation::aggregate_att_gt_event_time;
 pub use aggregation::{
-    aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort, aggregate_att_gt_event_time,
+    aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort,
     aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
 };
 pub use aggte::{
     AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, UnitPanel,
-    aggregate_att_gt,
-    att_gt_clustered_standard_errors, row_panel,
+    aggregate_att_gt, att_gt_clustered_standard_errors, row_panel,
 };
-pub use bands::{
-    att_gt_mboot_bands, att_gt_simultaneous_bands, att_gt_simultaneous_bands_with_influence,
-};
+pub use bands::att_gt_mboot_bands;
+#[expect(
+    deprecated,
+    reason = "re-exports deprecated functions until they are removed"
+)]
+pub use bands::{att_gt_simultaneous_bands, att_gt_simultaneous_bands_with_influence};
 pub use pair_estimators::estimate_att_gt_dr_efficient_with_influence;
-pub use pretest::{PretestError, PretrendWald, pretrend_wald_test};
 pub use panel_pairs::{
     estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence, unit_panel,
 };
+pub use pretest::{PretestError, PretrendWald, pretrend_wald_test};
 
 /// Consolidated result of an event-study estimation.
+#[deprecated(
+    note = "part of the `InferenceDataset` workflow, which clusters with `G / (G - 1)` and labels \
+            every estimator DR-DiD; use `estimate_att_gt_dr_panel_with_influence` and \
+            `aggregate_att_gt`, with `did_clusters` for clustered variances"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventStudyResult {
     /// ATT(g,t) estimates.
@@ -55,6 +67,10 @@ pub struct EventStudyResult {
     pub outcome_name: Option<String>,
 }
 
+#[expect(
+    deprecated,
+    reason = "the deprecated workflow is built from its own deprecated types"
+)]
 impl EventStudyResult {
     /// Aggregate estimates by event-time with
     /// [`aggregate_att_gt_event_time_with_influence`]. With a cluster index, the
@@ -119,6 +135,9 @@ impl WindowAssessment {
 }
 
 /// Consolidated result of an event-time aggregated event-study.
+#[deprecated(
+    note = "part of the `InferenceDataset` workflow; use `aggregate_att_gt` and `did_clusters`"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventTimeResult {
     /// Event-time aggregated estimates, in increasing event time.
@@ -134,6 +153,10 @@ pub struct EventTimeResult {
     pub outcome_name: Option<String>,
 }
 
+#[expect(
+    deprecated,
+    reason = "the deprecated workflow is built from its own deprecated types"
+)]
 impl EventTimeResult {
     fn update_clustered_inference(&mut self) {
         if let Some(ref ci) = self.cluster_index {

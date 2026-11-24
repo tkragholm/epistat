@@ -1,3 +1,8 @@
+#![expect(
+    deprecated,
+    reason = "these tests cover the deprecated aggregation until it is removed"
+)]
+
 use super::*;
 use epistat_linalg::Mat;
 

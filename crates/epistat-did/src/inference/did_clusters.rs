@@ -12,7 +12,7 @@
 //! The standard error is `sqrt(sum_g s_g^2)` and the covariance of two
 //! estimates `a` and `b` is `sum_g s_ga s_gb`. There is no finite-cluster
 //! factor `G / (G - 1)`, which is what `did::aggte` and `did::att_gt` do when
-//! `clustervars` is set and `bstrap = FALSE`. [`clustered_variance_from_index`]
+//! `clustervars` is set and `bstrap = FALSE`. [`clustered_variance_from_index`](crate::clustered_variance_from_index)
 //! and the dataset workflow use the cluster-robust variance with that factor
 //! instead, so the same event study gets two standard errors depending on the
 //! route; the two are not interchangeable.
@@ -22,7 +22,7 @@
 //! function evaluated at its own estimate.
 //!
 //! With every unit its own cluster, the standard error is that of
-//! [`standard_error_from_influence`](super::standard_error_from_influence), up
+//! [`standard_error_from_influence`](crate::inference::standard_error_from_influence), up
 //! to the order of the floating-point sums.
 //!
 //! # Determinism
@@ -199,6 +199,50 @@ mod tests {
         let clusters = Clusters::from_labels(&[0_i64, 0, 1, 1]);
         let se = did_standard_error(&psi, &clusters).unwrap();
         assert!((se - (2.0_f64 * 0.25).sqrt()).abs() < 1e-15);
+    }
+
+    /// PHD's `did_cluster_sums` and `event_time_covariance`, transcribed. The
+    /// public functions must give the same bits, so that the kernel can call
+    /// them in place of its copy.
+    #[test]
+    fn the_sums_and_the_covariance_follow_the_summation_order_of_the_kernel() {
+        let mut stream = epistat_rng::Stream::seeded(17);
+        let n = 301;
+        let labels: Vec<u32> = (0..n).map(|i| ((i * 7) % 41) as u32).collect();
+        let psi: Vec<Vec<f64>> = (0..3)
+            .map(|_| (0..n).map(|_| stream.uniform() - 0.4).collect())
+            .collect();
+        let clusters = Clusters::from_labels(&labels);
+
+        let transcribed_sums = |values: &[f64]| {
+            let n_f = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n_f;
+            let mut sums = vec![0.0; clusters.count()];
+            for (value, &group) in values.iter().zip(clusters.of()) {
+                sums[group] += value - mean;
+            }
+            for sum in &mut sums {
+                *sum /= n_f;
+            }
+            sums
+        };
+        for values in &psi {
+            let want = transcribed_sums(values);
+            assert_eq!(did_cluster_sums(values, &clusters).unwrap(), want);
+            let se = want.iter().map(|v| v * v).sum::<f64>().sqrt();
+            assert_eq!(did_standard_error(values, &clusters).unwrap(), se);
+        }
+        let covariance = did_covariance(&psi, &clusters).unwrap();
+        for row in 0..3 {
+            for col in 0..3 {
+                let want: f64 = transcribed_sums(&psi[row])
+                    .iter()
+                    .zip(transcribed_sums(&psi[col]))
+                    .map(|(l, r)| l * r)
+                    .sum();
+                assert_eq!(covariance[row * 3 + col], want);
+            }
+        }
     }
 
     #[test]

@@ -79,6 +79,7 @@ use epistat_linalg::matmul;
 use epistat_linalg::{Accum, Mat, MatRef, Par};
 
 use crate::inference::{normal_interval, validate_confidence_level};
+use crate::methods::att_gt::aggregation::{WeightedCell, aggregate_weighted_cells};
 use crate::methods::att_gt::pair_estimators::{
     build_pair_rows, missing_pair_cell, prepare_att_gt_dr_inputs,
 };
@@ -688,57 +689,20 @@ where
     F: Fn(&EfficientDidEstimate) -> i32,
 {
     validate_efficient_aggregation_inputs(estimates, config)?;
-    let influence_len = estimates
-        .first()
-        .map_or(0, |estimate| estimate.influence_function.len());
-
-    let mut grouped = BTreeMap::<i32, Vec<&EfficientDidEstimate>>::new();
-    for estimate in estimates {
-        grouped.entry(key_fn(estimate)).or_default().push(estimate);
-    }
-
-    let mut grouped_estimates = BTreeMap::new();
-    let mut grouped_influence = Vec::with_capacity(grouped.len());
-    let mut influence_scratch = vec![0.0; influence_len];
-    for (key, bucket) in grouped {
-        let component_count = bucket.len();
-        let raw_total = bucket
-            .iter()
-            .map(|estimate| aggregation_weight(estimate, config.weighting))
-            .sum::<f64>();
-        let mut estimate = 0.0;
-        influence_scratch.fill(0.0);
-        let mut total_weight = 0.0;
-        for component in bucket {
-            let normalized_weight = aggregation_weight(component, config.weighting) / raw_total;
-            estimate += normalized_weight * component.att;
-            total_weight += component.total_weight;
-            for (destination, source) in influence_scratch
-                .iter_mut()
-                .zip(&component.influence_function)
-            {
-                *destination += normalized_weight * *source;
-            }
-        }
-        // The cells share units, so the variance is that of the combined
-        // influence function, cross-covariances included; see the module docs.
-        let se = standard_error_uncentred(&influence_scratch);
-        let (ci_low, ci_high) =
-            normal_interval(estimate, se, config.confidence_level.confidence_level);
-        grouped_estimates.insert(
-            key,
-            AttGtAggregatedEstimate {
-                estimate,
-                se,
-                ci_low,
-                ci_high,
-                components: component_count,
-                total_weight,
-            },
-        );
-        grouped_influence.push(influence_scratch.clone());
-    }
-    Ok((grouped_estimates, grouped_influence))
+    let cells = estimates
+        .iter()
+        .map(|estimate| WeightedCell {
+            key: key_fn(estimate),
+            att: estimate.att,
+            influence: &estimate.influence_function,
+            raw_weight: aggregation_weight(estimate, config.weighting),
+            total_weight: estimate.total_weight,
+        })
+        .collect::<Vec<_>>();
+    Ok(aggregate_weighted_cells(
+        &cells,
+        config.confidence_level.confidence_level,
+    ))
 }
 
 fn filter_complete_ids(

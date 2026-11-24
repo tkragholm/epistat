@@ -15,6 +15,42 @@
 //!
 //! The group summary is the exception: within a cohort the cells are averaged
 //! with equal weights, which are not estimated, so no correction applies.
+//!
+//! # Standard errors and the bootstrap
+//!
+//! Every aggregate has an influence function `psi_i`, the weighted sum of the
+//! cells' influence functions plus the weight correction. Its analytic standard
+//! error is `sqrt(sum_g s_g^2)` with `s_g` the sum of the centred `psi_i` in
+//! cluster `g`, divided by `n` ([`crate::inference::did_clusters`]).
+//!
+//! With [`AggteBootstrap`] the standard errors come from the multiplier
+//! bootstrap of `did::mboot`. Replicate `b` draws a Rademacher weight `w_gb`
+//! per cluster (per unit without clusters) and forms
+//! `T_b = sqrt(G) * mean_g(w_gb * S_g)` with `S_g` the uncentred cluster sum of
+//! the influence function. For each point of a path, `sigma` is the
+//! interquartile range of its `T_b` divided by `qnorm(.75) - qnorm(.25)`, and
+//! its standard error is `sigma * sqrt(G) / n`. The uniform critical value is
+//! the type 1 quantile at `1 - alpha` of `max_j |T_bj| / sigma_j` over the
+//! points of the path, so the band `att_j +- crit * se_j` covers the whole path
+//! with probability about `1 - alpha`. The standard error of the overall effect
+//! has its own bootstrap on the overall influence function.
+//!
+//! The analytic and the bootstrap standard errors differ when the draws are not
+//! normal, since the interquartile range ignores the tails: for a cell with few
+//! units the bootstrap value can be several per cent above the analytic one.
+//! That is a property of `did::mboot`, which this reproduces.
+//!
+//! # `max_e`, `min_e` and `balance_e`
+//!
+//! `did::aggte` applies `max_e` to the simple, group and dynamic summaries,
+//! `min_e` and `balance_e` to the dynamic one only, and none of them to the
+//! calendar one. See [`AggteConfig`] for the unit in which `max_e` is counted.
+//!
+//! # References
+//!
+//! Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
+//! periods. J Econom 2021;225(2):200-30. R package `did` 2.5.1, functions
+//! `aggte`, `mboot`, `getSE` and `wif`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -552,13 +588,7 @@ fn aggregate_point_estimates(
                 return Err(AggteError::NoPostTreatmentCells);
             }
             let (att, influence_vector) = combine_by_share(&post, estimates, influence, panel);
-            let summary = finish(
-                0,
-                att,
-                influence_vector,
-                confidence_level,
-                &clusters,
-            );
+            let summary = finish(0, att, influence_vector, confidence_level, &clusters);
             Ok(AggteResult {
                 overall_att: summary.att,
                 overall_se: summary.se,
@@ -607,13 +637,7 @@ fn aggregate_point_estimates(
                 .into_iter()
                 .map(|(event_time, cells)| {
                     let (att, vector) = combine_by_share(&cells, estimates, influence, panel);
-                    finish(
-                        event_time,
-                        att,
-                        vector,
-                        confidence_level,
-                        &clusters,
-                    )
+                    finish(event_time, att, vector, confidence_level, &clusters)
                 })
                 .collect::<Vec<_>>();
 
@@ -657,13 +681,7 @@ fn aggregate_point_estimates(
                 .into_iter()
                 .map(|(group, cells)| {
                     let (att, vector) = combine_equally(&cells, estimates, influence, n_units);
-                    finish(
-                        group,
-                        att,
-                        vector,
-                        confidence_level,
-                        &clusters,
-                    )
+                    finish(group, att, vector, confidence_level, &clusters)
                 })
                 .collect::<Vec<_>>();
 
@@ -732,13 +750,7 @@ fn aggregate_point_estimates(
                 .into_iter()
                 .map(|(time, cells)| {
                     let (att, vector) = combine_by_share(&cells, estimates, influence, panel);
-                    finish(
-                        time,
-                        att,
-                        vector,
-                        confidence_level,
-                        &clusters,
-                    )
+                    finish(time, att, vector, confidence_level, &clusters)
                 })
                 .collect::<Vec<_>>();
 
@@ -838,10 +850,7 @@ fn apply_bootstrap(
             bootstrap.replicates,
             bootstrap.seed,
         );
-        result.overall_se = bands
-            .ok()
-            .and_then(|bands| bands.se[0])
-            .unwrap_or(f64::NAN);
+        result.overall_se = bands.ok().and_then(|bands| bands.se[0]).unwrap_or(f64::NAN);
         let margin = pointwise * result.overall_se;
         result.overall_ci_low = result.overall_att - margin;
         result.overall_ci_high = result.overall_att + margin;

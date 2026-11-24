@@ -12,6 +12,11 @@ use crate::types::{
 /// # Errors
 ///
 /// Returns [`EventTimeError`] when confidence level or point values are invalid.
+#[deprecated(
+    note = "adds the variances of the points as if they were independent, which points without \
+            influence functions cannot avoid; use `aggregate_att_gt_event_time_with_influence`, \
+            or `aggregate_att_gt` with `AggteType::Dynamic` for `did::aggte`"
+)]
 pub fn aggregate_event_time(
     points: &[EventTimePoint],
     confidence_level: f64,

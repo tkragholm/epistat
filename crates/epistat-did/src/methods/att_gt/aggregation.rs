@@ -24,6 +24,11 @@ use crate::util::usize_to_f64;
 /// # Errors
 ///
 /// Returns [`AttGtAggregationError`] when estimates/configuration are invalid.
+#[deprecated(
+    note = "adds the variances of the cells as if they were independent, which a cell without \
+            influence functions cannot avoid; use `aggregate_att_gt_event_time_with_influence`, \
+            or `aggregate_att_gt` with `AggteType::Dynamic` for `did::aggte`"
+)]
 pub fn aggregate_att_gt_event_time(
     estimates: &[AttGtEstimate],
     config: AttGtAggregationConfig,
@@ -41,6 +46,12 @@ pub fn aggregate_att_gt_event_time(
 
 /// Aggregate ATT(g,t) estimates by event-time while preserving aligned
 /// influence-function vectors for joint-process inference.
+///
+/// Every cell enters, pre-treatment ones included, with weights that are taken
+/// as known, and the standard error is that of the combined influence function,
+/// unclustered. It is not `did::aggte`, which estimates the cohort shares and
+/// corrects for it: use [`aggregate_att_gt`](super::aggte::aggregate_att_gt)
+/// for that.
 ///
 /// # Errors
 ///
@@ -66,58 +77,103 @@ pub fn aggregate_att_gt_event_time_with_influence(
         return Err(AttGtAggregationError::EmptyInput);
     }
 
-    let mut grouped = BTreeMap::<i32, Vec<usize>>::new();
-    for (idx, estimate) in estimates.iter().enumerate() {
-        grouped.entry(estimate.event_time).or_default().push(idx);
+    let cells = estimates
+        .iter()
+        .zip(influence_functions)
+        .map(|(estimate, influence)| WeightedCell {
+            key: estimate.event_time,
+            att: estimate.att,
+            influence,
+            raw_weight: raw_weight(estimate, config.weighting),
+            total_weight: estimate.total_weight,
+        })
+        .collect::<Vec<_>>();
+    let (summaries, aggregated_influence) =
+        aggregate_weighted_cells(&cells, config.confidence_level.confidence_level);
+    Ok(AttGtEventTimeInfluenceOutput {
+        estimates: summaries
+            .into_iter()
+            .map(|(event_time, summary)| AttGtEventTimeEstimate {
+                event_time,
+                summary,
+            })
+            .collect(),
+        influence_functions: aggregated_influence,
+    })
+}
+
+/// One cell entering a fixed-weight aggregation.
+pub(crate) struct WeightedCell<'a> {
+    /// The key the cell is aggregated under: event time, cohort or period.
+    pub key: i32,
+    /// The cell's estimate.
+    pub att: f64,
+    /// The cell's influence function, one value per unit or row.
+    pub influence: &'a [f64],
+    /// The weight before normalisation within the key.
+    pub raw_weight: f64,
+    /// The sum of the observation weights the cell used.
+    pub total_weight: f64,
+}
+
+/// Weighted mean of the cells under each key, with the weights taken as known.
+///
+/// The weights within a key are normalised to sum to 1. The standard error is
+/// that of the combined influence function, so it counts the covariance between
+/// cells that share units, and it is not clustered. The estimate and the
+/// influence function are built cell by cell in input order with one rounding
+/// per multiply-add. The second element holds the combined influence function
+/// of each key, in key order.
+///
+/// Every cell is aggregated whatever its sign of event time, and the weights
+/// carry no correction for being estimated; [`aggregate_att_gt`] is the
+/// aggregation of `did::aggte`.
+pub(crate) fn aggregate_weighted_cells(
+    cells: &[WeightedCell<'_>],
+    confidence_level: f64,
+) -> (BTreeMap<i32, AttGtAggregatedEstimate>, Vec<Vec<f64>>) {
+    let n = cells.first().map_or(0, |cell| cell.influence.len());
+    let mut grouped = BTreeMap::<i32, Vec<&WeightedCell<'_>>>::new();
+    for cell in cells {
+        grouped.entry(cell.key).or_default().push(cell);
     }
 
-    let mut aggregated_estimates = Vec::with_capacity(grouped.len());
-    let mut aggregated_influence = Vec::with_capacity(grouped.len());
-    for (event_time, bucket) in grouped {
-        let component_count = bucket.len();
-        let raw_total = bucket
-            .iter()
-            .map(|idx| raw_weight(&estimates[*idx], config.weighting))
-            .sum::<f64>();
+    let mut summaries = BTreeMap::new();
+    let mut influences = Vec::with_capacity(grouped.len());
+    for (key, bucket) in grouped {
+        let raw_total = bucket.iter().map(|cell| cell.raw_weight).sum::<f64>();
         let mut estimate = 0.0;
         let mut total_influence = vec![0.0; n];
         let mut total_weight = 0.0;
-        for idx in bucket {
-            let component = &estimates[idx];
-            let normalized_weight = raw_weight(component, config.weighting) / raw_total;
-            estimate = normalized_weight.mul_add(component.att, estimate);
-            total_weight += component.total_weight;
-            for (dst, src) in total_influence.iter_mut().zip(&influence_functions[idx]) {
+        for cell in &bucket {
+            let normalized_weight = cell.raw_weight / raw_total;
+            estimate = normalized_weight.mul_add(cell.att, estimate);
+            total_weight += cell.total_weight;
+            for (dst, src) in total_influence.iter_mut().zip(cell.influence) {
                 *dst = normalized_weight.mul_add(*src, *dst);
             }
         }
-        // From the COMBINED influence function, not from `sum(w^2 * se^2)`.
-        // The latter is the variance of a weighted sum of INDEPENDENT terms, and
-        // ATT(g,t) cells share units, so its off-diagonal terms are not zero. It
-        // understated the standard error whenever the components were positively
-        // correlated, which is the ordinary case. The influence vectors were
-        // being carried alongside for exactly this and were not being used.
+        // From the COMBINED influence function, not from `sum(w^2 * se^2)`, which
+        // is the variance of a weighted sum of independent terms. ATT(g,t) cells
+        // share units, so the off-diagonal terms are not zero, and the
+        // independent-terms variance is too small when the cells are positively
+        // correlated, which is the ordinary case.
         let se = crate::inference::standard_error_from_influence(&total_influence);
-        let (ci_low, ci_high) =
-            normal_interval(estimate, se, config.confidence_level.confidence_level);
-        aggregated_estimates.push(AttGtEventTimeEstimate {
-            event_time,
-            summary: AttGtAggregatedEstimate {
+        let (ci_low, ci_high) = normal_interval(estimate, se, confidence_level);
+        summaries.insert(
+            key,
+            AttGtAggregatedEstimate {
                 estimate,
                 se,
                 ci_low,
                 ci_high,
-                components: component_count,
+                components: bucket.len(),
                 total_weight,
             },
-        });
-        aggregated_influence.push(total_influence);
+        );
+        influences.push(total_influence);
     }
-
-    Ok(AttGtEventTimeInfluenceOutput {
-        estimates: aggregated_estimates,
-        influence_functions: aggregated_influence,
-    })
+    (summaries, influences)
 }
 
 /// Aggregate post-treatment `ATT(g,t)` estimates by treatment cohort, as

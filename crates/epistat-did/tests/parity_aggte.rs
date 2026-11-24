@@ -193,8 +193,18 @@ fn assert_vectors_close(got: &[f64], want: &[f64], tolerance: f64, label: &str) 
 /// Estimates, standard errors and influence functions of the overall effect and
 /// the path, against R's.
 fn check(label: &str, got: &AggteResult, want: &Agg) {
-    close(got.overall_att, want.overall_att, 1e-9, &format!("{label} att"));
-    close(got.overall_se, want.overall_se, 1e-9, &format!("{label} se"));
+    close(
+        got.overall_att,
+        want.overall_att,
+        1e-9,
+        &format!("{label} att"),
+    );
+    close(
+        got.overall_se,
+        want.overall_se,
+        1e-9,
+        &format!("{label} se"),
+    );
     assert_vectors_close(
         &got.overall_influence,
         &want.inf_overall,
@@ -211,8 +221,18 @@ fn check(label: &str, got: &AggteResult, want: &Agg) {
     assert_eq!(got.by_key.len(), keys.len(), "{label} path length");
     for (j, point) in got.by_key.iter().enumerate() {
         assert_eq!(point.key, keys[j], "{label} key");
-        close(point.att, atts[j], 1e-9, &format!("{label} att at {}", keys[j]));
-        close(point.se, ses[j], 1e-9, &format!("{label} se at {}", keys[j]));
+        close(
+            point.att,
+            atts[j],
+            1e-9,
+            &format!("{label} att at {}", keys[j]),
+        );
+        close(
+            point.se,
+            ses[j],
+            1e-9,
+            &format!("{label} se at {}", keys[j]),
+        );
         assert_vectors_close(
             &point.influence,
             &influence[j],
@@ -302,7 +322,11 @@ fn max_e_counts_periods_in_the_list_of_periods_as_in_did() {
                 },
             )
             .expect("aggregate");
-            check(&format!("gap {aggregation:?} max_e={}", case.max_e), &got, want);
+            check(
+                &format!("gap {aggregation:?} max_e={}", case.max_e),
+                &got,
+                want,
+            );
         }
     }
 }
@@ -394,7 +418,10 @@ fn the_pre_test_refuses_what_has_nothing_to_test() {
         .filter(|&i| cells[i].time >= cells[i].group)
         .collect::<Vec<_>>();
     let only_post = post.iter().map(|&i| cells[i]).collect::<Vec<_>>();
-    let only_post_influence = post.iter().map(|&i| influence[i].clone()).collect::<Vec<_>>();
+    let only_post_influence = post
+        .iter()
+        .map(|&i| influence[i].clone())
+        .collect::<Vec<_>>();
     assert_eq!(
         pretrend_wald_test(&only_post, &only_post_influence, &panel(&r.unit_group)),
         Err(PretestError::NoPreTreatmentCells)
@@ -410,7 +437,12 @@ fn the_pre_test_refuses_what_has_nothing_to_test() {
     );
 }
 
-fn bootstrap(replicates: usize, seed: u64, standard_errors: bool, uniform_band: bool) -> AggteBootstrap {
+fn bootstrap(
+    replicates: usize,
+    seed: u64,
+    standard_errors: bool,
+    uniform_band: bool,
+) -> AggteBootstrap {
     AggteBootstrap {
         replicates,
         seed,
@@ -439,7 +471,10 @@ fn boot_config(aggregation: AggteType, replicates: usize, seed: u64) -> AggteCon
 /// of those.
 fn check_bootstrap(label: &str, got: &AggteResult, want: &BootAgg, biters: usize) {
     let four = 4.0 * 2.0_f64.sqrt();
-    assert!(got.uniform_band || want.crit_val.is_none(), "{label} uniform band");
+    assert!(
+        got.uniform_band || want.crit_val.is_none(),
+        "{label} uniform band"
+    );
     close(
         got.overall_att,
         want.agg.overall_att,
@@ -495,8 +530,13 @@ fn bootstrap_aggregates_agree_with_did_within_monte_carlo_error() {
         (AggteType::Group, &r.bootstrap.unclustered.group),
         (AggteType::Calendar, &r.bootstrap.unclustered.calendar),
     ] {
-        let got = aggregate_att_gt(&cells, &influence, &p, boot_config(aggregation, b, 20_261_124))
-            .expect("aggregate");
+        let got = aggregate_att_gt(
+            &cells,
+            &influence,
+            &p,
+            boot_config(aggregation, b, 20_261_124),
+        )
+        .expect("aggregate");
         check_bootstrap(&format!("{aggregation:?}"), &got, want, b);
         // The influence functions that go into the bootstrap are R's.
         let exact = aggregate_att_gt(&cells, &influence, &p, config(aggregation)).unwrap();
@@ -512,7 +552,12 @@ fn bootstrap_aggregates_agree_with_did_within_monte_carlo_error() {
         boot_config(AggteType::Dynamic, b, 20_261_124),
     )
     .expect("clustered");
-    check_bootstrap("clustered dynamic", &clustered, &r.bootstrap.clustered.dynamic, b);
+    check_bootstrap(
+        "clustered dynamic",
+        &clustered,
+        &r.bootstrap.clustered.dynamic,
+        b,
+    );
 }
 
 #[test]
@@ -522,8 +567,13 @@ fn bootstrap_results_do_not_depend_on_the_thread_count() {
     let influence = columns(&r.universal.cells.inffunc);
     let p = clustered_panel(&r);
     assert_same_on_threads(|| {
-        let got = aggregate_att_gt(&cells, &influence, &p, boot_config(AggteType::Dynamic, 3000, 7))
-            .unwrap();
+        let got = aggregate_att_gt(
+            &cells,
+            &influence,
+            &p,
+            boot_config(AggteType::Dynamic, 3000, 7),
+        )
+        .unwrap();
         let mut out = vec![got.critical_value, got.overall_se];
         out.extend(got.by_key.iter().map(|point| point.se));
         out
@@ -551,9 +601,17 @@ fn the_uniform_critical_value_has_the_stated_coverage_on_fresh_draws() {
         } else {
             panel(&r.unit_group)
         };
-        let got = aggregate_att_gt(&cells, &influence, &p, boot_config(AggteType::Dynamic, b, 99))
-            .unwrap();
-        let groups = p.clusters.as_ref().map(|labels| Clusters::from_sorted_labels(labels));
+        let got = aggregate_att_gt(
+            &cells,
+            &influence,
+            &p,
+            boot_config(AggteType::Dynamic, b, 99),
+        )
+        .unwrap();
+        let groups = p
+            .clusters
+            .as_ref()
+            .map(|labels| Clusters::from_sorted_labels(labels));
         let n = p.groups.len();
         let g = groups.as_ref().map_or(n, Clusters::count);
         // Cluster sums of the path's influence functions, one row per cluster.
@@ -610,8 +668,13 @@ fn the_flags_choose_what_the_bootstrap_replaces() {
     let influence = columns(&r.universal.cells.inffunc);
     let p = panel(&r.unit_group);
     let analytic = aggregate_att_gt(&cells, &influence, &p, config(AggteType::Dynamic)).unwrap();
-    let full = aggregate_att_gt(&cells, &influence, &p, boot_config(AggteType::Dynamic, 2000, 5))
-        .unwrap();
+    let full = aggregate_att_gt(
+        &cells,
+        &influence,
+        &p,
+        boot_config(AggteType::Dynamic, 2000, 5),
+    )
+    .unwrap();
 
     // cband only: analytic standard errors, uniform critical value.
     let band_only = aggregate_att_gt(

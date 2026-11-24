@@ -13,8 +13,10 @@
 //!   cross-sections; [`estimate_att_gt_dr_panel_with_influence`] on a panel.
 //! - Their aggregations as `aggte` of R's `did`: [`aggregate_att_gt`] by
 //!   event time, cohort, calendar time or overall, with the influence of the
-//!   estimated cohort shares, and [`att_gt_mboot_bands`] for simultaneous
-//!   bands by the multiplier bootstrap.
+//!   estimated cohort shares, with the multiplier bootstrap and uniform bands
+//!   of `aggte(bstrap, cband)` through [`AggteBootstrap`], and
+//!   [`att_gt_mboot_bands`] for simultaneous bands over the cells.
+//!   [`pretrend_wald_test`] is the Wald pre-test of `att_gt`.
 //! - The two-period estimators of `DRDID` \[2\]: [`estimate_drdid_panel`],
 //!   [`estimate_drdid_repeated_cross_section`], the improved estimators
 //!   [`estimate_drdid_improved_panel`] and
@@ -71,7 +73,8 @@
 //! estimators are `att +- 1.96 se`. In [`aggregate_att_gt`],
 //! [`att_gt_clustered_standard_errors`] and the bands, clusters replace the
 //! units by the sums of the centred `psi_i` within each cluster, divided by
-//! `n`, without the factor `G / (G - 1)`, as in `did`. [`EventStudyResult`] and
+//! `n`, without the factor `G / (G - 1)`, as in `did`; [`did_standard_error`] and
+//! [`did_covariance`] are that variance. The deprecated `EventStudyResult` and
 //! the validated dataset use [`clustered_variance_from_index`] and its
 //! siblings, which are the cluster-robust variance with that factor. The
 //! multiplier bootstrap draws a Rademacher weight per unit or cluster and
@@ -100,6 +103,10 @@
 //!    Econ Stud 2023;90(5):2555-91. doi:10.1093/restud/rdad018
 #![warn(missing_docs)]
 
+#[expect(
+    deprecated,
+    reason = "the deprecated workflow is built from its own deprecated types"
+)]
 pub(crate) mod dataset;
 pub(crate) mod error;
 pub(crate) mod estimators;
@@ -110,12 +117,17 @@ mod tests;
 pub(crate) mod types;
 pub(crate) mod util;
 
-pub use dataset::{
-    Diagnostic, InferenceDataset, PanelRecord, Severity, ValidatedInferenceDataset,
-    ValidationReport,
-};
+pub use dataset::{Diagnostic, PanelRecord, Severity, ValidationReport};
+#[expect(
+    deprecated,
+    reason = "re-exports deprecated types until they are removed"
+)]
+pub use dataset::{InferenceDataset, ValidatedInferenceDataset};
 pub use error::{DatasetError, InternalDidError};
 pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
+pub use inference::did_clusters::{
+    DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
+};
 pub use inference::export::{
     InferenceCovarianceRow, InferenceInfluenceRow, build_clustered_inference_covariance_rows,
     build_inference_covariance_rows, build_inference_influence_rows,
@@ -179,17 +191,23 @@ pub use inference::{
 #[cfg(feature = "honest")]
 pub use methods::att_gt::WindowAssessment;
 pub use methods::att_gt::{
-    PretestError, PretrendWald, pretrend_wald_test,
-    AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, EventStudyResult,
-    EventTimeResult, UnitPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
-    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time,
-    aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
-    att_gt_clustered_standard_errors, att_gt_mboot_bands, att_gt_simultaneous_bands,
-    att_gt_simultaneous_bands_with_influence, estimate_att_gt, estimate_att_gt_dr,
-    estimate_att_gt_dr_efficient_with_influence, estimate_att_gt_dr_panel,
-    estimate_att_gt_dr_panel_with_influence, estimate_att_gt_dr_with_influence,
-    estimate_att_gt_ipw, estimate_att_gt_ipw_with_influence, estimate_att_gt_or,
-    estimate_att_gt_or_with_influence, row_panel, unit_panel,
+    AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, PretestError,
+    PretrendWald, UnitPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
+    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
+    aggregate_att_gt_overall, att_gt_clustered_standard_errors, att_gt_mboot_bands,
+    estimate_att_gt, estimate_att_gt_dr, estimate_att_gt_dr_efficient_with_influence,
+    estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence,
+    estimate_att_gt_dr_with_influence, estimate_att_gt_ipw, estimate_att_gt_ipw_with_influence,
+    estimate_att_gt_or, estimate_att_gt_or_with_influence, pretrend_wald_test, row_panel,
+    unit_panel,
+};
+#[expect(
+    deprecated,
+    reason = "re-exports deprecated items until they are removed"
+)]
+pub use methods::att_gt::{
+    EventStudyResult, EventTimeResult, aggregate_att_gt_event_time, att_gt_simultaneous_bands,
+    att_gt_simultaneous_bands_with_influence,
 };
 pub use methods::continuous::sieve::estimate_acrt_sieve;
 pub use methods::did_cc::{
@@ -212,8 +230,13 @@ pub use methods::efficient::{
     aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
     aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
 };
+#[expect(
+    deprecated,
+    reason = "re-exports a deprecated function until it is removed"
+)]
+pub use methods::standard::aggregate_event_time;
 pub use methods::standard::{
-    aggregate_event_time, estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
+    estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
 pub use types::*;
