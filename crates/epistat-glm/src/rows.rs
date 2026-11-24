@@ -40,11 +40,17 @@
 //! the source is about `WAVE * ROW_BLOCK * (p + 8)` values. Each iteration
 //! forms the rows once, at the new coefficients, for the deviance and the
 //! products of the next iteration together, and again when a step is halved.
-//! The test for aliased columns at the first iteration projects each column
-//! on the ones kept before it by modified Gram-Schmidt with a second pass,
-//! whose inner products depend on each other in turn, so it forms the rows
-//! about `p^2` times for `p` columns, the norm left in one column together
-//! with the first inner product of the next.
+//! The test for aliased columns at the first iteration reads the Gram matrix
+//! `X'WX` at the starting means, which that iteration forms anyway, and
+//! settles every column whose decision its error bound makes clear, as
+//! [`Glm::fit`] does (see the [`fit`](crate::fit) module). Up to a column it
+//! does not settle, which is every aliased column, the decisions come from
+//! modified Gram-Schmidt with a second pass, whose inner products depend on
+//! each other in turn, so it forms the rows about `m^2` times for the first
+//! `m` columns, the norm left in one column together with the first inner
+//! product of the next. When a column is aliased the first iteration forms
+//! the products again over the columns kept, as `Glm::fit` forms its normal
+//! equations on the reduced design.
 //!
 //! # References
 //!
@@ -60,6 +66,7 @@ use epistat_linalg::{
 };
 use rayon::prelude::*;
 
+use crate::fit::screened_columns;
 use crate::robust::SandwichType;
 use crate::{Glm, GlmError};
 
@@ -325,8 +332,20 @@ impl Glm {
                 _ => Source::Beta(beta.clone()),
             };
             if iteration == 1 && self.ridge == 0.0 {
-                let keep = independent_columns(self, rows, self.tolerance);
+                // The products at the starting means over every column give
+                // the Gram matrix the screen for aliased columns reads, and
+                // are those of this iteration when no column is aliased.
+                let all = self.summed(rows, &source, &columns);
+                if let Some(row) = all.bad {
+                    return Err(GlmError::Design(DesignError::Weight { row }));
+                }
+                let keep = screened_columns(&all.gram, rows.n_rows(), self.tolerance, |m| {
+                    independent_columns(self, rows, self.tolerance, m)
+                });
                 columns = (0..p).filter(|&j| keep[j]).collect();
+                if columns.len() == p {
+                    ahead = Some(all);
+                }
             }
             let summed = match ahead.take() {
                 Some(s) => s,
@@ -530,15 +549,16 @@ struct AtSource {
     products: Option<Summed>,
 }
 
-/// The columns of `sqrt(W) X` at the starting means that `Glm::fit` keeps,
-/// by its modified Gram-Schmidt with a second pass, in column order.
+/// The first `limit` of the columns of `sqrt(W) X` at the starting means that
+/// `Glm::fit` keeps, by its modified Gram-Schmidt with a second pass, in
+/// column order.
 ///
 /// The vector of a column after each projection is formed again for every row
 /// from the inner products found so far, so each inner product and each norm
 /// takes one pass over the rows, summed in row order as `Glm::fit` sums them.
-fn independent_columns(model: &Glm, rows: &dyn Rows, epsilon: f64) -> Vec<bool> {
+fn independent_columns(model: &Glm, rows: &dyn Rows, epsilon: f64, limit: usize) -> Vec<bool> {
     let tol = 1e-7_f64.min(epsilon / 1000.0);
-    let p = rows.n_columns();
+    let p = limit;
     // The basis: each kept column with the inner products it was projected by,
     // two passes over the basis before it, and its norm after them.
     let mut basis: Vec<Kept> = Vec::new();
