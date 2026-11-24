@@ -22,7 +22,6 @@ use epistat_survival::weighting::trials::{
     Msm, MsmInput, PersonPeriod, TrialRows, TrialSpans, WeightModel, fit_msm, fit_msm_trials,
     switch_weights, trial_weights,
 };
-use epistat_testkit::Fingerprint;
 
 fn expit(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
@@ -364,6 +363,8 @@ fn spans_are_checked() {
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn bits_are_unchanged() {
+    use epistat_testkit::Fingerprint;
+
     let got: Vec<(String, usize, u64)> = outputs()
         .into_iter()
         .map(|(name, v)| {
