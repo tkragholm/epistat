@@ -207,8 +207,8 @@ mod tests {
     #[test]
     fn the_sums_and_the_covariance_follow_the_summation_order_of_the_kernel() {
         let mut stream = epistat_rng::Stream::seeded(17);
-        let n = 301;
-        let labels: Vec<u32> = (0..n).map(|i| ((i * 7) % 41) as u32).collect();
+        let n: u32 = 301;
+        let labels: Vec<u32> = (0..n).map(|i| (i * 7) % 41).collect();
         let psi: Vec<Vec<f64>> = (0..3)
             .map(|_| (0..n).map(|_| stream.uniform() - 0.4).collect())
             .collect();

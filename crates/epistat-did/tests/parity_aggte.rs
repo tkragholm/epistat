@@ -59,7 +59,8 @@ struct Agg {
 
 #[derive(Deserialize)]
 struct MaxE {
-    max_e: i32,
+    #[serde(rename = "max_e")]
+    bound: i32,
     simple: Agg,
     group: Agg,
     dynamic_balanced: Agg,
@@ -156,6 +157,10 @@ fn columns(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "cohorts are small whole numbers written as doubles by R"
+)]
 fn panel(unit_group: &[f64]) -> UnitPanel {
     UnitPanel::unweighted(
         unit_group
@@ -165,6 +170,10 @@ fn panel(unit_group: &[f64]) -> UnitPanel {
     )
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "state codes are small whole numbers written as doubles by R"
+)]
 fn clustered_panel(r: &Reference) -> UnitPanel {
     panel(&r.unit_group).clustered_by(r.unit_state.iter().map(|&s| s as i64).collect())
 }
@@ -258,13 +267,13 @@ fn max_e_applies_to_simple_and_group_as_in_did() {
                     aggregation,
                     balance_e,
                     min_e,
-                    max_e: Some(case.max_e),
+                    max_e: Some(case.bound),
                     ..AggteConfig::default()
                 },
             )
             .expect("aggregate")
         };
-        let label = |name: &str| format!("{name} max_e={}", case.max_e);
+        let label = |name: &str| format!("{name} max_e={}", case.bound);
         check(
             &label("simple"),
             &with(AggteType::Simple, None, None),
@@ -708,7 +717,7 @@ fn the_flags_choose_what_the_bootstrap_replaces() {
     assert!(!se_only.uniform_band);
     assert_eq!(se_only.critical_value, analytic.critical_value);
     assert_eq!(se_only.overall_se, full.overall_se);
-    assert!(se_only.by_key[0].se != analytic.by_key[0].se);
+    assert!((se_only.by_key[0].se - analytic.by_key[0].se).abs() > 1e-12);
 
     for bad in [bootstrap(0, 1, true, true), bootstrap(10, 1, false, false)] {
         let refused = aggregate_att_gt(
