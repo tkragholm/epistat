@@ -205,12 +205,7 @@ fn fit_logistic(
             "{what}: the rows of the fit need both values of the response"
         )));
     }
-    let subset = Subset {
-        x,
-        y,
-        rows,
-        weight: None,
-    };
+    let subset = Subset { x, y, rows };
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_rows(&subset)
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
@@ -225,13 +220,12 @@ fn fit_logistic(
     Ok((coefficients, fit.fitted(&subset)))
 }
 
-/// The rows `rows` of a design and a binary response, with prior weights of
-/// the rows or 1, as the rows of a fit, in place of a copy of them.
-pub(crate) struct Subset<'a> {
-    pub(crate) x: MatRef<'a, f64>,
-    pub(crate) y: &'a [bool],
-    pub(crate) rows: &'a [usize],
-    pub(crate) weight: Option<&'a [f64]>,
+/// The rows `rows` of a design and a binary response as the rows of a fit,
+/// in place of a copy of them.
+struct Subset<'a> {
+    x: MatRef<'a, f64>,
+    y: &'a [bool],
+    rows: &'a [usize],
 }
 
 impl Rows for Subset<'_> {
@@ -250,7 +244,7 @@ impl Rows for Subset<'_> {
                 block.x[(k, j)] = self.x[(r, j)];
             }
             block.y[k] = f64::from(u8::from(self.y[r]));
-            block.weight[k] = self.weight.map_or(1.0, |w| w[r]);
+            block.weight[k] = 1.0;
             block.cluster[k] = 0;
         }
     }

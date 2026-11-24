@@ -43,7 +43,8 @@
 //! The test for aliased columns at the first iteration projects each column
 //! on the ones kept before it by modified Gram-Schmidt with a second pass,
 //! whose inner products depend on each other in turn, so it forms the rows
-//! about `p^2` times for `p` columns.
+//! about `p^2` times for `p` columns, the norm left in one column together
+//! with the first inner product of the next.
 //!
 //! # References
 //!
@@ -264,12 +265,15 @@ impl Glm {
         let mut bad_weight: Option<(usize, f64)> = None;
         let mut bad_response: Option<(usize, f64)> = None;
         let mut used = 0_usize;
+        let mut old_deviance = empty_sum();
+        let start = Source::Start;
         in_order(
             rows,
             |b| {
                 let mut bw = None;
                 let mut by = None;
                 let mut used = 0;
+                let mut terms = Vec::with_capacity(b.y.len());
                 for k in 0..b.y.len() {
                     let (y, w) = (b.y[k], b.w[k]);
                     if bw.is_none() && !(w.is_finite() && w >= 0.0) {
@@ -279,13 +283,18 @@ impl Glm {
                         by = Some((b.start + k, y));
                     }
                     used += usize::from(w > 0.0);
+                    let r = self.at(&start, b.x.as_ref(), k, y, w);
+                    terms.push(family.deviance(y, r.mu, w));
                 }
-                (bw, by, used)
+                (bw, by, used, terms)
             },
-            |(bw, by, u)| {
+            |(bw, by, u, terms)| {
                 bad_weight = bad_weight.or(bw);
                 bad_response = bad_response.or(by);
                 used += u;
+                for t in terms {
+                    old_deviance += t;
+                }
             },
         );
         if let Some((index, value)) = bad_weight {
@@ -297,8 +306,6 @@ impl Glm {
         if let Some((index, value)) = bad_response {
             return Err(GlmError::Response { index, value });
         }
-        let start = Source::Start;
-        let mut old_deviance = self.deviance_at(rows, &start, None).deviance;
 
         let mut previous: Option<Vec<f64>> = None;
         let mut beta = vec![0.0; p];
@@ -536,20 +543,45 @@ fn independent_columns(model: &Glm, rows: &dyn Rows, epsilon: f64) -> Vec<bool> 
     // two passes over the basis before it, and its norm after them.
     let mut basis: Vec<Kept> = Vec::new();
     let mut keep = Vec::with_capacity(p);
+    // The first stage of the next column, formed with the last stage of this
+    // one when it needs only basis vectors that are already known.
+    let mut ahead: Option<(f64, Option<f64>)> = None;
     for j in 0..p {
         let mut dots: Vec<f64> = Vec::with_capacity(2 * basis.len());
-        // Stage 0 gives the norm of the column before any projection and its
-        // inner product with the first basis vector.
-        let first = sums(model, rows, &basis, j, &dots, basis.first().map(|_| 0));
+        // Stage 0 gives the sum of squares of the column before any
+        // projection and its inner product with the first basis vector.
+        let first = ahead
+            .take()
+            .unwrap_or_else(|| sums(model, rows, &basis, &[(j, &[], basis.first().map(|_| 0))])[0]);
         let original = first.0.sqrt();
         if let Some(d) = first.1 {
             dots.push(d);
         }
         for stage in dots.len()..2 * basis.len() {
-            let (_, d) = sums(model, rows, &basis, j, &dots, Some(stage % basis.len()));
+            let (_, d) = sums(
+                model,
+                rows,
+                &basis,
+                &[(j, &dots, Some(stage % basis.len()))],
+            )[0];
             dots.push(d.unwrap_or(f64::NAN));
         }
-        let left = sums(model, rows, &basis, j, &dots, None).0.sqrt();
+        // With no projection the norm left is the norm the column started
+        // with, summed alike.
+        let left = if dots.is_empty() {
+            original
+        } else if j + 1 < p {
+            let both = sums(
+                model,
+                rows,
+                &basis,
+                &[(j, &dots, None), (j + 1, &[], Some(0))],
+            );
+            ahead = Some(both[1]);
+            both[0].0.sqrt()
+        } else {
+            sums(model, rows, &basis, &[(j, &dots, None)])[0].0.sqrt()
+        };
         if left < tol * if original > 0.0 { original } else { 1.0 } {
             keep.push(false);
             continue;
@@ -573,25 +605,24 @@ struct Kept {
     norm: f64,
 }
 
-/// For column `j` projected by the inner products `dots` so far: the sum of
-/// the squares of its values over the rows, and, when `with` is given, its
-/// inner product with basis vector `with`, both summed in row order.
+/// For each request `(j, dots, with)`, column `j` projected by the inner
+/// products `dots`: the sum of the squares of its values over the rows, and,
+/// when `with` is given, its inner product with basis vector `with`, both
+/// summed in row order. The requests share one pass over the rows.
 fn sums(
     model: &Glm,
     rows: &dyn Rows,
     basis: &[Kept],
-    j: usize,
-    dots: &[f64],
-    with: Option<usize>,
-) -> (f64, Option<f64>) {
-    let mut squares = empty_sum();
-    let mut inner = empty_sum();
+    requests: &[(usize, &[f64], Option<usize>)],
+) -> Vec<(f64, Option<f64>)> {
+    let mut squares = vec![empty_sum(); requests.len()];
+    let mut inner = vec![empty_sum(); requests.len()];
     in_order(
         rows,
         |b| {
             let len = b.y.len();
-            let mut sq = Vec::with_capacity(len);
-            let mut ip = Vec::with_capacity(if with.is_some() { len } else { 0 });
+            let mut sq = vec![Vec::with_capacity(len); requests.len()];
+            let mut ip = vec![Vec::new(); requests.len()];
             let mut q = vec![0.0; basis.len()];
             for k in 0..len {
                 let (y, w) = (b.y[k], b.w[k]);
@@ -605,27 +636,37 @@ fn sums(
                     }
                     q[a] = u / kept.norm;
                 }
-                let mut u = s * b.x[(k, j)];
-                for (stage, &d) in dots.iter().enumerate() {
-                    u -= d * q[stage % basis.len()];
-                }
-                sq.push(u * u);
-                if let Some(v) = with {
-                    ip.push(q[v] * u);
+                for (t, &(j, dots, with)) in requests.iter().enumerate() {
+                    let mut u = s * b.x[(k, j)];
+                    for (stage, &d) in dots.iter().enumerate() {
+                        u -= d * q[stage % basis.len()];
+                    }
+                    sq[t].push(u * u);
+                    if let Some(v) = with {
+                        ip[t].push(q[v] * u);
+                    }
                 }
             }
             (sq, ip)
         },
         |(sq, ip)| {
-            for t in sq {
-                squares += t;
+            for (t, terms) in sq.into_iter().enumerate() {
+                for v in terms {
+                    squares[t] += v;
+                }
             }
-            for t in ip {
-                inner += t;
+            for (t, terms) in ip.into_iter().enumerate() {
+                for v in terms {
+                    inner[t] += v;
+                }
             }
         },
     );
-    (squares, with.map(|_| inner))
+    requests
+        .iter()
+        .enumerate()
+        .map(|(t, &(_, _, with))| (squares[t], with.map(|_| inner[t])))
+        .collect()
 }
 
 impl RowsFit {

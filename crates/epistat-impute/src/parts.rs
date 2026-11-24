@@ -64,7 +64,6 @@
 
 use std::ops::Range;
 
-use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link, Multinom};
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_linalg::design::{independent_columns, select_columns};
@@ -112,108 +111,18 @@ pub fn linear_fit(x: MatRef<'_, f64>, y: &[f64], column: usize) -> Result<Linear
         });
     }
     let fit = Glm::new(Family::Gaussian, Link::Identity).fit(x, y, None, None, None)?;
-    linear_from(
-        fit.converged,
-        &fit.coefficients,
-        &fit.covariance,
-        fit.dispersion,
-        fit.deviance,
-        n - p,
-        column,
-    )
-}
-
-/// [`linear_fit`] on the design of `rows`, formed block by block, with the
-/// same bits.
-pub(crate) fn linear_fit_rows(rows: &DesignRows<'_>, column: usize) -> Result<LinearFit> {
-    let (n, p) = (rows.n_rows(), rows.n_columns());
-    if n <= p {
-        return Err(ImputeError::TooFewObserved {
-            column,
-            observed: n,
-            parameters: p,
-        });
-    }
-    let fit = Glm::new(Family::Gaussian, Link::Identity).fit_rows(rows)?;
-    linear_from(
-        fit.converged,
-        &fit.coefficients,
-        &fit.covariance,
-        fit.dispersion,
-        fit.deviance,
-        n - p,
-        column,
-    )
-}
-
-fn linear_from(
-    converged: bool,
-    coefficients: &[Option<f64>],
-    covariance: &[Option<f64>],
-    dispersion: Option<f64>,
-    deviance: f64,
-    df: usize,
-    column: usize,
-) -> Result<LinearFit> {
-    if !converged {
+    if !fit.converged {
         return Err(ImputeError::NotConverged { column });
     }
-    let active: Vec<bool> = coefficients.iter().map(Option::is_some).collect();
-    let covariance = unscaled_covariance(covariance, &active, dispersion);
+    let active: Vec<bool> = fit.coefficients.iter().map(Option::is_some).collect();
+    let covariance = unscaled_covariance(&fit.covariance, &active, fit.dispersion);
     Ok(LinearFit {
-        coefficients: coefficients.iter().map(|c| c.unwrap_or(0.0)).collect(),
+        coefficients: fit.coefficients.iter().map(|c| c.unwrap_or(0.0)).collect(),
         active,
         covariance,
-        rss: deviance,
-        df: df as f64,
+        rss: fit.deviance,
+        df: (n - p) as f64,
     })
-}
-
-/// The rows of the design of an imputation model: an intercept and the
-/// predictor columns at the observed rows, then the rows of an augmentation,
-/// formed block by block for [`Glm::fit_rows`] in place of a design matrix.
-pub(crate) struct DesignRows<'a> {
-    /// The predictor columns, all rows of the data.
-    pub(crate) columns: &'a [&'a [f64]],
-    /// The observed rows.
-    pub(crate) observed: &'a [usize],
-    /// The outcome of each row of the design.
-    pub(crate) y: &'a [f64],
-    /// The rows added after the observed ones, with weight `weight` where the
-    /// observed rows have 1.
-    pub(crate) augmentation: Option<&'a Augmentation>,
-}
-
-impl Rows for DesignRows<'_> {
-    fn n_rows(&self) -> usize {
-        self.observed.len() + self.augmentation.map_or(0, |a| a.rows)
-    }
-
-    fn n_columns(&self) -> usize {
-        self.columns.len() + 1
-    }
-
-    fn fill(&self, start: usize, mut block: Block<'_>) {
-        let (n_obs, p) = (self.observed.len(), self.columns.len());
-        for i in 0..block.y.len() {
-            let row = start + i;
-            block.x[(i, 0)] = 1.0;
-            if row < n_obs {
-                let r = self.observed[row];
-                for (k, c) in self.columns.iter().enumerate() {
-                    block.x[(i, k + 1)] = c[r];
-                }
-                block.weight[i] = 1.0;
-            } else if let Some(aug) = self.augmentation {
-                for k in 0..p {
-                    block.x[(i, k + 1)] = aug.x[(row - n_obs) * p + k];
-                }
-                block.weight[i] = aug.weight;
-            }
-            block.y[i] = self.y[row];
-            block.cluster[i] = 0;
-        }
-    }
 }
 
 /// The covariance of the active coefficients divided by the dispersion, which
@@ -518,36 +427,20 @@ pub fn logistic_fit(
     column: usize,
 ) -> Result<LogisticFit> {
     let fit = Glm::new(Family::Binomial, Link::Logit).fit(x, y, Some(weights), None, None)?;
-    logistic_from(fit.converged, &fit.coefficients, &fit.covariance, column)
-}
-
-/// [`logistic_fit`] on the design, outcomes and weights of `rows`, formed
-/// block by block, with the same bits.
-pub(crate) fn logistic_fit_rows(rows: &DesignRows<'_>, column: usize) -> Result<LogisticFit> {
-    let fit = Glm::new(Family::Binomial, Link::Logit).fit_rows(rows)?;
-    logistic_from(fit.converged, &fit.coefficients, &fit.covariance, column)
-}
-
-fn logistic_from(
-    converged: bool,
-    coefficients: &[Option<f64>],
-    full: &[Option<f64>],
-    column: usize,
-) -> Result<LogisticFit> {
-    if !converged {
+    if !fit.converged {
         return Err(ImputeError::NotConverged { column });
     }
-    let p = coefficients.len();
-    let active: Vec<bool> = coefficients.iter().map(Option::is_some).collect();
+    let p = x.ncols();
+    let active: Vec<bool> = fit.coefficients.iter().map(Option::is_some).collect();
     let keep: Vec<usize> = (0..p).filter(|&j| active[j]).collect();
     let mut covariance = Vec::with_capacity(keep.len() * keep.len());
     for &i in &keep {
         for &j in &keep {
-            covariance.push(full[i * p + j].ok_or(ImputeError::Covariance { column })?);
+            covariance.push(fit.covariance[i * p + j].ok_or(ImputeError::Covariance { column })?);
         }
     }
     Ok(LogisticFit {
-        coefficients: coefficients.iter().map(|c| c.unwrap_or(0.0)).collect(),
+        coefficients: fit.coefficients.iter().map(|c| c.unwrap_or(0.0)).collect(),
         active,
         covariance,
     })

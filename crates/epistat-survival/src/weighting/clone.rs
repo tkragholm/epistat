@@ -90,10 +90,9 @@
 
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
-use epistat_linalg::{MatRef, ROW_BLOCK};
+use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
-use super::trials::Subset;
 use crate::error::{Error, Result};
 
 /// Whether a person who has started treatment must stay on it.
@@ -303,6 +302,10 @@ pub struct DeviationModel<'a> {
     pub numerator: Option<MatRef<'a, f64>>,
 }
 
+fn subset(x: MatRef<'_, f64>, rows: &[usize]) -> Mat<f64> {
+    Mat::from_fn(rows.len(), x.ncols(), |i, j| x[(rows[i], j)])
+}
+
 fn fit_deviation(
     x: MatRef<'_, f64>,
     d: &[bool],
@@ -316,13 +319,11 @@ fn fit_deviation(
             "{what}: the rows at risk need both deviations and rows that are not"
         )));
     }
+    let xs = subset(x, rows);
+    let ys: Vec<f64> = rows.iter().map(|&r| f64::from(u8::from(d[r]))).collect();
+    let ws: Option<Vec<f64>> = case.map(|c| rows.iter().map(|&r| c[r]).collect());
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit_rows(&Subset {
-            x,
-            y: d,
-            rows,
-            weight: case,
-        })
+        .fit(xs.as_ref(), &ys, ws.as_deref(), None, None)
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
     if !fit.converged {
         return Err(Error::input(format!("{what}: no convergence")));

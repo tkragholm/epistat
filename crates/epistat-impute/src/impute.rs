@@ -7,9 +7,8 @@ use rayon::prelude::*;
 use crate::data::{Column, Incomplete};
 use crate::error::{ImputeError, Result};
 use crate::parts::{
-    DesignRows, SortedDonors, augmentation_of, class_from_uniform, class_probabilities,
-    design_matrix, draw_coefficients, draw_linear, linear_fit_rows, logistic_fit_rows,
-    multinomial_fit,
+    SortedDonors, augmentation_of, class_from_uniform, class_probabilities, design_matrix,
+    draw_coefficients, draw_linear, linear_fit, logistic_fit, multinomial_fit,
 };
 use crate::spec::{ImputeOptions, ImputeSpec, MatchType, Method};
 
@@ -459,16 +458,9 @@ fn impute_column(
         }
         Method::Norm | Method::Pmm { .. } => {
             let cols = predictor_columns(data, completed, &spec.predictors[j]);
-            let slices: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
-            let fit = linear_fit_rows(
-                &DesignRows {
-                    columns: &slices,
-                    observed: obs,
-                    y: &y_obs,
-                    augmentation: None,
-                },
-                j,
-            )?;
+            let x = design_matrix(&cols, obs);
+            let fit = linear_fit(x.as_ref(), &y_obs, j)?;
+            drop(x);
             out.aliased += usize::from(fit.n_active() < fit.active.len());
             let mut stream = Stream::seeded(replicate_seed(seed, PARAMETER_ROW));
             let chi = stream.chi_square(fit.df)?;
@@ -508,22 +500,10 @@ fn impute_column(
         }
         Method::Logreg => {
             let cols = predictor_columns(data, completed, &spec.predictors[j]);
-            let slices: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
-            let aug = augmentation_rows(&cols, &y_obs, &[0.0, 1.0]);
-            out.augmented += usize::from(aug.is_some());
-            let y_aug: Vec<f64> = match &aug {
-                Some(a) => y_obs.iter().chain(&a.y).copied().collect(),
-                None => y_obs.clone(),
-            };
-            let fit = logistic_fit_rows(
-                &DesignRows {
-                    columns: &slices,
-                    observed: obs,
-                    y: &y_aug,
-                    augmentation: aug.as_ref(),
-                },
-                j,
-            )?;
+            let (x_aug, y_aug, w_aug, used) = augmented_problem(&cols, obs, &y_obs, &[0.0, 1.0]);
+            out.augmented += usize::from(used);
+            let fit = logistic_fit(x_aug.as_ref(), &y_aug, &w_aug, j)?;
+            drop((x_aug, y_aug, w_aug));
             out.aliased += usize::from(fit.active.iter().any(|&a| !a));
             let mut stream = Stream::seeded(replicate_seed(seed, PARAMETER_ROW));
             let mut z = vec![0.0; fit.active.iter().filter(|&&a| a).count()];
@@ -571,22 +551,6 @@ fn impute_column(
                 .collect())
         }
     }
-}
-
-/// The augmentation rows of `mice:::augment` for the outcomes of `outcomes`
-/// that are observed, `None` when there are no predictors.
-fn augmentation_rows(
-    cols: &[Cow<'_, [f64]>],
-    y_obs: &[f64],
-    outcomes: &[f64],
-) -> Option<crate::parts::Augmentation> {
-    let mut present: Vec<f64> = outcomes
-        .iter()
-        .copied()
-        .filter(|o| y_obs.contains(o))
-        .collect();
-    present.sort_unstable_by(f64::total_cmp);
-    augmentation_of(cols, &present)
 }
 
 /// The observed rows of the design with the intercept, followed by the

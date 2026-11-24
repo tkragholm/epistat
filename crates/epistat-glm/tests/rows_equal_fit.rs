@@ -46,11 +46,12 @@ fn normal(rng: &mut SplitMix64) -> f64 {
 }
 
 /// `n` rows of an intercept, two covariates and, with `aliased`, a column
-/// that is twice the second, a response of the family, weights with zeros,
+/// that is twice the first covariate, between it and a fourth covariate, so
+/// that a column after the aliased one is tested too, a response of the family, weights with zeros,
 /// and clusters of about five rows, in order or scattered.
 fn problem(n: usize, family: Family, aliased: bool, scattered: bool, seed: u64) -> Held {
     let mut rng = SplitMix64::new(seed);
-    let p = if aliased { 4 } else { 3 };
+    let p = if aliased { 5 } else { 3 };
     let mut x = Mat::<f64>::zeros(n, p);
     let mut y = Vec::with_capacity(n);
     let mut w = Vec::with_capacity(n);
@@ -59,9 +60,12 @@ fn problem(n: usize, family: Family, aliased: bool, scattered: bool, seed: u64) 
         let (a, b) = (normal(&mut rng), f64::from(u8::from(rng.unit() < 0.4)));
         x[(i, 0)] = 1.0;
         x[(i, 1)] = a;
-        x[(i, 2)] = b;
         if aliased {
-            x[(i, 3)] = 2.0 * a;
+            x[(i, 2)] = 2.0 * a;
+            x[(i, 3)] = b;
+            x[(i, 4)] = normal(&mut rng);
+        } else {
+            x[(i, 2)] = b;
         }
         let eta = 0.3 * a - 0.5 * b;
         y.push(match family {
