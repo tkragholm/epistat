@@ -179,7 +179,8 @@ pub use inference::{
 #[cfg(feature = "honest")]
 pub use methods::att_gt::WindowAssessment;
 pub use methods::att_gt::{
-    AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, EventStudyResult,
+    PretestError, PretrendWald, pretrend_wald_test,
+    AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, EventStudyResult,
     EventTimeResult, UnitPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
     aggregate_att_gt_by_cohort, aggregate_att_gt_event_time,
     aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,

@@ -374,6 +374,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                     min_e: None,
                     max_e: None,
                     confidence_level: inference,
+                    bootstrap: None,
                 },
             )),
         ));
@@ -469,6 +470,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                 min_e: None,
                 max_e: None,
                 confidence_level: inference,
+                bootstrap: None,
             },
         )),
     ));

@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use super::aggte::{
     AggteConfig, AggteError, AggteType, UnitPanel, aggregate_att_gt, checked_cluster_index,
-    combine_fixed, standard_error,
+    combine_fixed,
 };
+use crate::inference::did_clusters::standard_error;
 use crate::inference::{normal_interval, validate_confidence_level};
 use crate::types::{
     AttGtAggregatedEstimate, AttGtAggregationConfig, AttGtAggregationError,
@@ -251,7 +252,7 @@ fn aggregate_post_treatment(
     if !validate_confidence_level(confidence_level) {
         return Err(AggteError::InvalidConfidenceLevel);
     }
-    let (assignments, n_clusters) = checked_cluster_index(estimates, influence, panel)?;
+    let clusters = checked_cluster_index(estimates, influence, panel)?;
     let mut buckets = BTreeMap::<i32, Vec<usize>>::new();
     for (index, estimate) in estimates.iter().enumerate() {
         if estimate.time >= estimate.group {
@@ -310,7 +311,7 @@ fn aggregate_post_treatment(
                 let weights = raw.iter().map(|w| w / raw_total).collect::<Vec<_>>();
                 let (att, combined) =
                     combine_fixed(cells, &weights, estimates, influence, panel.groups.len());
-                let se = standard_error(&combined, &assignments, n_clusters);
+                let se = standard_error(&combined, &clusters);
                 let (ci_low, ci_high) = normal_interval(att, se, confidence_level);
                 (key, (att, se, ci_low, ci_high))
             })
