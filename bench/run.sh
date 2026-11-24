@@ -63,6 +63,8 @@ negbin:epistat-glm:tier1_glm:reg:1000000:tier1/bench.R:120
 risk_robust:epistat-glm:tier1_glm:reg:10000000:tier1/bench.R:120
 risk_cluster:epistat-glm:tier1_glm:reg:10000000:tier1/bench.R:120
 within:epistat-glm:tier1_glm:reg:10000000:tier1/bench.R:120
+glm_logit_p5:epistat-glm:tier1_glm_scale:none:10000000:-:300
+glm_logit_p20:epistat-glm:tier1_glm_scale:none:10000000:-:300
 mh_or:epistat-stats:tier1_stats:mh:10000000:tier1/bench.R:120
 mh_rr:epistat-stats:tier1_stats:mhr:10000000:tier1/bench.R:120
 padj_holm:epistat-inference:tier1_inference:pv:10000000:tier1/bench.R:120
@@ -78,6 +80,10 @@ pyears_rates:epistat-survival:tier1_survival:pyr:10000000:tier1/bench.R:120
 sir_ratetable:epistat-survival:tier1_survival:pyr:10000000:tier1/bench.R:120
 overlap:epistat-survival:tier1_survival:ps:10000000:tier1/bench.R:120
 ipwtm:epistat-survival:tier1_survival:ppw:10000000:tier1/bench.R:120
+cox_p5:epistat-survival:tier1_cox_scale:none:10000000:-:300
+cox_p20:epistat-survival:tier1_cox_scale:none:10000000:-:300
+cox_entry_p5:epistat-survival:tier1_cox_scale:none:10000000:-:300
+balance_weights:epistat-matching:tier1_balance_scale:none:10000000:-:300
 aipw:epistat-causal:tier1_causal:aipw:10000000:tier1/bench.R:120
 att_gt:epistat-did:tier1_did:did:1000000:tier1/bench.R:120
 two_part:epistat-semicontinuous:tier1_semicontinuous:sc:10000000:tier1/bench.R:120

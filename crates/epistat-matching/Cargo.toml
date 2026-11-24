@@ -81,5 +81,9 @@ harness = false
 name = "matchit_compare"
 harness = false
 
+[[bench]]
+name = "tier1_balance_scale"
+harness = false
+
 [lints]
 workspace = true

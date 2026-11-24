@@ -34,5 +34,9 @@ harness = false
 name = "tier2_af"
 harness = false
 
+[[bench]]
+name = "tier1_glm_scale"
+harness = false
+
 [lints]
 workspace = true
