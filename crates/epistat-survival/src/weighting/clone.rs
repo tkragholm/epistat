@@ -627,15 +627,15 @@ pub fn deviation_weights_rows(
             }
         });
     let mut cum = 1.0;
-    for r in 0..n {
+    for (r, w) in weight.iter_mut().enumerate() {
         if r == 0 || cloned.person[r] != cloned.person[r - 1] || cloned.arm[r] != cloned.arm[r - 1]
         {
             cum = 1.0;
         }
         if cloned.at_risk[r] {
-            cum *= weight[r];
+            cum *= *w;
         }
-        weight[r] = cum;
+        *w = cum;
     }
     Ok(DeviationWeights {
         weight,
