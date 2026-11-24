@@ -84,7 +84,7 @@ fn problem(n: usize, family: Family, aliased: bool, scattered: bool, seed: u64) 
         });
         w.push(if i % 11 == 5 { 0.0 } else { 0.5 + rng.unit() });
         labels.push(if scattered {
-            rng.below((n / 5).max(1) as u64) as usize
+            usize::try_from(rng.below((n / 5).max(1) as u64)).unwrap()
         } else {
             i / 5
         });

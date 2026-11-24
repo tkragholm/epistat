@@ -199,7 +199,9 @@ impl Table {
             if got == 0 {
                 break;
             }
-            newlines += buffer[..got].iter().filter(|&&b| b == b'\n').count();
+            for &b in &buffer[..got] {
+                newlines += usize::from(b == b'\n');
+            }
         }
         let file = fs::File::open(path).expect("open");
         let mut lines = std::io::BufReader::with_capacity(1 << 20, file).lines();
