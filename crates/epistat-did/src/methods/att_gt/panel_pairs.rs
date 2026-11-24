@@ -1,47 +1,61 @@
-//! Panel `ATT(g,t)` with covariate adjustment, matching `did::att_gt(panel = TRUE)`.
+//! Panel `ATT(g,t)` with covariate adjustment, `did::att_gt(panel = TRUE)`.
 //!
-//! # Why this exists separately from [`super::pair_estimators`]
+//! [`super::pair_estimators`] treats the two periods of a cell as independent
+//! samples, which is right for repeated cross-sections. On a panel they are
+//! the same units observed twice, and each cell here is a two-period panel
+//! estimator on the outcome changes of the units observed in both periods:
+//! `DRDID::drdid_panel`, `std_ipw_did_panel` or `reg_did_panel`, as `did`
+//! calls them for `est_method = "dr"`, `"ipw"` and `"reg"`.
 //!
-//! That module routes every covariate-adjusted cell through
-//! [`estimate_drdid_repeated_cross_section`](crate::methods::drdid::repeated::estimate_drdid_repeated_cross_section),
-//! which treats the baseline and follow-up periods as two independent samples.
-//! On panel data they are the same units observed twice, and ignoring the
-//! pairing inflates the variance. R's `did` defaults to `panel = TRUE` and uses
-//! `DRDID::drdid_panel`; this module is that route.
+//! # Influence vectors
 //!
-//! # The alignment convention, which is the whole correctness argument
-//!
-//! The repeated-cross-section path aligns each cell's influence function to the
-//! **input row** index and pads with zeros. That is right for it: one row is one
-//! observation. For panel data one *unit* is one observation, and the influence
-//! function `DRDID::drdid_panel` returns has one entry per unit, not per row.
-//!
-//! This matters numerically rather than cosmetically. Measured against
-//! `did` 2.5.1 on `mpdta` (`tests/data/cs_panel_dr_universal_ref.json`), R's reported
-//! standard error is exactly
+//! One unit is one observation, so every cell's influence vector has one
+//! entry per unit, indexed by position in the sorted ids of the units the
+//! pre-processing kept ([`crate::AttGtSample::ids`]); units absent from a cell
+//! carry zero. A cell fitted on `n_cell` of the `n` units has its vector
+//! scaled by `n / n_cell`, so that, as in `did`,
 //!
 //! ```text
-//! se = sqrt(sum(psi^2)) / n_units
+//! se = sqrt(sum(psi^2)) / n
 //! ```
 //!
-//! and [`standard_error_from_influence`](crate::inference::standard_error_from_influence)
-//! computes the same quantity from a vector of length `n`. So a unit-indexed
-//! vector reproduces R and a row-indexed one is wrong by a factor of the number
-//! of periods: on `mpdta`, five. Every aggregation, every simultaneous band and
-//! the whole `HonestDiD` surface is a function of this matrix, so the factor
-//! would propagate everywhere and fail silently.
+//! for every cell, and the vectors of different cells are on one scale for the
+//! aggregations, the bands and the `HonestDiD` covariance. A row-indexed
+//! vector would be wrong by a factor of the number of periods.
 //!
-//! Influence vectors from this module are therefore indexed by **position in the
-//! sorted list of distinct `unit_id` values across the whole input**, and units
-//! absent from a cell carry zero.
+//! An unbalanced panel under
+//! [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) is fitted
+//! by the repeated cross-section estimators on each cell's rows, and each
+//! unit's rows are summed in its entry.
 
-use std::collections::BTreeMap;
-
-use crate::methods::drdid::panel::{PanelFlatInput, estimate_drdid_panel_flat};
-use crate::types::{
-    AttGtDrConfig, AttGtDrObservation, AttGtError, AttGtEstimate, AttGtInfluenceOutput, PrunedCell,
-    SkippedCell,
+use crate::inference::standard_error_from_influence;
+use crate::methods::drdid::ipw_or::{
+    estimate_ipw_did_panel_flat, estimate_ipw_did_repeated_cross_section,
+    estimate_or_did_panel_flat, estimate_or_did_repeated_cross_section,
 };
+use crate::methods::drdid::panel::{PanelFlatInput, estimate_drdid_panel_flat};
+use crate::methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
+use crate::types::{
+    AttGtDrConfig, AttGtDrObservation, AttGtError, AttGtEstimate, AttGtInfluenceOutput, DidCell,
+    DrDidEstimate, DrDidRepeatedObservation, PrunedCell, SkippedCell, TimePeriod, TreatmentGroup,
+};
+
+use super::preprocess::{Prepared, Route, cell_grid, preprocess};
+
+/// A fitted cell, its unit-aligned influence vector and the covariate columns
+/// it dropped, or the reason it could not be fitted.
+type CellFit = Result<(AttGtEstimate, Vec<f64>, usize), &'static str>;
+
+/// The estimator of each cell, as `did::att_gt`'s `est_method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Estimator {
+    /// `"dr"`: `DRDID::drdid_panel`, or `drdid_rc` on an unbalanced panel.
+    DoublyRobust,
+    /// `"ipw"`: `DRDID::std_ipw_did_panel`, or `std_ipw_did_rc`.
+    InverseProbabilityWeighting,
+    /// `"reg"`: `DRDID::reg_did_panel`, or `reg_did_rc`.
+    OutcomeRegression,
+}
 
 /// One unit's contribution to a single `(g, t)` cell.
 struct PanelUnit<'a> {
@@ -51,27 +65,17 @@ struct PanelUnit<'a> {
     baseline_outcome: Option<f64>,
     follow_up_outcome: Option<f64>,
     weight: f64,
-    /// Taken from the BASELINE row, which is what `did` does: covariates are
-    /// measured before treatment so that treatment cannot have moved them.
-    ///
-    /// BORROWED from that row rather than cloned. This was a `Vec<f64>` filled
-    /// by `clone_from` once per unit per cell, and the cell loop runs hundreds
-    /// of times per slice: on Study I's shape that is millions of small
-    /// allocations whose contents never change.
+    /// The covariates of the row of the earlier of the cell's two periods,
+    /// borrowed from it, as `did` takes them. That is the base period except
+    /// in a pre-treatment cell under a universal base, whose base is later.
     covariates: &'a [f64],
 }
 
 /// Buffers the cell loop reuses, so the per-cell cost is the cell's own size.
 ///
-/// `collect_cell_units` built a `BTreeMap<i64, PanelUnit>` per cell: a node
-/// allocation and an O(log n) descent for every row of every cell, to rebuild a
-/// mapping `unit_universe` had already computed. `slots` is that mapping made
-/// dense, indexed by the unit position the influence vectors are aligned on
-/// anyway.
-///
-/// `touched` is what keeps the reuse honest. Clearing `slots` wholesale would
-/// cost the WHOLE panel per cell, which is worse than the map for a small cell;
-/// clearing only the entries a cell wrote costs the cell.
+/// `slots` is indexed by the unit position the influence vectors are aligned
+/// on. `touched` lists the slots a cell wrote, so that resetting costs the
+/// cell and not the whole panel.
 struct CellScratch<'a> {
     slots: Vec<Option<PanelUnit<'a>>>,
     touched: Vec<usize>,
@@ -110,33 +114,43 @@ impl CellScratch<'_> {
     }
 }
 
-/// The sorted distinct `unit_id` values, and a lookup from id to position.
+/// Whether kept row `k` of `prepared` is in the cell `(group, time)` against
+/// `baseline_time`, and as treated (`Some(true)`) or comparison
+/// (`Some(false)`).
 ///
-/// # Errors
-/// Returns [`AttGtError::MissingUnitId`] if any row lacks a unit id. A panel
-/// estimator cannot difference a unit it cannot name, and guessing (say, by row
-/// order) would produce a plausible number from mismatched units.
-fn unit_universe(observations: &[AttGtDrObservation]) -> Result<BTreeMap<i64, usize>, AttGtError> {
-    let mut ids = observations
-        .iter()
-        .map(|row| row.unit_id.ok_or(AttGtError::MissingUnitId))
-        .collect::<Result<Vec<i64>, AttGtError>>()?;
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids
-        .into_iter()
-        .enumerate()
-        .map(|(position, id)| (id, position))
-        .collect())
+/// Not-yet-treated eligibility is judged at the later of the two periods, as
+/// in `did`: under a universal base a pre-treatment cell has its base after
+/// `time`, and a unit treated between the two is treated at the base.
+fn cell_role(
+    row: &AttGtDrObservation,
+    cohort: Option<i32>,
+    group: i32,
+    time: i32,
+    baseline_time: i32,
+    config: AttGtDrConfig,
+) -> Option<bool> {
+    if row.time != baseline_time && row.time != time {
+        return None;
+    }
+    if cohort == Some(group) {
+        return Some(true);
+    }
+    super::is_control_for_pair(
+        cohort,
+        row.comparison_cohort,
+        group,
+        time.max(baseline_time),
+        config.att_gt.comparison_group,
+        config.att_gt.anticipation_periods,
+    )
+    .then_some(false)
 }
 
-/// Collect the units contributing to one `(group, time)` cell against `baseline_time`.
-///
-/// Only units observed at BOTH periods survive. A unit seen at one period is not
-/// a panel observation for this cell, and `did` drops it the same way.
+/// Collect the units contributing to one `(group, time)` cell against
+/// `baseline_time`: those observed at both periods.
 fn collect_cell_units<'a>(
     observations: &'a [AttGtDrObservation],
-    positions: &BTreeMap<i64, usize>,
+    prepared: &Prepared,
     group: i32,
     time: i32,
     baseline_time: i32,
@@ -145,37 +159,15 @@ fn collect_cell_units<'a>(
 ) -> Result<(), AttGtError> {
     scratch.reset();
     let mut duplicate: Option<i64> = None;
+    let earlier = time.min(baseline_time);
 
-    for row in observations {
-        if row.time != baseline_time && row.time != time {
-            continue;
-        }
-        let treated = row.first_treated_time == Some(group);
-        // Not-yet-treated eligibility is judged at the LATER of the two periods
-        // the cell compares, not at `time`. Under a universal base period a
-        // pre-treatment cell has base > time, and a unit treated between the two
-        // is already treated when the baseline is read; admitting it as a control
-        // contaminates exactly the placebo cells the pre-trend analysis reads.
-        // Verified against did 2.5.1 on mpdta cell (g=2006, t=2003, base=2005):
-        // `G > t` gives 0.008901391, `G > max(t, base)` gives 0.012018613, and
-        // att_gt reports the latter.
-        if !treated
-            && !super::is_control_for_pair(
-                row.first_treated_time,
-                row.comparison_cohort,
-                group,
-                time.max(baseline_time),
-                config.att_gt.comparison_group,
-                config.att_gt.anticipation_periods,
-            )
-        {
-            continue;
-        }
-        let Some(id) = row.unit_id else { continue };
-        let Some(&unit_index) = positions.get(&id) else {
+    for (k, &i) in prepared.rows.iter().enumerate() {
+        let row = &observations[i];
+        let Some(treated) = cell_role(row, prepared.cohort[k], group, time, baseline_time, config)
+        else {
             continue;
         };
-
+        let unit_index = prepared.position[k];
         let slot = &mut scratch.slots[unit_index];
         if slot.is_none() {
             scratch.touched.push(unit_index);
@@ -188,26 +180,21 @@ fn collect_cell_units<'a>(
                 covariates: &[],
             });
         }
-        // `is_none` above: the slot is Some here.
         let Some(entry) = slot.as_mut() else { continue };
 
-        // `baseline_time == time` cannot reach here: the caller skips that cell.
-        //
-        // A second row for the same unit at the same period is a duplicate, and
-        // it is reported rather than absorbed. Last-write-wins would silently
-        // change the estimate: a caller expressing "this unit counts four times"
-        // by repeating its rows gets one unit and no error, and the weight they
-        // thought they had applied simply vanishes. Use `weight` for that.
+        // A second row of a unit in one period is refused rather than
+        // absorbed: a caller who repeats rows to weight a unit would otherwise
+        // get one unit and no error. The weight field carries weights.
         let outcome_slot = if row.time == baseline_time {
             &mut entry.baseline_outcome
         } else {
             &mut entry.follow_up_outcome
         };
         if outcome_slot.is_some() {
-            duplicate = Some(id);
+            duplicate = row.unit_id;
         }
         *outcome_slot = Some(row.outcome);
-        if row.time == baseline_time {
+        if row.time == earlier {
             entry.weight = row.weight;
             entry.covariates = row.covariates.as_slice();
         }
@@ -221,9 +208,8 @@ fn collect_cell_units<'a>(
         });
     }
 
-    // Ascending unit position, which is ascending unit id, which is the order
-    // the `BTreeMap` produced. Kept exactly: the design matrix is summed in this
-    // order, so a different one would move the last bits of every estimate.
+    // Ascending unit position, which is ascending unit id: the design is
+    // summed in this order.
     scratch.touched.sort_unstable();
     for index in 0..scratch.touched.len() {
         let slot = scratch.touched[index];
@@ -234,18 +220,12 @@ fn collect_cell_units<'a>(
             scratch.units.push(unit);
         }
     }
-    // `take` above emptied every slot this cell wrote, so the next `reset` has
-    // nothing left to clear but the bookkeeping.
     Ok(())
 }
 
-/// Estimate one `(g, t)` cell and return the estimate plus a unit-aligned
-/// influence vector of length `unit_count`.
 /// The estimator's own word for why a cell's fit failed, one static label per
 /// error kind, so a caller counting skipped cells can tell a non-finite
-/// outcome from a singular design without parsing prose. `panel_fit` on its
-/// own was the label for all of them, and on a run that lost 315 of 325 cells
-/// it said nothing about which.
+/// outcome from a singular design without parsing prose.
 fn panel_fit_reason(error: &crate::types::DrDidError) -> &'static str {
     use crate::types::DrDidError as E;
     match error {
@@ -260,13 +240,39 @@ fn panel_fit_reason(error: &crate::types::DrDidError) -> &'static str {
     }
 }
 
+/// The cell's estimate from a two-period fit and its influence vector over
+/// all `unit_count` positions.
+fn cell_estimate(
+    fit: &DrDidEstimate,
+    group: i32,
+    time: i32,
+    se: f64,
+    ci: (f64, f64),
+) -> AttGtEstimate {
+    AttGtEstimate {
+        group,
+        time,
+        event_time: time - group,
+        att: fit.att,
+        se,
+        ci_low: ci.0,
+        ci_high: ci.1,
+        treated_n: fit.treated_n,
+        control_n: fit.control_n,
+        total_weight: fit.total_weight,
+    }
+}
+
+/// Estimate one `(g, t)` cell and return the estimate plus a unit-aligned
+/// influence vector of length `unit_count`.
 fn estimate_panel_cell(
     scratch: &mut CellScratch<'_>,
     unit_count: usize,
     group: i32,
     time: i32,
     config: AttGtDrConfig,
-) -> Result<(AttGtEstimate, Vec<f64>, usize), &'static str> {
+    estimator: Estimator,
+) -> CellFit {
     let treated_count = scratch.units.iter().filter(|unit| unit.treated).count();
     if treated_count == 0 {
         return Err("treated_panel");
@@ -275,25 +281,8 @@ fn estimate_panel_cell(
         return Err("control_panel");
     }
 
-    // The design built FLAT, straight into a buffer the cell loop reuses.
-    //
-    // This was a `Vec<DrDidObservation>`, each owning a fresh `Vec<f64>` of the
-    // intercept and the unit's covariates, which `prepare_panel_data` then
-    // copied into a flat buffer of its own. Two allocations and two copies per
-    // unit per cell, to move numbers that were already sitting in the caller's
-    // rows. `estimate_drdid_panel_flat` takes the flat form directly.
-    //
-    // The intercept is prepended HERE rather than left to the pair estimator,
-    // and the asymmetry is deliberate. The two DR routes in this crate disagree
-    // about whose job it is: `estimate_drdid_repeated_cross_section` always
-    // prepends one (`repeated.rs`, feature_count = covariate_count + 1), while
-    // the panel route treats its covariates as a finished design matrix and adds
-    // a constant column only when there are none at all. Left alone, the same
-    // `AttGtDrObservation` would be adjusted for `1 + X` through the RC route
-    // and for `X` alone through the panel route, which is a difference in the
-    // fitted model that produces a plausible number and fails nothing. R's
-    // `xformla = ~ x` means intercept plus x, so prepending here makes both
-    // routes agree with each other and with `did`.
+    // The intercept is prepended here: `xformla = ~ x` means intercept plus x,
+    // and the panel estimators take a finished design.
     let covariate_count = scratch
         .units
         .first()
@@ -317,34 +306,31 @@ fn estimate_panel_cell(
         scratch.design.extend_from_slice(unit.covariates);
     }
 
-    let fit = estimate_drdid_panel_flat(
-        PanelFlatInput {
-            treated: &scratch.treated,
-            delta_outcome: &scratch.delta,
-            weight: &scratch.weights,
-            design_matrix_flat: &scratch.design,
-            feature_count,
-        },
-        config.drdid,
-    )
+    let input = PanelFlatInput {
+        treated: &scratch.treated,
+        delta_outcome: &scratch.delta,
+        weight: &scratch.weights,
+        design_matrix_flat: &scratch.design,
+        feature_count,
+    };
+    let fit = match estimator {
+        Estimator::DoublyRobust => estimate_drdid_panel_flat(input, config.drdid),
+        Estimator::InverseProbabilityWeighting => estimate_ipw_did_panel_flat(input, config.drdid),
+        Estimator::OutcomeRegression => estimate_or_did_panel_flat(input, config.drdid),
+    }
     .map_err(|error| panel_fit_reason(&error))?;
     if fit.influence_function.len() != scratch.units.len() {
         return Err("influence_length");
     }
     // A solve that ran to a non-finite number is a failed cell, not a row.
-    // Every aggregation sums these, and one NaN would take the curve with it.
     if !fit.att.is_finite() || !fit.se.is_finite() {
         return Err("non_finite");
     }
 
-    // Rescale from the cell's own sample to the full one. `estimate_drdid_panel`
-    // returns psi normalised so that sqrt(sum(psi^2)) / n_cell is the standard
-    // error; padding with zeros and dividing by n_total instead would shrink
-    // every SE by n_cell / n_total, and by a DIFFERENT factor per cell, since
-    // cells differ in size. That would leave a covariance matrix whose blocks are
-    // on incompatible scales, which no single rescale downstream could repair.
-    // `did` embeds its influence functions in the full sample the same way:
-    // measured on mpdta cell (2004, 2005), R's psi is ours times 500/329.
+    // The cell's psi is normalised so that sqrt(sum(psi^2)) / n_cell is its
+    // standard error. Embedded in the whole sample it is scaled by
+    // n / n_cell, as `did` does (`if_x <- (n/n1) * att.inf.func`), so that
+    // every cell's vector is on the scale of the full sample.
     let scale =
         crate::util::usize_to_f64(unit_count) / crate::util::usize_to_f64(scratch.units.len());
     let mut aligned = vec![0.0; unit_count];
@@ -353,80 +339,162 @@ fn estimate_panel_cell(
     }
 
     Ok((
-        AttGtEstimate {
-            group,
-            time,
-            event_time: time - group,
-            att: fit.att,
-            se: fit.se,
-            ci_low: fit.ci_low,
-            ci_high: fit.ci_high,
-            treated_n: fit.treated_n,
-            control_n: fit.control_n,
-            total_weight: fit.total_weight,
-        },
+        cell_estimate(&fit, group, time, fit.se, (fit.ci_low, fit.ci_high)),
         aligned,
         fit.design_columns_dropped,
     ))
 }
 
-/// Panel `ATT(g,t)` with influence functions, aligned to the unit index.
+/// Buffers of the unbalanced-panel route.
+struct RepeatedScratch {
+    rows: Vec<DrDidRepeatedObservation>,
+    positions: Vec<usize>,
+    /// Per unit: bit 0 set when the cell has its baseline row, bit 1 its
+    /// follow-up row.
+    seen: Vec<u8>,
+    touched: Vec<usize>,
+}
+
+/// Estimate one cell of an unbalanced panel by the repeated cross-section
+/// estimator on the rows of its two periods, with each unit's rows summed in
+/// the influence function.
 ///
-/// The covariate-adjusted counterpart of `did::att_gt(..., panel = TRUE,
-/// est_method = "dr")`. Set
-/// [`BasePeriod::Universal`](crate::types::BasePeriod::Universal) to anchor every
-/// cell at `g - 1 - anticipation`, which is what a fixed-baseline event study
-/// means; R's default is `"varying"` and produces different coefficients.
-///
-/// Each cell is fitted by [`crate::estimate_drdid_panel_flat`], so comparators
-/// with a fitted propensity score of 0.995 or higher are trimmed from that
-/// cell's ATT, as in `did` and `DRDID`.
-///
-/// # Errors
-/// - [`AttGtError::MissingUnitId`] if any row lacks a unit id.
-/// - [`AttGtError::MissingCell`] if a cell has no treated or no control units
-///   and `skip_incomplete_pairs` is false.
-/// - [`AttGtError::NoEstimablePairs`] if no cell survives.
-pub fn estimate_att_gt_dr_panel_with_influence(
+/// This is `did`'s `allow_unbalanced_panel = TRUE`: each row's influence is
+/// scaled by `n / n_rows` and summed by unit, and the standard error is that
+/// of the summed vector, which accounts for a unit observed in both periods.
+fn estimate_repeated_cell(
+    observations: &[AttGtDrObservation],
+    prepared: &Prepared,
+    group: i32,
+    time: i32,
+    baseline_time: i32,
+    config: AttGtDrConfig,
+    estimator: Estimator,
+    scratch: &mut RepeatedScratch,
+) -> Result<CellFit, AttGtError> {
+    scratch.rows.clear();
+    scratch.positions.clear();
+    for &unit in &scratch.touched {
+        scratch.seen[unit] = 0;
+    }
+    scratch.touched.clear();
+    for (k, &i) in prepared.rows.iter().enumerate() {
+        let row = &observations[i];
+        let Some(treated) = cell_role(row, prepared.cohort[k], group, time, baseline_time, config)
+        else {
+            continue;
+        };
+        let unit = prepared.position[k];
+        let bit = if row.time == time { 2 } else { 1 };
+        if scratch.seen[unit] & bit != 0 {
+            return Err(AttGtError::DuplicatePanelRow {
+                unit_id: row.unit_id.unwrap_or_default(),
+                group,
+                time,
+            });
+        }
+        if scratch.seen[unit] == 0 {
+            scratch.touched.push(unit);
+        }
+        scratch.seen[unit] |= bit;
+        scratch.rows.push(DrDidRepeatedObservation {
+            weight: row.weight,
+            covariates: row.covariates.clone(),
+            ..DrDidRepeatedObservation::new(
+                DidCell::from_parts(
+                    if treated {
+                        TreatmentGroup::Treated
+                    } else {
+                        TreatmentGroup::Control
+                    },
+                    TimePeriod::from_bool(row.time == time),
+                ),
+                row.outcome,
+            )
+        });
+        scratch.positions.push(unit);
+    }
+    if let Some(cell) = super::pair_estimators::missing_pair_cell(&scratch.rows) {
+        return Ok(Err(cell));
+    }
+    let fit = match estimator {
+        Estimator::DoublyRobust => estimate_drdid_repeated_efficient(&scratch.rows, config.drdid),
+        Estimator::InverseProbabilityWeighting => {
+            estimate_ipw_did_repeated_cross_section(&scratch.rows, config.drdid)
+        }
+        Estimator::OutcomeRegression => {
+            estimate_or_did_repeated_cross_section(&scratch.rows, config.drdid)
+        }
+    };
+    let fit = match fit {
+        Ok(fit) => fit,
+        Err(error) => return Ok(Err(panel_fit_reason(&error))),
+    };
+    if !fit.att.is_finite() || !fit.se.is_finite() {
+        return Ok(Err("non_finite"));
+    }
+    let unit_count = prepared.position_count();
+    let scale =
+        crate::util::usize_to_f64(unit_count) / crate::util::usize_to_f64(scratch.rows.len());
+    let mut folded = vec![0.0; unit_count];
+    for (&unit, value) in scratch.positions.iter().zip(&fit.influence_function) {
+        folded[unit] += value * scale;
+    }
+    let se = standard_error_from_influence(&folded);
+    let ci = crate::methods::drdid::confidence_interval(fit.att, se, &folded, config.drdid);
+    Ok(Ok((
+        cell_estimate(&fit, group, time, se, ci),
+        folded,
+        fit.design_columns_dropped,
+    )))
+}
+
+fn estimate_att_gt_panel(
     observations: &[AttGtDrObservation],
     config: AttGtDrConfig,
+    estimator: Estimator,
 ) -> Result<AttGtInfluenceOutput, AttGtError> {
-    let (all_times, treated_groups) =
-        super::pair_estimators::prepare_att_gt_dr_inputs(observations, config)?;
-    let positions = unit_universe(observations)?;
-    let unit_count = positions.len();
+    let prepared = preprocess(observations, config.att_gt, Route::Panel)?;
+    let unit_count = prepared.position_count();
 
     let mut estimates = Vec::new();
     let mut influence_functions = Vec::new();
     let mut skipped = Vec::new();
     let mut pruned = Vec::new();
-    // Allocated once for the whole grid, not once per cell. See `CellScratch`.
     let mut scratch = CellScratch::new(unit_count);
+    let mut repeated = RepeatedScratch {
+        rows: Vec::new(),
+        positions: Vec::new(),
+        seen: vec![0; if prepared.as_repeated { unit_count } else { 0 }],
+        touched: Vec::new(),
+    };
 
-    for group in treated_groups {
-        let universal_baseline_time = group - config.att_gt.anticipation_periods - 1;
-        for &time in &all_times {
-            let baseline_time = super::pair_estimators::baseline_time_for_pair(
-                time,
-                group,
-                universal_baseline_time,
-                config.att_gt,
-            );
-            if time == baseline_time {
-                continue;
-            }
-
-            collect_cell_units(
-                observations,
-                &positions,
-                group,
-                time,
-                baseline_time,
-                config,
-                &mut scratch,
-            )?;
-
-            match estimate_panel_cell(&mut scratch, unit_count, group, time, config) {
+    for &group in &prepared.sample.cohorts {
+        for (time, baseline_time) in cell_grid(&prepared.sample.periods, group, config.att_gt) {
+            let cell = if prepared.as_repeated {
+                estimate_repeated_cell(
+                    observations,
+                    &prepared,
+                    group,
+                    time,
+                    baseline_time,
+                    config,
+                    estimator,
+                    &mut repeated,
+                )?
+            } else {
+                collect_cell_units(
+                    observations,
+                    &prepared,
+                    group,
+                    time,
+                    baseline_time,
+                    config,
+                    &mut scratch,
+                )?;
+                estimate_panel_cell(&mut scratch, unit_count, group, time, config, estimator)
+            };
+            match cell {
                 Ok((estimate, influence, columns_dropped)) => {
                     if columns_dropped > 0 {
                         pruned.push(PrunedCell {
@@ -468,7 +536,80 @@ pub fn estimate_att_gt_dr_panel_with_influence(
         influence_functions,
         skipped,
         pruned,
+        sample: prepared.sample,
     })
+}
+
+/// Panel `ATT(g,t)` by the doubly robust estimator, with influence functions
+/// aligned to the unit index.
+///
+/// `did::att_gt(..., panel = TRUE, est_method = "dr")`. The input is first
+/// pre-processed as `did` does it (see [`AttGtSample`](crate::AttGtSample)),
+/// and each cell is fitted by [`crate::estimate_drdid_panel_flat`] on the units
+/// observed at both its periods, with the covariates and the weight of the
+/// earlier period's row. Comparators with a fitted propensity score of 0.995
+/// or higher are trimmed from the cell, as in `did` and `DRDID`. Under
+/// [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) an
+/// unbalanced panel is fitted cell by cell with
+/// [`crate::estimate_drdid_repeated_efficient`], as `did` fits it with
+/// `drdid_rc`.
+///
+/// Set [`BasePeriod::Universal`](crate::types::BasePeriod::Universal) to anchor
+/// every cell at the last period before `g - anticipation`, which is what a
+/// fixed-baseline event study means; R's default is `"varying"`.
+///
+/// The influence vectors are indexed by [`AttGtSample::ids`](crate::AttGtSample),
+/// the sorted ids of the units kept, and
+/// [`AttGtSample::unit_panel`](crate::AttGtSample::unit_panel) gives the panel
+/// to aggregate them with.
+///
+/// # Errors
+/// - [`AttGtError::MissingUnitId`] if any row lacks a unit id, and
+///   [`AttGtError::InconsistentCohort`] if a unit's cohort differs between rows.
+/// - [`AttGtError::DuplicatePanelRow`] if a unit has two rows in one period of
+///   a cell.
+/// - [`AttGtError::MissingCell`] if a cell cannot be fitted and
+///   `skip_incomplete_pairs` is false.
+/// - [`AttGtError::NoEstimablePairs`] if no cohort or no cell survives.
+pub fn estimate_att_gt_dr_panel_with_influence(
+    observations: &[AttGtDrObservation],
+    config: AttGtDrConfig,
+) -> Result<AttGtInfluenceOutput, AttGtError> {
+    estimate_att_gt_panel(observations, config, Estimator::DoublyRobust)
+}
+
+/// Panel `ATT(g,t)` by inverse probability weighting,
+/// `did::att_gt(..., panel = TRUE, est_method = "ipw")`: each cell is
+/// [`crate::estimate_ipw_did_panel_flat`], `DRDID::std_ipw_did_panel`, and an
+/// unbalanced panel under
+/// [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) is fitted
+/// with [`crate::estimate_ipw_did_repeated_cross_section`]. Otherwise as
+/// [`estimate_att_gt_dr_panel_with_influence`].
+///
+/// # Errors
+/// As [`estimate_att_gt_dr_panel_with_influence`].
+pub fn estimate_att_gt_ipw_panel_with_influence(
+    observations: &[AttGtDrObservation],
+    config: AttGtDrConfig,
+) -> Result<AttGtInfluenceOutput, AttGtError> {
+    estimate_att_gt_panel(observations, config, Estimator::InverseProbabilityWeighting)
+}
+
+/// Panel `ATT(g,t)` by outcome regression,
+/// `did::att_gt(..., panel = TRUE, est_method = "reg")`: each cell is
+/// [`crate::estimate_or_did_panel_flat`], `DRDID::reg_did_panel`, and an
+/// unbalanced panel under
+/// [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) is fitted
+/// with [`crate::estimate_or_did_repeated_cross_section`]. Otherwise as
+/// [`estimate_att_gt_dr_panel_with_influence`].
+///
+/// # Errors
+/// As [`estimate_att_gt_dr_panel_with_influence`].
+pub fn estimate_att_gt_or_panel_with_influence(
+    observations: &[AttGtDrObservation],
+    config: AttGtDrConfig,
+) -> Result<AttGtInfluenceOutput, AttGtError> {
+    estimate_att_gt_panel(observations, config, Estimator::OutcomeRegression)
 }
 
 /// Panel `ATT(g,t)` without influence functions.
@@ -482,28 +623,32 @@ pub fn estimate_att_gt_dr_panel(
     estimate_att_gt_dr_panel_with_influence(observations, config).map(|out| out.estimates)
 }
 
-/// Each unit's cohort and sampling weight, indexed the same way as the influence
-/// vectors this module returns.
+/// Each unit's cohort and sampling weight, indexed by the sorted distinct unit
+/// ids of `observations`.
 ///
-/// Built here rather than by the caller because the ordering has to be the same
-/// `unit_universe` uses, and reproducing it outside would be one more place for
-/// the two to drift apart.
+/// This is the index of the panel routes' influence vectors when their
+/// pre-processing drops no unit and recodes no cohort, and every unit's
+/// weight is the same on all its rows. Otherwise use the output's
+/// [`AttGtSample::unit_panel`](crate::AttGtSample::unit_panel).
 ///
 /// # Errors
 /// [`AttGtError::MissingUnitId`] if any row lacks a unit id.
 pub fn unit_panel(
     observations: &[AttGtDrObservation],
 ) -> Result<super::aggte::UnitPanel, AttGtError> {
-    let positions = unit_universe(observations)?;
-    let mut groups = vec![None; positions.len()];
-    let mut weights = vec![1.0; positions.len()];
+    let mut ids = observations
+        .iter()
+        .map(|row| row.unit_id.ok_or(AttGtError::MissingUnitId))
+        .collect::<Result<Vec<i64>, AttGtError>>()?;
+    ids.sort_unstable();
+    ids.dedup();
+    let mut groups = vec![None; ids.len()];
+    let mut weights = vec![1.0; ids.len()];
     for row in observations {
         let Some(id) = row.unit_id else { continue };
-        let Some(&position) = positions.get(&id) else {
+        let Ok(position) = ids.binary_search(&id) else {
             continue;
         };
-        // A unit's cohort is time-invariant, so the last write is the same as
-        // the first. The weight is taken the same way for the same reason.
         groups[position] = row.first_treated_time;
         weights[position] = row.weight;
     }
@@ -512,8 +657,7 @@ pub fn unit_panel(
         weights,
         // Unclustered by default. A caller who knows units share a household,
         // a family or a matched set attaches the labels with
-        // `UnitPanel::clustered_by`; nothing in an ATT(g,t) input frame reveals
-        // that structure, so it cannot be inferred here.
+        // `UnitPanel::clustered_by`.
         clusters: None,
     })
 }
@@ -521,7 +665,7 @@ pub fn unit_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AttGtConfig, ComparisonGroup, DrDidConfig, PrunedCell};
+    use crate::types::{AttGtConfig, ComparisonGroup, DrDidConfig, PrunedCell, UnbalancedPanel};
 
     fn observation(unit: i64, group: Option<i32>, time: i32, outcome: f64) -> AttGtDrObservation {
         AttGtDrObservation {
@@ -537,10 +681,9 @@ mod tests {
 
     /// Eight units treated at period 2 and eight never treated, over periods
     /// 1 to 3, with the treated units unobserved at period 3. The cell
-    /// `(g = 2, t = 3)` then has no treated units and cannot be fitted. Nor
-    /// can the pre-period cell `(2, 1)`: under the varying base period its
-    /// baseline is period 0, which the panel does not have. Both are
-    /// reported, neither is an error, and the one fittable cell is fitted.
+    /// `(g = 2, t = 3)` then has no treated units and cannot be fitted. It is
+    /// reported, not an error, and the one fittable cell is fitted. The first
+    /// period is no cell's later period under a varying base, as in `did`.
     #[test]
     fn a_cell_with_no_treated_units_is_reported_rather_than_dropped() {
         let mut observations = Vec::new();
@@ -560,11 +703,11 @@ mod tests {
             }
         }
         let config = AttGtDrConfig {
-            att_gt: AttGtConfig::default(),
-            drdid: DrDidConfig {
-                bootstrap_reps: 1,
-                ..DrDidConfig::default()
+            att_gt: AttGtConfig {
+                unbalanced_panel: UnbalancedPanel::PerCell,
+                ..AttGtConfig::default()
             },
+            drdid: DrDidConfig::default(),
         };
         assert!(config.att_gt.skip_incomplete_pairs);
 
@@ -574,20 +717,12 @@ mod tests {
         assert_eq!(fitted_cells, vec![(2, 2)]);
         assert_eq!(
             fitted.skipped,
-            vec![
-                SkippedCell {
-                    group: 2,
-                    time: 1,
-                    baseline_time: 0,
-                    reason: "treated_panel",
-                },
-                SkippedCell {
-                    group: 2,
-                    time: 3,
-                    baseline_time: 1,
-                    reason: "treated_panel",
-                },
-            ]
+            vec![SkippedCell {
+                group: 2,
+                time: 3,
+                baseline_time: 1,
+                reason: "treated_panel",
+            }]
         );
     }
 
@@ -636,11 +771,11 @@ mod tests {
             rows
         }
         let config = AttGtDrConfig {
-            att_gt: AttGtConfig::default(),
-            drdid: DrDidConfig {
-                bootstrap_reps: 1,
-                ..DrDidConfig::default()
+            att_gt: AttGtConfig {
+                unbalanced_panel: UnbalancedPanel::PerCell,
+                ..AttGtConfig::default()
             },
+            drdid: DrDidConfig::default(),
         };
         let full = estimate_att_gt_dr_panel_with_influence(&panel(true), config).unwrap();
         let reduced = estimate_att_gt_dr_panel_with_influence(&panel(false), config).unwrap();
@@ -716,12 +851,10 @@ mod tests {
             att_gt: AttGtConfig {
                 comparison_group,
                 base_period: crate::types::BasePeriod::Universal,
+                unbalanced_panel: UnbalancedPanel::PerCell,
                 ..AttGtConfig::default()
             },
-            drdid: DrDidConfig {
-                bootstrap_reps: 1,
-                ..DrDidConfig::default()
-            },
+            drdid: DrDidConfig::default(),
         };
 
         let matched = estimate_att_gt_dr_panel_with_influence(

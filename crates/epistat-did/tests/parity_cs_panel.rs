@@ -11,7 +11,7 @@ use epistat_testkit::load_json;
 
 use epistat_did::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, BasePeriod, ComparisonGroup, DrDidConfig,
-    DrDidObservation, InferenceConfig, estimate_att_gt_dr_panel_with_influence,
+    DrDidObservation, InferenceConfig, UnbalancedPanel, estimate_att_gt_dr_panel_with_influence,
     estimate_drdid_panel,
 };
 use serde::Deserialize;
@@ -75,6 +75,7 @@ fn universal_config(comparison_group: ComparisonGroup) -> AttGtDrConfig {
             base_period: BasePeriod::Universal,
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
+            unbalanced_panel: UnbalancedPanel::Balance,
         },
         drdid: DrDidConfig::builder().build(),
     }

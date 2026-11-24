@@ -820,13 +820,40 @@ pub enum ComparisonGroup {
 }
 
 /// Base-period convention for staggered `ATT(g,t)` estimators.
+///
+/// On the covariate-adjusted routes "previous" means the previous period in
+/// the sorted list of the sample's periods, and the cohort's base is the last
+/// period before `g - anticipation`; with consecutive integer periods that is
+/// `g - 1 - anticipation`. The route without covariates uses the arithmetic
+/// `t - 1` and `g - 1 - anticipation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasePeriod {
     /// Pre-treatment cells use the previous period as baseline, and
-    /// post-treatment cells the period `g - 1 - anticipation`.
+    /// post-treatment cells the cohort's base.
     Varying,
-    /// Every cell uses the period `g - 1 - anticipation` as baseline.
+    /// Every cell uses the cohort's base as baseline.
     Universal,
+}
+
+/// How the panel routes treat units that are not observed in every period.
+///
+/// The repeated cross-section routes ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnbalancedPanel {
+    /// Drop every unit that is missing from some period, and report how many,
+    /// as `did::att_gt(allow_unbalanced_panel = FALSE)`, R's default.
+    Balance,
+    /// Keep every row. When the panel is unbalanced, estimate each cell with
+    /// the repeated cross-section estimator on the rows of its two periods and
+    /// sum each unit's rows in the influence function, as
+    /// `did::att_gt(allow_unbalanced_panel = TRUE)`; a balanced panel is
+    /// estimated as a panel.
+    RepeatedCrossSection,
+    /// Keep every row, and estimate each cell as a panel on the units observed
+    /// in both of its periods. No `did` counterpart. This suits a panel whose
+    /// units are observed on windows of their own, such as matched sets, where
+    /// balancing would drop most of them.
+    PerCell,
 }
 
 /// Configuration for `ATT(g,t)` estimation.
@@ -844,14 +871,18 @@ pub struct AttGtConfig {
     #[builder(default = BasePeriod::Varying)]
     pub base_period: BasePeriod,
     /// Number of periods before first treatment in which effects may already
-    /// occur, non-negative. The baseline of post-treatment cells is
-    /// `g - 1 - anticipation_periods`. The default is 0.
+    /// occur, non-negative. The baseline of post-treatment cells is the last
+    /// period before `g - anticipation_periods`. The default is 0.
     #[builder(default = 0_i32)]
     pub anticipation_periods: i32,
     /// Whether cells that cannot be fitted are skipped and reported, instead of
     /// causing an error. The default is `true`.
     #[builder(default = true)]
     pub skip_incomplete_pairs: bool,
+    /// How the panel routes treat an unbalanced panel. The default is
+    /// [`UnbalancedPanel::Balance`], as in `did`.
+    #[builder(default = UnbalancedPanel::Balance)]
+    pub unbalanced_panel: UnbalancedPanel,
 }
 
 impl Default for AttGtConfig {
@@ -862,6 +893,7 @@ impl Default for AttGtConfig {
             base_period: BasePeriod::Varying,
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
+            unbalanced_panel: UnbalancedPanel::Balance,
         }
     }
 }
@@ -933,12 +965,63 @@ pub struct PrunedCell {
     pub columns_dropped: usize,
 }
 
+/// The sample an ATT(g,t) route estimated on, after the pre-processing of
+/// `did::att_gt`, and what that pre-processing changed.
+///
+/// The covariate-adjusted routes apply `did`'s rules before forming any cell.
+/// A cohort first treated after the last period plus the anticipation
+/// periods is recoded as never treated. Without never-treated units, the
+/// periods from `c - anticipation_periods` on are dropped, `c` the last
+/// cohort, which then serves as comparison group: as not-yet-treated units
+/// under [`ComparisonGroup::NotYetTreated`], recoded as never treated under
+/// [`ComparisonGroup::NeverTreated`]. Units treated in the first period, or
+/// within `anticipation_periods` of it, are dropped. On a panel route the
+/// panel is then balanced or not as [`AttGtConfig::unbalanced_panel`] says.
+/// Base periods are taken from the sorted list of the remaining periods, so
+/// periods need not be consecutive.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AttGtSample {
+    /// What each position of the influence vectors stands for: a unit id on
+    /// the panel routes, ascending, and the index of an input row on the
+    /// repeated cross-section routes.
+    pub ids: Vec<i64>,
+    /// The cohort of each position after recoding, `None` for never treated.
+    pub groups: Vec<Option<i32>>,
+    /// The sampling weight of each position: a row's own on the repeated
+    /// cross-section routes; on the panel routes the weight of the unit's
+    /// earliest row, or the mean over its rows when the unbalanced panel was
+    /// estimated as repeated cross-sections, as `did::aggte` reads it.
+    pub weights: Vec<f64>,
+    /// The periods of the sample, ascending.
+    pub periods: Vec<i32>,
+    /// The cohorts whose cells were estimated, ascending.
+    pub cohorts: Vec<i32>,
+    /// Units (panel routes) or rows (repeated cross-section routes) whose
+    /// cohort was after the last period and was recoded as never treated.
+    pub recoded_never_treated: usize,
+    /// The last cohort, when the sample had no never-treated units and it
+    /// became the comparison group.
+    pub last_cohort_as_comparison: Option<i32>,
+    /// Rows dropped because their period was at or after that cohort's start
+    /// minus the anticipation periods.
+    pub dropped_late_rows: usize,
+    /// Units (panel routes) or rows (repeated cross-section routes) treated in
+    /// the first period or before it, given the anticipation periods, and
+    /// dropped.
+    pub dropped_treated_at_start: usize,
+    /// Units dropped to balance the panel under [`UnbalancedPanel::Balance`].
+    pub dropped_unbalanced: usize,
+    /// Whether an unbalanced panel was estimated as repeated cross-sections,
+    /// under [`UnbalancedPanel::RepeatedCrossSection`].
+    pub unbalanced_as_repeated_cross_section: bool,
+}
+
 /// ATT(g,t) estimates with aligned influence-function vectors.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttGtInfluenceOutput {
     /// ATT(g,t) estimates.
     pub estimates: Vec<AttGtEstimate>,
-    /// Influence vectors aligned to the full input sample index.
+    /// One influence vector per estimate, indexed as [`AttGtSample::ids`].
     pub influence_functions: Vec<Vec<f64>>,
     /// The cells that were attempted and could not be fitted, so they are
     /// missing from `estimates`. Empty when every cell fitted, and always empty
@@ -951,6 +1034,9 @@ pub struct AttGtInfluenceOutput {
     /// observed at both of its periods, and a covariate that varies across the
     /// input can be constant, or a combination of the others, inside it.
     pub pruned: Vec<PrunedCell>,
+    /// The sample the cells were estimated on, which the influence vectors
+    /// are indexed by.
+    pub sample: AttGtSample,
 }
 
 /// Event-time aggregated ATT estimates with aligned influence-function vectors.
@@ -1002,7 +1088,10 @@ pub enum AttGtError {
         /// Number of covariates on the offending row.
         actual: usize,
     },
-    /// The comparison group is never-treated and the sample has none.
+    /// The comparison group needs never-treated units and the sample has
+    /// none: the matched comparison group on the covariate-adjusted routes,
+    /// which otherwise compare with the last cohort as `did` does, and the
+    /// never-treated group on the route without covariates.
     #[error("never-treated comparison group is required but missing")]
     MissingNeverTreatedGroup,
     /// The matched comparison group was requested on a route that cannot carry it.
@@ -1011,6 +1100,15 @@ pub enum AttGtError {
          row, which only the doubly robust routes carry"
     )]
     MatchedComparisonUnsupported,
+    /// A unit's first treatment period differs between its rows.
+    #[error(
+        "unit {unit_id} has more than one first treatment period; treatment must be \
+         irreversible and its start the same on every row of the unit"
+    )]
+    InconsistentCohort {
+        /// Identifier of the unit.
+        unit_id: i64,
+    },
     /// A row has no unit identifier on the panel route.
     #[error(
         "panel ATT(g,t) requires a unit_id on every row: a unit cannot be \

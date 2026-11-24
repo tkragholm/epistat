@@ -89,7 +89,10 @@ fn check(label: &str, fit: &epistat_did::DrDidEstimate, reference: &Fit) {
         .zip(&reference.inffunc)
         .map(|(ours, theirs)| (ours - theirs).abs())
         .fold(0.0_f64, f64::max);
-    assert!(worst < INFLUENCE_TOLERANCE, "{label} influence off by {worst:e}");
+    assert!(
+        worst < INFLUENCE_TOLERANCE,
+        "{label} influence off by {worst:e}"
+    );
 }
 
 fn panel_rows(panel: &Panel) -> Vec<DrDidObservation> {
@@ -155,7 +158,10 @@ fn the_interval_is_analytic_by_default() {
     assert!((fit.ci_high - (fit.att + z * fit.se)).abs() < 1e-12);
     let boot = estimate_ipw_did_panel(
         &panel_rows(&reference.panel),
-        DrDidConfig::builder().ridge(0.0).bootstrap_reps(199).build(),
+        DrDidConfig::builder()
+            .ridge(0.0)
+            .bootstrap_reps(199)
+            .build(),
     )
     .expect("fit");
     assert_eq!(boot.att.to_bits(), fit.att.to_bits());

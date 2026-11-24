@@ -6,9 +6,7 @@ use itertools::izip;
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};
 use crate::estimators::common::linalg::{solve_spd_system, solve_spd_system_multi_rhs};
 use crate::estimators::common::logit::fit_logit;
-use crate::inference::{
-    standard_error_from_influence, validate_confidence_level,
-};
+use crate::inference::{standard_error_from_influence, validate_confidence_level};
 use crate::methods::drdid::moments::normalize_weights_to_n as normalize_weights_to_n_shared;
 use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidObservation};
 use crate::util::usize_to_f64;
@@ -244,8 +242,12 @@ fn estimate_from_prepared(
     )?;
 
     let se = standard_error_from_influence(&panel_att.influence_function);
-    let (ci_low, ci_high) =
-        crate::methods::drdid::confidence_interval(panel_att.att, se, &panel_att.influence_function, config);
+    let (ci_low, ci_high) = crate::methods::drdid::confidence_interval(
+        panel_att.att,
+        se,
+        &panel_att.influence_function,
+        config,
+    );
 
     Ok(DrDidEstimate {
         att: panel_att.att,
@@ -1353,8 +1355,18 @@ mod tests {
             .bootstrap_reps(200)
             .bootstrap_seed(42)
             .build();
-        let ci_a = crate::inference::multiplier_bootstrap_ci(1.0, &influence, config.inference(), config.bootstrap());
-        let ci_b = crate::inference::multiplier_bootstrap_ci(1.0, &influence, config.inference(), config.bootstrap());
+        let ci_a = crate::inference::multiplier_bootstrap_ci(
+            1.0,
+            &influence,
+            config.inference(),
+            config.bootstrap(),
+        );
+        let ci_b = crate::inference::multiplier_bootstrap_ci(
+            1.0,
+            &influence,
+            config.inference(),
+            config.bootstrap(),
+        );
         assert_eq!(ci_a, ci_b);
         assert!(ci_a.0 <= ci_a.1);
     }

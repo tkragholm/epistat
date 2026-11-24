@@ -7,9 +7,7 @@ use crate::estimators::outcome::model::OutcomeModel;
 use crate::estimators::propensity::common::logistic_scores;
 use crate::estimators::propensity::logistic::LogisticPS;
 use crate::estimators::propensity::types::{Config as PropensityConfig, PropensityEstimator};
-use crate::inference::{
-    standard_error_from_influence, validate_confidence_level,
-};
+use crate::inference::{standard_error_from_influence, validate_confidence_level};
 use crate::methods::drdid::moments::{
     RepeatedMomentError, RepeatedMomentEstimate, RepeatedMomentInputs,
     normalize_weights_to_n as normalize_weights_to_n_shared, repeated_att_moments,

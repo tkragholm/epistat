@@ -18,6 +18,7 @@ mod bands;
 mod core;
 pub mod pair_estimators;
 pub mod panel_pairs;
+mod preprocess;
 
 pub use aggregation::{
     aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort, aggregate_att_gt_event_time,
@@ -32,7 +33,8 @@ pub use bands::{
 };
 pub use pair_estimators::estimate_att_gt_dr_efficient_with_influence;
 pub use panel_pairs::{
-    estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence, unit_panel,
+    estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence,
+    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_or_panel_with_influence, unit_panel,
 };
 
 /// Consolidated result of an event-study estimation.

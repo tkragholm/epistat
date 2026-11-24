@@ -178,7 +178,8 @@ fn sample(
             (DidCell::ControlPre, false, false),
             (DidCell::ControlPost, false, true),
         ] {
-            let present = (0..n).any(|i| (treated[i] > 0.5) == is_treated && (post[i] > 0.5) == is_post);
+            let present =
+                (0..n).any(|i| (treated[i] > 0.5) == is_treated && (post[i] > 0.5) == is_post);
             if !present {
                 return Err(DrDidError::MissingCell { cell });
             }
@@ -556,25 +557,24 @@ fn ipw_repeated(sample: &Sample, config: DrDidConfig) -> Result<DrDidEstimate, D
         let influence = (0..n).map(|i| eta[i] - c[i] * att_c / mc).collect();
         Ok((mc, att_c, influence))
     };
-    let (_, att_a0, inf_a0) = cell(&a0, DidCell::TreatedPre)?;
-    let (_, att_a1, inf_a1) = cell(&a1, DidCell::TreatedPost)?;
-    let (mean_b0, att_b0, inf_b0) = cell(&b0, DidCell::ControlPre)?;
-    let (mean_b1, att_b1, inf_b1) = cell(&b1, DidCell::ControlPost)?;
-    let att = (att_a1 - att_a0) - (att_b1 - att_b0);
+    let (_, treated_pre, treated_pre_psi) = cell(&a0, DidCell::TreatedPre)?;
+    let (_, treated_post, treated_post_psi) = cell(&a1, DidCell::TreatedPost)?;
+    let (control_pre_weight, control_pre, control_pre_psi) = cell(&b0, DidCell::ControlPre)?;
+    let (control_post_weight, control_post, control_post_psi) = cell(&b1, DidCell::ControlPost)?;
+    let att = (treated_post - treated_pre) - (control_post - control_pre);
 
-    let centred = |c: &[f64], att_c: f64| -> Vec<f64> {
-        (0..n).map(|i| c[i] * (y[i] - att_c)).collect()
-    };
-    let m0 = moment(sample, &centred(&b0, att_b0));
-    let m1 = moment(sample, &centred(&b1, att_b1));
+    let centred =
+        |c: &[f64], att_c: f64| -> Vec<f64> { (0..n).map(|i| c[i] * (y[i] - att_c)).collect() };
+    let moment_pre = moment(sample, &centred(&b0, control_pre));
+    let moment_post = moment(sample, &centred(&b1, control_post));
     let m: Vec<f64> = (0..sample.feature_count)
-        .map(|j| m1[j] / mean_b1 - m0[j] / mean_b0)
+        .map(|j| moment_post[j] / control_post_weight - moment_pre[j] / control_pre_weight)
         .collect();
     let ps_term = propensity_projection(sample, &scores, &m)?;
     let influence = (0..n)
         .map(|i| {
-            let treated_part = inf_a1[i] - inf_a0[i];
-            let control_part = inf_b1[i] - inf_b0[i] + ps_term[i];
+            let treated_part = treated_post_psi[i] - treated_pre_psi[i];
+            let control_part = control_post_psi[i] - control_pre_psi[i] + ps_term[i];
             treated_part - control_part
         })
         .collect();
@@ -589,9 +589,7 @@ fn or_panel(sample: &Sample, config: DrDidConfig) -> Result<DrDidEstimate, DrDid
     if mean_a <= 0.0 {
         return Err(DrDidError::NoTreated);
     }
-    let comparator: Vec<f64> = (0..n)
-        .map(|i| sample.weights[i] * (1.0 - d[i]))
-        .collect();
+    let comparator: Vec<f64> = (0..n).map(|i| sample.weights[i] * (1.0 - d[i])).collect();
     let n_vector = moment(sample, &a);
     let (prediction, or_term) = outcome_regression(sample, &comparator, &n_vector, config.ridge)?;
 
@@ -735,7 +733,10 @@ pub fn estimate_ipw_did_repeated_cross_section(
     config: DrDidConfig,
 ) -> Result<DrDidEstimate, DrDidError> {
     validate_drdid_config(config)?;
-    ipw_repeated(&repeated_sample(observations, Nuisance::Propensity)?, config)
+    ipw_repeated(
+        &repeated_sample(observations, Nuisance::Propensity)?,
+        config,
+    )
 }
 
 /// The repeated cross-section outcome regression ATT, `DRDID::reg_did_rc`.
