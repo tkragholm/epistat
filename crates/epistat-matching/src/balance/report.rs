@@ -50,6 +50,7 @@ use epistat_stats::balance::{
 };
 use epistat_stats::weighted;
 use itertools::Itertools;
+use rapidhash::{RapidHashMap, RapidHashSet};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -228,6 +229,16 @@ fn sample_sizes<R: CovariateRecord>(
     weights: &BalanceWeights,
 ) -> SampleSizeTable {
     let group = |records: &[R], unit_weights: &[UnitWeights]| {
+        // One lookup of each identifier among the discarded units, and none
+        // when there are none.
+        let (mut unmatched, mut discarded) = (0, 0);
+        for (record, unit) in records.iter().zip(unit_weights) {
+            if !weights.discarded.is_empty() && weights.discarded.contains(record.id()) {
+                discarded += 1;
+            } else if unit.post == 0.0 {
+                unmatched += 1;
+            }
+        }
         let ess = |values: Vec<f64>| {
             // The weights have been validated, so only a size that is
             // undefined, with no positive weight, is left as `None`.
@@ -238,17 +249,8 @@ fn sample_sizes<R: CovariateRecord>(
             all_ess: ess(unit_weights.iter().map(|unit| unit.pre).collect()),
             matched: unit_weights.iter().filter(|unit| unit.post > 0.0).count(),
             matched_ess: ess(unit_weights.iter().map(|unit| unit.post).collect()),
-            unmatched: records
-                .iter()
-                .zip(unit_weights)
-                .filter(|(record, unit)| {
-                    unit.post == 0.0 && !weights.discarded.contains(record.id())
-                })
-                .count(),
-            discarded: records
-                .iter()
-                .filter(|record| weights.discarded.contains(record.id()))
-                .count(),
+            unmatched,
+            discarded,
         }
     };
     SampleSizeTable {
@@ -415,11 +417,11 @@ impl Column {
         match self {
             Self::Numeric(_) => numeric_covariate(reader, record, supplemental),
             Self::Level { level, known, .. } => {
-                let found =
-                    map_optional_covariate_to_level(covariate_value(reader, record, supplemental));
+                let found = level_name(covariate_value(reader, record, supplemental));
                 known
-                    .contains(&found)
-                    .then_some(if found == *level { 1.0 } else { 0.0 })
+                    .iter()
+                    .any(|known| known.as_str() == found)
+                    .then_some(if found == level.as_str() { 1.0 } else { 0.0 })
             }
         }
     }
@@ -635,8 +637,8 @@ struct BalanceSample<'a, R> {
     pairs: &'a [MatchedPair],
     /// The pairs as positions in the pooled records, cases first, with the
     /// pairs whose units are not among the records left out. `None` when an
-    /// identifier occurs twice in a group, where a pair has to be read by
-    /// identifier.
+    /// identifier of a pair occurs twice in a group, where a pair has to be
+    /// read by identifier.
     pair_positions: Option<Vec<(usize, usize)>>,
 }
 
@@ -674,18 +676,29 @@ impl<R: CovariateRecord> BalanceSample<'_, R> {
     }
 }
 
-/// The records by identifier, `None` when an identifier occurs twice.
-fn index_by_id<R: CovariateRecord>(records: &[R]) -> Option<HashMap<&str, usize>> {
-    let map = records
-        .iter()
-        .enumerate()
-        .map(|(position, record)| (record.id(), position))
-        .collect::<HashMap<_, _>>();
-    (map.len() == records.len()).then_some(map)
+/// The position among `records` of each identifier in `wanted`, `None` for one
+/// no record carries, or `None` in all when two records carry one of them.
+fn index_by_id<'a, R: CovariateRecord>(
+    records: &[R],
+    wanted: impl Iterator<Item = &'a str>,
+) -> Option<RapidHashMap<&'a str, Option<usize>>> {
+    let mut index: RapidHashMap<&str, Option<usize>> = wanted.map(|id| (id, None)).collect();
+    for (position, record) in records.iter().enumerate() {
+        if let Some(slot) = index.get_mut(record.id())
+            && slot.replace(position).is_some()
+        {
+            return None;
+        }
+    }
+    Some(index)
 }
 
 /// The pairs as positions among the pooled records, `None` when an identifier
-/// occurs twice in the cases or in the controls.
+/// of a pair is carried by two cases or by two controls.
+///
+/// Only the identifiers of the pairs are looked up. An identifier that two
+/// records share but no pair names does not change the values a pair reads,
+/// so the positions give the values that reading by identifier gives.
 fn pair_positions<R: CovariateRecord>(
     cases: &[R],
     controls: &[R],
@@ -694,14 +707,15 @@ fn pair_positions<R: CovariateRecord>(
     if pairs.is_empty() {
         return Some(Vec::new());
     }
-    let (case_index, control_index) = (index_by_id(cases)?, index_by_id(controls)?);
+    let case_index = index_by_id(cases, pairs.iter().map(|pair| pair.case_id.as_str()))?;
+    let control_index = index_by_id(controls, pairs.iter().map(|pair| pair.control_id.as_str()))?;
     Some(
         pairs
             .iter()
             .filter_map(|pair| {
                 Some((
-                    *case_index.get(pair.case_id.as_str())?,
-                    cases.len() + *control_index.get(pair.control_id.as_str())?,
+                    (*case_index.get(pair.case_id.as_str())?)?,
+                    cases.len() + (*control_index.get(pair.control_id.as_str())?)?,
                 ))
             })
             .collect(),
@@ -817,15 +831,22 @@ fn is_redundant_term<R: CovariateRecord>(
 }
 
 /// The records of both groups with their value of the feature, in the order
-/// of the records, cases first, and the value of every record by position, `None`
-/// for a record without a finite value, which is left out of the units.
+/// of the records, cases first, and, when there are pairs, the value of every
+/// record by position, `None` for a record without a finite value, which is
+/// left out of the units.
 fn feature_units<R: CovariateRecord>(
     sample: &BalanceSample<'_, R>,
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
 ) -> (Vec<Unit<f64>>, Vec<Option<f64>>) {
     let mut units = Vec::new();
-    let mut values = Vec::with_capacity(sample.cases.len() + sample.controls.len());
+    // The values by position are read only by the pair distances.
+    let positioned = !sample.pairs.is_empty();
+    let mut values = Vec::with_capacity(if positioned {
+        sample.cases.len() + sample.controls.len()
+    } else {
+        0
+    });
     let mut readers = feature.readers();
     for (records, weights, is_case, supplemental) in [
         (
@@ -850,7 +871,9 @@ fn feature_units<R: CovariateRecord>(
                     weights: *weights,
                 });
             }
-            values.push(value);
+            if positioned {
+                values.push(value);
+            }
         }
     }
     (units, values)
@@ -1014,6 +1037,11 @@ fn summarize_numeric_feature<R: CovariateRecord>(
     let case_post = group_moments(&units, true, post, binary);
     let control_post = group_moments(&units, false, post, binary);
     let reference = standardiser.variance(case_pre.variance, control_pre.variance);
+    // The pair distance needs only the values by position and the
+    // standardiser, so the values by position are freed before the sorts.
+    let name = feature.name();
+    let distance = pair_distance(sample, &name, &positioned, standardiser_scale(reference));
+    drop(positioned);
 
     let difference =
         |case: GroupMoments, control: GroupMoments| case.mean.zip(control.mean).map(|(a, b)| a - b);
@@ -1070,8 +1098,6 @@ fn summarize_numeric_feature<R: CovariateRecord>(
     let (eqq_mean_diff_pre, eqq_max_diff_pre) = eqq(false, case_pre, control_pre);
     let (eqq_mean_diff_post, eqq_max_diff_post) = eqq(true, case_post, control_post);
 
-    let name = feature.name();
-    let distance = pair_distance(sample, &name, &positioned, standardiser_scale(reference));
     let balance = NumericBalance {
         name,
         mean_case_pre: case_pre.mean,
@@ -1176,8 +1202,13 @@ fn summarize_categorical_feature<R: CovariateRecord>(
         .map(|(idx, level)| (level.as_str(), idx))
         .collect::<HashMap<_, _>>();
     let mut units: Vec<Unit<usize>> = Vec::new();
-    let mut positioned: Vec<Option<usize>> =
-        Vec::with_capacity(sample.cases.len() + sample.controls.len());
+    // The levels by position are read only by the pair distances.
+    let with_positions = !sample.pairs.is_empty();
+    let mut positioned: Vec<Option<usize>> = Vec::with_capacity(if with_positions {
+        sample.cases.len() + sample.controls.len()
+    } else {
+        0
+    });
     let mut reader = ColumnReader::new(key);
     for (records, is_case, supplemental, weights) in [
         (
@@ -1194,9 +1225,8 @@ fn summarize_categorical_feature<R: CovariateRecord>(
         ),
     ] {
         for (record, weights) in records.iter().zip(weights) {
-            let level =
-                map_optional_covariate_to_level(covariate_value(&mut reader, record, supplemental));
-            let value = level_position.get(level.as_str()).copied();
+            let level = level_name(covariate_value(&mut reader, record, supplemental));
+            let value = level_position.get(level).copied();
             if let Some(value) = value {
                 units.push(Unit {
                     value,
@@ -1204,7 +1234,9 @@ fn summarize_categorical_feature<R: CovariateRecord>(
                     weights: *weights,
                 });
             }
-            positioned.push(value);
+            if with_positions {
+                positioned.push(value);
+            }
         }
     }
     let plain = units;
@@ -1355,15 +1387,18 @@ fn collect_levels<R: CovariateRecord>(
     control_supplemental: &SupplementalCovariateMap,
     key: &str,
 ) -> Vec<String> {
+    // The distinct levels, found without a string per record, in sorted order.
     let mut reader = ColumnReader::new(key);
     let levels = cases
         .iter()
         .map(|record| (record, case_supplemental))
         .chain(controls.iter().map(|record| (record, control_supplemental)))
         .filter_map(|(record, supplemental)| covariate_value(&mut reader, record, supplemental))
-        .map(map_covariate_to_level)
+        .map(|value| level_name(Some(value)))
+        .collect::<RapidHashSet<&str>>()
+        .into_iter()
         .sorted()
-        .dedup()
+        .map(str::to_owned)
         .collect_vec();
 
     if levels.is_empty() {
@@ -1373,16 +1408,14 @@ fn collect_levels<R: CovariateRecord>(
     }
 }
 
-fn map_covariate_to_level(value: CovariateRef<'_>) -> String {
+/// The level a value counts as: a categorical value is its own level, a
+/// numeric one is `numeric` and a missing or absent one `missing`.
+const fn level_name(value: Option<CovariateRef<'_>>) -> &str {
     match value {
-        CovariateRef::Categorical(value) => value.to_owned(),
-        CovariateRef::Numeric(_) => "numeric".to_string(),
-        CovariateRef::Missing => "missing".to_string(),
+        Some(CovariateRef::Categorical(value)) => value,
+        Some(CovariateRef::Numeric(_)) => "numeric",
+        Some(CovariateRef::Missing) | None => "missing",
     }
-}
-
-fn map_optional_covariate_to_level(value: Option<CovariateRef<'_>>) -> String {
-    value.map_or_else(|| "missing".to_string(), map_covariate_to_level)
 }
 
 fn covariate_value<'a, R: CovariateRecord>(

@@ -35,7 +35,11 @@
 //! whose `μ'(η)` is 0, gets `z = 0` and `W = 0` and does not enter. The system is
 //! solved by `epistat_linalg`, which tries a Cholesky factorisation, then
 //! Bunch-Kaufman, then LU with partial and with full pivoting. Its weighted
-//! products do not depend on the number of threads, so neither does the fit.
+//! products do not depend on the number of threads. The working responses and
+//! weights, the linear predictor, the means and the deviance terms are formed
+//! row by row in parallel chunks, and the deviance and the Pearson sum add
+//! their terms in row order on one thread, so the fit does not depend on the
+//! number of threads either.
 //! R solves the same problem by a pivoted QR of `sqrt(W) X`, which agrees to
 //! about 1e-11 on well-conditioned designs. The normal equations square the
 //! condition number, so a design with nearly collinear columns loses about twice
@@ -88,7 +92,9 @@
 //!
 //! The columns are tested by modified Gram-Schmidt with a second pass of
 //! orthogonalisation on `U` at the working weights of the first iteration, in
-//! order, on one thread. The second pass keeps the residual norm accurate to the
+//! order. Each projection is a sum over the rows in row order. The first-pass
+//! projections on a kept column are made on all later columns at once, one
+//! thread per column, which changes no operation of any column. The second pass keeps the residual norm accurate to the
 //! rounding of `U` itself, far below `tol`, so exactly aliased columns are
 //! found. The set is fixed from then on, where R tests again in each iteration,
 //! so a column whose aliasing depends on the weights as they change between
@@ -155,10 +161,11 @@
 //!    Philadelphia: SIAM; 1979. R's `dqrdc2` modifies its `dqrdc` to pivot
 //!    only the columns that fall below the tolerance.
 
-use crate::columns::{column_slices, contiguous_copy, linear_predictor};
+use crate::columns::{column_slices, contiguous_copy, linear_predictor_into, rows};
 use epistat_linalg::design::select_columns;
-use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, weighted_xtz};
+use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, xtv};
 use epistat_linalg::{Mat, MatRef};
+use rayon::prelude::*;
 
 use crate::{Family, Link};
 
@@ -328,17 +335,14 @@ impl Glm {
         start: Option<&[f64]>,
     ) -> Result<Fit, GlmError> {
         let (n, p) = (x.nrows(), x.ncols());
-        let ones = vec![1.0; n];
-        let zeros = vec![0.0; n];
-        let weights = weights.unwrap_or(&ones);
-        let offset = offset.unwrap_or(&zeros);
         check("y", n, y.len())?;
-        check("weights", n, weights.len())?;
-        check("offset", n, offset.len())?;
+        check("weights", n, weights.map_or(n, <[f64]>::len))?;
+        check("offset", n, offset.map_or(n, <[f64]>::len))?;
         if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
             return Err(GlmError::Tolerance);
         }
         if let Some((index, &value)) = weights
+            .unwrap_or(&[])
             .iter()
             .enumerate()
             .find(|&(_, &w)| !(w.is_finite() && w >= 0.0))
@@ -359,38 +363,49 @@ impl Glm {
             return Err(GlmError::Response { index, value });
         }
         let (family, link) = (self.family, self.link);
-        let deviance = |mu: &[f64]| -> f64 {
-            (0..n)
-                .map(|i| family.deviance(y[i], mu[i], weights[i]))
-                .sum()
-        };
+        let weight = |i: usize| weights.map_or(1.0, |w| w[i]);
+        let offset_at = |i: usize| offset.map_or(0.0, |o| o[i]);
         let copy = contiguous_copy(x);
         let columns = column_slices(x, &copy);
-        // The linear predictor, the mean and the derivative of the mean.
-        let predict = |beta: &[f64]| -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-            let eta = linear_predictor(&columns, beta, offset);
-            let (mu, derivative) = eta.iter().map(|&e| link.inverse_and_derivative(e)).unzip();
-            (eta, mu, derivative)
+        // The linear predictor, the mean and the derivative of the mean, and a
+        // vector of one value per row that holds the working response while
+        // the normal equations are formed and is scratch space otherwise.
+        let mut eta = vec![0.0; n];
+        let mut mu = vec![0.0; n];
+        let mut derivative = vec![0.0; n];
+        let mut z = vec![0.0; n];
+        let predict = |beta: &[f64], eta: &mut [f64], mu: &mut [f64], derivative: &mut [f64]| {
+            linear_predictor_into(&columns, beta, offset, eta);
+            rows::each2(mu, derivative, |i, m, d| {
+                (*m, *d) = link.inverse_and_derivative(eta[i]);
+            });
         };
-        let valid = |mu: &[f64]| mu.iter().all(|&m| family.valid_mean(m));
+        // The deviance, its terms formed in parallel in `scratch` and added in
+        // row order.
+        let deviance = |mu: &[f64], scratch: &mut [f64]| -> f64 {
+            rows::each(scratch, |i, d| *d = family.deviance(y[i], mu[i], weight(i)));
+            scratch.iter().copied().sum()
+        };
+        let valid = |mu: &[f64]| rows::all(mu, |m| family.valid_mean(m));
 
         // R starts from the family's means, mapped to the linear predictor and
         // back, unless coefficients are given.
-        let (mut eta, mut mu, mut derivative) = start.map_or_else(
-            || {
-                let eta: Vec<f64> = (0..n)
-                    .map(|i| link.link(family.start(y[i], weights[i])))
-                    .collect();
-                let (mu, derivative) = eta.iter().map(|&e| link.inverse_and_derivative(e)).unzip();
-                (eta, mu, derivative)
-            },
-            predict,
-        );
-        let mut old_deviance = deviance(&mu);
+        if let Some(start) = start {
+            predict(start, &mut eta, &mut mu, &mut derivative);
+        } else {
+            rows::each(&mut eta, |i, e| {
+                *e = link.link(family.start(y[i], weight(i)));
+            });
+            rows::each2(&mut mu, &mut derivative, |i, m, d| {
+                (*m, *d) = link.inverse_and_derivative(eta[i]);
+            });
+        }
+        let mut old_deviance = deviance(&mu, &mut z);
         let mut previous: Option<Vec<f64>> = start.map(<[f64]>::to_vec);
         let mut beta = previous.clone().unwrap_or_else(|| vec![0.0; p]);
         let (mut converged, mut boundary, mut iterations) = (false, false, 0);
         let mut current_deviance = old_deviance;
+        let mut w2 = vec![0.0; n];
         let mut last_weights = vec![0.0; n];
         let mut last_gram = Mat::<f64>::zeros(p, p);
         // The columns kept when some are aliased, and the design without the
@@ -399,24 +414,27 @@ impl Glm {
 
         for iteration in 1..=self.max_iterations {
             iterations = iteration;
-            let mut z = vec![0.0; n];
-            let mut w2 = vec![0.0; n];
-            for i in 0..n {
+            rows::each2(&mut z, &mut w2, |i, z, w2| {
                 let slope = derivative[i];
-                if weights[i] > 0.0 && slope != 0.0 {
-                    z[i] = eta[i] - offset[i] + (y[i] - mu[i]) / slope;
-                    w2[i] = weights[i] * slope * slope / family.variance(mu[i]);
-                }
-            }
+                let prior = weight(i);
+                (*z, *w2) = if prior > 0.0 && slope != 0.0 {
+                    (
+                        eta[i] - offset_at(i) + (y[i] - mu[i]) / slope,
+                        prior * slope * slope / family.variance(mu[i]),
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
+            });
             if iteration == 1 && self.ridge == 0.0 {
-                let keep = independent_columns(x, &w2, self.tolerance);
+                let keep = independent_columns(&columns, &w2, self.tolerance);
                 if keep.iter().any(|&k| !k) {
                     let columns = (0..p).filter(|&j| keep[j]).collect();
                     active = Some((columns, select_columns(x, &keep)));
                 }
             }
             let design = active.as_ref().map_or(x, |(_, reduced)| reduced.as_ref());
-            let (solution, gram) = self.least_squares(design, &w2, &z)?;
+            let (solution, gram) = self.least_squares(design, &w2, &mut z)?;
             last_gram = gram;
             beta = vec![0.0; p];
             match &active {
@@ -427,9 +445,11 @@ impl Glm {
                 }
                 None => beta = solution,
             }
-            last_weights.clone_from(&w2);
-            (eta, mu, derivative) = predict(&beta);
-            current_deviance = deviance(&mu);
+            // The weights of this iteration become the last ones; `w2` is
+            // written in full by the next.
+            std::mem::swap(&mut last_weights, &mut w2);
+            predict(&beta, &mut eta, &mut mu, &mut derivative);
+            current_deviance = deviance(&mu, &mut z);
             boundary = false;
             if !current_deviance.is_finite() || !valid(&mu) {
                 let Some(old) = previous.as_ref() else {
@@ -444,8 +464,8 @@ impl Glm {
                     for (b, o) in beta.iter_mut().zip(old) {
                         *b = (*b + o) / 2.0;
                     }
-                    (eta, mu, derivative) = predict(&beta);
-                    current_deviance = deviance(&mu);
+                    predict(&beta, &mut eta, &mut mu, &mut derivative);
+                    current_deviance = deviance(&mu, &mut z);
                 }
                 boundary = true;
             }
@@ -459,7 +479,7 @@ impl Glm {
             previous = Some(beta.clone());
         }
 
-        let used = weights.iter().filter(|&&w| w > 0.0).count();
+        let used = (0..n).filter(|&i| weight(i) > 0.0).count();
         let columns: Vec<usize> = active
             .as_ref()
             .map_or_else(|| (0..p).collect(), |(columns, _)| columns.clone());
@@ -468,13 +488,17 @@ impl Glm {
             Some(1.0)
         } else if used > rank {
             // As summary.glm: the working weights of the last iteration times
-            // the working residuals at the final mean.
+            // the working residuals at the final mean, formed in parallel and
+            // added in row order over the rows with a positive weight.
+            rows::each(&mut z, |i, term| {
+                if last_weights[i] > 0.0 {
+                    let residual = (y[i] - mu[i]) / derivative[i];
+                    *term = last_weights[i] * residual * residual;
+                }
+            });
             let pearson: f64 = (0..n)
                 .filter(|&i| last_weights[i] > 0.0)
-                .map(|i| {
-                    let residual = (y[i] - mu[i]) / derivative[i];
-                    last_weights[i] * residual * residual
-                })
+                .map(|i| z[i])
                 .sum();
             Some(pearson / (used as f64 - rank as f64))
         } else {
@@ -517,14 +541,19 @@ impl Glm {
         Ok(gram)
     }
 
+    /// The solution of the normal equations and `X'WX` with the ridge. `z`
+    /// holds the working response and is left holding `w z`.
     fn least_squares(
         &self,
         x: MatRef<'_, f64>,
         w2: &[f64],
-        z: &[f64],
+        z: &mut [f64],
     ) -> Result<(Vec<f64>, Mat<f64>), GlmError> {
         let gram = self.information(x, w2)?;
-        let rhs = weighted_xtz(x, w2, z)?;
+        // `X'Wz` as `weighted_xtz` forms it, from the products `w z`, which
+        // are formed in place. `weighted_gram` has checked the weights.
+        rows::each(z, |i, v| *v *= w2[i]);
+        let rhs = xtv(x, z);
         let solution = epistat_linalg::solve(gram.as_ref(), rhs.as_ref(), &Attempt::SYMMETRIC)?;
         Ok(((0..x.ncols()).map(|j| solution.x[(j, 0)]).collect(), gram))
     }
@@ -534,34 +563,89 @@ impl Glm {
 /// after projecting out the kept columns before it is at least `tol` times the
 /// norm of the column. Modified Gram-Schmidt with a second pass, in column
 /// order.
-fn independent_columns(x: MatRef<'_, f64>, w2: &[f64], epsilon: f64) -> Vec<bool> {
+///
+/// Column `j` is projected on the kept columns before it in their order, twice
+/// over, and each projection is the sum over the rows in row order. The
+/// projections of the first pass are made as each kept column is finished, on
+/// every later column at once and in parallel, which is the same sequence of
+/// operations on each column as projecting column `j` on all of them when its
+/// turn comes; the second pass runs at its turn. The update `u -= d q` of one
+/// projection is made in the same pass over the rows as the sum of the next,
+/// which reads the updated value, so every value has the bits of the plain
+/// sequence.
+fn independent_columns(columns: &[&[f64]], w2: &[f64], epsilon: f64) -> Vec<bool> {
     let tol = 1e-7_f64.min(epsilon / 1000.0);
-    let n = x.nrows();
-    let mut basis: Vec<Vec<f64>> = Vec::new();
-    (0..x.ncols())
-        .map(|j| {
-            let mut u: Vec<f64> = (0..n).map(|i| w2[i].sqrt() * x[(i, j)]).collect();
-            let original = norm(&u);
-            for _ in 0..2 {
-                for q in &basis {
-                    let dot: f64 = q.iter().zip(&u).map(|(a, b)| a * b).sum();
-                    for (v, a) in u.iter_mut().zip(q) {
-                        *v -= dot * a;
-                    }
-                }
-            }
-            let left = norm(&u);
-            // A column of zeros is aliased, as in dqrdc2, which compares with 1.
-            if left < tol * if original > 0.0 { original } else { 1.0 } {
-                return false;
-            }
-            for v in &mut u {
-                *v /= left;
-            }
-            basis.push(u);
-            true
+    let p = columns.len();
+    // Each column scaled, its norm, and the projection last summed on it
+    // whose update is not yet made: the coefficient and the kept column.
+    let mut pending: Vec<(Vec<f64>, Deferred)> = columns
+        .par_iter()
+        .map(|column| {
+            let u = column.iter().zip(w2).map(|(x, w)| w.sqrt() * x).collect();
+            (u, None)
         })
-        .collect()
+        .collect();
+    let original: Vec<f64> = pending.par_iter().map(|(u, _)| norm(u)).collect();
+    let mut basis: Vec<Vec<f64>> = Vec::new();
+    let mut keep = vec![false; p];
+    for j in 0..p {
+        let (mut u, mut deferred) = (std::mem::take(&mut pending[j].0), pending[j].1);
+        for (k, q) in basis.iter().enumerate() {
+            let dot = update_and_dot(&mut u, deferred.map(|(d, m)| (d, &basis[m][..])), Some(q));
+            deferred = Some((dot, k));
+        }
+        let left = update_and_dot(&mut u, deferred.map(|(d, m)| (d, &basis[m][..])), None).sqrt();
+        // A column of zeros is aliased, as in dqrdc2, which compares with 1.
+        let original = original[j];
+        if left < tol * if original > 0.0 { original } else { 1.0 } {
+            continue;
+        }
+        keep[j] = true;
+        for v in &mut u {
+            *v /= left;
+        }
+        let k = basis.len();
+        pending[j + 1..]
+            .par_iter_mut()
+            .for_each(|(later, deferred)| {
+                let dot =
+                    update_and_dot(later, deferred.map(|(d, m)| (d, &basis[m][..])), Some(&u));
+                *deferred = Some((dot, k));
+            });
+        basis.push(u);
+    }
+    keep
+}
+
+/// A projection summed on a column whose update `u -= d q` is not yet made:
+/// the coefficient `d` and the position of `q` among the kept columns.
+type Deferred = Option<(f64, usize)>;
+
+/// Makes the update `u -= d q` of `deferred` and returns `sum_i q_i u_i` over
+/// the updated `u` for the column `q`, or `sum_i u_i^2` without one, in one
+/// pass over the rows.
+fn update_and_dot(u: &mut [f64], deferred: Option<(f64, &[f64])>, q: Option<&[f64]>) -> f64 {
+    match (deferred, q) {
+        (None, None) => u.iter().map(|a| a * a).sum(),
+        (None, Some(q)) => q.iter().zip(&*u).map(|(a, b)| a * b).sum(),
+        (Some((d, previous)), None) => u
+            .iter_mut()
+            .zip(previous)
+            .map(|(v, a)| {
+                *v -= d * a;
+                *v * *v
+            })
+            .sum(),
+        (Some((d, previous)), Some(q)) => u
+            .iter_mut()
+            .zip(previous)
+            .zip(q)
+            .map(|((v, a), b)| {
+                *v -= d * a;
+                b * *v
+            })
+            .sum(),
+    }
 }
 
 fn norm(v: &[f64]) -> f64 {

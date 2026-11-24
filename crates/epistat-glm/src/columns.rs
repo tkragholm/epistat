@@ -1,5 +1,10 @@
-//! The columns of a design as contiguous slices, and the linear predictor
-//! formed from them.
+//! The columns of a design as contiguous slices, the linear predictor formed
+//! from them, and loops over rows that run in parallel.
+//!
+//! Every loop here computes each row's values from that row's inputs alone,
+//! so splitting the rows into chunks for threads changes no bit of a result.
+//! Sums over rows are not formed here: a caller that needs one writes its
+//! terms with these loops and adds them in row order itself.
 
 use epistat_linalg::MatRef;
 
@@ -38,20 +43,103 @@ pub(crate) fn column_slices<'a>(x: MatRef<'a, f64>, copy: &'a [f64]) -> Vec<&'a 
 /// negative zero, so every `η_i` has the bits of a sum taken row by row. The
 /// design is read a column at a time, a tile of rows after another.
 pub(crate) fn linear_predictor(columns: &[&[f64]], beta: &[f64], offset: &[f64]) -> Vec<f64> {
-    let n = offset.len();
-    let mut eta = vec![-0.0_f64; n];
-    for (t, tile) in eta.chunks_mut(TILE).enumerate() {
-        let at = t * TILE;
-        for (column, &b) in columns.iter().zip(beta) {
-            for (e, v) in tile.iter_mut().zip(&column[at..]) {
-                *e += v * b;
+    let mut eta = vec![0.0; offset.len()];
+    linear_predictor_into(columns, beta, Some(offset), &mut eta);
+    eta
+}
+
+/// [`linear_predictor`] written into `eta`, with an offset of zero when
+/// `offset` is `None`. The zero is added as an offset would be, so the sign of
+/// a zero predictor is that of a zero offset. Chunks of tiles run in parallel.
+pub(crate) fn linear_predictor_into(
+    columns: &[&[f64]],
+    beta: &[f64],
+    offset: Option<&[f64]>,
+    eta: &mut [f64],
+) {
+    rows::chunks(eta, |at, chunk| {
+        for (t, tile) in chunk.chunks_mut(TILE).enumerate() {
+            let at = at + t * TILE;
+            tile.fill(-0.0);
+            for (column, &b) in columns.iter().zip(beta) {
+                for (e, v) in tile.iter_mut().zip(&column[at..]) {
+                    *e += v * b;
+                }
+            }
+            match offset {
+                Some(offset) => {
+                    for (e, o) in tile.iter_mut().zip(&offset[at..]) {
+                        *e += o;
+                    }
+                }
+                None => {
+                    for e in tile.iter_mut() {
+                        *e += 0.0;
+                    }
+                }
             }
         }
-        for (e, o) in tile.iter_mut().zip(&offset[at..]) {
-            *e += o;
+    });
+}
+
+/// Loops over the rows of vectors with one value per row, in chunks of
+/// [`rows::CHUNK`] rows that run in parallel when there are several.
+pub(crate) mod rows {
+    use rayon::prelude::*;
+
+    /// The rows of one task, a multiple of the tile of the linear predictor.
+    pub(crate) const CHUNK: usize = 16 * super::TILE;
+
+    /// Calls `f(first row, chunk)` on consecutive chunks of `out`.
+    pub(crate) fn chunks(out: &mut [f64], f: impl Fn(usize, &mut [f64]) + Sync) {
+        if out.len() <= CHUNK {
+            f(0, out);
+            return;
         }
+        out.par_chunks_mut(CHUNK)
+            .enumerate()
+            .for_each(|(c, chunk)| f(c * CHUNK, chunk));
     }
-    eta
+
+    /// Calls `f(row, value)` on every value of `out`.
+    pub(crate) fn each(out: &mut [f64], f: impl Fn(usize, &mut f64) + Sync) {
+        chunks(out, |at, chunk| {
+            for (k, value) in chunk.iter_mut().enumerate() {
+                f(at + k, value);
+            }
+        });
+    }
+
+    /// Calls `f(row, a, b)` on the values of every row of `a` and `b`, which
+    /// have the same length.
+    pub(crate) fn each2(
+        a: &mut [f64],
+        b: &mut [f64],
+        f: impl Fn(usize, &mut f64, &mut f64) + Sync,
+    ) {
+        assert_eq!(a.len(), b.len(), "one value per row");
+        let run = |at: usize, a: &mut [f64], b: &mut [f64]| {
+            for (k, (x, y)) in a.iter_mut().zip(b).enumerate() {
+                f(at + k, x, y);
+            }
+        };
+        if a.len() <= CHUNK {
+            run(0, a, b);
+            return;
+        }
+        a.par_chunks_mut(CHUNK)
+            .zip(b.par_chunks_mut(CHUNK))
+            .enumerate()
+            .for_each(|(c, (a, b))| run(c * CHUNK, a, b));
+    }
+
+    /// Whether `f` holds for every value of `values`.
+    pub(crate) fn all(values: &[f64], f: impl Fn(f64) -> bool + Sync) -> bool {
+        if values.len() <= CHUNK {
+            return values.iter().all(|&v| f(v));
+        }
+        values.par_iter().with_min_len(CHUNK).all(|&v| f(v))
+    }
 }
 
 #[cfg(test)]

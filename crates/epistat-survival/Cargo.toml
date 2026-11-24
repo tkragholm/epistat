@@ -42,6 +42,10 @@ name = "tier1_survival"
 harness = false
 
 [[bench]]
+name = "tier1_cox_scale"
+harness = false
+
+[[bench]]
 name = "tier2_survival"
 harness = false
 

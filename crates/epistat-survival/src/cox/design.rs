@@ -342,6 +342,19 @@
 //! tolerance of a residual adds `n` times the machine epsilon, the error of a
 //! running sum over at most `n` event times, to `p` times the 8 above.
 //!
+//! # Threads
+//!
+//! The rows are sorted, scaled and gathered into strata in parallel, and the
+//! risk scores and the score residuals of the rows are formed in parallel
+//! chunks, each value from its own row alone. The sort is by a strict order,
+//! stratum, then descending exit, then row, so it gives the order of a stable
+//! sort. Every sum is taken on one thread in the order described above: the
+//! scaling sums in row order, the risk-set sums in the sweep over the event
+//! times, and the cluster sums in the order of the strata and their rows. The
+//! results therefore do not depend on the number of threads. The sweep is the
+//! part of a fit whose time does not fall with more threads; at `p` columns
+//! it costs about `p^2` operations per row and per tied event.
+//!
 //! # References
 //!
 //! 1. Breslow N. Covariance analysis of censored survival data. Biometrics
@@ -366,11 +379,10 @@
     reason = "the entry point checks that the row count fits in u32"
 )]
 
-use std::borrow::Cow;
-
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
+use rayon::prelude::*;
 
 use super::sweep::{RiskSets, Sums, terms};
 use super::{Ties, moments};
@@ -513,10 +525,13 @@ impl CoxModelFit {
 struct Input<'a> {
     x: MatRef<'a, f64>,
     is_event: &'a [bool],
-    start: &'a [f64],
+    /// Entry times, `None` when every row is at risk from the beginning.
+    start: Option<&'a [f64]>,
     stop: &'a [f64],
-    weight: &'a [f64],
-    stratum: &'a [u32],
+    /// Case weights, `None` for weights of one.
+    weight: Option<&'a [f64]>,
+    /// Stratum codes, `None` for one stratum.
+    stratum: Option<&'a [u32]>,
     ties: Ties,
     cluster: Option<&'a [u32]>,
     /// One offset per row of the data.
@@ -526,6 +541,28 @@ struct Input<'a> {
     iter_max: u32,
     eps: f64,
     stepping: Stepping,
+}
+
+impl Input<'_> {
+    /// The entry time of row `i`, minus infinity without entry times.
+    fn start(&self, i: usize) -> f64 {
+        self.start.map_or(f64::NEG_INFINITY, |start| start[i])
+    }
+
+    fn weight(&self, i: usize) -> f64 {
+        self.weight.map_or(1.0, |weight| weight[i])
+    }
+
+    fn stratum(&self, i: usize) -> u32 {
+        self.stratum.map_or(0, |stratum| stratum[i])
+    }
+
+    /// The rows with a weight above zero, ascending.
+    fn kept(&self) -> Vec<u32> {
+        (0..self.x.nrows() as u32)
+            .filter(|&i| self.weight(i as usize) > 0.0)
+            .collect()
+    }
 }
 
 /// Which of the fitting routines of `survival` the iteration follows. They
@@ -623,25 +660,13 @@ fn with_input<R>(
         }
     };
     let is_event: Vec<bool> = data.cause(code)?.iter().collect();
-    let rows = data.n_rows();
-    // A missing start is at risk from the beginning, which is what an entry
-    // time of minus infinity says.
-    let start = surv
-        .start()
-        .map_or_else(|| Cow::Owned(vec![f64::NEG_INFINITY; rows]), Cow::Borrowed);
-    let weight = data
-        .weight()
-        .map_or_else(|| Cow::Owned(vec![1.0; rows]), Cow::Borrowed);
-    let stratum = data
-        .stratum()
-        .map_or_else(|| Cow::Owned(vec![0; rows]), Cow::Borrowed);
     Ok(f(&Input {
         x,
         is_event: &is_event,
-        start: &start,
+        start: surv.start(),
         stop: surv.stop(),
-        weight: &weight,
-        stratum: &stratum,
+        weight: data.weight(),
+        stratum: data.stratum(),
         ties: opts.ties,
         cluster: data.cluster(),
         offset: opts.offset,
@@ -742,6 +767,8 @@ struct Stratum {
     /// The offset of each row less its mean, empty without an offset.
     offset: Vec<f64>,
     stop: Vec<f64>,
+    /// The entry time of each row, empty without entry times, when every row
+    /// is at risk from the beginning.
     start: Vec<f64>,
     is_event: Vec<bool>,
     /// Index in the input of each row.
@@ -749,6 +776,8 @@ struct Stratum {
     /// Cluster code of each row, empty without clusters.
     cluster: Vec<u32>,
     /// Positions in descending entry order, and the entry times in that order.
+    /// Both are empty without entry times, when no row leaves a risk set
+    /// before its exit.
     by_start: Vec<u32>,
     start_sorted: Vec<f64>,
     /// Distinct event times, descending.
@@ -760,6 +789,15 @@ struct Stratum {
 }
 
 impl Stratum {
+    /// The entry time of position `j`, minus infinity without entry times.
+    fn start(&self, j: usize) -> f64 {
+        if self.start.is_empty() {
+            f64::NEG_INFINITY
+        } else {
+            self.start[j]
+        }
+    }
+
     fn risk_sets(&self) -> RiskSets<'_> {
         RiskSets {
             x: &self.x,
@@ -891,27 +929,42 @@ struct Model {
 }
 
 impl Model {
+    /// The linear predictor and the weighted risk score `w exp(eta)` of every
+    /// row of `stratum`, or `None` when a risk score is not finite. Each row's
+    /// values come from that row alone, so chunks of rows run in parallel.
     fn row_risk(stratum: &Stratum, p: usize, beta: &[f64]) -> Option<(Vec<f64>, Vec<f64>)> {
         let size = stratum.stop.len();
-        let mut eta = Vec::with_capacity(size);
-        let mut risk = Vec::with_capacity(size);
-        for row in 0..size {
-            let mut value: f64 = stratum.x[row * p..(row + 1) * p]
-                .iter()
-                .zip(beta)
-                .map(|(x, b)| x * b)
-                .sum();
-            if !stratum.offset.is_empty() {
-                value += stratum.offset[row];
+        let mut eta = vec![0.0f64; size];
+        let mut risk = vec![0.0f64; size];
+        let fill = |at: usize, eta: &mut [f64], risk: &mut [f64]| -> bool {
+            for (k, (eta, risk)) in eta.iter_mut().zip(risk).enumerate() {
+                let row = at + k;
+                let mut value: f64 = stratum.x[row * p..(row + 1) * p]
+                    .iter()
+                    .zip(beta)
+                    .map(|(x, b)| x * b)
+                    .sum();
+                if !stratum.offset.is_empty() {
+                    value += stratum.offset[row];
+                }
+                let weighted = stratum.weight[row] * value.exp();
+                if !weighted.is_finite() {
+                    return false;
+                }
+                *eta = value;
+                *risk = weighted;
             }
-            let weighted = stratum.weight[row] * value.exp();
-            if !weighted.is_finite() {
-                return None;
-            }
-            eta.push(value);
-            risk.push(weighted);
-        }
-        Some((eta, risk))
+            true
+        };
+        let finite = if size <= ROW_CHUNK {
+            fill(0, &mut eta, &mut risk)
+        } else {
+            eta.par_chunks_mut(ROW_CHUNK)
+                .zip(risk.par_chunks_mut(ROW_CHUNK))
+                .enumerate()
+                .all(|(c, (eta, risk))| fill(c * ROW_CHUNK, eta, risk))
+        };
+        finite.then_some((eta, risk))
     }
 
     /// The log partial likelihood, score and information at `beta`, or `None`
@@ -948,7 +1001,7 @@ impl Model {
                     scratch.run(
                         tied,
                         p,
-                        (0..end).filter(|&j| stratum.start[j] < time),
+                        (0..end).filter(|&j| stratum.start(j) < time),
                         &risk,
                         &stratum.x,
                     );
@@ -1040,6 +1093,7 @@ impl Model {
     ) -> Option<()> {
         let p = self.p;
         let mut residual = vec![0.0f64; p];
+        let mut buffer = Vec::new();
         let mut active = Vec::new();
         let mut sums = Sums::new(p, true);
         for stratum in &self.strata {
@@ -1089,7 +1143,9 @@ impl Model {
                     centre_sum[(k + 1) * p + a] = centre_sum[k * p + a] + centre[k * p + a];
                 }
             }
-            for (j, &risk_j) in risk.iter().enumerate() {
+            // The residual of position `j` into `out`, from the sums above.
+            let residual_of = |j: usize, out: &mut [f64]| {
+                let risk_j = risk[j];
                 let x = &stratum.x[j * p..(j + 1) * p];
                 // Event times t with start < t <= stop.
                 let first = stratum
@@ -1097,7 +1153,7 @@ impl Model {
                     .partition_point(|&t| t > stratum.stop[j]);
                 let last = stratum
                     .event_times
-                    .partition_point(|&t| t > stratum.start[j]);
+                    .partition_point(|&t| t > stratum.start(j));
                 let span = hazard_sum[last] - hazard_sum[first];
                 for a in 0..p {
                     let around = centre_sum[last * p + a] - centre_sum[first * p + a];
@@ -1108,9 +1164,35 @@ impl Model {
                         value += stratum.weight[j] * (x[a] - mean[first * p + a]);
                         value += risk_j * (x[a] * late_hazard[first] - late_centre[first * p + a]);
                     }
-                    residual[a] = value;
+                    out[a] = value;
                 }
-                emit(stratum, j, &residual);
+            };
+            // The residuals of a block of rows are formed in parallel and
+            // handed to `emit` in order.
+            let size = risk.len();
+            let mut block = 0;
+            while block < size {
+                let len = (size - block).min(SCORE_BLOCK);
+                if p == 0 || len <= ROW_CHUNK {
+                    for j in block..block + len {
+                        residual_of(j, &mut residual);
+                        emit(stratum, j, &residual);
+                    }
+                } else {
+                    buffer.resize(len * p, 0.0);
+                    buffer
+                        .par_chunks_mut(ROW_CHUNK * p)
+                        .enumerate()
+                        .for_each(|(c, chunk)| {
+                            for (k, out) in chunk.chunks_mut(p).enumerate() {
+                                residual_of(block + c * ROW_CHUNK + k, out);
+                            }
+                        });
+                    for (k, out) in buffer.chunks(p).enumerate() {
+                        emit(stratum, block + k, out);
+                    }
+                }
+                block += len;
             }
         }
         Some(())
@@ -1133,123 +1215,142 @@ struct Prepared {
     factor: Vec<f64>,
 }
 
-/// Centre and scale the covariates of the rows `kept`, which are not empty,
-/// and sort them into strata.
-fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
-    let p = input.x.ncols();
-    // Centre and scale as coxph does.
-    let total_weight: f64 = kept.iter().map(|&i| input.weight[i]).sum();
-    let mut centre = vec![0.0f64; p];
-    let mut factor = vec![0.0f64; p];
-    for a in 0..p {
-        let first = input.x[(kept[0], a)];
-        let constant = kept.iter().all(|&i| input.x[(i, a)] - first == 0.0);
-        if constant {
-            continue;
+/// Rows per task of the loops over rows that run in parallel.
+const ROW_CHUNK: usize = 1 << 14;
+/// Rows whose score residuals are held at once, formed in parallel and then
+/// handed on in order.
+const SCORE_BLOCK: usize = 1 << 17;
+
+/// A key whose ascending order is the descending order of `value` under
+/// `f64::total_cmp`.
+fn descending(value: f64) -> u64 {
+    let bits = value.to_bits();
+    // The order of `total_cmp` as an unsigned integer: negative values with
+    // every bit flipped, positive ones with the sign bit set.
+    let ascending = if bits >> 63 == 1 {
+        !bits
+    } else {
+        bits | 1 << 63
+    };
+    !ascending
+}
+
+/// `f(position)` for every position of `out`, in parallel chunks.
+fn gather<T: Send>(out: &mut [T], f: impl Fn(usize) -> T + Sync) {
+    if out.len() <= ROW_CHUNK {
+        for (k, value) in out.iter_mut().enumerate() {
+            *value = f(k);
         }
-        let mean: f64 = kept
-            .iter()
-            .map(|&i| input.weight[i] * input.x[(i, a)])
-            .sum::<f64>()
-            / total_weight;
-        let deviation: f64 = kept
-            .iter()
-            .map(|&i| input.weight[i] * (input.x[(i, a)] - mean).abs())
-            .sum::<f64>()
-            / total_weight;
-        centre[a] = mean;
-        factor[a] = if deviation > 0.0 {
+        return;
+    }
+    out.par_chunks_mut(ROW_CHUNK)
+        .enumerate()
+        .for_each(|(c, chunk)| {
+            for (k, value) in chunk.iter_mut().enumerate() {
+                *value = f(c * ROW_CHUNK + k);
+            }
+        });
+}
+
+/// The vector of `f(position)` for `len` positions, formed in parallel.
+fn gathered<T: Send + Copy + Default>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    let mut out = vec![T::default(); len];
+    gather(&mut out, f);
+    out
+}
+
+/// The centre and the scale factor of column `a` over the rows `kept`, as
+/// `coxph` standardises it: the weighted mean and one over the weighted mean
+/// absolute deviation, and `(0, 0)` for a column without variation. The sums
+/// run over the rows in order.
+fn column_scale(input: &Input<'_>, kept: &[u32], total_weight: f64, a: usize) -> (f64, f64) {
+    let x = |i: u32| input.x[(i as usize, a)];
+    let first = x(kept[0]);
+    if kept.iter().all(|&i| x(i) - first == 0.0) {
+        return (0.0, 0.0);
+    }
+    let mean: f64 = kept
+        .iter()
+        .map(|&i| input.weight(i as usize) * x(i))
+        .sum::<f64>()
+        / total_weight;
+    let deviation: f64 = kept
+        .iter()
+        .map(|&i| input.weight(i as usize) * (x(i) - mean).abs())
+        .sum::<f64>()
+        / total_weight;
+    (
+        mean,
+        if deviation > 0.0 {
             1.0 / deviation
         } else {
             1.0
-        };
-    }
+        },
+    )
+}
+
+/// Centre and scale the covariates of the rows `kept`, which are not empty,
+/// and sort them into strata.
+///
+/// The rows are ordered by stratum code, then by descending exit time, then
+/// by row, which is a strict order, so the parallel sort gives the order of
+/// sorting stably by stratum and then by exit. The columns are scaled one
+/// task per column with their sums in row order, and every row's values of a
+/// stratum are gathered in parallel, each from that row alone.
+fn prepare(input: &Input<'_>, kept: &[u32]) -> Prepared {
+    let p = input.x.ncols();
+    // Centre and scale as coxph does.
+    let total_weight: f64 = kept.iter().map(|&i| input.weight(i as usize)).sum();
+    let scales: Vec<(f64, f64)> = (0..p)
+        .into_par_iter()
+        .map(|a| column_scale(input, kept, total_weight, a))
+        .collect();
+    let centre: Vec<f64> = scales.iter().map(|&(c, _)| c).collect();
+    let factor: Vec<f64> = scales.iter().map(|&(_, f)| f).collect();
 
     // The partial likelihood does not change when a constant is added to every
     // offset. The mean is taken out, as `coxph` does, to keep `exp` in range.
     let shift = input
         .offset
-        .map(|offset| kept.iter().map(|&i| offset[i]).sum::<f64>() / kept.len() as f64);
-    let mut order = kept.to_vec();
-    order.sort_by_key(|&i| input.stratum[i]);
-    let mut strata = Vec::new();
+        .map(|offset| kept.iter().map(|&i| offset[i as usize]).sum::<f64>() / kept.len() as f64);
+    let order: Vec<u32> = {
+        let mut keyed: Vec<(u32, u64, u32)> = kept
+            .par_iter()
+            .map(|&i| {
+                let row = i as usize;
+                (input.stratum(row), descending(input.stop[row]), i)
+            })
+            .collect();
+        keyed.par_sort_unstable();
+        keyed.into_par_iter().map(|(_, _, i)| i).collect()
+    };
+    let mut ranges = Vec::new();
     let mut begin = 0;
     while begin < order.len() {
-        let code = input.stratum[order[begin]];
+        let code = input.stratum(order[begin] as usize);
         let end = begin
             + order[begin..]
                 .iter()
-                .take_while(|&&i| input.stratum[i] == code)
+                .take_while(|&&i| input.stratum(i as usize) == code)
                 .count();
-        let members = &mut order[begin..end];
+        ranges.push(begin..end);
         begin = end;
-        if !members.iter().any(|&i| input.is_event[i]) {
+    }
+    let strata: Vec<Stratum> = ranges
+        .into_par_iter()
+        .filter_map(|range| {
+            let members = &order[range];
             // A stratum without events has an unidentified baseline hazard and
             // adds nothing.
-            continue;
-        }
-        // Stable, so rows with the same exit keep their input order.
-        members.sort_by(|&a, &b| input.stop[b].total_cmp(&input.stop[a]));
-        let size = members.len();
-        let mut by_start: Vec<u32> = (0..size as u32).collect();
-        by_start.sort_by(|&a, &b| {
-            input.start[members[b as usize]].total_cmp(&input.start[members[a as usize]])
-        });
-        let start_sorted = by_start
-            .iter()
-            .map(|&row| input.start[members[row as usize]])
-            .collect();
-        let mut event_times = Vec::new();
-        let mut dying_rows = Vec::new();
-        let mut dying_offset = vec![0usize];
-        for (position, &i) in members.iter().enumerate() {
-            if !input.is_event[i] {
-                continue;
-            }
-            if event_times.last() != Some(&input.stop[i]) {
-                if !event_times.is_empty() {
-                    dying_offset.push(dying_rows.len());
-                }
-                event_times.push(input.stop[i]);
-            }
-            dying_rows.push(position as u32);
-        }
-        dying_offset.push(dying_rows.len());
-        let mut x = Vec::with_capacity(size * p);
-        for &i in members.iter() {
-            for a in 0..p {
-                x.push(if factor[a] == 0.0 {
-                    0.0
-                } else {
-                    (input.x[(i, a)] - centre[a]) * factor[a]
-                });
-            }
-        }
-        strata.push(Stratum {
-            x,
-            row: members.iter().map(|&i| i as u32).collect(),
-            weight: members.iter().map(|&i| input.weight[i]).collect(),
-            offset: match (input.offset, shift) {
-                (Some(offset), Some(shift)) => members.iter().map(|&i| offset[i] - shift).collect(),
-                _ => Vec::new(),
-            },
-            stop: members.iter().map(|&i| input.stop[i]).collect(),
-            start: members.iter().map(|&i| input.start[i]).collect(),
-            is_event: members.iter().map(|&i| input.is_event[i]).collect(),
-            cluster: input
-                .cluster
-                .map(|cluster| members.iter().map(|&i| cluster[i]).collect())
-                .unwrap_or_default(),
-            by_start,
-            start_sorted,
-            event_times,
-            dying_rows,
-            dying_offset,
-        });
-    }
+            members
+                .iter()
+                .any(|&i| input.is_event[i as usize])
+                .then(|| gather_stratum(input, members, &centre, &factor, shift))
+        })
+        .collect();
     let n_clusters = input.cluster.map_or(0, |cluster| {
         kept.iter()
-            .map(|&i| cluster[i] as usize + 1)
+            .map(|&i| cluster[i as usize] as usize + 1)
             .max()
             .unwrap_or(0)
     });
@@ -1261,6 +1362,101 @@ fn prepare(input: &Input<'_>, kept: &[usize]) -> Prepared {
             n_clusters,
         },
         factor,
+    }
+}
+
+/// The stratum of the rows `members`, in descending exit order.
+fn gather_stratum(
+    input: &Input<'_>,
+    members: &[u32],
+    centre: &[f64],
+    factor: &[f64],
+    shift: Option<f64>,
+) -> Stratum {
+    let p = centre.len();
+    let size = members.len();
+    let row = |position: usize| members[position] as usize;
+    let stop = gathered(size, |k| input.stop[row(k)]);
+    let is_event = gathered(size, |k| input.is_event[row(k)]);
+    let start = if input.start.is_some() {
+        gathered(size, |k| input.start(row(k)))
+    } else {
+        Vec::new()
+    };
+    let (by_start, start_sorted) = if start.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        // Descending entry, and the position for rows that enter together, as
+        // a stable sort of the positions gives.
+        let mut keyed: Vec<(u64, u32)> = start
+            .par_iter()
+            .enumerate()
+            .map(|(k, &time)| (descending(time), k as u32))
+            .collect();
+        keyed.par_sort_unstable();
+        let by_start: Vec<u32> = keyed.into_par_iter().map(|(_, k)| k).collect();
+        let start_sorted = gathered(size, |k| start[by_start[k] as usize]);
+        (by_start, start_sorted)
+    };
+    let mut event_times = Vec::new();
+    let mut dying_rows = Vec::new();
+    let mut dying_offset = vec![0usize];
+    for (position, (&time, &event)) in stop.iter().zip(&is_event).enumerate() {
+        if !event {
+            continue;
+        }
+        if event_times.last() != Some(&time) {
+            if !event_times.is_empty() {
+                dying_offset.push(dying_rows.len());
+            }
+            event_times.push(time);
+        }
+        dying_rows.push(position as u32);
+    }
+    dying_offset.push(dying_rows.len());
+    let mut x = vec![0.0f64; size * p];
+    if p > 0 {
+        let rows_per_chunk = ROW_CHUNK.div_ceil(p);
+        let fill = |at: usize, chunk: &mut [f64]| {
+            for (k, values) in chunk.chunks_mut(p).enumerate() {
+                let i = row(at + k);
+                for (a, value) in values.iter_mut().enumerate() {
+                    *value = if factor[a] == 0.0 {
+                        0.0
+                    } else {
+                        (input.x[(i, a)] - centre[a]) * factor[a]
+                    };
+                }
+            }
+        };
+        if size <= rows_per_chunk {
+            fill(0, &mut x);
+        } else {
+            x.par_chunks_mut(rows_per_chunk * p)
+                .enumerate()
+                .for_each(|(c, chunk)| fill(c * rows_per_chunk, chunk));
+        }
+    }
+    Stratum {
+        x,
+        row: members.to_vec(),
+        weight: gathered(size, |k| input.weight(row(k))),
+        offset: match (input.offset, shift) {
+            (Some(offset), Some(shift)) => gathered(size, |k| offset[row(k)] - shift),
+            _ => Vec::new(),
+        },
+        stop,
+        start,
+        is_event,
+        cluster: input
+            .cluster
+            .map(|cluster| gathered(size, |k| cluster[row(k)]))
+            .unwrap_or_default(),
+        by_start,
+        start_sorted,
+        event_times,
+        dying_rows,
+        dying_offset,
     }
 }
 
@@ -1359,26 +1555,24 @@ fn score_tests(
 fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     let p = input.x.ncols();
     let with_clusters = input.cluster.is_some();
-    let kept: Vec<usize> = (0..input.x.nrows())
-        .filter(|&i| input.weight[i] > 0.0)
-        .collect();
+    let kept = input.kept();
     if kept.is_empty() {
         return Ok(CoxModelFit::degenerate(p, 0.0, 0, with_clusters));
     }
     let n_rows = kept.len();
     let n_events: f64 = kept
         .iter()
-        .filter(|&&i| input.is_event[i])
-        .map(|&i| input.weight[i])
+        .filter(|&&i| input.is_event[i as usize])
+        .map(|&i| input.weight(i as usize))
         .sum();
-    if !kept.iter().any(|&i| input.is_event[i]) {
+    if !kept.iter().any(|&i| input.is_event[i as usize]) {
         return Ok(CoxModelFit::degenerate(p, n_events, n_rows, with_clusters));
     }
 
     let Prepared { model, factor } = prepare(input, &kept);
     let clusters = input
         .cluster
-        .map(|cluster| Clusters::of(cluster, kept.iter().copied(), model.n_clusters));
+        .map(|cluster| Clusters::of(cluster, kept.iter().map(|&i| i as usize), model.n_clusters));
     newton(
         &model,
         &Newton {
@@ -1788,7 +1982,7 @@ fn score_residuals_checked(
         .iter()
         .map(|c| c.map(|_| vec![0.0f64; rows]))
         .collect();
-    let kept: Vec<usize> = (0..rows).filter(|&i| data.weight[i] > 0.0).collect();
+    let kept = data.kept();
     if kept.is_empty() {
         return Ok(columns);
     }
