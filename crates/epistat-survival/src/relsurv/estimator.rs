@@ -8,6 +8,7 @@
 )]
 
 use super::ExpectedHazard;
+use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
@@ -241,8 +242,11 @@ fn exact(
     by_start.sort_by(|&a, &b| begin(a).total_cmp(&begin(b)).then(a.cmp(&b)));
     let mut next_entrant = 0;
     // The persons at risk, each with its cumulative reference hazard at the
-    // previous time point.
-    let mut active: Vec<(usize, f64)> = Vec::new();
+    // previous time point and where its pieces are in `pieces`. The pieces of
+    // a person are formed when it enters.
+    let mut active: Vec<(usize, f64, (usize, usize))> = Vec::new();
+    let mut reader = expected.reader();
+    let mut pieces = Pieces::default();
     let mut raw = Raw {
         times: Vec::new(),
         lambda: Vec::new(),
@@ -254,7 +258,9 @@ fn exact(
     for &b in &points {
         while next_entrant < by_start.len() && begin(by_start[next_entrant]) < b {
             let i = by_start[next_entrant];
-            active.push((i, expected.cumulative_within(i, previous)));
+            let at = reader.append(i, &mut pieces);
+            let h = pieces.slice(at.clone()).cumulative_within(previous);
+            active.push((i, h, (at.start, at.end)));
             next_entrant += 1;
         }
         if active.is_empty() {
@@ -266,8 +272,8 @@ fn exact(
         // and the deaths weighted by exp(H(b)). Ederer II: the sum of H(b) - H(a).
         let (mut w_a, mut w_gain, mut dh) = (0.0_f64, 0.0_f64, 0.0_f64);
         let (mut deaths, mut dw, mut dw2) = (0.0_f64, 0.0_f64, 0.0_f64);
-        for (i, h_a) in &mut active {
-            let h_b = expected.cumulative_within(*i, b);
+        for (i, h_a, at) in &mut active {
+            let h_b = pieces.slice(at.0..at.1).cumulative_within(b);
             let dead = stop[*i] == b && status[*i] != 0;
             match method {
                 Method::PoharPerme => {
@@ -308,7 +314,7 @@ fn exact(
             raw.at_risk.push(n);
             raw.events.push(deaths);
         }
-        active.retain(|&(i, _)| stop[i] > b);
+        active.retain(|&(i, _, _)| stop[i] > b);
         previous = b;
     }
     Ok(raw)
@@ -372,7 +378,9 @@ fn interval(
         WAVE,
         |range| {
             let mut c = Cells::zero(g);
+            let mut reader = expected.reader();
             for &i in &rows[range] {
+                let pieces = reader.row(i);
                 let begin = start.map_or(0.0, |s| s[i]);
                 let mut k = (begin / width).floor() as usize;
                 while (k as f64) * width < stop[i] && k < g {
@@ -381,11 +389,11 @@ fn interval(
                     let hi = stop[i].min(((k + 1) as f64) * width);
                     let y = hi - lo;
                     if y > 0.0 {
-                        let h_lo = expected.cumulative_within(i, lo);
-                        let h_hi = expected.cumulative_within(i, hi);
+                        let h_lo = pieces.cumulative_within(lo);
+                        let h_hi = pieces.cumulative_within(hi);
                         let w = match method {
                             Method::PoharPerme => {
-                                expected.cumulative_within(i, f64::midpoint(lo, hi)).exp()
+                                pieces.cumulative_within(f64::midpoint(lo, hi)).exp()
                             }
                             Method::EdererII => 1.0,
                         };

@@ -106,6 +106,8 @@ aipw_km:epistat-survival:tier2_survival:surv:10000000:tier2/survival.R:120
 aipw_cox:epistat-survival:tier2_survival:surv:10000000:tier2/survival.R:120
 trial_msm:epistat-survival:tier2_survival:trial:1000000:tier2/survival.R:120
 ccw:epistat-survival:tier2_survival:ccw:1000000:tier2/survival.R:120
+trial_msm_rows:epistat-survival:tier2_survival:trial:10000000:-:1200
+ccw_rows:epistat-survival:tier2_survival:ccw:10000000:-:1200
 sccs:epistat-survival:tier2_designs:scc:3000000:tier2/designs.R:300
 crossover:epistat-survival:tier2_designs:cxo:10000000:tier2/designs.R:300
 af_cox:epistat-survival:tier2_designs:afc:1000000:tier2/designs.R:300
@@ -134,9 +136,9 @@ flexpar_entry:epistat-survival:tier3_survival:flex:1000000:tier3/survival.R:600
 flexpar_tvc:epistat-survival:tier3_survival:flex:1000000:tier3/survival.R:600
 net_pp:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
 net_e2:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
-net_pp_monthly:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
-excess_poisson:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
-excess_flexpar:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
+net_pp_monthly:epistat-survival:tier3_relsurv:rel:10000000:tier3/relsurv.R:600
+excess_poisson:epistat-survival:tier3_relsurv:rel:10000000:tier3/relsurv.R:600
+excess_flexpar:epistat-survival:tier3_relsurv:rel:10000000:tier3/relsurv.R:600
 tmle_ate_binary:epistat-causal:tier3_tmle:tml:10000000:tier3/tmle.R:600
 tmle_ate_gaussian:epistat-causal:tier3_tmle:tml:10000000:tier3/tmle.R:600
 tmle_all_binary:epistat-causal:tier3_tmle:tml:10000000:tier3/tmle.R:600
@@ -148,6 +150,7 @@ pmm:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
 norm:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
 logreg:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
 polyreg:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
+pmm_chains:epistat-impute:tier3_impute:imp:1000000:-:600
 lmm_intercept:epistat-mixed:tier3_mixed:mix:1000000:tier3/mixed.R:600
 lmm_slope:epistat-mixed:tier3_mixed:mix:1000000:tier3/mixed.R:600
 glmm_laplace:epistat-mixed:tier3_mixed:mix:1000000:tier3/mixed.R:600

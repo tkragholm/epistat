@@ -185,6 +185,38 @@ impl Table {
         Self { names, columns }
     }
 
+    /// [`Table::read`] with the columns allocated once at the number of rows,
+    /// found by a first pass over the file, so that a large file takes the
+    /// memory of its values and not that of doubling vectors.
+    pub fn read_sized(path: &Path) -> Self {
+        use std::io::Read;
+        let mut file =
+            fs::File::open(path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+        let mut buffer = vec![0u8; 1 << 20];
+        let mut newlines = 0usize;
+        loop {
+            let got = file.read(&mut buffer).expect("read");
+            if got == 0 {
+                break;
+            }
+            for &b in &buffer[..got] {
+                newlines += usize::from(b == b'\n');
+            }
+        }
+        let file = fs::File::open(path).expect("open");
+        let mut lines = std::io::BufReader::with_capacity(1 << 20, file).lines();
+        let header = lines.next().expect("header").expect("read header");
+        let names: Vec<String> = header.split(',').map(str::to_string).collect();
+        let mut columns = vec![Vec::with_capacity(newlines); names.len()];
+        for line in lines {
+            let line = line.expect("read line");
+            for (column, field) in columns.iter_mut().zip(line.split(',')) {
+                column.push(field.parse::<f64>().unwrap_or(f64::NAN));
+            }
+        }
+        Self { names, columns }
+    }
+
     pub fn col(&self, name: &str) -> &[f64] {
         let k = self
             .names

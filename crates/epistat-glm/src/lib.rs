@@ -21,6 +21,9 @@
 //! models for ordered outcomes as `MASS::polr` and `ordinal::clm` do, with the
 //! Brant test of proportional odds.
 //!
+//! [`rows`] fits the model of [`Glm::fit`] to rows formed block by block, for
+//! designs too large to hold, with the same bits.
+//!
 //! [`elastic_net`] fits the Gaussian and binomial elastic net by coordinate
 //! descent as glmnet does, and [`park`] holds the modified Park test of a fitted
 //! variance function and the classic Park test. [`attributable`] gives the
@@ -39,6 +42,7 @@ pub mod negbin;
 pub mod ordinal;
 pub mod park;
 pub mod robust;
+pub mod rows;
 pub mod within;
 
 pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};

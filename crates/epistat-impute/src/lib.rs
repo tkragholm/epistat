@@ -93,9 +93,13 @@
 //!
 //! # Memory
 //!
-//! Each chain holds the completed data as `f64` columns, `8 n` bytes per
-//! column, and chains run in parallel, so memory is about `m_parallel` copies
-//! of the data. The result holds only the imputed cells.
+//! The complete columns are held once as `f64` columns, `8 n` bytes each, and
+//! read by every chain. Each chain holds its own copy of the incomplete
+//! columns and, while it imputes a column, the design of its observed rows and
+//! the indicators of its nominal predictors. Chains run in parallel, so memory
+//! is the shared columns plus about `m_parallel` times that of one chain. With
+//! a passive method every chain holds the whole completed data, which the
+//! passive function reads. The result holds only the imputed cells.
 //!
 //! # References
 //!

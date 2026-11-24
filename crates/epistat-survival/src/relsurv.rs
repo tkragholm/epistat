@@ -104,13 +104,18 @@
 //!
 //! # Scale
 //!
-//! [`ExpectedHazard`] keeps the pieces of every row, 24 bytes each and about
-//! two a year of follow-up for a table by age and calendar year, so 10^7
-//! persons followed for 10 years take about 5 GB. The intervals of
-//! [`Grid::Width`] cost `O(n g)` time for `g` intervals at risk per person
-//! and `O(g)` memory beyond the pieces; [`excess_hazard`] streams its records
-//! and costs `O(n k p^2)` per iteration for `k` intervals per person and `p`
+//! [`ExpectedHazard`] keeps 8 bytes for each time dimension, 8 for the
+//! factors and 8 for the end of the follow-up of every row, 32 bytes for a
+//! table by age, sex and calendar year. The pieces of a row, 24 bytes each and
+//! about two a year of follow-up for such a table, are formed when an
+//! estimator reads the row, by walking it through the table, the same walk
+//! each time. The intervals of [`Grid::Width`] cost `O(n g)` time for `g`
+//! intervals at risk per person and `O(g)` memory beyond the rows;
+//! [`excess_hazard`] streams its records, walking each row in every pass, and
+//! costs `O(n k p^2)` per iteration for `k` intervals per person and `p`
 //! parameters, or that of its cells with [`ExcessOptions::aggregate`].
+//! [`Grid::EventTimes`] holds the pieces of every person who has entered the
+//! risk set.
 //!
 //! # Excess hazard regression
 //!

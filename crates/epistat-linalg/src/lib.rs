@@ -40,7 +40,10 @@ pub mod eigen;
 mod error;
 mod solve;
 
-pub use blocks::{ROW_BLOCK, matvec_into, row_scaled_gram, weighted_gram, weighted_xtz, xtv};
+pub use blocks::{
+    BlockSum, ROW_BLOCK, block_scaled_gram, block_xtv, matvec_into, row_scaled_gram, weighted_gram,
+    weighted_xtz, xtv,
+};
 pub use error::DesignError;
 pub use faer::linalg::matmul::matmul;
 pub use faer::prelude::{Solve, SolveLstsq};

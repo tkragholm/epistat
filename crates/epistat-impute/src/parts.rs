@@ -345,6 +345,11 @@ pub struct Augmentation {
 /// does not.
 #[must_use]
 pub fn augmentation(x: &[Vec<f64>], outcomes: &[f64]) -> Option<Augmentation> {
+    augmentation_of(x, outcomes)
+}
+
+/// [`augmentation`] for columns held in any form.
+pub(crate) fn augmentation_of<C: AsRef<[f64]>>(x: &[C], outcomes: &[f64]) -> Option<Augmentation> {
     let p = x.len();
     let k = outcomes.len();
     if p == 0 || k == 0 {
@@ -354,6 +359,7 @@ pub fn augmentation(x: &[Vec<f64>], outcomes: &[f64]) -> Option<Augmentation> {
     let stats: Vec<(f64, f64, f64, f64)> = x
         .iter()
         .map(|col| {
+            let col = col.as_ref();
             let n = col.len() as f64;
             let mean = col.iter().sum::<f64>() / n;
             let ss: f64 = col.iter().map(|v| (v - mean) * (v - mean)).sum();
@@ -577,8 +583,12 @@ pub fn class_from_uniform(probabilities: &[f64], u: f64) -> usize {
 
 /// A design matrix from columns of equal length with a leading intercept,
 /// restricted to `rows`.
-pub(crate) fn design_matrix(columns: &[Vec<f64>], rows: &[usize]) -> Mat<f64> {
+pub(crate) fn design_matrix<C: AsRef<[f64]>>(columns: &[C], rows: &[usize]) -> Mat<f64> {
     Mat::from_fn(rows.len(), columns.len() + 1, |i, k| {
-        if k == 0 { 1.0 } else { columns[k - 1][rows[i]] }
+        if k == 0 {
+            1.0
+        } else {
+            columns[k - 1].as_ref()[rows[i]]
+        }
     })
 }
