@@ -1,4 +1,4 @@
-use crate::inference::{multiplier_bootstrap_ci, standard_error_from_influence};
+use crate::inference::standard_error_from_influence;
 use crate::methods::drdid::panel::estimate_drdid_panel;
 use crate::types::{DrDidConfig, DrDidObservation, TripleDidObservation, TripleDidResult};
 
@@ -81,12 +81,8 @@ pub fn estimate_dr_ddd(
     }
 
     let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        att_ddd,
-        &influence_function,
-        config.inference(),
-        config.bootstrap(),
-    );
+    let (ci_low, ci_high) =
+        crate::methods::drdid::confidence_interval(att_ddd, se, &influence_function, config);
 
     Ok(TripleDidResult {
         att_ddd,

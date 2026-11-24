@@ -8,7 +8,7 @@ use crate::estimators::propensity::common::logistic_scores;
 use crate::estimators::propensity::logistic::LogisticPS;
 use crate::estimators::propensity::types::{Config as PropensityConfig, PropensityEstimator};
 use crate::inference::{
-    multiplier_bootstrap_ci, standard_error_from_influence, validate_confidence_level,
+    standard_error_from_influence, validate_confidence_level,
 };
 use crate::methods::drdid::moments::{
     RepeatedMomentError, RepeatedMomentEstimate, RepeatedMomentInputs,
@@ -71,12 +71,8 @@ pub fn estimate_drdid_repeated_cross_section(
     let influence_function = moments.influence_function;
 
     let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        att,
-        &influence_function,
-        config.inference(),
-        config.bootstrap(),
-    );
+    let (ci_low, ci_high) =
+        crate::methods::drdid::confidence_interval(att, se, &influence_function, config);
 
     Ok(DrDidEstimate {
         att,
@@ -412,11 +408,6 @@ pub(super) fn validate_config(config: DrDidConfig) -> Result<(), DrDidError> {
     if !config.tol.is_finite() || config.tol <= 0.0 {
         return Err(DrDidError::InvalidConfig(
             "tol must be finite and > 0".to_string(),
-        ));
-    }
-    if config.bootstrap_reps == 0 {
-        return Err(DrDidError::InvalidConfig(
-            "bootstrap_reps must be > 0".to_string(),
         ));
     }
     Ok(())

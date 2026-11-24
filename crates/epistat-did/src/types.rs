@@ -464,8 +464,12 @@ pub struct DrDidConfig {
     #[builder(default = 1e-8)]
     pub tol: f64,
     /// Number of replications of the multiplier bootstrap behind the confidence
-    /// interval, positive. The default is 999.
-    #[builder(default = 999_usize)]
+    /// interval. With 0, the default, the interval is the normal interval
+    /// `att +- z se` at `confidence_level`, as `DRDID` reports with its default
+    /// `boot = FALSE` and `did::att_gt` with `bstrap = FALSE`. A positive count
+    /// makes it the percentile interval of that many Rademacher multiplier
+    /// replicates of the influence function.
+    #[builder(default = 0_usize)]
     pub bootstrap_reps: usize,
     /// Seed of the multiplier bootstrap. The default is 17,431.
     #[builder(default = 17_431_u64)]
@@ -480,7 +484,7 @@ impl Default for DrDidConfig {
             ridge: 1e-8,
             max_iter: 200,
             tol: 1e-8,
-            bootstrap_reps: BootstrapConfig::default().reps,
+            bootstrap_reps: 0,
             bootstrap_seed: BootstrapConfig::default().seed,
         }
     }
@@ -513,13 +517,12 @@ pub struct DrDidEstimate {
     /// Standard error from the influence function, not accounting for
     /// clustering.
     pub se: f64,
-    /// Lower end of the multiplier-bootstrap percentile confidence interval.
-    /// The improved estimators return `att - 1.96 * se` instead, whatever the
-    /// confidence level.
+    /// Lower end of the confidence interval: `att - z se` at the configured
+    /// level, or the multiplier-bootstrap percentile when
+    /// [`DrDidConfig::bootstrap_reps`] is positive. The improved estimators
+    /// return `att - 1.96 * se` whatever the configuration.
     pub ci_low: f64,
-    /// Upper end of the multiplier-bootstrap percentile confidence interval.
-    /// The improved estimators return `att + 1.96 * se` instead, whatever the
-    /// confidence level.
+    /// Upper end of the confidence interval, as `ci_low`.
     pub ci_high: f64,
     /// Number of treated units used.
     pub treated_n: usize,
@@ -548,7 +551,7 @@ pub struct DidCcConfig {
     /// Whether the confidence intervals are multiplier-bootstrap percentile
     /// intervals, using `drdid.bootstrap_reps` and `drdid.bootstrap_seed`, or
     /// otherwise normal intervals from the standard error. The default is
-    /// `true`.
+    /// `false`. With `true`, `drdid.bootstrap_reps` must be positive.
     pub bootstrap_confidence_intervals: bool,
     /// Number of cross-fitting folds, at least 1. One means no cross-fitting.
     /// The default is 1.
@@ -563,7 +566,7 @@ impl Default for DidCcConfig {
         Self {
             drdid: DrDidConfig::default(),
             hausman_alpha: 0.05,
-            bootstrap_confidence_intervals: true,
+            bootstrap_confidence_intervals: false,
             cross_fit_folds: 1,
             cross_fit_seed: BootstrapConfig::default().seed,
         }
@@ -879,9 +882,10 @@ pub struct AttGtEstimate {
     /// function for the doubly robust, outcome-regression and weighting
     /// estimators.
     pub se: f64,
-    /// Lower bound of the confidence interval. It is a two-sided normal interval
-    /// for the no-covariate estimator and a multiplier-bootstrap percentile
-    /// interval for the covariate-adjusted ones.
+    /// Lower bound of the confidence interval. It is a two-sided normal
+    /// interval, except for the covariate-adjusted estimators when
+    /// [`DrDidConfig::bootstrap_reps`] is positive, where it is a
+    /// multiplier-bootstrap percentile interval.
     pub ci_low: f64,
     /// Upper bound of the confidence interval, as `ci_low`.
     pub ci_high: f64,
@@ -1485,9 +1489,10 @@ pub struct TripleDidResult {
     pub att_ddd: f64,
     /// Standard error from the influence function.
     pub se: f64,
-    /// Lower end of the multiplier-bootstrap percentile confidence interval.
+    /// Lower end of the confidence interval, normal or bootstrap as
+    /// [`DrDidEstimate::ci_low`].
     pub ci_low: f64,
-    /// Upper end of the multiplier-bootstrap percentile confidence interval.
+    /// Upper end of the confidence interval, as `ci_low`.
     pub ci_high: f64,
     /// Influence function of the estimate, one value per input observation.
     pub influence_function: Vec<f64>,

@@ -263,7 +263,24 @@ fn dr_config(comparison_group: ComparisonGroup, base_period: BasePeriod) -> AttG
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
         },
-        drdid: DrDidConfig::builder().build(),
+        drdid: drdid_config(),
+    }
+}
+
+/// The estimators' settings with a 999-replicate bootstrap interval, so the
+/// hashes pin the bootstrap path. `drdid_panel_analytic` pins the default
+/// analytic interval.
+fn drdid_config() -> DrDidConfig {
+    DrDidConfig::builder().bootstrap_reps(999).build()
+}
+
+/// The compositional-change settings with bootstrap intervals, for the same
+/// reason as [`drdid_config`].
+fn did_cc_config() -> DidCcConfig {
+    DidCcConfig {
+        drdid: drdid_config(),
+        bootstrap_confidence_intervals: true,
+        ..DidCcConfig::default()
     }
 }
 
@@ -574,10 +591,14 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
 
     // Two-period estimators on one cell.
     let (panel_cell, rc_cell) = cell(&data.mpdta);
-    let drdid = DrDidConfig::builder().build();
+    let drdid = drdid_config();
     out.push((
         "drdid_panel",
         digest(&estimate_drdid_panel(&panel_cell, drdid)),
+    ));
+    out.push((
+        "drdid_panel_analytic",
+        digest(&estimate_drdid_panel(&panel_cell, DrDidConfig::default())),
     ));
     out.push((
         "drdid_improved_panel",
@@ -662,18 +683,18 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ));
     out.push((
         "did_cc_robust",
-        digest(&estimate_did_cc_robust(&data.cc, DidCcConfig::default())),
+        digest(&estimate_did_cc_robust(&data.cc, did_cc_config())),
     ));
     out.push((
         "did_cc_stationary",
         digest(&estimate_did_cc_stationary(
             &data.cc,
-            DidCcConfig::default(),
+            did_cc_config(),
         )),
     ));
     out.push((
         "did_cc_test",
-        digest(&test_did_cc_stationarity(&data.cc, DidCcConfig::default())),
+        digest(&test_did_cc_stationarity(&data.cc, did_cc_config())),
     ));
 
     // HonestDiD, on the paths Study I calls.
@@ -877,6 +898,7 @@ const GOLDEN: &[(&str, u64)] = &[
     ("att_gt_efficient_dr", 0x74b6_3e4f_4e86_2f51),
     ("aggregate_efficient_event_time", 0x7693_9d38_4755_f4ab),
     ("drdid_panel", 0x9a35_5276_7786_14a9),
+    ("drdid_panel_analytic", 0x3a8b_258f_748f_a7e0),
     ("drdid_improved_panel", 0x9731_c94f_9fdd_c514),
     ("drdid_rc", 0x5e65_35b6_1358_8f15),
     ("drdid_improved_rc", 0x922c_d1a0_99dc_b53a),

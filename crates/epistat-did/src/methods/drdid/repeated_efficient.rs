@@ -42,7 +42,7 @@ use crate::estimators::outcome::model::OutcomeModel;
 use crate::estimators::propensity::common::logistic_scores;
 use crate::estimators::propensity::logistic::LogisticPS;
 use crate::estimators::propensity::types::{Config as PropensityConfig, PropensityEstimator};
-use crate::inference::{multiplier_bootstrap_ci, standard_error_from_influence};
+use crate::inference::standard_error_from_influence;
 use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeatedObservation};
 use crate::util::usize_to_f64;
 
@@ -433,12 +433,8 @@ pub fn estimate_drdid_repeated_efficient(
         .collect::<Vec<f64>>();
 
     let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = multiplier_bootstrap_ci(
-        att,
-        &influence_function,
-        config.inference(),
-        config.bootstrap(),
-    );
+    let (ci_low, ci_high) =
+        crate::methods::drdid::confidence_interval(att, se, &influence_function, config);
 
     Ok(DrDidEstimate {
         att,
