@@ -12,6 +12,9 @@
 //! numbers written for comparison are the mean and variance of the imputed
 //! cells (the share of each level for `cat`), which agree between the two
 //! implementations only in distribution.
+//!
+//! `pmm_chains` is `pmm` with ten chains, `m = 10`, for the memory that grows
+//! with the number of chains; it has no R counterpart in the harness.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -64,7 +67,7 @@ fn main() {
     }
     let table = Table::read(&common::data_path("imp", n));
     let target = match method.as_str() {
-        "pmm" | "norm" => "inc",
+        "pmm" | "pmm_chains" | "norm" => "inc",
         "logreg" => "flag",
         "polyreg" => "cat",
         other => panic!("unknown method {other}"),
@@ -96,13 +99,13 @@ fn main() {
     .expect("data");
     let mut spec = ImputeSpec::default_for(&data);
     spec.methods[3] = Some(match method.as_str() {
-        "pmm" => Method::pmm(),
+        "pmm" | "pmm_chains" => Method::pmm(),
         "norm" => Method::Norm,
         "logreg" => Method::Logreg,
         _ => Method::Polyreg { proper: true },
     });
     let options = ImputeOptions {
-        m: 1,
+        m: if method == "pmm_chains" { 10 } else { 1 },
         max_iterations: 5,
         seed: SEED,
     };

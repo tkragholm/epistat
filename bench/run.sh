@@ -139,6 +139,7 @@ pmm:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
 norm:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
 logreg:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
 polyreg:epistat-impute:tier3_impute:imp:1000000:tier3/impute.R:600
+pmm_chains:epistat-impute:tier3_impute:imp:1000000:-:600
 lmm_intercept:epistat-mixed:tier3_mixed:mix:1000000:tier3/mixed.R:600
 lmm_slope:epistat-mixed:tier3_mixed:mix:1000000:tier3/mixed.R:600
 glmm_laplace:epistat-mixed:tier3_mixed:mix:1000000:tier3/mixed.R:600
