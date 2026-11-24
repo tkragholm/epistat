@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
 
+use super::aggte::{
+    AggteConfig, AggteError, AggteType, UnitPanel, aggregate_att_gt, checked_cluster_index,
+    combine_fixed, standard_error,
+};
 use crate::inference::{normal_interval, validate_confidence_level};
 use crate::types::{
     AttGtAggregatedEstimate, AttGtAggregationConfig, AttGtAggregationError,
@@ -9,6 +13,12 @@ use crate::types::{
 use crate::util::usize_to_f64;
 
 /// Aggregate ATT(g,t) estimates by event-time.
+///
+/// Every cell enters, pre-treatment ones included, and the standard error
+/// combines the components' standard errors as if they were independent, which
+/// understates it when cells share units.
+/// [`aggregate_att_gt_event_time_with_influence`] forms it from the combined
+/// influence function instead.
 ///
 /// # Errors
 ///
@@ -109,16 +119,34 @@ pub fn aggregate_att_gt_event_time_with_influence(
     })
 }
 
-/// Aggregate ATT(g,t) estimates by treatment cohort.
+/// Aggregate post-treatment `ATT(g,t)` estimates by treatment cohort, as
+/// `did::aggte(type = "group")` reports them per cohort.
+///
+/// Only cells with `t >= g` enter. Within a cohort the cells are weighted by
+/// [`AttGtAggregationConfig::weighting`]: under `ByTreatedCount` and `Equal`
+/// every cell has the same weight, which is `aggte`'s average over the
+/// cohort's post-treatment periods, and under `ByTotalWeight` each cell's
+/// weight is its `total_weight`. These weights are taken as known, so no
+/// estimation correction applies. The standard error is that of the combined
+/// influence function, centred and summed within the clusters of `panel`, as
+/// [`aggregate_att_gt`](super::aggte::aggregate_att_gt) forms it.
+///
+/// `influence` holds one vector per estimate, indexed like `panel`:
+/// [`unit_panel`](super::panel_pairs::unit_panel) for the panel route and
+/// [`row_panel`](super::aggte::row_panel) for repeated cross-sections.
+/// `components` and `total_weight` count the post-treatment cells that entered.
 ///
 /// # Errors
 ///
-/// Returns [`AttGtAggregationError`] when estimates/configuration are invalid.
+/// [`AggteError`] when the shapes disagree, the confidence level is invalid or
+/// no estimate is post-treatment.
 pub fn aggregate_att_gt_by_cohort(
     estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    panel: &UnitPanel,
     config: AttGtAggregationConfig,
-) -> Result<Vec<AttGtCohortEstimate>, AttGtAggregationError> {
-    aggregate_by_key(estimates, config, |est| est.group).map(|grouped| {
+) -> Result<Vec<AttGtCohortEstimate>, AggteError> {
+    aggregate_post_treatment(estimates, influence, panel, config, Summary::Cohort).map(|grouped| {
         grouped
             .into_iter()
             .map(|(group, summary)| AttGtCohortEstimate { group, summary })
@@ -126,35 +154,187 @@ pub fn aggregate_att_gt_by_cohort(
     })
 }
 
-/// Aggregate ATT(g,t) estimates by calendar time.
+/// Aggregate post-treatment `ATT(g,t)` estimates by calendar time, as
+/// `did::aggte(type = "calendar")` reports them per period.
+///
+/// Only cells with `t >= g` enter. Under `ByTreatedCount` the cells of a
+/// period are weighted by their cohort's share `P(G = g)`, estimated from the
+/// sampling weights of `panel` as `did` does, and the influence of that
+/// estimate is added as `did:::wif` adds it: this is
+/// [`aggregate_att_gt`](super::aggte::aggregate_att_gt) with
+/// [`AggteType::Calendar`]. Under `Equal` and `ByTotalWeight` the weights are
+/// equal or the cells' `total_weight`, taken as known, with no correction. The
+/// standard error, inputs and counts are as in [`aggregate_att_gt_by_cohort`].
 ///
 /// # Errors
 ///
-/// Returns [`AttGtAggregationError`] when estimates/configuration are invalid.
+/// [`AggteError`] when the shapes disagree, the confidence level is invalid or
+/// no estimate is post-treatment.
 pub fn aggregate_att_gt_by_calendar_time(
     estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    panel: &UnitPanel,
     config: AttGtAggregationConfig,
-) -> Result<Vec<AttGtCalendarEstimate>, AttGtAggregationError> {
-    aggregate_by_key(estimates, config, |est| est.time).map(|grouped| {
-        grouped
-            .into_iter()
-            .map(|(time, summary)| AttGtCalendarEstimate { time, summary })
-            .collect()
-    })
+) -> Result<Vec<AttGtCalendarEstimate>, AggteError> {
+    aggregate_post_treatment(estimates, influence, panel, config, Summary::Calendar).map(
+        |grouped| {
+            grouped
+                .into_iter()
+                .map(|(time, summary)| AttGtCalendarEstimate { time, summary })
+                .collect()
+        },
+    )
 }
 
-/// Aggregate ATT(g,t) estimates into a single overall summary.
+/// Aggregate all post-treatment `ATT(g,t)` estimates into one number, as
+/// `did::aggte(type = "simple")`.
+///
+/// Under `ByTreatedCount` each cell with `t >= g` is weighted by its cohort's
+/// estimated share `P(G = g)`, with the influence of that estimate included:
+/// this is [`aggregate_att_gt`](super::aggte::aggregate_att_gt) with
+/// [`AggteType::Simple`]. Under `Equal` and `ByTotalWeight` the weights are
+/// equal or the cells' `total_weight`, taken as known. The standard error,
+/// inputs and counts are as in [`aggregate_att_gt_by_cohort`].
 ///
 /// # Errors
 ///
-/// Returns [`AttGtAggregationError`] when estimates/configuration are invalid.
+/// [`AggteError`] when the shapes disagree, the confidence level is invalid or
+/// no estimate is post-treatment.
 pub fn aggregate_att_gt_overall(
     estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    panel: &UnitPanel,
     config: AttGtAggregationConfig,
-) -> Result<AttGtAggregatedEstimate, AttGtAggregationError> {
-    aggregate_by_key(estimates, config, |_| 0)
-        .map(|grouped| grouped.into_values().next())
-        .and_then(|opt| opt.ok_or(AttGtAggregationError::EmptyInput))
+) -> Result<AttGtAggregatedEstimate, AggteError> {
+    aggregate_post_treatment(estimates, influence, panel, config, Summary::Overall)?
+        .into_values()
+        .next()
+        .ok_or(AggteError::NoPostTreatmentCells)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Summary {
+    Cohort,
+    Calendar,
+    Overall,
+}
+
+impl Summary {
+    const fn key(self, estimate: &AttGtEstimate) -> i32 {
+        match self {
+            Self::Cohort => estimate.group,
+            Self::Calendar => estimate.time,
+            Self::Overall => 0,
+        }
+    }
+
+    const fn aggte_type(self) -> AggteType {
+        match self {
+            Self::Cohort => AggteType::Group,
+            Self::Calendar => AggteType::Calendar,
+            Self::Overall => AggteType::Simple,
+        }
+    }
+}
+
+/// The post-treatment cells grouped by key, each key's estimate, standard
+/// error and interval from `aggregate_att_gt` under treated-count weighting
+/// and from fixed weights otherwise.
+fn aggregate_post_treatment(
+    estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    panel: &UnitPanel,
+    config: AttGtAggregationConfig,
+    summary: Summary,
+) -> Result<BTreeMap<i32, AttGtAggregatedEstimate>, AggteError> {
+    let confidence_level = config.confidence_level.confidence_level;
+    if !validate_confidence_level(confidence_level) {
+        return Err(AggteError::InvalidConfidenceLevel);
+    }
+    let (assignments, n_clusters) = checked_cluster_index(estimates, influence, panel)?;
+    let mut buckets = BTreeMap::<i32, Vec<usize>>::new();
+    for (index, estimate) in estimates.iter().enumerate() {
+        if estimate.time >= estimate.group {
+            buckets
+                .entry(summary.key(estimate))
+                .or_default()
+                .push(index);
+        }
+    }
+    if buckets.is_empty() {
+        return Err(AggteError::NoPostTreatmentCells);
+    }
+
+    let points: BTreeMap<i32, (f64, f64, f64, f64)> = match config.weighting {
+        AttGtAggregationWeighting::ByTreatedCount => {
+            let result = aggregate_att_gt(
+                estimates,
+                influence,
+                panel,
+                AggteConfig {
+                    aggregation: summary.aggte_type(),
+                    confidence_level: config.confidence_level,
+                    ..AggteConfig::default()
+                },
+            )?;
+            match summary {
+                Summary::Overall => BTreeMap::from([(
+                    0,
+                    (
+                        result.overall_att,
+                        result.overall_se,
+                        result.overall_ci_low,
+                        result.overall_ci_high,
+                    ),
+                )]),
+                Summary::Cohort | Summary::Calendar => result
+                    .by_key
+                    .into_iter()
+                    .map(|point| {
+                        (
+                            point.key,
+                            (point.att, point.se, point.ci_low, point.ci_high),
+                        )
+                    })
+                    .collect(),
+            }
+        }
+        AttGtAggregationWeighting::Equal | AttGtAggregationWeighting::ByTotalWeight => buckets
+            .iter()
+            .map(|(&key, cells)| {
+                let raw = cells
+                    .iter()
+                    .map(|&c| raw_weight(&estimates[c], config.weighting))
+                    .collect::<Vec<_>>();
+                let raw_total = raw.iter().sum::<f64>();
+                let weights = raw.iter().map(|w| w / raw_total).collect::<Vec<_>>();
+                let (att, combined) =
+                    combine_fixed(cells, &weights, estimates, influence, panel.groups.len());
+                let se = standard_error(&combined, &assignments, n_clusters);
+                let (ci_low, ci_high) = normal_interval(att, se, confidence_level);
+                (key, (att, se, ci_low, ci_high))
+            })
+            .collect(),
+    };
+
+    buckets
+        .into_iter()
+        .map(|(key, cells)| {
+            let &(estimate, se, ci_low, ci_high) =
+                points.get(&key).ok_or(AggteError::NoPostTreatmentCells)?;
+            Ok((
+                key,
+                AttGtAggregatedEstimate {
+                    estimate,
+                    se,
+                    ci_low,
+                    ci_high,
+                    components: cells.len(),
+                    total_weight: cells.iter().map(|&c| estimates[c].total_weight).sum(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn aggregate_by_key<F>(

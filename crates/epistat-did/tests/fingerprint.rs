@@ -421,18 +421,30 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         ));
         out.push((
             names[1],
-            digest(&aggregate_att_gt_by_cohort(&fitted.estimates, aggregation)),
+            digest(&aggregate_att_gt_by_cohort(
+                &fitted.estimates,
+                &fitted.influence_functions,
+                &panel,
+                aggregation,
+            )),
         ));
         out.push((
             names[2],
             digest(&aggregate_att_gt_by_calendar_time(
                 &fitted.estimates,
+                &fitted.influence_functions,
+                &panel,
                 aggregation,
             )),
         ));
         out.push((
             names[3],
-            digest(&aggregate_att_gt_overall(&fitted.estimates, aggregation)),
+            digest(&aggregate_att_gt_overall(
+                &fitted.estimates,
+                &fitted.influence_functions,
+                &panel,
+                aggregation,
+            )),
         ));
     }
     // Clusters of units, indexed like the influence vectors: by sorted unit id.
@@ -841,17 +853,17 @@ const GOLDEN: &[(&str, u64)] = &[
     ("aggte_group", 0x3982_cc8c_d68f_d88f),
     ("aggte_calendar", 0x48a6_20d1_d6c8_be68),
     ("event_time_equal", 0x8879_9cf0_bd43_632c),
-    ("cohort_equal", 0xdb16_5bf2_2a8d_8d03),
-    ("calendar_equal", 0x94ff_7fff_5786_b1a5),
-    ("overall_equal", 0x507b_35e8_b660_bc96),
+    ("cohort_equal", 0x87d6_17a2_6507_6c7f),
+    ("calendar_equal", 0xb6c5_7c1f_f5da_692e),
+    ("overall_equal", 0x5f8c_8955_89bd_2aad),
     ("event_time_count", 0x4b2c_00d1_96fa_d5e3),
-    ("cohort_count", 0xdb16_5bf2_2a8d_8d03),
-    ("calendar_count", 0x5255_bedb_d607_16f1),
-    ("overall_count", 0x25a9_cfce_240f_ff15),
+    ("cohort_count", 0x87d6_17a2_6507_6c7f),
+    ("calendar_count", 0x23b1_6e04_5eda_c4ee),
+    ("overall_count", 0x72de_8cd2_d121_f9f9),
     ("event_time_weight", 0x4f13_5ec5_6c2e_b289),
-    ("cohort_weight", 0xdb16_5bf2_2a8d_8d03),
-    ("calendar_weight", 0x2290_abf8_31fb_e7c7),
-    ("overall_weight", 0x0b51_ceae_ad5c_5853),
+    ("cohort_weight", 0x87d6_17a2_6507_6c7f),
+    ("calendar_weight", 0x1834_994b_8dea_7b1e),
+    ("overall_weight", 0xd06d_1803_84a1_71bc),
     ("aggte_dynamic_clustered", 0x1f6b_8030_9cfe_7783),
     ("mboot_bands", 0xb8ba_24d8_c5f3_60f0),
     ("mboot_bands_clustered", 0x9c23_7ed5_f361_ca27),

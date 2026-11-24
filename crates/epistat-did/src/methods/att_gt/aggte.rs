@@ -1,17 +1,9 @@
 //! Aggregation of `ATT(g,t)` into the four summaries `did::aggte` produces.
 //!
-//! # Why this is not [`super::aggregation`]
-//!
-//! That module groups estimates by a key and takes a weighted average with one
-//! of three fixed weighting rules. It is useful, and it is not `aggte`. Two
-//! differences matter:
-//!
-//! * **It averages pre-treatment cells in.** `aggte` uses only cells with
-//!   `t >= g` for the group, calendar and simple summaries; a placebo cell is
-//!   not part of an average treatment effect.
-//! * **It treats the cells as independent.** Its variance is
-//!   `sum(w^2 * se^2)`, which ignores every off-diagonal term. The cells share
-//!   units, so those terms are not zero.
+//! The cohort, calendar and overall summaries of [`super::aggregation`] are
+//! built on this module: under treated-count weighting they are its group,
+//! calendar and simple summaries, and under their other weightings they use its
+//! cell selection and standard error with fixed weights.
 //!
 //! # The weights are estimated, and that shows up in the standard error
 //!
@@ -150,6 +142,9 @@ pub enum AggteError {
     /// No post-treatment cells remain after the requested restrictions.
     #[error("no post-treatment cells survive the requested aggregation")]
     NoPostTreatmentCells,
+    /// The confidence level is not strictly between 0 and 1.
+    #[error("confidence_level must be finite and in (0, 1)")]
+    InvalidConfidenceLevel,
 }
 
 /// The per-unit inputs the weights are estimated from.
@@ -215,7 +210,7 @@ impl UnitPanel {
 /// and which [`crate::inference::clustered_variance_from_index`] makes
 /// differently. The two are not interchangeable; this one is here because the
 /// aggregation has to agree with `did`.
-fn standard_error(influence: &[f64], assignments: &[usize], n_clusters: usize) -> f64 {
+pub(super) fn standard_error(influence: &[f64], assignments: &[usize], n_clusters: usize) -> f64 {
     let n_f = usize_to_f64(influence.len());
     let mean = influence.iter().sum::<f64>() / n_f;
     let mut sums = vec![0.0; n_clusters];
@@ -338,10 +333,32 @@ fn combine_equally(
     influence: &[Vec<f64>],
     n_units: usize,
 ) -> (f64, Vec<f64>) {
-    let weight = 1.0 / usize_to_f64(cells.len());
-    let att = cells.iter().map(|&c| weight * estimates[c].att).sum();
+    let weights = vec![1.0 / usize_to_f64(cells.len()); cells.len()];
+    combine_fixed(cells, &weights, estimates, influence, n_units)
+}
+
+/// Combine selected cells with the given weights, which are taken as known, so
+/// the influence function is the weighted sum of the cells' and nothing more.
+pub(super) fn combine_fixed(
+    cells: &[usize],
+    weights: &[f64],
+    estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    n_units: usize,
+) -> (f64, Vec<f64>) {
+    let att = cells
+        .iter()
+        .zip(weights)
+        .map(|(&c, w)| w * estimates[c].att)
+        .sum();
     let combined = (0..n_units)
-        .map(|unit| cells.iter().map(|&c| weight * influence[c][unit]).sum())
+        .map(|unit| {
+            cells
+                .iter()
+                .zip(weights)
+                .map(|(&c, w)| w * influence[c][unit])
+                .sum()
+        })
         .collect();
     (att, combined)
 }
@@ -376,24 +393,13 @@ fn finish(
     }
 }
 
-/// Aggregate `ATT(g,t)` the way `did::aggte` does.
-///
-/// `influence` must be unit-indexed and on the full-sample scale, which is what
-/// [`super::panel_pairs::estimate_att_gt_dr_panel_with_influence`] returns.
-///
-/// # Errors
-/// See [`AggteError`].
-#[expect(
-    clippy::too_many_lines,
-    reason = "the four aggregation types differ in which cells they select and \
-              how they weight them; splitting them apart hides the comparison"
-)]
-pub fn aggregate_att_gt(
+/// Checks that the estimates, their influence vectors and the panel agree in
+/// shape, and returns the panel's cluster assignments and cluster count.
+pub(super) fn checked_cluster_index(
     estimates: &[AttGtEstimate],
     influence: &[Vec<f64>],
     panel: &UnitPanel,
-    config: AggteConfig,
-) -> Result<AggteResult, AggteError> {
+) -> Result<(Vec<usize>, usize), AggteError> {
     if estimates.is_empty() {
         return Err(AggteError::EmptyInput);
     }
@@ -416,8 +422,6 @@ pub fn aggregate_att_gt(
             actual: bad.len(),
         });
     }
-
-    let confidence_level = config.confidence_level.confidence_level;
     let (assignments, n_clusters) = panel.cluster_index();
     if assignments.len() != n_units {
         return Err(AggteError::UnitGroupMismatch {
@@ -425,6 +429,30 @@ pub fn aggregate_att_gt(
             actual: assignments.len(),
         });
     }
+    Ok((assignments, n_clusters))
+}
+
+/// Aggregate `ATT(g,t)` the way `did::aggte` does.
+///
+/// `influence` must be unit-indexed and on the full-sample scale, which is what
+/// [`super::panel_pairs::estimate_att_gt_dr_panel_with_influence`] returns.
+///
+/// # Errors
+/// See [`AggteError`].
+#[expect(
+    clippy::too_many_lines,
+    reason = "the four aggregation types differ in which cells they select and \
+              how they weight them; splitting them apart hides the comparison"
+)]
+pub fn aggregate_att_gt(
+    estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    panel: &UnitPanel,
+    config: AggteConfig,
+) -> Result<AggteResult, AggteError> {
+    let (assignments, n_clusters) = checked_cluster_index(estimates, influence, panel)?;
+    let n_units = panel.groups.len();
+    let confidence_level = config.confidence_level.confidence_level;
     let post = (0..estimates.len())
         .filter(|&i| estimates[i].time >= estimates[i].group)
         .collect::<Vec<_>>();

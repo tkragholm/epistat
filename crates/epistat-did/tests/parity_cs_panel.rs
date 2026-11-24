@@ -1333,3 +1333,158 @@ fn the_fixed_weight_event_time_aggregation_understates_multi_cohort_cells() {
         "the fixture must exercise several overlapping cohorts, saw {multi_cohort_cells}"
     );
 }
+
+#[derive(Deserialize)]
+struct CsPanelCellsAndAgg {
+    group: Vec<i32>,
+    t: Vec<i32>,
+    att: Vec<f64>,
+    inffunc: Vec<Vec<f64>>,
+    inffunc_unit_order: Vec<i64>,
+    data_subset: Vec<DataRow>,
+    aggregations: Aggregations,
+}
+
+/// `aggregate_att_gt_by_cohort`, `aggregate_att_gt_by_calendar_time` and
+/// `aggregate_att_gt_overall` under treated-count weighting against
+/// `did::aggte` 2.5.1 (`type = "group"`, `"calendar"` and `"simple"`).
+///
+/// # The tolerance
+///
+/// It is propagated from the cells, whose largest differences from `did` are
+/// measured here: `da` in the estimates and `dpsi` in the influence values. An
+/// aggregate is `sum_c w_c ATT_c` with non-negative weights summing to one, so
+/// its estimate is within `da`. Its influence value adds `sum_c wif_ic ATT_c`,
+/// the estimated shares' influence, and since `|ind_ig - p_g| <= w_max`, both
+/// terms of `did:::wif` sum over the cells to at most `k w_max / P`, with `P`
+/// the sum of the cells' shares, which is at least `k p_min`. So an influence
+/// value is within `dpsi + 2 (w_max / p_min) da`, and the standard error, a
+/// root mean square over `n` units, within that over `sqrt(n)`. Both sides also
+/// round sums of `n + k` terms, `2 (n + k) eps` of the magnitudes, and the
+/// fixture carries 15 decimal places, `5e-16` each.
+#[test]
+fn cohort_calendar_and_overall_match_aggte() {
+    let fixture: CsPanelCellsAndAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    let rows = observations(&fixture.data_subset);
+    let out = estimate_att_gt_dr_panel_with_influence(
+        &rows,
+        universal_config(ComparisonGroup::NeverTreated),
+    )
+    .expect("panel att(g,t)");
+    let panel = epistat_did::unit_panel(&rows).expect("unit panel");
+
+    let mut sorted_ids = fixture
+        .data_subset
+        .iter()
+        .map(|row| row.countyreal)
+        .collect::<Vec<_>>();
+    sorted_ids.sort_unstable();
+    sorted_ids.dedup();
+    let n = sorted_ids.len();
+    let mut da = 0.0_f64;
+    let mut dpsi = 0.0_f64;
+    let mut largest_att = 0.0_f64;
+    let mut largest_psi = 0.0_f64;
+    for (estimate, ours) in out.estimates.iter().zip(&out.influence_functions) {
+        let column = (0..fixture.att.len())
+            .find(|&i| fixture.group[i] == estimate.group && fixture.t[i] == estimate.time)
+            .expect("cell in the fixture");
+        da = da.max((estimate.att - fixture.att[column]).abs());
+        largest_att = largest_att.max(estimate.att.abs());
+        for (r_row, id) in fixture.inffunc_unit_order.iter().enumerate() {
+            let position = sorted_ids.binary_search(id).expect("unit");
+            dpsi = dpsi.max((ours[position] - fixture.inffunc[r_row][column]).abs());
+            largest_psi = largest_psi.max(ours[position].abs());
+        }
+    }
+    let shares = out
+        .estimates
+        .iter()
+        .map(|e| {
+            let members = panel
+                .groups
+                .iter()
+                .zip(&panel.weights)
+                .filter(|(g, _)| **g == Some(e.group))
+                .map(|(_, w)| *w)
+                .sum::<f64>();
+            members / n as f64
+        })
+        .collect::<Vec<_>>();
+    let p_min = shares.iter().copied().fold(f64::INFINITY, f64::min);
+    let w_max = panel.weights.iter().copied().fold(0.0_f64, f64::max);
+    let k = out.estimates.len() as f64;
+    let rounding = 2.0 * (n as f64 + k) * f64::EPSILON;
+    let att_bound = da + rounding * largest_att + 5e-16;
+    let se_bound =
+        (dpsi + 2.0 * (w_max / p_min) * da + rounding * largest_psi) / (n as f64).sqrt() + 5e-16;
+    println!("cells: da {da:e}, dpsi {dpsi:e}; bounds: att {att_bound:e}, se {se_bound:e}");
+
+    let config = epistat_did::AttGtAggregationConfig::default();
+    let check = |label: &str, got: &epistat_did::AttGtAggregatedEstimate, att: f64, se: f64| {
+        assert!(
+            (got.estimate - att).abs() <= att_bound,
+            "{label} att {} vs did {att}, bound {att_bound:e}",
+            got.estimate
+        );
+        assert!(
+            (got.se - se).abs() <= se_bound,
+            "{label} se {} vs did {se}, bound {se_bound:e}",
+            got.se
+        );
+    };
+    let path = |want: &AggRef| {
+        let keys = want.egt.clone().expect("egt");
+        let atts = want.att_egt.clone().expect("att");
+        let ses = want.se_egt.clone().expect("se");
+        (0..keys.len())
+            .filter_map(|i| ses[i].map(|se| (keys[i], atts[i], se)))
+            .collect::<Vec<_>>()
+    };
+
+    let cohort = epistat_did::aggregate_att_gt_by_cohort(
+        &out.estimates,
+        &out.influence_functions,
+        &panel,
+        config,
+    )
+    .expect("cohort");
+    let want = path(&fixture.aggregations.group);
+    assert_eq!(cohort.len(), want.len());
+    for (got, (group, att, se)) in cohort.iter().zip(&want) {
+        assert_eq!(got.group, *group);
+        check(&format!("cohort {group}"), &got.summary, *att, *se);
+    }
+
+    let calendar = epistat_did::aggregate_att_gt_by_calendar_time(
+        &out.estimates,
+        &out.influence_functions,
+        &panel,
+        config,
+    )
+    .expect("calendar");
+    let want = path(&fixture.aggregations.calendar);
+    assert_eq!(calendar.len(), want.len());
+    for (got, (time, att, se)) in calendar.iter().zip(&want) {
+        assert_eq!(got.time, *time);
+        check(&format!("calendar {time}"), &got.summary, *att, *se);
+    }
+
+    let overall = epistat_did::aggregate_att_gt_overall(
+        &out.estimates,
+        &out.influence_functions,
+        &panel,
+        config,
+    )
+    .expect("overall");
+    check(
+        "overall",
+        &overall,
+        fixture.aggregations.simple.overall_att,
+        fixture.aggregations.simple.overall_se,
+    );
+    // Only post-treatment cells: the universal base emits placebo cells too.
+    let post = out.estimates.iter().filter(|e| e.time >= e.group).count();
+    assert!(post < out.estimates.len());
+    assert_eq!(overall.components, post);
+}
