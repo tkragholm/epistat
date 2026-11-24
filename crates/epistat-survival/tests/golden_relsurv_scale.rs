@@ -17,18 +17,17 @@ mod relsurv_sim;
 
 use epistat_survival::SurvData;
 use epistat_survival::relsurv::{
-    ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, Transform, excess_hazard,
-    net_survival,
+    ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, Transform, excess_hazard, net_survival,
 };
 use epistat_testkit::Fingerprint;
 use relsurv_sim::{cohort, table};
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("lookups", 150000, 0x9ff3_932f_e7bf_630c),
-    ("pohar perme exact", 29242, 0x9a0d_d0da_8bc0_33d7),
+    ("lookups", 150_000, 0x9ff3_932f_e7bf_630c),
+    ("pohar perme exact", 29_242, 0x9a0d_d0da_8bc0_33d7),
     ("pohar perme quarterly", 474, 0x1d17_933c_73ac_d470),
-    ("ederer2 exact", 29242, 0xc260_bf74_8882_b2bf),
+    ("ederer2 exact", 29_242, 0xc260_bf74_8882_b2bf),
     ("ederer2 quarterly", 474, 0x20e8_629c_56e4_710f),
     ("excess records", 58, 0x15c7_d5ae_05c0_687b),
     ("excess aggregated", 46, 0x27fd_379a_82c6_543f),
@@ -46,8 +45,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
         .weight(&weight)
         .build()
         .unwrap();
-    let expected =
-        ExpectedHazard::from_table(&t, &data, &[&c.age0, &c.date0], &[&c.sex]).unwrap();
+    let expected = ExpectedHazard::from_table(&t, &data, &[&c.age0, &c.date0], &[&c.sex]).unwrap();
     let mut out = Vec::new();
 
     let mut lookups = Vec::new();

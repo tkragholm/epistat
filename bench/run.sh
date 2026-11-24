@@ -125,9 +125,9 @@ flexpar_entry:epistat-survival:tier3_survival:flex:1000000:tier3/survival.R:600
 flexpar_tvc:epistat-survival:tier3_survival:flex:1000000:tier3/survival.R:600
 net_pp:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
 net_e2:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
-net_pp_monthly:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
-excess_poisson:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
-excess_flexpar:epistat-survival:tier3_relsurv:rel:1000000:tier3/relsurv.R:600
+net_pp_monthly:epistat-survival:tier3_relsurv:rel:10000000:tier3/relsurv.R:600
+excess_poisson:epistat-survival:tier3_relsurv:rel:10000000:tier3/relsurv.R:600
+excess_flexpar:epistat-survival:tier3_relsurv:rel:10000000:tier3/relsurv.R:600
 tmle_ate_binary:epistat-causal:tier3_tmle:tml:10000000:tier3/tmle.R:600
 tmle_ate_gaussian:epistat-causal:tier3_tmle:tml:10000000:tier3/tmle.R:600
 tmle_all_binary:epistat-causal:tier3_tmle:tml:10000000:tier3/tmle.R:600

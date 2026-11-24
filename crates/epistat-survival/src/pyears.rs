@@ -170,7 +170,8 @@ impl Pyears {
 }
 
 /// A time dimension while a row is walked.
-struct Walker<'a> {
+#[derive(Clone, Copy)]
+pub(crate) struct Walker<'a> {
     cuts: &'a [f64],
     origin: &'a [f64],
     stride: usize,
@@ -179,6 +180,20 @@ struct Walker<'a> {
     /// The number of cuts at or below the current value. 0 is below the first
     /// cut, `cuts.len()` is at or beyond the last.
     above: usize,
+}
+
+impl<'a> Walker<'a> {
+    /// The time dimension with these cuts, the value of each row at time 0
+    /// and the stride of its cells.
+    pub(crate) const fn new(cuts: &'a [f64], origin: &'a [f64], stride: usize) -> Self {
+        Self {
+            cuts,
+            origin,
+            stride,
+            x0: 0.0,
+            above: 0,
+        }
+    }
 }
 
 /// Person-time, counts and events for the cells of `dims`.
@@ -381,6 +396,22 @@ impl<'d, 'x> Layout<'d, 'x> {
     }
 }
 
+impl<'x> Cursor<'x> {
+    /// The part of the cell index of row `i` that comes from the factors.
+    pub(crate) fn base(&self, i: usize) -> usize {
+        self.factors
+            .iter()
+            .map(|&(codes, stride)| codes[i] as usize * stride)
+            .sum()
+    }
+
+    /// The cuts and the stride of each time dimension, in the order of the
+    /// dimensions.
+    pub(crate) fn time_dimensions(&self) -> impl Iterator<Item = (&'x [f64], usize)> + '_ {
+        self.walkers.iter().map(|w| (w.cuts, w.stride))
+    }
+}
+
 impl Cursor<'_> {
     /// Walks the rows of positive weight in row order. `on_piece(row, cell,
     /// length)` is called for each stretch of follow-up that stays in one
@@ -403,88 +434,108 @@ impl Cursor<'_> {
         for row in data.used_rows() {
             let i = row as usize;
             let begin = start.map_or(0.0, |s| s[i]);
-            let end = stop[i];
-            let duration = end - begin;
             let base: usize = factors
                 .iter()
                 .map(|&(codes, stride)| codes[i] as usize * stride)
                 .sum();
-            for walker in walkers.iter_mut() {
-                walker.x0 = walker.origin[i] + begin;
-                walker.above = walker.cuts.partition_point(|&c| c <= walker.x0);
-            }
-
-            let mut elapsed = 0.0_f64;
-            let mut last: Option<usize> = None;
-            let mut any_piece = false;
-            while elapsed < duration {
-                let mut next = duration;
-                let mut entry = 0.0_f64;
-                let mut below = false;
-                let mut beyond = false;
-                for walker in walkers.iter() {
-                    if walker.above == walker.cuts.len() {
-                        beyond = true;
-                        continue;
-                    }
-                    let cut = walker.cuts[walker.above];
-                    let mut offset = cut - walker.x0;
-                    let reach = reach(cut, walker.x0, begin, end);
-                    if duration - offset <= reach {
-                        offset = duration;
-                    }
-                    if walker.above == 0 {
-                        below = true;
-                        entry = entry.max(offset);
-                    } else if offset < next {
-                        next = offset;
-                    }
-                }
-                let to = if beyond {
-                    duration
-                } else if below {
-                    entry.min(duration)
-                } else {
-                    next
-                };
-                let length = to - elapsed;
-                if length > 0.0 {
-                    let cell = (!beyond && !below).then(|| {
-                        base + walkers
-                            .iter()
-                            .map(|walker| (walker.above - 1) * walker.stride)
-                            .sum::<usize>()
-                    });
-                    on_piece(i, cell, length);
-                    last = cell;
-                    any_piece = true;
-                }
-                elapsed = to;
-                for walker in walkers.iter_mut() {
-                    while walker.above < walker.cuts.len() {
-                        let cut = walker.cuts[walker.above];
-                        if cut - walker.x0 > elapsed + reach(cut, walker.x0, begin, end) {
-                            break;
-                        }
-                        walker.above += 1;
-                    }
-                }
-            }
-            if !any_piece {
-                let inside = walkers
-                    .iter()
-                    .all(|walker| walker.above > 0 && walker.above < walker.cuts.len());
-                last = inside.then(|| {
-                    base + walkers
-                        .iter()
-                        .map(|walker| (walker.above - 1) * walker.stride)
-                        .sum::<usize>()
-                });
-            }
+            let last = walk_row(walkers, i, base, begin, stop[i], &mut |cell, length| {
+                on_piece(i, cell, length);
+            });
             on_end(i, last);
         }
         Ok(())
     }
+}
+
+/// Walks row `i` from `begin` to `end` through the time dimensions of
+/// `walkers`, with `base` the part of its cell index from the factors.
+/// `on_piece(cell, length)` is called for each stretch of follow-up that stays
+/// in one cell, with `cell` `None` for time off the table. Returns the last
+/// cell the row spent time in, or the cell its values at time 0 fall in when
+/// it spent none. The walk depends only on these arguments and the origins of
+/// row `i`, so a row walked again gives the same pieces.
+pub(crate) fn walk_row(
+    walkers: &mut [Walker<'_>],
+    i: usize,
+    base: usize,
+    begin: f64,
+    end: f64,
+    on_piece: &mut impl FnMut(Option<usize>, f64),
+) -> Option<usize> {
+    let duration = end - begin;
+    for walker in walkers.iter_mut() {
+        walker.x0 = walker.origin[i] + begin;
+        walker.above = walker.cuts.partition_point(|&c| c <= walker.x0);
+    }
+
+    let mut elapsed = 0.0_f64;
+    let mut last: Option<usize> = None;
+    let mut any_piece = false;
+    while elapsed < duration {
+        let mut next = duration;
+        let mut entry = 0.0_f64;
+        let mut below = false;
+        let mut beyond = false;
+        for walker in walkers.iter() {
+            if walker.above == walker.cuts.len() {
+                beyond = true;
+                continue;
+            }
+            let cut = walker.cuts[walker.above];
+            let mut offset = cut - walker.x0;
+            let reach = reach(cut, walker.x0, begin, end);
+            if duration - offset <= reach {
+                offset = duration;
+            }
+            if walker.above == 0 {
+                below = true;
+                entry = entry.max(offset);
+            } else if offset < next {
+                next = offset;
+            }
+        }
+        let to = if beyond {
+            duration
+        } else if below {
+            entry.min(duration)
+        } else {
+            next
+        };
+        let length = to - elapsed;
+        if length > 0.0 {
+            let cell = (!beyond && !below).then(|| {
+                base + walkers
+                    .iter()
+                    .map(|walker| (walker.above - 1) * walker.stride)
+                    .sum::<usize>()
+            });
+            on_piece(cell, length);
+            last = cell;
+            any_piece = true;
+        }
+        elapsed = to;
+        for walker in walkers.iter_mut() {
+            while walker.above < walker.cuts.len() {
+                let cut = walker.cuts[walker.above];
+                if cut - walker.x0 > elapsed + reach(cut, walker.x0, begin, end) {
+                    break;
+                }
+                walker.above += 1;
+            }
+        }
+    }
+    if !any_piece {
+        let inside = walkers
+            .iter()
+            .all(|walker| walker.above > 0 && walker.above < walker.cuts.len());
+        last = inside.then(|| {
+            base + walkers
+                .iter()
+                .map(|walker| (walker.above - 1) * walker.stride)
+                .sum::<usize>()
+        });
+    }
+    last
 }
 
 /// The rounding error to allow in the offset `cut - x0` of a boundary, whose

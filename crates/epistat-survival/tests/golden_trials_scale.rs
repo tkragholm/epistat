@@ -152,7 +152,11 @@ fn trial_msm_full(d: &Periods) -> Msm {
 /// The clone-censor-weight analysis of the benchmark, with the design of the
 /// outcome model built in full.
 fn ccw_full(d: &Periods) -> Msm {
-    let period: Vec<u32> = d.period.iter().map(|&p| u32::try_from(p).unwrap()).collect();
+    let period: Vec<u32> = d
+        .period
+        .iter()
+        .map(|&p| u32::try_from(p).unwrap())
+        .collect();
     let strategies = [
         Strategy::InitiateWithin {
             grace: 3,

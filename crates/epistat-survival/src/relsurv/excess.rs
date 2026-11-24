@@ -6,6 +6,7 @@
 )]
 
 use super::ExpectedHazard;
+use super::expected::Reader;
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::par;
@@ -166,7 +167,8 @@ impl Setup<'_> {
     /// Calls `f(interval, y, d, expected)` for each record of row `i`: its
     /// follow-up cut at the interval cuts and at the cuts of the rate table,
     /// so that the reference hazard is constant over each record.
-    fn records(&self, i: usize, mut f: impl FnMut(usize, f64, f64, f64)) {
+    fn records(&self, reader: &mut Reader<'_>, i: usize, mut f: impl FnMut(usize, f64, f64, f64)) {
+        let pieces = reader.row(i);
         let begin = self.start.map_or(0.0, |s| s[i]);
         let end = self.stop[i];
         let dead = self.status[i] != 0;
@@ -176,7 +178,7 @@ impl Setup<'_> {
             let lo = begin.max(self.cuts[k]);
             let hi = end.min(self.cuts[k + 1]);
             if hi > lo {
-                self.expected.pieces_within(i, lo, hi, |a, b, hazard| {
+                pieces.pieces_within(lo, hi, |a, b, hazard| {
                     let d = f64::from(u8::from(dead && b == end));
                     f(k, b - a, d, (b - a) * hazard);
                 });
@@ -236,9 +238,10 @@ impl Setup<'_> {
             let mut z = vec![0.0; q];
             match units {
                 Units::Rows(rows) => {
+                    let mut reader = self.expected.reader();
                     for &i in &rows[range] {
                         let mut good = true;
-                        self.records(i, |k, y, d, dstar| {
+                        self.records(&mut reader, i, |k, y, d, dstar| {
                             good &= add(&mut t, &mut z, i, k, y, d, dstar);
                         });
                         if !good {
@@ -307,9 +310,10 @@ fn aggregate(setup: &Setup<'_>, rows: &[usize]) -> Vec<Cell> {
     }
     let n_int = setup.cuts.len() - 1;
     let mut keyed: Vec<(usize, Cell)> = Vec::new();
+    let mut reader = setup.expected.reader();
     for &i in rows {
         let g = group[i];
-        setup.records(i, |k, y, d, dstar| {
+        setup.records(&mut reader, i, |k, y, d, dstar| {
             keyed.push((
                 number[g] * n_int + k,
                 Cell {
@@ -452,8 +456,9 @@ pub fn excess_hazard(
     };
     let (mut events, mut dstar, mut years) = (vec![0.0; n_all], vec![0.0; n_all], vec![0.0; n_all]);
     let mut n_records = 0;
+    let mut reader = expected.reader();
     for &i in &rows {
-        setup.records(i, |k, y, d, e| {
+        setup.records(&mut reader, i, |k, y, d, e| {
             events[k] += d;
             dstar[k] += e;
             years[k] += y;
