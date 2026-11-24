@@ -1,7 +1,8 @@
 //! The bits of the outcome models of sequential trials and of
 //! clone-censor-weight on simulated person-period data, with the stacked rows
 //! built in full and formed block by block by `fit_msm_trials` and
-//! `fit_msm_clones`.
+//! `fit_msm_clones`, and of the deviation weights from held designs and from
+//! designs formed row by row by `deviation_weights_rows`.
 //!
 //! The two ways give the same bits on every platform. The recorded values are
 //! an FNV-1a digest of the `to_bits` of each output, with its length, taken
@@ -14,8 +15,8 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::weighting::clone::{
-    Adherence, CloneInput, DeviationModel, Strategy, clone_censor, deviation_weights,
-    fit_msm_clones,
+    Adherence, CloneInput, DeviationDesign, DeviationModel, DeviationRows, DeviationWeights,
+    Strategy, clone_censor, deviation_weights, deviation_weights_rows, fit_msm_clones,
 };
 use epistat_survival::weighting::trials::{
     Msm, MsmInput, PersonPeriod, TrialRows, TrialSpans, WeightModel, fit_msm, fit_msm_trials,
@@ -236,13 +237,61 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
         person: &person,
     })
     .unwrap();
-    let rows = fit_msm_clones(&c, &w.weight, 5, &|i, out| {
+    // The weights again from designs formed row by row, which must be the
+    // same, with and without case weights and a numerator.
+    let den_fill = |i: usize, out: &mut [f64]| {
+        let s = c.source[i];
+        let p = f64::from(period[s]);
+        out.copy_from_slice(&[1.0, d.l[s], d.l0[s], p, p * p]);
+    };
+    let num_fill = |i: usize, out: &mut [f64]| {
+        out.copy_from_slice(&[1.0, f64::from(period[c.source[i]])]);
+    };
+    let rows_model = DeviationRows {
+        denominator: DeviationDesign {
+            columns: 5,
+            fill: &den_fill,
+        },
+        numerator: Some(DeviationDesign {
+            columns: 2,
+            fill: &num_fill,
+        }),
+    };
+    let by_rows = deviation_weights_rows(&c, &[rows_model, rows_model], None).unwrap();
+    assert_eq!(weights_bits(&by_rows), weights_bits(&w));
+    let counts: Vec<f64> = (0..m)
+        .map(|i| f64::from(u8::try_from(c.person[i] % 3).unwrap()))
+        .collect();
+    let unstabilised = DeviationModel {
+        numerator: None,
+        ..model
+    };
+    let rows_unstabilised = DeviationRows {
+        numerator: None,
+        ..rows_model
+    };
+    assert_eq!(
+        weights_bits(
+            &deviation_weights_rows(&c, &[rows_unstabilised, rows_model], Some(&counts)).unwrap()
+        ),
+        weights_bits(&deviation_weights(&c, &[unstabilised, model], Some(&counts)).unwrap())
+    );
+    let rows = fit_msm_clones(&c, &by_rows.weight, 5, &|i, out| {
         let p = f64::from(period[c.source[i]]);
         let arm = c.arm[i] as f64;
         out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
     })
     .unwrap();
     (full, rows)
+}
+
+fn weights_bits(w: &DeviationWeights) -> Vec<u64> {
+    w.weight
+        .iter()
+        .chain(&w.probability)
+        .chain(w.coefficients.iter().flatten())
+        .map(|v| v.to_bits())
+        .collect()
 }
 
 /// `(name, length, digest)` of each recorded output.
