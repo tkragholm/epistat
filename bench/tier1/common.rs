@@ -189,6 +189,12 @@ impl Table {
     /// found by a first pass over the file, so that a large file takes the
     /// memory of its values and not that of doubling vectors.
     pub fn read_sized(path: &Path) -> Self {
+        Self::read_sized_only(path, &[])
+    }
+
+    /// [`Table::read_sized`] keeping only the columns named in `keep`, or all
+    /// of them when `keep` is empty.
+    pub fn read_sized_only(path: &Path, keep: &[&str]) -> Self {
         use std::io::Read;
         let mut file =
             fs::File::open(path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
@@ -206,11 +212,22 @@ impl Table {
         let file = fs::File::open(path).expect("open");
         let mut lines = std::io::BufReader::with_capacity(1 << 20, file).lines();
         let header = lines.next().expect("header").expect("read header");
-        let names: Vec<String> = header.split(',').map(str::to_string).collect();
+        let all: Vec<String> = header.split(',').map(str::to_string).collect();
+        let kept: Vec<bool> = all
+            .iter()
+            .map(|n| keep.is_empty() || keep.contains(&n.as_str()))
+            .collect();
+        let names: Vec<String> = all
+            .iter()
+            .zip(&kept)
+            .filter(|(_, k)| **k)
+            .map(|(n, _)| n.clone())
+            .collect();
         let mut columns = vec![Vec::with_capacity(newlines); names.len()];
         for line in lines {
             let line = line.expect("read line");
-            for (column, field) in columns.iter_mut().zip(line.split(',')) {
+            let fields = line.split(',').zip(&kept).filter(|(_, k)| **k);
+            for (column, (field, _)) in columns.iter_mut().zip(fields) {
                 column.push(field.parse::<f64>().unwrap_or(f64::NAN));
             }
         }
