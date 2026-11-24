@@ -199,6 +199,10 @@ pub use methods::did_cc::{
 pub use methods::drdid::improved::{
     estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
 };
+pub use methods::drdid::ipw_or::{
+    estimate_ipw_did_panel, estimate_ipw_did_panel_flat, estimate_ipw_did_repeated_cross_section,
+    estimate_or_did_panel, estimate_or_did_panel_flat, estimate_or_did_repeated_cross_section,
+};
 pub use methods::drdid::panel::{
     PanelFlatInput, PanelNuisanceFit, PanelPropensityCoefficients, estimate_drdid_panel,
     estimate_drdid_panel_flat, fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,

@@ -4,9 +4,12 @@
 //! - [`panel`] holds the panel estimator. `estimate_drdid_panel` is the
 //!   locally efficient panel estimator of `DRDID::drdid_panel`.
 //! - [`repeated`] holds the traditional repeated cross-section estimator.
+//! - [`ipw_or`] holds the inverse probability weighting and outcome
+//!   regression estimators, on panels and repeated cross-sections.
 
 mod design;
 pub mod improved;
+pub mod ipw_or;
 pub mod moments;
 pub mod panel;
 pub mod repeated;

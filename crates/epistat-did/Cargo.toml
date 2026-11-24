@@ -100,6 +100,11 @@ path = "tests/parity_drdid_rc_efficient.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "parity_ipw_or"
+path = "tests/parity_ipw_or.rs"
+required-features = ["parity-tests"]
+
+[[test]]
 name = "parity_drdid_improved"
 path = "tests/parity_drdid_improved.rs"
 required-features = ["parity-tests"]
