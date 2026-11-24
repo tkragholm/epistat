@@ -1,9 +1,10 @@
 //! The results of the eight-lane reductions in epistat-stats and
 //! epistat-inference, hashed to the bit. The hash is the same on NEON, SSE4.2
 //! and AVX2 builds and on any thread count, because the lane width and the
-//! order of the additions are fixed in the source. Results that go through the
-//! platform's libm, such as normal tail probabilities and normal draws, are
-//! left out, because those differ in the last bit between aarch64 and x86-64.
+//! order of the additions are fixed in the source. The digest also covers
+//! normal tail probabilities and normal draws, which go through the platform's
+//! libm, so its recorded value is compared only on aarch64 macOS. Equality
+//! across thread counts is checked everywhere.
 
 use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
@@ -76,5 +77,11 @@ fn the_lane_reductions_have_fixed_bits() {
     for (run, threads) in on_threads(&counts, fingerprint).into_iter().zip(counts) {
         assert_eq!(run, expected, "{threads} threads");
     }
+    // The digest covers the normal distribution function and normal draws,
+    // which go through `exp`, `ln` and `cos`, whose last bits depend on the
+    // maths library and, on Windows, on the processor the library dispatches
+    // for, so the constant is checked only on aarch64 macOS, where it was
+    // recorded. The thread counts above must agree everywhere.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     assert_eq!(expected, 0xf4a0_3bd1_4db8_f150);
 }

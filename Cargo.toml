@@ -31,3 +31,10 @@ suboptimal_flops = "allow"
 # A local exception is `#[expect(.., reason = "..")]`, never `#[allow]`, so an
 # exception that no longer applies is itself a warning.
 allow_attributes = "warn"
+
+# The profile CI runs the tests in: debug assertions and overflow checks as in
+# `dev`, but optimised, so the numerical suites take minutes instead of an hour.
+[profile.ci]
+inherits = "dev"
+opt-level = 2
+debug = "line-tables-only"

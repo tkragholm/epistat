@@ -21,7 +21,7 @@ use epistat_inference::curve::{Band, contrast_curve};
 use epistat_inference::simultaneous::sup_t_from_covariance;
 use epistat_linalg::Mat;
 use epistat_linalg::basis::{Basis, NaturalSpline, RestrictedCubic};
-use epistat_testkit::{Fingerprint, assert_same_on_threads, load_json};
+use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -242,14 +242,21 @@ fn simultaneous_band_uses_the_sup_t_value() {
         v
     };
     assert_same_on_threads(values);
-    let r = run();
-    let hash = Fingerprint::new()
-        .f64(r.critical)
-        .f64s(&r.lower)
-        .f64s(&r.upper)
-        .finish();
-    eprintln!("curve fingerprint {hash:#018x}");
-    assert_eq!(hash, 0x5f9d_e54c_4f54_6a2d);
+    // The band goes through `ln`, `exp` and the normal draws' `cos`, whose last
+    // bits depend on the maths library and, on Windows, on the processor the
+    // library dispatches for, so the bits are checked only on aarch64 macOS,
+    // where they were recorded.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let r = run();
+        let hash = epistat_testkit::Fingerprint::new()
+            .f64(r.critical)
+            .f64s(&r.lower)
+            .f64s(&r.upper)
+            .finish();
+        eprintln!("curve fingerprint {hash:#018x}");
+        assert_eq!(hash, 0x5f9d_e54c_4f54_6a2d);
+    }
 }
 
 #[test]

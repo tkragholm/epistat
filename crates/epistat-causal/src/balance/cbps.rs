@@ -87,10 +87,9 @@
 //! the flat objectives of the tests. Where the search stops in that range depends
 //! on the last bits of `exp` and so on the platform. The gradient keeps falling
 //! there, so the BFGS result is finished by Newton steps on the gradient, with
-//! the Hessian from central differences of the analytic gradient at a relative
-//! step of 1e-5, accurate to about 1e-10. A step is taken while it reduces the
-//! largest entry of the gradient, until that entry is at most the tolerance, for
-//! at most 20 steps.
+//! the exact Hessian `2 H`, with `H` as defined under Variance. A step is taken
+//! while it reduces the largest entry of the gradient, until that entry is at
+//! most the tolerance, for at most 20 steps.
 //!
 //! ## Weights
 //!
@@ -271,6 +270,18 @@ pub struct Cbps {
     /// The largest standardised difference between the weighted means of the
     /// treated and the controls over the columns of the design that vary.
     pub max_imbalance: f64,
+}
+
+/// What the Hessian of the continuously updated `J` and the influence of its
+/// minimiser share: the `f` of the module documentation per person as `phi`, the
+/// factors `alpha` and `beta` of the weighting-matrix term, `W D` as `wd` and
+/// half the Hessian of `J` as `half`.
+struct CuSecond {
+    phi: Vec<f64>,
+    alpha: Vec<f64>,
+    beta: Vec<f64>,
+    wd: Mat<f64>,
+    half: Mat<f64>,
 }
 
 struct Problem {
@@ -505,12 +516,10 @@ impl Problem {
         }
     }
 
-    /// The influence of the continuously updated coefficients: the exact
-    /// derivative of the minimiser with respect to the case weight of each
-    /// person, times its sample weight, as rows of an `n x k` matrix. `None`
-    /// when the Hessian of `J` is not positive definite there. See the module
-    /// documentation for the formulas.
-    fn cu_influence(&self, e: &[f64]) -> Result<Option<Mat<f64>>> {
+    /// The terms of the continuously updated objective at `e` that its Hessian
+    /// and the influence of its minimiser share. See the module documentation
+    /// for the formulas.
+    fn cu_second(&self, e: &[f64]) -> Result<CuSecond> {
         let (k, m) = (self.k(), e.len());
         let w = self.v_inverse(e)?;
         let g = self.moments(e);
@@ -541,10 +550,6 @@ impl Problem {
             alpha[i] = u - a[i] * p1 - b[i] * p2;
             beta[i] = wb[i] - b[i] * p1 - cc[i] * p2;
         }
-        // Q = n^-1 sum s x phi, half the gradient of J; zero at the minimum up to
-        // the solver's tolerance.
-        let xq = xtv(self.x.as_ref(), &self.sw(&phi));
-        let q: Vec<f64> = (0..k).map(|j| xq[(j, 0)] / self.n).collect();
         // D = n^-1 sum s [x p; x m] x' and half the Hessian C_eta + D' W D.
         let (top, bottom) = (self.signed_gram(&hp), self.signed_gram(&hm));
         let d = Mat::from_fn(2 * k, k, |r, c| {
@@ -561,6 +566,33 @@ impl Problem {
         let half = Mat::from_fn(k, k, |r, c| {
             c_eta[(r, c)] + compensated((0..2 * k).map(|j| d[(j, r)] * wd[(j, c)]))
         });
+        Ok(CuSecond {
+            phi,
+            alpha,
+            beta,
+            wd,
+            half,
+        })
+    }
+
+    /// The influence of the continuously updated coefficients: the exact
+    /// derivative of the minimiser with respect to the case weight of each
+    /// person, times its sample weight, as rows of an `n x k` matrix. `None`
+    /// when the Hessian of `J` is not positive definite there. See the module
+    /// documentation for the formulas.
+    fn cu_influence(&self, e: &[f64]) -> Result<Option<Mat<f64>>> {
+        let (k, m) = (self.k(), e.len());
+        let CuSecond {
+            phi,
+            alpha,
+            beta,
+            wd,
+            half,
+        } = self.cu_second(e)?;
+        // Q = n^-1 sum s x phi, half the gradient of J; zero at the minimum up to
+        // the solver's tolerance.
+        let xq = xtv(self.x.as_ref(), &self.sw(&phi));
+        let q: Vec<f64> = (0..k).map(|j| xq[(j, 0)] / self.n).collect();
         if cholesky_factor(half.as_ref(), Regularisation::default()).is_none() {
             return Ok(None);
         }
@@ -932,8 +964,7 @@ impl Problem {
     }
 
     /// Newton steps on the gradient of the continuously updated `J` from a BFGS
-    /// result, with the Hessian from central differences of the analytic
-    /// gradient. Returns the point, `J`, the gradient and the number of steps.
+    /// result, with its exact Hessian. Returns the point, `J`, the gradient and the number of steps.
     fn polish_cu(
         &self,
         mut beta: Vec<f64>,
@@ -944,20 +975,14 @@ impl Problem {
         let k = self.k();
         let mut steps = 0;
         while steps < 20 && max_abs(&grad) > tolerance {
-            let mut hess = Mat::zeros(k, k);
-            for c in 0..k {
-                let h = 1e-5 * beta[c].abs().max(1.0);
-                let mut up = beta.clone();
-                up[c] += h;
-                let mut down = beta.clone();
-                down[c] -= h;
-                let gu = self.cu(&up).1;
-                let gd = self.cu(&down).1;
-                for r in 0..k {
-                    hess[(r, c)] = (gu[r] - gd[r]) / (up[c] - down[c]);
-                }
+            let e = self.probs(&beta);
+            if check_probs(&e).is_err() {
+                break;
             }
-            let hess = Mat::from_fn(k, k, |r, c| f64::midpoint(hess[(r, c)], hess[(c, r)]));
+            let Ok(second) = self.cu_second(&e) else {
+                break;
+            };
+            let hess = Mat::from_fn(k, k, |r, c| 2.0 * second.half[(r, c)]);
             let rhs = Mat::from_fn(k, 1, |r, _| -grad[r]);
             let Ok(sol) = solve(
                 hess.as_ref(),
@@ -1416,4 +1441,58 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         start,
         max_imbalance,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Twice `cu_second(..).half` is the Jacobian of the gradient of `cu`. A
+    /// central difference of the gradient at step `h` has a truncation error of
+    /// order `h^2 f'''/6` and a rounding error of order `u |grad| / h`, `u` the
+    /// unit roundoff. Over `h` from 1e-3 to 1e-6 the deviation from the exact
+    /// matrix falls as `h^2` to 2e-7 of the largest entry at `h = 1e-4` and then
+    /// rises with rounding, so 1e-6 of the largest entry at `h = 1e-4` accepts
+    /// the difference's error and rejects a wrong term, which is of order one.
+    #[test]
+    fn the_exact_hessian_is_the_jacobian_of_the_gradient() {
+        let n = 200;
+        let mut rng = epistat_rng::Stream::seeded(5);
+        let x = Mat::from_fn(n, 3, |_, c| if c == 0 { 1.0 } else { rng.normal() });
+        let t: Vec<bool> = (0..n)
+            .map(|i| rng.uniform() < expit(0.4 * x[(i, 1)] - 0.3))
+            .collect();
+        for ate in [true, false] {
+            let nt = t.iter().filter(|&&a| a).count() as f64;
+            let prob = Problem {
+                x: x.clone(),
+                t: t.clone(),
+                s: vec![1.0; n],
+                att: !ate,
+                n: n as f64,
+                c: if ate { 1.0 } else { n as f64 / nt },
+            };
+            let beta = [0.1, -0.3, 0.2];
+            let e = prob.probs(&beta);
+            let exact = prob.cu_second(&e).unwrap().half;
+            let h = 1e-4;
+            let mut scale = 0.0_f64;
+            let mut worst = 0.0_f64;
+            for c in 0..3 {
+                let (mut up, mut down) = (beta, beta);
+                up[c] += h;
+                down[c] -= h;
+                let (gu, gd) = (prob.cu(&up).1, prob.cu(&down).1);
+                for r in 0..3 {
+                    let fd = (gu[r] - gd[r]) / (2.0 * h);
+                    scale = scale.max(fd.abs());
+                    worst = worst.max((fd - 2.0 * exact[(r, c)]).abs());
+                }
+            }
+            assert!(
+                worst < 1e-6 * scale,
+                "ate {ate}: {worst:e} against {scale:e}"
+            );
+        }
+    }
 }
