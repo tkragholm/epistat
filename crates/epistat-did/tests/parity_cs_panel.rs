@@ -405,6 +405,7 @@ fn run(
             min_e: None,
             max_e: None,
             confidence_level: InferenceConfig::default(),
+            bootstrap: None,
         },
     )
     .expect("aggregate")
@@ -989,6 +990,7 @@ fn aggte_dynamic_trimming_matches_r() {
                 min_e: Some(want.min_e),
                 max_e: Some(want.max_e),
                 confidence_level: InferenceConfig::default(),
+                bootstrap: None,
             },
         )
         .expect("trimmed dynamic");

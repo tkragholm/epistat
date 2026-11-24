@@ -1,3 +1,8 @@
+#![expect(
+    deprecated,
+    reason = "these tests cover the deprecated bands and aggregation until they are removed"
+)]
+
 use std::collections::BTreeMap;
 
 use epistat_rng::Stream;

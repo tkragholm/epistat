@@ -783,12 +783,38 @@ fn build_numeric_balance<R: CovariateRecord>(
     levels: &LevelTable,
     transforms: NumericBalanceTransform,
 ) -> (Vec<NumericBalance>, Vec<PairDistance>) {
-    // The features are independent, and the report keeps their order.
-    numeric_feature_specs(numeric_keys, levels, transforms)
-        .par_iter()
-        .filter(|feature| !is_redundant_term(sample, context, feature))
-        .map(|feature| summarize_numeric_feature(sample, context, feature))
-        .unzip()
+    // The features are independent, and the report keeps their order. A
+    // batch of them runs at once, sized by the memory a feature holds.
+    let specs = numeric_feature_specs(numeric_keys, levels, transforms);
+    let mut out = (Vec::new(), Vec::new());
+    for batch in specs.chunks(features_in_flight(sample)) {
+        let (balances, distances): (Vec<_>, Vec<_>) = batch
+            .par_iter()
+            .filter(|feature| !is_redundant_term(sample, context, feature))
+            .map(|feature| summarize_numeric_feature(sample, context, feature))
+            .unzip();
+        out.0.extend(balances);
+        out.1.extend(distances);
+    }
+    out
+}
+
+/// The memory, in bytes, that the features summarised at once may hold
+/// between them, about.
+const FEATURE_MEMORY: usize = 2 << 30;
+
+/// The bytes a feature holds at its peak for each record, about: its units,
+/// the sorted orders and the two stages of one distribution distance.
+const FEATURE_BYTES_PER_RECORD: usize = 128;
+
+/// How many features are summarised at once: as many as fit in
+/// [`FEATURE_MEMORY`], and at least one. It depends on the number of records
+/// alone, so the peak memory of a report does not grow with the number of
+/// threads, and the results do not depend on it, since every feature is
+/// summarised on its own and the report keeps their order.
+fn features_in_flight<R>(sample: &BalanceSample<'_, R>) -> usize {
+    let records = sample.cases.len() + sample.controls.len();
+    (FEATURE_MEMORY / (FEATURE_BYTES_PER_RECORD * records.max(1))).max(1)
 }
 
 /// A squared or product term that is exactly zero everywhere or exactly equal
@@ -839,7 +865,7 @@ fn feature_units<R: CovariateRecord>(
     context: BalanceCovariateContext<'_>,
     feature: &NumericFeature,
 ) -> (Vec<Unit<f64>>, Vec<Option<f64>>) {
-    let mut units = Vec::new();
+    let mut units = Vec::with_capacity(sample.cases.len() + sample.controls.len());
     // The values by position are read only by the pair distances.
     let positioned = !sample.pairs.is_empty();
     let mut values = Vec::with_capacity(if positioned {
@@ -1000,11 +1026,15 @@ struct Stage {
 fn group_moments(units: &[Unit<f64>], is_case: bool, stage: Stage, binary: bool) -> GroupMoments {
     let matched = stage.matched;
     let use_weights = matched || stage.sampled;
-    let (values, weights): (Vec<f64>, Vec<f64>) = units
-        .iter()
-        .filter(|unit| unit.is_case == is_case && (!use_weights || unit.weight(matched) > 0.0))
-        .map(|unit| (unit.value, unit.weight(matched)))
-        .unzip();
+    let counted =
+        |unit: &&Unit<f64>| unit.is_case == is_case && (!use_weights || unit.weight(matched) > 0.0);
+    let count = units.iter().filter(counted).count();
+    let mut values = Vec::with_capacity(count);
+    let mut weights = Vec::with_capacity(count);
+    for unit in units.iter().filter(counted) {
+        values.push(unit.value);
+        weights.push(unit.weight(matched));
+    }
     let weights = use_weights.then_some(weights);
     let mean = weighted::mean(&values, weights.as_deref());
     let variance = if binary {
@@ -1032,10 +1062,22 @@ fn summarize_numeric_feature<R: CovariateRecord>(
         matched: true,
         ..pre
     };
-    let case_pre = group_moments(&units, true, pre, binary);
-    let control_pre = group_moments(&units, false, pre, binary);
-    let case_post = group_moments(&units, true, post, binary);
-    let control_post = group_moments(&units, false, post, binary);
+    // The statistics of the two groups and the two stages are independent
+    // and run at once.
+    let ((case_pre, control_pre), (case_post, control_post)) = rayon::join(
+        || {
+            rayon::join(
+                || group_moments(&units, true, pre, binary),
+                || group_moments(&units, false, pre, binary),
+            )
+        },
+        || {
+            rayon::join(
+                || group_moments(&units, true, post, binary),
+                || group_moments(&units, false, post, binary),
+            )
+        },
+    );
     let reference = standardiser.variance(case_pre.variance, control_pre.variance);
     // The pair distance needs only the values by position and the
     // standardiser, so the values by position are freed before the sorts.
@@ -1093,10 +1135,19 @@ fn summarize_numeric_feature<R: CovariateRecord>(
             (gap, gap)
         }
     };
-    let (ecdf_mean_diff_pre, ecdf_max_diff_pre) = ecdf(false, case_pre, control_pre);
-    let (ecdf_mean_diff_post, ecdf_max_diff_post) = ecdf(true, case_post, control_post);
-    let (eqq_mean_diff_pre, eqq_max_diff_pre) = eqq(false, case_pre, control_pre);
-    let (eqq_mean_diff_post, eqq_max_diff_post) = eqq(true, case_post, control_post);
+    // The distribution distances hold the most memory of a feature, so the
+    // two stages of one distance run at once and the two distances one after
+    // the other.
+    let ((ecdf_mean_diff_pre, ecdf_max_diff_pre), (ecdf_mean_diff_post, ecdf_max_diff_post)) =
+        rayon::join(
+            || ecdf(false, case_pre, control_pre),
+            || ecdf(true, case_post, control_post),
+        );
+    let ((eqq_mean_diff_pre, eqq_max_diff_pre), (eqq_mean_diff_post, eqq_max_diff_post)) =
+        rayon::join(
+            || eqq(false, case_pre, control_pre),
+            || eqq(true, case_post, control_post),
+        );
 
     let balance = NumericBalance {
         name,
@@ -1160,10 +1211,14 @@ fn build_categorical_balance<R: CovariateRecord>(
     categorical_keys: &[String],
     levels: &LevelTable,
 ) -> (Vec<CategoricalBalance>, Vec<PairDistance>) {
-    let summaries = categorical_keys
-        .par_iter()
-        .map(|key| summarize_categorical_feature(sample, context, key, &levels[key.as_str()]))
-        .collect::<Vec<_>>();
+    let mut summaries = Vec::with_capacity(categorical_keys.len());
+    for batch in categorical_keys.chunks(features_in_flight(sample)) {
+        summaries.par_extend(
+            batch.par_iter().map(|key| {
+                summarize_categorical_feature(sample, context, key, &levels[key.as_str()])
+            }),
+        );
+    }
     let mut balances = Vec::new();
     let mut distances = Vec::new();
     for (balance, level_distances) in summaries {

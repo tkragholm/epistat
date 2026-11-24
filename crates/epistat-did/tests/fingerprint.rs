@@ -6,21 +6,26 @@
 //! the hash alone and a value that moves in its last bit changes it. `Debug`
 //! prints an `f64` with the fewest digits that read back to the same bits.
 //! Run with `--nocapture` to print the current hashes.
+#![expect(
+    deprecated,
+    reason = "the fingerprint pins the deprecated bands until they are removed"
+)]
 
 use std::fmt::Debug;
 
 use epistat_did::{
-    AggteConfig, AggteType, AttGtAggregationConfig, AttGtAggregationWeighting, AttGtBandConfig,
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtError, AttGtInfluenceOutput,
-    AttGtObservation, BasePeriod, ClusterIndex, ComparisonGroup, ContinuousObservation,
-    DesignPruning, DidCcConfig, DidConfig, DrDidConfig, DrDidObservation, DrDidRepeatedObservation,
-    EfficientDidConfig, HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
-    HonestMonotonicityDirection, HonestPostFunctional, HonestRelativeMagnitudeBound,
-    HonestSensitivity, InferenceConfig, LeastFavorableSimulation, PanelFlatInput, PanelObservation,
-    PolynomialBasis, RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod,
-    TripleDidObservation, UnbalancedPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
-    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
-    aggregate_att_gt_overall, aggregate_efficient_att_gt_event_time,
+    AggteBootstrap, AggteConfig, AggteType, AttGtAggregationConfig, AttGtAggregationWeighting,
+    AttGtBandConfig, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtError,
+    AttGtInfluenceOutput, AttGtObservation, BasePeriod, ClusterIndex, ComparisonGroup,
+    ContinuousObservation, DesignPruning, DidCcConfig, DidConfig, DrDidConfig, DrDidObservation,
+    DrDidRepeatedObservation, EfficientDidConfig, HonestEventStudyInput, HonestJointPathConfig,
+    HonestJointPathMethod, HonestMonotonicityDirection, HonestPostFunctional,
+    HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
+    PanelFlatInput, PanelObservation, PolynomialBasis, RelativeMagnitudeConfidenceSetConfig,
+    SensitivitySummaryMethod, TripleDidObservation, UnbalancedPanel, aggregate_att_gt,
+    aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort,
+    aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
+    aggregate_efficient_att_gt_event_time,
     assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
     att_gt_clustered_standard_errors, att_gt_mboot_bands, att_gt_simultaneous_bands,
@@ -37,7 +42,7 @@ use epistat_did::{
     estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
     estimate_or_did_repeated_cross_section, estimate_smoothness_upper_bound_from_pretrends,
     fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients, independent_design_columns,
-    summarize_relative_magnitude_sensitivity_many_with_simulation,
+    pretrend_wald_test, summarize_relative_magnitude_sensitivity_many_with_simulation,
     summarize_smoothness_sensitivity_with_simulation, test_did_cc_stationarity, unit_panel,
 };
 use epistat_testkit::{Fingerprint, load_json, on_threads};
@@ -407,6 +412,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                     min_e: None,
                     max_e: None,
                     confidence_level: inference,
+                    bootstrap: None,
                 },
             )),
         ));
@@ -502,8 +508,54 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                 min_e: None,
                 max_e: None,
                 confidence_level: inference,
+                bootstrap: None,
             },
         )),
+    ));
+    out.push((
+        "aggte_dynamic_bootstrap",
+        digest(&aggregate_att_gt(
+            &fitted.estimates,
+            &fitted.influence_functions,
+            &clustered,
+            AggteConfig {
+                aggregation: AggteType::Dynamic,
+                confidence_level: inference,
+                bootstrap: Some(AggteBootstrap {
+                    replicates: 999,
+                    seed: 20_261_124,
+                    standard_errors: true,
+                    uniform_band: true,
+                }),
+                ..AggteConfig::default()
+            },
+        )),
+    ));
+    for (name, aggregation) in [
+        ("aggte_simple_max_e", AggteType::Simple),
+        ("aggte_group_max_e", AggteType::Group),
+    ] {
+        out.push((
+            name,
+            digest(&aggregate_att_gt(
+                &fitted.estimates,
+                &fitted.influence_functions,
+                &panel,
+                AggteConfig {
+                    aggregation,
+                    max_e: Some(1),
+                    confidence_level: inference,
+                    ..AggteConfig::default()
+                },
+            )),
+        ));
+    }
+    out.push((
+        "pretrend_wald",
+        digest(
+            &pretrend_wald_test(&fitted.estimates, &fitted.influence_functions, &panel)
+                .expect("pre-test"),
+        ),
     ));
     let bands = AttGtBandConfig {
         confidence_level: inference,
@@ -946,35 +998,39 @@ const GOLDEN: &[(&str, u64)] = &[
     ("att_gt_efficient", 0x201f_58e9_78ec_8f24),
     ("att_gt_dr_panel_universal_never", 0xcc70_fa0b_a55a_a346),
     ("att_gt_dr_panel_varying_notyet", 0xc9c4_06f6_5f4b_9158),
-    ("aggte_simple", 0xe092_59f2_e199_9f54),
-    ("aggte_dynamic", 0x5084_f4b9_8e69_35c7),
-    ("aggte_dynamic_balanced", 0xa468_3905_d250_2c2e),
-    ("aggte_group", 0x3982_cc8c_d68f_d88f),
-    ("aggte_calendar", 0x48a6_20d1_d6c8_be68),
+    ("aggte_simple", 0xda55_7f26_63da_48c7),
+    ("aggte_dynamic", 0x50a1_8f2f_2fe8_c5f5),
+    ("aggte_dynamic_balanced", 0x4f35_2b2d_2722_852a),
+    ("aggte_group", 0xbac2_b5d8_e0d0_ddcc),
+    ("aggte_calendar", 0x909c_e3a0_c3af_c20d),
     ("event_time_equal", 0x8879_9cf0_bd43_632c),
-    ("cohort_equal", 0x87d6_17a2_6507_6c7f),
-    ("calendar_equal", 0xb6c5_7c1f_f5da_692e),
-    ("overall_equal", 0x5f8c_8955_89bd_2aad),
+    ("cohort_equal", 0x51a3_128f_98c1_c126),
+    ("calendar_equal", 0x40fa_2903_c5a4_2bf5),
+    ("overall_equal", 0xb2d1_26be_796d_43c7),
     ("event_time_count", 0x4b2c_00d1_96fa_d5e3),
-    ("cohort_count", 0x87d6_17a2_6507_6c7f),
-    ("calendar_count", 0x23b1_6e04_5eda_c4ee),
-    ("overall_count", 0x72de_8cd2_d121_f9f9),
+    ("cohort_count", 0x51a3_128f_98c1_c126),
+    ("calendar_count", 0x2d87_5901_42bc_02a0),
+    ("overall_count", 0x5a63_c7fb_9e3b_6921),
     ("event_time_weight", 0x4f13_5ec5_6c2e_b289),
-    ("cohort_weight", 0x87d6_17a2_6507_6c7f),
-    ("calendar_weight", 0x1834_994b_8dea_7b1e),
-    ("overall_weight", 0xd06d_1803_84a1_71bc),
-    ("aggte_dynamic_clustered", 0x1f6b_8030_9cfe_7783),
+    ("cohort_weight", 0x51a3_128f_98c1_c126),
+    ("calendar_weight", 0xb4c1_658b_4b25_7f67),
+    ("overall_weight", 0xf056_78e1_c999_68bb),
+    ("aggte_dynamic_clustered", 0x7fde_61d3_537f_a0bf),
+    ("aggte_dynamic_bootstrap", 0x5edd_21ef_58a6_3fee),
+    ("aggte_simple_max_e", 0x453b_496b_7eab_d0fd),
+    ("aggte_group_max_e", 0xbf29_a586_8de7_fe37),
+    ("pretrend_wald", 0x8f10_ca3c_4156_c995),
     ("mboot_bands", 0xb8ba_24d8_c5f3_60f0),
     ("mboot_bands_clustered", 0x9c23_7ed5_f361_ca27),
     ("simultaneous_bands", 0xc259_eb6c_1fd4_c655),
-    ("clustered_standard_errors", 0xe498_3a1c_4c9f_ce0a),
+    ("clustered_standard_errors", 0x121c_5c2e_b2b8_f6f3),
     ("clustered_standard_error_from_index", 0xc62a_1ff2_fb3a_07c3),
     ("att_gt_dr_rc", 0x37ef_b315_808d_1e84),
     ("att_gt_dr_rc_efficient", 0x4944_165b_8d88_f9b4),
     ("att_gt_ipw_rc", 0x56f7_d6ad_d427_e4d3),
     ("att_gt_or_rc", 0x6872_5381_68cf_3c11),
     ("att_gt_efficient_dr", 0x74b6_3e4f_4e86_2f51),
-    ("aggregate_efficient_event_time", 0x7693_9d38_4755_f4ab),
+    ("aggregate_efficient_event_time", 0x0b45_6585_4366_2606),
     ("drdid_panel", 0x9a35_5276_7786_14a9),
     ("drdid_panel_analytic", 0x3a8b_258f_748f_a7e0),
     ("drdid_improved_panel", 0x9731_c94f_9fdd_c514),

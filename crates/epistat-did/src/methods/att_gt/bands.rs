@@ -17,6 +17,10 @@ use crate::types::{AttGtBandConfig, AttGtBandError, AttGtBandEstimate, AttGtEsti
 ///
 /// Returns [`AttGtBandError`] when inputs/configuration are invalid or influence
 /// vectors are malformed/degenerate for bootstrap inference.
+#[deprecated(
+    note = "scales Rademacher draws by the analytic standard error and has no clustering; \
+            use `att_gt_mboot_bands` for the cells and `AggteConfig::bootstrap` for aggregates"
+)]
 pub fn att_gt_simultaneous_bands_with_influence(
     estimates: &[AttGtEstimate],
     influence_functions: &[Vec<f64>],
@@ -108,6 +112,10 @@ pub fn att_gt_simultaneous_bands_with_influence(
 /// # Errors
 ///
 /// Returns [`AttGtBandError`] when inputs/configuration are invalid.
+#[deprecated(
+    note = "takes the maximum of independent normals and ignores the correlation between cells; \
+            use `att_gt_mboot_bands` for the cells and `AggteConfig::bootstrap` for aggregates"
+)]
 pub fn att_gt_simultaneous_bands(
     estimates: &[AttGtEstimate],
     config: AttGtBandConfig,

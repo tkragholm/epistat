@@ -15,12 +15,50 @@
 //!
 //! The group summary is the exception: within a cohort the cells are averaged
 //! with equal weights, which are not estimated, so no correction applies.
+//!
+//! # Standard errors and the bootstrap
+//!
+//! Every aggregate has an influence function `psi_i`, the weighted sum of the
+//! cells' influence functions plus the weight correction. Its analytic standard
+//! error is `sqrt(sum_g s_g^2)` with `s_g` the sum of the centred `psi_i` in
+//! cluster `g`, divided by `n` ([`crate::inference::did_clusters`]).
+//!
+//! With [`AggteBootstrap`] the standard errors come from the multiplier
+//! bootstrap of `did::mboot`. Replicate `b` draws a Rademacher weight `w_gb`
+//! per cluster (per unit without clusters) and forms
+//! `T_b = sqrt(G) * mean_g(w_gb * S_g)` with `S_g` the uncentred cluster sum of
+//! the influence function. For each point of a path, `sigma` is the
+//! interquartile range of its `T_b` divided by `qnorm(.75) - qnorm(.25)`, and
+//! its standard error is `sigma * sqrt(G) / n`. The uniform critical value is
+//! the type 1 quantile at `1 - alpha` of `max_j |T_bj| / sigma_j` over the
+//! points of the path, so the band `att_j +- crit * se_j` covers the whole path
+//! with probability about `1 - alpha`. The standard error of the overall effect
+//! has its own bootstrap on the overall influence function.
+//!
+//! The analytic and the bootstrap standard errors differ when the draws are not
+//! normal, since the interquartile range ignores the tails: for a cell with few
+//! units the bootstrap value can be several per cent above the analytic one.
+//! That is a property of `did::mboot`, which this reproduces.
+//!
+//! # `max_e`, `min_e` and `balance_e`
+//!
+//! `did::aggte` applies `max_e` to the simple, group and dynamic summaries,
+//! `min_e` and `balance_e` to the dynamic one only, and none of them to the
+//! calendar one. See [`AggteConfig`] for the unit in which `max_e` is counted.
+//!
+//! # References
+//!
+//! Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
+//! periods. J Econom 2021;225(2):200-30. R package `did` 2.5.1, functions
+//! `aggte`, `mboot`, `getSE` and `wif`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use epistat_inference::Clusters;
+use epistat_inference::simultaneous::multiplier_bands;
 
-use crate::inference::normal_interval;
+use crate::inference::did_clusters::standard_error;
+use crate::inference::{normal_interval, validate_confidence_level, z_score_for_confidence};
 use crate::types::{AttGtEstimate, InferenceConfig};
 use crate::util::usize_to_f64;
 
@@ -57,9 +95,46 @@ pub struct AggteConfig {
     /// times, so trimming the path moves it. Dynamic only, as in R.
     pub min_e: Option<i32>,
     /// Drop event times above this, inclusive bound. `did::aggte(max_e = )`.
+    ///
+    /// For [`AggteType::Dynamic`] the bound is in the units of the period
+    /// variable. For [`AggteType::Simple`] and [`AggteType::Group`] only the
+    /// post-treatment cells at most `max_e` periods after the cohort's first
+    /// treated period enter, as `did` 2.5.1 selects them, and the distance is
+    /// counted in steps of the sorted list of periods and cohorts that occur in
+    /// the estimates, where `did` counts in its own period list. The two agree
+    /// when the periods are consecutive. Ignored by [`AggteType::Calendar`], as
+    /// in `did`.
     pub max_e: Option<i32>,
     /// Confidence level settings for the intervals.
     pub confidence_level: InferenceConfig,
+    /// Multiplier bootstrap for the standard errors and the uniform band, as
+    /// `did::aggte(bstrap = TRUE, cband = TRUE)`. `None` gives analytic
+    /// standard errors and pointwise intervals.
+    pub bootstrap: Option<AggteBootstrap>,
+}
+
+/// Settings for the multiplier bootstrap of [`aggregate_att_gt`].
+///
+/// One Rademacher weight is drawn per unit, or per cluster when
+/// [`UnitPanel::clusters`] is set, and replicate `r` draws from
+/// `replicate_seed(seed, r)`, so the result depends on the seed and not on the
+/// number of threads. The path of an aggregate (event times, cohorts or
+/// periods) is bootstrapped jointly, and the overall effect separately from the
+/// same seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AggteBootstrap {
+    /// Number of replicates, `biters` in `did`. At least 1.
+    pub replicates: usize,
+    /// Seed of the draws.
+    pub seed: u64,
+    /// Replace the analytic standard errors by the bootstrap ones, as
+    /// `bstrap = TRUE`.
+    pub standard_errors: bool,
+    /// Use the uniform critical value of the path for its intervals, as
+    /// `cband = TRUE`. It is never below the pointwise normal value. When no
+    /// finite critical value exists the intervals stay pointwise and
+    /// [`AggteResult::uniform_band`] is `false`.
+    pub uniform_band: bool,
 }
 
 impl Default for AggteConfig {
@@ -70,6 +145,7 @@ impl Default for AggteConfig {
             min_e: None,
             max_e: None,
             confidence_level: InferenceConfig::default(),
+            bootstrap: None,
         }
     }
 }
@@ -107,6 +183,12 @@ pub struct AggteResult {
     pub overall_influence: Vec<f64>,
     /// Empty for [`AggteType::Simple`], which has no path.
     pub by_key: Vec<AggteEstimate>,
+    /// The multiplier of a path point's standard error in its interval: the
+    /// pointwise normal quantile, or the uniform critical value when
+    /// [`AggteResult::uniform_band`] is set.
+    pub critical_value: f64,
+    /// Whether the intervals of the path use a uniform critical value.
+    pub uniform_band: bool,
 }
 
 /// Errors from aggregation.
@@ -145,6 +227,13 @@ pub enum AggteError {
     /// The confidence level is not strictly between 0 and 1.
     #[error("confidence_level must be finite and in (0, 1)")]
     InvalidConfidenceLevel,
+    /// The bootstrap has no replicates, or asks for neither standard errors nor
+    /// a uniform band.
+    #[error("bootstrap needs at least one replicate and standard errors or a uniform band")]
+    InvalidBootstrap,
+    /// An aggregated influence function contains a value that is not finite.
+    #[error("an aggregated influence function is not finite")]
+    NonFiniteInfluence,
 }
 
 /// The per-unit inputs the weights are estimated from.
@@ -183,41 +272,18 @@ impl UnitPanel {
         self
     }
 
-    /// Compact cluster assignments and the cluster count.
+    /// The clusters of the units: the labels in increasing order, or one
+    /// cluster per unit without labels.
     ///
-    /// `None` clusters yields one cluster per unit, which is the identity case:
-    /// [`standard_error`] then reduces exactly to the unclustered formula, and
+    /// One cluster per unit is the identity case: [`standard_error`] then
+    /// reduces to the unclustered formula, and
     /// `clustering_by_unit_reproduces_the_unclustered_standard_error` pins that.
-    fn cluster_index(&self) -> (Vec<usize>, usize) {
+    fn cluster_index(&self) -> Clusters {
         match self.clusters {
-            None => ((0..self.groups.len()).collect(), self.groups.len()),
-            Some(ref labels) => {
-                let numbered = Clusters::from_sorted_labels(labels);
-                (numbered.of().to_vec(), numbered.count())
-            }
+            None => Clusters::singletons(self.groups.len()),
+            Some(ref labels) => Clusters::from_sorted_labels(labels),
         }
     }
-}
-
-/// Standard error of an aggregate from its influence function, clustered.
-///
-/// Units are centred first and then summed within cluster, rather than the other
-/// way round. That ordering is what makes the singleton-cluster case reduce
-/// exactly to [`standard_error_from_influence`], so switching clustering on for a
-/// design that has none cannot silently move a number.
-///
-/// No `G / (G - 1)` finite-cluster correction, which is the choice `did` makes
-/// and which [`crate::inference::clustered_variance_from_index`] makes
-/// differently. The two are not interchangeable; this one is here because the
-/// aggregation has to agree with `did`.
-pub(super) fn standard_error(influence: &[f64], assignments: &[usize], n_clusters: usize) -> f64 {
-    let n_f = usize_to_f64(influence.len());
-    let mean = influence.iter().sum::<f64>() / n_f;
-    let mut sums = vec![0.0; n_clusters];
-    for (value, &cluster) in influence.iter().zip(assignments) {
-        sums[cluster] += value - mean;
-    }
-    sums.iter().map(|value| value * value).sum::<f64>().sqrt() / n_f
 }
 
 /// Cohort share `pg = sum_i w_i * 1(G_i = g) / n`, as `did` computes it.
@@ -378,10 +444,9 @@ fn finish(
     att: f64,
     influence: Vec<f64>,
     confidence_level: f64,
-    assignments: &[usize],
-    n_clusters: usize,
+    clusters: &Clusters,
 ) -> AggteEstimate {
-    let se = standard_error(&influence, assignments, n_clusters);
+    let se = standard_error(&influence, clusters);
     let (ci_low, ci_high) = normal_interval(att, se, confidence_level);
     AggteEstimate {
         key,
@@ -394,12 +459,12 @@ fn finish(
 }
 
 /// Checks that the estimates, their influence vectors and the panel agree in
-/// shape, and returns the panel's cluster assignments and cluster count.
+/// shape, and returns the panel's clusters.
 pub(super) fn checked_cluster_index(
     estimates: &[AttGtEstimate],
     influence: &[Vec<f64>],
     panel: &UnitPanel,
-) -> Result<(Vec<usize>, usize), AggteError> {
+) -> Result<Clusters, AggteError> {
     if estimates.is_empty() {
         return Err(AggteError::EmptyInput);
     }
@@ -422,14 +487,14 @@ pub(super) fn checked_cluster_index(
             actual: bad.len(),
         });
     }
-    let (assignments, n_clusters) = panel.cluster_index();
-    if assignments.len() != n_units {
+    let clusters = panel.cluster_index();
+    if clusters.len() != n_units {
         return Err(AggteError::UnitGroupMismatch {
             expected: n_units,
-            actual: assignments.len(),
+            actual: clusters.len(),
         });
     }
-    Ok((assignments, n_clusters))
+    Ok(clusters)
 }
 
 /// Aggregate `ATT(g,t)` the way `did::aggte` does.
@@ -437,25 +502,85 @@ pub(super) fn checked_cluster_index(
 /// `influence` must be unit-indexed and on the full-sample scale, which is what
 /// [`super::panel_pairs::estimate_att_gt_dr_panel_with_influence`] returns.
 ///
+/// Standard errors are analytic, from the combined influence function including
+/// the influence of the estimated cohort shares, unless
+/// [`AggteConfig::bootstrap`] asks for the multiplier bootstrap. With
+/// [`AggteBootstrap::standard_errors`] the standard error of every point and of
+/// the overall effect is the bootstrap one, which uses the interquartile range
+/// of the draws as `did::mboot` does and so differs from the analytic value
+/// where the draws are not normal. With [`AggteBootstrap::uniform_band`] the
+/// intervals of the path use the critical value of the maximum over the path.
+///
 /// # Errors
 /// See [`AggteError`].
-#[expect(
-    clippy::too_many_lines,
-    reason = "the four aggregation types differ in which cells they select and \
-              how they weight them; splitting them apart hides the comparison"
-)]
 pub fn aggregate_att_gt(
     estimates: &[AttGtEstimate],
     influence: &[Vec<f64>],
     panel: &UnitPanel,
     config: AggteConfig,
 ) -> Result<AggteResult, AggteError> {
-    let (assignments, n_clusters) = checked_cluster_index(estimates, influence, panel)?;
+    let confidence_level = config.confidence_level.confidence_level;
+    if !validate_confidence_level(confidence_level) {
+        return Err(AggteError::InvalidConfidenceLevel);
+    }
+    if let Some(bootstrap) = config.bootstrap
+        && (bootstrap.replicates == 0 || !(bootstrap.standard_errors || bootstrap.uniform_band))
+    {
+        return Err(AggteError::InvalidBootstrap);
+    }
+    let result = aggregate_point_estimates(estimates, influence, panel, config)?;
+    match config.bootstrap {
+        None => Ok(result),
+        Some(bootstrap) => apply_bootstrap(result, panel, bootstrap, confidence_level),
+    }
+}
+
+/// Position of each period or cohort in the sorted list of those that occur in
+/// the estimates, which is how `did` measures `max_e` for the simple and group
+/// summaries.
+fn period_ranks(estimates: &[AttGtEstimate]) -> BTreeMap<i32, i32> {
+    let periods = estimates
+        .iter()
+        .flat_map(|estimate| [estimate.time, estimate.group])
+        .collect::<BTreeSet<i32>>();
+    periods
+        .into_iter()
+        .enumerate()
+        .map(|(rank, period)| (period, i32::try_from(rank).unwrap_or(i32::MAX)))
+        .collect()
+}
+
+/// The post-treatment cells that `max_e` leaves in the simple and group
+/// summaries.
+fn post_cells_within(estimates: &[AttGtEstimate], max_e: Option<i32>) -> Vec<usize> {
+    let ranks = max_e.map(|_| period_ranks(estimates));
+    (0..estimates.len())
+        .filter(|&i| estimates[i].time >= estimates[i].group)
+        .filter(|&i| match (max_e, ranks.as_ref()) {
+            (Some(limit), Some(ranks)) => {
+                ranks[&estimates[i].time] - ranks[&estimates[i].group] <= limit
+            }
+            _ => true,
+        })
+        .collect()
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the four aggregation types differ in which cells they select and \
+              how they weight them; splitting them apart hides the comparison"
+)]
+fn aggregate_point_estimates(
+    estimates: &[AttGtEstimate],
+    influence: &[Vec<f64>],
+    panel: &UnitPanel,
+    config: AggteConfig,
+) -> Result<AggteResult, AggteError> {
+    let clusters = checked_cluster_index(estimates, influence, panel)?;
     let n_units = panel.groups.len();
     let confidence_level = config.confidence_level.confidence_level;
-    let post = (0..estimates.len())
-        .filter(|&i| estimates[i].time >= estimates[i].group)
-        .collect::<Vec<_>>();
+    let critical_value = z_score_for_confidence(confidence_level);
+    let post = post_cells_within(estimates, config.max_e);
 
     match config.aggregation {
         AggteType::Simple => {
@@ -463,14 +588,7 @@ pub fn aggregate_att_gt(
                 return Err(AggteError::NoPostTreatmentCells);
             }
             let (att, influence_vector) = combine_by_share(&post, estimates, influence, panel);
-            let summary = finish(
-                0,
-                att,
-                influence_vector,
-                confidence_level,
-                &assignments,
-                n_clusters,
-            );
+            let summary = finish(0, att, influence_vector, confidence_level, &clusters);
             Ok(AggteResult {
                 overall_att: summary.att,
                 overall_se: summary.se,
@@ -478,6 +596,8 @@ pub fn aggregate_att_gt(
                 overall_ci_high: summary.ci_high,
                 overall_influence: summary.influence,
                 by_key: Vec::new(),
+                critical_value,
+                uniform_band: false,
             })
         }
         AggteType::Dynamic => {
@@ -517,14 +637,7 @@ pub fn aggregate_att_gt(
                 .into_iter()
                 .map(|(event_time, cells)| {
                     let (att, vector) = combine_by_share(&cells, estimates, influence, panel);
-                    finish(
-                        event_time,
-                        att,
-                        vector,
-                        confidence_level,
-                        &assignments,
-                        n_clusters,
-                    )
+                    finish(event_time, att, vector, confidence_level, &clusters)
                 })
                 .collect::<Vec<_>>();
 
@@ -538,8 +651,7 @@ pub fn aggregate_att_gt(
                 overall_att,
                 overall_influence,
                 confidence_level,
-                &assignments,
-                n_clusters,
+                &clusters,
             );
             Ok(AggteResult {
                 overall_att: overall.att,
@@ -548,6 +660,8 @@ pub fn aggregate_att_gt(
                 overall_ci_high: overall.ci_high,
                 overall_influence: overall.influence,
                 by_key,
+                critical_value,
+                uniform_band: false,
             })
         }
         AggteType::Group => {
@@ -567,14 +681,7 @@ pub fn aggregate_att_gt(
                 .into_iter()
                 .map(|(group, cells)| {
                     let (att, vector) = combine_equally(&cells, estimates, influence, n_units);
-                    finish(
-                        group,
-                        att,
-                        vector,
-                        confidence_level,
-                        &assignments,
-                        n_clusters,
-                    )
+                    finish(group, att, vector, confidence_level, &clusters)
                 })
                 .collect::<Vec<_>>();
 
@@ -614,8 +721,7 @@ pub fn aggregate_att_gt(
                 overall_att,
                 overall_influence,
                 confidence_level,
-                &assignments,
-                n_clusters,
+                &clusters,
             );
             Ok(AggteResult {
                 overall_att: overall.att,
@@ -624,9 +730,12 @@ pub fn aggregate_att_gt(
                 overall_ci_high: overall.ci_high,
                 overall_influence: overall.influence,
                 by_key,
+                critical_value,
+                uniform_band: false,
             })
         }
         AggteType::Calendar => {
+            let post = post_cells_within(estimates, None);
             if post.is_empty() {
                 return Err(AggteError::NoPostTreatmentCells);
             }
@@ -641,14 +750,7 @@ pub fn aggregate_att_gt(
                 .into_iter()
                 .map(|(time, cells)| {
                     let (att, vector) = combine_by_share(&cells, estimates, influence, panel);
-                    finish(
-                        time,
-                        att,
-                        vector,
-                        confidence_level,
-                        &assignments,
-                        n_clusters,
-                    )
+                    finish(time, att, vector, confidence_level, &clusters)
                 })
                 .collect::<Vec<_>>();
 
@@ -659,8 +761,7 @@ pub fn aggregate_att_gt(
                 overall_att,
                 overall_influence,
                 confidence_level,
-                &assignments,
-                n_clusters,
+                &clusters,
             );
             Ok(AggteResult {
                 overall_att: overall.att,
@@ -669,9 +770,92 @@ pub fn aggregate_att_gt(
                 overall_ci_high: overall.ci_high,
                 overall_influence: overall.influence,
                 by_key,
+                critical_value,
+                uniform_band: false,
             })
         }
     }
+}
+
+/// Replaces the analytic standard errors and the pointwise critical value by the
+/// bootstrap ones, as `did::aggte` does for `bstrap = TRUE` and `cband = TRUE`.
+///
+/// The path is bootstrapped as one matrix, so its standard errors and critical
+/// value come from the same draws. The overall effect has a separate bootstrap
+/// from the same seed, so for a path whose overall effect is a fixed linear
+/// combination of its points the draw of the overall effect is that combination
+/// of the draws of the points.
+fn apply_bootstrap(
+    mut result: AggteResult,
+    panel: &UnitPanel,
+    bootstrap: AggteBootstrap,
+    confidence_level: f64,
+) -> Result<AggteResult, AggteError> {
+    let alpha = 1.0 - confidence_level;
+    let pointwise = z_score_for_confidence(confidence_level);
+    let finite = result
+        .by_key
+        .iter()
+        .map(|point| &point.influence)
+        .chain(std::iter::once(&result.overall_influence))
+        .all(|vector| vector.iter().all(|value| value.is_finite()));
+    if !finite {
+        return Err(AggteError::NonFiniteInfluence);
+    }
+    let clusters = panel.clusters.as_deref().map(Clusters::from_sorted_labels);
+
+    if !result.by_key.is_empty() {
+        let columns = result
+            .by_key
+            .iter()
+            .map(|point| point.influence.as_slice())
+            .collect::<Vec<_>>();
+        let bands = multiplier_bands(
+            &columns,
+            clusters.as_ref(),
+            alpha,
+            bootstrap.replicates,
+            bootstrap.seed,
+        );
+        // An error here means that no draw gave a finite studentised maximum, so
+        // there are no bootstrap standard errors either.
+        let standard_errors = bands.as_ref().ok().map(|bands| bands.se.clone());
+        if bootstrap.standard_errors {
+            for (index, point) in result.by_key.iter_mut().enumerate() {
+                point.se = standard_errors
+                    .as_ref()
+                    .and_then(|se| se[index])
+                    .unwrap_or(f64::NAN);
+            }
+        }
+        if let (true, Ok(bands)) = (bootstrap.uniform_band, bands.as_ref())
+            && bands.critical.is_finite()
+            && bands.critical >= pointwise
+        {
+            result.critical_value = bands.critical;
+            result.uniform_band = true;
+        }
+        for point in &mut result.by_key {
+            let margin = result.critical_value * point.se;
+            point.ci_low = point.att - margin;
+            point.ci_high = point.att + margin;
+        }
+    }
+
+    if bootstrap.standard_errors {
+        let bands = multiplier_bands(
+            &[result.overall_influence.as_slice()],
+            clusters.as_ref(),
+            alpha,
+            bootstrap.replicates,
+            bootstrap.seed,
+        );
+        result.overall_se = bands.ok().and_then(|bands| bands.se[0]).unwrap_or(f64::NAN);
+        let margin = pointwise * result.overall_se;
+        result.overall_ci_low = result.overall_att - margin;
+        result.overall_ci_high = result.overall_att + margin;
+    }
+    Ok(result)
 }
 
 /// Per-cell standard errors and intervals for `ATT(g,t)`, clustered.
@@ -725,11 +909,11 @@ pub fn att_gt_clustered_standard_errors(
             actual: bad.len(),
         });
     }
-    let (assignments, n_clusters) = panel.cluster_index();
-    if assignments.len() != n_units {
+    let clusters = panel.cluster_index();
+    if clusters.len() != n_units {
         return Err(AggteError::UnitGroupMismatch {
             expected: n_units,
-            actual: assignments.len(),
+            actual: clusters.len(),
         });
     }
 
@@ -737,7 +921,7 @@ pub fn att_gt_clustered_standard_errors(
         .iter()
         .zip(influence)
         .map(|(estimate, vector)| {
-            let se = standard_error(vector, &assignments, n_clusters);
+            let se = standard_error(vector, &clusters);
             let (ci_low, ci_high) = normal_interval(estimate.att, se, inference.confidence_level);
             AttGtEstimate {
                 se,

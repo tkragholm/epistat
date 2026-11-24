@@ -89,6 +89,11 @@ impl ValidationReport {
 }
 
 /// An unvalidated collection of observations for inference.
+#[deprecated(
+    note = "the workflow runs repeated-cross-section estimators on panel data and aggregates with \
+            fixed weights; use `unit_panel`, `estimate_att_gt_dr_panel_with_influence` and \
+            `aggregate_att_gt`"
+)]
 pub struct InferenceDataset {
     pub(crate) unit_ids: Vec<String>,
     pub(crate) time_periods: Vec<i32>,
@@ -104,6 +109,8 @@ pub struct InferenceDataset {
 /// A verified collection of observations that has passed all integrity checks.
 ///
 /// This type can only be obtained via [`InferenceDataset::validate`].
+#[deprecated(note = "part of the `InferenceDataset` workflow; use `unit_panel`, \
+            `estimate_att_gt_dr_panel_with_influence` and `aggregate_att_gt`")]
 pub struct ValidatedInferenceDataset {
     inner: InferenceDataset,
 }

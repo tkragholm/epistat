@@ -348,12 +348,20 @@
 //! risk scores and the score residuals of the rows are formed in parallel
 //! chunks, each value from its own row alone. The sort is by a strict order,
 //! stratum, then descending exit, then row, so it gives the order of a stable
-//! sort. Every sum is taken on one thread in the order described above: the
-//! scaling sums in row order, the risk-set sums in the sweep over the event
-//! times, and the cluster sums in the order of the strata and their rows. The
-//! results therefore do not depend on the number of threads. The sweep is the
-//! part of a fit whose time does not fall with more threads; at `p` columns
-//! it costs about `p^2` operations per row and per tied event.
+//! sort.
+//!
+//! The sweep over the event times runs in pieces: a stratum of fewer than
+//! `2^14` rows is one piece, and a larger one is cut into blocks of event
+//! times as the `sweep` module describes, each started from the risk-set sums
+//! of the rows before it. The pieces are grouped in order into tasks of at
+//! least `2^14` rows, each task sums its terms of the log partial likelihood,
+//! the score and the information in the order of the sweep, and the sums of
+//! the tasks are added in task order. The pieces and the tasks depend on the
+//! data alone, so every result is the same on every number of threads. A fit
+//! of fewer rows is one task, one running sum over every stratum. The
+//! grouping changes the order of the additions in a larger fit, which moves
+//! its results by about the rounding error of the sums, a few hundred times
+//! the machine epsilon relative at `2 x 10^5` rows.
 //!
 //! # References
 //!
@@ -384,7 +392,7 @@ use epistat_linalg::{Mat, MatRef};
 use epistat_stats::gamma::chi_square_sf;
 use rayon::prelude::*;
 
-use super::sweep::{RiskSets, Sums, terms};
+use super::sweep::{BLOCK_ROWS, Block, Moments, RiskSets, Sums, terms};
 use super::{Ties, moments};
 use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
@@ -786,6 +794,9 @@ struct Stratum {
     /// of `event_times`: `dying_rows[dying_offset[k]..dying_offset[k + 1]]`.
     dying_rows: Vec<u32>,
     dying_offset: Vec<usize>,
+    /// The blocks of event times the sweep runs in parallel, one for a
+    /// stratum of fewer than `BLOCK_ROWS` rows.
+    blocks: Vec<Block>,
 }
 
 impl Stratum {
@@ -921,6 +932,48 @@ impl PartialLikelihood for Model {
     }
 }
 
+/// The sums of one task of the sweep: the log partial likelihood, the score
+/// and the lower triangle of the information.
+struct Partial {
+    loglik: f64,
+    score: Vec<f64>,
+    information: Vec<f64>,
+}
+
+impl Partial {
+    fn new(p: usize) -> Self {
+        Self {
+            loglik: 0.0,
+            score: vec![0.0; p],
+            information: vec![0.0; p * p],
+        }
+    }
+}
+
+/// Working arrays of the terms at one event time.
+struct Work {
+    d1: Vec<f64>,
+    quotient: Vec<f64>,
+    scratch: ExactScratch,
+}
+
+impl Work {
+    fn new(p: usize) -> Self {
+        Self {
+            d1: vec![0.0; p],
+            quotient: vec![0.0; p],
+            scratch: ExactScratch::default(),
+        }
+    }
+}
+
+/// A piece of the sweep: a stratum swept whole, or one block of a stratum.
+#[derive(Clone, Copy)]
+enum Piece {
+    Whole(usize),
+    Block(usize, usize),
+}
+
 struct Model {
     p: usize,
     ties: Ties,
@@ -967,88 +1020,217 @@ impl Model {
         finite.then_some((eta, risk))
     }
 
+    /// Adds the terms of event time `position` of `stratum`, at the sums `at`,
+    /// to `partial`. False when a denominator is not finite and positive.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sweep's state is passed as it is, without a struct of borrows"
+    )]
+    fn add_terms(
+        &self,
+        stratum: &Stratum,
+        position: usize,
+        at: &Sums,
+        eta: &[f64],
+        risk: &[f64],
+        partial: &mut Partial,
+        work: &mut Work,
+    ) -> bool {
+        let p = self.p;
+        let Partial {
+            loglik,
+            score,
+            information,
+        } = partial;
+        let Work {
+            d1,
+            quotient,
+            scratch,
+        } = work;
+        let range = stratum.dying_offset[position]..stratum.dying_offset[position + 1];
+        let tied = range.len();
+        for &row in &stratum.dying_rows[range] {
+            let row = row as usize;
+            *loglik += stratum.weight[row] * eta[row];
+            for (total, x) in score.iter_mut().zip(&stratum.x[row * p..(row + 1) * p]) {
+                *total += stratum.weight[row] * x;
+            }
+        }
+        if self.ties == Ties::Exact && tied >= 2 {
+            // The risk set is the rows that have not left before this time,
+            // which are a prefix of the descending exit order, and have
+            // entered before it.
+            let time = stratum.event_times[position];
+            let end = stratum.stop.partition_point(|&s| s >= time);
+            scratch.run(
+                tied,
+                p,
+                (0..end).filter(|&j| stratum.start(j) < time),
+                risk,
+                &stratum.x,
+            );
+            let d0 = scratch.d0[tied];
+            if d0 <= 0.0 || !d0.is_finite() {
+                return false;
+            }
+            *loglik -= d0.ln();
+            for a in 0..p {
+                d1[a] = scratch.d1[tied * p + a] / d0;
+                score[a] -= d1[a];
+            }
+            for a in 0..p {
+                for b in 0..=a {
+                    let d2 = scratch.d2[tied * p * p + a * p + b];
+                    information[a * p + b] += d2 / d0 - d1[a] * d1[b];
+                }
+            }
+            return true;
+        }
+        for (u, fraction) in stratum.terms(position, self.ties) {
+            let d0 = at.risk.m0 - fraction * at.dying.m0;
+            if d0 <= 0.0 || !d0.is_finite() {
+                return false;
+            }
+            *loglik -= u * d0.ln();
+            for a in 0..p {
+                d1[a] = at.risk.m1[a] - fraction * at.dying.m1[a];
+                score[a] -= u * d1[a] / d0;
+            }
+            moments::quotients(d1, d0, quotient);
+            moments::add_information(
+                p,
+                u,
+                d0,
+                fraction,
+                &at.risk.m2,
+                &at.dying.m2,
+                quotient,
+                information,
+            );
+        }
+        true
+    }
+
+    /// The work of the sweep in order: whole strata of one block, and the
+    /// blocks of larger strata, grouped into tasks of at least `BLOCK_ROWS`
+    /// rows, which depend on the data alone.
+    fn tasks(&self) -> Vec<Vec<Piece>> {
+        let mut tasks = Vec::new();
+        let mut task = Vec::new();
+        let mut rows = 0;
+        for (s, stratum) in self.strata.iter().enumerate() {
+            let size = stratum.stop.len();
+            let pieces: Vec<(Piece, usize)> = if stratum.blocks.len() <= 1 {
+                vec![(Piece::Whole(s), size)]
+            } else {
+                (0..stratum.blocks.len())
+                    .map(|b| {
+                        let end = stratum.blocks.get(b + 1).map_or(size, |next| next.entered);
+                        (Piece::Block(s, b), end - stratum.blocks[b].entered)
+                    })
+                    .collect()
+            };
+            for (piece, piece_rows) in pieces {
+                task.push(piece);
+                rows += piece_rows;
+                if rows >= BLOCK_ROWS {
+                    tasks.push(std::mem::take(&mut task));
+                    rows = 0;
+                }
+            }
+        }
+        if !task.is_empty() {
+            tasks.push(task);
+        }
+        tasks
+    }
+
     /// The log partial likelihood, score and information at `beta`, or `None`
     /// when any of them is not finite.
+    ///
+    /// The tasks of [`tasks`](Self::tasks) run in parallel, each summing its
+    /// terms in the order of the sweep, and their sums are added in task
+    /// order. With one task this is one running sum over every stratum.
     fn evaluate(&self, beta: &[f64]) -> Option<Evaluation> {
         let p = self.p;
-        let mut loglik = 0.0f64;
-        let mut score = vec![0.0f64; p];
-        let mut information = vec![0.0f64; p * p];
-        let mut active = Vec::new();
-        let mut sums = Sums::new(p, true);
-        let mut d1 = vec![0.0f64; p];
-        let mut quotient = vec![0.0f64; p];
-        let mut scratch = ExactScratch::default();
-        for stratum in &self.strata {
-            let (eta, risk) = Self::row_risk(stratum, p, beta)?;
-            let mut failed = false;
-            stratum.sweep(p, &risk, &mut active, &mut sums, |position, at| {
-                let range = stratum.dying_offset[position]..stratum.dying_offset[position + 1];
-                let tied = range.len();
-                for &row in &stratum.dying_rows[range] {
-                    let row = row as usize;
-                    loglik += stratum.weight[row] * eta[row];
-                    for (total, x) in score.iter_mut().zip(&stratum.x[row * p..(row + 1) * p]) {
-                        *total += stratum.weight[row] * x;
-                    }
+        let risks: Vec<(Vec<f64>, Vec<f64>)> = self
+            .strata
+            .par_iter()
+            .map(|stratum| Self::row_risk(stratum, p, beta))
+            .collect::<Option<_>>()?;
+        let starts: Vec<Vec<Moments>> = self
+            .strata
+            .par_iter()
+            .zip(&risks)
+            .map(|(stratum, (_, risk))| {
+                if stratum.blocks.len() <= 1 {
+                    Vec::new()
+                } else {
+                    stratum.risk_sets().block_starts(p, risk, &stratum.blocks)
                 }
-                if self.ties == Ties::Exact && tied >= 2 {
-                    // The risk set is the rows that have not left before this
-                    // time, which are a prefix of the descending exit order,
-                    // and have entered before it.
-                    let time = stratum.event_times[position];
-                    let end = stratum.stop.partition_point(|&s| s >= time);
-                    scratch.run(
-                        tied,
+            })
+            .collect();
+        let run = |pieces: &Vec<Piece>| -> Option<Partial> {
+            let mut partial = Partial::new(p);
+            let mut work = Work::new(p);
+            let mut active = Vec::new();
+            let mut sums = Sums::new(p, true);
+            for &piece in pieces {
+                let (s, block) = match piece {
+                    Piece::Whole(s) => (s, None),
+                    Piece::Block(s, b) => (s, Some(b)),
+                };
+                let stratum = &self.strata[s];
+                let (eta, risk) = &risks[s];
+                let mut finite = true;
+                let visit = |position: usize, at: &Sums| {
+                    finite = finite
+                        && self.add_terms(
+                            stratum,
+                            position,
+                            at,
+                            eta,
+                            risk,
+                            &mut partial,
+                            &mut work,
+                        );
+                };
+                match block {
+                    None => stratum.sweep(p, risk, &mut active, &mut sums, visit),
+                    Some(b) => stratum.risk_sets().sweep_block(
                         p,
-                        (0..end).filter(|&j| stratum.start(j) < time),
-                        &risk,
-                        &stratum.x,
-                    );
-                    let d0 = scratch.d0[tied];
-                    if d0 <= 0.0 || !d0.is_finite() {
-                        failed = true;
-                        return;
-                    }
-                    loglik -= d0.ln();
-                    for a in 0..p {
-                        d1[a] = scratch.d1[tied * p + a] / d0;
-                        score[a] -= d1[a];
-                    }
-                    for a in 0..p {
-                        for b in 0..=a {
-                            let d2 = scratch.d2[tied * p * p + a * p + b];
-                            information[a * p + b] += d2 / d0 - d1[a] * d1[b];
-                        }
-                    }
-                    return;
+                        risk,
+                        &stratum.blocks[b],
+                        &starts[s][b],
+                        &mut sums,
+                        visit,
+                    ),
                 }
-                for (u, fraction) in stratum.terms(position, self.ties) {
-                    let d0 = at.risk.m0 - fraction * at.dying.m0;
-                    if d0 <= 0.0 || !d0.is_finite() {
-                        failed = true;
-                        return;
-                    }
-                    loglik -= u * d0.ln();
-                    for a in 0..p {
-                        d1[a] = at.risk.m1[a] - fraction * at.dying.m1[a];
-                        score[a] -= u * d1[a] / d0;
-                    }
-                    moments::quotients(&d1, d0, &mut quotient);
-                    moments::add_information(
-                        p,
-                        u,
-                        d0,
-                        fraction,
-                        &at.risk.m2,
-                        &at.dying.m2,
-                        &quotient,
-                        &mut information,
-                    );
+                if !finite {
+                    return None;
                 }
-            });
-            if failed {
-                return None;
+            }
+            Some(partial)
+        };
+        let tasks = self.tasks();
+        let partials: Vec<Partial> = if tasks.len() == 1 {
+            vec![run(&tasks[0])?]
+        } else {
+            tasks.par_iter().map(run).collect::<Option<_>>()?
+        };
+        let mut partials = partials.into_iter();
+        let Partial {
+            mut loglik,
+            mut score,
+            mut information,
+        } = partials.next().unwrap_or_else(|| Partial::new(p));
+        for partial in partials {
+            loglik += partial.loglik;
+            for (a, b) in score.iter_mut().zip(&partial.score) {
+                *a += b;
+            }
+            for (a, b) in information.iter_mut().zip(&partial.information) {
+                *a += b;
             }
         }
         for a in 0..p {
@@ -1108,30 +1290,98 @@ impl Model {
             let mut centre = vec![0.0f64; count * p];
             let mut late_centre = vec![0.0f64; count * p];
             let mut mean = vec![0.0f64; count * p];
-            let mut failed = false;
-            stratum.sweep(p, &risk, &mut active, &mut sums, |position, at| {
+            // The sums of one event time into its slots of the arrays above,
+            // false when a denominator is not finite and positive.
+            let fill = |position: usize,
+                        at: &Sums,
+                        hazard: &mut f64,
+                        late_hazard: &mut f64,
+                        centre: &mut [f64],
+                        late_centre: &mut [f64],
+                        mean: &mut [f64]|
+             -> bool {
                 let mut terms = 0.0f64;
                 for (u, fraction) in stratum.terms(position, self.ties) {
                     let d0 = at.risk.m0 - fraction * at.dying.m0;
                     if d0 <= 0.0 || !d0.is_finite() {
-                        failed = true;
-                        return;
+                        return false;
                     }
-                    hazard[position] += u / d0;
-                    late_hazard[position] += u * fraction / d0;
+                    *hazard += u / d0;
+                    *late_hazard += u * fraction / d0;
                     for a in 0..p {
                         let d1 = at.risk.m1[a] - fraction * at.dying.m1[a];
-                        centre[position * p + a] += u * d1 / (d0 * d0);
-                        late_centre[position * p + a] += u * fraction * d1 / (d0 * d0);
-                        mean[position * p + a] += d1 / d0;
+                        centre[a] += u * d1 / (d0 * d0);
+                        late_centre[a] += u * fraction * d1 / (d0 * d0);
+                        mean[a] += d1 / d0;
                     }
                     terms += 1.0;
                 }
-                for a in 0..p {
-                    mean[position * p + a] /= terms;
+                for value in mean {
+                    *value /= terms;
                 }
-            });
-            if failed {
+                true
+            };
+            let finite = if stratum.blocks.len() <= 1 {
+                let mut finite = true;
+                stratum.sweep(p, &risk, &mut active, &mut sums, |k, at| {
+                    finite = finite
+                        && fill(
+                            k,
+                            at,
+                            &mut hazard[k],
+                            &mut late_hazard[k],
+                            &mut centre[k * p..(k + 1) * p],
+                            &mut late_centre[k * p..(k + 1) * p],
+                            &mut mean[k * p..(k + 1) * p],
+                        );
+                });
+                finite
+            } else {
+                // Each block fills the slots of its own event times.
+                let starts = stratum.risk_sets().block_starts(p, &risk, &stratum.blocks);
+                let mut slots = Vec::with_capacity(stratum.blocks.len());
+                let (mut h, mut lh) = (&mut hazard[..], &mut late_hazard[..]);
+                let (mut c, mut lc, mut m) = (&mut centre[..], &mut late_centre[..], &mut mean[..]);
+                for block in &stratum.blocks {
+                    let len = block.events.len();
+                    let (h0, h1) = std::mem::take(&mut h).split_at_mut(len);
+                    let (lh0, lh1) = std::mem::take(&mut lh).split_at_mut(len);
+                    let (c0, c1) = std::mem::take(&mut c).split_at_mut(len * p);
+                    let (lc0, lc1) = std::mem::take(&mut lc).split_at_mut(len * p);
+                    let (m0, m1) = std::mem::take(&mut m).split_at_mut(len * p);
+                    slots.push((h0, lh0, c0, lc0, m0));
+                    (h, lh, c, lc, m) = (h1, lh1, c1, lc1, m1);
+                }
+                stratum.blocks.par_iter().zip(&starts).zip(slots).all(
+                    |((block, start), (h, lh, c, lc, m))| {
+                        let mut sums = Sums::new(p, true);
+                        let mut finite = true;
+                        let first = block.events.start;
+                        stratum.risk_sets().sweep_block(
+                            p,
+                            &risk,
+                            block,
+                            start,
+                            &mut sums,
+                            |k, at| {
+                                let i = k - first;
+                                finite = finite
+                                    && fill(
+                                        k,
+                                        at,
+                                        &mut h[i],
+                                        &mut lh[i],
+                                        &mut c[i * p..(i + 1) * p],
+                                        &mut lc[i * p..(i + 1) * p],
+                                        &mut m[i * p..(i + 1) * p],
+                                    );
+                            },
+                        );
+                        finite
+                    },
+                )
+            };
+            if !finite {
                 return None;
             }
             // Prefix sums over the descending event times.
@@ -1437,7 +1687,7 @@ fn gather_stratum(
                 .for_each(|(c, chunk)| fill(c * rows_per_chunk, chunk));
         }
     }
-    Stratum {
+    let mut stratum = Stratum {
         x,
         row: members.to_vec(),
         weight: gathered(size, |k| input.weight(row(k))),
@@ -1457,7 +1707,10 @@ fn gather_stratum(
         event_times,
         dying_rows,
         dying_offset,
-    }
+        blocks: Vec::new(),
+    };
+    stratum.blocks = stratum.risk_sets().blocks(BLOCK_ROWS);
+    stratum
 }
 
 /// The clusters of a fit: the number of cluster codes, which is the number of

@@ -95,6 +95,10 @@ path = "tests/parity_cs_panel.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "parity_aggte"
+path = "tests/parity_aggte.rs"
+
+[[test]]
 name = "parity_drdid_rc_efficient"
 path = "tests/parity_drdid_rc_efficient.rs"
 required-features = ["parity-tests"]
