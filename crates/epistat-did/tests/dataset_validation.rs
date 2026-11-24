@@ -1,3 +1,8 @@
+#![expect(
+    deprecated,
+    reason = "this test covers the deprecated dataset workflow until it is removed"
+)]
+
 use epistat_did::{DatasetError, InferenceDataset, PanelRecord};
 
 struct MockRow {

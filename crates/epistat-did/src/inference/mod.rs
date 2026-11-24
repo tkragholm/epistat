@@ -7,6 +7,7 @@ use std::hash::Hash;
 
 use thiserror::Error;
 
+pub mod did_clusters;
 /// Long-form export of influence functions and covariances.
 pub mod export;
 // Gated: the HonestDiD sensitivity machinery is the only consumer of the
