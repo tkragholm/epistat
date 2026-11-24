@@ -188,7 +188,7 @@ mod tests {
         let se_b = did_standard_error(&b, &clusters).unwrap();
         assert!((cov[0].sqrt() - se_a).abs() <= f64::EPSILON * se_a);
         assert!((cov[3].sqrt() - se_b).abs() <= f64::EPSILON * se_b);
-        assert_eq!(cov[1], cov[2]);
+        assert_eq!(cov[1].to_bits(), cov[2].to_bits());
     }
 
     #[test]
@@ -230,7 +230,10 @@ mod tests {
             let want = transcribed_sums(values);
             assert_eq!(did_cluster_sums(values, &clusters).unwrap(), want);
             let se = want.iter().map(|v| v * v).sum::<f64>().sqrt();
-            assert_eq!(did_standard_error(values, &clusters).unwrap(), se);
+            assert_eq!(
+                did_standard_error(values, &clusters).unwrap().to_bits(),
+                se.to_bits()
+            );
         }
         let covariance = did_covariance(&psi, &clusters).unwrap();
         for row in 0..3 {
@@ -240,7 +243,7 @@ mod tests {
                     .zip(transcribed_sums(&psi[col]))
                     .map(|(l, r)| l * r)
                     .sum();
-                assert_eq!(covariance[row * 3 + col], want);
+                assert_eq!(covariance[row * 3 + col].to_bits(), want.to_bits());
             }
         }
     }

@@ -697,10 +697,16 @@ fn the_flags_choose_what_the_bootstrap_replaces() {
     )
     .unwrap();
     assert!(band_only.uniform_band);
-    assert_eq!(band_only.critical_value, full.critical_value);
-    assert_eq!(band_only.overall_se, analytic.overall_se);
+    assert_eq!(
+        band_only.critical_value.to_bits(),
+        full.critical_value.to_bits()
+    );
+    assert_eq!(
+        band_only.overall_se.to_bits(),
+        analytic.overall_se.to_bits()
+    );
     for (a, b) in band_only.by_key.iter().zip(&analytic.by_key) {
-        assert_eq!(a.se, b.se);
+        assert_eq!(a.se.to_bits(), b.se.to_bits());
     }
 
     // bstrap only: bootstrap standard errors, pointwise critical value.
@@ -715,8 +721,11 @@ fn the_flags_choose_what_the_bootstrap_replaces() {
     )
     .unwrap();
     assert!(!se_only.uniform_band);
-    assert_eq!(se_only.critical_value, analytic.critical_value);
-    assert_eq!(se_only.overall_se, full.overall_se);
+    assert_eq!(
+        se_only.critical_value.to_bits(),
+        analytic.critical_value.to_bits()
+    );
+    assert_eq!(se_only.overall_se.to_bits(), full.overall_se.to_bits());
     assert!((se_only.by_key[0].se - analytic.by_key[0].se).abs() > 1e-12);
 
     for bad in [bootstrap(0, 1, true, true), bootstrap(10, 1, false, false)] {
