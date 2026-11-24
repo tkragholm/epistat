@@ -283,16 +283,23 @@ fn dr_config(comparison_group: ComparisonGroup, base_period: BasePeriod) -> AttG
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
             unbalanced_panel: UnbalancedPanel::Balance,
+            refuse_small_never_treated: true,
+            refuse_poor_overlap: true,
         },
         drdid: drdid_config(),
     }
 }
 
 /// The estimators' settings with a 999-replicate bootstrap interval, so the
-/// hashes pin the bootstrap path. `drdid_panel_analytic` pins the default
-/// analytic interval.
+/// hashes pin the bootstrap path, and the legacy repeated cross-section
+/// doubly robust computation, which `drdid_rc` and `att_gt_dr_rc` pin.
+/// `drdid_panel_analytic` pins the default analytic interval, and
+/// `drdid_rc1` and `att_gt_dr_rc1` the default `drdid_rc1` estimator.
 fn drdid_config() -> DrDidConfig {
-    DrDidConfig::builder().bootstrap_reps(999).build()
+    DrDidConfig::builder()
+        .bootstrap_reps(999)
+        .legacy_repeated_cross_section(true)
+        .build()
 }
 
 /// The compositional-change settings with bootstrap intervals, for the same
@@ -990,6 +997,27 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         "or_did_rc",
         digest(&estimate_or_did_repeated_cross_section(&rc_cell, drdid)),
     ));
+    let rc1 = DrDidConfig {
+        legacy_repeated_cross_section: false,
+        ..drdid
+    };
+    out.push((
+        "drdid_rc1",
+        digest(&estimate_drdid_repeated_cross_section(&rc_cell, rc1)),
+    ));
+    let rc_rows = dr_rows(&data.mpdta, false, true);
+    let rc_config = dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying);
+    out.push((
+        "att_gt_dr_rc1",
+        attgt_digest(&estimate_att_gt_dr_with_influence(
+            &rc_rows,
+            AttGtDrConfig {
+                drdid: rc1,
+                ..rc_config
+            },
+        )),
+    ));
+    out.push(("att_gt_dr_panel_overlap", digest(&fitted.overlap)));
     out
 }
 
@@ -1067,6 +1095,9 @@ const GOLDEN: &[(&str, u64)] = &[
     ("or_did_panel", 0x1a96_d211_3058_aac8),
     ("ipw_did_rc", 0x05db_71a0_55cd_b5c6),
     ("or_did_rc", 0xf733_191b_2d7f_a9fd),
+    ("drdid_rc1", 0x0473_5319_db10_7207),
+    ("att_gt_dr_rc1", 0x4789_4f8f_bb24_580a),
+    ("att_gt_dr_panel_overlap", 0xdb27_39b9_9043_05a9),
 ];
 
 #[test]

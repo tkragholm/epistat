@@ -103,6 +103,22 @@ pub fn estimate_att_gt_ipw_with_influence(
     )
 }
 
+/// The design (intercept first), its column count and the arm of a cell's
+/// rows, for the overlap check.
+pub(super) fn overlap_design(rows: &[DrDidRepeatedObservation]) -> (Vec<f64>, usize, Vec<f64>) {
+    let feature_count = rows.first().map_or(1, |row| row.covariates.len() + 1);
+    let mut design = Vec::with_capacity(rows.len() * feature_count);
+    for row in rows {
+        design.push(1.0);
+        design.extend_from_slice(&row.covariates);
+    }
+    let treated = rows
+        .iter()
+        .map(|row| f64::from(u8::from(row.treated)))
+        .collect();
+    (design, feature_count, treated)
+}
+
 /// The rows of cell `(group, time)` against `baseline_time`, with their
 /// influence positions.
 fn build_prepared_pair_rows(
@@ -157,12 +173,15 @@ fn estimate_att_gt_pair_with_influence(
     method: &'static str,
     pair_estimator: PairEstimator,
 ) -> Result<AttGtInfluenceOutput, AttGtError> {
+    // `did` checks overlap for its doubly robust and weighting estimators.
+    let uses_propensity = method != "or";
     let prepared = preprocess(observations, config.att_gt, Route::RepeatedCrossSection)?;
     let full_n = prepared.position_count();
     let mut estimates = Vec::new();
     let mut influence_functions = Vec::new();
     let mut skipped = Vec::new();
     let mut pruned = Vec::new();
+    let mut overlap = Vec::new();
     let mut pair_rows = Vec::new();
     let mut pair_positions = Vec::new();
 
@@ -179,6 +198,33 @@ fn estimate_att_gt_pair_with_influence(
                 &mut pair_positions,
             );
             if let Some(cell) = missing_pair_cell(&pair_rows) {
+                if config.att_gt.skip_incomplete_pairs {
+                    skipped.push(SkippedCell {
+                        group,
+                        time,
+                        baseline_time,
+                        reason: cell,
+                    });
+                    continue;
+                }
+                return Err(AttGtError::MissingCell {
+                    group,
+                    time,
+                    baseline_time,
+                    cell,
+                });
+            }
+
+            let (design, feature_count, treated) = overlap_design(&pair_rows);
+            if let Err(cell) = super::panel_pairs::check_overlap(
+                &design,
+                feature_count,
+                &treated,
+                (group, time, baseline_time),
+                config,
+                uses_propensity,
+                &mut overlap,
+            ) {
                 if config.att_gt.skip_incomplete_pairs {
                     skipped.push(SkippedCell {
                         group,
@@ -251,6 +297,7 @@ fn estimate_att_gt_pair_with_influence(
         skipped,
         pruned,
         sample: prepared.sample,
+        overlap,
     })
 }
 

@@ -5,8 +5,8 @@
 # Writes ipw_or_two_period_ref.json: a panel and a repeated cross-section
 # drawn here, each with a continuous and a binary covariate and sampling
 # weights, and the results of std_ipw_did_panel, reg_did_panel,
-# std_ipw_did_rc and reg_did_rc on them with the defaults (boot = FALSE,
-# trim.level = 0.995), influence functions included.
+# std_ipw_did_rc, reg_did_rc and drdid_rc1 on them with the defaults
+# (boot = FALSE, trim.level = 0.995), influence functions included.
 
 suppressMessages({
   library(DRDID)
@@ -43,13 +43,14 @@ Z <- cbind(1, z1, z2)
 
 ipw_r <- std_ipw_did_rc(y, post, dd, Z, i.weights = ww, inffunc = TRUE)
 reg_r <- reg_did_rc(y, post, dd, Z, i.weights = ww, inffunc = TRUE)
+dr1_r <- drdid_rc1(y, post, dd, Z, i.weights = ww, inffunc = TRUE)
 
 grab <- function(fit) list(att = fit$ATT, se = fit$se, inffunc = as.vector(fit$att.inf.func))
 ref <- list(
   panel = list(d = d, y0 = y0, y1 = y1, x1 = x1, x2 = x2, w = w,
                ipw = grab(ipw_p), reg = grab(reg_p)),
   rc = list(d = dd, post = post, y = y, x1 = z1, x2 = z2, w = ww,
-            ipw = grab(ipw_r), reg = grab(reg_r))
+            ipw = grab(ipw_r), reg = grab(reg_r), dr1 = grab(dr1_r))
 )
 write_json(ref, "tests/data/ipw_or_two_period_ref.json", digits = 17,
            auto_unbox = TRUE, na = "null", null = "null")

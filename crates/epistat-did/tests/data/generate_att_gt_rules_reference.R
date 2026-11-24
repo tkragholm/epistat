@@ -179,6 +179,40 @@ ref$varying_runs <- list(
   run(varying, base_period = "varying", est_method = "ipw")
 )
 
+# 7. The overlap check: cohort 3's covariate is shifted far from the
+#    comparators', so a logistic fit of its cells reaches 0.999 and did sets
+#    them to NA.
+overlap <- sim_panel(150, 1:4, c(0, 2, 3), 601)
+overlap$x1[overlap$g == 3] <- overlap$x1[overlap$g == 3] + 5
+ref$overlap <- overlap
+ref$overlap_runs <- list(
+  run(overlap),
+  run(overlap, est_method = "ipw", base_period = "universal"),
+  run(overlap, est_method = "reg")
+)
+
+# 8. The size check of the never-treated group: with two covariates did
+#    stops when it has fewer than 7 rows per period, so 6 never-treated units
+#    are refused and 7 are not; under not-yet-treated it does not apply.
+never_ids <- sort(unique(balanced$id[balanced$g == 0]))
+small_never <- function(keep) {
+  balanced[balanced$g != 0 | balanced$id %in% never_ids[seq_len(keep)], ]
+}
+stops <- function(data, control_group) {
+  tryCatch({
+    suppressWarnings(suppressMessages(att_gt(
+      yname = "y", tname = "period", idname = "id", gname = "g",
+      xformla = ~ x1 + x2, data = data, weightsname = "w", bstrap = FALSE,
+      cband = FALSE, control_group = control_group)))
+    ""
+  }, error = function(e) conditionMessage(e))
+}
+ref$small_never <- list(
+  list(keep = 6, control_group = "nevertreated", error = stops(small_never(6), "nevertreated")),
+  list(keep = 7, control_group = "nevertreated", error = stops(small_never(7), "nevertreated")),
+  list(keep = 6, control_group = "notyettreated", error = stops(small_never(6), "notyettreated"))
+)
+
 # 6. Anticipation on mpdta, with lpop.
 data(mpdta)
 run_mpdta <- function(...) {

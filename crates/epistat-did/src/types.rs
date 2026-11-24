@@ -474,6 +474,15 @@ pub struct DrDidConfig {
     /// Seed of the multiplier bootstrap. The default is 17,431.
     #[builder(default = 17_431_u64)]
     pub bootstrap_seed: u64,
+    /// Whether [`crate::estimate_drdid_repeated_cross_section`] computes as
+    /// `epistat-did` 0.1 and `did_methods` 0.2 did, for reproducing results
+    /// made with them: propensity score fitted without the sampling weights
+    /// and clipped to `[propensity_clip, 1 - propensity_clip]`, no trimming,
+    /// and an influence function without the estimation of the nuisance
+    /// models. Off, the default, it is `DRDID::drdid_rc1`. The other
+    /// estimators ignore it.
+    #[builder(default = false)]
+    pub legacy_repeated_cross_section: bool,
 }
 
 impl Default for DrDidConfig {
@@ -486,6 +495,7 @@ impl Default for DrDidConfig {
             tol: 1e-8,
             bootstrap_reps: 0,
             bootstrap_seed: BootstrapConfig::default().seed,
+            legacy_repeated_cross_section: false,
         }
     }
 }
@@ -883,6 +893,22 @@ pub struct AttGtConfig {
     /// [`UnbalancedPanel::Balance`], as in `did`.
     #[builder(default = UnbalancedPanel::Balance)]
     pub unbalanced_panel: UnbalancedPanel,
+    /// Whether the covariate-adjusted routes refuse a never-treated
+    /// comparison group with fewer observations per period than the number
+    /// of covariates plus 5, as `did::att_gt` stops. Read only under
+    /// [`ComparisonGroup::NeverTreated`]; it never changes an estimate. The
+    /// default is `true`.
+    #[builder(default = true)]
+    pub refuse_small_never_treated: bool,
+    /// Whether a cell whose largest fitted propensity score is 0.999 or more
+    /// is left out, as `did::att_gt` sets it to NA, for the doubly robust and
+    /// inverse probability weighted cells. The score is that of an unweighted
+    /// logistic regression of the cell's arm on its design; without
+    /// covariates it is the treated share. Every cell's largest score is
+    /// reported in [`AttGtInfluenceOutput::overlap`] whatever this is. The
+    /// default is `true`.
+    #[builder(default = true)]
+    pub refuse_poor_overlap: bool,
 }
 
 impl Default for AttGtConfig {
@@ -894,6 +920,8 @@ impl Default for AttGtConfig {
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
             unbalanced_panel: UnbalancedPanel::Balance,
+            refuse_small_never_treated: true,
+            refuse_poor_overlap: true,
         }
     }
 }
@@ -1037,6 +1065,25 @@ pub struct AttGtInfluenceOutput {
     /// The sample the cells were estimated on, which the influence vectors
     /// are indexed by.
     pub sample: AttGtSample,
+    /// The largest fitted propensity score of every cell that had both arms,
+    /// fitted or not, in the order the cells were attempted.
+    pub overlap: Vec<CellOverlap>,
+}
+
+/// The overlap diagnostic of one ATT(g,t) cell: the largest propensity score
+/// of `did`'s overlap check. See [`AttGtConfig::refuse_poor_overlap`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellOverlap {
+    /// Cohort of the cell.
+    pub group: i32,
+    /// Calendar period of the cell.
+    pub time: i32,
+    /// Baseline period of the cell.
+    pub baseline_time: i32,
+    /// The largest fitted score over the cell's treated and comparison units
+    /// or rows; without covariates the treated share. `None` when the
+    /// logistic fit failed.
+    pub max_propensity: Option<f64>,
 }
 
 /// Event-time aggregated ATT estimates with aligned influence-function vectors.
@@ -1100,6 +1147,20 @@ pub enum AttGtError {
          row, which only the doubly robust routes carry"
     )]
     MatchedComparisonUnsupported,
+    /// The never-treated comparison group has too few observations, as
+    /// `did::att_gt` refuses it.
+    #[error(
+        "the never-treated group is too small to serve as a reliable control \
+         ({per_period} observations per period, fewer than {required}, the number of \
+         covariates plus 5); try the not-yet-treated comparison group, which includes \
+         not-yet-treated units as controls"
+    )]
+    SmallNeverTreatedGroup {
+        /// Never-treated rows divided by the number of periods.
+        per_period: f64,
+        /// The number of covariates plus 5.
+        required: usize,
+    },
     /// A unit's first treatment period differs between its rows.
     #[error(
         "unit {unit_id} has more than one first treatment period; treatment must be \

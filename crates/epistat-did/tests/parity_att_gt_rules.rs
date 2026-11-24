@@ -33,7 +33,7 @@ use serde::Deserialize;
 const ESTIMATE_TOLERANCE: f64 = 1e-9;
 const INFLUENCE_TOLERANCE: f64 = 1e-8;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 struct Row {
     id: Option<i64>,
     period: i32,
@@ -57,7 +57,8 @@ struct Run {
     att: Vec<Option<f64>>,
     se: Vec<Option<f64>>,
     n: usize,
-    inffunc: Option<Vec<Vec<f64>>>,
+    /// `null` in the columns of R's NA cells.
+    inffunc: Option<Vec<Vec<Option<f64>>>>,
     ids: Vec<i64>,
     aggregates: Option<Aggregates>,
 }
@@ -115,7 +116,18 @@ struct Reference {
     unbalanced_runs: Vec<Run>,
     varying: Vec<Row>,
     varying_runs: Vec<Run>,
+    overlap: Vec<Row>,
+    overlap_runs: Vec<Run>,
+    small_never: Vec<SmallNever>,
     mpdta_anticipation: Vec<MpdtaRun>,
+}
+
+#[derive(Deserialize)]
+struct SmallNever {
+    keep: usize,
+    control_group: String,
+    /// R's error message, empty when `att_gt` ran.
+    error: String,
 }
 
 fn reference() -> Reference {
@@ -229,7 +241,8 @@ fn check(label: &str, out: &AttGtInfluenceOutput, run: &Run) {
             .binary_search(id)
             .unwrap_or_else(|_| panic!("{label}: id {id} missing"));
         for (cell, &i) in expected.iter().enumerate() {
-            let deviation = (out.influence_functions[cell][position] - inffunc[r_row][i]).abs();
+            let theirs = inffunc[r_row][i].expect("influence of a cell with a standard error");
+            let deviation = (out.influence_functions[cell][position] - theirs).abs();
             worst = worst.max(deviation);
         }
     }
@@ -403,6 +416,115 @@ fn time_varying_covariates_and_weights_come_from_the_earlier_period() {
     for (index, run) in reference.varying_runs.iter().enumerate() {
         let out = estimate(&reference.varying, run);
         check(&format!("varying {index}"), &out, run);
+    }
+}
+
+/// Cohort 3's covariate is far from the comparators', so `did`'s overlap
+/// check sets its doubly robust and weighting cells to NA; the outcome
+/// regression has no check. Here those cells are skipped, every cell's
+/// largest score is reported, and with the check off the cells are fitted.
+#[test]
+fn cells_without_overlap_are_left_out_as_att_gt_does() {
+    let reference = reference();
+    for (index, run) in reference.overlap_runs.iter().enumerate() {
+        let out = estimate(&reference.overlap, run);
+        check(&format!("overlap {index} {}", run.est_method), &out, run);
+        let refused: Vec<(i32, i32)> = out
+            .skipped
+            .iter()
+            .filter(|cell| cell.reason.starts_with("overlap"))
+            .map(|cell| (cell.group, cell.time))
+            .collect();
+        let na: Vec<(i32, i32)> = (0..run.group.len())
+            .filter(|&i| run.att[i].is_none())
+            .map(|i| (run.group[i], run.t[i]))
+            .collect();
+        assert_eq!(refused, na, "overlap {index}: refused cells");
+        for diagnostic in &out.overlap {
+            let tripped = diagnostic.max_propensity.is_none_or(|score| score >= 0.999);
+            assert_eq!(
+                tripped,
+                diagnostic.group == 3,
+                "overlap {index}: {diagnostic:?}"
+            );
+        }
+        let mut config = config(
+            run,
+            if run.panel && run.est_method == "dr" {
+                1e-8
+            } else {
+                0.0
+            },
+        );
+        config.att_gt.refuse_poor_overlap = false;
+        let observations = observations(&reference.overlap, run.panel);
+        let all = match run.est_method.as_str() {
+            "dr" => estimate_att_gt_dr_panel_with_influence(&observations, config),
+            "ipw" => estimate_att_gt_ipw_panel_with_influence(&observations, config),
+            _ => estimate_att_gt_or_panel_with_influence(&observations, config),
+        }
+        .expect("fit");
+        assert_eq!(all.estimates.len(), out.estimates.len() + refused.len());
+        assert_eq!(all.overlap, out.overlap);
+    }
+}
+
+/// `did` stops when the never-treated group has fewer rows per period than
+/// the covariates plus 5, here 7, and only under the never-treated
+/// comparison group.
+#[test]
+fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
+    let reference = reference();
+    let never: Vec<i64> = {
+        let mut ids: Vec<i64> = reference
+            .balanced
+            .iter()
+            .filter(|row| row.g == 0)
+            .filter_map(|row| row.id)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    let template = &reference.methods_panel[3];
+    for case in &reference.small_never {
+        let rows: Vec<Row> = reference
+            .balanced
+            .iter()
+            .filter(|row| row.g != 0 || never[..case.keep].contains(&row.id.expect("id")))
+            .copied()
+            .collect();
+        let observations: Vec<AttGtDrObservation> = observations(&rows, true);
+        let mut config = config(template, 1e-8);
+        config.att_gt.comparison_group = match case.control_group.as_str() {
+            "nevertreated" => ComparisonGroup::NeverTreated,
+            _ => ComparisonGroup::NotYetTreated,
+        };
+        let result = estimate_att_gt_dr_panel_with_influence(&observations, config);
+        if case.error.is_empty() {
+            assert!(result.is_ok(), "{} kept: {result:?}", case.keep);
+        } else {
+            assert!(
+                case.error.contains("never-treated group is too small"),
+                "{}",
+                case.error
+            );
+            let error = result.expect_err("refused");
+            assert!(
+                matches!(
+                    error,
+                    epistat_did::AttGtError::SmallNeverTreatedGroup { required: 7, .. }
+                ),
+                "{error:?}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("never-treated group is too small")
+            );
+            config.att_gt.refuse_small_never_treated = false;
+            assert!(estimate_att_gt_dr_panel_with_influence(&observations, config).is_ok());
+        }
     }
 }
 

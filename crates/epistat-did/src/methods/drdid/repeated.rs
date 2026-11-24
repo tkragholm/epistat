@@ -33,9 +33,15 @@ use crate::types::{DidCell, DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeate
 /// - `m_{0,pre}(X_i) = E[Y_i | D_i = 0, T_i = 0, X_i]`,
 /// - `m_{0,post}(X_i) = E[Y_i | D_i = 0, T_i = 1, X_i]`.
 ///
-/// The implementation here follows the standard doubly robust repeated-cross-
-/// section score and treats the improved / calibrated repeated estimator as a
-/// separate surface, [`estimate_drdid_improved_repeated_cross_section`](crate::estimate_drdid_improved_repeated_cross_section).
+/// This is `DRDID::drdid_rc1`: the propensity score is fitted with the
+/// sampling weights, comparators with a score of 0.995 or more are trimmed,
+/// and the influence function includes the estimation of the propensity score
+/// and of both outcome regressions. With
+/// [`DrDidConfig::legacy_repeated_cross_section`] it is the computation of
+/// `epistat-did` 0.1 instead: an unweighted propensity score clipped to
+/// `[propensity_clip, 1 - propensity_clip]`, no trimming, and only the
+/// cell-mean terms in the influence function. The improved estimator is
+/// [`estimate_drdid_improved_repeated_cross_section`](crate::estimate_drdid_improved_repeated_cross_section).
 ///
 /// References:
 /// - Callaway, B. and Sant'Anna, P. H. C. (2021). "Difference-in-Differences
@@ -54,6 +60,9 @@ pub fn estimate_drdid_repeated_cross_section(
     validate_config(config)?;
     if observations.is_empty() {
         return Err(DrDidError::EmptyInput);
+    }
+    if !config.legacy_repeated_cross_section {
+        return super::ipw_or::estimate_dr_did_repeated_traditional(observations, config);
     }
 
     let prepared = prepare(observations)?;

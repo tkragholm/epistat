@@ -16,6 +16,7 @@ pub(crate) mod aggregation;
 pub mod aggte;
 mod bands;
 mod core;
+mod overlap;
 pub mod pair_estimators;
 pub mod panel_pairs;
 mod preprocess;

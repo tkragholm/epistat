@@ -2,7 +2,11 @@
 //!
 //! The four estimators `DRDID` 1.3.0 provides beside the doubly robust ones,
 //! and that `did::att_gt` calls for `est_method = "ipw"` and `"reg"`:
-//! `std_ipw_did_panel`, `reg_did_panel`, `std_ipw_did_rc` and `reg_did_rc`.
+//! `std_ipw_did_panel`, `reg_did_panel`, `std_ipw_did_rc` and `reg_did_rc`;
+//! and, from the same pieces, the traditional doubly robust repeated
+//! cross-section estimator `drdid_rc1`, which combines the IPW weights with
+//! the outcome residuals `Y - m_T(X)` and adds the projections of both
+//! regressions and of the propensity score to its influence function.
 //!
 //! # Algorithm
 //!
@@ -420,14 +424,8 @@ fn propensity_projection(
 }
 
 /// Weighted least squares of the outcome on the design over the rows where
-/// `fit_weight` is positive, its prediction for every row, and `r_i N` for
-/// every row, with `r` its asymptotic linear representation.
-fn outcome_regression(
-    sample: &Sample,
-    fit_weight: &[f64],
-    n_vector: &[f64],
-    ridge: f64,
-) -> Result<(Vec<f64>, Vec<f64>), DrDidError> {
+/// `fit_weight` is positive, and its prediction for every row.
+fn outcome_fit(sample: &Sample, fit_weight: &[f64], ridge: f64) -> Result<Vec<f64>, DrDidError> {
     let k = sample.feature_count;
     let rows: Vec<usize> = (0..sample.n()).filter(|&i| fit_weight[i] > 0.0).collect();
     if rows.len() < k {
@@ -442,17 +440,38 @@ fn outcome_regression(
         weights.push(fit_weight[i]);
     }
     let beta = fit_weighted_linear(&design, k, &outcome, &weights, ridge)?;
-    let prediction = predict_linear(&sample.design, k, &beta);
+    Ok(predict_linear(&sample.design, k, &beta))
+}
 
+/// `r_i N` for every row, with `r` the asymptotic linear representation of
+/// the regression [`outcome_fit`] fitted with `fit_weight`, whose
+/// predictions are `prediction`.
+fn outcome_projection(
+    sample: &Sample,
+    fit_weight: &[f64],
+    prediction: &[f64],
+    n_vector: &[f64],
+) -> Result<Vec<f64>, DrDidError> {
     let n_f = usize_to_f64(sample.n());
     let mut bread = gram(sample, fit_weight)?;
     for value in &mut bread {
         *value /= n_f;
     }
     let solved = solve_spd_system(&bread, n_vector).map_err(|_| DrDidError::SingularSystem)?;
-    let projection = (0..sample.n())
+    Ok((0..sample.n())
         .map(|i| fit_weight[i] * (sample.outcome[i] - prediction[i]) * dot(sample.row(i), &solved))
-        .collect();
+        .collect())
+}
+
+/// [`outcome_fit`] and its [`outcome_projection`] on `n_vector`.
+fn outcome_regression(
+    sample: &Sample,
+    fit_weight: &[f64],
+    n_vector: &[f64],
+    ridge: f64,
+) -> Result<(Vec<f64>, Vec<f64>), DrDidError> {
+    let prediction = outcome_fit(sample, fit_weight, ridge)?;
+    let projection = outcome_projection(sample, fit_weight, &prediction, n_vector)?;
     Ok((prediction, projection))
 }
 
@@ -656,6 +675,115 @@ fn or_repeated(sample: &Sample, config: DrDidConfig) -> Result<DrDidEstimate, Dr
         })
         .collect();
     Ok(estimate(sample, att, influence, config))
+}
+
+fn dr_repeated(sample: &Sample, config: DrDidConfig) -> Result<DrDidEstimate, DrDidError> {
+    let n = sample.n();
+    let k = sample.feature_count;
+    let (d, t, y) = (&sample.treated, &sample.post, &sample.outcome);
+    let scores = propensity(sample, config)?;
+    let trim: Vec<f64> = (0..n)
+        .map(|i| {
+            if d[i] > 0.5 || scores[i] < TRIM_LEVEL {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let comparator_pre: Vec<f64> = (0..n)
+        .map(|i| sample.weights[i] * (1.0 - d[i]) * (1.0 - t[i]))
+        .collect();
+    let comparator_post: Vec<f64> = (0..n)
+        .map(|i| sample.weights[i] * (1.0 - d[i]) * t[i])
+        .collect();
+    let prediction_pre = outcome_fit(sample, &comparator_pre, config.ridge)?;
+    let prediction_post = outcome_fit(sample, &comparator_post, config.ridge)?;
+    let residual: Vec<f64> = (0..n)
+        .map(|i| {
+            let prediction = if t[i] > 0.5 {
+                prediction_post[i]
+            } else {
+                prediction_pre[i]
+            };
+            y[i] - prediction
+        })
+        .collect();
+
+    let treated_weight = |i: usize| trim[i] * sample.weights[i] * d[i];
+    let control_weight =
+        |i: usize| trim[i] * sample.weights[i] * scores[i] * (1.0 - d[i]) / (1.0 - scores[i]);
+    let a0: Vec<f64> = (0..n).map(|i| treated_weight(i) * (1.0 - t[i])).collect();
+    let a1: Vec<f64> = (0..n).map(|i| treated_weight(i) * t[i]).collect();
+    let b0: Vec<f64> = (0..n).map(|i| control_weight(i) * (1.0 - t[i])).collect();
+    let b1: Vec<f64> = (0..n).map(|i| control_weight(i) * t[i]).collect();
+
+    // Each cell's `eta_i = c_i (Y_i - m_i) / mean(c)`, its mean and its
+    // influence `eta_i - c_i att_c / mean(c)`.
+    let cell = |c: &[f64], missing: DidCell| -> Result<(f64, f64, Vec<f64>), DrDidError> {
+        let mc = mean(c);
+        if mc <= 0.0 {
+            return Err(DrDidError::MissingCell { cell: missing });
+        }
+        let eta: Vec<f64> = (0..n).map(|i| c[i] * residual[i] / mc).collect();
+        let att_c = mean(&eta);
+        let influence = (0..n).map(|i| eta[i] - c[i] * att_c / mc).collect();
+        Ok((mc, att_c, influence))
+    };
+    let (treated_pre_weight, treated_pre, treated_pre_psi) = cell(&a0, DidCell::TreatedPre)?;
+    let (treated_post_weight, treated_post, treated_post_psi) = cell(&a1, DidCell::TreatedPost)?;
+    let (control_pre_weight, control_pre, control_pre_psi) = cell(&b0, DidCell::ControlPre)?;
+    let (control_post_weight, control_post, control_post_psi) = cell(&b1, DidCell::ControlPost)?;
+    let att = (treated_post - treated_pre) - (control_post - control_pre);
+
+    // `-sum_i c_i X_i / (n mean(c))`, the derivative of a cell's mean with
+    // respect to the regression coefficients.
+    let scaled_moment = |c: &[f64], by: f64| -> Vec<f64> {
+        moment(sample, c).into_iter().map(|v| -v / by).collect()
+    };
+    let m1_post = scaled_moment(&a1, treated_post_weight);
+    let m1_pre = scaled_moment(&a0, treated_pre_weight);
+    let m3_post = scaled_moment(&b1, control_post_weight);
+    let m3_pre = scaled_moment(&b0, control_pre_weight);
+    let treated_or_post = outcome_projection(sample, &comparator_post, &prediction_post, &m1_post)?;
+    let treated_or_pre = outcome_projection(sample, &comparator_pre, &prediction_pre, &m1_pre)?;
+    let control_or_post = outcome_projection(sample, &comparator_post, &prediction_post, &m3_post)?;
+    let control_or_pre = outcome_projection(sample, &comparator_pre, &prediction_pre, &m3_pre)?;
+
+    let centred = |c: &[f64], att_c: f64| -> Vec<f64> {
+        (0..n).map(|i| c[i] * (residual[i] - att_c)).collect()
+    };
+    let moment_pre = moment(sample, &centred(&b0, control_pre));
+    let moment_post = moment(sample, &centred(&b1, control_post));
+    let m2: Vec<f64> = (0..k)
+        .map(|j| moment_post[j] / control_post_weight - moment_pre[j] / control_pre_weight)
+        .collect();
+    let ps_term = propensity_projection(sample, &scores, &m2)?;
+
+    let influence = (0..n)
+        .map(|i| {
+            let treated_part =
+                treated_post_psi[i] - treated_pre_psi[i] + (treated_or_post[i] + treated_or_pre[i]);
+            let control_part = control_post_psi[i] - control_pre_psi[i]
+                + ps_term[i]
+                + (control_or_post[i] + control_or_pre[i]);
+            treated_part - control_part
+        })
+        .collect();
+    Ok(estimate(sample, att, influence, config))
+}
+
+/// The traditional doubly robust repeated cross-section ATT,
+/// `DRDID::drdid_rc1`: the weighted propensity score and the comparators'
+/// outcome regression in each period, comparators with a score of 0.995 or
+/// more trimmed, and an influence function that includes the estimation of
+/// all three models. The intercept is prepended to the covariates.
+pub(crate) fn estimate_dr_did_repeated_traditional(
+    observations: &[DrDidRepeatedObservation],
+    config: DrDidConfig,
+) -> Result<DrDidEstimate, DrDidError> {
+    validate_drdid_config(config)?;
+    dr_repeated(&repeated_sample(observations, Nuisance::Outcome)?, config)
 }
 
 /// The panel inverse probability weighted ATT with normalised weights,

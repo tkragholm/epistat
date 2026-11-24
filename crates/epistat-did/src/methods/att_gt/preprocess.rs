@@ -16,6 +16,9 @@
 //!    after the first period plus the anticipation periods.
 //! 4. On a panel, units missing from some period are dropped, or kept, as
 //!    [`UnbalancedPanel`] says.
+//! 5. Under the never-treated comparison group, a never-treated group with
+//!    fewer rows per period than the number of covariates plus 5 is refused
+//!    ([`AttGtConfig::refuse_small_never_treated`]).
 //!
 //! The base periods are then read from the sorted list of the remaining
 //! periods ([`cell_grid`]), which is what lets the periods have gaps.
@@ -251,6 +254,22 @@ pub(super) fn preprocess(
     }
     if cohorts.is_empty() || !keep.iter().any(|&kept| kept) {
         return Err(AttGtError::NoEstimablePairs);
+    }
+
+    // 5. The size of the never-treated group: `did` stops when it has fewer
+    // rows per period than the covariates plus 5.
+    if config.refuse_small_never_treated && config.comparison_group == ComparisonGroup::NeverTreated
+    {
+        let never = (0..n).filter(|&i| keep[i] && cohort[i].is_none()).count();
+        let per_period =
+            crate::util::usize_to_f64(never) / crate::util::usize_to_f64(periods.len());
+        let required = observations.first().map_or(0, |row| row.covariates.len()) + 5;
+        if per_period < crate::util::usize_to_f64(required) {
+            return Err(AttGtError::SmallNeverTreatedGroup {
+                per_period,
+                required,
+            });
+        }
     }
 
     let rows: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();

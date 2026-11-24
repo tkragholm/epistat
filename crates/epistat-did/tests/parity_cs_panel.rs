@@ -76,6 +76,8 @@ fn universal_config(comparison_group: ComparisonGroup) -> AttGtDrConfig {
             anticipation_periods: 0,
             skip_incomplete_pairs: true,
             unbalanced_panel: UnbalancedPanel::Balance,
+            refuse_small_never_treated: true,
+            refuse_poor_overlap: true,
         },
         drdid: DrDidConfig::builder().build(),
     }

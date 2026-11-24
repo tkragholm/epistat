@@ -36,8 +36,9 @@ use crate::methods::drdid::ipw_or::{
 use crate::methods::drdid::panel::{PanelFlatInput, estimate_drdid_panel_flat};
 use crate::methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
 use crate::types::{
-    AttGtDrConfig, AttGtDrObservation, AttGtError, AttGtEstimate, AttGtInfluenceOutput, DidCell,
-    DrDidEstimate, DrDidRepeatedObservation, PrunedCell, SkippedCell, TimePeriod, TreatmentGroup,
+    AttGtDrConfig, AttGtDrObservation, AttGtError, AttGtEstimate, AttGtInfluenceOutput,
+    CellOverlap, DidCell, DrDidEstimate, DrDidRepeatedObservation, PrunedCell, SkippedCell,
+    TimePeriod, TreatmentGroup,
 };
 
 use super::preprocess::{Prepared, Route, cell_grid, preprocess};
@@ -48,7 +49,7 @@ type CellFit = Result<(AttGtEstimate, Vec<f64>, usize), &'static str>;
 
 /// The estimator of each cell, as `did::att_gt`'s `est_method`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Estimator {
+pub(super) enum Estimator {
     /// `"dr"`: `DRDID::drdid_panel`, or `drdid_rc` on an unbalanced panel.
     DoublyRobust,
     /// `"ipw"`: `DRDID::std_ipw_did_panel`, or `std_ipw_did_rc`.
@@ -263,15 +264,61 @@ fn cell_estimate(
     }
 }
 
+/// Record the cell's overlap diagnostic and refuse the cell when `did` would
+/// set it to NA: under [`AttGtConfig::refuse_poor_overlap`](crate::AttGtConfig),
+/// for the doubly robust and weighting estimators, when the largest score is
+/// at least 0.999 or the check's logistic fit fails.
+pub(super) fn check_overlap(
+    design: &[f64],
+    feature_count: usize,
+    treated: &[f64],
+    (group, time, baseline_time): (i32, i32, i32),
+    config: AttGtDrConfig,
+    uses_propensity: impl Into<UsesPropensity>,
+    overlap: &mut Vec<CellOverlap>,
+) -> Result<(), &'static str> {
+    let max_propensity = super::overlap::max_propensity(design, feature_count, treated);
+    overlap.push(CellOverlap {
+        group,
+        time,
+        baseline_time,
+        max_propensity,
+    });
+    if !config.att_gt.refuse_poor_overlap || !uses_propensity.into().0 {
+        return Ok(());
+    }
+    match max_propensity {
+        None => Err("overlap_fit"),
+        Some(score) if score >= super::overlap::OVERLAP_THRESHOLD => Err("overlap"),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Whether an estimator fits a propensity score, which is when `did` checks
+/// overlap.
+pub(super) struct UsesPropensity(pub(super) bool);
+
+impl From<Estimator> for UsesPropensity {
+    fn from(estimator: Estimator) -> Self {
+        Self(estimator != Estimator::OutcomeRegression)
+    }
+}
+
+impl From<bool> for UsesPropensity {
+    fn from(uses: bool) -> Self {
+        Self(uses)
+    }
+}
+
 /// Estimate one `(g, t)` cell and return the estimate plus a unit-aligned
 /// influence vector of length `unit_count`.
 fn estimate_panel_cell(
     scratch: &mut CellScratch<'_>,
     unit_count: usize,
-    group: i32,
-    time: i32,
+    (group, time, baseline_time): (i32, i32, i32),
     config: AttGtDrConfig,
     estimator: Estimator,
+    overlap: &mut Vec<CellOverlap>,
 ) -> CellFit {
     let treated_count = scratch.units.iter().filter(|unit| unit.treated).count();
     if treated_count == 0 {
@@ -305,6 +352,21 @@ fn estimate_panel_cell(
         scratch.design.push(1.0);
         scratch.design.extend_from_slice(unit.covariates);
     }
+
+    let treated: Vec<f64> = scratch
+        .treated
+        .iter()
+        .map(|&d| f64::from(u8::from(d)))
+        .collect();
+    check_overlap(
+        &scratch.design,
+        feature_count,
+        &treated,
+        (group, time, baseline_time),
+        config,
+        estimator,
+        overlap,
+    )?;
 
     let input = PanelFlatInput {
         treated: &scratch.treated,
@@ -365,12 +427,11 @@ struct RepeatedScratch {
 fn estimate_repeated_cell(
     observations: &[AttGtDrObservation],
     prepared: &Prepared,
-    group: i32,
-    time: i32,
-    baseline_time: i32,
+    (group, time, baseline_time): (i32, i32, i32),
     config: AttGtDrConfig,
     estimator: Estimator,
     scratch: &mut RepeatedScratch,
+    overlap: &mut Vec<CellOverlap>,
 ) -> Result<CellFit, AttGtError> {
     scratch.rows.clear();
     scratch.positions.clear();
@@ -417,6 +478,18 @@ fn estimate_repeated_cell(
     if let Some(cell) = super::pair_estimators::missing_pair_cell(&scratch.rows) {
         return Ok(Err(cell));
     }
+    let (design, feature_count, treated) = super::pair_estimators::overlap_design(&scratch.rows);
+    if let Err(reason) = check_overlap(
+        &design,
+        feature_count,
+        &treated,
+        (group, time, baseline_time),
+        config,
+        estimator,
+        overlap,
+    ) {
+        return Ok(Err(reason));
+    }
     let fit = match estimator {
         Estimator::DoublyRobust => estimate_drdid_repeated_efficient(&scratch.rows, config.drdid),
         Estimator::InverseProbabilityWeighting => {
@@ -461,6 +534,7 @@ fn estimate_att_gt_panel(
     let mut influence_functions = Vec::new();
     let mut skipped = Vec::new();
     let mut pruned = Vec::new();
+    let mut overlap = Vec::new();
     let mut scratch = CellScratch::new(unit_count);
     let mut repeated = RepeatedScratch {
         rows: Vec::new(),
@@ -475,12 +549,11 @@ fn estimate_att_gt_panel(
                 estimate_repeated_cell(
                     observations,
                     &prepared,
-                    group,
-                    time,
-                    baseline_time,
+                    (group, time, baseline_time),
                     config,
                     estimator,
                     &mut repeated,
+                    &mut overlap,
                 )?
             } else {
                 collect_cell_units(
@@ -492,7 +565,14 @@ fn estimate_att_gt_panel(
                     config,
                     &mut scratch,
                 )?;
-                estimate_panel_cell(&mut scratch, unit_count, group, time, config, estimator)
+                estimate_panel_cell(
+                    &mut scratch,
+                    unit_count,
+                    (group, time, baseline_time),
+                    config,
+                    estimator,
+                    &mut overlap,
+                )
             };
             match cell {
                 Ok((estimate, influence, columns_dropped)) => {
@@ -537,6 +617,7 @@ fn estimate_att_gt_panel(
         skipped,
         pruned,
         sample: prepared.sample,
+        overlap,
     })
 }
 
@@ -771,8 +852,12 @@ mod tests {
             rows
         }
         let config = AttGtDrConfig {
+            // The indicator separates the arms in the cells it is dropped
+            // from, which `did`'s overlap check would refuse; the test is of
+            // the pruning.
             att_gt: AttGtConfig {
                 unbalanced_panel: UnbalancedPanel::PerCell,
+                refuse_poor_overlap: false,
                 ..AttGtConfig::default()
             },
             drdid: DrDidConfig::default(),

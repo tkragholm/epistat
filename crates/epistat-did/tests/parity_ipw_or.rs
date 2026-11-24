@@ -18,8 +18,8 @@
 //! against `1e-9`.
 
 use epistat_did::{
-    DrDidConfig, DrDidObservation, DrDidRepeatedObservation, estimate_ipw_did_panel,
-    estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
+    DrDidConfig, DrDidObservation, DrDidRepeatedObservation, estimate_drdid_repeated_cross_section,
+    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
     estimate_or_did_repeated_cross_section,
 };
 use epistat_testkit::load_json;
@@ -54,6 +54,7 @@ struct Repeated {
     w: Vec<f64>,
     ipw: Fit,
     reg: Fit,
+    dr1: Fit,
 }
 
 #[derive(Deserialize)]
@@ -166,4 +167,32 @@ fn the_interval_is_analytic_by_default() {
     .expect("fit");
     assert_eq!(boot.att.to_bits(), fit.att.to_bits());
     assert_ne!(boot.ci_low.to_bits(), fit.ci_low.to_bits());
+}
+
+/// The traditional doubly robust estimator with sampling weights,
+/// `DRDID::drdid_rc1`.
+#[test]
+fn repeated_dr_matches_drdid_rc1_with_weights() {
+    let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
+    let fit = estimate_drdid_repeated_cross_section(&repeated_rows(&reference.rc), config())
+        .expect("fit");
+    check("rc dr1", &fit, &reference.rc.dr1);
+}
+
+/// The legacy computation is still reached, and is a different estimator on
+/// weighted data: its propensity score ignores the weights and its influence
+/// function lacks the nuisance terms.
+#[test]
+fn the_legacy_repeated_dr_is_kept_as_an_option() {
+    let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
+    let rows = repeated_rows(&reference.rc);
+    let legacy = estimate_drdid_repeated_cross_section(
+        &rows,
+        DrDidConfig::builder()
+            .ridge(0.0)
+            .legacy_repeated_cross_section(true)
+            .build(),
+    )
+    .expect("fit");
+    assert!((legacy.att - reference.rc.dr1.att).abs() > 1e-6);
 }
