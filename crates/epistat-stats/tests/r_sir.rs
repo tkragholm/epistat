@@ -20,7 +20,7 @@
 //! which differs from the root by up to `2e-3` for these counts.
 
 use epistat_stats::sir::{SirInterval, excess_absolute_risk, sir, sir_homogeneity, sir_trend};
-use epistat_testkit::{Fingerprint, load_json};
+use epistat_testkit::load_json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -262,10 +262,14 @@ fn excess_absolute_risk_by_hand() {
     assert_eq!(excess_absolute_risk(3.0, 2.0, 0.0, 1000.0).unwrap(), None);
 }
 
+/// The values go through `ln`, `exp` and `powf`, whose last bits depend on
+/// the maths library and, on Windows, on the processor the library dispatches
+/// for, so the bits are checked only on aarch64 macOS, where they were recorded.
 #[test]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_the_strata() {
     let r = reference();
-    let mut hash = Fingerprint::new();
+    let mut hash = epistat_testkit::Fingerprint::new();
     for kind in [
         SirInterval::Exact,
         SirInterval::Byar,

@@ -23,7 +23,7 @@ use epistat_stats::mantel_haenszel::{
     RateStratum, Table, breslow_day, cmh_test, odds_ratio, rate_difference, rate_ratio,
     rate_ratio_test, risk_difference, risk_ratio,
 };
-use epistat_testkit::{Fingerprint, load_json};
+use epistat_testkit::load_json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -295,7 +295,11 @@ fn rate_estimators_and_tests() {
     eprintln!("rates: worst deviation {:.3} of its bound", worst.0);
 }
 
+/// The values go through `ln`, `exp` and `powf`, whose last bits depend on
+/// the maths library and, on Windows, on the processor the library dispatches
+/// for, so the bits are checked only on aarch64 macOS, where they were recorded.
 #[test]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_the_bcg_data() {
     let case = reference().tables.remove(0);
     let tables = tables_of(&case);
@@ -304,7 +308,7 @@ fn fingerprint_of_the_bcg_data() {
     let rd = risk_difference(&tables, 0.95).unwrap();
     let bd = breslow_day(&tables, true).unwrap().unwrap();
     let cmh = cmh_test(&tables, true).unwrap().unwrap();
-    let hash = Fingerprint::new()
+    let hash = epistat_testkit::Fingerprint::new()
         .option_f64(or.estimate)
         .option_f64(or.se)
         .option_f64(rr.estimate)

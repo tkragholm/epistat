@@ -21,7 +21,7 @@ use epistat_stats::poisson::{Method, cipoisson};
 use epistat_stats::rates::{
     crude_rate, direct_standardised, rate_difference, rate_ratio, rate_ratio_exact_test,
 };
-use epistat_testkit::{Fingerprint, Tolerance, load_json};
+use epistat_testkit::{Tolerance, load_json};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -199,14 +199,18 @@ fn exact_test_grid() {
     assert!(worst <= 1.0, "{worst}");
 }
 
+/// The values go through `ln`, `exp` and `powf`, whose last bits depend on
+/// the maths library and, on Windows, on the processor the library dispatches
+/// for, so the bits are checked only on aarch64 macOS, where they were recorded.
 #[test]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_a_fixed_table() {
     let s = &reference().standardised[0];
     let g = direct_standardised(&s.events, &s.time, &s.weights, 0.95).unwrap();
     let c = crude_rate(7.0, 12.5, 0.95, 1000.0).unwrap();
     let r = rate_ratio(5.0, 100.0, 9.0, 120.0, 0.95).unwrap();
     let p = rate_ratio_exact_test(5.0, 100.0, 9.0, 120.0).unwrap();
-    let hash = Fingerprint::new()
+    let hash = epistat_testkit::Fingerprint::new()
         .option_f64(g.rate)
         .option_f64(g.variance)
         .option_f64(g.lower)
