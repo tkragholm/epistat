@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use epistat_glm::expit;
 use epistat_rng::{Stream, replicate_seed, splitmix64};
 use rayon::prelude::*;
@@ -5,8 +7,9 @@ use rayon::prelude::*;
 use crate::data::{Column, Incomplete};
 use crate::error::{ImputeError, Result};
 use crate::parts::{
-    SortedDonors, augmentation, class_from_uniform, class_probabilities, design_matrix,
-    draw_coefficients, draw_linear, linear_fit, logistic_fit, multinomial_fit,
+    DesignRows, SortedDonors, augmentation_of, class_from_uniform, class_probabilities,
+    design_matrix, draw_coefficients, draw_linear, linear_fit_rows, logistic_fit_rows,
+    multinomial_fit,
 };
 use crate::spec::{ImputeOptions, ImputeSpec, MatchType, Method};
 
@@ -48,6 +51,42 @@ struct Context<'a> {
     options: &'a ImputeOptions,
     observed: Vec<Vec<usize>>,
     missing: Vec<Vec<usize>>,
+    /// The values of each complete column as numbers, shared by the chains,
+    /// `None` for an incomplete column and for every column when a passive
+    /// method needs the whole completed data of each chain.
+    shared: Vec<Option<Vec<f64>>>,
+}
+
+/// The completed data of one chain. Without a passive method a chain holds its
+/// own copy of the incomplete columns only and reads the complete ones from
+/// the copy the chains share.
+enum Completed<'a> {
+    Shared(Vec<Cow<'a, [f64]>>),
+    Full(Vec<Vec<f64>>),
+}
+
+impl Completed<'_> {
+    fn column(&self, j: usize) -> &[f64] {
+        match self {
+            Self::Shared(c) => &c[j],
+            Self::Full(c) => &c[j],
+        }
+    }
+
+    fn column_mut(&mut self, j: usize) -> &mut [f64] {
+        match self {
+            Self::Shared(c) => c[j].to_mut(),
+            Self::Full(c) => &mut c[j],
+        }
+    }
+
+    /// Every column, for a passive method.
+    fn full(&self) -> Option<&[Vec<f64>]> {
+        match self {
+            Self::Shared(_) => None,
+            Self::Full(c) => Some(c),
+        }
+    }
 }
 
 struct ChainOutput {
@@ -88,12 +127,26 @@ pub fn impute(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> 
         })
         .collect();
     let missing: Vec<Vec<usize>> = (0..n_columns).map(|j| data.missing(j).rows()).collect();
+    let passive = spec
+        .methods
+        .iter()
+        .any(|m| matches!(m, Some(Method::Passive(_))));
+    let shared = (0..n_columns)
+        .map(|j| {
+            (!passive && missing[j].is_empty()).then(|| {
+                (0..data.rows())
+                    .map(|r| data.columns()[j].value(r))
+                    .collect()
+            })
+        })
+        .collect();
     let ctx = Context {
         data,
         spec,
         options,
         observed,
         missing,
+        shared,
     };
     let chains: Vec<ChainOutput> = (0..options.m)
         .into_par_iter()
@@ -106,11 +159,11 @@ pub fn impute(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> 
     let mut chain_mean = vec![Vec::with_capacity(m * maxit); n_columns];
     let mut chain_variance = vec![Vec::with_capacity(m * maxit); n_columns];
     let (mut aliased, mut augmented) = (0, 0);
-    for chain in chains {
+    for mut chain in chains {
         aliased += chain.aliased;
         augmented += chain.augmented;
         for j in 0..n_columns {
-            values[j].push(chain.values[j].clone());
+            values[j].push(std::mem::take(&mut chain.values[j]));
             chain_mean[j].extend_from_slice(&chain.mean[j]);
             chain_variance[j].extend_from_slice(&chain.variance[j]);
         }
@@ -262,19 +315,31 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
     let (data, spec, options) = (ctx.data, ctx.spec, ctx.options);
     let n_columns = data.n_columns();
     let maxit = options.max_iterations;
-    let mut completed: Vec<Vec<f64>> = (0..n_columns)
-        .map(|j| {
-            (0..data.rows())
-                .map(|r| data.columns()[j].value(r))
-                .collect()
-        })
-        .collect();
+    let own = |j: usize| -> Vec<f64> {
+        (0..data.rows())
+            .map(|r| data.columns()[j].value(r))
+            .collect()
+    };
+    let mut completed = if ctx.shared.iter().any(Option::is_some) {
+        Completed::Shared(
+            (0..n_columns)
+                .map(|j| {
+                    ctx.shared[j]
+                        .as_deref()
+                        .map_or_else(|| Cow::Owned(own(j)), Cow::Borrowed)
+                })
+                .collect(),
+        )
+    } else {
+        Completed::Full((0..n_columns).map(own).collect())
+    };
     // Starting values: a random observed value for each missing cell.
-    for (j, column) in completed.iter_mut().enumerate() {
+    for j in 0..n_columns {
         let (obs, mis) = (&ctx.observed[j], &ctx.missing[j]);
         if mis.is_empty() {
             continue;
         }
+        let column = completed.column_mut(j);
         let seed = column_seed(options.seed, chain, 0, j);
         let draws: Vec<f64> = mis
             .par_iter()
@@ -296,15 +361,17 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
         for &j in &spec.visit_order {
             let seed = column_seed(options.seed, chain, iteration, j);
             let cells = impute_column(ctx, &completed, j, seed, &mut out)?;
+            let column = completed.column_mut(j);
             for (&r, &v) in ctx.missing[j].iter().zip(&cells) {
-                completed[j][r] = v;
+                column[r] = v;
             }
             let (mean, variance) = moments(&cells);
             out.mean[j].push(mean);
             out.variance[j].push(variance);
         }
     }
-    for (j, column) in completed.iter().enumerate() {
+    for j in 0..n_columns {
+        let column = completed.column(j);
         out.values[j] = ctx.missing[j].iter().map(|&r| column[r]).collect();
     }
     Ok(out)
@@ -321,33 +388,35 @@ fn moments(values: &[f64]) -> (f64, Option<f64>) {
 }
 
 /// The predictors of column `j` as numeric columns without an intercept:
-/// indicators for the levels of a nominal predictor after the first.
-fn predictor_columns(
+/// indicators for the levels of a nominal predictor after the first, and the
+/// completed columns themselves for the others.
+fn predictor_columns<'c>(
     data: &Incomplete,
-    completed: &[Vec<f64>],
+    completed: &'c Completed<'_>,
     predictors: &[usize],
-) -> Vec<Vec<f64>> {
+) -> Vec<Cow<'c, [f64]>> {
     let mut out = Vec::new();
     for &k in predictors {
         match &data.columns()[k] {
             Column::Nominal { levels, .. } => {
                 for level in 1..*levels {
                     let target = level as f64;
-                    out.push(
-                        completed[k]
+                    out.push(Cow::Owned(
+                        completed
+                            .column(k)
                             .iter()
                             .map(|&v| f64::from(u8::from((v - target).abs() < 0.5)))
                             .collect(),
-                    );
+                    ));
                 }
             }
-            _ => out.push(completed[k].clone()),
+            _ => out.push(Cow::Borrowed(completed.column(k))),
         }
     }
     out
 }
 
-fn predict(columns: &[Vec<f64>], rows: &[usize], beta: &[f64]) -> Vec<f64> {
+fn predict(columns: &[Cow<'_, [f64]>], rows: &[usize], beta: &[f64]) -> Vec<f64> {
     rows.iter()
         .map(|&r| {
             let mut s = beta[0];
@@ -361,7 +430,7 @@ fn predict(columns: &[Vec<f64>], rows: &[usize], beta: &[f64]) -> Vec<f64> {
 
 fn impute_column(
     ctx: &Context<'_>,
-    completed: &[Vec<f64>],
+    completed: &Completed<'_>,
     j: usize,
     seed: u64,
     out: &mut ChainOutput,
@@ -378,7 +447,11 @@ fn impute_column(
             .map(|&r| y_obs[row_stream(seed, r).below(y_obs.len())])
             .collect()),
         Method::Passive(f) => {
-            let column = f.call(completed);
+            let column = f.call(
+                completed
+                    .full()
+                    .expect("a passive method keeps every column"),
+            );
             if column.len() != data.rows() || mis.iter().any(|&r| !column[r].is_finite()) {
                 return Err(ImputeError::Passive { column: j });
             }
@@ -386,8 +459,16 @@ fn impute_column(
         }
         Method::Norm | Method::Pmm { .. } => {
             let cols = predictor_columns(data, completed, &spec.predictors[j]);
-            let x = design_matrix(&cols, obs);
-            let fit = linear_fit(x.as_ref(), &y_obs, j)?;
+            let slices: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
+            let fit = linear_fit_rows(
+                &DesignRows {
+                    columns: &slices,
+                    observed: obs,
+                    y: &y_obs,
+                    augmentation: None,
+                },
+                j,
+            )?;
             out.aliased += usize::from(fit.n_active() < fit.active.len());
             let mut stream = Stream::seeded(replicate_seed(seed, PARAMETER_ROW));
             let chi = stream.chi_square(fit.df)?;
@@ -427,9 +508,22 @@ fn impute_column(
         }
         Method::Logreg => {
             let cols = predictor_columns(data, completed, &spec.predictors[j]);
-            let (x_aug, y_aug, w_aug, used) = augmented_problem(&cols, obs, &y_obs, &[0.0, 1.0]);
-            out.augmented += usize::from(used);
-            let fit = logistic_fit(x_aug.as_ref(), &y_aug, &w_aug, j)?;
+            let slices: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
+            let aug = augmentation_rows(&cols, &y_obs, &[0.0, 1.0]);
+            out.augmented += usize::from(aug.is_some());
+            let y_aug: Vec<f64> = match &aug {
+                Some(a) => y_obs.iter().chain(&a.y).copied().collect(),
+                None => y_obs.clone(),
+            };
+            let fit = logistic_fit_rows(
+                &DesignRows {
+                    columns: &slices,
+                    observed: obs,
+                    y: &y_aug,
+                    augmentation: aug.as_ref(),
+                },
+                j,
+            )?;
             out.aliased += usize::from(fit.active.iter().any(|&a| !a));
             let mut stream = Stream::seeded(replicate_seed(seed, PARAMETER_ROW));
             let mut z = vec![0.0; fit.active.iter().filter(|&&a| a).count()];
@@ -479,10 +573,26 @@ fn impute_column(
     }
 }
 
+/// The augmentation rows of `mice:::augment` for the outcomes of `outcomes`
+/// that are observed, `None` when there are no predictors.
+fn augmentation_rows(
+    cols: &[Cow<'_, [f64]>],
+    y_obs: &[f64],
+    outcomes: &[f64],
+) -> Option<crate::parts::Augmentation> {
+    let mut present: Vec<f64> = outcomes
+        .iter()
+        .copied()
+        .filter(|o| y_obs.contains(o))
+        .collect();
+    present.sort_unstable_by(f64::total_cmp);
+    augmentation_of(cols, &present)
+}
+
 /// The observed rows of the design with the intercept, followed by the
 /// augmentation rows, with the outcome and weight of each.
 fn augmented_problem(
-    cols: &[Vec<f64>],
+    cols: &[Cow<'_, [f64]>],
     obs: &[usize],
     y_obs: &[f64],
     outcomes: &[f64],
@@ -495,7 +605,7 @@ fn augmented_problem(
         .filter(|o| y_obs.contains(o))
         .collect();
     present.sort_unstable_by(f64::total_cmp);
-    match augmentation(cols, &present) {
+    match augmentation_of(cols, &present) {
         None => (base, y_obs.to_vec(), vec![1.0; n_obs], false),
         Some(aug) => {
             let p = cols.len();
