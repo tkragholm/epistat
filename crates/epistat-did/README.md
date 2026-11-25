@@ -72,9 +72,14 @@ cohort or unit effects and not-yet-treated or never-treated controls, as
 by cohort, by period and by event time, come with their delta-method standard
 errors from the exact Jacobian, where `marginaleffects` uses forward
 differences, and with influence functions by unit. The fit is the same
-absorbed regression, so the cost is linear in the rows. Poisson and logit
-models, which `etwfe` fits with cohort and period dummies, are not offered
-yet.
+absorbed regression, so the cost is linear in the rows. The Poisson and logit
+models of `etwfe(family = "poisson" / "logit")` are fitted as `fixest::feglm`
+fits them, with an intercept and cohort and period dummies in place of the
+absorbed effects, by `epistat-glm`'s iteratively reweighted least squares on
+rows formed block by block, so no design matrix is held. Their average effects
+are means of differences of predicted means, with the delta method on the
+exact Jacobian of the mean, the iid, robust or clustered covariance of
+`fixest` and influence functions by unit.
 
 Synthetic difference-in-differences (Arkhangelsky, Athey, Hirshberg, Imbens
 and Wager), synthetic control and the plain difference-in-differences

@@ -160,6 +160,10 @@ name = "parity_etwfe"
 path = "tests/parity_etwfe.rs"
 
 [[test]]
+name = "parity_etwfe_glm"
+path = "tests/parity_etwfe_glm.rs"
+
+[[test]]
 name = "imputation_properties"
 path = "tests/imputation_properties.rs"
 

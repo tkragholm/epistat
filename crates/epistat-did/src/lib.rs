@@ -62,8 +62,9 @@
 //!   with the cohort and relative period coefficients and their summaries by
 //!   relative period, by cohort and overall.
 //! - Wooldridge's extended two-way fixed-effects regression \[15\] and its
-//!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them for
-//!   linear models: [`estimate_etwfe`].
+//!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them:
+//!   [`estimate_etwfe`] for linear models and [`estimate_etwfe_glm`] for the
+//!   Poisson and logit models.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -300,9 +301,11 @@ pub use methods::efficient::{
     aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
     aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
 };
+pub use methods::etwfe;
 pub use methods::etwfe::{
     EtwfeCoefficient, EtwfeConfig, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeError,
-    EtwfeResult, EtwfeTerm, EtwfeType, estimate_etwfe,
+    EtwfeFamily, EtwfeGlmCoefficient, EtwfeGlmConfig, EtwfeGlmResult, EtwfeGlmTerm, EtwfeResult,
+    EtwfeTerm, EtwfeType, estimate_etwfe, estimate_etwfe_glm,
 };
 pub use methods::imputation;
 pub use methods::imputation::{
