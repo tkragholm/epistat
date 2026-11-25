@@ -6,7 +6,7 @@ use epistat_did::{
     DrDidConfig, DrDidObservation, MissingAssumption, MissingConfig, MissingError, MissingFolds,
     MissingModels, MissingPreData, MissingPredictions, PanelFlatInput, att_missing_pre,
     att_missing_pre_from_predictions, estimate_drdid_panel, estimate_drdid_panel_flat,
-    fit_drdid_panel_nuisance,
+    fit_drdid_panel_nuisance, missing_cross_fit_folds,
 };
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
@@ -506,6 +506,42 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
     )
     .unwrap();
     assert_ne!(all.nuisance.propensity, nu.propensity);
+}
+
+/// The folds are dealt in turn from a random order, so their sizes differ
+/// by at most one unit (or cluster), as do the two halves within a fold; a
+/// cluster lies in one fold and one half.
+#[test]
+fn the_folds_are_balanced_and_keep_clusters_whole() {
+    let plain = missing_cross_fit_folds(1003, None, 5, 7).unwrap();
+    let mut sizes = [0_usize; 5];
+    let mut halves = [[0_usize; 2]; 5];
+    for (f, h) in plain.fold.iter().zip(&plain.nested_half) {
+        sizes[*f] += 1;
+        halves[*f][usize::from(*h)] += 1;
+    }
+    assert!(sizes.iter().max().unwrap() - sizes.iter().min().unwrap() <= 1);
+    for h in halves {
+        assert!(h[0].abs_diff(h[1]) <= 1);
+    }
+    assert_ne!(
+        plain.fold,
+        missing_cross_fit_folds(1003, None, 5, 8).unwrap().fold
+    );
+
+    let labels: Vec<usize> = (0..1000).map(|i| (i * 7) % 100).collect();
+    let clusters = Clusters::from_labels(&labels);
+    let grouped = missing_cross_fit_folds(1000, Some(&clusters), 4, 7).unwrap();
+    for i in 0..1000 {
+        for j in 0..1000 {
+            if labels[i] == labels[j] {
+                assert_eq!(grouped.fold[i], grouped.fold[j]);
+                assert_eq!(grouped.nested_half[i], grouped.nested_half[j]);
+            }
+        }
+    }
+    assert!(missing_cross_fit_folds(1000, Some(&clusters), 101, 7).is_err());
+    assert!(missing_cross_fit_folds(999, Some(&clusters), 4, 7).is_err());
 }
 
 #[test]

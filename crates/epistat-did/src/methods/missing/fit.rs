@@ -447,13 +447,20 @@ impl Designs {
 
 /// The fold of each unit and its half within the training units, from a
 /// random order of the units, or of the clusters when there are clusters.
-fn fold_assignment(
-    data: &MissingPreData<'_>,
+pub(super) fn fold_assignment(
+    n: usize,
+    clusters: Option<&epistat_inference::Clusters>,
     folds: usize,
     seed: u64,
 ) -> Result<(Vec<usize>, Vec<bool>), MissingError> {
-    let n = data.treated.len();
-    let groups = data.clusters.map_or(n, epistat_inference::Clusters::count);
+    if clusters.is_some_and(|c| c.len() != n) {
+        return Err(MissingError::Length {
+            what: "clusters",
+            expected: n,
+            found: clusters.map_or(0, epistat_inference::Clusters::len),
+        });
+    }
+    let groups = clusters.map_or(n, epistat_inference::Clusters::count);
     if folds < 2 || folds > groups {
         return Err(MissingError::Config(
             "the number of folds must be at least 2 and at most the number of units or clusters",
@@ -465,7 +472,7 @@ fn fold_assignment(
     for (pos, &g) in order.iter().enumerate() {
         position[g] = pos;
     }
-    let group = |i: usize| data.clusters.map_or(i, |c| c.of()[i]);
+    let group = |i: usize| clusters.map_or(i, |c| c.of()[i]);
     let fold = (0..n).map(|i| position[group(i)] % folds).collect();
     let half = (0..n)
         .map(|i| (position[group(i)] / folds) % 2 == 1)
@@ -522,7 +529,7 @@ pub(super) fn fit_nuisance(
             Ok((out, 1))
         }
         MissingFolds::CrossFit { folds, seed } => {
-            let (fold, half) = fold_assignment(data, folds, seed)?;
+            let (fold, half) = fold_assignment(n, data.clusters, folds, seed)?;
             for j in 0..folds {
                 let train: Vec<bool> = fold.iter().map(|&f| f != j).collect();
                 let eval: Vec<bool> = fold.iter().map(|&f| f == j).collect();

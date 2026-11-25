@@ -319,9 +319,9 @@ pub use methods::imputation::{
 };
 pub use methods::missing;
 pub use methods::missing::{
-    MissingAssumption, MissingAtt, MissingConfig, MissingError, MissingFolds, MissingModels,
-    MissingNuisance, MissingPreData, MissingPredictions, NestedOutcome, att_missing_pre,
-    att_missing_pre_from_predictions,
+    CrossFitFolds, MissingAssumption, MissingAtt, MissingConfig, MissingError, MissingFolds,
+    MissingModels, MissingNuisance, MissingPreData, MissingPredictions, NestedOutcome,
+    att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
 pub use methods::staggered::StaggeredPanel;
 #[expect(

@@ -100,19 +100,20 @@
 //! norm, a column that is collinear with the others among the rows of the
 //! fit.
 //!
-//! With [`MissingFolds::CrossFit`] the units (or the clusters, when the data have
-//! them) are put in a random order from the seed and dealt to the folds in
-//! turn. For each fold the models are fitted on the other folds and predict
-//! for the fold, as in the paper's equation 10, and `theta` solves the
-//! estimating equation pooled over the folds. The paper writes the estimate
-//! as the mean of the per-fold estimates (its equation 11), which is the same
-//! when every fold has the same number of treated units. Under `MarXY1` the
-//! paper fits `eta0` on a subsample independent of the models in its
-//! pseudo-outcome: within each fold's training units, the order above also
-//! deals every unit to one of two halves, `mu0(., Y1, 0)` and `gamma(., Y1, 0)`
-//! of the pseudo-outcome are fitted on the first, and `eta0` on the
-//! controls of the second. The models that enter `phi` are fitted on all the
-//! training units. Without cross-fitting every model, `eta0` included, is
+//! With [`MissingFolds::CrossFit`] the units (or the clusters, when the data
+//! have them) are put in a random order from the seed and dealt to the folds
+//! in turn. For each fold the models are fitted on the other folds and
+//! predict for the fold, as in the paper's equation 10, and `theta` solves
+//! the estimating equation pooled over the folds. The paper writes the
+//! estimate as the mean of the per-fold estimates (its equation 11), which is
+//! the same when every fold has the same number of treated units. Under
+//! `MarXY1` the paper fits `eta0` on a subsample independent of the models in
+//! its pseudo-outcome: within each fold's training units, the order above
+//! also deals every unit to one of two halves, `mu0(., Y1, 0)` and
+//! `gamma(., Y1, 0)` of the pseudo-outcome are fitted on the first, and
+//! `eta0` on the controls of the second. The models that enter `phi` are
+//! fitted on all the training units. [`missing_cross_fit_folds`] gives the
+//! folds and halves. Without cross-fitting every model, `eta0` included, is
 //! fitted on all units, as in the authors' simulations.
 //!
 //! [`att_missing_pre_from_predictions`] takes the predictions of any learner
@@ -121,7 +122,8 @@
 //! were not fitted on that unit, by cross-fitting: split the units into `K`
 //! folds, fit every model on the other folds, predict for the fold, and pass
 //! the out-of-fold predictions of all units. Under `MarXY1` the nested
-//! regression needs its own split within the training folds, as above.
+//! regression needs its own split within the training folds, as above. The
+//! documentation of [`att_missing_pre_from_predictions`] lists the steps.
 //!
 //! # Variance
 //!
@@ -146,8 +148,22 @@
 //! clipped. [`MissingAtt`] reports the ranges of both where they enter, so
 //! that overlap can be judged. An arm without units, an arm without any `Y0`
 //! observed, values that are not finite, and inputs of different lengths are
-//! errors. The authors' code clips both probabilities to `[0.01, 0.99]`,
-//! which changes the estimand where it binds.
+//! errors.
+//!
+//! # The authors' code
+//!
+//! The replication code of the paper (github.com/testalorenzo/MissingDiD,
+//! `dgp.py`) computes the same estimator, with three differences, where this
+//! module follows the paper. It regresses the nested pseudo-outcome on the
+//! covariates of all units rather than of the controls, which is a different
+//! function when the treatment shifts `Y1` and matters when the propensity
+//! model is wrong. It clips the fitted propensity and `gamma` to
+//! `[0.01, 0.99]`, which changes the estimand where it binds; here they are
+//! used as fitted and refused at the caller's limits. Its simulations fit
+//! every model on all units, as [`MissingFolds::None`] does, without the
+//! cross-fitting the paper's theory assumes. On the reference's own
+//! predictions the estimate, influence function and standard error of
+//! [`att_missing_pre_from_predictions`] agree with the code's to rounding.
 //!
 //! # References
 //!
@@ -428,6 +444,39 @@ pub enum MissingError {
     Config(&'static str),
 }
 
+/// The folds of cross-fitting, as [`missing_cross_fit_folds`] deals them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossFitFolds {
+    /// The fold of each unit, from 0 to the number of folds less 1.
+    pub fold: Vec<usize>,
+    /// The half of the training units each unit belongs to for the nested
+    /// regression: `false` for the half on which `mu0(., Y1, 0)` and
+    /// `gamma(., Y1, 0)` of the pseudo-outcome are fitted, `true` for the
+    /// half on whose controls `eta0` is fitted.
+    pub nested_half: Vec<bool>,
+}
+
+/// The folds that [`att_missing_pre`] uses with [`MissingFolds::CrossFit`]:
+/// the units, or the clusters, are put in a random order from `seed` and
+/// dealt to the folds in turn, and within each fold alternately to the two
+/// halves of the nested regression. For cross-fitting other learners on the
+/// same folds before [`att_missing_pre_from_predictions`].
+///
+/// # Errors
+///
+/// [`MissingError::Config`] for fewer than 2 folds or more folds than units
+/// (or clusters), and [`MissingError::Length`] for clusters of another
+/// length.
+pub fn missing_cross_fit_folds(
+    units: usize,
+    clusters: Option<&Clusters>,
+    folds: usize,
+    seed: u64,
+) -> Result<CrossFitFolds, MissingError> {
+    let (fold, nested_half) = fit::fold_assignment(units, clusters, folds, seed)?;
+    Ok(CrossFitFolds { fold, nested_half })
+}
+
 /// The ATT with nuisance models fitted here: logistic regressions for the
 /// propensity and the missingness, least squares for the outcome regressions
 /// and the nested regression, with or without cross-fitting. See the module
@@ -473,8 +522,34 @@ pub fn att_missing_pre(
 }
 
 /// The ATT from nuisance predictions made elsewhere, for instance out-of-fold
-/// predictions of random forests. See the module documentation for how they
-/// should be made, and [`MissingPredictions`] for what enters where.
+/// predictions of random forests. [`MissingPredictions`] lists what enters
+/// where.
+///
+/// For the standard error to hold, the predictions of a unit must come from
+/// models that did not see it. With folds from [`missing_cross_fit_folds`]
+/// (or any other split into `K` folds), for each fold `k`:
+///
+/// ```text
+/// train = units not in fold k
+/// pi            classifier of A on X, fitted on train
+/// gamma(., 1)   classifier of R0 on X (and Y1 under MarXY1), on the treated of train
+/// gamma(., 0)   the same on the controls of train
+/// mu0(., 1)     regression of Y0 on X (and Y1 under MarXY1), on the treated of train with Y0
+/// mu1(., 0)     regression of Y1 on X, on the controls of train
+/// mu0(., 0)     regression of Y0 on X (and Y1 under MarXY1), on the controls of train with Y0
+/// predict all six for the units of fold k
+/// ```
+///
+/// Under MarXY1 the nested regression comes from the two halves of `train`
+/// given by `nested_half`: fit `mu0(., Y1, 0)` and `gamma(., Y1, 0)` again on
+/// the first half, form the pseudo-outcome `m + R0 (Y0 - m) / g` (or `m`)
+/// with their predictions for the controls of the second half, regress it on
+/// `X` among those controls, and predict for fold `k`.
+///
+/// Probabilities from a classifier such as a random forest can be exactly 0
+/// or 1, which is an error here where they enter. Clipping them, as the
+/// authors' code does, changes the estimand where it binds and should be a
+/// visible choice of the caller's.
 ///
 /// # Errors
 ///
