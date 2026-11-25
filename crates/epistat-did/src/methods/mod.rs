@@ -8,6 +8,7 @@ pub mod efficient;
 pub mod imputation;
 pub mod staggered;
 pub mod standard;
+pub mod sunab;
 pub mod synthdid;
 pub mod triple_did;
 pub mod twfe;

@@ -421,7 +421,10 @@ impl Prepared {
 }
 
 /// `Err(unit)` for the first unit whose rows carry different values.
-fn check_constant_within_units<T: Copy + PartialEq>(unit: &[u32], value: &[T]) -> Result<(), u32> {
+pub(crate) fn check_constant_within_units<T: Copy + PartialEq>(
+    unit: &[u32],
+    value: &[T],
+) -> Result<(), u32> {
     let levels = unit.iter().copied().max().map_or(0, |m| m as usize + 1);
     let mut seen: Vec<Option<T>> = vec![None; levels];
     for (&u, &v) in unit.iter().zip(value) {

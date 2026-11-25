@@ -57,6 +57,10 @@
 //!   the two-stage estimator of Gardner \[13\]: [`estimate_did2s`], in
 //!   [`two_stage`]. Both absorb the unit and period effects of the untreated
 //!   rows with `epistat_glm::absorb`, so their cost is linear in the rows.
+//! - The interaction-weighted event study of Sun and Abraham \[14\], as
+//!   `fixest::sunab` and `fixest::aggregate` compute it: [`estimate_sunab`],
+//!   with the cohort and relative period coefficients and their summaries by
+//!   relative period, by cohort and overall.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -145,6 +149,9 @@
 //!     doi:10.1093/restud/rdae007
 //! 13. Gardner J. Two-stage differences in differences. Working paper,
 //!     2021. arXiv:2207.05943
+//! 14. Sun L, Abraham S. Estimating dynamic treatment effects in event
+//!     studies with heterogeneous treatment effects. J Econom
+//!     2021;225(2):175-99. doi:10.1016/j.jeconom.2020.09.006
 #![warn(missing_docs)]
 
 #[expect(
@@ -300,6 +307,10 @@ pub use methods::staggered::StaggeredPanel;
 pub use methods::standard::aggregate_event_time;
 pub use methods::standard::{
     estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
+};
+pub use methods::sunab::{
+    SUNAB_DEFAULT_REFERENCES, SunabBins, SunabCell, SunabConfig, SunabControl, SunabError,
+    SunabEstimate, SunabReference, SunabResult, SunabTerm, estimate_sunab,
 };
 pub use methods::synthdid;
 pub use methods::synthdid::{

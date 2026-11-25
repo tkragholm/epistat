@@ -52,6 +52,18 @@ the rows. The Goodman-Bacon decomposition splits the static estimate into its
 within and between components when there are time-varying covariates. Both
 are checked against R.
 
+The interaction-weighted event study of Sun and Abraham fits one coefficient
+per cohort and relative period, with the never treated, cohorts not treated
+in the panel, named cohorts or the last treated cohort as controls, the
+reference periods and the binning of `fixest::sunab`, and averages the
+coefficients by their shares of the rows into effects by relative period, by
+cohort and overall, with `fixest::aggregate`'s clustered standard errors and
+influence functions by unit. It is fitted by the same absorbed regression, so
+the cost is linear in the rows. It differs from `fixest` 0.14.2 where that
+classifies cohorts by an order-dependent scan that can drop rows and keep
+always-treated units as controls; here the always treated are removed. It is
+checked against `fixest` 0.14.2.
+
 Synthetic difference-in-differences (Arkhangelsky, Athey, Hirshberg, Imbens
 and Wager), synthetic control and the plain difference-in-differences
 estimator reproduce R's `synthdid` 0.0.9: the unit and time weights by its
