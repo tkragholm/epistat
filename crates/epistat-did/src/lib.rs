@@ -37,6 +37,9 @@
 //! - Doubly robust triple differences \[5\]: [`estimate_dr_ddd`].
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
+//! - Event-study effects for treatments that switch on and off or take
+//!   several values, as `DIDmultiplegtDYN` of de Chaisemartin and
+//!   D'Haultfoeuille \[8\]: [`estimate_dcdh`].
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -108,6 +111,9 @@
 //!    with a continuous treatment. Working paper, 2024.
 //! 7. Rambachan A, Roth J. A more credible approach to parallel trends. Rev
 //!    Econ Stud 2023;90(5):2555-91. doi:10.1093/restud/rdad018
+//! 8. de Chaisemartin C, D'Haultfoeuille X. Difference-in-differences
+//!    estimators of intertemporal treatment effects. Rev Econ Stat 2024.
+//!    doi:10.1162/rest_a_01414
 #![warn(missing_docs)]
 
 #[expect(

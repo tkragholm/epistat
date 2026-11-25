@@ -331,6 +331,22 @@ if (method %in% c("rcs", "ns")) {
   o <- r$value
   finish(r$times, c(setNames(o$att, sprintf("att_g%d_t%d", o$group, o$t)),
                     setNames(o$se, sprintf("se_g%d_t%d", o$group, o$t))))
+} else if (method == "dcdh") {
+  # DIDmultiplegtDYN 2.4.0 needs polars, which is not on CRAN; 2.2.0 from the
+  # CRAN archive is installed into its own library (DCDH_LIB).
+  lib <- Sys.getenv("DCDH_LIB", path.expand("~/.cache/r-didmultiplegtdyn-2.2.0"))
+  suppressMessages(library(DIDmultiplegtDYN, lib.loc = lib))
+  stopifnot(as.character(packageVersion("DIDmultiplegtDYN", lib.loc = lib)) == "2.2.0")
+  d <- as.data.frame(rd("dcdh"))
+  r <- timed(function() suppressMessages(did_multiplegt_dyn(d, "y", "id", "time", "d",
+                                                            effects = 3, placebo = 2,
+                                                            graph_off = TRUE))$results)
+  o <- r$value
+  finish(r$times, c(setNames(o$Effects[, "Estimate"], paste0("est_effect", 1:3)),
+                    setNames(o$Effects[, "SE"], paste0("se_effect", 1:3)),
+                    setNames(o$Placebos[, "Estimate"], paste0("est_placebo", 1:2)),
+                    setNames(o$Placebos[, "SE"], paste0("se_placebo", 1:2)),
+                    est_average = o$ATE[1, "Estimate"], se_average = o$ATE[1, "SE"]))
 } else if (method == "two_part") {
   d <- rd("sc")
   r <- timed(function() {
