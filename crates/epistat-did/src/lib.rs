@@ -273,8 +273,11 @@ pub use methods::bacon::{
 };
 pub use methods::continuous::sieve::estimate_acrt_sieve;
 pub use methods::dcdh::{
-    DcdhConfig, DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhObservation, DcdhResult,
-    DcdhSwitchers, estimate_dcdh,
+    DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapEstimate, DcdhConfig, DcdhDesign,
+    DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhHeterogeneity, DcdhObservation, DcdhPath,
+    DcdhPathResult, DcdhResult, DcdhSubgroup, DcdhSwitchDate, DcdhSwitchDates, DcdhSwitchers,
+    dcdh_design, dcdh_first_switch_dates, estimate_dcdh, estimate_dcdh_bootstrap, estimate_dcdh_by,
+    estimate_dcdh_by_path, estimate_dcdh_heterogeneity,
 };
 pub use methods::did_cc::{
     DidCcObservationView, estimate_did_cc_robust, estimate_did_cc_robust_from_views,
