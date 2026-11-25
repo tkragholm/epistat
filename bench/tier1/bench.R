@@ -140,6 +140,15 @@ if (method %in% c("rcs", "ns")) {
   r <- timed(function() feols(fml, data = d, cluster = ~id, notes = FALSE))
   finish(r$times, c(coef_x1 = coef(r$value)[["x1"]], se_x1 = se(r$value)[["x1"]],
                     coef_x2 = coef(r$value)[["x2"]], se_x2 = se(r$value)[["x2"]]))
+} else if (method %in% c("feols_sparse2", "feols_sparse3", "feols_chain2_cg", "feols_chain3_cg")) {
+  # fixest at its defaults; the _cg suffix names the Rust side's solver.
+  suppressMessages(library(fixest))
+  setFixest_nthreads(parallel::detectCores())
+  d <- rd(if (startsWith(method, "feols_chain")) "chn" else "hfe")
+  fml <- if (grepl("3", method)) y ~ x1 | worker + firm + year else y ~ x1 | worker + firm
+  r <- timed(function() feols(fml, data = d, cluster = ~worker, notes = FALSE))
+  message(method, " ", n, ": fixest iterations ", paste(r$value$iterations, collapse = " "))
+  finish(r$times, c(coef_x1 = coef(r$value)[["x1"]], se_x1 = se(r$value)[["x1"]]))
 } else if (method == "mh_or") {
   suppressMessages(library(metafor))
   d <- rd("mh")
