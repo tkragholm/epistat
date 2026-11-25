@@ -188,5 +188,9 @@ harness = false
 name = "tier1_imputation"
 harness = false
 
+[[bench]]
+name = "tier1_missing"
+harness = false
+
 [lints]
 workspace = true
