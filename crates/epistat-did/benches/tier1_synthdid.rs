@@ -106,9 +106,13 @@ fn main() {
         let estimate = estimate_synthdid(&panel, &config).expect("estimate");
         let se = match method.as_str() {
             "synthdid_jk_t100" => Some(
-                synthdid_variance(&panel, &estimate, SynthVariance::Jackknife { clusters: None })
-                    .expect("jackknife")
-                    .se,
+                synthdid_variance(
+                    &panel,
+                    &estimate,
+                    SynthVariance::Jackknife { clusters: None },
+                )
+                .expect("jackknife")
+                .se,
             ),
             "synthdid_placebo_t20" => Some(
                 synthdid_variance(
