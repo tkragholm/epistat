@@ -13,6 +13,9 @@
 //!   with few rows, inequality rows and up to a million bounded columns.
 //! - [`branch_and_bound`]: branch and bound for programs with binary columns,
 //!   on the bounded simplex.
+//! - [`frank_wolfe`]: the Frank-Wolfe method with an exact line search for
+//!   ridge-penalised least squares on the probability simplex, the weights of
+//!   synthetic control and synthetic difference-in-differences.
 //! - [`min_cost_flow`]: minimum-cost flow with integer data by the network
 //!   simplex method, for assignment and matching problems of thousands of
 //!   nodes.
@@ -27,6 +30,7 @@ pub mod bfgs;
 pub mod bounded_simplex;
 pub mod branch_and_bound;
 pub mod brent;
+pub mod frank_wolfe;
 pub mod min_cost_flow;
 pub mod multistart;
 pub mod nelder_mead;

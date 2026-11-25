@@ -40,6 +40,12 @@
 //! - Event-study effects for treatments that switch on and off or take
 //!   several values, as `DIDmultiplegtDYN` of de Chaisemartin and
 //!   D'Haultfoeuille \[8\]: [`estimate_dcdh`].
+//! - Synthetic difference-in-differences \[9\], synthetic control and the
+//!   plain difference-in-differences beside them, as R's `synthdid` computes
+//!   them: [`estimate_synthdid`] with [`SynthDidConfig`], standard errors by
+//!   placebo, bootstrap or jackknife in [`synthdid_variance`], and staggered
+//!   adoption cohort by cohort in [`estimate_synthdid_staggered`]. The
+//!   module [`synthdid`] gives the algorithm.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -114,6 +120,9 @@
 //! 8. de Chaisemartin C, D'Haultfoeuille X. Difference-in-differences
 //!    estimators of intertemporal treatment effects. Rev Econ Stat 2024.
 //!    doi:10.1162/rest_a_01414
+//! 9. Arkhangelsky D, Athey S, Hirshberg DA, Imbens GW, Wager S. Synthetic
+//!    difference-in-differences. Am Econ Rev 2021;111(12):4088-118.
+//!    doi:10.1257/aer.20190159
 #![warn(missing_docs)]
 
 #[expect(
@@ -259,6 +268,13 @@ pub use methods::efficient::{
 pub use methods::standard::aggregate_event_time;
 pub use methods::standard::{
     estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
+};
+pub use methods::synthdid;
+pub use methods::synthdid::{
+    StaggeredSynthEstimate, StaggeredSynthPanel, SynthCohort, SynthDidConfig, SynthDidError,
+    SynthDidEstimate, SynthDidVariance, SynthDraws, SynthObservation, SynthPanel, SynthTrace,
+    SynthUndefined, SynthVariance, SynthWeights, estimate_synthdid, estimate_synthdid_staggered,
+    synthdid_staggered_variance, synthdid_variance,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
 pub use types::*;
