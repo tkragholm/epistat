@@ -617,7 +617,7 @@ pub fn estimate_did_imputation(
         .collect();
     let n_cells = cell_of.len();
 
-    let projector = Projector::new(&fe, &fit, x, panel.unit, &prepared.time);
+    let projector = Projector::new(&fe, &fit, x, &[panel.unit, &prepared.time]);
     let fit_rows = fe.rows();
     let fit_weights = fe.weights();
     let mut estimates = Vec::with_capacity(terms.len());

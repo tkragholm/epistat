@@ -242,7 +242,7 @@ pub fn estimate_did2s(
         .map(|k| (weight_sum[k] > 0.0).then(|| weighted_y[k] / weight_sum[k]))
         .collect();
 
-    let projector = Projector::new(&fe, &fit, x, panel.unit, &prepared.time);
+    let projector = Projector::new(&fe, &fit, x, &[panel.unit, &prepared.time]);
     let fit_rows = fe.rows();
     let fit_weights = fe.weights();
     let mut sums: Vec<Option<Vec<f64>>> = Vec::with_capacity(k_terms);

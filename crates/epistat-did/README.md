@@ -94,9 +94,9 @@ untreated rows, impute the untreated outcomes of the treated rows and average
 the imputed effects, overall, by horizon or with the caller's weights, with
 the pre-trend regression of the imputation estimator. The effects are
 absorbed by alternating projections in `epistat-glm`, and the variances need
-fitted values of the first stage's auxiliary systems, which are found from a
-spanning forest of the untreated rows' units and periods and one more
-demeaning, so the cost is linear in the rows and no dummies are formed. They
+fitted values of the first stage's auxiliary systems, which the same
+alternating projections solve from their level sums, so the cost is linear
+in the rows and no dummies are formed. They
 follow `didimputation` 0.5.1 and `did2s` 1.2.1, except that a row whose unit
 and period effects are not jointly identified is dropped rather than imputed,
 and that with varying prior weights the imputation variance is the derivative
