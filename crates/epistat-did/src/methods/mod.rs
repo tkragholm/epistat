@@ -7,6 +7,7 @@ pub mod drdid;
 pub mod efficient;
 pub mod etwfe;
 pub mod imputation;
+pub mod missing;
 pub mod staggered;
 pub mod standard;
 pub mod sunab;

@@ -168,6 +168,14 @@ name = "imputation_properties"
 path = "tests/imputation_properties.rs"
 
 [[test]]
+name = "parity_missing"
+path = "tests/parity_missing.rs"
+
+[[test]]
+name = "missing_properties"
+path = "tests/missing_properties.rs"
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
@@ -182,6 +190,10 @@ harness = false
 
 [[bench]]
 name = "tier1_imputation"
+harness = false
+
+[[bench]]
+name = "tier1_missing"
 harness = false
 
 [lints]

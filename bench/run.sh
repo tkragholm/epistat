@@ -27,11 +27,17 @@
 #   AF_SRC    the directory AF/R of the unpacked tarball of the R package AF
 #             0.1.5 (archived from CRAN), which the R side of af_cross,
 #             af_case_control and af_cox sources; those R runs fail without it
+#   PYTHON    the Python interpreter of reference scripts that are Python
+#             rather than R (a script ending in .py runs as "$PYTHON -I"),
+#             default python3; its environment needs the script's packages
+#   MISSINGDID_SRC  a clone of github.com/testalorenzo/MissingDiD, whose
+#             dgp.py the reference side of the missing_* methods loads; those
+#             runs fail without it
 #
-# Results, in OUT:
+# Results, in OUT (impl "r" is the reference side, R or Python):
 #   runs.csv        impl,n,method,status,process_wall_s,peak_rss_kb
 #   rust_times.csv  n,method,reps,median_s,min_s   (the method only)
-#   r_times.csv     the same for R
+#   r_times.csv     the same for the reference side
 #   rust_METHOD_N.csv, r_METHOD_N.csv  the numbers each side produced
 #   compare_N.csv   what bench/tier1/compare.R prints for each size: the
 #                   largest difference between the two sides' numbers. It is
@@ -105,6 +111,9 @@ sunab_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 etwfe_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 etwfe_poisson:epistat-did:tier1_imputation:stagc:10000000:tier1/bench.R:900
 etwfe_logit:epistat-did:tier1_imputation:stagc:10000000:tier1/bench.R:900
+missing_marx:epistat-did:tier1_missing:mdid:10000000:tier1/missing_did.py:600
+missing_marxy1:epistat-did:tier1_missing:mdid:10000000:tier1/missing_did.py:600
+missing_marxy1_cf5:epistat-did:tier1_missing:mdid:10000000:-:600
 two_part:epistat-semicontinuous:tier1_semicontinuous:sc:10000000:tier1/bench.R:120
 lexis:epistat-register:tier2_register:lx:10000000:tier2/bench.R:120
 intervals:epistat-register:tier2_register:iv:10000000:tier2/bench.R:120
@@ -261,6 +270,9 @@ run_one() { # impl n method
   if [ "$impl" = rust ]; then
     N=$n METHOD=$m REPS="$(reps_for "$n")" SCRATCH="$SCRATCH" OUT="$OUT" \
       guarded "$tf" "$limit" "$(bin_of "$(field "$m" 3)")" > "$OUT/log_rust_${m}_${n}.txt" 2>&1
+  elif [ "${rs%.py}" != "$rs" ]; then
+    REPS="$(reps_for "$n")" OUT="$OUT" \
+      guarded "$tf" "$limit" "${PYTHON:-python3}" -I "$HERE/$rs" "$n" "$m" "$SCRATCH" > "$OUT/log_r_${m}_${n}.txt" 2>&1
   else
     REPS="$(reps_for "$n")" OUT="$OUT" \
       guarded "$tf" "$limit" Rscript "$HERE/$rs" "$n" "$m" "$SCRATCH" > "$OUT/log_r_${m}_${n}.txt" 2>&1
