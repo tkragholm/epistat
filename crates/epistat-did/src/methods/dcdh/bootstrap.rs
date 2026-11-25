@@ -52,7 +52,9 @@ pub struct DcdhBootstrap {
 /// one drawn no time leaves. The replicates run in parallel, and each
 /// depends only on `seed` and `r`, so the result does not depend on the
 /// number of threads. A replicate in which an estimate cannot be computed
-/// has none for it.
+/// has none for it. Each thread holds one replicate's panel, so the memory
+/// is that of one estimation times the threads of the rayon pool it runs
+/// in; a smaller pool bounds it.
 ///
 /// # Errors
 /// [`DcdhError`] as [`estimate_dcdh`] on the data, or for fewer than two

@@ -21,7 +21,9 @@
 //! comes in a random period or never, and after it the treatment flips with
 //! probability 0.3 each period. Method: `dcdh`, `estimate_dcdh` with three
 //! effects and two placebos, set against `DIDmultiplegtDYN::did_multiplegt_dyn`
-//! 2.2.0 (the last release that runs without polars).
+//! 2.2.0 (the last release that runs without polars). On the same data,
+//! `dcdh_trends_lin`, `dcdh_same_switchers` and `dcdh_less_conservative` add
+//! those options, and `dcdh_bootstrap` takes 50 bootstrap replications.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -35,7 +37,8 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhConfig, DcdhObservation, DrDidConfig,
-    StaggeredPanel, TwfeConfig, TwfeSpec, estimate_att_gt_dr_panel, estimate_dcdh, estimate_twfe,
+    StaggeredPanel, TwfeConfig, TwfeSpec, estimate_att_gt_dr_panel, estimate_dcdh,
+    estimate_dcdh_bootstrap, estimate_twfe,
 };
 
 const SEED: u64 = 20_261_208;
@@ -156,7 +159,7 @@ fn twfe(n: usize) {
     common::finish("twfe_es", n, &times, &lines);
 }
 
-fn run_dcdh(n: usize) {
+fn run_dcdh(n: usize, method: &str) {
     let t = Table::read(&common::data_path("dcdh", n));
     let rows: Vec<DcdhObservation> = (0..t.len())
         .map(|i| DcdhObservation {
@@ -173,12 +176,32 @@ fn run_dcdh(n: usize) {
     let config = DcdhConfig {
         effects: 3,
         placebo: 2,
+        trends_lin: method == "dcdh_trends_lin",
+        same_switchers: method == "dcdh_same_switchers",
+        less_conservative_se: method == "dcdh_less_conservative",
         ..DcdhConfig::default()
     };
+    let mut lines = Lines::default();
+    if method == "dcdh_bootstrap" {
+        let (times, r) = common::timed(common::reps(), || {
+            estimate_dcdh_bootstrap(&rows, &config, 50, 1).expect("dcdh")
+        });
+        for e in &r.effects {
+            lines.push(
+                &format!("est_effect{}", e.relative_period),
+                e.estimate.unwrap_or(f64::NAN),
+            );
+            lines.push(
+                &format!("bse_effect{}", e.relative_period),
+                e.se.unwrap_or(f64::NAN),
+            );
+        }
+        common::finish(method, n, &times, &lines);
+        return;
+    }
     let (times, r) = common::timed(common::reps(), || {
         estimate_dcdh(&rows, &config).expect("dcdh")
     });
-    let mut lines = Lines::default();
     let rows = r
         .effects
         .iter()
@@ -193,10 +216,13 @@ fn run_dcdh(n: usize) {
             &r.average_total_effect,
         )));
     for (name, e) in rows {
+        if e.estimate.is_none() && name == "average" {
+            continue;
+        }
         lines.push(&format!("est_{name}"), e.estimate.unwrap_or(f64::NAN));
         lines.push(&format!("se_{name}"), e.se.unwrap_or(f64::NAN));
     }
-    common::finish("dcdh", n, &times, &lines);
+    common::finish(method, n, &times, &lines);
 }
 
 fn main() {
@@ -217,8 +243,8 @@ fn main() {
         generate_dcdh(n);
         return;
     }
-    if method == "dcdh" {
-        run_dcdh(n);
+    if method.starts_with("dcdh") {
+        run_dcdh(n, &method);
         return;
     }
     assert_eq!(method, "att_gt", "unknown method {method}");

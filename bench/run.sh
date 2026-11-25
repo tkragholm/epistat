@@ -94,6 +94,10 @@ aipw:epistat-causal:tier1_causal:aipw:10000000:tier1/bench.R:120
 att_gt:epistat-did:tier1_did:did:1000000:tier1/bench.R:120
 twfe_es:epistat-did:tier1_did:twfe:10000000:tier1/bench.R:600
 dcdh:epistat-did:tier1_did:dcdh:10000000:tier1/bench.R:1200
+dcdh_trends_lin:epistat-did:tier1_did:dcdh:10000000:tier1/bench.R:1200
+dcdh_same_switchers:epistat-did:tier1_did:dcdh:10000000:tier1/bench.R:1200
+dcdh_less_conservative:epistat-did:tier1_did:dcdh:10000000:tier1/bench.R:1200
+dcdh_bootstrap:epistat-did:tier1_did:dcdh:1000000:tier1/bench.R:1200
 synthdid_t20:epistat-did:tier1_synthdid:sdid20:10000:tier1/synthdid.R:600
 synthdid_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:600
 sc_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:600
