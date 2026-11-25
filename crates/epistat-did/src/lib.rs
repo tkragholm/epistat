@@ -218,6 +218,10 @@ pub use methods::att_gt::{
     att_gt_simultaneous_bands_with_influence,
 };
 pub use methods::continuous::sieve::estimate_acrt_sieve;
+pub use methods::dcdh::{
+    DcdhConfig, DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhObservation, DcdhResult,
+    DcdhSwitchers, estimate_dcdh,
+};
 pub use methods::did_cc::{
     DidCcObservationView, estimate_did_cc_robust, estimate_did_cc_robust_from_views,
     estimate_did_cc_stationary, estimate_did_cc_stationary_from_views, test_did_cc_stationarity,

@@ -78,6 +78,14 @@ path = "tests/parity.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "dcdh_properties"
+path = "tests/dcdh_properties.rs"
+
+[[test]]
+name = "parity_dcdh"
+path = "tests/parity_dcdh.rs"
+
+[[test]]
 name = "parity_acrt"
 path = "tests/parity_acrt.rs"
 
