@@ -8,7 +8,8 @@
 #
 # Settings, all optional:
 #   SIZES     default "10000 100000 1000000 10000000"; a method runs up to its
-#             own largest size (persons, for the g-formula)
+#             own largest size (persons, for the g-formula; units, for the
+#             synthdid methods, which are run with SIZES="100 1000 10000")
 #   METHODS   default every method in the table below
 #   TIERS     default "1 2 3"; the methods of those tiers
 #   LIMIT     seconds allowed to one process; default the method's own limit
@@ -92,6 +93,12 @@ balance_weights:epistat-matching:tier1_balance_scale:none:10000000:-:300
 aipw:epistat-causal:tier1_causal:aipw:10000000:tier1/bench.R:120
 att_gt:epistat-did:tier1_did:did:1000000:tier1/bench.R:120
 twfe_es:epistat-did:tier1_did:twfe:10000000:tier1/bench.R:600
+dcdh:epistat-did:tier1_did:dcdh:10000000:tier1/bench.R:1200
+synthdid_t20:epistat-did:tier1_synthdid:sdid20:10000:tier1/synthdid.R:600
+synthdid_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:600
+sc_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:600
+synthdid_jk_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:900
+synthdid_placebo_t20:epistat-did:tier1_synthdid:sdid20:10000:tier1/synthdid.R:900
 two_part:epistat-semicontinuous:tier1_semicontinuous:sc:10000000:tier1/bench.R:120
 lexis:epistat-register:tier2_register:lx:10000000:tier2/bench.R:120
 intervals:epistat-register:tier2_register:iv:10000000:tier2/bench.R:120

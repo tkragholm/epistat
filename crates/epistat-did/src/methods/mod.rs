@@ -1,9 +1,11 @@
 pub mod att_gt;
 pub mod bacon;
 pub mod continuous;
+pub mod dcdh;
 pub mod did_cc;
 pub mod drdid;
 pub mod efficient;
 pub mod standard;
+pub mod synthdid;
 pub mod triple_did;
 pub mod twfe;

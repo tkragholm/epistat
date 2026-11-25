@@ -21,6 +21,19 @@ average causal response to a continuous treatment by a sieve estimator, whose
 standard error comes from the influence function of the whole procedure,
 estimated control trend included.
 
+For treatments that go on and off or take several values, such as benefit
+spells, `estimate_dcdh` is the event-study estimator of de Chaisemartin and
+D'Haultfoeuille as `did_multiplegt_dyn` of R's `DIDmultiplegtDYN` computes
+it: the effects of a group's first change of treatment against groups with
+the same baseline treatment that have not changed yet, for switchers in and
+out, with placebos, the average total effect, normalised effects, controls,
+comparisons within strata, weights and clusters, and the package's
+influence-function standard errors and joint tests. It follows the rules of
+2.4.0 and is tested against 2.2.0, the last release that runs without the R
+package polars; the module documentation lists where the two differ and
+where this crate departs from both. The work is linear in the cells of the
+panel.
+
 The efficient ATT(g,t) on a panel without covariates uses the sampling
 weights, which must be constant within a unit, and indexes every cell's
 influence function by unit over the whole panel, so the cells of an
@@ -38,6 +51,18 @@ the rows. The Goodman-Bacon decomposition splits the static estimate into its
 2x2 comparisons and their weights as `bacondecomp::bacon` does, with the
 within and between components when there are time-varying covariates. Both
 are checked against R.
+
+Synthetic difference-in-differences (Arkhangelsky, Athey, Hirshberg, Imbens
+and Wager), synthetic control and the plain difference-in-differences
+estimator reproduce R's `synthdid` 0.0.9: the unit and time weights by its
+Frank-Wolfe solver (in `epistat-optim`) with the penalties it derives from
+the noise level, its sparsification and stopping rules, covariates as it
+adjusts for them, and its placebo, bootstrap and jackknife standard errors,
+with a standard error for each post period. The jackknife without covariates
+is computed in closed form, in time linear in the panel. `synthdid` takes a
+single adoption date; staggered adoption is estimated cohort by cohort
+against the never-treated units and aggregated by treated cells, with the
+standard errors replaying the whole procedure.
 
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
@@ -57,9 +82,21 @@ second difference larger than a smoothness bound `M`, is empty and reported
 as NaN; the confidence sets are computed there as in HonestDiD. The `nightly`
 feature enables faer's AVX-512 kernels through epistat-linalg.
 
+The `pretrends` module gives the power of the pre-trends test and the
+distortion after passing it (Roth, 2022). From event-study coefficients and
+their covariance, from any estimator, and a hypothesised violation of parallel
+trends, it returns the probability that no pre-period coefficient is
+significant, the means of the pre- and post-period coefficients given that the
+test passes, the Bayes factor and the likelihood ratio against parallel
+trends, and the slope of a linear violation that the test detects with a given
+power. The rectangle probabilities are computed by Genz's transformation on a
+fixed, randomly shifted Korobov lattice; every probability comes with the
+standard error of its evaluation, and the results are deterministic. The cost
+depends on the number of pre-period coefficients, not on the number of rows.
+
 The tests compare estimates, standard errors and influence functions with
-`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `triplediff` and `contdid`
-0.1.2, the continuous treatment's influence function with the
+`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `pretrends` 0.1.0 (from its authors' repository), `triplediff`, `contdid`
+0.1.2, `DIDmultiplegtDYN` 2.2.0 and `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
 whole procedure, from reference values written by the R scripts in `tests/`. They run with

@@ -78,6 +78,14 @@ path = "tests/parity.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "dcdh_properties"
+path = "tests/dcdh_properties.rs"
+
+[[test]]
+name = "parity_dcdh"
+path = "tests/parity_dcdh.rs"
+
+[[test]]
 name = "parity_acrt"
 path = "tests/parity_acrt.rs"
 
@@ -132,12 +140,24 @@ name = "parity_bacon"
 path = "tests/parity_bacon.rs"
 
 [[test]]
+name = "parity_synthdid"
+path = "tests/parity_synthdid.rs"
+
+[[test]]
+name = "parity_pretrends"
+path = "tests/parity_pretrends.rs"
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
 
 [[bench]]
 name = "tier1_did"
+harness = false
+
+[[bench]]
+name = "tier1_synthdid"
 harness = false
 
 [lints]
