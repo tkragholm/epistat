@@ -64,6 +64,20 @@ single adoption date; staggered adoption is estimated cohort by cohort
 against the never-treated units and aggregated by treated cells, with the
 standard errors replaying the whole procedure.
 
+The imputation estimator of Borusyak, Jaravel and Spiess and the two-stage
+estimator of Gardner fit unit and period effects and covariates on the
+untreated rows, impute the untreated outcomes of the treated rows and average
+the imputed effects, overall, by horizon or with the caller's weights, with
+the pre-trend regression of the imputation estimator. The effects are
+absorbed by alternating projections in `epistat-glm`, and the variances need
+fitted values of the first stage's auxiliary systems, which are found from a
+spanning forest of the untreated rows' units and periods and one more
+demeaning, so the cost is linear in the rows and no dummies are formed. They
+follow `didimputation` 0.5.1 and `did2s` 1.2.1, except that a row whose unit
+and period effects are not jointly identified is dropped rather than imputed,
+and that with varying prior weights the imputation variance is the derivative
+of the estimate, which the package's is not.
+
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
 Every bootstrap replicate is seeded from the caller's seed, and results do not
@@ -96,7 +110,7 @@ depends on the number of pre-period coefficients, not on the number of rows.
 
 The tests compare estimates, standard errors and influence functions with
 `did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `pretrends` 0.1.0 (from its authors' repository), `triplediff`, `contdid`
-0.1.2, `DIDmultiplegtDYN` 2.2.0 and `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), the continuous treatment's influence function with the
+0.1.2, `DIDmultiplegtDYN` 2.2.0, `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), `didimputation` 0.5.1 and `did2s` 1.2.1, the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
 whole procedure, from reference values written by the R scripts in `tests/`. They run with

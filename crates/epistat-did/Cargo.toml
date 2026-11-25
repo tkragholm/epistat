@@ -148,6 +148,14 @@ name = "parity_pretrends"
 path = "tests/parity_pretrends.rs"
 
 [[test]]
+name = "parity_imputation"
+path = "tests/parity_imputation.rs"
+
+[[test]]
+name = "imputation_properties"
+path = "tests/imputation_properties.rs"
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
@@ -158,6 +166,10 @@ harness = false
 
 [[bench]]
 name = "tier1_synthdid"
+harness = false
+
+[[bench]]
+name = "tier1_imputation"
 harness = false
 
 [lints]

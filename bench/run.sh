@@ -99,6 +99,8 @@ synthdid_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:600
 sc_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:600
 synthdid_jk_t100:epistat-did:tier1_synthdid:sdid100:10000:tier1/synthdid.R:900
 synthdid_placebo_t20:epistat-did:tier1_synthdid:sdid20:10000:tier1/synthdid.R:900
+imputation_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
+did2s_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 two_part:epistat-semicontinuous:tier1_semicontinuous:sc:10000000:tier1/bench.R:120
 lexis:epistat-register:tier2_register:lx:10000000:tier2/bench.R:120
 intervals:epistat-register:tier2_register:iv:10000000:tier2/bench.R:120
