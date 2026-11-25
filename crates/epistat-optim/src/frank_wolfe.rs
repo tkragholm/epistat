@@ -34,6 +34,10 @@
 //!    then `1` when `g'd < 0` and `0` otherwise.
 //! 5. `x <- x + s d`, and `A x <- A x + s r`.
 //!
+//! Every sum over rows or columns (the dot products of the gradient, the
+//! norms, the objective) runs over eight fixed lanes in a fixed order, so
+//! that it vectorises and has the same bits on every target and thread count.
+//!
 //! The product `A x` is carried from step to step by the update in 5 rather
 //! than formed again, so that a step reads `A` once, for the gradient. The
 //! update is a convex combination of `A x` and a column of `A`, so its
@@ -56,8 +60,10 @@
 //! # Cost
 //!
 //! `O(m n)` per step for the gradient, `O(m + n)` for the rest. Nothing is
-//! allocated inside the loop and every sum runs in index order, so the result
-//! does not depend on the number of threads.
+//! allocated inside the loop and every sum has a fixed order, so the result
+//! does not depend on the number of threads. A step of a problem of `10^6`
+//! entries takes tens of microseconds, too little to share between threads;
+//! callers run independent problems in parallel instead.
 //!
 //! # References
 //!
@@ -230,14 +236,16 @@ impl<'a> SimplexLeastSquares<'a> {
     /// The objective `(|A x - b|^2 + eta |x|^2) / m` at the state.
     #[must_use]
     pub fn value(&self, state: &FrankWolfeState) -> f64 {
-        let fit: f64 = state
-            .ax
-            .iter()
-            .zip(self.b)
-            .map(|(&ax, &b)| (ax - b) * (ax - b))
-            .sum();
-        let penalty: f64 = state.x.iter().map(|&x| x * x).sum();
+        let fit = sum_map2(&state.ax, self.b, |ax, b| (ax - b) * (ax - b));
+        let penalty = dot(&state.x, &state.x);
         (self.eta * penalty + fit) / self.rows as f64
+    }
+
+    /// `A' r + eta x` into `out`.
+    fn gradient(&self, x: &[f64], residual: &[f64], out: &mut [f64]) {
+        for (j, (g, &xj)) in out.iter_mut().zip(x).enumerate() {
+            *g = dot(self.column(j), residual) + self.eta * xj;
+        }
     }
 
     /// One step, described in the module documentation.
@@ -251,16 +259,10 @@ impl<'a> SimplexLeastSquares<'a> {
         for ((r, &axv), &b) in residual.iter_mut().zip(ax.iter()).zip(self.b) {
             *r = axv - b;
         }
+        self.gradient(x, residual, gradient);
         let mut best = 0;
-        for j in 0..self.cols {
-            let dot: f64 = self
-                .column(j)
-                .iter()
-                .zip(residual.iter())
-                .map(|(&a, &r)| a * r)
-                .sum();
-            gradient[j] = dot + self.eta * x[j];
-            if gradient[j] < gradient[best] {
+        for (j, &g) in gradient.iter().enumerate() {
+            if g < gradient[best] {
                 best = j;
             }
         }
@@ -278,12 +280,10 @@ impl<'a> SimplexLeastSquares<'a> {
             return;
         }
         let column = self.column(best);
-        let mut r_norm = 0.0;
         for (residual_out, (&a, &axv)) in residual.iter_mut().zip(column.iter().zip(ax.iter())) {
-            let r = a - axv;
-            *residual_out = r;
-            r_norm += r * r;
+            *residual_out = a - axv;
         }
+        let r_norm = dot(residual, residual);
         let curvature = r_norm + self.eta * d_norm;
         let step = if curvature > 0.0 {
             (-slope / curvature).clamp(0.0, 1.0)
@@ -329,6 +329,40 @@ impl<'a> SimplexLeastSquares<'a> {
             converged,
         })
     }
+}
+
+const LANES: usize = 8;
+
+/// The sum of `f(a_i, b_i)` over eight lanes: lane `j` takes the terms at
+/// positions `j`, `j + 8`, ... in order, the lanes are folded as
+/// `((l0 + l4) + (l2 + l6)) + ((l1 + l5) + (l3 + l7))`, and the last
+/// `len mod 8` terms are summed from left to right and added last. The width is
+/// fixed, so the bits do not depend on the target; the loop vectorises because
+/// the eight running sums are independent. The order is that of
+/// `epistat_stats::lanes`.
+#[inline]
+fn sum_map2(a: &[f64], b: &[f64], f: impl Fn(f64, f64) -> f64) -> f64 {
+    debug_assert_eq!(a.len(), b.len());
+    let (ca, ra) = a.as_chunks::<LANES>();
+    let (cb, rb) = b.as_chunks::<LANES>();
+    let mut lanes = [0.0_f64; LANES];
+    for (x, y) in ca.iter().zip(cb) {
+        for ((lane, &u), &v) in lanes.iter_mut().zip(x).zip(y) {
+            *lane += f(u, v);
+        }
+    }
+    let mut tail = 0.0;
+    for (&u, &v) in ra.iter().zip(rb) {
+        tail += f(u, v);
+    }
+    ((lanes[0] + lanes[4]) + (lanes[2] + lanes[6]))
+        + ((lanes[1] + lanes[5]) + (lanes[3] + lanes[7]))
+        + tail
+}
+
+#[inline]
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    sum_map2(a, b, |u, v| u * v)
 }
 
 #[cfg(test)]
