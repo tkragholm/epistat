@@ -46,6 +46,8 @@
 //!   placebo, bootstrap or jackknife in [`synthdid_variance`], and staggered
 //!   adoption cohort by cohort in [`estimate_synthdid_staggered`]. The
 //!   module [`synthdid`] gives the algorithm.
+//! - The power of the pre-trends test and the distortion after passing it,
+//!   after Roth \[10\], in [`pretrends`].
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -123,6 +125,9 @@
 //! 9. Arkhangelsky D, Athey S, Hirshberg DA, Imbens GW, Wager S. Synthetic
 //!    difference-in-differences. Am Econ Rev 2021;111(12):4088-118.
 //!    doi:10.1257/aer.20190159
+//! 10. Roth J. Pretest with caution: event-study estimates after testing for
+//!     parallel trends. Am Econ Rev Insights 2022;4(3):305-22.
+//!     doi:10.1257/aeri.20210236
 #![warn(missing_docs)]
 
 #[expect(
@@ -134,6 +139,7 @@ pub(crate) mod error;
 pub(crate) mod estimators;
 pub mod inference;
 pub(crate) mod methods;
+pub mod pretrends;
 #[cfg(test)]
 mod tests;
 pub(crate) mod types;

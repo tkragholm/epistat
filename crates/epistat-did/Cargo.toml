@@ -136,6 +136,10 @@ name = "parity_synthdid"
 path = "tests/parity_synthdid.rs"
 
 [[test]]
+name = "parity_pretrends"
+path = "tests/parity_pretrends.rs"
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
