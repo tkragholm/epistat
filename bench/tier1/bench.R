@@ -339,6 +339,16 @@ if (method %in% c("rcs", "ns")) {
   o <- r$value
   finish(r$times, c(setNames(o$att, sprintf("att_g%d_t%d", o$group, o$t)),
                     setNames(o$se, sprintf("se_g%d_t%d", o$group, o$t))))
+} else if (method == "twfe_es") {
+  suppressMessages(library(fixest))
+  setFixest_nthreads(parallel::detectCores())
+  d <- rd("twfe")
+  d[, rel := ifelse(g < 0, -1000, pmin(pmax(t - g, -5), 5))]
+  r <- timed(function() feols(y ~ i(rel, ref = c(-1, -1000)) | id + t, data = d, cluster = ~id,
+                              notes = FALSE))
+  rel <- as.integer(sub("rel::", "", names(coef(r$value))))
+  finish(r$times, c(setNames(coef(r$value), sprintf("coef_rel%d", rel)),
+                    setNames(se(r$value), sprintf("se_rel%d", rel))))
 } else if (method == "two_part") {
   d <- rd("sc")
   r <- timed(function() {

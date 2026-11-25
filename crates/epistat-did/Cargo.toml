@@ -124,6 +124,14 @@ path = "tests/parity_smoothness.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "parity_twfe"
+path = "tests/parity_twfe.rs"
+
+[[test]]
+name = "parity_bacon"
+path = "tests/parity_bacon.rs"
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]

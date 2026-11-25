@@ -28,6 +28,17 @@ unbalanced panel line up. Its aggregations take their standard errors from the
 combined influence function, which counts the covariance between cells that
 share units.
 
+Two-way fixed-effects regressions are there as the comparison readers
+expect: the static regression and the event study with relative-period
+indicators, a chosen reference period and binned end points, as
+`fixest::feols(y ~ i(rel, ref = -1) | id + t)`, with `fixest`'s clustered
+covariance and influence functions by unit. The unit and period effects are
+absorbed by `epistat-glm`'s alternating projections, so the cost is linear in
+the rows. The Goodman-Bacon decomposition splits the static estimate into its
+2x2 comparisons and their weights as `bacondecomp::bacon` does, with the
+within and between components when there are time-varying covariates. Both
+are checked against R.
+
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
 Every bootstrap replicate is seeded from the caller's seed, and results do not

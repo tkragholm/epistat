@@ -7,9 +7,18 @@
 //! covariate. `N` is the number of rows. Method: `att_gt` (the doubly robust
 //! estimator, never-treated comparison group, varying base period, analytic
 //! standard errors).
+//!
+//! The data (`twfe`) are `N / 10` units observed for ten consecutive periods
+//! out of fifteen, starting at a period drawn for each unit, first treated in
+//! period 5, 8 or 11 or never, with effects that grow with the time since
+//! treatment. Method: `twfe_es`, the event study
+//! `feols(y ~ i(rel, ref = c(-1, -1000)) | id + t, cluster = ~id)` with the
+//! relative periods binned at -5 and 5, including the influence functions of
+//! the coefficients by unit.
 
 #![allow(
     clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
     reason = "a benchmark program: sizes, codes and days are small whole numbers"
 )]
 
@@ -18,7 +27,8 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DrDidConfig, estimate_att_gt_dr_panel,
+    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DrDidConfig, TwfeConfig, TwfePanel, TwfeSpec,
+    estimate_att_gt_dr_panel, estimate_twfe,
 };
 
 const SEED: u64 = 20_261_208;
@@ -52,10 +62,82 @@ fn generate(n: usize) {
     }
 }
 
+fn generate_twfe(n: usize) {
+    let mut rng = Rng(SEED + 1);
+    let mut out = Writer::create(&common::data_path("twfe", n), "id,t,g,y");
+    let period_effect: Vec<f64> = (0..15).map(|_| rng.normal()).collect();
+    for id in 0..n / PERIODS_TWFE {
+        let u = rng.normal();
+        let start = rng.below(6) as usize;
+        let g = match rng.below(4) {
+            0 => 5.0,
+            1 => 8.0,
+            2 => 11.0,
+            _ => -1.0,
+        };
+        for s in 0..PERIODS_TWFE {
+            let t = (start + s) as f64;
+            let effect = if g > 0.0 && t >= g {
+                1.0 + 0.2 * (t - g)
+            } else {
+                0.0
+            };
+            let y = u + period_effect[start + s] + effect + rng.normal();
+            out.row(&[id as f64, t, g, y]);
+        }
+    }
+}
+
+const PERIODS_TWFE: usize = 10;
+
+fn twfe(n: usize) {
+    let t = Table::read_sized(&common::data_path("twfe", n));
+    let unit: Vec<u32> = t.col("id").iter().map(|&v| v as u32).collect();
+    let time: Vec<i32> = t.col("t").iter().map(|&v| v as i32).collect();
+    let first: Vec<Option<i32>> = t
+        .col("g")
+        .iter()
+        .map(|&g| (g > 0.0).then_some(g as i32))
+        .collect();
+    let panel = TwfePanel {
+        unit: &unit,
+        time: &time,
+        first_treated: &first,
+        outcome: t.col("y"),
+        weights: None,
+        covariates: None,
+    };
+    let config = TwfeConfig {
+        spec: TwfeSpec::EventStudy {
+            reference: -1,
+            bins: Some((-5, 5)),
+        },
+        ..TwfeConfig::event_study()
+    };
+    let (times, result) = common::timed(common::reps(), || {
+        estimate_twfe(&panel, &config).expect("twfe")
+    });
+    let mut lines = Lines::default();
+    for term in &result.terms {
+        let r = term.relative_period.unwrap_or(0);
+        lines.push_opt(&format!("coef_rel{r}"), term.estimate);
+        lines.push_opt(&format!("se_rel{r}"), term.std_error);
+    }
+    common::finish("twfe_es", n, &times, &lines);
+}
+
 fn main() {
     let (method, n) = (common::method(), common::size());
     if method == "gen_did" {
         generate(n);
+        return;
+    }
+    if method == "gen_twfe" {
+        generate_twfe(n);
+        return;
+    }
+    if method == "twfe_es" {
+        twfe(n);
         return;
     }
     assert_eq!(method, "att_gt", "unknown method {method}");

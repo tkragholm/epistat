@@ -37,6 +37,10 @@
 //! - Doubly robust triple differences \[5\]: [`estimate_dr_ddd`].
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
+//! - Two-way fixed-effects regressions, static and event study with binned
+//!   end points, as `fixest::feols` fits them: [`estimate_twfe`], and the
+//!   Goodman-Bacon decomposition of the static estimate into its 2x2
+//!   comparisons as `bacondecomp::bacon`: [`bacon_decomposition`].
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -217,6 +221,10 @@ pub use methods::att_gt::{
     EventStudyResult, EventTimeResult, aggregate_att_gt_event_time, att_gt_simultaneous_bands,
     att_gt_simultaneous_bands_with_influence,
 };
+pub use methods::bacon::{
+    BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconPanel, BaconWithin,
+    bacon_decomposition,
+};
 pub use methods::continuous::sieve::estimate_acrt_sieve;
 pub use methods::did_cc::{
     DidCcObservationView, estimate_did_cc_robust, estimate_did_cc_robust_from_views,
@@ -251,4 +259,7 @@ pub use methods::standard::{
     estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
+pub use methods::twfe::{
+    TwfeConfig, TwfeError, TwfePanel, TwfeResult, TwfeSpec, TwfeTerm, estimate_twfe,
+};
 pub use types::*;
