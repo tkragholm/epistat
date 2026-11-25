@@ -42,7 +42,7 @@
 //!   them: [`estimate_synthdid`] with [`SynthDidConfig`], standard errors by
 //!   placebo, bootstrap or jackknife in [`synthdid_variance`], and staggered
 //!   adoption cohort by cohort in [`estimate_synthdid_staggered`]. The
-//!   module documentation of `methods::synthdid` gives the algorithm.
+//!   module [`synthdid`] gives the algorithm.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -259,6 +259,7 @@ pub use methods::standard::aggregate_event_time;
 pub use methods::standard::{
     estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
 };
+pub use methods::synthdid;
 pub use methods::synthdid::{
     StaggeredSynthEstimate, StaggeredSynthPanel, SynthCohort, SynthDidConfig, SynthDidError,
     SynthDidEstimate, SynthDidVariance, SynthDraws, SynthObservation, SynthPanel, SynthTrace,

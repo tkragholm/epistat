@@ -149,9 +149,9 @@
 //! - A Frank-Wolfe step whose line search has a zero denominator (a flat
 //!   direction, possible only without a penalty) takes the full step when the
 //!   slope is negative and none otherwise, where R divides by zero.
-//! - The matrix products run in index order, not through BLAS, so the weights
-//!   agree with R's to rounding and the iteration counts agree exactly in the
-//!   tests.
+//! - The sums run over eight fixed lanes, not through BLAS, so the weights
+//!   agree with R's to rounding; in the tests the step counts and the zero
+//!   weights agree exactly.
 //!
 //! # References
 //!
