@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_linalg::{MatRef, weighted_gram, xtv};
 use epistat_rng::Stream;
+use rayon::prelude::*;
 
 use super::{
     MissingAssumption, MissingConfig, MissingError, MissingFolds, MissingModels, MissingNuisance,
@@ -43,6 +44,51 @@ impl Design {
     }
 }
 
+/// Rows per block of the passes over the units. The blocks are processed in
+/// parallel and their sums added in block order, so the results do not
+/// depend on the number of threads.
+const BLOCK: usize = 1 << 14;
+
+fn block_range(n: usize, b: usize) -> std::ops::Range<usize> {
+    b * BLOCK..n.min((b + 1) * BLOCK)
+}
+
+/// The sum of `f(i)` over `0..n`: compensated within each block of
+/// [`BLOCK`] units, the block sums added in order with compensation.
+fn block_sum(n: usize, f: impl Fn(usize) -> f64 + Sync) -> f64 {
+    let partial: Vec<f64> = (0..n.div_ceil(BLOCK))
+        .into_par_iter()
+        .map(|b| compensated_sum(block_range(n, b).map(&f)))
+        .collect();
+    compensated_sum(partial.into_iter())
+}
+
+/// `out[i] = f(i)` for every unit, block by block in parallel.
+fn fill(out: &mut [f64], f: impl Fn(usize) -> f64 + Sync) {
+    out.par_chunks_mut(BLOCK)
+        .enumerate()
+        .for_each(|(b, chunk)| {
+            for (k, v) in chunk.iter_mut().enumerate() {
+                *v = f(b * BLOCK + k);
+            }
+        });
+}
+
+/// `out[i] = f(i)` for the units of `rows`, block by block in parallel; the
+/// other entries are left as they are.
+fn fill_where(out: &mut [f64], rows: &[bool], f: impl Fn(usize) -> f64 + Sync) {
+    out.par_chunks_mut(BLOCK)
+        .enumerate()
+        .for_each(|(b, chunk)| {
+            for (k, v) in chunk.iter_mut().enumerate() {
+                let i = b * BLOCK + k;
+                if rows[i] {
+                    *v = f(i);
+                }
+            }
+        });
+}
+
 /// The scaled design of the chosen columns, with `y1` appended when given.
 fn design(
     covariates: MatRef<'_, f64>,
@@ -64,19 +110,17 @@ fn design(
     let mut centre = vec![0.0; q];
     let mut scale = vec![0.0; q];
     for j in 0..q {
-        for i in 0..n {
-            if !value(i, j).is_finite() {
-                return Err(MissingError::NotFinite {
-                    what: "covariates",
-                    unit: i,
-                });
-            }
+        if let Some(unit) = (0..n).find(|&i| !value(i, j).is_finite()) {
+            return Err(MissingError::NotFinite {
+                what: "covariates",
+                unit,
+            });
         }
-        let mean = compensated_sum((0..n).map(|i| value(i, j))) / n as f64;
-        let var = compensated_sum((0..n).map(|i| {
+        let mean = block_sum(n, |i| value(i, j)) / n as f64;
+        let var = block_sum(n, |i| {
             let d = value(i, j) - mean;
             d * d
-        })) / n as f64;
+        }) / n as f64;
         if var <= 0.0 || !var.is_finite() {
             return Err(MissingError::Constant {
                 what: if j < columns.len() {
@@ -89,13 +133,18 @@ fn design(
         centre[j] = mean;
         scale[j] = var.sqrt();
     }
-    let mut data = Vec::with_capacity(n * cols);
-    for i in 0..n {
-        data.push(1.0);
-        for j in 0..q {
-            data.push((value(i, j) - centre[j]) / scale[j]);
-        }
-    }
+    let mut data = vec![0.0; n * cols];
+    data.par_chunks_mut(BLOCK * cols)
+        .enumerate()
+        .for_each(|(b, chunk)| {
+            for (k, row) in chunk.chunks_mut(cols).enumerate() {
+                let i = b * BLOCK + k;
+                row[0] = 1.0;
+                for j in 0..q {
+                    row[j + 1] = (value(i, j) - centre[j]) / scale[j];
+                }
+            }
+        });
     Ok(Design { data, cols })
 }
 
@@ -150,12 +199,10 @@ fn least_squares(
     fit_rows: &[bool],
     model: &'static str,
 ) -> Result<Vec<f64>, MissingError> {
-    let weights: Vec<f64> = fit_rows.iter().map(|&r| f64::from(u8::from(r))).collect();
-    let weighted: Vec<f64> = y
-        .iter()
-        .zip(fit_rows)
-        .map(|(&v, &r)| if r { v } else { 0.0 })
-        .collect();
+    let mut weights = vec![0.0; y.len()];
+    fill(&mut weights, |i| f64::from(u8::from(fit_rows[i])));
+    let mut weighted = vec![0.0; y.len()];
+    fill(&mut weighted, |i| if fit_rows[i] { y[i] } else { 0.0 });
     let x = design.view();
     let gram = weighted_gram(x, &weights).map_err(|_| MissingError::Fit {
         model,
@@ -166,16 +213,6 @@ fn least_squares(
     solve(&gram, &b, model)
 }
 
-/// The logistic log-likelihood of the units of `fit_rows` at the linear
-/// predictor `eta`.
-fn log_likelihood(y: &[f64], eta: &[f64], fit_rows: &[bool]) -> f64 {
-    compensated_sum((0..y.len()).filter(|&i| fit_rows[i]).map(|i| {
-        let e = eta[i];
-        let softplus = e.max(0.0) + (-e.abs()).exp().ln_1p();
-        y[i] * e - softplus
-    }))
-}
-
 pub(super) fn expit(eta: f64) -> f64 {
     if eta >= 0.0 {
         1.0 / (1.0 + (-eta).exp())
@@ -183,6 +220,45 @@ pub(super) fn expit(eta: f64) -> f64 {
         let e = eta.exp();
         e / (1.0 + e)
     }
+}
+
+/// The linear predictor `eta` and `exp(-|eta|)` of the units of `fit_rows`
+/// at `beta`, written into `eta` and `damped`, and the log-likelihood
+/// `sum y eta - log(1 + exp(eta))` over those units.
+fn evaluate(
+    design: &Design,
+    y: &[f64],
+    fit_rows: &[bool],
+    beta: &[f64],
+    eta: &mut [f64],
+    damped: &mut [f64],
+) -> f64 {
+    let n = y.len();
+    let partial: Vec<f64> = eta
+        .par_chunks_mut(BLOCK)
+        .zip(damped.par_chunks_mut(BLOCK))
+        .enumerate()
+        .map(|(b, (eta, damped))| {
+            let range = block_range(n, b);
+            for (k, i) in range.clone().enumerate() {
+                if fit_rows[i] {
+                    let e = design.predict(i, beta);
+                    eta[k] = e;
+                    damped[k] = (-e.abs()).exp();
+                } else {
+                    eta[k] = 0.0;
+                    damped[k] = 0.0;
+                }
+            }
+            compensated_sum(
+                range
+                    .enumerate()
+                    .filter(|&(_, i)| fit_rows[i])
+                    .map(|(k, i)| y[i] * eta[k] - (eta[k].max(0.0) + damped[k].ln_1p())),
+            )
+        })
+        .collect();
+    compensated_sum(partial.into_iter())
 }
 
 /// Logistic regression of the 0/1 `y` on the design over the units of
@@ -197,34 +273,36 @@ fn logistic(
     let n = y.len();
     let p = design.cols;
     let x = design.view();
-    let linear = |beta: &[f64], eta: &mut Vec<f64>| {
-        eta.clear();
-        eta.extend((0..n).map(|i| {
-            if fit_rows[i] {
-                design.predict(i, beta)
-            } else {
-                0.0
-            }
-        }));
-    };
     let mut beta = vec![0.0; p];
-    let mut eta = Vec::with_capacity(n);
-    linear(&beta, &mut eta);
-    let mut ll = log_likelihood(y, &eta, fit_rows);
+    let (mut eta, mut damped) = (vec![0.0; n], vec![0.0; n]);
+    let (mut trial_eta, mut trial_damped) = (vec![0.0; n], vec![0.0; n]);
+    let mut ll = evaluate(design, y, fit_rows, &beta, &mut eta, &mut damped);
     let mut weights = vec![0.0; n];
     let mut residual = vec![0.0; n];
-    let mut candidate = Vec::with_capacity(n);
     for _ in 0..config.max_iterations {
-        for i in 0..n {
-            if fit_rows[i] {
-                let mu = expit(eta[i]);
-                weights[i] = mu * (1.0 - mu);
-                residual[i] = y[i] - mu;
-            } else {
-                weights[i] = 0.0;
-                residual[i] = 0.0;
-            }
-        }
+        // The fitted probability from `exp(-|eta|)`, without another
+        // exponential: `1 / (1 + d)` for `eta >= 0`, `d / (1 + d)` below.
+        weights
+            .par_chunks_mut(BLOCK)
+            .zip(residual.par_chunks_mut(BLOCK))
+            .enumerate()
+            .for_each(|(b, (w, r))| {
+                for (k, i) in block_range(n, b).enumerate() {
+                    if fit_rows[i] {
+                        let d = damped[i];
+                        let mu = if eta[i] >= 0.0 {
+                            1.0 / (1.0 + d)
+                        } else {
+                            d / (1.0 + d)
+                        };
+                        w[k] = mu * (1.0 - mu);
+                        r[k] = y[i] - mu;
+                    } else {
+                        w[k] = 0.0;
+                        r[k] = 0.0;
+                    }
+                }
+            });
         let gram = weighted_gram(x, &weights).map_err(|_| MissingError::Fit {
             model,
             reason: "the design could not be formed",
@@ -249,11 +327,18 @@ fn logistic(
             for j in 0..p {
                 trial[j] = beta[j] + factor * step[j];
             }
-            linear(&trial, &mut candidate);
-            let trial_ll = log_likelihood(y, &candidate, fit_rows);
+            let trial_ll = evaluate(
+                design,
+                y,
+                fit_rows,
+                &trial,
+                &mut trial_eta,
+                &mut trial_damped,
+            );
             if trial_ll.is_finite() && trial_ll >= ll - 1e-12 * ll.abs() {
                 beta.copy_from_slice(&trial);
-                std::mem::swap(&mut eta, &mut candidate);
+                std::mem::swap(&mut eta, &mut trial_eta);
+                std::mem::swap(&mut damped, &mut trial_damped);
                 ll = trial_ll;
                 accepted = true;
                 break;
@@ -537,14 +622,20 @@ fn fit_fold(
         beta.as_ref()
             .map_or(1.0, |b| expit(designs.missingness().predict(i, b)))
     };
-    for i in (0..n).filter(|&i| eval[i]) {
-        out.propensity[i] = expit(designs.propensity().predict(i, &propensity));
-        out.gamma_treated[i] = gamma_at(&gamma1, i);
-        out.gamma_control[i] = gamma_at(&gamma0, i);
-        out.pre_treated[i] = designs.pre().predict(i, &pre1);
-        out.post_control[i] = designs.post().predict(i, &post0);
-        out.pre_control[i] = designs.pre().predict(i, &pre0);
-    }
+    fill_where(&mut out.propensity, eval, |i| {
+        expit(designs.propensity().predict(i, &propensity))
+    });
+    fill_where(&mut out.gamma_treated, eval, |i| gamma_at(&gamma1, i));
+    fill_where(&mut out.gamma_control, eval, |i| gamma_at(&gamma0, i));
+    fill_where(&mut out.pre_treated, eval, |i| {
+        designs.pre().predict(i, &pre1)
+    });
+    fill_where(&mut out.post_control, eval, |i| {
+        designs.post().predict(i, &post0)
+    });
+    fill_where(&mut out.pre_control, eval, |i| {
+        designs.pre().predict(i, &pre0)
+    });
     let (Some(nested_design), Some(nested_out)) = (designs.nested(), out.nested_control.as_mut())
     else {
         return Ok(());
@@ -589,8 +680,6 @@ fn fit_fold(
         };
     }
     let eta = least_squares(nested_design, &pseudo, &nested_rows, "nested regression")?;
-    for i in (0..n).filter(|&i| eval[i]) {
-        nested_out[i] = nested_design.predict(i, &eta);
-    }
+    fill_where(nested_out, eval, |i| nested_design.predict(i, &eta));
     Ok(())
 }
