@@ -61,6 +61,9 @@
 //!   `fixest::sunab` and `fixest::aggregate` compute it: [`estimate_sunab`],
 //!   with the cohort and relative period coefficients and their summaries by
 //!   relative period, by cohort and overall.
+//! - Wooldridge's extended two-way fixed-effects regression \[15\] and its
+//!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them for
+//!   linear models: [`estimate_etwfe`].
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -152,6 +155,9 @@
 //! 14. Sun L, Abraham S. Estimating dynamic treatment effects in event
 //!     studies with heterogeneous treatment effects. J Econom
 //!     2021;225(2):175-99. doi:10.1016/j.jeconom.2020.09.006
+//! 15. Wooldridge JM. Two-way fixed effects, the two-way Mundlak regression,
+//!     and difference-in-differences estimators. Empir Econ
+//!     2025;69:2545-87. doi:10.1007/s00181-025-02807-z
 #![warn(missing_docs)]
 
 #[expect(
@@ -293,6 +299,10 @@ pub use methods::efficient::{
     aggregate_efficient_att_gt_by_calendar_time, aggregate_efficient_att_gt_by_cohort,
     aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
     aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
+};
+pub use methods::etwfe::{
+    EtwfeCoefficient, EtwfeConfig, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeError,
+    EtwfeResult, EtwfeTerm, EtwfeType, estimate_etwfe,
 };
 pub use methods::imputation;
 pub use methods::imputation::{

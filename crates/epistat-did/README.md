@@ -64,6 +64,18 @@ classifies cohorts by an order-dependent scan that can drop rows and keep
 always-treated units as controls; here the always treated are removed. It is
 checked against `fixest` 0.14.2.
 
+Wooldridge's extended two-way fixed-effects regression saturates the treated
+cohort and period cells, each with its own slopes on the covariates demeaned
+within the cohort, beside cohort and period slopes of the covariates, with
+cohort or unit effects and not-yet-treated or never-treated controls, as
+`etwfe::etwfe` 0.6.2 fits it. The average effects of `etwfe::emfx`, overall,
+by cohort, by period and by event time, come with their delta-method standard
+errors from the exact Jacobian, where `marginaleffects` uses forward
+differences, and with influence functions by unit. The fit is the same
+absorbed regression, so the cost is linear in the rows. Poisson and logit
+models, which `etwfe` fits with cohort and period dummies, are not offered
+yet.
+
 Synthetic difference-in-differences (Arkhangelsky, Athey, Hirshberg, Imbens
 and Wager), synthetic control and the plain difference-in-differences
 estimator reproduce R's `synthdid` 0.0.9: the unit and time weights by its

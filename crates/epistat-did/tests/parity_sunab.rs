@@ -4,6 +4,7 @@
 //! aggregated by treated counts.
 
 #[path = "common/feols_bound.rs"]
+#[expect(dead_code, reason = "the iid covariance is not used here")]
 mod feols_bound;
 
 use epistat_did::{
@@ -16,7 +17,7 @@ use epistat_glm::{Absorb, Ssc};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
-use feols_bound::{EPS, feols_bound};
+use feols_bound::{EPS, Meat, feols_bound};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -239,7 +240,7 @@ fn sunab_matches_fixest() {
             Some(&weights),
             &design,
             &case.outcome,
-            clusters,
+            Meat::Cluster(clusters),
             TIGHT,
             case.exact.lambda_plus,
             case.exact.error,
@@ -508,7 +509,7 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
         None,
         &design,
         &outcome,
-        &unit,
+        Meat::Cluster(&unit),
         TIGHT,
         f64::from(u8::try_from(periods).unwrap()),
         0.0,

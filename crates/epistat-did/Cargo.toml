@@ -156,6 +156,10 @@ name = "parity_sunab"
 path = "tests/parity_sunab.rs"
 
 [[test]]
+name = "parity_etwfe"
+path = "tests/parity_etwfe.rs"
+
+[[test]]
 name = "imputation_properties"
 path = "tests/imputation_properties.rs"
 
