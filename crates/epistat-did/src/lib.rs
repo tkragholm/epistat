@@ -37,6 +37,11 @@
 //! - Doubly robust triple differences \[5\]: [`estimate_dr_ddd`].
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
+//! - The imputation estimator of Borusyak, Jaravel and Spiess \[8\]:
+//!   [`estimate_did_imputation`], with the algorithm in [`imputation`]; and
+//!   the two-stage estimator of Gardner \[9\]: [`estimate_did2s`], in
+//!   [`two_stage`]. Both absorb the unit and period effects of the untreated
+//!   rows with `epistat_glm::absorb`, so their cost is linear in the rows.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -108,6 +113,11 @@
 //!    with a continuous treatment. Working paper, 2024.
 //! 7. Rambachan A, Roth J. A more credible approach to parallel trends. Rev
 //!    Econ Stud 2023;90(5):2555-91. doi:10.1093/restud/rdad018
+//! 8. Borusyak K, Jaravel X, Spiess J. Revisiting event-study designs: robust
+//!    and efficient estimation. Rev Econ Stud 2024;91(6):3253-85.
+//!    doi:10.1093/restud/rdae007
+//! 9. Gardner J. Two-stage differences in differences. Working paper, 2021.
+//!    arXiv:2207.05943
 #![warn(missing_docs)]
 
 #[expect(
@@ -242,6 +252,12 @@ pub use methods::efficient::{
     aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
     aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
 };
+pub use methods::imputation;
+pub use methods::imputation::{
+    ImputationConfig, ImputationError, ImputationEstimate, ImputationResult, ImputationTarget,
+    ImputationTerm, PretrendResult, PretrendTerm, Pretrends, StaggeredPanel,
+    estimate_did_imputation,
+};
 #[expect(
     deprecated,
     reason = "re-exports a deprecated function until it is removed"
@@ -251,4 +267,8 @@ pub use methods::standard::{
     estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
+pub use methods::two_stage;
+pub use methods::two_stage::{
+    TwoStageConfig, TwoStageResult, TwoStageSpec, TwoStageTerm, estimate_did2s,
+};
 pub use types::*;

@@ -124,6 +124,14 @@ path = "tests/parity_smoothness.rs"
 required-features = ["parity-tests"]
 
 [[test]]
+name = "parity_imputation"
+path = "tests/parity_imputation.rs"
+
+[[test]]
+name = "imputation_properties"
+path = "tests/imputation_properties.rs"
+
+[[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
