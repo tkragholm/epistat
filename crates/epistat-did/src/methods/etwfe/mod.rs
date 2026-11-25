@@ -551,8 +551,7 @@ pub fn estimate_etwfe(
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit(panel.outcome, x.as_ref(), &fe)?;
-    drop(x);
+    .fit_owned(panel.outcome, x, &fe)?;
     let cov = fit.vcov(config.vcov, config.ssc)?;
     let coefficients: Vec<EtwfeCoefficient> = terms
         .iter()

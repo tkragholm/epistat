@@ -501,8 +501,7 @@ pub fn estimate_sunab(
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit(panel.outcome, x.as_ref(), &fe)?;
-    drop(x);
+    .fit_owned(panel.outcome, x, &fe)?;
     let clusters = config.clusters.unwrap_or(panel.unit);
     let ways = [clusters];
     let cov = fit.vcov(Vcov::Cluster(&ways), config.ssc)?;

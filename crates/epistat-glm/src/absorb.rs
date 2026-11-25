@@ -814,6 +814,81 @@ impl FixedEffects {
         })
     }
 
+    /// [`FixedEffects::demean`] of the columns of `x` and then `y`, with the
+    /// columns of `x` demeaned in their own storage: each column keeps the
+    /// rows that enter, in order, at its top, and `x` is cut to those rows.
+    /// The values, the errors and their order are those of `demean` on the
+    /// same columns. The returned [`Demeaned`] holds no columns; the demeaned
+    /// `y` is the returned vector.
+    pub(crate) fn demean_matrix(
+        &self,
+        x: &mut epistat_linalg::Mat<f64>,
+        y: &[f64],
+        control: &Absorb,
+    ) -> Result<(Vec<f64>, Demeaned), AbsorbError> {
+        control.check()?;
+        let p = x.ncols();
+        for found in [x.nrows(), y.len()] {
+            if found != self.n_input {
+                return Err(AbsorbError::Length {
+                    what: "column",
+                    expected: self.n_input,
+                    found,
+                });
+            }
+        }
+        for j in 0..=p {
+            let c: &[f64] = if j < p { x.col_as_slice(j) } else { y };
+            if let Some(&row) = self.kept.par_iter().find_first(|&&i| !c[i].is_finite()) {
+                return Err(AbsorbError::NotFinite { column: j, row });
+            }
+        }
+        let n = self.kept.len();
+        let compact = n < self.n_input;
+        let mut y_tilde: Vec<f64> = self.kept.par_iter().map(|&i| y[i]).collect();
+        let (results, last) = rayon::join(
+            || {
+                x.par_col_iter_mut()
+                    .enumerate()
+                    .map(|(j, column)| {
+                        let column = column
+                            .try_as_col_major_mut()
+                            .ok_or(AbsorbError::Invalid("a column is not contiguous"))?
+                            .as_slice_mut();
+                        // The rows that enter are increasing, so each moves
+                        // up or stays and none is overwritten before it moves.
+                        if compact {
+                            for (k, &i) in self.kept.iter().enumerate() {
+                                column[k] = column[i];
+                            }
+                        }
+                        self.demean_in_place(&mut column[..n], control, j)
+                    })
+                    .collect::<Vec<Result<ColumnResult, AbsorbError>>>()
+            },
+            || self.demean_in_place(&mut y_tilde, control, p),
+        );
+        let mut scale = Vec::with_capacity(p + 1);
+        let mut iterations = Vec::with_capacity(p + 1);
+        let mut coefficients = Vec::with_capacity(p + 1);
+        for result in results.into_iter().chain(std::iter::once(last)) {
+            let column = result?;
+            scale.push(column.scale);
+            iterations.push(column.iterations);
+            coefficients.push(column.coefficients);
+        }
+        x.truncate(n, p);
+        Ok((
+            y_tilde,
+            Demeaned {
+                columns: epistat_linalg::Mat::<f64>::zeros(0, 0),
+                scale,
+                iterations,
+                coefficients,
+            },
+        ))
+    }
+
     /// The coefficients `alpha` that solve the normal equations
     /// `D' W D alpha = b` for given level sums `b`, one slice per factor and
     /// one value per level in the order of [`FixedEffects::levels`], by the
