@@ -605,3 +605,31 @@ fn the_fit_has_its_recorded_bits() {
         .finish();
     assert_eq!(hash, 239_393_430_769_115_130, "recorded hash");
 }
+
+#[test]
+fn influence_sums_are_the_sums_of_the_row_influence() {
+    let reference = reference();
+    let case = &reference.cases[0];
+    let fe = fixed_effects(case);
+    let fit = Feols::default()
+        .fit(&case.y, design(case).as_ref(), &fe)
+        .unwrap();
+    let rows = fit.influence();
+    let units = fe.codes(0);
+    let count = fe.levels()[0];
+    let sums = fit.influence_sums(units, count).unwrap();
+    for a in 0..fit.rank {
+        let mut want = vec![0.0; count];
+        let mut size = vec![0.0_f64; count];
+        for (k, &u) in units.iter().enumerate() {
+            want[u as usize] += rows[(k, a)];
+            size[u as usize] += rows[(k, a)].abs();
+        }
+        for g in 0..count {
+            // The two orders of summation differ by the rounding of sums of
+            // at most 8 rows and a product with B of rank 2: 16 eps of the
+            // sum of magnitudes.
+            assert!((sums[(g, a)] - want[g]).abs() <= 16.0 * EPS * size[g].max(f64::MIN_POSITIVE));
+        }
+    }
+}

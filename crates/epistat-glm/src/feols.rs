@@ -308,35 +308,56 @@ impl Feols {
             }
         }
         let p = x.ncols();
-        let x_columns: Vec<Vec<f64>> = (0..p)
-            .map(|j| (0..n_input).map(|i| x[(i, j)]).collect())
+        // Columns of a column-major matrix are read in place; others are
+        // copied.
+        let copies: Vec<Option<Vec<f64>>> = (0..p)
+            .map(|j| {
+                x.col(j)
+                    .try_as_col_major()
+                    .is_none()
+                    .then(|| (0..n_input).map(|i| x[(i, j)]).collect())
+            })
             .collect();
-        let mut columns: Vec<&[f64]> = x_columns.iter().map(Vec::as_slice).collect();
+        let mut columns: Vec<&[f64]> = (0..p)
+            .map(|j| {
+                copies[j].as_deref().unwrap_or_else(|| {
+                    x.col(j)
+                        .try_as_col_major()
+                        .map_or(&[][..], |column| column.as_slice())
+                })
+            })
+            .collect();
         columns.push(y);
         let demeaned = fe.demean(&columns, &self.absorb)?;
-        Self::solve(fe, &demeaned, p)
+        drop(copies);
+        Self::solve(fe, demeaned, p)
     }
 
     /// The fit from the demeaned columns: covariates first, outcome last.
-    fn solve<'a>(
-        fe: &'a FixedEffects,
-        demeaned: &Demeaned,
-        p: usize,
-    ) -> Result<FeolsFit<'a>, AbsorbError> {
+    fn solve(fe: &FixedEffects, demeaned: Demeaned, p: usize) -> Result<FeolsFit<'_>, AbsorbError> {
+        let Demeaned {
+            columns: mut matrix,
+            scale,
+            iterations,
+            coefficients: column_coefficients,
+        } = demeaned;
         let n = fe.n_rows();
         let w = fe.weights();
         let total_weight = w.map_or(n as f64, |w| blocked_total(w.len(), |k| w[k]));
-        let x_tilde = demeaned.columns.as_ref().subcols(0, p);
-        let y_tilde = demeaned.columns.col_as_slice(p);
-        let reference: Vec<f64> = demeaned.scale[..p]
-            .iter()
-            .map(|s| s * total_weight.sqrt())
-            .collect();
+        let y_tilde = matrix.col_as_slice(p).to_vec();
+        let x_tilde = matrix.as_ref().subcols(0, p);
+        let reference: Vec<f64> = scale[..p].iter().map(|s| s * total_weight.sqrt()).collect();
         let keep = independent_columns(x_tilde, w, &reference);
         let columns: Vec<usize> = (0..p).filter(|&j| keep[j]).collect();
         let rank = columns.len();
         let dropped_columns: Vec<usize> = (0..p).filter(|&j| !keep[j]).collect();
-        let design = select_columns(x_tilde, &keep);
+        let design = if rank == p {
+            // The demeaned covariates are the design: drop the outcome.
+            matrix.truncate(n, p);
+            matrix
+        } else {
+            select_columns(x_tilde, &keep)
+        };
         let root: Vec<f64> = w.map_or_else(Vec::new, |w| w.iter().map(|v| v.sqrt()).collect());
         let gram = row_scaled_gram(design.as_ref(), |k| root.get(k).copied().unwrap_or(1.0));
         let weighted_y: Vec<f64> = (0..n)
@@ -366,10 +387,10 @@ impl Feols {
         let weight = |k: usize| w.map_or(1.0, |w| w[k]);
         let rss = blocked_total(n, |k| weight(k) * residuals[k] * residuals[k]);
         let tss = blocked_total(n, |k| weight(k) * y_tilde[k] * y_tilde[k]);
-        let mut alpha = demeaned.coefficients[p].clone();
+        let mut alpha = column_coefficients[p].clone();
         for (a, &j) in columns.iter().enumerate() {
             let b = beta[(a, 0)];
-            for (target, source) in alpha.iter_mut().zip(&demeaned.coefficients[j]) {
+            for (target, source) in alpha.iter_mut().zip(&column_coefficients[j]) {
                 for (t, s) in target.iter_mut().zip(source) {
                     *t -= b * s;
                 }
@@ -384,7 +405,7 @@ impl Feols {
             rss,
             sigma2: None,
             r2_within: (tss > 0.0).then(|| 1.0 - rss / tss),
-            iterations: demeaned.iterations.clone(),
+            iterations,
             columns,
             design,
             bread,
@@ -465,6 +486,45 @@ impl FeolsFit<'_> {
                 });
         }
         out
+    }
+
+    /// The influence summed within groups: `B sum_{i in g} w_i e_i x~_i` for
+    /// each group `g` of `groups` (one code below `count` per row that enters),
+    /// one row per group, one column per covariate that is not aliased. The
+    /// scores are added in row order and then multiplied by `B`, so no
+    /// matrix of one row per row is formed.
+    ///
+    /// # Errors
+    ///
+    /// [`AbsorbError::Length`] when `groups` does not have one code per row
+    /// that enters, and [`AbsorbError::Invalid`] for a code not below `count`.
+    pub fn influence_sums(&self, groups: &[u32], count: usize) -> Result<Mat<f64>, AbsorbError> {
+        let n = self.residuals.len();
+        if groups.len() != n {
+            return Err(AbsorbError::Length {
+                what: "groups",
+                expected: n,
+                found: groups.len(),
+            });
+        }
+        if groups.iter().any(|&g| g as usize >= count) {
+            return Err(AbsorbError::Invalid("a group code is not below the count"));
+        }
+        let k = self.rank;
+        let w = self.fe.weights();
+        let mut scores = vec![0.0; count * k];
+        for (i, &g) in groups.iter().enumerate() {
+            let s = w.map_or(1.0, |w| w[i]) * self.residuals[i];
+            let row = &mut scores[g as usize * k..(g as usize + 1) * k];
+            for (a, r) in row.iter_mut().enumerate() {
+                *r += s * self.design[(i, a)];
+            }
+        }
+        Ok(Mat::from_fn(count, k, |g, a| {
+            (0..k)
+                .map(|b| self.bread[(a, b)] * scores[g * k + b])
+                .sum::<f64>()
+        }))
     }
 
     /// The codes of `codes` on the rows that enter, as clusters.
