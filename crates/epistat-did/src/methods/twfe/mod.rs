@@ -73,25 +73,9 @@
 use std::collections::BTreeSet;
 
 use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
-use epistat_linalg::{Mat, MatRef};
+use epistat_linalg::Mat;
 
-/// A panel for a two-way fixed-effects regression, one entry per row.
-#[derive(Clone, Copy, Debug)]
-pub struct TwfePanel<'a> {
-    /// The unit of each row, any numbers.
-    pub unit: &'a [u32],
-    /// The period of each row.
-    pub time: &'a [i32],
-    /// The first treated period of the row's unit, `None` for never treated;
-    /// the same on every row of a unit.
-    pub first_treated: &'a [Option<i32>],
-    /// The outcome.
-    pub outcome: &'a [f64],
-    /// Prior weights, 1 when `None`; rows with weight 0 do not enter.
-    pub weights: Option<&'a [f64]>,
-    /// Covariates, one row per row, or `None`.
-    pub covariates: Option<MatRef<'a, f64>>,
-}
+use crate::methods::staggered::StaggeredPanel;
 
 /// The treatment terms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,7 +208,7 @@ pub struct TwfeResult {
 /// [`TwfeError`] for inputs of the wrong length, cohorts that vary within a
 /// unit, no treated row, unusable bins, and the errors of the fit.
 pub fn estimate_twfe(
-    panel: &TwfePanel<'_>,
+    panel: &StaggeredPanel<'_>,
     config: &TwfeConfig<'_>,
 ) -> Result<TwfeResult, TwfeError> {
     let n = panel.unit.len();
@@ -364,7 +348,7 @@ pub fn estimate_twfe(
 }
 
 /// Checks that each unit has one first treated period.
-fn check_cohorts(panel: &TwfePanel<'_>) -> Result<(), TwfeError> {
+fn check_cohorts(panel: &StaggeredPanel<'_>) -> Result<(), TwfeError> {
     let levels = panel
         .unit
         .iter()

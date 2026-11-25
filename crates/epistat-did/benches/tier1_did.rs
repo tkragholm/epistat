@@ -35,7 +35,7 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhConfig, DcdhObservation, DrDidConfig,
-    TwfeConfig, TwfePanel, TwfeSpec, estimate_att_gt_dr_panel, estimate_dcdh, estimate_twfe,
+    StaggeredPanel, TwfeConfig, TwfeSpec, estimate_att_gt_dr_panel, estimate_dcdh, estimate_twfe,
 };
 
 const SEED: u64 = 20_261_208;
@@ -129,7 +129,7 @@ fn twfe(n: usize) {
         .iter()
         .map(|&g| (g > 0.0).then_some(g as i32))
         .collect();
-    let panel = TwfePanel {
+    let panel = StaggeredPanel {
         unit: &unit,
         time: &time,
         first_treated: &first,

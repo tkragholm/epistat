@@ -68,9 +68,9 @@ use epistat_glm::{Absorb, Feols};
 
 use crate::methods::imputation::first_stage::{FirstStage, Projection, Projector};
 use crate::methods::imputation::{
-    ImputationError, Prepared, StaggeredPanel, UnitIndex, first_stage_fixed_effects,
-    outer_covariance,
+    ImputationError, Prepared, UnitIndex, first_stage_fixed_effects, outer_covariance,
 };
+use crate::methods::staggered::StaggeredPanel;
 
 /// The second-stage indicators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -84,19 +84,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons};
 use epistat_linalg::{Mat, MatRef};
 
-/// A balanced panel for the decomposition, one entry per row.
+use crate::methods::staggered::StaggeredPanel;
+
+/// The rows of the decomposition, with the treatment of each row.
 #[derive(Clone, Copy, Debug)]
-pub struct BaconPanel<'a> {
-    /// The unit of each row.
-    pub unit: &'a [u32],
-    /// The period of each row.
-    pub time: &'a [i32],
-    /// Whether the row is treated.
-    pub treated: &'a [bool],
-    /// The outcome.
-    pub outcome: &'a [f64],
-    /// Time-varying covariates, one row per row, or `None`.
-    pub controls: Option<MatRef<'a, f64>>,
+struct Rows<'a> {
+    unit: &'a [u32],
+    time: &'a [i32],
+    treated: &'a [bool],
+    outcome: &'a [f64],
+    controls: Option<MatRef<'a, f64>>,
 }
 
 /// The kind of a 2x2 comparison, with the labels of `bacondecomp`.
@@ -164,13 +161,16 @@ pub enum BaconError {
     /// Some unit lacks a period, or has one twice.
     #[error("the panel is not balanced")]
     Unbalanced,
-    /// A unit's treatment switches off, or is on before its first treated
-    /// period.
-    #[error("unit {unit}: the treatment does not stay on once it starts")]
-    NotAbsorbing {
+    /// A unit has rows with different first treated periods.
+    #[error("unit {unit} has rows with different first treated periods")]
+    Cohort {
         /// The unit.
         unit: u32,
     },
+    /// Prior weights were given; the decomposition is unweighted, as in
+    /// `bacondecomp`.
+    #[error("the decomposition takes no weights")]
+    Weights,
     /// A value is not finite.
     #[error("a value of {0} is not finite")]
     NotFinite(&'static str),
@@ -254,24 +254,24 @@ fn group_means<K: Ord + Copy>(v: &[f64], key: impl Fn(usize) -> K) -> Vec<f64> {
         .collect()
 }
 
-/// The Goodman-Bacon decomposition of `panel`, as `bacondecomp::bacon`.
-#[expect(
-    clippy::similar_names,
-    reason = "n_k, n_l, d_k and d_l are the notation of bacondecomp"
-)]
+/// The Goodman-Bacon decomposition of `panel`, as `bacondecomp::bacon`. The
+/// panel must be balanced and unweighted; its covariates are the time-varying
+/// controls of the decomposition. A unit whose first treated period lies after
+/// the last period is never treated, as it is to `bacondecomp`, which sees only
+/// the treatment of each row.
 ///
 /// # Errors
 ///
-/// [`BaconError`] for inputs of the wrong length or not finite, a panel that
-/// is not balanced, a treatment that is not absorbing, fewer than two timing
-/// groups, and the errors of the regressions.
-pub fn bacon_decomposition(panel: &BaconPanel<'_>) -> Result<BaconDecomposition, BaconError> {
+/// [`BaconError`] for inputs of the wrong length or not finite, weights, a
+/// panel that is not balanced, a first treated period that varies within a
+/// unit, fewer than two timing groups, and the errors of the regressions.
+pub fn bacon_decomposition(panel: &StaggeredPanel<'_>) -> Result<BaconDecomposition, BaconError> {
     let n = panel.unit.len();
     for (what, found) in [
         ("time", panel.time.len()),
-        ("treated", panel.treated.len()),
+        ("first_treated", panel.first_treated.len()),
         ("outcome", panel.outcome.len()),
-        ("controls", panel.controls.map_or(n, |x| x.nrows())),
+        ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
     ] {
         if found != n {
             return Err(BaconError::Length {
@@ -281,6 +281,34 @@ pub fn bacon_decomposition(panel: &BaconPanel<'_>) -> Result<BaconDecomposition,
             });
         }
     }
+    if panel.weights.is_some() {
+        return Err(BaconError::Weights);
+    }
+    let mut first: BTreeMap<u32, Option<i32>> = BTreeMap::new();
+    for (&u, &g) in panel.unit.iter().zip(panel.first_treated) {
+        if *first.entry(u).or_insert(g) != g {
+            return Err(BaconError::Cohort { unit: u });
+        }
+    }
+    let treated: Vec<bool> = (0..n)
+        .map(|i| panel.first_treated[i].is_some_and(|g| panel.time[i] >= g))
+        .collect();
+    decompose(&Rows {
+        unit: panel.unit,
+        time: panel.time,
+        treated: &treated,
+        outcome: panel.outcome,
+        controls: panel.covariates,
+    })
+}
+
+/// The decomposition of rows whose treatment stays on once it starts.
+#[expect(
+    clippy::similar_names,
+    reason = "n_k, n_l, d_k and d_l are the notation of bacondecomp"
+)]
+fn decompose(panel: &Rows<'_>) -> Result<BaconDecomposition, BaconError> {
+    let n = panel.unit.len();
     if panel.outcome.iter().any(|v| !v.is_finite()) {
         return Err(BaconError::NotFinite("the outcome"));
     }
@@ -301,8 +329,8 @@ pub fn bacon_decomposition(panel: &BaconPanel<'_>) -> Result<BaconDecomposition,
         return Err(BaconError::Unbalanced);
     }
     let t_min = *periods.first().ok_or(BaconError::Groups)?;
-    // The first treated period of each unit, then the check that treatment
-    // stays on.
+    // The first treated period of each unit, as bacondecomp finds it from
+    // the treated rows.
     let mut cohort_of: BTreeMap<u32, Option<i32>> = units.iter().map(|&u| (u, None)).collect();
     for i in 0..n {
         if panel.treated[i] {
@@ -310,14 +338,6 @@ pub fn bacon_decomposition(panel: &BaconPanel<'_>) -> Result<BaconDecomposition,
                 .get_mut(&panel.unit[i])
                 .ok_or(BaconError::Groups)?;
             *c = Some(c.map_or(panel.time[i], |g: i32| g.min(panel.time[i])));
-        }
-    }
-    for i in 0..n {
-        let g = cohort_of[&panel.unit[i]];
-        if g.is_some_and(|g| panel.time[i] >= g) != panel.treated[i] {
-            return Err(BaconError::NotAbsorbing {
-                unit: panel.unit[i],
-            });
         }
     }
     let cohort: Vec<Option<i32>> = (0..n).map(|i| cohort_of[&panel.unit[i]]).collect();
@@ -443,7 +463,7 @@ fn scale(comparisons: &mut [BaconComparison]) {
     reason = "d_i, d_t, d_it, d_kt and d_ikt are the notation of the paper"
 )]
 fn controlled(
-    panel: &BaconPanel<'_>,
+    panel: &Rows<'_>,
     controls: MatRef<'_, f64>,
     cohort: &[Option<i32>],
     groups: &[Option<i32>],

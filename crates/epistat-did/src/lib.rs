@@ -256,8 +256,7 @@ pub use methods::att_gt::{
     att_gt_simultaneous_bands_with_influence,
 };
 pub use methods::bacon::{
-    BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconPanel, BaconWithin,
-    bacon_decomposition,
+    BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconWithin, bacon_decomposition,
 };
 pub use methods::continuous::sieve::estimate_acrt_sieve;
 pub use methods::dcdh::{
@@ -291,9 +290,9 @@ pub use methods::efficient::{
 pub use methods::imputation;
 pub use methods::imputation::{
     ImputationConfig, ImputationError, ImputationEstimate, ImputationResult, ImputationTarget,
-    ImputationTerm, PretrendResult, PretrendTerm, Pretrends, StaggeredPanel,
-    estimate_did_imputation,
+    ImputationTerm, PretrendResult, PretrendTerm, Pretrends, estimate_did_imputation,
 };
+pub use methods::staggered::StaggeredPanel;
 #[expect(
     deprecated,
     reason = "re-exports a deprecated function until it is removed"
@@ -310,9 +309,7 @@ pub use methods::synthdid::{
     synthdid_staggered_variance, synthdid_variance,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
-pub use methods::twfe::{
-    TwfeConfig, TwfeError, TwfePanel, TwfeResult, TwfeSpec, TwfeTerm, estimate_twfe,
-};
+pub use methods::twfe::{TwfeConfig, TwfeError, TwfeResult, TwfeSpec, TwfeTerm, estimate_twfe};
 pub use methods::two_stage;
 pub use methods::two_stage::{
     TwoStageConfig, TwoStageResult, TwoStageSpec, TwoStageTerm, estimate_did2s,

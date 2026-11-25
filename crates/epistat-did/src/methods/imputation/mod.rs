@@ -107,28 +107,11 @@ use std::collections::{BTreeSet, HashMap};
 
 use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_inference::Clusters;
-use epistat_linalg::{Mat, MatRef};
+use epistat_linalg::Mat;
 
 use first_stage::{FirstStage, Projection, Projector};
 
-/// A staggered panel, one entry per row.
-#[derive(Clone, Copy, Debug)]
-pub struct StaggeredPanel<'a> {
-    /// The unit of each row, any numbers.
-    pub unit: &'a [u32],
-    /// The period of each row.
-    pub time: &'a [i32],
-    /// The first treated period of the row's unit, `None` for never treated;
-    /// the same on every row of a unit.
-    pub first_treated: &'a [Option<i32>],
-    /// The outcome.
-    pub outcome: &'a [f64],
-    /// Prior weights, 1 when `None`; untreated rows of weight 0 do not enter
-    /// the first stage.
-    pub weights: Option<&'a [f64]>,
-    /// Covariates of the first stage, one row per row, or `None`.
-    pub covariates: Option<MatRef<'a, f64>>,
-}
+use crate::methods::staggered::StaggeredPanel;
 
 /// What the imputed effects are averaged into.
 #[derive(Clone, Copy, Debug)]

@@ -2,7 +2,7 @@
 //! `fixest::feols` 0.14.2 (`tests/data/generate_twfe_reference.R`).
 
 use epistat_did::{
-    TwfeConfig, TwfePanel, TwfeSpec, did_covariance, did_standard_error, estimate_twfe,
+    StaggeredPanel, TwfeConfig, TwfeSpec, did_covariance, did_standard_error, estimate_twfe,
 };
 use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_inference::Clusters;
@@ -90,8 +90,8 @@ fn config(case: &Case) -> TwfeConfig<'_> {
     }
 }
 
-fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> TwfePanel<'a> {
-    TwfePanel {
+fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
+    StaggeredPanel {
         unit: &case.unit,
         time: &case.time,
         first_treated: &case.first_treated,
@@ -453,7 +453,7 @@ fn a_cohort_that_varies_within_a_unit_is_an_error() {
     let mut first = case.first_treated.clone();
     let row = first.iter().position(Option::is_some).unwrap();
     first[row] = first[row].map(|g| g + 1);
-    let panel = TwfePanel {
+    let panel = StaggeredPanel {
         first_treated: &first,
         ..panel(case, None)
     };

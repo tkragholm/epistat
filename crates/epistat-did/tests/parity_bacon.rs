@@ -2,7 +2,7 @@
 //! 0.1.1 and the static TWFE coefficient of `fixest::feols` 0.14.2
 //! (`tests/data/generate_bacon_reference.R`).
 
-use epistat_did::{BaconKind, BaconPanel, bacon_decomposition};
+use epistat_did::{BaconKind, StaggeredPanel, bacon_decomposition};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -58,8 +58,17 @@ fn label(kind: BaconKind) -> &'static str {
     }
 }
 
-fn treated(case: &Case) -> Vec<bool> {
-    case.treated.iter().map(|&t| t == 1).collect()
+/// The first treated period of each row's unit, the first period in which
+/// the reference data mark it treated.
+fn first_treated(case: &Case) -> Vec<Option<i32>> {
+    let mut first = std::collections::BTreeMap::new();
+    for i in 0..case.unit.len() {
+        if case.treated[i] == 1 {
+            let e = first.entry(case.unit[i]).or_insert(case.time[i]);
+            *e = (*e).min(case.time[i]);
+        }
+    }
+    case.unit.iter().map(|u| first.get(u).copied()).collect()
 }
 
 fn controls(case: &Case) -> Mat<f64> {
@@ -86,15 +95,16 @@ fn rounding(case: &Case, fits: f64) -> f64 {
 #[test]
 fn the_decomposition_matches_bacondecomp() {
     for case in &reference().cases {
-        let d = treated(case);
+        let g = first_treated(case);
         let x = controls(case);
         for (with_controls, table) in [(false, &case.plain), (true, &case.controlled)] {
-            let panel = BaconPanel {
+            let panel = StaggeredPanel {
                 unit: &case.unit,
                 time: &case.time,
-                treated: &d,
+                first_treated: &g,
                 outcome: &case.outcome,
-                controls: with_controls.then(|| x.as_ref()),
+                weights: None,
+                covariates: with_controls.then(|| x.as_ref()),
             };
             let out = bacon_decomposition(&panel).unwrap();
             assert_eq!(out.comparisons.len(), table.treated.len(), "{}", case.name);
@@ -168,49 +178,55 @@ fn the_decomposition_matches_bacondecomp() {
 }
 
 #[test]
-fn an_unbalanced_panel_or_a_treatment_that_stops_is_an_error() {
+fn an_unbalanced_panel_a_varying_cohort_or_weights_are_errors() {
     let reference = reference();
     let case = &reference.cases[0];
-    let d = treated(case);
+    let g = first_treated(case);
     let n = case.unit.len() - 1;
-    let short = BaconPanel {
+    let short = StaggeredPanel {
         unit: &case.unit[..n],
         time: &case.time[..n],
-        treated: &d[..n],
+        first_treated: &g[..n],
         outcome: &case.outcome[..n],
-        controls: None,
+        weights: None,
+        covariates: None,
     };
     assert!(bacon_decomposition(&short).is_err());
-    let mut stops = d.clone();
-    let row = (0..stops.len())
-        .find(|&i| {
-            stops[i] && i + 1 < stops.len() && stops[i + 1] && case.unit[i] == case.unit[i + 1]
-        })
-        .unwrap();
-    stops[row + 1] = false;
-    let panel = BaconPanel {
+    let mut varying = g.clone();
+    let row = varying.iter().position(Option::is_some).unwrap();
+    varying[row] = varying[row].map(|g| g + 1);
+    let full = StaggeredPanel {
         unit: &case.unit,
         time: &case.time,
-        treated: &stops,
+        first_treated: &varying,
         outcome: &case.outcome,
-        controls: None,
+        weights: None,
+        covariates: None,
     };
-    assert!(bacon_decomposition(&panel).is_err());
+    assert!(bacon_decomposition(&full).is_err());
+    let w = vec![1.0; case.unit.len()];
+    let weighted = StaggeredPanel {
+        first_treated: &g,
+        weights: Some(&w),
+        ..full
+    };
+    assert!(bacon_decomposition(&weighted).is_err());
 }
 
 #[test]
 fn the_decomposition_does_not_depend_on_the_number_of_threads() {
     let reference = reference();
     let case = &reference.cases[0];
-    let d = treated(case);
+    let g = first_treated(case);
     let x = controls(case);
     assert_same_on_threads(|| {
-        let panel = BaconPanel {
+        let panel = StaggeredPanel {
             unit: &case.unit,
             time: &case.time,
-            treated: &d,
+            first_treated: &g,
             outcome: &case.outcome,
-            controls: Some(x.as_ref()),
+            weights: None,
+            covariates: Some(x.as_ref()),
         };
         let out = bacon_decomposition(&panel).unwrap();
         out.comparisons
