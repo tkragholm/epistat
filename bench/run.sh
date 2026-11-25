@@ -103,6 +103,8 @@ imputation_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 did2s_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 sunab_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 etwfe_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
+etwfe_poisson:epistat-did:tier1_imputation:stagc:10000000:tier1/bench.R:900
+etwfe_logit:epistat-did:tier1_imputation:stagc:10000000:tier1/bench.R:900
 two_part:epistat-semicontinuous:tier1_semicontinuous:sc:10000000:tier1/bench.R:120
 lexis:epistat-register:tier2_register:lx:10000000:tier2/bench.R:120
 intervals:epistat-register:tier2_register:iv:10000000:tier2/bench.R:120

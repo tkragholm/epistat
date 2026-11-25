@@ -415,6 +415,23 @@ if (method %in% c("rcs", "ns")) {
   finish(r$times, c(est_simple = s$estimate, se_simple = s$std.error,
                     setNames(e$estimate, paste0("est_", e$event)),
                     setNames(e$std.error, paste0("se_", e$event))))
+} else if (method %in% c("etwfe_poisson", "etwfe_logit")) {
+  # etwfe(family = "poisson" / "logit") on fixest 0.14.2's feglm, with
+  # emfx(compress = FALSE): emfx replaces the rows by cohort and period means
+  # from 5e5 rows by default, which changes the averages of a nonlinear model.
+  suppressMessages({library(fixest); library(etwfe); library(marginaleffects)})
+  setFixest_nthreads(parallel::detectCores())
+  d <- as.data.frame(rd("stagc"))
+  fam <- if (method == "etwfe_poisson") "poisson" else "logit"
+  f <- if (method == "etwfe_poisson") yc ~ x1 else yb ~ x1
+  r <- timed(function() {
+    m <- etwfe(f, tvar = t, gvar = g, data = d, family = fam, vcov = ~cl)
+    list(simple = emfx(m, "simple", compress = FALSE), event = emfx(m, "event", compress = FALSE))
+  })
+  s <- r$value$simple; e <- r$value$event
+  finish(r$times, c(est_simple = s$estimate, se_simple = s$std.error,
+                    setNames(e$estimate, paste0("est_", e$event)),
+                    setNames(e$std.error, paste0("se_", e$event))))
 } else if (method == "two_part") {
   d <- rd("sc")
   r <- timed(function() {
