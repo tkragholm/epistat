@@ -140,5 +140,9 @@ required-features = ["honest"]
 name = "tier1_did"
 harness = false
 
+[[bench]]
+name = "tier1_imputation"
+harness = false
+
 [lints]
 workspace = true

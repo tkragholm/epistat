@@ -339,6 +339,28 @@ if (method %in% c("rcs", "ns")) {
   o <- r$value
   finish(r$times, c(setNames(o$att, sprintf("att_g%d_t%d", o$group, o$t)),
                     setNames(o$se, sprintf("se_g%d_t%d", o$group, o$t))))
+} else if (method %in% c("imputation_es", "did2s_es")) {
+  # didimputation 0.5.1 and did2s 1.2.1 (CRAN), on fixest 0.14.2.
+  suppressMessages({library(fixest); library(didimputation); library(did2s)})
+  setFixest_nthreads(parallel::detectCores())
+  d <- as.data.frame(rd("stag"))
+  d$treat <- as.numeric(d$g > 0 & d$t >= d$g)
+  d$rel <- ifelse(d$g > 0, d$t - d$g, Inf)
+  if (method == "imputation_es") {
+    r <- timed(function() did_imputation(d, yname = "y", gname = "g", tname = "t", idname = "id",
+                                         first_stage = ~ x1 | id + t, horizon = TRUE,
+                                         cluster_var = "cl"))
+    o <- r$value
+    finish(r$times, c(setNames(o$estimate, paste0("est_", o$term)),
+                      setNames(o$std.error, paste0("se_", o$term))))
+  } else {
+    r <- timed(function() did2s(d, yname = "y", first_stage = ~ x1 | id + t,
+                                second_stage = ~ i(rel, ref = c(-1, Inf)), treatment = "treat",
+                                cluster_var = "cl"))
+    k <- sub("rel::", "", names(coef(r$value)))
+    finish(r$times, c(setNames(coef(r$value), paste0("est_", k)),
+                      setNames(se(r$value), paste0("se_", k))))
+  }
 } else if (method == "two_part") {
   d <- rd("sc")
   r <- timed(function() {

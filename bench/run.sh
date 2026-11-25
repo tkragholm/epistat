@@ -91,6 +91,8 @@ cox_entry_p5:epistat-survival:tier1_cox_scale:none:10000000:-:300
 balance_weights:epistat-matching:tier1_balance_scale:none:10000000:-:300
 aipw:epistat-causal:tier1_causal:aipw:10000000:tier1/bench.R:120
 att_gt:epistat-did:tier1_did:did:1000000:tier1/bench.R:120
+imputation_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
+did2s_es:epistat-did:tier1_imputation:stag:10000000:tier1/bench.R:900
 two_part:epistat-semicontinuous:tier1_semicontinuous:sc:10000000:tier1/bench.R:120
 lexis:epistat-register:tier2_register:lx:10000000:tier2/bench.R:120
 intervals:epistat-register:tier2_register:iv:10000000:tier2/bench.R:120
