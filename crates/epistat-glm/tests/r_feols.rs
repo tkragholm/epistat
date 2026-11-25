@@ -633,3 +633,67 @@ fn influence_sums_are_the_sums_of_the_row_influence() {
         }
     }
 }
+
+#[test]
+fn solving_from_level_sums_gives_the_projection_of_the_column() {
+    // With b = D' W v, the fitted D alpha is v minus its exact residual. The
+    // residual v - D alpha meets the criterion with the scale of the level
+    // means of b, so the bound of
+    // `the_criterion_bounds_the_distance_to_the_exact_projection` applies
+    // with that scale, and the rounding allowance is the same.
+    let tol = 1e-8;
+    let control = Absorb {
+        tolerance: tol,
+        max_iterations: 10_000,
+    };
+    for case in &reference().cases {
+        let fe = fixed_effects(case);
+        let w = kept_weights(case);
+        let n = w.len();
+        let m: usize = fe.levels().iter().sum();
+        for (j, column) in kept_columns(case).iter().enumerate() {
+            let sums: Vec<Vec<f64>> = (0..fe.n_factors())
+                .map(|q| {
+                    let mut s = vec![0.0; fe.levels()[q]];
+                    for (k, &c) in fe.codes(q).iter().enumerate() {
+                        s[c as usize] += w[k] * column[k];
+                    }
+                    s
+                })
+                .collect();
+            let refs: Vec<&[f64]> = sums.iter().map(Vec::as_slice).collect();
+            let alpha = fe.solve_sums(&refs, &control).unwrap();
+            let fitted = fe.fitted(&alpha);
+            let r: Vec<f64> = column.iter().zip(&fitted).map(|(v, f)| v - f).collect();
+            let mut gamma2 = 0.0;
+            let mut scale = 0.0_f64;
+            for (q, level_sums) in sums.iter().enumerate() {
+                let g = fe.levels()[q];
+                let (mut sum, mut weight) = (vec![0.0; g], vec![0.0; g]);
+                for (k, &c) in fe.codes(q).iter().enumerate() {
+                    sum[c as usize] += w[k] * r[k];
+                    weight[c as usize] += w[k];
+                }
+                for c in 0..g {
+                    gamma2 += sum[c] * sum[c];
+                    scale = scale.max((level_sums[c] / weight[c]).abs());
+                }
+            }
+            let norm_v: f64 = (0..n)
+                .map(|k| w[k] * column[k] * column[k])
+                .sum::<f64>()
+                .sqrt();
+            let error: f64 = (0..n)
+                .map(|k| w[k] * (r[k] - case.exact_residuals[k][j]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let bound = gamma2.sqrt() / case.lambda_plus.sqrt() + (n * m) as f64 * EPS * norm_v;
+            assert!(scale > 0.0);
+            assert!(
+                error <= bound,
+                "{} column {j}: {error:e} above {bound:e}",
+                case.name
+            );
+        }
+    }
+}

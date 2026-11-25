@@ -814,6 +814,107 @@ impl FixedEffects {
         })
     }
 
+    /// The coefficients `alpha` that solve the normal equations
+    /// `D' W D alpha = b` for given level sums `b`, one slice per factor and
+    /// one value per level in the order of [`FixedEffects::levels`], by the
+    /// iteration of [`FixedEffects::demean`]. With `b = D' W v` this is the
+    /// projection of a column `v`, but `b` need not come from a column: it
+    /// can carry sums over other rows, as the variance of the imputation
+    /// estimator needs. `b` must lie in the range of `D' W D`, so that with
+    /// two factors the sums over each connected component agree between the
+    /// factors; otherwise the iteration does not converge.
+    ///
+    /// The criterion is that of [`Absorb`] with the scale `s` replaced by the
+    /// largest level mean `|b_q[g]| / W_q[g]`: every level mean of
+    /// `b - D' W D alpha` is at most `tolerance` times it. The coefficients
+    /// are not normalised; [`FixedEffects::fitted`] gives `D alpha`, which is
+    /// unique.
+    ///
+    /// # Errors
+    ///
+    /// [`AbsorbError::Control`], [`AbsorbError::Length`] for sums of the
+    /// wrong shape, [`AbsorbError::NotFinite`] for a sum that is not finite,
+    /// and [`AbsorbError::NotConverged`].
+    pub fn solve_sums(
+        &self,
+        sums: &[&[f64]],
+        control: &Absorb,
+    ) -> Result<Vec<Vec<f64>>, AbsorbError> {
+        control.check()?;
+        let levels = self.levels();
+        if sums.len() != levels.len() {
+            return Err(AbsorbError::Length {
+                what: "level sums",
+                expected: levels.len(),
+                found: sums.len(),
+            });
+        }
+        for (q, (s, &g)) in sums.iter().zip(&levels).enumerate() {
+            if s.len() != g {
+                return Err(AbsorbError::Length {
+                    what: "level sums",
+                    expected: g,
+                    found: s.len(),
+                });
+            }
+            if let Some(row) = s.iter().position(|v| !v.is_finite()) {
+                return Err(AbsorbError::NotFinite { column: q, row });
+            }
+        }
+        let owned: Vec<Vec<f64>> = sums.iter().map(|s| s.to_vec()).collect();
+        let scale = owned
+            .iter()
+            .zip(&self.factors)
+            .flat_map(|(s, f)| s.iter().zip(&f.weight).map(|(b, w)| (b / w).abs()))
+            .fold(0.0_f64, f64::max);
+        if scale == 0.0 {
+            return Ok(levels.iter().map(|&g| vec![0.0; g]).collect());
+        }
+        if levels.len() == 1 {
+            return Ok(vec![
+                owned[0]
+                    .iter()
+                    .zip(&self.factors[0].weight)
+                    .map(|(b, w)| b / w)
+                    .collect(),
+            ]);
+        }
+        let mut solver = Iteration::new(self, &owned, control.tolerance * scale);
+        solver
+            .run(control.max_iterations)
+            .map(|(point, _)| point)
+            .ok_or(AbsorbError::NotConverged {
+                column: 0,
+                iterations: control.max_iterations,
+            })
+    }
+
+    /// `sum_q alpha_q[g_q(i)]` for each row that enters, from coefficients by
+    /// factor and level as [`FixedEffects::solve_sums`] returns them, added
+    /// in factor order.
+    ///
+    /// # Panics
+    ///
+    /// If `alpha` does not have one vector per factor with one value per
+    /// level.
+    #[must_use]
+    pub fn fitted(&self, alpha: &[Vec<f64>]) -> Vec<f64> {
+        assert_eq!(alpha.len(), self.factors.len(), "one vector per factor");
+        for (a, f) in alpha.iter().zip(&self.factors) {
+            assert_eq!(a.len(), f.levels(), "one value per level");
+        }
+        (0..self.kept.len())
+            .into_par_iter()
+            .map(|k| {
+                let mut total = 0.0;
+                for (a, f) in alpha.iter().zip(&self.factors) {
+                    total += a[f.codes[k] as usize];
+                }
+                total
+            })
+            .collect()
+    }
+
     /// The fixed effects of column `column` of `demeaned`, normalised as
     /// `fixest::fixef` does.
     ///
