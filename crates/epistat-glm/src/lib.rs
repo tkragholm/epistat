@@ -51,7 +51,9 @@ pub mod robust;
 pub mod rows;
 pub mod within;
 
-pub use absorb::{Absorb, AbsorbError, Demeaned, FixedEffectValues, FixedEffects, Singletons};
+pub use absorb::{
+    Absorb, AbsorbError, AbsorbMethod, Demeaned, FixedEffectValues, FixedEffects, Singletons,
+};
 pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};
 pub use family::{Family, Link, expit};
 pub use feols::{Covariance, Feols, FeolsFit, GDf, KFixef, Ssc, Vcov};

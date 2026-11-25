@@ -81,6 +81,7 @@ fn reference() -> Reference {
 const TIGHT: Absorb = Absorb {
     tolerance: 1e-13,
     max_iterations: 100_000,
+    ..Absorb::new()
 };
 
 fn covariates(case: &Case) -> Option<Mat<f64>> {

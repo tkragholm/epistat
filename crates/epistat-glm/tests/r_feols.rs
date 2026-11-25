@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use epistat_glm::{Absorb, Feols, FixedEffects, GDf, KFixef, Singletons, Ssc, Vcov};
+use epistat_glm::{Absorb, AbsorbMethod, Feols, FixedEffects, GDf, KFixef, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -66,6 +66,8 @@ fn reference() -> Reference {
 }
 
 const EPS: f64 = f64::EPSILON;
+
+const METHODS: [AbsorbMethod; 2] = [AbsorbMethod::Projections, AbsorbMethod::ConjugateGradient];
 
 fn design(case: &Case) -> Mat<f64> {
     Mat::from_fn(case.x.len(), case.x[0].len(), |i, j| case.x[i][j])
@@ -158,74 +160,79 @@ fn the_criterion_bounds_the_distance_to_the_exact_projection() {
     // error of order n m eps ||v|| (Higham, Accuracy and Stability, thm
     // 20.3), which is added.
     let tol = 1e-8;
-    for case in &reference().cases {
-        let fe = fixed_effects(case);
-        let columns = kept_columns(case);
-        let full: Vec<Vec<f64>> = (0..columns.len())
-            .map(|j| {
-                let mut v = vec![0.0; case.y.len()];
-                for (k, &i) in case.kept.iter().enumerate() {
-                    v[i] = columns[j][k];
+    let reference = reference();
+    for method in METHODS {
+        for case in &reference.cases {
+            let fe = fixed_effects(case);
+            let columns = kept_columns(case);
+            let full: Vec<Vec<f64>> = (0..columns.len())
+                .map(|j| {
+                    let mut v = vec![0.0; case.y.len()];
+                    for (k, &i) in case.kept.iter().enumerate() {
+                        v[i] = columns[j][k];
+                    }
+                    v
+                })
+                .collect();
+            let refs: Vec<&[f64]> = full.iter().map(Vec::as_slice).collect();
+            let out = fe
+                .demean(
+                    &refs,
+                    &Absorb {
+                        tolerance: tol,
+                        max_iterations: 10_000,
+                        method,
+                    },
+                )
+                .unwrap();
+            let w = kept_weights(case);
+            let n = w.len();
+            let m: usize = fe.levels().iter().sum();
+            for (j, column) in columns.iter().enumerate() {
+                let s = out.scale[j];
+                let r = out.columns.col_as_slice(j);
+                let largest_r = r.iter().fold(0.0_f64, |a, &b| a.max(b.abs()));
+                let mut gamma2 = 0.0;
+                for q in 0..fe.n_factors() {
+                    let codes = fe.codes(q);
+                    let g = fe.levels()[q];
+                    let (mut sum, mut weight, mut count) =
+                        (vec![0.0; g], vec![0.0; g], vec![0usize; g]);
+                    for k in 0..n {
+                        let c = codes[k] as usize;
+                        sum[c] += w[k] * r[k];
+                        weight[c] += w[k];
+                        count[c] += 1;
+                    }
+                    let largest_group = count.iter().copied().max().unwrap() as f64;
+                    for c in 0..g {
+                        let mean = sum[c] / weight[c];
+                        assert!(
+                            mean.abs() <= tol * s + largest_group * EPS * largest_r,
+                            "{} column {j} factor {q}: {mean:e} against {:e}",
+                            case.name,
+                            tol * s
+                        );
+                        gamma2 += sum[c] * sum[c];
+                    }
                 }
-                v
-            })
-            .collect();
-        let refs: Vec<&[f64]> = full.iter().map(Vec::as_slice).collect();
-        let out = fe
-            .demean(
-                &refs,
-                &Absorb {
-                    tolerance: tol,
-                    max_iterations: 10_000,
-                },
-            )
-            .unwrap();
-        let w = kept_weights(case);
-        let n = w.len();
-        let m: usize = fe.levels().iter().sum();
-        for (j, column) in columns.iter().enumerate() {
-            let s = out.scale[j];
-            let r = out.columns.col_as_slice(j);
-            let largest_r = r.iter().fold(0.0_f64, |a, &b| a.max(b.abs()));
-            let mut gamma2 = 0.0;
-            for q in 0..fe.n_factors() {
-                let codes = fe.codes(q);
-                let g = fe.levels()[q];
-                let (mut sum, mut weight, mut count) =
-                    (vec![0.0; g], vec![0.0; g], vec![0usize; g]);
-                for k in 0..n {
-                    let c = codes[k] as usize;
-                    sum[c] += w[k] * r[k];
-                    weight[c] += w[k];
-                    count[c] += 1;
-                }
-                let largest_group = count.iter().copied().max().unwrap() as f64;
-                for c in 0..g {
-                    let mean = sum[c] / weight[c];
-                    assert!(
-                        mean.abs() <= tol * s + largest_group * EPS * largest_r,
-                        "{} column {j} factor {q}: {mean:e} against {:e}",
-                        case.name,
-                        tol * s
-                    );
-                    gamma2 += sum[c] * sum[c];
-                }
+                let mean_v: f64 =
+                    (0..n).map(|k| w[k] * column[k]).sum::<f64>() / w.iter().sum::<f64>();
+                let norm_v: f64 = (0..n)
+                    .map(|k| w[k] * (column[k] - mean_v).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                let error: f64 = (0..n)
+                    .map(|k| w[k] * (r[k] - case.exact_residuals[k][j]).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                let bound = gamma2.sqrt() / case.lambda_plus.sqrt() + (n * m) as f64 * EPS * norm_v;
+                assert!(
+                    error <= bound,
+                    "{} column {j}: error {error:e} above bound {bound:e}",
+                    case.name
+                );
             }
-            let mean_v: f64 = (0..n).map(|k| w[k] * column[k]).sum::<f64>() / w.iter().sum::<f64>();
-            let norm_v: f64 = (0..n)
-                .map(|k| w[k] * (column[k] - mean_v).powi(2))
-                .sum::<f64>()
-                .sqrt();
-            let error: f64 = (0..n)
-                .map(|k| w[k] * (r[k] - case.exact_residuals[k][j]).powi(2))
-                .sum::<f64>()
-                .sqrt();
-            let bound = gamma2.sqrt() / case.lambda_plus.sqrt() + (n * m) as f64 * EPS * norm_v;
-            assert!(
-                error <= bound,
-                "{} column {j}: error {error:e} above bound {bound:e}",
-                case.name
-            );
         }
     }
 }
@@ -259,6 +266,7 @@ fn demeaning_error(case: &Case, fe: &FixedEffects, control: &Absorb) -> f64 {
 const TIGHT: Absorb = Absorb {
     tolerance: 1e-13,
     max_iterations: 100_000,
+    ..Absorb::new()
 };
 
 #[test]
@@ -642,58 +650,62 @@ fn solving_from_level_sums_gives_the_projection_of_the_column() {
     // `the_criterion_bounds_the_distance_to_the_exact_projection` applies
     // with that scale, and the rounding allowance is the same.
     let tol = 1e-8;
-    let control = Absorb {
-        tolerance: tol,
-        max_iterations: 10_000,
-    };
-    for case in &reference().cases {
-        let fe = fixed_effects(case);
-        let w = kept_weights(case);
-        let n = w.len();
-        let m: usize = fe.levels().iter().sum();
-        for (j, column) in kept_columns(case).iter().enumerate() {
-            let sums: Vec<Vec<f64>> = (0..fe.n_factors())
-                .map(|q| {
-                    let mut s = vec![0.0; fe.levels()[q]];
+    let reference = reference();
+    for method in METHODS {
+        for case in &reference.cases {
+            let fe = fixed_effects(case);
+            let w = kept_weights(case);
+            let n = w.len();
+            let m: usize = fe.levels().iter().sum();
+            for (j, column) in kept_columns(case).iter().enumerate() {
+                let sums: Vec<Vec<f64>> = (0..fe.n_factors())
+                    .map(|q| {
+                        let mut s = vec![0.0; fe.levels()[q]];
+                        for (k, &c) in fe.codes(q).iter().enumerate() {
+                            s[c as usize] += w[k] * column[k];
+                        }
+                        s
+                    })
+                    .collect();
+                let refs: Vec<&[f64]> = sums.iter().map(Vec::as_slice).collect();
+                let control = Absorb {
+                    tolerance: tol,
+                    max_iterations: 10_000,
+                    method,
+                };
+                let alpha = fe.solve_sums(&refs, &control).unwrap();
+                let fitted = fe.fitted(&alpha);
+                let r: Vec<f64> = column.iter().zip(&fitted).map(|(v, f)| v - f).collect();
+                let mut gamma2 = 0.0;
+                let mut scale = 0.0_f64;
+                for (q, level_sums) in sums.iter().enumerate() {
+                    let g = fe.levels()[q];
+                    let (mut sum, mut weight) = (vec![0.0; g], vec![0.0; g]);
                     for (k, &c) in fe.codes(q).iter().enumerate() {
-                        s[c as usize] += w[k] * column[k];
+                        sum[c as usize] += w[k] * r[k];
+                        weight[c as usize] += w[k];
                     }
-                    s
-                })
-                .collect();
-            let refs: Vec<&[f64]> = sums.iter().map(Vec::as_slice).collect();
-            let alpha = fe.solve_sums(&refs, &control).unwrap();
-            let fitted = fe.fitted(&alpha);
-            let r: Vec<f64> = column.iter().zip(&fitted).map(|(v, f)| v - f).collect();
-            let mut gamma2 = 0.0;
-            let mut scale = 0.0_f64;
-            for (q, level_sums) in sums.iter().enumerate() {
-                let g = fe.levels()[q];
-                let (mut sum, mut weight) = (vec![0.0; g], vec![0.0; g]);
-                for (k, &c) in fe.codes(q).iter().enumerate() {
-                    sum[c as usize] += w[k] * r[k];
-                    weight[c as usize] += w[k];
+                    for c in 0..g {
+                        gamma2 += sum[c] * sum[c];
+                        scale = scale.max((level_sums[c] / weight[c]).abs());
+                    }
                 }
-                for c in 0..g {
-                    gamma2 += sum[c] * sum[c];
-                    scale = scale.max((level_sums[c] / weight[c]).abs());
-                }
+                let norm_v: f64 = (0..n)
+                    .map(|k| w[k] * column[k] * column[k])
+                    .sum::<f64>()
+                    .sqrt();
+                let error: f64 = (0..n)
+                    .map(|k| w[k] * (r[k] - case.exact_residuals[k][j]).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                let bound = gamma2.sqrt() / case.lambda_plus.sqrt() + (n * m) as f64 * EPS * norm_v;
+                assert!(scale > 0.0);
+                assert!(
+                    error <= bound,
+                    "{} column {j}: {error:e} above {bound:e}",
+                    case.name
+                );
             }
-            let norm_v: f64 = (0..n)
-                .map(|k| w[k] * column[k] * column[k])
-                .sum::<f64>()
-                .sqrt();
-            let error: f64 = (0..n)
-                .map(|k| w[k] * (r[k] - case.exact_residuals[k][j]).powi(2))
-                .sum::<f64>()
-                .sqrt();
-            let bound = gamma2.sqrt() / case.lambda_plus.sqrt() + (n * m) as f64 * EPS * norm_v;
-            assert!(scale > 0.0);
-            assert!(
-                error <= bound,
-                "{} column {j}: {error:e} above {bound:e}",
-                case.name
-            );
         }
     }
 }

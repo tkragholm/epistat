@@ -187,6 +187,7 @@ pub enum BaconError {
 const ABSORB: Absorb = Absorb {
     tolerance: 1e-13,
     max_iterations: 10_000,
+    ..Absorb::new()
 };
 
 /// The rows of one regression with unit and period effects.

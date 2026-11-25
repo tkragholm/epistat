@@ -77,6 +77,7 @@ const EPS: f64 = f64::EPSILON;
 const TIGHT: Absorb = Absorb {
     tolerance: 1e-13,
     max_iterations: 100_000,
+    ..Absorb::new()
 };
 
 #[derive(Deserialize)]

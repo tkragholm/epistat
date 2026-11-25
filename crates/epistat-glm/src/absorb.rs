@@ -50,6 +50,51 @@
 //! residual unchanged, so that the criterion below does not depend on the
 //! column's location.
 //!
+//! With three or more factors the iteration restarts as `fixest`'s
+//! `demean_single_gnl` does \[3\]: after 15 iterations on every factor
+//! without convergence, the two factors with the most levels are solved alone
+//! by the same accelerated iteration, with the others held at their current
+//! coefficients (their contribution moves into the level sums), for at most
+//! `max_iterations / 2 - 15` iterations; the iteration on every factor then
+//! starts again from the combined point with the iterations left, plain
+//! sweeps taking over after half of them. Each stage starts its acceleration
+//! afresh, and the iterations of all stages count against
+//! [`Absorb::max_iterations`]. `fixest` also stops when the sum of squared
+//! residuals changes little over 40 iterations; that rule is not taken over,
+//! since on poorly connected designs it stops far from the solution.
+//!
+//! # Conjugate gradients
+//!
+//! [`AbsorbMethod::ConjugateGradient`] solves the same equations by Krylov
+//! iteration. Eliminating the largest factor `1` exactly, `alpha_1 = W_1^{-1}
+//! (S_1 - C_1x x)` with `C_qr` the weighted cross tabulation of factors `q`
+//! and `r` and `x` the coefficients of the others, leaves
+//!
+//! ```text
+//! S x = c,     S = A_xx - C_x1 W_1^{-1} C_1x,     c = S_x - C_x1 W_1^{-1} S_1
+//! ```
+//!
+//! with `A_xx` the normal equations of the other factors among themselves.
+//! `S` is positive semi-definite and `c` lies in its range, so conjugate
+//! gradients \[6\] preconditioned by the level weights `M = diag(W_q)`
+//! converge to a solution from `x = 0` \[7\]. The preconditioned residual
+//! `M^{-1} (c - S x)` is exactly the vector of level means `m_q` of the
+//! residual at the point `(alpha_1(x), x)`, where the largest factor's means
+//! are zero, so the criterion below applies unchanged. The error falls by
+//! about the factor `(sqrt(k) - 1) / (sqrt(k) + 1)` an iteration, `k` the
+//! ratio of the extreme positive eigenvalues of `M^{-1} S`, where a plain
+//! sweep reduces it by about `1 - 1 / k`. On a chain of 1000 firms with few
+//! movers between neighbours `k` is large: at 10^5 rows the gradients took
+//! about 1200 iterations, where the projections did not meet the criterion
+//! at `1e-10` in 30 000. An iteration
+//! applies `S` once, one pass over the rows for each factor, as a sweep
+//! does. The residual `c - S x` is carried by its recursion; when that passes
+//! the criterion, the means are computed afresh at the point, and the
+//! iteration continues from them when they do not pass. LSQR or LSMR on the
+//! column-scaled dummies, as some packages use, is conjugate gradients (or
+//! MINRES) on the full equations `A` with the same preconditioner, without
+//! the elimination; on the test designs it took about twice the iterations.
+//!
 //! # Convergence criterion
 //!
 //! The iteration stops at a point where every weighted level mean of the
@@ -66,8 +111,9 @@
 //! sweep's step of the other factor is its `m`, so the criterion is evaluated
 //! exactly at no extra cost. With three or more factors the steps of a sweep
 //! are taken at different points, and when they all pass, the means are
-//! evaluated at one point before stopping. The criterion is checked at the
-//! point that is returned, whatever the path to it.
+//! evaluated at one point before stopping. The conjugate gradients evaluate
+//! the means at the point they return. The criterion is checked at the point
+//! that is returned, whatever the path to it and whichever the method.
 //!
 //! The criterion bounds the error of the demeaned column. Let `D` be the
 //! dummies of all factors, `A = D' W D` and `r*` the exact residual. The error
@@ -133,6 +179,12 @@
 //! 5. Varadhan R, Roland C. Simple and globally convergent methods for
 //!    accelerating the convergence of any EM algorithm. Scand J Stat.
 //!    2008;35(2):335-53. doi:10.1111/j.1467-9469.2007.00585.x
+//! 6. Hestenes MR, Stiefel E. Methods of conjugate gradients for solving
+//!    linear systems. J Res Natl Bur Stand. 1952;49(6):409-36.
+//!    doi:10.6028/jres.049.044
+//! 7. Kaasschieter EF. Preconditioned conjugate gradients for solving
+//!    singular systems. J Comput Appl Math. 1988;24(1-2):265-75.
+//!    doi:10.1016/0377-0427(88)90358-5
 
 use std::collections::VecDeque;
 
@@ -156,6 +208,10 @@ const PROJECT_AFTER_ACCELERATION: usize = 40;
 /// Every this many iterations, an extrapolation over three iterates, as in
 /// `fixest`.
 const GRAND_ACCELERATION: usize = 4;
+
+/// With three or more factors, the iterations on every factor before the
+/// two largest are solved alone, as in `fixest` (`iter_warmup`).
+const WARMUP: usize = 15;
 
 /// Why fixed effects could not be absorbed.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -223,23 +279,43 @@ pub enum Singletons {
     Keep,
 }
 
+/// How the normal equations of the projection are solved. Both stop by the
+/// same criterion, so both carry the same bound on the error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AbsorbMethod {
+    /// Alternating projections with the accelerations of `fixest`.
+    #[default]
+    Projections,
+    /// Preconditioned conjugate gradients on the equations of the factors
+    /// other than the largest, which is eliminated exactly. Much faster on
+    /// poorly connected designs, such as workers who rarely move between
+    /// firms.
+    ConjugateGradient,
+}
+
 /// The controls of the iteration.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Absorb {
     /// The criterion: every weighted level mean of the residual at most
     /// `tolerance` times the root mean square of the centred column.
     pub tolerance: f64,
-    /// The largest number of iterations, each of two or three sweeps.
+    /// The largest number of iterations: with [`AbsorbMethod::Projections`]
+    /// each of two or three sweeps, with
+    /// [`AbsorbMethod::ConjugateGradient`] each of one sweep's work.
     pub max_iterations: usize,
+    /// The solver.
+    pub method: AbsorbMethod,
 }
 
 impl Absorb {
-    /// A tolerance of `1e-10` and 10 000 iterations.
+    /// A tolerance of `1e-10`, 10 000 iterations and
+    /// [`AbsorbMethod::Projections`].
     #[must_use]
     pub const fn new() -> Self {
         Self {
             tolerance: 1e-10,
             max_iterations: 10_000,
+            method: AbsorbMethod::Projections,
         }
     }
 
@@ -881,7 +957,7 @@ impl FixedEffects {
         }
         let mut solver = Iteration::new(self, &owned, control.tolerance * scale);
         solver
-            .run(control.max_iterations)
+            .solve(control)
             .map(|(point, _)| point)
             .ok_or(AbsorbError::NotConverged {
                 column: 0,
@@ -960,13 +1036,10 @@ impl FixedEffects {
                 }
             } else {
                 let mut solver = Iteration::new(self, &sums, control.tolerance * s);
-                let (point, its) =
-                    solver
-                        .run(control.max_iterations)
-                        .ok_or(AbsorbError::NotConverged {
-                            column,
-                            iterations: control.max_iterations,
-                        })?;
+                let (point, its) = solver.solve(control).ok_or(AbsorbError::NotConverged {
+                    column,
+                    iterations: control.max_iterations,
+                })?;
                 iterations = its;
                 alpha = point;
             }
@@ -998,10 +1071,17 @@ impl FixedEffects {
     }
 
     /// `out[g]` is the sum over the rows of level `g` of factor `q` of
-    /// `w_i sum_{r != q} current[r][g_r(i)]`.
-    fn other_sums(&self, q: usize, current: &[&[f64]], scratch: &mut Vec<f64>, out: &mut [f64]) {
+    /// `w_i sum_{r in others} current[r][g_r(i)]`, the factors `others`
+    /// in increasing order and without `q`.
+    fn other_sums(
+        &self,
+        q: usize,
+        others: &[usize],
+        current: &[&[f64]],
+        scratch: &mut Vec<f64>,
+        out: &mut [f64],
+    ) {
         let level = &self.factors[q];
-        let others: Vec<usize> = (0..self.factors.len()).filter(|&r| r != q).collect();
         let (codes, weights): (Vec<&[u32]>, Option<&[f64]>) = match &level.plan {
             Plan::Ordered {
                 others: copies,
@@ -1266,17 +1346,24 @@ pub(crate) struct ColumnResult {
     pub(crate) coefficients: Vec<Vec<f64>>,
 }
 
-/// The accelerated alternating projections for one column with two or more
-/// factors.
+/// The solution of the normal equations for one column with two or more
+/// factors, by accelerated alternating projections or by conjugate
+/// gradients.
 struct Iteration<'a> {
     fe: &'a FixedEffects,
+    /// The level sums of the column, one vector per factor; only those of
+    /// the active factors are read.
     sums: &'a [Vec<f64>],
     /// The bound on the level means of the residual.
     bound: f64,
-    /// The factor updated first in each sweep, the one with the most levels.
+    /// The factors solved for, in increasing order: every factor, or the
+    /// two largest while the others are held fixed.
+    active: Vec<usize>,
+    /// The factor updated first in each sweep, the active one with the most
+    /// levels.
     first: usize,
-    /// The other factors, in order; the state is their coefficients, one
-    /// after the other.
+    /// The other active factors, in order; the state is their coefficients,
+    /// one after the other.
     state: Vec<usize>,
     offsets: Vec<usize>,
     scratch: Vec<f64>,
@@ -1290,16 +1377,43 @@ struct Sweep {
     step: f64,
 }
 
+/// How a run of accelerated sweeps ended.
+enum Outcome {
+    /// The point that meets the criterion and the iterations taken.
+    Converged(Vec<Vec<f64>>, usize),
+    /// The iterations ran out; the last state.
+    Exhausted(Vec<f64>),
+}
+
+/// The largest absolute value of `v`.
+fn largest(v: &[f64]) -> f64 {
+    v.iter().fold(0.0_f64, |m, &a| m.max(a.abs()))
+}
+
+/// `sum_k a_k b_k` by blocks added in block order.
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    blocked_total(a.len(), |k| a[k] * b[k])
+}
+
 impl<'a> Iteration<'a> {
     fn new(fe: &'a FixedEffects, sums: &'a [Vec<f64>], bound: f64) -> Self {
+        Self::with_active(fe, sums, bound, (0..fe.factors.len()).collect())
+    }
+
+    fn with_active(
+        fe: &'a FixedEffects,
+        sums: &'a [Vec<f64>],
+        bound: f64,
+        active: Vec<usize>,
+    ) -> Self {
         let levels = fe.levels();
-        let mut first = 0;
-        for (q, &g) in levels.iter().enumerate() {
-            if g > levels[first] {
+        let mut first = active[0];
+        for &q in &active {
+            if levels[q] > levels[first] {
                 first = q;
             }
         }
-        let state: Vec<usize> = (0..levels.len()).filter(|&q| q != first).collect();
+        let state: Vec<usize> = active.iter().copied().filter(|&q| q != first).collect();
         let mut offsets = vec![0];
         for &q in &state {
             offsets.push(offsets.last().copied().unwrap_or(0) + levels[q]);
@@ -1308,6 +1422,7 @@ impl<'a> Iteration<'a> {
             fe,
             sums,
             bound,
+            active,
             first,
             state,
             offsets,
@@ -1319,14 +1434,26 @@ impl<'a> Iteration<'a> {
         self.offsets.last().copied().unwrap_or(0)
     }
 
-    /// The projection of factor `q` given the coefficients `current` of every
-    /// factor (its own are not read).
-    fn project(&mut self, q: usize, current: &[&[f64]], out: &mut [f64]) {
+    /// The projection of factor `q` given the coefficients `current` of the
+    /// active factors (its own are not read); with `homogeneous`, as if the
+    /// column's level sums were zero.
+    fn project_with(&mut self, q: usize, current: &[&[f64]], out: &mut [f64], homogeneous: bool) {
         let fe = self.fe;
-        fe.other_sums(q, current, &mut self.scratch, out);
-        for ((o, s), w) in out.iter_mut().zip(&self.sums[q]).zip(&fe.factors[q].weight) {
-            *o = (s - *o) / w;
+        let others: Vec<usize> = self.active.iter().copied().filter(|&r| r != q).collect();
+        fe.other_sums(q, &others, current, &mut self.scratch, out);
+        if homogeneous {
+            for (o, w) in out.iter_mut().zip(&fe.factors[q].weight) {
+                *o = -*o / w;
+            }
+        } else {
+            for ((o, s), w) in out.iter_mut().zip(&self.sums[q]).zip(&fe.factors[q].weight) {
+                *o = (s - *o) / w;
+            }
         }
+    }
+
+    fn project(&mut self, q: usize, current: &[&[f64]], out: &mut [f64]) {
+        self.project_with(q, current, out, false);
     }
 
     /// One sweep from the state `x`.
@@ -1356,7 +1483,7 @@ impl<'a> Iteration<'a> {
     }
 
     /// The coefficients of every factor as slices, from the first factor's
-    /// and the state.
+    /// and the state; empty for the factors that are not active.
     fn view<'b>(&self, first: &'b [f64], x: &'b [f64]) -> Vec<&'b [f64]> {
         let mut out: Vec<&[f64]> = vec![&[]; self.fe.factors.len()];
         out[self.first] = first;
@@ -1393,7 +1520,8 @@ impl<'a> Iteration<'a> {
         true
     }
 
-    /// The point `(first, x)` as coefficients of every factor.
+    /// The point `(first, x)` as coefficients of every factor; empty for the
+    /// factors that are not active.
     fn point(&self, first: Vec<f64>, x: &[f64]) -> Vec<Vec<f64>> {
         let mut out: Vec<Vec<f64>> = vec![Vec::new(); self.fe.factors.len()];
         out[self.first] = first;
@@ -1403,29 +1531,121 @@ impl<'a> Iteration<'a> {
         out
     }
 
-    /// Runs to convergence; the point and the iterations, `None` when the
-    /// iterations run out.
-    fn run(&mut self, max_iterations: usize) -> Option<(Vec<Vec<f64>>, usize)> {
-        let mut x = vec![0.0; self.dimension()];
+    /// Runs the solver of `control` to convergence; the point and the
+    /// iterations, `None` when the iterations run out.
+    fn solve(&mut self, control: &Absorb) -> Option<(Vec<Vec<f64>>, usize)> {
+        match control.method {
+            AbsorbMethod::Projections => self.projections(control.max_iterations),
+            AbsorbMethod::ConjugateGradient => self.conjugate_gradient(control.max_iterations),
+        }
+    }
+
+    /// The accelerated projections, with the restart of `fixest` for three
+    /// or more factors: [`WARMUP`] iterations on every factor, then the two
+    /// largest factors alone with the others held fixed, for up to half of
+    /// the iterations, then every factor again.
+    fn projections(&mut self, max_iterations: usize) -> Option<(Vec<Vec<f64>>, usize)> {
+        let start = vec![0.0; self.dimension()];
+        let plain_after = max_iterations.div_ceil(2);
+        let warmup = if self.state.len() == 1 {
+            max_iterations
+        } else {
+            WARMUP.min(max_iterations)
+        };
+        let x = match self.accelerate(start, warmup, plain_after) {
+            Outcome::Converged(point, iterations) => return Some((point, iterations)),
+            Outcome::Exhausted(x) => x,
+        };
+        if warmup == max_iterations {
+            return None;
+        }
+        let mut used = warmup;
+        let restart = (max_iterations / 2).saturating_sub(warmup);
+        let mut x = x;
+        if restart > 0 {
+            let (next, iterations) = self.solve_two_largest(&x, restart);
+            used += iterations;
+            if next.iter().all(|v| v.is_finite()) {
+                x = next;
+            }
+        }
+        let rest = max_iterations - used;
+        match self.accelerate(x, rest, rest.div_ceil(2)) {
+            Outcome::Converged(point, iterations) => Some((point, used + iterations)),
+            Outcome::Exhausted(_) => None,
+        }
+    }
+
+    /// The state `x` with the second largest active factor replaced by the
+    /// solution of the two largest with the others held at `x`, and the
+    /// iterations that took, at most `budget`.
+    fn solve_two_largest(&mut self, x: &[f64], budget: usize) -> (Vec<f64>, usize) {
+        let levels = self.fe.levels();
+        let mut slot = 0;
+        for (s, &q) in self.state.iter().enumerate() {
+            if levels[q] > levels[self.state[slot]] {
+                slot = s;
+            }
+        }
+        let second = self.state[slot];
+        let pair: Vec<usize> = self
+            .active
+            .iter()
+            .copied()
+            .filter(|&q| q == self.first || q == second)
+            .collect();
+        let held: Vec<usize> = self
+            .active
+            .iter()
+            .copied()
+            .filter(|&q| !pair.contains(&q))
+            .collect();
+        let fe = self.fe;
+        let mut sums: Vec<Vec<f64>> = vec![Vec::new(); fe.factors.len()];
+        {
+            let current = self.view(&[], x);
+            for &q in &pair {
+                let mut out = vec![0.0; levels[q]];
+                fe.other_sums(q, &held, &current, &mut self.scratch, &mut out);
+                sums[q] = self.sums[q].iter().zip(&out).map(|(s, o)| s - o).collect();
+            }
+        }
+        let range = self.offsets[slot]..self.offsets[slot + 1];
+        let mut sub = Iteration::with_active(fe, &sums, self.bound, pair);
+        let (values, iterations) =
+            match sub.accelerate(x[range.clone()].to_vec(), budget, budget.div_ceil(2)) {
+                Outcome::Converged(mut point, iterations) => {
+                    (std::mem::take(&mut point[second]), iterations)
+                }
+                Outcome::Exhausted(state) => (state, budget),
+            };
+        let mut next = x.to_vec();
+        next[range].copy_from_slice(&values);
+        (next, iterations)
+    }
+
+    /// At most `budget` iterations of the accelerated sweeps from the state
+    /// `start`, with plain sweeps after `plain_after` of them.
+    fn accelerate(&mut self, start: Vec<f64>, budget: usize, plain_after: usize) -> Outcome {
+        let mut x = start;
         let sweep = self.sweep(&x);
         if self.converged(&sweep.first, &x, sweep.step) {
-            return Some((self.point(sweep.first, &x), 0));
+            return Outcome::Converged(self.point(sweep.first, &x), 0);
         }
         let mut gx = sweep.next;
-        let accelerated = max_iterations.div_ceil(2);
         let mut grand: Vec<Vec<f64>> = Vec::new();
-        for iteration in 1..=max_iterations {
-            if iteration > accelerated {
+        for iteration in 1..=budget {
+            if iteration > plain_after {
                 let sweep = self.sweep(&gx);
                 if self.converged(&sweep.first, &gx, sweep.step) {
-                    return Some((self.point(sweep.first, &gx), iteration));
+                    return Outcome::Converged(self.point(sweep.first, &gx), iteration);
                 }
                 gx = sweep.next;
                 continue;
             }
             let sweep = self.sweep(&gx);
             if self.converged(&sweep.first, &gx, sweep.step) {
-                return Some((self.point(sweep.first, &gx), iteration));
+                return Outcome::Converged(self.point(sweep.first, &gx), iteration);
             }
             let ggx = sweep.next;
             x = irons_tuck(&x, &gx, &ggx);
@@ -1434,7 +1654,7 @@ impl<'a> Iteration<'a> {
             }
             let sweep = self.sweep(&x);
             if self.converged(&sweep.first, &x, sweep.step) {
-                return Some((self.point(sweep.first, &x), iteration));
+                return Outcome::Converged(self.point(sweep.first, &x), iteration);
             }
             gx = sweep.next;
             if iteration % GRAND_ACCELERATION == 0 {
@@ -1444,10 +1664,98 @@ impl<'a> Iteration<'a> {
                     grand.clear();
                     let sweep = self.sweep(&y);
                     if self.converged(&sweep.first, &y, sweep.step) {
-                        return Some((self.point(sweep.first, &y), iteration));
+                        return Outcome::Converged(self.point(sweep.first, &y), iteration);
                     }
                     gx = sweep.next;
                 }
+            }
+        }
+        Outcome::Exhausted(gx)
+    }
+
+    /// The coefficients of the first factor from the state `x`, and the
+    /// level means of the residual of the other active factors at that
+    /// point, in the layout of the state. With `homogeneous` the column's
+    /// sums are dropped, and the means are `-W^{-1} S x`.
+    fn means(&mut self, x: &[f64], homogeneous: bool) -> (Vec<f64>, Vec<f64>) {
+        let levels = self.fe.levels();
+        let zero = vec![0.0; levels[self.first]];
+        let mut first = vec![0.0; levels[self.first]];
+        {
+            let current = self.view(&zero, x);
+            self.project_with(self.first, &current, &mut first, homogeneous);
+        }
+        let mut means = vec![0.0; self.dimension()];
+        for s in 0..self.state.len() {
+            let q = self.state[s];
+            let range = self.offsets[s]..self.offsets[s + 1];
+            let mut out = vec![0.0; levels[q]];
+            let current = self.view(&first, x);
+            self.project_with(q, &current, &mut out, homogeneous);
+            for ((m, o), old) in means[range.clone()].iter_mut().zip(&out).zip(&x[range]) {
+                *m = o - old;
+            }
+        }
+        (first, means)
+    }
+
+    /// Conjugate gradients on the equations of the state with the first
+    /// factor eliminated, `S x = c`, preconditioned by the level weights.
+    fn conjugate_gradient(&mut self, max_iterations: usize) -> Option<(Vec<Vec<f64>>, usize)> {
+        let weight: Vec<f64> = self
+            .state
+            .iter()
+            .flat_map(|&q| self.fe.factors[q].weight.iter().copied())
+            .collect();
+        let mut x = vec![0.0; self.dimension()];
+        let (first, mut z) = self.means(&x, false);
+        if largest(&z) <= self.bound {
+            return Some((self.point(first, &x), 0));
+        }
+        let mut r: Vec<f64> = z.iter().zip(&weight).map(|(z, w)| z * w).collect();
+        let mut p = z.clone();
+        let mut rz = dot(&r, &z);
+        let mut restarted = false;
+        for iteration in 1..=max_iterations {
+            let (_, h) = self.means(&p, true);
+            let sp: Vec<f64> = h.iter().zip(&weight).map(|(h, w)| -(h * w)).collect();
+            let curvature = dot(&p, &sp);
+            let step = rz / curvature;
+            let usable = curvature > 0.0 && step.is_finite();
+            if usable {
+                for (xk, pk) in x.iter_mut().zip(&p) {
+                    *xk += step * pk;
+                }
+                for ((rk, zk), (sk, w)) in
+                    r.iter_mut().zip(z.iter_mut()).zip(sp.iter().zip(&weight))
+                {
+                    *rk -= step * sk;
+                    *zk = *rk / w;
+                }
+            }
+            if !usable || largest(&z) <= self.bound {
+                // The recursive residual can drift from the residual at the
+                // point; the criterion is checked on the latter.
+                let (first, true_means) = self.means(&x, false);
+                if largest(&true_means) <= self.bound {
+                    return Some((self.point(first, &x), iteration));
+                }
+                if !usable && restarted {
+                    return None;
+                }
+                restarted = !usable;
+                z = true_means;
+                r = z.iter().zip(&weight).map(|(z, w)| z * w).collect();
+                p.clone_from(&z);
+                rz = dot(&r, &z);
+                continue;
+            }
+            restarted = false;
+            let next = dot(&r, &z);
+            let beta = next / rz;
+            rz = next;
+            for (pk, zk) in p.iter_mut().zip(&z) {
+                *pk = zk + beta * *pk;
             }
         }
         None
@@ -1600,6 +1908,67 @@ mod tests {
                 // Means of 3 and of 20 000 values in [0, 1): far below 1e-12.
                 assert!((out.columns[(k, 0)] - e).abs() < 1e-12, "{shuffle} {k}");
             }
+        }
+    }
+
+    /// Workers on shuffled rows, five years each, who move to a neighbouring
+    /// one of `firms` firms on a line with probability 0.1 a year: a chain.
+    fn chain(workers: u32, firms: u32) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<f64>) {
+        let mut state = 5u64;
+        let mut rows = Vec::new();
+        for i in 0..workers {
+            let mut firm = (xorshift(&mut state) % u64::from(firms)) as u32;
+            let start = (xorshift(&mut state) % 6) as u32;
+            for s in 0..5 {
+                if xorshift(&mut state).is_multiple_of(10) {
+                    firm = if xorshift(&mut state).is_multiple_of(2) {
+                        firm.saturating_sub(1)
+                    } else {
+                        (firm + 1).min(firms - 1)
+                    };
+                }
+                let v = (xorshift(&mut state) >> 11) as f64 / (1u64 << 53) as f64;
+                rows.push((i, firm, start + s, v + f64::from(firm) / f64::from(firms)));
+            }
+        }
+        for i in (1..rows.len()).rev() {
+            let j = (xorshift(&mut state) % (i as u64 + 1)) as usize;
+            rows.swap(i, j);
+        }
+        (
+            rows.iter().map(|r| r.0).collect(),
+            rows.iter().map(|r| r.1).collect(),
+            rows.iter().map(|r| r.2).collect(),
+            rows.iter().map(|r| r.3).collect(),
+        )
+    }
+
+    #[test]
+    fn both_solvers_on_a_chain_do_not_depend_on_the_number_of_threads() {
+        // 20 000 workers are more than DENSE_LEVELS and their rows are
+        // shuffled, so they are summed through the copied codes; the years
+        // and the 30 firms are summed by dense blocks. The projections need
+        // more than the warm-up, so the restart on the two largest factors
+        // runs.
+        let (worker, firm, year, v) = chain(20_000, 30);
+        let w: Vec<f64> = (0..v.len()).map(|i| 0.5 + (i % 5) as f64 / 4.0).collect();
+        for method in [AbsorbMethod::Projections, AbsorbMethod::ConjugateGradient] {
+            let control = Absorb {
+                method,
+                ..Absorb::new()
+            };
+            let run = || {
+                let fe = FixedEffects::new(&[&worker, &firm, &year], Some(&w), Singletons::Remove)
+                    .unwrap();
+                let out = fe.demean(&[&v], &control).unwrap();
+                let mut bits = out.columns.col_as_slice(0).to_vec();
+                bits.push(out.iterations[0] as f64);
+                bits
+            };
+            if method == AbsorbMethod::Projections {
+                assert!(run().last().copied().unwrap() > WARMUP as f64);
+            }
+            epistat_testkit::assert_same_on_threads(run);
         }
     }
 
