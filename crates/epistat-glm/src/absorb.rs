@@ -779,16 +779,29 @@ impl FixedEffects {
         }
         let n = self.kept.len();
         let mut out = epistat_linalg::Mat::<f64>::zeros(n, columns.len());
+        // The columns are demeaned in parallel, each by its own deterministic
+        // iteration, so the order in which they finish does not matter.
+        let results: Vec<Result<ColumnResult, AbsorbError>> = out
+            .par_col_iter_mut()
+            .zip(columns.par_iter())
+            .enumerate()
+            .map(|(j, (target, c))| {
+                let target = target
+                    .try_as_col_major_mut()
+                    .ok_or(AbsorbError::Invalid("a column is not contiguous"))?
+                    .as_slice_mut();
+                target
+                    .par_iter_mut()
+                    .zip(self.kept.par_iter())
+                    .for_each(|(t, &i)| *t = c[i]);
+                self.demean_in_place(target, control, j)
+            })
+            .collect();
         let mut scale = Vec::with_capacity(columns.len());
         let mut iterations = Vec::with_capacity(columns.len());
         let mut coefficients = Vec::with_capacity(columns.len());
-        for (j, c) in columns.iter().enumerate() {
-            let target = out.col_as_slice_mut(j);
-            target
-                .par_iter_mut()
-                .zip(self.kept.par_iter())
-                .for_each(|(t, &i)| *t = c[i]);
-            let column = self.demean_in_place(target, control, j)?;
+        for result in results {
+            let column = result?;
             scale.push(column.scale);
             iterations.push(column.iterations);
             coefficients.push(column.coefficients);

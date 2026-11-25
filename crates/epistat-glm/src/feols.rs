@@ -15,7 +15,9 @@
 //! it are projected out, keeps less than `1e-7` of the weighted norm of the
 //! covariate centred at its mean, which is the rule of `Glm::fit` applied to
 //! the norms before demeaning; its coefficient is `None`, as `fixest` drops
-//! it. The fixed effects of the fit are those of `y - X beta`, which by
+//! it. The Gram-Schmidt pass is skipped when every Cholesky pivot of
+//! `X~' W X~` exceeds `1e-10` of the squared centred norm, a margin over the
+//! rule's `1e-14` that rounding cannot cross, so the decision is the same. The fixed effects of the fit are those of `y - X beta`, which by
 //! linearity are those of `y` minus `beta` times those of each covariate.
 //!
 //! # Covariances
@@ -248,6 +250,42 @@ impl Covariance {
     }
 }
 
+/// The Cholesky pivots of the Gram matrix of `sqrt(W) X~` over the squared
+/// reference norms, below which the columns are screened by Gram-Schmidt.
+const SCREEN: f64 = 1e-10;
+
+/// Whether every column is clearly not aliased: each Cholesky pivot of the
+/// Gram matrix, in column order, exceeds [`SCREEN`] times the squared
+/// reference norm. In exact arithmetic the pivot is the squared norm left
+/// after projecting out the columns before, so the Gram-Schmidt rule then
+/// keeps every column: the squared threshold of that rule is `1e-14`, and the
+/// rounding of the Gram matrix, summed over blocks, and of its factor is
+/// below `1e-12` of the squared norms for any number of rows that fits in
+/// memory.
+fn clearly_independent(gram: &Mat<f64>, reference: &[f64]) -> bool {
+    let p = gram.nrows();
+    let mut l = vec![0.0; p * p];
+    for j in 0..p {
+        let mut d = gram[(j, j)];
+        for k in 0..j {
+            d -= l[j * p + k] * l[j * p + k];
+        }
+        if d.is_nan() || d <= SCREEN * reference[j] * reference[j] {
+            return false;
+        }
+        let root = d.sqrt();
+        l[j * p + j] = root;
+        for i in j + 1..p {
+            let mut v = gram[(i, j)];
+            for k in 0..j {
+                v -= l[i * p + k] * l[j * p + k];
+            }
+            l[i * p + j] = v / root;
+        }
+    }
+    true
+}
+
 /// The columns of `sqrt(W) X~` that are not aliased: Gram-Schmidt with a
 /// second pass in column order, aliased where the norm left is below
 /// [`ALIAS_TOLERANCE`] times `reference[j]`. Sums run over blocks of rows
@@ -347,19 +385,26 @@ impl Feols {
         let y_tilde = matrix.col_as_slice(p).to_vec();
         let x_tilde = matrix.as_ref().subcols(0, p);
         let reference: Vec<f64> = scale[..p].iter().map(|s| s * total_weight.sqrt()).collect();
-        let keep = independent_columns(x_tilde, w, &reference);
+        let root: Vec<f64> = w.map_or_else(Vec::new, |w| w.iter().map(|v| v.sqrt()).collect());
+        let scaled = |k: usize| root.get(k).copied().unwrap_or(1.0);
+        let full_gram = row_scaled_gram(x_tilde, scaled);
+        let keep = if clearly_independent(&full_gram, &reference) {
+            vec![true; p]
+        } else {
+            independent_columns(x_tilde, w, &reference)
+        };
         let columns: Vec<usize> = (0..p).filter(|&j| keep[j]).collect();
         let rank = columns.len();
         let dropped_columns: Vec<usize> = (0..p).filter(|&j| !keep[j]).collect();
-        let design = if rank == p {
+        let (design, gram) = if rank == p {
             // The demeaned covariates are the design: drop the outcome.
             matrix.truncate(n, p);
-            matrix
+            (matrix, full_gram)
         } else {
-            select_columns(x_tilde, &keep)
+            let design = select_columns(x_tilde, &keep);
+            let gram = row_scaled_gram(design.as_ref(), scaled);
+            (design, gram)
         };
-        let root: Vec<f64> = w.map_or_else(Vec::new, |w| w.iter().map(|v| v.sqrt()).collect());
-        let gram = row_scaled_gram(design.as_ref(), |k| root.get(k).copied().unwrap_or(1.0));
         let weighted_y: Vec<f64> = (0..n)
             .map(|k| w.map_or(1.0, |w| w[k]) * y_tilde[k])
             .collect();
@@ -418,12 +463,24 @@ impl Feols {
 }
 
 /// The scores `w e x~` summed within the clusters of `of`.
+/// The meat of `epistat_inference::sandwich::meat` with clusters: the scores
+/// `score(i) x~_i` summed within the clusters `of` in row order, one row per
+/// cluster, and the Gram matrix of those rows.
 fn cluster_meat(
     design: MatRef<'_, f64>,
-    score: impl Fn(usize) -> f64 + Sync,
-    of: &Clusters,
-) -> Result<Mat<f64>, AbsorbError> {
-    meat(design, score, Some(of)).map_err(|e| AbsorbError::Glm(crate::GlmError::from(e)))
+    score: impl Fn(usize) -> f64,
+    of: &[u32],
+    count: usize,
+) -> Mat<f64> {
+    let p = design.ncols();
+    let mut sums = Mat::<f64>::zeros(count, p);
+    for (row, &cluster) in of.iter().enumerate() {
+        let r = score(row);
+        for j in 0..p {
+            sums[(cluster as usize, j)] += r * design[(row, j)];
+        }
+    }
+    row_scaled_gram(sums.as_ref(), |_| 1.0)
 }
 
 impl FeolsFit<'_> {
@@ -528,9 +585,30 @@ impl FeolsFit<'_> {
     }
 
     /// The codes of `codes` on the rows that enter, as clusters.
-    fn clusters_of(&self, codes: &[u32]) -> Clusters {
-        let kept: Vec<u32> = self.fe.rows().iter().map(|&i| codes[i]).collect();
-        Clusters::from_labels(&kept)
+    /// The cluster of each row that enters and the number of clusters,
+    /// numbered in order of first appearance as [`Clusters::from_labels`]
+    /// numbers them, through a table of the codes instead of a hash map.
+    fn clusters_of(&self, codes: &[u32]) -> (Vec<u32>, usize) {
+        let rows = self.fe.rows();
+        let largest = rows
+            .iter()
+            .map(|&i| codes[i])
+            .max()
+            .map_or(0, |m| m as usize + 1);
+        let mut number = vec![u32::MAX; largest];
+        let mut count = 0u32;
+        let of = rows
+            .iter()
+            .map(|&i| {
+                let slot = &mut number[codes[i] as usize];
+                if *slot == u32::MAX {
+                    *slot = count;
+                    count += 1;
+                }
+                *slot
+            })
+            .collect();
+        (of, count as usize)
     }
 
     /// Whether each factor is nested in one of the cluster variables.
@@ -665,22 +743,29 @@ impl FeolsFit<'_> {
                 factor.map(|f| Mat::from_fn(self.rank, self.rank, |a, b| f * v[(a, b)]))
             }
             Vcov::Cluster(ways) => {
-                let singles: Vec<Clusters> = ways.iter().map(|way| self.clusters_of(way)).collect();
-                let g_min = singles.iter().map(Clusters::count).min().unwrap_or(0);
+                let singles: Vec<(Vec<u32>, usize)> =
+                    ways.iter().map(|way| self.clusters_of(way)).collect();
+                let g_min = singles.iter().map(|s| s.1).min().unwrap_or(0);
                 min_clusters = Some(g_min);
                 let mut total = Mat::<f64>::zeros(self.rank, self.rank);
                 let mut defined = true;
                 for subset in 1..(1usize << ways.len()) {
                     let members: Vec<usize> =
                         (0..ways.len()).filter(|&j| subset >> j & 1 == 1).collect();
-                    let clusters = if members.len() == 1 {
-                        singles[members[0]].clone()
+                    let intersected;
+                    let (of, g) = if members.len() == 1 {
+                        (singles[members[0]].0.as_slice(), singles[members[0]].1)
                     } else {
-                        intersection(self.fe.rows(), ways, &members)
+                        let clusters = intersection(self.fe.rows(), ways, &members);
+                        intersected = clusters
+                            .of()
+                            .iter()
+                            .map(|&c| u32::try_from(c).unwrap_or(u32::MAX))
+                            .collect::<Vec<u32>>();
+                        (intersected.as_slice(), clusters.count())
                     };
-                    let middle = cluster_meat(design, score, &clusters)?;
+                    let middle = cluster_meat(design, score, of, g);
                     let v = sandwich_with_inverse(self.bread.as_ref(), middle.as_ref());
-                    let g = clusters.count();
                     let factor = if ssc.g_adj && ssc.g_df == GDf::Conventional {
                         if g < 2 {
                             defined = false;
