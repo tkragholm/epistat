@@ -21,6 +21,10 @@
 //! models for ordered outcomes as `MASS::polr` and `ordinal::clm` do, with the
 //! Brant test of proportional odds.
 //!
+//! [`absorb`] removes any number of fixed-effect factors from columns by
+//! accelerated alternating projections, and [`feols`] fits linear models on
+//! top of it with the covariances of `fixest::feols`.
+//!
 //! [`rows`] fits the model of [`Glm::fit`] to rows formed block by block, for
 //! designs too large to hold, with the same bits.
 //!
@@ -31,10 +35,12 @@
 //! standard error, as `AFglm` of the R package AF.
 #![warn(missing_docs)]
 
+pub mod absorb;
 pub mod attributable;
 mod columns;
 pub mod elastic_net;
 mod family;
+pub mod feols;
 pub mod fit;
 pub mod gee;
 pub mod multinom;
@@ -45,8 +51,10 @@ pub mod robust;
 pub mod rows;
 pub mod within;
 
+pub use absorb::{Absorb, AbsorbError, Demeaned, FixedEffectValues, FixedEffects, Singletons};
 pub use elastic_net::{ElasticNet, ElasticNetError, ElasticNetFit, ResponseScaling};
 pub use family::{Family, Link, expit};
+pub use feols::{Covariance, Feols, FeolsFit, GDf, KFixef, Ssc, Vcov};
 pub use fit::{Fit, Glm, GlmError};
 pub use gee::{Association, Correlation, Gee, GeeError, GeeFit, RobustVariance};
 pub use multinom::{Multinom, MultinomError, MultinomFit};

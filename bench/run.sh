@@ -66,6 +66,8 @@ negbin:epistat-glm:tier1_glm:reg:1000000:tier1/bench.R:120
 risk_robust:epistat-glm:tier1_glm:reg:10000000:tier1/bench.R:120
 risk_cluster:epistat-glm:tier1_glm:reg:10000000:tier1/bench.R:120
 within:epistat-glm:tier1_glm:reg:10000000:tier1/bench.R:120
+feols_fe2:epistat-glm:tier1_feols:fe:10000000:tier1/bench.R:600
+feols_fe3:epistat-glm:tier1_feols:fe:10000000:tier1/bench.R:600
 glm_logit_p5:epistat-glm:tier1_glm_scale:none:10000000:-:300
 glm_logit_p20:epistat-glm:tier1_glm_scale:none:10000000:-:300
 mh_or:epistat-stats:tier1_stats:mh:10000000:tier1/bench.R:120

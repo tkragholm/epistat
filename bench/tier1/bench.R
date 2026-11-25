@@ -132,6 +132,14 @@ if (method %in% c("rcs", "ns")) {
   d <- rd("reg")
   r <- timed(function() feols(c ~ x1 + x2 + x3 | fam, data = d, cluster = ~fam, notes = FALSE))
   finish(r$times, coefs(c("x1", "x2", "x3"), coef(r$value), se(r$value)))
+} else if (method %in% c("feols_fe2", "feols_fe3")) {
+  suppressMessages(library(fixest))
+  setFixest_nthreads(parallel::detectCores())
+  d <- rd("fe")
+  fml <- if (method == "feols_fe2") y ~ x1 + x2 | id + t else y ~ x1 + x2 | id + t + firm
+  r <- timed(function() feols(fml, data = d, cluster = ~id, notes = FALSE))
+  finish(r$times, c(coef_x1 = coef(r$value)[["x1"]], se_x1 = se(r$value)[["x1"]],
+                    coef_x2 = coef(r$value)[["x2"]], se_x2 = se(r$value)[["x2"]]))
 } else if (method == "mh_or") {
   suppressMessages(library(metafor))
   d <- rd("mh")
