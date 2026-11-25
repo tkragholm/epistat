@@ -37,6 +37,8 @@
 //! - Doubly robust triple differences \[5\]: [`estimate_dr_ddd`].
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
+//! - The power of the pre-trends test and the distortion after passing it,
+//!   after Roth \[8\], in [`pretrends`].
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -108,6 +110,9 @@
 //!    with a continuous treatment. Working paper, 2024.
 //! 7. Rambachan A, Roth J. A more credible approach to parallel trends. Rev
 //!    Econ Stud 2023;90(5):2555-91. doi:10.1093/restud/rdad018
+//! 8. Roth J. Pretest with caution: event-study estimates after testing for
+//!    parallel trends. Am Econ Rev Insights 2022;4(3):305-22.
+//!    doi:10.1257/aeri.20210236
 #![warn(missing_docs)]
 
 #[expect(
@@ -119,6 +124,7 @@ pub(crate) mod error;
 pub(crate) mod estimators;
 pub mod inference;
 pub(crate) mod methods;
+pub mod pretrends;
 #[cfg(test)]
 mod tests;
 pub(crate) mod types;

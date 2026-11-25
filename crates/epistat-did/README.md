@@ -46,8 +46,20 @@ second difference larger than a smoothness bound `M`, is empty and reported
 as NaN; the confidence sets are computed there as in HonestDiD. The `nightly`
 feature enables faer's AVX-512 kernels through epistat-linalg.
 
+The `pretrends` module gives the power of the pre-trends test and the
+distortion after passing it (Roth, 2022). From event-study coefficients and
+their covariance, from any estimator, and a hypothesised violation of parallel
+trends, it returns the probability that no pre-period coefficient is
+significant, the means of the pre- and post-period coefficients given that the
+test passes, the Bayes factor and the likelihood ratio against parallel
+trends, and the slope of a linear violation that the test detects with a given
+power. The rectangle probabilities are computed by Genz's transformation on a
+fixed, randomly shifted Korobov lattice; every probability comes with the
+standard error of its evaluation, and the results are deterministic. The cost
+depends on the number of pre-period coefficients, not on the number of rows.
+
 The tests compare estimates, standard errors and influence functions with
-`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `triplediff` and `contdid`
+`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `pretrends` 0.1.0, `triplediff` and `contdid`
 0.1.2, the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
