@@ -102,6 +102,22 @@ and period effects are not jointly identified is dropped rather than imputed,
 and that with varying prior weights the imputation variance is the derivative
 of the estimate, which the package's is not.
 
+When the pre-treatment outcome is missing for some units, missing at random
+given the covariates and treatment, or given those and the post-treatment
+outcome, `att_missing_pre` estimates the two-period ATT by the efficient
+estimators of Testa, Kennedy and Reimherr, including the nested regression
+that the outcome-dependent case needs. It fits logistic models for the
+propensity and the probability of an observed baseline and least squares for
+the outcome regressions, on all units or cross-fitted over folds dealt from a
+seed (by cluster when there are clusters). `att_missing_pre_from_predictions`
+takes out-of-fold predictions from any learner instead, which is how random
+forests or other flexible models are used. Probabilities near 0 or 1 are
+reported and can be refused at a floor of the caller's; they are not clipped.
+With every baseline observed the estimator is the panel doubly robust one with
+the control weights divided by the number treated rather than by their sum.
+It is checked against the authors' Python code on their simulation design,
+with correctly and wrongly specified models.
+
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
 Every bootstrap replicate is seeded from the caller's seed, and results do not
@@ -137,5 +153,7 @@ The tests compare estimates, standard errors and influence functions with
 0.1.2, `DIDmultiplegtDYN` 2.2.0, `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), `didimputation` 0.5.1 and `did2s` 1.2.1, the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
-whole procedure, from reference values written by the R scripts in `tests/`. They run with
+whole procedure, from reference values written by the R scripts in `tests/`;
+the estimator for a missing baseline is compared with the Python replication
+code of Testa, Kennedy and Reimherr through a Python script there. They run with
 `cargo test --features parity-tests`.
