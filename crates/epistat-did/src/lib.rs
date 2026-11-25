@@ -37,6 +37,12 @@
 //! - Doubly robust triple differences \[5\]: [`estimate_dr_ddd`].
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
+//! - Synthetic difference-in-differences \[8\], synthetic control and the
+//!   plain difference-in-differences beside them, as R's `synthdid` computes
+//!   them: [`estimate_synthdid`] with [`SynthDidConfig`], standard errors by
+//!   placebo, bootstrap or jackknife in [`synthdid_variance`], and staggered
+//!   adoption cohort by cohort in [`estimate_synthdid_staggered`]. The
+//!   module documentation of `methods::synthdid` gives the algorithm.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -108,6 +114,9 @@
 //!    with a continuous treatment. Working paper, 2024.
 //! 7. Rambachan A, Roth J. A more credible approach to parallel trends. Rev
 //!    Econ Stud 2023;90(5):2555-91. doi:10.1093/restud/rdad018
+//! 8. Arkhangelsky D, Athey S, Hirshberg DA, Imbens GW, Wager S. Synthetic
+//!    difference-in-differences. Am Econ Rev 2021;111(12):4088-118.
+//!    doi:10.1257/aer.20190159
 #![warn(missing_docs)]
 
 #[expect(
@@ -249,6 +258,12 @@ pub use methods::efficient::{
 pub use methods::standard::aggregate_event_time;
 pub use methods::standard::{
     estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
+};
+pub use methods::synthdid::{
+    StaggeredSynthEstimate, StaggeredSynthPanel, SynthCohort, SynthDidConfig, SynthDidError,
+    SynthDidEstimate, SynthDidVariance, SynthDraws, SynthObservation, SynthPanel, SynthTrace,
+    SynthUndefined, SynthVariance, SynthWeights, estimate_synthdid, estimate_synthdid_staggered,
+    synthdid_staggered_variance, synthdid_variance,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
 pub use types::*;

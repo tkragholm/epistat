@@ -28,6 +28,18 @@ unbalanced panel line up. Its aggregations take their standard errors from the
 combined influence function, which counts the covariance between cells that
 share units.
 
+Synthetic difference-in-differences (Arkhangelsky, Athey, Hirshberg, Imbens
+and Wager), synthetic control and the plain difference-in-differences
+estimator reproduce R's `synthdid` 0.0.9: the unit and time weights by its
+Frank-Wolfe solver (in `epistat-optim`) with the penalties it derives from
+the noise level, its sparsification and stopping rules, covariates as it
+adjusts for them, and its placebo, bootstrap and jackknife standard errors,
+with a standard error for each post period. The jackknife without covariates
+is computed in closed form, in time linear in the panel. `synthdid` takes a
+single adoption date; staggered adoption is estimated cohort by cohort
+against the never-treated units and aggregated by treated cells, with the
+standard errors replaying the whole procedure.
+
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
 Every bootstrap replicate is seeded from the caller's seed, and results do not
@@ -48,7 +60,7 @@ feature enables faer's AVX-512 kernels through epistat-linalg.
 
 The tests compare estimates, standard errors and influence functions with
 `did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `triplediff` and `contdid`
-0.1.2, the continuous treatment's influence function with the
+0.1.2, `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
 whole procedure, from reference values written by the R scripts in `tests/`. They run with
