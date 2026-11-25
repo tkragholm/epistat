@@ -387,6 +387,34 @@ if (method %in% c("rcs", "ns")) {
     finish(r$times, c(setNames(coef(r$value), paste0("est_", k)),
                       setNames(se(r$value), paste0("se_", k))))
   }
+} else if (method == "sunab_es") {
+  suppressMessages(library(fixest))
+  setFixest_nthreads(parallel::detectCores())
+  d <- as.data.frame(rd("stag"))
+  d$g[d$g == 0] <- 1000
+  r <- timed(function() {
+    m <- feols(y ~ sunab(g, t) + x1 | id + t, data = d, cluster = ~cl, notes = FALSE)
+    list(period = aggregate(m, "period"), att = aggregate(m, "att"))
+  })
+  p <- r$value$period
+  k <- sub("t::", "", rownames(p))
+  finish(r$times, c(setNames(p[, 1], paste0("est_", k)), setNames(p[, 2], paste0("se_", k)),
+                    est_att = r$value$att[1, 1], se_att = r$value$att[1, 2]))
+} else if (method == "etwfe_es") {
+  # etwfe 0.6.2 and marginaleffects 1.0.0 (CRAN), on fixest 0.14.2. emfx
+  # compresses the data to cohort by period means from 5e5 rows, which leaves
+  # a linear model's effects as they are.
+  suppressMessages({library(fixest); library(etwfe); library(marginaleffects)})
+  setFixest_nthreads(parallel::detectCores())
+  d <- as.data.frame(rd("stag"))
+  r <- timed(function() {
+    m <- etwfe(y ~ x1, tvar = t, gvar = g, data = d, vcov = ~cl)
+    list(simple = suppressWarnings(emfx(m, "simple")), event = suppressWarnings(emfx(m, "event")))
+  })
+  s <- r$value$simple; e <- r$value$event
+  finish(r$times, c(est_simple = s$estimate, se_simple = s$std.error,
+                    setNames(e$estimate, paste0("est_", e$event)),
+                    setNames(e$std.error, paste0("se_", e$event))))
 } else if (method == "two_part") {
   d <- rd("sc")
   r <- timed(function() {

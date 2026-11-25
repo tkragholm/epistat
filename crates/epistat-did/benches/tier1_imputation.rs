@@ -1,5 +1,7 @@
-//! Wall time of the imputation and two-stage estimators, set against
-//! `didimputation::did_imputation` and `did2s::did2s` (`bench/tier1/bench.R`).
+//! Wall time of the imputation, two-stage, interaction-weighted and extended
+//! two-way fixed-effects estimators, set against
+//! `didimputation::did_imputation`, `did2s::did2s`, `fixest::sunab` and
+//! `etwfe::etwfe` with `etwfe::emfx` (`bench/tier1/bench.R`).
 //! The driver and the environment are described in `bench/tier1/common.rs`.
 //!
 //! The data (`stag`) are `N / 10` units over ten periods with a tenth of the
@@ -7,8 +9,11 @@
 //! never-treated group, effects that grow with the time since treatment, one
 //! covariate correlated with treatment and clusters of 50 units. Methods:
 //! `imputation_es` (every horizon, clustered) and `did2s_es` (relative-period
-//! indicators with reference -1, clustered). The timed part includes the
-//! first stage, the estimates and the variance.
+//! indicators with reference -1, clustered), `sunab_es` (cohort by relative
+//! period cells with the covariate, clustered, and their summaries by
+//! relative period and overall) and `etwfe_es` (not-yet-treated controls,
+//! the covariate, clustered, and the overall and event-time effects). The
+//! timed part includes the fits, the estimates and the variances.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -21,9 +26,11 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
-    ImputationConfig, ImputationTerm, StaggeredPanel, TwoStageConfig, estimate_did_imputation,
-    estimate_did2s,
+    EtwfeConfig, EtwfeType, ImputationConfig, ImputationTerm, StaggeredPanel, SunabConfig,
+    SunabTerm, TwoStageConfig, estimate_did_imputation, estimate_did2s, estimate_etwfe,
+    estimate_sunab,
 };
+use epistat_glm::Vcov;
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_125;
@@ -109,6 +116,45 @@ fn main() {
                 let r = term.relative_period.expect("event study");
                 lines.push_opt(&format!("est_{r}"), term.estimate);
                 lines.push_opt(&format!("se_{r}"), term.std_error);
+            }
+            times
+        }
+        "sunab_es" => {
+            let config = SunabConfig {
+                clusters: Some(&cl),
+                ..SunabConfig::new()
+            };
+            let (times, out) = common::timed(common::reps(), || {
+                estimate_sunab(&panel, &config).expect("sunab")
+            });
+            for e in &out.estimates {
+                let name = match e.term {
+                    SunabTerm::Period(r) => format!("{r}"),
+                    SunabTerm::Att => "att".to_string(),
+                    SunabTerm::Cohort(_) => continue,
+                };
+                lines.push(&format!("est_{name}"), e.estimate);
+                lines.push_opt(&format!("se_{name}"), e.std_error);
+            }
+            times
+        }
+        "etwfe_es" => {
+            let ways = [&cl[..]];
+            let config = EtwfeConfig {
+                vcov: Vcov::Cluster(&ways),
+                ..EtwfeConfig::new()
+            };
+            let (times, out) = common::timed(common::reps(), || {
+                estimate_etwfe(&panel, &config).expect("etwfe")
+            });
+            for e in &out.effects {
+                let name = match e.term {
+                    EtwfeType::Simple => "simple".to_string(),
+                    EtwfeType::Event(r) => format!("{r}"),
+                    _ => continue,
+                };
+                lines.push(&format!("est_{name}"), e.estimate);
+                lines.push_opt(&format!("se_{name}"), e.std_error);
             }
             times
         }
