@@ -52,20 +52,41 @@
 //!   option is there to be compared with the default and not as a recommended
 //!   design.
 //!
+//! # Dates and strata that differ between people and trials
+//!
+//! By default every person has the same date for the same period, and the
+//! sets of a trial have that date as their index date. With
+//! [`PeriodDates::PerPerson`] (through [`match_trials_with`]) the periods are a
+//! time scale of each person's own, such as months since diagnosis, and each
+//! person gives the calendar date of each of their periods. The index date of a
+//! set is then the date of its initiator's period: the controls are at risk,
+//! alive and resident on that date and the age limit is taken at it, as for
+//! any risk set, and their own period of the trial says they are eligible.
+//!
+//! The strata of the record are the same in every trial. [`PeriodStrata`] gives
+//! strata of each person and period, such as a flare in the month of the
+//! trial, and in a trial a person's value is that of the period at which the
+//! trial starts. The matching reads such a key before the record's own, so the
+//! job's exact matches name the keys of both alike.
+//!
+//! With shared dates and no period strata, [`match_trials_with`] is
+//! [`match_trials`].
+//!
 //! The output gives, for each trial, the sets, the start of the follow-up of
 //! every matched person and the period of the deviation. The analysis censors
 //! each person at the deviation. Weights for the censoring are the task of the
 //! analysis and are not computed here.
 
 use crate::matching::job::TransitionMode;
-use crate::matching::{MatchJob, MatchingRecord, RandomSelection};
+use crate::matching::{CovariateRecord, MatchJob, MatchingRecord, RandomSelection};
 use crate::role_transition::IdOrder;
+use crate::types::{CovariateRef, CovariateValue};
 use crate::types::{MatchOutcome, RoleTransitionRecord};
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
@@ -170,6 +191,13 @@ pub enum TrialInputError {
         /// The period whose date is not after the date of the period before.
         period: i64,
     },
+    /// The period strata do not have a value for every row of the panel.
+    StrataRows {
+        /// The rows of the panel.
+        expected: usize,
+        /// The values of a key of the strata.
+        found: usize,
+    },
     /// A matched member of a trial is not in the panel or not enrolled in the
     /// trial.
     UnknownMember {
@@ -198,6 +226,10 @@ impl Display for TrialInputError {
             Self::DatesNotIncreasing { period } => write!(
                 f,
                 "the date of period {period} is not after the date of the period before it"
+            ),
+            Self::StrataRows { expected, found } => write!(
+                f,
+                "the period strata have {found} values for the {expected} rows of the panel; give one per row, in the order of PanelColumns"
             ),
             Self::UnknownMember { id, period } => write!(
                 f,
@@ -277,7 +309,7 @@ pub struct TrialMember {
     /// The period at which the follow-up starts, which is the start of the
     /// trial.
     pub follow_up_start_period: i64,
-    /// The first day of that period.
+    /// The first day of that period, in the person's own dates.
     pub follow_up_start: NaiveDate,
     /// The period at which the person first differs from the treatment of the
     /// period before, after the start. `None` when the person never deviates.
@@ -295,7 +327,10 @@ pub struct TrialMember {
 pub struct TrialResult {
     /// The period at which the trial starts.
     pub period: i64,
-    /// The first day of the period, which is the index date of the sets.
+    /// The first day of the period, which is the index date of the sets. With
+    /// [`PeriodDates::PerPerson`] each set has its initiator's date (the
+    /// initiator's [`TrialMember::follow_up_start`]), and this is the earliest
+    /// of them.
     pub index_date: NaiveDate,
     /// How many people were in the pool of the trial.
     pub n_eligible: usize,
@@ -335,12 +370,14 @@ struct Plan {
     last_initiation: Vec<Option<i64>>,
 }
 
-/// Checks the ids and the order of the periods, and, when `dates` is set, that
-/// the dates of a period agree across persons and increase with the period.
-/// The expansion reads no date, so only matching needs them.
+/// Checks the ids and the order of the periods, and the dates as `dates`
+/// says: none for the expansion, which reads no date; for
+/// [`PeriodDates::Shared`] that the dates of a period agree across persons
+/// and increase with the period; for [`PeriodDates::PerPerson`] that each
+/// person's dates increase with the period.
 fn validate<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
-    dates: bool,
+    dates: Option<PeriodDates>,
 ) -> Result<(), TrialInputError> {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut by_period: BTreeMap<i64, NaiveDate> = BTreeMap::new();
@@ -358,12 +395,23 @@ fn validate<R: MatchingRecord>(
                 });
             }
         }
-        if !dates {
-            continue;
-        }
-        for row in &person.periods {
-            if *by_period.entry(row.period).or_insert(row.date) != row.date {
-                return Err(TrialInputError::InconsistentDate { period: row.period });
+        match dates {
+            None => {}
+            Some(PeriodDates::Shared) => {
+                for row in &person.periods {
+                    if *by_period.entry(row.period).or_insert(row.date) != row.date {
+                        return Err(TrialInputError::InconsistentDate { period: row.period });
+                    }
+                }
+            }
+            Some(PeriodDates::PerPerson) => {
+                for pair in person.periods.windows(2) {
+                    if pair[1].date <= pair[0].date {
+                        return Err(TrialInputError::DatesNotIncreasing {
+                            period: pair[1].period,
+                        });
+                    }
+                }
             }
         }
     }
@@ -462,7 +510,7 @@ pub fn expand_trials<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
 ) -> Result<Vec<ExpandedRow>, TrialInputError> {
-    validate(panel, false)?;
+    validate(panel, None)?;
     let plan = plan(panel, options);
     let mut by_person: Vec<Vec<(i64, Enrolment)>> = vec![Vec::new(); panel.len()];
     for (period, (_, enrolments)) in &plan.trials {
@@ -660,7 +708,7 @@ pub fn expand_trial_columns<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
 ) -> Result<TrialColumns, TrialInputError> {
-    validate(panel, false)?;
+    validate(panel, None)?;
     let plan = plan(panel, options);
     let offsets = offsets(panel);
     let mut by_person: Vec<Vec<(i64, Enrolment)>> = vec![Vec::new(); panel.len()];
@@ -705,7 +753,7 @@ pub fn matched_trial_columns<R: MatchingRecord>(
     matched: &TrialOutcome,
     options: &TrialOptions,
 ) -> Result<(TrialColumns, Vec<usize>), TrialInputError> {
-    validate(panel, false)?;
+    validate(panel, None)?;
     let plan = plan(panel, options);
     let offsets = offsets(panel);
     let position: RapidHashMap<&str, usize> = panel
@@ -761,16 +809,181 @@ pub fn trial_seed(seed: u64, period: i64) -> u64 {
     epistat_rng::mix64(seed.wrapping_add((period as u64).wrapping_mul(epistat_rng::GAMMA)))
 }
 
+/// Whether the dates of a period are shared by every person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PeriodDates {
+    /// Every person has the same date for the same period, and the sets of a
+    /// trial have that date as their index date.
+    #[default]
+    Shared,
+    /// Each person has dates of their own, increasing with the period, and the
+    /// index date of a set is the date of its initiator's period.
+    PerPerson,
+}
+
+/// Strata of each person and period, read in each trial at the period at
+/// which the trial starts.
+///
+/// The values are in the order of the rows of [`PanelColumns::of`]: person by
+/// person in the order of the panel, period by period.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PeriodStrata {
+    keys: Vec<String>,
+    /// `values[k][row]`, the value of key `k` in panel row `row`.
+    values: Vec<Vec<String>>,
+}
+
+impl PeriodStrata {
+    /// Strata from one column of values per key, each in the order of the rows
+    /// of [`PanelColumns::of`]. The lengths are checked against the panel when
+    /// it is matched.
+    #[must_use]
+    pub fn new(keys: Vec<String>, values: Vec<Vec<String>>) -> Self {
+        Self { keys, values }
+    }
+
+    /// Strata with the value of each key `value(person, period, key)` for the
+    /// persons and periods of `panel`.
+    #[must_use]
+    pub fn of<R>(
+        panel: &[TrialPerson<R>],
+        keys: &[&str],
+        value: impl Fn(&TrialPerson<R>, &TrialPeriod, &str) -> String,
+    ) -> Self {
+        let values = keys
+            .iter()
+            .map(|key| {
+                panel
+                    .iter()
+                    .flat_map(|person| person.periods.iter().map(move |row| (person, row)))
+                    .map(|(person, row)| value(person, row, key))
+                    .collect()
+            })
+            .collect();
+        Self {
+            keys: keys.iter().map(|k| (*k).to_string()).collect(),
+            values,
+        }
+    }
+
+    fn check<R>(&self, panel: &[TrialPerson<R>]) -> Result<(), TrialInputError> {
+        let expected: usize = panel.iter().map(|p| p.periods.len()).sum();
+        if self.keys.len() != self.values.len() {
+            return Err(TrialInputError::StrataRows {
+                expected: self.keys.len(),
+                found: self.values.len(),
+            });
+        }
+        match self.values.iter().find(|v| v.len() != expected) {
+            Some(v) => Err(TrialInputError::StrataRows {
+                expected,
+                found: v.len(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// The value of `key` in panel row `row`, `None` for a key these strata do
+    /// not have.
+    fn get(&self, key: &str, row: usize) -> Option<&str> {
+        let k = self.keys.iter().position(|name| name == key)?;
+        Some(self.values[k][row].as_str())
+    }
+}
+
+/// What [`match_trials_with`] adds to the options: how the dates of the
+/// periods are given, and strata that change between periods.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TrialMatching<'a> {
+    /// Whether the dates of a period are shared by every person.
+    pub dates: PeriodDates,
+    /// Strata of each person and period, `None` for the record's strata alone.
+    pub strata: Option<&'a PeriodStrata>,
+}
+
+/// A person of a trial's pool: the person's record, with the strata of the
+/// period at which the trial starts read before the record's own.
+///
+/// [`MatchingRecord::strata`] is the record's map; the period strata are read
+/// through [`MatchingRecord::stratum`], which is what the matchers read.
+#[derive(Debug)]
+pub struct TrialView<'p, R> {
+    record: &'p R,
+    strata: Option<(&'p PeriodStrata, usize)>,
+}
+
+impl<R> Clone for TrialView<'_, R> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<R> Copy for TrialView<'_, R> {}
+
+impl<'p, R> TrialView<'p, R> {
+    /// The person's record in the panel.
+    #[must_use]
+    pub const fn record(&self) -> &'p R {
+        self.record
+    }
+}
+
+impl<R: MatchingRecord> MatchingRecord for TrialView<'_, R> {
+    fn id(&self) -> &str {
+        self.record.id()
+    }
+    fn birth_date(&self) -> NaiveDate {
+        self.record.birth_date()
+    }
+    fn strata(&self) -> &HashMap<String, String> {
+        self.record.strata()
+    }
+    fn stratum(&self, key: &str) -> Option<&str> {
+        match self.strata.and_then(|(strata, row)| strata.get(key, row)) {
+            Some(value) => Some(value),
+            None => self.record.stratum(key),
+        }
+    }
+    fn numeric(&self, name: &str) -> Option<f64> {
+        self.record.numeric(name)
+    }
+    fn numeric_table(&self) -> Option<usize> {
+        self.record.numeric_table()
+    }
+    fn numeric_slot(&self, name: &str) -> Option<usize> {
+        self.record.numeric_slot(name)
+    }
+    fn numeric_in_slot(&self, slot: usize) -> Option<f64> {
+        self.record.numeric_in_slot(slot)
+    }
+    fn unique_key(&self) -> Option<&str> {
+        self.record.unique_key()
+    }
+    fn death_date(&self) -> Option<NaiveDate> {
+        self.record.death_date()
+    }
+    fn emigration_date(&self) -> Option<NaiveDate> {
+        self.record.emigration_date()
+    }
+    fn entry_date(&self) -> Option<NaiveDate> {
+        self.record.entry_date()
+    }
+}
+
+impl<R: CovariateRecord> CovariateRecord for TrialView<'_, R> {
+    delegate_covariate_record!(record);
+}
+
 /// The pool of one trial, as the matching of the trial is given it.
 ///
 /// The records are the people eligible at the start of the trial, in the
-/// order of the panel, with the date of the trial as the transition date of
-/// the initiators and none for the rest. Each holds a reference to the record
-/// of the person in the panel, so a record is never copied, however many
-/// trials the person is eligible in.
+/// order of the panel, with the date of the initiator's period as the
+/// transition date of each initiator and none for the rest. Each is a
+/// [`TrialView`] of the record of the person in the panel, so a record is never
+/// copied, however many trials the person is eligible in.
 pub struct TrialPool<'p, R> {
     period: i64,
-    records: Vec<RoleTransitionRecord<&'p R>>,
+    records: Vec<RoleTransitionRecord<TrialView<'p, R>>>,
     /// The order of the pool's ids, read off the order of the panel's.
     id_order: Option<IdOrder>,
 }
@@ -784,7 +997,7 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
 
     /// The people of the pool as a risk-set cohort.
     #[must_use]
-    pub fn records(&self) -> &[RoleTransitionRecord<&'p R>] {
+    pub fn records(&self) -> &[RoleTransitionRecord<TrialView<'p, R>>] {
         &self.records
     }
 
@@ -796,8 +1009,8 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
         &self,
         seed: u64,
     ) -> MatchJob<
-        TransitionMode<'_, RoleTransitionRecord<&'p R>>,
-        RoleTransitionRecord<&'p R>,
+        TransitionMode<'_, RoleTransitionRecord<TrialView<'p, R>>>,
+        RoleTransitionRecord<TrialView<'p, R>>,
         RandomSelection,
     > {
         MatchJob::new_transition(&self.records, seed).with_id_order(self.id_order.as_ref())
@@ -840,13 +1053,39 @@ where
     E: Send,
     F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E> + Sync,
 {
-    validate(panel, true)?;
+    match_trials_with(panel, options, &TrialMatching::default(), run)
+}
+
+/// [`match_trials`] with the dates and strata of `matching`: dates of each
+/// person's own, with the index date of a set from its initiator, and strata
+/// that change between periods (see the module documentation).
+///
+/// # Errors
+///
+/// As [`match_trials`], and a [`TrialInputError`] for a person whose dates do
+/// not increase under [`PeriodDates::PerPerson`] or period strata without a
+/// value for every row of the panel.
+pub fn match_trials_with<R, E, F>(
+    panel: &[TrialPerson<R>],
+    options: &TrialOptions,
+    matching: &TrialMatching<'_>,
+    run: F,
+) -> Result<TrialOutcome, TrialsError<E>>
+where
+    R: MatchingRecord + Sync,
+    E: Send,
+    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E> + Sync,
+{
+    validate(panel, Some(matching.dates))?;
+    if let Some(strata) = matching.strata {
+        strata.check(panel)?;
+    }
     let plan = plan(panel, options);
     let panel_order = IdOrder::of_ids(panel.len(), |person| panel[person].record.id());
     let trials = match options.control_reuse {
         ControlReuse::AcrossTrials => {
             let starts: Vec<(&i64, &(NaiveDate, Vec<Enrolment>))> = plan.trials.iter().collect();
-            let context = TrialContext::new(panel, &plan, options, panel_order.as_ref());
+            let context = TrialContext::new(panel, &plan, options, matching, panel_order.as_ref());
             let results: Vec<Option<Result<TrialResult, TrialsError<E>>>> = starts
                 .into_par_iter()
                 .map(|(period, (date, enrolments))| {
@@ -860,7 +1099,9 @@ where
                 .flatten()
                 .collect::<Result<Vec<_>, _>>()?
         }
-        ControlReuse::OncePerRun => in_order(panel, &plan, options, panel_order.as_ref(), &run)?,
+        ControlReuse::OncePerRun => {
+            in_order(panel, &plan, options, matching, panel_order.as_ref(), &run)?
+        }
     };
     Ok(TrialOutcome { trials })
 }
@@ -872,6 +1113,7 @@ fn in_order<R, E, F>(
     panel: &[TrialPerson<R>],
     plan: &Plan,
     options: &TrialOptions,
+    matching: &TrialMatching<'_>,
     panel_order: Option<&IdOrder>,
     run: &F,
 ) -> Result<Vec<TrialResult>, TrialsError<E>>
@@ -879,7 +1121,7 @@ where
     R: MatchingRecord,
     F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E>,
 {
-    let context = TrialContext::new(panel, plan, options, panel_order);
+    let context = TrialContext::new(panel, plan, options, matching, panel_order);
     let once = options.control_reuse == ControlReuse::OncePerRun;
     let mut used_as_control = vec![false; panel.len()];
     let mut trials = Vec::new();
@@ -910,22 +1152,28 @@ struct TrialContext<'a, R> {
     panel: &'a [TrialPerson<R>],
     plan: &'a Plan,
     options: &'a TrialOptions,
+    matching: TrialMatching<'a>,
+    /// The first row of each person in [`PanelColumns`], for the strata.
+    offsets: Vec<usize>,
     panel_order: Option<&'a IdOrder>,
     /// The panel position of each id, built when a trial first has pairs.
     person_of: OnceLock<RapidHashMap<&'a str, usize>>,
 }
 
 impl<'a, R: MatchingRecord> TrialContext<'a, R> {
-    const fn new(
+    fn new(
         panel: &'a [TrialPerson<R>],
         plan: &'a Plan,
         options: &'a TrialOptions,
+        matching: &TrialMatching<'a>,
         panel_order: Option<&'a IdOrder>,
     ) -> Self {
         Self {
             panel,
             plan,
             options,
+            matching: *matching,
+            offsets: offsets(panel),
             panel_order,
             person_of: OnceLock::new(),
         }
@@ -984,10 +1232,17 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
             records: pool
                 .iter()
                 .map(|e| {
-                    RoleTransitionRecord::from_record(
-                        &panel[e.person].record,
-                        e.assigned.then_some(date),
-                    )
+                    let view = TrialView {
+                        record: &panel[e.person].record,
+                        strata: self
+                            .matching
+                            .strata
+                            .map(|strata| (strata, self.offsets[e.person] + e.start)),
+                    };
+                    // The date of the initiator's own period, which is the
+                    // date of the trial when dates are shared.
+                    let own = panel[e.person].periods[e.start].date;
+                    RoleTransitionRecord::from_record(view, e.assigned.then_some(own))
                 })
                 .collect(),
             id_order: self.panel_order.map(|order| order.subset(&members)),
@@ -1018,7 +1273,7 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
                 id: id.to_string(),
                 assigned: e.assigned,
                 follow_up_start_period: period,
-                follow_up_start: date,
+                follow_up_start: rows[e.start].date,
                 deviation_period: e.deviation.map(|d| rows[d].period),
                 deviation_date: e.deviation.map(|d| rows[d].date),
                 last_period: rows[e.last].period,
@@ -1031,10 +1286,21 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
                 controls.push(pool[at].person);
             }
         }
+        // Under per-person dates the trial has no one date; it reports the
+        // earliest of its initiators'.
+        let index_date = match self.matching.dates {
+            PeriodDates::Shared => date,
+            PeriodDates::PerPerson => pool
+                .iter()
+                .filter(|e| e.assigned)
+                .map(|e| panel[e.person].periods[e.start].date)
+                .min()
+                .unwrap_or(date),
+        };
         Some(Ok((
             TrialResult {
                 period,
-                index_date: date,
+                index_date,
                 n_eligible: pool.len(),
                 n_initiators,
                 outcome,
@@ -1290,13 +1556,23 @@ mod tests {
             let plan = plan(&people, &options);
             let order = IdOrder::of_ids(people.len(), |p| people[p].record.id());
             for ratio in [1, 3] {
-                let reference = in_order(&people, &plan, &options, None, &|pool| {
-                    Ok::<_, std::convert::Infallible>(job_on(pool, false, ratio))
-                })
+                let reference = in_order(
+                    &people,
+                    &plan,
+                    &options,
+                    &TrialMatching::default(),
+                    None,
+                    &|pool| Ok::<_, std::convert::Infallible>(job_on(pool, false, ratio)),
+                )
                 .expect("valid");
-                let ordered = in_order(&people, &plan, &options, order.as_ref(), &|pool| {
-                    Ok::<_, std::convert::Infallible>(job_on(pool, true, ratio))
-                })
+                let ordered = in_order(
+                    &people,
+                    &plan,
+                    &options,
+                    &TrialMatching::default(),
+                    order.as_ref(),
+                    &|pool| Ok::<_, std::convert::Infallible>(job_on(pool, true, ratio)),
+                )
                 .expect("valid");
                 let pairs: usize = reference.iter().map(|t| t.outcome.pairs.len()).sum();
                 assert!(pairs > n / 20, "seed {seed}: {pairs} pairs");

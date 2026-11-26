@@ -284,9 +284,10 @@ pub use role_transition::{
     exposure_density_sets, match_exposure_density,
 };
 pub use trials::{
-    ControlReuse, ExpandedRow, PanelColumns, TrialColumns, TrialInputError, TrialMember,
-    TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool, TrialResult, TrialsError,
-    expand_trial_columns, expand_trials, match_trials, matched_trial_columns, trial_seed,
+    ControlReuse, ExpandedRow, PanelColumns, PeriodDates, PeriodStrata, TrialColumns,
+    TrialInputError, TrialMatching, TrialMember, TrialOptions, TrialOutcome, TrialPeriod,
+    TrialPerson, TrialPool, TrialResult, TrialView, TrialsError, expand_trial_columns,
+    expand_trials, match_trials, match_trials_with, matched_trial_columns, trial_seed,
 };
 pub use types::{
     AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
@@ -412,9 +413,9 @@ pub mod prelude {
     };
 
     pub use crate::{
-        ControlReuse, ExpandedRow, TrialInputError, TrialMember, TrialOptions, TrialOutcome,
-        TrialPeriod, TrialPerson, TrialPool, TrialResult, TrialsError, expand_trials, match_trials,
-        trial_seed,
+        ControlReuse, ExpandedRow, PeriodDates, PeriodStrata, TrialInputError, TrialMatching,
+        TrialMember, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool, TrialResult,
+        TrialView, TrialsError, expand_trials, match_trials, match_trials_with, trial_seed,
     };
 
     /// The constraints that can be added to a [`MatchJob`].

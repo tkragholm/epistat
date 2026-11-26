@@ -313,7 +313,7 @@ fn ratio(k: usize) -> MatchRatio {
 
 fn run_trial(
     reference: &Reference,
-    cohort: &[RoleTransitionRecord<&BalanceRecord>],
+    cohort: &[RoleTransitionRecord<TrialView<'_, BalanceRecord>>],
     k: usize,
     replacement: bool,
     seed: u64,
