@@ -20,11 +20,15 @@
 //! ```
 //!
 //! and with predictive values `PPV_k` and `NPV_k` in place of `Se` and `Sp`,
-//! `A = a PPV_0 + b (1 - NPV_0)` and `C = c PPV_1 + d (1 - NPV_1)`. Outcome
+//! `A = a PPV_0 + b (1 - NPV_0)` and `C = c PPV_1 + d (1 - NPV_1)`. With the
+//! positive predictive value and the sensitivity, the truly exposed are the
+//! recorded exposed times `PPV_k / Se_k`. Outcome
 //! misclassification is the same with the roles of exposure and outcome
 //! exchanged, `Se_k` and `Sp_k` for exposed (`k = 0`) and unexposed (`k = 1`)
 //! persons and `A = ( a - (1 - Sp_0) (a + c) ) / ( Se_0 - (1 - Sp_0) )` for the
-//! true cases among the exposed. `Se + Sp - 1` must be positive, or the
+//! true cases among the exposed, `A = a PPV_0 + c (1 - NPV_0)` from
+//! predictive values and `A = a PPV_0 / Se_0` from the positive predictive
+//! value and the sensitivity. `Se + Sp - 1` must be positive, or the
 //! classification is no better than chance.
 //!
 //! Selection with the probability `s` of being in the table by cell: the
@@ -52,7 +56,14 @@
 //! standard error of the observed log measure.
 //!
 //! A draw is discarded when a corrected cell is not positive or a parameter is
-//! outside its range. The number kept and the number discarded are returned.
+//! outside its range, which for a classification includes `Se + Sp <= 1`.
+//! The number kept and the number discarded are returned, and so is every
+//! draw ([`Draws`]): its bias parameters and its corrected measures, so that a
+//! draw can be checked against the simple correction, plotted against a
+//! parameter, or summarised otherwise. The risk difference is summarised as
+//! the ratios are; with random error it is shifted by a standard normal draw
+//! times its standard error `sqrt(a c / (a + c)^3 + b d / (b + d)^3)`.
+
 //!
 //! # Random numbers
 //!
@@ -310,6 +321,102 @@ pub fn correct_exposure_predictive(
     }
     let big_a = t.a * ppv[0] + t.b * (1.0 - npv[0]);
     let big_c = t.c * ppv[1] + t.d * (1.0 - npv[1]);
+    Ok(Corrected::from_cells(Table2x2 {
+        a: big_a,
+        b: (t.a + t.b) - big_a,
+        c: big_c,
+        d: (t.c + t.d) - big_c,
+    }))
+}
+
+/// Corrects a table for misclassification of the outcome from predictive
+/// values: `ppv` and `npv` of the outcome classification among the exposed
+/// (index 0) and the unexposed (index 1). The true cases among the exposed
+/// are `a PPV_0 + c (1 - NPV_0)`, and among the unexposed `b PPV_1 + d (1 -
+/// NPV_1)`.
+///
+/// # Errors
+///
+/// [`BiasError`] when the table is invalid or a predictive value is outside
+/// `[0, 1]`.
+pub fn correct_outcome_predictive(
+    t: &Table2x2,
+    ppv: [f64; 2],
+    npv: [f64; 2],
+) -> Result<Corrected, BiasError> {
+    t.check()?;
+    if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
+        return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
+    }
+    let big_a = t.a * ppv[0] + t.c * (1.0 - npv[0]);
+    let big_b = t.b * ppv[1] + t.d * (1.0 - npv[1]);
+    Ok(Corrected::from_cells(Table2x2 {
+        a: big_a,
+        b: big_b,
+        c: (t.a + t.c) - big_a,
+        d: (t.b + t.d) - big_b,
+    }))
+}
+
+fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), BiasError> {
+    if ppv.iter().any(|x| !(0.0..=1.0).contains(x)) {
+        return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
+    }
+    if se.iter().any(|x| !(*x > 0.0 && *x <= 1.0)) {
+        return Err(BiasError::Parameter("sensitivities must be in (0, 1]"));
+    }
+    Ok(())
+}
+
+/// Corrects a table for misclassification of the outcome from the positive
+/// predictive value and the sensitivity of the outcome classification among
+/// the exposed (index 0) and the unexposed (index 1), as when a validation
+/// study reports the share of recorded cases that are real.
+///
+/// The recorded cases of a group that are real are `PPV` times the recorded,
+/// and they are the share `Se` of all real cases, so the true cases are the
+/// recorded times `PPV / Se`. The specificity this implies differs between
+/// groups of different risk. With the same `PPV` and `Se` in both groups the
+/// risk ratio is unchanged.
+///
+/// # Errors
+///
+/// [`BiasError`] when the table is invalid, a predictive value is outside
+/// `[0, 1]` or a sensitivity outside `(0, 1]`.
+pub fn correct_outcome_ppv(
+    t: &Table2x2,
+    ppv: [f64; 2],
+    se: [f64; 2],
+) -> Result<Corrected, BiasError> {
+    t.check()?;
+    check_ppv_sensitivity(ppv, se)?;
+    let big_a = t.a * ppv[0] / se[0];
+    let big_b = t.b * ppv[1] / se[1];
+    Ok(Corrected::from_cells(Table2x2 {
+        a: big_a,
+        b: big_b,
+        c: (t.a + t.c) - big_a,
+        d: (t.b + t.d) - big_b,
+    }))
+}
+
+/// Corrects a table for misclassification of the exposure from the positive
+/// predictive value and the sensitivity of the exposure classification among
+/// cases (index 0) and non-cases (index 1): the truly exposed are the
+/// recorded exposed times `PPV / Se`, as in [`correct_outcome_ppv`].
+///
+/// # Errors
+///
+/// As [`correct_outcome_ppv`].
+pub fn correct_exposure_ppv(
+    t: &Table2x2,
+    ppv: [f64; 2],
+    se: [f64; 2],
+) -> Result<Corrected, BiasError> {
+    t.check()?;
+    check_ppv_sensitivity(ppv, se)?;
+    let big_a = t.a * ppv[0] / se[0];
+    let big_c = t.c * ppv[1] / se[1];
     Ok(Corrected::from_cells(Table2x2 {
         a: big_a,
         b: (t.a + t.b) - big_a,
@@ -790,23 +897,102 @@ pub struct Summary {
     pub upper: f64,
 }
 
-/// The result of a probabilistic bias analysis, for the risk ratio and the odds
-/// ratio.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The result of a probabilistic bias analysis, for the risk ratio, the odds
+/// ratio and the risk difference, with every draw.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProbResult {
     /// The risk ratio with systematic error only.
     pub risk_ratio: Summary,
     /// The odds ratio with systematic error only.
     pub odds_ratio: Summary,
+    /// The risk difference with systematic error only.
+    pub risk_difference: Summary,
     /// The risk ratio with systematic and random error, when requested.
     pub risk_ratio_total: Option<Summary>,
     /// The odds ratio with systematic and random error, when requested.
     pub odds_ratio_total: Option<Summary>,
+    /// The risk difference with systematic and random error, when requested.
+    pub risk_difference_total: Option<Summary>,
     /// The draws kept.
     pub n_draws_used: usize,
     /// The draws discarded because a parameter or a corrected cell was out of
     /// range.
     pub n_discarded: usize,
+    /// Every draw, kept or discarded, in the order drawn.
+    pub draws: Draws<Measures>,
+}
+
+/// The corrected measures of one draw.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measures {
+    /// The risk ratio.
+    pub risk_ratio: f64,
+    /// The odds ratio.
+    pub odds_ratio: f64,
+    /// The risk difference.
+    pub risk_difference: f64,
+}
+
+/// Every draw of a probabilistic bias analysis, in the order drawn, so that
+/// draw `r` is the one made from `replicate_seed(seed, r)`.
+///
+/// The parameters of draw `r` are `parameters[r * names.len()..(r + 1) *
+/// names.len()]`, in the order of `names`; a parameter that could not be
+/// drawn is NaN. A discarded draw has `None` among the corrected values. The
+/// memory is about `8 (names.len() + 6)` bytes a draw.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Draws<M> {
+    /// The names of the bias parameters.
+    pub names: Vec<String>,
+    /// The bias parameters of every draw, `names.len()` a draw.
+    pub parameters: Vec<f64>,
+    /// The corrected value of every draw with systematic error only.
+    pub systematic: Vec<Option<M>>,
+    /// The corrected value of every draw with systematic and random error,
+    /// empty when random error was not requested.
+    pub total: Vec<Option<M>>,
+}
+
+impl<M> Draws<M> {
+    fn new(names: Vec<String>, draws: usize, random_error: bool) -> Self {
+        Self {
+            parameters: Vec::with_capacity(names.len() * draws),
+            names,
+            systematic: Vec::with_capacity(draws),
+            total: if random_error {
+                Vec::with_capacity(draws)
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    /// The number of draws.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.systematic.len()
+    }
+
+    /// Whether there are no draws.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.systematic.is_empty()
+    }
+
+    /// The parameters of draw `r`, in the order of `names`.
+    ///
+    /// # Panics
+    ///
+    /// When `r` is not below [`Draws::len`].
+    #[must_use]
+    pub fn parameters_of(&self, r: usize) -> &[f64] {
+        let k = self.names.len();
+        &self.parameters[r * k..(r + 1) * k]
+    }
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| (*s).to_owned()).collect()
 }
 
 /// Which variable is misclassified.
@@ -821,50 +1007,69 @@ pub enum Kind {
 /// The corrected values of one draw: systematic, and total when random error
 /// is added.
 struct Draw {
-    rr: f64,
-    or: f64,
-    total: Option<(f64, f64)>,
+    systematic: Measures,
+    total: Option<Measures>,
 }
 
-#[derive(Default)]
 struct Collector {
-    rr: Vec<f64>,
-    or: Vec<f64>,
-    rr_total: Vec<f64>,
-    or_total: Vec<f64>,
+    draws: Draws<Measures>,
+    random_error: bool,
     discarded: usize,
 }
 
 impl Collector {
-    fn push(&mut self, d: Option<Draw>) {
-        match d {
-            Some(d) if d.rr.is_finite() && d.or.is_finite() => {
-                self.rr.push(d.rr);
-                self.or.push(d.or);
-                if let Some((rr, or)) = d.total {
-                    self.rr_total.push(rr);
-                    self.or_total.push(or);
-                }
-            }
-            _ => self.discarded += 1,
+    fn new(names: Vec<String>, opts: &ProbOptions) -> Self {
+        Self {
+            draws: Draws::new(names, opts.draws, opts.random_error),
+            random_error: opts.random_error,
+            discarded: 0,
         }
     }
 
-    fn finish(mut self, alpha: f64) -> Result<ProbResult, BiasError> {
-        if self.rr.is_empty() {
+    fn push(&mut self, parameters: &[f64], d: Option<Draw>) {
+        self.draws.parameters.extend_from_slice(parameters);
+        match d {
+            Some(d)
+                if d.systematic.risk_ratio.is_finite() && d.systematic.odds_ratio.is_finite() =>
+            {
+                self.draws.systematic.push(Some(d.systematic));
+                if self.random_error {
+                    self.draws.total.push(d.total);
+                }
+            }
+            _ => {
+                self.discarded += 1;
+                self.draws.systematic.push(None);
+                if self.random_error {
+                    self.draws.total.push(None);
+                }
+            }
+        }
+    }
+
+    fn finish(self, alpha: f64) -> Result<ProbResult, BiasError> {
+        let kept: Vec<Measures> = self.draws.systematic.iter().flatten().copied().collect();
+        if kept.is_empty() {
             return Err(BiasError::NoValidDraws {
                 discarded: self.discarded,
             });
         }
-        let used = self.rr.len();
-        let total = !self.rr_total.is_empty();
+        let totals: Vec<Measures> = self.draws.total.iter().flatten().copied().collect();
+        let total = self.random_error && !totals.is_empty();
+        let pick = |values: &[Measures], f: fn(&Measures) -> f64| -> Summary {
+            let mut v: Vec<f64> = values.iter().map(f).collect();
+            summarise(&mut v, alpha)
+        };
         Ok(ProbResult {
-            risk_ratio: summarise(&mut self.rr, alpha),
-            odds_ratio: summarise(&mut self.or, alpha),
-            risk_ratio_total: total.then(|| summarise(&mut self.rr_total, alpha)),
-            odds_ratio_total: total.then(|| summarise(&mut self.or_total, alpha)),
-            n_draws_used: used,
+            risk_ratio: pick(&kept, |m| m.risk_ratio),
+            odds_ratio: pick(&kept, |m| m.odds_ratio),
+            risk_difference: pick(&kept, |m| m.risk_difference),
+            risk_ratio_total: total.then(|| pick(&totals, |m| m.risk_ratio)),
+            odds_ratio_total: total.then(|| pick(&totals, |m| m.odds_ratio)),
+            risk_difference_total: total.then(|| pick(&totals, |m| m.risk_difference)),
+            n_draws_used: kept.len(),
             n_discarded: self.discarded,
+            draws: self.draws,
         })
     }
 }
@@ -928,27 +1133,48 @@ fn count(x: f64) -> u64 {
     x as u64
 }
 
-fn ratio_measures(t: &Table2x2) -> Option<(f64, f64)> {
-    Some((t.risk_ratio()?, t.odds_ratio()?))
+fn measures(t: &Table2x2) -> Option<Measures> {
+    Some(Measures {
+        risk_ratio: t.risk_ratio()?,
+        odds_ratio: t.odds_ratio()?,
+        risk_difference: t.risk_difference()?,
+    })
+}
+
+/// The standard error of the risk difference of a table.
+fn rd_standard_error(t: &Table2x2) -> f64 {
+    (t.a * t.c / (t.a + t.c).powi(3) + t.b * t.d / (t.b + t.d).powi(3)).sqrt()
+}
+
+/// The measures shifted by the sampling error `z` times the standard errors
+/// `se` of the log risk ratio, the log odds ratio and the risk difference.
+fn shifted(m: &Measures, z: f64, se: [f64; 3]) -> Measures {
+    Measures {
+        risk_ratio: (m.risk_ratio.ln() - z * se[0]).exp(),
+        odds_ratio: (m.odds_ratio.ln() - z * se[1]).exp(),
+        risk_difference: m.risk_difference - z * se[2],
+    }
 }
 
 fn positive_cells(t: &Table2x2) -> bool {
     [t.a, t.b, t.c, t.d].iter().all(|x| *x > 0.0)
 }
 
-/// The sampling-error shift of a log risk ratio and a log odds ratio from the
-/// cells of a table.
-fn standard_errors(t: &Table2x2) -> [f64; 2] {
+/// The standard errors of the log risk ratio, the log odds ratio and the risk
+/// difference of a table.
+fn standard_errors(t: &Table2x2) -> [f64; 3] {
     let rr = (1.0 / t.a + 1.0 / t.b - 1.0 / (t.a + t.c) - 1.0 / (t.b + t.d)).sqrt();
     let or = (1.0 / t.a + 1.0 / t.b + 1.0 / t.c + 1.0 / t.d).sqrt();
-    [rr, or]
+    [rr, or, rd_standard_error(t)]
 }
 
 /// A probabilistic correction for misclassification of the exposure or the
 /// outcome.
 ///
 /// `se` and `sp` are the parameter pairs of [`Misclass`]. See the module
-/// documentation for the draws and the random error.
+/// documentation for the draws and the random error. The parameters of each
+/// draw are named `sensitivity 0`, `sensitivity 1`, `specificity 0` and
+/// `specificity 1`, for the strata of [`Misclass`].
 ///
 /// # Errors
 ///
@@ -969,17 +1195,28 @@ pub fn probabilistic_misclass(
     if opts.random_error && !t.is_integer() {
         return Err(BiasError::Table("random error needs whole counts"));
     }
-    let mut out = Collector::default();
+    let mut out = Collector::new(
+        names(&[
+            "sensitivity 0",
+            "sensitivity 1",
+            "specificity 0",
+            "specificity 1",
+        ]),
+        opts,
+    );
     for r in 0..opts.draws {
         let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
-        out.push(misclass_draw(
+        let mut parameters = [f64::NAN; 4];
+        let draw = misclass_draw(
             t,
             kind,
             se,
             sp,
             opts.random_error,
             &mut stream,
-        ));
+            &mut parameters,
+        );
+        out.push(&parameters, draw);
     }
     out.finish(opts.alpha)
 }
@@ -991,10 +1228,15 @@ fn misclass_draw(
     sp: &Pair,
     random_error: bool,
     stream: &mut Stream,
+    parameters: &mut [f64; 4],
 ) -> Option<Draw> {
     let se = se.draw(stream)?;
+    parameters[..2].copy_from_slice(&se);
     let sp = sp.draw(stream)?;
-    if se.iter().chain(&sp).any(|x| !(0.0..=1.0).contains(x)) {
+    parameters[2..].copy_from_slice(&sp);
+    if se.iter().chain(&sp).any(|x| !(0.0..=1.0).contains(x))
+        || se.iter().zip(&sp).any(|(e, p)| e - (1.0 - p) <= 0.0)
+    {
         return None;
     }
     let cells = match kind {
@@ -1004,11 +1246,10 @@ fn misclass_draw(
     if !positive_cells(&cells) {
         return None;
     }
-    let (rr, or) = ratio_measures(&cells)?;
+    let systematic = measures(&cells)?;
     if !random_error {
         return Some(Draw {
-            rr,
-            or,
+            systematic,
             total: None,
         });
     }
@@ -1062,22 +1303,18 @@ fn misclass_draw(
     if !positive_cells(&again) {
         return None;
     }
-    let (rr_again, or_again) = ratio_measures(&again)?;
-    let se_log = standard_errors(&again);
+    let reclassified_measures = measures(&again)?;
     let z = stream.normal();
     Some(Draw {
-        rr,
-        or,
-        total: Some((
-            (rr_again.ln() - z * se_log[0]).exp(),
-            (or_again.ln() - z * se_log[1]).exp(),
-        )),
+        systematic,
+        total: Some(shifted(&reclassified_measures, z, standard_errors(&again))),
     })
 }
 
 /// A probabilistic correction for selection: `s` holds the distribution of the
 /// selection probability of each cell, `[[a, b], [c, d]]`, drawn
-/// independently.
+/// independently. The parameters of each draw are named `selection a` to
+/// `selection d`.
 ///
 /// # Errors
 ///
@@ -1095,37 +1332,48 @@ pub fn probabilistic_selection(
         return Err(BiasError::Table("the observed measures are undefined"));
     };
     let se_log = standard_errors(t);
-    let mut out = Collector::default();
+    let mut out = Collector::new(
+        names(&["selection a", "selection b", "selection c", "selection d"]),
+        opts,
+    );
     for r in 0..opts.draws {
         let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
+        let mut parameters = [f64::NAN; 4];
         let draw = (|| {
-            let mut p = [[0.0; 2]; 2];
-            for i in 0..2 {
-                for j in 0..2 {
-                    p[i][j] = s[i][j].draw(&mut stream)?;
-                }
-            }
-            if p.iter().flatten().any(|x| !(*x > 0.0 && *x <= 1.0)) {
-                return None;
-            }
-            let cells = selection_cells(t, &p);
-            let (rr, or) = ratio_measures(&cells)?;
-            let total = opts.random_error.then(|| {
-                let z = stream.normal();
-                (
-                    (rr.ln() - z * se_log[0]).exp(),
-                    (or.ln() - z * se_log[1]).exp(),
-                )
-            });
-            Some(Draw { rr, or, total })
+            let p = draw_selection(s, &mut stream, &mut parameters)?;
+            let systematic = measures(&selection_cells(t, &p))?;
+            let total = opts
+                .random_error
+                .then(|| shifted(&systematic, stream.normal(), se_log));
+            Some(Draw { systematic, total })
         })();
-        out.push(draw);
+        out.push(&parameters, draw);
     }
     out.finish(opts.alpha)
 }
 
+/// Draws the four selection probabilities into `parameters`, `None` when one
+/// cannot be drawn or is outside `(0, 1]`.
+fn draw_selection(
+    s: &[[Dist; 2]; 2],
+    stream: &mut Stream,
+    parameters: &mut [f64],
+) -> Option<Selection> {
+    let mut p = [[0.0; 2]; 2];
+    for i in 0..2 {
+        for j in 0..2 {
+            p[i][j] = s[i][j].draw(stream)?;
+            parameters[2 * i + j] = p[i][j];
+        }
+    }
+    if p.iter().flatten().any(|x| !(*x > 0.0 && *x <= 1.0)) {
+        return None;
+    }
+    Some(p)
+}
+
 /// The result of a probabilistic adjustment for one measure.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AdjustedResult {
     /// The adjusted measure with systematic error only.
     pub adjusted: Summary,
@@ -1136,6 +1384,36 @@ pub struct AdjustedResult {
     /// The draws discarded because a parameter was out of range or a stratum
     /// cell negative.
     pub n_discarded: usize,
+    /// Every draw, kept or discarded, in the order drawn.
+    pub draws: Draws<f64>,
+}
+
+/// The adjusted value of every draw, summarised.
+fn finish_single(draws: Draws<f64>, alpha: f64) -> Result<AdjustedResult, BiasError> {
+    let mut systematic: Vec<f64> = draws.systematic.iter().flatten().copied().collect();
+    let discarded = draws.len() - systematic.len();
+    if systematic.is_empty() {
+        return Err(BiasError::NoValidDraws { discarded });
+    }
+    let mut total: Vec<f64> = draws.total.iter().flatten().copied().collect();
+    let random_error = !draws.total.is_empty();
+    Ok(AdjustedResult {
+        n_draws_used: systematic.len(),
+        n_discarded: discarded,
+        adjusted: summarise(&mut systematic, alpha),
+        adjusted_total: random_error.then(|| summarise(&mut total, alpha)),
+        draws,
+    })
+}
+
+/// The shift of a measure of `kind` by the sampling error `z` times its
+/// standard error: on the log scale for the ratios.
+fn shift_measure(measure: ConfoundingMeasure, value: f64, z: f64, se: [f64; 3]) -> f64 {
+    match measure {
+        ConfoundingMeasure::RiskRatio => (value.ln() - z * se[0]).exp(),
+        ConfoundingMeasure::OddsRatio => (value.ln() - z * se[1]).exp(),
+        ConfoundingMeasure::RiskDifference => value - z * se[2],
+    }
 }
 
 /// A probabilistic adjustment for an unmeasured binary confounder: the
@@ -1145,7 +1423,8 @@ pub struct AdjustedResult {
 /// the Mantel-Haenszel adjusted measure of [`adjust_confounding`]. With random
 /// error, the adjusted log measure is shifted by a standard normal draw times
 /// the standard error of the observed log measure (the standard error of the
-/// risk difference, for it).
+/// risk difference, for it). The parameters of each draw are named
+/// `prevalence exposed`, `prevalence unexposed` and `association`.
 ///
 /// # Errors
 ///
@@ -1162,52 +1441,65 @@ pub fn probabilistic_confounding(
     prevalence.validate()?;
     association.validate()?;
     check_options(opts)?;
-    let se_log = standard_errors(t);
-    let se_diff = (t.a * t.c / (t.a + t.c).powi(3) + t.b * t.d / (t.b + t.d).powi(3)).sqrt();
-    let mut systematic = Vec::new();
-    let mut total = Vec::new();
-    let mut discarded = 0;
+    let se = standard_errors(t);
+    let mut draws = Draws::new(
+        names(&["prevalence exposed", "prevalence unexposed", "association"]),
+        opts.draws,
+        opts.random_error,
+    );
     for r in 0..opts.draws {
         let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
-        let adjusted = prevalence
-            .draw(&mut stream)
-            .zip(association.draw(&mut stream))
-            .and_then(|(p, assoc)| {
-                adjust_confounding(
-                    t,
-                    measure,
-                    &Confounder {
-                        association: assoc,
-                        prevalence_exposed: p[0],
-                        prevalence_unexposed: p[1],
-                    },
-                )
-                .ok()
-            });
-        match adjusted.map(|c| c.adjusted_mh).filter(|x| x.is_finite()) {
-            Some(value) => {
-                systematic.push(value);
-                if opts.random_error {
-                    let z = stream.normal();
-                    total.push(match measure {
-                        ConfoundingMeasure::RiskRatio => (value.ln() - z * se_log[0]).exp(),
-                        ConfoundingMeasure::OddsRatio => (value.ln() - z * se_log[1]).exp(),
-                        ConfoundingMeasure::RiskDifference => value - z * se_diff,
-                    });
-                }
-            }
-            None => discarded += 1,
+        let mut parameters = [f64::NAN; 3];
+        let adjusted = draw_confounding(
+            t,
+            measure,
+            prevalence,
+            association,
+            &mut stream,
+            &mut parameters,
+        );
+        draws.parameters.extend_from_slice(&parameters);
+        draws.systematic.push(adjusted);
+        if opts.random_error {
+            draws
+                .total
+                .push(adjusted.map(|value| shift_measure(measure, value, stream.normal(), se)));
         }
     }
-    if systematic.is_empty() {
-        return Err(BiasError::NoValidDraws { discarded });
+    finish_single(draws, opts.alpha)
+}
+
+/// Draws a confounder into `parameters` and gives the Mantel-Haenszel
+/// adjusted measure, `None` when a draw fails or a stratum cell is negative.
+fn draw_confounding(
+    t: &Table2x2,
+    measure: ConfoundingMeasure,
+    prevalence: &Pair,
+    association: &Dist,
+    stream: &mut Stream,
+    parameters: &mut [f64],
+) -> Option<f64> {
+    let p = prevalence.draw(stream);
+    if let Some(p) = p {
+        parameters[..2].copy_from_slice(&p);
     }
-    Ok(AdjustedResult {
-        n_draws_used: systematic.len(),
-        n_discarded: discarded,
-        adjusted: summarise(&mut systematic, opts.alpha),
-        adjusted_total: opts.random_error.then(|| summarise(&mut total, opts.alpha)),
-    })
+    let assoc = association.draw(stream);
+    if let Some(assoc) = assoc {
+        parameters[2] = assoc;
+    }
+    let (p, assoc) = p.zip(assoc)?;
+    adjust_confounding(
+        t,
+        measure,
+        &Confounder {
+            association: assoc,
+            prevalence_exposed: p[0],
+            prevalence_unexposed: p[1],
+        },
+    )
+    .ok()
+    .map(|c| c.adjusted_mh)
+    .filter(|x| x.is_finite())
 }
 
 #[cfg(test)]
@@ -1639,6 +1931,119 @@ mod tests {
         assert!(
             probabilistic_misclass(&TRUE, Kind::Exposure, &rho, &ok, &options(5, false)).is_err()
         );
+    }
+
+    #[test]
+    fn outcome_predictive_values_invert_the_misclassification() {
+        // Classify the true outcome with sensitivity and specificity, and
+        // take the predictive values of the classification from the truth.
+        let m = Misclass {
+            se: [0.8, 0.7],
+            sp: [0.99, 0.97],
+        };
+        let recorded = |cases: f64, noncases: f64, k: usize| {
+            let tp = m.se[k] * cases;
+            let fp = (1.0 - m.sp[k]) * noncases;
+            let tn = m.sp[k] * noncases;
+            let fneg = (1.0 - m.se[k]) * cases;
+            (tp + fp, fneg + tn, tp / (tp + fp), tn / (tn + fneg))
+        };
+        let (a, c, ppv0, npv0) = recorded(TRUE.a, TRUE.c, 0);
+        let (b, d, ppv1, npv1) = recorded(TRUE.b, TRUE.d, 1);
+        let observed = Table2x2 { a, b, c, d };
+        let back = correct_outcome_predictive(&observed, [ppv0, ppv1], [npv0, npv1])
+            .unwrap()
+            .cells
+            .unwrap();
+        for (got, want) in [back.a, back.b, back.c, back.d]
+            .into_iter()
+            .zip([TRUE.a, TRUE.b, TRUE.c, TRUE.d])
+        {
+            assert!(close(got, want), "{got} {want}");
+        }
+        // The positive predictive value and the sensitivity give the true
+        // cases as well, and agree with the correction by Se and Sp.
+        let by_ppv = correct_outcome_ppv(&observed, [ppv0, ppv1], m.se)
+            .unwrap()
+            .cells
+            .unwrap();
+        assert!(close(by_ppv.a, TRUE.a) && close(by_ppv.b, TRUE.b));
+        let by_se_sp = correct_outcome(&observed, &m).unwrap().cells.unwrap();
+        assert!(close(by_ppv.a, by_se_sp.a));
+        // With the same PPV and Se in both groups the risk ratio is kept.
+        let same = correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.8, 0.8]).unwrap();
+        assert!(close(same.risk_ratio.unwrap(), TRUE.risk_ratio().unwrap()));
+        assert!(correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.0, 0.8]).is_err());
+    }
+
+    #[test]
+    fn exposure_ppv_and_sensitivity_give_the_true_exposed() {
+        let m = Misclass {
+            se: [0.9, 0.8],
+            sp: [0.95, 0.97],
+        };
+        let observed = observed_exposure(&TRUE, &m);
+        let ppv = [m.se[0] * TRUE.a / observed.a, m.se[1] * TRUE.c / observed.c];
+        let cells = correct_exposure_ppv(&observed, ppv, m.se)
+            .unwrap()
+            .cells
+            .unwrap();
+        assert!(close(cells.a, TRUE.a) && close(cells.c, TRUE.c));
+        assert!(close(cells.b, TRUE.b) && close(cells.d, TRUE.d));
+    }
+
+    #[test]
+    fn each_draw_is_the_simple_correction_of_its_parameters() {
+        let t = Table2x2 {
+            a: 150.0,
+            b: 900.0,
+            c: 9_850.0,
+            d: 89_100.0,
+        };
+        let se = Pair::Independent([
+            Dist::Uniform { lo: 0.7, hi: 0.9 },
+            Dist::Uniform { lo: 0.6, hi: 0.9 },
+        ]);
+        let sp = Pair::Same(Dist::Uniform { lo: 0.985, hi: 1.0 });
+        let r = probabilistic_misclass(&t, Kind::Outcome, &se, &sp, &options(500, true)).unwrap();
+        assert_eq!(r.draws.len(), 500);
+        assert_eq!(r.draws.total.len(), 500);
+        let mut discarded = 0;
+        for k in 0..r.draws.len() {
+            let p = r.draws.parameters_of(k);
+            let simple = correct_outcome(
+                &t,
+                &Misclass {
+                    se: [p[0], p[1]],
+                    sp: [p[2], p[3]],
+                },
+            )
+            .unwrap();
+            if let Some(m) = r.draws.systematic[k] {
+                assert_eq!(m.risk_ratio.to_bits(), simple.risk_ratio.unwrap().to_bits());
+                assert_eq!(
+                    m.risk_difference.to_bits(),
+                    simple.risk_difference.unwrap().to_bits()
+                );
+                assert!(r.draws.total[k].is_some());
+            } else {
+                discarded += 1;
+                assert!(simple.cells.is_none() || simple.risk_ratio.is_none());
+            }
+        }
+        assert_eq!(discarded, r.n_discarded);
+        assert!(r.n_discarded > 0);
+        // The risk difference is summarised from the same draws.
+        let mut rd: Vec<f64> = r
+            .draws
+            .systematic
+            .iter()
+            .flatten()
+            .map(|m| m.risk_difference)
+            .collect();
+        let s = summarise(&mut rd, 0.05);
+        assert_eq!(s, r.risk_difference);
+        assert!(r.risk_difference_total.is_some());
     }
 
     #[test]
