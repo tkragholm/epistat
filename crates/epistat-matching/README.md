@@ -8,7 +8,10 @@ be matched greedily under calipers and constraints on sex, birth date, exact
 strata, family, alive and resident at the index date, and any numeric field.
 
 Longitudinal cohorts are matched in risk sets at the time a person becomes a
-case, by exposure density, or across sequential trials. The output has the
+case, by exposure density, or across sequential trials. The expansion of
+sequential trials and the members of matched trials come as columns that point
+at the rows of the panel, the input of the trial weights and outcome models of
+`epistat-survival`. The output has the
 pairs or subclasses, matching weights for the ATT, ATC or ATE, a typed reason
 for every excluded candidate, balance before and after matching, effect
 estimates with matched-set bootstrap and Abadie-Imbens variances, and
