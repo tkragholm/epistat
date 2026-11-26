@@ -90,9 +90,12 @@
 //!   events expected in a cohort that had them, as `survival::ratetable` and
 //!   `pyears(expect = "event")`.
 //! - [`relsurv`]: net survival by Ederer II and Pohar Perme with variances, by group, exactly or
-//!   on a time grid, and the piecewise-constant excess hazard model, from the reference hazards
-//!   of a [`ratetable`], as `relsurv::rs.surv` and `popEpi::relpois`; the flexible parametric
-//!   excess hazard model is [`flexpar`] with an expected hazard, as `rstpm2::stpm2(bhazard =)`.
+//!   on a time grid, relative survival by Ederer I and Hakulinen, and the piecewise-constant
+//!   excess hazard model, from the reference hazards of a [`ratetable`], as `relsurv::rs.surv`
+//!   and `popEpi::relpois`; the expected survival of a cohort, as `survival::survexp`;
+//!   age-standardised net survival; the crude probabilities of death, as `relsurv::cmp.rel`; and
+//!   the test of equal net survival, as `relsurv::rs.diff`. The flexible parametric excess
+//!   hazard model is [`flexpar`] with an expected hazard, as `rstpm2::stpm2(bhazard =)`.
 //! - [`cox::predict`](mod@cox::predict): the baseline hazard, linear predictor, risk, expected
 //!   number of events, terms and predicted survival curves of a Cox fit, as
 //!   `basehaz`, `predict.coxph` and `survfit.coxph`, including the

@@ -10,10 +10,15 @@ Cramér's V), and MCMC diagnostics (autocorrelation, effective sample size,
 split R-hat).
 
 Also weighted means and variances with reliability weights, direct
-standardisation and the Kitagawa decomposition, Poisson confidence intervals
+standardisation and the Kitagawa decomposition with the variances of its parts
+(checked against `DasGuptR` and `MatchIt`), Poisson confidence intervals
 (exact, Anscombe and Byar), rates with exact intervals, rate ratios (with an exact interval) and
-differences and directly standardised rates with Fay-Feuer intervals,
-Mantel-Haenszel estimators with the Breslow-Day test, standardised incidence
+differences and directly standardised rates with Fay-Feuer intervals, the ratio
+of two standardised rates with Fay's F, the modified F of Tiwari, Clegg and Zou
+or the log interval, and their difference, the F quantile,
+Mantel-Haenszel estimators with the Breslow-Day test, tests of a common rate
+ratio over strata (Breslow-Day for rates, likelihood ratio and Pearson at the
+conditional maximum likelihood estimate), standardised incidence
 ratios with exact, Byar, Wald and profile intervals and tests of homogeneity
 and trend, the F tail,
 E-values (for risk, odds and hazard ratios, mean and risk differences, and

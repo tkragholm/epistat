@@ -304,6 +304,36 @@ pub fn f_sf(f: f64, df1: f64, df2: f64) -> f64 {
     }
 }
 
+/// The `p` quantile of the F distribution with `df1` and `df2` degrees of
+/// freedom, R's `qf(p, df1, df2)`, formed as R forms it: with `y` the `1 - p`
+/// quantile of the beta distribution with shapes `df2 / 2` and `df1 / 2`,
+/// `F = (1 / y - 1) df2 / df1`. Above `4e5` degrees of freedom the F
+/// quantile is a chi-square one, `qchisq(p, df1) / df1` when `df2` is the
+/// larger and `df2 / qchisq(1 - p, df2)` when `df1` is above `4e5`, as in R.
+/// `None` when a degree of freedom is not positive and finite, `p` is
+/// outside `[0, 1]`, or the beta quantile is `None`. The quantile of `p = 0`
+/// is 0 and of `p = 1` is infinity.
+#[must_use]
+pub fn f_quantile(p: f64, df1: f64, df2: f64) -> Option<f64> {
+    if !(df1 > 0.0 && df2 > 0.0 && df1.is_finite() && df2.is_finite() && (0.0..=1.0).contains(&p)) {
+        return None;
+    }
+    if p == 0.0 {
+        return Some(0.0);
+    }
+    if p >= 1.0 {
+        return Some(f64::INFINITY);
+    }
+    if df1 <= df2 && df2 > 4e5 {
+        return crate::poisson::gamma_quantile(p, df1 / 2.0).map(|q| 2.0 * q / df1);
+    }
+    if df1 > 4e5 {
+        return crate::poisson::gamma_quantile(1.0 - p, df2 / 2.0).map(|q| df2 / (2.0 * q));
+    }
+    let y = beta_quantile(1.0 - p, df2 / 2.0, df1 / 2.0)?;
+    Some((1.0 / y - 1.0) * (df2 / df1))
+}
+
 /// `P(T > |z|)`, half the two-sided tail.
 fn upper_tail(z: f64, nu: f64) -> f64 {
     if z.is_infinite() {

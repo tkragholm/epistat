@@ -1,7 +1,11 @@
 //! Mantel-Haenszel estimators of a common odds ratio, risk ratio, rate ratio,
 //! risk difference and rate difference over strata, the Mantel-Haenszel tests
-//! of association, and the Breslow-Day test of homogeneity with Tarone's
-//! correction.
+//! of association, the Breslow-Day test of homogeneity with Tarone's
+//! correction, and the tests of a common rate ratio:
+//! [`rate_ratio_breslow_day`] with the Mantel-Haenszel ratio and
+//! [`rate_ratio_homogeneity`], the likelihood ratio and Pearson tests at the
+//! conditional maximum likelihood estimate, whose formulas are in their
+//! documentation.
 //!
 //! # Algorithm
 //!
@@ -547,6 +551,197 @@ pub fn breslow_day(tables: &[Table], tarone: bool) -> Result<Option<Test>, MhErr
         statistic = (statistic - sum_e * sum_e / sum_v).max(0.0);
     }
     Ok(Some(chi_square_test(statistic, terms.len() - 1)))
+}
+
+/// The strata that say something about a common rate ratio, as
+/// `(x1, n, ln(t1 / t0))` with `n = x1 + x0`: both arms have person-time and
+/// there is at least one event.
+fn informative(strata: &[RateStratum]) -> Vec<(f64, f64, f64)> {
+    strata
+        .iter()
+        .filter(|s| s.t1 > 0.0 && s.t0 > 0.0 && s.x1 + s.x0 > 0.0)
+        .map(|s| (s.x1, s.x1 + s.x0, s.t1.ln() - s.t0.ln()))
+        .collect()
+}
+
+/// The probability `p = 1 / (1 + exp(-eta))` that an event of a stratum is
+/// in the exposed arm, and `1 - p`, each formed without subtracting.
+fn arm_probabilities(eta: f64) -> (f64, f64) {
+    (1.0 / (1.0 + (-eta).exp()), 1.0 / (1.0 + eta.exp()))
+}
+
+/// The analogue of the Breslow-Day test for rate ratios: that the rate ratio
+/// is the same in every stratum, with the Mantel-Haenszel rate ratio `psi`
+/// in place of the common one, or Tarone's corrected statistic when `tarone`
+/// is set.
+///
+/// Given the `n = x1 + x0` events of a stratum, `x1` is binomial with
+/// probability `p = psi t1 / (psi t1 + t0)` under a common ratio, so
+///
+/// ```text
+/// BD = sum (x1 - n p)^2 / (n p (1 - p))
+/// TA = BD - (sum (x1 - n p))^2 / sum n p (1 - p)
+/// ```
+///
+/// over the strata with person-time in both arms and at least one event, on
+/// one degree of freedom fewer than their number. Tarone's correction makes
+/// the statistic the score test at the conditional maximum likelihood
+/// estimate to first order, as it does for odds ratios. `None` when the
+/// Mantel-Haenszel ratio is 0 or undefined, or fewer than two strata enter.
+///
+/// # Errors
+///
+/// [`MhError`] for no strata, a negative or non-finite value, events without
+/// person-time, or an empty stratum.
+pub fn rate_ratio_breslow_day(
+    strata: &[RateStratum],
+    tarone: bool,
+) -> Result<Option<Test>, MhError> {
+    check_strata(strata)?;
+    let pooled = rate_ratio(strata, 0.5)?;
+    let Some(psi) = pooled.estimate.filter(|&r| r > 0.0 && r.is_finite()) else {
+        return Ok(None);
+    };
+    let ln_psi = psi.ln();
+    let terms: Vec<(f64, f64)> = informative(strata)
+        .into_iter()
+        .map(|(x1, n, offset)| {
+            let (p, q) = arm_probabilities(ln_psi + offset);
+            (x1 - n * p, n * p * q)
+        })
+        .collect();
+    if terms.len() < 2 {
+        return Ok(None);
+    }
+    let mut statistic = total(terms.iter().map(|&(e, v)| e * e / v)).max(0.0);
+    if tarone {
+        let sum_e = total(terms.iter().map(|&(e, _)| e));
+        let sum_v = total(terms.iter().map(|&(_, v)| v));
+        statistic = (statistic - sum_e * sum_e / sum_v).max(0.0);
+    }
+    Ok(Some(chi_square_test(statistic, terms.len() - 1)))
+}
+
+/// The likelihood ratio and Pearson tests that the rate ratio is the same in
+/// every stratum, at the conditional maximum likelihood estimate of the
+/// common ratio. See [`rate_ratio_homogeneity`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RateHomogeneity {
+    /// The conditional maximum likelihood estimate of the common rate ratio.
+    pub ratio: f64,
+    /// The likelihood ratio test, the deviance of the model with one common
+    /// ratio.
+    pub likelihood_ratio: Test,
+    /// The Pearson chi-square of the same model, the score test.
+    pub pearson: Test,
+    /// The Newton iterations taken.
+    pub iterations: usize,
+}
+
+/// The likelihood ratio and Pearson tests of a common rate ratio over strata.
+///
+/// Given the `n_s = x1 + x0` events of stratum `s`, `x1` is binomial with
+/// `logit p_s = beta + ln(t1 / t0)`, and a common rate ratio is
+/// `psi = exp(beta)`. The conditional maximum likelihood estimate solves
+/// `sum (x1 - n p) = 0` by Newton's method from the log of the
+/// Mantel-Haenszel ratio, with step halving when the log likelihood would
+/// fall, and stops when a step is below `4 eps max(1, |beta|)`. Then
+///
+/// ```text
+/// G2 = 2 sum [x1 ln(x1 / (n p)) + x0 ln(x0 / (n (1 - p)))],   a term with a zero count is 0
+/// X2 = sum (x1 - n p)^2 / (n p (1 - p))
+/// ```
+///
+/// on one degree of freedom fewer than the strata with person-time in both
+/// arms and at least one event. `G2` is the likelihood ratio test of the
+/// interaction of exposure and stratum in a Poisson regression of the counts
+/// with the log person-time as offset, since that model and the binomial one
+/// have the same likelihood ratio, and `X2` is the Pearson statistic of
+/// `glm(cbind(x1, x0) ~ 1, offset = log(t1 / t0), family = binomial)`.
+///
+/// `None` when fewer than two strata enter, or when all their events are in
+/// one arm, so that the common ratio is 0 or infinite.
+///
+/// # Errors
+///
+/// [`MhError`] for no strata, a negative or non-finite value, events without
+/// person-time, or an empty stratum.
+pub fn rate_ratio_homogeneity(strata: &[RateStratum]) -> Result<Option<RateHomogeneity>, MhError> {
+    check_strata(strata)?;
+    let cells = informative(strata);
+    if cells.len() < 2 {
+        return Ok(None);
+    }
+    let exposed = total(cells.iter().map(|c| c.0));
+    let unexposed = total(cells.iter().map(|c| c.1 - c.0));
+    if exposed == 0.0 || unexposed == 0.0 {
+        return Ok(None);
+    }
+    let Some(psi) = rate_ratio(strata, 0.5)?.estimate.filter(|&r| r > 0.0) else {
+        return Ok(None);
+    };
+    let log_likelihood = |beta: f64| {
+        total(cells.iter().map(|&(x1, n, offset)| {
+            let (p, q) = arm_probabilities(beta + offset);
+            let x0 = n - x1;
+            let mut l = 0.0;
+            if x1 > 0.0 {
+                l += x1 * p.ln();
+            }
+            if x0 > 0.0 {
+                l += x0 * q.ln();
+            }
+            l
+        }))
+    };
+    let mut beta = psi.ln();
+    let mut current = log_likelihood(beta);
+    let mut iterations = 0;
+    while iterations < 100 {
+        iterations += 1;
+        let (score, information) = cells.iter().fold((0.0, 0.0), |(u, i), &(x1, n, offset)| {
+            let (p, q) = arm_probabilities(beta + offset);
+            (u + (x1 - n * p), i + n * p * q)
+        });
+        let mut step = score / information;
+        let mut next = beta + step;
+        let mut value = log_likelihood(next);
+        let mut halvings = 0;
+        while value < current && halvings < 60 {
+            step /= 2.0;
+            next = beta + step;
+            value = log_likelihood(next);
+            halvings += 1;
+        }
+        beta = next;
+        current = value;
+        if step.abs() <= 4.0 * f64::EPSILON * beta.abs().max(1.0) {
+            break;
+        }
+    }
+    let df = cells.len() - 1;
+    let mut deviance = Vec::with_capacity(cells.len());
+    let mut pearson = Vec::with_capacity(cells.len());
+    for &(x1, n, offset) in &cells {
+        let (p, q) = arm_probabilities(beta + offset);
+        let x0 = n - x1;
+        let mut d = 0.0;
+        if x1 > 0.0 {
+            d += x1 * (x1 / (n * p)).ln();
+        }
+        if x0 > 0.0 {
+            d += x0 * (x0 / (n * q)).ln();
+        }
+        deviance.push(2.0 * d);
+        let e = x1 - n * p;
+        pearson.push(e * e / (n * p * q));
+    }
+    Ok(Some(RateHomogeneity {
+        ratio: beta.exp(),
+        likelihood_ratio: chi_square_test(total(deviance.into_iter()).max(0.0), df),
+        pearson: chi_square_test(total(pearson.into_iter()), df),
+        iterations,
+    }))
 }
 
 /// Builds the 2 x 2 tables of strata from one record per person: the stratum

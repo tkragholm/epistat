@@ -322,6 +322,7 @@ fn net_survival_matches_relsurv() {
             grid: Grid::EventTimes,
             level: 0.95,
             transform,
+            potential: None,
         };
         let curves = net_survival(&data, &expected, &opts).unwrap();
         assert_eq!(curves.len(), run.strata.len());
@@ -336,9 +337,10 @@ fn net_survival_matches_relsurv() {
                 // steps, so rounding of about 1e-12 relative; Pohar Perme the
                 // bound of its rule. An error in Lambda is a relative error in
                 // exp(-Lambda).
-                let bound = match method {
-                    Method::EdererII => 1e-11,
-                    Method::PoharPerme => rule_bound,
+                let bound = if method == Method::PoharPerme {
+                    rule_bound
+                } else {
+                    1e-11
                 };
                 worst.rel(&kind("survival"), got.survival[k], want.surv[k], 1.0, bound);
                 // The variance has no integral, only rounding.

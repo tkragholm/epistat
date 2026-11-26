@@ -70,7 +70,7 @@ fn interval_estimate_converges_to_the_exact_one() {
         // within `lambda_max w / 2` of 1, so each increment moves by at most
         // that share of its observed and expected parts.
         let bound = match method {
-            Method::EdererII => 1e-12,
+            Method::EdererII | Method::EdererI | Method::Hakulinen => 1e-12,
             Method::PoharPerme => {
                 let observed: f64 = exact
                     .events
