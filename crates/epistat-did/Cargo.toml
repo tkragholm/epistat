@@ -184,6 +184,11 @@ name = "fingerprint"
 path = "tests/fingerprint.rs"
 required-features = ["honest"]
 
+[[test]]
+name = "study_path"
+path = "tests/study_path.rs"
+required-features = ["honest"]
+
 [[bench]]
 name = "tier1_did"
 harness = false
