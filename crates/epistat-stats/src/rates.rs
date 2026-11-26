@@ -31,6 +31,37 @@
 //! rate of 0 has the lower limit 0, as the exact interval of a count of 0
 //! does, and the upper limit from the second line with `V = 0`.
 //!
+//! # Two standardised rates
+//!
+//! Two groups standardised to the same weights have the rates `R1` and `R0`
+//! with variances `V1` and `V0`, and they are independent.
+//! [`standardised_ratio`] gives `R1 / R0` with one of three intervals. Each F
+//! interval treats each rate as a scaled chi-square variable on `2 R^2 / V`
+//! degrees of freedom, so that their ratio is F, and moves the rate in the
+//! numerator of the upper limit, and the one in the denominator of the lower
+//! limit, up by a weight `s`, with its variance up by `u`, as the upper gamma
+//! limit of one rate does. With `qf(p, m, n)` the F quantile
+//! ([`crate::student::f_quantile`]),
+//!
+//! ```text
+//! lower = R1 / (R0 + s0)  qf(a,     2 R1^2 / V1,                2 (R0 + s0)^2 / (V0 + u0))
+//! upper = (R1 + s1) / R0  qf(1 - a, 2 (R1 + s1)^2 / (V1 + u1),  2 R0^2 / V0)
+//! ```
+//!
+//! For the F interval of Fay \[4\], `s = w_max` and `u = w_max^2`, from the
+//! largest weight per person-time of the group. For the modified F interval
+//! of Tiwari, Clegg and Zou \[2\], `s` is the mean of `w_s / y_s` over the `J`
+//! strata with a positive weight and `u` the mean of its square: the
+//! variance of `sum w_s (d_s + 1 / J) / y_s` when each `d_s + 1 / J` has its
+//! mean as variance, a count of 1 spread over the strata where Fay's interval
+//! puts it in the stratum of the largest weight. A ratio of 0 has the lower
+//! limit 0. The Wald interval on the log scale has the variance
+//! `V1 / R1^2 + V0 / R0^2` of `ln(R1 / R0)`. [`standardised_difference`]
+//! gives `R1 - R0` with the normal interval on the variance `V1 + V0`, the
+//! interval of Tiwari, Clegg and Zou for two independent rates.
+//!
+//! # Two crude rates
+//!
 //! The rate ratio of two groups has `ln RR = ln((e1 / t1) / (e0 / t0))` with
 //! variance `1 / e1 + 1 / e0`, and the Wald interval and p-value follow on
 //! that scale. The rate difference `e1 / t1 - e0 / t0` has variance
@@ -50,7 +81,9 @@
 //!
 //! A rate over person-time 0 is `None`. A standardised rate is `None` when a
 //! stratum with a positive weight has no person-time, since a rate over the
-//! other strata would be a different standard. The rate ratio is `None` when
+//! other strata would be a different standard, and so is a ratio or
+//! difference of two standardised rates when either is; a ratio is also `None`
+//! when the reference rate is 0. The rate ratio is `None` when
 //! the denominator has no events or either time is 0; with no events in the
 //! numerator the ratio is 0 and its limits and p-value are `None`.
 //!
@@ -74,13 +107,16 @@
 //!    age-adjusted cancer rates. Stat Methods Med Res 2006;15:547-569.
 //! 3. Breslow NE, Day NE. Statistical Methods in Cancer Research, volume II.
 //!    IARC 1987, chapter 2.
+//! 4. Fay MP. Approximate confidence intervals for rate ratios from directly
+//!    standardized rates with sparse data. Commun Stat Theory Methods
+//!    1999;28:2141-2160.
 
 use std::fmt;
 
 use crate::discrete::binomial_two_sided;
 use crate::normal;
 use crate::poisson::{self, Method, gamma_quantile};
-use crate::student::beta_quantile;
+use crate::student::{beta_quantile, f_quantile};
 use crate::sum::compensated;
 
 /// Why a rate was refused.
@@ -221,6 +257,72 @@ pub fn crude_rate(events: f64, time: f64, level: f64, scale: f64) -> Result<Rate
     })
 }
 
+/// The sums of one group standardised to a set of weights, over the strata
+/// with a positive weight.
+struct Parts {
+    /// `R = sum w_s d_s / y_s`.
+    rate: f64,
+    /// `V = sum w_s^2 d_s / y_s^2`.
+    variance: f64,
+    /// `max w_s / y_s`.
+    w_max: f64,
+    /// The mean of `w_s / y_s`.
+    w_mean: f64,
+    /// The mean of `(w_s / y_s)^2`.
+    w_square_mean: f64,
+}
+
+/// Checks a group and the weights and forms its sums, `None` when a stratum
+/// with a positive weight has no person-time.
+fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<Parts>, RateError> {
+    if events.len() != time.len() || events.len() != weights.len() {
+        return Err(RateError::Length);
+    }
+    if events.is_empty() {
+        return Err(RateError::Empty);
+    }
+    events.iter().try_for_each(|&x| check_count(x))?;
+    time.iter().try_for_each(|&x| check_time(x))?;
+    if weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
+        return Err(RateError::Weights);
+    }
+    let total = compensated(weights.iter().copied());
+    if !(total > 0.0 && total.is_finite()) {
+        return Err(RateError::Weights);
+    }
+    if weights.iter().zip(time).any(|(&w, &y)| w > 0.0 && y == 0.0) {
+        return Ok(None);
+    }
+    let share = |w: f64| w / total;
+    let used = || {
+        weights
+            .iter()
+            .zip(events)
+            .zip(time)
+            .filter(|((w, _), _)| **w > 0.0)
+    };
+    let rate = compensated(used().map(|((&w, &d), &y)| share(w) * (d / y)));
+    let variance = compensated(used().map(|((&w, &d), &y)| share(w) * share(w) * d / (y * y)));
+    let w_max = used().fold(0.0_f64, |m, ((&w, _), &y)| m.max(share(w) / y));
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a number of strata is far below 2^53"
+    )]
+    let j = used().count() as f64;
+    let w_mean = compensated(used().map(|((&w, _), &y)| share(w) / y)) / j;
+    let w_square_mean = compensated(used().map(|((&w, _), &y)| {
+        let x = share(w) / y;
+        x * x
+    })) / j;
+    Ok(Some(Parts {
+        rate,
+        variance,
+        w_max,
+        w_mean,
+        w_square_mean,
+    }))
+}
+
 /// The rate standardised to `weights`, with its variance and the gamma
 /// interval of Fay and Feuer at the coverage `level`. The weights are scaled
 /// to sum to 1, and the rate is per unit of person-time.
@@ -236,53 +338,22 @@ pub fn direct_standardised(
     weights: &[f64],
     level: f64,
 ) -> Result<Standardised, RateError> {
-    if events.len() != time.len() || events.len() != weights.len() {
-        return Err(RateError::Length);
-    }
-    if events.is_empty() {
-        return Err(RateError::Empty);
-    }
+    let parts = standardise(events, time, weights)?;
     check_level(level)?;
-    events.iter().try_for_each(|&x| check_count(x))?;
-    time.iter().try_for_each(|&x| check_time(x))?;
-    if weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
-        return Err(RateError::Weights);
-    }
-    let total = compensated(weights.iter().copied());
-    if !(total > 0.0 && total.is_finite()) {
-        return Err(RateError::Weights);
-    }
-    let undefined = Standardised {
-        rate: None,
-        variance: None,
-        lower: None,
-        upper: None,
+    let Some(Parts {
+        rate,
+        variance,
+        w_max,
+        ..
+    }) = parts
+    else {
+        return Ok(Standardised {
+            rate: None,
+            variance: None,
+            lower: None,
+            upper: None,
+        });
     };
-    if weights.iter().zip(time).any(|(&w, &y)| w > 0.0 && y == 0.0) {
-        return Ok(undefined);
-    }
-    let share = |w: f64| w / total;
-    let rate = compensated(
-        weights
-            .iter()
-            .zip(events)
-            .zip(time)
-            .filter(|((w, _), _)| **w > 0.0)
-            .map(|((&w, &d), &y)| share(w) * (d / y)),
-    );
-    let variance = compensated(
-        weights
-            .iter()
-            .zip(events)
-            .zip(time)
-            .filter(|((w, _), _)| **w > 0.0)
-            .map(|((&w, &d), &y)| share(w) * share(w) * d / (y * y)),
-    );
-    let w_max = weights
-        .iter()
-        .zip(time)
-        .filter(|(w, _)| **w > 0.0)
-        .fold(0.0_f64, |m, (&w, &y)| m.max(share(w) / y));
     let a = (1.0 - level) / 2.0;
     let lower = if rate == 0.0 {
         Some(0.0)
@@ -299,6 +370,162 @@ pub fn direct_standardised(
         lower,
         upper,
     })
+}
+
+/// The events and person-time of one group in each stratum of a standard.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Strata<'a> {
+    /// The events in each stratum.
+    pub events: &'a [f64],
+    /// The person-time in each stratum.
+    pub time: &'a [f64],
+}
+
+/// The interval of the ratio of two directly standardised rates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RatioInterval {
+    /// The F interval of Fay (1999), which shifts each rate by its largest
+    /// weight per person-time, as the gamma interval of one rate does.
+    F,
+    /// The modified F interval of Tiwari, Clegg and Zou (2006), which shifts
+    /// each rate by its mean weight per person-time.
+    ModifiedF,
+    /// The Wald interval on the log scale, with the variance of the log ratio
+    /// `V1 / R1^2 + V0 / R0^2`.
+    Log,
+}
+
+/// The two groups standardised to the same weights, or `None` when either
+/// has a stratum with a positive weight and no person-time.
+fn standardise_pair(
+    group: Strata<'_>,
+    reference: Strata<'_>,
+    weights: &[f64],
+    level: f64,
+) -> Result<Option<(Parts, Parts)>, RateError> {
+    let one = standardise(group.events, group.time, weights)?;
+    let zero = standardise(reference.events, reference.time, weights)?;
+    check_level(level)?;
+    Ok(one.zip(zero))
+}
+
+const NO_CONTRAST: Contrast = Contrast {
+    estimate: None,
+    lower: None,
+    upper: None,
+    p_value: None,
+};
+
+/// The ratio of the rate of `group` to that of `reference`, both directly
+/// standardised to `weights`, with the interval `interval` at the coverage
+/// `level`.
+///
+/// The ratio is `None` when the reference rate is 0 or either rate is
+/// undefined, as in [`direct_standardised`]. A ratio of 0 has the lower limit
+/// 0 and, with [`RatioInterval::Log`], no upper limit. The p-value is that
+/// of the Wald test on the log scale for [`RatioInterval::Log`] and `None`
+/// for the F intervals.
+///
+/// # Errors
+///
+/// [`RateError`] as for [`direct_standardised`], for either group.
+pub fn standardised_ratio(
+    group: Strata<'_>,
+    reference: Strata<'_>,
+    weights: &[f64],
+    level: f64,
+    interval: RatioInterval,
+) -> Result<Contrast, RateError> {
+    let Some((one, zero)) = standardise_pair(group, reference, weights, level)? else {
+        return Ok(NO_CONTRAST);
+    };
+    let (r1, v1, r0, v0) = (one.rate, one.variance, zero.rate, zero.variance);
+    if r0 == 0.0 {
+        return Ok(NO_CONTRAST);
+    }
+    let estimate = r1 / r0;
+    let a = (1.0 - level) / 2.0;
+    // A rate with its variance as a gamma variable on 2 r^2 / v degrees of
+    // freedom, scaled.
+    let df = |r: f64, v: f64| 2.0 * r * r / v;
+    let (lower, upper) = match interval {
+        RatioInterval::Log => {
+            if r1 == 0.0 {
+                return Ok(Contrast {
+                    estimate: Some(0.0),
+                    ..NO_CONTRAST
+                });
+            }
+            let c = wald(
+                estimate.ln(),
+                (v1 / (r1 * r1) + v0 / (r0 * r0)).sqrt(),
+                level,
+                true,
+            );
+            return Ok(Contrast {
+                estimate: Some(estimate),
+                ..c
+            });
+        }
+        RatioInterval::F => {
+            let (s1, u1) = (r1 + one.w_max, v1 + one.w_max * one.w_max);
+            let (s0, u0) = (r0 + zero.w_max, v0 + zero.w_max * zero.w_max);
+            let lower = if r1 == 0.0 {
+                Some(0.0)
+            } else {
+                f_quantile(a, df(r1, v1), df(s0, u0)).map(|q| r1 / s0 * q)
+            };
+            let upper = f_quantile(1.0 - a, df(s1, u1), df(r0, v0)).map(|q| s1 / r0 * q);
+            (lower, upper)
+        }
+        RatioInterval::ModifiedF => {
+            let (s1, u1) = (r1 + one.w_mean, v1 + one.w_square_mean);
+            let (s0, u0) = (r0 + zero.w_mean, v0 + zero.w_square_mean);
+            let lower = if r1 == 0.0 {
+                Some(0.0)
+            } else {
+                f_quantile(a, df(r1, v1), df(s0, u0)).map(|q| r1 / s0 * q)
+            };
+            let upper = f_quantile(1.0 - a, df(s1, u1), df(r0, v0)).map(|q| s1 / r0 * q);
+            (lower, upper)
+        }
+    };
+    Ok(Contrast {
+        estimate: Some(estimate),
+        lower,
+        upper,
+        p_value: None,
+    })
+}
+
+/// The difference of the rate of `group` and that of `reference`, both
+/// directly standardised to `weights`, with the normal interval and p-value
+/// at the coverage `level` from the variance `V1 + V0`.
+///
+/// The difference is `None` when either rate is undefined, and its limits and
+/// p-value are `None` when both variances are 0.
+///
+/// # Errors
+///
+/// [`RateError`] as for [`direct_standardised`], for either group.
+pub fn standardised_difference(
+    group: Strata<'_>,
+    reference: Strata<'_>,
+    weights: &[f64],
+    level: f64,
+) -> Result<Contrast, RateError> {
+    let Some((one, zero)) = standardise_pair(group, reference, weights, level)? else {
+        return Ok(NO_CONTRAST);
+    };
+    let difference = one.rate - zero.rate;
+    let se = (one.variance + zero.variance).sqrt();
+    if se == 0.0 {
+        return Ok(Contrast {
+            estimate: Some(difference),
+            ..NO_CONTRAST
+        });
+    }
+    Ok(wald(difference, se, level, false))
 }
 
 fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<(), RateError> {
