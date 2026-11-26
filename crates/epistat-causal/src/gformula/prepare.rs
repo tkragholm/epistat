@@ -498,6 +498,31 @@ pub(super) fn weighted_observed_risk(
 ) -> Vec<Option<f64>> {
     let periods = prepared.periods;
     let w = prepared.width;
+    // The weight of every row, 0 in a censored row.
+    let rows = prepared.start[prepared.start.len() - 1];
+    let mut weight = vec![0.0; rows];
+    for p in 0..prepared.start.len() - 1 {
+        let mut cumulative = 1.0;
+        for (k, r) in prepared.rows_of(p).enumerate() {
+            let h = prepared.history(p, k, w);
+            cumulative /= 1.0 - model.mean(&censoring.terms, &h);
+            weight[r] = if censoring.censored[r] {
+                0.0
+            } else {
+                cumulative
+            };
+        }
+    }
+    let cut = match censoring.cutoff {
+        super::WeightCutoff::None => None,
+        super::WeightCutoff::Value(v) => Some(v),
+        super::WeightCutoff::Quantile(q) => Some(quantile_type7(&weight, q)),
+    };
+    if let Some(c) = cut {
+        for v in &mut weight {
+            *v = v.min(c);
+        }
+    }
     // Weighted sums over the rows of each period: of the rows without the
     // competing event and of their events, of all rows and of the competing
     // events.
@@ -506,20 +531,18 @@ pub(super) fn weighted_observed_risk(
     let mut all = vec![0.0; periods];
     let mut deaths = vec![0.0; periods];
     for p in 0..prepared.start.len() - 1 {
-        let mut cumulative = 1.0;
         for (k, r) in prepared.rows_of(p).enumerate() {
-            let h = prepared.history(p, k, w);
-            cumulative /= 1.0 - model.mean(&censoring.terms, &h);
             if k >= periods || censoring.censored[r] {
                 continue;
             }
-            all[k] += cumulative;
+            let wr = weight[r];
+            all[k] += wr;
             if competing.is_some_and(|c| c[r]) {
-                deaths[k] += cumulative;
+                deaths[k] += wr;
             } else {
-                free[k] += cumulative;
+                free[k] += wr;
                 if event[r] {
-                    events[k] += cumulative;
+                    events[k] += wr;
                 }
             }
         }
@@ -540,4 +563,29 @@ pub(super) fn weighted_observed_risk(
         out.push(Some(risk));
     }
     out
+}
+
+/// R's type 7 quantile at `p` of `x`, formed as `stats::quantile` forms it:
+/// with the index `i = 1 + (n - 1) p` from 1, `lo = floor(i)` and `h = i -
+/// lo`, `(1 - h) x_(lo) + h x_(lo + 1)` when `i > lo` and the two differ, and
+/// `x_(lo)` otherwise.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "the index lies in [1, n]"
+)]
+fn quantile_type7(x: &[f64], p: f64) -> f64 {
+    let mut sorted = x.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let index = 1.0 + (sorted.len() - 1) as f64 * p;
+    let lo = index.floor();
+    let q = sorted[lo as usize - 1];
+    let high = sorted[index.ceil() as usize - 1];
+    if index > lo && high.to_bits() != q.to_bits() {
+        let h = index - lo;
+        (1.0 - h) * q + h * high
+    } else {
+        q
+    }
 }

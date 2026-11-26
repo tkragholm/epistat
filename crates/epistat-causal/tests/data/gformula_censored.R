@@ -9,7 +9,9 @@
 # no outcome or competing event observed (NA), and is the person's last row.
 # The record holds the data, gfoRmula's coefficients of the outcome,
 # competing-event and censoring models, and its IP weighted risk of each
-# period. gfoRmula's simulated risks are not used.
+# period, also with the weights cut at their 0.95 quantile
+# (ipw_cutoff_quantile) and at 3 (ipw_cutoff_value). gfoRmula's simulated
+# risks are not used.
 # Numbers are written with 17 digits.
 #
 # Run from the crate directory:
@@ -58,6 +60,22 @@ fit <- gformula(obs_data = d, id = "id", time_name = "t0",
   basecovs = c("V"), nsimul = 2000, seed = 1, sim_data_b = FALSE)
 res <- as.data.frame(fit$result)
 nat <- res[res$`Interv.` == 0, ]
+# The same with the weights cut at their 0.95 quantile and at 3.
+observed_with <- function(...) {
+  f <- gformula(obs_data = d, id = "id", time_name = "t0",
+    covnames = c("L1", "L2", "A"), covtypes = c("binary", "normal", "binary"),
+    histories = c(lagged), histvars = list(c("L1", "L2", "A")),
+    covparams = list(covmodels = c(L1 ~ lag1_L1 + lag1_A + V,
+                                   L2 ~ lag1_L2 + L1 + lag1_A,
+                                   A ~ lag1_A + L1 + L2)),
+    outcome_name = "Y", outcome_type = "survival",
+    ymodel = Y ~ L1 + L2 + A + V,
+    compevent_name = "D", compevent_model = D ~ L1 + t0,
+    censor_name = "C", censor_model = C ~ L1 + L2,
+    basecovs = c("V"), nsimul = 200, seed = 1, ...)
+  r <- as.data.frame(f$result)
+  as.numeric(r[r$`Interv.` == 0, "IP weighted risk"])
+}
 out <- list(
   versions = list(R = as.character(getRversion()),
     gfoRmula = as.character(packageVersion("gfoRmula")),
@@ -69,5 +87,7 @@ out <- list(
   competing_coef = as.numeric(fit$coeffs$D),
   censoring_coef = as.numeric(fit$coeffs[[length(fit$coeffs)]]),
   ip_weights = as.numeric(fit$IP_weights),
-  observed = as.numeric(nat$`IP weighted risk`))
+  observed = as.numeric(nat$`IP weighted risk`),
+  observed_quantile_95 = observed_with(ipw_cutoff_quantile = 0.95),
+  observed_value_3 = observed_with(ipw_cutoff_value = 3))
 cat(toJSON(out, digits = I(17), auto_unbox = TRUE, na = "null"))

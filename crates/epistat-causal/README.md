@@ -35,7 +35,8 @@ Causal effect estimators for cohort data.
   draws, seeded per person, so the results do not depend on the number of
   threads. The simulated courses can be returned, and the observed risk is
   weighted by the inverse probability of remaining uncensored when censoring
-  and its model are given. Categorical and truncated covariates, restrictions on
+  and its model are given, with the weights cut at a quantile or a value as
+  gfoRmula's `ipw_cutoff_quantile` and `ipw_cutoff_value`. Categorical and truncated covariates, restrictions on
   the outcome model and hazard ratios are not implemented.
 - Targeted maximum likelihood estimation (TMLE) for a binary or bounded
   continuous outcome, as the R package `tmle` does it: the effect in the

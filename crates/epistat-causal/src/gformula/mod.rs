@@ -103,7 +103,9 @@
 //! logistic model of censoring `p_c` is fitted on every row, a row that is not
 //! censored has the weight `w_r = prod over the person's rows s <= r of
 //! 1 / (1 - p_c(s))`, a censored row the weight 0, and `h_k` and `d_k` are the
-//! weighted proportions among the same rows. The censored rows leave the
+//! weighted proportions among the same rows. A [`WeightCutoff`] cuts the
+//! weights from above at a value or at a quantile of the weights of all rows,
+//! as gfoRmula does. The censored rows leave the
 //! outcome and competing-event models, as rows without an observed outcome.
 //!
 //! # Departures from gfoRmula
@@ -123,8 +125,7 @@
 //! Not built: zero-inflated, bounded and truncated normal covariates,
 //! categorical covariates with time as their only term (gfoRmula's
 //! `categorical time`); restrictions on the outcome and competing-event models;
-//! truncation of the censoring weights (`ipw_cutoff_quantile`) and censoring
-//! weights for an outcome at the end of follow-up; the hazard ratio of a pair
+//! censoring weights for an outcome at the end of follow-up; the hazard ratio of a pair
 //! of strategies; continuous outcomes over time.
 //!
 //! # Edge cases
@@ -270,6 +271,22 @@ pub struct Censoring<'a> {
     /// The terms of the logistic model of censoring, fitted on every row with
     /// the whole history of the period visible.
     pub terms: Vec<Term>,
+    /// Where the weights of the observed risk are cut.
+    pub cutoff: WeightCutoff,
+}
+
+/// Where the inverse probability of censoring weights of the observed risk
+/// are cut, as gfoRmula's `ipw_cutoff_quantile` and `ipw_cutoff_value`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum WeightCutoff {
+    /// The weights are not cut.
+    #[default]
+    None,
+    /// At the quantile of this probability of the weights of every row, the
+    /// censored rows' 0 among them (R's type 7 quantile).
+    Quantile(f64),
+    /// At this value.
+    Value(f64),
 }
 
 /// The outcome and its model.

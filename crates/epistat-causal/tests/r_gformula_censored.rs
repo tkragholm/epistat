@@ -16,7 +16,7 @@
 
 use epistat_causal::gformula::{
     Censoring, Competing, Covariate, CovariateKind, GFormulaOptions, Outcome, PersonPeriods, Term,
-    gformula,
+    WeightCutoff, gformula,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -42,6 +42,8 @@ struct Reference {
     competing_coef: Vec<f64>,
     censoring_coef: Vec<f64>,
     observed: Vec<f64>,
+    observed_quantile_95: Vec<f64>,
+    observed_value_3: Vec<f64>,
 }
 
 const L1: usize = 0;
@@ -102,19 +104,23 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
         censoring: Some(Censoring {
             censored: &censored,
             terms: vec![Intercept, Current(L1), Current(L2)],
+            cutoff: WeightCutoff::None,
         }),
     };
-    let g = gformula(
-        &data,
-        &covariates,
-        &outcome,
-        &[],
-        &GFormulaOptions {
-            simulated: Some(200),
-            ..GFormulaOptions::default()
-        },
-    )
-    .expect("g-formula");
+    let run = |outcome: &Outcome<'_>| {
+        gformula(
+            &data,
+            &covariates,
+            outcome,
+            &[],
+            &GFormulaOptions {
+                simulated: Some(200),
+                ..GFormulaOptions::default()
+            },
+        )
+        .expect("g-formula")
+    };
+    let g = run(&outcome);
     assert!(worst(&g.models.outcome.coefficients, &r.outcome_coef) < 1e-9);
     let competing_model = g.models.competing.as_ref().expect("competing model");
     assert!(worst(&competing_model.coefficients, &r.competing_coef) < 1e-9);
@@ -126,6 +132,38 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
         "{observed:?} against {:?}",
         r.observed
     );
+    // Cut weights: a cut at a value moves no weight by more than its error,
+    // and a type 7 quantile is a weighted mean of two neighbouring weights,
+    // so both keep the tolerance of the weights.
+    for (cutoff, want) in [
+        (WeightCutoff::Quantile(0.95), &r.observed_quantile_95),
+        (WeightCutoff::Value(3.0), &r.observed_value_3),
+    ] {
+        let Outcome::Survival {
+            event,
+            terms,
+            competing,
+            censoring,
+        } = &outcome
+        else {
+            unreachable!("a survival outcome")
+        };
+        let cut = Outcome::Survival {
+            event,
+            terms: terms.clone(),
+            competing: competing.clone(),
+            censoring: censoring.clone().map(|c| Censoring { cutoff, ..c }),
+        };
+        let got: Vec<f64> = run(&cut)
+            .observed
+            .iter()
+            .map(|o| o.expect("defined"))
+            .collect();
+        assert!(
+            worst(&got, want) < 1e-8,
+            "{cutoff:?}: {got:?} against {want:?}"
+        );
+    }
 }
 
 #[test]
@@ -144,6 +182,7 @@ fn a_row_after_censoring_is_an_error() {
         censoring: Some(Censoring {
             censored: &censored,
             terms: vec![Term::Intercept],
+            cutoff: WeightCutoff::None,
         }),
     };
     let covariates = [Covariate {
