@@ -21,8 +21,14 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   `riskRegression::ate`, with the influence-function standard error.
 - Target trial emulation: the weights of treatment switches and of censoring for
   sequential trials with the weighted logistic outcome model and cumulative
-  incidence of `TrialEmulation`, and clone-censor-weight for strategies with
-  grace periods, with a bootstrap over persons.
+  incidence of `TrialEmulation`, fitted on the rows `TrialEmulation` chooses,
+  with case weights for a bootstrap over persons, and a competing event in the
+  outcome model and the cumulative incidence. The whole chain from
+  `epistat-matching`'s expansion is checked against `TrialEmulation`.
+  Clone-censor-weight for strategies with a window of starting, a minimum
+  duration of treatment and dynamic starts set off by a covariate, with a
+  bootstrap over persons. Weighted Kaplan-Meier curves give the risk difference
+  of two arms with its standard error.
 - Flexible parametric survival models of Royston and Parmar on the log cumulative
   hazard, log cumulative odds and probit scales, with a restricted cubic spline
   baseline in log time, time-varying effects, delayed entry, case weights and

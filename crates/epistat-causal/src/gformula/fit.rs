@@ -1,19 +1,22 @@
 //! The covariate, competing-event and outcome models, fitted to the observed
 //! rows with each person's prior weight.
 
-use epistat_glm::{Family, Glm, Link};
+use epistat_glm::{Family, Glm, Link, Multinom};
 use epistat_linalg::Mat;
 
 use super::history::{History, Term};
 use super::prepare::Prepared;
-use super::{Covariate, CovariateKind, FittedModel, Models, Outcome, Restriction};
+use super::{Censoring, Covariate, CovariateKind, FittedModel, Models, Outcome, Restriction};
 use crate::error::{Error, Result};
 
-/// A fitted linear predictor and how it maps to a mean.
+/// A fitted linear predictor and how it maps to a mean; for a multinomial
+/// model, `classes - 1` linear predictors one after the other in `beta`.
 pub(super) struct Linear {
     pub(super) beta: Vec<f64>,
     pub(super) link: Link,
     pub(super) model: FittedModel,
+    /// The number of classes of a multinomial model, 0 otherwise.
+    pub(super) classes: usize,
 }
 
 impl Linear {
@@ -24,6 +27,34 @@ impl Linear {
             eta += t.eval(h) * b;
         }
         self.link.inverse(eta)
+    }
+
+    /// The class of a multinomial model whose cumulative probability, in the
+    /// order of the classes, first exceeds `u`.
+    pub(super) fn class(&self, terms: &[Term], h: &History<'_>, u: f64) -> f64 {
+        let q = terms.len();
+        let x: Vec<f64> = terms.iter().map(|t| t.eval(h)).collect();
+        let exps: Vec<f64> = (1..self.classes)
+            .map(|c| {
+                let mut eta = 0.0;
+                for (xj, b) in x.iter().zip(&self.beta[(c - 1) * q..c * q]) {
+                    eta += xj * b;
+                }
+                eta.exp()
+            })
+            .collect();
+        let total = 1.0 + exps.iter().sum::<f64>();
+        let mut cumulative = 1.0 / total;
+        if u < cumulative {
+            return 0.0;
+        }
+        for (c, e) in exps.iter().enumerate() {
+            cumulative += e / total;
+            if u < cumulative {
+                return (c + 1) as f64;
+            }
+        }
+        (self.classes - 1) as f64
     }
 }
 
@@ -43,6 +74,7 @@ impl Fitted {
                 .collect(),
             outcome: self.outcome.model.clone(),
             competing: self.competing.as_ref().map(|l| l.model.clone()),
+            censoring: None,
         }
     }
 }
@@ -74,6 +106,24 @@ pub(super) fn fit_all(
             let (family, link) = match c.kind {
                 CovariateKind::Binary => (Family::Binomial, Link::Logit),
                 CovariateKind::Normal => (Family::Gaussian, Link::Identity),
+                CovariateKind::Categorical(levels) => {
+                    return fit_multinomial(
+                        prepared,
+                        &c.terms,
+                        levels,
+                        weights,
+                        &format!("the model of variable {j}"),
+                        |p, r, k| {
+                            if k == 0 {
+                                return None;
+                            }
+                            let h = prepared.history(p, k, j);
+                            applies(c.restriction.as_ref(), j, &h)
+                                .then(|| (prepared.values[r * w + j], j))
+                        },
+                    )
+                    .map(Some);
+                }
             };
             fit_model(
                 prepared,
@@ -98,7 +148,9 @@ pub(super) fn fit_all(
             event,
             terms,
             competing,
+            censoring,
         } => {
+            let censored = |r: usize| censoring.as_ref().is_some_and(|c| c.censored[r]);
             let fitted_outcome = fit_model(
                 prepared,
                 terms,
@@ -108,7 +160,7 @@ pub(super) fn fit_all(
                 "the outcome model",
                 |_, r, _| {
                     let d = competing.as_ref().is_some_and(|c| c.event[r]);
-                    (!d).then(|| (f64::from(u8::from(event[r])), w))
+                    (!d && !censored(r)).then(|| (f64::from(u8::from(event[r])), w))
                 },
             )?;
             let fitted_competing = competing
@@ -121,7 +173,7 @@ pub(super) fn fit_all(
                         Link::Logit,
                         weights,
                         "the competing-event model",
-                        |_, r, _| Some((f64::from(u8::from(c.event[r])), w)),
+                        |_, r, _| (!censored(r)).then(|| (f64::from(u8::from(c.event[r])), w)),
                     )
                 })
                 .transpose()?;
@@ -151,6 +203,24 @@ pub(super) fn fit_all(
         outcome,
         competing,
     })
+}
+
+/// Fits the censoring model on every row, with the whole history of the
+/// period visible.
+pub(super) fn fit_censoring(
+    prepared: &Prepared<'_>,
+    censoring: &Censoring<'_>,
+    weights: &[f64],
+) -> Result<Linear> {
+    fit_model(
+        prepared,
+        &censoring.terms,
+        Family::Binomial,
+        Link::Logit,
+        weights,
+        "the censoring model",
+        |_, r, _| Some((f64::from(u8::from(censoring.censored[r])), prepared.width)),
+    )
 }
 
 /// Fits one model. `row(p, r, k)` gives, for row `r` of person `p` at period
@@ -218,5 +288,62 @@ fn fit_model(
             rmse,
             rows: n,
         },
+        classes: 0,
+    })
+}
+
+/// Fits the multinomial model of a categorical covariate with `levels`
+/// classes, on the rows `row` gives as in [`fit_model`].
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the classes are checked to be whole numbers below the number of classes"
+)]
+fn fit_multinomial(
+    prepared: &Prepared<'_>,
+    terms: &[Term],
+    levels: usize,
+    weights: &[f64],
+    what: &str,
+    row: impl Fn(usize, usize, usize) -> Option<(f64, usize)>,
+) -> Result<Linear> {
+    let q = terms.len();
+    let mut design = Vec::new();
+    let mut y = Vec::new();
+    let mut w = Vec::new();
+    for (p, &weight) in weights.iter().enumerate() {
+        if weight == 0.0 {
+            continue;
+        }
+        for (k, r) in prepared.rows_of(p).enumerate() {
+            let Some((response, visible)) = row(p, r, k) else {
+                continue;
+            };
+            let h = prepared.history(p, k, visible);
+            design.extend(terms.iter().map(|t| t.eval(&h)));
+            y.push(response as usize);
+            w.push(weight);
+        }
+    }
+    let n = y.len();
+    if n == 0 {
+        return Err(Error::input(format!("{what}: no rows to fit")));
+    }
+    let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
+    let fit = Multinom::default()
+        .fit(x.as_ref(), &y, levels, Some(&w))
+        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+    if !fit.converged {
+        return Err(Error::NoConvergence(format!("{what}: no convergence")));
+    }
+    Ok(Linear {
+        beta: fit.coefficients.clone(),
+        link: Link::Logit,
+        model: FittedModel {
+            coefficients: fit.coefficients,
+            rmse: None,
+            rows: n,
+        },
+        classes: levels,
     })
 }

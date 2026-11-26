@@ -175,7 +175,7 @@ fn main() {
         "trial_msm" => {
             let t = Table::read(&common::data_path("trial", n));
             let rows = t.len();
-            let id: Vec<u32> = t.ints("id");
+            let id: Vec<u64> = t.ints("id");
             let period: Vec<i64> = t.ints("period");
             let a = t.flags("a");
             let am1 = t.flags("am1");
@@ -247,8 +247,8 @@ fn main() {
         "ccw" => {
             let t = Table::read(&common::data_path("ccw", n));
             let rows = t.len();
-            let id: Vec<u32> = t.ints("id");
-            let period: Vec<u32> = t.ints("period");
+            let id: Vec<u64> = t.ints("id");
+            let period: Vec<i64> = t.ints("period");
             let a = t.flags("a");
             let outcome = t.flags("outcome");
             let (l, l0) = (t.col("l"), t.col("l0"));
@@ -266,6 +266,7 @@ fn main() {
                         period: &period,
                         treatment: &a,
                         outcome: &outcome,
+                        covariates: &[],
                     },
                     &strategies,
                 )
@@ -273,10 +274,10 @@ fn main() {
                 let m = c.len();
                 let den = Mat::from_fn(m, 5, |i, j| {
                     let s = c.source[i];
-                    let p = f64::from(period[s]);
+                    let p = period[s] as f64;
                     [1.0, l[s], l0[s], p, p * p][j]
                 });
-                let num = Mat::from_fn(m, 2, |i, j| [1.0, f64::from(period[c.source[i]])][j]);
+                let num = Mat::from_fn(m, 2, |i, j| [1.0, period[c.source[i]] as f64][j]);
                 let model = DeviationModel {
                     denominator: den.as_ref(),
                     numerator: Some(num.as_ref()),
@@ -285,13 +286,13 @@ fn main() {
                 let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
                 let design = Mat::from_fn(keep.len(), 5, |k, j| {
                     let i = keep[k];
-                    let p = f64::from(period[c.source[i]]);
+                    let p = period[c.source[i]] as f64;
                     let arm = c.arm[i] as f64;
                     [1.0, arm, p, p * p, arm * p][j]
                 });
                 let y: Vec<bool> = keep.iter().map(|&i| c.outcome[i]).collect();
                 let wt: Vec<f64> = keep.iter().map(|&i| w.weight[i]).collect();
-                let person: Vec<u32> = keep.iter().map(|&i| c.person[i]).collect();
+                let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
                 fit_msm(&MsmInput {
                     design: design.as_ref(),
                     outcome: &y,
@@ -309,7 +310,7 @@ fn main() {
             let (id, period, a, am1, l, x1, outcome) = {
                 let t = Table::read_sized(&common::data_path("trial", n));
                 (
-                    t.ints::<u32>("id"),
+                    t.ints::<u64>("id"),
                     t.ints::<i64>("period"),
                     t.flags("a"),
                     t.flags("am1"),
@@ -375,8 +376,8 @@ fn main() {
                     &["id", "period", "a", "outcome", "l", "l0"],
                 );
                 (
-                    t.ints::<u32>("id"),
-                    t.ints::<u32>("period"),
+                    t.ints::<u64>("id"),
+                    t.ints::<i64>("period"),
                     t.flags("a"),
                     t.flags("outcome"),
                     t.col("l").to_vec(),
@@ -398,17 +399,18 @@ fn main() {
                         period: &period,
                         treatment: &a,
                         outcome: &outcome,
+                        covariates: &[],
                     },
                     &strategies,
                 )
                 .expect("clones");
                 let den = |i: usize, out: &mut [f64]| {
                     let s = c.source[i];
-                    let p = f64::from(period[s]);
+                    let p = period[s] as f64;
                     out.copy_from_slice(&[1.0, l[s], l0[s], p, p * p]);
                 };
                 let num = |i: usize, out: &mut [f64]| {
-                    out.copy_from_slice(&[1.0, f64::from(period[c.source[i]])]);
+                    out.copy_from_slice(&[1.0, period[c.source[i]] as f64]);
                 };
                 let model = DeviationRows {
                     denominator: DeviationDesign {
@@ -422,7 +424,7 @@ fn main() {
                 };
                 let w = deviation_weights_rows(&c, &[model, model], None).expect("weights");
                 fit_msm_clones(&c, &w.weight, 5, &|i, out| {
-                    let p = f64::from(period[c.source[i]]);
+                    let p = period[c.source[i]] as f64;
                     let arm = c.arm[i] as f64;
                     out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
                 })

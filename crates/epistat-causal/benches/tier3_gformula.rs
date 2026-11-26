@@ -173,6 +173,7 @@ fn main() {
             event: &competing,
             terms: vec![Intercept, Current(0), Baseline(1), Period],
         }),
+        censoring: None,
     };
     let options = GFormulaOptions {
         bootstrap: if method == "gf_boot" { 20 } else { 0 },

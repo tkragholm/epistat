@@ -211,6 +211,7 @@ impl Sim {
                 event: &self.d,
                 terms: competing_terms(),
             }),
+            censoring: None,
         }
     }
 

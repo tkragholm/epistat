@@ -52,6 +52,7 @@ name = "invariants"
 required-features = ["test-utils"]
 
 [dev-dependencies]
+epistat-survival = { path = "../epistat-survival" }
 epistat-testkit = { path = "../epistat-testkit" }
 criterion = { version = "0.8.2", default-features = false }
 proptest = "1.6.0"

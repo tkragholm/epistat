@@ -118,6 +118,52 @@ impl WeightedKm {
     pub fn covariance_between(&self, group: usize, other: usize, time: usize) -> Option<f64> {
         self.covariance[self.index(group, time, other)]
     }
+
+    /// The difference of the risks `(1 - S_group) - (1 - S_other)` at
+    /// `times[time]`, with the standard errors of the difference that account
+    /// for the estimation of the weights and that take them as known,
+    /// `sqrt(V_gg + V_hh - 2 V_gh)` from the covariances of the two curves.
+    /// `group` and `other` are positions in `groups`, such as the treated and
+    /// the control arm.
+    ///
+    /// A standard error is `None` when a covariance it needs is (a curve that
+    /// has reached 0).
+    ///
+    /// # Panics
+    ///
+    /// When `group`, `other` or `time` is beyond the groups or times, as
+    /// [`Self::standard_error`].
+    #[must_use]
+    pub fn risk_difference(&self, group: usize, other: usize, time: usize) -> KmDifference {
+        let m = self.times.len();
+        assert!(
+            group < self.groups.len() && other < self.groups.len() && time < m,
+            "group {group}, other {other} or time {time} beyond {} groups and {m} times",
+            self.groups.len()
+        );
+        let se = |v: &[Option<f64>]| -> Option<f64> {
+            let gg = v[self.index(group, time, group)]?;
+            let hh = v[self.index(other, time, other)]?;
+            let gh = v[self.index(group, time, other)]?;
+            Some((gg + hh - 2.0 * gh).max(0.0).sqrt())
+        };
+        KmDifference {
+            estimate: self.surv[other * m + time] - self.surv[group * m + time],
+            std_err: se(&self.covariance),
+            std_err_known: se(&self.covariance_known),
+        }
+    }
+}
+
+/// The difference of the risks of two weighted curves at one time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KmDifference {
+    /// `(1 - S_group) - (1 - S_other)`.
+    pub estimate: f64,
+    /// Its standard error, accounting for the estimation of the weights.
+    pub std_err: Option<f64>,
+    /// Its standard error with the weights taken as known.
+    pub std_err_known: Option<f64>,
 }
 
 /// What the variance needs of the estimated weights.

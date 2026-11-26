@@ -15,8 +15,8 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Input {
-    pub id: Vec<u32>,
-    pub period: Vec<u32>,
+    pub id: Vec<u64>,
+    pub period: Vec<i64>,
     pub treatment: Vec<f64>,
     pub outcome: Vec<f64>,
     pub l: Vec<f64>,
@@ -82,6 +82,7 @@ pub fn cloned(r: &Reference, d: &Data) -> Cloned {
             period: &r.input.period,
             treatment: &d.treatment,
             outcome: &d.outcome,
+            covariates: &[],
         },
         &strategies(r.grace),
     )
@@ -102,12 +103,10 @@ pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
     let case = counts.map(|k| row_counts(c, k));
     let den = Mat::from_fn(m, 5, |i, j| {
         let s = c.source[i];
-        let p = f64::from(r.input.period[s]);
+        let p = r.input.period[s] as f64;
         [1.0, r.input.l[s], r.input.l0[s], p, p * p][j]
     });
-    let num = Mat::from_fn(m, 2, |i, j| {
-        [1.0, f64::from(r.input.period[c.source[i]])][j]
-    });
+    let num = Mat::from_fn(m, 2, |i, j| [1.0, r.input.period[c.source[i]] as f64][j]);
     let model = DeviationModel {
         denominator: den.as_ref(),
         numerator: Some(num.as_ref()),
@@ -116,7 +115,7 @@ pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
     let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
     let design = Mat::from_fn(keep.len(), 5, |k, j| {
         let i = keep[k];
-        let p = f64::from(r.input.period[c.source[i]]);
+        let p = r.input.period[c.source[i]] as f64;
         let arm = c.arm[i] as f64;
         [1.0, arm, p, p * p, arm * p][j]
     });
@@ -125,7 +124,7 @@ pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
         .iter()
         .map(|&i| w.weight[i] * case.as_ref().map_or(1.0, |k| k[i]))
         .collect();
-    let person: Vec<u32> = keep.iter().map(|&i| c.person[i]).collect();
+    let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
     let msm = fit_msm(&MsmInput {
         design: design.as_ref(),
         outcome: &outcome,

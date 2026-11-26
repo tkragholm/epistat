@@ -17,6 +17,7 @@
 //! ```text
 //! binary L_kj:   logit P(L_kj = 1 | H_kj) = x(H_kj)' beta_j         rows with k >= 1
 //! normal L_kj:   L_kj = x(H_kj)' beta_j + e,  e ~ N(0, s_j^2)        rows with k >= 1
+//! categorical:   log P(L_kj = c) / P(L_kj = 0) = x(H_kj)' beta_jc    rows with k >= 1
 //! competing D:   logit P(D_k = 1 | H_k)   = x(H_k)' gamma            all rows
 //! outcome Y:     logit P(Y_k = 1 | H_k, D_k = 0) = x(H_k)' alpha     rows with D_k = 0
 //! ```
@@ -33,7 +34,9 @@
 //! replacement. For each strategy, and `k = 0..K-1`, the variables of period
 //! `k` are taken in order. At `k = 0` a variable keeps its observed value; at
 //! `k >= 1` it is drawn from its model given the simulated history (a binary
-//! variable is 1 when a uniform falls below its probability, a normal one is its
+//! variable is 1 when a uniform falls below its probability, a categorical one
+//! is the first class whose cumulative probability exceeds a uniform, a normal
+//! one is its
 //! mean plus `s_j` times a standard normal, cut to the range observed in the
 //! data unless [`GFormulaOptions::truncate`] is off), or set as its
 //! restriction says where the restriction does not apply. The intervention's
@@ -58,7 +61,8 @@
 //! run with seed `s` draws from the stream seeded with `replicate_seed(s, j + 2)`
 //! of `epistat_rng`, which every strategy restarts, and every variable takes one
 //! draw at every period `k >= 1` whether or not it is restricted or intervened
-//! on (a uniform for a binary variable, a Box-Muller normal for a normal one).
+//! on (a uniform for a binary or categorical variable, a Box-Muller normal for
+//! a normal one).
 //! The draws of a person therefore do not depend on the order in which persons
 //! are simulated, and the results do not depend on the number of threads.
 //!
@@ -94,6 +98,14 @@
 //! for an end-of-follow-up outcome it is the mean of the observed outcomes at
 //! the last period.
 //!
+//! With a [`Censoring`] model the observed risk is weighted by the inverse
+//! probability of remaining uncensored, as gfoRmula's "IP weighted risk": a
+//! logistic model of censoring `p_c` is fitted on every row, a row that is not
+//! censored has the weight `w_r = prod over the person's rows s <= r of
+//! 1 / (1 - p_c(s))`, a censored row the weight 0, and `h_k` and `d_k` are the
+//! weighted proportions among the same rows. The censored rows leave the
+//! outcome and competing-event models, as rows without an observed outcome.
+//!
 //! # Departures from gfoRmula
 //!
 //! gfoRmula applies the interventions of a period after all its covariates are
@@ -104,14 +116,16 @@
 //! counts as intervened on in a period when a rule changed a value at all, where
 //! gfoRmula needs a change above `1e-6`. A model may read the current period only
 //! of variables before it in the order (gfoRmula would read the previous period's
-//! value of a later one); anything else is an error. Lags before period 0 that
-//! gfoRmula sets to the reference level of a categorical variable do not arise,
-//! since categorical covariates are not built.
+//! value of a later one); anything else is an error. A lag before period 0 is 0
+//! (without `baseline_lags`), which for a categorical variable is its reference
+//! class, as gfoRmula sets it.
 //!
-//! Not built: categorical, zero-inflated, bounded and truncated normal
-//! covariates; restrictions on the outcome and competing-event models;
-//! censoring weights for the observed risk; the hazard ratio of a pair of
-//! strategies; continuous outcomes over time.
+//! Not built: zero-inflated, bounded and truncated normal covariates,
+//! categorical covariates with time as their only term (gfoRmula's
+//! `categorical time`); restrictions on the outcome and competing-event models;
+//! truncation of the censoring weights (`ipw_cutoff_quantile`) and censoring
+//! weights for an outcome at the end of follow-up; the hazard ratio of a pair
+//! of strategies; continuous outcomes over time.
 //!
 //! # Edge cases
 //!
@@ -187,6 +201,11 @@ pub enum CovariateKind {
     /// Normal around a linear regression, with the residual root mean square
     /// as its standard deviation.
     Normal,
+    /// One of `levels` classes coded `0, 1, ..., levels - 1`, by multinomial
+    /// logistic regression with class 0 the reference (gfoRmula's
+    /// `categorical`, fitted by `nnet::multinom`). Terms read its classes
+    /// through [`Term::Is`].
+    Categorical(usize),
 }
 
 /// What a restricted covariate takes where its model does not apply.
@@ -239,6 +258,20 @@ pub struct Competing<'a> {
     pub terms: Vec<Term>,
 }
 
+/// Censoring of a survival outcome, observed as a row of its own (gfoRmula's
+/// `censor_name` and `censor_model`).
+#[derive(Debug, Clone)]
+pub struct Censoring<'a> {
+    /// Whether the person is censored in the row's period, before the outcome
+    /// of the period. A censored row is the person's last, has neither the
+    /// event nor the competing event, and does not enter the outcome and
+    /// competing-event models; its covariates do enter their models.
+    pub censored: &'a [bool],
+    /// The terms of the logistic model of censoring, fitted on every row with
+    /// the whole history of the period visible.
+    pub terms: Vec<Term>,
+}
+
 /// The outcome and its model.
 #[derive(Debug, Clone)]
 pub enum Outcome<'a> {
@@ -251,6 +284,10 @@ pub enum Outcome<'a> {
         terms: Vec<Term>,
         /// A competing event, which ends follow-up without the event.
         competing: Option<Competing<'a>>,
+        /// Censoring with its model, for the observed risk weighted by the
+        /// inverse probability of remaining uncensored. `None` treats a
+        /// person's rows as ending at censoring after the last of them.
+        censoring: Option<Censoring<'a>>,
     },
     /// A binary outcome measured at the last period: its probability. Values at
     /// other periods are not read; NaN marks a missing outcome.
@@ -360,6 +397,11 @@ pub struct GFormulaOptions {
     /// Whether simulated normal covariates are cut to the range observed in
     /// the data (gfoRmula's `sim_trunc`). The default is true.
     pub truncate: bool,
+    /// Whether the simulated courses of the point estimate are returned in
+    /// [`GFormula::courses`] (gfoRmula's `sim_data`), one row per simulated
+    /// person and period for each strategy. The default is false: the memory
+    /// is `strategies * simulated * periods * (variables + 6)` values.
+    pub keep_simulated: bool,
 }
 
 impl Default for GFormulaOptions {
@@ -374,6 +416,7 @@ impl Default for GFormulaOptions {
             reference: 0,
             baseline_lags: false,
             truncate: true,
+            keep_simulated: false,
         }
     }
 }
@@ -432,6 +475,59 @@ pub struct Models {
     pub outcome: FittedModel,
     /// The competing-event model.
     pub competing: Option<FittedModel>,
+    /// The censoring model, fitted once to the data for the observed risk.
+    pub censoring: Option<FittedModel>,
+}
+
+/// The simulated course of one strategy: one row per simulated person and
+/// period, in the order of the persons and then of the periods.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SimulatedCourse {
+    /// The simulated person, from 0.
+    pub person: Vec<usize>,
+    /// The observed person (its position in the order of the data) whose
+    /// period-0 row the simulated person starts from.
+    pub source: Vec<usize>,
+    /// The period.
+    pub period: Vec<usize>,
+    /// The value of each time-varying variable, one column per variable in
+    /// the order of [`PersonPeriods::time_varying`], after the strategy's rules.
+    pub values: Vec<Vec<f64>>,
+    /// The probability of the event in the period given the history and no
+    /// competing event, for a survival outcome; the outcome model's mean at the
+    /// last period for an outcome at the end of follow-up, NaN at the others.
+    pub outcome_probability: Vec<f64>,
+    /// The probability of the competing event in the period, 0 without one and
+    /// NaN for an outcome at the end of follow-up.
+    pub competing_probability: Vec<f64>,
+    /// The person's risk by the end of the period (gfoRmula's `poprisk`), or
+    /// the mean at the last period for an outcome at the end of follow-up, NaN
+    /// at the others. The estimate of the strategy is its mean over the
+    /// persons.
+    pub value: Vec<f64>,
+}
+
+impl SimulatedCourse {
+    fn new(variables: usize) -> Self {
+        Self {
+            values: vec![Vec::new(); variables],
+            ..Self::default()
+        }
+    }
+
+    fn extend(&mut self, other: &Self) {
+        self.person.extend_from_slice(&other.person);
+        self.source.extend_from_slice(&other.source);
+        self.period.extend_from_slice(&other.period);
+        for (a, b) in self.values.iter_mut().zip(&other.values) {
+            a.extend_from_slice(b);
+        }
+        self.outcome_probability
+            .extend_from_slice(&other.outcome_probability);
+        self.competing_probability
+            .extend_from_slice(&other.competing_probability);
+        self.value.extend_from_slice(&other.value);
+    }
 }
 
 /// The result of [`gformula`].
@@ -452,6 +548,9 @@ pub struct GFormula {
     pub replicates: usize,
     /// The replicates left out because a model could not be fitted.
     pub failed_replicates: usize,
+    /// The simulated courses of the point estimate, the natural course first,
+    /// when [`GFormulaOptions::keep_simulated`] asks for them.
+    pub courses: Option<Vec<SimulatedCourse>>,
 }
 
 /// The parametric g-formula: fits the models of `covariates` (one per
@@ -478,8 +577,14 @@ pub fn gformula(
     let fitted = fit::fit_all(&prepared, covariates, outcome, &ones)?;
     let point_seed = replicate_seed(options.seed, 0);
     let sources = simulate::sources(&ones, options.simulated, point_seed);
-    let point = simulate::run(
-        &prepared, covariates, outcome, &fitted, &sources, point_seed,
+    let mut point = simulate::run(
+        &prepared,
+        covariates,
+        outcome,
+        &fitted,
+        &sources,
+        point_seed,
+        options.keep_simulated,
     )?;
 
     let replicates: Vec<Option<Vec<Vec<f64>>>> = (0..options.bootstrap)
@@ -494,7 +599,9 @@ pub fn gformula(
                 return Ok(None);
             };
             let sources = simulate::sources(&counts, options.simulated, seed);
-            let run = simulate::run(&prepared, covariates, outcome, &fitted, &sources, seed)?;
+            let run = simulate::run(
+                &prepared, covariates, outcome, &fitted, &sources, seed, false,
+            )?;
             Ok(Some(run.means()))
         })
         .collect::<Result<_>>()?;
@@ -502,14 +609,34 @@ pub fn gformula(
     let replicates: Vec<Vec<Vec<f64>>> = replicates.into_iter().flatten().collect();
 
     let strategies = summarise(&point, &replicates, prepared.reference, options)?;
+    let mut models = fitted.report();
+    let mut observed = prepared.observed.clone();
+    if let Outcome::Survival {
+        event,
+        competing,
+        censoring: Some(censoring),
+        ..
+    } = outcome
+    {
+        let model = fit::fit_censoring(&prepared, censoring, &ones)?;
+        observed = prepare::weighted_observed_risk(
+            &prepared,
+            event,
+            competing.as_ref().map(|c| c.event),
+            censoring,
+            &model,
+        );
+        models.censoring = Some(model.model);
+    }
     Ok(GFormula {
         periods: prepared.reported_periods(),
-        observed: prepared.observed.clone(),
+        observed,
         strategies,
-        models: fitted.report(),
+        models,
         simulated: sources.len(),
         replicates: options.bootstrap,
         failed_replicates: failed,
+        courses: point.courses.take(),
     })
 }
 

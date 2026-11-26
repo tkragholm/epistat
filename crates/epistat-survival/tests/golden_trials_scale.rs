@@ -30,7 +30,7 @@ fn expit(x: f64) -> f64 {
 /// Person-period rows with a covariate that depends on the earlier treatment,
 /// a persistent treatment and an outcome that ends the follow-up.
 struct Periods {
-    id: Vec<u32>,
+    id: Vec<u64>,
     period: Vec<i64>,
     a: Vec<bool>,
     am1: Vec<bool>,
@@ -66,7 +66,7 @@ fn periods(n: usize, length: usize, seed: u64) -> Periods {
             let a = rng.uniform() < pa;
             let y = rng.uniform()
                 < expit(-3.0 - 0.6 * f64::from(u8::from(a)) + 0.4 * l + 0.05 * p as f64);
-            d.id.push(u32::try_from(id).unwrap());
+            d.id.push(u64::try_from(id).unwrap());
             d.period.push(i64::try_from(p).unwrap());
             d.a.push(a);
             d.am1.push(prev);
@@ -185,11 +185,7 @@ fn trial_msm_both(d: &Periods) -> (Msm, Msm) {
 /// The clone-censor-weight analysis of the benchmark, with the design of the
 /// outcome model built in full and formed by `fit_msm_clones`.
 fn ccw_both(d: &Periods) -> (Msm, Msm) {
-    let period: Vec<u32> = d
-        .period
-        .iter()
-        .map(|&p| u32::try_from(p).unwrap())
-        .collect();
+    let period = &d.period;
     let strategies = [
         Strategy::InitiateWithin {
             grace: 3,
@@ -200,9 +196,10 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
     let c = clone_censor(
         &CloneInput {
             id: &d.id,
-            period: &period,
+            period,
             treatment: &d.a,
             outcome: &d.outcome,
+            covariates: &[],
         },
         &strategies,
     )
@@ -210,10 +207,10 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
     let m = c.len();
     let den = Mat::from_fn(m, 5, |i, j| {
         let s = c.source[i];
-        let p = f64::from(period[s]);
+        let p = period[s] as f64;
         [1.0, d.l[s], d.l0[s], p, p * p][j]
     });
-    let num = Mat::from_fn(m, 2, |i, j| [1.0, f64::from(period[c.source[i]])][j]);
+    let num = Mat::from_fn(m, 2, |i, j| [1.0, period[c.source[i]] as f64][j]);
     let model = DeviationModel {
         denominator: den.as_ref(),
         numerator: Some(num.as_ref()),
@@ -222,13 +219,13 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
     let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
     let design = Mat::from_fn(keep.len(), 5, |k, j| {
         let i = keep[k];
-        let p = f64::from(period[c.source[i]]);
+        let p = period[c.source[i]] as f64;
         let arm = c.arm[i] as f64;
         [1.0, arm, p, p * p, arm * p][j]
     });
     let y: Vec<bool> = keep.iter().map(|&i| c.outcome[i]).collect();
     let wt: Vec<f64> = keep.iter().map(|&i| w.weight[i]).collect();
-    let person: Vec<u32> = keep.iter().map(|&i| c.person[i]).collect();
+    let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
     let full = fit_msm(&MsmInput {
         design: design.as_ref(),
         outcome: &y,
@@ -240,11 +237,11 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
     // same, with and without case weights and a numerator.
     let den_fill = |i: usize, out: &mut [f64]| {
         let s = c.source[i];
-        let p = f64::from(period[s]);
+        let p = period[s] as f64;
         out.copy_from_slice(&[1.0, d.l[s], d.l0[s], p, p * p]);
     };
     let num_fill = |i: usize, out: &mut [f64]| {
-        out.copy_from_slice(&[1.0, f64::from(period[c.source[i]])]);
+        out.copy_from_slice(&[1.0, period[c.source[i]] as f64]);
     };
     let rows_model = DeviationRows {
         denominator: DeviationDesign {
@@ -276,7 +273,7 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
         weights_bits(&deviation_weights(&c, &[unstabilised, model], Some(&counts)).unwrap())
     );
     let rows = fit_msm_clones(&c, &by_rows.weight, 5, &|i, out| {
-        let p = f64::from(period[c.source[i]]);
+        let p = period[c.source[i]] as f64;
         let arm = c.arm[i] as f64;
         out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
     })

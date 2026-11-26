@@ -284,9 +284,9 @@ pub use role_transition::{
     exposure_density_sets, match_exposure_density,
 };
 pub use trials::{
-    ControlReuse, ExpandedRow, TrialInputError, TrialMember, TrialOptions, TrialOutcome,
-    TrialPeriod, TrialPerson, TrialPool, TrialResult, TrialsError, expand_trials, match_trials,
-    trial_seed,
+    ControlReuse, ExpandedRow, PanelColumns, TrialColumns, TrialInputError, TrialMember,
+    TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool, TrialResult, TrialsError,
+    expand_trial_columns, expand_trials, match_trials, matched_trial_columns, trial_seed,
 };
 pub use types::{
     AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,

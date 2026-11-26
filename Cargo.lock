@@ -738,6 +738,7 @@ dependencies = [
  "epistat-register",
  "epistat-rng",
  "epistat-stats",
+ "epistat-survival",
  "epistat-testkit",
  "itertools 0.14.0",
  "ordered-float",

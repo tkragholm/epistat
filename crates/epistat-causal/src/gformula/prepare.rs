@@ -199,6 +199,13 @@ pub(super) fn prepare<'a>(
     let mut sums = vec![0.0; rows * width];
     for (j, column) in data.time_varying.iter().enumerate() {
         let binary = covariates[j].kind == CovariateKind::Binary;
+        if let CovariateKind::Categorical(levels) = covariates[j].kind
+            && levels < 2
+        {
+            return Err(Error::input(format!(
+                "variable {j}: a categorical covariate needs at least two classes"
+            )));
+        }
         for r in 0..rows {
             let x = column[r];
             if !x.is_finite() {
@@ -209,6 +216,13 @@ pub(super) fn prepare<'a>(
             if binary && !is_binary(x) {
                 return Err(Error::input(format!(
                     "row {r}: binary variable {j} is {x}, not 0 or 1"
+                )));
+            }
+            if let CovariateKind::Categorical(levels) = covariates[j].kind
+                && !(x >= 0.0 && x.fract() == 0.0 && x < levels as f64)
+            {
+                return Err(Error::input(format!(
+                    "row {r}: categorical variable {j} is {x}, not a class in 0..{levels}"
                 )));
             }
             values[r * width + j] = x;
@@ -252,8 +266,31 @@ pub(super) fn prepare<'a>(
             event,
             terms,
             competing,
+            censoring,
         } => {
             check_length("the outcome", rows, event.len())?;
+            if let Some(c) = censoring {
+                check_length("the censoring", rows, c.censored.len())?;
+                check_terms(&c.terms, n_baseline, width, width, "the censoring model")?;
+                for p in 0..persons {
+                    for r in start[p]..start[p + 1] {
+                        if !c.censored[r] {
+                            continue;
+                        }
+                        if r + 1 != start[p + 1] {
+                            return Err(Error::input(format!(
+                                "row {r}: person {} has rows after censoring",
+                                data.id[r]
+                            )));
+                        }
+                        if event[r] || competing.as_ref().is_some_and(|d| d.event[r]) {
+                            return Err(Error::input(format!(
+                                "row {r}: a censored row has no observed event"
+                            )));
+                        }
+                    }
+                }
+            }
             check_terms(terms, n_baseline, width, width, "the outcome model")?;
             if let Some(c) = competing {
                 check_length("the competing event", rows, c.event.len())?;
@@ -443,6 +480,61 @@ fn observed_risk(
         }
         let h = events[k] as f64 / free[k] as f64;
         let d = deaths[k] as f64 / rows[k] as f64;
+        risk += h * (1.0 - d) * survival;
+        survival *= (1.0 - h) * (1.0 - d);
+        out.push(Some(risk));
+    }
+    out
+}
+
+/// The observed risk by period weighted by the inverse probability of
+/// remaining uncensored (see the module documentation of the g-formula).
+pub(super) fn weighted_observed_risk(
+    prepared: &Prepared<'_>,
+    event: &[bool],
+    competing: Option<&[bool]>,
+    censoring: &super::Censoring<'_>,
+    model: &super::fit::Linear,
+) -> Vec<Option<f64>> {
+    let periods = prepared.periods;
+    let w = prepared.width;
+    // Weighted sums over the rows of each period: of the rows without the
+    // competing event and of their events, of all rows and of the competing
+    // events.
+    let mut free = vec![0.0; periods];
+    let mut events = vec![0.0; periods];
+    let mut all = vec![0.0; periods];
+    let mut deaths = vec![0.0; periods];
+    for p in 0..prepared.start.len() - 1 {
+        let mut cumulative = 1.0;
+        for (k, r) in prepared.rows_of(p).enumerate() {
+            let h = prepared.history(p, k, w);
+            cumulative /= 1.0 - model.mean(&censoring.terms, &h);
+            if k >= periods || censoring.censored[r] {
+                continue;
+            }
+            all[k] += cumulative;
+            if competing.is_some_and(|c| c[r]) {
+                deaths[k] += cumulative;
+            } else {
+                free[k] += cumulative;
+                if event[r] {
+                    events[k] += cumulative;
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(periods);
+    let (mut risk, mut survival) = (0.0, 1.0);
+    let mut defined = true;
+    for k in 0..periods {
+        defined &= all[k] > 0.0 && free[k] > 0.0;
+        if !defined {
+            out.push(None);
+            continue;
+        }
+        let h = events[k] / free[k];
+        let d = deaths[k] / all[k];
         risk += h * (1.0 - d) * survival;
         survival *= (1.0 - h) * (1.0 - d);
         out.push(Some(risk));

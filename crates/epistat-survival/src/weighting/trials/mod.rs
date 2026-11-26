@@ -97,11 +97,21 @@ use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 
+mod bootstrap;
+mod competing;
+mod protocol;
+
+pub use bootstrap::{PersonCounts, bootstrap_trials};
+pub use competing::{
+    CompetingIncidence, MsmCompeting, cumulative_incidence_competing, fit_msm_competing,
+};
+pub use protocol::{Panel, ProtocolRows, protocol_rows};
+
 /// The rows of a person-period data set, ordered by person and then period.
 #[derive(Debug, Clone, Copy)]
 pub struct PersonPeriod<'a> {
     /// The person of each row. The rows of a person are next to each other.
-    pub id: &'a [u32],
+    pub id: &'a [u64],
     /// The period of each row, increasing within a person.
     pub period: &'a [i64],
     /// The treatment in the period.
@@ -191,21 +201,26 @@ fn check_design(name: &str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
     Ok(())
 }
 
-/// Fit a logistic model of `y` on `x` over `rows` and give the coefficients and
-/// the fitted probability of each of the rows.
+/// Fit a logistic model of `y` on `x` over `rows`, with the case weights
+/// `case` when given, and give the coefficients and the fitted probability of
+/// each of the rows.
 fn fit_logistic(
     x: MatRef<'_, f64>,
     y: &[bool],
     rows: &[usize],
+    case: Option<&[f64]>,
     what: &str,
 ) -> Result<(Vec<f64>, Vec<f64>)> {
-    let positives = rows.iter().filter(|&&r| y[r]).count();
-    if positives == 0 || positives == rows.len() {
+    // A row of case weight 0 is not in the fit, as it is not in a resample.
+    let counted = |r: usize| case.is_none_or(|c| c[r] > 0.0);
+    let total = rows.iter().filter(|&&r| counted(r)).count();
+    let positives = rows.iter().filter(|&&r| counted(r) && y[r]).count();
+    if positives == 0 || positives == total {
         return Err(Error::input(format!(
             "{what}: the rows of the fit need both values of the response"
         )));
     }
-    let subset = Subset { x, y, rows };
+    let subset = Subset { x, y, rows, case };
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_rows(&subset)
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
@@ -226,6 +241,7 @@ struct Subset<'a> {
     x: MatRef<'a, f64>,
     y: &'a [bool],
     rows: &'a [usize],
+    case: Option<&'a [f64]>,
 }
 
 impl Rows for Subset<'_> {
@@ -244,9 +260,46 @@ impl Rows for Subset<'_> {
                 block.x[(k, j)] = self.x[(r, j)];
             }
             block.y[k] = f64::from(u8::from(self.y[r]));
-            block.weight[k] = 1.0;
+            block.weight[k] = self.case.map_or(1.0, |c| c[r]);
             block.cluster[k] = 0;
         }
+    }
+}
+
+/// Which rows the models of a weight are fitted on, and with which case
+/// weights.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WeightRows<'a> {
+    /// Whether each row is in the fits, all rows when `None`. A row that is not
+    /// has the weight 1 and probabilities of NaN, so that it leaves the
+    /// cumulative products of [`trial_weights`] as they are. [`protocol_rows`]
+    /// gives the rows of `TrialEmulation`.
+    pub fitted: Option<&'a [bool]>,
+    /// The case weight of each row in the fits, 1 for every row when `None`. A
+    /// row of weight 0 does not count towards the two values of the response a
+    /// fit needs. The counts of a resample of persons (see [`bootstrap_trials`])
+    /// give the fits of the resample.
+    pub case_weight: Option<&'a [f64]>,
+}
+
+impl WeightRows<'_> {
+    fn check(&self, n: usize) -> Result<()> {
+        if let Some(f) = self.fitted
+            && f.len() != n
+        {
+            return Err(Error::input(format!(
+                "fitted: {} values for {n} rows",
+                f.len()
+            )));
+        }
+        if let Some(c) = self.case_weight
+            && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
+        {
+            return Err(Error::input(
+                "case_weight: one non-negative finite value per row",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -258,35 +311,49 @@ fn ratio_weights(
     model: &WeightModel<'_>,
     fit: Fit,
     observed_value: bool,
+    rows: &WeightRows<'_>,
     what: &str,
 ) -> Result<RowWeights> {
     let n = y.len();
     check_design("numerator", model.numerator, n)?;
     check_design("denominator", model.denominator, n)?;
+    rows.check(n)?;
+    let fitted = |r: usize| rows.fitted.is_none_or(|f| f[r]);
     let groups: Vec<Vec<usize>> = match fit {
-        Fit::Pooled => vec![(0..n).collect()],
+        Fit::Pooled => vec![(0..n).filter(|&r| fitted(r)).collect()],
         Fit::ByPreviousTreatment => (0..2)
-            .map(|g| (0..n).filter(|&r| previous[r] == (g == 1)).collect())
+            .map(|g| {
+                (0..n)
+                    .filter(|&r| fitted(r) && previous[r] == (g == 1))
+                    .collect()
+            })
             .collect(),
     };
     let mut p_n = vec![f64::NAN; n];
     let mut p_d = vec![f64::NAN; n];
     let mut numerator_coefficients = Vec::new();
     let mut denominator_coefficients = Vec::new();
-    for (g, rows) in groups.iter().enumerate() {
-        if rows.is_empty() {
+    for (g, group) in groups.iter().enumerate() {
+        if group.is_empty() {
             return Err(Error::input(format!(
                 "{what}: no rows with previous treatment {g}"
             )));
         }
-        let (cn, pn) = fit_logistic(model.numerator, y, rows, &format!("{what} numerator {g}"))?;
+        let (cn, pn) = fit_logistic(
+            model.numerator,
+            y,
+            group,
+            rows.case_weight,
+            &format!("{what} numerator {g}"),
+        )?;
         let (cd, pd) = fit_logistic(
             model.denominator,
             y,
-            rows,
+            group,
+            rows.case_weight,
             &format!("{what} denominator {g}"),
         )?;
-        for (k, &r) in rows.iter().enumerate() {
+        for (k, &r) in group.iter().enumerate() {
             p_n[r] = pn[k];
             p_d[r] = pd[k];
         }
@@ -295,7 +362,9 @@ fn ratio_weights(
     }
     let weight = (0..n)
         .map(|r| {
-            if !observed_value || y[r] {
+            if !fitted(r) {
+                1.0
+            } else if !observed_value || y[r] {
                 p_n[r] / p_d[r]
             } else {
                 (1.0 - p_n[r]) / (1.0 - p_d[r])
@@ -315,6 +384,9 @@ fn ratio_weights(
 /// treatment among the rows of each previous treatment, `p_n / p_d` for a
 /// treated row and `(1 - p_n) / (1 - p_d)` for an untreated one.
 ///
+/// The models are fitted on every row; [`switch_weights_with`] fits them on
+/// chosen rows with case weights.
+///
 /// # Errors
 ///
 /// [`Error::Input`] for rows that are not ordered by person and period, for
@@ -323,6 +395,21 @@ fn ratio_weights(
 /// without both treated and untreated rows, a model that has an aliased column
 /// or does not converge.
 pub fn switch_weights(data: &PersonPeriod<'_>, model: &WeightModel<'_>) -> Result<RowWeights> {
+    switch_weights_with(data, model, &WeightRows::default())
+}
+
+/// [`switch_weights`] with the models fitted on the rows of `rows` and with
+/// its case weights. The designs have one row for every row of `data`.
+///
+/// # Errors
+///
+/// As [`switch_weights`], with `rows` of another length than the data or a
+/// case weight that is negative or not finite.
+pub fn switch_weights_with(
+    data: &PersonPeriod<'_>,
+    model: &WeightModel<'_>,
+    rows: &WeightRows<'_>,
+) -> Result<RowWeights> {
     data.check()?;
     ratio_weights(
         data.previous,
@@ -330,6 +417,7 @@ pub fn switch_weights(data: &PersonPeriod<'_>, model: &WeightModel<'_>) -> Resul
         model,
         Fit::ByPreviousTreatment,
         true,
+        rows,
         "switch",
     )
 }
@@ -340,7 +428,8 @@ pub fn switch_weights(data: &PersonPeriod<'_>, model: &WeightModel<'_>) -> Resul
 ///
 /// `censored` marks the rows of persons who are censored in the period. The
 /// rows are all used in the fit, so that a data set from which the rows after a
-/// deviation have been removed gives the weights of `TrialEmulation`.
+/// deviation have been removed gives the weights of `TrialEmulation`;
+/// [`censoring_weights_with`] fits on chosen rows.
 ///
 /// # Errors
 ///
@@ -351,6 +440,22 @@ pub fn censoring_weights(
     model: &WeightModel<'_>,
     fit: Fit,
 ) -> Result<RowWeights> {
+    censoring_weights_with(data, censored, model, fit, &WeightRows::default())
+}
+
+/// [`censoring_weights`] with the models fitted on the rows of `rows` and with
+/// its case weights.
+///
+/// # Errors
+///
+/// As [`censoring_weights`] and [`switch_weights_with`].
+pub fn censoring_weights_with(
+    data: &PersonPeriod<'_>,
+    censored: &[bool],
+    model: &WeightModel<'_>,
+    fit: Fit,
+    rows: &WeightRows<'_>,
+) -> Result<RowWeights> {
     let n = data.check()?;
     if censored.len() != n {
         return Err(Error::input(format!(
@@ -359,7 +464,15 @@ pub fn censoring_weights(
         )));
     }
     let uncensored: Vec<bool> = censored.iter().map(|&c| !c).collect();
-    ratio_weights(data.previous, &uncensored, model, fit, false, "censoring")
+    ratio_weights(
+        data.previous,
+        &uncensored,
+        model,
+        fit,
+        false,
+        rows,
+        "censoring",
+    )
 }
 
 /// The rows of the stacked trials: the person, the period the trial started and
@@ -367,7 +480,7 @@ pub fn censoring_weights(
 #[derive(Debug, Clone, Copy)]
 pub struct TrialRows<'a> {
     /// The person of each row.
-    pub id: &'a [u32],
+    pub id: &'a [u64],
     /// The period in which the trial of the row started.
     pub trial_period: &'a [i64],
     /// The periods since the start of the trial, 0 in the first row.
@@ -411,7 +524,7 @@ pub fn trial_weights(
         };
     }
     // The first row of every person.
-    let mut starts: Vec<(u32, usize, usize)> = Vec::new();
+    let mut starts: Vec<(u64, usize, usize)> = Vec::new();
     for i in 0..n {
         if i == 0 || data.id[i] != data.id[i - 1] {
             starts.push((data.id[i], i, i + 1));
@@ -419,7 +532,7 @@ pub fn trial_weights(
             last.2 = i + 1;
         }
     }
-    let find = |id: u32, period: i64| -> Option<usize> {
+    let find = |id: u64, period: i64| -> Option<usize> {
         let k = starts.binary_search_by_key(&id, |s| s.0).ok()?;
         let (_, a, b) = starts[k];
         let at = data.period[a..b].binary_search(&period).ok()?;
@@ -450,7 +563,7 @@ pub struct MsmInput<'a> {
     /// The weight of the row.
     pub weight: &'a [f64],
     /// The person of the row, the cluster of the covariance.
-    pub person: &'a [u32],
+    pub person: &'a [u64],
 }
 
 /// The outcome model of the stacked trials.
@@ -661,11 +774,11 @@ impl Stack {
     /// The stack of `spans` spans of `length(k)` rows each, with the clusters
     /// numbered in the order in which the `label` of a span first appears, the
     /// labels of a cluster being next to each other.
-    fn new(spans: usize, length: impl Fn(usize) -> usize, label: impl Fn(usize) -> u32) -> Self {
+    fn new(spans: usize, length: impl Fn(usize) -> usize, label: impl Fn(usize) -> u64) -> Self {
         let mut blocks = Vec::new();
         let (mut rows, mut clusters) = (0_usize, 0_usize);
         let mut next = 0_usize;
-        let mut last: Option<u32> = None;
+        let mut last: Option<u64> = None;
         for k in 0..spans {
             let len = length(k);
             if len == 0 {
@@ -705,7 +818,7 @@ struct TrialStack<'a> {
     trials: &'a TrialSpans<'a>,
     outcome: &'a [bool],
     cumulative: Vec<f64>,
-    person: &'a [u32],
+    person: &'a [u64],
     columns: usize,
     design: &'a (dyn Fn(usize, usize, &mut [f64]) + Sync),
     stack: Stack,
@@ -837,6 +950,9 @@ pub struct CumulativeIncidence {
 /// time `t`, with the assigned treatment and the time set, and the same rows in
 /// the same order for every time.
 ///
+/// [`cumulative_incidence_rows`] gives the same, bit for bit, from a function
+/// that writes the design of a row at a time, without a matrix per time.
+///
 /// # Errors
 ///
 /// [`Error::Input`] for no time, designs with another number of columns than the
@@ -847,9 +963,6 @@ pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<Cu
         return Err(Error::input("designs: no times"));
     };
     let rows = first.nrows();
-    if rows == 0 {
-        return Err(Error::input("designs: no rows"));
-    }
     for (t, d) in designs.iter().enumerate() {
         if d.nrows() != rows || d.ncols() != p {
             return Err(Error::input(format!(
@@ -859,38 +972,89 @@ pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<Cu
             )));
         }
     }
-    // For each row the running product of survival and the running sum of
-    // p_s x_s.
-    let mut surv = vec![1.0; rows];
-    let mut dlog = vec![0.0; rows * p];
-    let mut risk = Vec::with_capacity(designs.len());
-    let mut std_err = Vec::with_capacity(designs.len());
-    for d in designs {
-        let mut mean = 0.0;
-        let mut grad = vec![0.0; p];
-        for r in 0..rows {
-            let eta: f64 = (0..p).map(|j| d[(r, j)] * msm.coefficients[j]).sum();
+    cumulative_incidence_rows(msm, rows, designs.len(), &|r, t, out| {
+        for (j, v) in out.iter_mut().enumerate() {
+            *v = designs[t][(r, j)];
+        }
+    })
+}
+
+/// [`cumulative_incidence`] with the designs formed by `design(row, time,
+/// out)`, which writes into `out` the design of row `row` of the population at
+/// follow-up time `time` (from 0 to `times - 1`), with the assigned treatment
+/// and the time set. The memory is one design row and the sums of each time.
+///
+/// The risk at time `t` is `1 - mean over rows of S_r(t)`, `S_r(t) = prod over
+/// s <= t of (1 - p_r(s))`, with the delta-method standard error of the module
+/// documentation. The sum over rows is taken in the order of the rows, so the
+/// result does not depend on the number of threads and equals that of
+/// [`cumulative_incidence`] on the same designs.
+///
+/// # Errors
+///
+/// [`Error::Input`] for no time, no row, and a design value that is not
+/// finite.
+pub fn cumulative_incidence_rows(
+    msm: &Msm,
+    rows: usize,
+    times: usize,
+    design: &(dyn Fn(usize, usize, &mut [f64]) + Sync),
+) -> Result<CumulativeIncidence> {
+    let p = msm.coefficients.len();
+    if times == 0 {
+        return Err(Error::input("designs: no times"));
+    }
+    if rows == 0 {
+        return Err(Error::input("designs: no rows"));
+    }
+    let mut mean = vec![0.0; times];
+    let mut grad = vec![0.0; times * p];
+    let mut x = vec![0.0; p];
+    let mut dlog = vec![0.0; p];
+    for r in 0..rows {
+        // The running product of survival and the running sum of p_s x_s of
+        // the row.
+        let mut surv = 1.0;
+        dlog.fill(0.0);
+        for t in 0..times {
+            design(r, t, &mut x);
+            if x.iter().any(|v| !v.is_finite()) {
+                return Err(Error::input(format!(
+                    "design: a value of row {r} at time {t} is not finite"
+                )));
+            }
+            let eta: f64 = (0..p).map(|j| x[j] * msm.coefficients[j]).sum();
             let prob = 1.0 / (1.0 + (-eta).exp());
-            surv[r] *= 1.0 - prob;
+            surv *= 1.0 - prob;
             for j in 0..p {
-                dlog[r * p + j] += prob * d[(r, j)];
+                dlog[j] += prob * x[j];
             }
-            mean += surv[r];
+            mean[t] += surv;
             for j in 0..p {
-                grad[j] += surv[r] * dlog[r * p + j];
+                grad[t * p + j] += surv * dlog[j];
             }
         }
-        let nf = rows as f64;
-        risk.push(1.0 - mean / nf);
+    }
+    let nf = rows as f64;
+    let mut risk = Vec::with_capacity(times);
+    let mut std_err = Vec::with_capacity(times);
+    for t in 0..times {
+        risk.push(1.0 - mean[t] / nf);
         // The risk is 1 - mean S, so its derivative is + mean(S dlog).
-        let g: Vec<f64> = grad.iter().map(|v| v / nf).collect();
-        let mut var = 0.0;
-        for a in 0..p {
-            for b in 0..p {
-                var += g[a] * msm.covariance[a * p + b] * g[b];
-            }
-        }
-        std_err.push(var.max(0.0).sqrt());
+        let g: Vec<f64> = grad[t * p..(t + 1) * p].iter().map(|v| v / nf).collect();
+        std_err.push(quadratic_form(&g, &msm.covariance).max(0.0).sqrt());
     }
     Ok(CumulativeIncidence { risk, std_err })
+}
+
+/// `g' V g` for a `p * p` matrix `V` in row order, summed as `a` then `b`.
+pub(crate) fn quadratic_form(g: &[f64], v: &[f64]) -> f64 {
+    let p = g.len();
+    let mut var = 0.0;
+    for a in 0..p {
+        for b in 0..p {
+            var += g[a] * v[a * p + b] * g[b];
+        }
+    }
+    var
 }

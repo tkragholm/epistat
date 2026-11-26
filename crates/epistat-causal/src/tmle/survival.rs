@@ -60,6 +60,28 @@
 //! after [`SurvivalOptions::max_iterations`] rounds are errors. The ratio is
 //! `None` when the risk of the controls is 0.
 //!
+//! # Fitting the models
+//!
+//! [`tmle_survival_glm`] fits the three models and passes their predictions to
+//! [`tmle_survival`]. With `T_i` the last interval of person `i` and `K` the
+//! largest `T_i`:
+//!
+//! ```text
+//! event:      logit lambda_k = x_e(i, k, A_i)' b    on the intervals k <= T_i,
+//!             with the response 1 in k = T_i when the person has the event;
+//! censoring:  logit c_k = x_c(i, k, A_i)' d         on the intervals k <= T_i
+//!             without the event and k < K, with the response 1 in k = T_i;
+//! treatment:  logit g = z_i' a                       on the persons,
+//! ```
+//!
+//! all with the case weights rescaled to mean 1, as `glm` fits them. Censoring after the last
+//! interval `K` is the end of follow-up and is not modelled. The predictions
+//! are `lambda_k(a, x)` and `c_k(a, x)` from the designs with the treatment set
+//! to `a`, for `k` up to the horizon. The variance treats the fitted models as
+//! the predictions of [`tmle_survival`] do, through the efficient influence
+//! function, which is valid when the models are fitted on the same data and
+//! the hazard model is correct or the propensity and censoring models are.
+//!
 //! # References
 //!
 //! 1. Moore KL, van der Laan MJ. Application of time-to-event methods in the
@@ -451,5 +473,271 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         score: [one.score, zero.score],
         propensity_bound: bound,
         n_trimmed,
+    })
+}
+
+/// The design of a model of a hazard in discrete time, formed for a person and
+/// an interval when it is needed.
+#[derive(Clone, Copy)]
+pub struct IntervalDesign<'a> {
+    /// The number of columns, with the intercept.
+    pub columns: usize,
+    /// Writes into `out` the design of person `i` in interval `k` (from 1)
+    /// had the person been treated (`treated`) or not.
+    pub fill: &'a IntervalFill<'a>,
+}
+
+/// The function of an [`IntervalDesign`]: person, interval, treated, output.
+pub type IntervalFill<'a> = dyn Fn(usize, usize, bool, &mut [f64]) + Sync + 'a;
+
+impl std::fmt::Debug for IntervalDesign<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntervalDesign")
+            .field("columns", &self.columns)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The data and the models of [`tmle_survival_glm`].
+#[derive(Debug, Clone, Copy)]
+pub struct SurvivalGlmInput<'a> {
+    /// The last interval in which each person was observed, at least 1.
+    pub time: &'a [usize],
+    /// Whether the person had the event in that interval; otherwise the person
+    /// was censored after it.
+    pub event: &'a [bool],
+    /// Whether each person is treated.
+    pub treatment: &'a [bool],
+    /// The design of the logistic model of the event hazard.
+    pub hazard: IntervalDesign<'a>,
+    /// The design of the logistic model of the censoring hazard, `None` when
+    /// no one is censored before the last interval, which makes every
+    /// censoring hazard 0.
+    pub censoring: Option<IntervalDesign<'a>>,
+    /// The design of the logistic model of the treatment, one row per person,
+    /// with an intercept.
+    pub propensity: MatRef<'a, f64>,
+    /// Case weights, 1 for each person when `None`.
+    pub weight: Option<&'a [f64]>,
+    /// The cluster of each person, each person a cluster when `None`.
+    pub cluster: Option<&'a [u32]>,
+}
+
+/// The result of [`tmle_survival_glm`]: the estimator and the fitted models
+/// with their predictions.
+#[derive(Debug, Clone)]
+pub struct SurvivalTmleGlm {
+    /// The targeted estimator on the predictions.
+    pub tmle: SurvivalTmle,
+    /// The coefficients of the event hazard model.
+    pub hazard_coefficients: Vec<f64>,
+    /// The coefficients of the censoring hazard model, empty without one.
+    pub censoring_coefficients: Vec<f64>,
+    /// The coefficients of the propensity model.
+    pub propensity_coefficients: Vec<f64>,
+    /// The event hazard of each person (rows) and interval up to the horizon
+    /// (columns) had the person been treated.
+    pub hazard1: Mat<f64>,
+    /// The same had the person not been treated.
+    pub hazard0: Mat<f64>,
+    /// The censoring hazard of each person and interval before the horizon had
+    /// the person been treated, at least one column.
+    pub censoring1: Mat<f64>,
+    /// The same had the person not been treated.
+    pub censoring0: Mat<f64>,
+    /// The fitted propensity of each person.
+    pub propensity: Vec<f64>,
+}
+
+fn fit_logistic(x: MatRef<'_, f64>, y: &[f64], w: &[f64], what: &str) -> Result<Vec<f64>> {
+    let fit = Glm::new(Family::Binomial, Link::Logit)
+        .fit(x, y, Some(w), None, None)
+        .map_err(|e| Error::input(format!("{what} model: {e}")))?;
+    if !fit.converged {
+        return Err(Error::NoConvergence(format!("{what} model")));
+    }
+    fit.coefficients
+        .iter()
+        .enumerate()
+        .map(|(j, c)| {
+            c.ok_or_else(|| Error::input(format!("{what} model: design column {j} is aliased")))
+        })
+        .collect()
+}
+
+/// The person-intervals of a hazard model as a design, a response and weights.
+fn intervals(
+    design: IntervalDesign<'_>,
+    rows: &[(usize, usize, bool)],
+    treatment: &[bool],
+    w: &[f64],
+    what: &str,
+) -> Result<(Mat<f64>, Vec<f64>, Vec<f64>)> {
+    if design.columns == 0 {
+        return Err(Error::input(format!("{what} design: no columns")));
+    }
+    let mut x = Mat::<f64>::zeros(rows.len(), design.columns);
+    let mut values = vec![0.0; design.columns];
+    for (r, &(i, k, _)) in rows.iter().enumerate() {
+        (design.fill)(i, k, treatment[i], &mut values);
+        for (j, &v) in values.iter().enumerate() {
+            if !v.is_finite() {
+                return Err(Error::input(format!(
+                    "{what} design: person {i}, interval {k} has {v}"
+                )));
+            }
+            x[(r, j)] = v;
+        }
+    }
+    let y = rows
+        .iter()
+        .map(|&(_, _, y)| f64::from(u8::from(y)))
+        .collect();
+    let weight = rows.iter().map(|&(i, _, _)| w[i]).collect();
+    Ok((x, y, weight))
+}
+
+/// The predictions of a hazard model with coefficients `b` for every person
+/// and the intervals `1..=columns` under treatment `treated`.
+fn predictions(
+    design: IntervalDesign<'_>,
+    b: &[f64],
+    n: usize,
+    columns: usize,
+    treated: bool,
+) -> Mat<f64> {
+    let mut values = vec![0.0; design.columns];
+    let mut m = Mat::<f64>::zeros(n, columns);
+    for i in 0..n {
+        for k in 0..columns {
+            (design.fill)(i, k + 1, treated, &mut values);
+            let eta: f64 = values.iter().zip(b).map(|(x, c)| x * c).sum();
+            m[(i, k)] = plogis(eta);
+        }
+    }
+    m
+}
+
+/// [`tmle_survival`] with the event and censoring hazards and the propensity
+/// from logistic models fitted to the data (see the module documentation), as
+/// [`crate::tmle::tmle_glm`] does for a binary outcome.
+///
+/// # Errors
+///
+/// The errors of [`tmle_survival`], and [`Error::Input`] for inputs of
+/// different lengths, a design without columns or with a value that is not
+/// finite, a person censored before the last interval without a censoring
+/// model, and a model that has an aliased column; [`Error::NoConvergence`] for
+/// a model that does not converge.
+pub fn tmle_survival_glm(
+    input: &SurvivalGlmInput<'_>,
+    opts: &SurvivalOptions,
+) -> Result<SurvivalTmleGlm> {
+    let n = input.treatment.len();
+    check_len("time", input.time.len(), n)?;
+    check_len("event", input.event.len(), n)?;
+    if let Some(w) = input.weight {
+        check_len("weight", w.len(), n)?;
+    }
+    if input.propensity.nrows() != n || input.propensity.ncols() == 0 {
+        return Err(Error::input(format!(
+            "propensity design: {} rows and {} columns for {n} persons",
+            input.propensity.nrows(),
+            input.propensity.ncols()
+        )));
+    }
+    if !epistat_linalg::is_finite(input.propensity) {
+        return Err(Error::input("propensity design: a value is not finite"));
+    }
+    if let Some(i) = input.time.iter().position(|&k| k == 0) {
+        return Err(Error::input(format!("time: person {i} has 0 intervals")));
+    }
+    let raw: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
+    if let Some(i) = raw.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
+        return Err(Error::input(format!(
+            "weight: value {i} is negative or not finite"
+        )));
+    }
+    // The fits take the weights rescaled to mean 1, as the estimator does:
+    // the coefficients do not depend on the scale, but the stopping rule of
+    // IRLS, a relative change of the deviance with 0.1 added, does.
+    let sum = compensated(raw.iter().copied());
+    let w: Vec<f64> = raw.iter().map(|&x| x / sum * n as f64).collect();
+    let last = input.time.iter().copied().max().unwrap_or(0);
+    let t = opts.horizon;
+    let mut event_rows = Vec::new();
+    let mut censoring_rows = Vec::new();
+    for i in 0..n {
+        let end = input.time[i];
+        for k in 1..=end {
+            let at_end = k == end;
+            event_rows.push((i, k, at_end && input.event[i]));
+            if !(at_end && input.event[i]) && k < last {
+                censoring_rows.push((i, k, at_end));
+            }
+        }
+    }
+    let (x, y, wr) = intervals(input.hazard, &event_rows, input.treatment, &w, "event")?;
+    let hazard_coefficients = fit_logistic(x.as_ref(), &y, &wr, "event")?;
+    drop(x);
+    let cens_columns = t.saturating_sub(1).max(1);
+    let (censoring_coefficients, censoring1, censoring0) = if let Some(design) = input.censoring {
+        let (x, y, wr) = intervals(design, &censoring_rows, input.treatment, &w, "censoring")?;
+        let d = fit_logistic(x.as_ref(), &y, &wr, "censoring")?;
+        let c1 = predictions(design, &d, n, cens_columns, true);
+        let c0 = predictions(design, &d, n, cens_columns, false);
+        (d, c1, c0)
+    } else {
+        if let Some(&(i, k, _)) = censoring_rows.iter().find(|r| r.2) {
+            return Err(Error::input(format!(
+                "censoring: person {i} is censored after interval {k}, before the last; give a censoring model"
+            )));
+        }
+        let zero = Mat::<f64>::zeros(n, cens_columns);
+        (Vec::new(), zero.clone(), zero)
+    };
+    let a: Vec<f64> = input
+        .treatment
+        .iter()
+        .map(|&b| f64::from(u8::from(b)))
+        .collect();
+    let propensity_coefficients = fit_logistic(input.propensity, &a, &w, "propensity")?;
+    let z = input.propensity;
+    let propensity: Vec<f64> = (0..n)
+        .map(|i| {
+            let eta: f64 = (0..z.ncols())
+                .map(|j| z[(i, j)] * propensity_coefficients[j])
+                .sum();
+            plogis(eta)
+        })
+        .collect();
+    let columns = t.max(1);
+    let hazard1 = predictions(input.hazard, &hazard_coefficients, n, columns, true);
+    let hazard0 = predictions(input.hazard, &hazard_coefficients, n, columns, false);
+    let tmle = tmle_survival(
+        &SurvivalInput {
+            time: input.time,
+            event: input.event,
+            treatment: input.treatment,
+            hazard1: hazard1.as_ref(),
+            hazard0: hazard0.as_ref(),
+            censoring1: censoring1.as_ref(),
+            censoring0: censoring0.as_ref(),
+            propensity: &propensity,
+            weight: input.weight,
+            cluster: input.cluster,
+        },
+        opts,
+    )?;
+    Ok(SurvivalTmleGlm {
+        tmle,
+        hazard_coefficients,
+        censoring_coefficients,
+        propensity_coefficients,
+        hazard1,
+        hazard0,
+        censoring1,
+        censoring0,
+        propensity,
     })
 }
