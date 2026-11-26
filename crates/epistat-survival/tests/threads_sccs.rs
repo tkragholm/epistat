@@ -6,7 +6,9 @@
 //! part, age bands and one to four events per person.
 
 use epistat_rng::Stream;
-use epistat_survival::sccs::{PieceSpec, SccsOptions, WindowSpec, build_pieces, fit};
+use epistat_survival::sccs::{
+    ExposureSeries, PieceSpec, SccsOptions, WindowSpec, build_pieces, fit,
+};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
@@ -52,10 +54,13 @@ fn sccs_does_not_depend_on_the_number_of_threads() {
         end: &end,
         event_offsets: &event_offsets,
         events: &events,
-        exposure_offsets: &exposure_offsets,
-        exposures: &exposures,
+        exposures: &[ExposureSeries {
+            offsets: &exposure_offsets,
+            dates: &exposures,
+            windows: &windows,
+        }],
         age_cuts: &[150.0, 300.0, 450.0],
-        windows: &windows,
+        calendar: None,
     };
     assert_same_on_pools(&POOLS, || {
         let pieces = build_pieces(&spec).unwrap();

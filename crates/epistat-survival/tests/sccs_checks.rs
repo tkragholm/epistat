@@ -4,7 +4,9 @@
 //! start of observation) and the piece rules written out.
 
 use epistat_linalg::Mat;
-use epistat_survival::sccs::{PieceSpec, SccsData, SccsOptions, WindowSpec, build_pieces, fit};
+use epistat_survival::sccs::{
+    ExposureSeries, PieceSpec, SccsData, SccsOptions, WindowSpec, build_pieces, fit,
+};
 
 fn one_person<'a>(
     events: &'a [f64],
@@ -17,10 +19,13 @@ fn one_person<'a>(
         end: &[100.0],
         event_offsets: Box::leak(Box::new([0, events.len()])),
         events,
-        exposure_offsets: Box::leak(Box::new([0, exposures.len()])),
-        exposures,
+        exposures: Box::leak(Box::new([ExposureSeries {
+            offsets: Box::leak(Box::new([0, exposures.len()])),
+            dates: exposures,
+            windows,
+        }])),
         age_cuts,
-        windows,
+        calendar: None,
     }
 }
 
@@ -34,18 +39,18 @@ fn a_window_cut_by_the_end_of_observation_is_shorter() {
     let p = build_pieces(&one_person(&[5.0], &[95.0], &[W], &[])).unwrap();
     assert_eq!(p.start, vec![0.0, 95.0]);
     assert_eq!(p.end, vec![95.0, 100.0]);
-    assert_eq!(p.window, vec![None, Some(0)]);
+    assert_eq!(p.window, vec![vec![None, Some(0)]]);
 }
 
 #[test]
 fn an_exposure_before_observation_gives_the_rest_of_its_window() {
     let p = build_pieces(&one_person(&[5.0], &[-4.0], &[W], &[])).unwrap();
     assert_eq!(p.start, vec![0.0, 6.0]);
-    assert_eq!(p.window, vec![Some(0), None]);
+    assert_eq!(p.window, vec![vec![Some(0), None]]);
     // An exposure whose window ends before observation starts adds no cut.
     let q = build_pieces(&one_person(&[5.0], &[-40.0], &[W], &[])).unwrap();
     assert_eq!(q.start, vec![0.0]);
-    assert_eq!(q.window, vec![None]);
+    assert_eq!(q.window, vec![vec![None]]);
 }
 
 #[test]
@@ -71,7 +76,7 @@ fn the_latest_exposure_date_takes_an_overlapping_piece() {
     let p = build_pieces(&one_person(&[], &[20.0, 40.0], &[pre, after], &[])).unwrap();
     let at = |t: f64| {
         let i = p.start.iter().rposition(|&s| s <= t).unwrap();
-        p.window[i]
+        p.window[0][i]
     };
     assert_eq!(at(30.0), Some(1));
     assert_eq!(at(36.0), Some(0));
@@ -204,4 +209,220 @@ fn the_estimate_of_two_pieces_per_person_is_the_log_odds_ratio_of_the_counts() {
     assert!((beta - (8.0f64 / 12.0).ln()).abs() < 1e-9);
     let var = f.covariance[0].unwrap();
     assert!((var - (1.0 / 8.0 + 1.0 / 12.0)).abs() < 1e-9);
+    // The interval and test follow from the closed form. The fit stops within
+    // 1e-10 relative in the log likelihood, so beta and var are within about
+    // 1e-9 of it, and each derived quantity within a few times that.
+    let se = (1.0_f64 / 8.0 + 1.0 / 12.0).sqrt();
+    assert_eq!(f.standard_errors[0], Some(var.sqrt()));
+    let ri = f.relative_incidence(0.95, false).unwrap()[0].unwrap();
+    let z = 1.959_963_984_540_054;
+    assert!((ri.relative_incidence - 8.0 / 12.0).abs() < 1e-8);
+    assert!((ri.lower - ((8.0f64 / 12.0).ln() - z * se).exp()).abs() < 1e-8);
+    assert!((ri.upper - ((8.0f64 / 12.0).ln() + z * se).exp()).abs() < 1e-8);
+    assert!((ri.z - (8.0f64 / 12.0).ln() / se).abs() < 1e-8);
+    // R 4.6.2: 2 * pnorm(-abs(log(8/12) / sqrt(1/8 + 1/12))).
+    assert!((ri.p_value - 0.374_363_512_135_005).abs() < 1e-8);
+    // Every person is observed in and out of the window and has an event.
+    assert_eq!(f.n_informative_by_column, vec![20]);
+    assert!(f.relative_incidence(1.0, false).is_err());
+    assert!(f.relative_incidence(f64::NAN, false).is_err());
+    assert!(f.relative_incidence(0.95, true).is_err());
+}
+
+#[test]
+fn two_exposure_series_have_their_own_windows_and_columns() {
+    // Series 0 opens [0, 10) on day 20, series 1 opens [0, 30) and [30, 40)
+    // on day 25, so the two overlap on days 25 to 29.
+    let first = [WindowSpec {
+        from: 0.0,
+        to: 10.0,
+    }];
+    let second = [
+        WindowSpec {
+            from: 0.0,
+            to: 30.0,
+        },
+        WindowSpec {
+            from: 30.0,
+            to: 40.0,
+        },
+    ];
+    let series = [
+        ExposureSeries {
+            offsets: &[0, 1, 1],
+            dates: &[20.0],
+            windows: &first,
+        },
+        ExposureSeries {
+            offsets: &[0, 1, 1],
+            dates: &[25.0],
+            windows: &second,
+        },
+    ];
+    let spec = PieceSpec {
+        start: &[0.0, 0.0],
+        end: &[100.0, 50.0],
+        event_offsets: &[0, 2, 3],
+        events: &[27.0, 60.0, 10.0],
+        exposures: &series,
+        ..PieceSpec::default()
+    };
+    let p = build_pieces(&spec).unwrap();
+    assert_eq!(p.start, vec![0.0, 20.0, 25.0, 30.0, 55.0, 65.0, 0.0]);
+    assert_eq!(
+        p.window,
+        vec![
+            vec![None, Some(0), Some(0), None, None, None, None],
+            vec![None, None, Some(0), Some(0), Some(1), None, None],
+        ]
+    );
+    assert_eq!(p.events, vec![0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(p.n_windows, vec![1, 2]);
+    let x = p.design();
+    assert_eq!(x.ncols(), 3);
+    // Days 25 to 29 are in both: the two indicators are both 1.
+    assert_eq!((x[(2, 0)], x[(2, 1)], x[(2, 2)]), (1.0, 1.0, 0.0));
+    assert_eq!(p.exposed_cases(0), 1);
+    assert_eq!(p.exposed_cases(1), 1);
+    let summary = p.window_summary();
+    assert_eq!(summary.len(), 3);
+    assert_eq!(
+        (summary[0].cases, summary[0].events, summary[0].time),
+        (1, 1.0, 10.0)
+    );
+    assert_eq!(
+        (summary[1].cases, summary[1].events, summary[1].time),
+        (1, 1.0, 30.0)
+    );
+    assert_eq!((summary[2].series, summary[2].window), (1, 1));
+    assert_eq!((summary[2].events, summary[2].time), (1.0, 10.0));
+    assert_eq!(summary[2].informative_cases, 1);
+}
+
+#[test]
+fn calendar_input_that_is_not_usable_is_refused() {
+    use epistat_survival::sccs::{Calendar, SeasonStart};
+    let with = |calendar: Calendar<'_>| {
+        build_pieces(&PieceSpec {
+            start: &[0.0],
+            end: &[400.0],
+            event_offsets: &[0, 0],
+            calendar: Some(calendar),
+            ..PieceSpec::default()
+        })
+    };
+    let march = SeasonStart { month: 3, day: 1 };
+    let ok = with(Calendar {
+        origin: &[0.0],
+        cuts: &[],
+        season_starts: &[march, SeasonStart { month: 9, day: 1 }],
+    });
+    assert!(ok.is_ok());
+    for starts in [
+        &[march][..],
+        &[march, SeasonStart { month: 2, day: 29 }][..],
+        &[SeasonStart { month: 9, day: 1 }, march][..],
+        &[march, SeasonStart { month: 13, day: 1 }][..],
+        &[march, SeasonStart { month: 4, day: 31 }][..],
+    ] {
+        assert!(
+            with(Calendar {
+                origin: &[0.0],
+                cuts: &[],
+                season_starts: starts,
+            })
+            .is_err()
+        );
+    }
+    assert!(
+        with(Calendar {
+            origin: &[],
+            ..Calendar::default()
+        })
+        .is_err()
+    );
+    assert!(
+        with(Calendar {
+            origin: &[f64::NAN],
+            ..Calendar::default()
+        })
+        .is_err()
+    );
+    assert!(
+        with(Calendar {
+            origin: &[0.0],
+            cuts: &[200.0, 100.0],
+            season_starts: &[],
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn event_dependent_exposure_drops_later_doses_and_refuses_bad_windows() {
+    use epistat_survival::sccs::{EventDependentOptions, EventDependentSpec, fit_event_dependent};
+    // Twelve cases: a dose on day 40 and a second on day 80; the event on day
+    // 50 + i, so the second dose of the cases with their event before day 80
+    // comes after it and is dropped.
+    let n = 12;
+    let start = vec![0.0; n];
+    let end = vec![200.0; n];
+    let event: Vec<f64> = (0..n).map(|i| 45.0 + 10.0 * i as f64).collect();
+    let dose_offsets: Vec<usize> = (0..=n).map(|i| 2 * i).collect();
+    let doses: Vec<f64> = (0..n).flat_map(|_| [40.0, 80.0]).collect();
+    let windows = [WindowSpec {
+        from: 0.0,
+        to: 14.0,
+    }];
+    let spec = EventDependentSpec {
+        start: &start,
+        end: &end,
+        event: &event,
+        dose_offsets: &dose_offsets,
+        doses: &doses,
+        windows: &windows,
+        age_cuts: &[],
+        same_dose_parameters: true,
+    };
+    let f = fit_event_dependent(&spec, &EventDependentOptions::default()).unwrap();
+    // Events on days 45, 55, 65, 75 precede the second dose.
+    assert_eq!(f.n_doses_after_event, 4);
+    assert_eq!(f.n_cases, n);
+    // Every case starts unexposed, so all are at level 0, all have dose 1,
+    // and the eight that keep the second dose have level 2.
+    assert_eq!(f.n_strata_by_level, vec![12, 12, 8]);
+    let bad = |w: &[WindowSpec]| {
+        fit_event_dependent(
+            &EventDependentSpec { windows: w, ..spec },
+            &EventDependentOptions::default(),
+        )
+        .is_err()
+    };
+    assert!(bad(&[WindowSpec {
+        from: -5.0,
+        to: 14.0
+    }]));
+    assert!(bad(&[WindowSpec {
+        from: 0.0,
+        to: f64::INFINITY
+    }]));
+    assert!(bad(&[
+        WindowSpec { from: 0.0, to: 7.0 },
+        WindowSpec {
+            from: 8.0,
+            to: 14.0
+        }
+    ]));
+    assert!(bad(&[]));
+    let late = [300.0; 12];
+    assert!(
+        fit_event_dependent(
+            &EventDependentSpec {
+                event: &late,
+                ..spec
+            },
+            &EventDependentOptions::default()
+        )
+        .is_err()
+    );
 }
