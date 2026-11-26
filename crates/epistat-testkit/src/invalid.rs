@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn columns_are_spoiled_as_documented() {
         let good = [1.0, 2.0, 3.0];
-        assert!(BadInput::Empty.column(&good).is_empty());
+        assert_eq!(BadInput::Empty.column(&good).len(), 0);
         assert!(BadInput::Nan.column(&good)[1].is_nan());
         assert!(BadInput::Infinite.column(&good)[1].is_infinite());
         assert_eq!(BadInput::Mismatched.column(&good), [1.0, 2.0]);
