@@ -215,7 +215,7 @@ struct Prepared {
 
 fn prepare(strata: &[BinaryStratum]) -> Result<Prepared, Error> {
     if strata.is_empty() {
-        return Err(SensitivityError::NoInformation.into());
+        return Err(SensitivityError::Empty("strata").into());
     }
     let mut groups: BTreeMap<Margins, u64> = BTreeMap::new();
     let mut statistic = 0_u64;

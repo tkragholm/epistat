@@ -200,6 +200,7 @@ impl From<SensitivityError> for Error {
             SensitivityError::Gamma(gamma) => domain("gamma", gamma, "[1, inf)"),
             SensitivityError::NotFinite => invalid("responses", "must be finite"),
             SensitivityError::NoInformation => Self::NoInformation,
+            SensitivityError::Empty(what) => Self::Input(InputError::Empty { what }),
             SensitivityError::SetTooSmall => invalid("matched set", "has fewer than two units"),
             SensitivityError::ZeroScale => Self::ZeroScale,
             SensitivityError::Parameter(what) => invalid(what, "is out of range"),

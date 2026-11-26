@@ -72,7 +72,7 @@ pub fn gehan_scores(
     direction: EventDirection,
 ) -> Result<Vec<Vec<f64>>, Error> {
     if sets.is_empty() {
-        return Err(SensitivityError::NoInformation.into());
+        return Err(SensitivityError::Empty("sets").into());
     }
     let sign = match direction {
         EventDirection::Earlier => 1.0,

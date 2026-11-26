@@ -182,8 +182,10 @@ pub(crate) enum SensitivityError {
     Gamma(f64),
     /// A response that is not finite.
     NotFinite,
-    /// No pair with a non-zero difference, or no pairs.
+    /// No pair with a non-zero difference, or no informative set.
     NoInformation,
+    /// An input with no rows: the differences, the sets or the strata.
+    Empty(&'static str),
     /// A matched set with fewer than two units.
     SetTooSmall,
     /// The scale of the scores, a quantile of the differences within sets,
@@ -203,6 +205,7 @@ impl Display for SensitivityError {
             Self::Gamma(g) => write!(f, "gamma must be at least 1, got {g}"),
             Self::NotFinite => write!(f, "a response is not finite"),
             Self::NoInformation => write!(f, "no pair has a non-zero difference"),
+            Self::Empty(what) => write!(f, "{what} is empty"),
             Self::SetTooSmall => write!(f, "a matched set has fewer than two units"),
             Self::ZeroScale => write!(
                 f,
@@ -299,6 +302,9 @@ struct SignedRanks {
 
 impl SignedRanks {
     fn new(differences: &[f64]) -> Result<Self, Error> {
+        if differences.is_empty() {
+            return Err(SensitivityError::Empty("differences").into());
+        }
         if differences.iter().any(|d| !d.is_finite()) {
             return Err(SensitivityError::NotFinite.into());
         }
@@ -502,7 +508,7 @@ pub fn hodges_lehmann_bounds(
     }
     let n = differences.len();
     if n == 0 {
-        return Err(SensitivityError::NoInformation.into());
+        return Err(SensitivityError::Empty("differences").into());
     }
     let mut sorted = differences.to_vec();
     sorted.sort_by(f64::total_cmp);
@@ -555,7 +561,7 @@ pub fn hodges_lehmann_gamma(differences: &[f64], tau0: f64) -> Result<f64, Error
     }
     let n = differences.len();
     if n == 0 {
-        return Err(SensitivityError::NoInformation.into());
+        return Err(SensitivityError::Empty("differences").into());
     }
     let mut sorted = differences.to_vec();
     sorted.sort_by(f64::total_cmp);
@@ -755,7 +761,7 @@ pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, Error
         return Err(SensitivityError::Parameter("inner trim").into());
     }
     if sets.is_empty() {
-        return Err(SensitivityError::NoInformation.into());
+        return Err(SensitivityError::Empty("sets").into());
     }
     for set in sets {
         if set.len() < 2 {
@@ -860,7 +866,7 @@ pub struct SetBounds {
 pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, Error> {
     check_gamma(gamma)?;
     if scores.is_empty() {
-        return Err(SensitivityError::NoInformation.into());
+        return Err(SensitivityError::Empty("scores").into());
     }
     let mut statistic = 0.0;
     let mut expectation = 0.0;
