@@ -294,6 +294,10 @@ fn placebo(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance, S
                 plan.placebo(&permutation)
             }
         })
+        // Gathered in replicate order before the first error is taken, so the
+        // error reported does not depend on the number of threads.
+        .collect::<Vec<_>>()
+        .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
     Ok(collect(
         plan,
@@ -335,6 +339,10 @@ fn bootstrap(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance,
                 }
             }
         })
+        // Gathered in replicate order before the first error is taken, so the
+        // error reported does not depend on the number of threads.
+        .collect::<Vec<_>>()
+        .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
     Ok(collect(
         plan,
@@ -484,6 +492,8 @@ fn jackknife(
                 }
                 Ok(aggregate(&values, length))
             })
+            .collect::<Vec<_>>()
+            .into_iter()
             .collect::<Result<Vec<_>, SynthDidError>>()?
     };
     let influence = clusters.is_none().then(|| {
