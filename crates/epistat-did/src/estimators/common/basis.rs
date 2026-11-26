@@ -98,7 +98,7 @@ impl BSplineBasis {
         degree: usize,
         internal_knots: Vec<f64>,
         boundary_knots: (f64, f64),
-    ) -> Result<Self, epistat_linalg::basis::KnotError> {
+    ) -> Result<Self, epistat_linalg::Error> {
         let spline = BSpline::new(degree, &internal_knots, boundary_knots.0, boundary_knots.1)?;
         Ok(Self {
             degree,

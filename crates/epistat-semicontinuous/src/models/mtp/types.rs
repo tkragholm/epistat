@@ -83,7 +83,7 @@ pub enum MtpError {
     SolveFailed,
     /// Invalid weights in a weighted product.
     #[error("invalid weights in a weighted product: {0}")]
-    InvalidWeights(#[from] epistat_linalg::DesignError),
+    InvalidWeights(#[from] epistat_linalg::Error),
     /// MTP fitting did not converge.
     #[error("MTP fitting did not converge")]
     NonConvergence,

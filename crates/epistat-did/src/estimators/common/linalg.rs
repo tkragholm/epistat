@@ -139,10 +139,10 @@ impl SpdCholeskyScratch {
         self.solver
             .solve_into(a, b, out)
             .map_err(|error| match error {
-                epistat_linalg::SolveError::Shape { .. } => {
+                epistat_linalg::Error::Input(_) => {
                     "coefficient matrix shape does not match rhs length"
                 }
-                epistat_linalg::SolveError::NotFinite => NON_FINITE,
+                _ => NON_FINITE,
             })
     }
 }

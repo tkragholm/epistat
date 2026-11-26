@@ -119,9 +119,7 @@ use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_inference::wald::{Wald, wald};
 use epistat_inference::{Clusters, InferenceError};
 use epistat_linalg::design::independent_columns;
-use epistat_linalg::{
-    Attempt, DesignError, Factor, Mat, MatRef, Method, SolveError, weighted_gram,
-};
+use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, weighted_gram};
 use epistat_stats::normal;
 use rayon::prelude::*;
 
@@ -294,10 +292,10 @@ pub enum OrdinalError {
     Glm(#[from] GlmError),
     /// A design check failed.
     #[error(transparent)]
-    DesignCheck(#[from] DesignError),
+    DesignCheck(epistat_linalg::Error),
     /// A linear solve failed.
     #[error(transparent)]
-    Solve(#[from] SolveError),
+    Solve(#[from] epistat_linalg::Error),
     /// A sandwich or a test could not be formed.
     #[error(transparent)]
     Inference(#[from] InferenceError),
@@ -815,7 +813,8 @@ impl Ordinal {
             j if j <= p_in => x[(i, j - 1)],
             j => nominal.map_or(0.0, |m| m[(i, j - 1 - p_in)]),
         });
-        let keep = independent_columns(joint.as_ref(), w, None, 1e-8)?;
+        let keep = independent_columns(joint.as_ref(), w, None, 1e-8)
+            .map_err(OrdinalError::DesignCheck)?;
         if keep[1 + p_in..].iter().any(|&k| !k) {
             return Err(OrdinalError::NominalAliased);
         }
@@ -1128,7 +1127,7 @@ pub fn brant(
         let weight_k: Vec<f64> = (0..n)
             .map(|i| w[i] * fit.fitted[i] * (1.0 - fit.fitted[i]))
             .collect();
-        let info = weighted_gram(z.as_ref(), &weight_k)?;
+        let info = weighted_gram(z.as_ref(), &weight_k).map_err(OrdinalError::DesignCheck)?;
         let factor = Factor::new(info.as_ref(), &[Attempt::plain(Method::Cholesky)])
             .map_err(|_| OrdinalError::Singular)?;
         inverses.push(factor.solve(Mat::<f64>::identity(p + 1, p + 1).as_ref())?);
@@ -1142,7 +1141,7 @@ pub fn brant(
             let pair: Vec<f64> = (0..n)
                 .map(|i| w[i] * pis[k][i] * (1.0 - pis[j][i]))
                 .collect();
-            let middle = weighted_gram(z.as_ref(), &pair)?;
+            let middle = weighted_gram(z.as_ref(), &pair).map_err(OrdinalError::DesignCheck)?;
             let left = Mat::from_fn(p + 1, p + 1, |a, b| {
                 (0..=p)
                     .map(|c| inverses[j][(a, c)] * middle[(c, b)])

@@ -133,7 +133,7 @@
 )]
 
 use epistat_inference::sandwich::sandwich_with_inverse;
-use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, Regularisation, SolveError};
+use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, Regularisation};
 use rayon::prelude::*;
 
 use crate::columns::linear_predictor;
@@ -297,7 +297,7 @@ pub enum GeeError {
     Singular,
     /// A linear solve failed.
     #[error(transparent)]
-    Solve(#[from] SolveError),
+    Solve(#[from] epistat_linalg::Error),
 }
 
 /// A fitted GEE.

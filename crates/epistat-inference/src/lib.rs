@@ -90,7 +90,7 @@ pub enum InferenceError {
     },
     /// A linear system could not be solved.
     #[error(transparent)]
-    Solve(#[from] epistat_linalg::SolveError),
+    Solve(#[from] epistat_linalg::Error),
 }
 
 fn check_length(what: &'static str, expected: usize, found: usize) -> Result<(), InferenceError> {
