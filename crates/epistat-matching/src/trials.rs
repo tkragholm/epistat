@@ -987,6 +987,10 @@ impl<R: CovariateRecord> CovariateRecord for TrialView<'_, R> {
     delegate_covariate_record!(record);
 }
 
+/// A person of a trial's pool as the risk-set matching reads it: the
+/// [`TrialView`] with the initiator's date as its transition date.
+pub type TrialRecord<'p, R> = RoleTransitionRecord<TrialView<'p, R>>;
+
 /// The pool of one trial, as the matching of the trial is given it.
 ///
 /// The records are the people eligible at the start of the trial, in the
@@ -996,7 +1000,7 @@ impl<R: CovariateRecord> CovariateRecord for TrialView<'_, R> {
 /// copied, however many trials the person is eligible in.
 pub struct TrialPool<'p, R> {
     period: i64,
-    records: Vec<RoleTransitionRecord<TrialView<'p, R>>>,
+    records: Vec<TrialRecord<'p, R>>,
     /// The order of the pool's ids, read off the order of the panel's.
     id_order: Option<IdOrder>,
 }
@@ -1010,7 +1014,7 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
 
     /// The people of the pool as a risk-set cohort.
     #[must_use]
-    pub fn records(&self) -> &[RoleTransitionRecord<TrialView<'p, R>>] {
+    pub fn records(&self) -> &[TrialRecord<'p, R>] {
         &self.records
     }
 
@@ -1021,11 +1025,7 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
     pub fn job(
         &self,
         seed: u64,
-    ) -> MatchJob<
-        TransitionMode<'_, RoleTransitionRecord<TrialView<'p, R>>>,
-        RoleTransitionRecord<TrialView<'p, R>>,
-        RandomSelection,
-    > {
+    ) -> MatchJob<TransitionMode<'_, TrialRecord<'p, R>>, TrialRecord<'p, R>, RandomSelection> {
         MatchJob::new_transition(&self.records, seed).with_id_order(self.id_order.as_ref())
     }
 

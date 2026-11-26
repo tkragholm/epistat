@@ -286,7 +286,7 @@ pub use role_transition::{
 pub use trials::{
     ControlReuse, ExpandedRow, PanelColumns, PeriodDates, PeriodStrata, TrialColumns,
     TrialInputError, TrialMatching, TrialMember, TrialOptions, TrialOutcome, TrialPeriod,
-    TrialPerson, TrialPool, TrialResult, TrialView, TrialsError, expand_trial_columns,
+    TrialPerson, TrialPool, TrialRecord, TrialResult, TrialView, TrialsError, expand_trial_columns,
     expand_trials, match_trials, match_trials_with, matched_trial_columns, trial_seed,
 };
 pub use types::{
@@ -414,8 +414,9 @@ pub mod prelude {
 
     pub use crate::{
         ControlReuse, ExpandedRow, PeriodDates, PeriodStrata, TrialInputError, TrialMatching,
-        TrialMember, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool, TrialResult,
-        TrialView, TrialsError, expand_trials, match_trials, match_trials_with, trial_seed,
+        TrialMember, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool, TrialRecord,
+        TrialResult, TrialView, TrialsError, expand_trials, match_trials, match_trials_with,
+        trial_seed,
     };
 
     /// The constraints that can be added to a [`MatchJob`].
