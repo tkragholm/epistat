@@ -239,11 +239,12 @@ mod tests {
     #[test]
     fn the_reclassified_records_centre_on_the_corrected_table() {
         // The expected reclassified table is the corrected one, so the
-        // median of many draws of the crude risk ratio lies near the
-        // corrected risk ratio. With 2000 records the risk ratio of one
-        // draw has a standard deviation of about 0.1 on the log scale; the
-        // median of 400 draws is within 0.02 of its centre with room to
-        // spare.
+        // median of the draws of the crude risk ratio lies near the
+        // corrected risk ratio. The median of n draws has a standard error
+        // of about sqrt(pi / 2) sd / sqrt(n), with sd that of the log risk
+        // ratios of the draws (about 0.11 here); four of those are allowed,
+        // which also covers the small difference between the median of the
+        // log and the log of the expected table.
         let t = Table2x2 {
             a: 40.0,
             b: 60.0,
@@ -271,8 +272,19 @@ mod tests {
             |x| log_rr(x, &case),
         )
         .unwrap();
+        let logs: Vec<f64> = r
+            .draws
+            .systematic
+            .iter()
+            .flatten()
+            .map(|v| v.ln())
+            .collect();
+        let n = logs.len() as f64;
+        let mean = logs.iter().sum::<f64>() / n;
+        let sd = (logs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+        let allowed = 4.0 * (std::f64::consts::PI / 2.0).sqrt() * sd / n.sqrt();
         assert!(
-            (r.adjusted.median.ln() - corrected.ln()).abs() < 0.02,
+            (r.adjusted.median.ln() - corrected.ln()).abs() < allowed,
             "{} {corrected}",
             r.adjusted.median
         );
