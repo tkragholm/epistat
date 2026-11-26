@@ -54,9 +54,9 @@
 //!
 //! # Undefined values
 //!
-//! With `E = 0` there is no estimate. With
-//! `O = 0` and `E > 0` the ratio is 0 and the lower limit is 0, except for the
-//! Wald interval, which is `None`. A stratum with `E = 0` in a test over
+//! With `E = 0` there is no estimate. With `O = 0` and `E > 0` the ratio is
+//! 0 and the lower limit is 0, except with the Wald interval, which is then
+//! `None`. A stratum with `E = 0` in a test over
 //! strata is an error, since its ratio is undefined and dropping it would
 //! change the question. The test of trend is `None` when the scores are equal
 //! or the maximum likelihood estimate of the slope does not exist.
