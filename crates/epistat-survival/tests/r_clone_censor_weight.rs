@@ -72,6 +72,7 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
         period: &period,
         treatment: &treatment,
         outcome: &outcome,
+        covariates: &[],
     };
     let strategies = [
         Strategy::InitiateWithin {
@@ -145,7 +146,7 @@ fn a_numerator_equal_to_the_denominator_gives_weights_of_one() {
     let m = c.len();
     let den = Mat::from_fn(m, 3, |i, j| {
         let s = c.source[i];
-        [1.0, r.input.l[s], f64::from(r.input.period[s])][j]
+        [1.0, r.input.l[s], r.input.period[s] as f64][j]
     });
     let model = DeviationModel {
         denominator: den.as_ref(),

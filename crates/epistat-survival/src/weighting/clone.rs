@@ -22,10 +22,20 @@
 //! of its person in order. A row is the first deviation of the clone, and the
 //! clone is censored at the start of it, when
 //!
-//! - for [`Strategy::InitiateWithin`] with `grace = m`: the person has not
-//!   started treatment before the row, `a_j = 0` and `j = m` (the period `m` is
-//!   the last in which starting is allowed); or the person has started, the
-//!   adherence is [`Adherence::Continuous`] and `a_j = 0`;
+//! - for [`Strategy::InitiateBetween`] with `first = f` and `last = m`: the
+//!   person has not started treatment before the row and either `a_j = 1` and
+//!   `j < f` (started too early) or `a_j = 0` and `j = m` (the period `m` is
+//!   the last in which starting is allowed); or the person started in period
+//!   `s` and the adherence forbids stopping in the row while `a_j = 0`:
+//!   [`Adherence::Continuous`] in every row after the start,
+//!   [`Adherence::For`] with `d` in the rows `s < j < s + d`, and
+//!   [`Adherence::None`] in none. [`Strategy::InitiateWithin`] with `grace = m`
+//!   is `f = 0`;
+//! - for [`Strategy::InitiateWhen`] with `grace = g`: as `InitiateBetween` with
+//!   `f = k` and `m = k + g`, where `k` is the first period in which the
+//!   trigger holds on the covariate of the row. Before `k` every period is one
+//!   in which starting deviates, and a person in whom the trigger never holds
+//!   follows the strategy untreated;
 //! - for [`Strategy::NeverInitiate`] with `until = u`: `a_j = 1` and `j <= u`, or
 //!   at any period without `until`.
 //!
@@ -38,9 +48,10 @@
 //! # Weights
 //!
 //! A clone is at risk of deviating in a row when a deviation can happen there:
-//! for `InitiateWithin` in the period `m` before treatment is started and in every
-//! period after it with continuous adherence, for `NeverInitiate` in every period
-//! it covers. The deviation in a row at risk is a binary variable `d_j`. For
+//! in the periods before the first allowed start and in the last allowed one
+//! before treatment is started, in the periods after the start that the
+//! adherence constrains, and for `NeverInitiate` in every period it covers. The
+//! deviation in a row at risk is a binary variable `d_j`. For
 //! each strategy a pooled logistic model of `d_j` is fitted on the rows at risk of
 //! the clones of the strategy, with a denominator design `z` of the covariates
 //! and the time, and optionally a numerator design that stabilises the weights.
@@ -60,7 +71,8 @@
 //! have not started at `m` are the clones whose censoring the weights account
 //! for through their covariates before `m`. For this to be valid the covariates
 //! of the denominator model must contain everything that predicts both the
-//! starting of treatment and the outcome.
+//! starting of treatment and the outcome; for a dynamic strategy that includes
+//! the covariate of its trigger, which decides the rows at risk.
 //!
 //! # The outcome
 //!
@@ -87,6 +99,9 @@
 //! 3. Maringe C, Benitez Majano S, Exarchakou A, et al. Reflection on modern
 //!    methods: trial emulation in the presence of immortal-time bias. Int J
 //!    Epidemiol 2020;49(5):1719-29.
+//! 4. Young JG, Cain LE, Robins JM, O'Reilly EJ, Hernan MA. Comparative
+//!    effectiveness of dynamic treatment regimes: an application of the
+//!    parametric g-formula. Stat Biosci 2011;3(1):119-43.
 
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
@@ -102,10 +117,49 @@ pub enum Adherence {
     Continuous,
     /// Treatment after the start is not constrained.
     None,
+    /// Treatment must go on for this many periods from the start, the period
+    /// of the start included; stopping in them is a deviation, and treatment
+    /// after them is not constrained. `For(1)` is `None`.
+    For(u32),
+}
+
+/// When a covariate sets off a dynamic strategy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Trigger {
+    /// The covariate is below the threshold.
+    Below {
+        /// The position of the covariate in [`CloneInput::covariates`].
+        covariate: usize,
+        /// The threshold.
+        threshold: f64,
+    },
+    /// The covariate is at or above the threshold. A 0 or 1 indicator, such as
+    /// a flare in the period, sets it off with a threshold of 1.
+    AtLeast {
+        /// The position of the covariate in [`CloneInput::covariates`].
+        covariate: usize,
+        /// The threshold.
+        threshold: f64,
+    },
+}
+
+impl Trigger {
+    const fn covariate(self) -> usize {
+        match self {
+            Self::Below { covariate, .. } | Self::AtLeast { covariate, .. } => covariate,
+        }
+    }
+
+    fn holds(self, value: f64) -> bool {
+        match self {
+            Self::Below { threshold, .. } => value < threshold,
+            Self::AtLeast { threshold, .. } => value >= threshold,
+        }
+    }
 }
 
 /// A treatment strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Strategy {
     /// Start treatment in one of the periods `0..=grace`, and then follow
     /// `adherence`.
@@ -115,10 +169,36 @@ pub enum Strategy {
         /// The adherence after the start.
         adherence: Adherence,
     },
+    /// Start treatment in one of the periods `first..=last`, not before, and
+    /// then follow `adherence`. `InitiateWithin { grace }` is `first = 0` and
+    /// `last = grace`.
+    InitiateBetween {
+        /// The first period in which treatment may be started.
+        first: u32,
+        /// The last period in which treatment may be started.
+        last: u32,
+        /// The adherence after the start.
+        adherence: Adherence,
+    },
     /// Do not start treatment, in any period or up to and including `until`.
     NeverInitiate {
         /// The last period in which treatment must not be given, `None` for all.
         until: Option<u32>,
+    },
+    /// Start treatment in one of the `grace + 1` periods from the first period
+    /// in which `trigger` holds, not before it, and then follow `adherence`; a
+    /// person in whom it never holds follows the strategy untreated. This is
+    /// the dynamic strategy "start within `grace` periods of the first flare"
+    /// or "of the covariate first falling below a threshold" (Cain et al.
+    /// 2010).
+    InitiateWhen {
+        /// What sets the strategy off.
+        trigger: Trigger,
+        /// The periods after the first one in which the trigger holds in which
+        /// treatment may still be started.
+        grace: u32,
+        /// The adherence after the start.
+        adherence: Adherence,
     },
 }
 
@@ -127,13 +207,17 @@ pub enum Strategy {
 #[derive(Debug, Clone, Copy)]
 pub struct CloneInput<'a> {
     /// The person of each row.
-    pub id: &'a [u32],
+    pub id: &'a [u64],
     /// The period of each row, 0, 1, 2, ... within a person.
-    pub period: &'a [u32],
+    pub period: &'a [i64],
     /// Whether the person is treated at the start of the period.
     pub treatment: &'a [bool],
     /// Whether the outcome happens in the period.
     pub outcome: &'a [bool],
+    /// The time-varying covariates that the triggers of dynamic strategies
+    /// read, one slice of rows each, measured at the start of the period.
+    /// Empty when no strategy has a trigger.
+    pub covariates: &'a [&'a [f64]],
 }
 
 /// The clones of all persons under all strategies.
@@ -224,13 +308,51 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
     for s in strategies {
         let reach = match *s {
             Strategy::InitiateWithin { grace, .. } => Some(grace),
+            Strategy::InitiateBetween { first, last, .. } => {
+                if first > last {
+                    return Err(Error::input(format!(
+                        "strategy {s:?}: the first period of starting is after the last"
+                    )));
+                }
+                Some(last)
+            }
             Strategy::NeverInitiate { until } => until,
+            Strategy::InitiateWhen { trigger, .. } => {
+                let k = trigger.covariate();
+                let Some(column) = input.covariates.get(k) else {
+                    return Err(Error::input(format!(
+                        "strategy {s:?}: covariate {k} is not among the {} covariates",
+                        input.covariates.len()
+                    )));
+                };
+                if column.len() != n {
+                    return Err(Error::input(format!(
+                        "covariate {k}: {} values for {n} rows",
+                        column.len()
+                    )));
+                }
+                if let Some(r) = column.iter().position(|v| !v.is_finite()) {
+                    return Err(Error::input(format!(
+                        "covariate {k}: the value of row {r} is not finite"
+                    )));
+                }
+                None
+            }
         };
         if let Some(r) = reach
             && r as usize >= longest
         {
             return Err(Error::input(format!(
                 "strategy {s:?}: period {r} is beyond the longest follow-up of {longest} periods"
+            )));
+        }
+        if let Strategy::InitiateWithin { adherence, .. }
+        | Strategy::InitiateBetween { adherence, .. }
+        | Strategy::InitiateWhen { adherence, .. } = *s
+            && adherence == Adherence::For(0)
+        {
+            return Err(Error::input(format!(
+                "strategy {s:?}: treatment must go on for at least one period"
             )));
         }
     }
@@ -268,6 +390,33 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
     Ok(out)
 }
 
+/// Whether the row of period `j`, with treatment `a`, deviates from a
+/// strategy that starts treatment in one of the periods `first..=last` and
+/// then follows `adherence`, and whether a deviation can happen in it (the row
+/// is at risk). `started` is the period of the start before the row.
+fn initiation(
+    started: Option<i64>,
+    j: i64,
+    first: i64,
+    last: i64,
+    adherence: Adherence,
+    a: bool,
+) -> (bool, bool) {
+    match started {
+        Some(s) => {
+            let risk = match adherence {
+                Adherence::Continuous => true,
+                Adherence::None => false,
+                Adherence::For(d) => j - s < i64::from(d),
+            };
+            (risk && !a, risk)
+        }
+        None if j < first => (a, true),
+        None if j == last => (!a, true),
+        None => (false, false),
+    }
+}
+
 /// One clone row as [`clone_censor`] forms it.
 struct CloneRow {
     row: usize,
@@ -290,24 +439,50 @@ fn for_each_clone_row(
     for (p, w) in starts.windows(2).enumerate() {
         let mut observed = false;
         for (k, strategy) in strategies.iter().enumerate() {
-            let mut started = false;
+            // The period in which treatment was started, and the first period
+            // in which the trigger held, before the row.
+            let mut started: Option<i64> = None;
+            let mut triggered: Option<i64> = None;
             for r in w[0]..w[1] {
                 let j = input.period[r];
                 let a = input.treatment[r];
                 let (deviates, risk) = match *strategy {
                     Strategy::InitiateWithin { grace, adherence } => {
-                        if started {
-                            let risk = adherence == Adherence::Continuous;
-                            (risk && !a, risk)
-                        } else if j == grace {
-                            (!a, true)
-                        } else {
-                            (false, false)
-                        }
+                        initiation(started, j, 0, i64::from(grace), adherence, a)
                     }
+                    Strategy::InitiateBetween {
+                        first,
+                        last,
+                        adherence,
+                    } => initiation(
+                        started,
+                        j,
+                        i64::from(first),
+                        i64::from(last),
+                        adherence,
+                        a,
+                    ),
                     Strategy::NeverInitiate { until } => {
-                        let risk = until.is_none_or(|u| j <= u);
+                        let risk = until.is_none_or(|u| j <= i64::from(u));
                         (risk && a, risk)
+                    }
+                    Strategy::InitiateWhen {
+                        trigger,
+                        grace,
+                        adherence,
+                    } => {
+                        if triggered.is_none()
+                            && trigger.holds(input.covariates[trigger.covariate()][r])
+                        {
+                            triggered = Some(j);
+                        }
+                        match triggered {
+                            Some(t) => initiation(started, j, t, t + i64::from(grace), adherence, a),
+                            // Before the trigger every period is one in which
+                            // starting deviates; once started, the adherence
+                            // applies as in the other strategies.
+                            None => initiation(started, j, i64::MAX, i64::MAX, adherence, a),
+                        }
                     }
                 };
                 let event = !deviates && input.outcome[r];
@@ -323,7 +498,9 @@ fn for_each_clone_row(
                     break;
                 }
                 observed = true;
-                started |= a;
+                if a && started.is_none() {
+                    started = Some(j);
+                }
                 if event {
                     break;
                 }
