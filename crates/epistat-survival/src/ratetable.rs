@@ -16,14 +16,30 @@
 //!
 //! A time dimension is given by its cut points, strictly increasing, with
 //! cell `j` the interval `[c_j, c_{j+1})`, as the cut points of
-//! [`crate::pyears::Dimension::Time`]. A value below the first cut or at or
-//! above the last is off the table. Follow-up off the table has no expected
-//! count and is added to [`Expected::offtable`], as
-//! [`crate::pyears::Pyears::offtable`] does, so the caller sees it. A
-//! `ratetable` of R instead uses the first or last cell for a value outside the
-//! cut points, and a table read from R can be given the same reach by moving
-//! its first and last cut far out. A factor has `levels` cells, coded
-//! `0..levels`.
+//! [`crate::pyears::Dimension::Time`]. A factor has `levels` cells, coded
+//! `0..levels`. [`RateTable::new`] takes the rates in the order of the cells,
+//! and [`RateTable::from_long`] takes one row per cell, with the value of
+//! each dimension in the row, and puts them in that order.
+//!
+//! # Time off the table
+//!
+//! One rule decides where the table has a rate, for every function that reads
+//! it. A value of a time dimension below its first cut, or at or above its
+//! last, has no rate, unless the table has been given extended ends with
+//! [`RateTable::extend_ends`]: then the first cell reaches without limit
+//! below and the last without limit above, as the cells of R's `ratetable`
+//! do, and every value has a rate. Follow-up without a rate is never given
+//! one: [`RateTable::rate`] returns `None` for it, [`RateTable::expected`] and
+//! [`RateTable::expected_keyed`] leave it out of the expected count and add it
+//! to `offtable`, as [`crate::pyears::Pyears::offtable`] does, so the caller
+//! sees how much is missing, and
+//! [`ExpectedHazard`](crate::relsurv::ExpectedHazard) refuses a row with such
+//! follow-up and returns `None` for a time beyond its follow-up that has no
+//! rate, since an expected survival over time without a rate would be that
+//! of a population without deaths there. The choice between a table that
+//! ends and one with extended ends is the caller's, and belongs in the
+//! methods section: rates usually fall over calendar time, so the last year's
+//! rates applied to later years slightly overstate them.
 //!
 //! The rates are hazards per `scale` units of the follow-up time. With
 //! follow-up in days and daily hazards, as `survexp.us` has, the scale is 1.
@@ -105,6 +121,27 @@ impl RateDim {
     }
 }
 
+/// One dimension of a rate table given as one value per row of a long table,
+/// for [`RateTable::from_long`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LongDim<'a> {
+    /// A time dimension: the start of the cell of each row, such as the age
+    /// or the calendar year it holds, and the end of the last cell. The cuts
+    /// are the distinct starts and the end.
+    Time {
+        /// The start of the cell of each row, finite.
+        start: &'a [f64],
+        /// The end of the last cell, finite and above every start.
+        end: f64,
+    },
+    /// A factor: the level of each row, coded from 0. The levels are `0` to
+    /// the largest code.
+    Factor {
+        /// The level of each row.
+        level: &'a [u32],
+    },
+}
+
 /// A table of reference hazards.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RateTable {
@@ -112,6 +149,7 @@ pub struct RateTable {
     sizes: Vec<usize>,
     rates: Vec<f64>,
     scale: f64,
+    extended: bool,
 }
 
 /// Expected counts of a cohort.
@@ -209,7 +247,136 @@ impl RateTable {
             sizes,
             rates,
             scale,
+            extended: false,
         })
+    }
+
+    /// The same table with the first and last cells of every time dimension
+    /// reaching without limit below the first cut and above the last, as the
+    /// cells of R's `ratetable` do. No time is then off the table: follow-up
+    /// beyond the last calendar year has the rates of that year, and follow-up
+    /// beyond the oldest age those of that age.
+    #[must_use]
+    pub fn extend_ends(mut self) -> Self {
+        self.extended = true;
+        self
+    }
+
+    /// Whether the first and last cells of the time dimensions reach without
+    /// limit, see [`RateTable::extend_ends`].
+    #[must_use]
+    pub fn ends_extended(&self) -> bool {
+        self.extended
+    }
+
+    /// Builds a table from a long table with one row per cell: the value of
+    /// each dimension in the row and its hazard, such as rows of age, sex,
+    /// calendar year and death rate from a statistics office. Every
+    /// combination of the cuts of the time dimensions and the levels of the
+    /// factors must appear exactly once.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] for no dimension or no row, a dimension of another
+    /// length than the rates, a start that is not finite, an end that is not
+    /// finite or not above every start, a combination that appears twice or
+    /// not at all (the error names it), and the cases of [`RateTable::new`].
+    pub fn from_long(dims: &[LongDim<'_>], rates: &[f64], scale: f64) -> Result<Self> {
+        let n = rates.len();
+        if dims.is_empty() {
+            return Err(Error::input("a rate table needs at least one dimension"));
+        }
+        if n == 0 {
+            return Err(Error::input("the long table has no rows"));
+        }
+        let mut table_dims = Vec::with_capacity(dims.len());
+        for (d, dim) in dims.iter().enumerate() {
+            let length = match dim {
+                LongDim::Time { start, .. } => start.len(),
+                LongDim::Factor { level } => level.len(),
+            };
+            if length != n {
+                return Err(Error::input(format!(
+                    "dimension {d} has {length} values against {n} rates"
+                )));
+            }
+            table_dims.push(match *dim {
+                LongDim::Time { start, end } => {
+                    if let Some(row) = start.iter().position(|x| !x.is_finite()) {
+                        return Err(Error::input(format!(
+                            "dimension {d}: the start in row {row} is not finite"
+                        )));
+                    }
+                    let mut cuts = start.to_vec();
+                    cuts.sort_by(f64::total_cmp);
+                    cuts.dedup();
+                    let last = cuts[cuts.len() - 1];
+                    if !(end.is_finite() && end > last) {
+                        return Err(Error::input(format!(
+                            "dimension {d}: the end {end} must be finite and above the last start {last}"
+                        )));
+                    }
+                    cuts.push(end);
+                    RateDim::Time { cuts }
+                }
+                LongDim::Factor { level } => RateDim::Factor {
+                    levels: level.iter().max().map_or(0, |&m| m as usize + 1),
+                },
+            });
+        }
+        let sizes: Vec<usize> = table_dims.iter().map(RateDim::len).collect();
+        let cells = sizes
+            .iter()
+            .try_fold(1_usize, |c, &s| c.checked_mul(s))
+            .ok_or_else(|| Error::input("the table has too many cells"))?;
+        let mut dense: Vec<Option<usize>> = vec![None; cells];
+        let describe = |position: usize| -> String {
+            let mut rest = position;
+            let parts: Vec<String> = table_dims
+                .iter()
+                .zip(&sizes)
+                .enumerate()
+                .map(|(d, (dim, &size))| {
+                    let k = rest % size;
+                    rest /= size;
+                    match dim {
+                        RateDim::Time { cuts } => format!("dimension {d} at {}", cuts[k]),
+                        RateDim::Factor { .. } => format!("dimension {d} level {k}"),
+                    }
+                })
+                .collect();
+            parts.join(", ")
+        };
+        for row in 0..n {
+            let mut position = 0;
+            let mut stride = 1;
+            for ((dim, table_dim), &size) in dims.iter().zip(&table_dims).zip(&sizes) {
+                let k = match (dim, table_dim) {
+                    (LongDim::Time { start, .. }, RateDim::Time { cuts }) => {
+                        cuts.partition_point(|&c| c < start[row])
+                    }
+                    (LongDim::Factor { level }, _) => level[row] as usize,
+                    _ => unreachable!("the dimensions are built in the same order"),
+                };
+                position += k * stride;
+                stride *= size;
+            }
+            if let Some(first) = dense[position] {
+                return Err(Error::input(format!(
+                    "rows {first} and {row} are both the cell with {}",
+                    describe(position)
+                )));
+            }
+            dense[position] = Some(row);
+        }
+        if let Some(position) = dense.iter().position(Option::is_none) {
+            return Err(Error::input(format!(
+                "no row gives the cell with {}",
+                describe(position)
+            )));
+        }
+        let ordered = dense.iter().flatten().map(|&row| rates[row]).collect();
+        Self::new(table_dims, ordered, scale)
     }
 
     /// The dimensions.
@@ -254,10 +421,13 @@ impl RateTable {
                         return None;
                     }
                     let above = cuts.partition_point(|&c| c <= x);
-                    if above == 0 || above == cuts.len() {
+                    if self.extended {
+                        above.clamp(1, cuts.len() - 1) - 1
+                    } else if above == 0 || above == cuts.len() {
                         return None;
+                    } else {
+                        above - 1
                     }
-                    above - 1
                 }
                 RateDim::Factor { levels } => {
                     if !(x >= 0.0 && x.fract() == 0.0 && x < *levels as f64) {
@@ -367,7 +537,9 @@ impl RateTable {
                 let code = codes[d][k] as usize;
                 let cell = match dim {
                     RateDim::Time { cuts } => {
-                        if code == 0 || code == cuts.len() {
+                        if self.extended {
+                            code.clamp(1, cuts.len() - 1) - 1
+                        } else if code == 0 || code == cuts.len() {
                             off = true;
                             0
                         } else {
@@ -464,6 +636,9 @@ impl RateTable {
             mut cursor,
             ..
         } = Layout::new(data, &dims, &PyearsOptions::default(), false)?;
+        if self.extended {
+            cursor.open_ends();
+        }
         let mut person_time = vec![0.0; cells];
         let mut per_row = vec![0.0; data.n_rows()];
         let mut offtable = 0.0;
@@ -566,6 +741,122 @@ mod tests {
         assert!(RateTable::new(bad, vec![0.1, 0.2], 1.0).is_err());
         let one = vec![RateDim::Time { cuts: vec![1.0] }];
         assert!(RateTable::new(one, vec![], 1.0).is_err());
+    }
+
+    #[test]
+    fn extended_ends_reach_without_limit() {
+        let t = table().extend_ends();
+        assert!(t.ends_extended());
+        assert_eq!(t.rate(&[-1.0, 0.0]), Some(0.01));
+        assert_eq!(t.rate(&[100.0, 1.0]), Some(0.2));
+        assert_eq!(t.rate(&[1e9, 1.0]), Some(0.2));
+        assert_eq!(t.rate(&[5.0, 2.0]), None);
+        // From age -2 for 5 years: 2 years below the first cut and 3 inside,
+        // all at the rate of the first cell.
+        let stop = [5.0];
+        let status = [0];
+        let data = SurvData::builder(&stop, &status).build().unwrap();
+        let e = t.expected(&data, &[&[-2.0]], &[&[1]]).unwrap();
+        assert_eq!(e.offtable.to_bits(), 0.0_f64.to_bits());
+        assert!((e.total - 5.0 * 0.1).abs() < 1e-15);
+        let k = t.expected_keyed(&[&[0, 3], &[0, 1]], &[1.0, 2.0]).unwrap();
+        assert_eq!(k.per_cell, vec![0.01, 2.0 * 0.2]);
+        assert_eq!(k.offtable.to_bits(), 0.0_f64.to_bits());
+    }
+
+    #[test]
+    fn extended_ends_give_the_bits_of_far_cuts() {
+        // R's reach by moving the first and last cut far out, as the rates
+        // guide did by hand, and the extended table walk the same pieces.
+        let far = RateTable::new(
+            vec![
+                RateDim::Time {
+                    cuts: vec![-1e6, 10.0, 1e6],
+                },
+                RateDim::Factor { levels: 2 },
+            ],
+            vec![0.01, 0.02, 0.1, 0.2],
+            1.0,
+        )
+        .unwrap();
+        let t = table().extend_ends();
+        let stop = [4.0, 30.0, 200.0, 0.5];
+        let start = [0.0, 2.0, 0.0, 0.0];
+        let status = [0, 1, 0, 1];
+        let data = SurvData::builder(&stop, &status)
+            .start(&start)
+            .build()
+            .unwrap();
+        let age = [8.0, -5.0, 60.0, 99.9];
+        let sex = [0, 1, 1, 0];
+        let a = t.expected(&data, &[&age], &[&sex]).unwrap();
+        let b = far.expected(&data, &[&age], &[&sex]).unwrap();
+        assert_eq!(a.per_row, b.per_row);
+        assert_eq!(a.total.to_bits(), b.total.to_bits());
+    }
+
+    #[test]
+    fn a_long_table_gives_the_dense_one() {
+        // The rows of the table above in another order: age start, sex, rate.
+        let age = [10.0, 0.0, 0.0, 10.0];
+        let sex = [1, 0, 1, 0];
+        let rates = [0.2, 0.01, 0.1, 0.02];
+        let long = RateTable::from_long(
+            &[
+                LongDim::Time {
+                    start: &age,
+                    end: 100.0,
+                },
+                LongDim::Factor { level: &sex },
+            ],
+            &rates,
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(long, table());
+        let twice = RateTable::from_long(
+            &[
+                LongDim::Time {
+                    start: &[0.0, 0.0],
+                    end: 10.0,
+                },
+                LongDim::Factor { level: &[1, 1] },
+            ],
+            &[0.1, 0.2],
+            1.0,
+        )
+        .unwrap_err();
+        assert!(twice.to_string().contains("rows 0 and 1"), "{twice}");
+        let missing = RateTable::from_long(
+            &[
+                LongDim::Time {
+                    start: &age[..3],
+                    end: 100.0,
+                },
+                LongDim::Factor { level: &sex[..3] },
+            ],
+            &rates[..3],
+            1.0,
+        )
+        .unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("dimension 0 at 10, dimension 1 level 0"),
+            "{missing}"
+        );
+        let short_end = RateTable::from_long(
+            &[LongDim::Time {
+                start: &[0.0, 10.0],
+                end: 10.0,
+            }],
+            &[0.1, 0.2],
+            1.0,
+        );
+        assert!(short_end.is_err());
+        assert!(
+            RateTable::from_long(&[LongDim::Factor { level: &[0] }], &[0.1, 0.2], 1.0).is_err()
+        );
     }
 
     #[test]

@@ -180,6 +180,10 @@ pub(crate) struct Walker<'a> {
     /// The number of cuts at or below the current value. 0 is below the first
     /// cut, `cuts.len()` is at or beyond the last.
     above: usize,
+    /// Whether the first cell reaches without limit below the first cut and
+    /// the last cell without limit above the last, so that no value is off
+    /// the table and only the inner cuts are boundaries.
+    open: bool,
 }
 
 impl<'a> Walker<'a> {
@@ -192,7 +196,28 @@ impl<'a> Walker<'a> {
             stride,
             x0: 0.0,
             above: 0,
+            open: false,
         }
+    }
+
+    /// The same dimension with open ends when `open` is set.
+    pub(crate) const fn with_open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    /// The offset of the current cell in the cells of the table, `None` off
+    /// the table.
+    fn cell(&self) -> Option<usize> {
+        let n = self.cuts.len();
+        let above = if self.open {
+            self.above.clamp(1, n - 1)
+        } else if self.above == 0 || self.above == n {
+            return None;
+        } else {
+            self.above
+        };
+        Some((above - 1) * self.stride)
     }
 }
 
@@ -377,13 +402,7 @@ impl<'d, 'x> Layout<'d, 'x> {
         for (dim, &stride) in dims.iter().zip(&strides) {
             match *dim {
                 Dimension::Factor { codes, .. } => factors.push((codes, stride)),
-                Dimension::Time { origin, cuts } => walkers.push(Walker {
-                    cuts,
-                    origin,
-                    stride,
-                    x0: 0.0,
-                    above: 0,
-                }),
+                Dimension::Time { origin, cuts } => walkers.push(Walker::new(cuts, origin, stride)),
             }
         }
         Ok(Self {
@@ -409,6 +428,14 @@ impl<'x> Cursor<'x> {
     /// dimensions.
     pub(crate) fn time_dimensions(&self) -> impl Iterator<Item = (&'x [f64], usize)> + '_ {
         self.walkers.iter().map(|w| (w.cuts, w.stride))
+    }
+
+    /// Gives every time dimension open ends: its first and last cells reach
+    /// without limit, as the cells of R's `ratetable` do.
+    pub(crate) fn open_ends(&mut self) {
+        for walker in &mut self.walkers {
+            walker.open = true;
+        }
     }
 }
 
@@ -477,6 +504,20 @@ pub(crate) fn walk_row(
         let mut below = false;
         let mut beyond = false;
         for walker in walkers.iter() {
+            if walker.open {
+                // Only the inner cuts are boundaries: the next one above the
+                // value, if it is not the last cut.
+                let k = walker.above.max(1);
+                if k + 1 < walker.cuts.len() {
+                    let cut = walker.cuts[k];
+                    let mut offset = cut - walker.x0;
+                    if duration - offset <= reach(cut, walker.x0, begin, end) {
+                        offset = duration;
+                    }
+                    next = next.min(offset);
+                }
+                continue;
+            }
             if walker.above == walker.cuts.len() {
                 beyond = true;
                 continue;
@@ -503,12 +544,15 @@ pub(crate) fn walk_row(
         };
         let length = to - elapsed;
         if length > 0.0 {
-            let cell = (!beyond && !below).then(|| {
-                base + walkers
+            let cell = if beyond || below {
+                None
+            } else {
+                walkers
                     .iter()
-                    .map(|walker| (walker.above - 1) * walker.stride)
-                    .sum::<usize>()
-            });
+                    .map(Walker::cell)
+                    .sum::<Option<usize>>()
+                    .map(|offset| base + offset)
+            };
             on_piece(cell, length);
             last = cell;
             any_piece = true;
@@ -525,15 +569,11 @@ pub(crate) fn walk_row(
         }
     }
     if !any_piece {
-        let inside = walkers
+        last = walkers
             .iter()
-            .all(|walker| walker.above > 0 && walker.above < walker.cuts.len());
-        last = inside.then(|| {
-            base + walkers
-                .iter()
-                .map(|walker| (walker.above - 1) * walker.stride)
-                .sum::<usize>()
-        });
+            .map(Walker::cell)
+            .sum::<Option<usize>>()
+            .map(|offset| base + offset);
     }
     last
 }
