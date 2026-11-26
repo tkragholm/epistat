@@ -906,10 +906,19 @@ pub struct TrialMatching<'a> {
 ///
 /// [`MatchingRecord::strata`] is the record's map; the period strata are read
 /// through [`MatchingRecord::stratum`], which is what the matchers read.
+///
+/// Under [`PeriodDates::PerPerson`] the initiators of a trial have dates of
+/// their own, and an initiator whose date is after another's would be at risk
+/// as that one's control by the risk-set rule. The view of an initiator then
+/// gives an entry date after every date ([`NaiveDate::MAX`]), so that it is
+/// never a control in its own trial, as with shared dates, where every
+/// initiator's date is the date of the trial.
 #[derive(Debug)]
 pub struct TrialView<'p, R> {
     record: &'p R,
     strata: Option<(&'p PeriodStrata, usize)>,
+    /// An initiator under per-person dates, which enters no risk set.
+    closed: bool,
 }
 
 impl<R> Clone for TrialView<'_, R> {
@@ -966,7 +975,11 @@ impl<R: MatchingRecord> MatchingRecord for TrialView<'_, R> {
         self.record.emigration_date()
     }
     fn entry_date(&self) -> Option<NaiveDate> {
-        self.record.entry_date()
+        if self.closed {
+            Some(NaiveDate::MAX)
+        } else {
+            self.record.entry_date()
+        }
     }
 }
 
@@ -1238,6 +1251,7 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
                             .matching
                             .strata
                             .map(|strata| (strata, self.offsets[e.person] + e.start)),
+                        closed: e.assigned && self.matching.dates == PeriodDates::PerPerson,
                     };
                     // The date of the initiator's own period, which is the
                     // date of the trial when dates are shared.
