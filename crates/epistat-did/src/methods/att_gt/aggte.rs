@@ -54,6 +54,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use epistat_core::{Bootstrap, Level};
 use epistat_inference::Clusters;
 use epistat_inference::simultaneous::multiplier_bands;
 
@@ -803,6 +804,9 @@ fn apply_bootstrap(
         return Err(AggteError::NonFiniteInfluence);
     }
     let clusters = panel.clusters.as_deref().map(Clusters::from_sorted_labels);
+    // An alpha of 0 or 1 is an error of every band call below, as an invalid
+    // level is.
+    let level = Level::alpha(alpha).map_err(epistat_inference::Error::from);
 
     if !result.by_key.is_empty() {
         let columns = result
@@ -810,13 +814,14 @@ fn apply_bootstrap(
             .iter()
             .map(|point| point.influence.as_slice())
             .collect::<Vec<_>>();
-        let bands = multiplier_bands(
-            &columns,
-            clusters.as_ref(),
-            alpha,
-            bootstrap.replicates,
-            bootstrap.seed,
-        );
+        let bands = level.clone().and_then(|level| {
+            multiplier_bands(
+                &columns,
+                clusters.as_ref(),
+                level,
+                Bootstrap::new(bootstrap.replicates, bootstrap.seed),
+            )
+        });
         // An error here means that no draw gave a finite studentised maximum, so
         // there are no bootstrap standard errors either.
         let standard_errors = bands.as_ref().ok().map(|bands| bands.se.clone());
@@ -843,13 +848,14 @@ fn apply_bootstrap(
     }
 
     if bootstrap.standard_errors {
-        let bands = multiplier_bands(
-            &[result.overall_influence.as_slice()],
-            clusters.as_ref(),
-            alpha,
-            bootstrap.replicates,
-            bootstrap.seed,
-        );
+        let bands = level.and_then(|level| {
+            multiplier_bands(
+                &[result.overall_influence.as_slice()],
+                clusters.as_ref(),
+                level,
+                Bootstrap::new(bootstrap.replicates, bootstrap.seed),
+            )
+        });
         result.overall_se = bands.ok().and_then(|bands| bands.se[0]).unwrap_or(f64::NAN);
         let margin = pointwise * result.overall_se;
         result.overall_ci_low = result.overall_att - margin;

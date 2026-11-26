@@ -153,11 +153,13 @@ pub(super) fn sup_t_critical_value(
         return Err("covariance matrix must be square".to_string());
     }
     let matrix = Mat::from_fn(dim, dim, |row, col| covariance[row][col]);
+    let alpha = 1.0 - confidence_level;
+    let level = epistat_core::Level::alpha(alpha)
+        .map_err(|_| format!("sup-t critical value: alpha must lie in (0, 1), got {alpha}"))?;
     epistat_inference::simultaneous::sup_t_from_covariance(
         matrix.as_ref(),
-        1.0 - confidence_level,
-        simulation_draws,
-        simulation_seed,
+        level,
+        epistat_core::Bootstrap::new(simulation_draws, simulation_seed),
     )
     .map_err(|error| format!("sup-t critical value: {error}"))
 }

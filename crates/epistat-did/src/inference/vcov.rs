@@ -125,6 +125,10 @@ pub fn clustered_covariance_matrix_from_influence_matrix_index(
     )
 }
 
+#[expect(
+    deprecated,
+    reason = "Study I's covariances stay on the 0.3 influence functions"
+)]
 fn clustered_covariance_from_clusters(
     influence_functions: &[Vec<f64>],
     clusters: &Clusters,

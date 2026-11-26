@@ -1,3 +1,4 @@
+use epistat_core::{Bootstrap, Level};
 use epistat_inference::Clusters;
 use epistat_inference::simultaneous::multiplier_bands;
 use epistat_rng::{Stream, replicate_seed};
@@ -235,12 +236,12 @@ pub fn att_gt_mboot_bands(
     // kernel did calls, and not the Mammen weights its documentation names.
     let alpha = (1.0 - config.confidence_level.confidence_level).clamp(0.0, 1.0);
     let columns: Vec<&[f64]> = influence_functions.iter().map(Vec::as_slice).collect();
+    let level = Level::alpha(alpha).map_err(|_| AttGtBandError::DegenerateInfluence)?;
     let bands = multiplier_bands(
         &columns,
         cluster_numbers.as_ref(),
-        alpha,
-        config.reps,
-        config.seed,
+        level,
+        Bootstrap::new(config.reps, config.seed),
     )
     .map_err(|_| AttGtBandError::DegenerateInfluence)?;
     debug_assert_eq!(bands.se.len(), estimates.len());

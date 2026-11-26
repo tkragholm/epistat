@@ -88,8 +88,14 @@ pub fn validate_confidence_level(confidence_level: f64) -> bool {
 /// The Wald interval `estimate -/+ z se` at the given confidence level, `NaN`
 /// at both ends when the level is outside (0, 1).
 pub(crate) fn normal_interval(estimate: f64, se: f64, confidence_level: f64) -> (f64, f64) {
-    epistat_inference::interval::normal(estimate, se, 1.0 - confidence_level)
-        .unwrap_or((f64::NAN, f64::NAN))
+    let Ok(level) = epistat_core::Level::alpha(1.0 - confidence_level) else {
+        return (f64::NAN, f64::NAN);
+    };
+    let interval = epistat_inference::interval::normal(estimate, se, level);
+    (
+        interval.lower.unwrap_or(f64::NAN),
+        interval.upper.unwrap_or(f64::NAN),
+    )
 }
 
 /// Two-sided normal critical value for a confidence level in (0, 1).
@@ -102,20 +108,25 @@ pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
 /// deviation of the values, with divisor `n`, divided by `sqrt(n)`. NaN for an
 /// empty influence function.
 #[must_use]
+#[expect(
+    deprecated,
+    reason = "Study I's standard errors stay on the 0.3 influence functions"
+)]
 pub fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
     epistat_inference::influence::standard_error(influence_function).unwrap_or(f64::NAN)
 }
 
-fn map_influence_error(error: &epistat_inference::InferenceError) -> InferenceError {
-    use epistat_inference::InferenceError as Shared;
+fn map_influence_error(error: &epistat_inference::Error) -> InferenceError {
+    use epistat_core::InputError;
+    use epistat_inference::Error as Shared;
     match *error {
-        Shared::Length {
+        Shared::Input(InputError::Length {
             expected, found, ..
-        } => InferenceError::MisalignedClusterLengths {
+        }) => InferenceError::MisalignedClusterLengths {
             influence_len: expected,
             cluster_len: found,
         },
-        Shared::Empty => InferenceError::EmptyInfluenceFunction,
+        Shared::Input(InputError::Empty { .. }) => InferenceError::EmptyInfluenceFunction,
         _ => InferenceError::NonFiniteClusteredVariance,
     }
 }
@@ -131,6 +142,10 @@ fn map_influence_error(error: &epistat_inference::InferenceError) -> InferenceEr
 /// - Influence function and cluster index have different lengths.
 /// - There are fewer than two clusters.
 /// - The resulting variance is not finite.
+#[expect(
+    deprecated,
+    reason = "Study I's standard errors stay on the 0.3 influence functions"
+)]
 pub fn clustered_variance_from_index(
     influence_function: &[f64],
     cluster_index: &ClusterIndex,
@@ -186,6 +201,10 @@ pub fn clustered_ci_from_index(
 /// - Influence function and cluster labels have different lengths.
 /// - There are fewer than two clusters.
 /// - The resulting variance is not finite.
+#[expect(
+    deprecated,
+    reason = "Study I's standard errors stay on the 0.3 influence functions"
+)]
 pub fn clustered_variance_from_influence<L: Eq + Hash>(
     influence_function: &[f64],
     cluster_labels: &[L],
@@ -250,8 +269,7 @@ pub fn multiplier_bootstrap_ci(
     let Ok(mut draws) = epistat_inference::bootstrap::multiplier(
         estimate,
         influence_function,
-        bootstrap.reps,
-        bootstrap.seed,
+        epistat_core::Bootstrap::new(bootstrap.reps, bootstrap.seed),
     ) else {
         return (f64::NAN, f64::NAN);
     };
