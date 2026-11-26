@@ -58,6 +58,11 @@
 //!
 //! The start is `gamma = 1/2`, and for the log-normal the mean and standard
 //! deviation of `log t`, for the Weibull `alpha = 1` and `beta = 1 / mean(t)`.
+//! BFGS ends where the cost stops changing in its last bits, which can leave
+//! a gradient of about `1e-8`. Up to 20 Newton steps follow, with the Hessian
+//! from central differences of the analytic gradient, and a step is kept only
+//! when it lowers the gradient norm. The fit is converged when BFGS says so
+//! or the final gradient norm is below `1e-10`.
 //! The fit is serial and its result depends only on the times.
 //!
 //! [`waiting_times`] turns dispensing days into times. A dispensing on day `d`
@@ -273,8 +278,9 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
             None,
         )
         .map_err(|e| RegisterError::numerical(format!("the WTD fit could not run: {e}")))?;
-    let x = &minimum.x;
-    let (prevalent, a, b) = natural(family, x);
+    let (x, gradient) = polish(family, times, window_days, &minimum.x, &minimum.gradient);
+    let converged = minimum.converged || norm(&gradient) < bfgs.gradient_tolerance;
+    let (prevalent, a, b) = natural(family, &x);
     let mean_interarrival = match family {
         Family::LogNormal => (a + 0.5 * b * b).exp(),
         Family::Weibull => gamma::ln_gamma(1.0 + 1.0 / a).exp() / b,
@@ -287,14 +293,77 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
         log_likelihood: -minimum.value * n,
         n: times.len(),
         window_days,
-        converged: minimum.converged,
+        converged,
         estimation_scale: [x[0], x[1], x[2]],
-        gradient: [
-            minimum.gradient[0],
-            minimum.gradient[1],
-            minimum.gradient[2],
-        ],
+        gradient,
     })
+}
+
+fn norm(v: &[f64]) -> f64 {
+    v.iter().map(|g| g * g).sum::<f64>().sqrt()
+}
+
+/// Newton steps from the BFGS point, with the Hessian from central
+/// differences of the analytic gradient, each kept only when it lowers the
+/// gradient norm.
+fn polish(
+    family: Family,
+    times: &[f64],
+    delta: f64,
+    x0: &[f64],
+    g0: &[f64],
+) -> ([f64; 3], [f64; 3]) {
+    let grad = |x: &[f64; 3]| -> [f64; 3] {
+        let g = objective(family, times, delta, x).1;
+        [g[0], g[1], g[2]]
+    };
+    let mut x = [x0[0], x0[1], x0[2]];
+    let mut g = [g0[0], g0[1], g0[2]];
+    for _ in 0..20 {
+        let mut h = [[0.0; 3]; 3];
+        for j in 0..3 {
+            let step = 1e-5 * x[j].abs().max(1.0);
+            let (mut up, mut down) = (x, x);
+            up[j] += step;
+            down[j] -= step;
+            let (gu, gd) = (grad(&up), grad(&down));
+            for i in 0..3 {
+                h[i][j] = (gu[i] - gd[i]) / (2.0 * step);
+            }
+        }
+        // Symmetrise, then solve h d = g by Cramer's rule.
+        for i in 0..3 {
+            for j in 0..i {
+                let m = 0.5 * (h[i][j] + h[j][i]);
+                h[i][j] = m;
+                h[j][i] = m;
+            }
+        }
+        let det = |m: &[[f64; 3]; 3]| {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        };
+        let d0 = det(&h);
+        if !(d0.is_finite() && d0 != 0.0) {
+            break;
+        }
+        let mut next = x;
+        for j in 0..3 {
+            let mut m = h;
+            for (i, row) in m.iter_mut().enumerate() {
+                row[j] = g[i];
+            }
+            next[j] = x[j] - det(&m) / d0;
+        }
+        let gn = grad(&next);
+        if !(norm(&gn) < norm(&g)) {
+            break;
+        }
+        x = next;
+        g = gn;
+    }
+    (x, g)
 }
 
 /// The waiting time of each person with a dispensing in the window of days

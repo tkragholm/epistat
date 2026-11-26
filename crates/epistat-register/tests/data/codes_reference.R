@@ -87,7 +87,7 @@ for (k in 1:25) {
     intersection = bits(ma$member & mb$member),
     difference = bits(ma$member & !mb$member),
     # n for no match, t for a tie, a or b for the set.
-    longest = paste(c("n", "t", "a", "b")[longest + 3], collapse = ""),
+    longest = paste(c("t", "n", "a", "b")[longest + 3], collapse = ""),
     longest_item = max(vapply(c(a, b), function(it) it$len, 1L))
   )
 }
@@ -184,16 +184,17 @@ for (k in 1:60) {
                     ifelse(kind == "ManyToOne", sources > 1, TRUE))))
   ok <- !dup && consistent
   query <- unique(sample(c(codes8, "999"), sample(1:6, 1)))
-  cov <- NULL
+  cov <- NA
   if (ok) {
     mapped <- query[query %in% from]
     has <- function(kd) sum(vapply(mapped, function(q) any(kind[from == q] == kd), TRUE))
     cov <- list(codes = length(query), mapped = length(mapped),
-                unmapped = sort(setdiff(query, from)),
+                unmapped = I(sort(setdiff(query, from))),
                 one_to_one = has("OneToOne"), one_to_many = has("OneToMany"),
                 many_to_one = has("ManyToOne"), approximate = has("Approximate"))
   }
-  tables[[k]] <- list(from = from, to = to, kind = kind, ok = ok, query = query,
+  # I() keeps a vector of one element a JSON array under auto_unbox.
+  tables[[k]] <- list(from = I(from), to = I(to), kind = I(kind), ok = ok, query = I(query),
                       coverage = cov)
 }
 

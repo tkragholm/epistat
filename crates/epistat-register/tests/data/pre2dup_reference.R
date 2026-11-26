@@ -160,4 +160,4 @@ cat(toJSON(list(
   group = grp, globals = glob,
   rows = rows, stays = stays_all,
   periods = result
-), digits = NA, dataframe = "columns", na = "null"))
+), digits = NA, dataframe = "columns", na = "null", auto_unbox = TRUE))
