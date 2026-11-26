@@ -15,11 +15,18 @@ pub enum RegisterError {
     /// One or more years have no price index, sorted and without duplicates.
     #[error("Missing CPI adjustment factors for years: {}", join_years(.0))]
     MissingYears(Vec<i32>),
+    /// A fit that could not be computed from valid input.
+    #[error("{0}")]
+    Numerical(String),
 }
 
 impl RegisterError {
     pub(crate) fn input(message: impl Into<String>) -> Self {
         Self::Input(message.into())
+    }
+
+    pub(crate) fn numerical(message: impl Into<String>) -> Self {
+        Self::Numerical(message.into())
     }
 }
 

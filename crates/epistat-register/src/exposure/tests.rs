@@ -528,3 +528,96 @@ fn results_do_not_depend_on_the_thread_count() {
         p.end
     });
 }
+
+#[test]
+fn a_fractional_end_rounds_up_to_the_first_day_without_supply() {
+    // 49 units at 10 a day last 4.9 days: days 0 to 4 have supply left.
+    let a = Assumption {
+        dose_default: 10.0,
+        ..N02
+    };
+    let p = periods_of(&[(0, 49.0)], a, DoseRule::Default, Stock::Discard, &[]);
+    assert!((p.end[0] - 4.9).abs() < 1e-12);
+    assert_eq!((p.end_day(0), p.last_day(0)), (5, 4));
+    let q = PointTable {
+        person: &[0, 0],
+        group: &[0, 0],
+        day: &[4, 5],
+    };
+    assert_eq!(exposed_on(&p, &q, 0).unwrap(), [true, false]);
+    let set = p.span_set(0, 1).unwrap();
+    assert_eq!(
+        (set.start.as_slice(), set.end.as_slice()),
+        (&[0][..], &[5][..])
+    );
+}
+
+/// Every day of a random history is in the set of a group exactly when
+/// `exposed_on` reads it as exposed, for fractional and whole supplies.
+#[test]
+fn span_sets_agree_with_exposed_on_day_by_day() {
+    let mut rng = SplitMix64::new(0x5EED_0010);
+    for _ in 0..300 {
+        let persons = 1 + (rng.next_u64() % 4) as usize;
+        let (mut day, mut quantity, mut group, mut offsets) =
+            (Vec::new(), Vec::new(), Vec::new(), vec![0]);
+        for _ in 0..persons {
+            let mut t = (rng.next_u64() % 20) as i64;
+            for _ in 0..(rng.next_u64() % 6) {
+                day.push(t);
+                quantity.push(1.0 + (rng.next_u64() % 60) as f64 / 3.0);
+                group.push(Some((rng.next_u64() % 2) as u32));
+                t += (rng.next_u64() % 40) as i64;
+            }
+            offsets.push(day.len());
+        }
+        let a = Assumption {
+            dose_default: 1.5,
+            dose_min: 0.5,
+            dose_max: 3.0,
+            max_stock_days: 10.0,
+            grace_days: (rng.next_u64() % 5) as f64 / 2.0,
+        };
+        let assumptions = [a, a];
+        let d = Dispensings {
+            person_offsets: &offsets,
+            group: &group,
+            day: &day,
+            quantity: &quantity,
+        };
+        let rule = if rng.next_u64().is_multiple_of(2) {
+            DoseRule::Default
+        } else {
+            DoseRule::Observed
+        };
+        let s = Supply {
+            assumptions: &assumptions,
+            rule,
+            stock: Stock::CarryForward,
+            pauses: None,
+        };
+        let p = exposure_periods(&d, &s).unwrap();
+        for g in 0..2_u32 {
+            let set = p.span_set(g, persons).unwrap();
+            for person in 0..persons {
+                let rows = set.key_offsets[person]..set.key_offsets[person + 1];
+                for t in -2..400_i64 {
+                    let in_set = rows.clone().any(|r| set.start[r] <= t && t < set.end[r]);
+                    let q = PointTable {
+                        person: &[person as u32],
+                        group: &[g],
+                        day: &[t],
+                    };
+                    assert_eq!(in_set, exposed_on(&p, &q, 0).unwrap()[0]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn span_set_refuses_a_person_out_of_range() {
+    let p = periods_of(&[(0, 10.0)], N02, DoseRule::Default, Stock::Discard, &[]);
+    assert!(p.span_set(0, 0).is_err());
+    assert!(p.span_set(1, 1).unwrap().is_empty());
+}

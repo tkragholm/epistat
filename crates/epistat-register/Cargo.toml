@@ -1,6 +1,6 @@
 [package]
 name = "epistat-register"
-description = "Calendar-year person-time, interval merging, connected components over shared keys, constant-price deflation, ICD-10 normalisation, age, code sets for ICD-10, ICD-8 and ATC, event definitions, comorbidity indices and drug exposure episodes for register data"
+description = "Calendar-year person-time, interval merging, connected components over shared keys, constant-price deflation, ICD-10 normalisation, age, code sets for ICD-10, ICD-8 and ATC, event definitions, comorbidity indices, drug exposure episodes, waiting time distributions and PRE2DUP drug use periods for register data"
 keywords = ["register-data", "person-time", "intervals", "cpi", "epidemiology"]
 categories = ["algorithms", "science"]
 readme = "README.md"
@@ -20,6 +20,8 @@ denmark = []
 serde = ["dep:serde"]
 
 [dependencies]
+epistat-optim = { path = "../epistat-optim", version = "0.1.1" }
+epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
 thiserror = "2"
 serde = { version = "1", optional = true }
 

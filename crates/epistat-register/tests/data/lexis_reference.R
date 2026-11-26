@@ -31,8 +31,14 @@ invisible(capture.output(lex <- Lexis(entry = list(per = entry[keep], age = (ent
              exit = list(per = exit[keep]), exit.status = 1L, id = id[keep])))
 by_epi <- splitLexis(splitLexis(lex, breaks = per_cut, time.scale = "per"),
                      breaks = age_cut, time.scale = "age")
+# The label of a piece is the left end of its band on each scale, NA below
+# the first break: the year of the calendar band and the age of the age band.
 pieces <- function(x) {
-  d <- data.frame(id = x$lex.id, start = x$per, dur = x$lex.dur)
+  per_left <- timeBand(x, "per", "left")
+  age_left <- timeBand(x, "age", "left")
+  d <- data.frame(id = x$lex.id, start = x$per, dur = x$lex.dur,
+                  year = years[match(per_left, per_cut)],
+                  age = ages[match(age_left, age_cut)])
   d[order(d$id, d$start), ]
 }
 e <- pieces(by_epi)
@@ -43,6 +49,6 @@ cat(toJSON(list(
   versions = list(R = as.character(getRversion()), Epi = as.character(packageVersion("Epi")),
                   popEpi = as.character(packageVersion("popEpi"))),
   birth = birth, start = entry, end = exit, ages = ages,
-  epi = list(id = e$id - 1, start = e$start, dur = e$dur),
+  epi = list(id = e$id - 1, start = e$start, dur = e$dur, year = e$year, age = e$age),
   popepi_agrees = TRUE
-), digits = NA, auto_unbox = TRUE))
+), digits = NA, auto_unbox = TRUE, na = "null"))

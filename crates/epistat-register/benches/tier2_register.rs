@@ -25,7 +25,7 @@ use common::{Lines, Rng, Table, Writer};
 use epistat_register::AgeRule;
 use epistat_register::intervals::{SpanSet, clip, intersect, subtract};
 use epistat_register::lexis::{Cuts, split_at};
-use epistat_register::pedigree::{CousinKinds, Pedigree, SiblingKind, SiblingKinds};
+use epistat_register::pedigree::{CousinKinds, FamilyLinks, Pedigree, SiblingKind, SiblingKinds};
 use epistat_register::residence::{
     Direction, Events, SameDay, first_departure_on_or_after, residence_spells, resident_on,
 };
@@ -267,7 +267,9 @@ fn main() {
                     let cousins = ped
                         .cousin_pairs(1, CousinKinds::ALL, 10_000)
                         .expect("cousins");
-                    let clusters = ped.family_clusters().expect("clusters");
+                    let clusters = ped
+                        .family_clusters(FamilyLinks::SharedParents)
+                        .expect("clusters");
                     (siblings, cousins, clusters, ped.depth())
                 });
             let by = |k: SiblingKind| siblings.kind.iter().filter(|&&x| x == k).count() as f64;

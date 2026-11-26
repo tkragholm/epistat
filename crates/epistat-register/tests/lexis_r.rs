@@ -1,9 +1,10 @@
 //! The pieces of `lexis::split_at` against `Epi::splitLexis` and
 //! `popEpi::splitMulti` (`tests/data/lexis_reference.R`), with calendar years
 //! and with ages on the 365.25-day rule, where the R day scales are exact.
-//! The pieces are integers, so agreement is exact.
+//! The pieces are integers, so agreement is exact. The labels of the pieces
+//! are checked against `Epi::timeBand(x, scale, "left")`.
 
-use epistat_register::lexis::{Cuts, split_at};
+use epistat_register::lexis::{Cuts, labels, split_at};
 use epistat_register::{AgeRule, LeapBirthday};
 use epistat_testkit::{Fingerprint, assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -13,6 +14,8 @@ struct Pieces {
     id: Vec<f64>,
     start: Vec<f64>,
     dur: Vec<f64>,
+    year: Vec<Option<i64>>,
+    age: Vec<Option<i64>>,
 }
 
 #[derive(Deserialize)]
@@ -36,19 +39,43 @@ fn pieces_agree_with_epi_and_popepi() {
         "/tests/data/lexis_reference.json"
     ));
     let (birth, start, end) = (ints(&r.birth), ints(&r.start), ints(&r.end));
-    let split = split_at(
-        &start,
-        &end,
-        &[
-            Cuts::CalendarYears,
-            Cuts::AgeYears {
-                birth: &birth,
-                ages: &r.ages,
-                rule: AgeRule::DaysOver365_25,
-            },
-        ],
-    )
-    .unwrap();
+    let cuts = [
+        Cuts::CalendarYears,
+        Cuts::AgeYears {
+            birth: &birth,
+            ages: &r.ages,
+            rule: AgeRule::DaysOver365_25,
+        },
+    ];
+    let split = split_at(&start, &end, &cuts).unwrap();
+    // Each piece's labels against Epi::timeBand(x, scale, "left").
+    let label = labels(&split, &cuts).unwrap();
+    let mut got_labels: Vec<(i64, i64, Option<i64>, Option<i64>)> = (0..split.start.len())
+        .map(|i| {
+            (
+                i64::from(split.source_row[i]),
+                split.start[i],
+                label[0][i],
+                label[1][i],
+            )
+        })
+        .collect();
+    got_labels.sort_unstable();
+    let want_labels: Vec<(i64, i64, Option<i64>, Option<i64>)> = (0..r.epi.id.len())
+        .map(|i| {
+            (
+                ints(&r.epi.id)[i],
+                ints(&r.epi.start)[i],
+                r.epi.year[i],
+                r.epi.age[i],
+            )
+        })
+        .collect();
+    assert_eq!(got_labels, want_labels);
+    assert!(
+        want_labels.iter().any(|w| w.3.is_none()),
+        "a piece below the first age"
+    );
     // R drops the rows that are empty, and numbers the others from 0 in the
     // reference; ours keeps the source row, so the same rows appear.
     let mut got: Vec<(i64, i64, i64)> = (0..split.start.len())

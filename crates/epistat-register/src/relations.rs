@@ -51,18 +51,18 @@ use crate::RegisterError;
 /// A union points the larger root at the smaller, and path halving only moves
 /// a row's parent to an ancestor, so `parent[row] <= row` throughout and each
 /// root is its set's first row.
-struct DisjointSets {
+pub(crate) struct DisjointSets {
     parent: Vec<u32>,
 }
 
 impl DisjointSets {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         Self {
             parent: (0..n as u32).collect(),
         }
     }
 
-    fn find(&mut self, mut row: u32) -> u32 {
+    pub(crate) fn find(&mut self, mut row: u32) -> u32 {
         while self.parent[row as usize] != row {
             let grandparent = self.parent[self.parent[row as usize] as usize];
             self.parent[row as usize] = grandparent;
@@ -71,7 +71,7 @@ impl DisjointSets {
         row
     }
 
-    fn union(&mut self, left: u32, right: u32) {
+    pub(crate) fn union(&mut self, left: u32, right: u32) {
         let left = self.find(left);
         let right = self.find(right);
         if left != right {

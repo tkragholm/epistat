@@ -4,7 +4,7 @@
 //! one half, exact in a double, so the comparison is exact.
 
 use epistat_register::pedigree::{
-    CousinKinds, Pedigree, SiblingKinds, delivery_order, multiple_birth_groups,
+    CousinKinds, FamilyLinks, Pedigree, SiblingKinds, delivery_order, multiple_birth_groups,
 };
 use epistat_testkit::{Fingerprint, assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -37,6 +37,17 @@ struct Kinds {
     cousins1: Pairs,
     cousins2: Pairs,
     clusters: Vec<u32>,
+    group: Vec<Option<u32>>,
+    size: Vec<Option<u32>>,
+    order: Vec<Option<u32>>,
+    birth_day2: Vec<Option<f64>>,
+    tolerance: Vec<ByTolerance>,
+    pedigree_clusters: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+struct ByTolerance {
+    tolerance: u32,
     group: Vec<Option<u32>>,
     size: Vec<Option<u32>>,
     order: Vec<Option<u32>>,
@@ -158,17 +169,37 @@ fn pair_kinds_clusters_and_births_agree_with_r() {
         }
     }
 
-    assert_eq!(ped.family_clusters().unwrap(), k.clusters);
+    assert_eq!(
+        ped.family_clusters(FamilyLinks::SharedParents).unwrap(),
+        k.clusters
+    );
     fp = fp.u64(k.clusters.iter().map(|&c| u64::from(c)).sum());
 
-    let births = multiple_birth_groups(&opt(&k.birth_mother), &opt_i(&k.birth_day)).unwrap();
+    let births = multiple_birth_groups(&opt(&k.birth_mother), &opt_i(&k.birth_day), 0).unwrap();
     assert_eq!(births.group, k.group);
     assert_eq!(births.size, k.size);
     assert!(k.size.contains(&Some(2)));
-    let order = delivery_order(&opt(&k.birth_mother), &opt_i(&k.birth_day)).unwrap();
+    let order = delivery_order(&opt(&k.birth_mother), &opt_i(&k.birth_day), 0).unwrap();
     assert_eq!(order, k.order);
     assert!(k.order.iter().any(|o| *o >= Some(2)));
     assert_eq!(fp.finish(), 12_360_024_851_349_320_220, "golden hash");
+
+    assert_eq!(
+        ped.family_clusters(FamilyLinks::ParentsAndChildren)
+            .unwrap(),
+        k.pedigree_clusters
+    );
+    let day2 = opt_i(&k.birth_day2);
+    for t in &k.tolerance {
+        let births = multiple_birth_groups(&opt(&k.birth_mother), &day2, t.tolerance).unwrap();
+        assert_eq!(births.group, t.group, "tolerance {}", t.tolerance);
+        assert_eq!(births.size, t.size, "tolerance {}", t.tolerance);
+        let order = delivery_order(&opt(&k.birth_mother), &day2, t.tolerance).unwrap();
+        assert_eq!(order, t.order, "tolerance {}", t.tolerance);
+    }
+    // The tolerance changes the deliveries of these data.
+    assert_ne!(k.tolerance[0].size, k.tolerance[1].size);
+    assert_ne!(k.tolerance[1].size, k.tolerance[2].size);
 }
 
 #[expect(clippy::cast_possible_truncation, reason = "whole days from R")]

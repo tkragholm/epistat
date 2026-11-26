@@ -22,13 +22,21 @@
 //! - [`ComorbidityMap::elixhauser_quan_icd10`] with
 //!   [`elixhauser_van_walraven`] (van Walraven 2009, Table 3).
 //!
-//! The Danish adaptations of the Charlson index, for example the ICD-10 list
-//! with its positive predictive values of Thygesen et al. \[7\] and the ICD-8
-//! list before 1994 of Christensen et al. \[8\], are lists the caller supplies:
-//! [`ComorbidityMap::set_icd10`] and [`ComorbidityMap::set_icd8`] replace the
-//! codes of a condition, and [`ComorbidityMap::new`] builds a map from nothing.
-//! No year is built in. Which map applies to which diagnoses is the caller's
-//! decision by date.
+//! - [`ComorbidityMap::charlson_denmark`] with [`charlson_denmark_weights`]:
+//!   the 19 conditions of the Danish coding, with the ICD-10 codes of
+//!   Thygesen et al. \[7\] (Table 1), whose positive predictive values in the
+//!   Danish National Patient Register they report, and the ICD-8 codes for
+//!   the years before 1994 and the Charlson 1987 weights of Christensen et al.
+//!   \[8\] (Table A). The tables are written out by hand, with their ranges,
+//!   and the tests check the flags and scores against `heaven::charlsonIndex`
+//!   given the same list.
+//!
+//! Other lists are supplied by the caller: [`ComorbidityMap::set_icd10`] and
+//! [`ComorbidityMap::set_icd8`] replace the codes of a condition, and
+//! [`ComorbidityMap::new`] builds a map from nothing. Which revision a code is
+//! in is read from the code, and the ICD-8 codes of a map count only for
+//! diagnoses coded in ICD-8, so a study that reads history from 1977 needs a
+//! map with both, as the Danish one has.
 //!
 //! # Method
 //!
@@ -107,6 +115,7 @@
 //!    prediction of mortality following intensive care. Clin Epidemiol.
 //!    2011;3:203-11.
 
+mod denmark;
 mod lists;
 
 use crate::RegisterError;
@@ -159,6 +168,17 @@ pub fn charlson_original() -> Weights {
 #[must_use]
 pub fn charlson_quan2011() -> Weights {
     Weights::new("Quan 2011", lists::CHARLSON_QUAN_2011.to_vec())
+}
+
+/// The Charlson 1987 weights of the 19 conditions of
+/// [`ComorbidityMap::charlson_denmark`], as Christensen et al. 2011 (Table A)
+/// list them: 1 for the first ten conditions, 2 for hemiplegia, renal
+/// disease, diabetes with end organ damage, any tumour, leukaemia and
+/// lymphoma, 3 for moderate to severe liver disease and 6 for metastatic solid
+/// tumour and AIDS.
+#[must_use]
+pub fn charlson_denmark_weights() -> Weights {
+    Weights::new("Charlson 1987, Danish coding", denmark::weights())
 }
 
 /// The point weights of van Walraven et al. 2009 for the 31 conditions of
@@ -255,6 +275,18 @@ impl ComorbidityMap {
             .map(|s| condition_from(s, supersedes(s.key)))
             .collect();
         Self::new(conditions).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
+    }
+
+    /// The 19 conditions of the Charlson index in the Danish coding: ICD-10
+    /// codes of Thygesen et al. 2011 (Table 1) and ICD-8 codes of Christensen
+    /// et al. 2011 (Table A). Moderate or severe liver disease cancels mild
+    /// liver disease, diabetes with end organ damage cancels diabetes, and a
+    /// metastatic solid tumour cancels any tumour; leukaemia and lymphoma are
+    /// conditions of their own. Weights: [`charlson_denmark_weights`].
+    #[must_use]
+    pub fn charlson_denmark() -> Self {
+        Self::new(denmark::conditions())
+            .unwrap_or_else(|_| unreachable!("the built-in map is valid"))
     }
 
     /// The 31 conditions of the Elixhauser measure in the ICD-10 coding of Quan
