@@ -84,6 +84,7 @@ impl PersonTime2 {
 
 /// A corrected rate table and its measures; `None` throughout when a corrected
 /// count or person-time is negative.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CorrectedRates {
     /// The corrected cases and person-time.
@@ -231,13 +232,14 @@ pub fn probabilistic_misclass_rates(
             }));
         }
     }
-    finish_single(draws, opts.alpha)
+    finish_single(draws, opts.level)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bias::Dist;
+    use epistat_core::Level;
 
     const TRUE: PersonTime2 = PersonTime2 {
         exposed_events: 120.0,
@@ -306,12 +308,12 @@ mod tests {
                 draws: 20,
                 seed: 1,
                 random_error: false,
-                alpha: 0.05,
+                level: Level::alpha(0.05).unwrap(),
             },
         )
         .unwrap();
         assert_eq!(
-            r.adjusted.median.to_bits(),
+            r.adjusted.unwrap().estimate.to_bits(),
             simple.rate_ratio.unwrap().to_bits()
         );
         assert_eq!(r.draws.parameters_of(3), &[0.9, 0.85, 0.99, 0.98]);

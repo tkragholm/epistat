@@ -13,7 +13,9 @@
 //! As `sensitivitymw::senmwCI`: the lower end of the point estimates is the
 //! `tau` where the deviate bound of the shifted sets crosses 0, and the lower
 //! limit of the interval the `tau` where it crosses `z`, the normal quantile
-//! at `1 - alpha` (`1 - alpha / 2` for a two-sided interval). The upper ends
+//! at the level's [`Level::confidence_value`], `1 - alpha`, for a one-sided
+//! interval and at its [`Level::upper_probability`], `1 - alpha / 2`, for a
+//! two-sided one. The upper ends
 //! come from the same search on the negated responses. The scores, scale
 //! included, are recomputed at each `tau`, as `senmwCI` does. Each crossing
 //! is bracketed by `min(treated) - max(controls)`, where every treated unit
@@ -30,19 +32,26 @@
 
 use super::{MScore, SensitivityError, check_gamma, m_scores, set_bounds};
 use crate::Error;
+use epistat_core::{Interval, Level};
 use epistat_stats::dist::normal;
 
 /// Whether an interval has one limit or two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sides {
-    /// A lower limit only, at level `1 - alpha`, and an infinite upper one.
+    /// A lower limit only, with the level's alpha in its one tail, and no
+    /// upper limit.
     One,
-    /// Both limits, each at `1 - alpha / 2`.
+    /// Both limits, with half the level's alpha in each tail.
     Two,
 }
 
 /// The range of point estimates and the confidence interval of an additive
 /// effect at one `gamma`.
+///
+/// The point estimates are a range, not an interval at a level: every
+/// effect in it is a point estimate under some assignment probabilities
+/// that `gamma` allows.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EffectInterval {
     /// The sensitivity parameter.
@@ -51,10 +60,9 @@ pub struct EffectInterval {
     pub estimate_lower: f64,
     /// The largest point estimate.
     pub estimate_upper: f64,
-    /// The smallest lower confidence limit.
-    pub lower: f64,
-    /// The largest upper confidence limit, infinite for a one-sided interval.
-    pub upper: f64,
+    /// The confidence interval: the smallest lower limit and the largest
+    /// upper limit, `None` for the upper limit of a one-sided interval.
+    pub interval: Interval,
 }
 
 /// The deviate bound of the sets with `tau` taken from each treated response.
@@ -106,21 +114,17 @@ fn crossing(
 ///
 /// # Errors
 ///
-/// [`crate::Error`], [`crate::Error`] for `alpha`
-/// outside `(0, 1)` or a deviate that does not cross its target in the
-/// bracket, and those of [`m_scores`] and [`set_bounds`] at any `tau`
+/// [`crate::Error`] for a `gamma` below 1 or a deviate that does not cross
+/// its target in the bracket, and those of [`m_scores`] and [`set_bounds`] at any `tau`
 /// tried.
 pub fn m_statistic_interval(
     sets: &[Vec<f64>],
     gamma: f64,
     spec: &MScore,
-    alpha: f64,
+    level: Level,
     sides: Sides,
 ) -> Result<EffectInterval, Error> {
     check_gamma(gamma)?;
-    if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(SensitivityError::Parameter("alpha").into());
-    }
     // Validates the sets and the score.
     m_scores(sets, spec)?;
     let treated = sets.iter().map(|s| s[0]);
@@ -138,11 +142,10 @@ pub fn m_statistic_interval(
         )
         .into());
     }
-    let level = match sides {
-        Sides::One => alpha,
-        Sides::Two => alpha / 2.0,
-    };
-    let z = normal::quantile(1.0 - level);
+    let z = normal::quantile(match sides {
+        Sides::One => level.confidence_value(),
+        Sides::Two => level.upper_probability(),
+    });
     let negated: Vec<Vec<f64>> = sets
         .iter()
         .map(|s| s.iter().map(|v| -v).collect())
@@ -151,14 +154,13 @@ pub fn m_statistic_interval(
     let estimate_upper = -crossing(&negated, gamma, spec, 0.0, -high, -low)?;
     let lower = crossing(sets, gamma, spec, z, low, high)?;
     let upper = match sides {
-        Sides::One => f64::INFINITY,
-        Sides::Two => -crossing(&negated, gamma, spec, z, -high, -low)?,
+        Sides::One => None,
+        Sides::Two => Some(-crossing(&negated, gamma, spec, z, -high, -low)?),
     };
     Ok(EffectInterval {
         gamma,
         estimate_lower,
         estimate_upper,
-        lower,
-        upper,
+        interval: Interval::new(Some(lower), upper, level),
     })
 }

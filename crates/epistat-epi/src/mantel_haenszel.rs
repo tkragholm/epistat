@@ -38,7 +38,9 @@
 //!
 //! The Greenland-Robins variance of the risk difference is the one `metafor`
 //! writes. The interval is `estimate -/+ z se`, on the log scale for the
-//! ratios, and the p-value is the two-sided normal one. No continuity
+//! ratios, with `z` the normal quantile at [`Level::upper_probability`], and
+//! the p-value is the two-sided normal one, as [`epistat_stats::wald`] forms
+//! them. No continuity
 //! constant is added to a zero cell.
 //!
 //! The Mantel-Haenszel chi-square is
@@ -104,9 +106,10 @@
 use crate::Error;
 use std::fmt;
 
+use epistat_core::{Estimate, Level, Scale};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
-use epistat_stats::dist::normal;
 use epistat_stats::sum::compensated;
+use epistat_stats::wald;
 
 use crate::tables::{Counts2x2, PersonTime2};
 
@@ -120,8 +123,6 @@ pub(crate) enum MhError {
     Cell,
     /// A stratum has no persons or no person-time.
     EmptyStratum,
-    /// The level is not strictly between 0 and 1.
-    Level,
     /// The slices given to a table builder differ in length.
     Length,
 }
@@ -132,7 +133,6 @@ impl fmt::Display for MhError {
             Self::Empty => "there are no strata",
             Self::Cell => "counts and person-time must be finite and not negative, and events need person-time",
             Self::EmptyStratum => "a stratum has no persons or no person-time",
-            Self::Level => "the level must be strictly between 0 and 1",
             Self::Length => "the inputs differ in length",
         })
     }
@@ -141,25 +141,21 @@ impl fmt::Display for MhError {
 impl std::error::Error for MhError {}
 
 /// A pooled estimate.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pooled {
-    /// The estimate, a ratio or a difference.
-    pub estimate: Option<f64>,
-    /// The standard error, of the log ratio for a ratio and of the difference
-    /// for a difference.
-    pub se: Option<f64>,
-    /// The lower limit, on the scale of the estimate.
-    pub lower: Option<f64>,
-    /// The upper limit, on the scale of the estimate.
-    pub upper: Option<f64>,
-    /// The two-sided normal p-value of no effect.
-    pub p_value: Option<f64>,
+    /// The estimate, a ratio or a difference, with its Wald interval and the
+    /// two-sided normal p-value of no effect. A ratio is on [`Scale::Log`]:
+    /// its standard error is that of the log ratio. `None` where the pooled
+    /// estimate is undefined.
+    pub estimate: Option<Estimate>,
     /// The number of strata that compare the two groups, those with persons or
     /// person-time in both.
     pub n_strata_used: usize,
 }
 
 /// A test statistic on `df` degrees of freedom with its p-value.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Test {
     /// The statistic.
@@ -172,14 +168,6 @@ pub struct Test {
 
 fn finite_count(x: f64) -> bool {
     x.is_finite() && x >= 0.0
-}
-
-fn check_level(level: f64) -> Result<(), Error> {
-    if level > 0.0 && level < 1.0 {
-        Ok(())
-    } else {
-        Err(MhError::Level.into())
-    }
 }
 
 fn check_tables(tables: &[Counts2x2]) -> Result<(), Error> {
@@ -237,40 +225,25 @@ fn total(values: impl Iterator<Item = f64>) -> f64 {
     compensated(values)
 }
 
-fn undefined(n_strata_used: usize) -> Pooled {
+const fn undefined(n_strata_used: usize) -> Pooled {
     Pooled {
         estimate: None,
-        se: None,
-        lower: None,
-        upper: None,
-        p_value: None,
         n_strata_used,
     }
 }
 
-fn ratio_result(ratio: f64, variance: f64, level: f64, used: usize) -> Pooled {
-    let se = variance.sqrt();
-    let beta = ratio.ln();
-    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
+/// The Wald estimate of a ratio from the variance of its log.
+fn ratio_result(ratio: f64, variance: f64, level: Level, used: usize) -> Pooled {
     Pooled {
-        estimate: Some(ratio),
-        se: Some(se),
-        lower: Some((beta - z * se).exp()),
-        upper: Some((beta + z * se).exp()),
-        p_value: Some(2.0 * normal::cdf(-(beta / se).abs())),
+        estimate: Some(wald(ratio, Some(variance.sqrt()), level, Scale::Log)),
         n_strata_used: used,
     }
 }
 
-fn difference_result(difference: f64, variance: f64, level: f64, used: usize) -> Pooled {
-    let se = variance.sqrt();
-    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
+/// The Wald estimate of a difference from its variance.
+fn difference_result(difference: f64, variance: f64, level: Level, used: usize) -> Pooled {
     Pooled {
-        estimate: Some(difference),
-        se: Some(se),
-        lower: Some(difference - z * se),
-        upper: Some(difference + z * se),
-        p_value: Some(2.0 * normal::cdf(-(difference / se).abs())),
+        estimate: Some(wald(difference, Some(variance.sqrt()), level, Scale::Identity)),
         n_strata_used: used,
     }
 }
@@ -297,10 +270,9 @@ fn used_strata(strata: &[PersonTime2]) -> usize {
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for no strata, a negative or non-finite cell, an empty
-/// stratum, or a level outside `(0, 1)`.
-pub fn odds_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
-    check_level(level)?;
+/// [`crate::Error`] for no strata, a negative or non-finite cell, or an
+/// empty stratum.
+pub fn odds_ratio(tables: &[Counts2x2], level: Level) -> Result<Pooled, Error> {
     check_tables(tables)?;
     let used = used_tables(tables);
     let n = |t: &Counts2x2| {
@@ -328,8 +300,7 @@ pub fn odds_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
 /// # Errors
 ///
 /// As [`odds_ratio`].
-pub fn risk_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
-    check_level(level)?;
+pub fn risk_ratio(tables: &[Counts2x2], level: Level) -> Result<Pooled, Error> {
     check_tables(tables)?;
     let used = used_tables(tables);
     let n = |t: &Counts2x2| {
@@ -365,8 +336,7 @@ pub fn risk_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
 /// # Errors
 ///
 /// As [`odds_ratio`], for strata of events and person-time.
-pub fn rate_ratio(strata: &[PersonTime2], level: f64) -> Result<Pooled, Error> {
-    check_level(level)?;
+pub fn rate_ratio(strata: &[PersonTime2], level: Level) -> Result<Pooled, Error> {
     check_strata(strata)?;
     let used = used_strata(strata);
     let tt = |s: &PersonTime2| s.exposed_time + s.unexposed_time;
@@ -399,8 +369,7 @@ pub fn rate_ratio(strata: &[PersonTime2], level: f64) -> Result<Pooled, Error> {
 /// # Errors
 ///
 /// As [`odds_ratio`].
-pub fn risk_difference(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
-    check_level(level)?;
+pub fn risk_difference(tables: &[Counts2x2], level: Level) -> Result<Pooled, Error> {
     check_tables(tables)?;
     let used = used_tables(tables);
     let n = |t: &Counts2x2| {
@@ -437,8 +406,7 @@ pub fn risk_difference(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error
 /// # Errors
 ///
 /// As [`odds_ratio`], for strata of events and person-time.
-pub fn rate_difference(strata: &[PersonTime2], level: f64) -> Result<Pooled, Error> {
-    check_level(level)?;
+pub fn rate_difference(strata: &[PersonTime2], level: Level) -> Result<Pooled, Error> {
     check_strata(strata)?;
     let used = used_strata(strata);
     let tt = |s: &PersonTime2| s.exposed_time + s.unexposed_time;
@@ -677,8 +645,12 @@ fn arm_probabilities(eta: f64) -> (f64, f64) {
 /// person-time, or an empty stratum.
 pub fn rate_ratio_breslow_day(strata: &[PersonTime2], tarone: bool) -> Result<Option<Test>, Error> {
     check_strata(strata)?;
-    let pooled = rate_ratio(strata, 0.5)?;
-    let Some(psi) = pooled.estimate.filter(|&r| r > 0.0 && r.is_finite()) else {
+    let pooled = rate_ratio(strata, Level::default())?;
+    let Some(psi) = pooled
+        .estimate
+        .map(|r| r.estimate)
+        .filter(|&r| r > 0.0 && r.is_finite())
+    else {
         return Ok(None);
     };
     let ln_psi = psi.ln();
@@ -704,6 +676,7 @@ pub fn rate_ratio_breslow_day(strata: &[PersonTime2], tarone: bool) -> Result<Op
 /// The likelihood ratio and Pearson tests that the rate ratio is the same in
 /// every stratum, at the conditional maximum likelihood estimate of the
 /// common ratio. See [`rate_ratio_homogeneity`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RateHomogeneity {
     /// The conditional maximum likelihood estimate of the common rate ratio.
@@ -756,7 +729,10 @@ pub fn rate_ratio_homogeneity(strata: &[PersonTime2]) -> Result<Option<RateHomog
     if exposed == 0.0 || unexposed == 0.0 {
         return Ok(None);
     }
-    let Some(psi) = rate_ratio(strata, 0.5)?.estimate.filter(|&r| r > 0.0) else {
+    let Some(psi) = rate_ratio(strata, Level::default())?
+        .estimate
+        .map(|r| r.estimate)
+        .filter(|&r| r > 0.0) else {
         return Ok(None);
     };
     let log_likelihood = |beta: f64| {
@@ -879,15 +855,15 @@ mod tests {
 
     #[test]
     fn one_stratum_is_the_cross_product_ratio() {
-        let p = odds_ratio(&[tab(10.0, 20.0, 5.0, 40.0)], 0.95).unwrap();
-        assert!((p.estimate.unwrap() - 4.0).abs() < 1e-14);
-        let p = risk_ratio(&[tab(10.0, 20.0, 5.0, 40.0)], 0.95).unwrap();
-        assert!((p.estimate.unwrap() - (10.0 / 30.0) / (5.0 / 45.0)).abs() < 1e-14);
+        let p = odds_ratio(&[tab(10.0, 20.0, 5.0, 40.0)], Level::default()).unwrap();
+        assert!((p.estimate.unwrap().estimate - 4.0).abs() < 1e-14);
+        let p = risk_ratio(&[tab(10.0, 20.0, 5.0, 40.0)], Level::default()).unwrap();
+        assert!((p.estimate.unwrap().estimate - (10.0 / 30.0) / (5.0 / 45.0)).abs() < 1e-14);
     }
 
     #[test]
     fn undefined_cases_are_none() {
-        let p = odds_ratio(&[tab(0.0, 5.0, 3.0, 4.0)], 0.95).unwrap();
+        let p = odds_ratio(&[tab(0.0, 5.0, 3.0, 4.0)], Level::default()).unwrap();
         assert_eq!(p.estimate, None);
         let p = rate_ratio(
             &[PersonTime2 {
@@ -896,7 +872,7 @@ mod tests {
                 unexposed_events: 2.0,
                 unexposed_time: 3.0,
             }],
-            0.95,
+            Level::default(),
         )
         .unwrap();
         assert_eq!(p.estimate, None);
@@ -905,18 +881,14 @@ mod tests {
 
     #[test]
     fn refuses_bad_input() {
-        assert_eq!(odds_ratio(&[], 0.95), Err(MhError::Empty.into()));
+        assert_eq!(odds_ratio(&[], Level::default()), Err(MhError::Empty.into()));
         assert_eq!(
-            odds_ratio(&[tab(0.0, 0.0, 0.0, 0.0)], 0.95),
+            odds_ratio(&[tab(0.0, 0.0, 0.0, 0.0)], Level::default()),
             Err(MhError::EmptyStratum.into())
         );
         assert_eq!(
-            odds_ratio(&[tab(-1.0, 1.0, 1.0, 1.0)], 0.95),
+            odds_ratio(&[tab(-1.0, 1.0, 1.0, 1.0)], Level::default()),
             Err(MhError::Cell.into())
-        );
-        assert_eq!(
-            odds_ratio(&[tab(1.0, 1.0, 1.0, 1.0)], 1.0),
-            Err(MhError::Level.into())
         );
     }
 

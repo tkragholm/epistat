@@ -101,7 +101,6 @@ const fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
     })
 }
 
-const LEVEL: Error = invalid("level", "must be strictly between 0 and 1");
 const LENGTH: Error = invalid("inputs", "differ in length");
 const STRATA: Error = invalid("strata", "there are none");
 
@@ -114,7 +113,6 @@ impl From<MhError> for Error {
                 "counts and person-time must be finite and not negative, and events need person-time",
             ),
             MhError::EmptyStratum => invalid("stratum", "has no persons or no person-time"),
-            MhError::Level => LEVEL,
             MhError::Length => LENGTH,
         }
     }
@@ -130,7 +128,6 @@ impl From<RateError> for Error {
                 "weights",
                 "must be finite, not negative and sum to more than 0",
             ),
-            RateError::Level => LEVEL,
             RateError::Scale => invalid("scale", "must be positive and finite"),
             RateError::NotInteger => invalid("events", "the exact test needs integer counts"),
             RateError::Empty => STRATA,
@@ -147,7 +144,6 @@ impl From<SirError> for Error {
                 "person-time",
                 "must be finite and not negative, and positive where there are events",
             ),
-            SirError::Level => LEVEL,
             SirError::Length => LENGTH,
             SirError::ZeroExpected => Self::ZeroExpected,
             SirError::Score => invalid("scores", "must be finite"),
@@ -167,7 +163,6 @@ impl From<EValueError> for Error {
             }
             EValueError::BelowOne { what, value } => domain(what, value, "[1, inf)"),
             EValueError::Table(rule) => invalid("table", rule),
-            EValueError::Alpha(alpha) => domain("alpha", alpha, "(0, 1)"),
             EValueError::NegativeDifference => {
                 invalid("risk difference", "must be positive; recode the exposure")
             }
@@ -220,10 +215,10 @@ mod tests {
 
     #[test]
     fn errors_have_kinds_and_codes() {
-        let level = Error::from(MhError::Level);
+        let level = Error::from(MhError::Empty);
         assert_eq!(level.kind(), ErrorKind::Input);
         assert_eq!(level.code(), "epi.invalid");
-        assert_eq!(level.to_string(), "level: must be strictly between 0 and 1");
+        assert_eq!(level.to_string(), "strata: there are none");
         let gamma = Error::from(SensitivityError::Gamma(0.5));
         assert_eq!(gamma.code(), "input.domain");
         assert_eq!(Error::NoInformation.kind(), ErrorKind::Numerical);

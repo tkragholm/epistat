@@ -80,7 +80,8 @@
 //! events and person-time by stratum: the shares are those of the person-time,
 //! which is taken as fixed, and the counts are Poisson, so `v_i = d_i / y_i^2`
 //! times the square of the scale, estimated from the counts. The intervals
-//! are normal, `estimate -/+ z se`. Rates whose variance has another source,
+//! are normal, `estimate -/+ z se` with `z` the normal quantile at the
+//! level's [`Level::upper_probability`]. Rates whose variance has another source,
 //! such as a bootstrap or a binomial risk, go to [`kitagawa_variance`]
 //! directly. Shares estimated from a sample add a term of their own, which
 //! these variances leave out.
@@ -103,9 +104,14 @@
 //!    Washington: US Bureau of the Census; 1993. Current Population Reports,
 //!    P23-186.
 
+use epistat_core::{Estimate, InputError, Level, Scale, check};
 use epistat_stats::sum::exact;
+use epistat_stats::wald;
+
+use crate::Error;
 
 /// A gap split into its two parts.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Decomposition {
     /// The overall rate of A minus that of B.
@@ -118,6 +124,7 @@ pub struct Decomposition {
 
 /// A gap split into its two parts, each `None` when its own terms are not
 /// finite. See [`kitagawa_parts`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecompositionParts {
     /// The overall rate of A minus that of B.
@@ -281,6 +288,7 @@ pub enum Split {
 
 /// The variances of the gap and the two parts of a decomposition, and the
 /// covariance of the parts.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PartVariances {
     /// The variance of the gap.
@@ -382,36 +390,28 @@ pub fn kitagawa_variance(
     })
 }
 
-/// One part of a decomposition with its standard error and normal interval.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Part {
-    /// The estimate.
-    pub estimate: f64,
-    /// Its standard error.
-    pub se: f64,
-    /// The lower limit, `estimate - z se`.
-    pub lower: f64,
-    /// The upper limit, `estimate + z se`.
-    pub upper: f64,
-}
-
 /// The decomposition of a gap between two sets of Poisson rates with
 /// standard errors. See [`kitagawa_poisson`].
+///
+/// Each part is an [`Estimate`] with its standard error, the normal interval
+/// `estimate -/+ z se` and the two-sided normal p-value that the part is 0,
+/// as [`epistat_stats::wald`] forms them.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PoissonDecomposition {
     /// The crude rate of A minus that of B.
-    pub gap: Part,
+    pub gap: Estimate,
     /// The part from the difference in shares of person-time.
-    pub composition: Part,
+    pub composition: Estimate,
     /// The part from the difference in rates.
-    pub rate: Part,
+    pub rate: Estimate,
     /// The covariance of the composition part and the rate part.
     pub covariance: f64,
 }
 
 /// The Kitagawa decomposition of the gap in crude rates between A and the
 /// reference B from events and person-time by stratum, with standard errors
-/// and normal intervals at the coverage `level`.
+/// and normal intervals at `level`.
 ///
 /// The shares are each population's shares of its person-time, from
 /// [`shares`], and the rates `scale d / y`, so the gap is the difference of
@@ -422,41 +422,65 @@ pub struct PoissonDecomposition {
 /// linear parts and estimated from the counts, so a stratum without events
 /// adds nothing to them.
 ///
-/// `None` when the slices differ in length or are empty, a count or a
-/// person-time is negative or not finite, a population has no person-time, a
-/// stratum has events without person-time, `level` is outside `(0, 1)`,
-/// `scale` is not positive and finite, or a rate that is used is undefined: a
-/// stratum without person-time in one population and with it in the other
-/// has no rate where one is needed.
-#[must_use]
+/// `None` when a population has no person-time, or a rate that is used is
+/// undefined: a stratum without person-time in one population and with it in
+/// the other has no rate where one is needed.
+///
+/// # Errors
+///
+/// [`crate::Error::Input`] when the slices differ in length or are empty, a
+/// count or a person-time is negative or not finite, or `scale` is not
+/// positive and finite, and [`crate::Error::Invalid`] for a stratum with
+/// events and no person-time.
 pub fn kitagawa_poisson(
     group: crate::rates::Strata<'_>,
     reference: crate::rates::Strata<'_>,
     split: Split,
-    level: f64,
+    level: Level,
     scale: f64,
-) -> Option<PoissonDecomposition> {
+) -> Result<Option<PoissonDecomposition>, Error> {
     let n = group.events.len();
-    if n == 0
-        || [group.time, reference.events, reference.time]
-            .iter()
-            .any(|s| s.len() != n)
+    check::non_empty("events", n)?;
+    check::same_length("person-time", n, group.time.len())?;
+    check::same_length("reference events", n, reference.events.len())?;
+    check::same_length("reference person-time", n, reference.time.len())?;
+    if !(scale > 0.0 && scale.is_finite()) {
+        return Err(InputError::Domain {
+            what: "scale",
+            value: scale,
+            domain: "(0, inf)",
+        }
+        .into());
+    }
+    for (what, values) in [
+        ("events", group.events),
+        ("person-time", group.time),
+        ("reference events", reference.events),
+        ("reference person-time", reference.time),
+    ] {
+        check::finite(what, values)?;
+        if let Some(&value) = values.iter().find(|&&v| v < 0.0) {
+            return Err(InputError::Domain {
+                what,
+                value,
+                domain: "[0, inf)",
+            }
+            .into());
+        }
+    }
+    let events_without_time =
+        |events: &[f64], time: &[f64]| events.iter().zip(time).any(|(&d, &y)| y == 0.0 && d > 0.0);
+    if events_without_time(group.events, group.time)
+        || events_without_time(reference.events, reference.time)
     {
-        return None;
+        return Err(Error::Invalid {
+            what: "stratum",
+            rule: "has events without person-time",
+        });
     }
-    if !(level > 0.0 && level < 1.0 && scale > 0.0 && scale.is_finite()) {
-        return None;
-    }
-    let valid = |events: &[f64], time: &[f64]| {
-        events.iter().zip(time).all(|(&d, &y)| {
-            d.is_finite() && d >= 0.0 && y.is_finite() && y >= 0.0 && !(y == 0.0 && d > 0.0)
-        })
+    let (Some(share_a), Some(share_b)) = (shares(group.time), shares(reference.time)) else {
+        return Ok(None);
     };
-    if !(valid(group.events, group.time) && valid(reference.events, reference.time)) {
-        return None;
-    }
-    let share_a = shares(group.time)?;
-    let share_b = shares(reference.time)?;
     let rates = |events: &[f64], time: &[f64]| -> (Vec<f64>, Vec<f64>) {
         events
             .iter()
@@ -467,26 +491,24 @@ pub fn kitagawa_poisson(
     let (rate_a, var_a) = rates(group.events, group.time);
     let (rate_b, var_b) = rates(reference.events, reference.time);
     let d = match split {
-        Split::Reference => kitagawa(&share_a, &rate_a, &share_b, &rate_b)?,
-        Split::Symmetric => kitagawa_symmetric(&share_a, &rate_a, &share_b, &rate_b)?,
+        Split::Reference => kitagawa(&share_a, &rate_a, &share_b, &rate_b),
+        Split::Symmetric => kitagawa_symmetric(&share_a, &rate_a, &share_b, &rate_b),
     };
-    let v = kitagawa_variance(&share_a, &var_a, &share_b, &var_b, split)?;
-    let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - level) / 2.0);
+    let Some(d) = d else {
+        return Ok(None);
+    };
+    let Some(v) = kitagawa_variance(&share_a, &var_a, &share_b, &var_b, split) else {
+        return Ok(None);
+    };
     let part = |estimate: f64, variance: f64| {
-        let se = variance.sqrt();
-        Part {
-            estimate,
-            se,
-            lower: estimate - z * se,
-            upper: estimate + z * se,
-        }
+        wald(estimate, Some(variance.sqrt()), level, Scale::Identity)
     };
-    Some(PoissonDecomposition {
+    Ok(Some(PoissonDecomposition {
         gap: part(d.gap, v.gap),
         composition: part(d.composition, v.composition),
         rate: part(d.rate, v.rate),
         covariance: v.covariance,
-    })
+    }))
 }
 
 #[cfg(test)]

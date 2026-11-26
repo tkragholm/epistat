@@ -241,6 +241,7 @@ pub enum WilcoxonDistribution {
 }
 
 /// The bounds of the signed rank test at one `gamma`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WilcoxonBounds {
     /// The sensitivity parameter.
@@ -469,6 +470,7 @@ fn shifted_statistic(sorted: &[f64], tau: f64) -> f64 {
 }
 
 /// The bounds of the Hodges-Lehmann estimate of the shift at one `gamma`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HodgesLehmannBounds {
     /// The sensitivity parameter.
@@ -830,6 +832,7 @@ pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, Error
 }
 
 /// The bound of a test on the treated unit's score summed over sets.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SetBounds {
     /// The sensitivity parameter.

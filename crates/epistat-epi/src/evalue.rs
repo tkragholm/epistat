@@ -72,6 +72,7 @@
 //!    2019;30(4):509-16.
 
 use crate::Error;
+use epistat_core::{Estimate, Interval, Level};
 use std::fmt::{Display, Formatter};
 
 /// What is wrong with an E-value input.
@@ -105,8 +106,6 @@ pub(crate) enum EValueError {
     },
     /// A table that cannot be used.
     Table(&'static str),
-    /// A level outside `(0, 1)`.
-    Alpha(f64),
     /// A risk difference below zero, where the exposure groups should be
     /// exchanged.
     NegativeDifference,
@@ -132,7 +131,6 @@ impl Display for EValueError {
                 write!(f, "{what} must be at least 1, got {value}")
             }
             Self::Table(why) => write!(f, "invalid table: {why}"),
-            Self::Alpha(alpha) => write!(f, "alpha must be in (0, 1), got {alpha}"),
             Self::NegativeDifference => write!(
                 f,
                 "the risk difference is negative; exchange the exposure groups"
@@ -147,6 +145,11 @@ impl Display for EValueError {
 impl std::error::Error for EValueError {}
 
 /// The E-values of an estimate and of its confidence limits.
+///
+/// The fields are E-values and the risk ratios they are for, not an estimate
+/// with an interval: the limits come in as numbers without a level, and the
+/// E-value of a limit is not a limit of the E-value.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EValues {
     /// The risk ratio the E-values are for: the estimate, on the risk ratio
@@ -515,12 +518,13 @@ pub fn selection_evalues_rr(
 }
 
 /// The E-values of a risk difference and of its lower confidence limit.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RdEValues {
-    /// The risk difference of the table.
-    pub risk_difference: f64,
-    /// Its Wald lower limit at the level given.
-    pub lower_limit: f64,
+    /// The risk difference of the table with its standard error and its Wald
+    /// interval at the level given. The E-value of the limit is for the
+    /// lower limit; there is no p-value.
+    pub risk_difference: Estimate,
     /// The bias factor that moves the risk difference to the true value.
     pub bias_factor: f64,
     /// The bias factor that moves the lower limit to the true value, 1 when
@@ -537,7 +541,7 @@ pub struct RdEValues {
 /// `EValue::evalues.RD` \[2\]. The table is that of [`crate::bias`]: `a`
 /// exposed cases, `b` unexposed cases, `c` exposed non-cases and `d`
 /// unexposed non-cases. `true_rd` is the value to move to, 0 for the null,
-/// and the lower limit is the Wald limit at level `1 - alpha`.
+/// and the lower limit is the Wald limit at `level`.
 ///
 /// # Algorithm
 ///
@@ -552,7 +556,8 @@ pub struct RdEValues {
 /// ```
 ///
 /// with `f_B = f + (1 - f) / B`, `v1` and `v0` the binomial variances of the
-/// two risks, `vf` that of `f` and `z` the normal quantile at `1 - alpha / 2`.
+/// two risks, `vf` that of `f` and `z` the normal quantile at the level's
+/// [`Level::upper_probability`], `1 - alpha / 2` for a level given as alpha.
 /// The bias factor of the limit is the smallest `B` with `L(B) <= t`.
 /// `evalues.RD` finds it on a grid of step `1e-4` in `B`. Here `B` is scanned
 /// on a grid of relative step `1e-4` and the first crossing is then bisected
@@ -562,15 +567,15 @@ pub struct RdEValues {
 /// # Errors
 ///
 /// [`crate::Error`] for a table with a negative or non-finite cell, an
-/// empty exposure group or no unexposed case, [`crate::Error`],
-/// [`crate::Error`] for `true_rd`,
+/// empty exposure group or no unexposed case, [`crate::Error`] for a
+/// `true_rd` that is not finite,
 /// [`crate::Error`] when the risk difference is negative
 /// (exchange the exposure groups), and [`crate::Error`]
 /// when the difference is not above `true_rd`.
 pub fn evalues_rd(
     t: &crate::tables::Counts2x2,
     true_rd: f64,
-    alpha: f64,
+    level: Level,
 ) -> Result<RdEValues, Error> {
     if [
         t.exposed_cases,
@@ -595,9 +600,6 @@ pub fn evalues_rd(
             EValueError::Table("the unexposed need a case, or no bias factor is finite").into(),
         );
     }
-    if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(EValueError::Alpha(alpha).into());
-    }
     if !true_rd.is_finite() {
         return Err(EValueError::NotFinite { what: "true value" }.into());
     }
@@ -619,12 +621,19 @@ pub fn evalues_rd(
     let bias_factor =
         ((shifted * shifted + 4.0 * p1 * p0 * f * (1.0 - f)).sqrt() - shifted) / (2.0 * p0 * f);
     let estimate = evalue_threshold(bias_factor, 1.0)?;
-    let z = epistat_stats::dist::normal::quantile(1.0 - alpha / 2.0);
-    let lower_limit = p1 - p0 - z * (v1 + v0).sqrt();
+    let z = epistat_stats::dist::normal::two_sided_z(level);
+    let se = (v1 + v0).sqrt();
+    let lower_limit = p1 - p0 - z * se;
+    let risk_difference = Estimate::point(p1 - p0)
+        .with_se(Some(se))
+        .with_interval(Some(Interval::new(
+            Some(lower_limit),
+            Some(p1 - p0 + z * se),
+            level,
+        )));
     if lower_limit <= true_rd {
         return Ok(RdEValues {
-            risk_difference: p1 - p0,
-            lower_limit,
+            risk_difference,
             bias_factor,
             bias_factor_lower: 1.0,
             estimate,
@@ -639,8 +648,7 @@ pub fn evalues_rd(
     };
     let bias_factor_lower = first_crossing(1.0, bias_factor, |b| corrected_limit(b) <= true_rd);
     Ok(RdEValues {
-        risk_difference: p1 - p0,
-        lower_limit,
+        risk_difference,
         bias_factor,
         bias_factor_lower,
         estimate,
@@ -757,7 +765,8 @@ mod tests {
             exposed_noncases: 9_850.0,
             unexposed_noncases: 89_100.0,
         };
-        let e = evalues_rd(&t, 0.0, 0.05).unwrap();
+        let level = Level::alpha(0.05).unwrap();
+        let e = evalues_rd(&t, 0.0, level).unwrap();
         assert!((e.bias_factor - 1.5).abs() < 1e-12);
         assert!(e.bias_factor_lower > 1.0 && e.bias_factor_lower < e.bias_factor);
         assert!(e.lower < e.estimate);
@@ -768,14 +777,14 @@ mod tests {
             unexposed_noncases: 9_850.0,
         };
         assert_eq!(
-            evalues_rd(&swapped, 0.0, 0.05),
+            evalues_rd(&swapped, 0.0, level),
             Err(EValueError::NegativeDifference.into())
         );
         assert_eq!(
-            evalues_rd(&t, 0.01, 0.05),
+            evalues_rd(&t, 0.01, level),
             Err(EValueError::TrueNotBelowEstimate.into())
         );
-        assert!(evalues_rd(&t, 0.0, 1.5).is_err());
+        assert!(evalues_rd(&t, f64::NAN, level).is_err());
     }
 
     #[test]

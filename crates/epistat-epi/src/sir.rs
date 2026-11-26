@@ -13,11 +13,15 @@
 //! offered, all for the Poisson mean `O` and divided by `E`:
 //!
 //! ```text
-//! Exact (Garwood)   lower = Q_gamma(a, O) / E,  upper = Q_gamma(1 - a, O + 1) / E,  a = (1 - level) / 2
+//! Exact (Garwood)   lower = Q_gamma(a, O) / E,  upper = Q_gamma(1 - a, O + 1) / E
 //! Byar              the cube-root form of epistat_stats::dist::poisson, divided by E
 //! Wald              exp(ln SIR -/+ z / sqrt(O)), undefined for O = 0
 //! Profile           the t with 2 [ O ln(O / (E t)) - (O - E t) ] = z^2, one on each side of O / E
 //! ```
+//!
+//! Here `a` is the level's [`Level::lower_probability`], `(1 - level) / 2`
+//! for a confidence, and `z` the normal quantile at its
+//! [`Level::upper_probability`].
 //!
 //! The profile limits are the likelihood ratio interval of a Poisson mean with
 //! offset `ln E`. Each is the root of a smooth function that is monotone on its
@@ -50,7 +54,7 @@
 //!
 //! # Undefined values
 //!
-//! With `E = 0` the ratio, its interval and its p-value are `None`. With
+//! With `E = 0` there is no estimate. With
 //! `O = 0` and `E > 0` the ratio is 0 and the lower limit is 0, except for the
 //! Wald interval, which is `None`. A stratum with `E = 0` in a test over
 //! strata is an error, since its ratio is undefined and dropping it would
@@ -78,7 +82,8 @@ use crate::Error;
 use std::fmt;
 
 use crate::exact::poisson_two_sided;
-use epistat_core::Level;
+use crate::limits::interval;
+use epistat_core::{Estimate, Level, Scale};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::dist::normal;
 use epistat_stats::dist::poisson::{self, Method};
@@ -93,8 +98,6 @@ pub(crate) enum SirError {
     Expected,
     /// A time or a scale is negative, NaN or infinite, or `per` is not positive.
     Time,
-    /// The level is not strictly between 0 and 1.
-    Level,
     /// The slices differ in length.
     Length,
     /// A stratum has an expected count of 0.
@@ -109,7 +112,6 @@ impl fmt::Display for SirError {
             Self::Observed => "an observed count must be finite and not negative",
             Self::Expected => "an expected count must be finite and not negative",
             Self::Time => "the person-time must be finite and not negative, and per positive",
-            Self::Level => "the level must be strictly between 0 and 1",
             Self::Length => "the inputs differ in length",
             Self::ZeroExpected => "a stratum has no expected events, so its ratio is undefined",
             Self::Score => "a score must be finite",
@@ -132,24 +134,8 @@ pub enum SirInterval {
     Profile,
 }
 
-/// An SIR with its interval and p-value.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Sir {
-    /// The observed events.
-    pub observed: f64,
-    /// The expected events.
-    pub expected: f64,
-    /// `observed / expected`, `None` without expected events.
-    pub sir: Option<f64>,
-    /// The lower limit.
-    pub lower: Option<f64>,
-    /// The upper limit.
-    pub upper: Option<f64>,
-    /// The two-sided exact p-value that the ratio is 1.
-    pub p_value: Option<f64>,
-}
-
 /// A likelihood ratio statistic with its p-value.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Homogeneity {
     /// The statistic.
@@ -170,37 +156,36 @@ fn check_count(observed: f64, expected: f64) -> Result<(), Error> {
     Ok(())
 }
 
-/// The SIR of `observed` against `expected` events, with the interval at the
-/// coverage `level`. The observed count may be fractional, as when it is a sum
-/// of weights, but then it has no exact p-value.
+/// The SIR `observed / expected` with the interval `method` at `level` and
+/// the exact two-sided p-value that the ratio is 1, `None` without expected
+/// events.
+///
+/// The observed count may be fractional, as when it is a sum of weights, but
+/// then it has no exact p-value. With [`SirInterval::Wald`] the estimate is on
+/// [`Scale::Log`] with the standard error `1 / sqrt(O)` of `ln SIR`; the other
+/// intervals have no standard error.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or a level outside `(0, 1)`.
-pub fn sir(observed: f64, expected: f64, level: f64, interval: SirInterval) -> Result<Sir, Error> {
+/// [`crate::Error`] for a negative or non-finite count.
+pub fn sir(
+    observed: f64,
+    expected: f64,
+    level: Level,
+    method: SirInterval,
+) -> Result<Option<Estimate>, Error> {
     check_count(observed, expected)?;
-    if !(level > 0.0 && level < 1.0) {
-        return Err(SirError::Level.into());
-    }
     if expected == 0.0 {
-        return Ok(Sir {
-            observed,
-            expected,
-            sir: None,
-            lower: None,
-            upper: None,
-            p_value: None,
-        });
+        return Ok(None);
     }
     let ratio = observed / expected;
-    let (lower, upper) = match interval {
+    let (lower, upper) = match method {
         SirInterval::Exact | SirInterval::Byar => {
-            let method = if interval == SirInterval::Exact {
+            let method = if method == SirInterval::Exact {
                 Method::Exact
             } else {
                 Method::Byar
             };
-            let level = Level::confidence(level).map_err(|_| SirError::Level)?;
             let ci = poisson::cipoisson(observed, expected, level, method)
                 .map_err(|_| SirError::Expected)?;
             (ci.lower, ci.upper)
@@ -209,13 +194,13 @@ pub fn sir(observed: f64, expected: f64, level: f64, interval: SirInterval) -> R
             if observed == 0.0 {
                 (None, None)
             } else {
-                let half = normal::quantile(1.0 - (1.0 - level) / 2.0) / observed.sqrt();
+                let half = normal::two_sided_z(level) / observed.sqrt();
                 let centre = ratio.ln();
                 (Some((centre - half).exp()), Some((centre + half).exp()))
             }
         }
         SirInterval::Profile => {
-            let c = normal::quantile(1.0 - (1.0 - level) / 2.0).powi(2);
+            let c = normal::two_sided_z(level).powi(2);
             (
                 Some(profile_limit(observed, c, false) / expected),
                 Some(profile_limit(observed, c, true) / expected),
@@ -224,14 +209,16 @@ pub fn sir(observed: f64, expected: f64, level: f64, interval: SirInterval) -> R
     };
     let integer = (observed - observed.round()).abs() <= 1e-7;
     let p_value = integer.then(|| poisson_two_sided(observed.round(), expected));
-    Ok(Sir {
-        observed,
-        expected,
-        sir: Some(ratio),
-        lower,
-        upper,
-        p_value,
-    })
+    let estimate = Estimate::point(ratio)
+        .with_interval(interval(lower, upper, level))
+        .with_p_value(p_value);
+    Ok(Some(match method {
+        SirInterval::Wald if observed > 0.0 => estimate
+            .with_se(Some(1.0 / observed.sqrt()))
+            .with_scale(Scale::Log),
+        SirInterval::Wald => estimate.with_scale(Scale::Log),
+        _ => estimate,
+    }))
 }
 
 /// The mean `mu` with `2 [ o ln(o / mu) - o + mu ] = c` above or below `o`.
@@ -466,9 +453,10 @@ mod tests {
     #[test]
     fn profile_limits_satisfy_the_deviance_equation() {
         for (o, e) in [(0.0, 3.0), (1.0, 2.0), (7.0, 4.0), (250.0, 200.0)] {
-            let r = sir(o, e, 0.95, SirInterval::Profile).unwrap();
-            let c = normal::two_sided_z(Level::default()).powi(2);
-            for t in [r.lower.unwrap(), r.upper.unwrap()] {
+            let level = Level::default();
+            let r = sir(o, e, level, SirInterval::Profile).unwrap().unwrap();
+            let c = normal::two_sided_z(level).powi(2);
+            for t in [r.lower().unwrap(), r.upper().unwrap()] {
                 let mu = e * t;
                 if mu > 0.0 {
                     let dev = 2.0 * (o * (o / mu).ln() - o + mu);
@@ -481,23 +469,19 @@ mod tests {
 
     #[test]
     fn undefined_and_edge_cases() {
-        let r = sir(3.0, 0.0, 0.95, SirInterval::Exact).unwrap();
-        assert_eq!((r.sir, r.lower, r.p_value), (None, None, None));
-        let r = sir(0.0, 2.0, 0.95, SirInterval::Exact).unwrap();
-        assert_eq!((r.sir, r.lower), (Some(0.0), Some(0.0)));
-        let r = sir(0.0, 2.0, 0.95, SirInterval::Wald).unwrap();
-        assert_eq!(r.lower, None);
+        let level = Level::default();
+        assert_eq!(sir(3.0, 0.0, level, SirInterval::Exact).unwrap(), None);
+        let r = sir(0.0, 2.0, level, SirInterval::Exact).unwrap().unwrap();
+        assert_eq!((r.estimate, r.lower()), (0.0, Some(0.0)));
+        let r = sir(0.0, 2.0, level, SirInterval::Wald).unwrap().unwrap();
+        assert_eq!((r.interval, r.se), (None, None));
         assert_eq!(
-            sir(-1.0, 1.0, 0.95, SirInterval::Exact),
+            sir(-1.0, 1.0, level, SirInterval::Exact),
             Err(SirError::Observed.into())
         );
         assert_eq!(
-            sir(1.0, f64::NAN, 0.95, SirInterval::Exact),
+            sir(1.0, f64::NAN, level, SirInterval::Exact),
             Err(SirError::Expected.into())
-        );
-        assert_eq!(
-            sir(1.0, 1.0, 0.0, SirInterval::Exact),
-            Err(SirError::Level.into())
         );
         assert_eq!(
             sir_homogeneity(&[1.0, 2.0], &[1.0, 0.0]),

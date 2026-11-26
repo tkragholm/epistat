@@ -178,13 +178,14 @@ where
             }));
         }
     }
-    finish_single(draws, opts.alpha)
+    finish_single(draws, opts.level)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bias::{Dist, Misclass, correct_exposure};
+    use epistat_core::Level;
 
     #[expect(
         clippy::cast_possible_truncation,
@@ -239,14 +240,18 @@ mod tests {
                 draws: 10,
                 seed: 3,
                 random_error: false,
-                alpha: 0.05,
+                level: Level::alpha(0.05).unwrap(),
             },
             |x| log_rr(x, &case),
         )
         .unwrap();
         let rr = t.risk_ratio().unwrap();
-        assert!((r.adjusted.median - rr).abs() < 1e-14 * rr);
-        assert_eq!(r.adjusted.lower.to_bits(), r.adjusted.upper.to_bits());
+        let adjusted = r.adjusted.unwrap();
+        assert!((adjusted.estimate - rr).abs() < 1e-14 * rr);
+        assert_eq!(
+            adjusted.lower().unwrap().to_bits(),
+            adjusted.upper().unwrap().to_bits()
+        );
     }
 
     #[test]
@@ -280,7 +285,7 @@ mod tests {
                 draws: 400,
                 seed: 9,
                 random_error: true,
-                alpha: 0.05,
+                level: Level::alpha(0.05).unwrap(),
             },
             |x| log_rr(x, &case),
         )
@@ -296,12 +301,13 @@ mod tests {
         let mean = logs.iter().sum::<f64>() / n;
         let sd = (logs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
         let allowed = 4.0 * (std::f64::consts::PI / 2.0).sqrt() * sd / n.sqrt();
+        let adjusted = r.adjusted.unwrap();
         assert!(
-            (r.adjusted.median.ln() - corrected.ln()).abs() < allowed,
+            (adjusted.estimate.ln() - corrected.ln()).abs() < allowed,
             "{} {corrected}",
-            r.adjusted.median
+            adjusted.estimate
         );
         let total = r.adjusted_total.unwrap();
-        assert!(total.lower < r.adjusted.lower && total.upper > r.adjusted.upper);
+        assert!(total.lower() < adjusted.lower() && total.upper() > adjusted.upper());
     }
 }

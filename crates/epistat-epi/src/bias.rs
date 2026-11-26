@@ -44,9 +44,12 @@
 //! does.
 //!
 //! The probabilistic versions draw the bias parameters from [`Dist`]
-//! distributions, correct, and take the median and the `alpha / 2` and
-//! `1 - alpha / 2` percentiles (type 7) of the corrected measures: the
-//! systematic error. With `random_error`, the sampling error of the table is
+//! distributions, correct, and take the median and the
+//! [`Level::lower_probability`] and [`Level::upper_probability`] percentiles
+//! (type 7) of the corrected measures, `alpha / 2` and `1 - alpha / 2` for a
+//! level given as alpha: the systematic error. Each summary is an
+//! [`Estimate`] with the median as its estimate and the percentiles as its
+//! interval. With `random_error`, the sampling error of the table is
 //! added as well. For misclassification this follows Fox, Lash and Greenland
 //! \[2\]: the true exposure prevalences among cases and non-cases are drawn
 //! from `Beta(A, B)` and `Beta(C, D)`, the predictive values follow from them,
@@ -114,8 +117,11 @@ pub use rates::{
 };
 pub use record::record_level_misclass;
 
+use epistat_core::{Estimate, Level};
 use epistat_stats::dist::beta;
 use epistat_stats::dist::normal;
+
+use crate::limits::interval;
 use epistat_stats::quantile::type7;
 
 use crate::tables::Counts2x2;
@@ -182,6 +188,7 @@ impl Counts2x2 {
 /// A corrected table and its measures. `cells` is `None`, and so are the
 /// measures, when a corrected cell is negative: the assumed parameters are then
 /// incompatible with the data.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Corrected {
     /// The corrected cells.
@@ -513,6 +520,7 @@ pub struct Confounder {
 }
 
 /// A table adjusted for an unmeasured binary confounder.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Confounded {
     /// The crude measure of the table.
@@ -893,38 +901,34 @@ pub struct ProbOptions {
     pub seed: u64,
     /// Whether to add the sampling error of the table to the systematic error.
     pub random_error: bool,
-    /// The two-sided level of the limits: they are the `alpha / 2` and
-    /// `1 - alpha / 2` percentiles. 0.05 gives 95% limits.
-    pub alpha: f64,
-}
-
-/// The median and the limits of a set of corrected values.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Summary {
-    /// The median.
-    pub median: f64,
-    /// The `alpha / 2` percentile.
-    pub lower: f64,
-    /// The `1 - alpha / 2` percentile.
-    pub upper: f64,
+    /// The level of the limits: they are the percentiles at
+    /// [`Level::lower_probability`] and [`Level::upper_probability`].
+    /// `Level::alpha(0.05)` gives the 2.5 and 97.5 percentiles, as
+    /// `episensr`'s `alpha = 0.05`.
+    pub level: Level,
 }
 
 /// The result of a probabilistic bias analysis, for the risk ratio, the odds
 /// ratio and the risk difference, with every draw.
+///
+/// Each summary is the median of the draws kept with their percentiles as
+/// the interval, `None` when a value kept is NaN. The summaries with random
+/// error are also `None` when it was not requested.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbResult {
     /// The risk ratio with systematic error only.
-    pub risk_ratio: Summary,
+    pub risk_ratio: Option<Estimate>,
     /// The odds ratio with systematic error only.
-    pub odds_ratio: Summary,
+    pub odds_ratio: Option<Estimate>,
     /// The risk difference with systematic error only.
-    pub risk_difference: Summary,
-    /// The risk ratio with systematic and random error, when requested.
-    pub risk_ratio_total: Option<Summary>,
-    /// The odds ratio with systematic and random error, when requested.
-    pub odds_ratio_total: Option<Summary>,
-    /// The risk difference with systematic and random error, when requested.
-    pub risk_difference_total: Option<Summary>,
+    pub risk_difference: Option<Estimate>,
+    /// The risk ratio with systematic and random error.
+    pub risk_ratio_total: Option<Estimate>,
+    /// The odds ratio with systematic and random error.
+    pub odds_ratio_total: Option<Estimate>,
+    /// The risk difference with systematic and random error.
+    pub risk_difference_total: Option<Estimate>,
     /// The draws kept.
     pub n_draws_used: usize,
     /// The draws discarded because a parameter or a corrected cell was out of
@@ -1059,7 +1063,7 @@ impl Collector {
         }
     }
 
-    fn finish(self, alpha: f64) -> Result<ProbResult, Error> {
+    fn finish(self, level: Level) -> Result<ProbResult, Error> {
         let kept: Vec<Measures> = self.draws.systematic.iter().flatten().copied().collect();
         if kept.is_empty() {
             return Err(BiasError::NoValidDraws {
@@ -1069,17 +1073,19 @@ impl Collector {
         }
         let totals: Vec<Measures> = self.draws.total.iter().flatten().copied().collect();
         let total = self.random_error && !totals.is_empty();
-        let pick = |values: &[Measures], f: fn(&Measures) -> f64| -> Summary {
+        let pick = |values: &[Measures], f: fn(&Measures) -> f64| -> Option<Estimate> {
             let mut v: Vec<f64> = values.iter().map(f).collect();
-            summarise(&mut v, alpha)
+            summarise(&mut v, level)
         };
         Ok(ProbResult {
             risk_ratio: pick(&kept, |m| m.risk_ratio),
             odds_ratio: pick(&kept, |m| m.odds_ratio),
             risk_difference: pick(&kept, |m| m.risk_difference),
-            risk_ratio_total: total.then(|| pick(&totals, |m| m.risk_ratio)),
-            odds_ratio_total: total.then(|| pick(&totals, |m| m.odds_ratio)),
-            risk_difference_total: total.then(|| pick(&totals, |m| m.risk_difference)),
+            risk_ratio_total: total.then(|| pick(&totals, |m| m.risk_ratio)).flatten(),
+            odds_ratio_total: total.then(|| pick(&totals, |m| m.odds_ratio)).flatten(),
+            risk_difference_total: total
+                .then(|| pick(&totals, |m| m.risk_difference))
+                .flatten(),
             n_draws_used: kept.len(),
             n_discarded: self.discarded,
             draws: self.draws,
@@ -1087,22 +1093,19 @@ impl Collector {
     }
 }
 
-fn summarise(values: &mut [f64], alpha: f64) -> Summary {
+/// The median of `values` with the percentiles of `level` as its interval,
+/// `None` when a value is NaN.
+fn summarise(values: &mut [f64], level: Level) -> Option<Estimate> {
     values.sort_unstable_by(f64::total_cmp);
-    let at = |p: f64| type7(values, p).unwrap_or(f64::NAN);
-    Summary {
-        median: at(0.5),
-        lower: at(alpha / 2.0),
-        upper: at(1.0 - alpha / 2.0),
-    }
+    let median = type7(values, 0.5)?;
+    let lower = type7(values, level.lower_probability());
+    let upper = type7(values, level.upper_probability());
+    Some(Estimate::point(median).with_interval(interval(lower, upper, level)))
 }
 
 fn check_options(o: &ProbOptions) -> Result<(), Error> {
     if o.draws == 0 {
         return Err(BiasError::Parameter("the number of draws must be positive").into());
-    }
-    if !(o.alpha > 0.0 && o.alpha < 1.0) {
-        return Err(BiasError::Parameter("alpha must be in (0, 1)").into());
     }
     Ok(())
 }
@@ -1248,7 +1251,7 @@ pub fn probabilistic_misclass(
         );
         out.push(&parameters, draw);
     }
-    out.finish(opts.alpha)
+    out.finish(opts.level)
 }
 
 fn misclass_draw(
@@ -1395,7 +1398,7 @@ pub fn probabilistic_selection(
         })();
         out.push(&parameters, draw);
     }
-    out.finish(opts.alpha)
+    out.finish(opts.level)
 }
 
 /// Draws the four selection probabilities into `parameters`, `None` when one
@@ -1419,12 +1422,17 @@ fn draw_selection(
 }
 
 /// The result of a probabilistic adjustment for one measure.
+///
+/// Each summary is the median of the draws kept with their percentiles as
+/// the interval, `None` when a value kept is NaN, and for the one with random
+/// error also when it was not requested.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdjustedResult {
     /// The adjusted measure with systematic error only.
-    pub adjusted: Summary,
-    /// The adjusted measure with systematic and random error, when requested.
-    pub adjusted_total: Option<Summary>,
+    pub adjusted: Option<Estimate>,
+    /// The adjusted measure with systematic and random error.
+    pub adjusted_total: Option<Estimate>,
     /// The draws kept.
     pub n_draws_used: usize,
     /// The draws discarded because a parameter was out of range or a stratum
@@ -1435,7 +1443,7 @@ pub struct AdjustedResult {
 }
 
 /// The adjusted value of every draw, summarised.
-fn finish_single(draws: Draws<f64>, alpha: f64) -> Result<AdjustedResult, Error> {
+fn finish_single(draws: Draws<f64>, level: Level) -> Result<AdjustedResult, Error> {
     let mut systematic: Vec<f64> = draws.systematic.iter().flatten().copied().collect();
     let discarded = draws.len() - systematic.len();
     if systematic.is_empty() {
@@ -1446,8 +1454,10 @@ fn finish_single(draws: Draws<f64>, alpha: f64) -> Result<AdjustedResult, Error>
     Ok(AdjustedResult {
         n_draws_used: systematic.len(),
         n_discarded: discarded,
-        adjusted: summarise(&mut systematic, alpha),
-        adjusted_total: random_error.then(|| summarise(&mut total, alpha)),
+        adjusted: summarise(&mut systematic, level),
+        adjusted_total: random_error
+            .then(|| summarise(&mut total, level))
+            .flatten(),
         draws,
     })
 }
@@ -1512,7 +1522,7 @@ pub fn probabilistic_confounding(
                 .push(adjusted.map(|value| shift_measure(measure, value, stream.normal(), se)));
         }
     }
-    finish_single(draws, opts.alpha)
+    finish_single(draws, opts.level)
 }
 
 /// Draws a confounder into `parameters` and gives the Mantel-Haenszel
@@ -1898,7 +1908,7 @@ mod tests {
             draws,
             seed: 11,
             random_error,
-            alpha: 0.05,
+            level: Level::alpha(0.05).unwrap(),
         }
     }
 
@@ -1918,8 +1928,9 @@ mod tests {
             &options(50, false),
         )
         .unwrap();
-        assert!(close(r.risk_ratio.median, simple.risk_ratio.unwrap()));
-        assert_eq!(r.risk_ratio.lower.to_bits(), r.risk_ratio.upper.to_bits());
+        let rr = r.risk_ratio.unwrap();
+        assert!(close(rr.estimate, simple.risk_ratio.unwrap()));
+        assert_eq!(rr.lower().unwrap().to_bits(), rr.upper().unwrap().to_bits());
         assert_eq!((r.n_draws_used, r.n_discarded), (50, 0));
         assert!(r.risk_ratio_total.is_none());
     }
@@ -1953,8 +1964,8 @@ mod tests {
         assert!(x.n_discarded > 0, "{x:?}");
         assert_eq!(x.n_draws_used + x.n_discarded, 2000);
         assert_ne!(x, run(6));
-        let total = x.risk_ratio_total.unwrap();
-        assert!(total.lower < x.risk_ratio.lower && total.upper > x.risk_ratio.upper);
+        let (total, rr) = (x.risk_ratio_total.unwrap(), x.risk_ratio.unwrap());
+        assert!(total.lower() < rr.lower() && total.upper() > rr.upper());
     }
 
     #[test]

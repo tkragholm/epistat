@@ -76,6 +76,7 @@ pub enum BinaryDistribution {
 }
 
 /// The bounds of the one-sided Mantel-Haenszel test at one `gamma`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BinaryBounds {
     /// The sensitivity parameter.

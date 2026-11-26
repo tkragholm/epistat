@@ -214,5 +214,5 @@ pub fn probabilistic_multiple(
                 .push(value.map(|v| shift_measure(measure, v, stream.normal(), se)));
         }
     }
-    finish_single(draws, opts.alpha)
+    finish_single(draws, opts.level)
 }

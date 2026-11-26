@@ -75,7 +75,15 @@
 //! `p = e1 / (e1 + e0)` bounded by the Clopper-Pearson limits
 //! `qbeta(a, e1, e0 + 1)` and `qbeta(1 - a, e1 + 1, e0)`, `a = (1 - level) / 2`,
 //! the limits of the ratio are `p / (1 - p) t0 / t1`, as `poisson.test` has
-//! them. They are 0 for `e1 = 0` and infinite for `e0 = 0`.
+//! them. The lower limit is 0 for `e1 = 0`, and for `e0 = 0` the ratio is
+//! infinite and has no upper limit.
+//!
+//! # Results and levels
+//!
+//! Every estimate is an [`epistat_core::Estimate`] with its interval at the
+//! [`Level`] given. In the formulas `a` is [`Level::lower_probability`] and
+//! `1 - a` is [`Level::upper_probability`], so a level given as the
+//! confidence `c` uses `(1 - c) / 2` and `1 - (1 - c) / 2` as written.
 //!
 //! # Undefined values
 //!
@@ -85,7 +93,7 @@
 //! difference of two standardised rates when either is; a ratio is also `None`
 //! when the reference rate is 0. The rate ratio is `None` when
 //! the denominator has no events or either time is 0; with no events in the
-//! numerator the ratio is 0 and its limits and p-value are `None`.
+//! numerator the ratio is 0 and has no interval or p-value.
 //!
 //! # Accuracy
 //!
@@ -115,7 +123,8 @@ use crate::Error;
 use std::fmt;
 
 use crate::exact::binomial_two_sided;
-use epistat_core::Level;
+use crate::limits::interval;
+use epistat_core::{Estimate, Interval, Level, Scale};
 use epistat_stats::dist::normal;
 use epistat_stats::dist::poisson::{self, Method};
 use epistat_stats::dist::{beta, chi_square, f};
@@ -137,8 +146,6 @@ pub(crate) enum RateError {
     Time,
     /// A weight is negative, NaN or infinite, or the weights sum to 0.
     Weights,
-    /// The level is not strictly between 0 and 1.
-    Level,
     /// The scale is not positive and finite.
     Scale,
     /// A count given to the exact test is not an integer.
@@ -154,7 +161,6 @@ impl fmt::Display for RateError {
             Self::Events => "an event count must be finite and not negative",
             Self::Time => "a person-time must be finite and not negative",
             Self::Weights => "weights must be finite, not negative and sum to more than 0",
-            Self::Level => "the level must be strictly between 0 and 1",
             Self::Scale => "the scale must be positive and finite",
             Self::NotInteger => "the exact test needs integer counts",
             Self::Empty => "there are no strata",
@@ -164,54 +170,17 @@ impl fmt::Display for RateError {
 
 impl std::error::Error for RateError {}
 
-/// A rate with its exact Poisson interval.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Rate {
-    /// The events.
-    pub events: f64,
-    /// The person-time.
-    pub time: f64,
-    /// The rate times the scale, `None` without person-time.
-    pub rate: Option<f64>,
-    /// The lower limit of the interval, on the same scale.
-    pub lower: Option<f64>,
-    /// The upper limit of the interval, on the same scale.
-    pub upper: Option<f64>,
-}
-
-/// A directly standardised rate.
+/// A directly standardised rate: the rate with the gamma interval of Fay and
+/// Feuer, and its variance.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Standardised {
-    /// The standardised rate, `None` when a stratum with weight has no
-    /// person-time.
-    pub rate: Option<f64>,
-    /// The variance of the rate.
-    pub variance: Option<f64>,
-    /// The lower limit of the gamma interval.
-    pub lower: Option<f64>,
-    /// The upper limit of the gamma interval.
-    pub upper: Option<f64>,
-}
-
-/// A comparison of two rates.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Contrast {
-    /// The rate ratio or the rate difference.
-    pub estimate: Option<f64>,
-    /// The lower Wald limit.
-    pub lower: Option<f64>,
-    /// The upper Wald limit.
-    pub upper: Option<f64>,
-    /// The two-sided Wald p-value of no difference.
-    pub p_value: Option<f64>,
-}
-
-fn check_level(level: f64) -> Result<(), Error> {
-    if level > 0.0 && level < 1.0 {
-        Ok(())
-    } else {
-        Err(RateError::Level.into())
-    }
+    /// The standardised rate. Its standard error is the square root of
+    /// [`variance`](Self::variance) and its interval the gamma interval; it
+    /// has no p-value.
+    pub rate: Estimate,
+    /// The variance of the rate, `sum w_s^2 d_s / y_s^2`.
+    pub variance: f64,
 }
 
 fn check_count(x: f64) -> Result<(), Error> {
@@ -230,39 +199,33 @@ fn check_time(x: f64) -> Result<(), Error> {
     }
 }
 
-/// The rate `events / time * scale` with the exact Poisson interval at the
-/// coverage `level`.
+/// The rate `events / time * scale` with the exact Poisson interval at
+/// `level`, `None` without person-time. The estimate has no standard error
+/// or p-value.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or time, a level outside
-/// `(0, 1)`, or a scale that is not positive and finite.
-pub fn crude_rate(events: f64, time: f64, level: f64, scale: f64) -> Result<Rate, Error> {
+/// [`crate::Error`] for a negative or non-finite count or time, or a scale
+/// that is not positive and finite.
+pub fn crude_rate(
+    events: f64,
+    time: f64,
+    level: Level,
+    scale: f64,
+) -> Result<Option<Estimate>, Error> {
     check_count(events)?;
     check_time(time)?;
-    check_level(level)?;
     if !(scale > 0.0 && scale.is_finite()) {
         return Err(RateError::Scale.into());
     }
     if time == 0.0 {
-        return Ok(Rate {
-            events,
-            time,
-            rate: None,
-            lower: None,
-            upper: None,
-        });
+        return Ok(None);
     }
-    let level = Level::confidence(level).map_err(|_| RateError::Level)?;
     let ci =
         poisson::cipoisson(events, time, level, Method::Exact).map_err(|_| RateError::Events)?;
-    Ok(Rate {
-        events,
-        time,
-        rate: Some(events / time * scale),
-        lower: ci.lower.map(|x| x * scale),
-        upper: ci.upper.map(|x| x * scale),
-    })
+    Ok(Some(Estimate::point(events / time * scale).with_interval(
+        interval(ci.lower.map(|x| x * scale), ci.upper.map(|x| x * scale), level),
+    )))
 }
 
 /// The sums of one group standardised to a set of weights, over the strata
@@ -332,37 +295,30 @@ fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<P
 }
 
 /// The rate standardised to `weights`, with its variance and the gamma
-/// interval of Fay and Feuer at the coverage `level`. The weights are scaled
-/// to sum to 1, and the rate is per unit of person-time.
+/// interval of Fay and Feuer at `level`. The weights are scaled to sum to 1,
+/// and the rate is per unit of person-time. `None` when a stratum with a
+/// positive weight has no person-time.
 ///
 /// # Errors
 ///
 /// [`crate::Error`] for slices of different length or no strata, a negative or
-/// non-finite count, time or weight, weights that sum to 0, or a level
-/// outside `(0, 1)`.
+/// non-finite count, time or weight, or weights that sum to 0.
 pub fn direct_standardised(
     events: &[f64],
     time: &[f64],
     weights: &[f64],
-    level: f64,
-) -> Result<Standardised, Error> {
-    let parts = standardise(events, time, weights)?;
-    check_level(level)?;
+    level: Level,
+) -> Result<Option<Standardised>, Error> {
     let Some(Parts {
         rate,
         variance,
         w_max,
         ..
-    }) = parts
+    }) = standardise(events, time, weights)?
     else {
-        return Ok(Standardised {
-            rate: None,
-            variance: None,
-            lower: None,
-            upper: None,
-        });
+        return Ok(None);
     };
-    let a = (1.0 - level) / 2.0;
+    let a = level.lower_probability();
     let lower = if rate == 0.0 {
         Some(0.0)
     } else {
@@ -372,16 +328,16 @@ pub fn direct_standardised(
     let shifted = rate + w_max;
     let v_up = variance + w_max * w_max;
     let upper = finite(chi_square::quantile(
-        1.0 - a,
+        level.upper_probability(),
         2.0 * (shifted * shifted / v_up),
     ))
     .map(|q| q * v_up / (2.0 * shifted));
-    Ok(Standardised {
-        rate: Some(rate),
-        variance: Some(variance),
-        lower,
-        upper,
-    })
+    Ok(Some(Standardised {
+        rate: Estimate::point(rate)
+            .with_se(Some(variance.sqrt()))
+            .with_interval(interval(lower, upper, level)),
+        variance,
+    }))
 }
 
 /// The events and person-time of one group in each stratum of a standard.
@@ -413,30 +369,21 @@ fn standardise_pair(
     group: Strata<'_>,
     reference: Strata<'_>,
     weights: &[f64],
-    level: f64,
 ) -> Result<Option<(Parts, Parts)>, Error> {
     let one = standardise(group.events, group.time, weights)?;
     let zero = standardise(reference.events, reference.time, weights)?;
-    check_level(level)?;
     Ok(one.zip(zero))
 }
 
-const NO_CONTRAST: Contrast = Contrast {
-    estimate: None,
-    lower: None,
-    upper: None,
-    p_value: None,
-};
-
 /// The ratio of the rate of `group` to that of `reference`, both directly
-/// standardised to `weights`, with the interval `interval` at the coverage
-/// `level`.
+/// standardised to `weights`, with the interval `interval` at `level`.
 ///
 /// The ratio is `None` when the reference rate is 0 or either rate is
 /// undefined, as in [`direct_standardised`]. A ratio of 0 has the lower limit
-/// 0 and, with [`RatioInterval::Log`], no upper limit. The p-value is that
-/// of the Wald test on the log scale for [`RatioInterval::Log`] and `None`
-/// for the F intervals.
+/// 0 and, with [`RatioInterval::Log`], no upper limit. With
+/// [`RatioInterval::Log`] the estimate is on [`Scale::Log`], with the
+/// standard error of the log ratio and the Wald p-value on that scale; the F
+/// intervals have neither.
 ///
 /// # Errors
 ///
@@ -445,39 +392,40 @@ pub fn standardised_ratio(
     group: Strata<'_>,
     reference: Strata<'_>,
     weights: &[f64],
-    level: f64,
+    level: Level,
     interval: RatioInterval,
-) -> Result<Contrast, Error> {
-    let Some((one, zero)) = standardise_pair(group, reference, weights, level)? else {
-        return Ok(NO_CONTRAST);
+) -> Result<Option<Estimate>, Error> {
+    let Some((one, zero)) = standardise_pair(group, reference, weights)? else {
+        return Ok(None);
     };
     let (r1, v1, r0, v0) = (one.rate, one.variance, zero.rate, zero.variance);
     if r0 == 0.0 {
-        return Ok(NO_CONTRAST);
+        return Ok(None);
     }
     let estimate = r1 / r0;
-    let a = (1.0 - level) / 2.0;
+    let a = level.lower_probability();
+    let b = level.upper_probability();
     // A rate with its variance as a gamma variable on 2 r^2 / v degrees of
     // freedom, scaled.
     let df = |r: f64, v: f64| 2.0 * r * r / v;
     let (lower, upper) = match interval {
         RatioInterval::Log => {
             if r1 == 0.0 {
-                return Ok(Contrast {
-                    estimate: Some(0.0),
-                    ..NO_CONTRAST
-                });
+                return Ok(Some(Estimate::point(0.0).with_scale(Scale::Log)));
             }
-            let c = wald(
+            let w = wald(
                 estimate.ln(),
                 (v1 / (r1 * r1) + v0 / (r0 * r0)).sqrt(),
                 level,
-                true,
+                Scale::Log,
             );
-            return Ok(Contrast {
-                estimate: Some(estimate),
-                ..c
-            });
+            return Ok(Some(Estimate::new(
+                estimate,
+                w.se,
+                w.interval,
+                w.p_value,
+                w.scale,
+            )));
         }
         RatioInterval::F => {
             let (s1, u1) = (r1 + one.w_max, v1 + one.w_max * one.w_max);
@@ -487,7 +435,7 @@ pub fn standardised_ratio(
             } else {
                 finite(f::quantile(a, df(r1, v1), df(s0, u0))).map(|q| r1 / s0 * q)
             };
-            let upper = finite(f::quantile(1.0 - a, df(s1, u1), df(r0, v0))).map(|q| s1 / r0 * q);
+            let upper = finite(f::quantile(b, df(s1, u1), df(r0, v0))).map(|q| s1 / r0 * q);
             (lower, upper)
         }
         RatioInterval::ModifiedF => {
@@ -498,24 +446,21 @@ pub fn standardised_ratio(
             } else {
                 finite(f::quantile(a, df(r1, v1), df(s0, u0))).map(|q| r1 / s0 * q)
             };
-            let upper = finite(f::quantile(1.0 - a, df(s1, u1), df(r0, v0))).map(|q| s1 / r0 * q);
+            let upper = finite(f::quantile(b, df(s1, u1), df(r0, v0))).map(|q| s1 / r0 * q);
             (lower, upper)
         }
     };
-    Ok(Contrast {
-        estimate: Some(estimate),
-        lower,
-        upper,
-        p_value: None,
-    })
+    Ok(Some(
+        Estimate::point(estimate).with_interval(self::interval(lower, upper, level)),
+    ))
 }
 
 /// The difference of the rate of `group` and that of `reference`, both
 /// directly standardised to `weights`, with the normal interval and p-value
-/// at the coverage `level` from the variance `V1 + V0`.
+/// at `level` from the variance `V1 + V0`.
 ///
-/// The difference is `None` when either rate is undefined, and its limits and
-/// p-value are `None` when both variances are 0.
+/// The difference is `None` when either rate is undefined, and its interval
+/// and p-value are `None` when both variances are 0.
 ///
 /// # Errors
 ///
@@ -524,107 +469,106 @@ pub fn standardised_difference(
     group: Strata<'_>,
     reference: Strata<'_>,
     weights: &[f64],
-    level: f64,
-) -> Result<Contrast, Error> {
-    let Some((one, zero)) = standardise_pair(group, reference, weights, level)? else {
-        return Ok(NO_CONTRAST);
+    level: Level,
+) -> Result<Option<Estimate>, Error> {
+    let Some((one, zero)) = standardise_pair(group, reference, weights)? else {
+        return Ok(None);
     };
     let difference = one.rate - zero.rate;
     let se = (one.variance + zero.variance).sqrt();
     if se == 0.0 {
-        return Ok(Contrast {
-            estimate: Some(difference),
-            ..NO_CONTRAST
-        });
+        return Ok(Some(Estimate::point(difference).with_se(Some(se))));
     }
-    Ok(wald(difference, se, level, false))
+    Ok(Some(wald(difference, se, level, Scale::Identity)))
 }
 
-fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<(), Error> {
+fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<(), Error> {
     check_count(e1)?;
     check_count(e0)?;
     check_time(t1)?;
     check_time(t0)?;
-    check_level(level)
+    Ok(())
 }
 
-fn wald(estimate: f64, se: f64, level: f64, log_scale: bool) -> Contrast {
-    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
+/// The Wald estimate of `estimate` with the standard error `se` at `level`.
+/// On [`Scale::Log`], `estimate` is the log of the ratio and the limits and
+/// the reported estimate are on the ratio's scale.
+fn wald(estimate: f64, se: f64, level: Level, scale: Scale) -> Estimate {
+    let z = normal::two_sided_z(level);
     let (lower, upper) = (estimate - z * se, estimate + z * se);
     let p = 2.0 * normal::cdf(-(estimate / se).abs());
-    if log_scale {
-        Contrast {
-            estimate: Some(estimate.exp()),
-            lower: Some(lower.exp()),
-            upper: Some(upper.exp()),
-            p_value: Some(p),
-        }
-    } else {
-        Contrast {
-            estimate: Some(estimate),
-            lower: Some(lower),
-            upper: Some(upper),
-            p_value: Some(p),
-        }
-    }
+    let (estimate, lower, upper) = match scale {
+        Scale::Log => (estimate.exp(), lower.exp(), upper.exp()),
+        _ => (estimate, lower, upper),
+    };
+    Estimate::new(
+        estimate,
+        Some(se),
+        Some(Interval::new(Some(lower), Some(upper), level)),
+        Some(p),
+        scale,
+    )
 }
 
 /// The rate ratio `(e1 / t1) / (e0 / t0)` with the Wald interval and p-value
-/// on the log scale at the coverage `level`.
+/// on the log scale at `level`, on [`Scale::Log`].
+///
+/// `None` when the denominator has no events or either time is 0. With no
+/// events in the numerator the ratio is 0 and has no standard error,
+/// interval or p-value.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or time, or a level
-/// outside `(0, 1)`.
-pub fn rate_ratio(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, Error> {
-    check_pair(e1, t1, e0, t0, level)?;
-    let none = Contrast {
-        estimate: None,
-        lower: None,
-        upper: None,
-        p_value: None,
-    };
+/// [`crate::Error`] for a negative or non-finite count or time.
+pub fn rate_ratio(
+    e1: f64,
+    t1: f64,
+    e0: f64,
+    t0: f64,
+    level: Level,
+) -> Result<Option<Estimate>, Error> {
+    check_pair(e1, t1, e0, t0)?;
     if t1 == 0.0 || t0 == 0.0 || e0 == 0.0 {
-        return Ok(none);
+        return Ok(None);
     }
     if e1 == 0.0 {
-        return Ok(Contrast {
-            estimate: Some(0.0),
-            ..none
-        });
+        return Ok(Some(Estimate::point(0.0).with_scale(Scale::Log)));
     }
     let log_ratio = (e1 / t1).ln() - (e0 / t0).ln();
-    Ok(wald(log_ratio, (1.0 / e1 + 1.0 / e0).sqrt(), level, true))
+    Ok(Some(wald(
+        log_ratio,
+        (1.0 / e1 + 1.0 / e0).sqrt(),
+        level,
+        Scale::Log,
+    )))
 }
 
 /// The rate difference `e1 / t1 - e0 / t0` with the normal interval and
-/// p-value at the coverage `level`.
+/// p-value at `level`.
+///
+/// `None` when either time is 0. Without events the difference is 0 and its
+/// interval and p-value are `None`.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or time, or a level
-/// outside `(0, 1)`.
-pub fn rate_difference(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, Error> {
-    check_pair(e1, t1, e0, t0, level)?;
+/// [`crate::Error`] for a negative or non-finite count or time.
+pub fn rate_difference(
+    e1: f64,
+    t1: f64,
+    e0: f64,
+    t0: f64,
+    level: Level,
+) -> Result<Option<Estimate>, Error> {
+    check_pair(e1, t1, e0, t0)?;
     if t1 == 0.0 || t0 == 0.0 {
-        return Ok(Contrast {
-            estimate: None,
-            lower: None,
-            upper: None,
-            p_value: None,
-        });
+        return Ok(None);
     }
     let se = (e1 / (t1 * t1) + e0 / (t0 * t0)).sqrt();
     let difference = e1 / t1 - e0 / t0;
     if se == 0.0 {
-        return Ok(Contrast {
-            estimate: Some(difference),
-            lower: None,
-            upper: None,
-            p_value: None,
-        });
+        return Ok(Some(Estimate::point(difference).with_se(Some(se))));
     }
-    Ok(wald(difference, se, level, false))
+    Ok(Some(wald(difference, se, level, Scale::Identity)))
 }
 
 /// The two-sided p-value of the exact conditional test that the two rates
@@ -636,7 +580,7 @@ pub fn rate_difference(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result
 /// [`crate::Error`] for a negative or non-finite count or time, and
 /// [`crate::Error`] for a count more than `1e-7` from an integer.
 pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Option<f64>, Error> {
-    check_pair(e1, t1, e0, t0, 0.5)?;
+    check_pair(e1, t1, e0, t0)?;
     let (x1, x0) = (e1.round(), e0.round());
     if (e1 - x1).abs() > 1e-7 || (e0 - x0).abs() > 1e-7 {
         return Err(RateError::NotInteger.into());
@@ -648,48 +592,50 @@ pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Optio
 }
 
 /// The rate ratio `(e1 / t1) / (e0 / t0)` with its exact conditional interval
-/// at the coverage `level` and the exact two-sided p-value of equal rates, as
+/// at `level` and the exact two-sided p-value of equal rates, as
 /// `stats::poisson.test(c(e1, e0), c(t1, t0))`.
 ///
-/// The estimate is `None` when `e0` is 0, as in [`rate_ratio`], and the upper
-/// limit is `None` there since it is infinite. The lower limit of a ratio with
-/// `e1 = 0` is 0. Everything is `None` when there are no events or a time is 0.
+/// `None` when there are no events or a time is 0. With `e0 = 0` the
+/// estimate is infinite, as `poisson.test` reports it, and the interval has
+/// no upper limit. The lower limit of a ratio with `e1 = 0` is 0. The
+/// estimate has no standard error.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or time, or a level
-/// outside `(0, 1)`, and [`crate::Error`] for a count more than `1e-7`
-/// from an integer.
-pub fn rate_ratio_exact(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, Error> {
-    check_pair(e1, t1, e0, t0, level)?;
-    let p_value = rate_ratio_exact_test(e1, t1, e0, t0)?;
+/// [`crate::Error`] for a negative or non-finite count or time, and for a
+/// count more than `1e-7` from an integer.
+pub fn rate_ratio_exact(
+    e1: f64,
+    t1: f64,
+    e0: f64,
+    t0: f64,
+    level: Level,
+) -> Result<Option<Estimate>, Error> {
+    let Some(p_value) = rate_ratio_exact_test(e1, t1, e0, t0)? else {
+        return Ok(None);
+    };
     let (x1, x0) = (e1.round(), e0.round());
-    if p_value.is_none() {
-        return Ok(Contrast {
-            estimate: None,
-            lower: None,
-            upper: None,
-            p_value: None,
-        });
-    }
-    let alpha = (1.0 - level) / 2.0;
     let to_ratio = |p: f64| p / (1.0 - p) * (t0 / t1);
     let lower = if x1 == 0.0 {
         Some(0.0)
     } else {
-        finite(beta::quantile(alpha, x1, x0 + 1.0)).map(to_ratio)
+        finite(beta::quantile(level.lower_probability(), x1, x0 + 1.0)).map(to_ratio)
     };
     let upper = if x0 == 0.0 {
         None
     } else {
-        finite(beta::quantile(1.0 - alpha, x1 + 1.0, x0)).map(to_ratio)
+        finite(beta::quantile(level.upper_probability(), x1 + 1.0, x0)).map(to_ratio)
     };
-    Ok(Contrast {
-        estimate: (x0 > 0.0).then(|| (e1 / t1) / (e0 / t0)),
-        lower,
-        upper,
-        p_value,
-    })
+    let estimate = if x0 > 0.0 {
+        (e1 / t1) / (e0 / t0)
+    } else {
+        f64::INFINITY
+    };
+    Ok(Some(
+        Estimate::point(estimate)
+            .with_interval(interval(lower, upper, level))
+            .with_p_value(Some(p_value)),
+    ))
 }
 
 #[cfg(test)]
@@ -698,32 +644,36 @@ mod tests {
 
     #[test]
     fn standardised_rate_of_equal_strata_is_the_crude_rate() {
-        let s = direct_standardised(&[10.0, 20.0], &[100.0, 200.0], &[1.0, 3.0], 0.95).unwrap();
-        assert!((s.rate.unwrap() - 0.1).abs() < 1e-15);
-        let (lo, hi) = (s.lower.unwrap(), s.upper.unwrap());
+        let level = Level::default();
+        let s = direct_standardised(&[10.0, 20.0], &[100.0, 200.0], &[1.0, 3.0], level)
+            .unwrap()
+            .unwrap();
+        assert!((s.rate.estimate - 0.1).abs() < 1e-15);
+        let (lo, hi) = (s.rate.lower().unwrap(), s.rate.upper().unwrap());
         assert!(lo < 0.1 && 0.1 < hi);
     }
 
     #[test]
     fn empty_stratum_with_weight_has_no_rate() {
-        let s = direct_standardised(&[1.0, 0.0], &[10.0, 0.0], &[1.0, 1.0], 0.95).unwrap();
-        assert_eq!(s.rate, None);
-        let s = direct_standardised(&[1.0, 0.0], &[10.0, 0.0], &[1.0, 0.0], 0.95).unwrap();
-        assert_eq!(s.rate, Some(0.1));
+        let level = Level::default();
+        let s = direct_standardised(&[1.0, 0.0], &[10.0, 0.0], &[1.0, 1.0], level).unwrap();
+        assert_eq!(s, None);
+        let s = direct_standardised(&[1.0, 0.0], &[10.0, 0.0], &[1.0, 0.0], level).unwrap();
+        assert_eq!(s.map(|s| s.rate.estimate), Some(0.1));
     }
 
     #[test]
     fn refuses_bad_input() {
         assert_eq!(
-            direct_standardised(&[1.0], &[1.0, 2.0], &[1.0], 0.95),
+            direct_standardised(&[1.0], &[1.0, 2.0], &[1.0], Level::default()),
             Err(RateError::Length.into())
         );
         assert_eq!(
-            direct_standardised(&[1.0], &[1.0], &[0.0], 0.95),
+            direct_standardised(&[1.0], &[1.0], &[0.0], Level::default()),
             Err(RateError::Weights.into())
         );
         assert_eq!(
-            crude_rate(-1.0, 1.0, 0.95, 1.0),
+            crude_rate(-1.0, 1.0, Level::default(), 1.0),
             Err(RateError::Events.into())
         );
         assert_eq!(
@@ -734,9 +684,9 @@ mod tests {
 
     #[test]
     fn zero_events_in_the_denominator_leave_the_ratio_undefined() {
-        let c = rate_ratio(3.0, 10.0, 0.0, 10.0, 0.95).unwrap();
-        assert_eq!(c.estimate, None);
-        let c = rate_ratio(0.0, 10.0, 3.0, 10.0, 0.95).unwrap();
-        assert_eq!((c.estimate, c.lower, c.p_value), (Some(0.0), None, None));
+        let level = Level::default();
+        assert_eq!(rate_ratio(3.0, 10.0, 0.0, 10.0, level).unwrap(), None);
+        let c = rate_ratio(0.0, 10.0, 3.0, 10.0, level).unwrap().unwrap();
+        assert_eq!((c.estimate, c.interval, c.p_value), (0.0, None, None));
     }
 }

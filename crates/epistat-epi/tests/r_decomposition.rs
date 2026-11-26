@@ -18,6 +18,7 @@
 //! that R sums in row order, with a rounding error below `n eps` for `n` = 400
 //! persons, `1e-13` relative.
 
+use epistat_core::Level;
 use epistat_epi::decomposition::{Split, kitagawa, kitagawa_poisson, kitagawa_symmetric, shares};
 use epistat_epi::rates::Strata;
 use epistat_epi::standardisation::{standardisation_weights, stratum_counts};
@@ -107,7 +108,9 @@ fn decompositions_and_their_variances() {
             (Split::Reference, &case.var_reference, k),
             (Split::Symmetric, &case.var_symmetric, s),
         ] {
-            let p = kitagawa_poisson(group, reference, split, 0.95, case.scale).unwrap();
+            let p = kitagawa_poisson(group, reference, split, Level::default(), case.scale)
+                .unwrap()
+                .unwrap();
             assert_eq!(p.gap.estimate.to_bits(), d.gap.to_bits(), "{name}");
             assert_eq!(
                 p.composition.estimate.to_bits(),
@@ -116,13 +119,13 @@ fn decompositions_and_their_variances() {
             );
             assert_eq!(p.rate.estimate.to_bits(), d.rate.to_bits(), "{name}");
             let of = want[0] + want[1];
-            check(p.gap.se * p.gap.se, case.var_gap, 1e-13, case.var_gap);
-            check(p.composition.se * p.composition.se, want[0], 1e-13, of);
-            check(p.rate.se * p.rate.se, want[1], 1e-13, of);
+            check(p.gap.se.unwrap() * p.gap.se.unwrap(), case.var_gap, 1e-13, case.var_gap);
+            check(p.composition.se.unwrap() * p.composition.se.unwrap(), want[0], 1e-13, of);
+            check(p.rate.se.unwrap() * p.rate.se.unwrap(), want[1], 1e-13, of);
             check(p.covariance, want[2], 1e-13, of);
             // The gap is the sum of the parts, so its variance is the sum of
             // theirs and twice their covariance.
-            let total = p.composition.se.powi(2) + p.rate.se.powi(2) + 2.0 * p.covariance;
+            let total = p.composition.se.unwrap().powi(2) + p.rate.se.unwrap().powi(2) + 2.0 * p.covariance;
             check(total, case.var_gap, 1e-12, of);
         }
     }

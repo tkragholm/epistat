@@ -25,6 +25,7 @@ pub mod decomposition;
 mod error;
 pub mod evalue;
 mod exact;
+mod limits;
 pub mod mantel_haenszel;
 pub mod rates;
 pub mod rosenbaum;
