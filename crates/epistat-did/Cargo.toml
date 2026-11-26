@@ -35,7 +35,7 @@ nightly = ["epistat-linalg/nightly"]
 bon = "3"
 clarabel = { version = "0.11.1", optional = true }
 epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
-epistat-glm = { path = "../epistat-glm", version = "0.2.0" }
+epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
 epistat-optim = { path = "../epistat-optim", version = "0.1.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.3" }

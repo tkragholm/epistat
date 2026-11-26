@@ -21,7 +21,7 @@ bench-internals = []
 nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
-epistat-glm = { path = "../epistat-glm", version = "0.2.0" }
+epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
 epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.3" }

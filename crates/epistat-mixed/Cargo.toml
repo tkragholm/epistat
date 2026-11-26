@@ -12,7 +12,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-epistat-glm = { path = "../epistat-glm", version = "0.2.0" }
+epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
 epistat-optim = { path = "../epistat-optim", version = "0.1.1" }
 epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
