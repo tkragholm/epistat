@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use super::fit::{Fitted, applies};
 use super::history::History;
 use super::prepare::Prepared;
-use super::{Action, Covariate, CovariateKind, Otherwise, Outcome, Restriction};
+use super::{Action, Covariate, CovariateKind, Otherwise, Outcome, Restriction, SimulatedCourse};
 use crate::error::{Error, Result};
 
 /// The persons of a block, whose moments are merged in block order.
@@ -70,6 +70,8 @@ pub(super) fn ratio_standard_error(a: &Moments, b: &Moments, d: &Moments) -> Opt
 /// reported period `t`, of its values and of their differences from the
 /// reference strategy.
 pub(super) struct Run {
+    /// The simulated courses of each strategy, when they are kept.
+    pub(super) courses: Option<Vec<SimulatedCourse>>,
     pub(super) value: Vec<Vec<Moments>>,
     pub(super) difference: Vec<Vec<Moments>>,
     pub(super) intervened_persons: Vec<f64>,
@@ -110,6 +112,7 @@ pub(super) fn sources(counts: &[f64], simulated: Option<usize>, seed: u64) -> Ve
 }
 
 struct Block {
+    courses: Option<Vec<SimulatedCourse>>,
     value: Vec<Moments>,
     difference: Vec<Moments>,
     persons: Vec<usize>,
@@ -125,6 +128,7 @@ pub(super) fn run(
     fitted: &Fitted,
     sources: &[usize],
     seed: u64,
+    keep: bool,
 ) -> Result<Run> {
     let strategies = prepared.rules.len();
     let reported = prepared.reported_periods().len();
@@ -140,6 +144,7 @@ pub(super) fn run(
                 chunk,
                 b * BLOCK,
                 seed,
+                keep,
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -159,9 +164,21 @@ pub(super) fn run(
             person_periods[s] += block.person_periods[s];
         }
     }
+    let courses = keep.then(|| {
+        let mut all = vec![SimulatedCourse::new(prepared.width); strategies];
+        for block in &blocks {
+            if let Some(c) = &block.courses {
+                for (a, b) in all.iter_mut().zip(c) {
+                    a.extend(b);
+                }
+            }
+        }
+        all
+    });
     let n = sources.len() as f64;
     let by_strategy = |m: Vec<Moments>| m.chunks(reported).map(<[Moments]>::to_vec).collect();
     Ok(Run {
+        courses,
         value: by_strategy(value),
         difference: by_strategy(difference),
         intervened_persons: persons.iter().map(|&c| c as f64 / n).collect(),
@@ -180,6 +197,7 @@ fn simulate_block(
     sources: &[usize],
     first: usize,
     seed: u64,
+    keep: bool,
 ) -> Result<Block> {
     let strategies = prepared.rules.len();
     let reported = prepared.reported_periods().len();
@@ -188,6 +206,7 @@ fn simulate_block(
     let mut sums = vec![0.0; cells];
     let mut person = vec![0.0; strategies * reported];
     let mut block = Block {
+        courses: keep.then(|| vec![SimulatedCourse::new(prepared.width); strategies]),
         value: vec![Moments::default(); strategies * reported],
         difference: vec![Moments::default(); strategies * reported],
         persons: vec![0; strategies],
@@ -209,6 +228,10 @@ fn simulate_block(
                 &mut values,
                 &mut sums,
                 &mut person[s * reported..(s + 1) * reported],
+                block
+                    .courses
+                    .as_mut()
+                    .map(|c| (&mut c[s], first + i)),
             )?;
             if intervened > 0 {
                 block.persons[s] += 1;
@@ -240,6 +263,7 @@ fn simulate_person(
     values: &mut [f64],
     sums: &mut [f64],
     out: &mut [f64],
+    mut course: Option<(&mut SimulatedCourse, usize)>,
 ) -> Result<usize> {
     let w = prepared.width;
     let nb = prepared.n_baseline;
@@ -268,14 +292,17 @@ fn simulate_person(
                     .as_ref()
                     .expect("covariate models are fitted when more than one period is simulated");
                 let draw = match covariate.kind {
-                    CovariateKind::Binary => stream.uniform(),
+                    CovariateKind::Binary | CovariateKind::Categorical(_) => stream.uniform(),
                     CovariateKind::Normal => stream.normal(),
                 };
                 if applies(covariate.restriction.as_ref(), v, &h) {
-                    let mean = model.mean(&covariate.terms, &h);
                     match covariate.kind {
-                        CovariateKind::Binary => f64::from(u8::from(draw < mean)),
+                        CovariateKind::Categorical(_) => model.class(&covariate.terms, &h, draw),
+                        CovariateKind::Binary => {
+                            f64::from(u8::from(draw < model.mean(&covariate.terms, &h)))
+                        }
                         CovariateKind::Normal => {
+                            let mean = model.mean(&covariate.terms, &h);
                             let sd = model.model.rmse.unwrap_or(0.0);
                             let x = mean + sd * draw;
                             match prepared.ranges[v] {
@@ -324,7 +351,7 @@ fn simulate_person(
             visible: w,
             baseline_lags: prepared.baseline_lags,
         };
-        match outcome {
+        let (py, pd) = match outcome {
             Outcome::Survival {
                 terms, competing, ..
             } => {
@@ -336,12 +363,29 @@ fn simulate_person(
                 risk += py * (1.0 - pd) * survival;
                 survival *= (1.0 - py) * (1.0 - pd);
                 out[k] = risk;
+                (py, pd)
             }
             Outcome::BinaryEnd { terms, .. } | Outcome::ContinuousEnd { terms, .. } => {
                 if k + 1 == periods {
                     out[0] = fitted.outcome.mean(terms, &h);
+                    risk = out[0];
+                    (out[0], f64::NAN)
+                } else {
+                    risk = f64::NAN;
+                    (f64::NAN, f64::NAN)
                 }
             }
+        };
+        if let Some((c, person)) = course.as_mut() {
+            c.person.push(*person);
+            c.source.push(source);
+            c.period.push(k);
+            for (v, column) in c.values.iter_mut().enumerate() {
+                column.push(values[k * w + v]);
+            }
+            c.outcome_probability.push(py);
+            c.competing_probability.push(pd);
+            c.value.push(risk);
         }
     }
     Ok(intervened)

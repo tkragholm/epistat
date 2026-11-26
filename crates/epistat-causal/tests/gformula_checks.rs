@@ -419,6 +419,7 @@ fn unusable_input_is_refused() {
             event: &sim.d,
             terms: gformula_sim::competing_terms(),
         }),
+        censoring: None,
     };
     expect_input(
         gformula(&data, &covariates(), &o, &[], &default),
@@ -433,4 +434,67 @@ fn unusable_input_is_refused() {
         gformula(&data, &wrong, &outcome, &[], &default),
         "covariates",
     );
+}
+
+/// The simulated courses are those the estimates are means of, and keeping
+/// them changes no estimate.
+#[test]
+fn the_simulated_courses_give_the_estimates() {
+    let sim = simulate(700, 4, 9);
+    let kept = run(
+        &sim,
+        &interventions(),
+        &GFormulaOptions {
+            simulated: Some(900),
+            keep_simulated: true,
+            ..GFormulaOptions::default()
+        },
+    );
+    let plain = run(
+        &sim,
+        &interventions(),
+        &GFormulaOptions {
+            simulated: Some(900),
+            ..GFormulaOptions::default()
+        },
+    );
+    assert!(plain.simulated.is_none());
+    let courses = kept.simulated.clone().expect("kept");
+    assert_eq!(
+        GFormula {
+            simulated: None,
+            ..kept
+        },
+        plain
+    );
+    assert_eq!(courses.len(), plain.strategies.len());
+    let periods = plain.periods.len();
+    for (s, c) in courses.iter().enumerate() {
+        assert_eq!(c.person.len(), 900 * periods);
+        assert_eq!(c.values.len(), sim.time_varying().len());
+        for (k, want) in values(&plain, s).iter().enumerate() {
+            let at: Vec<f64> = (0..c.person.len())
+                .filter(|&r| c.period[r] == k)
+                .map(|r| c.value[r])
+                .collect();
+            let mean = at.iter().sum::<f64>() / at.len() as f64;
+            // A mean of 900 values in [0, 1] by two summation orders differs by
+            // at most 2 * 900 eps.
+            assert!((mean - want).abs() <= 1800.0 * f64::EPSILON, "{s} {k}");
+        }
+    }
+    // Under "always treat" the treatment is 1 from period 1 on, the period-0
+    // value is the observed one.
+    let always = interventions()
+        .iter()
+        .position(|i| {
+            i.rules.len() == 1
+                && i.rules[0].variable == A
+                && matches!(i.rules[0].action, Action::Set(v) if v == 1.0)
+                && i.rules[0].periods.is_none()
+        })
+        .map(|i| &courses[i + 1]);
+    if let Some(c) = always {
+        assert!((0..c.person.len()).all(|r| c.values[A][r] == 1.0));
+    }
 }

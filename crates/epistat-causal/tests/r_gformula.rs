@@ -321,6 +321,7 @@ fn with_main<T>(
             event: &competing,
             terms: competing_terms,
         }),
+        censoring: None,
     };
     f(gformula(&data, covariates, &outcome, interventions, options).expect("g-formula"))
 }
@@ -760,6 +761,7 @@ fn two_periods_match_the_exact_g_formula() {
             event: &competing,
             terms: vec![Intercept, Current(0), Period],
         }),
+        censoring: None,
     };
     let interventions = vec![
         Intervention::set(1, 0.0),

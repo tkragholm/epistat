@@ -33,8 +33,10 @@ Causal effect estimators for cohort data.
   standard error of each, and a nonparametric bootstrap over persons with
   percentile or normal limits. Every strategy is simulated from the same
   draws, seeded per person, so the results do not depend on the number of
-  threads. Categorical and truncated covariates, restrictions on the outcome
-  model, censoring weights and hazard ratios are not implemented.
+  threads. The simulated courses can be returned, and the observed risk is
+  weighted by the inverse probability of remaining uncensored when censoring
+  and its model are given. Categorical and truncated covariates, restrictions on
+  the outcome model and hazard ratios are not implemented.
 - Targeted maximum likelihood estimation (TMLE) for a binary or bounded
   continuous outcome, as the R package `tmle` does it: the effect in the
   population by logistic fluctuation, on the treated and on the controls by the
@@ -45,7 +47,8 @@ Causal effect estimators for cohort data.
   efficient influence function. The estimates stay inside the range of the
   outcome. The risk by a time with right censoring is estimated in discrete
   time, on given predictions of the event and censoring hazards, with iterated
-  logistic fluctuation of the hazards of each arm.
+  logistic fluctuation of the hazards of each arm, from given predictions of the
+  hazards and the propensity or with the logistic models fitted to the data.
 
 The risk by a time with right censoring is in `epistat-survival::aipw`, since it
 needs the Cox and censoring machinery of that crate.

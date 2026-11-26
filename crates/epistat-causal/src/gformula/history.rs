@@ -35,6 +35,10 @@ pub enum Term {
     LaggedCumulativeAverage(usize, usize),
     /// The product of two terms, for interactions and powers.
     Product(Box<Term>, Box<Term>),
+    /// 1 when the term equals the value and 0 otherwise: the indicator of a
+    /// class of a categorical variable, `Is(Current(v), 2.0)` or
+    /// `Is(Lag(v, 1), 1.0)`, as the dummy columns of a factor in gfoRmula.
+    Is(Box<Term>, f64),
 }
 
 impl Term {
@@ -42,6 +46,12 @@ impl Term {
     #[must_use]
     pub fn product(a: Self, b: Self) -> Self {
         Self::Product(Box::new(a), Box::new(b))
+    }
+
+    /// The indicator that `term` equals `value`.
+    #[must_use]
+    pub fn is(term: Self, value: f64) -> Self {
+        Self::Is(Box::new(term), value)
     }
 
     pub(crate) fn eval(&self, h: &History<'_>) -> f64 {
@@ -55,6 +65,7 @@ impl Term {
             Self::CumulativeAverage(v) => h.cumulative_average(*v),
             Self::LaggedCumulativeAverage(v, lag) => h.lagged_cumulative_average(*v, *lag),
             Self::Product(a, b) => a.eval(h) * b.eval(h),
+            Self::Is(a, value) => f64::from(u8::from(a.eval(h) == *value)),
         }
     }
 
@@ -92,6 +103,13 @@ impl Term {
             Self::Product(a, b) => {
                 a.check(baseline, width, current, what)?;
                 b.check(baseline, width, current, what)
+            }
+            Self::Is(a, value) => {
+                if value.is_finite() {
+                    a.check(baseline, width, current, what)
+                } else {
+                    bad(format!("the value {value} of an indicator is not finite"))
+                }
             }
         }
     }
