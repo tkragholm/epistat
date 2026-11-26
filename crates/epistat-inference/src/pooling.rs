@@ -49,7 +49,9 @@
 //!
 //! # Vectors and tests of several parameters
 //!
-//! [`rubin_vector`] pools `k` estimates with their covariance matrices:
+//! [`rubin_vector`] pools `k` estimates with their covariance matrices,
+//! given as an `m x k` matrix of estimates, one row per data set, and `m`
+//! covariance matrices:
 //! `Qbar` is the mean of the estimates, `Ubar` the mean of the covariances,
 //! `B = sum (Q_i - Qbar)(Q_i - Qbar)' / (m - 1)` and `T = Ubar + (1 + 1/m) B`.
 //! The average relative increase in variance is
@@ -133,12 +135,67 @@
 //!    interest in prognostic modelling studies after multiple imputation:
 //!    current practice and guidelines. BMC Med Res Methodol. 2009;9:57.
 
-use epistat_linalg::{Attempt, Mat, Method, solve};
+use epistat_core::{Covariance, InputError, Interval, Level, check};
+use epistat_linalg::{Attempt, Mat, MatRef, Method, solve};
 use epistat_stats::student::{f_sf, t_quantile};
 
-use crate::{InferenceError, check_length};
+use crate::{Error, check_length, empty};
+
+/// The first entry of `values` that is not finite, as an input error.
+fn finite(what: &'static str, values: &[f64]) -> Result<(), Error> {
+    Ok(check::finite(what, values)?)
+}
+
+/// The first entry of `values` that is negative or not finite, as an input
+/// error.
+fn non_negative(what: &'static str, values: &[f64]) -> Result<(), Error> {
+    finite(what, values)?;
+    match values.iter().find(|v| **v < 0.0) {
+        Some(&value) => Err(InputError::Domain {
+            what,
+            value,
+            domain: "[0, inf)",
+        }
+        .into()),
+        None => Ok(()),
+    }
+}
+
+/// A complete-data degrees of freedom that is `None` or positive.
+fn check_dfcom(dfcom: Option<f64>, allow_infinite: bool) -> Result<(), Error> {
+    match dfcom {
+        Some(d) if d.is_nan() || d <= 0.0 || (!allow_infinite && d.is_infinite()) => {
+            Err(InputError::Domain {
+                what: "dfcom",
+                value: d,
+                domain: if allow_infinite {
+                    "(0, inf]"
+                } else {
+                    "(0, inf)"
+                },
+            }
+            .into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// At least two data sets, so that the between variance is defined.
+fn at_least_two(what: &'static str, m: usize) -> Result<(), Error> {
+    if m < 2 {
+        Err(InputError::Length {
+            what,
+            expected: 2,
+            found: m,
+        }
+        .into())
+    } else {
+        Ok(())
+    }
+}
 
 /// An estimate pooled over imputed data sets.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pooled {
     /// The number of imputed data sets.
@@ -179,11 +236,9 @@ impl Pooled {
     ///
     /// # Errors
     ///
-    /// [`InferenceError::NotFinite`] when `null` is not finite.
-    pub fn p_value(&self, null: f64) -> Result<Option<f64>, InferenceError> {
-        if !null.is_finite() {
-            return Err(InferenceError::NotFinite);
-        }
+    /// [`InputError::NotFinite`] when `null` is not finite.
+    pub fn p_value(&self, null: f64) -> Result<Option<f64>, Error> {
+        finite("null", &[null])?;
         let (Some(se), Some(df)) = (self.se(), self.df) else {
             return Ok(None);
         };
@@ -197,30 +252,29 @@ impl Pooled {
         Ok(p.is_finite().then_some(p))
     }
 
-    /// The confidence interval `estimate -/+ t * se` at the level
-    /// `1 - alpha`, with `t` the quantile of the t distribution at
-    /// `1 - alpha / 2` on `df` degrees of freedom. `None` when the total
-    /// variance is zero.
-    ///
-    /// # Errors
-    ///
-    /// [`InferenceError::Alpha`] when `alpha` is not in `(0, 1)`.
-    pub fn interval(&self, alpha: f64) -> Result<Option<(f64, f64)>, InferenceError> {
-        if alpha.is_nan() || alpha <= 0.0 || alpha >= 1.0 {
-            return Err(InferenceError::Alpha(alpha));
-        }
+    /// The confidence interval `estimate -/+ t * se` at `level`, with `t` the
+    /// quantile of the t distribution at the level's upper probability,
+    /// `1 - alpha / 2`, on `df` degrees of freedom. The limits are `None` when
+    /// the total variance is zero or the quantile does not converge.
+    #[must_use]
+    pub fn interval(&self, level: Level) -> Interval {
+        let none = Interval::new(None, None, level);
         let (Some(se), Some(df)) = (self.se(), self.df) else {
-            return Ok(None);
+            return none;
         };
         let t = if df.is_infinite() {
-            epistat_stats::normal::quantile(1.0 - alpha / 2.0)
+            epistat_stats::normal::quantile(level.upper_probability())
         } else {
-            match t_quantile(1.0 - alpha / 2.0, df) {
+            match t_quantile(level.upper_probability(), df) {
                 Some(t) => t,
-                None => return Ok(None),
+                None => return none,
             }
         };
-        Ok(Some((self.estimate - t * se, self.estimate + t * se)))
+        Interval::new(
+            Some(self.estimate - t * se),
+            Some(self.estimate + t * se),
+            level,
+        )
     }
 }
 
@@ -230,34 +284,21 @@ impl Pooled {
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no data set, [`InferenceError::Length`] when
-/// the two lists differ in length, [`InferenceError::NotFinite`] for an
-/// estimate that is not finite, a variance that is negative or not finite, or
-/// a `dfcom` that is not positive, and [`InferenceError::Length`] with
-/// `expected` 2 for a single data set, whose between variance is not defined.
-pub fn rubin(
-    estimates: &[f64],
-    variances: &[f64],
-    dfcom: Option<f64>,
-) -> Result<Pooled, InferenceError> {
+/// [`InputError::Empty`] for no data set, [`InputError::Length`] when the two
+/// lists differ in length, and with `expected` 2 for a single data set, whose
+/// between variance is not defined, [`InputError::NotFinite`] for an estimate
+/// or a variance that is not finite, and [`InputError::Domain`] for a
+/// negative variance or a `dfcom` that is not positive.
+pub fn rubin(estimates: &[f64], variances: &[f64], dfcom: Option<f64>) -> Result<Pooled, Error> {
     let m = estimates.len();
     if m == 0 {
-        return Err(InferenceError::Empty);
+        return Err(empty("estimates"));
     }
     check_length("variances", m, variances.len())?;
-    if m < 2 {
-        return Err(InferenceError::Length {
-            what: "estimates",
-            expected: 2,
-            found: m,
-        });
-    }
-    if estimates.iter().any(|q| !q.is_finite())
-        || variances.iter().any(|u| !u.is_finite() || *u < 0.0)
-        || dfcom.is_some_and(|d| d.is_nan() || d <= 0.0)
-    {
-        return Err(InferenceError::NotFinite);
-    }
+    at_least_two("estimates", m)?;
+    finite("estimates", estimates)?;
+    non_negative("variances", variances)?;
+    check_dfcom(dfcom, true)?;
     let mf = m as f64;
     let mut sum = 0.0;
     for q in estimates {
@@ -333,6 +374,7 @@ pub fn dfcom_events(events: usize, coefficients: usize) -> f64 {
 }
 
 /// A vector of estimates pooled over imputed data sets.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PooledVector {
     /// The number of imputed data sets.
@@ -341,12 +383,12 @@ pub struct PooledVector {
     pub k: usize,
     /// The pooled estimates.
     pub estimate: Vec<f64>,
-    /// The within-imputation covariance, `k x k` in row-major order.
-    pub within: Vec<f64>,
-    /// The between-imputation covariance, `k x k` in row-major order.
-    pub between: Vec<f64>,
-    /// The total covariance, `k x k` in row-major order.
-    pub total: Vec<f64>,
+    /// The within-imputation covariance, `k x k`.
+    pub within: Covariance,
+    /// The between-imputation covariance, `k x k`.
+    pub between: Covariance,
+    /// The total covariance, `k x k`.
+    pub total: Covariance,
     /// The average relative increase in variance, `(1 + 1/m) tr(B Ubar^-1) / k`.
     pub riv: f64,
 }
@@ -357,48 +399,52 @@ pub struct PooledVector {
 /// `kappa` the condition number, so `1e-8` allows `kappa` up to about `1e7`.
 const SYMMETRY: f64 = 1e-8;
 
-fn check_sets(
-    estimates: &[&[f64]],
-    covariances: &[&[f64]],
-    k: usize,
-) -> Result<usize, InferenceError> {
-    let m = estimates.len();
-    if m == 0 || k == 0 {
-        return Err(InferenceError::Empty);
-    }
+/// The estimates of each data set and its row-major covariance.
+type Sets = (Vec<Vec<f64>>, Vec<Vec<f64>>);
+
+/// The sets as row-major slices: the estimates of each data set and its
+/// covariance, after the checks of [`rubin_vector`].
+fn check_sets(estimates: MatRef<'_, f64>, covariances: &[MatRef<'_, f64>]) -> Result<Sets, Error> {
+    let (m, k) = (estimates.nrows(), estimates.ncols());
+    check::non_empty("estimates", m)?;
+    check::non_empty("estimates columns", k)?;
     check_length("covariances", m, covariances.len())?;
-    if m < 2 {
-        return Err(InferenceError::Length {
-            what: "estimates",
-            expected: 2,
-            found: m,
-        });
-    }
-    for (q, u) in estimates.iter().zip(covariances) {
-        check_length("estimates", k, q.len())?;
-        check_length("covariance", k * k, u.len())?;
-        if q.iter().any(|v| !v.is_finite()) || u.iter().any(|v| !v.is_finite()) {
-            return Err(InferenceError::NotFinite);
-        }
+    at_least_two("estimates", m)?;
+    let mut rows = Vec::with_capacity(m);
+    let mut matrices = Vec::with_capacity(m);
+    for (set, u) in covariances.iter().enumerate() {
+        check_length("covariance rows", k, u.nrows())?;
+        check_length("covariance columns", k, u.ncols())?;
+        let q: Vec<f64> = (0..k).map(|j| estimates[(set, j)]).collect();
+        let u: Vec<f64> = (0..k * k).map(|e| u[(e / k, e % k)]).collect();
+        finite("estimates", &q)?;
+        finite("covariance", &u)?;
         for i in 0..k {
             if u[i * k + i] < 0.0 {
-                return Err(InferenceError::NotFinite);
+                return Err(InputError::Domain {
+                    what: "covariance diagonal",
+                    value: u[i * k + i],
+                    domain: "[0, inf)",
+                }
+                .into());
             }
             for j in 0..i {
                 let scale = (u[i * k + i] * u[j * k + j]).sqrt();
                 if (u[i * k + j] - u[j * k + i]).abs() > SYMMETRY * scale {
-                    return Err(InferenceError::NotSymmetric);
+                    return Err(Error::NotSymmetric);
                 }
             }
         }
+        rows.push(q);
+        matrices.push(u);
     }
-    Ok(m)
+    Ok((rows, matrices))
 }
 
 /// The pooled covariance parts of `m` sets of `k` estimates, symmetrised.
 fn vector_parts(
-    estimates: &[&[f64]],
-    covariances: &[&[f64]],
+    estimates: &[Vec<f64>],
+    covariances: &[Vec<f64>],
     k: usize,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let mf = estimates.len() as f64;
@@ -442,7 +488,7 @@ fn vector_parts(
 }
 
 /// `tr(B U^-1)`, from the solution of `U X = B`.
-fn trace_solve(ubar: &[f64], between: &[f64], k: usize) -> Result<f64, InferenceError> {
+fn trace_solve(ubar: &[f64], between: &[f64], k: usize) -> Result<f64, Error> {
     let u = Mat::from_fn(k, k, |i, j| ubar[i * k + j]);
     let b = Mat::from_fn(k, k, |i, j| between[i * k + j]);
     let x = solve(u.as_ref(), b.as_ref(), &[Attempt::plain(Method::FullPivLu)])?;
@@ -450,32 +496,31 @@ fn trace_solve(ubar: &[f64], between: &[f64], k: usize) -> Result<f64, Inference
     if trace.is_finite() {
         Ok(trace)
     } else {
-        Err(InferenceError::NotFinite)
+        Err(Error::NotFinite)
     }
 }
 
-/// Pools `k` estimates and their covariance matrices, `estimates[i]` and
-/// `covariances[i]` (`k x k`, row-major) from imputed data set `i`.
+/// Pools `k` estimates and their covariance matrices: row `i` of `estimates`
+/// (`m x k`) and `covariances[i]` (`k x k`) come from imputed data set `i`.
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no estimates, [`InferenceError::Length`] for a
-/// set of the wrong size or fewer than two sets, [`InferenceError::NotFinite`]
-/// for a value that is not finite or a negative variance,
-/// [`InferenceError::NotSymmetric`] for a covariance that is not symmetric
-/// within `1e-8` of its scale, and [`InferenceError::Solve`] when the pooled
-/// within covariance is singular, which means an aliased parameter in the
-/// models.
+/// [`InputError::Empty`] for no estimates, [`InputError::Length`] for a set of
+/// the wrong size or fewer than two sets, [`InputError::NotFinite`] for a
+/// value that is not finite, [`InputError::Domain`] for a negative variance,
+/// [`Error::NotSymmetric`] for a covariance that is not symmetric within
+/// `1e-8` of its scale, and [`Error::Solve`] when the pooled within
+/// covariance is singular, which means an aliased parameter in the models.
 pub fn rubin_vector(
-    estimates: &[&[f64]],
-    covariances: &[&[f64]],
-    k: usize,
-) -> Result<PooledVector, InferenceError> {
-    let m = check_sets(estimates, covariances, k)?;
-    let (estimate, within, between) = vector_parts(estimates, covariances, k);
+    estimates: MatRef<'_, f64>,
+    covariances: &[MatRef<'_, f64>],
+) -> Result<PooledVector, Error> {
+    let (rows, matrices) = check_sets(estimates, covariances)?;
+    let (m, k) = (rows.len(), estimates.ncols());
+    let (estimate, within, between) = vector_parts(&rows, &matrices, k);
     let inflation = 1.0 + 1.0 / m as f64;
     let riv = inflation * trace_solve(&within, &between, k)? / k as f64;
-    let total = within
+    let total: Vec<f64> = within
         .iter()
         .zip(&between)
         .map(|(u, b)| u + inflation * b)
@@ -484,14 +529,15 @@ pub fn rubin_vector(
         m,
         k,
         estimate,
-        within,
-        between,
-        total,
+        within: Covariance::from_values(k, &within)?,
+        between: Covariance::from_values(k, &between)?,
+        total: Covariance::from_values(k, &total)?,
         riv,
     })
 }
 
 /// The method of a test of several parameters.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultiMethod {
     /// The statistic of Li, Raghunathan and Rubin on pooled estimates.
@@ -504,6 +550,7 @@ pub enum MultiMethod {
 
 /// How a negative estimate of the relative increase in variance is handled by
 /// [`d3`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NegativeRiv {
     /// Use it as it is, as `mice::D3` does.
@@ -513,6 +560,7 @@ pub enum NegativeRiv {
 }
 
 /// A test of `k` parameters at once, with the F reference distribution.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MultiTest {
     /// The method.
@@ -601,38 +649,34 @@ fn reiter_df(t: f64, r: f64, dfcom: f64) -> f64 {
 ///
 /// # Errors
 ///
-/// As [`rubin_vector`], [`InferenceError::Length`] for a `null` that is not `k`
-/// long, [`InferenceError::NotFinite`] for a `null` or `dfcom` that is not
-/// finite or a `dfcom` that is not positive, and
-/// [`InferenceError::Imputations`] when `dfcom` is given and `k (m - 1)` is not
-/// above 4.
+/// As [`rubin_vector`], [`InputError::Length`] for a `null` that is not `k`
+/// long, [`InputError::NotFinite`] for a `null` that is not finite,
+/// [`InputError::Domain`] for a `dfcom` that is not positive and finite, and
+/// [`Error::Imputations`] when `dfcom` is given and `k (m - 1)` is not above
+/// 4.
 pub fn d1(
-    estimates: &[&[f64]],
-    covariances: &[&[f64]],
-    k: usize,
+    estimates: MatRef<'_, f64>,
+    covariances: &[MatRef<'_, f64>],
     null: Option<&[f64]>,
     dfcom: Option<f64>,
-) -> Result<MultiTest, InferenceError> {
-    let m = check_sets(estimates, covariances, k)?;
+) -> Result<MultiTest, Error> {
+    let (rows, matrices) = check_sets(estimates, covariances)?;
+    let (m, k) = (rows.len(), estimates.ncols());
     if let Some(null) = null {
         check_length("null", k, null.len())?;
-        if null.iter().any(|v| !v.is_finite()) {
-            return Err(InferenceError::NotFinite);
-        }
+        finite("null", null)?;
     }
-    if dfcom.is_some_and(|d| !(d.is_finite() && d > 0.0)) {
-        return Err(InferenceError::NotFinite);
-    }
+    check_dfcom(dfcom, false)?;
     let kf = k as f64;
     let t = kf * (m as f64 - 1.0);
     if dfcom.is_some() && t <= 4.0 {
-        return Err(InferenceError::Imputations {
+        return Err(Error::Imputations {
             what: "D1 with dfcom",
             k,
             m,
         });
     }
-    let (qbar, ubar, between) = vector_parts(estimates, covariances, k);
+    let (qbar, ubar, between) = vector_parts(&rows, &matrices, k);
     let r = (1.0 + 1.0 / m as f64) * trace_solve(&ubar, &between, k)? / kf;
     let diff: Vec<f64> = qbar
         .iter()
@@ -645,7 +689,7 @@ pub fn d1(
     let quad: f64 = (0..k).map(|i| diff[i] * x.x[(i, 0)]).sum();
     let statistic = quad / (1.0 + r) / kf;
     if !statistic.is_finite() {
-        return Err(InferenceError::NotFinite);
+        return Err(Error::NotFinite);
     }
     let df2 = match dfcom {
         Some(d) => reiter_df(t, r, d),
@@ -660,28 +704,15 @@ pub fn d1(
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no statistic or `k = 0`,
-/// [`InferenceError::Length`] for fewer than two data sets, and
-/// [`InferenceError::NotFinite`] for a statistic that is negative or not
-/// finite.
-pub fn d2(wald_statistics: &[f64], k: usize) -> Result<MultiTest, InferenceError> {
+/// [`InputError::Empty`] for no statistic or `k = 0`, [`InputError::Length`]
+/// for fewer than two data sets, [`InputError::NotFinite`] for a statistic
+/// that is not finite and [`InputError::Domain`] for one that is negative.
+pub fn d2(wald_statistics: &[f64], k: usize) -> Result<MultiTest, Error> {
     let m = wald_statistics.len();
-    if m == 0 || k == 0 {
-        return Err(InferenceError::Empty);
-    }
-    if m < 2 {
-        return Err(InferenceError::Length {
-            what: "statistics",
-            expected: 2,
-            found: m,
-        });
-    }
-    if wald_statistics
-        .iter()
-        .any(|d| !(d.is_finite() && *d >= 0.0))
-    {
-        return Err(InferenceError::NotFinite);
-    }
+    check::non_empty("statistics", m)?;
+    check::non_empty("parameters", k)?;
+    at_least_two("statistics", m)?;
+    non_negative("statistics", wald_statistics)?;
     let mf = m as f64;
     let kf = k as f64;
     let mut sum = 0.0;
@@ -717,31 +748,22 @@ pub fn d2(wald_statistics: &[f64], k: usize) -> Result<MultiTest, InferenceError
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no data set or `k = 0`,
-/// [`InferenceError::Length`] for lists of different length or fewer than two
-/// sets, and [`InferenceError::NotFinite`] for a statistic that is not
-/// finite.
+/// [`InputError::Empty`] for no data set or `k = 0`, [`InputError::Length`]
+/// for lists of different length or fewer than two sets, and
+/// [`InputError::NotFinite`] for a statistic that is not finite.
 pub fn d3(
     lr_own: &[f64],
     lr_pooled: &[f64],
     k: usize,
     negative: NegativeRiv,
-) -> Result<MultiTest, InferenceError> {
+) -> Result<MultiTest, Error> {
     let m = lr_own.len();
-    if m == 0 || k == 0 {
-        return Err(InferenceError::Empty);
-    }
+    check::non_empty("statistics", m)?;
+    check::non_empty("parameters", k)?;
     check_length("pooled statistics", m, lr_pooled.len())?;
-    if m < 2 {
-        return Err(InferenceError::Length {
-            what: "statistics",
-            expected: 2,
-            found: m,
-        });
-    }
-    if lr_own.iter().chain(lr_pooled).any(|v| !v.is_finite()) {
-        return Err(InferenceError::NotFinite);
-    }
+    at_least_two("statistics", m)?;
+    finite("statistics", lr_own)?;
+    finite("pooled statistics", lr_pooled)?;
     let mf = m as f64;
     let kf = k as f64;
     let mut own = 0.0;
@@ -773,6 +795,7 @@ pub fn d3(
 
 /// A transformation for pooling an estimate that is not normal on its own
 /// scale.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transform {
     /// `ln q`, for ratios of risks, odds or hazards, with `q > 0`.
@@ -796,6 +819,26 @@ impl Transform {
             Self::Cloglog => "complementary log-log",
             Self::Sqrt => "square root",
         }
+    }
+
+    fn domain(self) -> &'static str {
+        match self {
+            Self::Log | Self::Sqrt => "(0, inf)",
+            Self::Logit | Self::Cloglog => "(0, 1)",
+            Self::FisherZ => "(-1, 1)",
+        }
+    }
+
+    /// `g(q)` and `g'(q)`, or the input error for a `q` outside the domain.
+    fn checked(self, q: f64) -> Result<(f64, f64), Error> {
+        self.forward(q).ok_or_else(|| {
+            InputError::Domain {
+                what: self.name(),
+                value: q,
+                domain: self.domain(),
+            }
+            .into()
+        })
     }
 
     /// `g(q)` and `g'(q)`, `None` outside the domain.
@@ -826,6 +869,7 @@ impl Transform {
 }
 
 /// An estimate pooled on a transformed scale.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PooledOnScale {
     /// The transformation.
@@ -838,18 +882,14 @@ pub struct PooledOnScale {
 }
 
 impl PooledOnScale {
-    /// The confidence interval at the level `1 - alpha` on the transformed
-    /// scale, as [`Pooled::interval`], carried back to the original scale. `None`
-    /// when the total variance is zero.
-    ///
-    /// # Errors
-    ///
-    /// [`InferenceError::Alpha`] when `alpha` is not in `(0, 1)`.
-    pub fn interval(&self, alpha: f64) -> Result<Option<(f64, f64)>, InferenceError> {
-        Ok(self
-            .pooled
-            .interval(alpha)?
-            .map(|(lo, hi)| (self.transform.inverse(lo), self.transform.inverse(hi))))
+    /// The confidence interval at `level` on the transformed scale, as
+    /// [`Pooled::interval`], carried back to the original scale. The limits
+    /// are `None` where those on the transformed scale are.
+    #[must_use]
+    pub fn interval(&self, level: Level) -> Interval {
+        let on_scale = self.pooled.interval(level);
+        let back = |x: Option<f64>| x.map(|x| self.transform.inverse(x));
+        Interval::new(back(on_scale.lower), back(on_scale.upper), level)
     }
 
     /// The two-sided p-value of the null `q = null` on the original scale, tested
@@ -857,13 +897,10 @@ impl PooledOnScale {
     ///
     /// # Errors
     ///
-    /// [`InferenceError::Domain`] for a `null` outside the domain of the
+    /// [`InputError::Domain`] for a `null` outside the domain of the
     /// transformation.
-    pub fn p_value(&self, null: f64) -> Result<Option<f64>, InferenceError> {
-        let (g, _) = self.transform.forward(null).ok_or(InferenceError::Domain {
-            transform: self.transform.name(),
-            value: null,
-        })?;
+    pub fn p_value(&self, null: f64) -> Result<Option<f64>, Error> {
+        let (g, _) = self.transform.checked(null)?;
         self.pooled.p_value(g)
     }
 }
@@ -874,26 +911,21 @@ impl PooledOnScale {
 ///
 /// # Errors
 ///
-/// [`InferenceError::Domain`] for an estimate outside the domain of the
-/// transformation, [`InferenceError::NotFinite`] for a standard error that is
-/// negative or not finite, and the errors of [`rubin`].
+/// [`InputError::Domain`] for an estimate outside the domain of the
+/// transformation or a negative standard error, [`InputError::NotFinite`]
+/// for a standard error that is not finite, and the errors of [`rubin`].
 pub fn rubin_transformed(
     estimates: &[f64],
     ses: &[f64],
     transform: Transform,
     dfcom: Option<f64>,
-) -> Result<PooledOnScale, InferenceError> {
+) -> Result<PooledOnScale, Error> {
     check_length("standard errors", estimates.len(), ses.len())?;
-    if ses.iter().any(|s| !(s.is_finite() && *s >= 0.0)) {
-        return Err(InferenceError::NotFinite);
-    }
+    non_negative("standard errors", ses)?;
     let mut on_scale = Vec::with_capacity(estimates.len());
     let mut variances = Vec::with_capacity(estimates.len());
     for (&q, &se) in estimates.iter().zip(ses) {
-        let (g, slope) = transform.forward(q).ok_or(InferenceError::Domain {
-            transform: transform.name(),
-            value: q,
-        })?;
+        let (g, slope) = transform.checked(q)?;
         on_scale.push(g);
         variances.push(se * se * slope * slope);
     }

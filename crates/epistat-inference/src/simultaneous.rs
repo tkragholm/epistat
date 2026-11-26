@@ -1,6 +1,7 @@
 //! Critical values for simultaneous bands: the sup-t method.
 //!
-//! A band that covers `k` estimates at once, with probability `1 - alpha`,
+//! A band that covers `k` estimates at once, with probability `1 - alpha`
+//! for a [`Level`] of confidence `1 - alpha`,
 //! is `estimate_j +- c se_j` for a `c` larger than the pointwise normal
 //! critical value. The sup-t band takes `c` as the `1 - alpha` quantile of the
 //! maximum absolute standardised coordinate, `max_j |T_j|`, which keeps the
@@ -17,7 +18,7 @@
 //! T = L z,      z ~ N(0, I),      c = quantile_(1 - alpha) of max_j |T_j|
 //! ```
 //!
-//! over `draws` replicates. The quantile is R's type 7, which is what R's
+//! over the replicates of a [`Bootstrap`]. The quantile is R's type 7, which is what R's
 //! `quantile()` and the HonestDiD package return. A positive semidefinite
 //! `R` is accepted: a pivot below `1e-12` leaves its column of `L` at zero.
 //! The normal draws are pairs from the Box-Muller transform, taken from the
@@ -62,6 +63,11 @@
 //! normal one, or at 7 and above, to the pointwise one, and
 //! [`MultiplierBands::at_least_pointwise`] is the first of these.
 //!
+//! The quantile probability `1 - alpha` is the level's
+//! [`Level::confidence_value`] and the pointwise one is its
+//! [`Level::upper_probability`], so a level given as an alpha keeps the
+//! arithmetic of `1 - alpha` and `1 - alpha / 2`.
+//!
 //! # Determinism
 //!
 //! Replicates run in parallel, each from its own seed and into its own slot,
@@ -85,54 +91,52 @@
 //! 2. Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
 //!    periods. J Econom. 2021;225(2):200-30.
 
+use epistat_core::{Bootstrap, Level};
 use epistat_linalg::MatRef;
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_rng::{Stream, replicate_seed};
 use epistat_stats::{lanes, normal, quantile};
 use rayon::prelude::*;
 
-use crate::{Clusters, InferenceError, check_length};
+use crate::{Clusters, Error, check_length, empty};
 
 /// A covariance pivot below this leaves its column of the Cholesky factor zero.
 const PIVOT_FLOOR: f64 = 1e-12;
 /// A diagonal sum below minus this is not positive semidefinite.
 const NEGATIVE_FLOOR: f64 = 1e-10;
 
-fn check_alpha(alpha: f64) -> Result<(), InferenceError> {
-    if alpha > 0.0 && alpha < 1.0 {
-        Ok(())
-    } else {
-        Err(InferenceError::Alpha(alpha))
-    }
-}
-
 /// The sup-t critical value of a normal estimator with covariance
-/// `covariance`: the `1 - alpha` quantile (type 7) of the maximum absolute
-/// standardised coordinate over `draws` simulated replicates. Replicate `r`
-/// draws from `replicate_seed(seed, r)`.
+/// `covariance`: the quantile (type 7) at the confidence of `level` of the
+/// maximum absolute standardised coordinate over the simulated replicates of
+/// `draws`. Replicate `r` draws from `replicate_seed(seed, r)`.
 ///
 /// For one coordinate the value approaches the pointwise `normal` critical
-/// value as `draws` grows.
+/// value as the number of replicates grows.
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for a covariance with no rows or no draws,
-/// [`InferenceError::Length`] when it is not square,
-/// [`InferenceError::Alpha`] for `alpha` outside (0, 1), and
-/// [`InferenceError::NotFinite`] for a variance that is not positive and
+/// [`InputError::Empty`](epistat_core::InputError::Empty) for a covariance
+/// with no rows or no replicates,
+/// [`InputError::Length`](epistat_core::InputError::Length) when it is not
+/// square, and [`Error::NotFinite`] for a variance that is not positive and
 /// finite, or a correlation matrix that is not positive semidefinite.
 pub fn sup_t_from_covariance(
     covariance: MatRef<'_, f64>,
-    alpha: f64,
-    draws: usize,
-    seed: u64,
-) -> Result<f64, InferenceError> {
+    level: Level,
+    draws: Bootstrap,
+) -> Result<f64, Error> {
+    let Bootstrap {
+        replicates: draws,
+        seed,
+    } = draws;
     let dim = covariance.nrows();
     check_length("covariance columns", dim, covariance.ncols())?;
-    if dim == 0 || draws == 0 {
-        return Err(InferenceError::Empty);
+    if dim == 0 {
+        return Err(empty("covariance"));
     }
-    check_alpha(alpha)?;
+    if draws == 0 {
+        return Err(empty("replicates"));
+    }
     let lower = lower_cholesky(&correlation(covariance)?, dim)?;
     let mut maxima: Vec<f64> = (0..draws as u64)
         .into_par_iter()
@@ -146,16 +150,16 @@ pub fn sup_t_from_covariance(
             },
         )
         .collect();
-    quantile::type7_unsorted(&mut maxima, 1.0 - alpha).ok_or(InferenceError::NotFinite)
+    quantile::type7_unsorted(&mut maxima, level.confidence_value()).ok_or(Error::NotFinite)
 }
 
 /// The correlation matrix of the symmetrised covariance, row-major.
-pub(crate) fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, InferenceError> {
+pub(crate) fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, Error> {
     let dim = covariance.nrows();
     let symmetric = |i: usize, j: usize| covariance[(i, j)].midpoint(covariance[(j, i)]);
     let sd: Vec<f64> = (0..dim).map(|i| symmetric(i, i).sqrt()).collect();
     if sd.iter().any(|s| !s.is_finite() || *s <= 0.0) {
-        return Err(InferenceError::NotFinite);
+        return Err(Error::NotFinite);
     }
     let mut corr = vec![0.0; dim * dim];
     for i in 0..dim {
@@ -172,7 +176,7 @@ pub(crate) fn correlation(covariance: MatRef<'_, f64>) -> Result<Vec<f64>, Infer
 
 /// The lower Cholesky factor of a symmetric positive semidefinite matrix,
 /// row-major, with sums in column order.
-pub(crate) fn lower_cholesky(matrix: &[f64], n: usize) -> Result<Vec<f64>, InferenceError> {
+pub(crate) fn lower_cholesky(matrix: &[f64], n: usize) -> Result<Vec<f64>, Error> {
     cholesky_lower(
         matrix,
         n,
@@ -181,7 +185,7 @@ pub(crate) fn lower_cholesky(matrix: &[f64], n: usize) -> Result<Vec<f64>, Infer
             pivot_floor: PIVOT_FLOOR,
         },
     )
-    .ok_or(InferenceError::NotFinite)
+    .ok_or(Error::NotFinite)
 }
 
 /// `out = L z` for a row-major lower triangular `L`.
@@ -192,6 +196,7 @@ fn lower_times(lower: &[f64], dim: usize, z: &[f64], out: &mut [f64]) {
 }
 
 /// The result of [`multiplier_bands`].
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MultiplierBands {
     /// The simultaneous critical value, a multiplier of the standard errors.
@@ -199,14 +204,18 @@ pub struct MultiplierBands {
     /// The bootstrap standard error of each estimate, `None` for an estimate
     /// whose draws are degenerate.
     pub se: Vec<Option<f64>>,
+    /// The level of the bands.
+    pub level: Level,
 }
 
 impl MultiplierBands {
-    /// The critical value, or the pointwise normal one at `alpha` if that is
-    /// larger. A band can then not be narrower than the pointwise interval.
+    /// The critical value, or the pointwise normal one at the bands' level if
+    /// that is larger. A band can then not be narrower than the pointwise
+    /// interval.
     #[must_use]
-    pub fn at_least_pointwise(&self, alpha: f64) -> f64 {
-        self.critical.max(normal::quantile(1.0 - alpha / 2.0))
+    pub fn at_least_pointwise(&self) -> f64 {
+        self.critical
+            .max(normal::quantile(self.level.upper_probability()))
     }
 }
 
@@ -215,35 +224,41 @@ impl MultiplierBands {
 ///
 /// `influence` holds one column per estimate, each over the same `n` units.
 /// `clusters` assigns the units to clusters, one multiplier per cluster, or is
-/// `None` for one per unit. Replicate `r` draws its multipliers from
+/// `None` for one per unit; the clusters are matched to the units by
+/// position. Replicate `r` draws its multipliers from
 /// `replicate_seed(seed, r)`. The band of estimate `j` is
 /// `estimate_j +- critical * se_j`.
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no estimates, no units or no replicates,
-/// [`InferenceError::Length`] when the columns or the clusters differ in
-/// length, [`InferenceError::Alpha`] for `alpha` outside (0, 1), and
-/// [`InferenceError::NotFinite`] for an influence value that is not finite or
-/// when no estimate gives a finite critical value.
+/// [`InputError::Empty`](epistat_core::InputError::Empty) for no estimates,
+/// no units or no replicates,
+/// [`InputError::Length`](epistat_core::InputError::Length) when the columns
+/// or the clusters differ in length,
+/// [`InputError::NotFinite`](epistat_core::InputError::NotFinite) for an
+/// influence value that is not finite, and [`Error::NotFinite`] when no
+/// estimate gives a finite critical value.
 pub fn multiplier_bands(
     influence: &[&[f64]],
     clusters: Option<&Clusters>,
-    alpha: f64,
-    replicates: usize,
-    seed: u64,
-) -> Result<MultiplierBands, InferenceError> {
-    let n = influence.first().ok_or(InferenceError::Empty)?.len();
+    level: Level,
+    bootstrap: Bootstrap,
+) -> Result<MultiplierBands, Error> {
+    let Bootstrap { replicates, seed } = bootstrap;
+    let n = influence
+        .first()
+        .ok_or_else(|| empty("influence columns"))?
+        .len();
     for column in influence {
         check_length("influence column", n, column.len())?;
-        if column.iter().any(|v| !v.is_finite()) {
-            return Err(InferenceError::NotFinite);
-        }
+        epistat_core::check::finite("influence column", column)?;
     }
-    if n == 0 || replicates == 0 {
-        return Err(InferenceError::Empty);
+    if n == 0 {
+        return Err(empty("influence column"));
     }
-    check_alpha(alpha)?;
+    if replicates == 0 {
+        return Err(empty("replicates"));
+    }
     let width = influence.len();
     let (sums, groups): (Vec<Vec<f64>>, usize) = match clusters {
         None => (influence.iter().map(|c| c.to_vec()).collect(), n),
@@ -277,7 +292,7 @@ pub fn multiplier_bands(
             }
         },
     );
-    from_draws(&draws, width, groups, n, alpha)
+    from_draws(&draws, width, groups, n, level)
 }
 
 /// The scale, standard errors and critical value from replicate-major draws
@@ -287,8 +302,8 @@ fn from_draws(
     width: usize,
     groups: usize,
     n: usize,
-    alpha: f64,
-) -> Result<MultiplierBands, InferenceError> {
+    level: Level,
+) -> Result<MultiplierBands, Error> {
     let replicates = draws.len() / width;
     let column = |j: usize| (0..replicates).map(move |r| draws[r * width + j]);
     let keep: Vec<bool> = (0..width)
@@ -321,18 +336,23 @@ fn from_draws(
         .filter(|t| t.is_finite())
         .collect();
     maxima.sort_by(f64::total_cmp);
-    let critical = quantile::type1(&maxima, 1.0 - alpha).ok_or(InferenceError::NotFinite)?;
+    let critical = quantile::type1(&maxima, level.confidence_value()).ok_or(Error::NotFinite)?;
     let root = (groups as f64).sqrt();
     let se = scale
         .iter()
         .map(|s| s.map(|s| s * root / n as f64))
         .collect();
-    Ok(MultiplierBands { critical, se })
+    Ok(MultiplierBands {
+        critical,
+        se,
+        level,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
     use epistat_linalg::Mat;
     use epistat_testkit::{assert_same_on_threads, load_json};
     use serde::Deserialize;
@@ -373,6 +393,10 @@ mod tests {
         clustered: Run,
         post: Post,
         supt: SupT,
+    }
+
+    fn alpha(a: f64) -> Level {
+        Level::alpha(a).unwrap()
     }
 
     fn reference() -> Reference {
@@ -430,7 +454,7 @@ mod tests {
                 draws.push((groups as f64).sqrt() * (total / groups as f64));
             }
         }
-        let bands = from_draws(&draws, influence.len(), groups, n, 0.05).unwrap();
+        let bands = from_draws(&draws, influence.len(), groups, n, alpha(0.05)).unwrap();
         let sigma = bands.se.iter().map(|s| s.unwrap()).collect();
         (draws, sigma)
     }
@@ -450,7 +474,7 @@ mod tests {
             (normal::quantile(0.75) - normal::quantile(0.25)).to_bits(),
             post.iqr_norm.to_bits()
         );
-        let bands = from_draws(&draws, width, post.n_clusters, post.n, post.alpha).unwrap();
+        let bands = from_draws(&draws, width, post.n_clusters, post.n, alpha(post.alpha)).unwrap();
         assert_eq!(bands.critical.to_bits(), post.crit.to_bits());
         assert_eq!(bands.se.len(), post.se.len());
         let mut scales = post.b_sigma.iter();
@@ -471,11 +495,18 @@ mod tests {
         let influence = columns(&reference.influence);
         let clusters = Clusters::from_sorted_labels(&reference.clusters);
         for clusters in [None, Some(&clusters)] {
-            let got = multiplier_bands(&influence, clusters, 0.05, 700, 11).unwrap();
+            let got = multiplier_bands(&influence, clusters, alpha(0.05), Bootstrap::new(700, 11))
+                .unwrap();
             let (draws, sigma) = bootstrap_maxima(&influence, clusters, 700, 11);
             let groups = clusters.map_or(influence[0].len(), Clusters::count);
-            let expected =
-                from_draws(&draws, influence.len(), groups, influence[0].len(), 0.05).unwrap();
+            let expected = from_draws(
+                &draws,
+                influence.len(),
+                groups,
+                influence[0].len(),
+                alpha(0.05),
+            )
+            .unwrap();
             assert_eq!(got.critical.to_bits(), expected.critical.to_bits());
             for (a, b) in got.se.iter().zip(&sigma) {
                 assert_eq!(a.unwrap().to_bits(), b.to_bits());
@@ -495,8 +526,13 @@ mod tests {
             (Some(&clusters), &reference.clustered),
         ];
         for (clusters, r) in runs {
-            let ours = multiplier_bands(&influence, clusters, reference.alpha, reference.biters, 3)
-                .unwrap();
+            let ours = multiplier_bands(
+                &influence,
+                clusters,
+                alpha(reference.alpha),
+                Bootstrap::new(reference.biters, 3),
+            )
+            .unwrap();
             // The critical value: both runs have the standard error of the
             // quantile, estimated from our maxima.
             let groups = clusters.map_or(units, Clusters::count);
@@ -541,7 +577,9 @@ mod tests {
         assert_same_on_threads(|| {
             let mut out = Vec::new();
             for clusters in [None, Some(&clusters)] {
-                let bands = multiplier_bands(&influence, clusters, 0.05, 900, 5).unwrap();
+                let bands =
+                    multiplier_bands(&influence, clusters, alpha(0.05), Bootstrap::new(900, 5))
+                        .unwrap();
                 out.push(bands.critical);
                 out.extend(bands.se.iter().map(|s| s.unwrap()));
             }
@@ -553,36 +591,36 @@ mod tests {
     fn a_degenerate_estimate_has_no_standard_error() {
         let flat = vec![0.0; 50];
         let varied: Vec<f64> = (0..50).map(|i| f64::from(i % 7) - 3.0).collect();
-        let bands = multiplier_bands(&[&flat, &varied], None, 0.05, 400, 1).unwrap();
+        let bands =
+            multiplier_bands(&[&flat, &varied], None, alpha(0.05), Bootstrap::new(400, 1)).unwrap();
         assert_eq!(bands.se[0], None);
         assert!(bands.se[1].is_some());
         assert!(bands.critical.is_finite());
-        assert!(bands.at_least_pointwise(0.05) >= normal::quantile(0.975));
+        assert!(bands.at_least_pointwise() >= normal::quantile(0.975));
+        assert_eq!(bands.level, alpha(0.05));
     }
 
     #[test]
     fn invalid_input_is_an_error() {
         let column = [1.0, -1.0, 2.0];
-        assert_eq!(
-            multiplier_bands(&[], None, 0.05, 10, 1),
-            Err(InferenceError::Empty)
-        );
-        assert_eq!(
-            multiplier_bands(&[&column], None, 0.0, 10, 1),
-            Err(InferenceError::Alpha(0.0))
-        );
-        assert_eq!(
-            multiplier_bands(&[&column], None, 0.05, 0, 1),
-            Err(InferenceError::Empty)
-        );
+        let ten = Bootstrap::new(10, 1);
+        let level = alpha(0.05);
         assert!(matches!(
-            multiplier_bands(&[&column], Some(&Clusters::singletons(2)), 0.05, 10, 1),
-            Err(InferenceError::Length { .. })
+            multiplier_bands(&[], None, level, ten),
+            Err(Error::Input(InputError::Empty { .. }))
         ));
-        assert_eq!(
-            multiplier_bands(&[&[1.0, f64::NAN, 0.0]], None, 0.05, 10, 1),
-            Err(InferenceError::NotFinite)
-        );
+        assert!(matches!(
+            multiplier_bands(&[&column], None, level, Bootstrap::new(0, 1)),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
+        assert!(matches!(
+            multiplier_bands(&[&column], Some(&Clusters::singletons(2)), level, ten),
+            Err(Error::Input(InputError::Length { .. }))
+        ));
+        assert!(matches!(
+            multiplier_bands(&[&[1.0, f64::NAN, 0.0]], None, level, ten),
+            Err(Error::Input(InputError::NotFinite { row: 1, .. }))
+        ));
     }
 
     fn matrix(rows: &[Vec<f64>]) -> Mat<f64> {
@@ -649,7 +687,8 @@ mod tests {
     #[test]
     fn sup_t_follows_its_definition_to_the_bit() {
         let cov = matrix(&reference().supt.cov);
-        let got = sup_t_from_covariance(cov.as_ref(), 0.05, 4_001, 9).unwrap();
+        let got =
+            sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(4_001, 9)).unwrap();
         let mut maxima = supt_maxima(&cov, 4_001, 9);
         let expected = quantile::type7_unsorted(&mut maxima, 1.0 - 0.05).unwrap();
         assert_eq!(got.to_bits(), expected.to_bits());
@@ -661,7 +700,12 @@ mod tests {
         let cov = matrix(&supt.cov);
         let draws = 400_000;
         for (alpha, exact) in [(0.05, supt.q95), (0.10, supt.q90)] {
-            let got = sup_t_from_covariance(cov.as_ref(), alpha, draws, 21).unwrap();
+            let got = sup_t_from_covariance(
+                cov.as_ref(),
+                Level::alpha(alpha).unwrap(),
+                Bootstrap::new(draws, 21),
+            )
+            .unwrap();
             let mut maxima = supt_maxima(&cov, draws, 21);
             let se = quantile_se(&mut maxima, alpha);
             assert!(
@@ -674,7 +718,8 @@ mod tests {
     #[test]
     fn sup_t_of_one_coordinate_is_the_pointwise_value() {
         let cov = Mat::from_fn(1, 1, |_, _| 7.5);
-        let got = sup_t_from_covariance(cov.as_ref(), 0.05, 400_000, 4).unwrap();
+        let got =
+            sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(400_000, 4)).unwrap();
         assert!((got - normal::quantile(0.975)).abs() < 0.01);
     }
 
@@ -682,7 +727,9 @@ mod tests {
     fn sup_t_does_not_depend_on_threads() {
         let cov = matrix(&reference().supt.cov);
         assert_same_on_threads(|| {
-            vec![sup_t_from_covariance(cov.as_ref(), 0.05, 5_000, 2).unwrap()]
+            vec![
+                sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(5_000, 2)).unwrap(),
+            ]
         });
     }
 
@@ -690,29 +737,31 @@ mod tests {
     fn sup_t_rejects_what_it_cannot_standardise() {
         let zero_variance = Mat::from_fn(2, 2, |i, j| if i == j && i == 0 { 0.0 } else { 1.0 });
         assert_eq!(
-            sup_t_from_covariance(zero_variance.as_ref(), 0.05, 10, 1),
-            Err(InferenceError::NotFinite)
+            sup_t_from_covariance(zero_variance.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            Err(Error::NotFinite)
         );
         let above_one = Mat::from_fn(2, 2, |i, j| if i == j { 1.0 } else { 2.0 });
-        assert!(sup_t_from_covariance(above_one.as_ref(), 0.05, 10, 1).is_ok());
+        assert!(
+            sup_t_from_covariance(above_one.as_ref(), alpha(0.05), Bootstrap::new(10, 1)).is_ok()
+        );
         let indefinite = Mat::from_fn(3, 3, |i, j| match (i, j) {
             _ if i == j => 1.0,
             (0, 2) | (2, 0) => -0.9,
             _ => 0.9,
         });
         assert_eq!(
-            sup_t_from_covariance(indefinite.as_ref(), 0.05, 10, 1),
-            Err(InferenceError::NotFinite)
+            sup_t_from_covariance(indefinite.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            Err(Error::NotFinite)
         );
         let wide = Mat::<f64>::zeros(2, 3);
         assert!(matches!(
-            sup_t_from_covariance(wide.as_ref(), 0.05, 10, 1),
-            Err(InferenceError::Length { .. })
+            sup_t_from_covariance(wide.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            Err(Error::Input(InputError::Length { .. }))
         ));
         let empty = Mat::<f64>::zeros(0, 0);
-        assert_eq!(
-            sup_t_from_covariance(empty.as_ref(), 0.05, 10, 1),
-            Err(InferenceError::Empty)
-        );
+        assert!(matches!(
+            sup_t_from_covariance(empty.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
     }
 }

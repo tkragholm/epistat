@@ -6,6 +6,9 @@
 //! libm, so its recorded value is compared only on aarch64 macOS. Equality
 //! across thread counts is checked everywhere.
 
+#![expect(deprecated, reason = "the digest pins the 0.3 influence functions")]
+
+use epistat_core::{Bootstrap, Level};
 use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
 use epistat_inference::influence::{clustered_covariance, clustered_variance, standard_error};
@@ -59,9 +62,15 @@ fn fingerprint() -> u64 {
         if let Some(cov) = clustered_covariance(&[&x, &w], &clusters).unwrap() {
             h = h.f64s(&cov);
         }
-        h = h.f64s(&bootstrap::cluster_totals(&[&x, &w], 40, 9).unwrap());
-        h = h.f64s(&bootstrap::multiplier(1.0, &x, 40, 5).unwrap());
-        let bands = multiplier_bands(&[&x, &w], None, 0.05, 60, 3).unwrap();
+        h = h.f64s(&bootstrap::cluster_totals(&[&x, &w], Bootstrap::new(40, 9)).unwrap());
+        h = h.f64s(&bootstrap::multiplier(1.0, &x, Bootstrap::new(40, 5)).unwrap());
+        let bands = multiplier_bands(
+            &[&x, &w],
+            None,
+            Level::alpha(0.05).unwrap(),
+            Bootstrap::new(60, 3),
+        )
+        .unwrap();
         h = h.f64(bands.critical);
         for s in &bands.se {
             h = h.option_f64(*s);

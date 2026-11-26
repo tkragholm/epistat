@@ -69,8 +69,13 @@ fn main() {
         let u: Vec<Vec<f64>> = (0..m)
             .map(|i| (0..K * K).map(|j| t.col(&format!("u{j}"))[i]).collect())
             .collect();
-        let qs: Vec<&[f64]> = q.iter().map(Vec::as_slice).collect();
-        let us: Vec<&[f64]> = u.iter().map(Vec::as_slice).collect();
+        let qs = epistat_linalg::Mat::from_fn(m, K, |i, j| q[i][j]);
+        let um: Vec<epistat_linalg::Mat<f64>> = u
+            .iter()
+            .map(|u| epistat_linalg::Mat::from_fn(K, K, |i, j| u[i * K + j]))
+            .collect();
+        let us: Vec<epistat_linalg::MatRef<'_, f64>> =
+            um.iter().map(epistat_linalg::Mat::as_ref).collect();
         let scalar_q = t.col("bq").to_vec();
         let scalar_u = t.col("bu").to_vec();
         let wald = t.col("wald").to_vec();
@@ -78,8 +83,8 @@ fn main() {
         let (times, r) = common::timed(common::reps().max(50), || {
             (
                 rubin(&scalar_q, &scalar_u, Some(dfcom)).expect("rubin"),
-                rubin_vector(&qs, &us, K).expect("vector"),
-                d1(&qs, &us, K, None, Some(dfcom)).expect("d1"),
+                rubin_vector(qs.as_ref(), &us).expect("vector"),
+                d1(qs.as_ref(), &us, None, Some(dfcom)).expect("d1"),
                 d2(&wald, K).expect("d2"),
             )
         });

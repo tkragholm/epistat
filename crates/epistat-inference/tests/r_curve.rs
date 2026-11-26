@@ -17,6 +17,7 @@
 //! limits are the estimate plus or minus a multiple of the standard error. The
 //! test prints the largest deviation in units of its bound.
 
+use epistat_core::{Bootstrap, Level};
 use epistat_inference::curve::{Band, contrast_curve};
 use epistat_inference::simultaneous::sup_t_from_covariance;
 use epistat_linalg::Mat;
@@ -80,14 +81,14 @@ fn rcs_curves_match_predict() {
     for case in reference().rcs {
         let basis = RestrictedCubic::new(&case.knots, true).unwrap();
         let cov = matrix(&case.cov);
-        let alpha = 1.0 - case.level;
+        let level = Level::alpha(1.0 - case.level).unwrap();
         let curve = contrast_curve(
             &basis,
             &case.grid,
             case.reference,
             &case.coef,
             cov.as_ref(),
-            alpha,
+            level,
             Band::Pointwise,
         )
         .unwrap();
@@ -134,7 +135,7 @@ fn natural_spline_curve_matches_ci_lin() {
         case.reference,
         &case.coef,
         cov.as_ref(),
-        1.0 - case.level,
+        Level::alpha(1.0 - case.level).unwrap(),
         Band::Pointwise,
     )
     .unwrap();
@@ -164,10 +165,8 @@ fn simultaneous_band_uses_the_sup_t_value() {
     let basis =
         NaturalSpline::new(&case.interior, (case.boundary[0], case.boundary[1]), false).unwrap();
     let cov = matrix(&case.cov);
-    let band = Band::SupT {
-        draws: 20_000,
-        seed: 20_261_123,
-    };
+    let band = Band::SupT(Bootstrap::new(20_000, 20_261_123));
+    let alpha = Level::alpha(0.05).unwrap();
     let run = || {
         contrast_curve(
             &basis,
@@ -175,7 +174,7 @@ fn simultaneous_band_uses_the_sup_t_value() {
             case.reference,
             &case.coef,
             cov.as_ref(),
-            0.05,
+            alpha,
             band,
         )
         .unwrap()
@@ -187,7 +186,7 @@ fn simultaneous_band_uses_the_sup_t_value() {
         case.reference,
         &case.coef,
         cov.as_ref(),
-        0.05,
+        alpha,
         Band::Pointwise,
     )
     .unwrap();
@@ -220,15 +219,15 @@ fn simultaneous_band_uses_the_sup_t_value() {
         s
     });
     let draws = 200_000;
-    let want = sup_t_from_covariance(full.as_ref(), 0.05, draws, 7).unwrap();
+    let want = sup_t_from_covariance(full.as_ref(), alpha, Bootstrap::new(draws, 7)).unwrap();
     let got = contrast_curve(
         &basis,
         &small,
         case.reference,
         &case.coef,
         cov.as_ref(),
-        0.05,
-        Band::SupT { draws, seed: 11 },
+        alpha,
+        Band::SupT(Bootstrap::new(draws, 11)),
     )
     .unwrap()
     .critical;
@@ -261,32 +260,41 @@ fn simultaneous_band_uses_the_sup_t_value() {
 
 #[test]
 fn input_errors() {
-    use epistat_inference::InferenceError as E;
+    use epistat_core::InputError;
+    use epistat_inference::Error as E;
     let basis = RestrictedCubic::new(&[1.0, 2.0, 3.0], true).unwrap();
     let cov = Mat::<f64>::identity(2, 2);
-    let ok = |grid: &[f64], coef: &[f64], cov: &Mat<f64>, alpha: f64| {
+    let ok = |grid: &[f64], coef: &[f64], cov: &Mat<f64>| {
         contrast_curve(
             &basis,
             grid,
             2.0,
             coef,
             cov.as_ref(),
-            alpha,
+            Level::default(),
             Band::Pointwise,
         )
     };
-    assert!(ok(&[1.5], &[0.1, 0.2], &cov, 0.05).is_ok());
-    assert_eq!(ok(&[], &[0.1, 0.2], &cov, 0.05), Err(E::Empty));
+    assert!(ok(&[1.5], &[0.1, 0.2], &cov).is_ok());
     assert!(matches!(
-        ok(&[1.5], &[0.1], &cov, 0.05),
-        Err(E::Length { .. })
+        ok(&[], &[0.1, 0.2], &cov),
+        Err(E::Input(InputError::Empty { what: "grid" }))
     ));
     assert!(matches!(
-        ok(&[1.5], &[0.1, 0.2], &Mat::identity(3, 3), 0.05),
-        Err(E::Length { .. })
+        ok(&[1.5], &[0.1], &cov),
+        Err(E::Input(InputError::Length { .. }))
     ));
-    assert_eq!(ok(&[1.5], &[0.1, 0.2], &cov, 1.0), Err(E::Alpha(1.0)));
-    assert_eq!(ok(&[f64::NAN], &[0.1, 0.2], &cov, 0.05), Err(E::NotFinite));
+    assert!(matches!(
+        ok(&[1.5], &[0.1, 0.2], &Mat::identity(3, 3)),
+        Err(E::Input(InputError::Length { .. }))
+    ));
+    assert!(matches!(
+        ok(&[f64::NAN], &[0.1, 0.2], &cov),
+        Err(E::Input(InputError::NotFinite {
+            what: "grid",
+            row: 0
+        }))
+    ));
     let skew = Mat::from_fn(2, 2, |i, j| {
         if i == 0 && j == 1 {
             0.5
@@ -294,7 +302,10 @@ fn input_errors() {
             f64::from(i == j)
         }
     });
-    assert_eq!(ok(&[1.5], &[0.1, 0.2], &skew, 0.05), Err(E::NotSymmetric));
+    assert_eq!(ok(&[1.5], &[0.1, 0.2], &skew), Err(E::NotSymmetric));
     let negative = Mat::from_fn(2, 2, |i, j| if i == j { -1.0 } else { 0.0 });
-    assert_eq!(ok(&[1.5], &[0.1, 0.2], &negative, 0.05), Err(E::NotFinite));
+    assert!(matches!(
+        ok(&[1.5], &[0.1, 0.2], &negative),
+        Err(E::Input(InputError::Domain { .. }))
+    ));
 }

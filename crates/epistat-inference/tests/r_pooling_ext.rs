@@ -21,11 +21,13 @@
 //! or `1e-14` absolute. The checks print the largest deviation in units of its
 //! bound.
 
-use epistat_inference::InferenceError;
+use epistat_core::{InputError, Level};
+use epistat_inference::Error;
 use epistat_inference::pooling::{
-    NegativeRiv, Transform, d1, d2, d3, dfcom_events, dfcom_residual, rubin, rubin_transformed,
-    rubin_vector,
+    MultiTest, NegativeRiv, PooledVector, Transform, d1, d2, d3, dfcom_events, dfcom_residual,
+    rubin, rubin_transformed, rubin_vector,
 };
+use epistat_linalg::{Mat, MatRef};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -181,6 +183,35 @@ fn slices(v: &[Vec<f64>]) -> Vec<&[f64]> {
     v.iter().map(Vec::as_slice).collect()
 }
 
+/// The estimates as an `m x k` matrix and the row-major covariances as
+/// `k x k` matrices, the forms `rubin_vector` and `d1` take.
+fn matrices(q: &[&[f64]], u: &[&[f64]]) -> (Mat<f64>, Vec<Mat<f64>>) {
+    let k = q[0].len();
+    let estimates = Mat::from_fn(q.len(), k, |i, j| q[i][j]);
+    let covariances = u
+        .iter()
+        .map(|u| Mat::from_fn(k, k, |i, j| u[i * k + j]))
+        .collect();
+    (estimates, covariances)
+}
+
+fn vector(q: &[&[f64]], u: &[&[f64]]) -> Result<PooledVector, Error> {
+    let (estimates, covariances) = matrices(q, u);
+    let views: Vec<MatRef<'_, f64>> = covariances.iter().map(Mat::as_ref).collect();
+    rubin_vector(estimates.as_ref(), &views)
+}
+
+fn test_d1(
+    q: &[&[f64]],
+    u: &[&[f64]],
+    null: Option<&[f64]>,
+    dfcom: Option<f64>,
+) -> Result<MultiTest, Error> {
+    let (estimates, covariances) = matrices(q, u);
+    let views: Vec<MatRef<'_, f64>> = covariances.iter().map(Mat::as_ref).collect();
+    d1(estimates.as_ref(), &views, null, dfcom)
+}
+
 #[test]
 fn pooled_vector_matches_mice_pool() {
     let mut worst = Worst(0.0);
@@ -188,14 +219,19 @@ fn pooled_vector_matches_mice_pool() {
         let p = case.fits1[0].coef.len();
         let q: Vec<&[f64]> = case.fits1.iter().map(|f| f.coef.as_slice()).collect();
         let u: Vec<&[f64]> = case.fits1.iter().map(|f| f.vcov.as_slice()).collect();
-        let v = rubin_vector(&q, &u, p).unwrap();
+        let v = vector(&q, &u).unwrap();
         assert_eq!(v.m, case.m);
         for j in 0..p {
             let name = format!("{} coefficient {j}", case.name);
             worst.rel(&name, v.estimate[j], case.pooled.estimate[j], 1e-10);
-            worst.rel(&name, v.within[j * p + j], case.pooled.ubar[j], 1e-10);
-            worst.rel(&name, v.between[j * p + j], case.pooled.b[j], 1e-10);
-            worst.rel(&name, v.total[j * p + j], case.pooled.t[j], 1e-10);
+            worst.rel(
+                &name,
+                v.within.get(j, j).unwrap(),
+                case.pooled.ubar[j],
+                1e-10,
+            );
+            worst.rel(&name, v.between.get(j, j).unwrap(), case.pooled.b[j], 1e-10);
+            worst.rel(&name, v.total.get(j, j).unwrap(), case.pooled.t[j], 1e-10);
             // The scalar rule per coefficient, with the p-value.
             let est: Vec<f64> = q.iter().map(|f| f[j]).collect();
             let var: Vec<f64> = u.iter().map(|f| f[j * p + j]).collect();
@@ -208,7 +244,7 @@ fn pooled_vector_matches_mice_pool() {
         }
         // The relative increase of the tested block is D1's.
         let (tq, tu) = tested_parts(&case);
-        let sub = rubin_vector(&slices(&tq), &slices(&tu), case.k).unwrap();
+        let sub = vector(&slices(&tq), &slices(&tu)).unwrap();
         worst.rel(
             &case.name,
             sub.riv,
@@ -226,7 +262,7 @@ fn d1_matches_mitml() {
         let (q, u) = tested_parts(&case);
         let (q, u) = (slices(&q), slices(&u));
         let name = &case.name;
-        let t = d1(&q, &u, case.k, None, None).unwrap();
+        let t = test_d1(&q, &u, None, None).unwrap();
         let bound = solve_bound(&case);
         if case.d1.f > 1e-6 {
             worst.rel(name, t.statistic, case.d1.f, bound);
@@ -234,12 +270,9 @@ fn d1_matches_mitml() {
         worst.rel(name, t.riv, case.d1.riv, bound.max(1e-9));
         worst.rel(name, t.df2, case.d1.df2, bound.max(1e-9));
         worst.prob(name, t.p_value.unwrap(), case.d1.p, bound.max(1e-9));
-        let c = d1(&q, &u, case.k, None, Some(case.dfcom));
+        let c = test_d1(&q, &u, None, Some(case.dfcom));
         if case.k * (case.m - 1) <= 4 {
-            assert!(
-                matches!(c, Err(InferenceError::Imputations { .. })),
-                "{name}"
-            );
+            assert!(matches!(c, Err(Error::Imputations { .. })), "{name}");
             continue;
         }
         let c = c.unwrap();
@@ -327,7 +360,8 @@ fn transformed_pooling_matches_pool_scalar() {
         worst.rel(name, p.pooled.total, c.t, 1e-12);
         worst.rel(name, p.pooled.df.unwrap(), c.df, 1e-9);
         worst.rel(name, p.estimate, c.estimate, 1e-12);
-        let (lo, hi) = p.interval(0.05).unwrap().unwrap();
+        let interval = p.interval(Level::alpha(0.05).unwrap());
+        let (lo, hi) = (interval.lower.unwrap(), interval.upper.unwrap());
         worst.rel(name, lo, c.lower, 1e-9);
         worst.rel(name, hi, c.upper, 1e-9);
         let null = match kind {
@@ -346,11 +380,11 @@ fn transformations_refuse_values_outside_their_domain() {
     let se = [0.05; 3];
     assert!(matches!(
         rubin_transformed(&q, &se, Transform::Logit, None),
-        Err(InferenceError::Domain { .. })
+        Err(Error::Input(InputError::Domain { .. }))
     ));
     assert!(matches!(
         rubin_transformed(&[0.5, -0.1], &[0.1, 0.1], Transform::Log, None),
-        Err(InferenceError::Domain { .. })
+        Err(Error::Input(InputError::Domain { .. }))
     ));
     assert!(
         rubin_transformed(&[0.5, 0.6], &[0.1, 0.1], Transform::Log, None)
@@ -385,17 +419,11 @@ fn distribution_tails_match_r() {
     let mut worst_t = Worst(0.0);
     for g in &r.pt {
         // A pooled estimate z standard errors from the null, on nu degrees of freedom.
-        let pooled = epistat_inference::pooling::Pooled {
-            m: 5,
-            estimate: g.z,
-            within: 1.0,
-            between: 0.0,
-            total: 1.0,
-            riv: None,
-            lambda: None,
-            fmi: None,
-            df: Some(g.nu),
-        };
+        // Two equal sets of variance 1 pool to a total variance of 1; the
+        // estimate and the degrees of freedom are then set to the case's.
+        let mut pooled = rubin(&[0.0, 0.0], &[1.0, 1.0], None).unwrap();
+        pooled.estimate = g.z;
+        pooled.df = Some(g.nu);
         let got = pooled.p_value(0.0).unwrap().unwrap();
         worst_t.prob(
             &format!("pt nu {} z {}", g.nu, g.z),
@@ -428,7 +456,7 @@ fn fingerprint_of_the_tests() {
         .unwrap();
     let (q, u) = tested_parts(&case);
     let (q, u) = (slices(&q), slices(&u));
-    let a = d1(&q, &u, case.k, None, Some(case.dfcom)).unwrap();
+    let a = test_d1(&q, &u, None, Some(case.dfcom)).unwrap();
     let b = d2(&case.wald_stats, case.k).unwrap();
     let w = case.d3.as_ref().unwrap();
     let c = d3(&w.lr_own, &w.lr_pooled, case.k, NegativeRiv::Keep).unwrap();

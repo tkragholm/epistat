@@ -42,6 +42,22 @@
 //! [`sandwich_with_inverse`] forms the same `V = A^-1 M A^-T` from an inverse
 //! the caller already has, by two products, for a symmetric `A`.
 //!
+//! [`SmallSample`] gives the small-sample factor `c` that scales `V`, with
+//! `N` rows, a model of rank `K` and `G` clusters:
+//!
+//! ```text
+//! rule       no clusters      clusters
+//! None       1                1
+//! Clusters   N / (N - 1)      G / (G - 1)
+//! Hc1        N / (N - K)      G / (G - 1) (N - 1) / (N - K)
+//! ```
+//!
+//! `Hc1` is `sandwich::vcovHC(type = "HC1")` without clusters and
+//! `sandwich::vcovCL(type = "HC1", cadjust = TRUE)` with them; `Clusters` is
+//! `vcovCL(type = "HC0", cadjust = TRUE)`, every row its own cluster when
+//! there are none. The factor does not exist, and is `None`, where a
+//! denominator is not positive.
+//!
 //! [`standard_errors`] is `sqrt(max(V_ii, 0))`. A negative diagonal entry,
 //! which rounding can produce when `V` is near singular, is read as zero.
 //!
@@ -55,9 +71,10 @@
 //! # Edge cases
 //!
 //! - A `clusters` argument that covers another number of rows is
-//!   [`InferenceError::Length`]. Without clusters the length of the
-//!   residuals is not checked, since they are a function of the row.
-//! - A singular or non-finite solve is [`InferenceError::Solve`].
+//!   [`InputError::Length`]. Without clusters [`meat`] does not check the
+//!   length of the residuals, since they are a function of the row;
+//!   [`meat_from`] checks it.
+//! - A singular or non-finite solve is [`Error::Solve`].
 //!
 //! # References
 //!
@@ -75,7 +92,10 @@
 use epistat_linalg::{Attempt, Factor, row_scaled_gram};
 use epistat_linalg::{Mat, MatRef};
 
-use crate::{Clusters, InferenceError, check_length};
+#[cfg(doc)]
+use epistat_core::InputError;
+
+use crate::{Clusters, Error, check_length};
 
 /// The meat `M` from per-row score residuals `r_i = residual(i)`.
 ///
@@ -85,12 +105,12 @@ use crate::{Clusters, InferenceError, check_length};
 ///
 /// # Errors
 ///
-/// [`InferenceError::Length`] when `clusters` covers another number of rows.
+/// [`InputError::Length`] when `clusters` covers another number of rows.
 pub fn meat(
     x: MatRef<'_, f64>,
     residual: impl Fn(usize) -> f64 + Sync,
     clusters: Option<&Clusters>,
-) -> Result<Mat<f64>, InferenceError> {
+) -> Result<Mat<f64>, Error> {
     let Some(clusters) = clusters else {
         return Ok(row_scaled_gram(x, residual));
     };
@@ -106,6 +126,72 @@ pub fn meat(
     Ok(row_scaled_gram(sums.as_ref(), |_| 1.0))
 }
 
+/// [`meat`] with the residuals as a column, or every residual 1 for `None`,
+/// which is the meat of scores already in the rows of `x`. The bits are those
+/// of [`meat`] with `|i| residuals[i]` or `|_| 1.0`.
+///
+/// # Errors
+///
+/// [`InputError::Length`] when the residuals or `clusters` cover another
+/// number of rows.
+pub fn meat_from(
+    x: MatRef<'_, f64>,
+    residuals: Option<&[f64]>,
+    clusters: Option<&Clusters>,
+) -> Result<Mat<f64>, Error> {
+    match residuals {
+        Some(r) => {
+            check_length("residuals", x.nrows(), r.len())?;
+            meat(x, |i| r[i], clusters)
+        }
+        None => meat(x, |_| 1.0, clusters),
+    }
+}
+
+/// The small-sample factor of a sandwich covariance.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SmallSample {
+    /// No factor, `HC0`.
+    #[default]
+    None,
+    /// `G / (G - 1)` for `G` clusters.
+    Clusters,
+    /// `N / (N - K)` without clusters, `G / (G - 1) (N - 1) / (N - K)` with
+    /// them.
+    Hc1,
+}
+
+impl SmallSample {
+    /// The factor for `rows` rows, a model of rank `rank` and `clusters`
+    /// clusters (`None` without clusters), or `None` where it does not exist:
+    /// fewer than two clusters, or no more rows than the rank.
+    ///
+    /// The arithmetic is `g / (g - 1) * (n - 1) / (n - k)` from left to right
+    /// for `Hc1` with clusters, as `sandwich::vcovCL` writes it.
+    #[must_use]
+    pub fn factor(self, rows: usize, rank: usize, clusters: Option<usize>) -> Option<f64> {
+        match (self, clusters) {
+            (Self::None, _) => Some(1.0),
+            (Self::Clusters, groups) => {
+                let g = groups.unwrap_or(rows);
+                (g >= 2).then(|| g as f64 / (g - 1) as f64)
+            }
+            (Self::Hc1, None) => (rows > rank).then(|| rows as f64 / (rows - rank) as f64),
+            (Self::Hc1, Some(g)) => (g >= 2 && rows > rank)
+                .then(|| g as f64 / (g - 1) as f64 * (rows - 1) as f64 / (rows - rank) as f64),
+        }
+    }
+}
+
+/// `factor * V`, entry by entry.
+#[must_use]
+pub fn scaled(covariance: MatRef<'_, f64>, factor: f64) -> Mat<f64> {
+    Mat::from_fn(covariance.nrows(), covariance.ncols(), |a, b| {
+        factor * covariance[(a, b)]
+    })
+}
+
 /// `A^-1 M A^-T` for a symmetric meat `M`, by two solves with one
 /// factorisation of `A` through `attempts`, averaged with its transpose so that
 /// the result is exactly symmetric.
@@ -116,13 +202,12 @@ pub fn meat(
 ///
 /// # Errors
 ///
-/// [`InferenceError::Solve`] when `A` cannot be factorised or a solve is not
-/// finite.
+/// [`Error::Solve`] when `A` cannot be factorised or a solve is not finite.
 pub fn sandwich(
     information: MatRef<'_, f64>,
     meat: MatRef<'_, f64>,
     attempts: &[Attempt],
-) -> Result<Mat<f64>, InferenceError> {
+) -> Result<Mat<f64>, Error> {
     let factor = Factor::new(information, attempts)?;
     let left = factor.solve(meat)?;
     let transposed = factor.solve(left.transpose())?;
@@ -295,6 +380,41 @@ mod tests {
                 assert_eq!(new[(i, j)].to_bits(), old[(i, j)].to_bits());
             }
         }
+    }
+
+    #[test]
+    fn meat_from_columns_has_the_bits_of_the_closure_form() {
+        let x = Mat::from_fn(7, 3, |i, j| ((i * 3 + j) % 5) as f64 - 1.7);
+        let r: Vec<f64> = (0..7).map(|i| 0.3 * f64::from(i) - 1.0).collect();
+        let clusters = Clusters::from_codes(&[0, 0, 1, 1, 2, 2, 2]);
+        for c in [None, Some(&clusters)] {
+            assert_eq!(
+                meat_from(x.as_ref(), Some(&r), c).unwrap(),
+                meat(x.as_ref(), |i| r[i], c).unwrap()
+            );
+            assert_eq!(
+                meat_from(x.as_ref(), None, c).unwrap(),
+                meat(x.as_ref(), |_| 1.0, c).unwrap()
+            );
+        }
+        assert!(meat_from(x.as_ref(), Some(&r[..3]), None).is_err());
+    }
+
+    #[test]
+    fn small_sample_factors() {
+        assert_eq!(SmallSample::None.factor(10, 3, Some(1)), Some(1.0));
+        assert_eq!(SmallSample::Clusters.factor(10, 3, Some(5)), Some(1.25));
+        assert_eq!(SmallSample::Clusters.factor(5, 3, None), Some(1.25));
+        assert_eq!(SmallSample::Clusters.factor(10, 3, Some(1)), None);
+        assert_eq!(SmallSample::Hc1.factor(10, 2, None), Some(1.25));
+        assert_eq!(SmallSample::Hc1.factor(2, 2, None), None);
+        let g = 4.0_f64 / 3.0 * 9.0 / 8.0;
+        assert_eq!(
+            SmallSample::Hc1.factor(10, 2, Some(4)).map(f64::to_bits),
+            Some(g.to_bits())
+        );
+        let v = mat![[1.0, 2.0], [2.0, 4.0]];
+        assert_eq!(scaled(v.as_ref(), 0.5), mat![[0.5, 1.0], [1.0, 2.0]]);
     }
 
     #[test]
