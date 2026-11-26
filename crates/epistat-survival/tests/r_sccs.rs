@@ -29,7 +29,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::sccs::{
-    PieceSpec, Pieces, SccsData, SccsOptions, WindowSpec, build_pieces, fit,
+    ExposureSeries, PieceSpec, Pieces, SccsData, SccsOptions, WindowSpec, build_pieces, fit,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -131,10 +131,13 @@ fn build(spec: &Spec) -> Pieces {
         end: &spec.end,
         event_offsets: &spec.event_offsets,
         events: &spec.events,
-        exposure_offsets: &spec.exposure_offsets,
-        exposures: &spec.exposures,
+        exposures: &[ExposureSeries {
+            offsets: &spec.exposure_offsets,
+            dates: &spec.exposures,
+            windows: &windows,
+        }],
         age_cuts: &spec.age_cuts,
-        windows: &windows,
+        calendar: None,
     })
     .unwrap()
 }
@@ -196,9 +199,12 @@ fn pieces_equal_the_explicit_loop() {
         assert_eq!(got.end, want.end, "{}", case.label);
         assert_eq!(got.events, want.events, "{}", case.label);
         assert_eq!(got.age_band, want.age_band, "{}", case.label);
-        let window: Vec<i64> = got.window.iter().map(|w| w.map_or(-1, i64::from)).collect();
+        let window: Vec<i64> = got.window[0]
+            .iter()
+            .map(|w| w.map_or(-1, i64::from))
+            .collect();
         assert_eq!(window, want.window, "{}", case.label);
-        assert_eq!(got.n_windows, case.n_windows);
+        assert_eq!(got.n_windows, vec![case.n_windows]);
         assert_eq!(got.n_age_bands, case.n_age_bands);
     }
 }

@@ -56,25 +56,46 @@
 //!
 //! The covariance is `I^-1`. With `robust` the person-level scores `s_i` give
 //! the sandwich `I^-1 (sum_i s_i s_i') I^-1`, valid when the events of a
-//! person are not independent given the person's rate.
+//! person are not independent given the person's rate. The standard errors
+//! are the square roots of the diagonals, and
+//! [`SccsFit::relative_incidence`] gives `exp(b)` with the Wald interval
+//! `exp(b -+ z se)`, `z` the normal quantile of the level, and the two-sided
+//! Wald p-value. `standardsccs` prints its interval with `z = 1.96`, which
+//! differs from the quantile `1.959964` in the fourth decimal of the limits.
 //!
 //! # The pieces
 //!
 //! [`build_pieces`] cuts the observation period `[start_i, end_i)` of each
-//! person at the age cut points and at the boundaries of every risk window of
-//! every exposure date, and counts the events in each piece. Time is
-//! continuous and intervals are half open: an event at a boundary belongs to
-//! the piece that starts there, and for dates in days `end` is the last
-//! observed day plus one. All times, the observation period, the exposure
-//! dates, the events and the age cut points, are on one scale, usually age in
-//! days. A [`WindowSpec`] covers `[date + from, date + to)` for each exposure
-//! date of the person, and `to` may be infinite. Windows of one exposure may
-//! not overlap. Where windows of different exposure dates overlap, the piece
-//! takes the window of the latest exposure date, so that a pre-exposure window
-//! of a later dose takes precedence over the late window of an earlier dose.
-//! Neighbouring pieces with the same age band and window are merged, which
-//! does not change the likelihood. The pieces of a person are contiguous and
-//! in time order, and people appear in the order of the input.
+//! person at the age cut points, at the boundaries of every risk window of
+//! every exposure date of every exposure series, and at the calendar cuts and
+//! season starts, and counts the events in each piece. Time is continuous and
+//! intervals are half open: an event at a boundary belongs to the piece that
+//! starts there, and for dates in days `end` is the last observed day plus
+//! one. All times, the observation period, the exposure dates, the events and
+//! the age cut points, are on one scale, usually age in days. A
+//! [`WindowSpec`] covers `[date + from, date + to)` for each exposure date of
+//! the person, and `to` may be infinite. Windows of one series may not
+//! overlap. Where windows of different dates of one series overlap, the piece
+//! takes the window of the latest date, so that a pre-exposure window of a
+//! later dose takes precedence over the late window of an earlier dose. Each
+//! [`ExposureSeries`] labels the pieces on its own, so the windows of two
+//! drugs may overlap and the design then has both indicators set, the
+//! multiplicative model of `standardsccs` with several drugs.
+//!
+//! A [`Calendar`] places each person's time on the calendar: time `t` is the
+//! day `origin_i + t` from 1970-01-01, so with time as age in days `origin_i`
+//! is the date of birth. Calendar cuts are dates, and each falls at the time
+//! `cut - origin_i` of the person. A season starts on the same day of the
+//! calendar every year, and the days before the first start of the year belong
+//! to the last season, as in `standardsccs` with `seasongrp` and `dob`.
+//! Neighbouring pieces with the same labels are merged, which does not change
+//! the likelihood. The pieces of a person are contiguous and in time order,
+//! and people appear in the order of the input.
+//!
+//! [`Pieces::window_summary`] and [`Pieces::exposed_cases`] count, for each
+//! window, the cases observed in it, those that inform its coefficient (an
+//! event, and time both in and out of the window), the events and the time in
+//! it, which a report gives beside the estimate.
 //!
 //! # What the likelihood assumes
 //!
@@ -100,9 +121,10 @@
 //!
 //! The tests compare coefficients, both covariances and the log likelihood with
 //! `SCCS::standardsccs` (SCCS 1.8) for one event per person and for several,
-//! with `glm` Poisson with person dummies, with `survival::clogit`, and with a
-//! hand-written R loop for the pieces. `tests/data/sccs.R` records the
-//! versions.
+//! with two drugs and with seasons, with `glm` Poisson with person dummies,
+//! with `survival::clogit`, and with a hand-written R loop for the pieces,
+//! with R's `Date` for calendar periods and seasons. `tests/data/sccs.R` and
+//! `tests/data/sccs_calendar.R` record the versions.
 //!
 //! # References
 //!
@@ -181,6 +203,11 @@ pub struct SccsFit {
     /// The person-level sandwich covariance, laid out as `covariance`, when
     /// [`SccsOptions::robust`] was set and there is an estimate.
     pub robust_covariance: Option<Vec<Option<f64>>>,
+    /// The standard errors of the coefficients, the square roots of the
+    /// diagonal of `covariance`.
+    pub standard_errors: Vec<Option<f64>>,
+    /// The standard errors from `robust_covariance`, when it is formed.
+    pub robust_standard_errors: Option<Vec<Option<f64>>>,
     /// The log likelihood at the estimate, `None` without an estimate.
     pub log_likelihood: Option<f64>,
     /// The log likelihood at `beta = 0`, `None` when no person has an event in
@@ -196,6 +223,11 @@ pub struct SccsFit {
     pub n_persons_one_piece: usize,
     /// The events of the people used.
     pub n_events: f64,
+    /// For each column, the people used whose value of the column is not the
+    /// same in all their pieces. For the indicator of a risk window these are
+    /// the cases with an event who were observed both in and out of the
+    /// window, the exposed cases that inform its coefficient.
+    pub n_informative_by_column: Vec<usize>,
     /// The columns that are not aliased.
     pub rank: usize,
     /// The Newton steps taken.
@@ -461,6 +493,8 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
         coefficients: vec![None; n_cols],
         covariance: vec![None; n_cols * n_cols],
         robust_covariance: None,
+        standard_errors: vec![None; n_cols],
+        robust_standard_errors: None,
         log_likelihood: None,
         null_log_likelihood: None,
         n_persons: persons.ranges.len(),
@@ -468,6 +502,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
         n_persons_without_events: n_without,
         n_persons_one_piece: n_one,
         n_events,
+        n_informative_by_column: informative_by_column(data, x, &persons),
         rank: 0,
         iterations: 0,
         converged: false,
@@ -562,6 +597,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
             result.covariance[ca * n_cols + cb] = Some(inverse[a * p + b]);
         }
     }
+    result.standard_errors = diagonal_roots(&result.covariance, n_cols);
     if opts.robust {
         let meat = blocked(data, x, &cols, &persons, &beta, true).meat;
         let sandwich = sandwich(&inverse, &meat, p);
@@ -571,9 +607,118 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
                 full[ca * n_cols + cb] = Some(sandwich[a * p + b]);
             }
         }
+        result.robust_standard_errors = Some(diagonal_roots(&full, n_cols));
         result.robust_covariance = Some(full);
     }
     Ok(result)
+}
+
+/// The square roots of the diagonal of a `p * p` covariance.
+fn diagonal_roots(covariance: &[Option<f64>], p: usize) -> Vec<Option<f64>> {
+    (0..p)
+        .map(|j| covariance[j * p + j].map(f64::sqrt))
+        .collect()
+}
+
+/// For each column, the people with events in at least two pieces whose
+/// value of the column varies between their pieces.
+fn informative_by_column(data: &SccsData<'_>, x: MatRef<'_, f64>, persons: &Persons) -> Vec<usize> {
+    let p = x.ncols();
+    ordered_reduce(
+        persons.ranges.len(),
+        PERSON_BLOCK,
+        64,
+        |r| {
+            let mut count = vec![0_usize; p];
+            for &(a, b) in &persons.ranges[r] {
+                let n_i: f64 = data.events[a..b].iter().sum();
+                if n_i == 0.0 || b - a < 2 {
+                    continue;
+                }
+                for (j, c) in count.iter_mut().enumerate() {
+                    let first = x[(a, j)];
+                    *c += usize::from((a + 1..b).any(|k| x[(k, j)] != first));
+                }
+            }
+            count
+        },
+        |total: &mut Vec<usize>, next| {
+            for (t, n) in total.iter_mut().zip(next) {
+                *t += n;
+            }
+        },
+    )
+}
+
+/// The relative incidence of one column with its interval and test, from
+/// [`SccsFit::relative_incidence`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RelativeIncidence {
+    /// The coefficient, the log relative incidence.
+    pub coefficient: f64,
+    /// Its standard error, model-based or robust as asked.
+    pub standard_error: f64,
+    /// `exp(coefficient)`.
+    pub relative_incidence: f64,
+    /// The lower limit, `exp(coefficient - z standard_error)`.
+    pub lower: f64,
+    /// The upper limit, `exp(coefficient + z standard_error)`.
+    pub upper: f64,
+    /// The Wald statistic, `coefficient / standard_error`.
+    pub z: f64,
+    /// The two-sided p-value of the Wald statistic.
+    pub p_value: f64,
+}
+
+impl SccsFit {
+    /// The relative incidence of each column with its Wald interval at
+    /// `level`, `exp(b +- z se)` with `z` the `(1 + level) / 2` normal
+    /// quantile, and the two-sided Wald test of no effect. `robust` takes the
+    /// standard errors from the sandwich. A column whose coefficient is `None`
+    /// gives `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when `level` is not strictly between 0 and 1, or
+    /// `robust` is asked for a fit without the sandwich.
+    pub fn relative_incidence(
+        &self,
+        level: f64,
+        robust: bool,
+    ) -> Result<Vec<Option<RelativeIncidence>>> {
+        if !(level > 0.0 && level < 1.0) {
+            return Err(invalid(format!(
+                "the level is {level}, which is not strictly between 0 and 1"
+            )));
+        }
+        let se = if robust {
+            self.robust_standard_errors.as_ref().ok_or_else(|| {
+                invalid("the fit has no robust covariance: set SccsOptions::robust")
+            })?
+        } else {
+            &self.standard_errors
+        };
+        let z = epistat_stats::normal::two_sided_z(level);
+        Ok(self
+            .coefficients
+            .iter()
+            .zip(se)
+            .map(|(b, s)| {
+                let (b, s) = (b.as_ref()?, s.as_ref()?);
+                let (b, s) = (*b, *s);
+                let wald = b / s;
+                Some(RelativeIncidence {
+                    coefficient: b,
+                    standard_error: s,
+                    relative_incidence: b.exp(),
+                    lower: (b - z * s).exp(),
+                    upper: (b + z * s).exp(),
+                    z: wald,
+                    p_value: 2.0 * epistat_stats::normal::cdf(-wald.abs()),
+                })
+            })
+            .collect())
+    }
 }
 
 fn newton_step(sums: &Sums, p: usize, tolerance: f64) -> Result<Vec<f64>> {
@@ -624,12 +769,57 @@ pub struct WindowSpec {
     pub to: f64,
 }
 
+/// One exposure series: the exposure dates of each person and the risk
+/// windows that every date of the series opens.
+///
+/// The dates are ragged: person `i` has `dates[offsets[i]..offsets[i + 1]]`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExposureSeries<'a> {
+    /// The offsets of each person's dates, one more entry than people.
+    pub offsets: &'a [usize],
+    /// The exposure dates. A date outside the observation period is allowed,
+    /// since its windows may reach into it.
+    pub dates: &'a [f64],
+    /// The risk windows of the series, which do not overlap one another.
+    pub windows: &'a [WindowSpec],
+}
+
+/// The first day of a season, as a day of the calendar year.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeasonStart {
+    /// The month, 1 to 12.
+    pub month: u32,
+    /// The day of the month. 29 February is refused, since it is missing in
+    /// most years.
+    pub day: u32,
+}
+
+/// Cuts on the calendar: calendar periods and seasons.
+///
+/// The time of the pieces is in days, and `origin` places each person's time
+/// scale on the calendar: time `t` of person `i` is the day `origin[i] + t`,
+/// counted from 1970-01-01. With time as age in days, `origin` is the date of
+/// birth; with time as calendar days, it is 0.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Calendar<'a> {
+    /// The day, from 1970-01-01, at time 0 of each person.
+    pub origin: &'a [f64],
+    /// Strictly increasing calendar dates, as days from 1970-01-01. Calendar
+    /// period `c` is `[cut_(c-1), cut_c)`, with period 0 before the first cut.
+    pub cuts: &'a [f64],
+    /// The first days of the seasons, in calendar order from 1 January and at
+    /// least two when given. Season `s` runs from `season_starts[s]` to the day
+    /// before the next start; the days of the year before the first start
+    /// belong to the last season, and season 0 is the reference.
+    pub season_starts: &'a [SeasonStart],
+}
+
 /// The observation, events and exposures of the people, and how to cut them.
 ///
-/// Events and exposure dates are ragged: person `i` has the entries
-/// `events[event_offsets[i]..event_offsets[i + 1]]`, and the same for
-/// exposures.
-#[derive(Debug, Clone, Copy)]
+/// Events are ragged: person `i` has the entries
+/// `events[event_offsets[i]..event_offsets[i + 1]]`. Fields left out with
+/// `..PieceSpec::default()` are empty: no exposure, no age cut, no calendar.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PieceSpec<'a> {
     /// The start of observation of each person.
     pub start: &'a [f64],
@@ -639,16 +829,32 @@ pub struct PieceSpec<'a> {
     pub event_offsets: &'a [usize],
     /// The event times, each in `[start, end)` of its person.
     pub events: &'a [f64],
-    /// The offsets of each person's exposure dates, one more entry than people.
-    pub exposure_offsets: &'a [usize],
-    /// The exposure dates. A date outside the observation period is allowed,
-    /// since its windows may reach into it.
-    pub exposures: &'a [f64],
+    /// The exposure series. Each has its own windows and its own columns in
+    /// the design, and windows of different series may overlap.
+    pub exposures: &'a [ExposureSeries<'a>],
     /// The strictly increasing age cut points. Age band `b` is `[cut_(b-1),
     /// cut_b)`, with band 0 below the first cut.
     pub age_cuts: &'a [f64],
-    /// The risk windows, which do not overlap.
-    pub windows: &'a [WindowSpec],
+    /// Calendar periods and seasons, when the time is in days.
+    pub calendar: Option<Calendar<'a>>,
+}
+
+/// A column of [`Pieces::design`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    /// The indicator of risk window `window` of exposure series `series`.
+    Window {
+        /// The exposure series.
+        series: usize,
+        /// The window within the series.
+        window: usize,
+    },
+    /// The indicator of an age band, from 1; band 0 is the reference.
+    AgeBand(usize),
+    /// The indicator of a season, from 1; season 0 is the reference.
+    Season(usize),
+    /// The indicator of a calendar period, from 1; period 0 is the reference.
+    CalendarPeriod(usize),
 }
 
 /// The pieces of the observation periods of a set of people.
@@ -664,12 +870,40 @@ pub struct Pieces {
     pub events: Vec<f64>,
     /// The age band of each piece, from 0.
     pub age_band: Vec<u32>,
-    /// The risk window of each piece, `None` outside every window.
-    pub window: Vec<Option<u32>>,
+    /// The risk window of each piece in each exposure series, `window[s][k]`
+    /// for series `s` and piece `k`, `None` outside every window of the
+    /// series.
+    pub window: Vec<Vec<Option<u32>>>,
+    /// The season of each piece, 0 without seasons.
+    pub season: Vec<u32>,
+    /// The calendar period of each piece, 0 without calendar cuts.
+    pub calendar_period: Vec<u32>,
     /// The number of age bands, one more than the cut points.
     pub n_age_bands: usize,
-    /// The number of risk windows.
-    pub n_windows: usize,
+    /// The number of risk windows of each exposure series.
+    pub n_windows: Vec<usize>,
+    /// The number of seasons, 1 without seasons.
+    pub n_seasons: usize,
+    /// The number of calendar periods, one more than the calendar cuts.
+    pub n_calendar_periods: usize,
+}
+
+/// The cases and events in one risk window, from [`Pieces::window_summary`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowSummary {
+    /// The exposure series.
+    pub series: usize,
+    /// The window within the series.
+    pub window: usize,
+    /// The people with observed time in the window.
+    pub cases: usize,
+    /// The people with observed time in the window, at least one event and
+    /// observed time outside the window too, who carry information about it.
+    pub informative_cases: usize,
+    /// The events in the window.
+    pub events: f64,
+    /// The observed time in the window.
+    pub time: f64,
 }
 
 impl Pieces {
@@ -694,42 +928,201 @@ impl Pieces {
         }
     }
 
-    /// The design: one indicator column per risk window, then one per age band
-    /// after the first, which is the reference.
+    /// What each column of [`Pieces::design`] is.
+    #[must_use]
+    pub fn columns(&self) -> Vec<Column> {
+        let mut out = Vec::new();
+        for (series, &n) in self.n_windows.iter().enumerate() {
+            out.extend((0..n).map(|window| Column::Window { series, window }));
+        }
+        out.extend((1..self.n_age_bands).map(Column::AgeBand));
+        out.extend((1..self.n_seasons).map(Column::Season));
+        out.extend((1..self.n_calendar_periods).map(Column::CalendarPeriod));
+        out
+    }
+
+    /// The design: one indicator column per risk window of each exposure
+    /// series in turn, then one per age band after the first, one per season
+    /// after the first and one per calendar period after the first, as
+    /// [`Pieces::columns`] lists them.
     #[must_use]
     pub fn design(&self) -> Mat<f64> {
-        let (w, a) = (self.n_windows, self.n_age_bands.saturating_sub(1));
-        Mat::from_fn(self.person.len(), w + a, |i, j| {
-            if j < w {
-                f64::from(u8::from(self.window[i] == u32::try_from(j).ok()))
-            } else {
-                f64::from(u8::from(self.age_band[i] as usize == j - w + 1))
-            }
+        let columns = self.columns();
+        Mat::from_fn(self.person.len(), columns.len(), |i, j| {
+            let on = match columns[j] {
+                Column::Window { series, window } => {
+                    self.window[series][i] == u32::try_from(window).ok()
+                }
+                Column::AgeBand(b) => self.age_band[i] as usize == b,
+                Column::Season(s) => self.season[i] as usize == s,
+                Column::CalendarPeriod(c) => self.calendar_period[i] as usize == c,
+            };
+            f64::from(u8::from(on))
         })
     }
+
+    /// The people with observed time in any risk window of exposure series
+    /// `series`: the cases exposed while observed.
+    ///
+    /// # Panics
+    ///
+    /// When `series` is not a series of the pieces.
+    #[must_use]
+    pub fn exposed_cases(&self, series: usize) -> usize {
+        let window = &self.window[series];
+        let mut count = 0;
+        let mut k = 0;
+        while k < self.person.len() {
+            let p = self.person[k];
+            let mut exposed = false;
+            while k < self.person.len() && self.person[k] == p {
+                exposed |= window[k].is_some();
+                k += 1;
+            }
+            count += usize::from(exposed);
+        }
+        count
+    }
+
+    /// The cases, events and time of each risk window of each series, in the
+    /// order of the window columns of [`Pieces::design`].
+    #[must_use]
+    pub fn window_summary(&self) -> Vec<WindowSummary> {
+        let mut out = Vec::new();
+        for (series, &n) in self.n_windows.iter().enumerate() {
+            let label = &self.window[series];
+            for window in 0..n {
+                let w = u32::try_from(window).ok();
+                let mut summary = WindowSummary {
+                    series,
+                    window,
+                    cases: 0,
+                    informative_cases: 0,
+                    events: 0.0,
+                    time: 0.0,
+                };
+                let mut k = 0;
+                while k < self.person.len() {
+                    let p = self.person[k];
+                    let (mut inside, mut outside, mut events) = (false, false, 0.0);
+                    while k < self.person.len() && self.person[k] == p {
+                        if label[k] == w {
+                            inside = true;
+                            summary.events += self.events[k];
+                            summary.time += self.end[k] - self.start[k];
+                        } else {
+                            outside = true;
+                        }
+                        events += self.events[k];
+                        k += 1;
+                    }
+                    summary.cases += usize::from(inside);
+                    summary.informative_cases += usize::from(inside && outside && events > 0.0);
+                }
+                out.push(summary);
+            }
+        }
+        out
+    }
+}
+
+fn check_offsets(o: &[usize], n: usize, len: usize) -> bool {
+    o.len() == n + 1 && o[0] == 0 && o[n] == len && o.windows(2).all(|w| w[0] <= w[1])
+}
+
+fn check_windows(series: usize, windows: &[WindowSpec]) -> Result<()> {
+    for (k, w) in windows.iter().enumerate() {
+        if w.from.is_nan()
+            || w.to.is_nan()
+            || w.from >= w.to
+            || w.from == f64::INFINITY
+            || w.from == f64::NEG_INFINITY
+        {
+            return Err(invalid(format!(
+                "window {k} of exposure series {series} is [{}, {}), which is not a non-empty interval with a finite start",
+                w.from, w.to
+            )));
+        }
+        for (l, v) in windows.iter().enumerate().take(k) {
+            if w.from < v.to && v.from < w.to {
+                return Err(invalid(format!(
+                    "windows {l} and {k} of exposure series {series} overlap"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `(month, day)` is a day of the calendar other than 29 February.
+fn valid_season_start(s: SeasonStart) -> bool {
+    const DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    (1..=12).contains(&s.month) && s.day >= 1 && s.day <= DAYS[s.month as usize - 1]
+}
+
+fn check_calendar(cal: &Calendar<'_>, n: usize) -> Result<()> {
+    if cal.origin.len() != n {
+        return Err(invalid("the calendar origin needs one entry per person"));
+    }
+    if let Some(i) = cal.origin.iter().position(|o| !o.is_finite()) {
+        return Err(invalid(format!(
+            "the calendar origin of person {i} is {}, which is not finite",
+            cal.origin[i]
+        )));
+    }
+    if !cal.cuts.iter().all(|c| c.is_finite()) || cal.cuts.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(invalid(
+            "the calendar cuts must be finite and strictly increasing",
+        ));
+    }
+    if cal.season_starts.len() == 1 {
+        return Err(invalid("seasons need at least two season starts"));
+    }
+    if let Some(s) = cal.season_starts.iter().find(|&&s| !valid_season_start(s)) {
+        return Err(invalid(format!(
+            "the season start {}-{} is not a day of every year",
+            s.month, s.day
+        )));
+    }
+    if cal
+        .season_starts
+        .windows(2)
+        .any(|w| (w[0].month, w[0].day) >= (w[1].month, w[1].day))
+    {
+        return Err(invalid(
+            "the season starts must be in calendar order without repeats",
+        ));
+    }
+    Ok(())
 }
 
 fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
     let n = spec.start.len();
-    if spec.end.len() != n
-        || spec.event_offsets.len() != n + 1
-        || spec.exposure_offsets.len() != n + 1
-    {
+    if spec.end.len() != n || spec.event_offsets.len() != n + 1 {
         return Err(invalid(
-            "start and end need one entry per person and the offsets one more",
+            "start and end need one entry per person and the event offsets one more",
         ));
     }
     if u32::try_from(n).is_err() {
         return Err(invalid("more people than a u32 addresses"));
     }
-    let offsets_ok =
-        |o: &[usize], len: usize| o[0] == 0 && o[n] == len && o.windows(2).all(|w| w[0] <= w[1]);
-    if !offsets_ok(spec.event_offsets, spec.events.len())
-        || !offsets_ok(spec.exposure_offsets, spec.exposures.len())
-    {
+    if !check_offsets(spec.event_offsets, n, spec.events.len()) {
         return Err(invalid(
-            "the offsets must start at 0, not decrease and end at the length of their column",
+            "the event offsets must start at 0, not decrease and end at the number of events",
         ));
+    }
+    for (s, series) in spec.exposures.iter().enumerate() {
+        if !check_offsets(series.offsets, n, series.dates.len()) {
+            return Err(invalid(format!(
+                "the offsets of exposure series {s} must have one more entry than people, start at 0, not decrease and end at the number of its dates"
+            )));
+        }
+        if let Some(&t) = series.dates.iter().find(|t| !t.is_finite()) {
+            return Err(invalid(format!(
+                "exposure series {s} has the date {t}, which is not finite"
+            )));
+        }
+        check_windows(s, series.windows)?;
     }
     for i in 0..n {
         if !(spec.start[i].is_finite() && spec.end[i].is_finite() && spec.start[i] < spec.end[i]) {
@@ -739,13 +1132,8 @@ fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
             )));
         }
     }
-    if let Some(&t) = spec
-        .events
-        .iter()
-        .chain(spec.exposures)
-        .find(|t| !t.is_finite())
-    {
-        return Err(invalid(format!("an event or exposure time is {t}")));
+    if let Some(&t) = spec.events.iter().find(|t| !t.is_finite()) {
+        return Err(invalid(format!("an event time is {t}")));
     }
     if !spec.age_cuts.iter().all(|c| c.is_finite())
         || spec.age_cuts.windows(2).any(|w| w[0] >= w[1])
@@ -754,36 +1142,54 @@ fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
             "the age cut points must be finite and strictly increasing",
         ));
     }
-    for (k, w) in spec.windows.iter().enumerate() {
-        if w.from.is_nan()
-            || w.to.is_nan()
-            || w.from >= w.to
-            || w.from == f64::INFINITY
-            || w.from == f64::NEG_INFINITY
-        {
-            return Err(invalid(format!(
-                "window {k} is [{}, {}), which is not a non-empty interval with a finite start",
-                w.from, w.to
-            )));
-        }
-        for (l, v) in spec.windows.iter().enumerate().take(k) {
-            if w.from < v.to && v.from < w.to {
-                return Err(invalid(format!("windows {l} and {k} overlap")));
-            }
-        }
+    if let Some(cal) = &spec.calendar {
+        check_calendar(cal, n)?;
     }
     Ok(n)
+}
+
+/// The day count of a time on the calendar, rounded down.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a finite day count far inside the i64 range"
+)]
+fn day_of(t: f64) -> i64 {
+    t.floor() as i64
+}
+
+/// The season boundaries of person `i` on their own time scale, as `(time,
+/// season)` in time order, from the last start on or before `start` to the
+/// last start before `end`.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "day counts are far below 2^53 and seasons are few"
+)]
+fn season_boundaries(cal: &Calendar<'_>, origin: f64, start: f64, end: f64) -> Vec<(f64, u32)> {
+    let first_year = crate::crossover::civil_from_days(day_of(origin + start)).0 - 1;
+    let last_year = crate::crossover::civil_from_days(day_of(origin + end)).0;
+    let mut out = Vec::new();
+    for year in first_year..=last_year {
+        for (s, start_day) in cal.season_starts.iter().enumerate() {
+            let day = crate::crossover::days_from_civil(
+                year,
+                i64::from(start_day.month),
+                i64::from(start_day.day),
+            );
+            out.push((day as f64 - origin, s as u32));
+        }
+    }
+    out
 }
 
 /// One person's pieces appended to the output.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "window and age band counts are small"
+    reason = "window, age band, season and period counts are small"
 )]
 fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
     let (start, end) = (spec.start[i], spec.end[i]);
     let events = &spec.events[spec.event_offsets[i]..spec.event_offsets[i + 1]];
-    let dates = &spec.exposures[spec.exposure_offsets[i]..spec.exposure_offsets[i + 1]];
     for &t in events {
         if !(t >= start && t < end) {
             return Err(invalid(format!(
@@ -791,18 +1197,38 @@ fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
             )));
         }
     }
+    let dates: Vec<&[f64]> = spec
+        .exposures
+        .iter()
+        .map(|s| &s.dates[s.offsets[i]..s.offsets[i + 1]])
+        .collect();
     let mut cuts = vec![start, end];
-    for &c in spec.age_cuts {
+    let mut push = |c: f64| {
         if c > start && c < end {
             cuts.push(c);
         }
+    };
+    for &c in spec.age_cuts {
+        push(c);
     }
-    for &d in dates {
-        for w in spec.windows {
-            for c in [d + w.from, d + w.to] {
-                if c > start && c < end {
-                    cuts.push(c);
-                }
+    for (series, dates) in spec.exposures.iter().zip(&dates) {
+        for &d in *dates {
+            for w in series.windows {
+                push(d + w.from);
+                push(d + w.to);
+            }
+        }
+    }
+    let mut seasons = Vec::new();
+    let origin = spec.calendar.map_or(0.0, |cal| cal.origin[i]);
+    if let Some(cal) = &spec.calendar {
+        for &c in cal.cuts {
+            push(c - origin);
+        }
+        if !cal.season_starts.is_empty() {
+            seasons = season_boundaries(cal, origin, start, end);
+            for &(t, _) in &seasons {
+                push(t);
             }
         }
     }
@@ -810,26 +1236,43 @@ fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
     cuts.dedup();
     let person = u32::try_from(i).map_err(|_| invalid("more people than a u32 addresses"))?;
     let first = out.person.len();
+    let mut labels: Vec<Option<u32>> = vec![None; spec.exposures.len()];
     for pair in cuts.windows(2) {
         let (a, b) = (pair[0], pair[1]);
-        let band = spec.age_cuts.partition_point(|&c| c <= a);
-        // The latest exposure date with a window that covers the piece.
-        let mut label: Option<(f64, u32)> = None;
-        for &d in dates {
-            for (k, w) in spec.windows.iter().enumerate() {
-                if d + w.from <= a && a < d + w.to {
-                    let better = label.is_none_or(|(best, _)| d > best);
-                    if better {
-                        label = Some((d, k as u32));
+        let band = spec.age_cuts.partition_point(|&c| c <= a) as u32;
+        let period =
+            spec.calendar
+                .map_or(0, |cal| cal.cuts.partition_point(|&c| c - origin <= a)) as u32;
+        let season = seasons
+            .iter()
+            .rev()
+            .find(|&&(t, _)| t <= a)
+            .map_or(0, |&(_, s)| s);
+        // In each series, the latest exposure date with a window that covers
+        // the piece.
+        for ((series, dates), label) in spec.exposures.iter().zip(&dates).zip(&mut labels) {
+            let mut best: Option<(f64, u32)> = None;
+            for &d in *dates {
+                for (k, w) in series.windows.iter().enumerate() {
+                    if d + w.from <= a && a < d + w.to && best.is_none_or(|(top, _)| d > top) {
+                        best = Some((d, k as u32));
                     }
                 }
             }
+            *label = best.map(|(_, k)| k);
         }
-        let window = label.map(|(_, k)| k);
-        let band = band as u32;
         let count = events.iter().filter(|&&t| t >= a && t < b).count() as f64;
         let last = out.person.len();
-        if last > first && out.age_band[last - 1] == band && out.window[last - 1] == window {
+        let same = last > first
+            && out.age_band[last - 1] == band
+            && out.season[last - 1] == season
+            && out.calendar_period[last - 1] == period
+            && out
+                .window
+                .iter()
+                .zip(&labels)
+                .all(|(w, l)| w[last - 1] == *l);
+        if same {
             out.end[last - 1] = b;
             out.events[last - 1] += count;
         } else {
@@ -838,22 +1281,27 @@ fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
             out.end.push(b);
             out.events.push(count);
             out.age_band.push(band);
-            out.window.push(window);
+            out.season.push(season);
+            out.calendar_period.push(period);
+            for (w, l) in out.window.iter_mut().zip(&labels) {
+                w.push(*l);
+            }
         }
     }
     Ok(())
 }
 
-/// Cuts the observation period of each person into pieces of constant age band
-/// and risk window, and counts the events in each. See the module
-/// documentation for the rules.
+/// Cuts the observation period of each person into pieces of constant age
+/// band, risk window of each exposure series, season and calendar period, and
+/// counts the events in each. See the module documentation for the rules.
 ///
 /// # Errors
 ///
 /// [`Error::Input`] when the columns and offsets disagree in length, a time is
 /// not finite, an observation period is empty, an event lies outside its
-/// person's observation period, the age cut points are not strictly increasing,
-/// a window is empty or two windows overlap.
+/// person's observation period, the age or calendar cut points are not
+/// strictly increasing, a window is empty, two windows of one series overlap,
+/// or a season start is not a day of every year or out of calendar order.
 pub fn build_pieces(spec: &PieceSpec<'_>) -> Result<Pieces> {
     let n = check_spec(spec)?;
     let blocks = ordered_reduce(
@@ -881,7 +1329,11 @@ pub fn build_pieces(spec: &PieceSpec<'_>) -> Result<Pieces> {
                     total.0.end.extend(next.0.end);
                     total.0.events.extend(next.0.events);
                     total.0.age_band.extend(next.0.age_band);
-                    total.0.window.extend(next.0.window);
+                    total.0.season.extend(next.0.season);
+                    total.0.calendar_period.extend(next.0.calendar_period);
+                    for (w, v) in total.0.window.iter_mut().zip(next.0.window) {
+                        w.extend(v);
+                    }
                 }
             }
         },
@@ -891,15 +1343,22 @@ pub fn build_pieces(spec: &PieceSpec<'_>) -> Result<Pieces> {
 }
 
 fn empty(spec: &PieceSpec<'_>) -> Pieces {
+    let (n_seasons, n_periods) = spec.calendar.map_or((1, 1), |cal| {
+        (cal.season_starts.len().max(1), cal.cuts.len() + 1)
+    });
     Pieces {
         person: Vec::new(),
         start: Vec::new(),
         end: Vec::new(),
         events: Vec::new(),
         age_band: Vec::new(),
-        window: Vec::new(),
+        window: vec![Vec::new(); spec.exposures.len()],
+        season: Vec::new(),
+        calendar_period: Vec::new(),
         n_age_bands: spec.age_cuts.len() + 1,
-        n_windows: spec.windows.len(),
+        n_windows: spec.exposures.iter().map(|s| s.windows.len()).collect(),
+        n_seasons,
+        n_calendar_periods: n_periods,
     }
 }
 
@@ -938,19 +1397,59 @@ mod tests {
             end: &[100.0],
             event_offsets: &[0, 2],
             events: &[10.0, 30.0],
-            exposure_offsets: &[0, 1],
-            exposures: &[20.0],
-            age_cuts: &[50.0],
-            windows: &[WindowSpec {
-                from: 0.0,
-                to: 10.0,
+            exposures: &[ExposureSeries {
+                offsets: &[0, 1],
+                dates: &[20.0],
+                windows: &[WindowSpec {
+                    from: 0.0,
+                    to: 10.0,
+                }],
             }],
+            age_cuts: &[50.0],
+            calendar: None,
         };
         let pieces = build_pieces(&spec).unwrap();
         assert_eq!(pieces.start, vec![0.0, 20.0, 30.0, 50.0]);
         assert_eq!(pieces.end, vec![20.0, 30.0, 50.0, 100.0]);
         assert_eq!(pieces.events, vec![1.0, 0.0, 1.0, 0.0]);
-        assert_eq!(pieces.window, vec![None, Some(0), None, None]);
+        assert_eq!(pieces.window, vec![vec![None, Some(0), None, None]]);
         assert_eq!(pieces.age_band, vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn seasons_and_calendar_periods_cut_on_the_calendar() {
+        // Time is age in days from a birth on 2000-01-01, day 10_957. Seasons
+        // start on 1 March and 1 September; a calendar cut on 2001-01-01.
+        let birth = crate::crossover::days_from_civil(2000, 1, 1) as f64;
+        let march = crate::crossover::days_from_civil(2000, 3, 1) as f64 - birth;
+        let september = crate::crossover::days_from_civil(2000, 9, 1) as f64 - birth;
+        let new_year = crate::crossover::days_from_civil(2001, 1, 1) as f64;
+        let march_next = crate::crossover::days_from_civil(2001, 3, 1) as f64 - birth;
+        let spec = PieceSpec {
+            start: &[10.0],
+            end: &[500.0],
+            event_offsets: &[0, 1],
+            events: &[100.0],
+            calendar: Some(Calendar {
+                origin: &[birth],
+                cuts: &[new_year],
+                season_starts: &[
+                    SeasonStart { month: 3, day: 1 },
+                    SeasonStart { month: 9, day: 1 },
+                ],
+            }),
+            ..PieceSpec::default()
+        };
+        let p = build_pieces(&spec).unwrap();
+        let year = new_year - birth;
+        assert_eq!(p.start, vec![10.0, march, september, year, march_next]);
+        assert_eq!(p.end, vec![march, september, year, march_next, 500.0]);
+        // January and February belong to the last season, the autumn one.
+        assert_eq!(p.season, vec![1, 0, 1, 1, 0]);
+        assert_eq!(p.calendar_period, vec![0, 0, 0, 1, 1]);
+        assert_eq!(
+            p.columns(),
+            vec![Column::Season(1), Column::CalendarPeriod(1)]
+        );
     }
 }
