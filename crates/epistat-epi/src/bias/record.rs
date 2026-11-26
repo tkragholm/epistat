@@ -32,6 +32,7 @@
 //!    sensitivity analyses of misclassified binary variables. Int J
 //!    Epidemiol. 2005;34(6):1370-6.
 
+use crate::Error;
 use epistat_rng::{Stream, replicate_seed};
 
 use super::{
@@ -52,9 +53,9 @@ use super::{
 ///
 /// # Errors
 ///
-/// [`BiasError::Table`] when the records have different lengths or their
-/// table is invalid, [`BiasError`] for an invalid distribution or option, and
-/// [`BiasError::NoValidDraws`] when every draw is discarded.
+/// [`crate::Error`] when the records have different lengths or their
+/// table is invalid, [`crate::Error`] for an invalid distribution or option, and
+/// [`crate::Error`] when every draw is discarded.
 pub fn record_level_misclass<F>(
     exposed: &[bool],
     case: &[bool],
@@ -63,14 +64,12 @@ pub fn record_level_misclass<F>(
     sp: &Pair,
     opts: &ProbOptions,
     mut fit: F,
-) -> Result<AdjustedResult, BiasError>
+) -> Result<AdjustedResult, Error>
 where
     F: FnMut(&[bool]) -> Option<(f64, f64)>,
 {
     if exposed.len() != case.len() {
-        return Err(BiasError::Table(
-            "exposure and outcome need one value a record",
-        ));
+        return Err(BiasError::Table("exposure and outcome need one value a record").into());
     }
     se.validate()?;
     sp.validate()?;

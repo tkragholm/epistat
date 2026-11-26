@@ -101,6 +101,7 @@
 //! 5. Tarone RE. On heterogeneity tests based on efficient scores. Biometrika
 //!    1985;72:91-95.
 
+use crate::Error;
 use std::fmt;
 
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
@@ -111,7 +112,7 @@ use crate::tables::{Counts2x2, PersonTime2};
 
 /// Why a Mantel-Haenszel estimate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MhError {
+pub(crate) enum MhError {
     /// There are no strata.
     Empty,
     /// A count or person-time is negative, NaN or infinite, or events have no
@@ -173,17 +174,17 @@ fn finite_count(x: f64) -> bool {
     x.is_finite() && x >= 0.0
 }
 
-fn check_level(level: f64) -> Result<(), MhError> {
+fn check_level(level: f64) -> Result<(), Error> {
     if level > 0.0 && level < 1.0 {
         Ok(())
     } else {
-        Err(MhError::Level)
+        Err(MhError::Level.into())
     }
 }
 
-fn check_tables(tables: &[Counts2x2]) -> Result<(), MhError> {
+fn check_tables(tables: &[Counts2x2]) -> Result<(), Error> {
     if tables.is_empty() {
-        return Err(MhError::Empty);
+        return Err(MhError::Empty.into());
     }
     for t in tables {
         if ![
@@ -195,18 +196,18 @@ fn check_tables(tables: &[Counts2x2]) -> Result<(), MhError> {
         .into_iter()
         .all(finite_count)
         {
-            return Err(MhError::Cell);
+            return Err(MhError::Cell.into());
         }
         if t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases == 0.0 {
-            return Err(MhError::EmptyStratum);
+            return Err(MhError::EmptyStratum.into());
         }
     }
     Ok(())
 }
 
-fn check_strata(strata: &[PersonTime2]) -> Result<(), MhError> {
+fn check_strata(strata: &[PersonTime2]) -> Result<(), Error> {
     if strata.is_empty() {
-        return Err(MhError::Empty);
+        return Err(MhError::Empty.into());
     }
     for s in strata {
         if ![
@@ -218,15 +219,15 @@ fn check_strata(strata: &[PersonTime2]) -> Result<(), MhError> {
         .into_iter()
         .all(finite_count)
         {
-            return Err(MhError::Cell);
+            return Err(MhError::Cell.into());
         }
         if (s.exposed_time == 0.0 && s.exposed_events > 0.0)
             || (s.unexposed_time == 0.0 && s.unexposed_events > 0.0)
         {
-            return Err(MhError::Cell);
+            return Err(MhError::Cell.into());
         }
         if s.exposed_time + s.unexposed_time == 0.0 {
-            return Err(MhError::EmptyStratum);
+            return Err(MhError::EmptyStratum.into());
         }
     }
     Ok(())
@@ -296,9 +297,9 @@ fn used_strata(strata: &[PersonTime2]) -> usize {
 ///
 /// # Errors
 ///
-/// [`MhError`] for no strata, a negative or non-finite cell, an empty
+/// [`crate::Error`] for no strata, a negative or non-finite cell, an empty
 /// stratum, or a level outside `(0, 1)`.
-pub fn odds_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
+pub fn odds_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
     check_level(level)?;
     check_tables(tables)?;
     let used = used_tables(tables);
@@ -327,7 +328,7 @@ pub fn odds_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
 /// # Errors
 ///
 /// As [`odds_ratio`].
-pub fn risk_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
+pub fn risk_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
     check_level(level)?;
     check_tables(tables)?;
     let used = used_tables(tables);
@@ -364,7 +365,7 @@ pub fn risk_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
 /// # Errors
 ///
 /// As [`odds_ratio`], for strata of events and person-time.
-pub fn rate_ratio(strata: &[PersonTime2], level: f64) -> Result<Pooled, MhError> {
+pub fn rate_ratio(strata: &[PersonTime2], level: f64) -> Result<Pooled, Error> {
     check_level(level)?;
     check_strata(strata)?;
     let used = used_strata(strata);
@@ -398,7 +399,7 @@ pub fn rate_ratio(strata: &[PersonTime2], level: f64) -> Result<Pooled, MhError>
 /// # Errors
 ///
 /// As [`odds_ratio`].
-pub fn risk_difference(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
+pub fn risk_difference(tables: &[Counts2x2], level: f64) -> Result<Pooled, Error> {
     check_level(level)?;
     check_tables(tables)?;
     let used = used_tables(tables);
@@ -436,7 +437,7 @@ pub fn risk_difference(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhErr
 /// # Errors
 ///
 /// As [`odds_ratio`], for strata of events and person-time.
-pub fn rate_difference(strata: &[PersonTime2], level: f64) -> Result<Pooled, MhError> {
+pub fn rate_difference(strata: &[PersonTime2], level: f64) -> Result<Pooled, Error> {
     check_level(level)?;
     check_strata(strata)?;
     let used = used_strata(strata);
@@ -494,9 +495,9 @@ fn continuity_shift(delta: f64, continuity: bool) -> f64 {
 ///
 /// # Errors
 ///
-/// [`MhError`] for no strata, a negative or non-finite cell, or an empty
+/// [`crate::Error`] for no strata, a negative or non-finite cell, or an empty
 /// stratum.
-pub fn cmh_test(tables: &[Counts2x2], continuity: bool) -> Result<Option<Test>, MhError> {
+pub fn cmh_test(tables: &[Counts2x2], continuity: bool) -> Result<Option<Test>, Error> {
     check_tables(tables)?;
     let n = |t: &Counts2x2| {
         t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
@@ -539,9 +540,9 @@ pub fn cmh_test(tables: &[Counts2x2], continuity: bool) -> Result<Option<Test>, 
 ///
 /// # Errors
 ///
-/// [`MhError`] for no strata, a negative or non-finite value, or an empty
+/// [`crate::Error`] for no strata, a negative or non-finite value, or an empty
 /// stratum.
-pub fn rate_ratio_test(strata: &[PersonTime2], continuity: bool) -> Result<Option<Test>, MhError> {
+pub fn rate_ratio_test(strata: &[PersonTime2], continuity: bool) -> Result<Option<Test>, Error> {
     check_strata(strata)?;
     let tt = |s: &PersonTime2| s.exposed_time + s.unexposed_time;
     if total(strata.iter().map(|s| s.exposed_events + s.unexposed_events)) == 0.0 {
@@ -570,9 +571,9 @@ pub fn rate_ratio_test(strata: &[PersonTime2], continuity: bool) -> Result<Optio
 ///
 /// # Errors
 ///
-/// [`MhError`] for no strata, a negative or non-finite cell, or an empty
+/// [`crate::Error`] for no strata, a negative or non-finite cell, or an empty
 /// stratum.
-pub fn breslow_day(tables: &[Counts2x2], tarone: bool) -> Result<Option<Test>, MhError> {
+pub fn breslow_day(tables: &[Counts2x2], tarone: bool) -> Result<Option<Test>, Error> {
     check_tables(tables)?;
     let n = |t: &Counts2x2| {
         t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
@@ -672,12 +673,9 @@ fn arm_probabilities(eta: f64) -> (f64, f64) {
 ///
 /// # Errors
 ///
-/// [`MhError`] for no strata, a negative or non-finite value, events without
+/// [`crate::Error`] for no strata, a negative or non-finite value, events without
 /// person-time, or an empty stratum.
-pub fn rate_ratio_breslow_day(
-    strata: &[PersonTime2],
-    tarone: bool,
-) -> Result<Option<Test>, MhError> {
+pub fn rate_ratio_breslow_day(strata: &[PersonTime2], tarone: bool) -> Result<Option<Test>, Error> {
     check_strata(strata)?;
     let pooled = rate_ratio(strata, 0.5)?;
     let Some(psi) = pooled.estimate.filter(|&r| r > 0.0 && r.is_finite()) else {
@@ -745,9 +743,9 @@ pub struct RateHomogeneity {
 ///
 /// # Errors
 ///
-/// [`MhError`] for no strata, a negative or non-finite value, events without
+/// [`crate::Error`] for no strata, a negative or non-finite value, events without
 /// person-time, or an empty stratum.
-pub fn rate_ratio_homogeneity(strata: &[PersonTime2]) -> Result<Option<RateHomogeneity>, MhError> {
+pub fn rate_ratio_homogeneity(strata: &[PersonTime2]) -> Result<Option<RateHomogeneity>, Error> {
     check_strata(strata)?;
     let cells = informative(strata);
     if cells.len() < 2 {
@@ -832,18 +830,18 @@ pub fn rate_ratio_homogeneity(strata: &[PersonTime2]) -> Result<Option<RateHomog
 ///
 /// # Errors
 ///
-/// [`MhError::Length`] for slices of different length and [`MhError::Empty`]
+/// [`crate::Error`] for slices of different length and [`crate::Error`]
 /// for no records.
 pub fn tables_from_records(
     stratum: &[usize],
     exposed: &[bool],
     case: &[bool],
-) -> Result<Vec<Counts2x2>, MhError> {
+) -> Result<Vec<Counts2x2>, Error> {
     if stratum.len() != exposed.len() || stratum.len() != case.len() {
-        return Err(MhError::Length);
+        return Err(MhError::Length.into());
     }
     let Some(&top) = stratum.iter().max() else {
-        return Err(MhError::Empty);
+        return Err(MhError::Empty.into());
     };
     let mut tables = vec![
         Counts2x2 {
@@ -907,18 +905,18 @@ mod tests {
 
     #[test]
     fn refuses_bad_input() {
-        assert_eq!(odds_ratio(&[], 0.95), Err(MhError::Empty));
+        assert_eq!(odds_ratio(&[], 0.95), Err(MhError::Empty.into()));
         assert_eq!(
             odds_ratio(&[tab(0.0, 0.0, 0.0, 0.0)], 0.95),
-            Err(MhError::EmptyStratum)
+            Err(MhError::EmptyStratum.into())
         );
         assert_eq!(
             odds_ratio(&[tab(-1.0, 1.0, 1.0, 1.0)], 0.95),
-            Err(MhError::Cell)
+            Err(MhError::Cell.into())
         );
         assert_eq!(
             odds_ratio(&[tab(1.0, 1.0, 1.0, 1.0)], 1.0),
-            Err(MhError::Level)
+            Err(MhError::Level.into())
         );
     }
 

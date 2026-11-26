@@ -64,7 +64,8 @@
 //! the ratios are; with random error it is shifted by a standard normal draw
 //! times its standard error `sqrt(a c / (a + c)^3 + b d / (b + d)^3)`.
 //!
-//! Rates (cases and person-time) are corrected in [`PersonTime2`]'s functions,
+//! Rates (cases and person-time, a [`crate::PersonTime2`]) are corrected by
+//! [`correct_exposure_rates`] and the functions beside it,
 //! several biases in one draw by [`probabilistic_multiple`], and an adjusted
 //! estimate from any model by the record-level correction of
 //! [`record_level_misclass`].
@@ -100,6 +101,7 @@
 //! 5. Knuth DE. The Art of Computer Programming, vol 2. 3rd ed. Addison-Wesley;
 //!    1997. Section 3.4.1, exercise 22 (binomial variates by beta splitting).
 
+use crate::Error;
 use epistat_rng::{Stream, replicate_seed};
 
 mod multiple;
@@ -126,7 +128,7 @@ fn finite(x: f64) -> Option<f64> {
 /// What is wrong with the input of a bias analysis.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
-pub enum BiasError {
+pub(crate) enum BiasError {
     /// A table that is not finite and non-negative, or has a margin of zero.
     #[error("invalid table: {0}")]
     Table(&'static str),
@@ -145,7 +147,7 @@ pub enum BiasError {
 }
 
 impl Counts2x2 {
-    fn check(&self) -> Result<(), BiasError> {
+    fn check(&self) -> Result<(), Error> {
         let cells = [
             self.exposed_cases,
             self.unexposed_cases,
@@ -153,14 +155,14 @@ impl Counts2x2 {
             self.unexposed_noncases,
         ];
         if cells.iter().any(|x| !x.is_finite() || *x < 0.0) {
-            return Err(BiasError::Table("cells must be finite and not negative"));
+            return Err(BiasError::Table("cells must be finite and not negative").into());
         }
         if self.exposed_cases + self.unexposed_cases <= 0.0
             || self.exposed_noncases + self.unexposed_noncases <= 0.0
             || self.exposed_cases + self.exposed_noncases <= 0.0
             || self.unexposed_cases + self.unexposed_noncases <= 0.0
         {
-            return Err(BiasError::Table("every row and column needs a count"));
+            return Err(BiasError::Table("every row and column needs a count").into());
         }
         Ok(())
     }
@@ -232,17 +234,17 @@ pub struct Misclass {
 }
 
 impl Misclass {
-    fn check(&self) -> Result<(), BiasError> {
+    fn check(&self) -> Result<(), Error> {
         for k in 0..2 {
             if !(0.0..=1.0).contains(&self.se[k]) || !(0.0..=1.0).contains(&self.sp[k]) {
-                return Err(BiasError::Parameter(
-                    "sensitivity and specificity must be in [0, 1]",
-                ));
+                return Err(
+                    BiasError::Parameter("sensitivity and specificity must be in [0, 1]").into(),
+                );
             }
             if self.se[k] - (1.0 - self.sp[k]) <= 0.0 {
-                return Err(BiasError::Parameter(
-                    "sensitivity plus specificity must exceed 1",
-                ));
+                return Err(
+                    BiasError::Parameter("sensitivity plus specificity must exceed 1").into(),
+                );
             }
         }
         Ok(())
@@ -283,8 +285,8 @@ fn outcome_cells(t: &Counts2x2, se: [f64; 2], sp: [f64; 2]) -> Counts2x2 {
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table or a parameter is invalid.
-pub fn correct_exposure(t: &Counts2x2, m: &Misclass) -> Result<Corrected, BiasError> {
+/// [`crate::Error`] when the table or a parameter is invalid.
+pub fn correct_exposure(t: &Counts2x2, m: &Misclass) -> Result<Corrected, Error> {
     t.check()?;
     m.check()?;
     Ok(Corrected::from_cells(exposure_cells(t, m.se, m.sp)))
@@ -296,8 +298,8 @@ pub fn correct_exposure(t: &Counts2x2, m: &Misclass) -> Result<Corrected, BiasEr
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table or a parameter is invalid.
-pub fn correct_outcome(t: &Counts2x2, m: &Misclass) -> Result<Corrected, BiasError> {
+/// [`crate::Error`] when the table or a parameter is invalid.
+pub fn correct_outcome(t: &Counts2x2, m: &Misclass) -> Result<Corrected, Error> {
     t.check()?;
     m.check()?;
     Ok(Corrected::from_cells(outcome_cells(t, m.se, m.sp)))
@@ -309,16 +311,16 @@ pub fn correct_outcome(t: &Counts2x2, m: &Misclass) -> Result<Corrected, BiasErr
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table is invalid or a predictive value is outside
+/// [`crate::Error`] when the table is invalid or a predictive value is outside
 /// `[0, 1]`.
 pub fn correct_exposure_predictive(
     t: &Counts2x2,
     ppv: [f64; 2],
     npv: [f64; 2],
-) -> Result<Corrected, BiasError> {
+) -> Result<Corrected, Error> {
     t.check()?;
     if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
-        return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
+        return Err(BiasError::Parameter("predictive values must be in [0, 1]").into());
     }
     let big_a = t.exposed_cases * ppv[0] + t.unexposed_cases * (1.0 - npv[0]);
     let big_c = t.exposed_noncases * ppv[1] + t.unexposed_noncases * (1.0 - npv[1]);
@@ -338,16 +340,16 @@ pub fn correct_exposure_predictive(
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table is invalid or a predictive value is outside
+/// [`crate::Error`] when the table is invalid or a predictive value is outside
 /// `[0, 1]`.
 pub fn correct_outcome_predictive(
     t: &Counts2x2,
     ppv: [f64; 2],
     npv: [f64; 2],
-) -> Result<Corrected, BiasError> {
+) -> Result<Corrected, Error> {
     t.check()?;
     if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
-        return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
+        return Err(BiasError::Parameter("predictive values must be in [0, 1]").into());
     }
     let big_a = t.exposed_cases * ppv[0] + t.exposed_noncases * (1.0 - npv[0]);
     let big_b = t.unexposed_cases * ppv[1] + t.unexposed_noncases * (1.0 - npv[1]);
@@ -359,12 +361,12 @@ pub fn correct_outcome_predictive(
     }))
 }
 
-fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), BiasError> {
+fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), Error> {
     if ppv.iter().any(|x| !(0.0..=1.0).contains(x)) {
-        return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
+        return Err(BiasError::Parameter("predictive values must be in [0, 1]").into());
     }
     if se.iter().any(|x| !(*x > 0.0 && *x <= 1.0)) {
-        return Err(BiasError::Parameter("sensitivities must be in (0, 1]"));
+        return Err(BiasError::Parameter("sensitivities must be in (0, 1]").into());
     }
     Ok(())
 }
@@ -382,13 +384,9 @@ fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), BiasError> {
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table is invalid, a predictive value is outside
+/// [`crate::Error`] when the table is invalid, a predictive value is outside
 /// `[0, 1]` or a sensitivity outside `(0, 1]`.
-pub fn correct_outcome_ppv(
-    t: &Counts2x2,
-    ppv: [f64; 2],
-    se: [f64; 2],
-) -> Result<Corrected, BiasError> {
+pub fn correct_outcome_ppv(t: &Counts2x2, ppv: [f64; 2], se: [f64; 2]) -> Result<Corrected, Error> {
     t.check()?;
     check_ppv_sensitivity(ppv, se)?;
     let big_a = t.exposed_cases * ppv[0] / se[0];
@@ -413,7 +411,7 @@ pub fn correct_exposure_ppv(
     t: &Counts2x2,
     ppv: [f64; 2],
     se: [f64; 2],
-) -> Result<Corrected, BiasError> {
+) -> Result<Corrected, Error> {
     t.check()?;
     check_ppv_sensitivity(ppv, se)?;
     let big_a = t.exposed_cases * ppv[0] / se[0];
@@ -430,11 +428,9 @@ pub fn correct_exposure_ppv(
 /// probability that a person of that cell is in the table.
 pub type Selection = [[f64; 2]; 2];
 
-fn check_selection(s: &Selection) -> Result<(), BiasError> {
+fn check_selection(s: &Selection) -> Result<(), Error> {
     if s.iter().flatten().any(|x| !(*x > 0.0 && *x <= 1.0)) {
-        return Err(BiasError::Parameter(
-            "selection probabilities must be in (0, 1]",
-        ));
+        return Err(BiasError::Parameter("selection probabilities must be in (0, 1]").into());
     }
     Ok(())
 }
@@ -444,8 +440,8 @@ fn check_selection(s: &Selection) -> Result<(), BiasError> {
 ///
 /// # Errors
 ///
-/// [`BiasError::Parameter`] when a probability is not in `(0, 1]`.
-pub fn selection_bias_factor(s: &Selection) -> Result<f64, BiasError> {
+/// [`crate::Error`] when a probability is not in `(0, 1]`.
+pub fn selection_bias_factor(s: &Selection) -> Result<f64, Error> {
     check_selection(s)?;
     Ok((s[0][1] * s[1][0]) / (s[0][0] * s[1][1]))
 }
@@ -455,8 +451,8 @@ pub fn selection_bias_factor(s: &Selection) -> Result<f64, BiasError> {
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table or a probability is invalid.
-pub fn correct_selection(t: &Counts2x2, s: &Selection) -> Result<Corrected, BiasError> {
+/// [`crate::Error`] when the table or a probability is invalid.
+pub fn correct_selection(t: &Counts2x2, s: &Selection) -> Result<Corrected, Error> {
     t.check()?;
     check_selection(s)?;
     Ok(Corrected::from_cells(selection_cells(t, s)))
@@ -478,16 +474,16 @@ fn selection_cells(t: &Counts2x2, s: &Selection) -> Counts2x2 {
 ///
 /// # Errors
 ///
-/// [`BiasError::Parameter`] when a prevalence is outside `[0, 1]` or `rr_cd`
+/// [`crate::Error`] when a prevalence is outside `[0, 1]` or `rr_cd`
 /// is not positive.
-pub fn confounding_bias_factor(p1: f64, p0: f64, rr_cd: f64) -> Result<f64, BiasError> {
+pub fn confounding_bias_factor(p1: f64, p0: f64, rr_cd: f64) -> Result<f64, Error> {
     if !(0.0..=1.0).contains(&p1) || !(0.0..=1.0).contains(&p0) {
-        return Err(BiasError::Parameter("prevalences must be in [0, 1]"));
+        return Err(BiasError::Parameter("prevalences must be in [0, 1]").into());
     }
     if !(rr_cd > 0.0 && rr_cd.is_finite()) {
-        return Err(BiasError::Parameter(
-            "the confounder-outcome risk ratio must be positive",
-        ));
+        return Err(
+            BiasError::Parameter("the confounder-outcome risk ratio must be positive").into(),
+        );
     }
     Ok((p1 * (rr_cd - 1.0) + 1.0) / (p0 * (rr_cd - 1.0) + 1.0))
 }
@@ -537,28 +533,28 @@ pub struct Confounded {
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table or a parameter is invalid, or the parameters
-/// give a negative cell in a stratum ([`BiasError::NegativeCell`]).
+/// [`crate::Error`] when the table or a parameter is invalid, or the parameters
+/// give a negative cell in a stratum ([`crate::Error`]).
 pub fn adjust_confounding(
     t: &Counts2x2,
     measure: ConfoundingMeasure,
     c: &Confounder,
-) -> Result<Confounded, BiasError> {
+) -> Result<Confounded, Error> {
     t.check()?;
     if !(0.0..=1.0).contains(&c.prevalence_exposed)
         || !(0.0..=1.0).contains(&c.prevalence_unexposed)
     {
-        return Err(BiasError::Parameter("prevalences must be in [0, 1]"));
+        return Err(BiasError::Parameter("prevalences must be in [0, 1]").into());
     }
     if measure != ConfoundingMeasure::RiskDifference
         && !(c.association > 0.0 && c.association.is_finite())
     {
-        return Err(BiasError::Parameter(
-            "the confounder-outcome association must be positive",
-        ));
+        return Err(
+            BiasError::Parameter("the confounder-outcome association must be positive").into(),
+        );
     }
     if !c.association.is_finite() {
-        return Err(BiasError::Parameter("the association must be finite"));
+        return Err(BiasError::Parameter("the association must be finite").into());
     }
     let (a, b, cc, d) = (
         t.exposed_cases,
@@ -665,7 +661,7 @@ pub fn adjust_confounding(
         ]
     });
     if cells.iter().flatten().any(|x| x.is_nan() || *x < 0.0) {
-        return Err(BiasError::NegativeCell);
+        return Err(BiasError::NegativeCell.into());
     }
     let crude = crude.ok_or(BiasError::Table("the crude measure is undefined"))?;
     Ok(Confounded {
@@ -750,8 +746,8 @@ impl Dist {
     ///
     /// # Errors
     ///
-    /// [`BiasError::Parameter`] when they do not define a distribution.
-    pub fn validate(&self) -> Result<(), BiasError> {
+    /// [`crate::Error`] when they do not define a distribution.
+    pub fn validate(&self) -> Result<(), Error> {
         let ok = match *self {
             Self::Constant(x) => x.is_finite(),
             Self::Uniform { lo, hi } => lo.is_finite() && hi.is_finite() && lo < hi,
@@ -779,9 +775,7 @@ impl Dist {
         if ok {
             Ok(())
         } else {
-            Err(BiasError::Parameter(
-                "a distribution has invalid parameters",
-            ))
+            Err(BiasError::Parameter("a distribution has invalid parameters").into())
         }
     }
 
@@ -855,18 +849,19 @@ pub enum Pair {
 }
 
 impl Pair {
-    fn validate(&self) -> Result<(), BiasError> {
+    fn validate(&self) -> Result<(), Error> {
         match self {
             Self::Same(d) => d.validate(),
             Self::Independent(ds) => ds.iter().try_for_each(Dist::validate),
             Self::Correlated { dists, rho } => {
                 if !(*rho > 0.0 && *rho < 1.0) {
-                    return Err(BiasError::Parameter("a correlation must be in (0, 1)"));
+                    return Err(BiasError::Parameter("a correlation must be in (0, 1)").into());
                 }
                 if dists.iter().any(|d| matches!(d, Dist::Constant(_))) {
                     return Err(BiasError::Parameter(
                         "a constant cannot be correlated with another draw",
-                    ));
+                    )
+                    .into());
                 }
                 dists.iter().try_for_each(Dist::validate)
             }
@@ -1064,12 +1059,13 @@ impl Collector {
         }
     }
 
-    fn finish(self, alpha: f64) -> Result<ProbResult, BiasError> {
+    fn finish(self, alpha: f64) -> Result<ProbResult, Error> {
         let kept: Vec<Measures> = self.draws.systematic.iter().flatten().copied().collect();
         if kept.is_empty() {
             return Err(BiasError::NoValidDraws {
                 discarded: self.discarded,
-            });
+            }
+            .into());
         }
         let totals: Vec<Measures> = self.draws.total.iter().flatten().copied().collect();
         let total = self.random_error && !totals.is_empty();
@@ -1101,12 +1097,12 @@ fn summarise(values: &mut [f64], alpha: f64) -> Summary {
     }
 }
 
-fn check_options(o: &ProbOptions) -> Result<(), BiasError> {
+fn check_options(o: &ProbOptions) -> Result<(), Error> {
     if o.draws == 0 {
-        return Err(BiasError::Parameter("the number of draws must be positive"));
+        return Err(BiasError::Parameter("the number of draws must be positive").into());
     }
     if !(o.alpha > 0.0 && o.alpha < 1.0) {
-        return Err(BiasError::Parameter("alpha must be in (0, 1)"));
+        return Err(BiasError::Parameter("alpha must be in (0, 1)").into());
     }
     Ok(())
 }
@@ -1212,22 +1208,22 @@ fn standard_errors(t: &Counts2x2) -> [f64; 3] {
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table, a distribution or an option is invalid, when
+/// [`crate::Error`] when the table, a distribution or an option is invalid, when
 /// random error is requested for a table with fractional cells, and
-/// [`BiasError::NoValidDraws`] when every draw is discarded.
+/// [`crate::Error`] when every draw is discarded.
 pub fn probabilistic_misclass(
     t: &Counts2x2,
     kind: Kind,
     se: &Pair,
     sp: &Pair,
     opts: &ProbOptions,
-) -> Result<ProbResult, BiasError> {
+) -> Result<ProbResult, Error> {
     t.check()?;
     se.validate()?;
     sp.validate()?;
     check_options(opts)?;
     if opts.random_error && !t.is_integer() {
-        return Err(BiasError::Table("random error needs whole counts"));
+        return Err(BiasError::Table("random error needs whole counts").into());
     }
     let mut out = Collector::new(
         names(&[
@@ -1373,13 +1369,13 @@ pub fn probabilistic_selection(
     t: &Counts2x2,
     s: &[[Dist; 2]; 2],
     opts: &ProbOptions,
-) -> Result<ProbResult, BiasError> {
+) -> Result<ProbResult, Error> {
     t.check()?;
     s.iter().flatten().try_for_each(Dist::validate)?;
     check_options(opts)?;
     let observed = (t.risk_ratio(), t.odds_ratio());
     let (Some(_), Some(_)) = observed else {
-        return Err(BiasError::Table("the observed measures are undefined"));
+        return Err(BiasError::Table("the observed measures are undefined").into());
     };
     let se_log = standard_errors(t);
     let mut out = Collector::new(
@@ -1439,11 +1435,11 @@ pub struct AdjustedResult {
 }
 
 /// The adjusted value of every draw, summarised.
-fn finish_single(draws: Draws<f64>, alpha: f64) -> Result<AdjustedResult, BiasError> {
+fn finish_single(draws: Draws<f64>, alpha: f64) -> Result<AdjustedResult, Error> {
     let mut systematic: Vec<f64> = draws.systematic.iter().flatten().copied().collect();
     let discarded = draws.len() - systematic.len();
     if systematic.is_empty() {
-        return Err(BiasError::NoValidDraws { discarded });
+        return Err(BiasError::NoValidDraws { discarded }.into());
     }
     let mut total: Vec<f64> = draws.total.iter().flatten().copied().collect();
     let random_error = !draws.total.is_empty();
@@ -1478,15 +1474,15 @@ fn shift_measure(measure: ConfoundingMeasure, value: f64, z: f64, se: [f64; 3]) 
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table, a distribution or an option is invalid, and
-/// [`BiasError::NoValidDraws`] when every draw is discarded.
+/// [`crate::Error`] when the table, a distribution or an option is invalid, and
+/// [`crate::Error`] when every draw is discarded.
 pub fn probabilistic_confounding(
     t: &Counts2x2,
     measure: ConfoundingMeasure,
     prevalence: &Pair,
     association: &Dist,
     opts: &ProbOptions,
-) -> Result<AdjustedResult, BiasError> {
+) -> Result<AdjustedResult, Error> {
     t.check()?;
     prevalence.validate()?;
     association.validate()?;
@@ -1799,7 +1795,7 @@ mod tests {
         };
         assert_eq!(
             adjust_confounding(&t, ConfoundingMeasure::RiskRatio, &c).unwrap_err(),
-            BiasError::NegativeCell
+            Error::NegativeCell
         );
     }
 
@@ -1976,7 +1972,7 @@ mod tests {
             &Pair::Same(Dist::Constant(0.95)),
             &options(20, false),
         );
-        assert_eq!(r.unwrap_err(), BiasError::NoValidDraws { discarded: 20 });
+        assert_eq!(r.unwrap_err(), Error::NoValidDraws { discarded: 20 });
     }
 
     #[test]

@@ -44,6 +44,7 @@
 //!    sensitivity analysis in observational studies. Biometrics.
 //!    2017;73(2):422-30.
 
+use crate::Error;
 use std::collections::BTreeMap;
 
 use super::{SensitivityError, check_gamma, sensitivity_value};
@@ -211,9 +212,9 @@ struct Prepared {
     informative: usize,
 }
 
-fn prepare(strata: &[BinaryStratum]) -> Result<Prepared, SensitivityError> {
+fn prepare(strata: &[BinaryStratum]) -> Result<Prepared, Error> {
     if strata.is_empty() {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     let mut groups: BTreeMap<Margins, u64> = BTreeMap::new();
     let mut statistic = 0_u64;
@@ -231,7 +232,7 @@ fn prepare(strata: &[BinaryStratum]) -> Result<Prepared, SensitivityError> {
         }
     }
     if informative == 0 {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     Ok(Prepared {
         groups: groups.into_iter().collect(),
@@ -303,21 +304,17 @@ impl Prepared {
         sum.min(1.0)
     }
 
-    fn normal_upper_tail(&self, w: f64) -> Result<f64, SensitivityError> {
+    fn normal_upper_tail(&self, w: f64) -> Result<f64, Error> {
         let (mean, variance) = self.moments(w);
         if !(variance > 0.0 && variance.is_finite()) {
-            return Err(SensitivityError::ZeroVariance);
+            return Err(SensitivityError::ZeroVariance.into());
         }
         Ok(normal::cdf(
             -(self.shifted_statistic as f64 - mean) / variance.sqrt(),
         ))
     }
 
-    fn bounds(
-        &self,
-        gamma: f64,
-        distribution: BinaryDistribution,
-    ) -> Result<BinaryBounds, SensitivityError> {
+    fn bounds(&self, gamma: f64, distribution: BinaryDistribution) -> Result<BinaryBounds, Error> {
         check_gamma(gamma)?;
         let (mean, variance) = self.moments(gamma);
         let floor = (self.statistic - self.shifted_statistic) as f64;
@@ -326,7 +323,8 @@ impl Prepared {
                 if self.work() > MAX_CONVOLUTION_WORK {
                     return Err(SensitivityError::Parameter(
                         "the exact distribution is too large; use the normal approximation",
-                    ));
+                    )
+                    .into());
                 }
                 (
                     self.exact_upper_tail(1.0 / gamma),
@@ -359,16 +357,16 @@ impl Prepared {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Gamma`], [`SensitivityError::NoInformation`] when no
-/// stratum is informative, [`SensitivityError::ZeroVariance`] and
-/// [`SensitivityError::Parameter`] when a count overflows or the exact
+/// [`crate::Error`], [`crate::Error`] when no
+/// stratum is informative, [`crate::Error`] and
+/// [`crate::Error`] when a count overflows or the exact
 /// distribution would take more than [`MAX_CONVOLUTION_WORK`]
 /// multiplications.
 pub fn binary_bounds(
     strata: &[BinaryStratum],
     gamma: f64,
     distribution: BinaryDistribution,
-) -> Result<BinaryBounds, SensitivityError> {
+) -> Result<BinaryBounds, Error> {
     check_gamma(gamma)?;
     prepare(strata)?.bounds(gamma, distribution)
 }
@@ -383,7 +381,7 @@ pub fn binary_sensitivity_value(
     strata: &[BinaryStratum],
     alpha: f64,
     distribution: BinaryDistribution,
-) -> Result<f64, SensitivityError> {
+) -> Result<f64, Error> {
     let prepared = prepare(strata)?;
     sensitivity_value(alpha, |gamma| {
         prepared.bounds(gamma, distribution).map(|b| b.p_upper)
@@ -462,7 +460,7 @@ mod tests {
         let s = [pair(1, 1), pair(0, 0)];
         assert_eq!(
             binary_bounds(&s, 1.0, BinaryDistribution::Exact),
-            Err(SensitivityError::NoInformation)
+            Err(SensitivityError::NoInformation.into())
         );
         assert!(binary_bounds(&[pair(1, 0)], 0.5, BinaryDistribution::Exact).is_err());
     }

@@ -59,14 +59,14 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 pub use epistat_epi::evalue::{
-    EValueError, EValues, Outcome, RdEValues, SelectionBias, bounding_factor, evalues_hr,
-    evalues_md, evalues_or, evalues_rd, evalues_rr, selection_evalues_rr,
+    EValues, Outcome, RdEValues, SelectionBias, bounding_factor, evalues_hr, evalues_md,
+    evalues_or, evalues_rd, evalues_rr, selection_evalues_rr,
 };
 use epistat_epi::rosenbaum::{self, BinaryStratum};
 pub use epistat_epi::rosenbaum::{
     BinaryBounds, BinaryDistribution, Censored, EffectInterval, EventDirection,
-    HodgesLehmannBounds, MScore, SensitivityError, SetBounds, Sides, WilcoxonBounds,
-    WilcoxonDistribution, amplify, sensitivity_value,
+    HodgesLehmannBounds, MScore, SetBounds, Sides, WilcoxonBounds, WilcoxonDistribution, amplify,
+    sensitivity_value,
 };
 
 use crate::effects::{EffectError, UnitData};
@@ -235,7 +235,7 @@ pub enum BoundsError {
     /// The sets cannot be used.
     Sets(SetsError),
     /// The bound cannot be computed.
-    Bound(SensitivityError),
+    Bound(epistat_epi::Error),
     /// An outcome other than 0 or 1 where a binary outcome is needed.
     NotBinary(f64),
 }
@@ -258,8 +258,8 @@ impl From<SetsError> for BoundsError {
     }
 }
 
-impl From<SensitivityError> for BoundsError {
-    fn from(e: SensitivityError) -> Self {
+impl From<epistat_epi::Error> for BoundsError {
+    fn from(e: epistat_epi::Error) -> Self {
         Self::Bound(e)
     }
 }
@@ -426,7 +426,10 @@ fn binary_strata(sets: &[MatchedSet]) -> Result<Vec<BinaryStratum>, BoundsError>
     sets.iter()
         .map(|s| {
             if s.controls.is_empty() {
-                return Err(SensitivityError::SetTooSmall.into());
+                return Err(BoundsError::Bound(epistat_epi::Error::Invalid {
+                    what: "matched set",
+                    rule: "has fewer than two units",
+                }));
             }
             let treated = case(s.treated)?;
             let mut control_cases = 0_u64;

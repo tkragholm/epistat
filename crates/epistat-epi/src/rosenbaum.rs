@@ -154,7 +154,7 @@
 //! 6. Rosenbaum PR, Silber JH. Amplification of sensitivity analysis in
 //!    matched observational studies. J Am Stat Assoc. 2009;104(488):1398-405.
 
-use std::error::Error;
+use crate::Error;
 use std::fmt::{Display, Formatter};
 
 mod binary;
@@ -169,15 +169,15 @@ pub use censored::{Censored, EventDirection, gehan_scores};
 pub use interval::{EffectInterval, Sides, m_statistic_interval};
 
 use crate::signed_rank::{self, SignedRankError, average_ranks};
+use epistat_rng::Stream;
 use epistat_stats::dist::normal;
 use epistat_stats::quantile::type7_unsorted;
-use epistat_rng::Stream;
 use epistat_stats::sum::lanes;
 
 /// What goes wrong in a sensitivity analysis.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum SensitivityError {
+pub(crate) enum SensitivityError {
     /// `gamma` below 1 or not finite.
     Gamma(f64),
     /// A response that is not finite.
@@ -215,7 +215,7 @@ impl Display for SensitivityError {
     }
 }
 
-impl Error for SensitivityError {}
+impl std::error::Error for SensitivityError {}
 
 impl From<SignedRankError> for SensitivityError {
     fn from(e: SignedRankError) -> Self {
@@ -223,11 +223,11 @@ impl From<SignedRankError> for SensitivityError {
     }
 }
 
-fn check_gamma(gamma: f64) -> Result<(), SensitivityError> {
+fn check_gamma(gamma: f64) -> Result<(), Error> {
     if gamma.is_finite() && gamma >= 1.0 {
         Ok(())
     } else {
-        Err(SensitivityError::Gamma(gamma))
+        Err(SensitivityError::Gamma(gamma).into())
     }
 }
 
@@ -259,14 +259,14 @@ pub struct WilcoxonBounds {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Gamma`], [`SensitivityError::NotFinite`],
-/// [`SensitivityError::NoInformation`] when every difference is zero, and
+/// [`crate::Error`], [`crate::Error`],
+/// [`crate::Error`] when every difference is zero, and
 /// from the exact distribution.
 pub fn wilcoxon_bounds(
     differences: &[f64],
     gamma: f64,
     distribution: WilcoxonDistribution,
-) -> Result<WilcoxonBounds, SensitivityError> {
+) -> Result<WilcoxonBounds, Error> {
     check_gamma(gamma)?;
     SignedRanks::new(differences)?.bounds(gamma, distribution)
 }
@@ -277,13 +277,13 @@ pub fn wilcoxon_bounds(
 ///
 /// # Errors
 ///
-/// As [`wilcoxon_bounds`], and [`SensitivityError::Parameter`] for `alpha`
+/// As [`wilcoxon_bounds`], and [`crate::Error`] for `alpha`
 /// outside `(0, 1)`.
 pub fn wilcoxon_sensitivity_value(
     differences: &[f64],
     alpha: f64,
     distribution: WilcoxonDistribution,
-) -> Result<f64, SensitivityError> {
+) -> Result<f64, Error> {
     let ranks = SignedRanks::new(differences)?;
     sensitivity_value(alpha, |gamma| {
         ranks.bounds(gamma, distribution).map(|b| b.p_upper)
@@ -297,13 +297,13 @@ struct SignedRanks {
 }
 
 impl SignedRanks {
-    fn new(differences: &[f64]) -> Result<Self, SensitivityError> {
+    fn new(differences: &[f64]) -> Result<Self, Error> {
         if differences.iter().any(|d| !d.is_finite()) {
-            return Err(SensitivityError::NotFinite);
+            return Err(SensitivityError::NotFinite.into());
         }
         let kept: Vec<f64> = differences.iter().copied().filter(|d| *d != 0.0).collect();
         if kept.is_empty() {
-            return Err(SensitivityError::NoInformation);
+            return Err(SensitivityError::NoInformation.into());
         }
         let absolute: Vec<f64> = kept.iter().map(|d| d.abs()).collect();
         let ranks = average_ranks(&absolute)?;
@@ -315,15 +315,15 @@ impl SignedRanks {
         &self,
         gamma: f64,
         distribution: WilcoxonDistribution,
-    ) -> Result<WilcoxonBounds, SensitivityError> {
+    ) -> Result<WilcoxonBounds, Error> {
         check_gamma(gamma)?;
         let p_plus = gamma / (1.0 + gamma);
         let p_minus = 1.0 / (1.0 + gamma);
-        let tail = |p: f64| -> Result<f64, SensitivityError> {
+        let tail = |p: f64| -> Result<f64, Error> {
             match distribution {
                 WilcoxonDistribution::Normal => {
                     signed_rank::normal_upper_tail(&self.ranks, self.statistic, p)
-                        .ok_or(SensitivityError::ZeroVariance)
+                        .ok_or(SensitivityError::ZeroVariance.into())
                 }
                 WilcoxonDistribution::Exact => Ok(signed_rank::exact_upper_tail(
                     &self.ranks,
@@ -355,19 +355,19 @@ impl SignedRanks {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Parameter`] for `alpha` outside `(0, 1)` or a bound
+/// [`crate::Error`] for `alpha` outside `(0, 1)` or a bound
 /// that is not a number, and those of `p_upper`.
-pub fn sensitivity_value<E: From<SensitivityError>>(
+pub fn sensitivity_value<E: From<Error>>(
     alpha: f64,
     mut p_upper: impl FnMut(f64) -> Result<f64, E>,
 ) -> Result<f64, E> {
     if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(SensitivityError::Parameter("alpha").into());
+        return Err(Error::from(SensitivityError::Parameter("alpha")).into());
     }
     let mut reached = |gamma: f64| -> Result<bool, E> {
         let p = p_upper(gamma)?;
         if p.is_nan() {
-            return Err(SensitivityError::Parameter("a p-value bound").into());
+            return Err(Error::from(SensitivityError::Parameter("a p-value bound")).into());
         }
         Ok(p >= alpha)
     };
@@ -408,12 +408,12 @@ pub fn sensitivity_value<E: From<SensitivityError>>(
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Gamma`] and [`SensitivityError::Parameter`] for a
+/// [`crate::Error`] and [`crate::Error`] for a
 /// `lambda` that is not a number.
-pub fn amplify(gamma: f64, lambda: f64) -> Result<Option<f64>, SensitivityError> {
+pub fn amplify(gamma: f64, lambda: f64) -> Result<Option<f64>, Error> {
     check_gamma(gamma)?;
     if lambda.is_nan() {
-        return Err(SensitivityError::Parameter("lambda"));
+        return Err(SensitivityError::Parameter("lambda").into());
     }
     if lambda <= gamma {
         return Ok(None);
@@ -484,29 +484,29 @@ pub struct HodgesLehmannBounds {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Gamma`], [`SensitivityError::NotFinite`],
-/// [`SensitivityError::NoInformation`] for no pairs, and
-/// [`SensitivityError::SignedRank`] when the range of the differences is not
+/// [`crate::Error`], [`crate::Error`],
+/// [`crate::Error`] for no pairs, and
+/// [`crate::Error`] when the range of the differences is not
 /// finite, since a shifted difference could then overflow.
 pub fn hodges_lehmann_bounds(
     differences: &[f64],
     gammas: &[f64],
-) -> Result<Vec<HodgesLehmannBounds>, SensitivityError> {
+) -> Result<Vec<HodgesLehmannBounds>, Error> {
     for g in gammas {
         check_gamma(*g)?;
     }
     if differences.iter().any(|d| !d.is_finite()) {
-        return Err(SensitivityError::NotFinite);
+        return Err(SensitivityError::NotFinite.into());
     }
     let n = differences.len();
     if n == 0 {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     let mut sorted = differences.to_vec();
     sorted.sort_by(f64::total_cmp);
     // Every shift tried lies between the smallest and the largest difference.
     if !(sorted[n - 1] - sorted[0]).is_finite() {
-        return Err(SensitivityError::SignedRank(SignedRankError::NotFinite));
+        return Err(SensitivityError::SignedRank(SignedRankError::NotFinite).into());
     }
     let negative_zero = sorted.iter().any(|d| *d == 0.0 && d.is_sign_negative());
     let total = (n * (n + 1)) as f64 / 2.0;
@@ -545,20 +545,20 @@ pub fn hodges_lehmann_bounds(
 ///
 /// # Errors
 ///
-/// As [`hodges_lehmann_bounds`], and [`SensitivityError::NotFinite`] for a
+/// As [`hodges_lehmann_bounds`], and [`crate::Error`] for a
 /// `tau0` that is not finite.
-pub fn hodges_lehmann_gamma(differences: &[f64], tau0: f64) -> Result<f64, SensitivityError> {
+pub fn hodges_lehmann_gamma(differences: &[f64], tau0: f64) -> Result<f64, Error> {
     if differences.iter().any(|d| !d.is_finite()) || !tau0.is_finite() {
-        return Err(SensitivityError::NotFinite);
+        return Err(SensitivityError::NotFinite.into());
     }
     let n = differences.len();
     if n == 0 {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     let mut sorted = differences.to_vec();
     sorted.sort_by(f64::total_cmp);
     if !(sorted[n - 1] - sorted[0]).is_finite() {
-        return Err(SensitivityError::SignedRank(SignedRankError::NotFinite));
+        return Err(SensitivityError::SignedRank(SignedRankError::NotFinite).into());
     }
     // The largest Walsh average at or below tau0, by a pointer per row that
     // moves down as the row moves up.
@@ -622,7 +622,6 @@ impl<'a> WalshSearch<'a> {
     fn average(&self, row: usize, column: usize) -> f64 {
         self.sorted[row].midpoint(self.sorted[column])
     }
-
 
     /// Fill `cut` with, per row, the first column from the diagonal on whose
     /// average is above `value`, and return the smallest average above `value`
@@ -744,24 +743,24 @@ impl Default for MScore {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::SetTooSmall`], [`SensitivityError::NotFinite`],
-/// [`SensitivityError::Parameter`] and [`SensitivityError::ZeroScale`].
-pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, SensitivityError> {
+/// [`crate::Error`], [`crate::Error`],
+/// [`crate::Error`] and [`crate::Error`].
+pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, Error> {
     if !(spec.lambda > 0.0 && spec.lambda < 1.0) {
-        return Err(SensitivityError::Parameter("lambda"));
+        return Err(SensitivityError::Parameter("lambda").into());
     }
     if !(spec.inner >= 0.0 && spec.inner <= spec.trim) {
-        return Err(SensitivityError::Parameter("inner trim"));
+        return Err(SensitivityError::Parameter("inner trim").into());
     }
     if sets.is_empty() {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     for set in sets {
         if set.len() < 2 {
-            return Err(SensitivityError::SetTooSmall);
+            return Err(SensitivityError::SetTooSmall.into());
         }
         if set.iter().any(|v| !v.is_finite()) {
-            return Err(SensitivityError::NotFinite);
+            return Err(SensitivityError::NotFinite.into());
         }
     }
     let rescale = spec.trim < f64::INFINITY || spec.inner > 0.0;
@@ -780,7 +779,7 @@ pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, Sensi
         if h > 0.0 {
             h
         } else {
-            return Err(SensitivityError::ZeroScale);
+            return Err(SensitivityError::ZeroScale.into());
         }
     } else {
         1.0
@@ -853,22 +852,22 @@ pub struct SetBounds {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Gamma`], [`SensitivityError::SetTooSmall`],
-/// [`SensitivityError::NotFinite`] and [`SensitivityError::ZeroVariance`].
-pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, SensitivityError> {
+/// [`crate::Error`], [`crate::Error`],
+/// [`crate::Error`] and [`crate::Error`].
+pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, Error> {
     check_gamma(gamma)?;
     if scores.is_empty() {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     let mut statistic = 0.0;
     let mut expectation = 0.0;
     let mut variance = 0.0;
     for set in scores {
         if set.len() < 2 {
-            return Err(SensitivityError::SetTooSmall);
+            return Err(SensitivityError::SetTooSmall.into());
         }
         if set.iter().any(|v| !v.is_finite()) {
-            return Err(SensitivityError::NotFinite);
+            return Err(SensitivityError::NotFinite.into());
         }
         statistic += set[0];
         let mut sorted = set.clone();
@@ -896,7 +895,7 @@ pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, Sensitiv
         variance += best_var;
     }
     if !(variance > 0.0 && variance.is_finite()) {
-        return Err(SensitivityError::ZeroVariance);
+        return Err(SensitivityError::ZeroVariance.into());
     }
     let deviate = (statistic - expectation) / variance.sqrt();
     Ok(SetBounds {
@@ -917,7 +916,7 @@ pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, Sensitiv
 /// # Errors
 ///
 /// As [`set_bounds`] and [`sensitivity_value`].
-pub fn scores_sensitivity_value(scores: &[Vec<f64>], alpha: f64) -> Result<f64, SensitivityError> {
+pub fn scores_sensitivity_value(scores: &[Vec<f64>], alpha: f64) -> Result<f64, Error> {
     sensitivity_value(alpha, |gamma| set_bounds(scores, gamma).map(|b| b.p_upper))
 }
 
@@ -931,7 +930,7 @@ pub fn matched_sets_bounds(
     sets: &[Vec<f64>],
     gamma: f64,
     spec: &MScore,
-) -> Result<SetBounds, SensitivityError> {
+) -> Result<SetBounds, Error> {
     set_bounds(&m_scores(sets, spec)?, gamma)
 }
 

@@ -27,6 +27,7 @@
 //! 1. Greenland S. Multiple-bias modelling for analysis of observational data.
 //!    J R Stat Soc Ser A. 2005;168(2):267-306.
 
+use crate::Error;
 use epistat_rng::{Stream, replicate_seed};
 
 use super::{
@@ -63,7 +64,7 @@ pub struct ConfoundingStep {
 }
 
 impl BiasStep {
-    fn validate(&self) -> Result<(), BiasError> {
+    fn validate(&self) -> Result<(), Error> {
         match self {
             Self::Misclassification { se, sp, .. } => {
                 se.validate()?;
@@ -124,20 +125,20 @@ impl BiasStep {
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table, a distribution or an option is invalid,
-/// [`BiasError::Parameter`] when there is neither a step nor a confounder,
-/// and [`BiasError::NoValidDraws`] when every draw is discarded.
+/// [`crate::Error`] when the table, a distribution or an option is invalid,
+/// [`crate::Error`] when there is neither a step nor a confounder,
+/// and [`crate::Error`] when every draw is discarded.
 pub fn probabilistic_multiple(
     t: &Counts2x2,
     steps: &[BiasStep],
     confounding: Option<&ConfoundingStep>,
     measure: ConfoundingMeasure,
     opts: &ProbOptions,
-) -> Result<AdjustedResult, BiasError> {
+) -> Result<AdjustedResult, Error> {
     t.check()?;
     check_options(opts)?;
     if steps.is_empty() && confounding.is_none() {
-        return Err(BiasError::Parameter("there is no bias to correct for"));
+        return Err(BiasError::Parameter("there is no bias to correct for").into());
     }
     steps.iter().try_for_each(BiasStep::validate)?;
     if let Some(c) = confounding {
@@ -150,7 +151,7 @@ pub fn probabilistic_multiple(
         ConfoundingMeasure::RiskDifference => t.risk_difference(),
     };
     if observed.is_none() {
-        return Err(BiasError::Table("the observed measure is undefined"));
+        return Err(BiasError::Table("the observed measure is undefined").into());
     }
     let se = standard_errors(t);
     let mut names = Vec::new();

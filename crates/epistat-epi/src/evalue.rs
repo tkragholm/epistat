@@ -71,13 +71,13 @@
 //! 3. Smith LH, VanderWeele TJ. Bounding bias due to selection. Epidemiology.
 //!    2019;30(4):509-16.
 
-use std::error::Error;
+use crate::Error;
 use std::fmt::{Display, Formatter};
 
 /// What is wrong with an E-value input.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum EValueError {
+pub(crate) enum EValueError {
     /// A ratio that is not finite and positive.
     NotPositive {
         /// The argument.
@@ -144,7 +144,7 @@ impl Display for EValueError {
     }
 }
 
-impl Error for EValueError {}
+impl std::error::Error for EValueError {}
 
 /// The E-values of an estimate and of its confidence limits.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -176,11 +176,11 @@ pub enum Outcome {
     Common,
 }
 
-fn positive(what: &'static str, value: f64) -> Result<f64, EValueError> {
+fn positive(what: &'static str, value: f64) -> Result<f64, Error> {
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
-        Err(EValueError::NotPositive { what, value })
+        Err(EValueError::NotPositive { what, value }.into())
     }
 }
 
@@ -189,9 +189,9 @@ fn positive(what: &'static str, value: f64) -> Result<f64, EValueError> {
 ///
 /// # Errors
 ///
-/// [`EValueError::NotPositive`] when `x` or `true_rr` is not finite and
+/// [`crate::Error`] when `x` or `true_rr` is not finite and
 /// positive.
-pub fn evalue_threshold(x: f64, true_rr: f64) -> Result<f64, EValueError> {
+pub fn evalue_threshold(x: f64, true_rr: f64) -> Result<f64, Error> {
     let mut x = positive("risk ratio", x)?;
     let mut t = positive("true value", true_rr)?;
     if x <= 1.0 {
@@ -211,16 +211,16 @@ pub fn evalue_threshold(x: f64, true_rr: f64) -> Result<f64, EValueError> {
 ///
 /// # Errors
 ///
-/// [`EValueError::NotPositive`] for a ratio that is not positive,
-/// [`EValueError::LimitsReversed`] when `lower > upper` and
-/// [`EValueError::EstimateOutsideInterval`] when the estimate is not between
+/// [`crate::Error`] for a ratio that is not positive,
+/// [`crate::Error`] when `lower > upper` and
+/// [`crate::Error`] when the estimate is not between
 /// the limits given.
 pub fn evalues_rr(
     estimate: f64,
     lower: Option<f64>,
     upper: Option<f64>,
     true_rr: f64,
-) -> Result<EValues, EValueError> {
+) -> Result<EValues, Error> {
     interval_evalues(estimate, lower, upper, true_rr, evalue_threshold)
 }
 
@@ -232,8 +232,8 @@ fn interval_evalues(
     lower: Option<f64>,
     upper: Option<f64>,
     true_rr: f64,
-    threshold: impl Fn(f64, f64) -> Result<f64, EValueError>,
-) -> Result<EValues, EValueError> {
+    threshold: impl Fn(f64, f64) -> Result<f64, Error>,
+) -> Result<EValues, Error> {
     positive("risk ratio", estimate)?;
     positive("true value", true_rr)?;
     if let Some(lo) = lower {
@@ -245,10 +245,10 @@ fn interval_evalues(
     if let (Some(lo), Some(hi)) = (lower, upper)
         && lo > hi
     {
-        return Err(EValueError::LimitsReversed);
+        return Err(EValueError::LimitsReversed.into());
     }
     if lower.is_some_and(|lo| estimate < lo) || upper.is_some_and(|hi| estimate > hi) {
-        return Err(EValueError::EstimateOutsideInterval);
+        return Err(EValueError::EstimateOutsideInterval.into());
     }
     let point = threshold(estimate, true_rr)?;
     let mut lower_e = lower.map(|v| threshold(v, true_rr)).transpose()?;
@@ -288,8 +288,8 @@ fn interval_evalues(
 ///
 /// # Errors
 ///
-/// [`EValueError::NotPositive`] for an odds ratio that is not positive.
-pub fn odds_ratio_to_rr(odds_ratio: f64, outcome: Outcome) -> Result<f64, EValueError> {
+/// [`crate::Error`] for an odds ratio that is not positive.
+pub fn odds_ratio_to_rr(odds_ratio: f64, outcome: Outcome) -> Result<f64, Error> {
     let or = positive("odds ratio", odds_ratio)?;
     Ok(match outcome {
         Outcome::Rare => or,
@@ -301,8 +301,8 @@ pub fn odds_ratio_to_rr(odds_ratio: f64, outcome: Outcome) -> Result<f64, EValue
 ///
 /// # Errors
 ///
-/// [`EValueError::NotPositive`] for a hazard ratio that is not positive.
-pub fn hazard_ratio_to_rr(hazard_ratio: f64, outcome: Outcome) -> Result<f64, EValueError> {
+/// [`crate::Error`] for a hazard ratio that is not positive.
+pub fn hazard_ratio_to_rr(hazard_ratio: f64, outcome: Outcome) -> Result<f64, Error> {
     let hr = positive("hazard ratio", hazard_ratio)?;
     Ok(match outcome {
         Outcome::Rare => hr,
@@ -316,12 +316,12 @@ pub fn hazard_ratio_to_rr(hazard_ratio: f64, outcome: Outcome) -> Result<f64, EV
 ///
 /// # Errors
 ///
-/// [`EValueError::NotFinite`] for a difference that is not finite.
-pub fn mean_difference_to_rr(difference: f64) -> Result<f64, EValueError> {
+/// [`crate::Error`] for a difference that is not finite.
+pub fn mean_difference_to_rr(difference: f64) -> Result<f64, Error> {
     if difference.is_finite() {
         Ok((0.91 * difference).exp())
     } else {
-        Err(EValueError::NotFinite { what: "difference" })
+        Err(EValueError::NotFinite { what: "difference" }.into())
     }
 }
 
@@ -337,7 +337,7 @@ pub fn evalues_or(
     upper: Option<f64>,
     outcome: Outcome,
     true_or: f64,
-) -> Result<EValues, EValueError> {
+) -> Result<EValues, Error> {
     let convert = |v: f64| odds_ratio_to_rr(v, outcome);
     evalues_rr(
         convert(estimate)?,
@@ -359,7 +359,7 @@ pub fn evalues_hr(
     upper: Option<f64>,
     outcome: Outcome,
     true_hr: f64,
-) -> Result<EValues, EValueError> {
+) -> Result<EValues, Error> {
     let convert = |v: f64| hazard_ratio_to_rr(v, outcome);
     evalues_rr(
         convert(estimate)?,
@@ -375,13 +375,13 @@ pub fn evalues_hr(
 ///
 /// # Errors
 ///
-/// [`EValueError::NegativeStandardError`], [`EValueError::NotFinite`], and
+/// [`crate::Error`], [`crate::Error`], and
 /// those of [`evalues_rr`].
 pub fn evalues_md(
     estimate: f64,
     standard_error: Option<f64>,
     true_difference: f64,
-) -> Result<EValues, EValueError> {
+) -> Result<EValues, Error> {
     let rr = mean_difference_to_rr(estimate)?;
     let true_rr = mean_difference_to_rr(true_difference)?;
     let (lower, upper) = match standard_error {
@@ -389,9 +389,10 @@ pub fn evalues_md(
         Some(se) if !se.is_finite() => {
             return Err(EValueError::NotFinite {
                 what: "standard error",
-            });
+            }
+            .into());
         }
-        Some(se) if se < 0.0 => return Err(EValueError::NegativeStandardError),
+        Some(se) if se < 0.0 => return Err(EValueError::NegativeStandardError.into()),
         Some(se) => (
             Some((0.91 * estimate - 1.78 * se).exp()),
             Some((0.91 * estimate + 1.78 * se).exp()),
@@ -408,14 +409,14 @@ pub fn evalues_md(
 ///
 /// # Errors
 ///
-/// [`EValueError::BelowOne`] for an argument below 1 or not a number.
-pub fn bounding_factor(rr_eu: f64, rr_ud: f64) -> Result<f64, EValueError> {
+/// [`crate::Error`] for an argument below 1 or not a number.
+pub fn bounding_factor(rr_eu: f64, rr_ud: f64) -> Result<f64, Error> {
     for (what, value) in [
         ("the risk ratio with the exposure", rr_eu),
         ("the risk ratio with the outcome", rr_ud),
     ] {
         if value.is_nan() || value < 1.0 {
-            return Err(EValueError::BelowOne { what, value });
+            return Err(EValueError::BelowOne { what, value }.into());
         }
     }
     if rr_eu.is_infinite() {
@@ -465,13 +466,13 @@ pub enum SelectionBias {
 ///
 /// # Errors
 ///
-/// [`EValueError::NotPositive`] when `x` or `true_rr` is not finite and
+/// [`crate::Error`] when `x` or `true_rr` is not finite and
 /// positive.
 pub fn selection_evalue_threshold(
     x: f64,
     true_rr: f64,
     assumption: SelectionBias,
-) -> Result<f64, EValueError> {
+) -> Result<f64, Error> {
     let mut x = positive("risk ratio", x)?;
     let mut t = positive("true value", true_rr)?;
     if x <= 1.0 {
@@ -507,7 +508,7 @@ pub fn selection_evalues_rr(
     upper: Option<f64>,
     true_rr: f64,
     assumption: SelectionBias,
-) -> Result<EValues, EValueError> {
+) -> Result<EValues, Error> {
     interval_evalues(estimate, lower, upper, true_rr, |x, t| {
         selection_evalue_threshold(x, t, assumption)
     })
@@ -560,17 +561,17 @@ pub struct RdEValues {
 ///
 /// # Errors
 ///
-/// [`EValueError::Table`] for a table with a negative or non-finite cell, an
-/// empty exposure group or no unexposed case, [`EValueError::Alpha`],
-/// [`EValueError::NotFinite`] for `true_rd`,
-/// [`EValueError::NegativeDifference`] when the risk difference is negative
-/// (exchange the exposure groups), and [`EValueError::TrueNotBelowEstimate`]
+/// [`crate::Error`] for a table with a negative or non-finite cell, an
+/// empty exposure group or no unexposed case, [`crate::Error`],
+/// [`crate::Error`] for `true_rd`,
+/// [`crate::Error`] when the risk difference is negative
+/// (exchange the exposure groups), and [`crate::Error`]
 /// when the difference is not above `true_rd`.
 pub fn evalues_rd(
     t: &crate::tables::Counts2x2,
     true_rd: f64,
     alpha: f64,
-) -> Result<RdEValues, EValueError> {
+) -> Result<RdEValues, Error> {
     if [
         t.exposed_cases,
         t.unexposed_cases,
@@ -580,35 +581,35 @@ pub fn evalues_rd(
     .iter()
     .any(|x| !x.is_finite() || *x < 0.0)
     {
-        return Err(EValueError::Table("cells must be finite and not negative"));
+        return Err(EValueError::Table("cells must be finite and not negative").into());
     }
     let (n1, n0) = (
         t.exposed_cases + t.exposed_noncases,
         t.unexposed_cases + t.unexposed_noncases,
     );
     if !(n1 > 0.0 && n0 > 0.0) {
-        return Err(EValueError::Table("both exposure groups need people"));
+        return Err(EValueError::Table("both exposure groups need people").into());
     }
     if t.unexposed_cases <= 0.0 {
-        return Err(EValueError::Table(
-            "the unexposed need a case, or no bias factor is finite",
-        ));
+        return Err(
+            EValueError::Table("the unexposed need a case, or no bias factor is finite").into(),
+        );
     }
     if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(EValueError::Alpha(alpha));
+        return Err(EValueError::Alpha(alpha).into());
     }
     if !true_rd.is_finite() {
-        return Err(EValueError::NotFinite { what: "true value" });
+        return Err(EValueError::NotFinite { what: "true value" }.into());
     }
     let n = n1 + n0;
     let f = n1 / n;
     let p1 = t.exposed_cases / n1;
     let p0 = t.unexposed_cases / n0;
     if p1 < p0 {
-        return Err(EValueError::NegativeDifference);
+        return Err(EValueError::NegativeDifference.into());
     }
     if p1 - p0 <= true_rd {
-        return Err(EValueError::TrueNotBelowEstimate);
+        return Err(EValueError::TrueNotBelowEstimate.into());
     }
     let v1 = p1 * (1.0 - p1) / n1;
     let v0 = p0 * (1.0 - p0) / n0;
@@ -768,11 +769,11 @@ mod tests {
         };
         assert_eq!(
             evalues_rd(&swapped, 0.0, 0.05),
-            Err(EValueError::NegativeDifference)
+            Err(EValueError::NegativeDifference.into())
         );
         assert_eq!(
             evalues_rd(&t, 0.01, 0.05),
-            Err(EValueError::TrueNotBelowEstimate)
+            Err(EValueError::TrueNotBelowEstimate.into())
         );
         assert!(evalues_rd(&t, 0.0, 1.5).is_err());
     }

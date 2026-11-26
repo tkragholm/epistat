@@ -29,6 +29,7 @@
 //!    2007;63(2):456-64.
 
 use super::{MScore, SensitivityError, check_gamma, m_scores, set_bounds};
+use crate::Error;
 use epistat_stats::dist::normal;
 
 /// Whether an interval has one limit or two.
@@ -57,12 +58,7 @@ pub struct EffectInterval {
 }
 
 /// The deviate bound of the sets with `tau` taken from each treated response.
-fn deviate(
-    sets: &[Vec<f64>],
-    tau: f64,
-    gamma: f64,
-    spec: &MScore,
-) -> Result<f64, SensitivityError> {
+fn deviate(sets: &[Vec<f64>], tau: f64, gamma: f64, spec: &MScore) -> Result<f64, Error> {
     let shifted: Vec<Vec<f64>> = sets
         .iter()
         .map(|s| {
@@ -82,12 +78,13 @@ fn crossing(
     target: f64,
     mut low: f64,
     mut high: f64,
-) -> Result<f64, SensitivityError> {
+) -> Result<f64, Error> {
     let above = |tau: f64| deviate(sets, tau, gamma, spec).map(|d| d > target);
     if !above(low)? || above(high)? {
         return Err(SensitivityError::Parameter(
             "the deviate does not cross its target between the ends of the search",
-        ));
+        )
+        .into());
     }
     loop {
         let mid = low + (high - low) / 2.0;
@@ -109,7 +106,7 @@ fn crossing(
 ///
 /// # Errors
 ///
-/// [`SensitivityError::Gamma`], [`SensitivityError::Parameter`] for `alpha`
+/// [`crate::Error`], [`crate::Error`] for `alpha`
 /// outside `(0, 1)` or a deviate that does not cross its target in the
 /// bracket, and those of [`m_scores`] and [`set_bounds`] at any `tau`
 /// tried.
@@ -119,10 +116,10 @@ pub fn m_statistic_interval(
     spec: &MScore,
     alpha: f64,
     sides: Sides,
-) -> Result<EffectInterval, SensitivityError> {
+) -> Result<EffectInterval, Error> {
     check_gamma(gamma)?;
     if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(SensitivityError::Parameter("alpha"));
+        return Err(SensitivityError::Parameter("alpha").into());
     }
     // Validates the sets and the score.
     m_scores(sets, spec)?;
@@ -138,7 +135,8 @@ pub fn m_statistic_interval(
     if !(low < high && (high - low).is_finite()) {
         return Err(SensitivityError::Parameter(
             "the responses give no range of effects to search",
-        ));
+        )
+        .into());
     }
     let level = match sides {
         Sides::One => alpha,

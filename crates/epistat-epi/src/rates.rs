@@ -111,6 +111,7 @@
 //!    standardized rates with sparse data. Commun Stat Theory Methods
 //!    1999;28:2141-2160.
 
+use crate::Error;
 use std::fmt;
 
 use crate::exact::binomial_two_sided;
@@ -127,7 +128,7 @@ use epistat_stats::sum::compensated;
 
 /// Why a rate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RateError {
+pub(crate) enum RateError {
     /// The slices differ in length.
     Length,
     /// An event count is negative, NaN or infinite.
@@ -205,27 +206,27 @@ pub struct Contrast {
     pub p_value: Option<f64>,
 }
 
-fn check_level(level: f64) -> Result<(), RateError> {
+fn check_level(level: f64) -> Result<(), Error> {
     if level > 0.0 && level < 1.0 {
         Ok(())
     } else {
-        Err(RateError::Level)
+        Err(RateError::Level.into())
     }
 }
 
-fn check_count(x: f64) -> Result<(), RateError> {
+fn check_count(x: f64) -> Result<(), Error> {
     if x.is_finite() && x >= 0.0 {
         Ok(())
     } else {
-        Err(RateError::Events)
+        Err(RateError::Events.into())
     }
 }
 
-fn check_time(x: f64) -> Result<(), RateError> {
+fn check_time(x: f64) -> Result<(), Error> {
     if x.is_finite() && x >= 0.0 {
         Ok(())
     } else {
-        Err(RateError::Time)
+        Err(RateError::Time.into())
     }
 }
 
@@ -234,14 +235,14 @@ fn check_time(x: f64) -> Result<(), RateError> {
 ///
 /// # Errors
 ///
-/// [`RateError`] for a negative or non-finite count or time, a level outside
+/// [`crate::Error`] for a negative or non-finite count or time, a level outside
 /// `(0, 1)`, or a scale that is not positive and finite.
-pub fn crude_rate(events: f64, time: f64, level: f64, scale: f64) -> Result<Rate, RateError> {
+pub fn crude_rate(events: f64, time: f64, level: f64, scale: f64) -> Result<Rate, Error> {
     check_count(events)?;
     check_time(time)?;
     check_level(level)?;
     if !(scale > 0.0 && scale.is_finite()) {
-        return Err(RateError::Scale);
+        return Err(RateError::Scale.into());
     }
     if time == 0.0 {
         return Ok(Rate {
@@ -281,21 +282,21 @@ struct Parts {
 
 /// Checks a group and the weights and forms its sums, `None` when a stratum
 /// with a positive weight has no person-time.
-fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<Parts>, RateError> {
+fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<Parts>, Error> {
     if events.len() != time.len() || events.len() != weights.len() {
-        return Err(RateError::Length);
+        return Err(RateError::Length.into());
     }
     if events.is_empty() {
-        return Err(RateError::Empty);
+        return Err(RateError::Empty.into());
     }
     events.iter().try_for_each(|&x| check_count(x))?;
     time.iter().try_for_each(|&x| check_time(x))?;
     if weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
-        return Err(RateError::Weights);
+        return Err(RateError::Weights.into());
     }
     let total = compensated(weights.iter().copied());
     if !(total > 0.0 && total.is_finite()) {
-        return Err(RateError::Weights);
+        return Err(RateError::Weights.into());
     }
     if weights.iter().zip(time).any(|(&w, &y)| w > 0.0 && y == 0.0) {
         return Ok(None);
@@ -336,7 +337,7 @@ fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<P
 ///
 /// # Errors
 ///
-/// [`RateError`] for slices of different length or no strata, a negative or
+/// [`crate::Error`] for slices of different length or no strata, a negative or
 /// non-finite count, time or weight, weights that sum to 0, or a level
 /// outside `(0, 1)`.
 pub fn direct_standardised(
@@ -344,7 +345,7 @@ pub fn direct_standardised(
     time: &[f64],
     weights: &[f64],
     level: f64,
-) -> Result<Standardised, RateError> {
+) -> Result<Standardised, Error> {
     let parts = standardise(events, time, weights)?;
     check_level(level)?;
     let Some(Parts {
@@ -413,7 +414,7 @@ fn standardise_pair(
     reference: Strata<'_>,
     weights: &[f64],
     level: f64,
-) -> Result<Option<(Parts, Parts)>, RateError> {
+) -> Result<Option<(Parts, Parts)>, Error> {
     let one = standardise(group.events, group.time, weights)?;
     let zero = standardise(reference.events, reference.time, weights)?;
     check_level(level)?;
@@ -439,14 +440,14 @@ const NO_CONTRAST: Contrast = Contrast {
 ///
 /// # Errors
 ///
-/// [`RateError`] as for [`direct_standardised`], for either group.
+/// [`crate::Error`] as for [`direct_standardised`], for either group.
 pub fn standardised_ratio(
     group: Strata<'_>,
     reference: Strata<'_>,
     weights: &[f64],
     level: f64,
     interval: RatioInterval,
-) -> Result<Contrast, RateError> {
+) -> Result<Contrast, Error> {
     let Some((one, zero)) = standardise_pair(group, reference, weights, level)? else {
         return Ok(NO_CONTRAST);
     };
@@ -518,13 +519,13 @@ pub fn standardised_ratio(
 ///
 /// # Errors
 ///
-/// [`RateError`] as for [`direct_standardised`], for either group.
+/// [`crate::Error`] as for [`direct_standardised`], for either group.
 pub fn standardised_difference(
     group: Strata<'_>,
     reference: Strata<'_>,
     weights: &[f64],
     level: f64,
-) -> Result<Contrast, RateError> {
+) -> Result<Contrast, Error> {
     let Some((one, zero)) = standardise_pair(group, reference, weights, level)? else {
         return Ok(NO_CONTRAST);
     };
@@ -539,7 +540,7 @@ pub fn standardised_difference(
     Ok(wald(difference, se, level, false))
 }
 
-fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<(), RateError> {
+fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<(), Error> {
     check_count(e1)?;
     check_count(e0)?;
     check_time(t1)?;
@@ -573,9 +574,9 @@ fn wald(estimate: f64, se: f64, level: f64, log_scale: bool) -> Contrast {
 ///
 /// # Errors
 ///
-/// [`RateError`] for a negative or non-finite count or time, or a level
+/// [`crate::Error`] for a negative or non-finite count or time, or a level
 /// outside `(0, 1)`.
-pub fn rate_ratio(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, RateError> {
+pub fn rate_ratio(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, Error> {
     check_pair(e1, t1, e0, t0, level)?;
     let none = Contrast {
         estimate: None,
@@ -601,15 +602,9 @@ pub fn rate_ratio(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Cont
 ///
 /// # Errors
 ///
-/// [`RateError`] for a negative or non-finite count or time, or a level
+/// [`crate::Error`] for a negative or non-finite count or time, or a level
 /// outside `(0, 1)`.
-pub fn rate_difference(
-    e1: f64,
-    t1: f64,
-    e0: f64,
-    t0: f64,
-    level: f64,
-) -> Result<Contrast, RateError> {
+pub fn rate_difference(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, Error> {
     check_pair(e1, t1, e0, t0, level)?;
     if t1 == 0.0 || t0 == 0.0 {
         return Ok(Contrast {
@@ -638,13 +633,13 @@ pub fn rate_difference(
 ///
 /// # Errors
 ///
-/// [`RateError`] for a negative or non-finite count or time, and
-/// [`RateError::NotInteger`] for a count more than `1e-7` from an integer.
-pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Option<f64>, RateError> {
+/// [`crate::Error`] for a negative or non-finite count or time, and
+/// [`crate::Error`] for a count more than `1e-7` from an integer.
+pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Option<f64>, Error> {
     check_pair(e1, t1, e0, t0, 0.5)?;
     let (x1, x0) = (e1.round(), e0.round());
     if (e1 - x1).abs() > 1e-7 || (e0 - x0).abs() > 1e-7 {
-        return Err(RateError::NotInteger);
+        return Err(RateError::NotInteger.into());
     }
     if t1 == 0.0 || t0 == 0.0 || x1 + x0 == 0.0 {
         return Ok(None);
@@ -662,16 +657,10 @@ pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Optio
 ///
 /// # Errors
 ///
-/// [`RateError`] for a negative or non-finite count or time, or a level
-/// outside `(0, 1)`, and [`RateError::NotInteger`] for a count more than `1e-7`
+/// [`crate::Error`] for a negative or non-finite count or time, or a level
+/// outside `(0, 1)`, and [`crate::Error`] for a count more than `1e-7`
 /// from an integer.
-pub fn rate_ratio_exact(
-    e1: f64,
-    t1: f64,
-    e0: f64,
-    t0: f64,
-    level: f64,
-) -> Result<Contrast, RateError> {
+pub fn rate_ratio_exact(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<Contrast, Error> {
     check_pair(e1, t1, e0, t0, level)?;
     let p_value = rate_ratio_exact_test(e1, t1, e0, t0)?;
     let (x1, x0) = (e1.round(), e0.round());
@@ -727,16 +716,19 @@ mod tests {
     fn refuses_bad_input() {
         assert_eq!(
             direct_standardised(&[1.0], &[1.0, 2.0], &[1.0], 0.95),
-            Err(RateError::Length)
+            Err(RateError::Length.into())
         );
         assert_eq!(
             direct_standardised(&[1.0], &[1.0], &[0.0], 0.95),
-            Err(RateError::Weights)
+            Err(RateError::Weights.into())
         );
-        assert_eq!(crude_rate(-1.0, 1.0, 0.95, 1.0), Err(RateError::Events));
+        assert_eq!(
+            crude_rate(-1.0, 1.0, 0.95, 1.0),
+            Err(RateError::Events.into())
+        );
         assert_eq!(
             rate_ratio_exact_test(1.5, 1.0, 2.0, 1.0),
-            Err(RateError::NotInteger)
+            Err(RateError::NotInteger.into())
         );
     }
 

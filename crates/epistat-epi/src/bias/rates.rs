@@ -36,6 +36,7 @@
 //! 1. Lash TL, Fox MP, Fink AK. Applying Quantitative Bias Analysis to
 //!    Epidemiologic Data. New York: Springer; 2009.
 
+use crate::Error;
 use epistat_rng::{Stream, replicate_seed};
 
 use crate::tables::PersonTime2;
@@ -46,7 +47,7 @@ use super::{
 };
 
 impl PersonTime2 {
-    fn check(&self) -> Result<(), BiasError> {
+    fn check(&self) -> Result<(), Error> {
         let all = [
             self.exposed_events,
             self.unexposed_events,
@@ -54,17 +55,17 @@ impl PersonTime2 {
             self.unexposed_time,
         ];
         if all.iter().any(|x| !x.is_finite() || *x < 0.0) {
-            return Err(BiasError::Table(
-                "cases and person-time must be finite and not negative",
-            ));
+            return Err(
+                BiasError::Table("cases and person-time must be finite and not negative").into(),
+            );
         }
         if self.exposed_events + self.unexposed_events <= 0.0
             || self.exposed_time <= 0.0
             || self.unexposed_time <= 0.0
         {
-            return Err(BiasError::Table(
-                "there must be cases and person-time in both groups",
-            ));
+            return Err(
+                BiasError::Table("there must be cases and person-time in both groups").into(),
+            );
         }
         Ok(())
     }
@@ -135,8 +136,8 @@ fn exposure_rate_cells(t: &PersonTime2, se: [f64; 2], sp: [f64; 2]) -> PersonTim
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table or a parameter is invalid.
-pub fn correct_exposure_rates(t: &PersonTime2, m: &Misclass) -> Result<CorrectedRates, BiasError> {
+/// [`crate::Error`] when the table or a parameter is invalid.
+pub fn correct_exposure_rates(t: &PersonTime2, m: &Misclass) -> Result<CorrectedRates, Error> {
     t.check()?;
     m.check()?;
     Ok(CorrectedRates::from_table(exposure_rate_cells(
@@ -152,13 +153,13 @@ pub fn correct_exposure_rates(t: &PersonTime2, m: &Misclass) -> Result<Corrected
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table is invalid, a predictive value is outside
+/// [`crate::Error`] when the table is invalid, a predictive value is outside
 /// `[0, 1]` or a sensitivity outside `(0, 1]`.
 pub fn correct_outcome_rates_ppv(
     t: &PersonTime2,
     ppv: [f64; 2],
     se: [f64; 2],
-) -> Result<CorrectedRates, BiasError> {
+) -> Result<CorrectedRates, Error> {
     t.check()?;
     super::check_ppv_sensitivity(ppv, se)?;
     Ok(CorrectedRates::from_table(PersonTime2 {
@@ -176,20 +177,20 @@ pub fn correct_outcome_rates_ppv(
 ///
 /// # Errors
 ///
-/// [`BiasError`] when the table, a distribution or an option is invalid, and
-/// [`BiasError::NoValidDraws`] when every draw is discarded.
+/// [`crate::Error`] when the table, a distribution or an option is invalid, and
+/// [`crate::Error`] when every draw is discarded.
 pub fn probabilistic_misclass_rates(
     t: &PersonTime2,
     se: &Pair,
     sp: &Pair,
     opts: &ProbOptions,
-) -> Result<AdjustedResult, BiasError> {
+) -> Result<AdjustedResult, Error> {
     t.check()?;
     se.validate()?;
     sp.validate()?;
     check_options(opts)?;
     if !(t.exposed_events > 0.0 && t.unexposed_events > 0.0) {
-        return Err(BiasError::Table("both groups need cases"));
+        return Err(BiasError::Table("both groups need cases").into());
     }
     let standard_error = (1.0 / t.exposed_events + 1.0 / t.unexposed_events).sqrt();
     let mut draws = Draws::new(

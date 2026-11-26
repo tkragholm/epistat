@@ -34,6 +34,7 @@
 //!    singly-censored samples. Biometrika. 1965;52(1-2):203-23.
 
 use super::SensitivityError;
+use crate::Error;
 
 /// A time to an event or to censoring.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,15 +64,15 @@ fn precedes(a: Censored, b: Censored) -> bool {
 ///
 /// # Errors
 ///
-/// [`SensitivityError::NoInformation`] for no sets,
-/// [`SensitivityError::SetTooSmall`] and [`SensitivityError::NotFinite`]
+/// [`crate::Error`] for no sets,
+/// [`crate::Error`] and [`crate::Error`]
 /// for a time that is not finite.
 pub fn gehan_scores(
     sets: &[Vec<Censored>],
     direction: EventDirection,
-) -> Result<Vec<Vec<f64>>, SensitivityError> {
+) -> Result<Vec<Vec<f64>>, Error> {
     if sets.is_empty() {
-        return Err(SensitivityError::NoInformation);
+        return Err(SensitivityError::NoInformation.into());
     }
     let sign = match direction {
         EventDirection::Earlier => 1.0,
@@ -80,10 +81,10 @@ pub fn gehan_scores(
     sets.iter()
         .map(|set| {
             if set.len() < 2 {
-                return Err(SensitivityError::SetTooSmall);
+                return Err(SensitivityError::SetTooSmall.into());
             }
             if set.iter().any(|u| !u.time.is_finite()) {
-                return Err(SensitivityError::NotFinite);
+                return Err(SensitivityError::NotFinite.into());
             }
             Ok(set
                 .iter()

@@ -74,6 +74,7 @@
 //!    1936;28:437-442.
 //! 3. Byar's approximation is given in Breslow and Day \[1\], section 2.5.
 
+use crate::Error;
 use std::fmt;
 
 use crate::exact::poisson_two_sided;
@@ -85,7 +86,7 @@ use epistat_stats::sum::compensated;
 
 /// Why an SIR was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SirError {
+pub(crate) enum SirError {
     /// An observed count is negative, NaN or infinite.
     Observed,
     /// An expected count is negative, NaN or infinite.
@@ -159,12 +160,12 @@ pub struct Homogeneity {
     pub p_value: f64,
 }
 
-fn check_count(observed: f64, expected: f64) -> Result<(), SirError> {
+fn check_count(observed: f64, expected: f64) -> Result<(), Error> {
     if !(observed.is_finite() && observed >= 0.0) {
-        return Err(SirError::Observed);
+        return Err(SirError::Observed.into());
     }
     if !(expected.is_finite() && expected >= 0.0) {
-        return Err(SirError::Expected);
+        return Err(SirError::Expected.into());
     }
     Ok(())
 }
@@ -175,16 +176,11 @@ fn check_count(observed: f64, expected: f64) -> Result<(), SirError> {
 ///
 /// # Errors
 ///
-/// [`SirError`] for a negative or non-finite count or a level outside `(0, 1)`.
-pub fn sir(
-    observed: f64,
-    expected: f64,
-    level: f64,
-    interval: SirInterval,
-) -> Result<Sir, SirError> {
+/// [`crate::Error`] for a negative or non-finite count or a level outside `(0, 1)`.
+pub fn sir(observed: f64, expected: f64, level: f64, interval: SirInterval) -> Result<Sir, Error> {
     check_count(observed, expected)?;
     if !(level > 0.0 && level < 1.0) {
-        return Err(SirError::Level);
+        return Err(SirError::Level.into());
     }
     if expected == 0.0 {
         return Ok(Sir {
@@ -288,14 +284,14 @@ fn profile_limit(o: f64, c: f64, upper: bool) -> f64 {
     x
 }
 
-fn check_strata(observed: &[f64], expected: &[f64]) -> Result<(), SirError> {
+fn check_strata(observed: &[f64], expected: &[f64]) -> Result<(), Error> {
     if observed.len() != expected.len() {
-        return Err(SirError::Length);
+        return Err(SirError::Length.into());
     }
     for (&o, &e) in observed.iter().zip(expected) {
         check_count(o, e)?;
         if e == 0.0 {
-            return Err(SirError::ZeroExpected);
+            return Err(SirError::ZeroExpected.into());
         }
     }
     Ok(())
@@ -314,12 +310,9 @@ fn chi_square(statistic: f64, df: usize) -> Homogeneity {
 ///
 /// # Errors
 ///
-/// [`SirError`] for slices of different length, a negative or non-finite
+/// [`crate::Error`] for slices of different length, a negative or non-finite
 /// count, or a stratum with no expected events.
-pub fn sir_homogeneity(
-    observed: &[f64],
-    expected: &[f64],
-) -> Result<Option<Homogeneity>, SirError> {
+pub fn sir_homogeneity(observed: &[f64], expected: &[f64]) -> Result<Option<Homogeneity>, Error> {
     check_strata(observed, expected)?;
     if observed.len() < 2 {
         return Ok(None);
@@ -341,7 +334,7 @@ pub fn sir_homogeneity(
 ///
 /// # Errors
 ///
-/// [`SirError`] for slices of different length, a negative or non-finite
+/// [`crate::Error`] for slices of different length, a negative or non-finite
 /// count, a stratum with no expected events, or a score that is not finite.
 #[expect(
     clippy::float_cmp,
@@ -351,13 +344,13 @@ pub fn sir_trend(
     observed: &[f64],
     expected: &[f64],
     score: &[f64],
-) -> Result<Option<Homogeneity>, SirError> {
+) -> Result<Option<Homogeneity>, Error> {
     check_strata(observed, expected)?;
     if score.len() != observed.len() {
-        return Err(SirError::Length);
+        return Err(SirError::Length.into());
     }
     if score.iter().any(|s| !s.is_finite()) {
-        return Err(SirError::Score);
+        return Err(SirError::Score.into());
     }
     let k = observed.len();
     if k < 2 || score.iter().all(|&s| s == score[0]) {
@@ -451,17 +444,17 @@ pub fn sir_trend(
 ///
 /// # Errors
 ///
-/// [`SirError`] for a negative or non-finite count or time, or a `per` that is
+/// [`crate::Error`] for a negative or non-finite count or time, or a `per` that is
 /// not positive and finite.
 pub fn excess_absolute_risk(
     observed: f64,
     expected: f64,
     time: f64,
     per: f64,
-) -> Result<Option<f64>, SirError> {
+) -> Result<Option<f64>, Error> {
     check_count(observed, expected)?;
     if !(time.is_finite() && time >= 0.0 && per.is_finite() && per > 0.0) {
-        return Err(SirError::Time);
+        return Err(SirError::Time.into());
     }
     Ok((time > 0.0).then(|| (observed - expected) / time * per))
 }
@@ -496,16 +489,19 @@ mod tests {
         assert_eq!(r.lower, None);
         assert_eq!(
             sir(-1.0, 1.0, 0.95, SirInterval::Exact),
-            Err(SirError::Observed)
+            Err(SirError::Observed.into())
         );
         assert_eq!(
             sir(1.0, f64::NAN, 0.95, SirInterval::Exact),
-            Err(SirError::Expected)
+            Err(SirError::Expected.into())
         );
-        assert_eq!(sir(1.0, 1.0, 0.0, SirInterval::Exact), Err(SirError::Level));
+        assert_eq!(
+            sir(1.0, 1.0, 0.0, SirInterval::Exact),
+            Err(SirError::Level.into())
+        );
         assert_eq!(
             sir_homogeneity(&[1.0, 2.0], &[1.0, 0.0]),
-            Err(SirError::ZeroExpected)
+            Err(SirError::ZeroExpected.into())
         );
     }
 

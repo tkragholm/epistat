@@ -38,6 +38,7 @@
 //!
 //! 1. Rosenbaum PR. Observational Studies, 2nd ed. Springer; 2002. Chapter 4.
 
+use crate::Error;
 use epistat_stats::dist::normal;
 use epistat_stats::sum::lanes;
 
@@ -47,7 +48,7 @@ pub const MAX_TABLE_WORK: f64 = 2.0e9;
 /// What goes wrong in the signed rank computations.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum SignedRankError {
+pub(crate) enum SignedRankError {
     /// A value that is not finite.
     NotFinite,
     /// A probability outside `[0, 1]`.
@@ -76,11 +77,11 @@ impl std::error::Error for SignedRankError {}
 ///
 /// # Errors
 ///
-/// [`SignedRankError::NotFinite`] when a value is NaN or infinite.
+/// [`crate::Error`] when a value is NaN or infinite.
 #[expect(clippy::float_cmp, reason = "tied values are equal")]
-pub fn average_ranks(values: &[f64]) -> Result<Vec<f64>, SignedRankError> {
+pub fn average_ranks(values: &[f64]) -> Result<Vec<f64>, Error> {
     if values.iter().any(|v| !v.is_finite()) {
-        return Err(SignedRankError::NotFinite);
+        return Err(SignedRankError::NotFinite.into());
     }
     let mut order: Vec<usize> = (0..values.len()).collect();
     order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
@@ -109,20 +110,20 @@ pub fn average_ranks(values: &[f64]) -> Result<Vec<f64>, SignedRankError> {
 ///
 /// # Errors
 ///
-/// [`SignedRankError::Probability`] for `p` outside `[0, 1]`,
-/// [`SignedRankError::NotFinite`] and [`SignedRankError::TooLarge`].
-pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, SignedRankError> {
+/// [`crate::Error`] for `p` outside `[0, 1]`,
+/// [`crate::Error`] and [`crate::Error`].
+pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, Error> {
     if !(0.0..=1.0).contains(&p) {
-        return Err(SignedRankError::Probability(p));
+        return Err(SignedRankError::Probability(p).into());
     }
     if !observed.is_finite() || ranks.iter().any(|r| !r.is_finite() || *r < 0.0) {
-        return Err(SignedRankError::NotFinite);
+        return Err(SignedRankError::NotFinite.into());
     }
     // The table size is checked in floating point before any conversion, so
     // ranks too large for the table are an error and never an overflow.
     let total_f: f64 = ranks.iter().map(|r| (2.0 * r).round()).sum();
     if !total_f.is_finite() || (ranks.len() as f64) * (total_f + 1.0) > MAX_TABLE_WORK {
-        return Err(SignedRankError::TooLarge);
+        return Err(SignedRankError::TooLarge.into());
     }
     #[expect(
         clippy::cast_possible_truncation,
@@ -230,7 +231,7 @@ mod tests {
     fn exact_upper_tail_with_huge_ranks_is_too_large() {
         assert_eq!(
             exact_upper_tail(&[1e19, 1e19], 1.0, 0.5),
-            Err(SignedRankError::TooLarge)
+            Err(SignedRankError::TooLarge.into())
         );
     }
 }

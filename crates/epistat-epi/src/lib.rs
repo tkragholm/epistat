@@ -22,6 +22,7 @@
 pub mod balance;
 pub mod bias;
 pub mod decomposition;
+mod error;
 pub mod evalue;
 mod exact;
 pub mod mantel_haenszel;
@@ -32,4 +33,5 @@ pub mod sir;
 pub mod standardisation;
 pub mod tables;
 
+pub use error::Error;
 pub use tables::{Counts2x2, PersonTime2};
