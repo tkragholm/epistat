@@ -1,7 +1,9 @@
 //! Relative and net survival: the survival of a cohort after the deaths that
 //! the general population would have had are taken out, as `relsurv` and
-//! `popEpi`, and excess hazard regression, as `popEpi::relpois` and
-//! `rstpm2::stpm2` with `bhazard`.
+//! `popEpi`, the expected survival of a cohort, as `survival::survexp`, the
+//! crude probabilities of death and the test of equal net survival, as
+//! `relsurv::cmp.rel` and `relsurv::rs.diff`, and excess hazard regression,
+//! as `popEpi::relpois` and `rstpm2::stpm2` with `bhazard`.
 //!
 //! The observed hazard of a person is the sum of the hazard `lambda*_i(t)` of
 //! the reference population, by age, sex and calendar year from a
@@ -20,7 +22,10 @@
 //! The hazard of a row is constant between the cuts of the rate table, so
 //! its cumulative hazard `H*_i(t)` is piecewise linear in the time since the
 //! origin, from 0 and not from the entry time, and the expected survival is
-//! `S*_i(t) = exp(-H*_i(t))`. Follow-up off the table is an error.
+//! `S*_i(t) = exp(-H*_i(t))`. Follow-up off the table is an error, by the
+//! rule of [`crate::ratetable`]. Beyond the follow-up of a row the hazard
+//! continues along the row's walk through the table, and is undefined where
+//! that walk leaves it.
 //!
 //! # Estimators
 //!
@@ -105,8 +110,8 @@
 //! # Scale
 //!
 //! [`ExpectedHazard`] keeps 8 bytes for each time dimension, 8 for the
-//! factors and 8 for the end of the follow-up of every row, 32 bytes for a
-//! table by age, sex and calendar year. The pieces of a row, 24 bytes each and
+//! factors, 8 for the end of the follow-up and 1 for whether it is used, for
+//! every row, 33 bytes for a table by age, sex and calendar year. The pieces of a row, 24 bytes each and
 //! about two a year of follow-up for such a table, are formed when an
 //! estimator reads the row, by walking it through the table, the same walk
 //! each time. The intervals of [`Grid::Width`] cost `O(n g)` time for `g`
@@ -164,13 +169,57 @@
 //! its deaths are few for its expected deaths; it is fixed when its fitted
 //! excess events fall below `1e-10` of its events.
 //!
+//! # Expected survival and relative survival
+//!
+//! [`expected_survival`] gives the expected survival of a cohort by Ederer I,
+//! Hakulinen and the conditional method, as `survival::survexp`, exactly
+//! between the points at which its set of rows changes; its documentation has
+//! the formulas. Ederer I and Hakulinen follow rows beyond their own
+//! follow-up through the table, as [`ExpectedHazard::cumulative`] does.
+//! [`Method::EdererI`] and [`Method::Hakulinen`] of [`net_survival`] are the
+//! relative survival estimators of `relsurv::rs.surv` with `type =
+//! "fleming-harrington"`: the observed survival `exp(-Lambda_O)` of Nelson and
+//! Aalen divided by the expected survival of the method, so that the reported
+//! cumulative excess hazard is `Lambda_O + ln S_e`, with the variance
+//! `sum d / n^2` of `Lambda_O`, as `rs.surv` gives it. `rs.surv` forms
+//! Hakulinen's hazard with the weights at the end of each step,
+//! `sum S*_i(b) dH*_i / sum S*_i(b)`, which differs from the exact integral
+//! by less than the largest squared increment of the step. Neither takes
+//! delayed entry.
+//!
+//! # Age standardisation
+//!
+//! [`standardise_net`] weights the curves of age groups, such as the strata
+//! of [`net_survival`] by age group, with [`ICSS`] or other weights:
+//! `R = sum w_k R_k` with variance `sum w_k^2 R_k^2 V_k`, the traditional
+//! approach of Corazziari et al. (2004).
+//!
+//! # Crude probabilities of death
+//!
+//! [`crude_mortality`] gives the probabilities of dying of the disease and of
+//! other causes in the presence of each other, `integral S(u-) dLambda_E(u)`
+//! and `integral S(u-) lambda_P(u) du` with the Kaplan-Meier survival `S`
+//! (Cronin and Feuer 2000), with the variances of `relsurv::cmp.rel`.
+//!
+//! # Test of equal net survival
+//!
+//! [`net_survival_test`] is the log-rank type test of Grafféo et al. (2016),
+//! the observed minus expected excess deaths of each group weighted by the
+//! inverse expected survival, as `relsurv::rs.diff`, on its grid.
+//!
+//! `relsurv::cmp.rel` and `relsurv::rs.diff` (relsurv 2.3-3) call `exp_prep`
+//! without the entry times, so a row with delayed entry counts as at risk
+//! from time 0 there; [`crude_mortality`] and [`net_survival_test`] count it
+//! from its entry, and the tests check them with delayed entry against the
+//! definitions written out in R and without it against relsurv.
+//!
 //! # Not covered
 //!
 //! The period approach (restricting follow-up to a calendar window) is made
-//! by clipping the entry and exit times of each row before the call. The
-//! Hakulinen and Ederer I estimators, the standardisation of net survival
-//! by age, and the estimators of relative survival by the actuarial method
-//! are not implemented.
+//! by clipping the entry and exit times of each row before the call. Age
+//! standardisation by individual weights inside the Pohar Perme estimator
+//! (Brenner's alternative) and the estimators of relative survival by the
+//! actuarial method are not implemented.
 //!
 //! # References
 //!
@@ -189,11 +238,31 @@
 //! 6. Esteve J, Benhamou E, Croasdale M, Raymond L. Relative survival and the
 //!    estimation of net survival: elements for further discussion. Stat Med.
 //!    1990;9(5):529-538.
+//! 7. Ederer F, Axtell LM, Cutler SJ. The relative survival rate: a
+//!    statistical methodology. Natl Cancer Inst Monogr. 1961;6:101-121.
+//! 8. Hakulinen T. Cancer survival corrected for heterogeneity in patient
+//!    withdrawal. Biometrics. 1982;38(4):933-942.
+//! 9. Cronin KA, Feuer EJ. Cumulative cause-specific mortality for cancer
+//!    patients in the presence of other causes: a crude analogue of relative
+//!    survival. Stat Med. 2000;19(13):1729-1740.
+//! 10. Graffeo N, Castell F, Belot A, Giorgi R. A log-rank-type test to
+//!     compare net survival distributions. Biometrics. 2016;72(3):760-769.
+//! 11. Corazziari I, Quinn M, Capocaccia R. Standard cancer patient population
+//!     for age standardising survival ratios. Eur J Cancer.
+//!     2004;40(15):2307-2316.
 
+mod cohort;
+mod crude;
+mod difference;
 mod estimator;
 mod excess;
 mod expected;
+mod standardise;
 
+pub use cohort::{ExpectedCurve, ExpectedMethod, expected_survival};
+pub use crude::{CrudeMortality, crude_mortality};
+pub use difference::{NetSurvivalTest, net_survival_test};
 pub use estimator::{Grid, Method, NetOptions, NetSurvival, Transform, net_survival};
 pub use excess::{ExcessFit, ExcessOptions, excess_hazard};
 pub use expected::ExpectedHazard;
+pub use standardise::{ICSS, StandardisedNet, standardise_net};

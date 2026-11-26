@@ -8,6 +8,7 @@
 )]
 
 use super::ExpectedHazard;
+use super::cohort::{self, ExpectedMethod, Weighting, sweep};
 use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::par;
@@ -32,6 +33,17 @@ pub enum Method {
     /// of the expected survival since the origin, which makes the estimator
     /// consistent for the net survival.
     PoharPerme,
+    /// The relative survival of Ederer I: the observed survival
+    /// `exp(-Lambda_O)` divided by the expected survival of Ederer I, the
+    /// mean expected survival of every person followed to the time
+    /// ([`super::ExpectedMethod::EdererI`]). The expected part ignores
+    /// censoring, so it suits a cohort followed to a common end.
+    EdererI,
+    /// The relative survival of Hakulinen: the observed survival divided by
+    /// Hakulinen's expected survival, in which each person counts until its
+    /// potential follow-up, [`NetOptions::potential`]
+    /// ([`super::ExpectedMethod::Hakulinen`]).
+    Hakulinen,
 }
 
 /// How the limits of the net survival are formed.
@@ -62,7 +74,7 @@ pub enum Grid {
 
 /// The settings of [`net_survival`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NetOptions {
+pub struct NetOptions<'a> {
     /// The estimator.
     pub method: Method,
     /// The time points.
@@ -71,15 +83,22 @@ pub struct NetOptions {
     pub level: f64,
     /// The scale of the limits.
     pub transform: Transform,
+    /// The potential follow-up of every row of the data, which
+    /// [`Method::Hakulinen`] needs and the other methods do not take: the time
+    /// a row would have been followed to had it not died, its exit time if it
+    /// was censored. `relsurv::rs.surv` sets it to `fin.date` less the date
+    /// of diagnosis for those who died.
+    pub potential: Option<&'a [f64]>,
 }
 
-impl Default for NetOptions {
+impl Default for NetOptions<'_> {
     fn default() -> Self {
         Self {
             method: Method::PoharPerme,
             grid: Grid::EventTimes,
             level: 0.95,
             transform: Transform::LogLog,
+            potential: None,
         }
     }
 }
@@ -121,7 +140,7 @@ struct Raw {
     events: Vec<f64>,
 }
 
-fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions) -> Result<()> {
+fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) -> Result<()> {
     if expected.n_rows() != data.n_rows() {
         return Err(Error::input(format!(
             "the expected hazards are for {} rows and the data has {}",
@@ -149,10 +168,22 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions) -> R
             "net survival takes weights of 0 and 1 only, which select rows",
         ));
     }
+    let hakulinen = opts.method == Method::Hakulinen;
+    if hakulinen && opts.potential.is_none() {
+        return Err(Error::input(
+            "the Hakulinen estimator needs the potential follow-up of every row",
+        ));
+    }
+    if !hakulinen && opts.potential.is_some() {
+        return Err(Error::input(
+            "only the Hakulinen estimator takes a potential follow-up",
+        ));
+    }
     Ok(())
 }
 
-/// Net survival by Ederer II or Pohar Perme, for each stratum of the data.
+/// Net survival by Ederer II or Pohar Perme, or relative survival by Ederer I
+/// or Hakulinen, for each stratum of the data.
 ///
 /// `data` is the follow-up with entry (`start`) and exit (`stop`) times in the
 /// time scale of the reference hazards of `expected`, and status 1 for death
@@ -164,14 +195,17 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions) -> R
 /// [`Error::Input`] for expected hazards of another number of rows than the
 /// data, a status with more than one event code, weights other than 0 and 1,
 /// a level outside `(0, 1)`, a grid width that is not positive, an entry
-/// before time 0, follow-up beyond what `expected` covers, and, for
+/// before time 0, follow-up beyond what `expected` covers, a potential
+/// follow-up missing for Hakulinen or given for another method, delayed entry
+/// or a walk off the table for Ederer I and Hakulinen (see
+/// [`super::expected_survival`]), and, for
 /// [`Grid::EventTimes`], data whose
 /// exact evaluation would visit more than 3e8 pairs of a person at risk and a
 /// time point.
 pub fn net_survival(
     data: &SurvData<'_>,
     expected: &ExpectedHazard,
-    opts: &NetOptions,
+    opts: &NetOptions<'_>,
 ) -> Result<Vec<NetSurvival>> {
     check(data, expected, opts)?;
     let surv = data.followup()?;
@@ -199,9 +233,14 @@ pub fn net_survival(
         .into_iter()
         .enumerate()
         .map(|(stratum, rows)| {
-            let raw = match opts.grid {
-                Grid::EventTimes => exact(&rows, start, stop, status, expected, opts.method)?,
-                Grid::Width(w) => interval(&rows, start, stop, status, expected, opts.method, w),
+            let raw = match (opts.method, opts.grid) {
+                (Method::EdererI | Method::Hakulinen, grid) => {
+                    relative(&rows, start, stop, status, expected, opts, grid)?
+                }
+                (method, Grid::EventTimes) => exact(&rows, start, stop, status, expected, method)?,
+                (method, Grid::Width(w)) => {
+                    interval(&rows, start, stop, status, expected, method, w)
+                }
             };
             Ok(finish(stratum, raw, z, opts.transform))
         })
@@ -287,7 +326,7 @@ fn exact(
                         dw2 += wb * wb;
                     }
                 }
-                Method::EdererII => {
+                Method::EdererII | Method::EdererI | Method::Hakulinen => {
                     dh += h_b - *h_a;
                     if dead {
                         deaths += 1.0;
@@ -302,7 +341,7 @@ fn exact(
                 lambda += dw / w_b - (w_gain / w_a).ln_1p();
                 variance += dw2 / (w_b * w_b);
             }
-            Method::EdererII => {
+            Method::EdererII | Method::EdererI | Method::Hakulinen => {
                 lambda += deaths / n - dh / n;
                 variance += deaths / (n * n);
             }
@@ -318,6 +357,160 @@ fn exact(
         previous = b;
     }
     Ok(raw)
+}
+
+/// The relative survival of Ederer I or Hakulinen: the cumulative observed
+/// hazard `Lambda_O` with its variance `sum d / n^2`, at every distinct exit
+/// time or at the end of every interval, less the cumulative expected hazard
+/// `-ln S_e` of the method at the same times.
+fn relative(
+    rows: &[usize],
+    start: Option<&[f64]>,
+    stop: &[f64],
+    status: &[i32],
+    expected: &ExpectedHazard,
+    opts: &NetOptions<'_>,
+    grid: Grid,
+) -> Result<Raw> {
+    if let Some(s) = start
+        && let Some(&i) = rows.iter().find(|&&i| s[i] > 0.0)
+    {
+        return Err(Error::input(format!(
+            "row {i} has delayed entry, which Ederer I and Hakulinen do not take"
+        )));
+    }
+    let mut raw = match grid {
+        Grid::EventTimes => observed(rows, stop, status),
+        Grid::Width(w) => interval_observed(rows, stop, status, w),
+    };
+    let method = match (opts.method, opts.potential) {
+        (Method::Hakulinen, Some(potential)) => {
+            if potential.len() != stop.len() {
+                return Err(Error::input(format!(
+                    "{} potential follow-up times for {} rows",
+                    potential.len(),
+                    stop.len()
+                )));
+            }
+            if let Some(&i) = rows
+                .iter()
+                .find(|&&i| !(potential[i].is_finite() && potential[i] >= 0.0))
+            {
+                return Err(Error::input(format!(
+                    "the potential follow-up of row {i} is not finite and not negative"
+                )));
+            }
+            ExpectedMethod::Hakulinen { potential }
+        }
+        _ => ExpectedMethod::EdererI,
+    };
+    let (survival, _) = match method {
+        ExpectedMethod::Hakulinen { potential } => {
+            let entry = |_: usize| 0.0;
+            let exit = |i: usize| potential[i];
+            sweep(
+                rows,
+                expected,
+                &raw.times,
+                &entry,
+                &exit,
+                Weighting::Survival,
+            )?
+        }
+        _ => cohort::ederer_one(rows, expected, &raw.times)?,
+    };
+    for (k, s) in survival.into_iter().enumerate() {
+        let s = s.ok_or_else(|| {
+            Error::input(format!(
+                "no row has potential follow-up to time {}, where the observed survival is estimated",
+                raw.times[k]
+            ))
+        })?;
+        raw.lambda[k] += s.ln();
+    }
+    Ok(raw)
+}
+
+/// The cumulative observed hazard of Nelson and Aalen at every distinct exit
+/// time of rows that enter at 0.
+fn observed(rows: &[usize], stop: &[f64], status: &[i32]) -> Raw {
+    let mut order: Vec<usize> = rows.to_vec();
+    order.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]).then(a.cmp(&b)));
+    let mut raw = Raw {
+        times: Vec::new(),
+        lambda: Vec::new(),
+        variance: Vec::new(),
+        at_risk: Vec::new(),
+        events: Vec::new(),
+    };
+    let (mut lambda, mut variance) = (0.0_f64, 0.0_f64);
+    let mut k = 0;
+    while k < order.len() {
+        let t = stop[order[k]];
+        let n = (order.len() - k) as f64;
+        let mut deaths = 0.0_f64;
+        while k < order.len() && stop[order[k]] == t {
+            if status[order[k]] != 0 {
+                deaths += 1.0;
+            }
+            k += 1;
+        }
+        lambda += deaths / n;
+        variance += deaths / (n * n);
+        raw.times.push(t);
+        raw.lambda.push(lambda);
+        raw.variance.push(variance);
+        raw.at_risk.push(n);
+        raw.events.push(deaths);
+    }
+    raw
+}
+
+/// The cumulative observed hazard with person-time denominators in intervals
+/// of `width`, the observed part of [`interval`].
+fn interval_observed(rows: &[usize], stop: &[f64], status: &[i32], width: f64) -> Raw {
+    let t_max = rows.iter().map(|&i| stop[i]).fold(0.0_f64, f64::max);
+    let g = if t_max > 0.0 {
+        (t_max / width).ceil() as usize
+    } else {
+        0
+    };
+    let (mut y, mut d) = (vec![0.0_f64; g], vec![0.0_f64; g]);
+    for &i in rows {
+        let mut k = 0;
+        while (k as f64) * width < stop[i] && k < g {
+            let hi = stop[i].min(((k + 1) as f64) * width);
+            y[k] += hi - (k as f64) * width;
+            if status[i] != 0 && hi == stop[i] {
+                d[k] += 1.0;
+            }
+            k += 1;
+        }
+    }
+    let mut raw = Raw {
+        times: Vec::new(),
+        lambda: Vec::new(),
+        variance: Vec::new(),
+        at_risk: Vec::new(),
+        events: Vec::new(),
+    };
+    let (mut lambda, mut variance) = (0.0_f64, 0.0_f64);
+    for k in 0..g {
+        if y[k] <= 0.0 {
+            continue;
+        }
+        let edge = (k as f64) * width;
+        let end = ((k + 1) as f64 * width).min(t_max);
+        let w = end - edge;
+        lambda += d[k] / y[k] * w;
+        variance += w * w * d[k] / (y[k] * y[k]);
+        raw.times.push(end);
+        raw.lambda.push(lambda);
+        raw.variance.push(variance);
+        raw.at_risk.push(y[k] / w);
+        raw.events.push(d[k]);
+    }
+    raw
 }
 
 struct Cells {
@@ -395,7 +588,7 @@ fn interval(
                             Method::PoharPerme => {
                                 pieces.cumulative_within(f64::midpoint(lo, hi)).exp()
                             }
-                            Method::EdererII => 1.0,
+                            Method::EdererII | Method::EdererI | Method::Hakulinen => 1.0,
                         };
                         let d = f64::from(u8::from(status[i] != 0 && hi == stop[i]));
                         c.wy[k] += w * y;

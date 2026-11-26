@@ -52,6 +52,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 grid,
                 level: 0.9,
                 transform: Transform::LogLog,
+                potential: None,
             };
             let mut v = Vec::new();
             for s in net_survival(&data, &expected, &opts).unwrap() {

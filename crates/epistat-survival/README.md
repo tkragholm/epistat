@@ -34,7 +34,12 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   grid of intervals, from the reference hazards of a rate table, and excess
   hazard models, piecewise constant on split or aggregated follow-up and
   flexible parametric with the expected hazard at each exit, checked against
-  `relsurv::rs.surv`, `popEpi::relpois` and `rstpm2::stpm2`.
+  `relsurv::rs.surv`, `popEpi::relpois` and `rstpm2::stpm2`. Also the expected
+  survival of a cohort by Ederer I, Hakulinen and the conditional method
+  (`survival::survexp`), relative survival by Ederer I and Hakulinen,
+  age-standardised net survival with the ICSS weights, the crude probabilities
+  of death from the disease and from other causes (`relsurv::cmp.rel`) and the
+  test of equal net survival of Grafféo et al. (`relsurv::rs.diff`).
 - Case-cohort analysis by the five methods of `survival::cch` (Prentice, Self-Prentice,
   Lin-Ying with Barlow's robust variance, and Borgan's two methods for a stratified
   subcohort), with the variance of the sampling of the subcohort.
@@ -55,8 +60,9 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   Cox risks, checked against `SCCS`, `survival::clogit` and `AF`.
 - Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
   pseudo-observations, concordance, Brier scores and calibration, standardised
-  risks, accelerated failure time models, person-time tables, rate tables with
-  expected counts for standardised incidence ratios, and the data tools
+  risks, accelerated failure time models, person-time tables, rate tables
+  (built from long rows, with or without R's extended ends) with expected
+  counts for standardised incidence ratios, and the data tools
   `survSplit`, `tmerge` and `survcondense`.
 
 Most estimators read a `SurvData`, the checked columns of a follow-up table.

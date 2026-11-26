@@ -18,7 +18,7 @@ use crate::surv::SurvData;
 ///
 /// The pieces are not stored. A row keeps its value of each time dimension at
 /// time 0, the part of its cell index that comes from the factors and the end
-/// of its follow-up, 8 bytes each, and its pieces are formed by walking it
+/// of its follow-up, 8 bytes each, and whether it is used, and its pieces are formed by walking it
 /// through the table when they are read. The walk of a row depends on these
 /// values alone, so it gives the same pieces, and the same cumulative hazards,
 /// every time.
