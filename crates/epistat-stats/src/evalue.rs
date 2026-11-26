@@ -610,7 +610,7 @@ pub fn evalues_rd(
     let bias_factor =
         ((shifted * shifted + 4.0 * p1 * p0 * f * (1.0 - f)).sqrt() - shifted) / (2.0 * p0 * f);
     let estimate = evalue_threshold(bias_factor, 1.0)?;
-    let z = crate::normal::quantile(1.0 - alpha / 2.0);
+    let z = crate::dist::normal::quantile(1.0 - alpha / 2.0);
     let lower_limit = p1 - p0 - z * (v1 + v0).sqrt();
     if lower_limit <= true_rd {
         return Ok(RdEValues {

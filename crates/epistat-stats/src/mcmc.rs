@@ -58,7 +58,7 @@
 //! 1. Gelman A, Carlin JB, Stern HS, Dunson DB, Vehtari A, Rubin DB. Bayesian
 //!    Data Analysis. 3rd ed. Boca Raton: CRC Press; 2013.
 
-use crate::lanes;
+use crate::sum::lanes;
 
 /// The lag-`lag` autocorrelation of a chain, with the lag-0 sum of squares in
 /// the denominator. `None` when the lag is not shorter than the chain or the

@@ -113,9 +113,14 @@ pub use rates::{
 };
 pub use record::record_level_misclass;
 
-use crate::normal;
+use crate::dist::beta;
+use crate::dist::normal;
 use crate::quantile::type7;
-use crate::student::beta_quantile;
+
+/// `x`, or `None` for NaN.
+fn finite(x: f64) -> Option<f64> {
+    (!x.is_nan()).then_some(x)
+}
 
 /// What is wrong with the input of a bias analysis.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -819,14 +824,18 @@ impl Dist {
                 })
             }
             Self::TruncatedNormal { lo, hi, mean, sd } => {
-                let z = normal::truncated_quantile(u, (lo - mean) / sd, (hi - mean) / sd)?;
+                let z = finite(normal::truncated_quantile(
+                    u,
+                    (lo - mean) / sd,
+                    (hi - mean) / sd,
+                ))?;
                 Some((mean + sd * z).clamp(lo, hi))
             }
             Self::LogitNormal { mean, sd } => {
                 let x = mean + sd * normal::quantile(u);
                 Some(1.0 / (1.0 + (-x).exp()))
             }
-            Self::Beta { alpha, beta } => beta_quantile(u, alpha, beta),
+            Self::Beta { alpha, beta } => finite(beta::quantile(u, alpha, beta)),
             Self::LogNormal { mu, sigma } => Some((mu + sigma * normal::quantile(u)).exp()),
         }
     }

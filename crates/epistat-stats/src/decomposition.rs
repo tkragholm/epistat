@@ -471,7 +471,7 @@ pub fn kitagawa_poisson(
         Split::Symmetric => kitagawa_symmetric(&share_a, &rate_a, &share_b, &rate_b)?,
     };
     let v = kitagawa_variance(&share_a, &var_a, &share_b, &var_b, split)?;
-    let z = crate::normal::two_sided_z(level);
+    let z = crate::dist::normal::quantile(1.0 - (1.0 - level) / 2.0);
     let part = |estimate: f64, variance: f64| {
         let se = variance.sqrt();
         Part {

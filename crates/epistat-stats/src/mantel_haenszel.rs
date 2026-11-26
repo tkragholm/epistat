@@ -103,8 +103,8 @@
 
 use std::fmt;
 
-use crate::gamma::chi_square_sf;
-use crate::normal;
+use crate::dist::chi_square::sf as chi_square_sf;
+use crate::dist::normal;
 use crate::sum::compensated;
 
 /// Why a Mantel-Haenszel estimate was refused.
@@ -256,7 +256,7 @@ fn undefined(n_strata_used: usize) -> Pooled {
 fn ratio_result(ratio: f64, variance: f64, level: f64, used: usize) -> Pooled {
     let se = variance.sqrt();
     let beta = ratio.ln();
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     Pooled {
         estimate: Some(ratio),
         se: Some(se),
@@ -269,7 +269,7 @@ fn ratio_result(ratio: f64, variance: f64, level: f64, used: usize) -> Pooled {
 
 fn difference_result(difference: f64, variance: f64, level: f64, used: usize) -> Pooled {
     let se = variance.sqrt();
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     Pooled {
         estimate: Some(difference),
         se: Some(se),

@@ -38,8 +38,8 @@
 //!
 //! 1. Rosenbaum PR. Observational Studies, 2nd ed. Springer; 2002. Chapter 4.
 
-use crate::lanes;
-use crate::normal;
+use crate::dist::normal;
+use crate::sum::lanes;
 
 /// The largest `n * (2 sum r_i + 1)` [`exact_upper_tail`] works through.
 pub const MAX_TABLE_WORK: f64 = 2.0e9;

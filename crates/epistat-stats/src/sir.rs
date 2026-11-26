@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! Exact (Garwood)   lower = Q_gamma(a, O) / E,  upper = Q_gamma(1 - a, O + 1) / E,  a = (1 - level) / 2
-//! Byar              the cube-root form of crate::poisson, divided by E
+//! Byar              the cube-root form of crate::dist::poisson, divided by E
 //! Wald              exp(ln SIR -/+ z / sqrt(O)), undefined for O = 0
 //! Profile           the t with 2 [ O ln(O / (E t)) - (O - E t) ] = z^2, one on each side of O / E
 //! ```
@@ -60,7 +60,7 @@
 //! # Accuracy
 //!
 //! The exact limits and the exact p-value have the accuracy of
-//! [`crate::poisson::gamma_quantile`] and of the Poisson point probabilities, about
+//! [`crate::dist::gamma::quantile`] and of the Poisson point probabilities, about
 //! `1e-13` relative. The profile limits are roots of a function whose
 //! derivative is `2 (E - O / t)` at the root, so their relative error is a few
 //! units of machine epsilon times the condition of the root, which is about
@@ -76,11 +76,12 @@
 
 use std::fmt;
 
-use crate::discrete::poisson_two_sided;
-use crate::gamma::chi_square_sf;
-use crate::normal;
-use crate::poisson::{self, Method};
+use crate::dist::chi_square::sf as chi_square_sf;
+use crate::dist::discrete::poisson_two_sided;
+use crate::dist::normal;
+use crate::dist::poisson::{self, Method};
 use crate::sum::compensated;
+use epistat_core::Level;
 
 /// Why an SIR was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +204,7 @@ pub fn sir(
             } else {
                 Method::Byar
             };
+            let level = Level::confidence(level).map_err(|_| SirError::Level)?;
             let ci = poisson::cipoisson(observed, expected, level, method)
                 .map_err(|_| SirError::Expected)?;
             (ci.lower, ci.upper)
@@ -211,13 +213,13 @@ pub fn sir(
             if observed == 0.0 {
                 (None, None)
             } else {
-                let half = normal::two_sided_z(level) / observed.sqrt();
+                let half = normal::quantile(1.0 - (1.0 - level) / 2.0) / observed.sqrt();
                 let centre = ratio.ln();
                 (Some((centre - half).exp()), Some((centre + half).exp()))
             }
         }
         SirInterval::Profile => {
-            let c = normal::two_sided_z(level).powi(2);
+            let c = normal::quantile(1.0 - (1.0 - level) / 2.0).powi(2);
             (
                 Some(profile_limit(observed, c, false) / expected),
                 Some(profile_limit(observed, c, true) / expected),
@@ -472,7 +474,7 @@ mod tests {
     fn profile_limits_satisfy_the_deviance_equation() {
         for (o, e) in [(0.0, 3.0), (1.0, 2.0), (7.0, 4.0), (250.0, 200.0)] {
             let r = sir(o, e, 0.95, SirInterval::Profile).unwrap();
-            let c = normal::two_sided_z(0.95).powi(2);
+            let c = normal::two_sided_z(Level::default()).powi(2);
             for t in [r.lower.unwrap(), r.upper.unwrap()] {
                 let mu = e * t;
                 if mu > 0.0 {

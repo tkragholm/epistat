@@ -1,5 +1,6 @@
-//! Probabilities of the Poisson and binomial distributions, for the exact
-//! tests of [`crate::rates`] and [`crate::sir`].
+//! Probabilities of the Poisson and binomial distributions, behind
+//! [`super::poisson`] and [`super::binomial`], and the two-sided exact tests
+//! of R's `poisson.test` and `binom.test`.
 //!
 //! # Algorithm
 //!
@@ -30,8 +31,8 @@
 //! 1. Loader C. Fast and accurate computation of binomial probabilities.
 //!    2000. <https://www.r-project.org/doc/reports/CLoader-dbinom-2002.pdf>
 
-use crate::gamma::{ln_gamma, lower_regularised, upper_regularised};
-use crate::student::regularised_beta;
+use super::beta::regularised as regularised_beta;
+use super::gamma::{ln_gamma, lower_regularised, upper_regularised};
 
 const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;
 const TWO_PI: f64 = std::f64::consts::TAU;
@@ -71,6 +72,20 @@ fn bd0(x: f64, np: f64) -> f64 {
     } else {
         x * (x / np).ln() + np - x
     }
+}
+
+/// The count `x` stands for, R's rule for a point probability: `x` rounded
+/// when it is within `1e-7 max(1, |x|)` of a non-negative integer, `None`
+/// otherwise.
+pub(crate) fn support_point(x: f64) -> Option<f64> {
+    let k = x.round();
+    ((x - k).abs() <= 1e-7 * x.abs().max(1.0) && k >= 0.0).then_some(k)
+}
+
+/// The count up to `x`, R's rule for a distribution function:
+/// `floor(x + 1e-7)`.
+pub(crate) fn floor_count(x: f64) -> f64 {
+    (x + 1e-7).floor()
 }
 
 /// `P(X = x)` for `X` Poisson with mean `m >= 0`.

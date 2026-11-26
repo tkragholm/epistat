@@ -3,6 +3,9 @@
 //! [`compensated`] is a compensated sum that matches Python's `sum()` over floats,
 //! [`exact`] is the correctly rounded sum that matches Python's `math.fsum()`,
 //! and [`blocked`] is the pairwise sum that polars uses for a float column.
+//! [`lanes`] holds sums and dot products over eight fixed lanes, for hot loops
+//! whose result is defined by that order rather than by a reference
+//! implementation.
 //!
 //! # Compensated sum
 //!
@@ -68,6 +71,8 @@
 //!    Summen. Zeitschrift für Angewandte Mathematik und Mechanik 1974;54:39-51.
 //! 2. Shewchuk JR. Adaptive precision floating-point arithmetic and fast robust
 //!    geometric predicates. Discrete and Computational Geometry 1997;18:305-363.
+
+pub mod lanes;
 
 /// A running Neumaier compensated sum, for terms that arrive one at a time.
 ///

@@ -17,7 +17,8 @@
 //! bound is `1e-11`. The checks print the largest deviation in units of its
 //! bound.
 
-use epistat_stats::poisson::{Method, cipoisson};
+use epistat_core::Level;
+use epistat_stats::dist::poisson::{Method, cipoisson};
 use epistat_stats::rates::{
     crude_rate, direct_standardised, rate_difference, rate_ratio, rate_ratio_exact_test,
 };
@@ -112,7 +113,13 @@ fn crude_rates_and_byar() {
         } else {
             assert_eq!(r.lower, Some(0.0));
         }
-        let b = cipoisson(c.events, c.time, c.level, Method::Byar).unwrap();
+        let b = cipoisson(
+            c.events,
+            c.time,
+            Level::confidence(c.level).unwrap(),
+            Method::Byar,
+        )
+        .unwrap();
         ratio(&mut worst, b.upper.unwrap(), c.byar_upper, 1e-13);
         match c.byar_lower {
             Some(x) if x > 0.0 => ratio(&mut worst, b.lower.unwrap(), x, 1e-13),

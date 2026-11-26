@@ -55,8 +55,8 @@
 //!    parametric causal inference. Journal of Statistical Software
 //!    2011;42(8):1-28.
 
-use crate::lanes;
 use crate::quantile;
+use crate::sum::lanes;
 
 /// Standardised mean difference of a continuous variable, the difference in
 /// means over the square root of the mean of the two variances (Cohen 1988).

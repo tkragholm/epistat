@@ -4,7 +4,7 @@
 //! # Algorithm
 //!
 //! A stratum with `d` events in person-time `y` has the rate `d / y`. Its
-//! interval is the exact Poisson interval of [`crate::poisson`], divided by
+//! interval is the exact Poisson interval of [`crate::dist::poisson`], divided by
 //! `y` and multiplied by `scale`.
 //!
 //! A directly standardised rate over strata `s` with weights `w_s`, scaled to
@@ -41,7 +41,7 @@
 //! numerator of the upper limit, and the one in the denominator of the lower
 //! limit, up by a weight `s`, with its variance up by `u`, as the upper gamma
 //! limit of one rate does. With `qf(p, m, n)` the F quantile
-//! ([`crate::student::f_quantile`]),
+//! ([`crate::dist::f::quantile`]),
 //!
 //! ```text
 //! lower = R1 / (R0 + s0)  qf(a,     2 R1^2 / V1,                2 (R0 + s0)^2 / (V0 + u0))
@@ -113,10 +113,16 @@
 
 use std::fmt;
 
-use crate::discrete::binomial_two_sided;
-use crate::normal;
-use crate::poisson::{self, Method, gamma_quantile};
-use crate::student::{beta_quantile, f_quantile};
+use crate::dist::discrete::binomial_two_sided;
+use crate::dist::normal;
+use crate::dist::poisson::{self, Method};
+use crate::dist::{beta, chi_square, f};
+use epistat_core::Level;
+
+/// `x`, or `None` for NaN.
+fn finite(x: f64) -> Option<f64> {
+    (!x.is_nan()).then_some(x)
+}
 use crate::sum::compensated;
 
 /// Why a rate was refused.
@@ -246,6 +252,7 @@ pub fn crude_rate(events: f64, time: f64, level: f64, scale: f64) -> Result<Rate
             upper: None,
         });
     }
+    let level = Level::confidence(level).map_err(|_| RateError::Level)?;
     let ci =
         poisson::cipoisson(events, time, level, Method::Exact).map_err(|_| RateError::Events)?;
     Ok(Rate {
@@ -358,12 +365,16 @@ pub fn direct_standardised(
     let lower = if rate == 0.0 {
         Some(0.0)
     } else {
-        gamma_quantile(a, rate * rate / variance).map(|q| 2.0 * q * variance / (2.0 * rate))
+        finite(chi_square::quantile(a, 2.0 * (rate * rate / variance)))
+            .map(|q| q * variance / (2.0 * rate))
     };
     let shifted = rate + w_max;
     let v_up = variance + w_max * w_max;
-    let upper =
-        gamma_quantile(1.0 - a, shifted * shifted / v_up).map(|q| 2.0 * q * v_up / (2.0 * shifted));
+    let upper = finite(chi_square::quantile(
+        1.0 - a,
+        2.0 * (shifted * shifted / v_up),
+    ))
+    .map(|q| q * v_up / (2.0 * shifted));
     Ok(Standardised {
         rate: Some(rate),
         variance: Some(variance),
@@ -473,9 +484,9 @@ pub fn standardised_ratio(
             let lower = if r1 == 0.0 {
                 Some(0.0)
             } else {
-                f_quantile(a, df(r1, v1), df(s0, u0)).map(|q| r1 / s0 * q)
+                finite(f::quantile(a, df(r1, v1), df(s0, u0))).map(|q| r1 / s0 * q)
             };
-            let upper = f_quantile(1.0 - a, df(s1, u1), df(r0, v0)).map(|q| s1 / r0 * q);
+            let upper = finite(f::quantile(1.0 - a, df(s1, u1), df(r0, v0))).map(|q| s1 / r0 * q);
             (lower, upper)
         }
         RatioInterval::ModifiedF => {
@@ -484,9 +495,9 @@ pub fn standardised_ratio(
             let lower = if r1 == 0.0 {
                 Some(0.0)
             } else {
-                f_quantile(a, df(r1, v1), df(s0, u0)).map(|q| r1 / s0 * q)
+                finite(f::quantile(a, df(r1, v1), df(s0, u0))).map(|q| r1 / s0 * q)
             };
-            let upper = f_quantile(1.0 - a, df(s1, u1), df(r0, v0)).map(|q| s1 / r0 * q);
+            let upper = finite(f::quantile(1.0 - a, df(s1, u1), df(r0, v0))).map(|q| s1 / r0 * q);
             (lower, upper)
         }
     };
@@ -537,7 +548,7 @@ fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64, level: f64) -> Result<(), Rate
 }
 
 fn wald(estimate: f64, se: f64, level: f64, log_scale: bool) -> Contrast {
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     let (lower, upper) = (estimate - z * se, estimate + z * se);
     let p = 2.0 * normal::cdf(-(estimate / se).abs());
     if log_scale {
@@ -677,12 +688,12 @@ pub fn rate_ratio_exact(
     let lower = if x1 == 0.0 {
         Some(0.0)
     } else {
-        beta_quantile(alpha, x1, x0 + 1.0).map(to_ratio)
+        finite(beta::quantile(alpha, x1, x0 + 1.0)).map(to_ratio)
     };
     let upper = if x0 == 0.0 {
         None
     } else {
-        beta_quantile(1.0 - alpha, x1 + 1.0, x0).map(to_ratio)
+        finite(beta::quantile(1.0 - alpha, x1 + 1.0, x0)).map(to_ratio)
     };
     Ok(Contrast {
         estimate: (x0 > 0.0).then(|| (e1 / t1) / (e0 / t0)),

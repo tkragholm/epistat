@@ -2,7 +2,8 @@
 //! to two units in the last place because R's own last bit depends on whether
 //! it was compiled with fused multiply-add.
 
-use epistat_stats::{gamma, normal, quantile};
+use epistat_stats::dist::{chi_square, gamma, normal};
+use epistat_stats::quantile;
 use epistat_testkit::Tolerance;
 
 mod normal_values {
@@ -64,7 +65,7 @@ fn pchisq_and_lgamma() {
     let close = Tolerance::exact().rel(1e-13).abs(1e-300);
     for &(x, df, lower, upper) in gamma_values::CHISQ {
         let (x, df) = (f64::from_bits(x), f64::from_bits(df));
-        let (got_lower, got_upper) = (gamma::chi_square_cdf(x, df), gamma::chi_square_sf(x, df));
+        let (got_lower, got_upper) = (chi_square::cdf(x, df), chi_square::sf(x, df));
         assert!(
             close.accepts(got_lower, f64::from_bits(lower)),
             "pchisq({x}, {df}) = {got_lower:e}, R {:e}",
@@ -131,7 +132,7 @@ mod cipoisson_values {
 /// quantile carry this error, so the coefficient is 8, plus eight units in the
 /// last place for the Newton stopping rule.
 fn qgamma_tolerance(x: f64, shape: f64, t: f64) -> f64 {
-    let ln_norm = epistat_stats::gamma::ln_gamma(shape);
+    let ln_norm = epistat_stats::dist::gamma::ln_gamma(shape);
     let exponent = ((shape - 1.0) * x.ln()).abs() + x + ln_norm.abs();
     let density = ((shape - 1.0) * x.ln() - x - ln_norm).exp();
     8.0 * f64::EPSILON * exponent * t / (x * density) + 8.0 * f64::EPSILON
@@ -139,11 +140,11 @@ fn qgamma_tolerance(x: f64, shape: f64, t: f64) -> f64 {
 
 #[test]
 fn qgamma_quantiles() {
-    use epistat_stats::poisson::gamma_quantile;
+    use epistat_stats::dist::gamma::quantile as gamma_quantile;
     let mut worst = 0.0_f64;
     for &(p, shape, q) in cipoisson_values::QGAMMA {
         let (p, shape, expected) = (f64::from_bits(p), f64::from_bits(shape), f64::from_bits(q));
-        let got = gamma_quantile(p, shape).unwrap();
+        let got = gamma_quantile(p, shape);
         let deviation = ((got - expected) / expected).abs();
         let bound = qgamma_tolerance(expected, shape, p.min(1.0 - p));
         worst = worst.max(deviation / bound);
@@ -163,7 +164,8 @@ const CIPOISSON_REL: f64 = 1e-13;
 
 #[test]
 fn cipoisson_limits() {
-    use epistat_stats::poisson::{Method, cipoisson};
+    use epistat_core::Level;
+    use epistat_stats::dist::poisson::{Method, cipoisson};
     let mut worst = 0.0_f64;
     for (method, rows) in [
         (Method::Exact, cipoisson_values::CIPOISSON_EXACT),
@@ -175,7 +177,7 @@ fn cipoisson_limits() {
                 f64::from_bits(time),
                 f64::from_bits(level),
             );
-            let got = cipoisson(k, time, level, method).unwrap();
+            let got = cipoisson(k, time, Level::confidence(level).unwrap(), method).unwrap();
             for (name, got, bits) in [("lower", got.lower, lower), ("upper", got.upper, upper)] {
                 let expected = f64::from_bits(bits);
                 match got {
@@ -217,7 +219,7 @@ mod student_large_values {
 /// an error of the same kind, so the coefficient is 8, plus 64 eps for the
 /// fraction.
 fn beta_bound(a: f64, b: f64, x: f64, y: f64) -> f64 {
-    use epistat_stats::gamma::ln_gamma;
+    use epistat_stats::dist::gamma::ln_gamma;
     let terms = (a * x.ln()).abs()
         + (b * y.ln()).abs()
         + ln_gamma(a).abs()
@@ -235,7 +237,8 @@ fn t_bound(z: f64, nu: f64) -> f64 {
 
 #[test]
 fn pt_qt_and_pbeta() {
-    use epistat_stats::student::{regularised_beta, t_cdf_sf, t_ln_density, t_quantile};
+    use epistat_stats::dist::beta::regularised as regularised_beta;
+    use epistat_stats::dist::t;
     let mut worst = 0.0_f64;
     let mut check = |name: &str, got: f64, want: f64, bound: f64| {
         if want == 0.0 {
@@ -251,7 +254,7 @@ fn pt_qt_and_pbeta() {
     };
     for &(z, nu, lower, upper) in student_values::PT {
         let (z, nu) = (f64::from_bits(z), f64::from_bits(nu));
-        let (cdf, sf) = t_cdf_sf(z, nu);
+        let (cdf, sf) = (t::cdf(z, nu), t::sf(z, nu));
         // The larger tail is one minus the smaller, with an absolute error of
         // the smaller's bound.
         let bound = t_bound(z, nu);
@@ -280,7 +283,7 @@ fn pt_qt_and_pbeta() {
     }
     for &(p, nu, q) in student_values::QT {
         let (p, nu, want) = (f64::from_bits(p), f64::from_bits(nu), f64::from_bits(q));
-        let got = t_quantile(p, nu).unwrap();
+        let got = t::quantile(p, nu);
         if p.to_bits() == 0.5_f64.to_bits() {
             assert_eq!(got.to_bits(), 0.0_f64.to_bits());
             continue;
@@ -288,7 +291,7 @@ fn pt_qt_and_pbeta() {
         // A relative error d in the tail moves the quantile by
         // d tail / (t f(t)) in relative terms.
         let tail = p.min(1.0 - p);
-        let density = t_ln_density(want, nu).exp();
+        let density = t::ln_pdf(want, nu).exp();
         let mut bound = t_bound(want, nu) * tail / (want.abs() * density) + 16.0 * f64::EPSILON;
         if nu < 1.0 {
             // R's qt finds the root for fewer than one degree of freedom by a
@@ -322,7 +325,7 @@ fn pt_qt_and_pbeta() {
 /// difference, about `small ln(large)`. The continued fraction takes of the
 /// order of `sqrt(a + b)` terms, each with a rounding.
 fn large_beta_bound(a: f64, b: f64, x: f64, y: f64) -> f64 {
-    use epistat_stats::gamma::ln_gamma;
+    use epistat_stats::dist::gamma::ln_gamma;
     let (small, large) = if a < b { (a, b) } else { (b, a) };
     let terms = (a * x.ln()).abs()
         + (b * y.ln()).abs()
@@ -342,7 +345,8 @@ fn large_beta_bound(a: f64, b: f64, x: f64, y: f64) -> f64 {
 /// of the two.
 #[test]
 fn pt_and_pbeta_at_large_shapes() {
-    use epistat_stats::student::{regularised_beta, t_cdf_sf};
+    use epistat_stats::dist::beta::regularised as regularised_beta;
+    use epistat_stats::dist::t;
     let mut worst = 0.0_f64;
     let mut check = |name: &str, got: f64, want: f64, bound: f64| {
         let deviation = ((got - want) / want).abs();
@@ -354,7 +358,7 @@ fn pt_and_pbeta_at_large_shapes() {
     };
     for &(z, nu, lower, upper) in student_large_values::PT_LARGE {
         let (z, nu) = (f64::from_bits(z), f64::from_bits(nu));
-        let (cdf, sf) = t_cdf_sf(z, nu);
+        let (cdf, sf) = (t::cdf(z, nu), t::sf(z, nu));
         let q = nu + z * z;
         let (a, b) = (0.5 * nu, 0.5);
         let bound = large_beta_bound(a, b, nu / q, z * z / q) + (a + b) * f64::EPSILON;

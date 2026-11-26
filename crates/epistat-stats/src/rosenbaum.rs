@@ -168,10 +168,10 @@ pub use binary::{
 pub use censored::{Censored, EventDirection, gehan_scores};
 pub use interval::{EffectInterval, Sides, m_statistic_interval};
 
-use crate::lanes;
-use crate::normal;
+use crate::dist::normal;
 use crate::quantile::type7_unsorted;
 use crate::signed_rank::{self, SignedRankError, average_ranks};
+use crate::sum::lanes;
 
 /// What goes wrong in a sensitivity analysis.
 #[derive(Debug, Clone, PartialEq)]
