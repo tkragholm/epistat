@@ -76,7 +76,12 @@ mod tests {
         assert_eq!(expit(800.0), 1.0);
         for eta in [-30.0, -2.5, -0.1, 0.1, 2.5, 30.0] {
             assert!((expit(eta) + expit(-eta) - 1.0).abs() <= f64::EPSILON);
-            assert!((logit(expit(eta)) - eta).abs() <= 1e-15 * eta.abs().max(1.0) * 1e3);
+            // p = expit(eta) is rounded to half an ulp of p, and 1 - p loses
+            // what that is relative to the smaller tail, so the round trip is
+            // good to a few eps over min(p, 1 - p) in the logit.
+            let p = expit(eta);
+            let tolerance = 4.0 * f64::EPSILON / p.min(1.0 - p);
+            assert!((logit(p) - eta).abs() <= tolerance, "{eta}");
         }
     }
 
