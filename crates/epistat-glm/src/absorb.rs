@@ -1,5 +1,6 @@
-//! Absorption of any number of fixed-effect factors by alternating
-//! projections, as `fixest` demeans before it fits.
+//! Absorption of any number of fixed-effect factors, by preconditioned
+//! conjugate gradients or by the alternating projections with which `fixest`
+//! demeans before it fits.
 //!
 //! [`FixedEffects`] holds the factors of a linear model (unit, time, firm and
 //! so on) for the rows that enter it, and [`FixedEffects::demean`] removes them
@@ -65,8 +66,8 @@
 //!
 //! # Conjugate gradients
 //!
-//! [`AbsorbMethod::ConjugateGradient`] solves the same equations by Krylov
-//! iteration. Eliminating the largest factor `1` exactly, `alpha_1 = W_1^{-1}
+//! [`AbsorbMethod::ConjugateGradient`], the default, solves the same
+//! equations by Krylov iteration. Eliminating the largest factor `1` exactly, `alpha_1 = W_1^{-1}
 //! (S_1 - C_1x x)` with `C_qr` the weighted cross tabulation of factors `q`
 //! and `r` and `x` the coefficients of the others, leaves
 //!
@@ -94,6 +95,13 @@
 //! column-scaled dummies, as some packages use, is conjugate gradients (or
 //! MINRES) on the full equations `A` with the same preconditioner, without
 //! the elimination; on the test designs it took about twice the iterations.
+//!
+//! The gradients are the default because they meet the same criterion, and so
+//! the same bound, at least as fast on every design measured: as fast on well
+//! connected panels, where the projections converge in a few iterations, and
+//! 4 to 5 times faster on a sparse worker-firm graph at 10^7 rows, where the
+//! projections still converge. [`AbsorbMethod::Projections`] remains for
+//! results that follow `fixest`'s path.
 //!
 //! # Convergence criterion
 //!
@@ -283,13 +291,14 @@ pub enum Singletons {
 /// same criterion, so both carry the same bound on the error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AbsorbMethod {
-    /// Alternating projections with the accelerations of `fixest`.
-    #[default]
+    /// Alternating projections with the accelerations and the restart of
+    /// `fixest`, for results that follow `fixest`'s path.
     Projections,
     /// Preconditioned conjugate gradients on the equations of the factors
     /// other than the largest, which is eliminated exactly. Much faster on
     /// poorly connected designs, such as workers who rarely move between
-    /// firms.
+    /// firms, and as fast on well connected ones.
+    #[default]
     ConjugateGradient,
 }
 
@@ -309,13 +318,13 @@ pub struct Absorb {
 
 impl Absorb {
     /// A tolerance of `1e-10`, 10 000 iterations and
-    /// [`AbsorbMethod::Projections`].
+    /// [`AbsorbMethod::ConjugateGradient`].
     #[must_use]
     pub const fn new() -> Self {
         Self {
             tolerance: 1e-10,
             max_iterations: 10_000,
-            method: AbsorbMethod::Projections,
+            method: AbsorbMethod::ConjugateGradient,
         }
     }
 

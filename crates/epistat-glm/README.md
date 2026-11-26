@@ -25,14 +25,15 @@ module is the linear within-family estimator with clustered variance as
 `fixest::feols`. Each is checked against R.
 
 The `absorb` module removes any number of fixed-effect factors (unit, time,
-firm and more) from columns by alternating projections with the Irons-Tuck
-acceleration and the restart for three or more factors that `fixest` uses,
-with prior weights, the repeated removal of singletons and a stopping rule on
-the weighted level means of the residual that bounds the distance to the exact
-projection. On poorly connected designs, such as workers who seldom move
-between firms, preconditioned conjugate gradients on the equations left after
-the largest factor is eliminated reach the same criterion in far fewer
-iterations, and are offered as an option. It returns the fixed effects
+firm and more) from columns, with prior weights, the repeated removal of
+singletons and a stopping rule on the weighted level means of the residual
+that bounds the distance to the exact projection. By default it solves by
+preconditioned conjugate gradients on the equations left after the largest
+factor is eliminated. They are as fast as `fixest`'s projections on well
+connected panels and far faster on poorly connected designs, such as workers
+who seldom move between firms, where the projections can fail to converge.
+The alternating projections with the Irons-Tuck acceleration and the restart
+for three or more factors that `fixest` uses remain as an option. It returns the fixed effects
 normalised as `fixest::fixef` does, with their references, and predicts their
 sums for new rows, so that a model can be fitted on a subset of the rows (0/1
 weights) and the fixed effects carried to the others. The `feols` module fits

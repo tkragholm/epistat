@@ -22,7 +22,8 @@
 //! Brant test of proportional odds.
 //!
 //! [`absorb`] removes any number of fixed-effect factors from columns by
-//! accelerated alternating projections, and [`feols`] fits linear models on
+//! preconditioned conjugate gradients or by `fixest`'s accelerated
+//! alternating projections, and [`feols`] fits linear models on
 //! top of it with the covariances of `fixest::feols`.
 //!
 //! [`rows`] fits the model of [`Glm::fit`] to rows formed block by block, for

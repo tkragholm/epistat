@@ -673,5 +673,5 @@ fn sunab_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&sunab_bits())
         .finish();
-    assert_eq!(hash, 6_228_224_586_456_616_965, "recorded hash");
+    assert_eq!(hash, 12_002_447_259_631_101_414, "recorded hash");
 }

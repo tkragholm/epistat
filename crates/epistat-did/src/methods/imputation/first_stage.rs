@@ -12,8 +12,8 @@
 //! untreated rows and a vector `c` on the treated rows. `M0` is not formed.
 //! The level sums `b_D = D0' W base + D1' c` of every factor are solved for
 //! coefficients `alpha` with `D0' W D0 alpha = b_D` by
-//! [`FixedEffects::solve_sums`], the alternating projections of
-//! [`FixedEffects::demean`] run on the sums, and `f_D = D0 alpha`
+//! [`FixedEffects::solve_sums`], the solver of [`FixedEffects::demean`]
+//! run on the sums, and `f_D = D0 alpha`
 //! ([`FixedEffects::fitted`]) is unique although `alpha` is not. The sums lie
 //! in the range of `D0' W D0` when every treated row's levels are connected
 //! to untreated rows, which is what makes the row imputable. Nothing in this

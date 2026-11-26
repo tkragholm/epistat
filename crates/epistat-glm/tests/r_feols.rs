@@ -680,7 +680,7 @@ fn the_fit_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&fit_bits())
         .finish();
-    assert_eq!(hash, 239_393_430_769_115_130, "recorded hash");
+    assert_eq!(hash, 16_667_844_132_692_258_619, "recorded hash");
 }
 
 #[test]

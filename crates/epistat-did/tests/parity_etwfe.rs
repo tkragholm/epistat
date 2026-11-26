@@ -469,5 +469,5 @@ fn etwfe_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&etwfe_bits())
         .finish();
-    assert_eq!(hash, 2_658_182_323_512_888_873, "recorded hash");
+    assert_eq!(hash, 13_680_617_634_678_465_476, "recorded hash");
 }

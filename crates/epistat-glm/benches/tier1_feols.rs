@@ -4,7 +4,7 @@
 //!
 //! The data (`fe`) are `N / 10` units observed for ten consecutive periods
 //! out of fifteen, starting at a period drawn for each unit, so that the panel
-//! is unbalanced in calendar time and the projections iterate. Each row has a
+//! is unbalanced in calendar time and the solver iterates. Each row has a
 //! firm, which a unit leaves for a random one with probability 0.2 a period.
 //! Covariates: `x1` correlated with the unit effect, `x2` with the period
 //! effect. Methods: `feols_fe2` (`y ~ x1 + x2 | id + t`, clustered by unit)
@@ -18,7 +18,7 @@
 //!
 //! - `hfe`: a worker moves to a random one of `N / 20` firms with probability
 //!   0.05 a year, a sparse random graph of firms. Methods `feols_sparse2` and
-//!   `feols_sparse3` with the default projections, `feols_sparse2_cg` and
+//!   `feols_sparse3` with the projections, `feols_sparse2_cg` and
 //!   `feols_sparse3_cg` with the conjugate gradients.
 //! - `chn`: the firms, at most 1000, lie on a line and a worker moves to a
 //!   neighbouring firm with probability 0.1 a year, a chain. Methods

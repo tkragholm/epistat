@@ -59,7 +59,7 @@ expect: the static regression and the event study with relative-period
 indicators, a chosen reference period and binned end points, as
 `fixest::feols(y ~ i(rel, ref = -1) | id + t)`, with `fixest`'s clustered
 covariance and influence functions by unit. The unit and period effects are
-absorbed by `epistat-glm`'s alternating projections, so the cost is linear in
+absorbed by `epistat-glm`'s fixed-effects solver, so the cost is linear in
 the rows. The Goodman-Bacon decomposition splits the static estimate into its
 2x2 comparisons and their weights as `bacondecomp::bacon` does, with the
 within and between components when there are time-varying covariates. Both
@@ -111,9 +111,9 @@ estimator of Gardner fit unit and period effects and covariates on the
 untreated rows, impute the untreated outcomes of the treated rows and average
 the imputed effects, overall, by horizon or with the caller's weights, with
 the pre-trend regression of the imputation estimator. The effects are
-absorbed by alternating projections in `epistat-glm`, and the variances need
+absorbed by the fixed-effects solver of `epistat-glm`, and the variances need
 fitted values of the first stage's auxiliary systems, which the same
-alternating projections solve from their level sums, so the cost is linear
+solver finds from their level sums, so the cost is linear
 in the rows and no dummies are formed. They
 follow `didimputation` 0.5.1 and `did2s` 1.2.1, except that a row whose unit
 and period effects are not jointly identified is dropped rather than imputed,
