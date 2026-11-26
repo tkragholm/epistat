@@ -61,11 +61,39 @@
 //! part with a term that is not finite. [`shares`] returns `None` when the weights do not have a
 //! positive finite total, or one is NaN or negative.
 //!
+//! # Variances
+//!
+//! With the shares fixed, both parts are linear in the rates, so for
+//! independent rates with variances `v_i` (A) and `u_i` (B) their variances
+//! and covariance are exact sums, which [`kitagawa_variance`] forms:
+//!
+//! ```text
+//! gap                     sum a^2 v + sum b^2 u
+//! reference  composition  sum (a - b)^2 u,     rate  sum a^2 (v + u),
+//!            covariance   -sum (a - b) a u
+//! symmetric  composition  sum ((a - b)/2)^2 (v + u),   rate  sum ((a + b)/2)^2 (v + u),
+//!            covariance   sum ((a - b)/2) ((a + b)/2) (v - u)
+//! ```
+//!
+//! The variance of the composition part plus that of the rate part plus twice
+//! their covariance is the variance of the gap. [`kitagawa_poisson`] takes
+//! events and person-time by stratum: the shares are those of the person-time,
+//! which is taken as fixed, and the counts are Poisson, so `v_i = d_i / y_i^2`
+//! times the square of the scale, estimated from the counts. The intervals
+//! are normal, `estimate -/+ z se`. Rates whose variance has another source,
+//! such as a bootstrap or a binomial risk, go to [`kitagawa_variance`]
+//! directly. Shares estimated from a sample add a term of their own, which
+//! these variances leave out.
+//!
 //! # Agreement with other software
 //!
-//! The tests check hand-computed examples, the exact addition of the parts to the
-//! gap, and the reference decomposition of the PHD equity kernel
-//! (`kernels::equity`), which forms the same sums.
+//! The symmetric decomposition is Das Gupta's decomposition of a rate into an
+//! age structure and a rate factor, and the tests check it against
+//! `DasGuptR::dgnpop` with `crossclassified`. They check the decomposition
+//! with a reference and the variances against the formulas written out in R,
+//! the exact addition of the parts to the gap, and the reference
+//! decomposition of the PHD equity kernel (`kernels::equity`), which forms
+//! the same sums.
 //!
 //! # References
 //!
@@ -238,6 +266,226 @@ pub fn kitagawa_symmetric(
         gap: exact(own) - exact(reference),
         composition: exact(composition),
         rate: exact(rate),
+    })
+}
+
+/// Which split of a gap a variance is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Split {
+    /// The rates of the reference as the standard, as [`kitagawa`].
+    Reference,
+    /// Both parts at the average of the two populations, as
+    /// [`kitagawa_symmetric`].
+    Symmetric,
+}
+
+/// The variances of the gap and the two parts of a decomposition, and the
+/// covariance of the parts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PartVariances {
+    /// The variance of the gap.
+    pub gap: f64,
+    /// The variance of the composition part.
+    pub composition: f64,
+    /// The variance of the rate part.
+    pub rate: f64,
+    /// The covariance of the composition part and the rate part.
+    pub covariance: f64,
+}
+
+/// The sum of `coefficient * variance` over the strata, skipping a zero
+/// coefficient, or `None` when a term used is not finite.
+fn weighted_variances(coefficients: &[f64], variances: &[f64]) -> Option<f64> {
+    sum_products(coefficients, variances)
+}
+
+/// The variances of the gap and of the parts of a decomposition with fixed
+/// shares and independent rates whose variances are `variances` (A) and
+/// `reference_variances` (B). The parts are linear in the rates, so with
+/// `v_i` and `u_i` the variances of `r_i` and `q_i`,
+///
+/// ```text
+/// gap                       sum a^2 v + sum b^2 u
+/// Reference   composition   sum (a - b)^2 u
+///             rate          sum a^2 (v + u)
+///             covariance    -sum (a - b) a u
+/// Symmetric   composition   sum ((a - b) / 2)^2 (v + u)
+///             rate          sum ((a + b) / 2)^2 (v + u)
+///             covariance    sum ((a - b) / 2) ((a + b) / 2) (v - u)
+/// ```
+///
+/// A term with a coefficient of exactly 0 is left out, as in [`kitagawa`],
+/// and the sums are correctly rounded. `None` when the slices differ in
+/// length or are empty, a variance is negative, or a term used is not finite.
+#[must_use]
+#[expect(
+    clippy::manual_midpoint,
+    reason = "the average is (x + y) / 2, as in kitagawa_symmetric"
+)]
+pub fn kitagawa_variance(
+    shares: &[f64],
+    variances: &[f64],
+    reference_shares: &[f64],
+    reference_variances: &[f64],
+    split: Split,
+) -> Option<PartVariances> {
+    if !same_length([shares, variances, reference_shares, reference_variances]) {
+        return None;
+    }
+    if variances
+        .iter()
+        .chain(reference_variances)
+        .any(|&v| v < 0.0)
+    {
+        return None;
+    }
+    let map = |f: &dyn Fn(f64, f64) -> f64| -> Vec<f64> {
+        shares
+            .iter()
+            .zip(reference_shares)
+            .map(|(&a, &b)| f(a, b))
+            .collect()
+    };
+    let both: Vec<f64> = variances
+        .iter()
+        .zip(reference_variances)
+        .map(|(v, u)| v + u)
+        .collect();
+    let gap = weighted_variances(&map(&|a, _| a * a), variances)?
+        + weighted_variances(&map(&|_, b| b * b), reference_variances)?;
+    let (composition, rate, covariance) = match split {
+        Split::Reference => (
+            weighted_variances(&map(&|a, b| (a - b) * (a - b)), reference_variances)?,
+            weighted_variances(&map(&|a, _| a * a), &both)?,
+            -weighted_variances(&map(&|a, b| (a - b) * a), reference_variances)?,
+        ),
+        Split::Symmetric => {
+            let difference: Vec<f64> = variances
+                .iter()
+                .zip(reference_variances)
+                .map(|(v, u)| v - u)
+                .collect();
+            let half_gap = |a: f64, b: f64| (a - b) / 2.0;
+            let half_sum = |a: f64, b: f64| (a + b) / 2.0;
+            (
+                weighted_variances(&map(&|a, b| half_gap(a, b) * half_gap(a, b)), &both)?,
+                weighted_variances(&map(&|a, b| half_sum(a, b) * half_sum(a, b)), &both)?,
+                weighted_variances(&map(&|a, b| half_gap(a, b) * half_sum(a, b)), &difference)?,
+            )
+        }
+    };
+    Some(PartVariances {
+        gap,
+        composition,
+        rate,
+        covariance,
+    })
+}
+
+/// One part of a decomposition with its standard error and normal interval.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Part {
+    /// The estimate.
+    pub estimate: f64,
+    /// Its standard error.
+    pub se: f64,
+    /// The lower limit, `estimate - z se`.
+    pub lower: f64,
+    /// The upper limit, `estimate + z se`.
+    pub upper: f64,
+}
+
+/// The decomposition of a gap between two sets of Poisson rates with
+/// standard errors. See [`kitagawa_poisson`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PoissonDecomposition {
+    /// The crude rate of A minus that of B.
+    pub gap: Part,
+    /// The part from the difference in shares of person-time.
+    pub composition: Part,
+    /// The part from the difference in rates.
+    pub rate: Part,
+    /// The covariance of the composition part and the rate part.
+    pub covariance: f64,
+}
+
+/// The Kitagawa decomposition of the gap in crude rates between A and the
+/// reference B from events and person-time by stratum, with standard errors
+/// and normal intervals at the coverage `level`.
+///
+/// The shares are each population's shares of its person-time, from
+/// [`shares`], and the rates `scale d / y`, so the gap is the difference of
+/// the crude rates times `scale`. The estimates are those of [`kitagawa`] or
+/// [`kitagawa_symmetric`], bit for bit. The person-time is taken as fixed and
+/// the counts as Poisson, so a rate has the variance `scale^2 d / y^2` and the
+/// variances are those of [`kitagawa_variance`]; they are exact for the
+/// linear parts and estimated from the counts, so a stratum without events
+/// adds nothing to them.
+///
+/// `None` when the slices differ in length or are empty, a count or a
+/// person-time is negative or not finite, a population has no person-time, a
+/// stratum has events without person-time, `level` is outside `(0, 1)`,
+/// `scale` is not positive and finite, or a rate that is used is undefined: a
+/// stratum without person-time in one population and with it in the other
+/// has no rate where one is needed.
+#[must_use]
+pub fn kitagawa_poisson(
+    group: crate::rates::Strata<'_>,
+    reference: crate::rates::Strata<'_>,
+    split: Split,
+    level: f64,
+    scale: f64,
+) -> Option<PoissonDecomposition> {
+    let n = group.events.len();
+    if n == 0
+        || [group.time, reference.events, reference.time]
+            .iter()
+            .any(|s| s.len() != n)
+    {
+        return None;
+    }
+    if !(level > 0.0 && level < 1.0 && scale > 0.0 && scale.is_finite()) {
+        return None;
+    }
+    let valid = |events: &[f64], time: &[f64]| {
+        events.iter().zip(time).all(|(&d, &y)| {
+            d.is_finite() && d >= 0.0 && y.is_finite() && y >= 0.0 && !(y == 0.0 && d > 0.0)
+        })
+    };
+    if !(valid(group.events, group.time) && valid(reference.events, reference.time)) {
+        return None;
+    }
+    let share_a = shares(group.time)?;
+    let share_b = shares(reference.time)?;
+    let rates = |events: &[f64], time: &[f64]| -> (Vec<f64>, Vec<f64>) {
+        events
+            .iter()
+            .zip(time)
+            .map(|(&d, &y)| (scale * d / y, scale * scale * d / (y * y)))
+            .unzip()
+    };
+    let (rate_a, var_a) = rates(group.events, group.time);
+    let (rate_b, var_b) = rates(reference.events, reference.time);
+    let d = match split {
+        Split::Reference => kitagawa(&share_a, &rate_a, &share_b, &rate_b)?,
+        Split::Symmetric => kitagawa_symmetric(&share_a, &rate_a, &share_b, &rate_b)?,
+    };
+    let v = kitagawa_variance(&share_a, &var_a, &share_b, &var_b, split)?;
+    let z = crate::normal::two_sided_z(level);
+    let part = |estimate: f64, variance: f64| {
+        let se = variance.sqrt();
+        Part {
+            estimate,
+            se,
+            lower: estimate - z * se,
+            upper: estimate + z * se,
+        }
+    };
+    Some(PoissonDecomposition {
+        gap: part(d.gap, v.gap),
+        composition: part(d.composition, v.composition),
+        rate: part(d.rate, v.rate),
+        covariance: v.covariance,
     })
 }
 

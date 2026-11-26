@@ -27,18 +27,23 @@
 //!
 //! # Summation
 //!
-//! The counts are added as fixed-point integers by
-//! [`crate::weighted::fixed_point_sum`]'s rule: each term is rounded to
-//! `places` decimals, to the nearest with ties to even, and the integers are
-//! added, so the counts do not depend on the order of the persons. This
-//! is the arithmetic of the weight bootstrap of the PHD kernels, where the
-//! counts are recomputed in every replicate.
+//! Each count is the correctly rounded sum of its weights
+//! ([`crate::sum::exact`]), so it does not depend on the order of the
+//! persons, and a count of integer weights is exact.
 //!
 //! # Edge cases
 //!
 //! `None` when the slices differ in length, a stratum is `n_strata` or more,
-//! `places` is above 22, or a weight is NaN or infinite or too large for the
-//! fixed-point sum.
+//! or a weight is NaN or infinite. A count beyond the range of `f64` is
+//! infinite, and a comparator of that stratum then has weight 0 or NaN.
+//!
+//! # Agreement with other software
+//!
+//! With unit weights, the weights of the comparators are those of
+//! `MatchIt::matchit(method = "exact", estimand = "ATT")` up to its rescaling
+//! of the control weights to sum to the number of matched controls; the tests
+//! check them against `MatchIt` and the weighted counts against `tapply` in
+//! R.
 //!
 //! # References
 //!
@@ -47,7 +52,7 @@
 //! 2. Rothman KJ, Greenland S, Lash TL. Modern Epidemiology. 3rd ed.
 //!    Philadelphia: Lippincott Williams and Wilkins; 2008. Chapter 3.
 
-use crate::weighted::{fixed_point, scale_for, total_to_f64};
+use crate::sum::exact;
 
 /// The weighted counts of the comparators and the exposed in each stratum, as
 /// `[comparators, exposed]`.
@@ -59,21 +64,23 @@ pub fn stratum_counts(
     exposed: &[bool],
     weights: &[f64],
     n_strata: usize,
-    places: u32,
 ) -> Option<Vec<[f64; 2]>> {
-    let scale = scale_for(places)?;
     if stratum.len() != exposed.len() || stratum.len() != weights.len() {
         return None;
     }
-    let mut totals = vec![[0i128; 2]; n_strata];
+    let mut terms: Vec<[Vec<f64>; 2]> = vec![[Vec::new(), Vec::new()]; n_strata];
     for ((&s, &is_exposed), &g) in stratum.iter().zip(exposed).zip(weights) {
-        let cell = &mut totals.get_mut(s as usize)?[usize::from(is_exposed)];
-        *cell = cell.checked_add(fixed_point(g, scale)?)?;
+        if !g.is_finite() {
+            return None;
+        }
+        terms.get_mut(s as usize)?[usize::from(is_exposed)].push(g);
     }
-    totals
-        .into_iter()
-        .map(|[c, e]| Some([total_to_f64(c, scale)?, total_to_f64(e, scale)?]))
-        .collect()
+    Some(
+        terms
+            .into_iter()
+            .map(|[c, e]| [exact(c), exact(e)])
+            .collect(),
+    )
 }
 
 /// The weight of each person after standardisation to the exposed mix:
@@ -87,9 +94,8 @@ pub fn standardisation_weights(
     exposed: &[bool],
     weights: &[f64],
     n_strata: usize,
-    places: u32,
 ) -> Option<Vec<f64>> {
-    let counts = stratum_counts(stratum, exposed, weights, n_strata, places)?;
+    let counts = stratum_counts(stratum, exposed, weights, n_strata)?;
     Some(
         stratum
             .iter()
@@ -123,9 +129,9 @@ mod tests {
     #[test]
     fn counts_and_weights_follow_the_formula() {
         let ones = [1.0; 11];
-        let counts = stratum_counts(&STRATUM, &EXPOSED, &ones, 3, 15).unwrap();
+        let counts = stratum_counts(&STRATUM, &EXPOSED, &ones, 3).unwrap();
         assert_eq!(counts, [[4.0, 2.0], [1.0, 3.0], [0.0, 1.0]]);
-        let weights = standardisation_weights(&STRATUM, &EXPOSED, &ones, 3, 15).unwrap();
+        let weights = standardisation_weights(&STRATUM, &EXPOSED, &ones, 3).unwrap();
         let expected: [f64; 11] = [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 3.0, 1.0];
         assert_eq!(
             weights.iter().map(|w| w.to_bits()).collect::<Vec<_>>(),
@@ -148,26 +154,22 @@ mod tests {
     #[test]
     fn weights_multiply_before_the_division() {
         let g = [0.5, 0.25, 3.0, 0.125, 1.5, 2.0, 1.0, 1.0, 1.0, 0.75, 1.0];
-        let counts = stratum_counts(&STRATUM, &EXPOSED, &g, 3, 15).unwrap();
+        let counts = stratum_counts(&STRATUM, &EXPOSED, &g, 3).unwrap();
         assert_eq!(
             counts[0].map(f64::to_bits),
             [6.625_f64, 0.75].map(f64::to_bits)
         );
-        let weights = standardisation_weights(&STRATUM, &EXPOSED, &g, 3, 15).unwrap();
+        let weights = standardisation_weights(&STRATUM, &EXPOSED, &g, 3).unwrap();
         assert_eq!(weights[2].to_bits(), (3.0 * 0.75 / 6.625_f64).to_bits());
     }
 
     #[test]
     fn refusals_are_none() {
         let ones = [1.0; 11];
-        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones[..10], 3, 15), None);
-        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones, 2, 15), None);
-        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones, 3, 23), None);
+        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones[..10], 3), None);
+        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones, 2), None);
         let mut bad = ones;
         bad[3] = f64::NAN;
-        assert_eq!(
-            standardisation_weights(&STRATUM, &EXPOSED, &bad, 3, 15),
-            None
-        );
+        assert_eq!(standardisation_weights(&STRATUM, &EXPOSED, &bad, 3), None);
     }
 }
