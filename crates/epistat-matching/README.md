@@ -12,7 +12,9 @@ case, by exposure density, or across sequential trials. The output has the
 pairs or subclasses, matching weights for the ATT, ATC or ATE, a typed reason
 for every excluded candidate, balance before and after matching, effect
 estimates with matched-set bootstrap and Abadie-Imbens variances, and
-Rosenbaum bounds and E-values.
+Rosenbaum bounds and E-values: for continuous, binary and censored outcomes in
+matched pairs and sets, with sensitivity values, amplification and the
+interval of the effect under hidden bias.
 
 Seeds come from the caller, and results do not depend on the number of
 threads. Golden hashes pin the matched sets.
