@@ -526,7 +526,7 @@ pub(super) fn fit_cbps(
         Ok(problem.j_value(&g, &w))
     };
     let mut failure = None;
-    let scale = epistat_optim::brent::minimise(
+    let scale = epistat_optim::brent::minimize(
         |a| match objective(a) {
             Ok(value) => value,
             Err(error) => {

@@ -226,6 +226,7 @@ impl Default for Bfgs {
 }
 
 /// The best point found.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Minimum {
     /// The point.
@@ -236,6 +237,9 @@ pub struct Minimum {
     pub gradient: Vec<f64>,
     /// The number of iterations used.
     pub iterations: usize,
+    /// The number of evaluations of the cost and gradient, the line searches'
+    /// included.
+    pub evaluations: usize,
     /// Whether a tolerance was met before the iteration limit.
     pub converged: bool,
 }
@@ -281,6 +285,25 @@ impl Bfgs {
         mut f: impl FnMut(&[f64]) -> (f64, Vec<f64>),
         inverse_hessian: Option<Vec<f64>>,
     ) -> Result<Minimum, BfgsError> {
+        let mut evaluations = 0;
+        let mut minimum = self.search_from(
+            x0,
+            |x| {
+                evaluations += 1;
+                f(x)
+            },
+            inverse_hessian,
+        )?;
+        minimum.evaluations = evaluations;
+        Ok(minimum)
+    }
+
+    fn search_from(
+        &self,
+        x0: &[f64],
+        mut f: impl FnMut(&[f64]) -> (f64, Vec<f64>),
+        inverse_hessian: Option<Vec<f64>>,
+    ) -> Result<Minimum, BfgsError> {
         let n = x0.len();
         let mut h = inverse_hessian.unwrap_or_else(|| identity(n));
         if n == 0 || h.len() != n * n {
@@ -299,6 +322,7 @@ impl Bfgs {
             value: cost,
             gradient: grad.clone(),
             iterations: 0,
+            evaluations: 0,
             converged: false,
         };
         for iteration in 1..=self.max_iterations {
@@ -347,6 +371,7 @@ impl Bfgs {
                 value: cost,
                 gradient: grad.clone(),
                 iterations: iteration,
+                evaluations: 0,
                 converged: false,
             };
             if (previous - cost).abs() < self.cost_tolerance {
@@ -711,6 +736,26 @@ mod tests {
             "{:?}",
             minimum.x
         );
+    }
+
+    #[test]
+    fn evaluations_count_every_call() {
+        let mut calls = 0;
+        let minimum = Bfgs {
+            max_iterations: 200,
+            ..Bfgs::default()
+        }
+        .minimize(
+            &[-1.2, 1.0],
+            |p| {
+                calls += 1;
+                rosenbrock(p)
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(minimum.evaluations, calls);
+        assert!(minimum.evaluations > minimum.iterations);
     }
 
     #[test]

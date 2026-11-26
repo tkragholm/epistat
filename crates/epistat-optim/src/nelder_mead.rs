@@ -103,6 +103,7 @@ impl Default for NelderMead {
 }
 
 /// Result of a minimisation.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Minimum {
     /// Best point found.
@@ -111,6 +112,9 @@ pub struct Minimum {
     pub value: f64,
     /// Number of iterations performed.
     pub iterations: usize,
+    /// Number of evaluations of the objective, the starting vertices
+    /// included.
+    pub evaluations: usize,
     /// True if the standard deviation criterion was met, false if the
     /// iteration cap stopped the search.
     pub converged: bool,
@@ -216,6 +220,20 @@ impl NelderMead {
         simplex: Vec<Vec<f64>>,
         mut f: impl FnMut(&[f64]) -> f64,
     ) -> Result<Minimum, NelderMeadError> {
+        let mut evaluations = 0;
+        let mut minimum = self.search_from(simplex, |x| {
+            evaluations += 1;
+            f(x)
+        })?;
+        minimum.evaluations = evaluations;
+        Ok(minimum)
+    }
+
+    fn search_from(
+        &self,
+        simplex: Vec<Vec<f64>>,
+        mut f: impl FnMut(&[f64]) -> f64,
+    ) -> Result<Minimum, NelderMeadError> {
         let dimension = simplex.first().map_or(0, Vec::len);
         if dimension == 0 {
             return Err(NelderMeadError::EmptySimplex);
@@ -265,6 +283,7 @@ impl NelderMead {
             x: best.x,
             value: best.cost,
             iterations,
+            evaluations: 0,
             converged,
         })
     }
@@ -409,9 +428,17 @@ mod tests {
             ..NelderMead::default()
         };
         let simplex = vec![vec![-1.2, 1.0], vec![-1.0, 1.0], vec![-1.2, 1.2]];
-        let m = nm.minimize(simplex, rosenbrock).unwrap();
+        let mut calls = 0;
+        let m = nm
+            .minimize(simplex, |p| {
+                calls += 1;
+                rosenbrock(p)
+            })
+            .unwrap();
         assert!(!m.converged);
         assert_eq!(m.iterations, 3);
+        assert_eq!(m.evaluations, calls);
+        assert!(m.evaluations >= 3 + 3);
     }
 
     #[test]
