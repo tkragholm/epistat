@@ -99,12 +99,14 @@ use crate::error::{Error, Result};
 
 mod bootstrap;
 mod competing;
+mod limits;
 mod protocol;
 
 pub use bootstrap::{PersonCounts, bootstrap_trials};
 pub use competing::{
     CompetingIncidence, MsmCompeting, cumulative_incidence_competing, fit_msm_competing,
 };
+pub use limits::{WeightLimits, limit_weights};
 pub use protocol::{Panel, ProtocolRows, protocol_rows};
 
 /// The rows of a person-period data set, ordered by person and then period.
