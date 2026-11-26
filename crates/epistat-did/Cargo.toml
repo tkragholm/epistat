@@ -86,6 +86,10 @@ name = "parity_dcdh"
 path = "tests/parity_dcdh.rs"
 
 [[test]]
+name = "parity_dcdh_options"
+path = "tests/parity_dcdh_options.rs"
+
+[[test]]
 name = "parity_acrt"
 path = "tests/parity_acrt.rs"
 

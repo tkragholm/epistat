@@ -1,5 +1,7 @@
 //! Properties of `estimate_dcdh` that hold without a reference: exact
-//! effects on outcomes without noise, independence of the thread count,
+//! effects on outcomes without noise, also with group-specific linear trends
+//! under `trends_lin`, the same switchers at every horizon under
+//! `same_switchers`, `by` with one level, independence of the thread count,
 //! clusters of one group, and the errors.
 //!
 //! On noiseless outcomes every estimate is a ratio of sums of exact
@@ -12,7 +14,9 @@
     reason = "test data: small whole numbers"
 )]
 
-use epistat_did::{DcdhConfig, DcdhError, DcdhObservation, DcdhSwitchers, estimate_dcdh};
+use epistat_did::{
+    DcdhConfig, DcdhError, DcdhObservation, DcdhSwitchers, estimate_dcdh, estimate_dcdh_by,
+};
 
 const EPS: f64 = f64::EPSILON;
 
@@ -86,6 +90,95 @@ fn noiseless_absorbing_effects_are_exact() {
     for p in &r.placebos {
         assert!(p.estimate.expect("placebo").abs() <= tol, "placebo");
     }
+}
+
+/// With a linear trend of its own for every group, the effects of
+/// `trends_lin` are still exact: effect `l` sums `l` exact differences, so
+/// its tolerance is `l TOL`, relative to the largest outcome change.
+#[test]
+fn trends_lin_removes_group_trends() {
+    let mut rows = absorbing();
+    for r in &mut rows {
+        let slope = 0.4 * (r.group % 4) as f64 + 0.1 * ((r.group * 7) % 3) as f64;
+        *r.outcome.as_mut().expect("outcome") += slope * r.time as f64;
+    }
+    let tol = 16.0 * rows.len() as f64 * EPS * 8.0;
+    let r = estimate_dcdh(
+        &rows,
+        &DcdhConfig {
+            effects: 4,
+            placebo: 2,
+            trends_lin: true,
+            ..DcdhConfig::default()
+        },
+    )
+    .expect("estimate");
+    assert_eq!(r.effects.len(), 4);
+    for (l, e) in r.effects.iter().enumerate() {
+        let want = 1.0 + 0.5 * l as f64;
+        let got = e.estimate.expect("effect");
+        assert!(
+            (got - want).abs() <= (l + 1) as f64 * tol * want,
+            "effect {}: {got}",
+            l + 1
+        );
+    }
+    for p in &r.placebos {
+        assert!(p.estimate.expect("placebo").abs() <= 2.0 * tol, "placebo");
+    }
+    assert!(r.average_total_effect.estimate.is_none());
+    // Without the option the trends, which differ by cohort, bias the
+    // effects.
+    let plain = estimate_dcdh(
+        &rows,
+        &DcdhConfig {
+            effects: 4,
+            ..DcdhConfig::default()
+        },
+    )
+    .expect("estimate");
+    assert!((plain.effects[3].estimate.expect("effect") - 2.5).abs() > 0.01);
+}
+
+#[test]
+fn same_switchers_are_the_same_at_every_horizon() {
+    let rows = moving(2, 1.0, 11);
+    let r = estimate_dcdh(
+        &rows,
+        &DcdhConfig {
+            effects: 3,
+            placebo: 2,
+            same_switchers: true,
+            same_switchers_pl: true,
+            ..DcdhConfig::default()
+        },
+    )
+    .expect("estimate");
+    // The placebos keep those of the effects' switchers that also allow
+    // every placebo.
+    let (n, n_pl) = (r.effects[0].n_switchers, r.placebos[0].n_switchers);
+    assert!(n > 0.0 && n_pl > 0.0 && n_pl <= n);
+    for e in &r.effects {
+        assert_eq!(e.n_switchers, n, "switchers at {}", e.relative_period);
+    }
+    for e in &r.placebos {
+        assert_eq!(e.n_switchers, n_pl, "switchers at {}", e.relative_period);
+    }
+}
+
+#[test]
+fn by_with_one_level_is_the_whole_panel() {
+    let rows = moving(3, 0.7, 5);
+    let config = DcdhConfig {
+        effects: 2,
+        placebo: 1,
+        ..DcdhConfig::default()
+    };
+    let whole = estimate_dcdh(&rows, &config).expect("estimate");
+    let by = estimate_dcdh_by(&rows, &config, &vec![4; rows.len()]).expect("by");
+    assert_eq!(by.len(), 1);
+    assert_eq!(by[0].level, 4);
+    assert_eq!(by[0].result.as_ref().expect("estimate"), &whole);
 }
 
 /// A treatment that moves among `levels` after a random first change, and

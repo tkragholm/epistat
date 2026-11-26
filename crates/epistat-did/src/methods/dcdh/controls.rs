@@ -21,6 +21,18 @@ fn level_value(panel: &Panel, l: usize) -> f64 {
         .map_or(NA, |g| panel.d_sq[g])
 }
 
+/// Whether `x` takes two values in one cell among `rows`.
+fn varies(rows: impl Iterator<Item = usize>, cell: &dyn Fn(usize) -> usize, x: &[f64]) -> bool {
+    let mut first: std::collections::HashMap<usize, u64> = std::collections::HashMap::new();
+    for c in rows {
+        let v = (x[c] + 0.0).to_bits();
+        if *first.entry(cell(c)).or_insert(v) != v {
+            return true;
+        }
+    }
+    false
+}
+
 fn solve_spd(a: &[f64], b: &[f64], k: usize) -> Option<Vec<f64>> {
     let am = Mat::from_fn(k, k, |i, j| a[i * k + j]);
     let bm = Mat::from_fn(k, 1, |i, _| b[i]);
@@ -40,6 +52,7 @@ impl Controls {
     )]
     pub fn new(panel: &Panel) -> Result<Self, DcdhError> {
         let k = panel.controls.len();
+        let user_k = k - panel.generated.len();
         let nt = panel.nt;
         let gn = panel.n_grid_groups();
         let cells = gn * nt;
@@ -126,17 +139,42 @@ impl Controls {
                     }
                 }
             }
-            let th = solve_spd(&m, &v, k).ok_or(DcdhError::Controls {
+            // The period controls of `continuous` that are constant within
+            // every cell of the regression are zero once demeaned; they are
+            // left out, with coefficient 0.
+            let act: Vec<usize> = (0..k)
+                .filter(|&j| {
+                    j < user_k
+                        || varies(
+                            rows.iter().copied().filter(|&c| panel.n_gt[c] > 0.0),
+                            &cell_of,
+                            &diff_x[j],
+                        )
+                })
+                .collect();
+            let ka = act.len();
+            let m_act: Vec<f64> = (0..ka * ka)
+                .map(|i| m[act[i / ka] * k + act[i % ka]])
+                .collect();
+            let v_act: Vec<f64> = act.iter().map(|&j| v[j]).collect();
+            let collinear = || DcdhError::Controls {
                 baseline: value,
                 reason: "the controls are collinear among its not-yet switchers",
-            })?;
-            let mm = Mat::from_fn(k, k, |a, b| m[a * k + b]);
-            let inv = inverse(mm.as_ref(), &[Attempt::plain(Method::Cholesky)]).map_err(|_| {
-                DcdhError::Controls {
-                    baseline: value,
-                    reason: "the controls are collinear among its not-yet switchers",
+            };
+            let mut th = vec![0.0; k];
+            let mut inv = vec![0.0; k * k];
+            if ka > 0 {
+                let solved = solve_spd(&m_act, &v_act, ka).ok_or_else(collinear)?;
+                let mm = Mat::from_fn(ka, ka, |a, b| m_act[a * ka + b]);
+                let inverted = inverse(mm.as_ref(), &[Attempt::plain(Method::Cholesky)])
+                    .map_err(|_| collinear())?;
+                for a in 0..ka {
+                    th[act[a]] = solved[a];
+                    for b in 0..ka {
+                        inv[act[a] * k + act[b]] = inverted.x[(a, b)];
+                    }
                 }
-            })?;
+            }
             // R 2.4.0: the sum of N_gt over the level's control sample.
             let rmax = rows.iter().map(|&c| panel.f_g[c / nt]).max().unwrap_or(0);
             let mut rsum = 0.0;
@@ -150,7 +188,7 @@ impl Controls {
                 (0..k)
                     .map(|a| {
                         (0..k)
-                            .map(|b| inv.x[(a, b)] * rsum * g_count)
+                            .map(|b| inv[a * k + b] * rsum * g_count)
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>(),
@@ -197,10 +235,31 @@ impl Controls {
                     }
                 }
             }
-            let beta = solve_spd(&a, &b, k).ok_or(DcdhError::Controls {
-                baseline: value,
-                reason: "the controls are collinear in the regression with period effects",
-            })?;
+            let act_b: Vec<usize> = (0..k)
+                .filter(|&j| {
+                    j < user_k
+                        || varies(
+                            est.iter().copied().filter(|&c| panel.weight[c] > 0.0),
+                            &|c| c % nt,
+                            &diff_x[j],
+                        )
+                })
+                .collect();
+            let kb = act_b.len();
+            let a_act: Vec<f64> = (0..kb * kb)
+                .map(|i| a[act_b[i / kb] * k + act_b[i % kb]])
+                .collect();
+            let b_act: Vec<f64> = act_b.iter().map(|&j| b[j]).collect();
+            let mut beta = vec![0.0; k];
+            if kb > 0 {
+                let solved = solve_spd(&a_act, &b_act, kb).ok_or(DcdhError::Controls {
+                    baseline: value,
+                    reason: "the controls are collinear in the regression with period effects",
+                })?;
+                for (i, &j) in act_b.iter().enumerate() {
+                    beta[j] = solved[i];
+                }
+            }
             for c in 0..cells {
                 let tp = c % nt;
                 if in_reg(c) && fd_all[c] && wt[tp] > 0.0 {

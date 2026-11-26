@@ -34,6 +34,19 @@ package polars; the module documentation lists where the two differ and
 where this crate departs from both. The work is linear in the cells of the
 panel.
 
+The package's other options are there too: group-specific linear trends
+(`trends_lin`), a continuous baseline treatment through a polynomial in it
+(`continuous`), effects over the same switchers at every horizon
+(`same_switchers`, `same_switchers_pl`), standard errors that demean the
+switchers within their treatment paths (`less_conservative_se`), the weights
+of the normalised effects on the treatment's lags and the average number of
+periods over which a dose accumulates. Separate functions give the
+regressions of the effects on group-level covariates (`predict_het`, with HC2
+standard errors), the estimates by subgroup and by treatment path, the
+switchers' treatment paths and first-switch dates, and a bootstrap whose
+replicates are seeded one by one, so its result does not depend on the
+number of threads.
+
 The efficient ATT(g,t) on a panel without covariates uses the sampling
 weights, which must be constant within a unit, and indexes every cell's
 influence function by unit over the whole panel, so the cells of an

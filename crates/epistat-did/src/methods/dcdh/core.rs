@@ -7,7 +7,7 @@
 )]
 
 use super::controls::Controls;
-use super::panel::{NA, Panel};
+use super::panel::{NA, Panel, index_of, ordered};
 
 /// The terms of one effect or placebo in one direction.
 pub(super) struct Terms {
@@ -45,9 +45,25 @@ pub(super) struct DirectionTerms {
     pub delta_d_g: Vec<Vec<f64>>,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the R function's logical arguments"
+)]
 pub(super) struct Options {
     pub only_never_switchers: bool,
     pub normalized: bool,
+    /// `same_switchers`: only switchers for which this many effects can be
+    /// estimated.
+    pub same_switchers: Option<usize>,
+    /// `same_switchers_pl`: of those, only switchers for which this many
+    /// placebos can be estimated enter the placebos.
+    pub same_switchers_pl: Option<usize>,
+    /// `less_conservative_se`: switchers are demeaned within their
+    /// treatment paths.
+    pub less_conservative_se: bool,
+    /// `trends_lin`: the last effect and the last placebo are the sums of
+    /// those before them.
+    pub trends_lin: bool,
 }
 
 /// Sums of a value over the cells that pass a filter, by a key of the
@@ -94,6 +110,190 @@ fn cohort_sums(
         rows
     };
     Cohort { count, total, dof }
+}
+
+/// The switchers' sums of `less_conservative_se`: over the cells of the
+/// switchers of the effect, by cohort, with the number of those cells with
+/// a weight and a long difference (rows, also with clusters).
+fn path_sums(panel: &Panel, key: &[usize], n_keys: usize, member: &[bool], diff: &[f64]) -> Cohort {
+    let nt = panel.nt;
+    let mut count = vec![0.0; n_keys];
+    let mut total = vec![0.0; n_keys];
+    let mut dof = vec![0.0; n_keys];
+    for (c, &m) in member.iter().enumerate() {
+        if !m {
+            continue;
+        }
+        let k = key[c / nt];
+        count[k] += panel.n_gt[c];
+        total[k] += panel.n_gt[c] * diff[c];
+        if panel.n_gt[c] != 0.0 && !diff[c].is_nan() {
+            dof[k] += 1.0;
+        }
+    }
+    Cohort { count, total, dof }
+}
+
+/// The switchers' cohorts of `less_conservative_se` for one effect.
+pub(super) struct Paths {
+    /// Which cohort each grid group is demeaned within: 2 for its path to
+    /// the effect, 1 for its path to effect 1, 0 for its baseline and
+    /// `F_g`.
+    level: Vec<u8>,
+    /// The cohort of each grid group at each of the three levels, within
+    /// the stratum, and the numbers of cohorts.
+    keys: [Vec<usize>; 3],
+    n_keys: [usize; 3],
+}
+
+/// The cohorts at one level of the paths, with whether another group shares
+/// each group's path.
+type Level = ((Vec<usize>, usize), Vec<bool>);
+
+/// The switchers' cohorts of `less_conservative_se` for effects
+/// `1..=effects`. A group's path to effect `l` is its baseline, `F_g` and
+/// its treatments at `F_g, ..., F_g - 1 + l`, a treatment outside the panel
+/// or missing taken from the period before. A switcher of effect `l` is
+/// demeaned among the switchers with the same path to `l` when another
+/// group shares that path, else among those with the same path to effect 1
+/// when another group shares that, else among those with its baseline and
+/// `F_g`; always within the stratum.
+fn path_cohorts(panel: &Panel, effects: usize) -> Vec<Paths> {
+    let nt = panel.nt;
+    let gn = panel.n_grid_groups();
+    let shared = |ids: &[usize], n: usize| -> Vec<bool> {
+        let mut count = vec![0_usize; n];
+        for &p in ids {
+            count[p] += 1;
+        }
+        ids.iter().map(|&p| count[p] > 1).collect()
+    };
+    let within = |ids: &[usize]| {
+        index_of(
+            &(0..gn)
+                .map(|g| (ids[g], panel.base_id[g]))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let (path0, _) = index_of(
+        &(0..gn)
+            .map(|g| (ordered(panel.base_value[g]), panel.f_g[g]))
+            .collect::<Vec<_>>(),
+    );
+    let key0 = within(&path0);
+    let mut prev = path0;
+    let mut prev_d = panel.base_value.clone();
+    let mut first: Option<Level> = None;
+    let mut out = Vec::with_capacity(effects);
+    for i in 1..=effects {
+        let ii = i64::try_from(i).expect("effect index");
+        let d_i: Vec<f64> = (0..gn)
+            .map(|g| {
+                let tp = panel.f_g[g] - 1 + ii - panel.t_min;
+                usize::try_from(tp)
+                    .ok()
+                    .filter(|&tp| tp < nt)
+                    .map(|tp| panel.d_cohort[g * nt + tp])
+                    .filter(|v| !v.is_nan())
+                    .unwrap_or(prev_d[g])
+            })
+            .collect();
+        let (path, n_path) = index_of(
+            &(0..gn)
+                .map(|g| (prev[g], ordered(d_i[g])))
+                .collect::<Vec<_>>(),
+        );
+        let full = shared(&path, n_path);
+        let key = within(&path);
+        if first.is_none() {
+            first = Some((key.clone(), full.clone()));
+        }
+        let (key1, full1) = first.as_ref().expect("set at the first effect");
+        let level: Vec<u8> = (0..gn)
+            .map(|g| if full[g] { 2 } else { u8::from(full1[g]) })
+            .collect();
+        out.push(Paths {
+            level,
+            keys: [key0.0.clone(), key1.0.clone(), key.0],
+            n_keys: [key0.1, key1.1, key.1],
+        });
+        prev = path;
+        prev_d = d_i;
+    }
+    out
+}
+
+/// The long difference `Y_t - Y_{t-q}`, or `Y_t - Y_{t+q}` when `lead`.
+fn long_diff(panel: &Panel, q: usize, lead: bool) -> Vec<f64> {
+    let nt = panel.nt;
+    (0..panel.n_grid_groups() * nt)
+        .map(|c| {
+            let tp = c % nt;
+            if lead {
+                if tp + q < nt {
+                    panel.y[c] - panel.y[c + q]
+                } else {
+                    NA
+                }
+            } else if tp >= q {
+                panel.y[c] - panel.y[c - q]
+            } else {
+                NA
+            }
+        })
+        .collect()
+}
+
+/// For `same_switchers`: how many of the horizons `1..=horizons` after
+/// (`lead` false) or before (`lead` true) `F_g - 1` each group has a long
+/// difference and a control at.
+fn horizons_with_control(
+    panel: &Panel,
+    horizons: usize,
+    lead: bool,
+    only_never: bool,
+) -> Vec<usize> {
+    let nt = panel.nt;
+    let never_f = panel.t_max + 1;
+    let mut count = vec![0_usize; panel.n_grid_groups()];
+    for q in 1..=horizons {
+        let diff = long_diff(panel, q, lead);
+        let never: Vec<f64> = (0..diff.len())
+            .map(|c| {
+                let f = panel.f_g[c / nt];
+                let t = panel.time_of(c % nt);
+                if diff[c].is_nan() {
+                    NA
+                } else if only_never && f > t && f < never_f {
+                    0.0
+                } else if f > t {
+                    1.0
+                } else {
+                    NA
+                }
+            })
+            .collect();
+        let n_ctrl = controls_sum(panel, &never);
+        let qq = i64::try_from(q).expect("horizon");
+        for (g, slot) in count.iter_mut().enumerate() {
+            let t = if lead {
+                panel.f_g[g] - 1 - qq
+            } else {
+                panel.f_g[g] - 1 + qq
+            };
+            let Ok(tp) = usize::try_from(t - panel.t_min) else {
+                continue;
+            };
+            if tp >= nt {
+                continue;
+            }
+            let c = g * nt + tp;
+            if n_ctrl[panel.base_id[g] * nt + tp] > 0.0 && !diff[c].is_nan() {
+                *slot += 1;
+            }
+        }
+    }
+    count
 }
 
 /// `E_hat_gt` and `DOF_gt` of one cell, the demeaning and the small-sample
@@ -156,6 +356,8 @@ struct Sample<'a> {
     n_ctrl: &'a [f64],
     n: f64,
     part2: &'a [f64],
+    /// With `less_conservative_se`, the switchers' cohorts.
+    paths: Option<&'a Paths>,
 }
 
 /// `U`, `U^var` and the counts of one effect or placebo.
@@ -186,6 +388,23 @@ fn u_terms(panel: &Panel, s: &Sample<'_>) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         &switching,
         s.diff,
     );
+    let on_path: Vec<bool> = s.dist.iter().map(|&v| v == 1.0).collect();
+    let path_sums: Option<Vec<Cohort>> = s.paths.map(|p| {
+        (0..3)
+            .map(|level| path_sums(panel, &p.keys[level], p.n_keys[level], &on_path, s.diff))
+            .collect()
+    });
+    let switcher = |g: usize, c: usize| -> Option<(f64, f64)> {
+        if let (Some(p), Some(sums)) = (s.paths, &path_sums) {
+            let level = usize::from(p.level[g]);
+            let k = p.keys[level][g];
+            let co = &sums[level];
+            on_path[c].then(|| (co.total[k] / co.count[k], co.dof[k]))
+        } else {
+            let k = panel.cohort_id[g];
+            switching[c].then(|| (sw.total[k] / sw.count[k], sw.dof[k]))
+        }
+    };
     let nss = cohort_sums(panel, &cell_of, n_cells, &union, s.diff);
     let pick = |co: &Cohort, k: usize, member: bool| {
         member.then(|| (co.total[k] / co.count[k], co.dof[k]))
@@ -223,7 +442,7 @@ fn u_terms(panel: &Panel, s: &Sample<'_>) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
                 f,
                 i,
                 pick(&ns, cell, not_yet[c]),
-                pick(&sw, panel.cohort_id[g], switching[c]),
+                switcher(g, c),
                 pick(&nss, cell, union[c]),
             );
             let vterm = coef * dof * (s.diff[c] - e);
@@ -326,6 +545,25 @@ pub(super) fn direction(
     let mut out_effects = Vec::with_capacity(effects);
     let mut nevers: Vec<Vec<f64>> = Vec::with_capacity(effects);
 
+    // `same_switchers`: the switchers that allow every effect, and of those
+    // with `same_switchers_pl` the ones that allow every placebo.
+    let still: Option<Vec<bool>> = options.same_switchers.map(|e| {
+        let ee = i64::try_from(e).expect("effects");
+        let count = horizons_with_control(panel, e, false, options.only_never_switchers);
+        (0..gn)
+            .map(|g| panel.f_g[g] - 1 + ee <= panel.t_g[g] && count[g] == e)
+            .collect()
+    });
+    let fillin_pl: Option<Vec<f64>> = options.same_switchers_pl.map(|p| {
+        horizons_with_control(panel, p, true, options.only_never_switchers)
+            .iter()
+            .map(|&k| f64::from(u8::from(k == p)))
+            .collect()
+    });
+    let paths = options
+        .less_conservative_se
+        .then(|| path_cohorts(panel, effects));
+
     for i in 1..=effects {
         let ii = i64::try_from(i).expect("effect index");
         let mut diff = vec![NA; cells];
@@ -357,7 +595,8 @@ pub(super) fn direction(
                 }
                 let t = panel.time_of(tp);
                 let has_ctrl = n_ctrl[panel.base_id[g] * nt + tp] > 0.0;
-                dist[c] = if t == f - 1 + ii && ii <= panel.l_g[g] {
+                let kept = still.as_ref().is_none_or(|s| s[g]);
+                dist[c] = if kept && t == f - 1 + ii && ii <= panel.l_g[g] {
                     if panel.s_g[g].is_nan() {
                         if has_ctrl { NA } else { 0.0 }
                     } else {
@@ -390,6 +629,7 @@ pub(super) fn direction(
                     n_ctrl: &n_ctrl,
                     n,
                     part2: &part2,
+                    paths: paths.as_ref().map(|p| &p[i - 1]),
                 },
             )
         };
@@ -433,7 +673,8 @@ pub(super) fn direction(
                     NA
                 } else {
                     let ok = !diff[c].is_nan() && n_ctrl[panel.base_id[c / nt] * nt + c % nt] > 0.0;
-                    dist_i[c] * f64::from(u8::from(ok))
+                    let fill = fillin_pl.as_ref().map_or(1.0, |f| f[c / nt]);
+                    dist_i[c] * f64::from(u8::from(ok)) * fill
                 }
             })
             .collect();
@@ -457,6 +698,7 @@ pub(super) fn direction(
                     n_ctrl: &n_ctrl,
                     n,
                     part2: &part2,
+                    paths: None,
                 },
             )
         };
@@ -474,6 +716,23 @@ pub(super) fn direction(
             delta_norm: delta,
             dist,
         });
+    }
+
+    // `trends_lin`: effect and placebo `l` on the outcome are the sums of
+    // effects and placebos `1..=l` on its first difference, unless one of
+    // them has no switcher. There is then no average total effect.
+    if options.trends_lin {
+        sum_last(&mut out_effects);
+        sum_last(&mut out_placebos);
+        return DirectionTerms {
+            effects: out_effects,
+            placebos: out_placebos,
+            sum_n: 0.0,
+            ate_u: Vec::new(),
+            ate_u_var: Vec::new(),
+            ate_den: NA,
+            delta_d_g: Vec::new(),
+        };
     }
 
     // The average total effect: the effects weighted by their numbers of
@@ -524,4 +783,24 @@ pub(super) fn direction(
         ate_den: den,
         delta_d_g,
     }
+}
+
+/// Replaces the terms of the last estimate by the sums, in order, of the
+/// terms of all of them, when none of them is without switchers.
+fn sum_last(terms: &mut [Terms]) {
+    if terms.is_empty() || terms.iter().any(|t| t.n == 0.0) {
+        return;
+    }
+    let gn = terms[0].u.len();
+    let mut u = vec![0.0; gn];
+    let mut u_var = vec![0.0; gn];
+    for t in terms.iter() {
+        for g in 0..gn {
+            u[g] += t.u[g];
+            u_var[g] += t.u_var[g];
+        }
+    }
+    let last = terms.last_mut().expect("not empty");
+    last.u = u;
+    last.u_var = u_var;
 }
