@@ -182,6 +182,45 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 }
             }
         }
+        // The risk difference of the treated (group 1) and the controls: its
+        // variance is V_11 + V_00 - 2 V_10, so its error is at most the sum of
+        // the tolerances of the three entries, and that of its square root
+        // that sum over the square root of the variance.
+        for t in 0..m_times {
+            let d = est.risk_difference(1, 0, t);
+            let tol: f64 = (0..2)
+                .map(|g| {
+                    let s = r.surv[t][g];
+                    s * (4.0 * omega * (1.0 + s.ln().abs()) + 8.0 * m_times as f64 * EPS)
+                })
+                .sum();
+            assert!(
+                (d.estimate - (r.surv[t][0] - r.surv[t][1])).abs() <= tol,
+                "{} difference ({t})",
+                r.name
+            );
+            for (mine, cov, plain) in [
+                (d.std_err, &r.covariance, &r.covariance_plain),
+                (d.std_err_known, &r.known, &r.known_plain),
+            ] {
+                let entry = |g: usize, h: usize| {
+                    let scale = (r.covariance[t][g][g] * r.covariance[t][h][h]).sqrt();
+                    rel * scale + 2.0 * (plain[t][g][h] - cov[t][g][h]).abs()
+                };
+                let var = cov[t][1][1] + cov[t][0][0] - 2.0 * cov[t][1][0];
+                if var <= 0.0 {
+                    continue;
+                }
+                let tol = (entry(1, 1) + entry(0, 0) + 2.0 * entry(1, 0)) / var.sqrt();
+                let mine = mine.unwrap();
+                assert!(
+                    (mine - var.sqrt()).abs() <= tol,
+                    "{} difference se ({t}): {mine} against {}",
+                    r.name,
+                    var.sqrt()
+                );
+            }
+        }
         println!(
             "{}: worst deviation in tolerances: curve {:.3e}, survfit se {:.3e}, adjusted covariance {:.3e}, known covariance {:.3e}",
             r.name, worst[0], worst[1], worst[2], worst[3]
