@@ -101,8 +101,8 @@
 //! With a [`Censoring`] model the observed risk is weighted by the inverse
 //! probability of remaining uncensored, as gfoRmula's "IP weighted risk": a
 //! logistic model of censoring `p_c` is fitted on every row, a row that is not
-//! censored has the weight `w_r = prod over the person's rows s <= r of 1 / (1
-//! - p_c(s))`, a censored row the weight 0, and `h_k` and `d_k` are the
+//! censored has the weight `w_r = prod over the person's rows s <= r of
+//! 1 / (1 - p_c(s))`, a censored row the weight 0, and `h_k` and `d_k` are the
 //! weighted proportions among the same rows. The censored rows leave the
 //! outcome and competing-event models, as rows without an observed outcome.
 //!

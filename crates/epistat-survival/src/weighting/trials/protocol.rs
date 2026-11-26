@@ -92,9 +92,7 @@ pub fn protocol_rows(panel: &Panel<'_>) -> Result<ProtocolRows> {
         let end = (start..n)
             .find(|&i| panel.id[i] != panel.id[start])
             .unwrap_or(n);
-        for i in start + 1..end {
-            previous[i] = panel.treatment[i - 1];
-        }
+        previous[start + 1..end].copy_from_slice(&panel.treatment[start..end - 1]);
         if let Some(first) = (start..end).find(|&i| panel.eligible[i]) {
             previous[first] = false;
             let last = (first..end).find(|&i| panel.outcome[i]).unwrap_or(end - 1);
@@ -155,7 +153,7 @@ mod tests {
     fn rows(treatment: &[u8], eligible: &[u8], outcome: &[u8]) -> ProtocolRows {
         let n = treatment.len();
         let id = vec![7; n];
-        let period: Vec<i64> = (0..n as i64).collect();
+        let period: Vec<i64> = (0..i64::try_from(n).expect("small")).collect();
         let t: Vec<bool> = treatment.iter().map(|&v| v == 1).collect();
         let e: Vec<bool> = eligible.iter().map(|&v| v == 1).collect();
         let o: Vec<bool> = outcome.iter().map(|&v| v == 1).collect();

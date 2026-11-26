@@ -483,18 +483,8 @@ fn the_simulated_courses_give_the_estimates() {
             assert!((mean - want).abs() <= 1800.0 * f64::EPSILON, "{s} {k}");
         }
     }
-    // Under "always treat" the treatment is 1 from period 1 on, the period-0
-    // value is the observed one.
-    let always = interventions()
-        .iter()
-        .position(|i| {
-            i.rules.len() == 1
-                && i.rules[0].variable == A
-                && matches!(i.rules[0].action, Action::Set(v) if v == 1.0)
-                && i.rules[0].periods.is_none()
-        })
-        .map(|i| &courses[i + 1]);
-    if let Some(c) = always {
-        assert!((0..c.person.len()).all(|r| c.values[A][r] == 1.0));
-    }
+    // Under "always treat", the second intervention, the treatment is 1 in
+    // every period, period 0 included.
+    let c = &courses[2];
+    assert!((0..c.person.len()).all(|r| c.values[A][r].to_bits() == 1.0_f64.to_bits()));
 }

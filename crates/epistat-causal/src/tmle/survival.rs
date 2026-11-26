@@ -484,8 +484,11 @@ pub struct IntervalDesign<'a> {
     pub columns: usize,
     /// Writes into `out` the design of person `i` in interval `k` (from 1)
     /// had the person been treated (`treated`) or not.
-    pub fill: &'a (dyn Fn(usize, usize, bool, &mut [f64]) + Sync),
+    pub fill: &'a IntervalFill<'a>,
 }
+
+/// The function of an [`IntervalDesign`]: person, interval, treated, output.
+pub type IntervalFill<'a> = dyn Fn(usize, usize, bool, &mut [f64]) + Sync + 'a;
 
 impl std::fmt::Debug for IntervalDesign<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -678,23 +681,20 @@ pub fn tmle_survival_glm(
     let hazard_coefficients = fit_logistic(x.as_ref(), &y, &wr, "event")?;
     drop(x);
     let cens_columns = t.saturating_sub(1).max(1);
-    let (censoring_coefficients, censoring1, censoring0) = match input.censoring {
-        Some(design) => {
-            let (x, y, wr) = intervals(design, &censoring_rows, input.treatment, &w, "censoring")?;
-            let d = fit_logistic(x.as_ref(), &y, &wr, "censoring")?;
-            let c1 = predictions(design, &d, n, cens_columns, true);
-            let c0 = predictions(design, &d, n, cens_columns, false);
-            (d, c1, c0)
+    let (censoring_coefficients, censoring1, censoring0) = if let Some(design) = input.censoring {
+        let (x, y, wr) = intervals(design, &censoring_rows, input.treatment, &w, "censoring")?;
+        let d = fit_logistic(x.as_ref(), &y, &wr, "censoring")?;
+        let c1 = predictions(design, &d, n, cens_columns, true);
+        let c0 = predictions(design, &d, n, cens_columns, false);
+        (d, c1, c0)
+    } else {
+        if let Some(&(i, k, _)) = censoring_rows.iter().find(|r| r.2) {
+            return Err(Error::input(format!(
+                "censoring: person {i} is censored after interval {k}, before the last; give a censoring model"
+            )));
         }
-        None => {
-            if let Some(&(i, k, _)) = censoring_rows.iter().find(|r| r.2) {
-                return Err(Error::input(format!(
-                    "censoring: person {i} is censored after interval {k}, before the last; give a censoring model"
-                )));
-            }
-            let zero = Mat::<f64>::zeros(n, cens_columns);
-            (Vec::new(), zero.clone(), zero)
-        }
+        let zero = Mat::<f64>::zeros(n, cens_columns);
+        (Vec::new(), zero.clone(), zero)
     };
     let a: Vec<f64> = input
         .treatment

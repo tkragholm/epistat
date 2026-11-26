@@ -65,7 +65,7 @@ impl Term {
             Self::CumulativeAverage(v) => h.cumulative_average(*v),
             Self::LaggedCumulativeAverage(v, lag) => h.lagged_cumulative_average(*v, *lag),
             Self::Product(a, b) => a.eval(h) * b.eval(h),
-            Self::Is(a, value) => f64::from(u8::from(a.eval(h) == *value)),
+            Self::Is(a, value) => f64::from(u8::from(equals(a.eval(h), *value))),
         }
     }
 
@@ -113,6 +113,16 @@ impl Term {
             }
         }
     }
+}
+
+/// Whether a value is the class `value`. Classes are whole numbers held
+/// exactly, so the comparison is exact.
+#[expect(
+    clippy::float_cmp,
+    reason = "classes are whole numbers, compared exactly"
+)]
+fn equals(x: f64, value: f64) -> bool {
+    x == value
 }
 
 /// Checks every term of a model; see [`Term`].

@@ -27,7 +27,7 @@ use epistat_testkit::load_json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-#[allow(non_snake_case)]
+#[expect(non_snake_case, reason = "the columns keep the names of the R data")]
 struct Data {
     id: Vec<u64>,
     t0: Vec<usize>,
