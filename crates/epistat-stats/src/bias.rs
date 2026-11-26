@@ -63,7 +63,11 @@
 //! parameter, or summarised otherwise. The risk difference is summarised as
 //! the ratios are; with random error it is shifted by a standard normal draw
 //! times its standard error `sqrt(a c / (a + c)^3 + b d / (b + d)^3)`.
-
+//!
+//! Rates (cases and person-time) are corrected in [`RateTable`]'s functions,
+//! several biases in one draw by [`probabilistic_multiple`], and an adjusted
+//! estimate from any model by the record-level correction of
+//! [`record_level_misclass`].
 //!
 //! # Random numbers
 //!
@@ -78,8 +82,8 @@
 //!
 //! # Not included
 //!
-//! Record-level correction, regression calibration and SIMEX are not here.
-//! A correction that gives a negative cell is `None`, not a number.
+//! Regression calibration and SIMEX are not here. A correction that gives a
+//! negative cell is `None`, not a number.
 //!
 //! # References
 //!
@@ -97,6 +101,17 @@
 //!    1997. Section 3.4.1, exercise 22 (binomial variates by beta splitting).
 
 use epistat_rng::{Stream, replicate_seed};
+
+mod multiple;
+mod rates;
+mod record;
+
+pub use multiple::{BiasStep, ConfoundingStep, probabilistic_multiple};
+pub use rates::{
+    CorrectedRates, RateTable, correct_exposure_rates, correct_outcome_rates_ppv,
+    probabilistic_misclass_rates,
+};
+pub use record::record_level_misclass;
 
 use crate::normal;
 use crate::quantile::type7;
@@ -2044,6 +2059,159 @@ mod tests {
         let s = summarise(&mut rd, 0.05);
         assert_eq!(s, r.risk_difference);
         assert!(r.risk_difference_total.is_some());
+    }
+
+    #[test]
+    fn one_step_of_the_multiple_analysis_is_the_single_analysis() {
+        let t = Table2x2 {
+            a: 150.0,
+            b: 900.0,
+            c: 9_850.0,
+            d: 89_100.0,
+        };
+        let se = Pair::Same(Dist::Trapezoidal {
+            a: 0.7,
+            b: 0.75,
+            c: 0.85,
+            d: 0.9,
+        });
+        let sp = Pair::Same(Dist::Uniform { lo: 0.99, hi: 1.0 });
+        let systematic = options(400, false);
+        let single = probabilistic_misclass(&t, Kind::Outcome, &se, &sp, &systematic).unwrap();
+        let step = BiasStep::Misclassification {
+            kind: Kind::Outcome,
+            se,
+            sp,
+        };
+        let multiple = probabilistic_multiple(
+            &t,
+            &[step],
+            None,
+            ConfoundingMeasure::RiskRatio,
+            &systematic,
+        )
+        .unwrap();
+        assert_eq!(multiple.adjusted, single.risk_ratio);
+        assert_eq!(multiple.draws.names[0], "step 1: sensitivity 0");
+
+        let s = [
+            [
+                Dist::Uniform { lo: 0.7, hi: 0.9 },
+                Dist::Uniform { lo: 0.85, hi: 0.95 },
+            ],
+            [
+                Dist::Uniform { lo: 0.93, hi: 0.97 },
+                Dist::Uniform { lo: 0.93, hi: 0.97 },
+            ],
+        ];
+        let random = options(400, true);
+        let single = probabilistic_selection(&t, &s, &random).unwrap();
+        let multiple = probabilistic_multiple(
+            &t,
+            &[BiasStep::Selection(s)],
+            None,
+            ConfoundingMeasure::OddsRatio,
+            &random,
+        )
+        .unwrap();
+        assert_eq!(multiple.adjusted, single.odds_ratio);
+        assert_eq!(multiple.adjusted_total, single.odds_ratio_total);
+
+        let prevalence = Pair::Independent([
+            Dist::Beta {
+                alpha: 30.0,
+                beta: 70.0,
+            },
+            Dist::Beta {
+                alpha: 20.0,
+                beta: 80.0,
+            },
+        ]);
+        let association = Dist::LogNormal {
+            mu: 2f64.ln(),
+            sigma: 0.2,
+        };
+        let single = probabilistic_confounding(
+            &t,
+            ConfoundingMeasure::RiskRatio,
+            &prevalence,
+            &association,
+            &random,
+        )
+        .unwrap();
+        let multiple = probabilistic_multiple(
+            &t,
+            &[],
+            Some(&ConfoundingStep {
+                prevalence,
+                association,
+            }),
+            ConfoundingMeasure::RiskRatio,
+            &random,
+        )
+        .unwrap();
+        assert_eq!(multiple.adjusted, single.adjusted);
+        assert_eq!(multiple.adjusted_total, single.adjusted_total);
+        assert!(
+            probabilistic_multiple(&t, &[], None, ConfoundingMeasure::RiskRatio, &random).is_err()
+        );
+    }
+
+    #[test]
+    fn chained_steps_are_the_chained_simple_corrections() {
+        let t = Table2x2 {
+            a: 150.0,
+            b: 900.0,
+            c: 9_850.0,
+            d: 89_100.0,
+        };
+        let steps = [
+            BiasStep::Misclassification {
+                kind: Kind::Outcome,
+                se: Pair::Same(Dist::Uniform { lo: 0.7, hi: 0.9 }),
+                sp: Pair::Same(Dist::Uniform { lo: 0.995, hi: 1.0 }),
+            },
+            BiasStep::Selection([[Dist::Uniform { lo: 0.8, hi: 0.95 }; 2]; 2]),
+        ];
+        let confounder = ConfoundingStep {
+            prevalence: Pair::Same(Dist::Uniform { lo: 0.2, hi: 0.3 }),
+            association: Dist::Uniform { lo: 1.5, hi: 2.5 },
+        };
+        let r = probabilistic_multiple(
+            &t,
+            &steps,
+            Some(&confounder),
+            ConfoundingMeasure::RiskRatio,
+            &options(200, false),
+        )
+        .unwrap();
+        assert_eq!(r.draws.names.len(), 11);
+        for k in 0..r.draws.len() {
+            let p = r.draws.parameters_of(k);
+            let Some(value) = r.draws.systematic[k] else {
+                continue;
+            };
+            let m = Misclass {
+                se: [p[0], p[1]],
+                sp: [p[2], p[3]],
+            };
+            let first = correct_outcome(&t, &m).unwrap().cells.unwrap();
+            let second = correct_selection(&first, &[[p[4], p[5]], [p[6], p[7]]])
+                .unwrap()
+                .cells
+                .unwrap();
+            let third = adjust_confounding(
+                &second,
+                ConfoundingMeasure::RiskRatio,
+                &Confounder {
+                    association: p[10],
+                    prevalence_exposed: p[8],
+                    prevalence_unexposed: p[9],
+                },
+            )
+            .unwrap();
+            assert_eq!(value.to_bits(), third.adjusted_mh.to_bits());
+        }
     }
 
     #[test]
