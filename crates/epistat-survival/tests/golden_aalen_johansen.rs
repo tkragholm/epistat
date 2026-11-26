@@ -20,7 +20,7 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
-use epistat_rng::Stream;
+use epistat_rng::{Stream, replicate_seed};
 use epistat_survival::aalen_johansen::{
     AalenJohansenOptions, BootstrapOptions, Draw, RowWindows, bootstrap, estimate,
 };
@@ -214,7 +214,9 @@ fn options(n_replicates: usize, draw: Draw) -> BootstrapOptions {
 fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
     let (buf, exposed, cells) = frame(400);
     let data = buf.as_data();
-    let seeds: Vec<u64> = (0..cells.len() as u64).map(|c| 11 + 7919 * c).collect();
+    let seeds: Vec<u64> = (0..cells.len() as u64)
+        .map(|c| replicate_seed(11, c))
+        .collect();
     let ages = vec![2.5, 0.05, 1.0, 40.0, 4.0];
     for (name, draw) in [("per cell", Draw::PerCell), ("shared", Draw::Shared)] {
         for cause in [1, 3] {

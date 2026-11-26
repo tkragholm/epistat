@@ -23,7 +23,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_rng::Stream;
+use epistat_rng::{Stream, replicate_seed};
 use epistat_survival::multistate::{Options, bootstrap, estimate, integrate};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
@@ -34,33 +34,33 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("refuse/initial given", 84, 0x1ead_8649_64b0_384a),
     ("refuse/no cluster", 67, 0x21d1_005e_95fc_6f57),
     ("refuse/no weight", 59, 0x13fa_029d_9cad_5cf3),
-    ("plain ascending/curves", 2484, 0xdf16_23ba_b590_a02e),
-    ("plain ascending/restricted", 54, 0xc4dc_7e01_0e0a_c5f6),
-    ("plain ascending/single seed", 3, 0x9db9_e0c7_6414_7e49),
+    ("plain ascending/curves", 2484, 0xacad_e9a3_189b_cf93),
+    ("plain ascending/restricted", 54, 0x6f58_d1d5_5f3d_a0a6),
+    ("plain ascending/single seed", 3, 0xe50e_f2b0_ef4a_3053),
     ("plain ascending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("plain descending/curves", 2484, 0xc9e1_4415_f5e9_cc76),
-    ("plain descending/restricted", 54, 0xfeec_f043_dee0_3656),
-    ("plain descending/single seed", 3, 0x7e02_a796_e43f_520d),
+    ("plain descending/curves", 2484, 0xc8fd_2f4b_85f3_bba0),
+    ("plain descending/restricted", 54, 0xef31_8b7b_6f45_1f3e),
+    ("plain descending/single seed", 3, 0x50eb_0151_a4a2_45c0),
     ("plain descending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich ascending/curves", 2736, 0x431b_b850_4962_1fc0),
-    ("rich ascending/restricted", 54, 0x51d6_1108_62c6_5553),
-    ("rich ascending/single seed", 3, 0xa22c_7c50_fe6d_ca8e),
+    ("rich ascending/curves", 2736, 0xcd86_ed30_b833_0e65),
+    ("rich ascending/restricted", 54, 0x8eed_da5d_0a60_66e4),
+    ("rich ascending/single seed", 3, 0x06a0_e356_8294_1234),
     ("rich ascending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich padded/curves", 4644, 0x3a25_09fe_b306_a614),
-    ("rich padded/restricted", 54, 0xf0fe_5ca7_1176_27f3),
-    ("rich padded/single seed", 3, 0xd5fa_4250_e3f5_4b16),
+    ("rich padded/curves", 4644, 0x75c1_f7b3_0e76_6996),
+    ("rich padded/restricted", 54, 0x5d57_3e63_aa4a_5a65),
+    ("rich padded/single seed", 3, 0x0069_3379_6087_3599),
     ("rich padded/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich descending/curves", 2736, 0x14d8_ca9a_8abb_4fb3),
-    ("rich descending/restricted", 54, 0xb48b_735c_cf21_42a5),
-    ("rich descending/single seed", 3, 0x1090_d82c_1794_273c),
+    ("rich descending/curves", 2736, 0x2d5c_f3e8_bf55_0c47),
+    ("rich descending/restricted", 54, 0xcce6_fcdf_bbfe_8429),
+    ("rich descending/single seed", 3, 0xadf8_74c2_2859_d8af),
     ("rich descending/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("rich shuffled/curves", 2736, 0xc773_f44f_b00c_0c6e),
-    ("rich shuffled/restricted", 54, 0x9799_c1d4_69c4_318a),
-    ("rich shuffled/single seed", 3, 0x1090_d82c_1794_273c),
+    ("rich shuffled/curves", 2736, 0x25ae_9ee5_f132_3cfb),
+    ("rich shuffled/restricted", 54, 0x0029_44db_8d21_a9e2),
+    ("rich shuffled/single seed", 3, 0xadf8_74c2_2859_d8af),
     ("rich shuffled/no seeds", 0, 0xcbf2_9ce4_8422_2325),
-    ("two states/curves", 1824, 0xbdee_5473_1f06_55d3),
-    ("two states/restricted", 36, 0x381f_0924_9caa_f1f5),
-    ("two states/single seed", 2, 0xb236_47b7_aa49_3e01),
+    ("two states/curves", 1824, 0xca22_e7a5_6da4_fa7b),
+    ("two states/restricted", 36, 0x73c7_0e45_9fd1_7a7a),
+    ("two states/single seed", 2, 0xc745_c5a4_1518_0ebf),
     ("two states/no seeds", 0, 0xcbf2_9ce4_8422_2325),
     ("plain ascending/probabilities", 360, 0x883a_1b01_5ad4_3c79),
     ("plain ascending/at_risk", 120, 0xe166_05a9_b7fa_d256),
@@ -484,13 +484,21 @@ fn bootstrap_case(
 ) {
     let buf = p.buf(weights, Some(clusters.to_vec()), states).unwrap();
     let data = buf.as_data();
-    let seeds: Vec<u64> = (0..6).map(|r| 500 + r * 7919).collect();
+    let seeds: Vec<u64> = (0..6).map(|r| replicate_seed(500, r)).collect();
     for (label, horizons) in [("curves", vec![]), ("restricted", vec![2.0, 7.5, 30.0])] {
         let out = bootstrap(&data, times, &horizons, 0.5, &seeds, &options(None)).unwrap();
         check(&format!("{name}/{label}"), &out.values);
     }
     // One seed, and no seeds.
-    let single = bootstrap(&data, times, &[4.0], 0.0, &[77], &options(None)).unwrap();
+    let single = bootstrap(
+        &data,
+        times,
+        &[4.0],
+        0.0,
+        &[replicate_seed(77, 0)],
+        &options(None),
+    )
+    .unwrap();
     check(&format!("{name}/single seed"), &single.values);
     let none = bootstrap(&data, times, &[], 0.0, &[], &options(None)).unwrap();
     check(&format!("{name}/no seeds"), &none.values);

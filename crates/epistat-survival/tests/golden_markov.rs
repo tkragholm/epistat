@@ -21,7 +21,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_rng::Stream;
+use epistat_rng::{Stream, replicate_seed};
 use epistat_survival::markov::{Options, Test, test};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
@@ -39,19 +39,19 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("dense q1/n_occupied", 7, 0x1c9d_1507_6382_07d3),
     ("dense q1/n_events_after", 7, 0x3b3e_c9ef_529b_d6d6),
     ("dense q1/statistic", 1, 0xc59c_c993_19d2_a7d7),
-    ("dense q1/p_value", 1, 0xb6cf_8c3f_4ea2_8624),
+    ("dense q1/p_value", 1, 0x0032_b592_eb35_5554),
     ("dense q2/trace", 14, 0xf4e1_6d0f_0836_b0ba),
     ("dense q2/variance", 14, 0xb71b_7d52_fc62_db7a),
     ("dense q2/n_occupied", 14, 0xf1cc_1f9f_b46e_5268),
     ("dense q2/n_events_after", 7, 0x3b3e_c9ef_529b_d6d6),
     ("dense q2/statistic", 2, 0x6267_2e62_f1c0_f111),
-    ("dense q2/p_value", 2, 0x7014_0d3e_703c_613d),
+    ("dense q2/p_value", 2, 0x1a28_ec3b_8cf5_dc09),
     ("dense q3/trace", 21, 0xc6cd_a1c8_78fb_a89a),
     ("dense q3/variance", 21, 0x131e_1348_bf72_971a),
     ("dense q3/n_occupied", 21, 0x169c_f5c9_5bbb_8f28),
     ("dense q3/n_events_after", 7, 0x3b3e_c9ef_529b_d6d6),
     ("dense q3/statistic", 3, 0xc2d4_2a2d_1e77_1c7e),
-    ("dense q3/p_value", 3, 0xc1e2_2aea_7003_57d2),
+    ("dense q3/p_value", 3, 0x1fdb_9f7e_d840_b616),
     ("dense no seeds/trace", 14, 0xf4e1_6d0f_0836_b0ba),
     ("dense no seeds/variance", 14, 0xb71b_7d52_fc62_db7a),
     ("dense no seeds/n_occupied", 14, 0xf1cc_1f9f_b46e_5268),
@@ -63,13 +63,13 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("dense one seed/n_occupied", 14, 0xf1cc_1f9f_b46e_5268),
     ("dense one seed/n_events_after", 7, 0x3b3e_c9ef_529b_d6d6),
     ("dense one seed/statistic", 2, 0x6267_2e62_f1c0_f111),
-    ("dense one seed/p_value", 2, 0x271b_e7d4_e51a_6a45),
+    ("dense one seed/p_value", 2, 0x2be2_cbea_19a8_27c5),
     ("dense odd grid/trace", 21, 0x1f5b_b8bf_5bc3_81e2),
     ("dense odd grid/variance", 21, 0xa37d_39bc_9362_f4dc),
     ("dense odd grid/n_occupied", 21, 0x6571_25eb_5b97_6eeb),
     ("dense odd grid/n_events_after", 7, 0xd573_a563_53b6_fead),
     ("dense odd grid/statistic", 3, 0x6d62_9621_f994_ad40),
-    ("dense odd grid/p_value", 3, 0xd1ad_87fa_fee5_0eda),
+    ("dense odd grid/p_value", 3, 0xf7d3_00dc_dc09_a166),
     ("dense one landmark/trace", 2, 0xcb28_45bd_8b81_d922),
     ("dense one landmark/variance", 2, 0xa83d_e6d1_6b8c_71be),
     ("dense one landmark/n_occupied", 2, 0x170c_689b_f08f_aeb5),
@@ -79,25 +79,25 @@ const EXPECTED: &[(&str, usize, u64)] = &[
         0xa956_f432_2893_eb3f,
     ),
     ("dense one landmark/statistic", 2, 0x6437_92f3_9680_4d1e),
-    ("dense one landmark/p_value", 2, 0x7014_0d3e_703c_613d),
+    ("dense one landmark/p_value", 2, 0xf012_55f3_4fd0_08f5),
     ("sparse q2/trace", 14, 0x950f_7821_1e25_a2c1),
     ("sparse q2/variance", 14, 0x5216_32ce_c3e6_6229),
     ("sparse q2/n_occupied", 14, 0x13be_0805_4090_e97b),
     ("sparse q2/n_events_after", 7, 0x0b80_3f57_e639_2f20),
     ("sparse q2/statistic", 2, 0xd01f_1a03_3610_6ee1),
-    ("sparse q2/p_value", 2, 0x7a6c_690c_88e0_3fa4),
+    ("sparse q2/p_value", 2, 0x463e_f5bf_8037_3c14),
     ("sparse q3/trace", 21, 0xfdb8_e27d_f5d9_41c1),
     ("sparse q3/variance", 21, 0x56cc_6d40_d9a6_8509),
     ("sparse q3/n_occupied", 21, 0x7403_133d_4ddd_0edb),
     ("sparse q3/n_events_after", 7, 0x0b80_3f57_e639_2f20),
     ("sparse q3/statistic", 3, 0xe5d0_4ecb_c2e0_9a0e),
-    ("sparse q3/p_value", 3, 0x31e0_5f8d_b9c1_b17b),
+    ("sparse q3/p_value", 3, 0x585c_5838_787f_996b),
     ("far states/trace", 14, 0x0fcf_6fa0_210f_3b5c),
     ("far states/variance", 14, 0xf6da_b316_9794_67ea),
     ("far states/n_occupied", 14, 0x8577_d07e_5966_2e4b),
     ("far states/n_events_after", 7, 0x72c2_e05d_889f_b5fa),
     ("far states/statistic", 2, 0xbd6b_46fd_f35f_9c7c),
-    ("far states/p_value", 2, 0x48f8_1e65_2318_0bdd),
+    ("far states/p_value", 2, 0x3cc2_3a4f_e839_9b0d),
     ("refuse/overlapping stays", 126, 0x1136_cd91_f73a_db7a),
     ("no events/trace", 21, 0x35da_7620_6393_6645),
     ("no events/variance", 21, 0x35da_7620_6393_6645),
@@ -114,7 +114,7 @@ const EXPECTED: &[(&str, usize, u64)] = &[
         0x55ce_87de_b65c_a307,
     ),
     ("every stay an event/statistic", 3, 0x1b13_c964_0741_af36),
-    ("every stay an event/p_value", 3, 0xd0dc_935c_f1de_c0ca),
+    ("every stay an event/p_value", 3, 0x61f0_4c5e_7aca_e0d8),
     ("empty qualifying state/trace", 35, 0x7b4e_793d_3eef_74b1),
     ("empty qualifying state/variance", 35, 0x649c_3eb3_011f_cccf),
     (
@@ -128,7 +128,7 @@ const EXPECTED: &[(&str, usize, u64)] = &[
         0x15e3_59b9_5fca_81ba,
     ),
     ("empty qualifying state/statistic", 5, 0xe6bf_3876_7846_a025),
-    ("empty qualifying state/p_value", 5, 0xb60d_7802_a8e3_3bb6),
+    ("empty qualifying state/p_value", 5, 0xb2c2_ee52_5e3e_55a6),
     ("nobody at risk/trace", 4, 0x0c82_1078_4d8a_f5a5),
     ("nobody at risk/variance", 4, 0x0c82_1078_4d8a_f5a5),
     ("nobody at risk/n_occupied", 4, 0xc5d5_7a0b_8a7e_f5a5),
@@ -276,7 +276,7 @@ const GRID: [f64; 7] = [0.3, 0.9, 1.6, 2.4, 3.5, 4.8, 6.1];
 
 #[test]
 fn tests_on_a_process() {
-    let seeds: Vec<u64> = (0..25).map(|r| 77 + r * 7919).collect();
+    let seeds: Vec<u64> = (0..25).map(|r| replicate_seed(77, r)).collect();
     let dense = process(120, 41, false, |id| id as u32);
     for qualifying in 1..=3 {
         let codes: Vec<u32> = (1..=qualifying).collect();
@@ -286,7 +286,7 @@ fn tests_on_a_process() {
     check_test("dense no seeds", &run(&dense, &GRID, &[1, 2], &[]).unwrap());
     check_test(
         "dense one seed",
-        &run(&dense, &GRID, &[1, 2], &[5]).unwrap(),
+        &run(&dense, &GRID, &[1, 2], &[replicate_seed(5, 0)]).unwrap(),
     );
     // Landmarks out of order, repeated, before the data and past it.
     let odd_grid = [4.8, 0.3, 0.3, 0.0, 99.0, 2.4, -1.0];
@@ -310,7 +310,7 @@ fn tests_on_a_process() {
 
 #[test]
 fn tests_on_awkward_stays() {
-    let seeds: Vec<u64> = (0..15).collect();
+    let seeds: Vec<u64> = (0..15).map(|r| replicate_seed(0, r)).collect();
     let base = process(80, 43, false, |id| id as u32);
 
     // Stays in states that do not qualify: state 2 and some stays in state 1
