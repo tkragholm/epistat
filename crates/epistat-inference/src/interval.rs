@@ -1,15 +1,22 @@
 //! Intervals from an estimate and its standard error, or from bootstrap
 //! replicates.
 //!
-//! Levels are given as `alpha`, the probability outside the interval, which
-//! must lie in `(0, 1)`. The replicate functions sort their input in place.
-//! A NaN replicate is [`InferenceError::NanReplicate`], since a percentile of a
-//! sample with a missing value does not exist.
+//! Every function takes the confidence level as a [`Level`] and returns an
+//! [`Interval`] that carries it. A level given as an alpha keeps the
+//! arithmetic of `1 - alpha / 2`, and one given as a confidence that of
+//! `1 - (1 - c) / 2`, so an alpha of `1.0 - 0.95` and a confidence of `0.95`
+//! can differ in the last bits; the caller's number is used as given. The
+//! replicate functions sort their input in place, except
+//! [`percentile_sorted`], which reads replicates already sorted. A NaN
+//! replicate is an input error, since a percentile of a sample with a missing
+//! value does not exist.
 //!
 //! # Normal interval
 //!
 //! [`normal()`] returns `estimate -/+ z * se`, where `z` is the standard normal
-//! quantile at `1 - alpha / 2`.
+//! quantile at the upper probability of the level, `1 - alpha / 2`. A NaN
+//! limit, as from a NaN standard error, is `None`; an infinite standard error
+//! gives infinite limits.
 //!
 //! # Percentile intervals
 //!
@@ -67,9 +74,9 @@
 //!
 //! # Edge cases
 //!
-//! - `alpha` outside `(0, 1)` is [`InferenceError::Alpha`].
-//! - No replicates is [`InferenceError::Empty`], and a NaN among them is
-//!   [`InferenceError::NanReplicate`].
+//! - No replicates is [`InputError::Empty`], a NaN among them is
+//!   [`InputError::NotFinite`] at its position, and replicates that
+//!   [`percentile_sorted`] finds out of order are [`InputError::Unsorted`].
 //! - One replicate gives that replicate as both bounds.
 //!
 //! # References
@@ -85,15 +92,17 @@
 //! 5. Abramowitz M, Stegun IA, editors. Handbook of mathematical functions.
 //!    Washington, DC: National Bureau of Standards; 1964.
 
+use epistat_core::{InputError, Interval, Level, check};
 use epistat_stats::dist::normal;
 use epistat_stats::{compat, quantile};
 
-use crate::InferenceError;
+use crate::{Error, empty};
 
 /// How a percentile interval reads its bounds from the sorted replicates.
 ///
 /// Use [`Percentile::Type7`] for new work. The other two rules reproduce the
 /// intervals of existing software.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Percentile {
     /// R's type 7 quantiles at `alpha / 2` and `1 - alpha / 2`.
@@ -108,57 +117,80 @@ pub enum Percentile {
     OutwardFromCount,
 }
 
-/// `estimate -/+ z se` with `z` the normal quantile at `1 - alpha / 2`.
-///
-/// # Errors
-///
-/// [`InferenceError::Alpha`] unless `0 < alpha < 1`.
-pub fn normal(estimate: f64, se: f64, alpha: f64) -> Result<(f64, f64), InferenceError> {
-    check_alpha(alpha)?;
-    let margin = normal::quantile(1.0 - alpha / 2.0) * se;
-    Ok((estimate - margin, estimate + margin))
+/// `estimate -/+ z se` with `z` the normal quantile at the level's upper
+/// probability, `1 - alpha / 2`. A NaN limit is `None`.
+#[must_use]
+pub fn normal(estimate: f64, se: f64, level: Level) -> Interval {
+    let margin = normal::quantile(level.upper_probability()) * se;
+    let defined = |v: f64| (!v.is_nan()).then_some(v);
+    Interval::new(
+        defined(estimate - margin),
+        defined(estimate + margin),
+        level,
+    )
 }
 
 /// The percentile interval of the replicates, which it sorts.
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no replicates, [`InferenceError::NanReplicate`]
-/// for a NaN among them and [`InferenceError::Alpha`] unless `0 < alpha < 1`.
+/// [`InputError::Empty`] for no replicates and [`InputError::NotFinite`] for a
+/// NaN among them.
+pub fn percentile(
+    replicates: &mut [f64],
+    level: Level,
+    rule: Percentile,
+) -> Result<Interval, Error> {
+    check_replicates(replicates)?;
+    replicates.sort_by(f64::total_cmp);
+    sorted_bounds(replicates, level, rule)
+}
+
+/// The percentile interval of replicates sorted in increasing order, which it
+/// leaves as they are. [`percentile`] sorts a copy the caller can lend.
+///
+/// # Errors
+///
+/// As [`percentile`], and [`InputError::Unsorted`] for replicates out of
+/// order.
+pub fn percentile_sorted(
+    sorted: &[f64],
+    level: Level,
+    rule: Percentile,
+) -> Result<Interval, Error> {
+    check_replicates(sorted)?;
+    check::sorted_by("replicates", sorted, f64::total_cmp)?;
+    sorted_bounds(sorted, level, rule)
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "the value is a non-negative position below the length"
 )]
-pub fn percentile(
-    replicates: &mut [f64],
-    alpha: f64,
-    rule: Percentile,
-) -> Result<(f64, f64), InferenceError> {
-    check_alpha(alpha)?;
-    check_replicates(replicates)?;
-    replicates.sort_by(f64::total_cmp);
-    let sorted = &*replicates;
+fn sorted_bounds(sorted: &[f64], level: Level, rule: Percentile) -> Result<Interval, Error> {
     let last = sorted.len() - 1;
     let n = sorted.len() as f64;
-    Ok(match rule {
+    let (lower_p, upper_p) = (level.lower_probability(), level.upper_probability());
+    let (lower, upper) = match rule {
         Percentile::Type7 => (
-            quantile::type7(sorted, alpha / 2.0).ok_or(InferenceError::Empty)?,
-            quantile::type7(sorted, 1.0 - alpha / 2.0).ok_or(InferenceError::Empty)?,
+            quantile::type7(sorted, lower_p).ok_or_else(|| empty("replicates"))?,
+            quantile::type7(sorted, upper_p).ok_or_else(|| empty("replicates"))?,
         ),
         Percentile::OutwardFromLast => {
-            let lower = (alpha / 2.0 * last as f64).floor() as usize;
-            let upper = ((1.0 - alpha / 2.0) * last as f64).ceil() as usize;
+            let lower = (lower_p * last as f64).floor() as usize;
+            let upper = (upper_p * last as f64).ceil() as usize;
             (sorted[lower], sorted[upper.min(last)])
         }
         Percentile::OutwardFromCount => {
-            let lower = ((alpha / 2.0 * n).floor() as usize).min(last);
-            let upper = (((1.0 - alpha / 2.0) * n).ceil() as usize)
+            let lower = ((lower_p * n).floor() as usize).min(last);
+            let upper = ((upper_p * n).ceil() as usize)
                 .saturating_sub(1)
                 .clamp(lower, last);
             (sorted[lower], sorted[upper])
         }
-    })
+    };
+    Ok(Interval::new(Some(lower), Some(upper), level))
 }
 
 /// [`percentile`] after dropping `floor(trim * n)` replicates from each tail,
@@ -175,19 +207,18 @@ pub fn percentile(
 )]
 pub fn trimmed_percentile(
     replicates: &mut [f64],
-    alpha: f64,
+    level: Level,
     trim: f64,
     rule: Percentile,
-) -> Result<(f64, f64), InferenceError> {
-    check_alpha(alpha)?;
+) -> Result<Interval, Error> {
     check_replicates(replicates)?;
     let n = replicates.len();
     let cut = (trim.clamp(0.0, 0.49) * n as f64).floor() as usize;
     if cut == 0 || 2 * cut >= n {
-        return percentile(replicates, alpha, rule);
+        return percentile(replicates, level, rule);
     }
     replicates.sort_by(f64::total_cmp);
-    percentile(&mut replicates[cut..n - cut], alpha, rule)
+    percentile(&mut replicates[cut..n - cut], level, rule)
 }
 
 /// Efron's bias-corrected percentile interval, without acceleration.
@@ -204,38 +235,32 @@ pub fn trimmed_percentile(
 pub fn bias_corrected(
     replicates: &mut [f64],
     estimate: f64,
-    alpha: f64,
-) -> Result<(f64, f64), InferenceError> {
-    check_alpha(alpha)?;
+    level: Level,
+) -> Result<Interval, Error> {
     check_replicates(replicates)?;
     replicates.sort_by(f64::total_cmp);
     let sorted = &*replicates;
     let n = sorted.len() as f64;
     let below = sorted.iter().filter(|&&v| v < estimate).count() as f64;
     let z0 = compat::quantile_acklam((below / n).clamp(0.5 / n, 1.0 - 0.5 / n));
-    let z_lower = compat::quantile_acklam(alpha / 2.0);
-    let z_upper = compat::quantile_acklam(1.0 - alpha / 2.0);
+    let z_lower = compat::quantile_acklam(level.lower_probability());
+    let z_upper = compat::quantile_acklam(level.upper_probability());
     let at = |z: f64| {
-        compat::rounded_rank(sorted, compat::cdf_as26(2.0 * z0 + z)).ok_or(InferenceError::Empty)
+        compat::rounded_rank(sorted, compat::cdf_as26(2.0 * z0 + z))
+            .ok_or_else(|| empty("replicates"))
     };
-    Ok((at(z_lower)?, at(z_upper)?))
+    Ok(Interval::new(Some(at(z_lower)?), Some(at(z_upper)?), level))
 }
 
-fn check_replicates(replicates: &[f64]) -> Result<(), InferenceError> {
-    if replicates.is_empty() {
-        Err(InferenceError::Empty)
-    } else if replicates.iter().any(|v| v.is_nan()) {
-        Err(InferenceError::NanReplicate)
-    } else {
-        Ok(())
-    }
-}
-
-fn check_alpha(alpha: f64) -> Result<(), InferenceError> {
-    if alpha > 0.0 && alpha < 1.0 {
-        Ok(())
-    } else {
-        Err(InferenceError::Alpha(alpha))
+fn check_replicates(replicates: &[f64]) -> Result<(), Error> {
+    check::non_empty("replicates", replicates.len())?;
+    match replicates.iter().position(|v| v.is_nan()) {
+        Some(row) => Err(InputError::NotFinite {
+            what: "replicates",
+            row,
+        }
+        .into()),
+        None => Ok(()),
     }
 }
 
@@ -247,62 +272,95 @@ mod tests {
         (0..100).rev().map(f64::from).collect()
     }
 
+    fn alpha(a: f64) -> Level {
+        Level::alpha(a).unwrap()
+    }
+
+    fn bounds(interval: Interval) -> (f64, f64) {
+        (interval.lower.unwrap(), interval.upper.unwrap())
+    }
+
     #[test]
     fn the_three_percentile_rules() {
-        assert_eq!(
-            percentile(&mut replicates(), 0.1, Percentile::Type7).unwrap(),
-            (4.95, 94.05)
-        );
-        assert_eq!(
-            percentile(&mut replicates(), 0.1, Percentile::OutwardFromLast).unwrap(),
-            (4.0, 95.0)
-        );
-        assert_eq!(
-            percentile(&mut replicates(), 0.1, Percentile::OutwardFromCount).unwrap(),
-            (5.0, 94.0)
-        );
+        let at = |rule| bounds(percentile(&mut replicates(), alpha(0.1), rule).unwrap());
+        assert_eq!(at(Percentile::Type7), (4.95, 94.05));
+        assert_eq!(at(Percentile::OutwardFromLast), (4.0, 95.0));
+        assert_eq!(at(Percentile::OutwardFromCount), (5.0, 94.0));
+        let interval = percentile(&mut replicates(), alpha(0.1), Percentile::Type7).unwrap();
+        assert_eq!(interval.level, alpha(0.1));
+    }
+
+    #[test]
+    fn sorted_replicates_give_the_same_interval_without_a_copy() {
+        let mut sorted = replicates();
+        sorted.sort_by(f64::total_cmp);
+        for rule in [
+            Percentile::Type7,
+            Percentile::OutwardFromLast,
+            Percentile::OutwardFromCount,
+        ] {
+            assert_eq!(
+                percentile_sorted(&sorted, alpha(0.1), rule).unwrap(),
+                percentile(&mut replicates(), alpha(0.1), rule).unwrap()
+            );
+        }
+        assert!(matches!(
+            percentile_sorted(&replicates(), alpha(0.1), Percentile::Type7),
+            Err(Error::Input(InputError::Unsorted { row: 1, .. }))
+        ));
     }
 
     #[test]
     fn trimming_and_bias_correction() {
-        let trimmed =
-            trimmed_percentile(&mut replicates(), 0.1, 0.1, Percentile::OutwardFromLast).unwrap();
-        assert_eq!(trimmed, (13.0, 86.0));
+        let trimmed = trimmed_percentile(
+            &mut replicates(),
+            alpha(0.1),
+            0.1,
+            Percentile::OutwardFromLast,
+        )
+        .unwrap();
+        assert_eq!(bounds(trimmed), (13.0, 86.0));
         // A point estimate at the median leaves the interval centred.
-        let (lower, upper) = bias_corrected(&mut replicates(), 49.5, 0.1).unwrap();
+        let (lower, upper) = bounds(bias_corrected(&mut replicates(), 49.5, alpha(0.1)).unwrap());
         assert!((lower + upper - 99.0).abs() <= 1.0);
     }
 
     #[test]
     fn a_nan_replicate_is_an_error() {
+        let nan_at = |row| {
+            Err(Error::Input(InputError::NotFinite {
+                what: "replicates",
+                row,
+            }))
+        };
         for rule in [
             Percentile::Type7,
             Percentile::OutwardFromLast,
             Percentile::OutwardFromCount,
         ] {
             let mut sample = vec![1.0, f64::NAN, 3.0];
-            assert_eq!(
-                percentile(&mut sample, 0.1, rule),
-                Err(InferenceError::NanReplicate)
-            );
+            assert_eq!(percentile(&mut sample, alpha(0.1), rule), nan_at(1));
         }
         let mut sample: Vec<f64> = (0..20).map(f64::from).collect();
         sample[0] = f64::NAN;
         assert_eq!(
-            trimmed_percentile(&mut sample, 0.1, 0.1, Percentile::Type7),
-            Err(InferenceError::NanReplicate)
+            trimmed_percentile(&mut sample, alpha(0.1), 0.1, Percentile::Type7),
+            nan_at(0)
         );
-        assert_eq!(
-            bias_corrected(&mut sample, 5.0, 0.1),
-            Err(InferenceError::NanReplicate)
-        );
+        assert_eq!(bias_corrected(&mut sample, 5.0, alpha(0.1)), nan_at(0));
+        assert!(matches!(
+            percentile(&mut [], alpha(0.1), Percentile::Type7),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
     }
 
     #[test]
     fn the_normal_interval() {
-        let (lower, upper) = normal(1.0, 0.5, 0.05).unwrap();
+        let (lower, upper) = bounds(normal(1.0, 0.5, alpha(0.05)));
         assert!((upper - 1.0 - 1.959_963_984_540_054 * 0.5).abs() < 1e-15);
         assert_eq!((lower + upper).to_bits(), 2.0_f64.to_bits());
-        assert_eq!(normal(0.0, 1.0, 0.0), Err(InferenceError::Alpha(0.0)));
+        let confidence = normal(1.0, 0.5, Level::default());
+        assert!((confidence.upper.unwrap() - upper).abs() < 1e-15);
+        assert_eq!(normal(0.0, f64::NAN, Level::default()).lower, None);
     }
 }

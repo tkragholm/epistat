@@ -1,7 +1,8 @@
 //! Bootstrap replicates whose draws depend only on the seed and the
 //! replicate number.
 //!
-//! Replicate `r` draws from the stream seeded with
+//! Each function takes a [`Bootstrap`], the number of replicates and a root
+//! seed. Replicate `r` draws from the stream seeded with
 //! [`replicate_seed`]`(seed, r)`, so a replicate is the same whichever thread
 //! computes it and in whatever order. The output is the same on any number
 //! of threads.
@@ -35,6 +36,10 @@
 //! totals, replicate by replicate. All columns use the same counts within a
 //! replicate.
 //!
+//! [`unit_counts`] gives those counts themselves, for a bootstrap that draws
+//! `n` units with replacement and refits on each replicate: replicate `r`
+//! is `resample_counts(n, replicate_seed(seed, r))`.
+//!
 //! # Determinism
 //!
 //! Replicates are computed in parallel, each from its own seed, and written to
@@ -43,9 +48,9 @@
 //!
 //! # Edge cases
 //!
-//! - An empty influence function is [`InferenceError::Empty`].
-//! - No columns is [`InferenceError::Empty`] and columns of different lengths
-//!   are [`InferenceError::Length`]. Columns of length zero give an empty
+//! - An empty influence function is [`InputError::Empty`].
+//! - No columns is [`InputError::Empty`] and columns of different lengths
+//!   are [`InputError::Length`]. Columns of length zero give an empty
 //!   result.
 //! - Zero replicates give an empty result.
 //!
@@ -60,11 +65,14 @@
 //! 4. Efron B, Tibshirani RJ. An introduction to the bootstrap. New York:
 //!    Chapman & Hall; 1993.
 
+use epistat_core::Bootstrap;
+#[cfg(doc)]
+use epistat_core::InputError;
 use epistat_rng::{Stream, rademacher_sum, rademacher_sums, replicate_seed, resample_counts};
 use epistat_stats::sum::lanes;
 use rayon::prelude::*;
 
-use crate::{InferenceError, check_length};
+use crate::{Error, check_length, empty};
 
 /// Replicates of a linear estimator under the Rademacher multiplier
 /// bootstrap: `estimate + sum(s_i psi_i) / n` with independent signs `s_i`.
@@ -72,16 +80,12 @@ use crate::{InferenceError, check_length};
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for an empty influence function.
-pub fn multiplier(
-    estimate: f64,
-    psi: &[f64],
-    replicates: usize,
-    seed: u64,
-) -> Result<Vec<f64>, InferenceError> {
+/// [`InputError::Empty`] for an empty influence function.
+pub fn multiplier(estimate: f64, psi: &[f64], bootstrap: Bootstrap) -> Result<Vec<f64>, Error> {
     if psi.is_empty() {
-        return Err(InferenceError::Empty);
+        return Err(empty("influence function"));
     }
+    let Bootstrap { replicates, seed } = bootstrap;
     let n = psi.len() as f64;
     let mut out = vec![0.0; replicates];
     out.par_chunks_mut(LANES)
@@ -117,14 +121,14 @@ const LANES: usize = 8;
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no columns and [`InferenceError::Length`]
-/// when they differ in length.
-pub fn cluster_totals(
-    columns: &[&[f64]],
-    replicates: usize,
-    seed: u64,
-) -> Result<Vec<f64>, InferenceError> {
-    let clusters = columns.first().ok_or(InferenceError::Empty)?.len();
+/// [`InputError::Empty`] for no columns and [`InputError::Length`] when they
+/// differ in length.
+pub fn cluster_totals(columns: &[&[f64]], bootstrap: Bootstrap) -> Result<Vec<f64>, Error> {
+    let Bootstrap { replicates, seed } = bootstrap;
+    let clusters = columns
+        .first()
+        .ok_or_else(|| empty("per-cluster columns"))?
+        .len();
     for column in columns {
         check_length("per-cluster column", clusters, column.len())?;
     }
@@ -145,6 +149,21 @@ pub fn cluster_totals(
     Ok(totals)
 }
 
+/// How often each of `n` units is drawn, with replacement, in each replicate:
+/// one vector of `n` counts summing to `n` per replicate, replicate `r` from
+/// `resample_counts(n, replicate_seed(seed, r))`.
+///
+/// The result holds `n * replicates` counts. A caller that refits one
+/// replicate at a time and cannot hold them all draws replicate `r` with
+/// `epistat_rng::resample_counts` and the same seed.
+#[must_use]
+pub fn unit_counts(n: usize, bootstrap: &Bootstrap) -> Vec<Vec<u32>> {
+    (0..bootstrap.replicates as u64)
+        .into_par_iter()
+        .map(|r| resample_counts(n, replicate_seed(bootstrap.seed, r)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,8 +174,14 @@ mod tests {
         let psi: Vec<f64> = (0..5_000).map(|i| f64::from(i % 13) - 6.0).collect();
         let columns: Vec<f64> = (0..300).map(|i| f64::from(i % 5)).collect();
         assert_same_on_threads(|| {
-            let mut out = multiplier(1.0, &psi, 500, 42).unwrap();
-            out.extend(cluster_totals(&[&columns, &columns], 200, 7).unwrap());
+            let mut out = multiplier(1.0, &psi, Bootstrap::new(500, 42)).unwrap();
+            out.extend(cluster_totals(&[&columns, &columns], Bootstrap::new(200, 7)).unwrap());
+            out.extend(
+                unit_counts(37, &Bootstrap::new(50, 3))
+                    .into_iter()
+                    .flatten()
+                    .map(f64::from),
+            );
             out
         });
     }
@@ -164,9 +189,11 @@ mod tests {
     #[test]
     fn a_cluster_total_matches_its_resample_counts() {
         let values = [1.0, 10.0, 100.0];
-        let totals = cluster_totals(&[&values], 3, 5).unwrap();
+        let totals = cluster_totals(&[&values], Bootstrap::new(3, 5)).unwrap();
+        let all = unit_counts(3, &Bootstrap::new(3, 5));
         for (r, &total) in totals.iter().enumerate() {
             let counts = resample_counts(3, replicate_seed(5, r as u64));
+            assert_eq!(all[r], counts);
             let expected: f64 = counts
                 .iter()
                 .zip(values)
@@ -179,7 +206,7 @@ mod tests {
     #[test]
     fn multiplier_replicates_centre_on_the_estimate() {
         let psi = vec![1.0; 64];
-        let draws = multiplier(3.0, &psi, 2_000, 1).unwrap();
+        let draws = multiplier(3.0, &psi, Bootstrap::new(2_000, 1)).unwrap();
         let mean = draws.iter().sum::<f64>() / 2_000.0;
         assert!((mean - 3.0).abs() < 0.01);
     }
@@ -203,8 +230,9 @@ mod tests {
                         0.25 + rademacher_sum(&psi, &mut stream) / n as f64
                     })
                     .collect();
-                assert_same_on_threads(|| multiplier(0.25, &psi, replicates, 3).unwrap());
-                let got = multiplier(0.25, &psi, replicates, 3).unwrap();
+                let bootstrap = Bootstrap::new(replicates, 3);
+                assert_same_on_threads(|| multiplier(0.25, &psi, bootstrap).unwrap());
+                let got = multiplier(0.25, &psi, bootstrap).unwrap();
                 let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
                 assert_eq!(
                     bits(&got),

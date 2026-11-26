@@ -66,9 +66,12 @@
 
 use rayon::prelude::*;
 
-use crate::InferenceError;
+use epistat_core::InputError;
+
+use crate::Error;
 
 /// A method of adjusting p-values.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Adjustment {
     /// Multiplication by the number of comparisons.
@@ -91,20 +94,26 @@ pub enum Adjustment {
 ///
 /// # Errors
 ///
-/// [`InferenceError::PValue`] for a p-value that is NaN or outside `[0, 1]`
-/// and [`InferenceError::Comparisons`] when `n` is below the number of
-/// p-values.
-pub fn adjust(p: &[f64], method: Adjustment, n: Option<usize>) -> Result<Vec<f64>, InferenceError> {
+/// [`InputError::Domain`] for a p-value that is NaN or outside `[0, 1]`, and
+/// for an `n` below the number of p-values.
+pub fn adjust(p: &[f64], method: Adjustment, n: Option<usize>) -> Result<Vec<f64>, Error> {
     if let Some(&bad) = p.iter().find(|v| !(0.0..=1.0).contains(*v)) {
-        return Err(InferenceError::PValue(bad));
+        return Err(InputError::Domain {
+            what: "p-value",
+            value: bad,
+            domain: "[0, 1]",
+        }
+        .into());
     }
     let lp = p.len();
     let n = n.unwrap_or(lp);
     if n < lp {
-        return Err(InferenceError::Comparisons {
-            comparisons: n,
-            p_values: lp,
-        });
+        return Err(InputError::Domain {
+            what: "number of comparisons",
+            value: n as f64,
+            domain: "at least the number of p-values",
+        }
+        .into());
     }
     if n <= 1 {
         return Ok(p.to_vec());
@@ -456,7 +465,7 @@ mod tests {
     fn refuses_bad_input() {
         assert!(matches!(
             adjust(&[0.1, f64::NAN], Adjustment::Holm, None),
-            Err(InferenceError::PValue(v)) if v.is_nan()
+            Err(Error::Input(InputError::Domain { value, .. })) if value.is_nan()
         ));
         assert!(adjust(&[1.5], Adjustment::Holm, None).is_err());
         assert!(adjust(&[0.1, 0.2, 0.3], Adjustment::Holm, Some(2)).is_err());

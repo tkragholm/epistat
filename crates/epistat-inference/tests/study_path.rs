@@ -5,8 +5,9 @@
 //! `alpha = 0.05`, the trimmed interval at the cost models' default trim of
 //! 0.025, and the bias-corrected interval. Study I's simultaneous window bands
 //! are `kernels::did::curve::simultaneous_bands`: `multiplier_bands` on
-//! cluster-level influence rows, no clusters, `alpha = 1 - 0.95`, 1,000
-//! replicates and seed 17,431. A change that moves a hash moves a protected
+//! cluster-level influence rows, no clusters, `Level::alpha(1 - 0.95)`,
+//! 1,000 replicates and seed 17,431. Study II passes its `alpha` as
+//! `Level::alpha(alpha)`. A change that moves a hash moves a protected
 //! study, except where a decision says otherwise (decision 104 moves Study I's
 //! bands at the next bump in PHD), so a port of these calls to new signatures
 //! must reproduce every hash.
@@ -15,6 +16,7 @@
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
+use epistat_core::{Bootstrap, Interval, Level};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::simultaneous::multiplier_bands;
 use epistat_testkit::{Fingerprint, SplitMix64};
@@ -37,10 +39,9 @@ impl Hash {
         self.o(Some(value));
     }
 
-    fn pair(&mut self, interval: Option<(f64, f64)>) {
-        let (lower, upper) = interval.unzip();
-        self.o(lower);
-        self.o(upper);
+    fn pair(&mut self, interval: Option<Interval>) {
+        self.o(interval.and_then(|i| i.lower));
+        self.o(interval.and_then(|i| i.upper));
     }
 
     fn finish(&self) -> u64 {
@@ -68,18 +69,19 @@ fn replicates(n: usize, seed: u64) -> Vec<f64> {
 fn cases() -> Vec<(&'static str, u64)> {
     let mut out = Vec::new();
 
+    let alpha = Level::alpha(ALPHA).expect("alpha");
     let mut h = Hash::new();
     for (n, seed) in [(1_000, 1), (100, 2), (999, 3), (1_000, 4)] {
         let draws = replicates(n, seed);
         let point = draws[0] * 0.98;
-        h.pair(interval::percentile(&mut draws.clone(), ALPHA, Percentile::Type7).ok());
+        h.pair(interval::percentile(&mut draws.clone(), alpha, Percentile::Type7).ok());
         h.pair(
-            interval::trimmed_percentile(&mut draws.clone(), ALPHA, TRIM, Percentile::Type7).ok(),
+            interval::trimmed_percentile(&mut draws.clone(), alpha, TRIM, Percentile::Type7).ok(),
         );
         h.pair(
-            interval::trimmed_percentile(&mut draws.clone(), ALPHA, 0.0, Percentile::Type7).ok(),
+            interval::trimmed_percentile(&mut draws.clone(), alpha, 0.0, Percentile::Type7).ok(),
         );
-        h.pair(interval::bias_corrected(&mut draws.clone(), point, ALPHA).ok());
+        h.pair(interval::bias_corrected(&mut draws.clone(), point, alpha).ok());
     }
     out.push(("bootstrap_intervals", h.finish()));
 
@@ -95,13 +97,14 @@ fn cases() -> Vec<(&'static str, u64)> {
         })
         .collect();
     let rows: Vec<&[f64]> = flat.chunks_exact(n_clusters).collect();
-    let bands = multiplier_bands(&rows, None, BAND_ALPHA, 1_000, 17_431).expect("bands");
+    let level = Level::alpha(BAND_ALPHA).expect("alpha");
+    let bands = multiplier_bands(&rows, None, level, Bootstrap::new(1_000, 17_431)).expect("bands");
     let mut h = Hash::new();
     h.f(bands.critical);
     for &se in &bands.se {
         h.o(se);
     }
-    h.f(bands.at_least_pointwise(BAND_ALPHA));
+    h.f(bands.at_least_pointwise());
     out.push(("multiplier_bands", h.finish()));
     out
 }

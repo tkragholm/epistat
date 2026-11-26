@@ -19,9 +19,13 @@ use epistat_linalg::{Attempt, Method, solve};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
-use crate::{InferenceError, check_length};
+#[cfg(doc)]
+use epistat_core::InputError;
+
+use crate::{Error, check_length, empty};
 
 /// The result of [`wald`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Wald {
     /// The Wald chi-square statistic.
@@ -36,14 +40,14 @@ pub struct Wald {
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for no estimates, [`InferenceError::Length`] when
-/// the covariance is not `k x k`, [`InferenceError::Solve`] when the
-/// covariance cannot be solved, and [`InferenceError::NotFinite`] for a
+/// [`InputError::Empty`] for no estimates, [`InputError::Length`] when the
+/// covariance is not `k x k`, [`Error::Solve`] when the covariance cannot be
+/// solved, and [`Error::NotFinite`] for a
 /// statistic that is not finite.
-pub fn wald(estimates: &[f64], covariance: MatRef<'_, f64>) -> Result<Wald, InferenceError> {
+pub fn wald(estimates: &[f64], covariance: MatRef<'_, f64>) -> Result<Wald, Error> {
     let k = estimates.len();
     if k == 0 {
-        return Err(InferenceError::Empty);
+        return Err(empty("estimates"));
     }
     check_length("covariance rows", k, covariance.nrows())?;
     check_length("covariance columns", k, covariance.ncols())?;
@@ -51,7 +55,7 @@ pub fn wald(estimates: &[f64], covariance: MatRef<'_, f64>) -> Result<Wald, Infe
     let solved = solve(covariance, b.as_ref(), &[Attempt::plain(Method::FullPivLu)])?;
     let statistic: f64 = (0..k).map(|i| estimates[i] * solved.x[(i, 0)]).sum();
     if !statistic.is_finite() {
-        return Err(InferenceError::NotFinite);
+        return Err(Error::NotFinite);
     }
     Ok(Wald {
         statistic,
@@ -83,10 +87,14 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert_eq!(wald(&[], mat![[1.0]].as_ref()), Err(InferenceError::Empty));
+        use epistat_core::InputError;
+        assert!(matches!(
+            wald(&[], mat![[1.0]].as_ref()),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
         assert!(matches!(
             wald(&[1.0, 2.0], mat![[1.0]].as_ref()),
-            Err(InferenceError::Length { .. })
+            Err(Error::Input(InputError::Length { .. }))
         ));
     }
 }

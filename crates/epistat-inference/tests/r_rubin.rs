@@ -17,6 +17,7 @@
 //! case is compared at 1e-5 and the test also asserts that our value is the
 //! limit, `df_obs`.
 
+use epistat_core::Level;
 use epistat_inference::pooling::rubin;
 use epistat_testkit::{Tolerance, assert_close, load_json};
 use serde::Deserialize;
@@ -158,7 +159,8 @@ fn undefined_statistics_are_none_and_bad_input_is_an_error() {
     assert_eq!(p.se(), None);
     assert_eq!(p.df, None);
     assert_eq!(p.lambda, None);
-    assert_eq!(p.interval(0.05).unwrap(), None);
+    let interval = p.interval(Level::alpha(0.05).unwrap());
+    assert_eq!((interval.lower, interval.upper), (None, None));
     assert!(rubin(&[1.0], &[0.1], None).is_err());
     assert!(rubin(&[1.0, 2.0], &[0.1], None).is_err());
     assert!(rubin(&[1.0, f64::NAN], &[0.1, 0.1], None).is_err());
@@ -169,7 +171,8 @@ fn undefined_statistics_are_none_and_bad_input_is_an_error() {
 #[test]
 fn interval_uses_the_t_quantile_on_the_pooled_degrees_of_freedom() {
     let p = rubin(&[1.1, 0.9, 1.4, 1.0], &[0.2, 0.25, 0.22, 0.21], None).unwrap();
-    let (lo, hi) = p.interval(0.05).unwrap().unwrap();
+    let interval = p.interval(Level::alpha(0.05).unwrap());
+    let (lo, hi) = (interval.lower.unwrap(), interval.upper.unwrap());
     // qt(0.975, 68.2995918367348) = 1.99531 (R).
     let half = (hi - lo) / 2.0;
     assert!((half / p.se().unwrap() - 1.99531).abs() < 1e-5, "{half}");

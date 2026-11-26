@@ -68,7 +68,8 @@ fn summarise(results: &[(f64, bool)]) -> Summary {
 }
 
 fn covers(pooled: &Pooled, truth: f64) -> bool {
-    let (lo, hi) = pooled.interval(0.05).unwrap().unwrap();
+    let interval = pooled.interval(epistat_core::Level::alpha(0.05).unwrap());
+    let (lo, hi) = (interval.lower.unwrap(), interval.upper.unwrap());
     lo <= truth && truth <= hi
 }
 

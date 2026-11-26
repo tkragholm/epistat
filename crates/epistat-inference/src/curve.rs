@@ -18,8 +18,9 @@
 //! `d(x)`. On a log or logit link, the exponential of the curve and its limits
 //! is a ratio.
 //!
+//! The confidence level is a [`Level`] of confidence `1 - alpha`.
 //! [`Band::Pointwise`] gives the limits `l(x) -+ z se(x)` with
-//! `z = Phi^-1(1 - alpha / 2)`, each covering its own `l(x)` with probability
+//! `z = Phi^-1(1 - alpha / 2)`, the level's upper probability, each covering its own `l(x)` with probability
 //! `1 - alpha`. [`Band::SupT`] gives limits with the sup-t critical value `c`
 //! of [`crate::simultaneous::sup_t_from_covariance`], the `1 - alpha` quantile
 //! of the largest absolute standardised deviation over the grid, so that the
@@ -50,6 +51,7 @@
 //!    theory, implementation, and an application to SVARs. J Appl Econom.
 //!    2019;34(1):1-17.
 
+use epistat_core::{Bootstrap, InputError, Level, check};
 use epistat_linalg::MatRef;
 use epistat_linalg::basis::Basis;
 use epistat_rng::{Stream, replicate_seed};
@@ -59,28 +61,25 @@ use epistat_stats::sum::lanes;
 use rayon::prelude::*;
 
 use crate::simultaneous::{correlation, lower_cholesky};
-use crate::{InferenceError, check_length};
+use crate::{Error, check_length, empty};
 
 /// How far a covariance matrix may be from symmetric, relative to the
 /// geometric mean of its two diagonal entries (see `pooling`).
 const SYMMETRY: f64 = 1e-8;
 
 /// The kind of confidence limits of a curve.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Band {
     /// Each point has its own interval of coverage `1 - alpha`.
     Pointwise,
     /// The band covers the curve over the whole grid at once, with a sup-t
-    /// critical value from `draws` simulated replicates seeded from `seed`.
-    SupT {
-        /// The number of simulated replicates.
-        draws: usize,
-        /// The seed of the replicates.
-        seed: u64,
-    },
+    /// critical value from the simulated replicates of the [`Bootstrap`].
+    SupT(Bootstrap),
 }
 
 /// A contrast curve and its limits.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContrastCurve {
     /// The grid.
@@ -96,65 +95,71 @@ pub struct ContrastCurve {
     /// The critical value that multiplies the standard errors: the normal
     /// quantile for [`Band::Pointwise`], the sup-t value for [`Band::SupT`].
     pub critical: f64,
+    /// The level of the limits.
+    pub level: Level,
 }
 
 /// The contrast curve of `basis` on `grid` against `reference`, with the
 /// spline coefficients `coefficients` and their covariance block `covariance`
-/// in the order of the basis, and limits of the confidence level `1 - alpha`.
+/// in the order of the basis, and limits at `level`.
 ///
 /// # Errors
 ///
-/// [`InferenceError::Empty`] for an empty grid or no draws,
-/// [`InferenceError::Length`] when the coefficients or the covariance do not
-/// match the basis, [`InferenceError::Alpha`] for `alpha` outside `(0, 1)`,
-/// [`InferenceError::NotSymmetric`] for a covariance that is not symmetric,
-/// and [`InferenceError::NotFinite`] for a grid point, the reference, a
-/// coefficient or a covariance entry that is not finite, a negative variance,
-/// or a curve variance that is negative.
+/// [`InputError::Empty`] for an empty grid or basis or no replicates,
+/// [`InputError::Length`] when the coefficients or the covariance do not
+/// match the basis, [`InputError::NotFinite`] for a grid point, the reference,
+/// a coefficient or a covariance entry that is not finite,
+/// [`InputError::Domain`] for a negative variance, [`Error::NotSymmetric`]
+/// for a covariance that is not symmetric, and [`Error::NotFinite`] for a
+/// curve value or variance that is not finite or a curve variance that is
+/// negative.
 pub fn contrast_curve<B: Basis + ?Sized>(
     basis: &B,
     grid: &[f64],
     reference: f64,
     coefficients: &[f64],
     covariance: MatRef<'_, f64>,
-    alpha: f64,
+    level: Level,
     band: Band,
-) -> Result<ContrastCurve, InferenceError> {
+) -> Result<ContrastCurve, Error> {
     let p = basis.len();
-    if grid.is_empty() || p == 0 {
-        return Err(InferenceError::Empty);
-    }
+    check::non_empty("grid", grid.len())?;
+    check::non_empty("basis", p)?;
     check_length("coefficients", p, coefficients.len())?;
     check_length("covariance rows", p, covariance.nrows())?;
     check_length("covariance columns", p, covariance.ncols())?;
-    if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(InferenceError::Alpha(alpha));
-    }
-    if !reference.is_finite()
-        || grid.iter().any(|v| !v.is_finite())
-        || coefficients.iter().any(|v| !v.is_finite())
-    {
-        return Err(InferenceError::NotFinite);
-    }
+    check::finite("reference", &[reference])?;
+    check::finite("grid", grid)?;
+    check::finite("coefficients", coefficients)?;
     // The symmetrised covariance, row-major.
     let mut v = vec![0.0; p * p];
     for i in 0..p {
         for j in 0..p {
             let (a, b) = (covariance[(i, j)], covariance[(j, i)]);
             if !a.is_finite() || !b.is_finite() {
-                return Err(InferenceError::NotFinite);
+                let row = if a.is_finite() { j * p + i } else { i * p + j };
+                return Err(InputError::NotFinite {
+                    what: "covariance",
+                    row,
+                }
+                .into());
             }
             v[i * p + j] = a.midpoint(b);
         }
     }
     for i in 0..p {
         if v[i * p + i] < 0.0 {
-            return Err(InferenceError::NotFinite);
+            return Err(InputError::Domain {
+                what: "covariance diagonal",
+                value: v[i * p + i],
+                domain: "[0, inf)",
+            }
+            .into());
         }
         for j in 0..i {
             let scale = (v[i * p + i] * v[j * p + j]).sqrt();
             if (covariance[(i, j)] - covariance[(j, i)]).abs() > SYMMETRY * scale {
-                return Err(InferenceError::NotSymmetric);
+                return Err(Error::NotSymmetric);
             }
         }
     }
@@ -187,24 +192,24 @@ pub fn contrast_curve<B: Basis + ?Sized>(
             var += d * w;
         }
         if !(e.is_finite() && var.is_finite()) || var < 0.0 {
-            return Err(InferenceError::NotFinite);
+            return Err(Error::NotFinite);
         }
         estimate.push(e);
         variance.push(var);
     }
     let se: Vec<f64> = variance.iter().map(|v| v.sqrt()).collect();
 
-    let z = normal::quantile(1.0 - alpha / 2.0);
+    let z = normal::quantile(level.upper_probability());
     let critical = match band {
         Band::Pointwise => z,
-        Band::SupT { draws, seed } => {
+        Band::SupT(draws) => {
             // The points with a variance; the reference has none.
             let free: Vec<usize> = (0..g).filter(|&r| variance[r] > 0.0).collect();
             if free.is_empty() {
                 z
             } else {
                 let a = scaled_rows(&rows, &free, &se, &v, p)?;
-                sup_t(&a, p, alpha, draws, seed)?
+                sup_t(&a, p, level, draws)?
             }
         }
     };
@@ -225,6 +230,7 @@ pub fn contrast_curve<B: Basis + ?Sized>(
         lower,
         upper,
         critical,
+        level,
     })
 }
 
@@ -241,7 +247,7 @@ fn scaled_rows(
     se: &[f64],
     v: &[f64],
     p: usize,
-) -> Result<Vec<f64>, InferenceError> {
+) -> Result<Vec<f64>, Error> {
     let covariance = epistat_linalg::Mat::from_fn(p, p, |i, j| v[i * p + j]);
     let lower = lower_cholesky(&correlation(covariance.as_ref())?, p)?;
     let sd: Vec<f64> = (0..p).map(|i| v[i * p + i].sqrt()).collect();
@@ -259,12 +265,16 @@ fn scaled_rows(
     Ok(a)
 }
 
-/// The `1 - alpha` quantile of the largest `|A z|` over `draws` standard
-/// normal vectors `z` of length `p`, replicate `r` drawn from
-/// `replicate_seed(seed, r)`.
-fn sup_t(a: &[f64], p: usize, alpha: f64, draws: usize, seed: u64) -> Result<f64, InferenceError> {
+/// The quantile at the confidence of `level` of the largest `|A z|` over the
+/// replicates of `draws`, standard normal vectors `z` of length `p`, replicate
+/// `r` drawn from `replicate_seed(seed, r)`.
+fn sup_t(a: &[f64], p: usize, level: Level, draws: Bootstrap) -> Result<f64, Error> {
+    let Bootstrap {
+        replicates: draws,
+        seed,
+    } = draws;
     if draws == 0 {
-        return Err(InferenceError::Empty);
+        return Err(empty("replicates"));
     }
     let m = a.len() / p;
     let mut maxima: Vec<f64> = (0..draws as u64)
@@ -279,7 +289,7 @@ fn sup_t(a: &[f64], p: usize, alpha: f64, draws: usize, seed: u64) -> Result<f64
             },
         )
         .collect();
-    quantile::type7_unsorted(&mut maxima, 1.0 - alpha).ok_or(InferenceError::NotFinite)
+    quantile::type7_unsorted(&mut maxima, level.confidence_value()).ok_or(Error::NotFinite)
 }
 
 #[cfg(test)]
@@ -301,7 +311,7 @@ mod tests {
             3.0,
             &[7.0, 2.0],
             cov.as_ref(),
-            0.05,
+            Level::alpha(0.05).unwrap(),
             Band::Pointwise,
         )
         .unwrap();
