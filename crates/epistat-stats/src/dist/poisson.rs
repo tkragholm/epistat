@@ -2,7 +2,7 @@
 //! rate.
 //!
 //! [`pmf`], [`cdf`] and [`sf`] are R's `dpois` and `ppois`, from
-//! [`super::discrete`]: the point probability by Loader's saddle-point form
+//! the crate's private `discrete` module: the point probability by Loader's saddle-point form
 //! and the tails from the regularised incomplete gamma function,
 //! `P(X <= x) = Q(x + 1, m)`. [`cipoisson`] is `survival::cipoisson`.
 //!

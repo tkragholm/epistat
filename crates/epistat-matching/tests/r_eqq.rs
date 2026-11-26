@@ -6,7 +6,7 @@
 //! of distinct values (so that both the branch for at most five distinct values
 //! and the continuous one are used), ties, and the weights (one, random, integer
 //! and with zeros). Each case is compared to
-//! `epistat_stats::balance::eqq_distance_weighted`.
+//! `epistat_epi::balance::eqq_distance_weighted`.
 //!
 //! The two agree except in one situation, where MatchIt has a defect. With at
 //! most five distinct values in the pooled sample, MatchIt reads the larger
@@ -29,7 +29,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_stats::balance::eqq_distance_weighted;
+use epistat_epi::balance::eqq_distance_weighted;
 use epistat_testkit::{Tolerance, load_json, na_f64};
 use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;

@@ -18,10 +18,10 @@
 //! bound.
 
 use epistat_core::Level;
-use epistat_stats::dist::poisson::{Method, cipoisson};
-use epistat_stats::rates::{
+use epistat_epi::rates::{
     crude_rate, direct_standardised, rate_difference, rate_ratio, rate_ratio_exact_test,
 };
+use epistat_stats::dist::poisson::{Method, cipoisson};
 use epistat_testkit::{Tolerance, load_json};
 use serde::Deserialize;
 

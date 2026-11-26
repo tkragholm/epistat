@@ -1,10 +1,10 @@
 [package]
 name = "epistat-stats"
-description = "Sample quantiles, distributions, floating-point sums, balance statistics, E-values, Rosenbaum bounds and standardisation that agree with R and Python to the bit"
+description = "Distribution functions, sample quantiles, floating-point sums, weighted moments and k-means that agree with R and Python to the bit"
 keywords = ["statistics", "quantile", "normal-distribution", "summation"]
 categories = ["mathematics", "science"]
 readme = "README.md"
-version = "0.2.5"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -22,14 +22,6 @@ epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1.0.200", features = ["derive"] }
 # Parses floats to the nearest double, so the R references are compared to the bit.
 serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
-
-[[bench]]
-name = "tier1_stats"
-harness = false
-
-[[bench]]
-name = "tier2_bias"
-harness = false
 
 [lints]
 workspace = true

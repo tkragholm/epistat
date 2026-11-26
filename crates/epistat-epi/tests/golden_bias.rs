@@ -4,7 +4,7 @@
 //! confounding. Recorded on aarch64 macOS.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
-use epistat_stats::bias::{
+use epistat_epi::bias::{
     ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, Summary, Table2x2,
     probabilistic_confounding, probabilistic_misclass, probabilistic_selection,
 };

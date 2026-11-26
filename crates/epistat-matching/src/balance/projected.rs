@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use crate::matching::to_f64;
-use epistat_stats::{balance, weighted};
+use epistat_epi::balance;
+use epistat_stats::weighted;
 
 /// Numeric projected covariate definition for balance summaries.
 #[derive(Clone, Copy)]

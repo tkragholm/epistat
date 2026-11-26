@@ -7,7 +7,7 @@
 //! standard errors of their difference, estimated from the ten runs on each
 //! side.
 
-use epistat_stats::bias::{
+use epistat_epi::bias::{
     Confounder, ConfoundingMeasure, Dist, Kind, Misclass, Pair, ProbOptions, ProbResult, Summary,
     Table2x2, adjust_confounding, correct_exposure, correct_exposure_predictive, correct_outcome,
     correct_selection, probabilistic_confounding, probabilistic_misclass, probabilistic_selection,

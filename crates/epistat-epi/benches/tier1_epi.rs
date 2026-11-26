@@ -10,7 +10,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_stats::mantel_haenszel::{
+use epistat_epi::mantel_haenszel::{
     Pooled, RateStratum, odds_ratio, rate_difference, rate_ratio, risk_difference, risk_ratio,
     tables_from_records,
 };

@@ -6,11 +6,12 @@
 //! libm, so its recorded value is compared only on aarch64 macOS. Equality
 //! across thread counts is checked everywhere.
 
+use epistat_epi::{balance, rosenbaum, signed_rank};
 use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
 use epistat_inference::influence::{clustered_covariance, clustered_variance, standard_error};
 use epistat_inference::simultaneous::multiplier_bands;
-use epistat_stats::{balance, mcmc, quantile, rosenbaum, signed_rank};
+use epistat_stats::{mcmc, quantile};
 use epistat_testkit::{Fingerprint, on_threads};
 
 fn data(n: usize, salt: usize) -> Vec<f64> {

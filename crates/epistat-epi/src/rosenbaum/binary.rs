@@ -47,7 +47,7 @@
 use std::collections::BTreeMap;
 
 use super::{SensitivityError, check_gamma, sensitivity_value};
-use crate::dist::normal;
+use epistat_stats::dist::normal;
 
 /// The largest number of multiplications the exact convolution may take.
 pub const MAX_CONVOLUTION_WORK: f64 = 2.0e9;

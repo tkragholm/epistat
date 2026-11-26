@@ -18,9 +18,9 @@
 //! that R sums in row order, with a rounding error below `n eps` for `n` = 400
 //! persons, `1e-13` relative.
 
-use epistat_stats::decomposition::{Split, kitagawa, kitagawa_poisson, kitagawa_symmetric, shares};
-use epistat_stats::rates::Strata;
-use epistat_stats::standardisation::{standardisation_weights, stratum_counts};
+use epistat_epi::decomposition::{Split, kitagawa, kitagawa_poisson, kitagawa_symmetric, shares};
+use epistat_epi::rates::Strata;
+use epistat_epi::standardisation::{standardisation_weights, stratum_counts};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 

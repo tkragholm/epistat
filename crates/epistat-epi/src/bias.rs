@@ -113,9 +113,9 @@ pub use rates::{
 };
 pub use record::record_level_misclass;
 
-use crate::dist::beta;
-use crate::dist::normal;
-use crate::quantile::type7;
+use epistat_stats::dist::beta;
+use epistat_stats::dist::normal;
+use epistat_stats::quantile::type7;
 
 /// `x`, or `None` for NaN.
 fn finite(x: f64) -> Option<f64> {

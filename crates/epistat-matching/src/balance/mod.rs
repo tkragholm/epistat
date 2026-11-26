@@ -21,7 +21,7 @@ pub fn benchmark_ecdf_distance_stats(
     case_values: &[f64],
     control_values: &[f64],
 ) -> Option<(f64, f64)> {
-    epistat_stats::balance::ecdf_distance(case_values, control_values)
+    epistat_epi::balance::ecdf_distance(case_values, control_values)
 }
 
 #[cfg(feature = "bench-internals")]
@@ -30,5 +30,5 @@ pub fn benchmark_eqq_distance_stats(
     case_values: &[f64],
     control_values: &[f64],
 ) -> Option<(f64, f64)> {
-    epistat_stats::balance::eqq_distance(case_values, control_values)
+    epistat_epi::balance::eqq_distance(case_values, control_values)
 }

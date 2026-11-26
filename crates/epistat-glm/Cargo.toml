@@ -15,7 +15,7 @@ repository.workspace = true
 epistat-core = { path = "../epistat-core", version = "0.1.0" }
 epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
-epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
+epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
 rayon = "1.10"
 thiserror = "2"
 

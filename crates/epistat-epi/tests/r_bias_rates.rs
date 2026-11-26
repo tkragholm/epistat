@@ -9,7 +9,7 @@
 //! medians and limits of ten runs on each side, in standard errors of their
 //! difference.
 
-use epistat_stats::bias::{
+use epistat_epi::bias::{
     Dist, Misclass, Pair, ProbOptions, RateTable, Summary, correct_exposure_rates,
     probabilistic_misclass_rates,
 };

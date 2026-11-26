@@ -19,7 +19,7 @@
 //! are compared to `5.1e-5`. Its profile limits interpolate a profile on a grid,
 //! which differs from the root by up to `2e-3` for these counts.
 
-use epistat_stats::sir::{SirInterval, excess_absolute_risk, sir, sir_homogeneity, sir_trend};
+use epistat_epi::sir::{SirInterval, excess_absolute_risk, sir, sir_homogeneity, sir_trend};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 

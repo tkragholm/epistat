@@ -44,7 +44,7 @@ use crate::types::{
     MatchedPair, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
     NumericImprovement, PairDistance, SampleSizeTable,
 };
-use epistat_stats::balance::{
+use epistat_epi::balance::{
     cramers_v_weighted, ecdf_distance_weighted_ordered, eqq_distance_weighted_sorted,
     variance_ratio,
 };
@@ -78,7 +78,7 @@ use std::sync::Arc;
 ///
 /// The eQQ distances are those of `summary(standardize = FALSE)`: the larger
 /// group is read at the smaller group's cumulative weights as a step function
-/// (see [`epistat_stats::balance::eqq_distance_weighted`]). Cramér's V uses the
+/// (see [`epistat_epi::balance::eqq_distance_weighted`]). Cramér's V uses the
 /// weights as counts.
 #[must_use]
 pub fn balance_report<R: CovariateRecord>(
@@ -1498,7 +1498,7 @@ mod tests {
         SupplementalBalanceCovariates,
     };
     use crate::{date, test_outcome};
-    use epistat_stats::balance::{ecdf_distance_weighted, eqq_distance_weighted};
+    use epistat_epi::balance::{ecdf_distance_weighted, eqq_distance_weighted};
     use std::collections::HashMap;
 
     fn participant(id: &str) -> BalanceRecord {

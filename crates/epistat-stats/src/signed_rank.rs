@@ -1,52 +1,26 @@
-//! Ranks with ties and the signed rank statistic under biased assignment.
-//!
-//! The Wilcoxon signed rank statistic of a sample of paired differences is
-//! the sum of the ranks of the absolute differences over the pairs whose
-//! difference is positive. Without hidden bias each pair is positive with
-//! probability one half, and the distribution is the usual one. When the
-//! odds of treatment within a pair may differ by up to a factor `gamma`
-//! between the two units, each pair is positive with a probability between
-//! `1 / (1 + gamma)` and `gamma / (1 + gamma)` \[1\].
-//!
-//! # Algorithm
-//!
-//! [`average_ranks`] ranks a sample, giving tied values the mean of their
-//! ranks. Every average rank is a multiple of one half, so twice a rank is an
-//! integer. [`exact_upper_tail`] computes `P(sum r_i B_i >= t)` for
-//! independent Bernoulli(`p`) variables `B_i` and ranks `r_i`, by the
-//! recursion over the pairs
-//!
-//! ```text
-//! f_k(s) = (1 - p) f_{k-1}(s) + p f_{k-1}(s - 2 r_k)
-//! ```
-//!
-//! on the integer grid of twice the sum, which is exact up to rounding of the
-//! probabilities and handles ties among the ranks. The table has
-//! `2 sum r_i + 1` cells and the recursion `n` passes over it, so the
-//! computation stops at [`MAX_TABLE_WORK`] cells in all. [`normal_upper_tail`]
-//! is the large-sample approximation, with mean `p sum r_i` and variance
-//! `p (1 - p) sum r_i^2`.
-//!
-//! # Validation
-//!
-//! The exact tail at `p = 1/2` agrees with R's `psignrank` for samples
-//! without ties, and at other `p` with a brute-force enumeration over all
-//! `2^n` sign patterns; both are in the tests of `epistat-matching`
-//! (`r_sensitivity`) and of this module.
-//!
-//! # References
-//!
-//! 1. Rosenbaum PR. Observational Studies, 2nd ed. Springer; 2002. Chapter 4.
+//! Deprecated: this module moved to `epistat_epi::signed_rank` in 0.3.0, where its
+//! documentation, explainer and tests are. The copy here keeps the items and
+//! the results of 0.2 for one release and is removed in 0.4.0.
+
+#![expect(deprecated, reason = "the copy of 0.2 calls its own deprecated items")]
 
 use crate::dist::normal;
 use crate::sum::lanes;
 
 /// The largest `n * (2 sum r_i + 1)` [`exact_upper_tail`] works through.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::signed_rank::MAX_TABLE_WORK`"
+)]
 pub const MAX_TABLE_WORK: f64 = 2.0e9;
 
 /// What goes wrong in the signed rank computations.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::signed_rank::SignedRankError`"
+)]
 pub enum SignedRankError {
     /// A value that is not finite.
     NotFinite,
@@ -78,6 +52,10 @@ impl std::error::Error for SignedRankError {}
 ///
 /// [`SignedRankError::NotFinite`] when a value is NaN or infinite.
 #[expect(clippy::float_cmp, reason = "tied values are equal")]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::signed_rank::average_ranks`"
+)]
 pub fn average_ranks(values: &[f64]) -> Result<Vec<f64>, SignedRankError> {
     if values.iter().any(|v| !v.is_finite()) {
         return Err(SignedRankError::NotFinite);
@@ -111,6 +89,10 @@ pub fn average_ranks(values: &[f64]) -> Result<Vec<f64>, SignedRankError> {
 ///
 /// [`SignedRankError::Probability`] for `p` outside `[0, 1]`,
 /// [`SignedRankError::NotFinite`] and [`SignedRankError::TooLarge`].
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::signed_rank::exact_upper_tail`"
+)]
 pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, SignedRankError> {
     if !(0.0..=1.0).contains(&p) {
         return Err(SignedRankError::Probability(p));
@@ -166,6 +148,10 @@ pub fn exact_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Result<f64, Sig
 /// `p sum r_i` and the variance `p (1 - p) sum r_i^2`. `None` when the
 /// variance is zero.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::signed_rank::normal_upper_tail`"
+)]
 pub fn normal_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Option<f64> {
     let mean = p * lanes::sum(ranks);
     let variance = p * (1.0 - p) * lanes::sum_squares(ranks);
@@ -173,64 +159,5 @@ pub fn normal_upper_tail(ranks: &[f64], observed: f64, p: f64) -> Option<f64> {
         Some(normal::cdf(-(observed - mean) / variance.sqrt()))
     } else {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ties_share_the_mean_rank() {
-        let r = average_ranks(&[3.0, 1.0, 3.0, 2.0]).unwrap();
-        assert_eq!(r, vec![3.5, 1.0, 3.5, 2.0]);
-    }
-
-    fn brute(ranks: &[f64], observed: f64, p: f64) -> f64 {
-        let n = ranks.len();
-        let mut total = 0.0;
-        for mask in 0..(1_u32 << n) {
-            let mut stat = 0.0;
-            let mut prob = 1.0;
-            for (i, r) in ranks.iter().enumerate() {
-                if mask >> i & 1 == 1 {
-                    stat += r;
-                    prob *= p;
-                } else {
-                    prob *= 1.0 - p;
-                }
-            }
-            if stat >= observed - 1e-12 {
-                total += prob;
-            }
-        }
-        total
-    }
-
-    #[test]
-    fn exact_tail_matches_enumeration_with_ties() {
-        let ranks = [1.0, 2.5, 2.5, 4.0, 5.0, 6.5, 6.5, 8.0];
-        for p in [0.5, 0.6, 0.75, 0.9] {
-            for observed in [0.0, 3.5, 10.0, 17.5, 25.0, 36.0, 40.0] {
-                let a = exact_upper_tail(&ranks, observed, p).unwrap();
-                let b = brute(&ranks, observed, p);
-                assert!((a - b).abs() < 1e-14, "{p} {observed} {a} {b}");
-            }
-        }
-    }
-
-    #[test]
-    fn exact_tail_at_half_for_three_pairs() {
-        // Sums of {1,2,3}: 0,1,2,3,3,4,5,6, each with probability 1/8.
-        let t = exact_upper_tail(&[1.0, 2.0, 3.0], 5.0, 0.5).unwrap();
-        assert!((t - 2.0 / 8.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn exact_upper_tail_with_huge_ranks_is_too_large() {
-        assert_eq!(
-            exact_upper_tail(&[1e19, 1e19], 1.0, 0.5),
-            Err(SignedRankError::TooLarge)
-        );
     }
 }

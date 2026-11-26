@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! Exact (Garwood)   lower = Q_gamma(a, O) / E,  upper = Q_gamma(1 - a, O + 1) / E,  a = (1 - level) / 2
-//! Byar              the cube-root form of crate::dist::poisson, divided by E
+//! Byar              the cube-root form of epistat_stats::dist::poisson, divided by E
 //! Wald              exp(ln SIR -/+ z / sqrt(O)), undefined for O = 0
 //! Profile           the t with 2 [ O ln(O / (E t)) - (O - E t) ] = z^2, one on each side of O / E
 //! ```
@@ -60,7 +60,7 @@
 //! # Accuracy
 //!
 //! The exact limits and the exact p-value have the accuracy of
-//! [`crate::dist::gamma::quantile`] and of the Poisson point probabilities, about
+//! [`epistat_stats::dist::gamma::quantile`] and of the Poisson point probabilities, about
 //! `1e-13` relative. The profile limits are roots of a function whose
 //! derivative is `2 (E - O / t)` at the root, so their relative error is a few
 //! units of machine epsilon times the condition of the root, which is about
@@ -76,12 +76,12 @@
 
 use std::fmt;
 
-use crate::dist::chi_square::sf as chi_square_sf;
-use crate::dist::discrete::poisson_two_sided;
-use crate::dist::normal;
-use crate::dist::poisson::{self, Method};
-use crate::sum::compensated;
+use crate::exact::poisson_two_sided;
 use epistat_core::Level;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
+use epistat_stats::dist::normal;
+use epistat_stats::dist::poisson::{self, Method};
+use epistat_stats::sum::compensated;
 
 /// Why an SIR was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

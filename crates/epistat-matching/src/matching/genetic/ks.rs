@@ -16,7 +16,7 @@
 //! The test is that of R's `ks.test`: exact when `m * n < 10000`, asymptotic
 //! otherwise.
 
-use epistat_stats::balance::ecdf_gaps_sorted;
+use epistat_epi::balance::ecdf_gaps_sorted;
 
 /// The statistic of two unsorted samples, or `None` when either is empty.
 pub(crate) fn ks_statistic(x: &[f64], y: &[f64]) -> Option<f64> {

@@ -19,7 +19,7 @@
 //! relative, the sensitivity of the tail to its argument. The checks print the
 //! largest deviation in units of its bound.
 
-use epistat_stats::mantel_haenszel::{
+use epistat_epi::mantel_haenszel::{
     RateStratum, Table, breslow_day, cmh_test, odds_ratio, rate_difference, rate_ratio,
     rate_ratio_test, risk_difference, risk_ratio,
 };
@@ -115,7 +115,7 @@ impl Worst {
         }
     }
 
-    fn pooled(&mut self, what: &str, got: &epistat_stats::mantel_haenszel::Pooled, want: &Pooled) {
+    fn pooled(&mut self, what: &str, got: &epistat_epi::mantel_haenszel::Pooled, want: &Pooled) {
         self.check(
             &format!("{what} estimate"),
             got.estimate,

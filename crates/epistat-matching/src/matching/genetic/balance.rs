@@ -11,8 +11,8 @@
 
 use std::cmp::Ordering;
 
+use epistat_epi::balance::ecdf_gaps_sorted;
 use epistat_rng::Stream;
-use epistat_stats::balance::ecdf_gaps_sorted;
 use epistat_stats::dist::t;
 
 use super::ks;

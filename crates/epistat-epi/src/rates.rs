@@ -4,7 +4,7 @@
 //! # Algorithm
 //!
 //! A stratum with `d` events in person-time `y` has the rate `d / y`. Its
-//! interval is the exact Poisson interval of [`crate::dist::poisson`], divided by
+//! interval is the exact Poisson interval of [`epistat_stats::dist::poisson`], divided by
 //! `y` and multiplied by `scale`.
 //!
 //! A directly standardised rate over strata `s` with weights `w_s`, scaled to
@@ -41,7 +41,7 @@
 //! numerator of the upper limit, and the one in the denominator of the lower
 //! limit, up by a weight `s`, with its variance up by `u`, as the upper gamma
 //! limit of one rate does. With `qf(p, m, n)` the F quantile
-//! ([`crate::dist::f::quantile`]),
+//! ([`epistat_stats::dist::f::quantile`]),
 //!
 //! ```text
 //! lower = R1 / (R0 + s0)  qf(a,     2 R1^2 / V1,                2 (R0 + s0)^2 / (V0 + u0))
@@ -113,17 +113,17 @@
 
 use std::fmt;
 
-use crate::dist::discrete::binomial_two_sided;
-use crate::dist::normal;
-use crate::dist::poisson::{self, Method};
-use crate::dist::{beta, chi_square, f};
+use crate::exact::binomial_two_sided;
 use epistat_core::Level;
+use epistat_stats::dist::normal;
+use epistat_stats::dist::poisson::{self, Method};
+use epistat_stats::dist::{beta, chi_square, f};
 
 /// `x`, or `None` for NaN.
 fn finite(x: f64) -> Option<f64> {
     (!x.is_nan()).then_some(x)
 }
-use crate::sum::compensated;
+use epistat_stats::sum::compensated;
 
 /// Why a rate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

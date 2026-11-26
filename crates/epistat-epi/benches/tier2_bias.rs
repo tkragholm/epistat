@@ -13,9 +13,7 @@
 mod common;
 
 use common::Lines;
-use epistat_stats::bias::{
-    Dist, Kind, Pair, ProbOptions, Summary, Table2x2, probabilistic_misclass,
-};
+use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, Summary, Table2x2, probabilistic_misclass};
 
 const TABLE: Table2x2 = Table2x2 {
     a: 215.0,

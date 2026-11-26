@@ -22,11 +22,13 @@
 //! invalid input as an [`Error`].
 //!
 //! The modules `normal`, `gamma`, `student` and `poisson` hold the paths of
-//! 0.2 as deprecated forwarders for one release.
+//! 0.2 as deprecated forwarders for one release. The epidemiological modules
+//! moved to `epistat-epi`; `balance`, `decomposition`, `evalue`, `rosenbaum`,
+//! `signed_rank` and `standardisation` stay here as deprecated copies of
+//! their 0.2 items for one release.
 #![warn(missing_docs)]
 
 pub mod balance;
-pub mod bias;
 pub mod cluster;
 pub mod compat;
 pub mod decomposition;
@@ -36,16 +38,13 @@ pub mod evalue;
 pub mod gamma;
 pub mod likelihood;
 pub mod logistic;
-pub mod mantel_haenszel;
 pub mod mcmc;
 pub mod moments;
 pub mod normal;
 pub mod poisson;
 pub mod quantile;
-pub mod rates;
 pub mod rosenbaum;
 pub mod signed_rank;
-pub mod sir;
 pub mod standardisation;
 pub mod student;
 pub mod sum;

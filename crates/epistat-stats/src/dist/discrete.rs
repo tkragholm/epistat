@@ -1,6 +1,5 @@
 //! Probabilities of the Poisson and binomial distributions, behind
-//! [`super::poisson`] and [`super::binomial`], and the two-sided exact tests
-//! of R's `poisson.test` and `binom.test`.
+//! [`super::poisson`] and [`super::binomial`].
 //!
 //! # Algorithm
 //!
@@ -162,87 +161,6 @@ pub(crate) fn pbinom_upper(x: f64, n: f64, p: f64) -> f64 {
     } else {
         regularised_beta(x + 1.0, n - x, p, 1.0 - p)
     }
-}
-
-/// The relative tolerance on the point probability that the exact tests of R
-/// allow when they collect the outcomes that are not more likely than the
-/// observed one.
-pub(crate) const REL_ERR: f64 = 1.0 + 1e-7;
-
-/// The two-sided p-value of an exact Poisson test of `x` against the mean
-/// `m > 0`, as `stats::poisson.test`: the total probability of the outcomes
-/// with a probability not above that of `x`, within [`REL_ERR`].
-#[expect(
-    clippy::float_cmp,
-    reason = "R takes the observed count at the mean as the tie of the test"
-)]
-pub(crate) fn poisson_two_sided(x: f64, m: f64) -> f64 {
-    let d = dpois(x, m);
-    if x == m {
-        return 1.0;
-    }
-    let p = if x < m {
-        let mut top = (2.0 * m - x).ceil();
-        while dpois(top, m) > d {
-            top *= 2.0;
-        }
-        let mut count = 0.0;
-        let mut i = m.ceil();
-        while i <= top {
-            if dpois(i, m) <= d * REL_ERR {
-                count += 1.0;
-            }
-            i += 1.0;
-        }
-        ppois_lower(x, m) + ppois_upper(top - count, m)
-    } else {
-        let mut count = 0.0;
-        let mut i = 0.0;
-        while i <= m.floor() {
-            if dpois(i, m) <= d * REL_ERR {
-                count += 1.0;
-            }
-            i += 1.0;
-        }
-        ppois_lower(count - 1.0, m) + ppois_upper(x - 1.0, m)
-    };
-    p.min(1.0)
-}
-
-/// The two-sided p-value of an exact binomial test of `x` successes in `n`
-/// trials against the probability `p` in `(0, 1)`, as `stats::binom.test`.
-#[expect(
-    clippy::float_cmp,
-    reason = "R takes the observed count at the mean as the tie of the test"
-)]
-pub(crate) fn binomial_two_sided(x: f64, n: f64, p: f64) -> f64 {
-    let d = dbinom(x, n, p);
-    let m = n * p;
-    if x == m {
-        return 1.0;
-    }
-    let value = if x < m {
-        let mut count = 0.0;
-        let mut i = m.ceil();
-        while i <= n {
-            if dbinom(i, n, p) <= d * REL_ERR {
-                count += 1.0;
-            }
-            i += 1.0;
-        }
-        pbinom_lower(x, n, p) + pbinom_upper(n - count, n, p)
-    } else {
-        let mut count = 0.0;
-        let mut i = 0.0;
-        while i <= m.floor() {
-            if dbinom(i, n, p) <= d * REL_ERR {
-                count += 1.0;
-            }
-            i += 1.0;
-        }
-        pbinom_lower(count - 1.0, n, p) + pbinom_upper(x - 1.0, n, p)
-    };
-    value.min(1.0)
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 //! method that gives sets with one treated unit: [`matched_sets`] reads the
 //! pairs and sets of [`crate::output::get_matches`], and [`MatchedSet`]s can
 //! be built by hand. The numerical work is in
-//! [`epistat_stats::rosenbaum`] and [`epistat_stats::evalue`], which are
+//! [`epistat_epi::rosenbaum`] and [`epistat_epi::evalue`], which are
 //! re-exported here.
 //!
 //! # Bounds
@@ -58,12 +58,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-pub use epistat_stats::evalue::{
+pub use epistat_epi::evalue::{
     EValueError, EValues, Outcome, RdEValues, SelectionBias, bounding_factor, evalues_hr,
     evalues_md, evalues_or, evalues_rd, evalues_rr, selection_evalues_rr,
 };
-use epistat_stats::rosenbaum::{self, BinaryStratum};
-pub use epistat_stats::rosenbaum::{
+use epistat_epi::rosenbaum::{self, BinaryStratum};
+pub use epistat_epi::rosenbaum::{
     BinaryBounds, BinaryDistribution, Censored, EffectInterval, EventDirection,
     HodgesLehmannBounds, MScore, SensitivityError, SetBounds, Sides, WilcoxonBounds,
     WilcoxonDistribution, amplify, sensitivity_value,
@@ -279,7 +279,7 @@ pub fn wilcoxon_bounds(
     gammas
         .iter()
         .map(|&g| {
-            epistat_stats::rosenbaum::wilcoxon_bounds(&diffs, g, distribution)
+            epistat_epi::rosenbaum::wilcoxon_bounds(&diffs, g, distribution)
                 .map_err(BoundsError::from)
         })
         .collect()
@@ -296,7 +296,7 @@ pub fn hodges_lehmann_bounds(
     gammas: &[f64],
 ) -> Result<Vec<HodgesLehmannBounds>, BoundsError> {
     let diffs = pair_differences(sets)?;
-    Ok(epistat_stats::rosenbaum::hodges_lehmann_bounds(
+    Ok(epistat_epi::rosenbaum::hodges_lehmann_bounds(
         &diffs, gammas,
     )?)
 }
@@ -312,17 +312,17 @@ pub fn m_statistic_bounds(
     gammas: &[f64],
     spec: &MScore,
 ) -> Result<Vec<SetBounds>, BoundsError> {
-    let scores = epistat_stats::rosenbaum::m_scores(&raw_sets(sets)?, spec)?;
+    let scores = epistat_epi::rosenbaum::m_scores(&raw_sets(sets)?, spec)?;
     gammas
         .iter()
-        .map(|&g| epistat_stats::rosenbaum::set_bounds(&scores, g).map_err(BoundsError::from))
+        .map(|&g| epistat_epi::rosenbaum::set_bounds(&scores, g).map_err(BoundsError::from))
         .collect()
 }
 
 /// The sensitivity value of the signed rank test of matched pairs: the
 /// smallest `gamma` at which the upper bound of [`wilcoxon_bounds`] reaches
 /// `alpha`; 1 when it does so without hidden bias. See
-/// [`epistat_stats::rosenbaum::sensitivity_value`].
+/// [`epistat_epi::rosenbaum::sensitivity_value`].
 ///
 /// # Errors
 ///
@@ -343,7 +343,7 @@ pub fn wilcoxon_sensitivity_value(
 /// The smallest `gamma` at which the lower bound of the Hodges-Lehmann
 /// estimate of matched pairs reaches `tau0`, 0 for no effect; 1 when it is
 /// there without hidden bias and infinite when no `gamma` brings it there.
-/// See [`epistat_stats::rosenbaum::hodges_lehmann_gamma`].
+/// See [`epistat_epi::rosenbaum::hodges_lehmann_gamma`].
 ///
 /// # Errors
 ///
@@ -387,7 +387,7 @@ pub fn m_statistic_sensitivity_value(
 /// The range of point estimates and the confidence interval of an additive
 /// effect under `gamma`, from the m-statistic over matched sets, as
 /// `sensitivitymw::senmwCI`. See
-/// [`epistat_stats::rosenbaum::m_statistic_interval`].
+/// [`epistat_epi::rosenbaum::m_statistic_interval`].
 ///
 /// # Errors
 ///
@@ -448,7 +448,7 @@ fn binary_strata(sets: &[MatchedSet]) -> Result<Vec<BinaryStratum>, BoundsError>
 /// binary outcome, 0 or 1, at each `gamma`, as `sensitivity2x2xk::mh`
 /// ([`BinaryDistribution::Exact`]) or `mhLS` ([`BinaryDistribution::Normal`]).
 /// In pairs this is the binomial tail of the discordant pairs. See
-/// [`epistat_stats::rosenbaum::binary_bounds`].
+/// [`epistat_epi::rosenbaum::binary_bounds`].
 ///
 /// # Errors
 ///
@@ -512,8 +512,8 @@ fn gehan(sets: &[CensoredSet], direction: EventDirection) -> Result<Vec<Vec<f64>
 
 /// The bound of the one-sided test of censored times to an event over
 /// matched sets, at each `gamma`: Gehan's scores of
-/// [`epistat_stats::rosenbaum::gehan_scores`] summed for the treated units,
-/// with the bound of [`epistat_stats::rosenbaum::set_bounds`]. `direction`
+/// [`epistat_epi::rosenbaum::gehan_scores`] summed for the treated units,
+/// with the bound of [`epistat_epi::rosenbaum::set_bounds`]. `direction`
 /// says whether the test is that the treated have the event earlier or
 /// later. The null hypothesis is that the treatment changes neither the
 /// times to the event nor the censoring.

@@ -32,11 +32,11 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_epi::rosenbaum;
 use epistat_matching::sensitivity::{
     EValues, MScore, MatchedSet, Outcome, WilcoxonDistribution, evalues_hr, evalues_md, evalues_or,
     evalues_rr, hodges_lehmann_bounds, m_statistic_bounds, wilcoxon_bounds,
 };
-use epistat_stats::rosenbaum;
 
 use r_reference::reference as load_reference;
 use serde::Deserialize;

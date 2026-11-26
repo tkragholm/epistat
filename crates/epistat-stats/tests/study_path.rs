@@ -12,6 +12,9 @@
 //! The hashes were recorded on aarch64 macOS. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+// The 0.2 paths of decomposition and standardisation are what PHD compiles
+// against at the bump; epistat-epi hashes the same calls at their new paths.
+#![expect(deprecated, reason = "the hashes cover the deprecated 0.2 paths too")]
 
 use epistat_stats::dist::{chi_square, normal};
 use epistat_stats::{compat, decomposition, standardisation, sum, weighted};

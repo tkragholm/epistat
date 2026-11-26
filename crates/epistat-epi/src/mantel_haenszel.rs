@@ -103,9 +103,9 @@
 
 use std::fmt;
 
-use crate::dist::chi_square::sf as chi_square_sf;
-use crate::dist::normal;
-use crate::sum::compensated;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
+use epistat_stats::dist::normal;
+use epistat_stats::sum::compensated;
 
 /// Why a Mantel-Haenszel estimate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

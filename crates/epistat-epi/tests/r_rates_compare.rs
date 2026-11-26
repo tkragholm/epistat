@@ -23,8 +23,8 @@
 //! there, is checked to `1e-12`. The Breslow-Day statistics are sums written
 //! out in the same order, `1e-12`.
 
-use epistat_stats::mantel_haenszel::{RateStratum, rate_ratio_breslow_day, rate_ratio_homogeneity};
-use epistat_stats::rates::{RatioInterval, Strata, standardised_difference, standardised_ratio};
+use epistat_epi::mantel_haenszel::{RateStratum, rate_ratio_breslow_day, rate_ratio_homogeneity};
+use epistat_epi::rates::{RatioInterval, Strata, standardised_difference, standardised_ratio};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 

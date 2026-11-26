@@ -15,7 +15,7 @@
 //! probabilities, each accurate to `1e-14`. The
 //! test prints the largest deviation in units of its bound.
 
-use epistat_stats::rates::rate_ratio_exact;
+use epistat_epi::rates::rate_ratio_exact;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 use serde_json::Value;

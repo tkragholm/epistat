@@ -26,11 +26,12 @@ epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
 epistat-optim = { path = "../epistat-optim", version = "0.1.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.1.1" }
-epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
+epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
 rayon = "1.10"
 thiserror = "2"
 
 [dev-dependencies]
+epistat-epi = { path = "../epistat-epi", version = "0.1.0" }
 epistat-testkit = { path = "../epistat-testkit" }
 serde = { version = "1.0.200", features = ["derive"] }
 

@@ -29,7 +29,7 @@
 //!    2007;63(2):456-64.
 
 use super::{MScore, SensitivityError, check_gamma, m_scores, set_bounds};
-use crate::dist::normal;
+use epistat_stats::dist::normal;
 
 /// Whether an interval has one limit or two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -27,7 +27,7 @@ pub(super) fn standard_deviation(variance: f64) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::matching::to_f64;
-    use epistat_stats::balance::{
+    use epistat_epi::balance::{
         ecdf_distance as ecdf_distance_stats, eqq_distance as eqq_distance_stats,
     };
     use itertools::Itertools;

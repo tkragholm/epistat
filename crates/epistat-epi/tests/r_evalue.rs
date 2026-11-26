@@ -10,8 +10,8 @@
 //!   last place, allowed as 1e-12.
 //! * `svalues.RR`: a square root or two of the same ratio, to 1e-14 relative.
 
-use epistat_stats::bias::Table2x2;
-use epistat_stats::evalue::{SelectionBias, bounding_factor, evalues_rd, selection_evalues_rr};
+use epistat_epi::bias::Table2x2;
+use epistat_epi::evalue::{SelectionBias, bounding_factor, evalues_rd, selection_evalues_rr};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 use std::collections::HashMap;

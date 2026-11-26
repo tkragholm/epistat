@@ -22,7 +22,7 @@ serde = ["dep:serde"]
 [dependencies]
 epistat-core = { path = "../epistat-core", version = "0.1.0" }
 epistat-optim = { path = "../epistat-optim", version = "0.1.1" }
-epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
+epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
 thiserror = "2"
 serde = { version = "1", optional = true }
 
