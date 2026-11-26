@@ -19,19 +19,26 @@
 //! - [`Referent::Bidirectional`]: the same on both sides, `+-step, ..,
 //!   +-n step` \[2\].
 //! - [`Referent::TimeStratified`]: every shift that is a multiple of 7 days
-//!   and puts the day `t + s` in the same calendar month, or year, as `t`. The
+//!   and puts the day `t + s` in the same stratum as `t`: the calendar month,
+//!   quarter or year, or a block of fixed length ([`StratumUnit`]). The
 //!   referents are the days with the same weekday as the event in the same
 //!   stratum, which keeps the referent days balanced around the event and
 //!   avoids the bias of unidirectional selection when the exposure trends
 //!   \[3, 4\].
+//! - [`Referent::Stratified`]: the same with a spacing other than 7 days, 14
+//!   or 28 to keep the weekday with fewer referents, or at least the hazard
+//!   window for a hazard window longer than a week, such as 35 days in the
+//!   calendar year for a 30-day window.
+//! - [`build_windows_in_strata`]: the same with a stratum the caller gives for
+//!   each event, such as one that follows a holiday calendar.
 //!
 //! A referent window is dropped when it contains the event day or does not lie
 //! within the observation period of the person, and a set that has no referent
 //! left is dropped with its case. A set whose hazard window is not within
 //! observation is dropped too. Each of these is counted or listed in
 //! [`Windows`]. The shifts must be at least `h` days apart from zero (a step,
-//! and for time stratification 7 days, of at least `h`) so that referent windows
-//! do not overlap the hazard window.
+//! and for time stratification 7 days or the spacing, of at least `h`) so that
+//! referent windows do not overlap the hazard window.
 //!
 //! # Exposure
 //!
@@ -54,7 +61,12 @@
 //! estimate. It removes the bias of a trend in the exposure only if the trend is
 //! the same in cases and controls, which fails when it differs for reasons
 //! related to the event \[6\]. The matching of the control persons is the
-//! caller's, for example by `epistat-matching`.
+//! caller's, by `epistat-matching` or by [`sample_controls`], which draws
+//! control persons at the date of each case: people without the event by
+//! then for the case-time-control design, or people who have it later for the
+//! case-case-time-control design \[7\], whose controls are closer to the cases
+//! in whatever leads to the event. [`case_time_control_windows`] builds the
+//! windows of both and the group of each window.
 //!
 //! # Agreement with R
 //!
@@ -62,7 +74,15 @@
 //! explicit R loop over calendar days (R's `Date`, for weekday and month
 //! length), the exposure with the union of days in R, and the analysis with
 //! `survival::clogit`, with the exact likelihood and with a cluster-robust
-//! variance by the approximate method and `cluster(person)`.
+//! variance by the approximate method and `cluster(person)`. The
+//! time-stratified referents by month, 7 and 14 days apart, are compared with
+//! the referent days of `rSPARCS::CXover.data` (rSPARCS 0.1.1), and the
+//! analysis in fixed 28- and 35-day strata and by month with
+//! `season::casecross` (season 0.3.16), which puts the hazard on the event day
+//! itself; a hazard window here ends the day before, so its one-day windows
+//! stand for the day after them. No R package samples control persons at the
+//! case's date by these rules, so [`sample_controls`] is checked for
+//! eligibility, uniformity and thread independence on its own.
 //!
 //! # References
 //!
@@ -78,20 +98,40 @@
 //! 5. Suissa S. The case-time-control design. Epidemiology 1995;6(3):248-53.
 //! 6. Greenland S. Confounding and exposure trends in case-crossover and
 //!    case-time-control designs. Epidemiology 1996;7(3):231-9.
+//! 7. Wang S, Linkletter C, Maclure M, Dore D, Mor V, Buka S, et al. Future
+//!    cases as present controls to adjust for exposure trend bias in
+//!    case-only studies. Epidemiology 2011;22(4):568-74.
+
+mod controls;
+
+pub use controls::{
+    Candidates, CaseEvents, CaseTimeControlWindows, ControlRule, Controls,
+    case_time_control_windows, sample_controls,
+};
 
 use epistat_linalg::Mat;
 use rayon::prelude::*;
 
 use crate::error::{Error, Result};
 
-/// The calendar stratum within which a time-stratified referent shares the
-/// weekday of the event.
+/// The calendar stratum within which time-stratified referents are chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StratumUnit {
     /// The same calendar month and year.
     Month,
+    /// The same calendar quarter and year: January to March, April to June,
+    /// July to September, October to December.
+    Quarter,
     /// The same calendar year.
     Year,
+    /// Consecutive blocks of `length` days, the first starting on day
+    /// `origin`, as the strata of `season::casecross` with `stratalength`.
+    Fixed {
+        /// The first day of a stratum.
+        origin: i64,
+        /// The days of each stratum, at least 1.
+        length: i64,
+    },
 }
 
 /// How the referent windows of an event are chosen.
@@ -111,11 +151,33 @@ pub enum Referent {
         /// The days between windows, at least the hazard window length.
         step: i64,
     },
-    /// The same weekday within the calendar stratum of the event.
+    /// The same weekday within the calendar stratum of the event: every
+    /// shift that is a multiple of 7 days and stays in the stratum.
     TimeStratified {
         /// The stratum.
         unit: StratumUnit,
     },
+    /// Every shift that is a multiple of `spacing` days and stays in the
+    /// calendar stratum of the event. A spacing of 7 is
+    /// [`Referent::TimeStratified`]; 14 or 28 keep the weekday with fewer
+    /// referents, and a spacing of at least the hazard window allows a hazard
+    /// window longer than a week.
+    Stratified {
+        /// The stratum.
+        unit: StratumUnit,
+        /// The days between referents, at least the hazard window length.
+        spacing: i64,
+    },
+}
+
+/// The first and last day of the stratum of each event, both included, for
+/// strata the caller defines.
+#[derive(Debug, Clone, Copy)]
+pub struct EventStrata<'a> {
+    /// The first day of the stratum of each event.
+    pub first: &'a [i64],
+    /// The last day of the stratum of each event.
+    pub last: &'a [i64],
 }
 
 /// The days of observation of each event's person, both ends included.
@@ -225,21 +287,37 @@ pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+/// The first day of the month `months` months after January of year `y`.
+fn first_of_month(y: i64, months: i64) -> i64 {
+    days_from_civil(y + months.div_euclid(12), months.rem_euclid(12) + 1, 1)
+}
+
 /// The first and last day of the stratum that holds `t`.
 fn stratum_of(t: i64, unit: StratumUnit) -> (i64, i64) {
     let (y, m, _) = civil_from_days(t);
     match unit {
-        StratumUnit::Month => {
-            let first = days_from_civil(y, m, 1);
-            let next = if m == 12 {
-                days_from_civil(y + 1, 1, 1)
-            } else {
-                days_from_civil(y, m + 1, 1)
-            };
-            (first, next - 1)
+        StratumUnit::Month => (first_of_month(y, m - 1), first_of_month(y, m) - 1),
+        StratumUnit::Quarter => {
+            let q = (m - 1) / 3;
+            (first_of_month(y, 3 * q), first_of_month(y, 3 * q + 3) - 1)
         }
         StratumUnit::Year => (days_from_civil(y, 1, 1), days_from_civil(y + 1, 1, 1) - 1),
+        StratumUnit::Fixed { origin, length } => {
+            let first = origin + (t - origin).div_euclid(length) * length;
+            (first, first + length - 1)
+        }
     }
+}
+
+/// The shifts that are nonzero multiples of `spacing` and keep `t` within
+/// `[first, last]`, in increasing order.
+fn stratum_shifts(t: i64, first: i64, last: i64, spacing: i64) -> Vec<i64> {
+    let below = (t - first) / spacing;
+    let above = (last - t) / spacing;
+    (-below..=above)
+        .filter(|&k| k != 0)
+        .map(|k| spacing * k)
+        .collect()
 }
 
 /// The shifts of the referent windows of an event on day `t`, in increasing
@@ -258,12 +336,11 @@ fn shifts(t: i64, referent: Referent) -> Vec<i64> {
         }
         Referent::TimeStratified { unit } => {
             let (first, last) = stratum_of(t, unit);
-            let below = (t - first) / 7;
-            let above = (last - t) / 7;
-            (-below..=above)
-                .filter(|&k| k != 0)
-                .map(|k| 7 * k)
-                .collect()
+            stratum_shifts(t, first, last, 7)
+        }
+        Referent::Stratified { unit, spacing } => {
+            let (first, last) = stratum_of(t, unit);
+            stratum_shifts(t, first, last, spacing)
         }
     }
 }
@@ -280,12 +357,9 @@ fn shifts(t: i64, referent: Referent) -> Vec<i64> {
 /// [`Error::Input`] when the columns differ in length, `hazard_days` is below
 /// 1, `lag` is negative, a referent has no window or a step below
 /// `hazard_days` (below 7 days for a time-stratified referent, whose smallest
-/// shift is 7), an observation period ends before it starts, or there are more
-/// events than a `u32` addresses.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the number of events is checked against u32 first"
-)]
+/// shift is 7, and below the spacing of a stratified one), a fixed stratum or
+/// a spacing is shorter than a day, an observation period ends before it
+/// starts, or there are more events than a `u32` addresses.
 pub fn build_windows(
     event_day: &[i64],
     person: &[u32],
@@ -294,6 +368,104 @@ pub fn build_windows(
     referent: Referent,
     observation: Option<Observation<'_>>,
 ) -> Result<Windows> {
+    let smallest = match referent {
+        Referent::Unidirectional { n, step } | Referent::Bidirectional { n, step } => {
+            if n == 0 {
+                return Err(invalid("a referent needs at least one window"));
+            }
+            step
+        }
+        Referent::TimeStratified { unit } => {
+            check_unit(unit)?;
+            7
+        }
+        Referent::Stratified { unit, spacing } => {
+            check_unit(unit)?;
+            if spacing < 1 {
+                return Err(invalid(format!(
+                    "the spacing of the referents is {spacing}, which is less than a day"
+                )));
+            }
+            spacing
+        }
+    };
+    check_events(event_day, person, hazard_days, lag, smallest, observation)?;
+    Ok(build_with(
+        event_day,
+        person,
+        hazard_days,
+        lag,
+        observation,
+        |_, t| shifts(t, referent),
+    ))
+}
+
+/// Builds the hazard and referent windows of each event with strata the
+/// caller defines: the referents of event `i` are the shifts that are
+/// nonzero multiples of `spacing` days and keep the event day within
+/// `[strata.first[i], strata.last[i]]`. Otherwise as [`build_windows`].
+///
+/// # Errors
+///
+/// As [`build_windows`], and when the strata do not have one entry per event
+/// or an event day is not within its stratum, or `spacing` is below
+/// `hazard_days`.
+pub fn build_windows_in_strata(
+    event_day: &[i64],
+    person: &[u32],
+    hazard_days: i64,
+    lag: i64,
+    strata: EventStrata<'_>,
+    spacing: i64,
+    observation: Option<Observation<'_>>,
+) -> Result<Windows> {
+    let n = event_day.len();
+    if strata.first.len() != n || strata.last.len() != n {
+        return Err(invalid("the strata columns must have one entry per event"));
+    }
+    if let Some(i) =
+        (0..n).find(|&i| !(strata.first[i] <= event_day[i] && event_day[i] <= strata.last[i]))
+    {
+        return Err(invalid(format!(
+            "event {i} on day {} is not within its stratum [{}, {}]",
+            event_day[i], strata.first[i], strata.last[i]
+        )));
+    }
+    if spacing < 1 {
+        return Err(invalid(format!(
+            "the spacing of the referents is {spacing}, which is less than a day"
+        )));
+    }
+    check_events(event_day, person, hazard_days, lag, spacing, observation)?;
+    Ok(build_with(
+        event_day,
+        person,
+        hazard_days,
+        lag,
+        observation,
+        |i, t| stratum_shifts(t, strata.first[i], strata.last[i], spacing),
+    ))
+}
+
+fn check_unit(unit: StratumUnit) -> Result<()> {
+    if let StratumUnit::Fixed { length, .. } = unit {
+        if length < 1 {
+            return Err(invalid(format!(
+                "a fixed stratum of {length} days is shorter than a day"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_events(
+    event_day: &[i64],
+    person: &[u32],
+    hazard_days: i64,
+    lag: i64,
+    smallest: i64,
+    observation: Option<Observation<'_>>,
+) -> Result<()> {
     let n = event_day.len();
     if person.len() != n {
         return Err(invalid(
@@ -318,20 +490,27 @@ pub fn build_windows(
     if hazard_days < 1 || lag < 0 {
         return Err(invalid("hazard_days must be at least 1 and lag at least 0"));
     }
-    let smallest = match referent {
-        Referent::Unidirectional { n, step } | Referent::Bidirectional { n, step } => {
-            if n == 0 {
-                return Err(invalid("a referent needs at least one window"));
-            }
-            step
-        }
-        Referent::TimeStratified { .. } => 7,
-    };
     if smallest < hazard_days {
         return Err(invalid(format!(
             "referent windows are {smallest} days apart, fewer than the {hazard_days} days of the hazard window, so they would overlap it"
         )));
     }
+    Ok(())
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the number of events is checked against u32 first"
+)]
+fn build_with(
+    event_day: &[i64],
+    person: &[u32],
+    hazard_days: i64,
+    lag: i64,
+    observation: Option<Observation<'_>>,
+    shifts_of: impl Fn(usize, i64) -> Vec<i64> + Sync,
+) -> Windows {
+    let n = event_day.len();
     let blocks: Vec<Windows> = (0..n.div_ceil(BLOCK))
         .into_par_iter()
         .map(|block| {
@@ -346,7 +525,7 @@ pub fn build_windows(
                     continue;
                 }
                 let mut referents = Vec::new();
-                for s in shifts(t, referent) {
+                for s in shifts_of(i, t) {
                     let (a, b) = (hs + s, he + s);
                     if a <= t && t <= b {
                         w.n_referents_on_event_day += 1;
@@ -384,7 +563,7 @@ pub fn build_windows(
         out.n_referents_outside_observation += w.n_referents_outside_observation;
         out.n_referents_on_event_day += w.n_referents_on_event_day;
     }
-    Ok(out)
+    out
 }
 
 /// The exposure in each window: the days of the window covered by the
