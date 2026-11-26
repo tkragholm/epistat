@@ -44,6 +44,13 @@
 //! `summary()`: the larger group is read at the smaller group's cumulative
 //! weights as a step function, where [`eqq_distance`] interpolates.
 //!
+//! # Kolmogorov-Smirnov test
+//!
+//! [`ks_test`] is R's two-sample `ks.test`: the largest gap between the two
+//! empirical distribution functions, with the exact p-value given ties below
+//! `m n = 10000` and Kolmogorov's limit above. The method is in the
+//! documentation of the `ks` submodule's functions.
+//!
 //! # References
 //!
 //! 1. Austin PC. Balance diagnostics for comparing the distribution of baseline
@@ -55,8 +62,12 @@
 //!    parametric causal inference. Journal of Statistical Software
 //!    2011;42(8):1-28.
 
+mod ks;
+
 use epistat_stats::quantile;
 use epistat_stats::sum::lanes;
+
+pub use ks::{KsTest, kolmogorov_upper, ks_statistic, ks_statistic_sorted, ks_test};
 
 /// Standardised mean difference of a continuous variable, the difference in
 /// means over the square root of the mean of the two variances (Cohen 1988).

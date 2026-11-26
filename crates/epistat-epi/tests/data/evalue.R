@@ -24,7 +24,7 @@ rd_cases <- list(
   list(t = c(300, 120, 700, 880), true = 0, alpha = 0.05),
   list(t = c(30, 20, 70, 80), true = 0, alpha = 0.05))
 rd <- lapply(rd_cases, function(x) {
-  # Table2x2 order: a exposed cases, b unexposed cases, c exposed non-cases,
+  # Cell order (episensr's): a exposed cases, b unexposed cases, c exposed non-cases,
   # d unexposed non-cases.
   t <- x$t
   e <- quiet(evalues.RD(n11 = t[1], n10 = t[3], n01 = t[2], n00 = t[4],

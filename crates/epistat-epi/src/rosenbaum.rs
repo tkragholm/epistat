@@ -171,6 +171,7 @@ pub use interval::{EffectInterval, Sides, m_statistic_interval};
 use crate::signed_rank::{self, SignedRankError, average_ranks};
 use epistat_stats::dist::normal;
 use epistat_stats::quantile::type7_unsorted;
+use epistat_rng::Stream;
 use epistat_stats::sum::lanes;
 
 /// What goes wrong in a sensitivity analysis.
@@ -601,7 +602,9 @@ struct WalshSearch<'a> {
     end: Vec<usize>,
     /// Per row, the first column whose average is above the value last tried.
     cut: Vec<usize>,
-    state: u64,
+    /// The generator of the pivots, seeded at `GAMMA` so that its first draw
+    /// is `mix64(2 GAMMA)`.
+    stream: Stream,
 }
 
 impl<'a> WalshSearch<'a> {
@@ -612,7 +615,7 @@ impl<'a> WalshSearch<'a> {
             first: Vec::with_capacity(n),
             end: Vec::with_capacity(n),
             cut: vec![0; n],
-            state: 0x9e37_79b9_7f4a_7c15,
+            stream: Stream::seeded(epistat_rng::GAMMA),
         }
     }
 
@@ -620,10 +623,6 @@ impl<'a> WalshSearch<'a> {
         self.sorted[row].midpoint(self.sorted[column])
     }
 
-    fn next_random(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(epistat_rng::GAMMA);
-        epistat_rng::mix64(self.state)
-    }
 
     /// Fill `cut` with, per row, the first column from the diagonal on whose
     /// average is above `value`, and return the smallest average above `value`
@@ -682,7 +681,7 @@ impl<'a> WalshSearch<'a> {
             let mut pivot = least;
             for _ in 0..4 {
                 let bound = u64::try_from(active).unwrap_or(u64::MAX);
-                let mut draw = usize::try_from(self.next_random() % bound).unwrap_or(0);
+                let mut draw = usize::try_from(self.stream.next_u64() % bound).unwrap_or(0);
                 let mut row = 0;
                 while draw >= self.end[row].saturating_sub(self.first[row]) {
                     draw -= self.end[row].saturating_sub(self.first[row]);
@@ -939,6 +938,19 @@ pub fn matched_sets_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pivots come from the SplitMix64 counter that started at `GAMMA`
+    /// and was advanced before each draw: `Stream::seeded(GAMMA)` gives the
+    /// same draws, so the search visits the same pivots.
+    #[test]
+    fn the_pivot_stream_is_the_counter_from_gamma() {
+        let mut stream = Stream::seeded(epistat_rng::GAMMA);
+        let mut state = epistat_rng::GAMMA;
+        for _ in 0..1000 {
+            state = state.wrapping_add(epistat_rng::GAMMA);
+            assert_eq!(stream.next_u64(), epistat_rng::mix64(state));
+        }
+    }
 
     /// The bounds from all the Walsh averages, sorted, bisected one by one.
     fn reference(differences: &[f64], gammas: &[f64]) -> Vec<HodgesLehmannBounds> {
