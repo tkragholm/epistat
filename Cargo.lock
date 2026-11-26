@@ -645,6 +645,7 @@ dependencies = [
 name = "epistat-core"
 version = "0.1.0"
 dependencies = [
+ "epistat-testkit",
  "serde",
  "serde_json",
 ]
@@ -881,8 +882,9 @@ dependencies = [
 
 [[package]]
 name = "epistat-testkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "epistat-core",
  "rayon",
  "serde",
  "serde_json",
