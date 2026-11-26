@@ -1,6 +1,10 @@
 //! Shared by the distribution and coverage tests: statistics of imputed values
 //! per data set and comparisons within Monte Carlo error.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
 #![allow(
     dead_code,
     clippy::cast_possible_truncation,
@@ -146,10 +150,10 @@ pub fn lm(columns: &[&[f64]], y: &[f64]) -> (Vec<f64>, Vec<f64>) {
         if k == 0 { 1.0 } else { columns[k - 1][i] }
     });
     let fit = Glm::new(Family::Gaussian, Link::Identity)
-        .fit(x.as_ref(), y, None, None, None)
+        .fit_slices(x.as_ref(), y, None, None, None)
         .unwrap();
     let p = columns.len() + 1;
     let coef = fit.coefficients.iter().map(|c| c.unwrap()).collect();
-    let var = (0..p).map(|i| fit.covariance[i * p + i].unwrap()).collect();
+    let var = (0..p).map(|i| fit.covariance.get(i, i).unwrap()).collect();
     (coef, var)
 }

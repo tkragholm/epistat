@@ -2,8 +2,9 @@
 //! and their average effects. See the [module](crate::etwfe) for the model, the
 //! effects and the covariances.
 
+use epistat_core::InputError;
 use epistat_glm::rows::{Block, Rows};
-use epistat_glm::{AbsorbError, Family, Glm, GlmError, Link, Ssc, Vcov};
+use epistat_glm::{Error as GlmError, Family, Glm, Link, Ssc, Vcov};
 use epistat_linalg::ROW_BLOCK;
 use rayon::prelude::*;
 
@@ -283,8 +284,8 @@ fn blocked_sum(n: usize, len: usize, term: impl Fn(usize, usize, &mut [f64]) + S
     total
 }
 
-fn glm_error(e: GlmError) -> EtwfeError {
-    EtwfeError::Fit(AbsorbError::Glm(e))
+const fn glm_error(e: GlmError) -> EtwfeError {
+    EtwfeError::Fit(e)
 }
 
 /// `sum_g S_g S_g'` for the sums `sums`, one row of `q` values per group.
@@ -339,11 +340,11 @@ const fn count(v: f64) -> usize {
 /// [`EtwfeError`] for inputs of the wrong length or not finite, cohorts that
 /// vary within a unit, never-treated controls without never-treated units,
 /// no treated cell and periods out of range; [`EtwfeError::Fit`] with
-/// [`AbsorbError::Weight`] for a weight that is negative or not finite,
-/// [`AbsorbError::Invalid`] for more than one cluster variable,
-/// [`AbsorbError::Length`] for cluster codes of the wrong length, and
-/// [`AbsorbError::Glm`] for the errors of the fit, among them a response
-/// outside the family's support (its index that of the input row).
+/// [`GlmError::Input`] for a weight that is negative or not finite or
+/// cluster codes of the wrong length, [`GlmError::Invalid`] for more than
+/// one cluster variable, and the errors of the fit, among them
+/// [`GlmError::Response`] for a response outside the family's support (its
+/// row that of the input row).
 #[expect(
     clippy::too_many_lines,
     reason = "one pass from the layout to the fit, the covariance and the averages"
@@ -357,24 +358,33 @@ pub fn estimate_etwfe_glm(
     if let Some(w) = panel.weights
         && let Some(index) = w.iter().position(|v| !(v.is_finite() && *v >= 0.0))
     {
-        return Err(EtwfeError::Fit(AbsorbError::Weight {
-            index,
-            value: w[index],
-        }));
+        let value = w[index];
+        return Err(EtwfeError::Fit(GlmError::Input(if value.is_finite() {
+            InputError::Domain {
+                what: "weights",
+                value,
+                domain: "[0, inf)",
+            }
+        } else {
+            InputError::NotFinite {
+                what: "weights",
+                row: index,
+            }
+        })));
     }
     let ways: Option<&[u32]> = match config.vcov {
         Vcov::Cluster(ways) => {
             let [way] = ways else {
-                return Err(EtwfeError::Fit(AbsorbError::Invalid(
+                return Err(EtwfeError::Fit(GlmError::Invalid(
                     "the nonlinear fits take one cluster variable",
                 )));
             };
             if way.len() != n {
-                return Err(EtwfeError::Fit(AbsorbError::Length {
+                return Err(EtwfeError::Fit(GlmError::Input(InputError::Length {
                     what: "cluster codes",
                     expected: n,
                     found: way.len(),
-                }));
+                })));
             }
             Some(way)
         }
@@ -398,8 +408,8 @@ pub fn estimate_etwfe_glm(
         ..Glm::new(family, link)
     };
     let fit = model.fit_rows(&design).map_err(|e| match e {
-        GlmError::Response { index, value } => glm_error(GlmError::Response {
-            index: design.rows.get(index).copied().unwrap_or(index),
+        GlmError::Response { row, value } => glm_error(GlmError::Response {
+            row: design.rows.get(row).copied().unwrap_or(row),
             value,
         }),
         other => glm_error(other),
@@ -418,7 +428,9 @@ pub fn estimate_etwfe_glm(
     };
     // (X'WX)^-1 over the kept columns: the covariance at dispersion one.
     let bread: Vec<f64> = (0..q * q)
-        .map(|ac| fit.covariance[kept[ac / q] * k_all + kept[ac % q]].unwrap_or(f64::NAN))
+        .map(|ac| {
+            fit.covariance.as_slice()[kept[ac / q] * k_all + kept[ac % q]].unwrap_or(f64::NAN)
+        })
         .collect();
 
     // The score factor w (y - mu) of each row of the fit at the estimates.

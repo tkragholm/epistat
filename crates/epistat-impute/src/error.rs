@@ -1,4 +1,4 @@
-use epistat_glm::{GlmError, MultinomError};
+use epistat_glm::Error as GlmError;
 use epistat_inference::Error as InferenceError;
 
 /// Why an imputation could not be made.
@@ -130,7 +130,7 @@ pub enum ImputeError {
     Glm(#[from] GlmError),
     /// A multinomial regression could not be fitted.
     #[error(transparent)]
-    Multinom(#[from] MultinomError),
+    Multinom(GlmError),
     /// A random draw was out of range.
     #[error(transparent)]
     Draw(#[from] epistat_rng::Error),

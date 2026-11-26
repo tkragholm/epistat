@@ -142,8 +142,7 @@ impl Display for EstimationError {
 impl Error for EstimationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::GlmFitFailed(error) => Some(error),
-            Self::ElasticNetFitFailed(error) => Some(error),
+            Self::GlmFitFailed(error) | Self::ElasticNetFitFailed(error) => Some(error),
             _ => None,
         }
     }

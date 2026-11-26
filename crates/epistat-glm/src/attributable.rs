@@ -58,7 +58,10 @@
 //! The limits are `AF +- z se` on the identity scale, and on the scale of
 //! `log(1 - AF)`, which keeps them below 1,
 //! `1 - (1 - AF) exp(+- z se / (1 - AF))`, the log transformation of
-//! Dahlqwist et al. for the complement.
+//! Dahlqwist et al. for the complement. `z` is the normal quantile at the
+//! upper probability of the level, `1 - (1 - c) / 2` for a confidence `c`.
+//! The standard error is that of `AF` on its own scale in both cases, so the
+//! [`Estimate`] has [`Scale::Identity`].
 //!
 //! # Results that are not numbers
 //!
@@ -93,12 +96,17 @@
 //! 6. Rowe AK, Powell KE, Flanders WD. Why population attributable fractions can
 //!    sum to more than one. Am J Prev Med 2004;26(3):243-9.
 
+use epistat_core::{Estimate, Interval, Level, Scale};
+use epistat_inference::Clusters;
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
+use crate::error::length;
 use crate::fit::Fit;
+use crate::{Error, GlmData};
 
 /// The sampling that the model was fitted to.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Design {
     /// A cohort or cross-sectional sample: the g-formula over everybody.
@@ -109,6 +117,7 @@ pub enum Design {
 }
 
 /// The scale of the confidence limits.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntervalScale {
     /// `AF +- z se`.
@@ -117,45 +126,36 @@ pub enum IntervalScale {
     LogComplement,
 }
 
-/// What [`attributable_logistic`] takes besides the model and the data.
-#[derive(Debug, Clone, Copy)]
-pub struct AfOptions<'a> {
+/// The choices of [`attributable_logistic`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AfOptions {
     /// The sampling of the data.
     pub design: Design,
-    /// The confidence level, in `(0, 1)`.
-    pub level: f64,
+    /// The confidence level of the limits, `AFglm`'s `conf.level`.
+    pub level: Level,
     /// The scale of the limits.
     pub scale: IntervalScale,
-    /// Case weights, one per row, not negative. They must be the prior weights
-    /// of the fit.
-    pub weights: Option<&'a [f64]>,
-    /// Cluster codes, one per row, for a cluster-robust variance.
-    pub cluster: Option<&'a [u32]>,
 }
 
-impl Default for AfOptions<'_> {
+impl Default for AfOptions {
+    /// The cross-sectional design, a confidence of 0.95 and limits on the
+    /// scale of `log(1 - AF)`.
     fn default() -> Self {
         Self {
             design: Design::CrossSectional,
-            level: 0.95,
+            level: Level::default(),
             scale: IntervalScale::LogComplement,
-            weights: None,
-            cluster: None,
         }
     }
 }
 
 /// An attributable fraction with its standard error and confidence limits.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attributable {
-    /// The attributable fraction.
-    pub af: Option<f64>,
-    /// Its standard error.
-    pub se: Option<f64>,
-    /// The lower confidence limit.
-    pub lower: Option<f64>,
-    /// The upper confidence limit.
-    pub upper: Option<f64>,
+    /// The attributable fraction with its standard error and limits, `None`
+    /// when the fraction is undefined.
+    pub af: Option<Estimate>,
     /// The rows of the data.
     pub n_rows: usize,
     /// The rows with an event and a positive weight.
@@ -164,87 +164,66 @@ pub struct Attributable {
     pub n_clusters: usize,
 }
 
-/// Why an attributable fraction could not be formed.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum AfError {
-    /// The input cannot be used: columns of different length, a response that
-    /// is not 0 or 1, a weight that is negative or not finite, a level outside
-    /// `(0, 1)`, a fit that is not a logistic fit, or a covariance the fit does
-    /// not have.
-    #[error("{0}")]
-    Input(String),
-}
-
-fn invalid(message: impl Into<String>) -> AfError {
-    AfError::Input(message.into())
-}
-
-/// The attributable fraction of the exposure that distinguishes `x` from
-/// `x_unexposed`, from the logistic `fit` of `y` on `x`.
+/// The attributable fraction of the exposure that distinguishes the design of
+/// `data` from `x_unexposed`, from the logistic `fit` of the response of
+/// `data` on its design.
 ///
-/// `x` is the design the model was fitted to and `x_unexposed` the same design
-/// with the exposure removed, as the module documentation describes. The fit
-/// must be binomial with the logit link; the fitted means are checked against
-/// the linear predictor.
+/// `data` holds the design and the 0/1 response the model was fitted to, and
+/// its weights must be the prior weights of the fit. `x_unexposed` is the same
+/// design with the exposure removed, as the module documentation describes.
+/// `clusters`, when given, sum the influence within clusters for a
+/// cluster-robust variance; `AFglm` numbers them in order of first
+/// appearance, as [`Clusters::from_labels`] does. The fit must be binomial
+/// with the logit link; the fitted means are checked against the linear
+/// predictor.
 ///
 /// # Errors
 ///
-/// [`AfError::Input`] as described there.
+/// [`Error::Input`] for a fit, `x_unexposed` or clusters whose rows or
+/// columns do not match the data, [`Error::Response`] for a response that is
+/// not 0 or 1, [`Error::Invalid`] for fitted means that are not the logistic
+/// function of the linear predictor, and [`Error::Undefined`] for a fit
+/// without a covariance.
 pub fn attributable_logistic(
     fit: &Fit,
-    x: MatRef<'_, f64>,
+    data: &GlmData<'_>,
     x_unexposed: MatRef<'_, f64>,
-    y: &[f64],
-    opts: &AfOptions<'_>,
-) -> Result<Attributable, AfError> {
+    clusters: Option<&Clusters>,
+    options: &AfOptions,
+) -> Result<Attributable, Error> {
+    let (x, y) = (data.x(), data.y());
     let n = y.len();
     let p = fit.coefficients.len();
-    if fit.fitted.len() != n || fit.linear_predictor.len() != n {
-        return Err(invalid("the fit and y have different numbers of rows"));
+    length("fitted", n, fit.fitted.len())?;
+    length("linear predictor", n, fit.linear_predictor.len())?;
+    length("x columns", p, x.ncols())?;
+    length("x_unexposed", n, x_unexposed.nrows())?;
+    length("x_unexposed columns", p, x_unexposed.ncols())?;
+    if let Some(row) = y.iter().position(|&v| !matches!(v, 0.0 | 1.0)) {
+        return Err(Error::Response { row, value: y[row] });
     }
-    if x.nrows() != n || x_unexposed.nrows() != n || x.ncols() != p || x_unexposed.ncols() != p {
-        return Err(invalid(format!(
-            "x and x_unexposed must have {n} rows and {p} columns, the rows and coefficients of the fit"
-        )));
-    }
-    if !(opts.level > 0.0 && opts.level < 1.0) {
-        return Err(invalid("level must be in (0, 1)"));
-    }
-    if let Some(i) = y.iter().position(|&v| !matches!(v, 0.0 | 1.0)) {
-        return Err(invalid(format!("y[{i}] is {}, not 0 or 1", y[i])));
-    }
-    let ones = vec![1.0; if opts.weights.is_some() { 0 } else { n }];
-    let w: &[f64] = opts.weights.unwrap_or(&ones);
-    if w.len() != n {
-        return Err(invalid("weights must have one entry per row"));
-    }
-    if let Some(i) = w.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
-        return Err(invalid(format!("weight {i} is negative or not finite")));
+    let ones = vec![1.0; if data.weights().is_some() { 0 } else { n }];
+    let w: &[f64] = data.weights().unwrap_or(&ones);
+    if let Some(c) = clusters {
+        length("clusters", n, c.len())?;
     }
     let event: Vec<bool> = y.iter().map(|&v| matches!(v, 1.0)).collect();
-    if let Some(c) = opts.cluster
-        && c.len() != n
-    {
-        return Err(invalid("cluster must have one entry per row"));
-    }
     for i in 0..n {
-        let expected = crate::family::expit(fit.linear_predictor[i]);
+        let expected = crate::expit(fit.linear_predictor[i]);
         if (fit.fitted[i] - expected).abs() > 1e-8 * expected.max(1e-300) + 1e-12 {
-            return Err(invalid(
+            return Err(Error::Invalid(
                 "the fitted means are not the logistic function of the linear predictor",
             ));
         }
     }
     let kept: Vec<usize> = (0..p).filter(|&j| fit.coefficients[j].is_some()).collect();
     let q = kept.len();
-    let dispersion = fit
-        .dispersion
-        .ok_or_else(|| invalid("the fit has no dispersion, so no covariance"))?;
+    let undefined = || Error::Undefined("the covariance of the fit");
+    let dispersion = fit.dispersion.ok_or_else(undefined)?;
     let mut v = vec![0.0; q * q];
     for (a, &ja) in kept.iter().enumerate() {
         for (b, &jb) in kept.iter().enumerate() {
-            let c =
-                fit.covariance[ja * p + jb].ok_or_else(|| invalid("the fit has no covariance"))?;
+            let c = fit.covariance.get(ja, jb).ok_or_else(undefined)?;
             v[a * q + b] = c / dispersion;
         }
     }
@@ -258,9 +237,6 @@ pub fn attributable_logistic(
     let cases = (0..n).filter(|&i| event[i] && w[i] > 0.0).count();
     let mut result = Attributable {
         af: None,
-        se: None,
-        lower: None,
-        upper: None,
         n_rows: n,
         n_cases: cases,
         n_clusters: 0,
@@ -279,9 +255,9 @@ pub fn attributable_logistic(
         .collect();
     // u_i = n V s_i and the gradient of the estimating equation of the
     // quantity with respect to beta.
-    let case_control = opts.design == Design::CaseControl;
+    let case_control = options.design == Design::CaseControl;
     let p0: Vec<f64> = (0..n)
-        .map(|i| crate::family::expit(fit.linear_predictor[i] - delta[i]))
+        .map(|i| crate::expit(fit.linear_predictor[i] - delta[i]))
         .collect();
     let (af, grad, scale_a, scale_b);
     let mut ybar = 0.0;
@@ -336,7 +312,7 @@ pub fn attributable_logistic(
         scale_a = p_unexposed / (p_obs * p_obs);
         scale_b = 1.0 / p_obs;
     }
-    result.af = Some(af);
+    result.af = Some(Estimate::point(af).with_scale(Scale::Identity));
     // The influence of each row.
     let mut z = Vec::with_capacity(n);
     let mut s = vec![0.0; q];
@@ -360,18 +336,11 @@ pub fn attributable_logistic(
         });
     }
     // Sums within clusters, in order of first appearance.
-    let (sums, n_clusters) = match opts.cluster {
+    let (sums, n_clusters) = match clusters {
         None => (z, 0),
-        Some(codes) => {
-            let mut order: Vec<u32> = Vec::new();
-            let mut index = std::collections::HashMap::new();
-            let mut sums: Vec<f64> = Vec::new();
-            for (i, &c) in codes.iter().enumerate() {
-                let k = *index.entry(c).or_insert_with(|| {
-                    order.push(c);
-                    sums.push(0.0);
-                    sums.len() - 1
-                });
+        Some(clusters) => {
+            let mut sums = vec![0.0; clusters.count()];
+            for (i, &k) in clusters.of().iter().enumerate() {
                 sums[k] += z[i];
             }
             let c = sums.len();
@@ -390,22 +359,25 @@ pub fn attributable_logistic(
         };
         let var = ss / (m - 1) as f64 * factor;
         let se = var.max(0.0).sqrt();
-        result.se = Some(se);
-        let zq = normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
-        match opts.scale {
-            IntervalScale::Identity => {
-                result.lower = Some(af - zq * se);
-                result.upper = Some(af + zq * se);
-            }
+        let zq = normal::two_sided_z(options.level);
+        let limits = match options.scale {
+            IntervalScale::Identity => Some((af - zq * se, af + zq * se)),
             IntervalScale::LogComplement => {
                 let r = 1.0 - af;
-                if r > 0.0 {
+                (r > 0.0).then(|| {
                     let half = zq * se / r;
-                    result.lower = Some(1.0 - r * half.exp());
-                    result.upper = Some(1.0 - r * (-half).exp());
-                }
+                    (1.0 - r * half.exp(), 1.0 - r * (-half).exp())
+                })
             }
-        }
+        };
+        let interval =
+            limits.map(|(lower, upper)| Interval::new(Some(lower), Some(upper), options.level));
+        result.af = Some(
+            Estimate::point(af)
+                .with_se(Some(se))
+                .with_interval(interval)
+                .with_scale(Scale::Identity),
+        );
     }
     Ok(result)
 }

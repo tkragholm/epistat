@@ -1,9 +1,10 @@
 //! Elastic-net regression for the Gaussian and binomial families, by cyclic
 //! coordinate descent as in glmnet.
 //!
-//! [`ElasticNet::fit`] takes a design matrix, a response, and optional prior
-//! weights, offset, per-column penalty factors and starting coefficients. It
-//! returns an [`ElasticNetFit`] with the coefficients, whether the iteration
+//! [`ElasticNet::fit`] takes a [`GlmData`]: a design matrix, a response, and
+//! optional prior weights, offset and starting coefficients. The per-column
+//! penalty factors are a field of the model, [`ElasticNet::penalty_factor`].
+//! It returns an [`ElasticNetFit`] with the coefficients, whether the iteration
 //! converged, and the number of IRLS steps and coordinate passes it took.
 //!
 //! # Objective
@@ -148,9 +149,14 @@
 //!    net. J R Stat Soc Ser B. 2005;67(2):301-20.
 //!    doi:10.1111/j.1467-9868.2005.00503.x
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 
-use crate::Family;
+use crate::{Error, Family, GlmData};
+
+/// The error type of the elastic net in epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type ElasticNetError = Error;
 use crate::columns::{column_slices, contiguous_copy};
 
 /// The largest number of columns for which the fit works from the weighted
@@ -165,6 +171,7 @@ const MAX_HALVINGS: usize = 30;
 
 /// How the Gaussian fit treats the spread of the response, see the module
 /// documentation.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ResponseScaling {
     /// The objective as written, whatever the units of the response.
@@ -176,7 +183,7 @@ pub enum ResponseScaling {
 }
 
 /// An elastic-net model and its fitting controls.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ElasticNet {
     /// [`Family::Gaussian`] or [`Family::Binomial`].
     pub family: Family,
@@ -196,6 +203,10 @@ pub struct ElasticNet {
     pub probability_clip: f64,
     /// The treatment of the response's spread, for the Gaussian family.
     pub scaling: ResponseScaling,
+    /// The factor that multiplies the penalty of each column, glmnet's
+    /// `penalty.factor`: 1 for every column when `None`, 0 for an unpenalised
+    /// column such as the intercept.
+    pub penalty_factor: Option<Vec<f64>>,
 }
 
 impl ElasticNet {
@@ -212,73 +223,13 @@ impl ElasticNet {
             max_iterations: 100,
             probability_clip: 1e-8,
             scaling: ResponseScaling::None,
+            penalty_factor: None,
         }
     }
 }
 
-/// Why an elastic net could not be fitted.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum ElasticNetError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// The family is neither Gaussian nor binomial.
-    #[error("the elastic net is defined for the Gaussian and binomial families")]
-    Family,
-    /// `lambda` is negative or not finite, or `alpha` is outside `[0, 1]`.
-    #[error("lambda must be finite and not negative, and alpha must lie in [0, 1]")]
-    Penalty,
-    /// A penalty factor is negative or not finite.
-    #[error("penalty factor {index} is {value}, which is negative or not finite")]
-    PenaltyFactor {
-        /// The position of the factor.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// A prior weight is negative or not finite.
-    #[error("prior weight {index} is {value}, which is negative or not finite")]
-    Weight {
-        /// The position of the weight.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// Every prior weight is 0.
-    #[error("no row has a positive prior weight")]
-    NoWeight,
-    /// A response lies outside the support of the family.
-    #[error("response {index} is {value}, outside the family's support")]
-    Response {
-        /// The position of the response.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// The design, offset or starting coefficients hold a value that is not
-    /// finite.
-    #[error("{what} holds a value that is not finite")]
-    NotFinite {
-        /// The name of the input.
-        what: &'static str,
-    },
-    /// A control is out of range: the tolerance must be positive and finite,
-    /// the probability clip in `(0, 0.5)`, and the limits at least 1.
-    #[error("a fitting control is out of range")]
-    Control,
-    /// The response does not vary, so glmnet's scaling is undefined.
-    #[error("the response has no weighted variation to scale by")]
-    ConstantResponse,
-}
-
 /// A fitted elastic net.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct ElasticNetFit {
     /// The coefficients, one per column of the design.
@@ -1040,34 +991,41 @@ impl Covariance<'_> {
     }
 }
 
-fn check(what: &'static str, expected: usize, found: usize) -> Result<(), ElasticNetError> {
-    if expected == found {
-        Ok(())
-    } else {
-        Err(ElasticNetError::Length {
-            what,
-            expected,
-            found,
-        })
-    }
-}
-
 impl ElasticNet {
-    /// Fits the model to `y` on the columns of `x`.
+    /// Fits the model to the response of `data` on the columns of its design.
     ///
-    /// `weights` are prior weights (1 when `None`), `offset` is added to the
-    /// linear predictor (0 when `None`), `penalty_factor` multiplies the
-    /// penalty of each column (1 when `None`, 0 for an unpenalised column such
-    /// as the intercept) and `start` gives the starting coefficients (0 when
-    /// `None`).
+    /// The prior weights are 1 and the offset 0 when the data have none, and
+    /// the starting coefficients are 0 unless given.
     ///
     /// A fit that does not meet the stopping rule within its limits is
     /// returned with `converged` false and the coefficients it reached.
     ///
     /// # Errors
     ///
-    /// See [`ElasticNetError`].
-    pub fn fit(
+    /// [`Error::Unsupported`] for a family other than Gaussian and binomial,
+    /// [`Error::Input`] for a `lambda` that is negative or not finite, an
+    /// `alpha` outside `[0, 1]`, a control out of range, penalty factors of
+    /// the wrong length or negative, or no row of positive weight,
+    /// [`Error::Response`] for a response outside the family's support, and
+    /// [`Error::ConstantResponse`] when glmnet's scaling has no spread to
+    /// scale by.
+    pub fn fit(&self, data: &GlmData<'_>) -> Result<ElasticNetFit, Error> {
+        let covariance = data.n_columns() <= COVARIANCE_MAX_COLUMNS;
+        self.fit_with(covariance, data)
+    }
+
+    /// Fits the model as [`ElasticNet::fit`] does, to the data given as
+    /// separate arguments, the signature of epistat-glm 0.2, with the penalty
+    /// factors in place of [`ElasticNet::penalty_factor`].
+    ///
+    /// # Errors
+    ///
+    /// Those of [`GlmData`]'s `build` and of [`ElasticNet::fit`].
+    #[deprecated(
+        since = "0.3.0",
+        note = "build a GlmData, set ElasticNet::penalty_factor and call ElasticNet::fit"
+    )]
+    pub fn fit_slices(
         &self,
         x: MatRef<'_, f64>,
         y: &[f64],
@@ -1075,83 +1033,72 @@ impl ElasticNet {
         offset: Option<&[f64]>,
         penalty_factor: Option<&[f64]>,
         start: Option<&[f64]>,
-    ) -> Result<ElasticNetFit, ElasticNetError> {
-        let covariance = x.ncols() <= COVARIANCE_MAX_COLUMNS;
-        self.fit_with(covariance, x, y, weights, offset, penalty_factor, start)
+    ) -> Result<ElasticNetFit, Error> {
+        let data = GlmData::from_parts(x, y, weights, offset, start)?;
+        let model = Self {
+            penalty_factor: penalty_factor.map(<[f64]>::to_vec),
+            ..self.clone()
+        };
+        model.fit(&data)
     }
 
     /// [`ElasticNet::fit`] with the solver named: the weighted moments of the
     /// design when `covariance`, the residual form otherwise.
-    fn fit_with(
-        &self,
-        covariance: bool,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        penalty_factor: Option<&[f64]>,
-        start: Option<&[f64]>,
-    ) -> Result<ElasticNetFit, ElasticNetError> {
+    fn fit_with(&self, covariance: bool, data: &GlmData<'_>) -> Result<ElasticNetFit, Error> {
+        let (x, y) = (data.x(), data.y());
+        let (weights, offset, start) = (data.weights(), data.offset(), data.start());
+        let penalty_factor = self.penalty_factor.as_deref();
         let (n, p) = (x.nrows(), x.ncols());
         let binomial = match self.family {
             Family::Gaussian => false,
             Family::Binomial => true,
-            _ => return Err(ElasticNetError::Family),
+            _ => {
+                return Err(Error::Unsupported {
+                    what: "an elastic net family other than Gaussian and binomial",
+                });
+            }
         };
-        if !(self.lambda.is_finite() && self.lambda >= 0.0 && (0.0..=1.0).contains(&self.alpha)) {
-            return Err(ElasticNetError::Penalty);
-        }
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0)
-            || self.max_passes == 0
-            || self.max_iterations == 0
-            || !(self.probability_clip > 0.0 && self.probability_clip < 0.5)
-        {
-            return Err(ElasticNetError::Control);
-        }
-        check("y", n, y.len())?;
-        for (what, values) in [("weights", weights), ("offset", offset)] {
-            if let Some(values) = values {
-                check(what, n, values.len())?;
+        let domain = |what, value, domain| -> Error {
+            InputError::Domain {
+                what,
+                value,
+                domain,
             }
+            .into()
+        };
+        if !(self.lambda.is_finite() && self.lambda >= 0.0) {
+            return Err(domain("lambda", self.lambda, "[0, inf)"));
         }
-        for (what, values) in [("penalty_factor", penalty_factor), ("start", start)] {
-            if let Some(values) = values {
-                check(what, p, values.len())?;
-            }
+        if !(0.0..=1.0).contains(&self.alpha) {
+            return Err(domain("alpha", self.alpha, "[0, 1]"));
         }
-        if n == 0 {
-            return Err(ElasticNetError::NoWeight);
+        crate::error::tolerance("tolerance", self.tolerance)?;
+        crate::error::iterations("max_passes", self.max_passes)?;
+        crate::error::iterations("max_iterations", self.max_iterations)?;
+        if !(self.probability_clip > 0.0 && self.probability_clip < 0.5) {
+            return Err(domain(
+                "probability_clip",
+                self.probability_clip,
+                "(0, 0.5)",
+            ));
         }
-        if let Some((index, &value)) = y
+        if let Some(f) = penalty_factor {
+            crate::error::length("penalty_factor", p, f.len())?;
+            crate::error::weights("penalty_factor", f)?;
+        }
+        if let Some((row, &value)) = y
             .iter()
             .enumerate()
             .find(|&(_, &v)| !self.family.valid_response(v))
         {
-            return Err(ElasticNetError::Response { index, value });
+            return Err(Error::Response { row, value });
         }
-        if let Some((index, &value)) = weights.and_then(|w| {
-            w.iter()
-                .enumerate()
-                .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-        }) {
-            return Err(ElasticNetError::Weight { index, value });
-        }
-        if let Some((index, &value)) = penalty_factor.and_then(|f| {
-            f.iter()
-                .enumerate()
-                .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-        }) {
-            return Err(ElasticNetError::PenaltyFactor { index, value });
-        }
-        if offset.is_some_and(|o| o.iter().any(|v| !v.is_finite())) {
-            return Err(ElasticNetError::NotFinite { what: "offset" });
-        }
-        if start.is_some_and(|s| s.iter().any(|v| !v.is_finite())) {
-            return Err(ElasticNetError::NotFinite { what: "start" });
-        }
-        if (0..p).any(|j| (0..n).any(|i| !x[(i, j)].is_finite())) {
-            return Err(ElasticNetError::NotFinite { what: "x" });
-        }
+        let no_weight = || -> Error {
+            InputError::Empty {
+                what: "rows with positive weight",
+            }
+            .into()
+        };
 
         // Prior weights scaled to mean 1. Unit weights stay exactly 1.
         let prior: Vec<f64> = match weights {
@@ -1159,7 +1106,7 @@ impl ElasticNet {
             Some(w) => {
                 let total: f64 = w.iter().sum();
                 if total <= 0.0 || !total.is_finite() {
-                    return Err(ElasticNetError::NoWeight);
+                    return Err(no_weight());
                 }
                 let scale = n as f64 / total;
                 w.iter().map(|v| v * scale).collect()
@@ -1182,7 +1129,7 @@ impl ElasticNet {
                 / total;
             let scale = variance.sqrt();
             if !(scale > 0.0 && scale.is_finite()) {
-                return Err(ElasticNetError::ConstantResponse);
+                return Err(Error::ConstantResponse);
             }
             l2_scale = 1.0 / scale;
         }
@@ -1360,9 +1307,9 @@ mod tests {
             tolerance: 1e-24,
             ..ElasticNet::new(Family::Gaussian, 0.0, 0.5)
         };
-        let fit = enet.fit(x.as_ref(), &y, None, None, None, None).unwrap();
+        let fit = enet.fit6(x.as_ref(), &y, None, None, None, None).unwrap();
         let glm = crate::Glm::new(Family::Gaussian, crate::Link::Identity)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         assert!(fit.converged);
         for (a, b) in fit.coefficients.iter().zip(&glm.coefficients) {
@@ -1381,7 +1328,7 @@ mod tests {
         };
         let factors = [0.0, 1.0, 1.0];
         let fit = enet
-            .fit(x.as_ref(), &y, None, None, Some(&factors), None)
+            .fit6(x.as_ref(), &y, None, None, Some(&factors), None)
             .unwrap();
         let mut a = Mat::from_fn(3, 3, |j, k| {
             (0..40).map(|i| x[(i, j)] * x[(i, k)]).sum::<f64>() / 40.0
@@ -1405,7 +1352,7 @@ mod tests {
         let (x, y) = data(50);
         let factors = [0.0, 1.0, 1.0];
         let fit = ElasticNet::new(Family::Gaussian, 100.0, 1.0)
-            .fit(x.as_ref(), &y, None, None, Some(&factors), None)
+            .fit6(x.as_ref(), &y, None, None, Some(&factors), None)
             .unwrap();
         assert_eq!(fit.coefficients[1].to_bits(), 0.0_f64.to_bits());
         assert_eq!(fit.coefficients[2].to_bits(), 0.0_f64.to_bits());
@@ -1421,7 +1368,7 @@ mod tests {
             tolerance: 1e-30,
             ..ElasticNet::new(Family::Gaussian, 0.1, 0.5)
         };
-        let fit = enet.fit(x.as_ref(), &y, None, None, None, None).unwrap();
+        let fit = enet.fit6(x.as_ref(), &y, None, None, None, None).unwrap();
         assert!(!fit.converged);
         assert_eq!(fit.passes, 1);
     }
@@ -1430,9 +1377,9 @@ mod tests {
     fn a_warm_start_at_the_solution_takes_one_pass() {
         let (x, y) = data(50);
         let enet = ElasticNet::new(Family::Gaussian, 0.05, 0.5);
-        let cold = enet.fit(x.as_ref(), &y, None, None, None, None).unwrap();
+        let cold = enet.fit6(x.as_ref(), &y, None, None, None, None).unwrap();
         let warm = enet
-            .fit(x.as_ref(), &y, None, None, None, Some(&cold.coefficients))
+            .fit6(x.as_ref(), &y, None, None, None, Some(&cold.coefficients))
             .unwrap();
         assert!(warm.converged && warm.passes <= 2 && warm.passes < cold.passes);
     }
@@ -1451,9 +1398,9 @@ mod tests {
             tolerance: 1e-18,
             ..ElasticNet::new(Family::Binomial, 0.0, 0.5)
         };
-        let fit = enet.fit(x.as_ref(), &y, None, None, None, None).unwrap();
+        let fit = enet.fit6(x.as_ref(), &y, None, None, None, None).unwrap();
         let glm = crate::Glm::new(Family::Binomial, crate::Link::Logit)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         assert!(fit.converged);
         for (a, b) in fit.coefficients.iter().zip(&glm.coefficients) {
@@ -1473,11 +1420,11 @@ mod tests {
             ..ElasticNet::new(Family::Gaussian, 0.05, 0.5)
         };
         let weighted = enet
-            .fit(x.as_ref(), &y, Some(&weights), None, None, None)
+            .fit6(x.as_ref(), &y, Some(&weights), None, None, None)
             .unwrap();
         let head = Mat::from_fn(40, 3, |i, j| x[(i, j)]);
         let dropped = enet
-            .fit(head.as_ref(), &y[..40], None, None, None, None)
+            .fit6(head.as_ref(), &y[..40], None, None, None, None)
             .unwrap();
         for (a, b) in weighted.coefficients.iter().zip(&dropped.coefficients) {
             assert!((a - b).abs() < 1e-10);
@@ -1592,18 +1539,14 @@ mod tests {
                             let offset = (variant >= 2).then_some(c.offset.as_slice());
                             let start: Vec<f64> = (0..p).map(|j| 0.01 * j as f64).collect();
                             let start = (variant == 1).then_some(start.as_slice());
-                            let run = |covariance: bool| {
-                                enet.fit_with(
-                                    covariance,
-                                    c.x.as_ref(),
-                                    &c.y,
-                                    weights,
-                                    offset,
-                                    Some(&c.factors),
-                                    start,
-                                )
-                                .unwrap()
+                            let enet = ElasticNet {
+                                penalty_factor: Some(c.factors.clone()),
+                                ..enet
                             };
+                            let data =
+                                GlmData::from_parts(c.x.as_ref(), &c.y, weights, offset, start)
+                                    .unwrap();
+                            let run = |covariance: bool| enet.fit_with(covariance, &data).unwrap();
                             let (a, b) = (run(true), run(false));
                             let label = format!(
                                 "seed {seed} binomial {binomial} intercept {intercept} lambda {lambda} variant {variant}"
@@ -1649,8 +1592,8 @@ mod tests {
     fn a_fit_repeats_to_the_bit() {
         let (x, y) = data(60);
         let enet = ElasticNet::new(Family::Gaussian, 0.05, 0.3);
-        let a = enet.fit(x.as_ref(), &y, None, None, None, None).unwrap();
-        let b = enet.fit(x.as_ref(), &y, None, None, None, None).unwrap();
+        let a = enet.fit6(x.as_ref(), &y, None, None, None, None).unwrap();
+        let b = enet.fit6(x.as_ref(), &y, None, None, None, None).unwrap();
         let bits = |f: &ElasticNetFit| -> Vec<u64> {
             f.coefficients.iter().map(|v| v.to_bits()).collect()
         };
@@ -1661,50 +1604,59 @@ mod tests {
     fn invalid_input_is_an_error() {
         let (x, y) = data(20);
         let ok = ElasticNet::new(Family::Gaussian, 0.1, 0.5);
-        let run = |enet: ElasticNet, y: &[f64], w: Option<&[f64]>, f: Option<&[f64]>| {
-            enet.fit(x.as_ref(), y, w, None, f, None).unwrap_err()
+        let run = |enet: &ElasticNet, y: &[f64], w: Option<&[f64]>, f: Option<&[f64]>| {
+            enet.fit6(x.as_ref(), y, w, None, f, None).unwrap_err()
         };
-        assert_eq!(
-            run(ElasticNet::new(Family::Poisson, 0.1, 0.5), &y, None, None),
-            ElasticNetError::Family
-        );
-        assert_eq!(
-            run(ElasticNet::new(Family::Gaussian, -1.0, 0.5), &y, None, None),
-            ElasticNetError::Penalty
-        );
-        assert_eq!(
-            run(ElasticNet::new(Family::Gaussian, 1.0, 1.5), &y, None, None),
-            ElasticNetError::Penalty
-        );
+        let domain = |error: Error, name: &str| matches!(error, Error::Input(InputError::Domain { what, .. }) if what == name);
         assert!(matches!(
-            run(ok, &y[..5], None, None),
-            ElasticNetError::Length { what: "y", .. }
+            run(&ElasticNet::new(Family::Poisson, 0.1, 0.5), &y, None, None),
+            Error::Unsupported { .. }
+        ));
+        assert!(domain(
+            run(
+                &ElasticNet::new(Family::Gaussian, -1.0, 0.5),
+                &y,
+                None,
+                None
+            ),
+            "lambda"
+        ));
+        assert!(domain(
+            run(&ElasticNet::new(Family::Gaussian, 1.0, 1.5), &y, None, None),
+            "alpha"
         ));
         assert!(matches!(
-            run(ok, &y, None, Some(&[1.0, -1.0, 1.0])),
-            ElasticNetError::PenaltyFactor { index: 1, .. }
+            run(&ok, &y[..5], None, None),
+            Error::Input(InputError::Length { what: "y", .. })
+        ));
+        assert!(domain(
+            run(&ok, &y, None, Some(&[1.0, -1.0, 1.0])),
+            "penalty_factor"
         ));
         let mut weights = vec![1.0; 20];
         weights[2] = f64::NAN;
         assert!(matches!(
-            run(ok, &y, Some(&weights), None),
-            ElasticNetError::Weight { index: 2, .. }
+            run(&ok, &y, Some(&weights), None),
+            Error::Input(InputError::NotFinite {
+                what: "weights",
+                row: 2
+            })
         ));
-        assert_eq!(
-            run(ok, &y, Some(&[0.0; 20]), None),
-            ElasticNetError::NoWeight
-        );
         assert!(matches!(
-            run(ElasticNet::new(Family::Binomial, 0.1, 0.5), &y, None, None),
-            ElasticNetError::Response { .. }
+            run(&ok, &y, Some(&[0.0; 20]), None),
+            Error::Input(InputError::Empty { .. })
+        ));
+        assert!(matches!(
+            run(&ElasticNet::new(Family::Binomial, 0.1, 0.5), &y, None, None),
+            Error::Response { .. }
         ));
         let scaled = ElasticNet {
             scaling: ResponseScaling::Glmnet,
             ..ok
         };
         assert_eq!(
-            run(scaled, &[1.0; 20], None, None),
-            ElasticNetError::ConstantResponse
+            run(&scaled, &[1.0; 20], None, None),
+            Error::ConstantResponse
         );
     }
 

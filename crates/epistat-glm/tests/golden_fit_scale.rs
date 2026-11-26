@@ -16,6 +16,9 @@ use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_linalg::Mat;
 use epistat_testkit::{Fingerprint, SplitMix64, on_threads};
 
+mod common;
+use common::*;
+
 fn normal(rng: &mut SplitMix64) -> f64 {
     let (u, v) = (1.0 - rng.unit(), rng.unit());
     (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
@@ -29,7 +32,7 @@ fn hash_options(h: Fingerprint, values: &[Option<f64>]) -> Fingerprint {
 
 fn hash_fit(fit: &Fit) -> u64 {
     let mut h = hash_options(Fingerprint::new(), &fit.coefficients);
-    h = hash_options(h, &fit.covariance);
+    h = hash_options(h, fit.covariance.as_slice());
     h = h
         .u64(fit.rank as u64)
         .u64(fit.residual_df as u64)
@@ -83,7 +86,7 @@ fn fits() -> Vec<u64> {
         })
         .collect();
     let logit = Glm::new(Family::Binomial, Link::Logit);
-    let fit = logit.fit(x.as_ref(), &y, None, None, None).unwrap();
+    let fit = logit.fit5(x.as_ref(), &y, None, None, None).unwrap();
     assert_eq!(fit.rank, 7);
     hashes.push(hash_fit(&fit));
 
@@ -91,7 +94,7 @@ fn fits() -> Vec<u64> {
     let rows = Mat::from_fn(x.ncols(), n, |j, i| x[(i, j)]);
     hashes.push(hash_fit(
         &logit
-            .fit(rows.as_ref().transpose(), &y, None, None, None)
+            .fit5(rows.as_ref().transpose(), &y, None, None, None)
             .unwrap(),
     ));
 
@@ -122,7 +125,7 @@ fn fits() -> Vec<u64> {
     let poisson = Glm::new(Family::Poisson, Link::Log);
     hashes.push(hash_fit(
         &poisson
-            .fit(x.as_ref(), &y, Some(&weights), Some(&offset), None)
+            .fit5(x.as_ref(), &y, Some(&weights), Some(&offset), None)
             .unwrap(),
     ));
 
@@ -134,7 +137,9 @@ fn fits() -> Vec<u64> {
     let start = [0.5, 0.0, 0.0, 0.0, 0.0];
     let gamma = Glm::new(Family::Gamma, Link::Log);
     hashes.push(hash_fit(
-        &gamma.fit(x.as_ref(), &y, None, None, Some(&start)).unwrap(),
+        &gamma
+            .fit5(x.as_ref(), &y, None, None, Some(&start))
+            .unwrap(),
     ));
 
     // A log-binomial fit, whose steps leave the unit interval and are
@@ -151,7 +156,7 @@ fn fits() -> Vec<u64> {
         ridge: 0.5,
         ..Glm::new(Family::Binomial, Link::Log)
     };
-    let fit = ridged.fit(x.as_ref(), &y, None, None, Some(&low)).unwrap();
+    let fit = ridged.fit5(x.as_ref(), &y, None, None, Some(&low)).unwrap();
     assert!(fit.boundary);
     hashes.push(hash_fit(&fit));
     hashes

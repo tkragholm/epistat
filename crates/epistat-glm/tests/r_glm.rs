@@ -5,6 +5,9 @@ use epistat_linalg::Mat;
 use epistat_testkit::{Tolerance, assert_close, load_json};
 use serde::Deserialize;
 
+mod common;
+use common::*;
+
 #[derive(Deserialize)]
 struct Reference {
     x: Vec<Vec<f64>>,
@@ -52,7 +55,7 @@ fn fits_match_r() {
         let weights = r.weighted.then_some(reference.weights.as_slice());
         let offset = r.offset.then_some(reference.offset.as_slice());
         let fit = Glm::new(family, link)
-            .fit(x.as_ref(), &r.y, weights, offset, None)
+            .fit5(x.as_ref(), &r.y, weights, offset, None)
             .unwrap();
         assert!(fit.converged, "{}", r.name);
         assert_eq!(fit.iterations, r.iterations, "{}", r.name);
@@ -106,7 +109,7 @@ fn tweedie_fits_match_statmod() {
     });
     for r in &reference.fits {
         let fit = Glm::new(Family::Tweedie { power: r.power }, Link::Log)
-            .fit(
+            .fit5(
                 x.as_ref(),
                 &reference.y,
                 Some(&reference.weights),
@@ -174,7 +177,7 @@ fn aliased_columns_are_none_as_in_r() {
             (Family::Poisson, Link::Log)
         };
         let fit = Glm::new(family, link)
-            .fit(x.as_ref(), &r.y, None, None, None)
+            .fit5(x.as_ref(), &r.y, None, None, None)
             .unwrap();
         // The fit solves the normal equations, R a QR of sqrt(W) X, so the two
         // can differ by about the condition number of X'WX times the unit
@@ -283,7 +286,7 @@ fn cloglog_fits_match_r() {
             .contains("offset")
             .then_some(reference.offset.as_slice());
         let fit = Glm::new(family, Link::Cloglog)
-            .fit(x.as_ref(), y, weighted.then_some(weights), offset, None)
+            .fit5(x.as_ref(), y, weighted.then_some(weights), offset, None)
             .unwrap();
         assert!(fit.converged, "{}", r.name);
         assert_eq!(fit.iterations, r.iterations, "{}", r.name);
@@ -352,7 +355,7 @@ fn probit_fits_match_r() {
             .contains("offset")
             .then_some(reference.offset.as_slice());
         let fit = Glm::new(Family::Binomial, Link::Probit)
-            .fit(x.as_ref(), y, weights, offset, None)
+            .fit5(x.as_ref(), y, weights, offset, None)
             .unwrap();
         assert!(fit.converged, "{}", r.name);
         assert_eq!(fit.iterations, r.iterations, "{}", r.name);

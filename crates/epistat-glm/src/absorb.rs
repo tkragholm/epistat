@@ -164,7 +164,7 @@
 //!
 //! # Determinism
 //!
-//! A factor with at most [`DENSE_LEVELS`] levels is summed by blocks of
+//! A factor with at most 4096 levels is summed by blocks of
 //! `16 * ROW_BLOCK` rows into one partial vector per block, and the partial
 //! vectors are added in block order. A factor with more levels is summed level
 //! by level over its rows in row order; when its codes are not sorted, the
@@ -196,15 +196,19 @@
 
 use std::collections::VecDeque;
 
+use epistat_core::InputError;
 use epistat_linalg::ROW_BLOCK;
 use rayon::prelude::*;
+
+use crate::Error;
+use crate::error::{length, weight_error};
 
 /// The rows per block of the dense sums.
 const DENSE_BLOCK: usize = 16 * ROW_BLOCK;
 
 /// Factors with at most this many levels are summed into one dense partial
 /// vector per block of `16 * ROW_BLOCK` rows.
-pub const DENSE_LEVELS: usize = DENSE_BLOCK / 4;
+pub(crate) const DENSE_LEVELS: usize = DENSE_BLOCK / 4;
 
 /// The levels handled by one task when a factor is summed level by level.
 const LEVELS_PER_TASK: usize = 4096;
@@ -221,64 +225,8 @@ const GRAND_ACCELERATION: usize = 4;
 /// two largest are solved alone, as in `fixest` (`iter_warmup`).
 const WARMUP: usize = 15;
 
-/// Why fixed effects could not be absorbed.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum AbsorbError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// No factors were given.
-    #[error("at least one fixed-effect factor is needed")]
-    NoFactors,
-    /// A prior weight is negative or not finite.
-    #[error("prior weight {index} is {value}, which is negative or not finite")]
-    Weight {
-        /// The position of the weight.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// A value of a column is not finite on a row that enters.
-    #[error("value {row} of column {column} is not finite")]
-    NotFinite {
-        /// The column.
-        column: usize,
-        /// The input row.
-        row: usize,
-    },
-    /// The tolerance is not positive and finite, or no iterations are allowed.
-    #[error("the tolerance must be positive and finite and the iterations at least one")]
-    Control,
-    /// No rows remain after rows of weight zero and singletons are removed.
-    #[error("no rows remain after rows of weight zero and singletons are removed")]
-    Empty,
-    /// More rows than the 32-bit row numbers can hold.
-    #[error("at most 2^32 - 1 rows are supported")]
-    TooManyRows,
-    /// The iteration did not meet the criterion.
-    #[error("column {column} did not converge in {iterations} iterations")]
-    NotConverged {
-        /// The column.
-        column: usize,
-        /// The iterations run.
-        iterations: usize,
-    },
-    /// Codes of another factor or of a cluster variable are not usable.
-    #[error("{0}")]
-    Invalid(&'static str),
-    /// The fit on the demeaned columns failed.
-    #[error(transparent)]
-    Glm(#[from] crate::GlmError),
-}
-
 /// What to do with levels that have one row.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Singletons {
     /// Remove their rows, repeatedly, as `fixest` does by default.
@@ -289,6 +237,7 @@ pub enum Singletons {
 
 /// How the normal equations of the projection are solved. Both stop by the
 /// same criterion, so both carry the same bound on the error.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AbsorbMethod {
     /// Alternating projections with the accelerations and the restart of
@@ -328,12 +277,9 @@ impl Absorb {
         }
     }
 
-    fn check(&self) -> Result<(), AbsorbError> {
-        if self.tolerance.is_finite() && self.tolerance > 0.0 && self.max_iterations > 0 {
-            Ok(())
-        } else {
-            Err(AbsorbError::Control)
-        }
+    fn check(&self) -> Result<(), Error> {
+        crate::error::tolerance("absorb tolerance", self.tolerance)?;
+        crate::error::iterations("absorb max_iterations", self.max_iterations)
     }
 }
 
@@ -459,6 +405,7 @@ pub struct FixedEffects {
 }
 
 /// A column with its fixed effects removed.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Demeaned {
     /// The residuals, one per row that enters ([`FixedEffects::rows`]), one
@@ -474,6 +421,7 @@ pub struct Demeaned {
 }
 
 /// The fixed effects of a fit, normalised as `fixest::fixef` does.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct FixedEffectValues {
     /// For each factor, the coefficient of each code the caller gave, `None`
@@ -520,24 +468,12 @@ impl FixedEffectValues {
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::Length`] when the factors differ in number or length.
-    pub fn predict(&self, factors: &[&[u32]]) -> Result<Vec<Option<f64>>, AbsorbError> {
-        if factors.len() != self.values.len() {
-            return Err(AbsorbError::Length {
-                what: "factors",
-                expected: self.values.len(),
-                found: factors.len(),
-            });
-        }
+    /// [`Error::Input`] when the factors differ in number or length.
+    pub fn predict(&self, factors: &[&[u32]]) -> Result<Vec<Option<f64>>, Error> {
+        length("factors", self.values.len(), factors.len())?;
         let n = factors.first().map_or(0, |f| f.len());
         for f in factors {
-            if f.len() != n {
-                return Err(AbsorbError::Length {
-                    what: "factor codes",
-                    expected: n,
-                    found: f.len(),
-                });
-            }
+            length("factor codes", n, f.len())?;
         }
         Ok((0..n)
             .into_par_iter()
@@ -607,44 +543,42 @@ impl FixedEffects {
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::NoFactors`], [`AbsorbError::Length`] for slices of the
-    /// wrong length, [`AbsorbError::Weight`] for a weight that is negative or
-    /// not finite, [`AbsorbError::TooManyRows`] and [`AbsorbError::Empty`].
+    /// [`Error::Input`] for no factors, slices of the wrong length, a weight
+    /// that is negative or not finite, more rows than 32-bit row numbers
+    /// hold, and no rows left after the rows of weight zero and the
+    /// singletons are removed.
     pub fn new(
         factors: &[&[u32]],
         weights: Option<&[f64]>,
         singletons: Singletons,
-    ) -> Result<Self, AbsorbError> {
+    ) -> Result<Self, Error> {
         let Some(first) = factors.first() else {
-            return Err(AbsorbError::NoFactors);
+            return Err(InputError::Empty { what: "factors" }.into());
         };
         let n = first.len();
         if u32::try_from(n).is_err() {
-            return Err(AbsorbError::TooManyRows);
+            return Err(InputError::TooLarge {
+                what: "rows",
+                limit: u64::from(u32::MAX),
+                found: n as u64,
+            }
+            .into());
         }
         for f in factors {
             if f.len() != n {
-                return Err(AbsorbError::Length {
-                    what: "factor codes",
-                    expected: n,
-                    found: f.len(),
-                });
+                return Err(length_error("factor codes", n, f.len()));
             }
         }
         if let Some(w) = weights {
             if w.len() != n {
-                return Err(AbsorbError::Length {
-                    what: "weights",
-                    expected: n,
-                    found: w.len(),
-                });
+                return Err(length_error("weights", n, w.len()));
             }
             if let Some((index, &value)) = w
                 .par_iter()
                 .enumerate()
                 .find_first(|&(_, &v)| !(v.is_finite() && v >= 0.0))
             {
-                return Err(AbsorbError::Weight { index, value });
+                return Err(weight_error("weights", index, value));
             }
         }
         let input_levels: Vec<usize> = factors
@@ -677,7 +611,10 @@ impl FixedEffects {
         }
         let removed_singletons = n - removed_zero_weight - kept.len();
         if kept.is_empty() {
-            return Err(AbsorbError::Empty);
+            return Err(InputError::Empty {
+                what: "rows left after rows of weight zero and singletons are removed",
+            }
+            .into());
         }
         let kept_weights: Option<Vec<f64>> = weights.map(|w| kept.iter().map(|&i| w[i]).collect());
         let levels: Vec<Level> = factors
@@ -842,38 +779,37 @@ impl FixedEffects {
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::Control`] for an unusable control,
-    /// [`AbsorbError::Length`] for a column of the wrong length,
-    /// [`AbsorbError::NotFinite`] for a value that is not finite on a row
-    /// that enters, and [`AbsorbError::NotConverged`].
-    pub fn demean(&self, columns: &[&[f64]], control: &Absorb) -> Result<Demeaned, AbsorbError> {
+    /// [`Error::Input`] for an unusable control, a column of the wrong length
+    /// or a value that is not finite on a row that enters, and
+    /// [`Error::NotConverged`].
+    pub fn demean(&self, columns: &[&[f64]], control: &Absorb) -> Result<Demeaned, Error> {
         control.check()?;
         for c in columns {
             if c.len() != self.n_input {
-                return Err(AbsorbError::Length {
-                    what: "column",
-                    expected: self.n_input,
-                    found: c.len(),
-                });
+                return Err(length_error("column", self.n_input, c.len()));
             }
         }
-        for (j, c) in columns.iter().enumerate() {
+        for c in columns {
             if let Some(&row) = self.kept.par_iter().find_first(|&&i| !c[i].is_finite()) {
-                return Err(AbsorbError::NotFinite { column: j, row });
+                return Err(InputError::NotFinite {
+                    what: "columns",
+                    row,
+                }
+                .into());
             }
         }
         let n = self.kept.len();
         let mut out = epistat_linalg::Mat::<f64>::zeros(n, columns.len());
         // The columns are demeaned in parallel, each by its own deterministic
         // iteration, so the order in which they finish does not matter.
-        let results: Vec<Result<ColumnResult, AbsorbError>> = out
+        let results: Vec<Result<ColumnResult, Error>> = out
             .par_col_iter_mut()
             .zip(columns.par_iter())
             .enumerate()
             .map(|(j, (target, c))| {
                 let target = target
                     .try_as_col_major_mut()
-                    .ok_or(AbsorbError::Invalid("a column is not contiguous"))?
+                    .ok_or(Error::Invalid("a column is not contiguous"))?
                     .as_slice_mut();
                 target
                     .par_iter_mut()
@@ -910,22 +846,22 @@ impl FixedEffects {
         x: &mut epistat_linalg::Mat<f64>,
         y: &[f64],
         control: &Absorb,
-    ) -> Result<(Vec<f64>, Demeaned), AbsorbError> {
+    ) -> Result<(Vec<f64>, Demeaned), Error> {
         control.check()?;
         let p = x.ncols();
         for found in [x.nrows(), y.len()] {
             if found != self.n_input {
-                return Err(AbsorbError::Length {
-                    what: "column",
-                    expected: self.n_input,
-                    found,
-                });
+                return Err(length_error("column", self.n_input, found));
             }
         }
         for j in 0..=p {
             let c: &[f64] = if j < p { x.col_as_slice(j) } else { y };
             if let Some(&row) = self.kept.par_iter().find_first(|&&i| !c[i].is_finite()) {
-                return Err(AbsorbError::NotFinite { column: j, row });
+                return Err(InputError::NotFinite {
+                    what: "columns",
+                    row,
+                }
+                .into());
             }
         }
         let n = self.kept.len();
@@ -938,7 +874,7 @@ impl FixedEffects {
                     .map(|(j, column)| {
                         let column = column
                             .try_as_col_major_mut()
-                            .ok_or(AbsorbError::Invalid("a column is not contiguous"))?
+                            .ok_or(Error::Invalid("a column is not contiguous"))?
                             .as_slice_mut();
                         // The rows that enter are increasing, so each moves
                         // up or stays and none is overwritten before it moves.
@@ -949,7 +885,7 @@ impl FixedEffects {
                         }
                         self.demean_in_place(&mut column[..n], control, j)
                     })
-                    .collect::<Vec<Result<ColumnResult, AbsorbError>>>()
+                    .collect::<Vec<Result<ColumnResult, Error>>>()
             },
             || self.demean_in_place(&mut y_tilde, control, p),
         );
@@ -992,33 +928,24 @@ impl FixedEffects {
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::Control`], [`AbsorbError::Length`] for sums of the
-    /// wrong shape, [`AbsorbError::NotFinite`] for a sum that is not finite,
-    /// and [`AbsorbError::NotConverged`].
-    pub fn solve_sums(
-        &self,
-        sums: &[&[f64]],
-        control: &Absorb,
-    ) -> Result<Vec<Vec<f64>>, AbsorbError> {
+    /// [`Error::Input`] for an unusable control, sums of the wrong shape or a
+    /// sum that is not finite, and [`Error::NotConverged`].
+    pub fn solve_sums(&self, sums: &[&[f64]], control: &Absorb) -> Result<Vec<Vec<f64>>, Error> {
         control.check()?;
         let levels = self.levels();
         if sums.len() != levels.len() {
-            return Err(AbsorbError::Length {
-                what: "level sums",
-                expected: levels.len(),
-                found: sums.len(),
-            });
+            return Err(length_error("level sums", levels.len(), sums.len()));
         }
-        for (q, (s, &g)) in sums.iter().zip(&levels).enumerate() {
+        for (s, &g) in sums.iter().zip(&levels) {
             if s.len() != g {
-                return Err(AbsorbError::Length {
-                    what: "level sums",
-                    expected: g,
-                    found: s.len(),
-                });
+                return Err(length_error("level sums", g, s.len()));
             }
             if let Some(row) = s.iter().position(|v| !v.is_finite()) {
-                return Err(AbsorbError::NotFinite { column: q, row });
+                return Err(InputError::NotFinite {
+                    what: "level sums",
+                    row,
+                }
+                .into());
             }
         }
         let owned: Vec<Vec<f64>> = sums.iter().map(|s| s.to_vec()).collect();
@@ -1043,9 +970,9 @@ impl FixedEffects {
         solver
             .solve(control)
             .map(|(point, _)| point)
-            .ok_or(AbsorbError::NotConverged {
-                column: 0,
+            .ok_or(Error::NotConverged {
                 iterations: control.max_iterations,
+                column: Some(0),
             })
     }
 
@@ -1092,7 +1019,7 @@ impl FixedEffects {
         v: &mut [f64],
         control: &Absorb,
         column: usize,
-    ) -> Result<ColumnResult, AbsorbError> {
+    ) -> Result<ColumnResult, Error> {
         let n = v.len();
         let mean = blocked_total(n, |k| self.weight(k) * v[k]) / self.total_weight;
         v.par_iter_mut().for_each(|x| *x -= mean);
@@ -1120,9 +1047,9 @@ impl FixedEffects {
                 }
             } else {
                 let mut solver = Iteration::new(self, &sums, control.tolerance * s);
-                let (point, its) = solver.solve(control).ok_or(AbsorbError::NotConverged {
-                    column,
+                let (point, its) = solver.solve(control).ok_or(Error::NotConverged {
                     iterations: control.max_iterations,
+                    column: Some(column),
                 })?;
                 iterations = its;
                 alpha = point;
@@ -1866,6 +1793,15 @@ fn irons_tuck(x: &[f64], gx: &[f64], ggx: &[f64]) -> Vec<f64> {
         .zip(&d)
         .map(|(g, d)| g - coefficient * d)
         .collect()
+}
+
+/// The error of a value of `found` entries where `expected` were needed.
+const fn length_error(what: &'static str, expected: usize, found: usize) -> Error {
+    Error::Input(InputError::Length {
+        what,
+        expected,
+        found,
+    })
 }
 
 #[cfg(test)]

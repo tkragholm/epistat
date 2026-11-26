@@ -132,14 +132,16 @@ fn main() {
     let ways: [&[u32]; 1] = [&id];
     let (times, (coefficients, covariance)) = common::timed(common::reps(), || {
         let fe = FixedEffects::new(&factors, None, Singletons::Remove).expect("factors");
-        let fit = Feols::default().fit(y, x.as_ref(), &fe).expect("feols");
-        let cov = fit.vcov(Vcov::Cluster(&ways), Ssc::new()).expect("vcov");
+        let fit = Feols::default().fit(x.as_ref(), y, &fe).expect("feols");
+        let cov = fit
+            .vcov(&fe, Vcov::Cluster(&ways), Ssc::new())
+            .expect("vcov");
         (fit.coefficients, cov.matrix)
     });
     let mut lines = Lines::default();
     for (j, name) in ["x1", "x2"].iter().enumerate() {
         lines.push_opt(&format!("coef_{name}"), coefficients[j]);
-        lines.push_opt(&format!("se_{name}"), covariance[j * 2 + j].map(f64::sqrt));
+        lines.push_opt(&format!("se_{name}"), covariance.get(j, j).map(f64::sqrt));
     }
     common::finish(&method, n, &times, &lines);
 }
@@ -172,13 +174,15 @@ fn workers(method: &str, n: usize) {
     let ways: [&[u32]; 1] = [&worker];
     let (times, (coefficients, covariance, iterations)) = common::timed(common::reps(), || {
         let fe = FixedEffects::new(&factors, None, Singletons::Remove).expect("factors");
-        let fit = Feols { absorb }.fit(y, x.as_ref(), &fe).expect("feols");
-        let cov = fit.vcov(Vcov::Cluster(&ways), Ssc::new()).expect("vcov");
+        let fit = Feols { absorb }.fit(x.as_ref(), y, &fe).expect("feols");
+        let cov = fit
+            .vcov(&fe, Vcov::Cluster(&ways), Ssc::new())
+            .expect("vcov");
         (fit.coefficients, cov.matrix, fit.iterations)
     });
     let mut lines = Lines::default();
     lines.push_opt("coef_x1", coefficients[0]);
-    lines.push_opt("se_x1", covariance[0].map(f64::sqrt));
+    lines.push_opt("se_x1", covariance.get(0, 0).map(f64::sqrt));
     eprintln!("{method} {n}: iterations {iterations:?}");
     common::finish(method, n, &times, &lines);
 }

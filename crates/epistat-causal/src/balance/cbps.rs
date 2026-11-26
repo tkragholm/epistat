@@ -174,6 +174,11 @@
 //! 3. Hansen LP, Heaton J, Yaron A. Finite-sample properties of some alternative
 //!    GMM estimators. J Bus Econ Stat. 1996;14(3):262-80.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{
     Attempt, Mat, MatRef, Method, Regularisation, cholesky_factor, design::independent_columns,
@@ -1115,7 +1120,7 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
     };
     let y: Vec<f64> = t.iter().map(|&a| f64::from(u8::from(a))).collect();
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(prob.x.as_ref(), &y, Some(&s), None, None)
+        .fit_slices(prob.x.as_ref(), &y, Some(&s), None, None)
         .map_err(|e| Error::input(format!("logistic fit: {e}")))?;
     if !fit.converged {
         return Err(Error::input("logistic fit: no convergence"));

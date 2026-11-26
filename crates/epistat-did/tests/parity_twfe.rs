@@ -309,7 +309,7 @@ fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
         }
     });
     let fit = Feols { absorb: TIGHT }
-        .fit(&case.outcome, design.as_ref(), &fe)
+        .fit(design.as_ref(), &case.outcome, &fe)
         .unwrap();
     // The wrapper is the plain fit.
     for (j, c) in fit.coefficients.iter().enumerate() {
@@ -396,9 +396,10 @@ fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
         }
     }
     let ways = [clusters_input(case)];
-    let cov = fit.vcov(Vcov::Cluster(&ways), Ssc::new()).unwrap();
+    let cov = fit.vcov(&fe, Vcov::Cluster(&ways), Ssc::new()).unwrap();
     let largest = cov
         .matrix
+        .as_slice()
         .iter()
         .flatten()
         .fold(0.0_f64, |a, &b| a.max(b.abs()));

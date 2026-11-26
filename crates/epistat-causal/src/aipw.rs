@@ -76,6 +76,11 @@
 //!    treatment effects with right-censored time to event outcome and competing
 //!    risks. Biom J. 2020;62(3):751-63.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use std::collections::BTreeMap;
 
 use epistat_glm::{Family, Glm, Link};
@@ -497,7 +502,7 @@ pub(crate) fn fit_model(
     what: &str,
 ) -> Result<Fitted> {
     let model = glm
-        .fit(x, y, Some(weights), None, None)
+        .fit_slices(x, y, Some(weights), None, None)
         .map_err(|e| Error::input(format!("{what} model: {e}")))?;
     if !model.converged {
         return Err(Error::input(format!("{what} model: no convergence")));

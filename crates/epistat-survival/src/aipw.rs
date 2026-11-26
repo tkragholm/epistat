@@ -141,6 +141,11 @@
 //!    differences in restricted mean lifetimes in observational studies.
 //!    Biometrics 2012;68(4):999-1009.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
@@ -549,7 +554,7 @@ impl Model {
             .map(|&a| f64::from(u8::from(a)))
             .collect();
         let glm = Glm::new(Family::Binomial, Link::Logit)
-            .fit(spec.propensity_x, &y, None, None, None)
+            .fit_slices(spec.propensity_x, &y, None, None, None)
             .map_err(|e| Error::input(format!("treatment model: {e}")))?;
         if !glm.converged {
             return Err(Error::input("treatment model: no convergence"));

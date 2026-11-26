@@ -18,7 +18,8 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_glm::attributable::{AfOptions, Design, attributable_logistic};
-use epistat_glm::{Family, Glm, Link};
+use epistat_glm::{Family, Glm, GlmData, Link};
+use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_208;
@@ -50,21 +51,23 @@ fn main() {
     let cluster: Vec<u32> = t.ints("cluster");
     let x = Mat::from_fn(n, 4, |i, j| [1.0, e[i], z[i], e[i] * z[i]][j]);
     let x0 = Mat::from_fn(n, 4, |i, j| if j == 1 || j == 3 { 0.0 } else { x[(i, j)] });
+    let data = GlmData::builder(x.as_ref(), y).build().expect("data");
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(x.as_ref(), y, None, None, None)
+        .fit(&data)
         .expect("fit");
     let opts = AfOptions {
         design,
-        cluster: Some(&cluster),
         ..AfOptions::default()
     };
     let (times, result) = common::timed(common::reps(), || {
-        attributable_logistic(&fit, x.as_ref(), x0.as_ref(), y, &opts).expect("af")
+        let clusters = Clusters::from_labels(&cluster);
+        attributable_logistic(&fit, &data, x0.as_ref(), Some(&clusters), &opts).expect("af")
     });
+    let af = result.af.expect("a fraction");
     let mut lines = Lines::default();
-    lines.push_opt("af", result.af);
-    lines.push_opt("se", result.se);
-    lines.push_opt("lower", result.lower);
-    lines.push_opt("upper", result.upper);
+    lines.push_opt("af", Some(af.estimate));
+    lines.push_opt("se", af.se);
+    lines.push_opt("lower", af.lower());
+    lines.push_opt("upper", af.upper());
     common::finish(&method, n, &times, &lines);
 }

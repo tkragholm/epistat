@@ -31,7 +31,7 @@
 //!
 //! With complete or quasi-complete separation the likelihood has no maximum.
 //! The Hessian then becomes singular and the fit is
-//! [`MultinomError::Separation`], or the iteration stops at its limit with
+//! [`Error::Separation`], or the iteration stops at its limit with
 //! [`MultinomFit::converged`] false and [`MultinomFit::fitted_at_boundary`]
 //! true, which is the case when a fitted probability lies within ten machine
 //! epsilons of 0 or 1.
@@ -43,8 +43,15 @@
 //! fitted probabilities, residual deviance and the standard errors of
 //! `summary()`.
 
+use epistat_core::Covariance;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method};
 use rayon::prelude::*;
+
+use crate::{Error, MultinomData};
+
+/// The error type of the multinomial logit in epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type MultinomError = Error;
 
 /// Fitting controls for the multinomial logit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,66 +72,8 @@ impl Default for Multinom {
     }
 }
 
-/// Why a multinomial logit could not be fitted.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum MultinomError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// There are fewer than two classes, or a label is not below the number
-    /// of classes.
-    #[error(
-        "class {value} of row {row} is outside 0..{classes}, or there are fewer than two classes"
-    )]
-    Class {
-        /// The row.
-        row: usize,
-        /// Its label.
-        value: usize,
-        /// The number of classes.
-        classes: usize,
-    },
-    /// A class has no row with positive weight.
-    #[error("class {class} has no row with positive weight")]
-    EmptyClass {
-        /// The class.
-        class: usize,
-    },
-    /// A weight is negative or not finite.
-    #[error("weight {index} is {value}, which is negative or not finite")]
-    Weight {
-        /// The row.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// The design has a missing or infinite value.
-    #[error("the design matrix has a value that is not finite")]
-    Design,
-    /// The Hessian became singular with fitted probabilities at 0 or 1: the
-    /// classes are separated by the covariates and the likelihood has no
-    /// maximum.
-    #[error("the classes are separated by the covariates")]
-    Separation,
-    /// The Hessian is not positive definite: the design is collinear.
-    #[error("the Hessian is singular, the design is collinear")]
-    Singular,
-    /// The tolerance is not positive and finite.
-    #[error("the tolerance must be positive and finite")]
-    Tolerance,
-    /// A linear solve failed.
-    #[error(transparent)]
-    Solve(#[from] epistat_linalg::Error),
-}
-
 /// A fitted multinomial logit.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MultinomFit {
     /// The number of classes `K`.
@@ -141,8 +90,8 @@ pub struct MultinomFit {
     /// The residual deviance, `-2` times the log-likelihood, as `nnet` reports.
     pub deviance: f64,
     /// The covariance of the coefficients, the inverse of the information,
-    /// row-major `(K - 1) p` square in the order of `coefficients`.
-    pub covariance: Vec<f64>,
+    /// `(K - 1) p` square in the order of `coefficients`.
+    pub covariance: Covariance,
     /// The number of Newton iterations.
     pub iterations: usize,
     /// Whether the largest step fell below the tolerance.
@@ -154,104 +103,70 @@ pub struct MultinomFit {
 
 impl MultinomFit {
     /// The coefficient of column `j` for class `k`, with `k` in
-    /// `1..classes`.
+    /// `1..classes`; `None` for the baseline class 0 or outside the model.
     #[must_use]
-    pub fn coefficient(&self, class: usize, column: usize) -> f64 {
-        self.coefficients[(class - 1) * self.columns + column]
+    pub fn coefficient(&self, class: usize, column: usize) -> Option<f64> {
+        if class == 0 || class >= self.classes || column >= self.columns {
+            return None;
+        }
+        Some(self.coefficients[(class - 1) * self.columns + column])
     }
 
-    /// The fitted probabilities of row `i`, one per class.
+    /// The fitted probabilities of row `i`, one per class; `None` for a row
+    /// outside the fit.
     #[must_use]
-    pub fn row_probabilities(&self, row: usize) -> &[f64] {
-        &self.probabilities[row * self.classes..(row + 1) * self.classes]
+    pub fn row_probabilities(&self, row: usize) -> Option<&[f64]> {
+        self.probabilities
+            .get(row * self.classes..(row + 1) * self.classes)
     }
 
     /// The standard errors of the coefficients, in the order of
-    /// `coefficients`.
+    /// `coefficients`, `None` for a negative variance.
     #[must_use]
-    pub fn standard_errors(&self) -> Vec<f64> {
-        let q = self.coefficients.len();
-        (0..q)
-            .map(|i| self.covariance[i * q + i].max(0.0).sqrt())
-            .collect()
+    pub fn standard_errors(&self) -> Vec<Option<f64>> {
+        self.covariance.standard_errors()
     }
 
     /// The log of the odds of class `class` against the baseline for a row of
-    /// covariates, `x'b_class`, with `class` in `1..classes`.
+    /// covariates, `x'b_class`, with `class` in `1..classes`; `None` for the
+    /// baseline class 0 or another class outside the model, or a row whose
+    /// length is not the number of columns.
     #[must_use]
-    pub fn linear_predictor(&self, class: usize, x: &[f64]) -> f64 {
+    pub fn linear_predictor(&self, class: usize, x: &[f64]) -> Option<f64> {
+        if class == 0 || class >= self.classes || x.len() != self.columns {
+            return None;
+        }
         let b = &self.coefficients[(class - 1) * self.columns..class * self.columns];
         let mut s = 0.0;
         for (xi, bi) in x.iter().zip(b) {
             s += xi * bi;
         }
-        s
+        Some(s)
     }
 }
 
 impl Multinom {
-    /// Fits the model to the class labels `y` (each in `0..classes`) on the
-    /// columns of `x`, which holds the intercept if the model has one.
-    /// `weights` are case weights, 1 when `None`; rows of weight 0 do not
-    /// enter.
+    /// Fits the model to the class labels of `data` on the columns of its
+    /// design, which holds the intercept if the model has one. Case weights
+    /// are 1 when the data have none; rows of weight 0 do not enter.
     ///
     /// # Errors
     ///
-    /// See [`MultinomError`].
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[usize],
-        classes: usize,
-        weights: Option<&[f64]>,
-    ) -> Result<MultinomFit, MultinomError> {
+    /// [`Error::Input`] for a tolerance that is not positive and finite,
+    /// [`Error::EmptyClass`] for a class without a row of positive weight,
+    /// [`Error::Separation`] when the covariates separate the classes,
+    /// [`Error::Singular`] for a collinear design, and [`Error::Solve`] when
+    /// a Newton step cannot be solved.
+    pub fn fit(&self, data: &MultinomData<'_>) -> Result<MultinomFit, Error> {
+        let (x, y, classes) = (data.x(), data.y(), data.classes());
         let (n, p) = (x.nrows(), x.ncols());
         let ones = vec![1.0; n];
-        let w = weights.unwrap_or(&ones);
-        let check = |what, expected, found| {
-            if expected == found {
-                Ok(())
-            } else {
-                Err(MultinomError::Length {
-                    what,
-                    expected,
-                    found,
-                })
-            }
-        };
-        check("y", n, y.len())?;
-        check("weights", n, w.len())?;
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
-            return Err(MultinomError::Tolerance);
-        }
-        if let Some((index, &value)) = w
-            .iter()
-            .enumerate()
-            .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-        {
-            return Err(MultinomError::Weight { index, value });
-        }
-        if classes < 2 {
-            return Err(MultinomError::Class {
-                row: 0,
-                value: classes,
-                classes,
-            });
-        }
-        if let Some((row, &value)) = y.iter().enumerate().find(|&(_, &c)| c >= classes) {
-            return Err(MultinomError::Class {
-                row,
-                value,
-                classes,
-            });
-        }
+        let w = data.weights().unwrap_or(&ones);
+        crate::error::tolerance("tolerance", self.tolerance)?;
         for class in 0..classes {
             if !(0..n).any(|i| y[i] == class && w[i] > 0.0) {
-                return Err(MultinomError::EmptyClass { class });
+                return Err(Error::EmptyClass { class });
             }
-        }
-        if (0..n).any(|i| (0..p).any(|j| !x[(i, j)].is_finite())) {
-            return Err(MultinomError::Design);
         }
 
         let q = (classes - 1) * p;
@@ -305,8 +220,12 @@ impl Multinom {
         // The information at the final coefficients.
         let (_, hessian) = derivatives(x, y, w, classes, &probs);
         let covariance = Factor::new(hessian.as_ref(), &[Attempt::plain(Method::Cholesky)])
-            .map_err(|_| MultinomError::Singular)?
+            .map_err(|_| Error::Singular)?
             .solve(Mat::<f64>::identity(q, q).as_ref())?;
+        let values = (0..q * q)
+            .map(|k| Some(covariance[(k / q, k % q)]))
+            .collect();
+        let covariance = crate::fit::covariance(q, values)?;
         let boundary = at_boundary(&probs);
         Ok(MultinomFit {
             classes,
@@ -315,11 +234,28 @@ impl Multinom {
             probabilities: probs,
             log_likelihood: loglik,
             deviance: -2.0 * loglik,
-            covariance: (0..q * q).map(|k| covariance[(k / q, k % q)]).collect(),
+            covariance,
             iterations,
             converged,
             fitted_at_boundary: boundary,
         })
+    }
+
+    /// Fits the model as [`Multinom::fit`] does, to the data given as separate
+    /// arguments, the signature of epistat-glm 0.2.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`MultinomData`]'s `build` and of [`Multinom::fit`].
+    #[deprecated(since = "0.3.0", note = "build a MultinomData and call Multinom::fit")]
+    pub fn fit_slices(
+        &self,
+        x: MatRef<'_, f64>,
+        y: &[usize],
+        classes: usize,
+        weights: Option<&[f64]>,
+    ) -> Result<MultinomFit, Error> {
+        self.fit(&MultinomData::from_parts(x, y, classes, weights)?)
     }
 }
 
@@ -329,11 +265,11 @@ fn at_boundary(probs: &[f64]) -> bool {
         .any(|&v| v < 10.0 * f64::EPSILON || v > 1.0 - 10.0 * f64::EPSILON)
 }
 
-fn singular(probs: &[f64]) -> MultinomError {
+fn singular(probs: &[f64]) -> Error {
     if at_boundary(probs) {
-        MultinomError::Separation
+        Error::Separation
     } else {
-        MultinomError::Singular
+        Error::Singular
     }
 }
 
@@ -641,7 +577,8 @@ mod tests {
         );
         let y: Vec<usize> = (0..n).map(|_| rng.below(3)).collect();
         epistat_testkit::assert_same_on_pools(&[1, 2, 4, 12], || {
-            let fit = Multinom::default().fit(x.as_ref(), &y, 3, None).unwrap();
+            let data = MultinomData::builder(x.as_ref(), &y, 3).build().unwrap();
+            let fit = Multinom::default().fit(&data).unwrap();
             fit.coefficients
                 .into_iter()
                 .chain(fit.probabilities)

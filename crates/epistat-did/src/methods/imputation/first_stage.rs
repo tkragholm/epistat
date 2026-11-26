@@ -31,7 +31,7 @@
 //! equations `Z0' W h = b`, which bound the distance to the exact projection
 //! (the tests check that bound).
 
-use epistat_glm::{Absorb, AbsorbError, FeolsFit, FixedEffects};
+use epistat_glm::{Absorb, Error as AbsorbError, FeolsFit, FixedEffects};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
@@ -67,9 +67,10 @@ impl FirstStage {
         outcome: &[f64],
         weight: Vec<f64>,
         covariates: MatRef<'_, f64>,
-        fit: &FeolsFit<'_>,
-    ) -> Self {
-        let values = fit.fixed_effects();
+        fe: &FixedEffects,
+        fit: &FeolsFit,
+    ) -> Result<Self, AbsorbError> {
+        let values = fit.fixed_effects(fe)?;
         let coefficients = fit.coefficients.clone();
         let p = covariates.ncols();
         let adjusted: Vec<Option<f64>> = (0..unit.len())
@@ -84,12 +85,12 @@ impl FirstStage {
                 Some(outcome[i] - fitted)
             })
             .collect();
-        Self {
+        Ok(Self {
             treated,
             adjusted,
             weight,
             coefficients,
-        }
+        })
     }
 }
 
@@ -105,7 +106,7 @@ pub(crate) struct Projection<'a> {
 /// The projections of the first stage.
 pub(crate) struct Projector<'a> {
     fe: &'a FixedEffects,
-    fit: &'a FeolsFit<'a>,
+    fit: &'a FeolsFit,
     covariates: MatRef<'a, f64>,
     /// The caller's codes of each factor, one per input row.
     factors: Vec<&'a [u32]>,
@@ -116,7 +117,7 @@ pub(crate) struct Projector<'a> {
 impl<'a> Projector<'a> {
     pub(crate) fn new(
         fe: &'a FixedEffects,
-        fit: &'a FeolsFit<'a>,
+        fit: &'a FeolsFit,
         covariates: MatRef<'a, f64>,
         factors: &[&'a [u32]],
     ) -> Self {

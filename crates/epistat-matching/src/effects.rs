@@ -109,6 +109,11 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat
 //!    Softw. 2020;95(1):1-36.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -698,7 +703,7 @@ fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, Effect
     let mut glm = Glm::new(family, link);
     glm.tolerance = 1e-12;
     glm.max_iterations = 100;
-    let fit = glm.fit(
+    let fit = glm.fit_slices(
         x.as_ref(),
         &sample.outcome,
         Some(&sample.weight),

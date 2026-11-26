@@ -4,7 +4,12 @@ Generalised linear models (Gaussian, binomial, Poisson, gamma, Tweedie, negative
 binomial with a given shape, and quasi-Poisson and quasi-binomial,
 with identity, log, logit, probit and complementary log-log links) fitted by IRLS as
 R's `glm.fit` does: the same starting values, step halving and convergence rule, with prior
-weights, offsets, starting coefficients and an optional ridge. Coefficients,
+weights, offsets, starting coefficients and an optional ridge. Each model takes
+its data as one checked view (`GlmData`, `GeeData`, `OrdinalData`,
+`MultinomData`), every covariance knows its dimension, and every error is one
+`Error` with a stable code. `Fit::full_rank` gives the coefficients of a fit
+that converged with no aliased column and refuses any other, and
+`Glm::predict` gives the means of a fit on new rows. Coefficients,
 deviances, iteration counts and standard errors agree with R's `glm()` on
 the test fits, and results do not depend on the number of threads.
 
@@ -20,9 +25,8 @@ reports a Poisson limit where the data are not overdispersed, with a log or an
 identity link. The `robust` module
 gives sandwich covariances of a fit (HC0, HC1, HC3, clustered) as
 `sandwich::vcovHC` and `vcovCL`, and risk ratios and risk differences of a binary
-outcome by modified Poisson and binomial identity regression. The `within`
-module is the linear within-family estimator with clustered variance as
-`fixest::feols`. Each is checked against R.
+outcome by modified Poisson and binomial identity regression. Each is checked
+against R.
 
 The `absorb` module removes any number of fixed-effect factors (unit, time,
 firm and more) from columns, with prior weights, the repeated removal of
@@ -42,7 +46,9 @@ clustered covariances of `fixest::feols`, including its small-sample
 corrections and its counting of nested fixed effects, and the influence of
 each row. Both are checked against `fixest` 0.14.2 and against the exact
 projections on the dummies, and they scale linearly in the rows without a
-dummy design.
+dummy design. The within-family (sibling) estimator is `Feols` with the family
+as its one factor, and `between_within` splits columns into family means and
+deviations.
 
 The `gee` module fits generalised estimating equations with independence,
 exchangeable, AR(1) and unstructured working correlations, with the robust,

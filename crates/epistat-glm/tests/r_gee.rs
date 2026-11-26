@@ -27,8 +27,9 @@
     reason = "the test panels have a few thousand rows"
 )]
 
+use epistat_core::InputError;
 use epistat_glm::{
-    Association, Correlation, Family, Gee, GeeError, Glm, Link, RobustVariance, SandwichType,
+    Association, Correlation, Error, Family, Gee, Glm, Link, RobustVariance, SandwichType,
     robust_covariance,
 };
 use epistat_inference::Clusters;
@@ -36,6 +37,9 @@ use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+
+mod common;
+use common::*;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -132,7 +136,7 @@ fn model(case: &Case, structure: &str) -> Gee {
 
 fn fit(case: &Case, gee: &Gee) -> epistat_glm::GeeFit {
     let x = matrix(&case.x);
-    gee.fit(
+    gee.fit6(
         x.as_ref(),
         &case.y,
         &case.cluster,
@@ -176,8 +180,8 @@ fn yan_fine_fits_match_geeglm() {
             assert!(got.converged, "{label}");
             let want = &entry.geeglm;
             let a = worst(&some(&got.coefficients), &want.coef, &label);
-            let b = worst(&some(&got.covariance), &want.robust, &label);
-            let c = worst(&some(&got.naive_covariance), &want.naive, &label);
+            let b = worst(&some(got.covariance.as_slice()), &want.robust, &label);
+            let c = worst(&some(got.naive_covariance.as_slice()), &want.naive, &label);
             let d = worst(&[got.scale], &[want.scale], &label);
             let alpha = want.alpha.to_vec();
             let e = if alpha.is_empty() {
@@ -210,8 +214,8 @@ fn moment_fits_match_gee() {
             let got = fit(case, &gee);
             let label = format!("{} {structure} (gee)", case.name);
             let a = worst(&some(&got.coefficients), &want.coef, &label);
-            let b = worst(&some(&got.covariance), &want.robust, &label);
-            let c = worst(&some(&got.naive_covariance), &want.naive, &label);
+            let b = worst(&some(got.covariance.as_slice()), &want.robust, &label);
+            let c = worst(&some(got.naive_covariance.as_slice()), &want.naive, &label);
             let d = worst(&[got.scale], &[want.scale], &label);
             let alpha = want.alpha.to_vec();
             let e = if alpha.is_empty() {
@@ -242,7 +246,7 @@ fn mancl_de_rouen_matches_the_transcription() {
             gee.variance = RobustVariance::ManclDeRouen;
             let got = fit(case, &gee);
             let label = format!("{} {structure} (Mancl and DeRouen)", case.name);
-            let dev = worst(&some(&got.covariance), want, &label);
+            let dev = worst(&some(got.covariance.as_slice()), want, &label);
             eprintln!("{label}: {dev:.1e}");
             assert!(dev < 1e-9, "{label}");
             compared += 1;
@@ -260,13 +264,17 @@ fn independence_is_glm_with_the_clustered_sandwich() {
     // glm stops at a relative change of 1e-8 in the deviance, so its
     // coefficients are within about 1e-6 of the maximum.
     let a = worst(&some(&got.coefficients), &r.independence_glm.coef, "coef");
-    let b = worst(&some(&got.covariance), &r.independence_glm.robust, "robust");
+    let b = worst(
+        &some(got.covariance.as_slice()),
+        &r.independence_glm.robust,
+        "robust",
+    );
     eprintln!("independence against glm and vcovCL: coef {a:.1e} robust {b:.1e}");
     assert!(a < 1e-6 && b < 1e-6);
     // The same covariance from this crate's own sandwich on the Glm fit.
     let x = matrix(&case.x);
     let model = Glm::new(Family::Binomial, Link::Logit);
-    let glm = model.fit(x.as_ref(), &case.y, None, None, None).unwrap();
+    let glm = model.fit5(x.as_ref(), &case.y, None, None, None).unwrap();
     let clusters = Clusters::from_labels(&case.cluster);
     let own = robust_covariance(
         &model,
@@ -277,7 +285,11 @@ fn independence_is_glm_with_the_clustered_sandwich() {
         SandwichType::Hc0,
     )
     .unwrap();
-    let c = worst(&some(&got.covariance), &some(&own), "own sandwich");
+    let c = worst(
+        &some(got.covariance.as_slice()),
+        &some(own.as_slice()),
+        "own sandwich",
+    );
     eprintln!("independence against robust_covariance Hc0: {c:.1e}");
     assert!(c < 1e-6);
 }
@@ -296,7 +308,7 @@ fn an_aliased_column_is_none() {
     });
     let gee = model(case, "exchangeable");
     let got = gee
-        .fit(
+        .fit6(
             x.as_ref(),
             &case.y,
             &case.cluster,
@@ -307,7 +319,7 @@ fn an_aliased_column_is_none() {
         .unwrap();
     assert_eq!(got.rank, 3);
     assert!(got.coefficients[3].is_none());
-    assert!(got.covariance[3 * 4 + 3].is_none() && got.covariance[3].is_none());
+    assert!(got.covariance.get(3, 3).is_none() && got.covariance.get(0, 3).is_none());
     let plain = fit(case, &gee);
     assert_eq!(
         got.coefficients[..3]
@@ -325,7 +337,7 @@ fn bad_input_is_an_error() {
     let x = matrix(&case.x);
     let gee = model(case, "exchangeable");
     let run = |gee: &Gee, cluster: &[u32], wave: Option<&[u32]>, w: Option<&[f64]>| {
-        gee.fit(
+        gee.fit6(
             x.as_ref(),
             &case.y,
             cluster,
@@ -342,36 +354,39 @@ fn bad_input_is_an_error() {
     assert_eq!(case.cluster[1], first);
     assert!(matches!(
         run(&gee, &case.cluster, Some(&dup), None),
-        Err(GeeError::DuplicateWave { .. })
+        Err(Error::DuplicateWave { .. })
     ));
     // Unstructured without waves, and the moment estimator with weights.
     let un = model(case, "unstructured");
     assert!(matches!(
         run(&un, &case.cluster, None, None),
-        Err(GeeError::WavesRequired)
+        Err(Error::Unsupported { .. })
     ));
     let mut moment = gee;
     moment.association = Association::Moment;
     assert!(matches!(
         run(&moment, &case.cluster, Some(&case.wave), Some(&ones)),
-        Err(GeeError::MomentWeights)
+        Err(Error::Unsupported { .. })
     ));
     // One row per cluster has no pair to estimate a correlation from.
     let singles: Vec<u32> = (0..case.y.len() as u32).collect();
     assert!(matches!(
         run(&gee, &singles, Some(&case.wave), None),
-        Err(GeeError::NoPairs)
+        Err(Error::Undefined(_))
     ));
     // A wrong length and a negative weight.
     assert!(matches!(
         run(&gee, &case.cluster[1..], None, None),
-        Err(GeeError::Length { .. })
+        Err(Error::Input(InputError::Length { .. }))
     ));
     let mut bad = ones;
     bad[3] = -1.0;
     assert!(matches!(
         run(&gee, &case.cluster, Some(&case.wave), Some(&bad)),
-        Err(GeeError::Weight { .. })
+        Err(Error::Input(InputError::Domain {
+            what: "weights",
+            ..
+        }))
     ));
 }
 
@@ -384,8 +399,8 @@ fn unstructured_waves_that_never_meet_are_an_error() {
     let y: Vec<f64> = (0..n).map(|i| f64::from((i * 7 % 5) as u8)).collect();
     let x = Mat::from_fn(n, 1, |_, _| 1.0);
     let gee = Gee::new(Family::Gaussian, Link::Identity, Correlation::Unstructured);
-    let got = gee.fit(x.as_ref(), &y, &cluster, Some(&wave), None, None);
-    assert!(matches!(got, Err(GeeError::MissingPair { .. })), "{got:?}");
+    let got = gee.fit6(x.as_ref(), &y, &cluster, Some(&wave), None, None);
+    assert!(matches!(got, Err(Error::Undefined(_))), "{got:?}");
 }
 
 fn bits(case: &Case, structure: &str, variance: RobustVariance) -> Vec<f64> {
@@ -394,8 +409,8 @@ fn bits(case: &Case, structure: &str, variance: RobustVariance) -> Vec<f64> {
     gee.variance = variance;
     let got = fit(case, &gee);
     let mut out = some(&got.coefficients);
-    out.extend(some(&got.covariance));
-    out.extend(some(&got.naive_covariance));
+    out.extend(some(got.covariance.as_slice()));
+    out.extend(some(got.naive_covariance.as_slice()));
     out.extend(&got.alpha);
     out.push(got.scale);
     out.extend(&got.fitted);

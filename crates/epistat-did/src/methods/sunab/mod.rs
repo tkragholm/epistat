@@ -84,7 +84,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 
 use crate::methods::imputation::check_constant_within_units;
@@ -501,12 +501,12 @@ pub fn estimate_sunab(
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit_owned(panel.outcome, x, &fe)?;
+    .fit_owned(x, panel.outcome, &fe)?;
     let clusters = config.clusters.unwrap_or(panel.unit);
     let ways = [clusters];
-    let cov = fit.vcov(Vcov::Cluster(&ways), config.ssc)?;
+    let cov = fit.vcov(&fe, Vcov::Cluster(&ways), config.ssc)?;
     let p = k_cells + p_cov;
-    let se = |j: usize| cov.matrix[j * p + j].map(|v| v.max(0.0).sqrt());
+    let se = |j: usize| cov.matrix.as_slice()[j * p + j].map(|v| v.max(0.0).sqrt());
 
     // The weight of each cell among the rows of the fit.
     let mut cell_weight = vec![0.0; k_cells];
@@ -533,7 +533,7 @@ pub fn estimate_sunab(
     let unit_codes = fe.codes(0);
     let units = fe.labels(0).to_vec();
     let n_units = units.len();
-    let sums = fit.influence_sums(unit_codes, n_units)?;
+    let sums = fit.influence_sums(&fe, unit_codes, n_units)?;
     let mut influence = vec![None; p];
     for (a, &j) in fit.kept_columns().iter().enumerate() {
         influence[j] = Some(
@@ -588,7 +588,7 @@ pub fn estimate_sunab(
             let mut defined = true;
             for &(i, si) in &shares[a] {
                 for &(j, sj) in &shares[b] {
-                    match cov.matrix[i * p + j] {
+                    match cov.matrix.as_slice()[i * p + j] {
                         Some(v) => total += si * sj * v,
                         None => defined = false,
                     }
@@ -632,7 +632,7 @@ pub fn estimate_sunab(
         estimate_covariance,
         estimate_influence,
         covariate_coefficients: fit.coefficients[k_cells..].to_vec(),
-        covariance: cov.matrix,
+        covariance: cov.matrix.into_values(),
         df_k: cov.df_k,
         n_clusters: cov.min_clusters.unwrap_or(0),
         influence,

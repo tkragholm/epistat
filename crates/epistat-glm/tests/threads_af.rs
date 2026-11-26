@@ -3,8 +3,12 @@
 
 use epistat_glm::attributable::{AfOptions, Design, attributable_logistic};
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{POOLS, SplitMix64, assert_same_on_pools};
+
+mod common;
+use common::*;
 
 #[test]
 fn attributable_fraction_does_not_depend_on_the_number_of_threads() {
@@ -31,25 +35,26 @@ fn attributable_fraction_does_not_depend_on_the_number_of_threads() {
     let x0 = Mat::from_fn(n, 3, |i, j| if j == 1 { 0.0 } else { x[(i, j)] });
     assert_same_on_pools(&POOLS, || {
         let fit = Glm::new(Family::Binomial, Link::Logit)
-            .fit(x.as_ref(), &y, Some(&w), None, None)
+            .fit5(x.as_ref(), &y, Some(&w), None, None)
             .unwrap();
         let mut out = vec![];
+        let data = glm_data(x.as_ref(), &y, Some(&w), None, None).unwrap();
+        let clusters = Clusters::from_labels(&cluster);
         for design in [Design::CrossSectional, Design::CaseControl] {
-            for cl in [None, Some(&cluster[..])] {
+            for cl in [None, Some(&clusters)] {
                 let a = attributable_logistic(
                     &fit,
-                    x.as_ref(),
+                    &data,
                     x0.as_ref(),
-                    &y,
+                    cl,
                     &AfOptions {
                         design,
-                        weights: Some(&w),
-                        cluster: cl,
                         ..AfOptions::default()
                     },
                 )
                 .unwrap();
-                out.extend([a.af, a.se, a.lower, a.upper].map(Option::unwrap));
+                let af = a.af.unwrap();
+                out.extend([Some(af.estimate), af.se, af.lower(), af.upper()].map(Option::unwrap));
             }
         }
         out

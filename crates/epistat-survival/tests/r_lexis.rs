@@ -228,7 +228,7 @@ fn rates_match_glm_and_ci() {
     for j in 0..p {
         check(fit.fit.coefficients[j].unwrap(), r.coefficients[j]);
         for k in 0..p {
-            check(fit.fit.covariance[j * p + k].unwrap(), r.vcov[j * p + k]);
+            check(fit.fit.covariance.get(j, k).unwrap(), r.vcov[j * p + k]);
         }
     }
     check(fit.fit.deviance, r.deviance);

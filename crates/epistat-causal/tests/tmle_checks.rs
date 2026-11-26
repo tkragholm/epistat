@@ -2,6 +2,11 @@
 //! they solve, the range of their estimates, their approach to the augmented
 //! estimator as the sample grows, and their refusals.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, Target, aipw, aipw_glm};
 use epistat_causal::tmle::{
     OutcomeModel, OutcomeRange, PropensityBound, Targeting, TmleOptions, tmle, tmle_glm,
@@ -110,7 +115,7 @@ fn fluctuation_solves_its_score_equations() {
 fn propensity(d: &Data) -> Vec<f64> {
     let z: Vec<f64> = d.a.iter().map(|&t| f64::from(u8::from(t))).collect();
     let fit = epistat_glm::Glm::new(Family::Binomial, epistat_glm::Link::Logit)
-        .fit(d.x.as_ref(), &z, None, None, None)
+        .fit_slices(d.x.as_ref(), &z, None, None, None)
         .unwrap();
     fit.fitted
 }
@@ -397,11 +402,13 @@ fn survival_with_one_interval_is_the_binary_estimator() {
     let z: Vec<f64> = d.a.iter().map(|&t| f64::from(u8::from(t))).collect();
     let logistic = epistat_glm::Glm::new(Family::Binomial, epistat_glm::Link::Logit);
     let g = logistic
-        .fit(d.x.as_ref(), &z, None, None, None)
+        .fit_slices(d.x.as_ref(), &z, None, None, None)
         .unwrap()
         .fitted;
     let q = Mat::from_fn(n, 4, |i, j| if j < 3 { d.x[(i, j)] } else { z[i] });
-    let fit = logistic.fit(q.as_ref(), &d.y, None, None, None).unwrap();
+    let fit = logistic
+        .fit_slices(q.as_ref(), &d.y, None, None, None)
+        .unwrap();
     let beta: Vec<f64> = fit.coefficients.iter().map(|c| c.unwrap()).collect();
     let pred = |treated: f64| -> Vec<f64> {
         (0..n)

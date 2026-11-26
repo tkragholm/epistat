@@ -339,9 +339,9 @@ pub enum EstimationError {
     /// trimming leaves nothing to refit on.
     NoCommonSupport,
     /// The generalised linear model could not be fitted.
-    GlmFitFailed(epistat_glm::GlmError),
+    GlmFitFailed(epistat_glm::Error),
     /// The elastic net could not be fitted.
-    ElasticNetFitFailed(epistat_glm::ElasticNetError),
+    ElasticNetFitFailed(epistat_glm::Error),
     /// A covariate balancing propensity score needs a column named `intercept`.
     CbpsNeedsIntercept,
     /// The design of a covariate balancing propensity score is not of full

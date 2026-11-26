@@ -96,6 +96,11 @@
 //! 3. Hansen LP. Large sample properties of generalized method of moments
 //!    estimators. Econometrica. 1982;50(4):1029-1054.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use super::EstimationError;
 use super::config::{CbpsConfig, CbpsEstimand, CbpsMethod};
 use super::encoding::CovariateMatrix;
@@ -508,7 +513,7 @@ pub(super) fn fit_cbps(
     let mut logistic = Glm::new(Family::Binomial, Link::Logit);
     logistic.max_iterations = 25;
     let start = logistic
-        .fit(problem.u, labels, Some(&problem.s), None, None)
+        .fit_slices(problem.u, labels, Some(&problem.s), None, None)
         .map_err(EstimationError::GlmFitFailed)?;
     let g0: Vec<f64> = start
         .coefficients

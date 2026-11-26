@@ -97,7 +97,7 @@
 //! # Determinism
 //!
 //! Rows are sorted by cluster and wave. Clusters are summed in blocks of
-//! [`BLOCK`] clusters, each block in order, and the blocks in order, so results
+//! 128 clusters, each block in order, and the blocks in order, so results
 //! do not depend on the number of threads.
 //!
 //! # Cost
@@ -132,18 +132,21 @@
     reason = "waves, cluster sizes and lags are small whole numbers"
 )]
 
+use epistat_core::Covariance;
 use epistat_inference::sandwich::sandwich_with_inverse;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, Regularisation};
 use rayon::prelude::*;
 
 use crate::columns::linear_predictor;
-use crate::{Family, Glm, GlmError, Link};
+use crate::fit::covariance;
+use crate::{Error, Family, GeeData, Glm, GlmData, Link};
 
 /// The number of clusters summed together before the blocks are added in
 /// order.
-pub const BLOCK: usize = 128;
+pub(crate) const BLOCK: usize = 128;
 
 /// The working correlation.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Correlation {
     /// Uncorrelated rows: the estimate is that of [`Glm`] with a clustered
@@ -158,6 +161,7 @@ pub enum Correlation {
 }
 
 /// How the association parameters and the scale are estimated.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Association {
     /// The equations of `geepack::geeglm`.
@@ -167,6 +171,7 @@ pub enum Association {
 }
 
 /// The robust covariance of the coefficients.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RobustVariance {
     /// The sandwich of Liang and Zeger.
@@ -216,101 +221,18 @@ impl Gee {
     }
 }
 
-/// Why a GEE could not be fitted.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum GeeError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A prior weight is negative or not finite.
-    #[error("prior weight {index} is {value}, which is negative or not finite")]
-    Weight {
-        /// The row.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// The tolerance or a fixed scale is not positive and finite.
-    #[error("the tolerance and a fixed scale must be positive and finite")]
-    Tolerance,
-    /// The design has no rows or a value that is not finite.
-    #[error("the design is empty or has a value that is not finite")]
-    Design,
-    /// The independence fit that starts the iteration failed.
-    #[error(transparent)]
-    Glm(#[from] GlmError),
-    /// A cluster has two rows at one wave.
-    #[error("cluster {cluster} has two rows at wave {wave}")]
-    DuplicateWave {
-        /// The cluster label.
-        cluster: u32,
-        /// The wave.
-        wave: u32,
-    },
-    /// The unstructured correlation needs the waves.
-    #[error("the unstructured correlation needs the wave of every row")]
-    WavesRequired,
-    /// The moment estimators of `gee` do not take prior weights.
-    #[error("the moment estimators do not take prior weights")]
-    MomentWeights,
-    /// No cluster has two rows with positive weight, or there are not more
-    /// pairs than coefficients, so the correlation cannot be estimated.
-    #[error("too few pairs of rows to estimate the correlation")]
-    NoPairs,
-    /// Two waves never occur together in a cluster, so their correlation
-    /// cannot be estimated.
-    #[error("the waves {first} and {second} never occur in one cluster")]
-    MissingPair {
-        /// The first wave rank.
-        first: usize,
-        /// The second wave rank.
-        second: usize,
-    },
-    /// The estimated unstructured correlation matrix is not positive definite.
-    #[error("the estimated unstructured correlation matrix is not positive definite")]
-    NotPositiveDefinite,
-    /// The estimated correlation is outside the range for which the working
-    /// correlation matrix is positive definite.
-    #[error(
-        "the estimated correlation {0} gives a working correlation that is not positive definite"
-    )]
-    CorrelationRange(f64),
-    /// The AR(1) estimating equation has no root in `(-1, 1)`.
-    #[error("the AR(1) estimating equation has no root in (-1, 1)")]
-    NoRoot,
-    /// The residual degrees of freedom `N - p` are not positive.
-    #[error("there are no more rows than coefficients")]
-    Degrees,
-    /// A fitted mean left the domain of the family, or a variance is not
-    /// positive.
-    #[error("a fitted mean left the domain of the family")]
-    Domain,
-    /// The information matrix is singular.
-    #[error("the information matrix is singular")]
-    Singular,
-    /// A linear solve failed.
-    #[error(transparent)]
-    Solve(#[from] epistat_linalg::Error),
-}
-
 /// A fitted GEE.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeeFit {
     /// The coefficients, `None` for an aliased column.
     pub coefficients: Vec<Option<f64>>,
-    /// The robust covariance of the coefficients, row-major `p` square, `None`
-    /// for an aliased column. All `None` when the Mancl and DeRouen
-    /// correction has a singular cluster.
-    pub covariance: Vec<Option<f64>>,
-    /// The model-based covariance `φ B^{-1}`, row-major `p` square.
-    pub naive_covariance: Vec<Option<f64>>,
+    /// The robust covariance of the coefficients, `p` square, `None` for an
+    /// aliased column. All `None` when the Mancl and DeRouen correction has a
+    /// singular cluster.
+    pub covariance: Covariance,
+    /// The model-based covariance `φ B^{-1}`, `p` square.
+    pub naive_covariance: Covariance,
     /// The association parameters: none for independence, one for exchangeable
     /// and AR(1), and for unstructured the correlations of the pairs of wave
     /// ranks `(0, 1), (0, 2), ..., (1, 2), ...`.
@@ -334,10 +256,7 @@ impl GeeFit {
     /// the covariance is undefined.
     #[must_use]
     pub fn standard_errors(&self) -> Vec<Option<f64>> {
-        let p = self.coefficients.len();
-        (0..p)
-            .map(|i| self.covariance[i * p + i].map(|v| v.max(0.0).sqrt()))
-            .collect()
+        self.covariance.standard_errors()
     }
 }
 
@@ -416,33 +335,35 @@ impl Moments {
 }
 
 impl Gee {
-    /// Fits the model to `y` on the columns of `x`, which holds the intercept
-    /// if the model has one. `cluster` labels the cluster of each row and
-    /// `wave` the time or position of the row within its cluster. Without
-    /// `wave` the rows of a cluster are ordered as given. `weights` are prior
-    /// weights, which scale the variance of a row by `1 / w`, and `offset` is
-    /// added to the linear predictor.
+    /// Fits the model to the response of `data` on the columns of its
+    /// design, which holds the intercept if the model has one. The clusters
+    /// of the data label the cluster of each row and the waves the time or
+    /// position of the row within its cluster. Without waves the rows of a
+    /// cluster are ordered as given. Prior weights scale the variance of a
+    /// row by `1 / w`, and the offset is added to the linear predictor.
     ///
     /// # Errors
     ///
-    /// See [`GeeError`].
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        wave: Option<&[u32]>,
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-    ) -> Result<GeeFit, GeeError> {
+    /// [`Error::Input`] for a design without columns, a tolerance or fixed
+    /// scale that is not positive and finite, [`Error::Unsupported`] for the
+    /// unstructured correlation without waves or prior weights with the
+    /// moment estimators, [`Error::DuplicateWave`] for two rows of a cluster
+    /// at one wave, the errors of the independence fit that starts the
+    /// iteration, and [`Error::Singular`], [`Error::NotPositiveDefinite`],
+    /// [`Error::CorrelationRange`] and [`Error::Undefined`] when the
+    /// iteration cannot go on; see the module documentation.
+    pub fn fit(&self, data: &GeeData<'_>) -> Result<GeeFit, Error> {
+        let (x, y, cluster, wave) = (data.x(), data.y(), data.clusters(), data.waves());
+        let (weights, offset) = (data.weights(), data.offset());
         let (n, p) = (x.nrows(), x.ncols());
-        self.check(n, p, x, y, cluster, wave, weights, offset)?;
+        self.check(p, wave, weights)?;
         let ones = vec![1.0; n];
         let zeros = vec![0.0; n];
         let w_in = weights.unwrap_or(&ones);
         let o_in = offset.unwrap_or(&zeros);
 
-        let start = Glm::new(self.family, self.link).fit(x, y, weights, offset, None)?;
+        let start = Glm::new(self.family, self.link)
+            .fit(&GlmData::from_parts(x, y, weights, offset, None)?)?;
         let kept: Vec<usize> = (0..p)
             .filter(|&j| start.coefficients[j].is_some())
             .collect();
@@ -503,7 +424,7 @@ impl Gee {
             RobustVariance::ManclDeRouen => panel.mancl_de_rouen(&rows, &working, &inverse),
         };
 
-        let expand = |m: Option<&Mat<f64>>, factor: f64| -> Vec<Option<f64>> {
+        let expand = |m: Option<&Mat<f64>>, factor: f64| -> Result<Covariance, Error> {
             let mut out = vec![None; p * p];
             if let Some(m) = m {
                 for (a, &ja) in kept.iter().enumerate() {
@@ -512,7 +433,7 @@ impl Gee {
                     }
                 }
             }
-            out
+            covariance(p, out)
         };
         let mut coefficients = vec![None; p];
         for (&j, &b) in kept.iter().zip(&beta) {
@@ -524,8 +445,8 @@ impl Gee {
         }
         Ok(GeeFit {
             coefficients,
-            covariance: expand(robust.as_ref(), 1.0),
-            naive_covariance: expand(Some(&inverse), estimate.scale),
+            covariance: expand(robust.as_ref(), 1.0)?,
+            naive_covariance: expand(Some(&inverse), estimate.scale)?,
             alpha: estimate.alpha,
             scale: estimate.scale,
             fitted,
@@ -538,64 +459,27 @@ impl Gee {
 }
 
 impl Gee {
-    fn check(
-        &self,
-        n: usize,
-        p: usize,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        wave: Option<&[u32]>,
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-    ) -> Result<(), GeeError> {
-        let length = |what, found| {
-            if found == n {
-                Ok(())
-            } else {
-                Err(GeeError::Length {
-                    what,
-                    expected: n,
-                    found,
-                })
-            }
-        };
-        length("y", y.len())?;
-        length("cluster", cluster.len())?;
-        if let Some(wave) = wave {
-            length("wave", wave.len())?;
+    fn check(&self, p: usize, wave: Option<&[u32]>, weights: Option<&[f64]>) -> Result<(), Error> {
+        if weights.is_some() && self.association == Association::Moment {
+            return Err(Error::Unsupported {
+                what: "prior weights with the moment estimators",
+            });
         }
-        if let Some(weights) = weights {
-            length("weights", weights.len())?;
-            if self.association == Association::Moment {
-                return Err(GeeError::MomentWeights);
-            }
-            if let Some((index, &value)) = weights
-                .iter()
-                .enumerate()
-                .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-            {
-                return Err(GeeError::Weight { index, value });
-            }
-        }
-        if let Some(offset) = offset {
-            length("offset", offset.len())?;
-        }
-        let positive = |v: f64| v.is_finite() && v > 0.0;
-        if !positive(self.tolerance) || self.fix_scale.is_some_and(|v| !positive(v)) {
-            return Err(GeeError::Tolerance);
+        crate::error::tolerance("tolerance", self.tolerance)?;
+        if let Some(scale) = self.fix_scale {
+            crate::error::tolerance("fix_scale", scale)?;
         }
         if self.correlation == Correlation::Unstructured && wave.is_none() {
-            return Err(GeeError::WavesRequired);
+            return Err(Error::Unsupported {
+                what: "the unstructured correlation without waves",
+            });
         }
-        if n == 0 || p == 0 || !epistat_linalg::is_finite(x) {
-            return Err(GeeError::Design);
-        }
+        epistat_core::check::non_empty("x columns", p)?;
         Ok(())
     }
 
     /// The means, residuals and derivatives at `beta`.
-    fn rows_at(&self, panel: &Panel, beta: &[f64]) -> Result<Rows, GeeError> {
+    fn rows_at(&self, panel: &Panel, beta: &[f64]) -> Result<Rows, Error> {
         let n = panel.n;
         let columns: Vec<&[f64]> = panel.x.chunks_exact(n).collect();
         let eta = linear_predictor(&columns, beta, &panel.offset);
@@ -609,7 +493,9 @@ impl Gee {
             let (mu, slope) = self.link.inverse_and_derivative(e);
             let v = self.family.variance(mu);
             if !(self.family.valid_mean(mu) && v.is_finite() && v > 0.0 && slope.is_finite()) {
-                return Err(GeeError::Domain);
+                return Err(Error::Undefined(
+                    "a variance at a fitted mean outside the family's domain",
+                ));
             }
             let e = panel.y[i] - mu;
             let root = (panel.w[i] / v).sqrt();
@@ -630,14 +516,16 @@ impl Gee {
         sum_w: f64,
         q: usize,
         max_cluster: usize,
-    ) -> Result<Estimate, GeeError> {
+    ) -> Result<Estimate, Error> {
         let mut ssq = 0.0;
         for (s, w) in rows.s.iter().zip(&panel.w) {
             ssq += w * s * s;
         }
         let moment = self.association == Association::Moment;
         if not_positive(sum_w) || (moment && panel.n <= q) {
-            return Err(GeeError::Degrees);
+            return Err(Error::Undefined(
+                "the scale, with no more rows than coefficients",
+            ));
         }
         let phi_n = ssq / sum_w;
         let phi_np = ssq / (panel.n - q.min(panel.n)) as f64;
@@ -658,21 +546,27 @@ impl Gee {
                 let pairs = counts[0];
                 let denominator = if moment { pairs - q as f64 } else { pairs };
                 if not_positive(denominator) {
-                    return Err(GeeError::NoPairs);
+                    return Err(Error::Undefined(
+                        "the correlation, with too few pairs of rows",
+                    ));
                 }
                 let alpha = sums[0] / (phi * denominator);
                 if alpha.is_nan() || alpha >= 1.0 || alpha <= -1.0 / (max_cluster as f64 - 1.0) {
-                    return Err(GeeError::CorrelationRange(alpha));
+                    return Err(Error::CorrelationRange(alpha));
                 }
                 vec![alpha]
             }
             Correlation::Ar1 => {
                 if counts.len() < 2 || counts[1..].iter().all(|&c| c <= 0.0) {
-                    return Err(GeeError::NoPairs);
+                    return Err(Error::Undefined(
+                        "the correlation, with too few pairs of rows",
+                    ));
                 }
                 let alpha = if moment {
                     if not_positive(counts[1]) {
-                        return Err(GeeError::NoPairs);
+                        return Err(Error::Undefined(
+                            "the correlation, with too few pairs of rows",
+                        ));
                     }
                     sums[1] / (phi * counts[1])
                 } else {
@@ -680,7 +574,7 @@ impl Gee {
                     ar1_root(&z, counts)?
                 };
                 if alpha.is_nan() || alpha.abs() >= 1.0 {
-                    return Err(GeeError::CorrelationRange(alpha));
+                    return Err(Error::CorrelationRange(alpha));
                 }
                 vec![alpha]
             }
@@ -691,10 +585,9 @@ impl Gee {
                     for k in j + 1..m {
                         let c = counts[j * m + k];
                         if not_positive(c) {
-                            return Err(GeeError::MissingPair {
-                                first: j,
-                                second: k,
-                            });
+                            return Err(Error::Undefined(
+                                "the correlation of two waves that never occur in one cluster",
+                            ));
                         }
                         alpha.push(sums[j * m + k] / (phi * c));
                     }
@@ -705,7 +598,7 @@ impl Gee {
                 )
                 .is_none()
                 {
-                    return Err(GeeError::NotPositiveDefinite);
+                    return Err(Error::NotPositiveDefinite);
                 }
                 alpha
             }
@@ -714,7 +607,7 @@ impl Gee {
     }
 
     /// The working correlation for the association parameters `alpha`.
-    fn working(&self, panel: &Panel, alpha: &[f64]) -> Result<Working, GeeError> {
+    fn working(&self, panel: &Panel, alpha: &[f64]) -> Result<Working, Error> {
         Ok(match self.correlation {
             Correlation::Independence => Working::Independence,
             Correlation::Exchangeable => Working::Exchangeable(alpha[0]),
@@ -728,7 +621,7 @@ impl Gee {
                         full[(pattern[a] as usize, pattern[b] as usize)]
                     });
                     let factor = Factor::new(sub.as_ref(), &[Attempt::plain(Method::Cholesky)])
-                        .map_err(|_| GeeError::NotPositiveDefinite)?;
+                        .map_err(|_| Error::NotPositiveDefinite)?;
                     inverses.push(factor.solve(Mat::<f64>::identity(m, m).as_ref())?);
                 }
                 Working::Unstructured(inverses)
@@ -762,7 +655,7 @@ fn correlation_matrix(alpha: &[f64], m: usize) -> Mat<f64> {
 const GRID: usize = 2000;
 const EDGE: f64 = 0.9999;
 
-fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, GeeError> {
+fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, Error> {
     let g = |a: f64| -> f64 {
         let mut total = 0.0;
         for d in 1..z.len() {
@@ -792,7 +685,9 @@ fn ar1_root(z: &[f64], counts: &[f64]) -> Result<f64, GeeError> {
         }
         previous = current;
     }
-    let (_, mut lo, mut hi) = best.ok_or(GeeError::NoRoot)?;
+    let (_, mut lo, mut hi) = best.ok_or(Error::Undefined(
+        "the AR(1) correlation, whose equation has no root in (-1, 1)",
+    ))?;
     let mut f_lo = g(lo);
     for _ in 0..200 {
         let mid = lo.midpoint(hi);
@@ -818,17 +713,16 @@ fn symmetric(v: &[f64], q: usize) -> Mat<f64> {
     Mat::from_fn(q, q, |a, b| v[a * q + b].midpoint(v[b * q + a]))
 }
 
-fn invert(information: &Mat<f64>) -> Result<Mat<f64>, GeeError> {
-    let q = information.nrows();
-    let factor = Factor::new(information.as_ref(), &[Attempt::plain(Method::Cholesky)])
-        .map_err(|_| GeeError::Singular)?;
-    Ok(factor.solve(Mat::<f64>::identity(q, q).as_ref())?)
+fn invert(information: &Mat<f64>) -> Result<Mat<f64>, Error> {
+    epistat_linalg::inverse(information.as_ref(), &[Attempt::plain(Method::Cholesky)])
+        .map(|solution| solution.x)
+        .map_err(|_| Error::Singular)
 }
 
-fn solve_information(total: &Moments, q: usize) -> Result<Vec<f64>, GeeError> {
+fn solve_information(total: &Moments, q: usize) -> Result<Vec<f64>, Error> {
     let information = symmetric(&total.information, q);
     let factor = Factor::new(information.as_ref(), &[Attempt::plain(Method::Cholesky)])
-        .map_err(|_| GeeError::Singular)?;
+        .map_err(|_| Error::Singular)?;
     let rhs = Mat::from_fn(q, 1, |i, _| total.score[i]);
     let step = factor.solve(rhs.as_ref())?;
     Ok((0..q).map(|i| step[(i, 0)]).collect())
@@ -844,7 +738,7 @@ impl Panel {
         wave: Option<&[u32]>,
         w: &[f64],
         offset: &[f64],
-    ) -> Result<Self, GeeError> {
+    ) -> Result<Self, Error> {
         let n = x.nrows();
         let q = kept.len();
         let mut order: Vec<usize> = (0..n).collect();
@@ -861,7 +755,7 @@ impl Panel {
             for (position, i) in (starts[c]..starts[c + 1]).enumerate() {
                 let value = wave.map_or(position as u32, |w| w[order[i]]);
                 if position > 0 && waves[i - 1] == value && wave.is_some() {
-                    return Err(GeeError::DuplicateWave {
+                    return Err(Error::DuplicateWave {
                         cluster: cluster[order[i]],
                         wave: value,
                     });

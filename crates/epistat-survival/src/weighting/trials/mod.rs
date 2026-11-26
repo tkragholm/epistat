@@ -88,6 +88,11 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
@@ -613,7 +618,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         .collect();
     let model = Glm::new(Family::Binomial, Link::Logit);
     let fit = model
-        .fit(input.design, &y, Some(input.weight), None, None)
+        .fit_slices(input.design, &y, Some(input.weight), None, None)
         .map_err(|e| Error::input(format!("outcome model: {e}")))?;
     if !fit.converged {
         return Err(Error::input("outcome model: no convergence"));
@@ -645,6 +650,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
     }
     let factor = g as f64 / (g - 1) as f64;
     let covariance: Vec<f64> = cov
+        .as_slice()
         .iter()
         .map(|v| {
             v.map(|v| v * factor)
@@ -912,6 +918,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
     }
     let factor = g as f64 / (g - 1) as f64;
     let covariance: Vec<f64> = cov
+        .as_slice()
         .iter()
         .map(|v| {
             v.map(|v| v * factor)

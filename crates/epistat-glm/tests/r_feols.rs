@@ -133,9 +133,9 @@ fn rows_levels_and_parameters_match_fixest() {
         let fe = fixed_effects(case);
         assert_eq!(fe.rows(), case.kept.as_slice(), "{}", case.name);
         let x = design(case);
-        let fit = Feols::default().fit(&case.y, x.as_ref(), &fe).unwrap();
+        let fit = Feols::default().fit(x.as_ref(), &case.y, &fe).unwrap();
         assert_eq!(fit.n_parameters(), case.nparams, "{}", case.name);
-        let fx = fit.fixed_effects();
+        let fx = fit.fixed_effects(&fe).unwrap();
         if let Some(references) = &case.references {
             assert_eq!(&fx.references, references, "{}", case.name);
         }
@@ -277,7 +277,7 @@ fn coefficients_covariances_and_fixed_effects_match_fixest() {
         let fe = fixed_effects(case);
         let x = design(case);
         let fit = Feols { absorb: TIGHT }
-            .fit(&case.y, x.as_ref(), &fe)
+            .fit(x.as_ref(), &case.y, &fe)
             .unwrap();
         // Both sides' distance from the exact projection, relative to each
         // column's root mean square.
@@ -367,7 +367,7 @@ fn coefficients_covariances_and_fixed_effects_match_fixest() {
                 "hetero" => Vcov::Hetero,
                 _ => Vcov::Cluster(&ways),
             };
-            let cov = fit.vcov(kind, ssc(&spec.ssc)).unwrap();
+            let cov = fit.vcov(&fe, kind, ssc(&spec.ssc)).unwrap();
             assert_eq!(cov.df_k, spec.df_k, "{} {label} K", case.name);
             let largest = spec
                 .matrix
@@ -441,7 +441,7 @@ fn coefficients_covariances_and_fixed_effects_match_fixest() {
             }
             for (a, &i) in kept.iter().enumerate() {
                 for (b, &j) in kept.iter().enumerate() {
-                    let got = cov.matrix[i * p + j].unwrap();
+                    let got = cov.matrix.get(i, j).unwrap();
                     let want = spec.matrix[i * p + j].unwrap();
                     assert!(
                         (got - want).abs() <= bound[a * k + b],
@@ -465,7 +465,7 @@ fn coefficients_covariances_and_fixed_effects_match_fixest() {
                 let repaired = cov.positive_definite();
                 for (a, &i) in kept.iter().enumerate() {
                     for (b, &j) in kept.iter().enumerate() {
-                        let got = repaired[i * p + j].unwrap();
+                        let got = repaired.get(i, j).unwrap();
                         let want = spec.fixed[i * p + j].unwrap();
                         assert!(
                             (got - want).abs() <= bound[a * k + b] + 1e3 * EPS * largest,
@@ -481,7 +481,7 @@ fn coefficients_covariances_and_fixed_effects_match_fixest() {
         // y - x beta - e, so its error is at most delta_e plus |x| |d beta|,
         // and a level's value is reached from a reference through at most
         // as many rows as there are levels.
-        let fx = fit.fixed_effects();
+        let fx = fit.fixed_effects(&fe).unwrap();
         let levels: usize = fe.levels().iter().sum();
         let largest_x: f64 = kept
             .iter()
@@ -527,9 +527,9 @@ fn fixed_effects_predict_the_fitted_sums_and_refuse_unidentified_rows() {
         .unwrap();
     let fe = fixed_effects(case);
     let fit = Feols { absorb: TIGHT }
-        .fit(&case.y, design(case).as_ref(), &fe)
+        .fit(design(case).as_ref(), &case.y, &fe)
         .unwrap();
-    let fx = fit.fixed_effects();
+    let fx = fit.fixed_effects(&fe).unwrap();
     let factors: Vec<&[u32]> = case.factors.iter().map(Vec::as_slice).collect();
     let predicted = fx.predict(&factors).unwrap();
     let kept = fit.kept_columns().to_vec();
@@ -564,10 +564,10 @@ fn zero_weights_select_the_same_fit_as_dropping_the_rows() {
     let fe = FixedEffects::new(&refs, Some(&weights), Singletons::Remove).unwrap();
     let x = Mat::from_fn(keep.len(), case.x[0].len(), |i, j| case.x[keep[i]][j]);
     let y: Vec<f64> = keep.iter().map(|&i| case.y[i]).collect();
-    let a = Feols::default().fit(&y, x.as_ref(), &fe).unwrap();
+    let a = Feols::default().fit(x.as_ref(), &y, &fe).unwrap();
     let fe_full = fixed_effects(case);
     let b = Feols::default()
-        .fit(&case.y, design(case).as_ref(), &fe_full)
+        .fit(design(case).as_ref(), &case.y, &fe_full)
         .unwrap();
     for j in 0..case.coef.len() {
         assert_eq!(
@@ -578,7 +578,7 @@ fn zero_weights_select_the_same_fit_as_dropping_the_rows() {
 }
 
 /// Every output of a fit, as bits, for comparing two fits.
-fn all_bits(fit: &epistat_glm::FeolsFit<'_>, ways: &[&[u32]]) -> Vec<u64> {
+fn all_bits(fit: &epistat_glm::FeolsFit, fe: &FixedEffects, ways: &[&[u32]]) -> Vec<u64> {
     let mut out: Vec<u64> = fit
         .coefficients
         .iter()
@@ -598,10 +598,15 @@ fn all_bits(fit: &epistat_glm::FeolsFit<'_>, ways: &[&[u32]]) -> Vec<u64> {
         out.extend((0..b.nrows()).map(|i| b[(i, j)].to_bits()));
     }
     for kind in [Vcov::Iid, Vcov::Hetero, Vcov::Cluster(ways)] {
-        let cov = fit.vcov(kind, Ssc::new()).unwrap();
-        out.extend(cov.matrix.iter().map(|c| c.map_or(1, f64::to_bits)));
+        let cov = fit.vcov(fe, kind, Ssc::new()).unwrap();
+        out.extend(
+            cov.matrix
+                .as_slice()
+                .iter()
+                .map(|c| c.map_or(1, f64::to_bits)),
+        );
     }
-    for v in &fit.fixed_effects().values {
+    for v in &fit.fixed_effects(fe).unwrap().values {
         out.extend(v.iter().map(|c| c.map_or(1, f64::to_bits)));
     }
     out
@@ -625,9 +630,14 @@ fn a_fit_of_an_owned_design_has_the_bits_of_a_fit_of_a_borrowed_one() {
         });
         for x in [x, aliased] {
             let feols = Feols { absorb: TIGHT };
-            let a = feols.fit(&case.y, x.as_ref(), &fe).unwrap();
-            let b = feols.fit_owned(&case.y, x.clone(), &fe).unwrap();
-            assert_eq!(all_bits(&a, &ways), all_bits(&b, &ways), "{}", case.name);
+            let a = feols.fit(x.as_ref(), &case.y, &fe).unwrap();
+            let b = feols.fit_owned(x.clone(), &case.y, &fe).unwrap();
+            assert_eq!(
+                all_bits(&a, &fe, &ways),
+                all_bits(&b, &fe, &ways),
+                "{}",
+                case.name
+            );
         }
         // The errors are those of the borrowed fit.
         let mut x = design(case);
@@ -635,13 +645,13 @@ fn a_fit_of_an_owned_design_has_the_bits_of_a_fit_of_a_borrowed_one() {
         x[(row, 0)] = f64::NAN;
         let feols = Feols::default();
         assert_eq!(
-            feols.fit(&case.y, x.as_ref(), &fe).unwrap_err(),
-            feols.fit_owned(&case.y, x.clone(), &fe).unwrap_err()
+            feols.fit(x.as_ref(), &case.y, &fe).unwrap_err(),
+            feols.fit_owned(x.clone(), &case.y, &fe).unwrap_err()
         );
         let short = Mat::<f64>::zeros(x.nrows() - 1, x.ncols());
         assert_eq!(
-            feols.fit(&case.y, short.as_ref(), &fe).unwrap_err(),
-            feols.fit_owned(&case.y, short, &fe).unwrap_err()
+            feols.fit(short.as_ref(), &case.y, &fe).unwrap_err(),
+            feols.fit_owned(short, &case.y, &fe).unwrap_err()
         );
     }
 }
@@ -652,16 +662,16 @@ fn fit_bits() -> Vec<f64> {
     for case in &reference.cases {
         let fe = fixed_effects(case);
         let fit = Feols::default()
-            .fit(&case.y, design(case).as_ref(), &fe)
+            .fit(design(case).as_ref(), &case.y, &fe)
             .unwrap();
         out.extend(fit.coefficients.iter().flatten());
         out.extend(fit.residuals.iter().take(50));
         let mut names: Vec<&String> = case.variables.keys().collect();
         names.sort();
         let ways: Vec<&[u32]> = vec![case.variables[names[0]].as_slice()];
-        let cov = fit.vcov(Vcov::Cluster(&ways), Ssc::new()).unwrap();
-        out.extend(cov.matrix.iter().flatten());
-        let fx = fit.fixed_effects();
+        let cov = fit.vcov(&fe, Vcov::Cluster(&ways), Ssc::new()).unwrap();
+        out.extend(cov.matrix.as_slice().iter().flatten());
+        let fx = fit.fixed_effects(&fe).unwrap();
         for v in &fx.values {
             out.extend(v.iter().flatten());
         }
@@ -689,12 +699,12 @@ fn influence_sums_are_the_sums_of_the_row_influence() {
     let case = &reference.cases[0];
     let fe = fixed_effects(case);
     let fit = Feols::default()
-        .fit(&case.y, design(case).as_ref(), &fe)
+        .fit(design(case).as_ref(), &case.y, &fe)
         .unwrap();
-    let rows = fit.influence();
+    let rows = fit.influence(&fe).unwrap();
     let units = fe.codes(0);
     let count = fe.levels()[0];
-    let sums = fit.influence_sums(units, count).unwrap();
+    let sums = fit.influence_sums(&fe, units, count).unwrap();
     for a in 0..fit.rank {
         let mut want = vec![0.0; count];
         let mut size = vec![0.0_f64; count];

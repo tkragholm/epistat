@@ -5,6 +5,9 @@ use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
+mod common;
+use common::*;
+
 #[derive(Deserialize)]
 struct Reference {
     x: Vec<Vec<f64>>,
@@ -81,7 +84,7 @@ fn fits_match_glmnet() {
             ..ElasticNet::new(family, r.lambda, r.alpha)
         };
         let fit = enet
-            .fit(x.as_ref(), y, weights, offset, Some(&factors), None)
+            .fit6(x.as_ref(), y, weights, offset, Some(&factors), None)
             .unwrap();
         assert!(fit.converged, "{label}");
         assert_eq!(fit.coefficients.len(), r.coefficients.len());
@@ -165,7 +168,7 @@ fn unscaled_gaussian_equals_glmnet_at_a_rescaled_ridge() {
             scaling,
             ..ElasticNet::new(Family::Gaussian, lambda, 0.0)
         }
-        .fit(
+        .fit6(
             x.as_ref(),
             &reference.y_gaussian,
             None,
@@ -216,7 +219,7 @@ fn default_tolerance_converges_in_few_passes() {
         let mut factors = vec![1.0; p];
         factors[0] = 0.0;
         let fit = ElasticNet::new(family, r.lambda, r.alpha)
-            .fit(x.as_ref(), y, None, None, Some(&factors), None)
+            .fit6(x.as_ref(), y, None, None, Some(&factors), None)
             .unwrap();
         assert!(fit.converged);
         most = most.max(fit.passes.div_ceil(fit.iterations));

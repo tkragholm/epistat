@@ -122,6 +122,11 @@
 //! 5. Schuler MS, Rose S. Targeted maximum likelihood estimation for causal
 //!    inference in observational studies. Am J Epidemiol. 2017;185(1):65-73.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 pub mod survival;
 
 use epistat_glm::{Family, Glm, Link};
@@ -474,7 +479,7 @@ fn population(
         }
     });
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(design.as_ref(), &p.ystar, Some(&p.w), Some(&offset), None)
+        .fit_slices(design.as_ref(), &p.ystar, Some(&p.w), Some(&offset), None)
         .map_err(|e| Error::input(format!("fluctuation: {e}")))?;
     if !fit.converged {
         return Err(Error::NoConvergence(
@@ -590,7 +595,7 @@ fn intercept(rows: &[usize], a: &[f64], g: &[f64]) -> Result<Vec<f64>> {
     let offset: Vec<f64> = rows.iter().map(|&i| logit(g[i])).collect();
     let ones = Mat::from_fn(rows.len(), 1, |_, _| 1.0);
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(ones.as_ref(), a, None, Some(&offset), None)
+        .fit_slices(ones.as_ref(), a, None, Some(&offset), None)
         .map_err(|e| Error::input(format!("propensity recalibration: {e}")))?;
     if !fit.converged {
         return Err(Error::NoConvergence(
@@ -1002,7 +1007,7 @@ pub fn tmle_glm(
             let k = x.ncols();
             let design = Mat::from_fn(n, k + 1, |i, j| if j < k { x[(i, j)] } else { a[i] });
             let fit = glm
-                .fit(design.as_ref(), &p.ystar, Some(&p.w), None, None)
+                .fit_slices(design.as_ref(), &p.ystar, Some(&p.w), None, None)
                 .map_err(|e| Error::input(format!("outcome model: {e}")))?;
             if !fit.converged {
                 return Err(Error::input("outcome model: no convergence"));

@@ -54,9 +54,9 @@
 //! replaced by the mean of itself and the coefficients of the previous iteration,
 //! and `η`, `μ` and `D` are recomputed. This repeats until both are valid, at
 //! most `max_iterations` times, after which the fit fails with
-//! [`GlmError::StepHalving`]. If there are no previous coefficients, because the
+//! [`Error::StepHalving`]. If there are no previous coefficients, because the
 //! first step from the family's starting means is invalid, the fit fails with
-//! [`GlmError::NoValidStart`]. [`Fit::boundary`] is true when the last iteration
+//! [`Error::NoValidStart`]. [`Fit::boundary`] is true when the last iteration
 //! halved. R's `glm.fit` also halves on an invalid `η`, which is not checked here.
 //!
 //! # Convergence
@@ -199,11 +199,24 @@
 //!
 //! # Arguments
 //!
-//! Prior weights default to 1, the offset to 0. A response outside the support of
-//! the family is rejected with [`GlmError::Response`] before any iteration, a
-//! prior weight that is negative or not finite with [`GlmError::Weight`], a
-//! tolerance that is not positive and finite with [`GlmError::Tolerance`], and
-//! inputs of the wrong length with [`GlmError::Length`].
+//! The data come as a [`GlmData`], which has checked the lengths and that
+//! every value is finite and every weight not negative. Prior weights default
+//! to 1, the offset to 0. A response outside the support of the family is
+//! rejected with [`Error::Response`] before any iteration, a family parameter
+//! outside its range and a tolerance that is not positive and finite with
+//! [`Error::Input`].
+//!
+//! # Full rank and prediction
+//!
+//! [`Fit::full_rank`] gives every coefficient of a fit that converged with no
+//! aliased column, and refuses any other fit: the strict fit an estimator
+//! needs when it reuses the coefficients of a nuisance model, such as a
+//! propensity score. [`Glm::linear_predictor`] and [`Glm::predict`] give
+//! `η = x'β + o` and `μ = g⁻¹(η)` on new rows, with the arithmetic of the fit,
+//! so that on the rows of the fit they reproduce [`Fit::linear_predictor`] and
+//! [`Fit::fitted`] to the bit. An aliased coefficient enters them as 0, as it
+//! entered the fit, which is what R's `predict.glm` does for a fit that is not
+//! of full rank.
 //!
 //! # References
 //!
@@ -224,12 +237,18 @@
 //!    inner products, triangular inversion and the Cholesky factorisation.
 
 use crate::columns::{column_slices, contiguous_copy, linear_predictor_into, rows};
+use epistat_core::Covariance;
 use epistat_linalg::design::select_columns;
 use epistat_linalg::{Attempt, Factor, weighted_gram, xtv};
 use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
-use crate::{Family, Link};
+use crate::error::{finite, finite_matrix, length};
+use crate::{Error, Family, GlmData, Link};
+
+/// The error type of epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type GlmError = Error;
 
 /// A model and its fitting controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -261,71 +280,8 @@ impl Glm {
     }
 }
 
-/// Why a model could not be fitted.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum GlmError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// The Tweedie power lies in `(0, 1)` or is not finite, or the negative
-    /// binomial `theta` is not finite and positive.
-    #[error("the family's parameter is outside its range")]
-    Family,
-    /// A prior weight is negative or not finite.
-    #[error("prior weight {index} is {value}, which is negative or not finite")]
-    Weight {
-        /// The position of the weight.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// The tolerance is not positive and finite.
-    #[error("the tolerance must be positive and finite")]
-    Tolerance,
-    /// A response lies outside the support of the family.
-    #[error("response {index} is {value}, outside the family's support")]
-    Response {
-        /// The position of the response.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// The first iterate left the model's domain, with no earlier one to halve
-    /// toward.
-    #[error("no valid coefficients were found; supply starting values")]
-    NoValidStart,
-    /// Halving a step did not bring the fit back into the domain.
-    #[error("the step could not be corrected by halving")]
-    StepHalving,
-    /// The design could not be reduced to its identifiable columns.
-    #[error(transparent)]
-    Design(epistat_linalg::Error),
-    /// The normal equations could not be solved.
-    #[error(transparent)]
-    Solve(#[from] epistat_linalg::Error),
-    /// A sandwich variance or cluster sum could not be formed.
-    #[error(transparent)]
-    Inference(#[from] epistat_inference::Error),
-    /// The link is not one the model is defined for.
-    #[error("the link is not available for this model")]
-    Link,
-    /// The model needs a quantity the fit does not have, such as a dispersion
-    /// that is undefined for lack of residual degrees of freedom.
-    #[error("the fit has no {0}")]
-    Missing(&'static str),
-    /// The cluster labels or counts are not usable.
-    #[error("{0}")]
-    Clusters(&'static str),
-}
-
 /// A fitted model.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Fit {
     /// The coefficients, `None` for an aliased column, as R reports `NA`.
@@ -356,73 +312,87 @@ pub struct Fit {
     pub dispersion: Option<f64>,
     /// `dispersion * (X'WX + ridge)^-1`, the ridge on every diagonal entry
     /// but the first, with the last iteration's weights, as R's
-    /// `summary.glm` computes it, row-major and `p x p`. The rows and columns
-    /// of aliased coefficients are `None`, and so is every entry when the
-    /// dispersion is.
-    pub covariance: Vec<Option<f64>>,
+    /// `summary.glm` computes it, `p x p`. The rows and columns of aliased
+    /// coefficients are `None`, and so is every entry when the dispersion is.
+    pub covariance: Covariance,
 }
 
 impl Fit {
     /// The square roots of the covariance diagonal, `None` for an aliased
-    /// coefficient or an undefined dispersion.
+    /// coefficient, an undefined dispersion or a negative variance.
     #[must_use]
     pub fn standard_errors(&self) -> Vec<Option<f64>> {
-        let p = self.coefficients.len();
-        (0..p)
-            .map(|i| self.covariance[i * p + i].map(|v| v.max(0.0).sqrt()))
+        self.covariance.standard_errors()
+    }
+
+    /// Every coefficient, for a fit that converged and has no aliased column.
+    ///
+    /// This is the strict fit of a nuisance model whose coefficients an
+    /// estimator reuses, such as a propensity score: a fit that stopped at
+    /// its iteration limit, or one that dropped a column, is not the model
+    /// the estimator assumes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConverged`] when the fit did not converge, and
+    /// [`Error::Aliased`] with the first aliased column otherwise.
+    pub fn full_rank(&self) -> Result<Vec<f64>, Error> {
+        if !self.converged {
+            return Err(Error::NotConverged {
+                iterations: self.iterations,
+                column: None,
+            });
+        }
+        self.coefficients
+            .iter()
+            .enumerate()
+            .map(|(column, c)| c.ok_or(Error::Aliased { column }))
             .collect()
     }
 }
 
+/// The covariance with the row-major `values`, an entry that is not finite
+/// read as undefined.
+pub(crate) fn covariance(dim: usize, mut values: Vec<Option<f64>>) -> Result<Covariance, Error> {
+    for value in &mut values {
+        if value.is_some_and(|v| !v.is_finite()) {
+            *value = None;
+        }
+    }
+    Ok(Covariance::new(dim, values)?)
+}
+
 impl Glm {
-    /// Fits the model to `y` on the columns of `x`.
+    /// Fits the model to the response of `data` on the columns of its design.
     ///
-    /// `weights` are prior weights (1 when `None`), rows with weight 0 do not
-    /// enter the fit. `offset` is added to the linear predictor. `start`
-    /// replaces the family's starting means with starting coefficients.
+    /// Prior weights are 1 when the data have none, and rows with weight 0 do
+    /// not enter the fit. The offset is added to the linear predictor.
+    /// Starting coefficients replace the family's starting means.
     ///
-    /// Columns of `x` that are linear combinations of the columns before them
-    /// are aliased: their coefficients and standard errors are `None`, as R's
-    /// `NA`, and the others are fitted without them.
+    /// Columns of the design that are linear combinations of the columns
+    /// before them are aliased: their coefficients and standard errors are
+    /// `None`, as R's `NA`, and the others are fitted without them.
     ///
     /// # Errors
     ///
-    /// See [`GlmError`].
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        start: Option<&[f64]>,
-    ) -> Result<Fit, GlmError> {
+    /// [`Error::Input`] for a tolerance that is not positive and finite or a
+    /// family parameter outside its range, [`Error::Response`] for a response
+    /// outside the family's support, [`Error::NoValidStart`] and
+    /// [`Error::StepHalving`] when the iteration leaves the family's domain,
+    /// and [`Error::Design`] and [`Error::Solve`] when the normal equations
+    /// cannot be formed or solved.
+    pub fn fit(&self, data: &GlmData<'_>) -> Result<Fit, Error> {
+        let (x, y) = (data.x(), data.y());
+        let (weights, offset, start) = (data.weights(), data.offset(), data.start());
         let (n, p) = (x.nrows(), x.ncols());
-        check("y", n, y.len())?;
-        check("weights", n, weights.map_or(n, <[f64]>::len))?;
-        check("offset", n, offset.map_or(n, <[f64]>::len))?;
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
-            return Err(GlmError::Tolerance);
-        }
-        if let Some((index, &value)) = weights
-            .unwrap_or(&[])
-            .iter()
-            .enumerate()
-            .find(|&(_, &w)| !(w.is_finite() && w >= 0.0))
-        {
-            return Err(GlmError::Weight { index, value });
-        }
-        if let Some(start) = start {
-            check("start", p, start.len())?;
-        }
-        if !self.family.valid() {
-            return Err(GlmError::Family);
-        }
-        if let Some((index, &value)) = y
+        crate::error::tolerance("tolerance", self.tolerance)?;
+        self.family.check()?;
+        if let Some((row, &value)) = y
             .iter()
             .enumerate()
             .find(|&(_, &v)| !self.family.valid_response(v))
         {
-            return Err(GlmError::Response { index, value });
+            return Err(Error::Response { row, value });
         }
         let (family, link) = (self.family, self.link);
         let weight = |i: usize| weights.map_or(1.0, |w| w[i]);
@@ -525,13 +495,13 @@ impl Glm {
             boundary = false;
             if !current_deviance.is_finite() || !valid(&mu) {
                 let Some(old) = previous.as_ref() else {
-                    return Err(GlmError::NoValidStart);
+                    return Err(Error::NoValidStart);
                 };
                 let mut halvings = 0;
                 while !current_deviance.is_finite() || !valid(&mu) {
                     halvings += 1;
                     if halvings > self.max_iterations {
-                        return Err(GlmError::StepHalving);
+                        return Err(Error::StepHalving);
                     }
                     for (b, o) in beta.iter_mut().zip(old) {
                         *b = (*b + o) / 2.0;
@@ -578,14 +548,15 @@ impl Glm {
         };
         let inverse = Factor::new(last_gram.as_ref(), &Attempt::SYMMETRIC)?
             .solve(Mat::<f64>::identity(rank, rank).as_ref())?;
-        let mut covariance = vec![None; p * p];
+        let mut values = vec![None; p * p];
         if let Some(dispersion) = dispersion {
             for (a, &i) in columns.iter().enumerate() {
                 for (b, &j) in columns.iter().enumerate() {
-                    covariance[i * p + j] = Some(dispersion * inverse[(a, b)]);
+                    values[i * p + j] = Some(dispersion * inverse[(a, b)]);
                 }
             }
         }
+        let covariance = covariance(p, values)?;
         let coefficients = (0..p)
             .map(|j| columns.contains(&j).then_some(beta[j]))
             .collect();
@@ -605,8 +576,75 @@ impl Glm {
         })
     }
 
-    fn information(&self, x: MatRef<'_, f64>, w2: &[f64]) -> Result<Mat<f64>, GlmError> {
-        let mut gram = weighted_gram(x, w2).map_err(GlmError::Design)?;
+    /// Fits the model as [`Glm::fit`] does, to the data given as separate
+    /// arguments, the signature of epistat-glm 0.2.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`GlmData`]'s `build` and of [`Glm::fit`].
+    #[deprecated(since = "0.3.0", note = "build a GlmData and call Glm::fit")]
+    pub fn fit_slices(
+        &self,
+        x: MatRef<'_, f64>,
+        y: &[f64],
+        weights: Option<&[f64]>,
+        offset: Option<&[f64]>,
+        start: Option<&[f64]>,
+    ) -> Result<Fit, Error> {
+        self.fit(&GlmData::from_parts(x, y, weights, offset, start)?)
+    }
+
+    /// The linear predictor `η = x'β + o` of `fit` on the rows of `x`, with
+    /// the offset `o` (0 when `None`), formed as the fit formed it. An aliased
+    /// coefficient enters as 0.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when `x` does not have one column per coefficient of
+    /// the fit, `offset` not one value per row of `x`, or either holds a
+    /// value that is not finite.
+    pub fn linear_predictor(
+        &self,
+        fit: &Fit,
+        x: MatRef<'_, f64>,
+        offset: Option<&[f64]>,
+    ) -> Result<Vec<f64>, Error> {
+        let n = x.nrows();
+        length("x columns", fit.coefficients.len(), x.ncols())?;
+        finite_matrix("x", x)?;
+        if let Some(o) = offset {
+            length("offset", n, o.len())?;
+            finite("offset", o)?;
+        }
+        let beta: Vec<f64> = fit.coefficients.iter().map(|c| c.unwrap_or(0.0)).collect();
+        let copy = contiguous_copy(x);
+        let columns = column_slices(x, &copy);
+        let mut eta = vec![0.0; n];
+        linear_predictor_into(&columns, &beta, offset, &mut eta);
+        Ok(eta)
+    }
+
+    /// The mean `μ = g⁻¹(x'β + o)` of `fit` on the rows of `x`, with the
+    /// inverse link of the model, which keeps a mean off the bounds of its
+    /// range as R's does. On the rows of the fit it is [`Fit::fitted`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Glm::linear_predictor`].
+    pub fn predict(
+        &self,
+        fit: &Fit,
+        x: MatRef<'_, f64>,
+        offset: Option<&[f64]>,
+    ) -> Result<Vec<f64>, Error> {
+        let mut values = self.linear_predictor(fit, x, offset)?;
+        let link = self.link;
+        rows::each(&mut values, |_, v| *v = link.inverse(*v));
+        Ok(values)
+    }
+
+    fn information(&self, x: MatRef<'_, f64>, w2: &[f64]) -> Result<Mat<f64>, Error> {
+        let mut gram = weighted_gram(x, w2).map_err(Error::Design)?;
         for j in 1..gram.ncols() {
             gram[(j, j)] += self.ridge;
         }
@@ -621,7 +659,7 @@ impl Glm {
         gram: Mat<f64>,
         w2: &[f64],
         z: &mut [f64],
-    ) -> Result<(Vec<f64>, Mat<f64>), GlmError> {
+    ) -> Result<(Vec<f64>, Mat<f64>), Error> {
         // `X'Wz` as `weighted_xtz` forms it, from the products `w z`, which
         // are formed in place. `weighted_gram` has checked the weights.
         rows::each(z, |i, v| *v *= w2[i]);
@@ -957,18 +995,6 @@ fn norm(v: &[f64]) -> f64 {
     v.iter().map(|a| a * a).sum::<f64>().sqrt()
 }
 
-fn check(what: &'static str, expected: usize, found: usize) -> Result<(), GlmError> {
-    if expected == found {
-        Ok(())
-    } else {
-        Err(GlmError::Length {
-            what,
-            expected,
-            found,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1143,10 +1169,10 @@ mod tests {
     fn tweedie_at_power_two_is_the_gamma_fit() {
         let (x, y) = data();
         let gamma = Glm::new(Family::Gamma, Link::Log)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         let tweedie = Glm::new(Family::Tweedie { power: 2.0 }, Link::Log)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         assert_eq!(gamma.coefficients, tweedie.coefficients);
         assert_eq!(gamma.rank, 2);
@@ -1157,7 +1183,7 @@ mod tests {
         let (x, mut y) = data();
         y[3] = 0.0;
         let fit = Glm::new(Family::Tweedie { power: 1.5 }, Link::Log)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         assert!(fit.converged && fit.deviance.is_finite() && fit.dispersion.unwrap() > 0.0);
     }
@@ -1166,13 +1192,13 @@ mod tests {
     fn a_ridge_shrinks_the_slope() {
         let (x, y) = data();
         let plain = Glm::new(Family::Gaussian, Link::Identity)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         let ridged = Glm {
             ridge: 50.0,
             ..Glm::new(Family::Gaussian, Link::Identity)
         }
-        .fit(x.as_ref(), &y, None, None, None)
+        .fit5(x.as_ref(), &y, None, None, None)
         .unwrap();
         assert!(ridged.coefficients[1].unwrap().abs() < plain.coefficients[1].unwrap().abs());
     }
@@ -1181,19 +1207,22 @@ mod tests {
     fn tweedie_parameters_and_zeros_are_checked() {
         let (x, y) = data();
         let between = Glm::new(Family::Tweedie { power: 0.5 }, Link::Log);
-        assert_eq!(
-            between.fit(x.as_ref(), &y, None, None, None).unwrap_err(),
-            GlmError::Family
-        );
+        assert!(matches!(
+            between.fit5(x.as_ref(), &y, None, None, None).unwrap_err(),
+            Error::Input(epistat_core::InputError::Domain {
+                what: "Tweedie power",
+                ..
+            })
+        ));
         let mut zero = y.clone();
         zero[0] = 0.0;
         let above_two = Glm::new(Family::Tweedie { power: 2.5 }, Link::Log);
         assert!(matches!(
-            above_two.fit(x.as_ref(), &zero, None, None, None),
-            Err(GlmError::Response { index: 0, .. })
+            above_two.fit5(x.as_ref(), &zero, None, None, None),
+            Err(Error::Response { row: 0, .. })
         ));
         let compound = Glm::new(Family::Tweedie { power: 1.5 }, Link::Log);
-        assert!(compound.fit(x.as_ref(), &zero, None, None, None).is_ok());
+        assert!(compound.fit5(x.as_ref(), &zero, None, None, None).is_ok());
     }
 
     #[test]
@@ -1205,15 +1234,15 @@ mod tests {
             |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] },
         );
         let fit = Glm::new(Family::Gaussian, Link::Identity)
-            .fit(wide.as_ref(), &y, None, None, None)
+            .fit5(wide.as_ref(), &y, None, None, None)
             .unwrap();
         let plain = Glm::new(Family::Gaussian, Link::Identity)
-            .fit(x.as_ref(), &y, None, None, None)
+            .fit5(x.as_ref(), &y, None, None, None)
             .unwrap();
         assert_eq!(fit.rank, 2);
         assert_eq!(fit.coefficients[2], None);
         assert_eq!(fit.standard_errors()[2], None);
-        assert_eq!(fit.covariance[2 * 3 + 1], None);
+        assert_eq!(fit.covariance.get(2, 1), None);
         assert_eq!(fit.coefficients[..2], plain.coefficients[..]);
         assert_eq!(fit.standard_errors()[..2], plain.standard_errors()[..]);
     }
@@ -1222,7 +1251,7 @@ mod tests {
     fn no_residual_degrees_of_freedom_leaves_the_dispersion_undefined() {
         let x = Mat::from_fn(2, 2, |i, j| if j == 0 { 1.0 } else { i as f64 });
         let fit = Glm::new(Family::Gaussian, Link::Identity)
-            .fit(x.as_ref(), &[1.0, 2.0], None, None, None)
+            .fit5(x.as_ref(), &[1.0, 2.0], None, None, None)
             .unwrap();
         assert_eq!(fit.dispersion, None);
         assert_eq!(fit.standard_errors(), [None, None]);
@@ -1233,27 +1262,99 @@ mod tests {
         let (x, y) = data();
         let glm = Glm::new(Family::Binomial, Link::Logit);
         assert!(matches!(
-            glm.fit(x.as_ref(), &y, None, None, None),
-            Err(GlmError::Response { .. })
+            glm.fit5(x.as_ref(), &y, None, None, None),
+            Err(Error::Response { .. })
         ));
         assert!(matches!(
-            glm.fit(x.as_ref(), &y[..3], None, None, None),
-            Err(GlmError::Length { .. })
+            glm.fit5(x.as_ref(), &y[..3], None, None, None),
+            Err(Error::Input(epistat_core::InputError::Length { .. }))
         ));
         let gaussian = Glm::new(Family::Gaussian, Link::Identity);
         let mut weights = vec![1.0; 40];
         weights[5] = -1.0;
         assert!(matches!(
-            gaussian.fit(x.as_ref(), &y, Some(&weights), None, None),
-            Err(GlmError::Weight { index: 5, .. })
+            gaussian.fit5(x.as_ref(), &y, Some(&weights), None, None),
+            Err(Error::Input(epistat_core::InputError::Domain {
+                what: "weights",
+                ..
+            }))
         ));
         let loose = Glm {
             tolerance: 0.0,
             ..gaussian
         };
+        assert!(matches!(
+            loose.fit5(x.as_ref(), &y, None, None, None).unwrap_err(),
+            Error::Input(epistat_core::InputError::Domain {
+                what: "tolerance",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn predict_on_the_rows_of_the_fit_is_the_fit() {
+        let (x, y) = data();
+        let mut offset = vec![0.0; 40];
+        offset[3] = 0.25;
+        let wide = Mat::from_fn(
+            40,
+            3,
+            |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] },
+        );
+        for (model, design) in [
+            (Glm::new(Family::Gamma, Link::Log), &x),
+            (Glm::new(Family::Gaussian, Link::Identity), &wide),
+        ] {
+            let fit = model
+                .fit5(design.as_ref(), &y, None, Some(&offset), None)
+                .unwrap();
+            let eta = model
+                .linear_predictor(&fit, design.as_ref(), Some(&offset))
+                .unwrap();
+            let mu = model.predict(&fit, design.as_ref(), Some(&offset)).unwrap();
+            let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&eta), bits(&fit.linear_predictor));
+            assert_eq!(bits(&mu), bits(&fit.fitted));
+        }
+        let fit = Glm::new(Family::Gamma, Link::Log)
+            .fit5(x.as_ref(), &y, None, None, None)
+            .unwrap();
+        assert!(matches!(
+            Glm::new(Family::Gamma, Link::Log).predict(&fit, wide.as_ref(), None),
+            Err(Error::Input(epistat_core::InputError::Length { .. }))
+        ));
+    }
+
+    #[test]
+    fn full_rank_refuses_aliased_and_unconverged_fits() {
+        let (x, y) = data();
+        let model = Glm::new(Family::Gaussian, Link::Identity);
+        let fit = model.fit5(x.as_ref(), &y, None, None, None).unwrap();
+        let coefficients = fit.full_rank().unwrap();
         assert_eq!(
-            loose.fit(x.as_ref(), &y, None, None, None).unwrap_err(),
-            GlmError::Tolerance
+            coefficients.iter().map(|c| Some(*c)).collect::<Vec<_>>(),
+            fit.coefficients
+        );
+        let wide = Mat::from_fn(
+            40,
+            3,
+            |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] },
+        );
+        let aliased = model.fit5(wide.as_ref(), &y, None, None, None).unwrap();
+        assert_eq!(aliased.full_rank(), Err(Error::Aliased { column: 2 }));
+        let short = Glm {
+            max_iterations: 1,
+            ..Glm::new(Family::Gamma, Link::Log)
+        };
+        let unconverged = short.fit5(x.as_ref(), &y, None, None, None).unwrap();
+        assert!(!unconverged.converged);
+        assert_eq!(
+            unconverged.full_rank(),
+            Err(Error::NotConverged {
+                iterations: 1,
+                column: None
+            })
         );
     }
 }

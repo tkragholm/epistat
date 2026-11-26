@@ -22,7 +22,10 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_glm::{Correlation, Family, Gee, Link, Ordinal, OrdinalLink, brant};
+use epistat_core::Covariance;
+use epistat_glm::{
+    Correlation, Family, Gee, GeeData, Link, Ordinal, OrdinalData, OrdinalLink, brant,
+};
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_203;
@@ -94,15 +97,14 @@ fn report(
     lines: &mut Lines,
     names: &[&str],
     coef: &[Option<f64>],
-    cov: &[Option<f64>],
+    cov: &Covariance,
     offset: usize,
 ) {
-    let t = cov.len().isqrt();
     for (j, name) in names.iter().enumerate() {
         lines.push_opt(&format!("coef_{name}"), coef[j]);
         lines.push_opt(
             &format!("se_{name}"),
-            cov[(offset + j) * t + offset + j].map(f64::sqrt),
+            cov.get(offset + j, offset + j).map(f64::sqrt),
         );
     }
 }
@@ -123,16 +125,11 @@ fn gee(method: &str, t: &Table) -> (Vec<f64>, Lines) {
     };
     let model = Gee::new(family, link, correlation);
     let (times, fit) = common::timed(common::reps(), || {
-        model
-            .fit(
-                x.as_ref(),
-                t.col(response),
-                &cluster,
-                Some(&wave),
-                None,
-                None,
-            )
-            .expect("gee")
+        let data = GeeData::builder(x.as_ref(), t.col(response), &cluster)
+            .waves(&wave)
+            .build()
+            .expect("data");
+        model.fit(&data).expect("gee")
     });
     let mut lines = Lines::default();
     report(
@@ -171,7 +168,8 @@ fn main() {
             let mut lines = Lines::default();
             if method == "brant" {
                 let (times, test) = common::timed(common::reps(), || {
-                    brant(x.as_ref(), &y, None).expect("brant")
+                    let data = OrdinalData::builder(x.as_ref(), &y).build().expect("data");
+                    brant(&data).expect("brant")
                 });
                 lines.push("omnibus", test.omnibus.statistic);
                 (times, lines)
@@ -179,19 +177,20 @@ fn main() {
                 let model = Ordinal::new(OrdinalLink::Logit);
                 let w = columns(&t, &["z1", "z2"], false);
                 let (times, fit) = common::timed(common::reps(), || {
-                    if ppo {
-                        model.fit_partial(x.as_ref(), w.as_ref(), &y, None, None, None)
+                    let builder = OrdinalData::builder(x.as_ref(), &y);
+                    let builder = if ppo {
+                        builder.nominal(w.as_ref())
                     } else {
-                        model.fit(x.as_ref(), &y, None, None, None)
-                    }
-                    .expect("ordinal")
+                        builder
+                    };
+                    model.fit(&builder.build().expect("data")).expect("ordinal")
                 });
                 let k1 = fit.thresholds.len();
                 for (k, th) in fit.thresholds.iter().enumerate() {
                     lines.push(&format!("theta{k}"), *th);
                     lines.push_opt(
                         &format!("se_theta{k}"),
-                        fit.covariance[k * fit.covariance.len().isqrt() + k].map(f64::sqrt),
+                        fit.covariance.get(k, k).map(f64::sqrt),
                     );
                 }
                 report(&mut lines, names, &fit.coefficients, &fit.covariance, k1);

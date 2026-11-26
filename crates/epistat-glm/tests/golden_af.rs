@@ -11,8 +11,12 @@
 
 use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{Fingerprint, SplitMix64};
+
+mod common;
+use common::*;
 
 /// `(name, length, digest)` of each recorded field.
 const EXPECTED: &[(&str, usize, u64)] = &[
@@ -78,18 +82,21 @@ fn attributable_fraction_bits_are_recorded() {
     let x = Mat::from_fn(n, 4, |i, j| [1.0, e[i], z[i], e[i] * z[i]][j]);
     let x0 = Mat::from_fn(n, 4, |i, j| if j == 1 || j == 3 { 0.0 } else { x[(i, j)] });
     let model = Glm::new(Family::Binomial, Link::Logit);
-    let plain = model.fit(x.as_ref(), &y, None, None, None).unwrap();
-    let weighted = model.fit(x.as_ref(), &y, Some(&w), None, None).unwrap();
+    let plain = model.fit5(x.as_ref(), &y, None, None, None).unwrap();
+    let weighted = model.fit5(x.as_ref(), &y, Some(&w), None, None).unwrap();
     for (name, design) in [("cs", Design::CrossSectional), ("cc", Design::CaseControl)] {
-        for (variant, fit, weights, cl) in [
-            ("plain", &plain, None, None),
-            ("cluster", &plain, None, Some(&cluster[..])),
-            ("weighted", &weighted, Some(&w[..]), None),
+        let clusters = Clusters::from_labels(&cluster);
+        let unweighted = glm_data(x.as_ref(), &y, None, None, None).unwrap();
+        let with_weights = glm_data(x.as_ref(), &y, Some(&w), None, None).unwrap();
+        for (variant, fit, data, cl) in [
+            ("plain", &plain, &unweighted, None),
+            ("cluster", &plain, &unweighted, Some(&clusters)),
+            ("weighted", &weighted, &with_weights, None),
             (
                 "weighted cluster",
                 &weighted,
-                Some(&w[..]),
-                Some(&cluster[..]),
+                &with_weights,
+                Some(&clusters),
             ),
         ] {
             for (scale_name, scale) in [
@@ -98,19 +105,21 @@ fn attributable_fraction_bits_are_recorded() {
             ] {
                 let a = attributable_logistic(
                     fit,
-                    x.as_ref(),
+                    data,
                     x0.as_ref(),
-                    &y,
+                    cl,
                     &AfOptions {
                         design,
                         scale,
-                        weights,
-                        cluster: cl,
                         ..AfOptions::default()
                     },
                 )
+                .unwrap()
+                .af
                 .unwrap();
-                let v: Vec<f64> = [a.af, a.se, a.lower, a.upper].map(Option::unwrap).to_vec();
+                let v: Vec<f64> = [Some(a.estimate), a.se, a.lower(), a.upper()]
+                    .map(Option::unwrap)
+                    .to_vec();
                 check(&format!("{name}/{variant}/{scale_name}"), &v);
             }
         }

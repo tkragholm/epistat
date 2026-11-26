@@ -15,6 +15,11 @@
 //! their own storage, so the demeaned design is the only copy of it; the
 //! results are those of `fit` to the bit.
 //!
+//! The fit owns its results. The methods that need the fixed effects again,
+//! the covariances, the influence and the fixed-effect values, take the
+//! [`FixedEffects`] the fit was made with as an argument, and refuse one with
+//! other rows or levels.
+//!
 //! A covariate is aliased when its demeaned column, after the columns before
 //! it are projected out, keeps less than `1e-7` of the weighted norm of the
 //! covariate centred at its mean, which is the rule of `Glm::fit` applied to
@@ -65,7 +70,7 @@
 //! `fixest` makes a covariance that is not positive definite positive
 //! definite by raising its eigenvalues to `1e-16`; this module reports the
 //! covariance as computed, with its smallest eigenvalue, and
-//! [`Covariance::positive_definite`] gives `fixest`'s repair.
+//! [`FeolsCovariance::positive_definite`] gives `fixest`'s repair.
 //!
 //! # Influence
 //!
@@ -85,14 +90,16 @@
 
 use std::collections::HashMap;
 
+use epistat_core::Covariance;
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, ROW_BLOCK, matvec_into, row_scaled_gram, xtv};
 use rayon::prelude::*;
 
-use crate::absorb::{
-    Absorb, AbsorbError, Demeaned, FixedEffectValues, FixedEffects, blocked_total,
-};
+use crate::Error;
+use crate::absorb::{Absorb, Demeaned, FixedEffectValues, FixedEffects, blocked_total};
+use crate::error::length;
+use crate::fit::covariance;
 
 /// The share of a covariate's centred norm below which it is aliased.
 const ALIAS_TOLERANCE: f64 = 1e-7;
@@ -105,9 +112,9 @@ pub struct Feols {
 }
 
 /// A linear fit with absorbed fixed effects.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct FeolsFit<'a> {
-    fe: &'a FixedEffects,
+pub struct FeolsFit {
     /// The coefficients, `None` for an aliased covariate.
     pub coefficients: Vec<Option<f64>>,
     /// The aliased covariates.
@@ -127,6 +134,11 @@ pub struct FeolsFit<'a> {
     /// The iterations of the demeaning of each covariate and of the outcome,
     /// last.
     pub iterations: Vec<usize>,
+    /// The parameters `fixest` reports as `nparams`.
+    n_parameters: usize,
+    /// The input rows, the rows that enter and the levels of each factor of
+    /// the fixed effects of the fit.
+    shape: (usize, usize, Vec<usize>),
     /// The kept covariates.
     columns: Vec<usize>,
     /// The demeaned kept covariates.
@@ -150,6 +162,7 @@ pub enum Vcov<'c> {
 }
 
 /// How the fixed effects enter `K`.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KFixef {
     /// Not at all.
@@ -162,6 +175,7 @@ pub enum KFixef {
 
 /// The number of clusters in the factor `G/(G - 1)` with several cluster
 /// variables.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GDf {
     /// The smallest number of clusters, for the whole covariance.
@@ -205,12 +219,13 @@ impl Default for Ssc {
     }
 }
 
-/// A covariance of the coefficients.
+/// A covariance of the coefficients, with the quantities of its correction.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct Covariance {
-    /// Row-major `p x p`, `None` for aliased covariates and everywhere when a
-    /// factor of the correction does not exist.
-    pub matrix: Vec<Option<f64>>,
+pub struct FeolsCovariance {
+    /// `p x p`, `None` for aliased covariates and everywhere when a factor of
+    /// the correction does not exist.
+    pub matrix: Covariance,
     /// The `K` of the correction.
     pub df_k: usize,
     /// The smallest number of clusters of a single cluster variable.
@@ -218,28 +233,27 @@ pub struct Covariance {
     /// The smallest eigenvalue of the matrix over the covariates that are not
     /// aliased.
     pub min_eigenvalue: Option<f64>,
-    dimension: usize,
 }
 
-impl Covariance {
+impl FeolsCovariance {
     /// The matrix with eigenvalues below `1e-16` raised to `1e-16`, as
     /// `fixest` repairs a covariance that is not positive definite; the
     /// matrix itself when it is.
     #[must_use]
-    pub fn positive_definite(&self) -> Vec<Option<f64>> {
-        let p = self.dimension;
+    pub fn positive_definite(&self) -> Covariance {
+        let p = self.matrix.dim();
         let kept: Vec<usize> = (0..p)
-            .filter(|&j| self.matrix[j * p + j].is_some())
+            .filter(|&j| self.matrix.get(j, j).is_some())
             .collect();
         let k = kept.len();
         if k == 0 || self.min_eigenvalue.is_none_or(|m| m > 0.0) {
             return self.matrix.clone();
         }
         let a: Vec<f64> = (0..k * k)
-            .map(|ab| self.matrix[kept[ab / k] * p + kept[ab % k]].unwrap_or(0.0))
+            .map(|ab| self.matrix.get(kept[ab / k], kept[ab % k]).unwrap_or(0.0))
             .collect();
         let (values, vectors) = epistat_linalg::eigen::symmetric_eigen_jacobi(&a, k);
-        let mut out = self.matrix.clone();
+        let mut out = self.matrix.as_slice().to_vec();
         for a in 0..k {
             for b in 0..k {
                 let mut total = 0.0;
@@ -249,7 +263,7 @@ impl Covariance {
                 out[kept[a] * p + kept[b]] = Some(total);
             }
         }
-        out
+        covariance(p, out).unwrap_or_else(|_| self.matrix.clone())
     }
 }
 
@@ -323,31 +337,19 @@ fn independent_columns(x: MatRef<'_, f64>, w: Option<&[f64]>, reference: &[f64])
 }
 
 impl Feols {
-    /// Fits `y` on the columns of `x` with the fixed effects `fe`. `y` and
-    /// `x` have one row per input row of `fe`; only the rows that enter are
+    /// Fits `y` on the columns of `x` with the fixed effects `fe`. `x` and
+    /// `y` have one row per input row of `fe`; only the rows that enter are
     /// read.
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::Length`] for inputs of the wrong length, the errors of
-    /// [`FixedEffects::demean`], and [`AbsorbError::Glm`] when the normal
+    /// [`Error::Input`] for inputs of the wrong length, the errors of
+    /// [`FixedEffects::demean`], and [`Error::Solve`] when the normal
     /// equations cannot be solved.
-    pub fn fit<'a>(
-        &self,
-        y: &[f64],
-        x: MatRef<'_, f64>,
-        fe: &'a FixedEffects,
-    ) -> Result<FeolsFit<'a>, AbsorbError> {
+    pub fn fit(&self, x: MatRef<'_, f64>, y: &[f64], fe: &FixedEffects) -> Result<FeolsFit, Error> {
         let n_input = fe.n_input();
-        for (what, found) in [("y", y.len()), ("x", x.nrows())] {
-            if found != n_input {
-                return Err(AbsorbError::Length {
-                    what,
-                    expected: n_input,
-                    found,
-                });
-            }
-        }
+        length("x", n_input, x.nrows())?;
+        length("y", n_input, y.len())?;
         let p = x.ncols();
         // Columns of a column-major matrix are read in place; others are
         // copied.
@@ -384,22 +386,15 @@ impl Feols {
     /// # Errors
     ///
     /// As [`Feols::fit`].
-    pub fn fit_owned<'a>(
+    pub fn fit_owned(
         &self,
-        y: &[f64],
         mut x: Mat<f64>,
-        fe: &'a FixedEffects,
-    ) -> Result<FeolsFit<'a>, AbsorbError> {
+        y: &[f64],
+        fe: &FixedEffects,
+    ) -> Result<FeolsFit, Error> {
         let n_input = fe.n_input();
-        for (what, found) in [("y", y.len()), ("x", x.nrows())] {
-            if found != n_input {
-                return Err(AbsorbError::Length {
-                    what,
-                    expected: n_input,
-                    found,
-                });
-            }
-        }
+        length("x", n_input, x.nrows())?;
+        length("y", n_input, y.len())?;
         let (y_tilde, demeaned) = fe.demean_matrix(&mut x, y, &self.absorb)?;
         Self::solve(fe, x, &y_tilde, demeaned)
     }
@@ -407,12 +402,12 @@ impl Feols {
     /// The fit from the demeaned covariates, one row per row that enters,
     /// and the demeaned outcome; `demeaned` carries the scales, iterations
     /// and coefficients of the covariates and then of the outcome.
-    fn solve<'a>(
-        fe: &'a FixedEffects,
+    fn solve(
+        fe: &FixedEffects,
         mut matrix: Mat<f64>,
         y_tilde: &[f64],
         demeaned: Demeaned,
-    ) -> Result<FeolsFit<'a>, AbsorbError> {
+    ) -> Result<FeolsFit, Error> {
         let Demeaned {
             scale,
             iterations,
@@ -457,12 +452,9 @@ impl Feols {
         let (bread, beta) = if rank == 0 {
             (Mat::<f64>::zeros(0, 0), Mat::<f64>::zeros(0, 1))
         } else {
-            let factor =
-                Factor::new(gram.as_ref(), &Attempt::SYMMETRIC).map_err(crate::GlmError::from)?;
-            let bread = factor
-                .solve(Mat::<f64>::identity(rank, rank).as_ref())
-                .map_err(crate::GlmError::from)?;
-            let beta = factor.solve(rhs.as_ref()).map_err(crate::GlmError::from)?;
+            let factor = Factor::new(gram.as_ref(), &Attempt::SYMMETRIC)?;
+            let bread = factor.solve(Mat::<f64>::identity(rank, rank).as_ref())?;
+            let beta = factor.solve(rhs.as_ref())?;
             (bread, beta)
         };
         let mut fitted = vec![0.0; n];
@@ -486,8 +478,9 @@ impl Feols {
                 }
             }
         }
+        let levels = fe.levels();
+        let n_parameters = rank + levels.iter().sum::<usize>() + 1 - fe.n_factors();
         let mut fit = FeolsFit {
-            fe,
             coefficients,
             dropped_columns,
             rank,
@@ -496,6 +489,8 @@ impl Feols {
             sigma2: None,
             r2_within: (tss > 0.0).then(|| 1.0 - rss / tss),
             iterations,
+            n_parameters,
+            shape: (fe.n_input(), n, levels),
             columns,
             design,
             bread,
@@ -507,34 +502,26 @@ impl Feols {
     }
 }
 
-/// The scores `w e x~` summed within the clusters of `of`.
-/// The meat of `epistat_inference::sandwich::meat` with clusters: the scores
-/// `score(i) x~_i` summed within the clusters `of` in row order, one row per
-/// cluster, and the Gram matrix of those rows.
-fn cluster_meat(
-    design: MatRef<'_, f64>,
-    score: impl Fn(usize) -> f64,
-    of: &[u32],
-    count: usize,
-) -> Mat<f64> {
-    let p = design.ncols();
-    let mut sums = Mat::<f64>::zeros(count, p);
-    for (row, &cluster) in of.iter().enumerate() {
-        let r = score(row);
-        for j in 0..p {
-            sums[(cluster as usize, j)] += r * design[(row, j)];
-        }
-    }
-    row_scaled_gram(sums.as_ref(), |_| 1.0)
-}
-
-impl FeolsFit<'_> {
+impl FeolsFit {
     /// The number of parameters `fixest` reports as `nparams`: the covariates
     /// that are not aliased and `sum G_q - (Q - 1)` fixed effects.
     #[must_use]
-    pub fn n_parameters(&self) -> usize {
-        let levels: usize = self.fe.levels().iter().sum();
-        self.rank + levels + 1 - self.fe.n_factors()
+    pub const fn n_parameters(&self) -> usize {
+        self.n_parameters
+    }
+
+    /// `fe` has the input rows, the rows that enter and the levels of the
+    /// fixed effects of the fit.
+    fn check(&self, fe: &FixedEffects) -> Result<(), Error> {
+        let (n_input, n_rows, levels) = &self.shape;
+        length("fixed effects input rows", *n_input, fe.n_input())?;
+        length("fixed effects rows", *n_rows, fe.n_rows())?;
+        if fe.levels() != *levels {
+            return Err(Error::Invalid(
+                "the fixed effects have other levels than those of the fit",
+            ));
+        }
+        Ok(())
     }
 
     /// The demeaned covariates that are not aliased, one row per row that
@@ -556,19 +543,30 @@ impl FeolsFit<'_> {
         &self.columns
     }
 
-    /// The fixed effects of the fit, normalised as `fixest::fixef` does.
-    #[must_use]
-    pub fn fixed_effects(&self) -> FixedEffectValues {
-        self.fe.normalise(self.alpha.clone())
+    /// The fixed effects of the fit, normalised as `fixest::fixef` does, with
+    /// `fe` the fixed effects the fit was made with.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] or [`Error::Invalid`] when `fe` has other rows or
+    /// levels than the fixed effects of the fit.
+    pub fn fixed_effects(&self, fe: &FixedEffects) -> Result<FixedEffectValues, Error> {
+        self.check(fe)?;
+        Ok(fe.normalise(self.alpha.clone()))
     }
 
     /// `B w_i e_i x~_i` for each row that enters: one row per row, one column
-    /// per covariate that is not aliased.
-    #[must_use]
-    pub fn influence(&self) -> Mat<f64> {
+    /// per covariate that is not aliased, with `fe` the fixed effects the fit
+    /// was made with.
+    ///
+    /// # Errors
+    ///
+    /// As [`FeolsFit::fixed_effects`].
+    pub fn influence(&self, fe: &FixedEffects) -> Result<Mat<f64>, Error> {
+        self.check(fe)?;
         let n = self.residuals.len();
         let k = self.rank;
-        let w = self.fe.weights();
+        let w = fe.weights();
         let mut out = Mat::<f64>::zeros(n, k);
         for a in 0..k {
             let column = out.col_as_slice_mut(a);
@@ -587,33 +585,35 @@ impl FeolsFit<'_> {
                     }
                 });
         }
-        out
+        Ok(out)
     }
 
     /// The influence summed within groups: `B sum_{i in g} w_i e_i x~_i` for
     /// each group `g` of `groups` (one code below `count` per row that enters),
-    /// one row per group, one column per covariate that is not aliased. The
-    /// scores are added in row order and then multiplied by `B`, so no
-    /// matrix of one row per row is formed.
+    /// one row per group, one column per covariate that is not aliased, with
+    /// `fe` the fixed effects the fit was made with. The scores are added in
+    /// row order and then multiplied by `B`, so no matrix of one row per row
+    /// is formed.
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::Length`] when `groups` does not have one code per row
-    /// that enters, and [`AbsorbError::Invalid`] for a code not below `count`.
-    pub fn influence_sums(&self, groups: &[u32], count: usize) -> Result<Mat<f64>, AbsorbError> {
+    /// As [`FeolsFit::fixed_effects`], [`Error::Input`] when `groups` does not
+    /// have one code per row that enters, and [`Error::Invalid`] for a code
+    /// not below `count`.
+    pub fn influence_sums(
+        &self,
+        fe: &FixedEffects,
+        groups: &[u32],
+        count: usize,
+    ) -> Result<Mat<f64>, Error> {
+        self.check(fe)?;
         let n = self.residuals.len();
-        if groups.len() != n {
-            return Err(AbsorbError::Length {
-                what: "groups",
-                expected: n,
-                found: groups.len(),
-            });
-        }
+        length("groups", n, groups.len())?;
         if groups.iter().any(|&g| g as usize >= count) {
-            return Err(AbsorbError::Invalid("a group code is not below the count"));
+            return Err(Error::Invalid("a group code is not below the count"));
         }
         let k = self.rank;
-        let w = self.fe.weights();
+        let w = fe.weights();
         let mut scores = vec![0.0; count * k];
         for (i, &g) in groups.iter().enumerate() {
             let s = w.map_or(1.0, |w| w[i]) * self.residuals[i];
@@ -633,8 +633,8 @@ impl FeolsFit<'_> {
     /// The cluster of each row that enters and the number of clusters,
     /// numbered in order of first appearance as [`Clusters::from_labels`]
     /// numbers them, through a table of the codes instead of a hash map.
-    fn clusters_of(&self, codes: &[u32]) -> (Vec<u32>, usize) {
-        let rows = self.fe.rows();
+    fn clusters_of(fe: &FixedEffects, codes: &[u32]) -> (Vec<u32>, usize) {
+        let rows = fe.rows();
         let largest = rows
             .iter()
             .map(|&i| codes[i])
@@ -657,12 +657,13 @@ impl FeolsFit<'_> {
     }
 
     /// Whether each factor is nested in one of the cluster variables.
-    fn nested(&self, ways: &[&[u32]]) -> Vec<bool> {
-        let rows = self.fe.rows();
-        (0..self.fe.n_factors())
+    fn nested(fe: &FixedEffects, ways: &[&[u32]]) -> Vec<bool> {
+        let rows = fe.rows();
+        let all_levels = fe.levels();
+        (0..fe.n_factors())
             .map(|q| {
-                let codes = self.fe.codes(q);
-                let levels = self.fe.levels()[q];
+                let codes = fe.codes(q);
+                let levels = all_levels[q];
                 ways.iter().any(|way| {
                     let mut first = vec![u32::MAX; levels];
                     let mut seen = vec![false; levels];
@@ -682,14 +683,14 @@ impl FeolsFit<'_> {
     }
 
     /// The `K` of the correction, as `fixest`'s `ssc_compute_K`.
-    fn df_k(&self, ssc: Ssc, ways: Option<&[&[u32]]>) -> usize {
-        let levels = self.fe.levels();
+    fn df_k(&self, fe: &FixedEffects, ssc: Ssc, ways: Option<&[&[u32]]>) -> usize {
+        let levels = fe.levels();
         let q = levels.len();
         let total: usize = levels.iter().sum();
         let nparams = self.n_parameters();
         let references = || {
             if q >= 2 {
-                self.fixed_effects().references
+                fe.normalise(self.alpha.clone()).references
             } else {
                 vec![0; q]
             }
@@ -704,7 +705,7 @@ impl FeolsFit<'_> {
                 }
             }
             (KFixef::Nonnested, Some(ways)) => {
-                let nested = self.nested(ways);
+                let nested = Self::nested(fe, ways);
                 let k = if nested.iter().all(|&b| b) {
                     nparams + 1 - (total + 1 - q)
                 } else if ssc.k_exact && q >= 2 {
@@ -731,37 +732,36 @@ impl FeolsFit<'_> {
         }
     }
 
-    /// The covariance `kind` with the correction `ssc`.
+    /// The covariance `kind` with the correction `ssc`, with `fe` the fixed
+    /// effects the fit was made with.
     ///
     /// # Errors
     ///
-    /// [`AbsorbError::Length`] for cluster codes of the wrong length,
-    /// [`AbsorbError::Invalid`] for no cluster variables, and
-    /// [`AbsorbError::Glm`] when a cluster sum cannot be formed.
-    pub fn vcov(&self, kind: Vcov<'_>, ssc: Ssc) -> Result<Covariance, AbsorbError> {
+    /// As [`FeolsFit::fixed_effects`], [`Error::Input`] for no cluster
+    /// variables or cluster codes of the wrong length, and
+    /// [`Error::Inference`] when a cluster sum cannot be formed.
+    pub fn vcov(
+        &self,
+        fe: &FixedEffects,
+        kind: Vcov<'_>,
+        ssc: Ssc,
+    ) -> Result<FeolsCovariance, Error> {
+        self.check(fe)?;
         let n = self.residuals.len();
         let p = self.coefficients.len();
-        let w = self.fe.weights();
+        let w = fe.weights();
         let score = |k: usize| w.map_or(1.0, |w| w[k]) * self.residuals[k];
         let ways = match kind {
             Vcov::Cluster(ways) => {
-                if ways.is_empty() {
-                    return Err(AbsorbError::Invalid("no cluster variables"));
-                }
+                epistat_core::check::non_empty("cluster variables", ways.len())?;
                 for way in ways {
-                    if way.len() != self.fe.n_input() {
-                        return Err(AbsorbError::Length {
-                            what: "cluster codes",
-                            expected: self.fe.n_input(),
-                            found: way.len(),
-                        });
-                    }
+                    length("cluster codes", fe.n_input(), way.len())?;
                 }
                 Some(ways)
             }
             Vcov::Iid | Vcov::Hetero => None,
         };
-        let k = self.df_k(ssc, ways);
+        let k = self.df_k(fe, ssc, ways);
         let design = self.design.as_ref();
         let mut min_clusters = None;
         let matrix: Option<Mat<f64>> = match kind {
@@ -777,8 +777,7 @@ impl FeolsFit<'_> {
                 })
             }
             Vcov::Hetero => {
-                let middle = meat(design, score, None)
-                    .map_err(|e| AbsorbError::Glm(crate::GlmError::from(e)))?;
+                let middle = meat(design, score, None)?;
                 let v = sandwich_with_inverse(self.bread.as_ref(), middle.as_ref());
                 let factor = if ssc.k_adj {
                     (n > k).then(|| n as f64 / (n - k) as f64)
@@ -789,7 +788,7 @@ impl FeolsFit<'_> {
             }
             Vcov::Cluster(ways) => {
                 let singles: Vec<(Vec<u32>, usize)> =
-                    ways.iter().map(|way| self.clusters_of(way)).collect();
+                    ways.iter().map(|way| Self::clusters_of(fe, way)).collect();
                 let g_min = singles.iter().map(|s| s.1).min().unwrap_or(0);
                 min_clusters = Some(g_min);
                 let mut total = Mat::<f64>::zeros(self.rank, self.rank);
@@ -797,19 +796,15 @@ impl FeolsFit<'_> {
                 for subset in 1..(1usize << ways.len()) {
                     let members: Vec<usize> =
                         (0..ways.len()).filter(|&j| subset >> j & 1 == 1).collect();
-                    let intersected;
-                    let (of, g) = if members.len() == 1 {
-                        (singles[members[0]].0.as_slice(), singles[members[0]].1)
+                    // The clusters are numbered in order of first appearance,
+                    // so the score sums are added in that order.
+                    let clusters = if members.len() == 1 {
+                        Clusters::from_codes(&singles[members[0]].0)
                     } else {
-                        let clusters = intersection(self.fe.rows(), ways, &members);
-                        intersected = clusters
-                            .of()
-                            .iter()
-                            .map(|&c| u32::try_from(c).unwrap_or(u32::MAX))
-                            .collect::<Vec<u32>>();
-                        (intersected.as_slice(), clusters.count())
+                        intersection(fe.rows(), ways, &members)
                     };
-                    let middle = cluster_meat(design, score, of, g);
+                    let g = clusters.count();
+                    let middle = meat(design, score, Some(&clusters))?;
                     let v = sandwich_with_inverse(self.bread.as_ref(), middle.as_ref());
                     let factor = if ssc.g_adj && ssc.g_df == GDf::Conventional {
                         if g < 2 {
@@ -862,12 +857,11 @@ impl FeolsFit<'_> {
                 min_eigenvalue = values.iter().copied().reduce(f64::min);
             }
         }
-        Ok(Covariance {
-            matrix: out,
+        Ok(FeolsCovariance {
+            matrix: covariance(p, out)?,
             df_k: k,
             min_clusters,
             min_eigenvalue,
-            dimension: p,
         })
     }
 }

@@ -63,7 +63,7 @@ pub fn feols_bound(
     factor: f64,
 ) -> FitBound {
     let fe = FixedEffects::new(factors, weights, Singletons::Remove).unwrap();
-    let fit = Feols { absorb }.fit(outcome, design.as_ref(), &fe).unwrap();
+    let fit = Feols { absorb }.fit(design.as_ref(), outcome, &fe).unwrap();
     let rows = fe.rows();
     let m = rows.len();
     let w: Vec<f64> = (0..m).map(|k| fe.weights().map_or(1.0, |w| w[k])).collect();
@@ -116,9 +116,10 @@ pub fn feols_bound(
     let clusters = match covariance_kind {
         Meat::Cluster(c) => c,
         Meat::Iid => {
-            let cov = fit.vcov(Vcov::Iid, Ssc::new()).unwrap();
+            let cov = fit.vcov(&fe, Vcov::Iid, Ssc::new()).unwrap();
             let largest = cov
                 .matrix
+                .as_slice()
                 .iter()
                 .flatten()
                 .fold(0.0_f64, |a, &b| a.max(b.abs()));
@@ -156,9 +157,10 @@ pub fn feols_bound(
         }
     }
     let ways = [clusters];
-    let cov = fit.vcov(Vcov::Cluster(&ways), Ssc::new()).unwrap();
+    let cov = fit.vcov(&fe, Vcov::Cluster(&ways), Ssc::new()).unwrap();
     let largest = cov
         .matrix
+        .as_slice()
         .iter()
         .flatten()
         .fold(0.0_f64, |a, &b| a.max(b.abs()));
@@ -181,7 +183,7 @@ pub fn feols_bound(
 
 /// The coefficient bound from the condition number of the demeaned design.
 fn finish(
-    fit: &epistat_glm::FeolsFit<'_>,
+    fit: &epistat_glm::FeolsFit,
     kept: Vec<usize>,
     covariance: Vec<f64>,
     e: f64,

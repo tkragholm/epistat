@@ -1,6 +1,11 @@
 //! The covariate, competing-event and outcome models, fitted to the observed
 //! rows with each person's prior weight.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link, Multinom};
 use epistat_linalg::Mat;
 
@@ -260,7 +265,7 @@ fn fit_model(
     let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
     let glm = Glm::new(family, link);
     let fit = glm
-        .fit(x.as_ref(), &y, Some(&w), None, None)
+        .fit_slices(x.as_ref(), &y, Some(&w), None, None)
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
     if !fit.converged {
         return Err(Error::NoConvergence(format!("{what}: no convergence")));
@@ -331,7 +336,7 @@ fn fit_multinomial(
     }
     let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
     let fit = Multinom::default()
-        .fit(x.as_ref(), &y, levels, Some(&w))
+        .fit_slices(x.as_ref(), &y, levels, Some(&w))
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
     if !fit.converged {
         return Err(Error::NoConvergence(format!("{what}: no convergence")));

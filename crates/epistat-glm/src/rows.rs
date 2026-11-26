@@ -36,7 +36,7 @@
 //!
 //! # Cost
 //!
-//! Blocks are formed in waves of [`WAVE`] in parallel, so the memory beyond
+//! Blocks are formed in waves of 32 in parallel, so the memory beyond
 //! the source is about `WAVE * ROW_BLOCK * (p + 8)` values. Each iteration
 //! forms the rows once, at the new coefficients, for the deviance and the
 //! products of the next iteration together, and again when a step is halved.
@@ -59,6 +59,7 @@
 //! 2. Golub GH, Van Loan CF. Matrix Computations. 4th ed. Baltimore: Johns
 //!    Hopkins University Press; 2013. Section 5.2.8, modified Gram-Schmidt.
 
+use epistat_core::Covariance;
 use epistat_inference::sandwich::sandwich_with_inverse;
 use epistat_linalg::{
     Attempt, BlockSum, Factor, Mat, MatMut, MatRef, ROW_BLOCK, block_scaled_gram, block_xtv,
@@ -66,12 +67,13 @@ use epistat_linalg::{
 };
 use rayon::prelude::*;
 
-use crate::fit::screened_columns;
-use crate::robust::SandwichType;
-use crate::{Glm, GlmError};
+use crate::error::weight_error;
+use crate::fit::{covariance, screened_columns};
+use crate::robust::{SandwichType, place};
+use crate::{Error, Glm};
 
 /// The blocks formed at once.
-pub const WAVE: usize = 32;
+pub(crate) const WAVE: usize = 32;
 
 /// One block of rows to be filled by [`Rows::fill`].
 pub struct Block<'a> {
@@ -166,6 +168,7 @@ enum Source {
 
 /// A fit of [`Glm::fit_rows`]: the fields of [`Fit`](crate::Fit) that do not
 /// have one value per row.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct RowsFit {
     /// The coefficients, `None` for an aliased column.
@@ -184,9 +187,9 @@ pub struct RowsFit {
     pub boundary: bool,
     /// The Pearson dispersion, or 1 for the binomial and Poisson families.
     pub dispersion: Option<f64>,
-    /// `dispersion * (X'WX + ridge)^-1`, row-major `p x p`, as
+    /// `dispersion * (X'WX + ridge)^-1`, `p x p`, as
     /// [`Fit::covariance`](crate::Fit::covariance).
-    pub covariance: Vec<Option<f64>>,
+    pub covariance: Covariance,
     model: Glm,
     columns: Vec<usize>,
     beta: Vec<f64>,
@@ -261,15 +264,15 @@ impl Glm {
     /// # Errors
     ///
     /// As [`Glm::fit`].
-    pub fn fit_rows(&self, rows: &dyn Rows) -> Result<RowsFit, GlmError> {
+    pub fn fit_rows(&self, rows: &dyn Rows) -> Result<RowsFit, Error> {
         let p = rows.n_columns();
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
-            return Err(GlmError::Tolerance);
-        }
-        // The first invalid weight and response, the rows of positive weight
-        // and the deviance at the starting means.
+        epistat_core::check::non_empty("x", rows.n_rows())?;
+        // The first invalid weight, design row and response, the rows of
+        // positive weight and the deviance at the starting means.
         let family = self.family;
         let mut bad_weight: Option<(usize, f64)> = None;
+        let mut bad_x: Option<usize> = None;
+        let mut bad_y: Option<usize> = None;
         let mut bad_response: Option<(usize, f64)> = None;
         let mut used = 0_usize;
         let mut old_deviance = empty_sum();
@@ -278,6 +281,8 @@ impl Glm {
             rows,
             |b| {
                 let mut bw = None;
+                let mut bx = None;
+                let mut bf = None;
                 let mut by = None;
                 let mut used = 0;
                 let mut terms = Vec::with_capacity(b.y.len());
@@ -286,6 +291,12 @@ impl Glm {
                     if bw.is_none() && !(w.is_finite() && w >= 0.0) {
                         bw = Some((b.start + k, w));
                     }
+                    if bx.is_none() && (0..p).any(|j| !b.x[(k, j)].is_finite()) {
+                        bx = Some(b.start + k);
+                    }
+                    if bf.is_none() && !y.is_finite() {
+                        bf = Some(b.start + k);
+                    }
                     if by.is_none() && !family.valid_response(y) {
                         by = Some((b.start + k, y));
                     }
@@ -293,10 +304,12 @@ impl Glm {
                     let r = self.at(&start, b.x.as_ref(), k, y, w);
                     terms.push(family.deviance(y, r.mu, w));
                 }
-                (bw, by, used, terms)
+                (bw, bx, bf, by, used, terms)
             },
-            |(bw, by, u, terms)| {
+            |(bw, bx, bf, by, u, terms)| {
                 bad_weight = bad_weight.or(bw);
+                bad_x = bad_x.or(bx);
+                bad_y = bad_y.or(bf);
                 bad_response = bad_response.or(by);
                 used += u;
                 for t in terms {
@@ -304,14 +317,19 @@ impl Glm {
                 }
             },
         );
-        if let Some((index, value)) = bad_weight {
-            return Err(GlmError::Weight { index, value });
+        if let Some((row, value)) = bad_weight {
+            return Err(weight_error("weights", row, value));
         }
-        if !family.valid() {
-            return Err(GlmError::Family);
+        if let Some(row) = bad_x {
+            return Err(epistat_core::InputError::NotFinite { what: "x", row }.into());
         }
-        if let Some((index, value)) = bad_response {
-            return Err(GlmError::Response { index, value });
+        if let Some(row) = bad_y {
+            return Err(epistat_core::InputError::NotFinite { what: "y", row }.into());
+        }
+        crate::error::tolerance("tolerance", self.tolerance)?;
+        family.check()?;
+        if let Some((row, value)) = bad_response {
+            return Err(Error::Response { row, value });
         }
 
         let mut previous: Option<Vec<f64>> = None;
@@ -371,13 +389,13 @@ impl Glm {
             boundary = false;
             if !current_deviance.is_finite() || !at.valid {
                 let Some(old) = previous.as_ref() else {
-                    return Err(GlmError::NoValidStart);
+                    return Err(Error::NoValidStart);
                 };
                 let mut halvings = 0;
                 while !current_deviance.is_finite() || !at.valid {
                     halvings += 1;
                     if halvings > self.max_iterations {
-                        return Err(GlmError::StepHalving);
+                        return Err(Error::StepHalving);
                     }
                     for (b, o) in beta.iter_mut().zip(old) {
                         *b = (*b + o) / 2.0;
@@ -432,14 +450,15 @@ impl Glm {
         };
         let inverse = Factor::new(last_gram.as_ref(), &Attempt::SYMMETRIC)?
             .solve(Mat::<f64>::identity(rank, rank).as_ref())?;
-        let mut covariance = vec![None; p * p];
+        let mut values = vec![None; p * p];
         if let Some(dispersion) = dispersion {
             for (a, &i) in columns.iter().enumerate() {
                 for (b, &j) in columns.iter().enumerate() {
-                    covariance[i * p + j] = Some(dispersion * inverse[(a, b)]);
+                    values[i * p + j] = Some(dispersion * inverse[(a, b)]);
                 }
             }
         }
+        let covariance = covariance(p, values)?;
         let coefficients = (0..p)
             .map(|j| columns.contains(&j).then_some(beta[j]))
             .collect();
@@ -558,8 +577,8 @@ struct AtSource {
 /// takes one pass over the rows, summed in row order as `Glm::fit` sums them.
 /// The error of a working weight that is not finite at `row`, as the
 /// products over a whole design report a bad weight.
-const fn working_weight(row: usize) -> GlmError {
-    GlmError::Design(epistat_linalg::Error::Input(
+const fn working_weight(row: usize) -> Error {
+    Error::Design(epistat_linalg::Error::Input(
         epistat_core::InputError::NotFinite {
             what: "working weights",
             row,
@@ -725,26 +744,30 @@ impl RowsFit {
     ///
     /// # Errors
     ///
-    /// As `robust_covariance`, and [`GlmError::Clusters`] for clusters that
+    /// As `robust_covariance`, and [`Error::Invalid`] for clusters that
     /// are not numbered in the order in which they first appear.
     pub fn robust_covariance(
         &self,
         rows: &dyn Rows,
         clustered: bool,
         kind: SandwichType,
-    ) -> Result<Vec<Option<f64>>, GlmError> {
+    ) -> Result<Covariance, Error> {
         let p = self.coefficients.len();
         if kind == SandwichType::Hc3 && clustered {
-            return Err(GlmError::Clusters("HC3 is defined for unclustered rows"));
+            return Err(Error::Unsupported {
+                what: "HC3 with clusters",
+            });
         }
         let columns = &self.columns;
         let q = columns.len();
         let dispersion = self
             .dispersion
             .filter(|&d| d > 0.0)
-            .ok_or(GlmError::Missing("positive dispersion"))?;
+            .ok_or(Error::Undefined("a positive dispersion"))?;
         let inverse = Mat::from_fn(q, q, |a, b| {
-            self.covariance[columns[a] * p + columns[b]].map_or(f64::NAN, |v| v / dispersion)
+            self.covariance
+                .get(columns[a], columns[b])
+                .map_or(f64::NAN, |v| v / dispersion)
         });
         let n = rows.n_rows();
         let rank = self.rank;
@@ -808,7 +831,7 @@ impl RowsFit {
                 },
             );
             if disordered {
-                return Err(GlmError::Clusters(
+                return Err(Error::Invalid(
                     "the clusters must be numbered in the order in which they first appear",
                 ));
             }
@@ -826,28 +849,7 @@ impl RowsFit {
             );
             (gram.finish_symmetric(), None)
         };
-        let factor = match (kind, groups) {
-            (SandwichType::Hc0 | SandwichType::Hc3, _) => 1.0,
-            (SandwichType::Hc1, None) => {
-                if n <= rank {
-                    return Ok(vec![None; p * p]);
-                }
-                n as f64 / (n - rank) as f64
-            }
-            (SandwichType::Hc1, Some(g)) => {
-                if g < 2 || n <= rank {
-                    return Ok(vec![None; p * p]);
-                }
-                g as f64 / (g - 1) as f64 * (n - 1) as f64 / (n - rank) as f64
-            }
-        };
         let v = sandwich_with_inverse(inverse.as_ref(), meat.as_ref());
-        let mut out = vec![None; p * p];
-        for (a, &i) in columns.iter().enumerate() {
-            for (b, &j) in columns.iter().enumerate() {
-                out[i * p + j] = Some(factor * v[(a, b)]);
-            }
-        }
-        Ok(out)
+        place(&v, kind.factor(n, rank, groups), columns, p)
     }
 }
