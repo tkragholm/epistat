@@ -357,3 +357,72 @@ fn calendar_input_that_is_not_usable_is_refused() {
         .is_err()
     );
 }
+
+#[test]
+fn event_dependent_exposure_drops_later_doses_and_refuses_bad_windows() {
+    use epistat_survival::sccs::{EventDependentOptions, EventDependentSpec, fit_event_dependent};
+    // Twelve cases: a dose on day 40 and a second on day 80; the event on day
+    // 50 + i, so the second dose of the cases with their event before day 80
+    // comes after it and is dropped.
+    let n = 12;
+    let start = vec![0.0; n];
+    let end = vec![200.0; n];
+    let event: Vec<f64> = (0..n).map(|i| 45.0 + 10.0 * i as f64).collect();
+    let dose_offsets: Vec<usize> = (0..=n).map(|i| 2 * i).collect();
+    let doses: Vec<f64> = (0..n).flat_map(|_| [40.0, 80.0]).collect();
+    let windows = [WindowSpec {
+        from: 0.0,
+        to: 14.0,
+    }];
+    let spec = EventDependentSpec {
+        start: &start,
+        end: &end,
+        event: &event,
+        dose_offsets: &dose_offsets,
+        doses: &doses,
+        windows: &windows,
+        age_cuts: &[],
+        same_dose_parameters: true,
+    };
+    let f = fit_event_dependent(&spec, &EventDependentOptions::default()).unwrap();
+    // Events on days 45, 55, 65, 75 precede the second dose.
+    assert_eq!(f.n_doses_after_event, 4);
+    assert_eq!(f.n_cases, n);
+    // Every case starts unexposed, so all are at level 0, all have dose 1,
+    // and the eight that keep the second dose have level 2.
+    assert_eq!(f.n_strata_by_level, vec![12, 12, 8]);
+    let bad = |w: &[WindowSpec]| {
+        fit_event_dependent(
+            &EventDependentSpec { windows: w, ..spec },
+            &EventDependentOptions::default(),
+        )
+        .is_err()
+    };
+    assert!(bad(&[WindowSpec {
+        from: -5.0,
+        to: 14.0
+    }]));
+    assert!(bad(&[WindowSpec {
+        from: 0.0,
+        to: f64::INFINITY
+    }]));
+    assert!(bad(&[
+        WindowSpec { from: 0.0, to: 7.0 },
+        WindowSpec {
+            from: 8.0,
+            to: 14.0
+        }
+    ]));
+    assert!(bad(&[]));
+    let late = [300.0; 12];
+    assert!(
+        fit_event_dependent(
+            &EventDependentSpec {
+                event: &late,
+                ..spec
+            },
+            &EventDependentOptions::default()
+        )
+        .is_err()
+    );
+}

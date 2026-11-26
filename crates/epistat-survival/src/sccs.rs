@@ -105,10 +105,15 @@
 //! violated when death or emigration follows the event, and (c) exposure after
 //! an event does not depend on the event, which is violated when the exposure
 //! treats the early symptoms of the event. A pre-exposure window in the design
-//! shows (c). The extensions for event-dependent exposures and observation
-//! periods of Farrington et al. \[3, 4\] change the likelihood by a factor that
-//! depends on the person's own times, which per-piece lengths cannot express,
-//! and are not provided. Nor is the smooth age effect of \[5\].
+//! shows (c). [`fit_event_dependent`] fits the extension of Farrington et al.
+//! \[3\] for exposures that the event censors or stops, as
+//! `SCCS::eventdepenexp`. The extension for event-dependent observation
+//! periods \[4\] (`SCCS::eventdepenobs`) and the smooth age effect of \[5\]
+//! (`SCCS::smoothagesccs`, and with a smooth exposure effect too,
+//! `nonparasccs`) are not provided. [`semiparametric_pieces`] gives the
+//! semiparametric case series, with an age effect free at every event time,
+//! as `SCCS::semisccs`, and [`sample_size`] the number of cases a design
+//! needs, as `SCCS::samplesize`.
 //!
 //! # Scale
 //!
@@ -142,9 +147,13 @@
 //! 5. Ghebremichael-Weldeselassie Y, Whitaker HJ, Farrington CP. Self-controlled
 //!    case series method with smooth age effect. Stat Med 2014;33(4):639-49.
 
+mod event_dependent;
 mod sample_size;
 mod semiparametric;
 
+pub use event_dependent::{
+    EventDependentFit, EventDependentOptions, EventDependentSpec, fit_event_dependent,
+};
 pub use sample_size::{SampleSizeSpec, sample_size};
 pub use semiparametric::{SemiparametricPieces, semiparametric_pieces};
 
