@@ -34,8 +34,12 @@ pub struct ExpectedHazard {
     base: Vec<usize>,
     /// The end of the follow-up of each row, 0 for a row without pieces.
     horizon: Vec<f64>,
+    /// Whether the row was used, that is has a positive weight.
+    used: Vec<bool>,
     /// The hazard of each cell, its rate divided by the scale of the table.
     cell_hazard: Vec<f64>,
+    /// Whether the time dimensions have extended ends.
+    open: bool,
 }
 
 impl ExpectedHazard {
@@ -75,6 +79,14 @@ impl ExpectedHazard {
             mut cursor,
             ..
         } = Layout::new(&from_origin, &dims, &PyearsOptions::default(), false)?;
+        let open = table.ends_extended();
+        if open {
+            cursor.open_ends();
+        }
+        let mut used = vec![false; n];
+        for row in walked.used_rows() {
+            used[row as usize] = true;
+        }
         let mut any = vec![false; n];
         let mut off: Option<usize> = None;
         cursor.walk(
@@ -100,7 +112,7 @@ impl ExpectedHazard {
             .map(|(&any, &end)| if any { end } else { 0.0 })
             .collect();
         let base = (0..n)
-            .map(|i| if any[i] { cursor.base(i) } else { 0 })
+            .map(|i| if used[i] { cursor.base(i) } else { 0 })
             .collect();
         let (cuts, strides) = cursor
             .time_dimensions()
@@ -113,7 +125,9 @@ impl ExpectedHazard {
             origins: origins.iter().map(|o| o.to_vec()).collect(),
             base,
             horizon,
+            used,
             cell_hazard: table.rates().iter().map(|r| r / scale).collect(),
+            open,
         })
     }
 
@@ -129,29 +143,64 @@ impl ExpectedHazard {
         self.horizon[i]
     }
 
-    /// The cumulative reference hazard of row `i` from time 0 to `t`, `None`
-    /// for `t` below 0, beyond the follow-up of the row, or not a number.
+    /// The cumulative reference hazard of row `i` from time 0 to `t`.
+    ///
+    /// Beyond the follow-up of the row it is the cumulative hazard at the end
+    /// of the follow-up plus that of the row's walk through the table from
+    /// there to `t`, as if the row were followed on, which the expected
+    /// survival of Ederer I and Hakulinen needs. `None` for `t` below 0 or not
+    /// a number, for a row of weight 0, and for a `t` beyond the follow-up
+    /// whose walk leaves the table, which has no rate there (see the rule in
+    /// [`crate::ratetable`]).
     #[must_use]
     pub fn cumulative(&self, i: usize, t: f64) -> Option<f64> {
-        if !(t >= 0.0 && t <= self.horizon(i)) {
+        if !(t >= 0.0 && self.used[i]) {
             return None;
         }
-        Some(
+        let end = self.horizon(i);
+        let within = |t: f64| {
             self.locate(i, t)
-                .map_or(0.0, |at| at.before + (t - at.begin) * at.hazard),
-        )
+                .map_or(0.0, |at| at.before + (t - at.begin) * at.hazard)
+        };
+        if t <= end {
+            return Some(within(t));
+        }
+        let mut beyond = 0.0_f64;
+        let mut off = false;
+        self.walk_beyond(i, t, &mut |cell, length| match cell {
+            Some(cell) => beyond += length * self.cell_hazard[cell],
+            None => off = true,
+        });
+        (!off).then(|| within(end) + beyond)
     }
 
     /// The reference hazard of row `i` at time `t`, that of the piece that
     /// ends at or after `t`, so that at a cut of the table it is the hazard
-    /// before the cut. `None` for `t` not above 0, beyond the follow-up of the
-    /// row, or not a number.
+    /// before the cut. Beyond the follow-up of the row it is that of the row's
+    /// walk through the table from there, as in [`ExpectedHazard::cumulative`].
+    /// `None` for `t` not above 0 or not a number, for a row of weight 0, and
+    /// for a `t` beyond the follow-up whose walk leaves the table.
     #[must_use]
     pub fn hazard(&self, i: usize, t: f64) -> Option<f64> {
-        if t.is_nan() || t <= 0.0 || self.horizon[i] == 0.0 {
+        if t.is_nan() || t <= 0.0 || !self.used[i] {
             return None;
         }
-        self.locate(i, t).filter(|at| at.within).map(|at| at.hazard)
+        if t <= self.horizon[i] {
+            return self.locate(i, t).filter(|at| at.within).map(|at| at.hazard);
+        }
+        let mut last: Option<Option<usize>> = None;
+        self.walk_beyond(i, t, &mut |cell, _| {
+            if last != Some(None) {
+                last = Some(cell);
+            }
+        });
+        last.flatten().map(|cell| self.cell_hazard[cell])
+    }
+
+    /// Walks row `i` through the table from the end of its follow-up to `t`.
+    fn walk_beyond(&self, i: usize, t: f64, on_piece: &mut impl FnMut(Option<usize>, f64)) {
+        let mut walkers: Vec<Walker<'_>> = self.walkers().collect();
+        walk_row(&mut walkers, i, self.base[i], self.horizon[i], t, on_piece);
     }
 
     /// The piece of row `i` that ends at or after `t`, or the last piece when
@@ -228,7 +277,7 @@ impl ExpectedHazard {
             .iter()
             .zip(&self.strides)
             .zip(&self.origins)
-            .map(|((cuts, &stride), origin)| Walker::new(cuts, origin, stride))
+            .map(|((cuts, &stride), origin)| Walker::new(cuts, origin, stride).with_open(self.open))
     }
 
     /// A reader of the pieces of rows, which keeps its buffers from one row
@@ -298,14 +347,34 @@ impl Reader<'_> {
     /// order, and the last piece ends where the follow-up ends, whatever the
     /// rounding of the sum. A row without pieces adds none.
     pub(crate) fn append(&mut self, i: usize, into: &mut Pieces) -> Range<usize> {
+        let end = self.expected.horizon[i];
+        // `from_table` refused a row with time off the table, found by the
+        // same walk, so every piece has a cell.
+        self.append_until(i, end, into)
+            .unwrap_or(into.len()..into.len())
+    }
+
+    /// Adds the pieces of row `i` from time 0 to `end` to `into`, as
+    /// [`Reader::append`] does for the follow-up, with `end` at or beyond the
+    /// follow-up for the expected survival of a row followed on. `None`, and
+    /// nothing added, when the walk leaves the table or the row has weight 0.
+    pub(crate) fn append_until(
+        &mut self,
+        i: usize,
+        end: f64,
+        into: &mut Pieces,
+    ) -> Option<Range<usize>> {
         let e = self.expected;
         let first = into.len();
-        let end = e.horizon[i];
+        if !e.used[i] {
+            return None;
+        }
         if end == 0.0 {
-            return first..first;
+            return Some(first..first);
         }
         let mut elapsed = 0.0_f64;
         let mut total = 0.0_f64;
+        let mut off = false;
         walk_row(
             &mut self.walkers,
             i,
@@ -313,9 +382,10 @@ impl Reader<'_> {
             0.0,
             end,
             &mut |cell, length| {
-                // `from_table` refused a row with time off the table, found
-                // by the same walk, so every piece has a cell.
-                let Some(cell) = cell else { return };
+                let Some(cell) = cell else {
+                    off = true;
+                    return;
+                };
                 let hazard = e.cell_hazard[cell];
                 elapsed += length;
                 total += length * hazard;
@@ -324,11 +394,27 @@ impl Reader<'_> {
                 into.cumulative.push(total);
             },
         );
+        if off {
+            into.ends.truncate(first);
+            into.hazards.truncate(first);
+            into.cumulative.truncate(first);
+            return None;
+        }
         let last = into.len();
         if last > first {
             into.ends[last - 1] = end;
         }
-        first..last
+        Some(first..last)
+    }
+
+    /// The pieces of row `i` from time 0 to `end`, held until the next call,
+    /// or `None` as for [`Reader::append_until`].
+    pub(crate) fn row_until(&mut self, i: usize, end: f64) -> Option<RowPieces<'_>> {
+        let mut pieces = std::mem::take(&mut self.pieces);
+        pieces.clear();
+        let range = self.append_until(i, end, &mut pieces);
+        self.pieces = pieces;
+        range.map(|r| self.pieces.slice(r))
     }
 
     /// The pieces of row `i`, held until the next call.

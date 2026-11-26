@@ -6,7 +6,10 @@
 //! with its length, taken from the expected hazards held as pieces of every
 //! row, before they were formed one row at a time. They must not change. To
 //! record again, run with `GOLDEN_RECORD=1 -- --nocapture` and paste the
-//! lines.
+//! lines. The lookups were recorded again when `cumulative` and `hazard`
+//! came to be defined beyond the follow-up of a row and `None` for a row of
+//! weight 0; the lookups within the follow-up of the used rows kept their
+//! bits.
 //!
 //! The bits depend on the platform's `ln` and `exp`, so the test runs only on
 //! aarch64 macOS, where it was recorded.
@@ -24,7 +27,7 @@ use relsurv_sim::{cohort, table};
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("lookups", 150_000, 0x9ff3_932f_e7bf_630c),
+    ("lookups", 150_000, 0xa22a_ad99_9d04_788a),
     ("pohar perme exact", 29_242, 0x9a0d_d0da_8bc0_33d7),
     ("pohar perme quarterly", 474, 0x1d17_933c_73ac_d470),
     ("ederer2 exact", 29_242, 0xc260_bf74_8882_b2bf),
