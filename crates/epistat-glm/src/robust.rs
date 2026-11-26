@@ -170,7 +170,8 @@ fn meat_of(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for inputs of the wrong length, [`Error::Undefined`]
+/// [`Error::Input`] for inputs of the wrong length or values that are not
+/// finite, [`Error::Undefined`]
 /// when the fit has no positive dispersion, [`Error::Unsupported`] for `Hc3`
 /// with clusters, and [`Error::Inference`] when a cluster sum or the sandwich
 /// cannot be formed.
@@ -190,6 +191,8 @@ pub fn robust_covariance(
     ] {
         crate::error::length(what, expected, found)?;
     }
+    crate::error::finite("y", y)?;
+    crate::error::finite_matrix("x", x)?;
     if kind == SandwichType::Hc3 && clusters.is_some() {
         return Err(Error::Unsupported {
             what: "HC3 with clusters",
