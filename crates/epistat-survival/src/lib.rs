@@ -77,10 +77,13 @@
 //! - [`rmst`]: restricted mean survival time and time lost in two groups with their
 //!   difference and ratios, and their regression on covariates, as `survRM2::rmst2`.
 //! - [`sccs`]: the self-controlled case series, its conditional Poisson likelihood with robust
-//!   variance and the cutting of follow-up into pieces of age band and risk window, as
-//!   `SCCS::standardsccs`.
-//! - [`crossover`]: the hazard and referent windows of the case-crossover and case-time-control
-//!   designs, with the exposure in each window, for [`clogit`].
+//!   variance and the cutting of follow-up into pieces of age band, season, calendar period and
+//!   the risk windows of several exposures, as `SCCS::standardsccs`; the semiparametric fit, the
+//!   fit for event-dependent exposures and the sample size, as `semisccs`, `eventdepenexp` and
+//!   `samplesize`.
+//! - [`crossover`]: the hazard and referent windows of the case-crossover, case-time-control and
+//!   case-case-time-control designs, time-stratified in calendar, fixed or given strata, the
+//!   sampling of control persons, and the exposure in each window, for [`clogit`].
 //! - [`pyears`]: person-time and event counts in the cells of factors and
 //!   time-dependent cut points such as age and calendar period.
 //! - [`ratetable`]: a table of reference hazards by age, sex and calendar year, and the

@@ -48,11 +48,18 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   hundreds of thousands of clusters without a dense information matrix, checked
   against `coxph` with `frailty()`.
 - The Titman-Putter test of the Markov property.
-- The self-controlled case series (conditional Poisson likelihood, risk windows
-  and age bands, robust variance) with the cutting of follow-up into pieces,
-  the windows of the case-crossover and case-time-control designs with the
-  exposure in each, and the attributable fraction function from standardised
-  Cox risks, checked against `SCCS`, `survival::clogit` and `AF`.
+- The self-controlled case series (conditional Poisson likelihood, robust
+  variance, relative incidences with intervals) with the cutting of follow-up
+  into pieces by risk windows of several exposures, age bands, seasons and
+  calendar periods, counts of exposed and informative cases, the
+  semiparametric fit, the fit for exposures the event censors and the sample
+  size; the windows of the case-crossover, case-time-control and
+  case-case-time-control designs with unidirectional, bidirectional and
+  time-stratified referents in calendar or fixed strata, the sampling of
+  control persons at each case's date and the exposure in each window; and
+  the attributable fraction function from standardised Cox risks. Checked
+  against `SCCS` (`standardsccs`, `semisccs`, `eventdepenexp`, `samplesize`),
+  `rSPARCS::CXover.data`, `season::casecross`, `survival::clogit` and `AF`.
 - Kaplan-Meier and Nelson-Aalen curves, restricted means, log-rank tests,
   pseudo-observations, concordance, Brier scores and calibration, standardised
   risks, accelerated failure time models, person-time tables, rate tables with
