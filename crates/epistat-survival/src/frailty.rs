@@ -712,7 +712,7 @@ fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaS
     };
     let _ = (f0, f1);
     let mut failed = None;
-    let found = brent::minimise(
+    let found = brent::minimize(
         |t| match f(search, t) {
             Ok(v) => v,
             Err(e) => {

@@ -5,7 +5,7 @@
 //! against the `clarabel` interior-point solver, which the shared crate does
 //! not depend on.
 
-pub(super) use epistat_optim::simplex::{DenseSimplex, LpError};
+pub(super) use epistat_optim::{Error as LpError, simplex::DenseSimplex};
 
 #[cfg(test)]
 mod tests {

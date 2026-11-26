@@ -19,12 +19,16 @@
 //! - [`min_cost_flow`]: minimum-cost flow with integer data by the network
 //!   simplex method, for assignment and matching problems of thousands of
 //!   nodes.
+//! - [`root`]: roots in a bracket, by bisection and by Brent's method as R's
+//!   `uniroot`.
 //! - [`multistart`]: independent restarts of a fit, run in parallel under the
 //!   `rayon` feature, with a selection that does not depend on thread count.
 //!
 //! Each module describes its algorithm, stopping rules and defaults, and lists
-//! its references.
+//! its references. Every solver returns the crate's one [`Error`].
 #![warn(missing_docs)]
+
+mod error;
 
 pub mod bfgs;
 pub mod bounded_simplex;
@@ -34,4 +38,7 @@ pub mod frank_wolfe;
 pub mod min_cost_flow;
 pub mod multistart;
 pub mod nelder_mead;
+pub mod root;
 pub mod simplex;
+
+pub use error::Error;

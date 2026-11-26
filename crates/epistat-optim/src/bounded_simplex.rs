@@ -70,25 +70,25 @@
 //! drift. When a pivot in the elimination is below `1e-12`, the basic column at
 //! that position is replaced by a slack, the first that makes the basis
 //! factorise, and only when none does is the solve
-//! [`BoundedLpError::Singular`]. At the start of a solve and after each
+//! [`Error::Singular`]. At the start of a solve and after each
 //! refactorisation, a non-basic column whose
 //! reduced cost has the wrong sign beyond the tolerance below is flipped to its
 //! other bound, which restores dual feasibility when both bounds are finite. A
 //! slack with one infinite bound cannot flip. Its cost is shifted to make the
-//! reduced cost zero, and [`BoundedSimplex::relaxation_bound`] is raised by the
-//! shift times the largest activity the row can have, so that it stays an upper
-//! bound. A structural column in that state is [`BoundedLpError::DualInfeasible`].
+//! reduced cost zero, and the bound on the optimum is raised by the shift
+//! times the largest activity the row can have, so that it stays an upper
+//! bound. A structural column in that state is [`Error::DualInfeasible`].
 //! The shifts are of the size of the tolerance.
 //!
 //! # Degeneracy
 //!
-//! Cost perturbation ([`BoundedSimplex::perturb_costs`]) keeps ties rare.
+//! Cost perturbation (`BoundedSimplex::perturb_costs`) keeps ties rare.
 //! A step of length at most the dual tolerance is degenerate. After 20000 in a
 //! row, the leaving variable becomes the infeasible basic variable of lowest
 //! index and the entering column the candidate of lowest index among the minimum
 //! ratios, with no flips, for the rest of that solve, which cannot cycle \[4\].
 //! A solve is limited to `100 (m + n) + 1000` pivots, after which it fails with
-//! [`BoundedLpError::IterationLimit`].
+//! [`Error::IterationLimit`].
 //!
 //! # Warm starts
 //!
@@ -165,7 +165,9 @@
               bounds, an integer cost equals its rounding, and ties are exact"
 )]
 
-use std::fmt;
+use epistat_core::check;
+
+use crate::error::{Error, domain};
 use std::time::Instant;
 
 const CHUNK: usize = 4096;
@@ -190,39 +192,9 @@ const TOL_SINGULAR: f64 = 1e-12;
 /// A candidate below this absolute size cannot be a pivot.
 const TOL_PIVOT_ABS: f64 = 1e-11;
 
-/// Why a solve did not reach an optimum.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BoundedLpError {
-    /// The input is malformed, with the reason.
-    InvalidInput(String),
-    /// No point satisfies the rows and bounds.
-    Infeasible,
-    /// A non-basic column has a reduced cost that its bounds cannot absorb, so
-    /// the starting basis is not dual feasible. The program is unbounded or
-    /// infeasible. No primal phase is run.
-    DualInfeasible,
-    /// The pivot budget ran out.
-    IterationLimit,
-    /// The deadline passed.
-    TimeLimit,
-    /// The basis could not be factorised.
-    Singular,
-}
-
-impl fmt::Display for BoundedLpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidInput(why) => write!(f, "InvalidInput: {why}"),
-            Self::Infeasible => f.write_str("Infeasible"),
-            Self::DualInfeasible => f.write_str("DualInfeasible"),
-            Self::IterationLimit => f.write_str("IterationLimit"),
-            Self::TimeLimit => f.write_str("TimeLimit"),
-            Self::Singular => f.write_str("Singular"),
-        }
-    }
-}
-
-impl std::error::Error for BoundedLpError {}
+/// The error of [`BoundedSimplex`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type BoundedLpError = Error;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Status {
@@ -236,7 +208,7 @@ enum Status {
 /// A bound on the program from the duals of a basis, see
 /// [`BoundedSimplex::dual_bound`].
 #[derive(Debug, Clone)]
-pub struct DualBound {
+pub(crate) struct DualBound {
     /// An upper bound on `c'x`, with the costs as given, over every point
     /// within the current bounds, rounding error included.
     pub value: f64,
@@ -252,7 +224,7 @@ pub struct DualBound {
 
 /// A row of the simplex tableau, see [`BoundedSimplex::tableau_row`].
 #[derive(Debug, Clone)]
-pub struct TableauRow {
+pub(crate) struct TableauRow {
     /// The basic variable of the row: a structural column below `n`, the slack
     /// of row `i` as `n + i`.
     pub variable: usize,
@@ -312,7 +284,7 @@ pub struct BoundedSimplex {
     /// max(|l_j|, |u_j|)`, infinite when a column with a nonzero entry has an
     /// infinite bound.
     row_extent: Vec<f64>,
-    /// Added to [`BoundedSimplex::relaxation_bound`] for the costs of slacks
+    /// Added to `relaxation_bound` for the costs of slacks
     /// that were shifted, see [`BoundedSimplex::solve`].
     bound_margin: f64,
     lo: Vec<f64>,
@@ -382,6 +354,24 @@ where
     }
 }
 
+/// A lower bound `lo` and upper bound `hi`: neither NaN, `lo <= hi`, `lo`
+/// below infinity and `hi` above minus infinity.
+fn check_bounds(what: &'static str, lo: f64, hi: f64) -> Result<(), Error> {
+    if lo.is_nan() || hi.is_nan() || lo > hi || lo == f64::INFINITY || hi == f64::NEG_INFINITY {
+        let value = if lo.is_nan() || lo == f64::INFINITY || !hi.is_nan() {
+            lo
+        } else {
+            hi
+        };
+        return Err(domain(
+            what,
+            value,
+            "a bound pair, neither NaN, lower at most upper",
+        ));
+    }
+    Ok(())
+}
+
 impl BoundedSimplex {
     /// Builds a solver for `max c'x  s.t.  r_lo ≤ A x ≤ r_hi,  l ≤ x ≤ u`.
     ///
@@ -389,7 +379,7 @@ impl BoundedSimplex {
     /// `columns[j * m..(j + 1) * m]`. `n` is `cost.len()`.
     ///
     /// # Errors
-    /// [`BoundedLpError::InvalidInput`] for a length that does not match, a NaN
+    /// [`Error::Input`] for a length that does not match, a NaN
     /// or infinite matrix entry or cost, a NaN bound, or a lower bound above its
     /// upper bound.
     pub fn new(
@@ -400,24 +390,15 @@ impl BoundedSimplex {
         col_hi: &[f64],
         row_lo: &[f64],
         row_hi: &[f64],
-    ) -> Result<Self, BoundedLpError> {
+    ) -> Result<Self, Error> {
         let n = cost.len();
-        let bad = |why: &str| Err(BoundedLpError::InvalidInput(why.to_string()));
-        if columns.len() != n * m {
-            return bad("the matrix does not have n * m entries");
-        }
-        if col_lo.len() != n || col_hi.len() != n {
-            return bad("the column bounds do not have one entry per column");
-        }
-        if row_lo.len() != m || row_hi.len() != m {
-            return bad("the row bounds do not have one entry per row");
-        }
-        if columns.iter().any(|v| !v.is_finite()) {
-            return bad("the matrix has a non-finite entry");
-        }
-        if cost.iter().any(|v| !v.is_finite()) {
-            return bad("a cost is not finite");
-        }
+        check::same_length("columns", n.saturating_mul(m), columns.len())?;
+        check::same_length("col_lo", n, col_lo.len())?;
+        check::same_length("col_hi", n, col_hi.len())?;
+        check::same_length("row_lo", m, row_lo.len())?;
+        check::same_length("row_hi", m, row_hi.len())?;
+        check::finite("columns", columns)?;
+        check::finite("cost", cost)?;
         let mut lo = Vec::with_capacity(n + m);
         let mut hi = Vec::with_capacity(n + m);
         lo.extend_from_slice(col_lo);
@@ -425,12 +406,7 @@ impl BoundedSimplex {
         lo.extend_from_slice(row_lo);
         hi.extend_from_slice(row_hi);
         for j in 0..n + m {
-            if lo[j].is_nan() || hi[j].is_nan() {
-                return bad("a bound is NaN");
-            }
-            if lo[j] > hi[j] || lo[j] == f64::INFINITY || hi[j] == f64::NEG_INFINITY {
-                return bad("a lower bound exceeds its upper bound");
-            }
+            check_bounds(if j < n { "col_lo" } else { "row_lo" }, lo[j], hi[j])?;
         }
         let mut q = Vec::with_capacity(n + m);
         q.extend(cost.iter().map(|c| -c));
@@ -556,18 +532,12 @@ impl BoundedSimplex {
     /// the current basis.
     ///
     /// # Errors
-    /// [`BoundedLpError::InvalidInput`] for a NaN bound or `lo > hi`.
-    pub fn set_bounds(&mut self, j: usize, lo: f64, hi: f64) -> Result<(), BoundedLpError> {
+    /// [`Error::Input`] for a NaN bound or `lo > hi`.
+    pub fn set_bounds(&mut self, j: usize, lo: f64, hi: f64) -> Result<(), Error> {
         if j >= self.n {
-            return Err(BoundedLpError::InvalidInput(
-                "column index out of range".to_string(),
-            ));
+            return Err(domain("j", j as f64, "a column of the program"));
         }
-        if lo.is_nan() || hi.is_nan() || lo > hi || lo == f64::INFINITY || hi == f64::NEG_INFINITY {
-            return Err(BoundedLpError::InvalidInput(
-                "a lower bound exceeds its upper bound".to_string(),
-            ));
-        }
+        check_bounds("lo", lo, hi)?;
         self.lo[j] = lo;
         self.hi[j] = hi;
         self.tol[j] = self.bound_tol(j);
@@ -654,7 +624,7 @@ impl BoundedSimplex {
 
     /// The structural columns that are basic, with their values, in basis
     /// order. At most `m`.
-    pub fn basic_columns(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
+    pub(crate) fn basic_columns(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
         self.basis
             .iter()
             .zip(&self.xb)
@@ -676,8 +646,8 @@ impl BoundedSimplex {
     /// the optimum of the program with the costs as given and exceeds it by at
     /// most [`Self::perturbation_total`], so it is an upper bound on that
     /// optimum.
-    #[must_use]
-    pub fn relaxation_bound(&self) -> f64 {
+    #[cfg(test)]
+    fn relaxation_bound(&self) -> f64 {
         let x = self.values();
         -x.iter().zip(&self.q).map(|(v, q)| v * q).sum::<f64>() + self.bound_margin
     }
@@ -685,7 +655,7 @@ impl BoundedSimplex {
     /// The largest amount the perturbation can add to the objective,
     /// `Σ ε_j max(|l_j|, |u_j|)` over the perturbed columns.
     #[must_use]
-    pub fn perturbation_total(&self) -> f64 {
+    pub(crate) fn perturbation_total(&self) -> f64 {
         (0..self.n)
             .map(|j| {
                 self.eps[j] * finite_or(self.lo[j].abs(), 0.0).max(finite_or(self.hi[j].abs(), 0.0))
@@ -712,7 +682,7 @@ impl BoundedSimplex {
     /// for the perturbed costs. [`Self::dual_bound`] gives a bound with the costs
     /// as given that does not depend on the perturbation. Call it before the
     /// first solve.
-    pub fn perturb_costs(&mut self) {
+    pub(crate) fn perturb_costs(&mut self) {
         let n = self.n;
         let c_max = self.cost.iter().fold(0.0_f64, |a, c| a.max(c.abs()));
         let eps_max = PERTURBATION * c_max;
@@ -740,38 +710,13 @@ impl BoundedSimplex {
     /// effect. Solving again from that basis with a small fraction of the
     /// perturbation takes few pivots and gives a bound that is that fraction as
     /// far from the optimum.
-    pub fn scale_perturbation(&mut self, factor: f64) {
+    pub(crate) fn scale_perturbation(&mut self, factor: f64) {
         for j in 0..self.n {
             if self.eps[j] != 0.0 {
                 self.eps[j] *= factor;
                 self.q[j] = -(self.cost[j] + self.eps[j]);
             }
         }
-    }
-
-    /// The reduced cost of each structural column at the current basis, in the
-    /// minimisation form with the perturbed costs: 0 for a basic column, and
-    /// otherwise the amount by which the objective changes per unit the column
-    /// moves away from its bound. Meaningful after a successful solve.
-    #[must_use]
-    pub fn reduced_costs(&self) -> Vec<f64> {
-        let y = self.duals();
-        let m = self.m;
-        chunked(self.n, |start, end| {
-            (start..end)
-                .map(|j| {
-                    if self.status[j] == Status::Basic {
-                        return 0.0;
-                    }
-                    let column = &self.a[j * m..(j + 1) * m];
-                    let mut ay = 0.0;
-                    for i in 0..m {
-                        ay += column[i] * y[i];
-                    }
-                    self.q[j] - ay
-                })
-                .collect()
-        })
     }
 
     /// The bound of non-basic structural column `j`: its value when it sits at
@@ -793,7 +738,7 @@ impl BoundedSimplex {
     /// structural column and `-e_i` for the slack of row `i`. See
     /// [`TableauRow`].
     #[must_use]
-    pub fn tableau_row(&self, position: usize) -> TableauRow {
+    pub(crate) fn tableau_row(&self, position: usize) -> TableauRow {
         let (m, n) = (self.m, self.n);
         let rho = &self.binv[position * m..(position + 1) * m];
         let columns = chunked(n, |start, end| {
@@ -865,7 +810,7 @@ impl BoundedSimplex {
     /// `k` the length of the longest chain of additions (the `m + 2` terms of
     /// one reduced cost, a chunk of 4096 columns, and the chunk sums).
     #[must_use]
-    pub fn dual_bound(&self) -> DualBound {
+    pub(crate) fn dual_bound(&self) -> DualBound {
         let (m, n) = (self.m, self.n);
         let mut y = self.duals();
         for (i, yi) in y.iter_mut().enumerate() {
@@ -943,22 +888,6 @@ impl BoundedSimplex {
         }
     }
 
-    /// The activity `A x` of each row at the current point.
-    #[must_use]
-    pub fn row_activity(&self) -> Vec<f64> {
-        let x = self.values();
-        let mut out = vec![0.0; self.m];
-        for (j, &xj) in x.iter().enumerate() {
-            if xj != 0.0 {
-                let column = &self.a[j * self.m..(j + 1) * self.m];
-                for (o, c) in out.iter_mut().zip(column) {
-                    *o += c * xj;
-                }
-            }
-        }
-        out
-    }
-
     /// Column `j` of the matrix, `m` entries.
     #[must_use]
     pub fn column(&self, j: usize) -> &[f64] {
@@ -968,7 +897,7 @@ impl BoundedSimplex {
     /// The scale `1e-9`-tolerance of row `i` is built on, see the
     /// [module](self) documentation.
     #[must_use]
-    pub fn row_tolerance(&self, i: usize) -> f64 {
+    pub(crate) fn row_tolerance(&self, i: usize) -> f64 {
         self.tol[self.n + i]
     }
 
@@ -993,12 +922,12 @@ impl BoundedSimplex {
     /// that makes it factorise takes that position, and the column leaves at the
     /// bound nearer its value. This happens when rounding over many updates of
     /// `B^{-1}` let a nearly dependent column in.
-    fn refactor(&mut self) -> Result<(), BoundedLpError> {
+    fn refactor(&mut self) -> Result<(), Error> {
         let (m, n) = (self.m, self.n);
         let mut repairs = 0;
         while let Err(position) = self.factorise() {
             if repairs >= m {
-                return Err(BoundedLpError::Singular);
+                return Err(Error::Singular);
             }
             repairs += 1;
             let out = self.basis[position];
@@ -1027,7 +956,7 @@ impl BoundedSimplex {
             }
             if !repaired {
                 self.basis[position] = out;
-                return Err(BoundedLpError::Singular);
+                return Err(Error::Singular);
             }
         }
         self.since_refactor = 0;
@@ -1168,7 +1097,7 @@ impl BoundedSimplex {
 
     /// Flip every non-basic variable whose reduced cost has the wrong sign
     /// beyond the dual tolerance to its other bound.
-    fn restore_dual_feasibility(&mut self) -> Result<(), BoundedLpError> {
+    fn restore_dual_feasibility(&mut self) -> Result<(), Error> {
         let m = self.m;
         let n = self.n;
         let y = self.duals();
@@ -1218,12 +1147,12 @@ impl BoundedSimplex {
                         f64::INFINITY
                     };
                     if !reach.is_finite() {
-                        return Err(BoundedLpError::DualInfeasible);
+                        return Err(Error::DualInfeasible);
                     }
                     let d = if j >= n {
                         self.q[j] + y[j - n]
                     } else {
-                        return Err(BoundedLpError::DualInfeasible);
+                        return Err(Error::DualInfeasible);
                     };
                     self.q[j] -= d;
                     self.bound_margin += d.abs() * reach;
@@ -1385,9 +1314,9 @@ impl BoundedSimplex {
     /// is checked once per pivot.
     ///
     /// # Errors
-    /// See [`BoundedLpError`]. After `Infeasible` the basis is dual feasible
+    /// See [`Error`]. After `Infeasible` the basis is dual feasible
     /// and can be reused after the bounds change back.
-    pub fn solve(&mut self, deadline: Option<Instant>) -> Result<(), BoundedLpError> {
+    pub fn solve(&mut self, deadline: Option<Instant>) -> Result<(), Error> {
         let limit = 100 * (self.m + self.n) + 1000;
         self.solve_within(deadline, limit)
     }
@@ -1395,14 +1324,14 @@ impl BoundedSimplex {
     /// [`Self::solve`] with at most `limit` pivots.
     ///
     /// # Errors
-    /// As [`Self::solve`], with [`BoundedLpError::IterationLimit`] after `limit`
+    /// As [`Self::solve`], with [`Error::IterationLimit`] after `limit`
     /// pivots. The basis is then dual feasible but not primal feasible, and
     /// [`Self::dual_bound`] is still a valid bound.
-    pub fn solve_within(
+    pub(crate) fn solve_within(
         &mut self,
         deadline: Option<Instant>,
         limit: usize,
-    ) -> Result<(), BoundedLpError> {
+    ) -> Result<(), Error> {
         let (m, n) = (self.m, self.n);
         if self.since_refactor >= REFACTOR_EVERY {
             self.refactor()?;
@@ -1417,7 +1346,7 @@ impl BoundedSimplex {
         let mut a_q = vec![0.0; m];
         loop {
             if deadline.is_some_and(|d| Instant::now() >= d) {
-                return Err(BoundedLpError::TimeLimit);
+                return Err(Error::TimeLimit);
             }
             if self.since_refactor >= REFACTOR_EVERY {
                 self.refactor()?;
@@ -1456,7 +1385,7 @@ impl BoundedSimplex {
             pivots += 1;
             self.iterations += 1;
             if pivots > limit {
-                return Err(BoundedLpError::IterationLimit);
+                return Err(Error::IterationLimit);
             }
             let p = self.basis[r];
             let increase = self.xb[r] < self.lo[p];
@@ -1473,7 +1402,7 @@ impl BoundedSimplex {
                     self.refactor()?;
                     continue;
                 }
-                return Err(BoundedLpError::Infeasible);
+                return Err(Error::Infeasible);
             }
 
             let entering = if bland {
@@ -1483,7 +1412,7 @@ impl BoundedSimplex {
                     .filter(|c| c.ratio <= min_ratio + self.dual_tol * 1e-3)
                     .min_by_key(|c| c.j);
                 let Some(&c) = lowest else {
-                    return Err(BoundedLpError::Infeasible);
+                    return Err(Error::Infeasible);
                 };
                 c
             } else {
@@ -1492,7 +1421,7 @@ impl BoundedSimplex {
                         self.refactor()?;
                         continue;
                     }
-                    return Err(BoundedLpError::Infeasible);
+                    return Err(Error::Infeasible);
                 };
                 // Harris's rule: no candidate that is not flipped may end with a
                 // reduced cost more than the dual tolerance on the wrong side, so
@@ -1584,7 +1513,7 @@ impl BoundedSimplex {
                     self.restore_dual_feasibility()?;
                     continue;
                 }
-                return Err(BoundedLpError::Singular);
+                return Err(Error::Singular);
             }
             let x_q0 = self.nonbasic_value(q);
             let delta_q = (self.xb[r] - target) / alpha_r;
@@ -1758,17 +1687,17 @@ mod tests {
             &[INF],
         )
         .unwrap();
-        assert_eq!(lp.solve(None), Err(BoundedLpError::Infeasible));
+        assert_eq!(lp.solve(None), Err(Error::Infeasible));
     }
 
     #[test]
     fn invalid_input_is_an_error() {
         let bad = BoundedSimplex::new(1, &[1.0], &[1.0], &[1.0], &[0.0], &[0.0], &[1.0]);
-        assert!(matches!(bad, Err(BoundedLpError::InvalidInput(_))));
+        assert!(matches!(bad, Err(Error::Input(_))));
         let bad = BoundedSimplex::new(1, &[f64::NAN], &[1.0], &[0.0], &[1.0], &[0.0], &[1.0]);
-        assert!(matches!(bad, Err(BoundedLpError::InvalidInput(_))));
+        assert!(matches!(bad, Err(Error::Input(_))));
         let bad = BoundedSimplex::new(1, &[1.0, 1.0], &[1.0], &[0.0], &[1.0], &[0.0], &[1.0]);
-        assert!(matches!(bad, Err(BoundedLpError::InvalidInput(_))));
+        assert!(matches!(bad, Err(Error::Input(_))));
     }
 
     /// Compare with the primal simplex of this crate on random equality

@@ -514,12 +514,14 @@ impl Within {
         let reduced_ref = reduced.as_ref().map_or(x_tilde, Mat::as_ref);
 
         // Least squares on the deviations through the normal equations.
-        let gram = weighted_gram(reduced_ref, w)?;
+        let gram = weighted_gram(reduced_ref, w).map_err(GlmError::Design)?;
         let inverse = Factor::new(gram.as_ref(), &Attempt::SYMMETRIC)?
             .solve(Mat::<f64>::identity(rank, rank).as_ref())?;
         let solution = epistat_linalg::solve(
             gram.as_ref(),
-            weighted_xtz(reduced_ref, w, y_tilde)?.as_ref(),
+            weighted_xtz(reduced_ref, w, y_tilde)
+                .map_err(GlmError::Design)?
+                .as_ref(),
             &Attempt::SYMMETRIC,
         )?;
         let mut fitted = vec![0.0; n];

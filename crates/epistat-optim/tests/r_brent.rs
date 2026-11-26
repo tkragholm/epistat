@@ -1,4 +1,4 @@
-//! `brent::minimise` against R's `optimize` (`tests/data/brent.R`): the same
+//! `brent::minimize` against R's `optimize` (`tests/data/brent.R`): the same
 //! number of points is evaluated, in the same order, and the same minimum is
 //! returned. `optimize` evaluates the function once more at the minimum to
 //! report its value, so its list has one point more than the search's.
@@ -18,7 +18,7 @@
     reason = "R's values as R printed them, with 17 significant digits"
 )]
 
-use epistat_optim::brent::minimise;
+use epistat_optim::brent::minimize;
 
 type Case = (&'static str, f64, f64, f64, f64, &'static [f64]);
 
@@ -185,7 +185,7 @@ fn points_and_minimum_equal_optimize() {
     let eps = f64::EPSILON.sqrt();
     for &(name, lower, upper, tol, minimum, points) in CASES {
         let mut seen = Vec::new();
-        let m = minimise(
+        let m = minimize(
             |x| {
                 seen.push(x);
                 function(name, x)
@@ -197,7 +197,8 @@ fn points_and_minimum_equal_optimize() {
         .unwrap();
         let search = &points[..points.len() - 1];
         assert_eq!(seen.len(), search.len(), "{name}: evaluations");
-        assert_eq!(m.evaluations as usize, search.len(), "{name}: count");
+        assert_eq!(m.evaluations, search.len(), "{name}: count");
+        assert_eq!(m.iterations + 1, m.evaluations, "{name}: iterations");
         for (k, (&got, &want)) in seen.iter().zip(search).enumerate() {
             let tol1 = eps * got.abs().max(want.abs()) + tol / 3.0;
             assert!(

@@ -76,37 +76,9 @@
 //!    doi:10.1257/aer.20190159. R package `synthdid` 0.0.9, functions
 //!    `fw.step` and `sc.weight.fw`.
 
-use std::fmt;
+use epistat_core::check;
 
-/// Why a problem or a start was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrankWolfeError {
-    /// `A` does not have `rows × cols` entries, `b` does not have `rows`, or
-    /// the start does not have `cols`.
-    Dimension,
-    /// `A` has no columns or no rows.
-    Empty,
-    /// An entry of `A`, `b` or the start is not finite, or `eta` is negative
-    /// or not finite.
-    NotFinite,
-    /// The start is not on the simplex: a negative entry, or a sum further
-    /// than `1e-8` from 1.
-    NotOnSimplex,
-}
-
-impl fmt::Display for FrankWolfeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::Dimension => "the matrix, the target and the start do not have matching sizes",
-            Self::Empty => "the matrix has no rows or no columns",
-            Self::NotFinite => "the data must be finite and the penalty finite and non-negative",
-            Self::NotOnSimplex => "the start must be non-negative and sum to one",
-        };
-        f.write_str(message)
-    }
-}
-
-impl std::error::Error for FrankWolfeError {}
+use crate::error::{Error, domain};
 
 /// When [`SimplexLeastSquares::solve`] stops.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -157,24 +129,25 @@ impl<'a> SimplexLeastSquares<'a> {
     ///
     /// # Errors
     ///
-    /// [`FrankWolfeError::Dimension`], [`FrankWolfeError::Empty`] or
-    /// [`FrankWolfeError::NotFinite`].
+    /// [`Error::Input`] when `A` has no rows or columns, `a` or `b` has the
+    /// wrong length, an entry is not finite, or `eta` is negative or not
+    /// finite.
     pub fn new(
         a: &'a [f64],
         rows: usize,
         cols: usize,
         b: &'a [f64],
         eta: f64,
-    ) -> Result<Self, FrankWolfeError> {
-        if rows == 0 || cols == 0 {
-            return Err(FrankWolfeError::Empty);
+    ) -> Result<Self, Error> {
+        check::non_empty("rows", rows)?;
+        check::non_empty("cols", cols)?;
+        check::same_length("a", rows.saturating_mul(cols), a.len())?;
+        check::same_length("b", rows, b.len())?;
+        if !(eta.is_finite() && eta >= 0.0) {
+            return Err(domain("eta", eta, "[0, inf)"));
         }
-        if rows.checked_mul(cols) != Some(a.len()) || b.len() != rows {
-            return Err(FrankWolfeError::Dimension);
-        }
-        if !(eta.is_finite() && eta >= 0.0) || a.iter().chain(b).any(|value| !value.is_finite()) {
-            return Err(FrankWolfeError::NotFinite);
-        }
+        check::finite("a", a)?;
+        check::finite("b", b)?;
         Ok(Self {
             a,
             b,
@@ -204,18 +177,18 @@ impl<'a> SimplexLeastSquares<'a> {
     ///
     /// # Errors
     ///
-    /// [`FrankWolfeError::Dimension`], [`FrankWolfeError::NotFinite`] or
-    /// [`FrankWolfeError::NotOnSimplex`].
-    pub fn start(&self, x: Vec<f64>) -> Result<FrankWolfeState, FrankWolfeError> {
-        if x.len() != self.cols {
-            return Err(FrankWolfeError::Dimension);
-        }
-        if x.iter().any(|value| !value.is_finite()) {
-            return Err(FrankWolfeError::NotFinite);
+    /// [`Error::Input`] when `x` has the wrong length, an entry that is not
+    /// finite, or is not on the simplex: a negative entry, or a sum further
+    /// than `1e-8` from 1.
+    pub fn start(&self, x: Vec<f64>) -> Result<FrankWolfeState, Error> {
+        check::same_length("x", self.cols, x.len())?;
+        check::finite("x", &x)?;
+        if let Some(&negative) = x.iter().find(|&&value| value < 0.0) {
+            return Err(domain("x", negative, "[0, inf)"));
         }
         let total: f64 = x.iter().sum();
-        if x.iter().any(|&value| value < 0.0) || (total - 1.0).abs() > 1e-8 {
-            return Err(FrankWolfeError::NotOnSimplex);
+        if (total - 1.0).abs() > 1e-8 {
+            return Err(domain("sum of x", total, "within 1e-8 of 1"));
         }
         let mut ax = vec![0.0; self.rows];
         for (j, &xj) in x.iter().enumerate() {
@@ -310,7 +283,7 @@ impl<'a> SimplexLeastSquares<'a> {
         &self,
         x0: Vec<f64>,
         options: FrankWolfeOptions,
-    ) -> Result<FrankWolfeSolution, FrankWolfeError> {
+    ) -> Result<FrankWolfeSolution, Error> {
         let mut state = self.start(x0)?;
         let mut values = Vec::with_capacity(options.max_iter.min(1 << 14));
         let mut converged = false;
@@ -368,6 +341,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     /// Two columns, so the minimiser on the segment is a parabola's vertex.
     #[test]
@@ -408,16 +382,28 @@ mod tests {
         let b = [1.0];
         assert_eq!(
             SimplexLeastSquares::new(&a, 1, 3, &b, 0.0).unwrap_err(),
-            FrankWolfeError::Dimension
+            Error::Input(InputError::Length {
+                what: "a",
+                expected: 3,
+                found: 2
+            })
         );
         assert_eq!(
             SimplexLeastSquares::new(&a, 1, 2, &b, -1.0).unwrap_err(),
-            FrankWolfeError::NotFinite
+            Error::Input(InputError::Domain {
+                what: "eta",
+                value: -1.0,
+                domain: "[0, inf)"
+            })
         );
         let problem = SimplexLeastSquares::new(&a, 1, 2, &b, 0.0).unwrap();
         assert_eq!(
             problem.start(vec![0.6, 0.6]).unwrap_err(),
-            FrankWolfeError::NotOnSimplex
+            Error::Input(InputError::Domain {
+                what: "sum of x",
+                value: 1.2,
+                domain: "within 1e-8 of 1"
+            })
         );
     }
 }

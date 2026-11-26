@@ -43,7 +43,7 @@
 //! fitted probabilities, residual deviance and the standard errors of
 //! `summary()`.
 
-use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, SolveError};
+use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method};
 use rayon::prelude::*;
 
 /// Fitting controls for the multinomial logit.
@@ -121,7 +121,7 @@ pub enum MultinomError {
     Tolerance,
     /// A linear solve failed.
     #[error(transparent)]
-    Solve(#[from] SolveError),
+    Solve(#[from] epistat_linalg::Error),
 }
 
 /// A fitted multinomial logit.

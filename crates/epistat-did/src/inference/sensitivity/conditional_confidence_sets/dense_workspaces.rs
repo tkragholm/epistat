@@ -444,7 +444,7 @@ mod tests {
                 // both solvers must then say so.
                 let Some(reference) = solve_arp_with_clarabel(&x_matrix, &sigma, &y_vec) else {
                     let error = workspace.solve_in_place(&y_vec).unwrap_err();
-                    assert!(error.contains("Infeasible"), "{error}");
+                    assert!(error.contains("no feasible point"), "{error}");
                     continue;
                 };
                 workspace.solve_in_place(&y_vec).unwrap();

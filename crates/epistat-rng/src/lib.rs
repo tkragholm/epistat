@@ -45,6 +45,9 @@
 //! which is `splitmix64(base ^ (r * γ))`, so the draws of a replicate depend
 //! only on the base seed and `r`, not on which thread runs it or in what
 //! order, and a caller that loops replicates itself gets the same streams.
+//! [`replicate_seeds`] lists the seeds of a [`Bootstrap`], and a seed below the
+//! replicate level is [`derive()`]`(base, &[replicate, index])`, the replicate
+//! seed applied once per level.
 //!
 //! # Derived draws
 //!
@@ -125,8 +128,14 @@
 #![warn(missing_docs)]
 
 mod draws;
+mod error;
 
-pub use draws::DrawError;
+use epistat_core::Bootstrap;
+pub use error::Error;
+
+/// The error of the draws that take parameters, under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_rng::Error`")]
+pub type DrawError = Error;
 
 /// The Weyl increment of `SplitMix64`: the odd integer nearest `2^64` divided by
 /// the golden ratio.
@@ -153,6 +162,35 @@ pub const fn splitmix64(value: u64) -> u64 {
 #[must_use]
 pub const fn replicate_seed(base: u64, replicate: u64) -> u64 {
     splitmix64(base ^ replicate.wrapping_mul(GAMMA))
+}
+
+/// The seed at the end of `path`: [`replicate_seed`] folded over the path from
+/// `base`, so `derive(s, &[a, b])` is `replicate_seed(replicate_seed(s, a), b)`
+/// and `derive(s, &[])` is `s`.
+///
+/// This is the rule for a seed below the replicate level, such as the
+/// candidate `b` of generation `a` of a genetic search, or the cell `b` of
+/// replicate `a`. Each level gets its own stream, and the seeds do not depend
+/// on the order in which the levels are visited.
+#[must_use]
+pub const fn derive(base: u64, path: &[u64]) -> u64 {
+    let mut seed = base;
+    let mut i = 0;
+    while i < path.len() {
+        seed = replicate_seed(seed, path[i]);
+        i += 1;
+    }
+    seed
+}
+
+/// The seeds of the replicates of `bootstrap`: `replicate_seed(seed, r)` for
+/// `r` from 0 to `replicates - 1`, the seeds a bootstrap with these settings
+/// draws from.
+#[must_use]
+pub fn replicate_seeds(bootstrap: Bootstrap) -> Vec<u64> {
+    (0..bootstrap.replicates as u64)
+        .map(|replicate| replicate_seed(bootstrap.seed, replicate))
+        .collect()
 }
 
 /// A hash of `bytes` that is the same in every build and on every platform:
@@ -422,6 +460,28 @@ mod tests {
             0.883_310_808_213_642_6_f64.to_bits()
         );
         assert_eq!(replicate_seed(1, 2), 0xF893_A2EE_FB32_555E);
+    }
+
+    #[test]
+    fn derive_folds_the_replicate_seed_over_the_path() {
+        const AT_COMPILE_TIME: u64 = derive(1, &[2]);
+        assert_eq!(derive(7, &[]), 7);
+        assert_eq!(derive(7, &[3]), replicate_seed(7, 3));
+        assert_eq!(
+            derive(7, &[3, 11]),
+            replicate_seed(replicate_seed(7, 3), 11)
+        );
+        assert_eq!(AT_COMPILE_TIME, 0xF893_A2EE_FB32_555E);
+    }
+
+    #[test]
+    fn replicate_seeds_are_the_seeds_of_each_replicate() {
+        let seeds = replicate_seeds(Bootstrap::new(5, 42));
+        assert_eq!(seeds.len(), 5);
+        for (r, &seed) in seeds.iter().enumerate() {
+            assert_eq!(seed, replicate_seed(42, r as u64));
+        }
+        assert_eq!(replicate_seeds(Bootstrap::new(0, 42)), Vec::<u64>::new());
     }
 
     #[test]

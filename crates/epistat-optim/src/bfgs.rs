@@ -27,7 +27,7 @@
 //!
 //! When `y's <= 0` the update is skipped and `H` is kept, so `H` stays positive
 //! definite as long as it started so \[2\]. If `d` is not a descent direction,
-//! `g'd >= 0`, the search fails with [`BfgsError::NotDescent`]. This can
+//! `g'd >= 0`, the search fails with [`Error::NotDescent`]. This can
 //! happen when an inverse Hessian passed by the caller is not positive
 //! definite.
 //!
@@ -160,7 +160,9 @@
 //! 3. Fletcher R. Practical Methods of Optimization. 2nd ed. Chichester: Wiley;
 //!    1987. Chapter 3.
 
-use std::fmt;
+use epistat_core::check;
+
+use crate::error::{Error, domain};
 
 /// The Moré-Thuente line search: finds a step that satisfies the strong
 /// Wolfe conditions `f(x + a d) <= f(x) + c1 a g'd` and
@@ -226,6 +228,7 @@ impl Default for Bfgs {
 }
 
 /// The best point found.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Minimum {
     /// The point.
@@ -236,33 +239,16 @@ pub struct Minimum {
     pub gradient: Vec<f64>,
     /// The number of iterations used.
     pub iterations: usize,
+    /// The number of evaluations of the cost and gradient, the line searches'
+    /// included.
+    pub evaluations: usize,
     /// Whether a tolerance was met before the iteration limit.
     pub converged: bool,
 }
 
-/// The ways a minimisation can refuse its input or fail.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BfgsError {
-    /// The starting point is empty, or the gradient or inverse Hessian has the
-    /// wrong length.
-    Shape,
-    /// The cost or gradient is not finite at the starting point.
-    NotFinite,
-    /// A search direction is not a descent direction.
-    NotDescent,
-}
-
-impl fmt::Display for BfgsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Shape => "the starting point, gradient or inverse Hessian has the wrong length",
-            Self::NotFinite => "the cost or gradient is not finite at the starting point",
-            Self::NotDescent => "the search direction is not a descent direction",
-        })
-    }
-}
-
-impl std::error::Error for BfgsError {}
+/// The error of [`Bfgs::minimize`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type BfgsError = Error;
 
 impl Bfgs {
     /// Minimises `f`, which returns the cost and the gradient at a point,
@@ -274,31 +260,52 @@ impl Bfgs {
     ///
     /// # Errors
     ///
-    /// See [`BfgsError`].
+    /// [`Error::Input`] for an empty start, an inverse Hessian or gradient of
+    /// the wrong length, a cost or gradient that is not finite at the start,
+    /// or a line search with no evaluations; [`Error::NotDescent`] when a
+    /// direction does not descend.
     pub fn minimize(
         &self,
         x0: &[f64],
         mut f: impl FnMut(&[f64]) -> (f64, Vec<f64>),
         inverse_hessian: Option<Vec<f64>>,
-    ) -> Result<Minimum, BfgsError> {
+    ) -> Result<Minimum, Error> {
+        let mut evaluations = 0;
+        let mut minimum = self.search_from(
+            x0,
+            |x| {
+                evaluations += 1;
+                f(x)
+            },
+            inverse_hessian,
+        )?;
+        minimum.evaluations = evaluations;
+        Ok(minimum)
+    }
+
+    fn search_from(
+        &self,
+        x0: &[f64],
+        mut f: impl FnMut(&[f64]) -> (f64, Vec<f64>),
+        inverse_hessian: Option<Vec<f64>>,
+    ) -> Result<Minimum, Error> {
         let n = x0.len();
         let mut h = inverse_hessian.unwrap_or_else(|| identity(n));
-        if n == 0 || h.len() != n * n {
-            return Err(BfgsError::Shape);
-        }
+        check::non_empty("x0", n)?;
+        check::same_length("inverse_hessian", n * n, h.len())?;
         let mut x = x0.to_vec();
         let (mut cost, mut grad) = f(&x);
-        if grad.len() != n {
-            return Err(BfgsError::Shape);
+        check::same_length("gradient", n, grad.len())?;
+        if !cost.is_finite() {
+            return Err(domain("cost at x0", cost, "finite"));
         }
-        if !cost.is_finite() || grad.iter().any(|g| !g.is_finite()) {
-            return Err(BfgsError::NotFinite);
-        }
+        check::finite("gradient at x0", &grad)?;
         let mut best = Minimum {
             x: x.clone(),
             value: cost,
             gradient: grad.clone(),
             iterations: 0,
+            evaluations: 0,
             converged: false,
         };
         for iteration in 1..=self.max_iterations {
@@ -347,6 +354,7 @@ impl Bfgs {
                 value: cost,
                 gradient: grad.clone(),
                 iterations: iteration,
+                evaluations: 0,
                 converged: false,
             };
             if (previous - cost).abs() < self.cost_tolerance {
@@ -412,10 +420,10 @@ impl MoreThuente {
         gradient: &[f64],
         direction: &[f64],
         f: &mut impl FnMut(&[f64]) -> (f64, Vec<f64>),
-    ) -> Result<Point, BfgsError> {
+    ) -> Result<Point, Error> {
         let slope0 = dot(gradient, direction);
         if slope0 >= 0.0 {
-            return Err(BfgsError::NotDescent);
+            return Err(Error::NotDescent);
         }
         let test = self.c1 * slope0;
         let mut width = self.step_max - self.step_min;
@@ -513,7 +521,7 @@ impl MoreThuente {
                 width = (upper.step - lower.step).abs();
             }
         }
-        last.ok_or(BfgsError::Shape)
+        last.ok_or_else(|| domain("max_evaluations", 0.0, "[1, inf)"))
     }
 }
 
@@ -665,6 +673,7 @@ fn norm(a: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     fn rosenbrock(p: &[f64]) -> (f64, Vec<f64>) {
         let (x, y) = (p[0], p[1]);
@@ -711,6 +720,26 @@ mod tests {
             "{:?}",
             minimum.x
         );
+    }
+
+    #[test]
+    fn evaluations_count_every_call() {
+        let mut calls = 0;
+        let minimum = Bfgs {
+            max_iterations: 200,
+            ..Bfgs::default()
+        }
+        .minimize(
+            &[-1.2, 1.0],
+            |p| {
+                calls += 1;
+                rosenbrock(p)
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(minimum.evaluations, calls);
+        assert!(minimum.evaluations > minimum.iterations);
     }
 
     #[test]
@@ -762,26 +791,33 @@ mod tests {
         let f = |p: &[f64]| (p[0], vec![1.0]);
         assert_eq!(
             Bfgs::default().minimize(&[], f, None).unwrap_err(),
-            BfgsError::Shape
+            Error::Input(InputError::Empty { what: "x0" })
         );
         assert_eq!(
             Bfgs::default()
                 .minimize(&[1.0], f, Some(vec![1.0, 0.0]))
                 .unwrap_err(),
-            BfgsError::Shape
+            Error::Input(InputError::Length {
+                what: "inverse_hessian",
+                expected: 1,
+                found: 2
+            })
         );
         let nan = |_: &[f64]| (f64::NAN, vec![0.0]);
-        assert_eq!(
+        assert!(matches!(
             Bfgs::default().minimize(&[1.0], nan, None).unwrap_err(),
-            BfgsError::NotFinite
-        );
+            Error::Input(InputError::Domain {
+                what: "cost at x0",
+                ..
+            })
+        ));
         // A negative definite starting inverse Hessian points uphill.
         let g = |p: &[f64]| (p[0] * p[0], vec![2.0 * p[0]]);
         assert_eq!(
             Bfgs::default()
                 .minimize(&[1.0], g, Some(vec![-1.0]))
                 .unwrap_err(),
-            BfgsError::NotDescent
+            Error::NotDescent
         );
     }
 }

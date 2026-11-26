@@ -37,7 +37,7 @@
 //!    - If the contraction is not accepted, the simplex shrinks: every vertex but
 //!      the best moves to `x_i = x_0 + σ (x_i - x_0)` and is evaluated again.
 //! 4. Otherwise `f_r` cannot be ordered, as when it is NaN, and the search fails
-//!    with [`NelderMeadError::Unordered`].
+//!    with [`Error::Unordered`].
 //!
 //! The vertices are sorted again after every step. The sort treats NaN costs of
 //! the starting vertices as equal to every other value.
@@ -69,7 +69,9 @@
 //!    Nelder-Mead simplex method in low dimensions. SIAM J Optim.
 //!    1998;9(1):112-47. doi:10.1137/S1052623496303470
 
-use std::fmt;
+use epistat_core::check;
+
+use crate::Error;
 
 /// Settings for the Nelder-Mead method.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +105,7 @@ impl Default for NelderMead {
 }
 
 /// Result of a minimisation.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Minimum {
     /// Best point found.
@@ -111,49 +114,17 @@ pub struct Minimum {
     pub value: f64,
     /// Number of iterations performed.
     pub iterations: usize,
+    /// Number of evaluations of the objective, the starting vertices
+    /// included.
+    pub evaluations: usize,
     /// True if the standard deviation criterion was met, false if the
     /// iteration cap stopped the search.
     pub converged: bool,
 }
 
-/// Errors from [`NelderMead::minimize`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NelderMeadError {
-    /// The simplex has no vertices, or its vertices have no coordinates.
-    EmptySimplex,
-    /// The vertices do not all have the same length.
-    RaggedSimplex,
-    /// The number of vertices is not the dimension plus one.
-    WrongVertexCount {
-        /// Number of vertices supplied.
-        vertices: usize,
-        /// Dimension of the vertices.
-        dimension: usize,
-    },
-    /// A trial point had an objective value that cannot be ordered, such as
-    /// NaN.
-    Unordered,
-}
-
-impl fmt::Display for NelderMeadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptySimplex => write!(f, "the simplex is empty"),
-            Self::RaggedSimplex => write!(f, "the simplex vertices differ in length"),
-            Self::WrongVertexCount {
-                vertices,
-                dimension,
-            } => write!(
-                f,
-                "a simplex in {dimension} dimensions needs {} vertices, got {vertices}",
-                dimension + 1
-            ),
-            Self::Unordered => write!(f, "the objective returned a value that cannot be ordered"),
-        }
-    }
-}
-
-impl std::error::Error for NelderMeadError {}
+/// The error of [`NelderMead::minimize`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type NelderMeadError = Error;
 
 struct Vertex {
     x: Vec<f64>,
@@ -215,20 +186,27 @@ impl NelderMead {
         &self,
         simplex: Vec<Vec<f64>>,
         mut f: impl FnMut(&[f64]) -> f64,
-    ) -> Result<Minimum, NelderMeadError> {
+    ) -> Result<Minimum, Error> {
+        let mut evaluations = 0;
+        let mut minimum = self.search_from(simplex, |x| {
+            evaluations += 1;
+            f(x)
+        })?;
+        minimum.evaluations = evaluations;
+        Ok(minimum)
+    }
+
+    fn search_from(
+        &self,
+        simplex: Vec<Vec<f64>>,
+        mut f: impl FnMut(&[f64]) -> f64,
+    ) -> Result<Minimum, Error> {
         let dimension = simplex.first().map_or(0, Vec::len);
-        if dimension == 0 {
-            return Err(NelderMeadError::EmptySimplex);
+        check::non_empty("simplex", dimension)?;
+        for vertex in &simplex {
+            check::same_length("vertex", dimension, vertex.len())?;
         }
-        if simplex.iter().any(|v| v.len() != dimension) {
-            return Err(NelderMeadError::RaggedSimplex);
-        }
-        if simplex.len() != dimension + 1 {
-            return Err(NelderMeadError::WrongVertexCount {
-                vertices: simplex.len(),
-                dimension,
-            });
-        }
+        check::same_length("simplex", dimension + 1, simplex.len())?;
 
         let mut vertices: Vec<Vertex> = simplex
             .into_iter()
@@ -265,6 +243,7 @@ impl NelderMead {
             x: best.x,
             value: best.cost,
             iterations,
+            evaluations: 0,
             converged,
         })
     }
@@ -275,7 +254,7 @@ impl NelderMead {
         &self,
         vertices: &mut [Vertex],
         f: &mut impl FnMut(&[f64]) -> f64,
-    ) -> Result<(), NelderMeadError> {
+    ) -> Result<(), Error> {
         // Centroid of every vertex but the worst.
         let last = vertices.len() - 1;
         let scale = 1.0 / (last as f64);
@@ -348,7 +327,7 @@ impl NelderMead {
                 }
             }
         } else {
-            return Err(NelderMeadError::Unordered);
+            return Err(Error::Unordered);
         }
         Ok(())
     }
@@ -357,6 +336,7 @@ impl NelderMead {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     fn rosenbrock(p: &[f64]) -> f64 {
         let (x, y) = (p[0], p[1]);
@@ -409,31 +389,41 @@ mod tests {
             ..NelderMead::default()
         };
         let simplex = vec![vec![-1.2, 1.0], vec![-1.0, 1.0], vec![-1.2, 1.2]];
-        let m = nm.minimize(simplex, rosenbrock).unwrap();
+        let mut calls = 0;
+        let m = nm
+            .minimize(simplex, |p| {
+                calls += 1;
+                rosenbrock(p)
+            })
+            .unwrap();
         assert!(!m.converged);
         assert_eq!(m.iterations, 3);
+        assert_eq!(m.evaluations, calls);
+        assert!(m.evaluations >= 3 + 3);
     }
 
     #[test]
     fn rejects_bad_simplices() {
         let nm = NelderMead::default();
         let f = |p: &[f64]| p[0];
-        assert_eq!(nm.minimize(vec![], f), Err(NelderMeadError::EmptySimplex));
-        assert_eq!(
-            nm.minimize(vec![vec![], vec![]], f),
-            Err(NelderMeadError::EmptySimplex)
-        );
+        let empty = Err(Error::Input(InputError::Empty { what: "simplex" }));
+        assert_eq!(nm.minimize(vec![], f), empty);
+        assert_eq!(nm.minimize(vec![vec![], vec![]], f), empty);
         assert_eq!(
             nm.minimize(vec![vec![0.0, 1.0], vec![1.0], vec![2.0, 2.0]], f),
-            Err(NelderMeadError::RaggedSimplex)
+            Err(Error::Input(InputError::Length {
+                what: "vertex",
+                expected: 2,
+                found: 1
+            }))
         );
         assert_eq!(
             nm.minimize(vec![vec![0.0, 1.0], vec![1.0, 0.0]], f),
-            Err(NelderMeadError::WrongVertexCount {
-                vertices: 2,
-                dimension: 2
-            })
+            Err(Error::Input(InputError::Length {
+                what: "simplex",
+                expected: 3,
+                found: 2
+            }))
         );
-        assert!(NelderMeadError::EmptySimplex.to_string().contains("empty"));
     }
 }

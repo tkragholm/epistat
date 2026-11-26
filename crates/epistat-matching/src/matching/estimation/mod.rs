@@ -353,7 +353,7 @@ pub enum EstimationError {
     /// The optimiser of a covariate balancing propensity score could not start:
     /// the objective is not finite at the start, or a direction does not
     /// descend.
-    CbpsFitFailed(epistat_optim::bfgs::BfgsError),
+    CbpsFitFailed(epistat_optim::Error),
     /// A linear system in the fit could not be solved.
     LinearSystemSolveFailed,
     /// The covariance matrix is not usable.

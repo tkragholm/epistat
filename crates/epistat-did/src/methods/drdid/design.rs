@@ -30,7 +30,8 @@
 use epistat_linalg::MatRef;
 
 use crate::types::DrDidError;
-use epistat_linalg::DesignError;
+use epistat_core::InputError;
+use epistat_linalg::Error as LinalgError;
 
 /// The rows on which a design column has to be identified to be kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,14 +150,24 @@ pub(super) fn prune_design(
         tolerance,
     )
     .map_err(|error| match error {
-        DesignError::Weight { row } => DrDidError::InvalidWeight {
+        LinalgError::Input(InputError::NotFinite {
+            what: "weights",
+            row,
+        }) => DrDidError::InvalidWeight {
             value: weights[row],
         },
-        DesignError::Length { expected, got, .. } => DrDidError::InconsistentCovariateCount {
+        LinalgError::Input(InputError::Domain {
+            what: "weights",
+            value,
+            ..
+        }) => DrDidError::InvalidWeight { value },
+        LinalgError::Input(InputError::Length {
+            expected, found, ..
+        }) => DrDidError::InconsistentCovariateCount {
             expected,
-            actual: got,
+            actual: found,
         },
-        other @ DesignError::Tolerance => DrDidError::InvalidConfig(other.to_string()),
+        other => DrDidError::InvalidConfig(other.to_string()),
     })?;
     let kept: Vec<usize> = (0..feature_count).filter(|&c| kept_flags[c]).collect();
 

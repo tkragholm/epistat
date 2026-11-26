@@ -133,7 +133,7 @@ pub enum ImputeError {
     Multinom(#[from] MultinomError),
     /// A random draw was out of range.
     #[error(transparent)]
-    Draw(#[from] epistat_rng::DrawError),
+    Draw(#[from] epistat_rng::Error),
     /// The estimates could not be pooled.
     #[error(transparent)]
     Pooling(#[from] InferenceError),

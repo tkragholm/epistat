@@ -57,7 +57,9 @@
 
 use epistat_stats::quantile::type7;
 
-use super::KnotError;
+use epistat_core::check;
+
+use crate::Error;
 
 /// R's `seq(from, to, length.out = n)`: the first and last values are exact.
 fn seq(from: f64, to: f64, n: usize) -> Vec<f64> {
@@ -85,17 +87,17 @@ fn sorted_unique(sorted: &[f64]) -> Vec<f64> {
     out
 }
 
-fn quantiles(sorted: &[f64], probabilities: &[f64]) -> Result<Vec<f64>, KnotError> {
+fn quantiles(sorted: &[f64], probabilities: &[f64]) -> Result<Vec<f64>, Error> {
     probabilities
         .iter()
-        .map(|&p| type7(sorted, p).ok_or(KnotError::TooFewObservations))
+        .map(|&p| type7(sorted, p).ok_or(Error::TooFewObservations))
         .collect()
 }
 
-fn median(sorted: &[f64]) -> Result<f64, KnotError> {
+fn median(sorted: &[f64]) -> Result<f64, Error> {
     let n = sorted.len();
     if n == 0 {
-        return Err(KnotError::TooFewObservations);
+        return Err(Error::TooFewObservations);
     }
     Ok(if n % 2 == 1 {
         sorted[n / 2]
@@ -109,21 +111,19 @@ fn median(sorted: &[f64]) -> Result<f64, KnotError> {
 ///
 /// # Errors
 ///
-/// [`KnotError::NotFinite`] for a value that is not finite,
-/// [`KnotError::TooFewObservations`] for fewer than six values or too few left
-/// after the tied end values are set aside, [`KnotError::TooFewKnots`] for
-/// `nk < 3`, and [`KnotError::TooFewDistinct`] where R stops because fewer
+/// [`Error::Input`] for a value that is not finite,
+/// [`Error::TooFewObservations`] for fewer than six values or too few left
+/// after the tied end values are set aside, [`Error::TooFewKnots`] for
+/// `nk < 3`, and [`Error::TooFewDistinct`] where R stops because fewer
 /// than three distinct knots result.
-pub fn harrell_knots(x: &[f64], nk: usize, fractied: f64) -> Result<Vec<f64>, KnotError> {
-    if x.iter().any(|v| !v.is_finite()) {
-        return Err(KnotError::NotFinite);
-    }
+pub fn harrell_knots(x: &[f64], nk: usize, fractied: f64) -> Result<Vec<f64>, Error> {
+    check::finite("x", x)?;
     let n = x.len();
     if n < 6 {
-        return Err(KnotError::TooFewObservations);
+        return Err(Error::TooFewObservations);
     }
     if nk < 3 {
-        return Err(KnotError::TooFewKnots);
+        return Err(Error::TooFewKnots);
     }
     let mut xx = x.to_vec();
     xx.sort_unstable_by(f64::total_cmp);
@@ -165,13 +165,13 @@ pub fn harrell_knots(x: &[f64], nk: usize, fractied: f64) -> Result<Vec<f64>, Kn
                     override_first = true;
                 }
                 if last_frequency >= fractied {
-                    let top = xx.last().copied().ok_or(KnotError::TooFewObservations)?;
+                    let top = xx.last().copied().ok_or(Error::TooFewObservations)?;
                     let last = xx
                         .iter()
                         .rev()
                         .find(|&&v| v < top)
                         .copied()
-                        .ok_or(KnotError::TooFewObservations)?;
+                        .ok_or(Error::TooFewObservations)?;
                     xx.retain(|&v| v < last);
                     last_knot = Some(last);
                     nke -= 1;
@@ -202,19 +202,19 @@ pub fn harrell_knots(x: &[f64], nk: usize, fractied: f64) -> Result<Vec<f64>, Kn
                         };
                         let last = match last_knot {
                             Some(b) => b,
-                            None => type7(&xx, 1.0 - outer).ok_or(KnotError::TooFewObservations)?,
+                            None => type7(&xx, 1.0 - outer).ok_or(Error::TooFewObservations)?,
                         };
                         knots = vec![first, mid, last];
                         knots.sort_unstable_by(f64::total_cmp);
                     }
                     if sorted_unique_count(&knots) < 3 {
-                        return Err(KnotError::TooFewDistinct);
+                        return Err(Error::TooFewDistinct);
                     }
                 }
             }
             if xx.len() < 100 {
                 if xx.len() < 5 || knots.len() < nke {
-                    return Err(KnotError::TooFewObservations);
+                    return Err(Error::TooFewObservations);
                 }
                 if !override_first {
                     knots[0] = xx[4];
@@ -233,7 +233,7 @@ pub fn harrell_knots(x: &[f64], nk: usize, fractied: f64) -> Result<Vec<f64>, Kn
     knots.sort_unstable_by(f64::total_cmp);
     knots.dedup();
     if knots.len() < 3 {
-        return Err(KnotError::TooFewDistinct);
+        return Err(Error::TooFewDistinct);
     }
     Ok(knots)
 }
@@ -250,20 +250,18 @@ fn sorted_unique_count(values: &[f64]) -> usize {
 ///
 /// # Errors
 ///
-/// [`KnotError::NotFinite`] for a value that is not finite,
-/// [`KnotError::Boundary`] for a boundary that is not increasing,
-/// [`KnotError::TooFewObservations`] when no value lies inside the boundary,
-/// and [`KnotError::OutsideBoundary`] when every interior knot equals a
+/// [`Error::Input`] for a value that is not finite,
+/// [`Error::Boundary`] for a boundary that is not increasing,
+/// [`Error::TooFewObservations`] when no value lies inside the boundary,
+/// and [`Error::OutsideBoundary`] when every interior knot equals a
 /// boundary knot, where R stops.
 pub fn natural_spline_knots(
     x: &[f64],
     df: usize,
     intercept: bool,
     boundary: Option<(f64, f64)>,
-) -> Result<Vec<f64>, KnotError> {
-    if x.iter().any(|v| !v.is_finite()) {
-        return Err(KnotError::NotFinite);
-    }
+) -> Result<Vec<f64>, Error> {
+    check::finite("x", x)?;
     let (lower, upper) = match boundary {
         Some(b) => b,
         None => (
@@ -272,7 +270,7 @@ pub fn natural_spline_knots(
         ),
     };
     if !(lower.is_finite() && upper.is_finite() && lower < upper) {
-        return Err(KnotError::Boundary);
+        return Err(Error::Boundary);
     }
     let count = df.saturating_sub(1 + usize::from(intercept));
     if count == 0 {
@@ -295,7 +293,7 @@ pub fn natural_spline_knots(
             .filter(|&k| k > lower)
             .fold(f64::INFINITY, f64::min);
         if !next.is_finite() {
-            return Err(KnotError::OutsideBoundary);
+            return Err(Error::OutsideBoundary);
         }
         for k in &mut knots {
             if *k == lower {
@@ -310,7 +308,7 @@ pub fn natural_spline_knots(
             .filter(|&k| k < upper)
             .fold(f64::NEG_INFINITY, f64::max);
         if !previous.is_finite() {
-            return Err(KnotError::OutsideBoundary);
+            return Err(Error::OutsideBoundary);
         }
         for k in &mut knots {
             if *k == upper {
@@ -324,6 +322,7 @@ pub fn natural_spline_knots(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     #[test]
     fn seq_ends_are_exact() {
@@ -355,19 +354,16 @@ mod tests {
     fn invalid_input_is_an_error() {
         assert_eq!(
             harrell_knots(&[1.0; 5], 4, 0.05),
-            Err(KnotError::TooFewObservations)
+            Err(Error::TooFewObservations)
         );
         assert_eq!(
             harrell_knots(&[f64::NAN; 10], 4, 0.05),
-            Err(KnotError::NotFinite)
+            Err(Error::Input(InputError::NotFinite { what: "x", row: 0 }))
         );
-        assert_eq!(
-            harrell_knots(&[1.0; 10], 2, 0.05),
-            Err(KnotError::TooFewKnots)
-        );
+        assert_eq!(harrell_knots(&[1.0; 10], 2, 0.05), Err(Error::TooFewKnots));
         assert_eq!(
             harrell_knots(&[1.0; 200], 4, 0.05),
-            Err(KnotError::TooFewDistinct)
+            Err(Error::TooFewDistinct)
         );
     }
 }

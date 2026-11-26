@@ -61,8 +61,8 @@
 
 use epistat_inference::sandwich::sandwich_with_inverse;
 use epistat_linalg::{
-    Attempt, BlockSum, DesignError, Factor, Mat, MatMut, MatRef, ROW_BLOCK, block_scaled_gram,
-    block_xtv, row_scaled_gram,
+    Attempt, BlockSum, Factor, Mat, MatMut, MatRef, ROW_BLOCK, block_scaled_gram, block_xtv,
+    row_scaled_gram,
 };
 use rayon::prelude::*;
 
@@ -337,7 +337,7 @@ impl Glm {
                 // are those of this iteration when no column is aliased.
                 let all = self.summed(rows, &source, &columns);
                 if let Some(row) = all.bad {
-                    return Err(GlmError::Design(DesignError::Weight { row }));
+                    return Err(working_weight(row));
                 }
                 let keep = screened_columns(&all.gram, rows.n_rows(), self.tolerance, |m| {
                     independent_columns(self, rows, self.tolerance, m)
@@ -352,7 +352,7 @@ impl Glm {
                 None => self.summed(rows, &source, &columns),
             };
             if let Some(row) = summed.bad {
-                return Err(GlmError::Design(DesignError::Weight { row }));
+                return Err(working_weight(row));
             }
             let mut gram = summed.gram;
             for j in 1..gram.ncols() {
@@ -556,6 +556,17 @@ struct AtSource {
 /// The vector of a column after each projection is formed again for every row
 /// from the inner products found so far, so each inner product and each norm
 /// takes one pass over the rows, summed in row order as `Glm::fit` sums them.
+/// The error of a working weight that is not finite at `row`, as the
+/// products over a whole design report a bad weight.
+const fn working_weight(row: usize) -> GlmError {
+    GlmError::Design(epistat_linalg::Error::Input(
+        epistat_core::InputError::NotFinite {
+            what: "working weights",
+            row,
+        },
+    ))
+}
+
 fn independent_columns(model: &Glm, rows: &dyn Rows, epsilon: f64, limit: usize) -> Vec<bool> {
     let tol = 1e-7_f64.min(epsilon / 1000.0);
     let p = limit;

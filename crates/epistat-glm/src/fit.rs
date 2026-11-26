@@ -225,7 +225,7 @@
 
 use crate::columns::{column_slices, contiguous_copy, linear_predictor_into, rows};
 use epistat_linalg::design::select_columns;
-use epistat_linalg::{Attempt, DesignError, Factor, SolveError, weighted_gram, xtv};
+use epistat_linalg::{Attempt, Factor, weighted_gram, xtv};
 use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
@@ -306,10 +306,10 @@ pub enum GlmError {
     StepHalving,
     /// The design could not be reduced to its identifiable columns.
     #[error(transparent)]
-    Design(#[from] DesignError),
+    Design(epistat_linalg::Error),
     /// The normal equations could not be solved.
     #[error(transparent)]
-    Solve(#[from] SolveError),
+    Solve(#[from] epistat_linalg::Error),
     /// A sandwich variance or cluster sum could not be formed.
     #[error(transparent)]
     Inference(#[from] epistat_inference::InferenceError),
@@ -606,7 +606,7 @@ impl Glm {
     }
 
     fn information(&self, x: MatRef<'_, f64>, w2: &[f64]) -> Result<Mat<f64>, GlmError> {
-        let mut gram = weighted_gram(x, w2)?;
+        let mut gram = weighted_gram(x, w2).map_err(GlmError::Design)?;
         for j in 1..gram.ncols() {
             gram[(j, j)] += self.ridge;
         }

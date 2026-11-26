@@ -224,7 +224,7 @@ pub enum TweedieError {
     SolveFailed,
     /// Invalid weights in a weighted product.
     #[error("invalid weights in a weighted product: {0}")]
-    InvalidWeights(#[from] epistat_linalg::DesignError),
+    InvalidWeights(#[from] epistat_linalg::Error),
 }
 
 crate::impl_input_error_from!(TweedieError, {

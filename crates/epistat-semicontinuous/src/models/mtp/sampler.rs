@@ -40,23 +40,23 @@ const SUBJECT_NEWTON_MAX_ITERS: usize = 8;
 #[cfg(feature = "bench-internals")]
 /// # Errors
 ///
-/// Returns `DesignError` for a negative or non-finite weight.
+/// Returns `epistat_linalg::Error` for a negative or non-finite weight.
 pub fn benchmark_weighted_xtx(
     x: &Mat<f64>,
     weights: &Mat<f64>,
-) -> Result<Mat<f64>, epistat_linalg::DesignError> {
+) -> Result<Mat<f64>, epistat_linalg::Error> {
     weighted_xtx(x, weights)
 }
 
 #[cfg(feature = "bench-internals")]
 /// # Errors
 ///
-/// Returns `DesignError` for a negative or non-finite weight.
+/// Returns `epistat_linalg::Error` for a negative or non-finite weight.
 pub fn benchmark_weighted_xtz(
     x: &Mat<f64>,
     weights: &Mat<f64>,
     response: &Mat<f64>,
-) -> Result<Mat<f64>, epistat_linalg::DesignError> {
+) -> Result<Mat<f64>, epistat_linalg::Error> {
     weighted_xtz(x, weights, response)
 }
 

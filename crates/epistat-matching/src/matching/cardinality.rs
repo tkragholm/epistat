@@ -118,10 +118,11 @@
 
 use crate::types::Estimand;
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
+use epistat_optim::Error as OptimError;
 use epistat_optim::branch_and_bound::{
-    MipError, MixedBinaryProgram, Options as SolverOptions, Status as SolverStatus, solve,
+    MixedBinaryProgram, Options as SolverOptions, Status as SolverStatus, solve,
 };
-use epistat_optim::min_cost_flow::{FlowError, MinCostFlow};
+use epistat_optim::min_cost_flow::MinCostFlow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
@@ -610,8 +611,8 @@ fn solve_stratum(
         ..SolverOptions::default()
     };
     let solution = solve(&program, &options).map_err(|e| match e {
-        MipError::Infeasible => CardinalityError::Infeasible { key },
-        MipError::NoSolution { .. } => CardinalityError::NoSolutionInTime { key },
+        OptimError::Infeasible => CardinalityError::Infeasible { key },
+        OptimError::NoSolution { .. } => CardinalityError::NoSolutionInTime { key },
         other => CardinalityError::Solver(other.to_string()),
     })?;
 
@@ -1049,7 +1050,7 @@ pub fn pair_units(
             }
         }
         let solution = flow.solve().map_err(|e| match e {
-            FlowError::Infeasible => CardinalityError::PairingNeedsWholeRatio,
+            OptimError::Infeasible => CardinalityError::PairingNeedsWholeRatio,
             other => CardinalityError::Solver(other.to_string()),
         })?;
         for a in 0..nt {

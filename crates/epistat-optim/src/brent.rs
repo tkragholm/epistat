@@ -38,9 +38,10 @@
 //!    Cliffs: Prentice-Hall; 1973. Chapter 5.
 //! 2. R Core Team. `optimize`, src/library/stats/src/optimize.c, R 4.6.2.
 
-use std::fmt;
+use crate::error::{Error, domain};
 
-/// The result of [`minimise`].
+/// The result of [`minimize`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Minimum {
     /// The point found.
@@ -48,37 +49,23 @@ pub struct Minimum {
     /// The function at `x`, after a value that is not finite is replaced as
     /// described in the module documentation.
     pub value: f64,
-    /// The number of function evaluations.
-    pub evaluations: u32,
+    /// The number of steps after the first point, each one evaluation.
+    pub iterations: usize,
+    /// The number of function evaluations, `iterations + 1`.
+    pub evaluations: usize,
+    /// Whether the stopping rule was met. The search has no iteration limit,
+    /// as R's has none, so this is always true; the field is there so that the
+    /// three minimisers report the same fields.
+    pub converged: bool,
 }
-
-/// Why [`minimise`] refused its input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrentError {
-    /// The ends are not finite, or `lower` is not below `upper`.
-    Interval,
-    /// The tolerance is not finite and positive.
-    Tolerance,
-}
-
-impl fmt::Display for BrentError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Interval => write!(f, "the interval must have finite ends, lower below upper"),
-            Self::Tolerance => write!(f, "the tolerance must be finite and positive"),
-        }
-    }
-}
-
-impl std::error::Error for BrentError {}
 
 /// A local minimum of `f` on `[lower, upper]` to within about `tol`, by
 /// Brent's method as R's `optimize(f, c(lower, upper), tol = tol)`.
 ///
 /// # Errors
 ///
-/// [`BrentError::Interval`] when an end is not finite or `lower >= upper`,
-/// and [`BrentError::Tolerance`] when `tol` is not finite and positive.
+/// [`Error::Input`] when an end is not finite, `lower >= upper`, or `tol` is
+/// not finite and positive.
 #[expect(
     clippy::float_cmp,
     reason = "Brent's algorithm tests whether a trial point is exactly one of the stored points"
@@ -91,19 +78,22 @@ impl std::error::Error for BrentError {}
     clippy::many_single_char_names,
     reason = "the names of Brent's algorithm, kept for comparison with its published form"
 )]
-pub fn minimise(
+pub fn minimize(
     mut f: impl FnMut(f64) -> f64,
     lower: f64,
     upper: f64,
     tol: f64,
-) -> Result<Minimum, BrentError> {
-    if !(lower.is_finite() && upper.is_finite() && lower < upper) {
-        return Err(BrentError::Interval);
+) -> Result<Minimum, Error> {
+    if !lower.is_finite() {
+        return Err(domain("lower", lower, "finite"));
+    }
+    if !(upper.is_finite() && upper > lower) {
+        return Err(domain("upper", upper, "finite and above lower"));
     }
     if !(tol.is_finite() && tol > 0.0) {
-        return Err(BrentError::Tolerance);
+        return Err(domain("tol", tol, "(0, inf)"));
     }
-    let mut evaluations = 0u32;
+    let mut evaluations = 0_usize;
     let mut eval = |x: f64| {
         evaluations += 1;
         let value = f(x);
@@ -194,27 +184,28 @@ pub fn minimise(
     Ok(Minimum {
         x,
         value: fx,
+        iterations: evaluations - 1,
         evaluations,
+        converged: true,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     #[test]
     fn refuses_bad_input() {
-        assert_eq!(minimise(|x| x, 1.0, 1.0, 1e-5), Err(BrentError::Interval));
-        assert_eq!(
-            minimise(|x| x, f64::NAN, 1.0, 1e-5),
-            Err(BrentError::Interval)
-        );
-        assert_eq!(minimise(|x| x, 0.0, 1.0, 0.0), Err(BrentError::Tolerance));
+        let input = |r: Result<Minimum, Error>, name: &str| matches!(r, Err(Error::Input(InputError::Domain { what, .. })) if what == name);
+        assert!(input(minimize(|x| x, 1.0, 1.0, 1e-5), "upper"));
+        assert!(input(minimize(|x| x, f64::NAN, 1.0, 1e-5), "lower"));
+        assert!(input(minimize(|x| x, 0.0, 1.0, 0.0), "tol"));
     }
 
     #[test]
     fn finds_the_minimum_of_a_parabola() {
-        let m = minimise(|x| (x - 0.3) * (x - 0.3), -1.0, 2.0, 1e-10).unwrap();
+        let m = minimize(|x| (x - 0.3) * (x - 0.3), -1.0, 2.0, 1e-10).unwrap();
         assert!((m.x - 0.3).abs() < 1e-8, "{m:?}");
     }
 }

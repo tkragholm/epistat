@@ -48,7 +48,7 @@
 //!
 //! [`weighted_gram`] uses `s_i = sqrt(w_i)`. [`weighted_xtz`] forms `w_i z_i`
 //! and calls [`xtv`]. Both, and [`independent_columns`], refuse a weight that is
-//! negative, infinite or NaN with [`DesignError::Weight`], so the Gram matrix
+//! negative, infinite or NaN with [`Error::Input`], so the Gram matrix
 //! and the right-hand side of the normal equations always describe the same
 //! weighted problem. A weight of zero is valid.
 //!
@@ -61,7 +61,7 @@
 
 use std::ops::Range;
 
-use crate::error::{DesignError, check_length, check_weights};
+use crate::error::{Error, check_length, check_weights};
 use faer::linalg::matmul::matmul;
 use faer::linalg::matmul::triangular::{self, BlockStructure};
 use faer::{Accum, Mat, MatMut, MatRef, Par};
@@ -70,6 +70,53 @@ use rayon::prelude::*;
 /// The rows per block. Changing it changes the order of additions, and so
 /// the last bits of every product below.
 pub const ROW_BLOCK: usize = 4096;
+
+/// `X'X`, exactly symmetric: [`row_scaled_gram`] with every scale 1, the same
+/// blocks and the same bits.
+#[must_use]
+pub fn gram(x: MatRef<'_, f64>) -> Mat<f64> {
+    row_scaled_gram(x, |_| 1.0)
+}
+
+/// `A Σ A'` for `a` of `m x p` and a symmetric `sigma` of `p x p`, exactly
+/// symmetric: the congruence of a covariance, the covariance of `A θ` when
+/// `Σ` is that of `θ`.
+///
+/// `T = A Σ` is formed entry by entry with the sum over `k` in increasing
+/// order, then `(A Σ A')_ij = sum_k T_ik a_jk` for `j <= i` in the same
+/// order, and the upper triangle is copied from the lower. No fused
+/// multiply-add and no blocking, so the bits do not depend on faer's kernels.
+///
+/// # Errors
+///
+/// [`Error::Input`] when `sigma` is not `p x p`.
+pub fn congruence(a: MatRef<'_, f64>, sigma: MatRef<'_, f64>) -> Result<Mat<f64>, Error> {
+    let (m, p) = (a.nrows(), a.ncols());
+    check_length("rows of sigma", sigma.nrows(), p)?;
+    check_length("columns of sigma", sigma.ncols(), p)?;
+    let mut t = Mat::<f64>::zeros(m, p);
+    for i in 0..m {
+        for j in 0..p {
+            let mut sum = 0.0;
+            for k in 0..p {
+                sum += a[(i, k)] * sigma[(k, j)];
+            }
+            t[(i, j)] = sum;
+        }
+    }
+    let mut out = Mat::<f64>::zeros(m, m);
+    for i in 0..m {
+        for j in 0..=i {
+            let mut sum = 0.0;
+            for k in 0..p {
+                sum += t[(i, k)] * a[(j, k)];
+            }
+            out[(i, j)] = sum;
+            out[(j, i)] = sum;
+        }
+    }
+    Ok(out)
+}
 
 /// `sum_i s_i^2 x_i x_i'` over the rows `x_i` of `x` with `s_i = scale(i)`,
 /// exactly symmetric.
@@ -226,10 +273,10 @@ impl BlockSum {
 ///
 /// # Errors
 ///
-/// [`DesignError::Length`] when `weights` does not have one entry per row of
-/// `x`, and [`DesignError::Weight`] for a weight that is negative or not
+/// [`Error::Input`] when `weights` does not have one entry per row of
+/// `x`, and [`Error::Input`] for a weight that is negative or not
 /// finite.
-pub fn weighted_gram(x: MatRef<'_, f64>, weights: &[f64]) -> Result<Mat<f64>, DesignError> {
+pub fn weighted_gram(x: MatRef<'_, f64>, weights: &[f64]) -> Result<Mat<f64>, Error> {
     check_weights(weights, x.nrows())?;
     Ok(row_scaled_gram(x, |i| weights[i].sqrt()))
 }
@@ -251,14 +298,10 @@ pub fn xtv(x: MatRef<'_, f64>, v: &[f64]) -> Mat<f64> {
 ///
 /// # Errors
 ///
-/// [`DesignError::Length`] when `weights` or `z` does not have one entry per
-/// row of `x`, and [`DesignError::Weight`] for a weight that is negative or
+/// [`Error::Input`] when `weights` or `z` does not have one entry per
+/// row of `x`, and [`Error::Input`] for a weight that is negative or
 /// not finite.
-pub fn weighted_xtz(
-    x: MatRef<'_, f64>,
-    weights: &[f64],
-    z: &[f64],
-) -> Result<Mat<f64>, DesignError> {
+pub fn weighted_xtz(x: MatRef<'_, f64>, weights: &[f64], z: &[f64]) -> Result<Mat<f64>, Error> {
     check_weights(weights, x.nrows())?;
     check_length("z", z.len(), x.nrows())?;
     let weighted: Vec<f64> = weights.iter().zip(z).map(|(w, v)| w * v).collect();
@@ -482,23 +525,48 @@ mod tests {
     }
 
     #[test]
+    fn gram_is_the_unit_scaled_gram_and_congruence_is_a_sigma_a_transpose() {
+        let x = design(50, 4);
+        let ours = gram(x.as_ref());
+        let theirs = row_scaled_gram(x.as_ref(), |_| 1.0);
+        for i in 0..4 {
+            for j in 0..4 {
+                assert_eq!(ours[(i, j)].to_bits(), theirs[(i, j)].to_bits());
+            }
+        }
+        let a = crate::mat![[1.0, 2.0, 0.0], [0.5, -1.0, 3.0]];
+        let sigma = crate::mat![[2.0, 0.3, 0.0], [0.3, 1.0, 0.1], [0.0, 0.1, 0.5]];
+        let c = congruence(a.as_ref(), sigma.as_ref()).unwrap();
+        let direct = &a * &sigma * a.transpose();
+        for i in 0..2 {
+            for j in 0..2 {
+                assert_eq!(c[(i, j)].to_bits(), c[(j, i)].to_bits());
+                // Sums of three products of values below 4: a few units of
+                // 2^-52 times 20.
+                assert!((c[(i, j)] - direct[(i, j)]).abs() < 1e-13);
+            }
+        }
+        assert!(congruence(a.as_ref(), a.as_ref()).is_err());
+    }
+
+    #[test]
     fn invalid_weights_are_refused_by_every_product() {
         let x = design(10, 3);
         let z = vec![1.0; 10];
         for bad in [-1.0, f64::NAN, f64::INFINITY] {
             let mut w = vec![1.0; 10];
             w[4] = bad;
-            let expected = Err(DesignError::Weight { row: 4 });
+            let expected = Err(crate::weight_error(&w).unwrap());
             assert_eq!(weighted_gram(x.as_ref(), &w).map(|_| ()), expected);
             assert_eq!(weighted_xtz(x.as_ref(), &w, &z).map(|_| ()), expected);
         }
         assert!(matches!(
             weighted_gram(x.as_ref(), &[1.0; 9]),
-            Err(DesignError::Length { .. })
+            Err(crate::Error::Input(epistat_core::InputError::Length { .. }))
         ));
         assert!(matches!(
             weighted_xtz(x.as_ref(), &[1.0; 10], &z[..9]),
-            Err(DesignError::Length { .. })
+            Err(crate::Error::Input(epistat_core::InputError::Length { .. }))
         ));
         assert!(weighted_gram(x.as_ref(), &[0.0; 10]).is_ok());
     }

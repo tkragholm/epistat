@@ -17,8 +17,9 @@
               that are far below the limits of the types"
 )]
 
-use epistat_optim::branch_and_bound::{MipError, MixedBinaryProgram, Options, Status, solve};
-use epistat_optim::min_cost_flow::{FlowError, MinCostFlow};
+use epistat_optim::Error;
+use epistat_optim::branch_and_bound::{MixedBinaryProgram, Options, Status, solve};
+use epistat_optim::min_cost_flow::MinCostFlow;
 
 use epistat_testkit::SplitMix64 as Rng;
 
@@ -148,7 +149,7 @@ fn check_trial(
             }
             Ok(())
         }
-        (None, Err(MipError::Infeasible)) => Ok(()),
+        (None, Err(Error::Infeasible)) => Ok(()),
         (r, g) => Err(format!("trial {trial}: reference {r:?}, solver {g:?}")),
     }
 }
@@ -488,7 +489,7 @@ fn network_simplex_agrees_with_successive_shortest_paths() {
                     failures.push(format!("trial {trial}: conservation"));
                 }
             }
-            (None, Err(FlowError::Infeasible)) => {}
+            (None, Err(Error::Infeasible)) => {}
             (r, g) => failures.push(format!("trial {trial}: reference {r:?}, solver {g:?}")),
         }
     }
@@ -504,13 +505,13 @@ fn network_simplex_agrees_with_successive_shortest_paths() {
 /// absolute `1e-8`, so a program on a small scale is reported solved.
 #[test]
 fn dense_simplex_reports_an_infeasible_program_on_a_small_scale() {
-    use epistat_optim::simplex::{DenseSimplex, LpError};
+    use epistat_optim::simplex::DenseSimplex;
     let mut lp = DenseSimplex::new(&[vec![1.0]], &[-1e-9]);
     lp.set_cost(&[1.0]);
     let result = lp.solve();
     assert_eq!(
         result,
-        Err(LpError::Infeasible),
+        Err(Error::Infeasible),
         "solved with lambda {:?} and objective {}",
         lp.lambda(),
         lp.objective()
@@ -520,10 +521,10 @@ fn dense_simplex_reports_an_infeasible_program_on_a_small_scale() {
 /// The same program scaled by 1e9 is reported infeasible.
 #[test]
 fn dense_simplex_reports_the_same_program_at_unit_scale_infeasible() {
-    use epistat_optim::simplex::{DenseSimplex, LpError};
+    use epistat_optim::simplex::DenseSimplex;
     let mut lp = DenseSimplex::new(&[vec![1.0]], &[-1.0]);
     lp.set_cost(&[1.0]);
-    assert_eq!(lp.solve(), Err(LpError::Infeasible));
+    assert_eq!(lp.solve(), Err(Error::Infeasible));
 }
 
 /// A circulation of negative cost with capacities far above `i64::MAX / 4`.
@@ -643,7 +644,7 @@ fn bounds_under_node_limits_hold() {
                             ));
                         }
                     }
-                    Err(MipError::NoSolution { bound, .. }) => {
+                    Err(Error::NoSolution { bound, .. }) => {
                         if bound < optimum - tol {
                             failures.push(format!("trial {trial} nodes {nodes}: no solution, bound {bound} below optimum {optimum}"));
                         }
