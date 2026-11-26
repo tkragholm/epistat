@@ -142,6 +142,12 @@
 //! 5. Ghebremichael-Weldeselassie Y, Whitaker HJ, Farrington CP. Self-controlled
 //!    case series method with smooth age effect. Stat Med 2014;33(4):639-49.
 
+mod sample_size;
+mod semiparametric;
+
+pub use sample_size::{SampleSizeSpec, sample_size};
+pub use semiparametric::{SemiparametricPieces, semiparametric_pieces};
+
 use epistat_linalg::{Mat, MatRef};
 
 use crate::error::{Error, Result};
@@ -1096,7 +1102,7 @@ fn check_calendar(cal: &Calendar<'_>, n: usize) -> Result<()> {
     Ok(())
 }
 
-fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
+pub(crate) fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
     let n = spec.start.len();
     if spec.end.len() != n || spec.event_offsets.len() != n + 1 {
         return Err(invalid(
