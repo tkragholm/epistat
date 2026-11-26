@@ -177,5 +177,5 @@ scenarios <- list(
 out <- list(
   versions = list(r = R.version.string, numDeriv = as.character(packageVersion("numDeriv")),
                   jsonlite = as.character(packageVersion("jsonlite"))),
-  time = time, event = event, treatment = a, scenarios = scenarios)
+  time = time, event = event, treatment = a, x1 = x1, x2 = x2, scenarios = scenarios)
 cat(toJSON(out, digits = I(17), auto_unbox = TRUE, null = "null", na = "null", matrix = "rowmajor"))
