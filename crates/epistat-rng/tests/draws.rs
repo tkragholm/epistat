@@ -3,7 +3,8 @@
 
 use std::f64::consts::PI;
 
-use epistat_rng::{DrawError, Stream, dirichlet_scale, dirichlet_weights};
+use epistat_core::{Classify, ErrorKind, InputError};
+use epistat_rng::{Error, Stream, dirichlet_scale, dirichlet_weights};
 use epistat_testkit::assert_within_standard_errors;
 
 const DRAWS: usize = 200_000;
@@ -120,7 +121,7 @@ fn inverse_wishart_inverts_a_wishart_draw_of_the_inverse_scale() {
 fn invalid_parameters_are_errors_and_draw_nothing() {
     let mut stream = Stream::seeded(11);
     let before = stream.clone();
-    let invalid: [Result<f64, DrawError>; 6] = [
+    let invalid: [Result<f64, Error>; 6] = [
         stream.gamma(0.0, 1.0),
         stream.gamma(1.0, f64::NAN),
         stream.gamma(f64::INFINITY, 1.0),
@@ -138,6 +139,44 @@ fn invalid_parameters_are_errors_and_draw_nothing() {
             .is_err()
     );
     assert_eq!(stream, before);
+}
+
+#[test]
+fn a_refusal_names_the_parameter_and_is_an_input_error() {
+    let mut stream = Stream::seeded(11);
+    let error = stream.gamma(-2.0, 1.0).unwrap_err();
+    assert_eq!(
+        error,
+        Error::Input(InputError::Domain {
+            what: "shape",
+            value: -2.0,
+            domain: "(0, inf)"
+        })
+    );
+    assert_eq!(
+        (error.kind(), error.code()),
+        (ErrorKind::Input, "input.domain")
+    );
+    assert_eq!(error.to_string(), "shape is -2, outside (0, inf)");
+    assert_eq!(
+        stream.wishart(5.0, &FACTOR[..8], 3),
+        Err(Error::Input(InputError::Length {
+            what: "scale_cholesky",
+            expected: 9,
+            found: 8
+        }))
+    );
+    assert!(matches!(
+        stream.wishart(2.0, &FACTOR, 3),
+        Err(Error::Input(InputError::Domain { what: "df", .. }))
+    ));
+    assert!(matches!(
+        stream.inverse_wishart(5.0, &[1.0, 0.0, 0.0, 0.0], 2),
+        Err(Error::Input(InputError::Domain {
+            what: "diagonal of scale_cholesky",
+            ..
+        }))
+    ));
 }
 
 // The copies below are the consumers' functions as they are written there.
@@ -247,5 +286,75 @@ fn the_dirichlet_scale_is_the_kernels_copy_and_the_weights_scale() {
         for &weight in &weights {
             assert_eq!(weight.to_bits(), (stream.exp1() * scale).to_bits());
         }
+    }
+}
+
+/// epistat-stats `bias.rs`, `binomial`, as written there.
+fn stats_bias_binomial(stream: &mut Stream, mut n: u64, mut p: f64) -> Option<u64> {
+    if !(0.0..=1.0).contains(&p) {
+        return None;
+    }
+    let mut k = 0_u64;
+    while n > 10 {
+        let half = 1 + n / 2;
+        let x = stream.beta(half as f64, (n + 1 - half) as f64).ok()?;
+        if x >= p {
+            n = half - 1;
+            p /= x;
+        } else {
+            k += half;
+            n -= half;
+            p = (p - x) / (1.0 - x);
+        }
+    }
+    for _ in 0..n {
+        if stream.uniform() < p {
+            k += 1;
+        }
+    }
+    Some(k)
+}
+
+#[test]
+fn binomial_draws_are_the_bias_analysis_draws() {
+    let mut ours = Stream::seeded(23);
+    let mut theirs = Stream::seeded(23);
+    for (n, p) in [
+        (0_u64, 0.5),
+        (5, 0.0),
+        (5, 1.0),
+        (7, 0.4),
+        (30, 0.1),
+        (1_000, 0.3),
+        (1_000_000, 0.02),
+        (u64::from(u32::MAX), 0.999),
+    ] {
+        for _ in 0..200 {
+            assert_eq!(
+                Some(ours.binomial(n, p).unwrap()),
+                stats_bias_binomial(&mut theirs, n, p)
+            );
+        }
+        assert_eq!(ours, theirs);
+    }
+    let before = ours.clone();
+    for p in [-0.1, 1.5, f64::NAN] {
+        assert!(matches!(
+            ours.binomial(5, p),
+            Err(Error::Input(InputError::Domain { what: "p", .. }))
+        ));
+    }
+    assert_eq!(ours, before);
+}
+
+#[test]
+fn binomial_has_its_mean_and_variance() {
+    let mut stream = Stream::seeded(7);
+    for (n, p) in [(7_u64, 0.4), (30, 0.1), (1_000, 0.3), (1_000_000, 0.02)] {
+        let sample: Vec<f64> = (0..20_000)
+            .map(|_| stream.binomial(n, p).unwrap() as f64)
+            .collect();
+        assert!(sample.iter().all(|&k| k <= n as f64));
+        check(&sample, n as f64 * p, n as f64 * p * (1.0 - p));
     }
 }

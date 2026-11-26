@@ -1,5 +1,5 @@
 //! Distribution draws on a [`Stream`]: the standard normal, the gamma family,
-//! the Beta, and the Wishart and inverse Wishart matrices.
+//! the Beta, the binomial, and the Wishart and inverse Wishart matrices.
 //!
 //! # Algorithm
 //!
@@ -29,6 +29,19 @@
 //! variate with `k` degrees of freedom is `gamma(k / 2, 2)`, and a Beta
 //! variate is `x / (x + y)` for `x ~ gamma(a, 1)` and `y ~ gamma(b, 1)`.
 //!
+//! [`Stream::binomial`] splits at a Beta variate \[4\]. The `k`-th smallest
+//! of `n` uniforms is `x ~ Beta(k, n + 1 - k)`. With `k = 1 + n / 2`
+//! (integer division), the number of the `n` uniforms below `p` is
+//!
+//! ```text
+//! k + Binomial(n - k, (p - x) / (1 - x))   when x < p,
+//! Binomial(k - 1, p / x)                    otherwise,
+//! ```
+//!
+//! so each Beta draw halves `n`. Once `n` is at most 10 the remaining trials
+//! are counted directly, one uniform each, a success when the uniform is
+//! below `p`. The draw is exact, and takes about `log2 n` Beta variates.
+//!
 //! [`Stream::wishart`] is the Bartlett decomposition \[3\]. For a scale matrix
 //! `S = L L'` with `L` lower triangular and `p` rows, let `A` be lower
 //! triangular with `A[i][i] = sqrt(chi-square(df - i))` and `A[i][j]` a
@@ -42,9 +55,10 @@
 //!
 //! # Edge cases
 //!
-//! A non-positive or non-finite shape, scale or degrees of freedom, a Wishart
-//! with `df <= p - 1`, or a scale factor with a non-positive or non-finite
-//! diagonal is a [`DrawError`]. No draw is taken before the check.
+//! A non-positive or non-finite shape, scale or degrees of freedom, a binomial
+//! probability outside `[0, 1]`, a Wishart with `df <= p - 1`, or a scale
+//! factor with a non-positive or non-finite diagonal is an [`Error`], whose
+//! [`InputError`] names the parameter. No draw is taken before the check.
 //!
 //! # Reproducibility
 //!
@@ -63,29 +77,26 @@
 //!    ACM Trans Math Softw. 2000;26(3):363-72. doi:10.1145/358407.358414
 //! 3. Smith WB, Hocking RR. Algorithm AS 53: Wishart variate generator.
 //!    J R Stat Soc Ser C. 1972;21(3):341-5. doi:10.2307/2346290
+//! 4. Knuth DE. The Art of Computer Programming, vol 2. 3rd ed. Addison-Wesley;
+//!    1997. Section 3.4.1, exercise 22 (binomial variates by Beta splitting).
 
 use std::f64::consts::PI;
-use std::fmt;
 
-use crate::Stream;
+use epistat_core::InputError;
 
-/// A parameter outside the range of a distribution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DrawError(&'static str);
+use crate::{Error, Stream};
 
-impl fmt::Display for DrawError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
-    }
-}
+const POSITIVE: &str = "(0, inf)";
 
-impl std::error::Error for DrawError {}
-
-fn positive(value: f64, what: &'static str) -> Result<(), DrawError> {
+fn positive(value: f64, what: &'static str) -> Result<(), Error> {
     if value > 0.0 && value.is_finite() {
         Ok(())
     } else {
-        Err(DrawError(what))
+        Err(Error::Input(InputError::Domain {
+            what,
+            value,
+            domain: POSITIVE,
+        }))
     }
 }
 
@@ -137,10 +148,10 @@ impl Stream {
     ///
     /// # Errors
     ///
-    /// [`DrawError`] when the shape or the scale is not positive and finite.
-    pub fn gamma(&mut self, shape: f64, scale: f64) -> Result<f64, DrawError> {
-        positive(shape, "the gamma shape must be positive and finite")?;
-        positive(scale, "the gamma scale must be positive and finite")?;
+    /// [`Error`] when the shape or the scale is not positive and finite.
+    pub fn gamma(&mut self, shape: f64, scale: f64) -> Result<f64, Error> {
+        positive(shape, "shape")?;
+        positive(scale, "scale")?;
         Ok(self.gamma_unchecked(shape, scale))
     }
 
@@ -172,12 +183,9 @@ impl Stream {
     ///
     /// # Errors
     ///
-    /// [`DrawError`] when `df` is not positive and finite.
-    pub fn chi_square(&mut self, df: f64) -> Result<f64, DrawError> {
-        positive(
-            df,
-            "the chi-square degrees of freedom must be positive and finite",
-        )?;
+    /// [`Error`] when `df` is not positive and finite.
+    pub fn chi_square(&mut self, df: f64) -> Result<f64, Error> {
+        positive(df, "df")?;
         Ok(self.gamma_unchecked(0.5 * df, 2.0))
     }
 
@@ -189,15 +197,52 @@ impl Stream {
     ///
     /// # Errors
     ///
-    /// [`DrawError`] when a shape is not positive and finite.
-    pub fn beta(&mut self, alpha: f64, beta: f64) -> Result<f64, DrawError> {
-        positive(alpha, "the Beta shapes must be positive and finite")?;
-        positive(beta, "the Beta shapes must be positive and finite")?;
+    /// [`Error`] when a shape is not positive and finite.
+    pub fn beta(&mut self, alpha: f64, beta: f64) -> Result<f64, Error> {
+        positive(alpha, "alpha")?;
+        positive(beta, "beta")?;
         let x = self.gamma_unchecked(alpha, 1.0);
         let y = self.gamma_unchecked(beta, 1.0);
         let total = x + y;
         // Both gamma variates can underflow to 0 for very small shapes.
         Ok(if total > 0.0 { x / total } else { 0.5 })
+    }
+
+    /// A binomial variate, the number of successes in `n` trials of
+    /// probability `p`, by splitting at Beta variates as described in the
+    /// module documentation. Exact, and logarithmic in `n` in Beta draws.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] when `p` is not in `[0, 1]`.
+    pub fn binomial(&mut self, n: u64, p: f64) -> Result<u64, Error> {
+        if !(0.0..=1.0).contains(&p) {
+            return Err(Error::Input(InputError::Domain {
+                what: "p",
+                value: p,
+                domain: "[0, 1]",
+            }));
+        }
+        let (mut n, mut p) = (n, p);
+        let mut k = 0_u64;
+        while n > 10 {
+            let half = 1 + n / 2;
+            let x = self.beta(half as f64, (n + 1 - half) as f64)?;
+            if x >= p {
+                n = half - 1;
+                p /= x;
+            } else {
+                k += half;
+                n -= half;
+                p = (p - x) / (1.0 - x);
+            }
+        }
+        for _ in 0..n {
+            if self.uniform() < p {
+                k += 1;
+            }
+        }
+        Ok(k)
     }
 
     /// The Bartlett factor `A` of a Wishart draw: row-major, lower triangular,
@@ -222,7 +267,7 @@ impl Stream {
     ///
     /// # Errors
     ///
-    /// [`DrawError`] when `dim` is 0, `scale_cholesky` does not hold `dim`
+    /// [`Error`] when `dim` is 0, `scale_cholesky` does not hold `dim`
     /// squared values, its diagonal is not positive and finite, or `df` is not
     /// above `dim - 1`.
     pub fn wishart(
@@ -230,7 +275,7 @@ impl Stream {
         df: f64,
         scale_cholesky: &[f64],
         dim: usize,
-    ) -> Result<Vec<f64>, DrawError> {
+    ) -> Result<Vec<f64>, Error> {
         check_wishart(df, scale_cholesky, dim)?;
         let bartlett = self.bartlett(df, dim);
         let mut product = vec![0.0; dim * dim];
@@ -261,7 +306,7 @@ impl Stream {
         df: f64,
         scale_cholesky: &[f64],
         dim: usize,
-    ) -> Result<Vec<f64>, DrawError> {
+    ) -> Result<Vec<f64>, Error> {
         check_wishart(df, scale_cholesky, dim)?;
         let bartlett = self.bartlett(df, dim);
         // `inverse` is A^-1, lower triangular, by forward substitution.
@@ -303,24 +348,29 @@ impl Stream {
     }
 }
 
-fn check_wishart(df: f64, scale_cholesky: &[f64], dim: usize) -> Result<(), DrawError> {
-    if dim == 0 || scale_cholesky.len() != dim * dim {
-        return Err(DrawError(
-            "the Wishart scale factor must be a non-empty square matrix",
-        ));
+fn check_wishart(df: f64, scale_cholesky: &[f64], dim: usize) -> Result<(), Error> {
+    if dim == 0 {
+        return Err(Error::Input(InputError::Empty {
+            what: "scale_cholesky",
+        }));
+    }
+    let entries = dim.checked_mul(dim);
+    if entries != Some(scale_cholesky.len()) {
+        return Err(Error::Input(InputError::Length {
+            what: "scale_cholesky",
+            expected: entries.unwrap_or(usize::MAX),
+            found: scale_cholesky.len(),
+        }));
     }
     if !(df.is_finite() && df > dim as f64 - 1.0) {
-        return Err(DrawError(
-            "the Wishart degrees of freedom must be finite and above the dimension minus one",
-        ));
+        return Err(Error::Input(InputError::Domain {
+            what: "df",
+            value: df,
+            domain: "(dim - 1, inf)",
+        }));
     }
     for i in 0..dim {
-        let diagonal = scale_cholesky[i * dim + i];
-        if !(diagonal > 0.0 && diagonal.is_finite()) {
-            return Err(DrawError(
-                "the Wishart scale factor needs a positive, finite diagonal",
-            ));
-        }
+        positive(scale_cholesky[i * dim + i], "diagonal of scale_cholesky")?;
     }
     Ok(())
 }
