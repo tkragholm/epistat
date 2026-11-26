@@ -14,6 +14,27 @@
 //! | [`tables`] | the 2 x 2 table and the person-time table every measure starts from | |
 //! | [`balance`] | standardised mean differences, variance ratios, eCDF and eQQ distances, Cramér's V | `cobalt`, `MatchIt` |
 //!
+//! # Results and levels
+//!
+//! An estimate with its uncertainty is an [`epistat_core::Estimate`]: the
+//! estimate, its standard error, an [`epistat_core::Interval`] at the level
+//! asked for and a p-value, each `None` where the method does not define
+//! it, and the [`epistat_core::Scale`] on which the standard error and the
+//! interval were formed. A result whose estimate is undefined, such as a
+//! rate over no person-time, is `None` as a whole. Every interval takes an
+//! [`epistat_core::Level`], whose default is a confidence of 0.95 and which
+//! keeps the number the caller gave, so `Level::confidence(0.95)` and
+//! `Level::alpha(0.05)` give the limits R gives for `conf.level = 0.95` and
+//! `alpha = 0.05`. The sensitivity values of [`rosenbaum`] take the `alpha`
+//! of a one-sided test as a number, since they form no interval.
+//!
+//! # Names shared between modules
+//!
+//! [`rates::rate_ratio`] and [`mantel_haenszel::rate_ratio`] are the crude
+//! and the pooled rate ratio, and the same holds for `rate_difference`. They
+//! keep their names and are called through their modules: with both modules
+//! imported by glob, the bare name is ambiguous.
+//!
 //! The distribution functions these rest on are in `epistat_stats::dist`.
 //! Nothing uses fused multiply-add, so results are the same on every
 //! platform.
