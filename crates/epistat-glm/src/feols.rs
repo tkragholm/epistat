@@ -387,7 +387,12 @@ impl Feols {
     /// # Errors
     ///
     /// As [`Feols::fit`].
-    pub fn fit_owned(&self, mut x: Mat<f64>, y: &[f64], fe: &FixedEffects) -> Result<FeolsFit, Error> {
+    pub fn fit_owned(
+        &self,
+        mut x: Mat<f64>,
+        y: &[f64],
+        fe: &FixedEffects,
+    ) -> Result<FeolsFit, Error> {
         let n_input = fe.n_input();
         length("x", n_input, x.nrows())?;
         length("y", n_input, y.len())?;

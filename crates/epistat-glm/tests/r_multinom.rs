@@ -96,7 +96,11 @@ fn fits_match_nnet_multinom() {
         assert_close(&fit.probabilities, &want, Tolerance::exact().abs(1e-6));
         assert_close(&[fit.deviance], &[f.deviance], Tolerance::exact().rel(1e-9));
         let want: Vec<f64> = f.se.iter().flatten().copied().collect();
-        let se: Vec<f64> = fit.standard_errors().into_iter().map(Option::unwrap).collect();
+        let se: Vec<f64> = fit
+            .standard_errors()
+            .into_iter()
+            .map(Option::unwrap)
+            .collect();
         assert_close(&se, &want, Tolerance::exact().rel(1e-5));
         let rows: f64 = (0..n)
             .map(|i| fit.row_probabilities(i).unwrap().iter().sum::<f64>())
@@ -111,10 +115,7 @@ fn separation_does_not_converge_and_a_collinear_design_is_an_error() {
     let x = Mat::from_fn(8, 2, |i, j| if j == 0 { 1.0 } else { i as f64 - 3.5 });
     let y: Vec<usize> = (0..8).map(|i| usize::from(i >= 4)).collect();
     let separated = Multinom::default().fit4(x.as_ref(), &y, 2, None);
-    assert!(
-        matches!(separated, Err(Error::Separation)),
-        "{separated:?}"
-    );
+    assert!(matches!(separated, Err(Error::Separation)), "{separated:?}");
 
     let x = Mat::from_fn(8, 3, |i, j| match j {
         0 => 1.0,

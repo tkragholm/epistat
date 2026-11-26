@@ -25,7 +25,9 @@ fn spoiled(bad: BadInput) -> Mat<f64> {
 }
 
 fn counts() -> Vec<f64> {
-    (0..N).map(|i| f64::from(u8::try_from(i % 5).unwrap())).collect()
+    (0..N)
+        .map(|i| f64::from(u8::try_from(i % 5).unwrap()))
+        .collect()
 }
 
 fn binary() -> Vec<f64> {
@@ -105,8 +107,12 @@ fn the_models_refuse_bad_columns() {
             GeeData::builder(x.as_ref(), &y, &cluster)
                 .build()
                 .and_then(|d| {
-                    Gee::new(Family::Poisson, Link::Log, epistat_glm::Correlation::Exchangeable)
-                        .fit(&d)
+                    Gee::new(
+                        Family::Poisson,
+                        Link::Log,
+                        epistat_glm::Correlation::Exchangeable,
+                    )
+                    .fit(&d)
                 })
         })
     });
@@ -167,9 +173,8 @@ fn feols_and_the_park_tests_refuse_bad_columns() {
         (bad != BadInput::Unsorted).then(|| Feols::default().fit(z.as_ref(), &bad.column(&y), &fe))
     });
     assert_rejects_bad_input("FixedEffects::new", |bad| {
-        (bad != BadInput::Unsorted).then(|| {
-            FixedEffects::new(&[&unit], Some(&bad.column(&weights())), Singletons::Keep)
-        })
+        (bad != BadInput::Unsorted)
+            .then(|| FixedEffects::new(&[&unit], Some(&bad.column(&weights())), Singletons::Keep))
     });
     let fitted: Vec<f64> = (0..N).map(|i| 1.0 + i as f64).collect();
     assert_rejects_bad_input("modified_park_test", |bad| {

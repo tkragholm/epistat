@@ -115,10 +115,10 @@
 
 #![expect(clippy::float_cmp, reason = "a constant column holds one exact value")]
 
-use epistat_inference::sandwich::{meat, sandwich_with_inverse};
-use epistat_inference::wald::{Wald, wald};
 use epistat_core::Covariance;
 use epistat_inference::Clusters;
+use epistat_inference::sandwich::{meat, sandwich_with_inverse};
+use epistat_inference::wald::{Wald, wald};
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, weighted_gram};
 use epistat_stats::dist::normal;
@@ -687,8 +687,7 @@ impl Ordinal {
             j if j <= p_in => x[(i, j - 1)],
             j => nominal.map_or(0.0, |m| m[(i, j - 1 - p_in)]),
         });
-        let keep =
-            independent_columns(joint.as_ref(), w, None, 1e-8).map_err(Error::Design)?;
+        let keep = independent_columns(joint.as_ref(), w, None, 1e-8).map_err(Error::Design)?;
         if let Some(l) = keep[1 + p_in..].iter().position(|&k| !k) {
             return Err(Error::Aliased { column: p_in + l });
         }
@@ -991,7 +990,13 @@ pub fn brant(data: &OrdinalData<'_>) -> Result<BrantTest, Error> {
             .iter()
             .map(|&c| f64::from(u8::from(c as usize > k)))
             .collect();
-        let fit = model.fit(&GlmData::from_parts(z.as_ref(), &response, Some(w), None, None)?)?;
+        let fit = model.fit(&GlmData::from_parts(
+            z.as_ref(),
+            &response,
+            Some(w),
+            None,
+            None,
+        )?)?;
         for j in 0..=p {
             let b = fit.coefficients[j].ok_or(Error::Singular)?;
             if j > 0 {

@@ -57,8 +57,8 @@ fn worst(got: &[Option<f64>], want: &[Option<f64>], label: &str) -> f64 {
 fn one_factor_matches_fixest_and_dummies() {
     for case in &reference().cases {
         let x = matrix(&case.x);
-        let fe = FixedEffects::new(&[&case.fam], case.weights.as_deref(), Singletons::Remove)
-            .unwrap();
+        let fe =
+            FixedEffects::new(&[&case.fam], case.weights.as_deref(), Singletons::Remove).unwrap();
         let fit = Feols::default().fit(x.as_ref(), &case.y, &fe).unwrap();
         // The coefficients equal the dummy-variable regression to the
         // condition of the demeaned Gram matrix times epsilon, about 1e-12

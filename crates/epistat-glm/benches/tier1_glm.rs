@@ -23,8 +23,8 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_core::Covariance;
 use epistat_glm::{
-    Feols, FixedEffects, GlmData, NegBin, RiskScale, SandwichType, Singletons, Ssc, ThetaRule, Vcov,
-    risk_regression,
+    Feols, FixedEffects, GlmData, NegBin, RiskScale, SandwichType, Singletons, Ssc, ThetaRule,
+    Vcov, risk_regression,
 };
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;

@@ -1,12 +1,12 @@
 //! `attributable_logistic`: what it refuses and the results that are not
 //! numbers, on small fits.
 
-use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
 use epistat_core::Level;
+use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
 use epistat_glm::{Error, Family, Glm, Link};
 use epistat_inference::Clusters;
-use epistat_testkit::{BadInput, assert_rejects_bad_input};
 use epistat_linalg::Mat;
+use epistat_testkit::{BadInput, assert_rejects_bad_input};
 
 mod common;
 use common::*;
@@ -78,7 +78,16 @@ fn nobody_exposed_gives_zero_and_no_events_gives_nothing() {
     let none_fit = Glm::new(Family::Binomial, Link::Logit)
         .fit5(x.as_ref(), &y, Some(&zeros), None, None)
         .unwrap();
-    let a = run(&none_fit, &x, &x, &y, Some(&zeros), None, &AfOptions::default()).unwrap();
+    let a = run(
+        &none_fit,
+        &x,
+        &x,
+        &y,
+        Some(&zeros),
+        None,
+        &AfOptions::default(),
+    )
+    .unwrap();
     assert!(a.af.is_none());
     assert_eq!(a.n_cases, 0);
 }
@@ -126,7 +135,15 @@ fn bad_columns_are_input_errors() {
     assert_rejects_bad_input("attributable_logistic", |bad| {
         Some(match bad {
             BadInput::Unsorted => return None,
-            _ => run(&fit, &x, &x0, &bad.column(&y), None, None, &AfOptions::default()),
+            _ => run(
+                &fit,
+                &x,
+                &x0,
+                &bad.column(&y),
+                None,
+                None,
+                &AfOptions::default(),
+            ),
         })
     });
 }

@@ -57,11 +57,15 @@ pub mod rows;
 #[cfg(test)]
 mod test_support;
 
-pub use absorb::{
-    Absorb, AbsorbMethod, Demeaned, FixedEffectValues, FixedEffects, Singletons,
+pub use absorb::{Absorb, AbsorbMethod, Demeaned, FixedEffectValues, FixedEffects, Singletons};
+pub use between::between_within;
+pub use data::{
+    GeeData, GeeDataBuilder, GlmData, GlmDataBuilder, MultinomData, MultinomDataBuilder,
+    OrdinalData, OrdinalDataBuilder,
 };
 pub use elastic_net::{ElasticNet, ElasticNetFit, ResponseScaling};
 pub use epistat_stats::logistic::expit;
+pub use error::Error;
 pub use family::{Family, Link};
 pub use feols::{Feols, FeolsCovariance, FeolsFit, GDf, KFixef, Ssc, Vcov};
 pub use fit::{Fit, Glm};
@@ -70,11 +74,15 @@ pub use multinom::{Multinom, MultinomFit};
 pub use negbin::{NegBin, NegBinFit, ThetaRule};
 pub use ordinal::{BrantTest, Ordinal, OrdinalFit, OrdinalLink, brant};
 pub use robust::{RiskFit, RiskScale, SandwichType, risk_regression, robust_covariance};
-pub use between::between_within;
-pub use data::{
-    GeeData, GeeDataBuilder, GlmData, GlmDataBuilder, MultinomData, MultinomDataBuilder,
-    OrdinalData, OrdinalDataBuilder,
-};
-pub use error::Error;
-#[allow(deprecated)]
-pub use error::{ElasticNetError, GlmError, MultinomError};
+
+/// The error type of epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type GlmError = Error;
+
+/// The error type of the elastic net in epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type ElasticNetError = Error;
+
+/// The error type of the multinomial logit in epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type MultinomError = Error;

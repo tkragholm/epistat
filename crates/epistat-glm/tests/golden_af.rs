@@ -10,8 +10,8 @@
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
 use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
-use epistat_inference::Clusters;
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{Fingerprint, SplitMix64};
 

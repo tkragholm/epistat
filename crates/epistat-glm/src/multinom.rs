@@ -49,8 +49,9 @@ use rayon::prelude::*;
 
 use crate::{Error, MultinomData};
 
-#[allow(deprecated)]
-pub use crate::error::MultinomError;
+/// The error type of the multinomial logit in epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type MultinomError = Error;
 
 /// Fitting controls for the multinomial logit.
 #[derive(Clone, Copy, Debug, PartialEq)]

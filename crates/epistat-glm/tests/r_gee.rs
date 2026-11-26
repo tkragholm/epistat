@@ -264,7 +264,11 @@ fn independence_is_glm_with_the_clustered_sandwich() {
     // glm stops at a relative change of 1e-8 in the deviance, so its
     // coefficients are within about 1e-6 of the maximum.
     let a = worst(&some(&got.coefficients), &r.independence_glm.coef, "coef");
-    let b = worst(&some(got.covariance.as_slice()), &r.independence_glm.robust, "robust");
+    let b = worst(
+        &some(got.covariance.as_slice()),
+        &r.independence_glm.robust,
+        "robust",
+    );
     eprintln!("independence against glm and vcovCL: coef {a:.1e} robust {b:.1e}");
     assert!(a < 1e-6 && b < 1e-6);
     // The same covariance from this crate's own sandwich on the Glm fit.
@@ -281,7 +285,11 @@ fn independence_is_glm_with_the_clustered_sandwich() {
         SandwichType::Hc0,
     )
     .unwrap();
-    let c = worst(&some(got.covariance.as_slice()), &some(own.as_slice()), "own sandwich");
+    let c = worst(
+        &some(got.covariance.as_slice()),
+        &some(own.as_slice()),
+        "own sandwich",
+    );
     eprintln!("independence against robust_covariance Hc0: {c:.1e}");
     assert!(c < 1e-6);
 }

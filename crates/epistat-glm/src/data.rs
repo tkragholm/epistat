@@ -32,9 +32,9 @@
 //! cost), so the model checks it when it fits, with
 //! [`Error::Response`](crate::Error::Response).
 
-use epistat_core::check;
 #[cfg(doc)]
 use epistat_core::InputError;
+use epistat_core::check;
 use epistat_linalg::MatRef;
 
 use crate::Error;
@@ -48,7 +48,7 @@ struct Common<'a> {
     offset: Option<&'a [f64]>,
 }
 
-impl<'a> Common<'a> {
+impl Common<'_> {
     fn check(self) -> Result<Self, Error> {
         let n = self.x.nrows();
         check::non_empty("x", n)?;

@@ -154,8 +154,9 @@ use epistat_linalg::MatRef;
 
 use crate::{Error, Family, GlmData};
 
-#[allow(deprecated)]
-pub use crate::error::ElasticNetError;
+/// The error type of the elastic net in epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type ElasticNetError = Error;
 use crate::columns::{column_slices, contiguous_copy};
 
 /// The largest number of columns for which the fit works from the weighted
@@ -1606,15 +1607,18 @@ mod tests {
         let run = |enet: &ElasticNet, y: &[f64], w: Option<&[f64]>, f: Option<&[f64]>| {
             enet.fit6(x.as_ref(), y, w, None, f, None).unwrap_err()
         };
-        let domain = |error: Error, name: &str| {
-            matches!(error, Error::Input(InputError::Domain { what, .. }) if what == name)
-        };
+        let domain = |error: Error, name: &str| matches!(error, Error::Input(InputError::Domain { what, .. }) if what == name);
         assert!(matches!(
             run(&ElasticNet::new(Family::Poisson, 0.1, 0.5), &y, None, None),
             Error::Unsupported { .. }
         ));
         assert!(domain(
-            run(&ElasticNet::new(Family::Gaussian, -1.0, 0.5), &y, None, None),
+            run(
+                &ElasticNet::new(Family::Gaussian, -1.0, 0.5),
+                &y,
+                None,
+                None
+            ),
             "lambda"
         ));
         assert!(domain(

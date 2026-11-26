@@ -133,7 +133,9 @@ fn main() {
     let (times, (coefficients, covariance)) = common::timed(common::reps(), || {
         let fe = FixedEffects::new(&factors, None, Singletons::Remove).expect("factors");
         let fit = Feols::default().fit(x.as_ref(), y, &fe).expect("feols");
-        let cov = fit.vcov(&fe, Vcov::Cluster(&ways), Ssc::new()).expect("vcov");
+        let cov = fit
+            .vcov(&fe, Vcov::Cluster(&ways), Ssc::new())
+            .expect("vcov");
         (fit.coefficients, cov.matrix)
     });
     let mut lines = Lines::default();
@@ -173,7 +175,9 @@ fn workers(method: &str, n: usize) {
     let (times, (coefficients, covariance, iterations)) = common::timed(common::reps(), || {
         let fe = FixedEffects::new(&factors, None, Singletons::Remove).expect("factors");
         let fit = Feols { absorb }.fit(x.as_ref(), y, &fe).expect("feols");
-        let cov = fit.vcov(&fe, Vcov::Cluster(&ways), Ssc::new()).expect("vcov");
+        let cov = fit
+            .vcov(&fe, Vcov::Cluster(&ways), Ssc::new())
+            .expect("vcov");
         (fit.coefficients, cov.matrix, fit.iterations)
     });
     let mut lines = Lines::default();

@@ -36,7 +36,7 @@
 //!
 //! # Cost
 //!
-//! Blocks are formed in waves of [`WAVE`] in parallel, so the memory beyond
+//! Blocks are formed in waves of 32 in parallel, so the memory beyond
 //! the source is about `WAVE * ROW_BLOCK * (p + 8)` values. Each iteration
 //! forms the rows once, at the new coefficients, for the deviance and the
 //! products of the next iteration together, and again when a step is halved.

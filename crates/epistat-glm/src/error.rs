@@ -123,18 +123,6 @@ pub enum Error {
     Inference(#[from] epistat_inference::Error),
 }
 
-/// The error type of epistat-glm 0.2.
-#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
-pub type GlmError = Error;
-
-/// The error type of the elastic net in epistat-glm 0.2.
-#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
-pub type ElasticNetError = Error;
-
-/// The error type of the multinomial logit in epistat-glm 0.2.
-#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
-pub type MultinomError = Error;
-
 impl Classify for Error {
     fn kind(&self) -> ErrorKind {
         match self {
@@ -207,7 +195,10 @@ pub(crate) fn finite_matrix(what: &'static str, x: MatRef<'_, f64>) -> Result<()
             first = Some(row);
         }
     }
-    first.map_or(Ok(()), |row| Err(InputError::NotFinite { what, row }.into()))
+    first.map_or(
+        Ok(()),
+        |row| Err(InputError::NotFinite { what, row }.into()),
+    )
 }
 
 /// Every weight is finite and not negative, or the error of the first that is

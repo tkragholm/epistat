@@ -196,11 +196,11 @@ fn risk_difference_matches_binomial_identity() {
         (SandwichType::Hc1, &d.cl_hc1, true),
     ] {
         let fit = risk_regression(
-        RiskScale::Difference,
-        &glm_data(x.as_ref(), &d.y, None, None, None).unwrap(),
-        with_clusters.then_some(&clusters),
-        kind,
-    )
+            RiskScale::Difference,
+            &glm_data(x.as_ref(), &d.y, None, None, None).unwrap(),
+            with_clusters.then_some(&clusters),
+            kind,
+        )
         .unwrap();
         for (j, &c) in d.coef.iter().enumerate() {
             assert!(
@@ -227,7 +227,14 @@ fn covariance_bits() -> Vec<f64> {
     let clusters = Clusters::from_labels(case.cluster.as_ref().unwrap());
     let fit = risk_regression(
         RiskScale::Ratio,
-        &glm_data(x.as_ref(), &case.y, case.weights.as_deref(), case.offset.as_deref(), None).unwrap(),
+        &glm_data(
+            x.as_ref(),
+            &case.y,
+            case.weights.as_deref(),
+            case.offset.as_deref(),
+            None,
+        )
+        .unwrap(),
         Some(&clusters),
         SandwichType::Hc1,
     )

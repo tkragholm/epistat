@@ -930,11 +930,7 @@ impl FixedEffects {
     ///
     /// [`Error::Input`] for an unusable control, sums of the wrong shape or a
     /// sum that is not finite, and [`Error::NotConverged`].
-    pub fn solve_sums(
-        &self,
-        sums: &[&[f64]],
-        control: &Absorb,
-    ) -> Result<Vec<Vec<f64>>, Error> {
+    pub fn solve_sums(&self, sums: &[&[f64]], control: &Absorb) -> Result<Vec<Vec<f64>>, Error> {
         control.check()?;
         let levels = self.levels();
         if sums.len() != levels.len() {
@@ -1799,6 +1795,15 @@ fn irons_tuck(x: &[f64], gx: &[f64], ggx: &[f64]) -> Vec<f64> {
         .collect()
 }
 
+/// The error of a value of `found` entries where `expected` were needed.
+const fn length_error(what: &'static str, expected: usize, found: usize) -> Error {
+    Error::Input(InputError::Length {
+        what,
+        expected,
+        found,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(
@@ -2015,13 +2020,4 @@ mod tests {
             bits
         });
     }
-}
-
-/// The error of a value of `found` entries where `expected` were needed.
-const fn length_error(what: &'static str, expected: usize, found: usize) -> Error {
-    Error::Input(InputError::Length {
-        what,
-        expected,
-        found,
-    })
 }

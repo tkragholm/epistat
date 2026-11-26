@@ -5,9 +5,9 @@
 //! for designs of one block and of several, with an aliased column, with prior
 //! weights of 0, and with clusters that are and are not contiguous.
 
+use epistat_core::{Covariance, InputError};
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
-use epistat_core::{Covariance, InputError};
 use epistat_glm::{Error, Family, Glm, Link};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;

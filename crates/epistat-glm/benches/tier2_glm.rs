@@ -178,7 +178,11 @@ fn main() {
                 let w = columns(&t, &["z1", "z2"], false);
                 let (times, fit) = common::timed(common::reps(), || {
                     let builder = OrdinalData::builder(x.as_ref(), &y);
-                    let builder = if ppo { builder.nominal(w.as_ref()) } else { builder };
+                    let builder = if ppo {
+                        builder.nominal(w.as_ref())
+                    } else {
+                        builder
+                    };
                     model.fit(&builder.build().expect("data")).expect("ordinal")
                 });
                 let k1 = fit.thresholds.len();

@@ -616,7 +616,11 @@ mod tests {
             Error::Unsupported { .. }
         ));
         assert!(matches!(
-            NegBin::new().fit(&GlmData::builder(x.as_ref(), &[1.0, -1.0, 2.0]).build().unwrap()),
+            NegBin::new().fit(
+                &GlmData::builder(x.as_ref(), &[1.0, -1.0, 2.0])
+                    .build()
+                    .unwrap()
+            ),
             Err(Error::Response { .. })
         ));
     }

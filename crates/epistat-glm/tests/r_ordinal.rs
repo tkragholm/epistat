@@ -343,7 +343,10 @@ fn partial_proportional_odds_matches_clm_and_vglm() {
 fn brant_test_matches_the_transcription() {
     for case in &reference().brant {
         let x = matrix(&case.x);
-        let got = brant(&ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap()).unwrap();
+        let got = brant(
+            &ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap(),
+        )
+        .unwrap();
         let b = worst(&got.coefficients, &case.coefficients, "slopes");
         let o = (got.omnibus.statistic - case.omnibus).abs() / case.omnibus;
         let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
@@ -370,7 +373,10 @@ fn brant_test_matches_the_transcription() {
 fn brant_test_matches_the_brant_package() {
     for case in &reference().brant {
         let x = matrix(&case.x);
-        let got = brant(&ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap()).unwrap();
+        let got = brant(
+            &ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap(),
+        )
+        .unwrap();
         let o = (got.omnibus.statistic - case.pkg_omnibus).abs() / case.pkg_omnibus;
         let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
         let c = per
@@ -490,7 +496,18 @@ fn all_bits() -> Vec<f64> {
     out.extend(&fit.nominal);
     out.extend(some(fit.covariance.as_slice()));
     let c = &r.brant[1];
-    let got = brant(&ordinal_data(matrix(&c.x).as_ref(), None, &c.y, Some(&c.weights), None, None).unwrap()).unwrap();
+    let got = brant(
+        &ordinal_data(
+            matrix(&c.x).as_ref(),
+            None,
+            &c.y,
+            Some(&c.weights),
+            None,
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     out.extend(&got.coefficients);
     out.push(got.omnibus.statistic);
     out

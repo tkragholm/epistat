@@ -16,8 +16,8 @@
 //! functions, and by the same rounding: `1e-6`. The data meet both bounds by
 //! two to five orders.
 
-use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
 use epistat_core::Level;
+use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;

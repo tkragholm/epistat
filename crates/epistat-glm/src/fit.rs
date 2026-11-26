@@ -246,8 +246,9 @@ use rayon::prelude::*;
 use crate::error::{finite, finite_matrix, length};
 use crate::{Error, Family, GlmData, Link};
 
-#[allow(deprecated)]
-pub use crate::error::GlmError;
+/// The error type of epistat-glm 0.2.
+#[deprecated(since = "0.3.0", note = "use epistat_glm::Error")]
+pub type GlmError = Error;
 
 /// A model and its fitting controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1296,7 +1297,11 @@ mod tests {
         let (x, y) = data();
         let mut offset = vec![0.0; 40];
         offset[3] = 0.25;
-        let wide = Mat::from_fn(40, 3, |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] });
+        let wide = Mat::from_fn(
+            40,
+            3,
+            |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] },
+        );
         for (model, design) in [
             (Glm::new(Family::Gamma, Link::Log), &x),
             (Glm::new(Family::Gaussian, Link::Identity), &wide),
@@ -1331,7 +1336,11 @@ mod tests {
             coefficients.iter().map(|c| Some(*c)).collect::<Vec<_>>(),
             fit.coefficients
         );
-        let wide = Mat::from_fn(40, 3, |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] });
+        let wide = Mat::from_fn(
+            40,
+            3,
+            |i, j| if j < 2 { x[(i, j)] } else { 2.0 * x[(i, 1)] },
+        );
         let aliased = model.fit5(wide.as_ref(), &y, None, None, None).unwrap();
         assert_eq!(aliased.full_rank(), Err(Error::Aliased { column: 2 }));
         let short = Glm {

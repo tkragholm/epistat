@@ -251,6 +251,13 @@ impl OrdinalParts for Ordinal {
         offset: Option<&[f64]>,
         cluster: Option<&[u32]>,
     ) -> Result<OrdinalFit, Error> {
-        self.fit(&ordinal_data(x, Some(nominal), y, weights, offset, cluster)?)
+        self.fit(&ordinal_data(
+            x,
+            Some(nominal),
+            y,
+            weights,
+            offset,
+            cluster,
+        )?)
     }
 }

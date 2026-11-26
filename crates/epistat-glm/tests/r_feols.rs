@@ -599,7 +599,12 @@ fn all_bits(fit: &epistat_glm::FeolsFit, fe: &FixedEffects, ways: &[&[u32]]) -> 
     }
     for kind in [Vcov::Iid, Vcov::Hetero, Vcov::Cluster(ways)] {
         let cov = fit.vcov(fe, kind, Ssc::new()).unwrap();
-        out.extend(cov.matrix.as_slice().iter().map(|c| c.map_or(1, f64::to_bits)));
+        out.extend(
+            cov.matrix
+                .as_slice()
+                .iter()
+                .map(|c| c.map_or(1, f64::to_bits)),
+        );
     }
     for v in &fit.fixed_effects(fe).unwrap().values {
         out.extend(v.iter().map(|c| c.map_or(1, f64::to_bits)));

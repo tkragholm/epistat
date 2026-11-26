@@ -362,9 +362,8 @@ impl Gee {
         let w_in = weights.unwrap_or(&ones);
         let o_in = offset.unwrap_or(&zeros);
 
-        let start = Glm::new(self.family, self.link).fit(&GlmData::from_parts(
-            x, y, weights, offset, None,
-        )?)?;
+        let start = Glm::new(self.family, self.link)
+            .fit(&GlmData::from_parts(x, y, weights, offset, None)?)?;
         let kept: Vec<usize> = (0..p)
             .filter(|&j| start.coefficients[j].is_some())
             .collect();
@@ -566,8 +565,8 @@ impl Gee {
                 let alpha = if moment {
                     if not_positive(counts[1]) {
                         return Err(Error::Undefined(
-                        "the correlation, with too few pairs of rows",
-                    ));
+                            "the correlation, with too few pairs of rows",
+                        ));
                     }
                     sums[1] / (phi * counts[1])
                 } else {

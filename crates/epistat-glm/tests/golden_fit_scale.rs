@@ -137,7 +137,9 @@ fn fits() -> Vec<u64> {
     let start = [0.5, 0.0, 0.0, 0.0, 0.0];
     let gamma = Glm::new(Family::Gamma, Link::Log);
     hashes.push(hash_fit(
-        &gamma.fit5(x.as_ref(), &y, None, None, Some(&start)).unwrap(),
+        &gamma
+            .fit5(x.as_ref(), &y, None, None, Some(&start))
+            .unwrap(),
     ));
 
     // A log-binomial fit, whose steps leave the unit interval and are
