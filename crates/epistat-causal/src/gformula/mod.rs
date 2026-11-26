@@ -398,7 +398,7 @@ pub struct GFormulaOptions {
     /// the data (gfoRmula's `sim_trunc`). The default is true.
     pub truncate: bool,
     /// Whether the simulated courses of the point estimate are returned in
-    /// [`GFormula::simulated`] (gfoRmula's `sim_data_b`), one row per simulated
+    /// [`GFormula::courses`] (gfoRmula's `sim_data`), one row per simulated
     /// person and period for each strategy. The default is false: the memory
     /// is `strategies * simulated * periods * (variables + 6)` values.
     pub keep_simulated: bool,
@@ -550,7 +550,7 @@ pub struct GFormula {
     pub failed_replicates: usize,
     /// The simulated courses of the point estimate, the natural course first,
     /// when [`GFormulaOptions::keep_simulated`] asks for them.
-    pub simulated: Option<Vec<SimulatedCourse>>,
+    pub courses: Option<Vec<SimulatedCourse>>,
 }
 
 /// The parametric g-formula: fits the models of `covariates` (one per
@@ -635,7 +635,7 @@ pub fn gformula(
         simulated: sources.len(),
         replicates: options.bootstrap,
         failed_replicates: failed,
-        simulated: point.courses.take(),
+        courses: point.courses.take(),
     })
 }
 

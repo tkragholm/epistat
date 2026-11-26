@@ -1,5 +1,7 @@
-//! A categorical covariate in the g-formula against gfoRmula 1.1.1 and
-//! nnet 7.3-21. See `data/gformula_categorical.R`.
+//! A categorical covariate in the g-formula against the g-formula written out
+//! as an exact sum over two periods in R, with nnet 7.3-21 for the model of
+//! the categorical covariate. See `data/gformula_categorical.R`, which also says
+//! why gfoRmula's categorical covariates are not the reference.
 //!
 //! # The tolerances
 //!
@@ -10,13 +12,13 @@
 //! maximum, with `lambda`, the smallest eigenvalue of the information, above
 //! `50` here: `2e-6`. They are checked to `1e-5`.
 //!
-//! The risks are simulated by both sides with different random numbers, so
-//! they agree within Monte Carlo error: the difference of the two is within
-//! four of its standard errors, `sqrt(se_r^2 + se^2)`, at every period and in
-//! both strategies (a chance of `6e-5` for each comparison when the two
-//! estimate the same risk). gfoRmula fits the categorical model with nnet's
-//! default stopping rule, coefficients `1e-4` from the maximum, which moves its
-//! risks by about `1e-5`, below a tenth of the standard errors.
+//! The risk by the end of period 1 is simulated here and summed exactly in R,
+//! so they agree within the Monte Carlo error of the simulation: within four
+//! of its standard errors (a chance of `6e-5` for each of the two strategies).
+//! R's models of the binary variables are glm fits, which agree with ours to
+//! `8 kappa eps`, and its multinomial fit to `2e-6` as above, which moves the
+//! exact risk by less than `1e-5`, a hundredth of the standard error of 200,000
+//! simulated persons.
 
 use epistat_causal::gformula::{
     Covariate, CovariateKind, GFormulaOptions, Intervention, Outcome, PersonPeriods, Term,
@@ -41,10 +43,8 @@ struct Data {
 struct Reference {
     data: Data,
     l3_coef: Vec<f64>,
-    natural: Vec<f64>,
-    natural_se: Vec<f64>,
-    treat: Vec<f64>,
-    treat_se: Vec<f64>,
+    natural: f64,
+    treat: f64,
 }
 
 const L1: usize = 0;
@@ -116,7 +116,8 @@ fn a_categorical_covariate_agrees_with_gformula() {
         &outcome,
         &[Intervention::set(A, 1.0)],
         &GFormulaOptions {
-            simulated: Some(40_000),
+            simulated: Some(200_000),
+            periods: Some(2),
             ..GFormulaOptions::default()
         },
     )
@@ -126,20 +127,14 @@ fn a_categorical_covariate_agrees_with_gformula() {
     for (b, want) in model.coefficients.iter().zip(&r.l3_coef) {
         assert!((b - want).abs() < 1e-5, "{b} against {want}");
     }
-    for (s, (want, se)) in [(&r.natural, &r.natural_se), (&r.treat, &r.treat_se)]
-        .into_iter()
-        .enumerate()
-    {
-        for (k, e) in g.strategies[s].value.iter().enumerate() {
-            let mine = e.estimate.expect("a risk");
-            let own = e.monte_carlo_se.expect("an error");
-            let tol = 4.0 * (se[k] * se[k] + own * own).sqrt();
-            assert!(
-                (mine - want[k]).abs() < tol,
-                "strategy {s}, period {k}: {mine} against {} (tolerance {tol:e})",
-                want[k]
-            );
-        }
+    for (s, want) in [r.natural, r.treat].into_iter().enumerate() {
+        let e = &g.strategies[s].value[1];
+        let mine = e.estimate.expect("a risk");
+        let tol = 4.0 * e.monte_carlo_se.expect("an error");
+        assert!(
+            (mine - want).abs() < tol,
+            "strategy {s}: {mine} against {want} (tolerance {tol:e})"
+        );
     }
 }
 

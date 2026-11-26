@@ -458,11 +458,11 @@ fn the_simulated_courses_give_the_estimates() {
             ..GFormulaOptions::default()
         },
     );
-    assert!(plain.simulated.is_none());
-    let courses = kept.simulated.clone().expect("kept");
+    assert!(plain.courses.is_none());
+    let courses = kept.courses.clone().expect("kept");
     assert_eq!(
         GFormula {
-            simulated: None,
+            courses: None,
             ..kept
         },
         plain

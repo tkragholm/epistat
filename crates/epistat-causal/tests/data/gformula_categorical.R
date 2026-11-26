@@ -1,15 +1,23 @@
-# A categorical covariate in the g-formula, against gfoRmula::gformula with
-# covtype "categorical" (fitted by nnet::multinom).
+# A categorical covariate in the g-formula, against the g-formula written out
+# here as an exact sum, with the models fitted by glm and nnet::multinom.
 #
 # Survival over four periods with a binary covariate L1, a three-class
 # covariate L3 (classes 0, 1, 2) that depends on its own lag and on L1, and a
-# binary treatment A that depends on L3. The record holds the data; the
-# coefficients of the model of L3, refitted by nnet::multinom with reltol =
-# 1e-14 on the rows gfoRmula fits it on (periods 1 to 3), since its default
-# stopping rule leaves the coefficients about 1e-4 from the maximum; and the
-# risks by period of gfoRmula under the natural course and under "always
-# treat" with nsimul = 40000, with the Monte Carlo standard error of each from
-# the simulated persons (sim_data).
+# binary treatment A that depends on L3. The models are fitted on the data:
+# L1, L3 and A on the rows of periods 1 to 3 (L3 by nnet::multinom with
+# reltol = 1e-14, since its default stopping rule leaves the coefficients about
+# 1e-4 from the maximum), the outcome on every row. The risk by the end of
+# period 1 under the natural course and under "always treat" is then the exact
+# sum over the values of L1, L3 and A in period 1, averaged over the persons'
+# period-0 rows:
+#   risk_1 = mean_i [ p_0 + (1 - p_0) sum_{l1, l3, a} P(l1) P(l3 | l1) P(a | l1, l3) p_1 ],
+# with p_0 the outcome model on the period-0 row (A set to 1 under "always
+# treat") and p_1 on the period-1 values.
+#
+# gfoRmula::gformula 1.1.1 with covtype "categorical" is not the reference:
+# on these data its simulated L3 keeps the period-0 distribution in every
+# period (the class proportions of its sim_data do not change with t0), while
+# the observed proportions rise from 0.31 and 0.14 to 0.39 and 0.19.
 # Numbers are written with 17 digits.
 #
 # Run from the crate directory:
@@ -17,7 +25,6 @@
 suppressMessages({
   library(jsonlite)
   library(data.table)
-  library(gfoRmula)
   library(nnet)
 })
 set.seed(20261126)
@@ -41,44 +48,49 @@ for (i in seq_len(n)) {
   }
 }
 d <- rbindlist(rows)
-dg <- copy(d)
-dg[, L3 := factor(L3, levels = 0:2)]
-fit <- gformula(obs_data = dg, id = "id", time_name = "t0",
-  covnames = c("L1", "L3", "A"), covtypes = c("binary", "categorical", "binary"),
-  histories = c(lagged), histvars = list(c("L1", "L3", "A")),
-  covparams = list(covmodels = c(L1 ~ lag1_L1 + lag1_A + V,
-                                 L3 ~ lag1_L3 + L1,
-                                 A ~ lag1_A + L1 + L3)),
-  outcome_name = "Y", outcome_type = "survival",
-  ymodel = Y ~ L1 + L3 + A + V,
-  intvars = list("A"), interventions = list(list(c(static, rep(1, K)))),
-  basecovs = c("V"), nsimul = 40000, seed = 7, sim_data_b = TRUE)
-res <- as.data.frame(fit$result)
-mc_se <- function(s) {
-  s <- as.data.table(s)
-  sapply(0:(K - 1), function(k) {
-    v <- s[t0 == k, poprisk]
-    sd(v) / sqrt(length(v))
-  })
-}
-# The model of L3 on the rows of periods 1 to K - 1, with lag1_L3 as a factor
-# whose value before period 0 is the reference class.
 dl <- copy(d)
-dl[, lag1_L3 := shift(L3, fill = 0), by = id]
-dl <- dl[t0 >= 1]
-dl[, lag1_L3 := factor(lag1_L3, levels = 0:2)]
-tight <- multinom(factor(L3, levels = 0:2) ~ lag1_L3 + L1, data = dl, reltol = 1e-14,
+dl[, `:=`(lag1_L1 = shift(L1, fill = 0), lag1_L3 = shift(L3, fill = 0),
+  lag1_A = shift(A, fill = 0)), by = id]
+later <- dl[t0 >= 1]
+later[, lag1_L3f := factor(lag1_L3, levels = 0:2)]
+m_l1 <- glm(L1 ~ lag1_L1 + lag1_A + V, family = binomial, data = later)
+tight <- multinom(factor(L3, levels = 0:2) ~ lag1_L3f + L1, data = later, reltol = 1e-14,
   maxit = 10000, trace = FALSE)
+m_a <- glm(A ~ lag1_A + L1 + factor(L3, levels = 0:2), family = binomial, data = later)
+m_y <- glm(Y ~ L1 + factor(L3, levels = 0:2) + A + V, family = binomial, data = dl)
+b1 <- coef(m_l1); bl3 <- coef(tight); ba <- coef(m_a); by <- coef(m_y)
+ind <- function(x) c(x == 1, x == 2)
+py <- function(l1, l3, a, v) plogis(sum(by * c(1, l1, ind(l3), a, v)))
+exact <- function(treat) {
+  base <- d[t0 == 0]
+  mean(sapply(seq_len(nrow(base)), function(i) {
+    r <- base[i]
+    a0 <- if (treat) 1 else r$A
+    p0 <- py(r$L1, r$L3, a0, r$V)
+    p_l1 <- plogis(sum(b1 * c(1, r$L1, a0, r$V)))
+    total <- 0
+    for (l1 in 0:1) {
+      pl1 <- if (l1 == 1) p_l1 else 1 - p_l1
+      e <- exp(drop(bl3 %*% c(1, ind(r$L3), l1)))
+      pl3 <- c(1, e) / (1 + sum(e))
+      for (l3 in 0:2) {
+        p_a <- plogis(sum(ba * c(1, a0, l1, ind(l3))))
+        for (a in 0:1) {
+          pa <- if (treat) as.numeric(a == 1) else if (a == 1) p_a else 1 - p_a
+          total <- total + pl1 * pl3[l3 + 1] * pa * py(l1, l3, a, r$V)
+        }
+      }
+    }
+    p0 + (1 - p0) * total
+  }))
+}
 out <- list(
   versions = list(R = as.character(getRversion()),
-    gfoRmula = as.character(packageVersion("gfoRmula")),
     nnet = as.character(packageVersion("nnet")),
     data.table = as.character(packageVersion("data.table")),
     jsonlite = as.character(packageVersion("jsonlite"))),
   data = list(id = d$id, t0 = d$t0, V = d$V, L1 = d$L1, L3 = d$L3, A = d$A, Y = d$Y),
   l3_coef = as.numeric(t(coef(tight))),
-  natural = as.numeric(res[res$`Interv.` == 0, "g-form risk"]),
-  natural_se = mc_se(fit$sim_data[[1]]),
-  treat = as.numeric(res[res$`Interv.` == 1, "g-form risk"]),
-  treat_se = mc_se(fit$sim_data[[2]]))
+  natural = exact(FALSE),
+  treat = exact(TRUE))
 cat(toJSON(out, digits = I(17), auto_unbox = TRUE))

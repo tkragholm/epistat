@@ -74,7 +74,7 @@
 //! treatment:  logit g = z_i' a                       on the persons,
 //! ```
 //!
-//! all with the case weights, as `glm` fits them. Censoring after the last
+//! all with the case weights rescaled to mean 1, as `glm` fits them. Censoring after the last
 //! interval `K` is the end of follow-up and is not modelled. The predictions
 //! are `lambda_k(a, x)` and `c_k(a, x)` from the designs with the treatment set
 //! to `a`, for `k` up to the horizon. The variance treats the fitted models as
@@ -646,12 +646,17 @@ pub fn tmle_survival_glm(
     if let Some(i) = input.time.iter().position(|&k| k == 0) {
         return Err(Error::input(format!("time: person {i} has 0 intervals")));
     }
-    let w: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-    if let Some(i) = w.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
+    let raw: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
+    if let Some(i) = raw.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
         return Err(Error::input(format!(
             "weight: value {i} is negative or not finite"
         )));
     }
+    // The fits take the weights rescaled to mean 1, as the estimator does:
+    // the coefficients do not depend on the scale, but the stopping rule of
+    // IRLS, a relative change of the deviance with 0.1 added, does.
+    let sum = compensated(raw.iter().copied());
+    let w: Vec<f64> = raw.iter().map(|&x| x / sum * n as f64).collect();
     let last = input.time.iter().copied().max().unwrap_or(0);
     let t = opts.horizon;
     let mut event_rows = Vec::new();
