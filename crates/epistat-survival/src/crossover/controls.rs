@@ -203,9 +203,11 @@ pub fn sample_controls(
                 first: Vec::new(),
             });
         }
-        let g = groups.last_mut().expect("a group was pushed");
-        g.members.push(i);
-        g.first.push(candidates.first_event[i].unwrap_or(i64::MAX));
+        let last = groups.len() - 1;
+        groups[last].members.push(i);
+        groups[last]
+            .first
+            .push(candidates.first_event[i].unwrap_or(i64::MAX));
     }
     let per: Vec<Vec<usize>> = (0..n)
         .into_par_iter()

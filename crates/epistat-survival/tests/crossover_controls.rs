@@ -6,8 +6,9 @@
 
 #![expect(
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
-    reason = "small test counts"
+    reason = "small test counts and days"
 )]
 
 use epistat_survival::crossover::{
@@ -107,7 +108,10 @@ fn the_rules_choose_the_people_they_name() {
         vec![107]
     );
     // A key no candidate has gives nothing.
-    assert!(eligible(ControlRule::EventFree, 1, Some(7)).is_empty());
+    assert_eq!(
+        eligible(ControlRule::EventFree, 1, Some(7)),
+        Vec::<u32>::new()
+    );
 }
 
 #[test]
@@ -131,7 +135,7 @@ fn controls_are_distinct_within_a_case_and_carry_its_day() {
         assert_eq!(mine.len(), 3);
     }
     assert!((0..c.len()).all(|i| c.day[i] == days[c.case[i] as usize]));
-    assert!(c.cases_short.is_empty());
+    assert_eq!(c.cases_short, Vec::<u32>::new());
     // The same seed gives the same controls.
     let again =
         sample_controls(&cases, &p.candidates(false), ControlRule::EventFree, 3, 9).unwrap();

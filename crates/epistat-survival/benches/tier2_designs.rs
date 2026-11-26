@@ -37,7 +37,9 @@ use epistat_survival::crossover::{
     ExposureIntervals, Measure, Observation, Referent, StratumUnit, build_windows,
     exposure_in_windows,
 };
-use epistat_survival::sccs::{PieceSpec, SccsOptions, WindowSpec, build_pieces, fit as sccs_fit};
+use epistat_survival::sccs::{
+    ExposureSeries, PieceSpec, SccsOptions, WindowSpec, build_pieces, fit as sccs_fit,
+};
 use epistat_survival::standardise::attributable::af_from_standardised;
 use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
 
@@ -157,10 +159,13 @@ fn main() {
                 end,
                 event_offsets: &event_offsets,
                 events: &events,
-                exposure_offsets: &exposure_offsets,
-                exposures: &exposures,
+                exposures: &[ExposureSeries {
+                    offsets: &exposure_offsets,
+                    dates: &exposures,
+                    windows: &windows,
+                }],
                 age_cuts: &[200.0, 400.0, 700.0],
-                windows: &windows,
+                calendar: None,
             };
             let opts = SccsOptions {
                 robust: true,

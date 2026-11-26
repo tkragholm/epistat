@@ -180,6 +180,10 @@ fn invalid(message: impl Into<String>) -> Error {
     Error::input(message)
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "contiguous windows share their boundary exactly"
+)]
 fn check(spec: &EventDependentSpec<'_>) -> Result<usize> {
     let n = spec.start.len();
     if spec.end.len() != n || spec.event.len() != n || spec.dose_offsets.len() != n + 1 {

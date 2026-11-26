@@ -83,6 +83,10 @@ fn invalid(message: impl Into<String>) -> Error {
 /// have one entry per band (after the first, for the former), a probability is
 /// negative or their sum is not in `(0, 1]`, or `alpha` or `power` is not in
 /// `(0, 1)`.
+#[expect(
+    clippy::float_cmp,
+    reason = "a relative incidence of exactly 1 has nothing to detect"
+)]
 pub fn sample_size(spec: &SampleSizeSpec<'_>) -> Result<f64> {
     let rho = spec.relative_incidence;
     if !(rho.is_finite() && rho > 0.0) || rho == 1.0 {
@@ -98,7 +102,10 @@ pub fn sample_size(spec: &SampleSizeSpec<'_>) -> Result<f64> {
     let mut bounds = vec![spec.start];
     bounds.extend_from_slice(spec.age_cuts);
     bounds.push(spec.end);
-    if bounds.windows(2).any(|w| !(w[0] < w[1])) {
+    if bounds
+        .windows(2)
+        .any(|w| w[0].partial_cmp(&w[1]) != Some(std::cmp::Ordering::Less))
+    {
         return Err(invalid(
             "the age cuts must be strictly increasing and inside the observation period",
         ));

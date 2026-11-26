@@ -637,6 +637,10 @@ fn diagonal_roots(covariance: &[Option<f64>], p: usize) -> Vec<Option<f64>> {
 
 /// For each column, the people with events in at least two pieces whose
 /// value of the column varies between their pieces.
+#[expect(
+    clippy::float_cmp,
+    reason = "a column varies within a person or it does not"
+)]
 fn informative_by_column(data: &SccsData<'_>, x: MatRef<'_, f64>, persons: &Persons) -> Vec<usize> {
     let p = x.ncols();
     ordered_reduce(

@@ -448,14 +448,12 @@ pub fn build_windows_in_strata(
 }
 
 fn check_unit(unit: StratumUnit) -> Result<()> {
-    if let StratumUnit::Fixed { length, .. } = unit {
-        if length < 1 {
-            return Err(invalid(format!(
-                "a fixed stratum of {length} days is shorter than a day"
-            )));
-        }
+    match unit {
+        StratumUnit::Fixed { length, .. } if length < 1 => Err(invalid(format!(
+            "a fixed stratum of {length} days is shorter than a day"
+        ))),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 fn check_events(

@@ -114,7 +114,8 @@ impl SemiparametricPieces {
 /// `spec` has age cuts or a calendar.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "people are checked against u32, windows and event times are fewer"
+    clippy::float_cmp,
+    reason = "people are checked against u32, windows and event times are fewer; an event is at a distinct event time or not"
 )]
 pub fn semiparametric_pieces(spec: &PieceSpec<'_>) -> Result<SemiparametricPieces> {
     let n = check_spec(spec)?;

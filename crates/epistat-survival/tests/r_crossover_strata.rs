@@ -25,6 +25,13 @@
 //!   strata given per event, with observation periods that drop referents and
 //!   sets; every window and count is an integer and is compared exactly.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "a few thousand events and days, far inside the ranges of the casts"
+)]
+
 use epistat_linalg::Mat;
 use epistat_survival::clogit::{ClogitOptions, clogit};
 use epistat_survival::crossover::{
