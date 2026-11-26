@@ -30,6 +30,7 @@ test-utils = []
 nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
 arrow-array = { version = "60", optional = true, default-features = false }
 epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
 epistat-inference = { path = "../epistat-inference", version = "0.3.2" }

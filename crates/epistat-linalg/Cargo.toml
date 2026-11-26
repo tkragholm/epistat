@@ -17,6 +17,7 @@ repository.workspace = true
 nightly = ["faer/nightly"]
 
 [dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
 dyn-stack = "0.13"
 epistat-stats = { path = "../epistat-stats", version = "0.2.5" }
 faer = { version = "0.24", default-features = false, features = ["std", "linalg", "rayon"] }

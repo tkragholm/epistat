@@ -12,6 +12,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
 epistat-optim = { path = "../epistat-optim", version = "0.1.0", features = ["rayon"] }
 epistat-rng = { path = "../epistat-rng", version = "0.1.1" }
 epistat-stats = { path = "../epistat-stats", version = "0.2.0" }

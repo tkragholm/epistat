@@ -16,6 +16,7 @@ readme = "README.md"
 rand = ["dep:rand_core"]
 
 [dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
 rand_core = { version = "0.10", optional = true }
 
 [dev-dependencies]

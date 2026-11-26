@@ -32,6 +32,7 @@ parity-tests = ["honest"]
 nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
 bon = "3"
 clarabel = { version = "0.11.1", optional = true }
 epistat-inference = { path = "../epistat-inference", version = "0.3.2" }

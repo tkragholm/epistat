@@ -1,0 +1,26 @@
+[package]
+name = "epistat-core"
+description = "The types every epistat crate shares: confidence levels, intervals, estimates, covariances, codes for labels, the person-period key, civil dates, input checks and error kinds"
+keywords = ["statistics", "epidemiology", "confidence-interval", "covariance"]
+categories = ["science", "data-structures"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[features]
+# Serialize and deserialize the shared types, for bindings that fill options
+# from a dictionary and return results as tables.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1.0.200", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
+
+[lints]
+workspace = true
