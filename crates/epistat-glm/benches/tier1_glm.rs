@@ -9,7 +9,8 @@
 //! continuous `c`. Methods: `negbin` (`y` on the covariates with the offset,
 //! the `glm.nb` stopping rules), `risk_robust` (risk ratios of `b`, HC1),
 //! `risk_cluster` (the same with the sum of scores within families) and
-//! `within` (`c` on the covariates with a family effect, clustered variance).
+//! `within` (`c` on the covariates with a family effect, clustered variance,
+//! by `Feols` with the family as its one factor).
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -20,7 +21,11 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_glm::{NegBin, RiskScale, SandwichType, ThetaRule, Within, risk_regression};
+use epistat_core::Covariance;
+use epistat_glm::{
+    Feols, FixedEffects, GlmData, NegBin, RiskScale, SandwichType, Singletons, Ssc, ThetaRule, Vcov,
+    risk_regression,
+};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 
@@ -62,11 +67,10 @@ fn design(t: &Table, intercept: bool) -> Mat<f64> {
     })
 }
 
-fn coefficients(lines: &mut Lines, names: &[&str], coef: &[Option<f64>], cov: &[Option<f64>]) {
-    let p = coef.len();
+fn coefficients(lines: &mut Lines, names: &[&str], coef: &[Option<f64>], cov: &Covariance) {
     for (j, name) in names.iter().enumerate() {
         lines.push_opt(&format!("coef_{name}"), coef[j]);
-        lines.push_opt(&format!("se_{name}"), cov[j * p + j].map(f64::sqrt));
+        lines.push_opt(&format!("se_{name}"), cov.get(j, j).map(f64::sqrt));
     }
 }
 
@@ -85,11 +89,11 @@ fn main() {
                 theta_rule: ThetaRule::RParity,
                 ..NegBin::new()
             };
-            let (times, fit) = common::timed(common::reps(), || {
-                model
-                    .fit(x.as_ref(), t.col("y"), None, Some(t.col("off")))
-                    .expect("negbin")
-            });
+            let data = GlmData::builder(x.as_ref(), t.col("y"))
+                .offset(t.col("off"))
+                .build()
+                .expect("data");
+            let (times, fit) = common::timed(common::reps(), || model.fit(&data).expect("negbin"));
             coefficients(
                 &mut lines,
                 &["int", "x1", "x2", "x3"],
@@ -105,13 +109,13 @@ fn main() {
             let fam: Vec<u64> = t.ints("fam");
             let clusters = Clusters::from_labels(&fam);
             let clustered = method == "risk_cluster";
+            let data = GlmData::builder(x.as_ref(), t.col("b"))
+                .build()
+                .expect("data");
             let (times, fit) = common::timed(common::reps(), || {
                 risk_regression(
                     RiskScale::Ratio,
-                    x.as_ref(),
-                    t.col("b"),
-                    None,
-                    None,
+                    &data,
                     clustered.then_some(&clusters),
                     SandwichType::Hc1,
                 )
@@ -127,19 +131,22 @@ fn main() {
         }
         "within" => {
             let x = design(&t, false);
-            let fam: Vec<u64> = t.ints("fam");
-            let clusters = Clusters::from_labels(&fam);
-            let model = Within::new();
-            let (times, fit) = common::timed(common::reps(), || {
-                model
-                    .fit(x.as_ref(), t.col("c"), &clusters, None)
-                    .expect("within")
+            let fam: Vec<u32> = t.ints("fam");
+            let (times, (fit, cov)) = common::timed(common::reps(), || {
+                let fe = FixedEffects::new(&[&fam], None, Singletons::Remove).expect("families");
+                let fit = Feols::default()
+                    .fit(x.as_ref(), t.col("c"), &fe)
+                    .expect("within");
+                let cov = fit
+                    .vcov(&fe, Vcov::Cluster(&[&fam]), Ssc::new())
+                    .expect("clustered covariance");
+                (fit, cov)
             });
             coefficients(
                 &mut lines,
                 &["x1", "x2", "x3"],
                 &fit.coefficients,
-                &fit.robust_covariance,
+                &cov.matrix,
             );
             times
         }

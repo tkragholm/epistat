@@ -18,10 +18,13 @@
 //! relative, and the standard errors, which come from the information at the
 //! fit, at 1e-5 relative.
 
-use epistat_glm::{Multinom, MultinomError};
+use epistat_glm::{Error, Multinom};
 use epistat_linalg::Mat;
 use epistat_testkit::{Tolerance, assert_close, load_json};
 use serde::Deserialize;
+
+mod common;
+use common::*;
 
 #[derive(Deserialize)]
 struct Reference {
@@ -70,7 +73,7 @@ fn fits_match_nnet_multinom() {
     for f in &r.fits {
         let weights = f.weighted.then_some(r.weights.as_slice());
         let fit = Multinom::default()
-            .fit(x.as_ref(), &f.y, f.classes, weights)
+            .fit4(x.as_ref(), &f.y, f.classes, weights)
             .unwrap();
         let label = format!("{} classes, weighted {}", f.classes, f.weighted);
         assert!(fit.converged, "{label}");
@@ -93,9 +96,10 @@ fn fits_match_nnet_multinom() {
         assert_close(&fit.probabilities, &want, Tolerance::exact().abs(1e-6));
         assert_close(&[fit.deviance], &[f.deviance], Tolerance::exact().rel(1e-9));
         let want: Vec<f64> = f.se.iter().flatten().copied().collect();
-        assert_close(&fit.standard_errors(), &want, Tolerance::exact().rel(1e-5));
+        let se: Vec<f64> = fit.standard_errors().into_iter().map(Option::unwrap).collect();
+        assert_close(&se, &want, Tolerance::exact().rel(1e-5));
         let rows: f64 = (0..n)
-            .map(|i| fit.row_probabilities(i).iter().sum::<f64>())
+            .map(|i| fit.row_probabilities(i).unwrap().iter().sum::<f64>())
             .sum();
         assert!((rows - n as f64).abs() < 1e-9, "probabilities sum to one");
     }
@@ -106,9 +110,9 @@ fn separation_does_not_converge_and_a_collinear_design_is_an_error() {
     // The class is determined by the sign of the covariate.
     let x = Mat::from_fn(8, 2, |i, j| if j == 0 { 1.0 } else { i as f64 - 3.5 });
     let y: Vec<usize> = (0..8).map(|i| usize::from(i >= 4)).collect();
-    let separated = Multinom::default().fit(x.as_ref(), &y, 2, None);
+    let separated = Multinom::default().fit4(x.as_ref(), &y, 2, None);
     assert!(
-        matches!(separated, Err(MultinomError::Separation)),
+        matches!(separated, Err(Error::Separation)),
         "{separated:?}"
     );
 
@@ -118,22 +122,22 @@ fn separation_does_not_converge_and_a_collinear_design_is_an_error() {
         _ => 2.0 * i as f64,
     });
     let y = [0, 1, 0, 1, 1, 0, 1, 0];
-    assert!(Multinom::default().fit(x.as_ref(), &y, 2, None).is_err());
+    assert!(Multinom::default().fit4(x.as_ref(), &y, 2, None).is_err());
     // A label outside the classes, an empty class and a negative weight.
     let x = Mat::from_fn(4, 1, |_, _| 1.0);
     assert!(
         Multinom::default()
-            .fit(x.as_ref(), &[0, 1, 2, 0], 2, None)
+            .fit4(x.as_ref(), &[0, 1, 2, 0], 2, None)
             .is_err()
     );
     assert!(
         Multinom::default()
-            .fit(x.as_ref(), &[0, 1, 0, 1], 3, None)
+            .fit4(x.as_ref(), &[0, 1, 0, 1], 3, None)
             .is_err()
     );
     assert!(
         Multinom::default()
-            .fit(x.as_ref(), &[0, 1, 0, 1], 2, Some(&[1.0, -1.0, 1.0, 1.0]))
+            .fit4(x.as_ref(), &[0, 1, 0, 1], 2, Some(&[1.0, -1.0, 1.0, 1.0]))
             .is_err()
     );
 }

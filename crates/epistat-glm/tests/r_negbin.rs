@@ -6,6 +6,9 @@ use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
 
+mod common;
+use common::*;
+
 #[derive(Deserialize)]
 struct Reference {
     scenarios: Vec<Scenario>,
@@ -194,8 +197,8 @@ fn identity_link_with_an_offset_needs_starting_coefficients() {
         link: Link::Identity,
         ..NegBin::new()
     };
-    let without = model.fit(x.as_ref(), &scenario.y, None, scenario.offset.as_deref());
-    assert!(matches!(without, Err(epistat_glm::GlmError::NoValidStart)));
+    let without = model.fit4(x.as_ref(), &scenario.y, None, scenario.offset.as_deref());
+    assert!(matches!(without, Err(epistat_glm::Error::NoValidStart)));
     let short = model.fit_from(
         x.as_ref(),
         &scenario.y,
@@ -203,7 +206,12 @@ fn identity_link_with_an_offset_needs_starting_coefficients() {
         scenario.offset.as_deref(),
         Some(&[1.0]),
     );
-    assert!(matches!(short, Err(epistat_glm::GlmError::Length { .. })));
+    assert!(matches!(
+        short,
+        Err(epistat_glm::Error::Input(
+            epistat_core::InputError::Length { .. }
+        ))
+    ));
 }
 
 #[test]
@@ -215,7 +223,7 @@ fn quasi_families_match_glm() {
             _ => (Family::QuasiBinomial, Link::Logit),
         };
         let fit = Glm::new(family, link)
-            .fit(x.as_ref(), &case.y, Some(&case.weights), None, None)
+            .fit5(x.as_ref(), &case.y, Some(&case.weights), None, None)
             .unwrap();
         assert_eq!(fit.residual_df, case.df_residual, "{}", case.family);
         let dispersion = fit.dispersion.unwrap();
@@ -251,10 +259,10 @@ fn fit_bits() -> Vec<f64> {
     let scenario = &reference.scenarios[2];
     let x = matrix(&scenario.x);
     let fit = NegBin::new()
-        .fit(x.as_ref(), &scenario.y, None, None)
+        .fit4(x.as_ref(), &scenario.y, None, None)
         .unwrap();
     let mut out: Vec<f64> = fit.glm.coefficients.iter().map(|c| c.unwrap()).collect();
-    out.extend(fit.glm.covariance.iter().map(|c| c.unwrap()));
+    out.extend(fit.glm.covariance.as_slice().iter().map(|c| c.unwrap()));
     out.extend([
         fit.theta.unwrap(),
         fit.theta_se.unwrap(),

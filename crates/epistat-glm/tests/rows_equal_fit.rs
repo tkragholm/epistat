@@ -7,10 +7,14 @@
 
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
-use epistat_glm::{Family, Glm, GlmError, Link};
+use epistat_core::{Covariance, InputError};
+use epistat_glm::{Error, Family, Glm, Link};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{SplitMix64, assert_same_on_pools};
+
+mod common;
+use common::*;
 
 struct Held {
     x: Mat<f64>,
@@ -97,9 +101,13 @@ fn flatten(v: &[Option<f64>]) -> Vec<u64> {
     v.iter().map(|c| c.map_or(u64::MAX, f64::to_bits)).collect()
 }
 
+fn flatten_covariance(v: &Covariance) -> Vec<u64> {
+    flatten(v.as_slice())
+}
+
 fn same(model: Glm, held: &Held) {
     let fit = model
-        .fit(held.x.as_ref(), &held.y, Some(&held.w), None, None)
+        .fit5(held.x.as_ref(), &held.y, Some(&held.w), None, None)
         .unwrap();
     let rows = model.fit_rows(held).unwrap();
     assert_eq!(flatten(&rows.coefficients), flatten(&fit.coefficients));
@@ -124,7 +132,10 @@ fn same(model: Glm, held: &Held) {
         rows.dispersion.map(f64::to_bits),
         fit.dispersion.map(f64::to_bits)
     );
-    assert_eq!(flatten(&rows.covariance), flatten(&fit.covariance));
+    assert_eq!(
+        flatten_covariance(&rows.covariance),
+        flatten_covariance(&fit.covariance)
+    );
     let clusters = Clusters::from_labels(&held.cluster);
     for (clustered, kind) in [
         (false, SandwichType::Hc0),
@@ -143,7 +154,11 @@ fn same(model: Glm, held: &Held) {
         );
         let got = rows.robust_covariance(held, clustered, kind);
         match (got, expected) {
-            (Ok(g), Ok(e)) => assert_eq!(flatten(&g), flatten(&e), "{kind:?} {clustered}"),
+            (Ok(g), Ok(e)) => assert_eq!(
+                flatten_covariance(&g),
+                flatten_covariance(&e),
+                "{kind:?} {clustered}"
+            ),
             (g, e) => assert_eq!(g.err(), e.err(), "{kind:?} {clustered}"),
         }
     }
@@ -188,15 +203,21 @@ fn errors_are_those_of_the_fit() {
     held.w[5_000] = -1.0;
     held.w[5_100] = f64::NAN;
     let expected = model
-        .fit(held.x.as_ref(), &held.y, Some(&held.w), None, None)
+        .fit5(held.x.as_ref(), &held.y, Some(&held.w), None, None)
         .unwrap_err();
     assert_eq!(model.fit_rows(&held).unwrap_err(), expected);
-    assert!(matches!(expected, GlmError::Weight { index: 5_000, .. }));
+    assert!(matches!(
+        expected,
+        Error::Input(InputError::Domain {
+            what: "weights",
+            ..
+        })
+    ));
     held.w[5_000] = 1.0;
     held.w[5_100] = 1.0;
     held.y[4_500] = 2.0;
     let expected = model
-        .fit(held.x.as_ref(), &held.y, Some(&held.w), None, None)
+        .fit5(held.x.as_ref(), &held.y, Some(&held.w), None, None)
         .unwrap_err();
     assert_eq!(model.fit_rows(&held).unwrap_err(), expected);
 }
@@ -212,6 +233,7 @@ fn the_fit_does_not_depend_on_the_thread_count() {
         v.extend(
             f.robust_covariance(&held, true, SandwichType::Hc1)
                 .unwrap()
+                .as_slice()
                 .iter()
                 .flatten(),
         );

@@ -59,7 +59,7 @@ fn one_factor_matches_fixest_and_dummies() {
         let x = matrix(&case.x);
         let fe = FixedEffects::new(&[&case.fam], case.weights.as_deref(), Singletons::Remove)
             .unwrap();
-        let fit = Feols::default().fit(&case.y, x.as_ref(), &fe).unwrap();
+        let fit = Feols::default().fit(x.as_ref(), &case.y, &fe).unwrap();
         // The coefficients equal the dummy-variable regression to the
         // condition of the demeaned Gram matrix times epsilon, about 1e-12
         // here, plus the demeaning's tolerance of 1e-10 of a column's scale;
@@ -72,14 +72,14 @@ fn one_factor_matches_fixest_and_dummies() {
             let d = worst(&fit.coefficients, &case.lm_coef, &case.name);
             assert!(d <= 1e-9, "{} against lm {d:e}", case.name);
         }
-        let iid = fit.vcov(Vcov::Iid, Ssc::new()).unwrap();
+        let iid = fit.vcov(&fe, Vcov::Iid, Ssc::new()).unwrap();
         let clustered = fit
-            .vcov(Vcov::Cluster(&[&case.fam]), Ssc::new())
+            .vcov(&fe, Vcov::Cluster(&[&case.fam]), Ssc::new())
             .unwrap();
         // The covariances are products of the coefficients' rounding, the
         // same 1e-9 bound relative to the largest entry.
-        let d1 = worst(&iid.matrix, &case.iid_vcov, &case.name);
-        let d2 = worst(&clustered.matrix, &case.cluster_vcov, &case.name);
+        let d1 = worst(iid.matrix.as_slice(), &case.iid_vcov, &case.name);
+        let d2 = worst(clustered.matrix.as_slice(), &case.cluster_vcov, &case.name);
         assert!(d1 <= 1e-9, "{} classical {d1:e}", case.name);
         assert!(d2 <= 1e-9, "{} clustered {d2:e}", case.name);
         assert!(

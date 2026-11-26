@@ -17,10 +17,15 @@
 //! two to five orders.
 
 use epistat_glm::attributable::{AfOptions, Design, IntervalScale, attributable_logistic};
+use epistat_core::Level;
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
+
+mod common;
+use common::*;
 
 #[derive(Deserialize)]
 struct Reference {
@@ -78,7 +83,7 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
         let x = matrix(&c.x);
         let x0 = matrix(&c.x0);
         let fit = model
-            .fit(x.as_ref(), &c.y, c.weights.as_deref(), None, None)
+            .fit5(x.as_ref(), &c.y, c.weights.as_deref(), None, None)
             .unwrap();
         let design = if c.is_case_control {
             Design::CaseControl
@@ -87,14 +92,16 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
         };
         let opts = AfOptions {
             design,
-            level: 0.95,
+            level: Level::confidence(0.95).unwrap(),
             scale: IntervalScale::Identity,
-            weights: c.weights.as_deref(),
-            cluster: c.cluster.as_deref(),
         };
-        let got = attributable_logistic(&fit, x.as_ref(), x0.as_ref(), &c.y, &opts).unwrap();
-        let af = got.af.unwrap();
-        let se = got.se.unwrap();
+        let data = glm_data(x.as_ref(), &c.y, c.weights.as_deref(), None, None).unwrap();
+        let clusters = c.cluster.as_deref().map(Clusters::from_labels);
+        let got =
+            attributable_logistic(&fit, &data, x0.as_ref(), clusters.as_ref(), &opts).unwrap();
+        let estimate = got.af.unwrap();
+        let af = estimate.estimate;
+        let se = estimate.se.unwrap();
         let d_af = (af - c.af).abs();
         assert!(d_af <= 1e-10, "{}: AF {af} against {}", c.label, c.af);
         let d_var = (se * se - c.var).abs() / c.var;
@@ -111,18 +118,20 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
             );
             worst.2 = worst.2.max(d);
         }
-        assert!((got.lower.unwrap() - (af - c.z * se)).abs() <= 1e-14);
-        assert!((got.upper.unwrap() - (af + c.z * se)).abs() <= 1e-14);
+        assert!((estimate.lower().unwrap() - (af - c.z * se)).abs() <= 1e-14);
+        assert!((estimate.upper().unwrap() - (af + c.z * se)).abs() <= 1e-14);
         let log = attributable_logistic(
             &fit,
-            x.as_ref(),
+            &data,
             x0.as_ref(),
-            &c.y,
+            clusters.as_ref(),
             &AfOptions {
                 scale: IntervalScale::LogComplement,
                 ..opts
             },
         )
+        .unwrap()
+        .af
         .unwrap();
         if af < 1.0 {
             let half = c.z * se / (1.0 - af);
@@ -130,9 +139,9 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
                 1.0 - (1.0 - af) * half.exp(),
                 1.0 - (1.0 - af) * (-half).exp(),
             );
-            assert!((log.lower.unwrap() - lo).abs() <= 1e-14, "{}", c.label);
-            assert!((log.upper.unwrap() - hi).abs() <= 1e-14, "{}", c.label);
-            assert!(log.upper.unwrap() < 1.0);
+            assert!((log.lower().unwrap() - lo).abs() <= 1e-14, "{}", c.label);
+            assert!((log.upper().unwrap() - hi).abs() <= 1e-14, "{}", c.label);
+            assert!(log.upper().unwrap() < 1.0);
         }
         assert_eq!(
             got.n_clusters,

@@ -1,11 +1,15 @@
 //! Sandwich covariances and risk regression checked against R's `glm` with
 //! `sandwich::vcovHC` and `vcovCL` (sandwich 3.1.3).
 
+use epistat_core::Covariance;
 use epistat_glm::{Family, Glm, Link, RiskScale, SandwichType, risk_regression, robust_covariance};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
+
+mod common;
+use common::*;
 
 #[derive(Deserialize)]
 struct Reference {
@@ -53,7 +57,8 @@ fn matrix(rows: &[Vec<f64>]) -> Mat<f64> {
 }
 
 /// The largest deviation over the largest entry of the reference.
-fn worst(got: &[Option<f64>], want: &[Option<f64>], label: &str) -> f64 {
+fn worst(got: &Covariance, want: &[Option<f64>], label: &str) -> f64 {
+    let got = got.as_slice();
     assert_eq!(got.len(), want.len(), "{label}");
     let scale = want.iter().flatten().fold(0.0_f64, |a, &b| a.max(b.abs()));
     let mut worst = 0.0_f64;
@@ -74,7 +79,7 @@ fn modified_poisson_matches_sandwich() {
         let x = matrix(&case.x);
         let model = Glm::new(Family::Poisson, Link::Log);
         let fit = model
-            .fit(
+            .fit5(
                 x.as_ref(),
                 &case.y,
                 case.weights.as_deref(),
@@ -140,10 +145,7 @@ fn risk_regression_is_modified_poisson_with_its_diagnostics() {
     let clusters = Clusters::from_labels(case.cluster.as_ref().unwrap());
     let fit = risk_regression(
         RiskScale::Ratio,
-        x.as_ref(),
-        &case.y,
-        None,
-        None,
+        &glm_data(x.as_ref(), &case.y, None, None, None).unwrap(),
         Some(&clusters),
         SandwichType::Hc1,
     )
@@ -161,17 +163,14 @@ fn risk_regression_is_modified_poisson_with_its_diagnostics() {
     assert!(fit.max_fitted > 0.0);
     let bad = risk_regression(
         RiskScale::Ratio,
-        x.as_ref(),
-        &[2.0; 1589],
-        None,
-        None,
+        &glm_data(x.as_ref(), &[2.0; 1589], None, None, None).unwrap(),
         None,
         SandwichType::Hc0,
     );
     assert!(bad.is_err());
     // HC3 is not defined with clusters.
     let model = Glm::new(Family::Poisson, Link::Log);
-    let plain = model.fit(x.as_ref(), &case.y, None, None, None).unwrap();
+    let plain = model.fit5(x.as_ref(), &case.y, None, None, None).unwrap();
     assert!(
         robust_covariance(
             &model,
@@ -197,14 +196,11 @@ fn risk_difference_matches_binomial_identity() {
         (SandwichType::Hc1, &d.cl_hc1, true),
     ] {
         let fit = risk_regression(
-            RiskScale::Difference,
-            x.as_ref(),
-            &d.y,
-            None,
-            None,
-            with_clusters.then_some(&clusters),
-            kind,
-        )
+        RiskScale::Difference,
+        &glm_data(x.as_ref(), &d.y, None, None, None).unwrap(),
+        with_clusters.then_some(&clusters),
+        kind,
+    )
         .unwrap();
         for (j, &c) in d.coef.iter().enumerate() {
             assert!(
@@ -231,15 +227,16 @@ fn covariance_bits() -> Vec<f64> {
     let clusters = Clusters::from_labels(case.cluster.as_ref().unwrap());
     let fit = risk_regression(
         RiskScale::Ratio,
-        x.as_ref(),
-        &case.y,
-        case.weights.as_deref(),
-        case.offset.as_deref(),
+        &glm_data(x.as_ref(), &case.y, case.weights.as_deref(), case.offset.as_deref(), None).unwrap(),
         Some(&clusters),
         SandwichType::Hc1,
     )
     .unwrap();
-    fit.robust_covariance.iter().map(|v| v.unwrap()).collect()
+    fit.robust_covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.unwrap())
+        .collect()
 }
 
 #[test]

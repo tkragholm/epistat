@@ -28,10 +28,14 @@
 //! scores (measured against finite differences), so `vcovCL` on a `clm` with an
 //! offset is wrong.
 
-use epistat_glm::{Ordinal, OrdinalError, OrdinalLink, brant};
+use epistat_core::InputError;
+use epistat_glm::{Error, Ordinal, OrdinalLink, brant};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
+
+mod common;
+use common::*;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -178,7 +182,7 @@ fn some(values: &[Option<f64>]) -> Vec<f64> {
 /// The covariance of the parameters in the order of the reference, which has
 /// no aliased columns.
 fn full_covariance(fit: &epistat_glm::OrdinalFit) -> Vec<f64> {
-    some(&fit.covariance)
+    some(fit.covariance.as_slice())
 }
 
 #[test]
@@ -202,7 +206,7 @@ fn check_panel(panel: &Panel, name: &str, with_offset: bool) {
             None
         };
         let fit = model
-            .fit(x.as_ref(), &panel.y, Some(&panel.weights), offset, None)
+            .fit5(x.as_ref(), &panel.y, Some(&panel.weights), offset, None)
             .unwrap();
         let label = format!("{name} {}", r.link);
         assert!(fit.converged && !fit.fitted_at_boundary, "{label}");
@@ -211,7 +215,7 @@ fn check_panel(panel: &Panel, name: &str, with_offset: bool) {
         let c = worst(&full_covariance(&fit), &r.vcov, &label);
         let d = (fit.log_likelihood - r.loglik).abs() / r.loglik.abs();
         let e = (fit.null_log_likelihood - r.null_loglik).abs() / r.null_loglik.abs();
-        let probs = fit.probabilities(x.as_ref(), None, offset);
+        let probs = fit.probabilities(x.as_ref(), None, offset).unwrap();
         let f = worst(&probs, &r.probs, &label);
         eprintln!(
             "{label}: thresholds {a:.1e} coef {b:.1e} vcov {c:.1e} loglik {d:.1e} null {e:.1e} probs {f:.1e} in {} iterations",
@@ -269,7 +273,7 @@ fn logit_without_the_offset_matches_orm() {
     let logit = r.sim.fits.iter().find(|f| f.link == "logit").unwrap();
     let orm = logit.orm.as_ref().unwrap();
     let fit = Ordinal::new(OrdinalLink::Logit)
-        .fit(x.as_ref(), &r.sim.y, Some(&r.sim.weights), None, None)
+        .fit5(x.as_ref(), &r.sim.y, Some(&r.sim.weights), None, None)
         .unwrap();
     let clm = worst(&fit.thresholds, &orm.theta_clm, "clm thresholds").max(worst(
         &some(&fit.coefficients),
@@ -288,7 +292,7 @@ fn cluster_robust_covariance_matches_the_scores_in_r() {
     let x = matrix(&r.sim.x);
     let logit = r.sim.fits.iter().find(|f| f.link == "logit").unwrap();
     let fit = Ordinal::new(OrdinalLink::Logit)
-        .fit(
+        .fit5(
             x.as_ref(),
             &r.sim.y,
             Some(&r.sim.weights),
@@ -296,7 +300,7 @@ fn cluster_robust_covariance_matches_the_scores_in_r() {
             r.sim.cluster.as_deref(),
         )
         .unwrap();
-    let robust = some(fit.robust_covariance.as_ref().unwrap());
+    let robust = some(fit.robust_covariance.as_ref().unwrap().as_slice());
     let dev = worst(&robust, logit.cluster.as_ref().unwrap(), "robust");
     eprintln!("cluster robust against the scores written out in R: {dev:.1e}");
     assert!(dev < 1e-7);
@@ -339,7 +343,7 @@ fn partial_proportional_odds_matches_clm_and_vglm() {
 fn brant_test_matches_the_transcription() {
     for case in &reference().brant {
         let x = matrix(&case.x);
-        let got = brant(x.as_ref(), &case.y, Some(&case.weights)).unwrap();
+        let got = brant(&ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap()).unwrap();
         let b = worst(&got.coefficients, &case.coefficients, "slopes");
         let o = (got.omnibus.statistic - case.omnibus).abs() / case.omnibus;
         let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
@@ -366,7 +370,7 @@ fn brant_test_matches_the_transcription() {
 fn brant_test_matches_the_brant_package() {
     for case in &reference().brant {
         let x = matrix(&case.x);
-        let got = brant(x.as_ref(), &case.y, Some(&case.weights)).unwrap();
+        let got = brant(&ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap()).unwrap();
         let o = (got.omnibus.statistic - case.pkg_omnibus).abs() / case.pkg_omnibus;
         let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
         let c = per
@@ -388,9 +392,9 @@ fn errors_and_separation() {
     // Complete separation: the covariate orders the outcome.
     let x = Mat::from_fn(12, 1, |i, _| i as f64);
     let y: Vec<u32> = (0..12).map(|i| i / 4).collect();
-    let got = model.fit(x.as_ref(), &y, None, None, None);
+    let got = model.fit5(x.as_ref(), &y, None, None, None);
     assert!(
-        matches!(got, Err(OrdinalError::Separation))
+        matches!(got, Err(Error::Separation))
             || got
                 .as_ref()
                 .is_ok_and(|f| !f.converged && f.fitted_at_boundary),
@@ -400,26 +404,29 @@ fn errors_and_separation() {
     // An empty category.
     let y = [0, 2, 0, 2, 0, 2, 0, 2, 0];
     assert!(matches!(
-        model.fit(x.as_ref(), &y, None, None, None),
-        Err(OrdinalError::EmptyCategory { class: 1 })
+        model.fit5(x.as_ref(), &y, None, None, None),
+        Err(Error::EmptyClass { class: 1 })
     ));
     // A constant column.
     let y = [0, 1, 2, 0, 1, 2, 0, 1, 2];
     let c = Mat::from_fn(9, 2, |i, j| if j == 0 { ((i * 5) % 7) as f64 } else { 1.0 });
     assert!(matches!(
-        model.fit(c.as_ref(), &y, None, None, None),
-        Err(OrdinalError::Intercept { column: 1 })
+        model.fit5(c.as_ref(), &y, None, None, None),
+        Err(Error::Intercept { column: 1 })
     ));
     // A negative weight and a wrong length.
     let mut w = vec![1.0; 9];
     w[2] = -1.0;
     assert!(matches!(
-        model.fit(x.as_ref(), &y, Some(&w), None, None),
-        Err(OrdinalError::Weight { .. })
+        model.fit5(x.as_ref(), &y, Some(&w), None, None),
+        Err(Error::Input(InputError::Domain {
+            what: "weights",
+            ..
+        }))
     ));
     assert!(matches!(
-        model.fit(x.as_ref(), &y[1..], None, None, None),
-        Err(OrdinalError::Length { .. })
+        model.fit5(x.as_ref(), &y[1..], None, None, None),
+        Err(Error::Input(InputError::Length { .. }))
     ));
 }
 
@@ -436,7 +443,7 @@ fn an_aliased_column_is_none() {
         }
     });
     let fit = Ordinal::new(OrdinalLink::Logit)
-        .fit(
+        .fit5(
             x.as_ref(),
             &r.housing.y,
             Some(&r.housing.weights),
@@ -446,8 +453,8 @@ fn an_aliased_column_is_none() {
         .unwrap();
     assert!(fit.coefficients[p].is_none());
     let t = fit.thresholds.len() + p + 1;
-    assert!(fit.covariance[(t - 1) * t + t - 1].is_none());
-    assert!(fit.covariance[0].is_some());
+    assert!(fit.covariance.get(t - 1, t - 1).is_none());
+    assert!(fit.covariance.get(0, 0).is_some());
 }
 
 fn all_bits() -> Vec<f64> {
@@ -460,7 +467,7 @@ fn all_bits() -> Vec<f64> {
         OrdinalLink::Cloglog,
     ] {
         let fit = Ordinal::new(l)
-            .fit(
+            .fit5(
                 x.as_ref(),
                 &r.sim.y,
                 Some(&r.sim.weights),
@@ -470,8 +477,8 @@ fn all_bits() -> Vec<f64> {
             .unwrap();
         out.extend(&fit.thresholds);
         out.extend(some(&fit.coefficients));
-        out.extend(some(&fit.covariance));
-        out.extend(some(fit.robust_covariance.as_ref().unwrap()));
+        out.extend(some(fit.covariance.as_slice()));
+        out.extend(some(fit.robust_covariance.as_ref().unwrap().as_slice()));
         out.push(fit.log_likelihood);
     }
     let p = &r.ppo;
@@ -481,9 +488,9 @@ fn all_bits() -> Vec<f64> {
         .unwrap();
     out.extend(&fit.thresholds);
     out.extend(&fit.nominal);
-    out.extend(some(&fit.covariance));
+    out.extend(some(fit.covariance.as_slice()));
     let c = &r.brant[1];
-    let got = brant(matrix(&c.x).as_ref(), &c.y, Some(&c.weights)).unwrap();
+    let got = brant(&ordinal_data(matrix(&c.x).as_ref(), None, &c.y, Some(&c.weights), None, None).unwrap()).unwrap();
     out.extend(&got.coefficients);
     out.push(got.omnibus.statistic);
     out

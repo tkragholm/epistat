@@ -17,7 +17,7 @@
 mod common;
 
 use common::{Lines, Rng};
-use epistat_glm::{Family, Glm, Link};
+use epistat_glm::{Family, Glm, GlmData, Link};
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_124;
@@ -80,9 +80,8 @@ fn main() {
     let (x, y) = data(n, p);
     let model = Glm::new(Family::Binomial, Link::Logit);
     let (times, fit) = common::timed(common::reps(), || {
-        model
-            .fit(x.as_ref(), &y, None, None, None)
-            .expect("logistic fit")
+        let data = GlmData::builder(x.as_ref(), &y).build().expect("data");
+        model.fit(&data).expect("logistic fit")
     });
     let mut lines = Lines::default();
     let se = fit.standard_errors();
