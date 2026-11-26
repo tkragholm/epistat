@@ -1,7 +1,7 @@
 //! Predictions and contrasts with delta-method intervals.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use super::link;
 use super::{FlexParFit, Scale};
@@ -191,7 +191,7 @@ pub fn predict(
 ) -> Result<Vec<Vec<Prediction>>> {
     let cov = covariance(fit, options)?;
     check_columns(fit, x_new)?;
-    let z = normal::two_sided_z(1.0 - options.alpha);
+    let z = normal::quantile(1.0 - (1.0 - (1.0 - options.alpha)) / 2.0);
     let scale = fit.scale;
     let mut out = Vec::with_capacity(x_new.nrows());
     for row in 0..x_new.nrows() {
@@ -274,7 +274,7 @@ pub fn contrast(
             "the reference has one row or as many as the rows to compare",
         ));
     }
-    let z = normal::two_sided_z(1.0 - options.alpha);
+    let z = normal::quantile(1.0 - (1.0 - (1.0 - options.alpha)) / 2.0);
     let scale = fit.scale;
     let mut out = Vec::with_capacity(x_new.nrows());
     for row in 0..x_new.nrows() {

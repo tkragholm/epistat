@@ -33,7 +33,7 @@
 //!
 //! `HonestDiD` searches `h` by bisection on a numerical derivative and takes
 //! `chi` from 10^6 normal draws; here the grid is fixed and `chi` is
-//! [`epistat_stats::normal::folded_quantile`]. The two agree to the Monte
+//! [`epistat_stats::dist::normal::folded_quantile`]. The two agree to the Monte
 //! Carlo error of `HonestDiD`'s quantile once the grid is fine.
 //!
 //! # References
@@ -467,7 +467,8 @@ fn find_worst_case_bias_given_h(
 }
 
 fn folded_normal_quantile(p: f64, mu: f64) -> Result<f64, String> {
-    epistat_stats::normal::folded_quantile(p, mu)
+    Some(epistat_stats::dist::normal::folded_quantile(p, mu))
+        .filter(|q| !q.is_nan())
         .ok_or_else(|| format!("folded-normal quantile probability must lie in (0,1), got {p}"))
 }
 
@@ -966,8 +967,7 @@ mod tests {
                     .sum();
                 let sd = variance.sqrt();
                 let bias = m * worst_case_bias_at_m_one(4, 4, a);
-                let expected =
-                    epistat_stats::normal::folded_quantile(0.95, bias / sd).expect("quantile") * sd;
+                let expected = epistat_stats::dist::normal::folded_quantile(0.95, bias / sd) * sd;
                 let tolerance = 1e-6 * expected;
                 assert!(
                     result.optimal_half_length >= expected - tolerance,

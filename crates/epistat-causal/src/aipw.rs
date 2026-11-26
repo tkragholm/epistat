@@ -363,7 +363,7 @@ pub(crate) fn estimate(value: f64, variance: f64, null: f64, alpha: f64) -> Resu
     let (lower, upper) = epistat_inference::interval::normal(value, se, alpha)
         .map_err(|e| Error::input(format!("alpha: {e}")))?;
     let p_value =
-        (se > 0.0).then(|| 2.0 * epistat_stats::normal::cdf(-((value - null) / se).abs()));
+        (se > 0.0).then(|| 2.0 * epistat_stats::dist::normal::cdf(-((value - null) / se).abs()));
     Ok(Estimate {
         estimate: value,
         se,

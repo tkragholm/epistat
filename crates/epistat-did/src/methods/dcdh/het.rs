@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use epistat_linalg::{Attempt, Mat, Method, inverse};
-use epistat_stats::student::{f_sf, t_quantile};
+use epistat_stats::dist::f::sf as f_sf;
+use epistat_stats::dist::t::quantile as t_quantile;
 
 use super::panel::{index_of, ordered, prepare};
 use super::{DcdhConfig, DcdhError, DcdhObservation, counts, validate};
@@ -216,7 +217,7 @@ pub fn estimate_dcdh_heterogeneity(
         ))?;
         let df = rows.len().saturating_sub(k + n_cells);
         let t_crit = if df > 0 {
-            t_quantile(f64::midpoint(1.0, config.confidence_level), df as f64).unwrap_or(f64::NAN)
+            t_quantile(f64::midpoint(1.0, config.confidence_level), df as f64)
         } else {
             f64::NAN
         };

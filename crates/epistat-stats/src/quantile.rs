@@ -66,8 +66,9 @@
 //!   then the element at `hi` among the larger ones, using `f64::total_cmp`, and
 //!   reorders the slice. It returns the same doubles as [`type7`] on the sorted
 //!   sample.
-//! - [`rounded_rank`] returns `x` at zero-based position `round(p (n - 1))`, with
-//!   halves rounded away from zero. It is not a Hyndman and Fan type.
+//!
+//! The rounded-rank quantile that Study II reproduces, which is not a Hyndman
+//! and Fan type, is [`crate::compat::rounded_rank`].
 //!
 //! # Edge cases
 //!
@@ -167,7 +168,7 @@ pub fn weighted_type1(sorted: &[f64], weights: &[f64], p: f64) -> Option<f64> {
     {
         return None;
     }
-    let total = crate::lanes::sum(weights);
+    let total = crate::sum::lanes::sum(weights);
     if !total.is_finite() || total <= 0.0 {
         return None;
     }
@@ -186,21 +187,11 @@ pub fn weighted_type1(sorted: &[f64], weights: &[f64], p: f64) -> Option<f64> {
     last
 }
 
-/// The order statistic nearest to position `p (n - 1)`, rounding halves away
-/// from zero. Not one of the Hyndman and Fan types.
+/// The order statistic nearest to position `p (n - 1)`.
+#[deprecated(since = "0.3.0", note = "use `epistat_stats::compat::rounded_rank`")]
 #[must_use]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the value is a non-negative position below the length"
-)]
 pub fn rounded_rank(sorted: &[f64], p: f64) -> Option<f64> {
-    let n = sorted.len();
-    if n == 0 || !(0.0..=1.0).contains(&p) || has_nan(sorted) {
-        return None;
-    }
-    let index = (p * (n - 1) as f64).round() as usize;
-    Some(sorted[index.min(n - 1)])
+    crate::compat::rounded_rank(sorted, p)
 }
 
 fn has_nan(sample: &[f64]) -> bool {
@@ -245,7 +236,6 @@ mod tests {
     fn empty_samples_and_bad_probabilities_give_none() {
         assert_eq!(type7(&[], 0.5), None);
         assert_eq!(type1(&[], 0.5), None);
-        assert_eq!(rounded_rank(&[], 0.5), None);
         assert_eq!(type7(&[1.0], 1.5), None);
         assert_eq!(type7(&[1.0], f64::NAN), None);
         assert_eq!(type7_ratio(&[1.0], 1, 0), None);
@@ -257,7 +247,6 @@ mod tests {
         let sample = [1.0, 2.0, f64::NAN];
         assert_eq!(type7(&sample, 0.5), None);
         assert_eq!(type1(&sample, 0.5), None);
-        assert_eq!(rounded_rank(&sample, 0.5), None);
         assert_eq!(type7_ratio(&sample, 1, 2), None);
         assert_eq!(type7_unsorted(&mut [f64::NAN, 1.0, 2.0], 0.5), None);
     }
@@ -276,14 +265,6 @@ mod tests {
             let ratio = type7_ratio(&sorted, numerator, denominator).unwrap();
             assert!((ratio - expected).abs() <= 1e-15 * expected.abs().max(1.0));
         }
-    }
-
-    #[test]
-    fn rounded_rank_rounds_half_away_from_zero() {
-        let sorted = [1.0, 2.0, 3.0];
-        assert_eq!(rounded_rank(&sorted, 0.25), Some(2.0));
-        assert_eq!(rounded_rank(&sorted, 0.24), Some(1.0));
-        assert_eq!(rounded_rank(&sorted, 1.0), Some(3.0));
     }
 
     #[expect(

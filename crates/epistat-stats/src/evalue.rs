@@ -1,75 +1,8 @@
-//! E-values for unmeasured confounding.
-//!
-//! The E-value of VanderWeele and Ding \[1\] is the smallest strength of
-//! association, on the risk ratio scale, that an unmeasured confounder would
-//! need to have with both the exposure and the outcome, given the measured
-//! covariates, to explain away an observed association. It depends only on the
-//! estimate and its confidence limit, so it applies to any design, including
-//! a matched one.
-//!
-//! # Algorithm
-//!
-//! For an estimated risk ratio `x` the E-value is
-//!
-//! ```text
-//! E(x) = x + sqrt(x (x - 1))          x >= 1
-//! E(x) = E(1 / x)                      x < 1
-//! ```
-//!
-//! To move the estimate to a risk ratio `t` other than the null the same
-//! quantity is taken for the ratio of the estimate to `t`. With `x` and `t`
-//! both on the side above 1 (a value below 1 is replaced by its reciprocal,
-//! for both), `E(x, t) = (x + sqrt(x (x - t))) / t` when `t <= x`. When `t > x`
-//! the true value lies beyond the estimate, and the E-value is that of the
-//! ratio `t / x`, `r + sqrt(r (r - 1))` with `r = t / x`.
-//!
-//! The confidence limit that matters is the one nearer the true value. If
-//! the interval contains the true value, its E-value is 1. The limit on the
-//! far side has no E-value.
-//!
-//! Other effect measures are converted to an approximate risk ratio first:
-//!
-//! * An odds ratio is the risk ratio when the outcome is rare, and its
-//!   square root when it is common \[1\].
-//! * A hazard ratio is the risk ratio when the outcome is rare. Otherwise
-//!   `(1 - 0.5^sqrt(HR)) / (1 - 0.5^sqrt(1 / HR))` \[1\].
-//! * A standardised mean difference `d` is `exp(0.91 d)`. The limits of its
-//!   interval are `exp(0.91 d -+ 1.78 se)`, where `1.78` is `1.96 * 0.91`
-//!   \[1\].
-//!
-//! The bound behind the E-value is the bounding factor of Ding and VanderWeele
-//! \[2\]: a confounder with risk ratio `RR_EU` with the exposure and `RR_UD`
-//! with the outcome, given the measured covariates, can move a risk ratio by
-//! at most `RR_EU RR_UD / (RR_EU + RR_UD - 1)`, whatever its prevalence
-//! ([`bounding_factor`]). The E-value is the common value of the two at which
-//! the bound reaches the observed ratio. A measured covariate's two
-//! associations, put into the bound, give a benchmark.
-//!
-//! A risk difference is moved by a bias factor through both risks and the
-//! exposed share, and its E-values are in [`evalues_rd`].
-//!
-//! Selection that depends on a factor `U` which also affects the outcome has
-//! an E-value of its own \[3\]: the common value of the risk ratios of `U`
-//! with selection and with the outcome, within exposure groups, that would
-//! explain the estimate. It depends on what is assumed about the selection,
-//! [`SelectionBias`], and is computed by [`selection_evalues_rr`].
-//!
-//! # Validation
-//!
-//! Checked against `EValue::evalues.RR`, `evalues.OR`, `evalues.HR` and
-//! `evalues.MD` 4.1.4 in `epistat-matching`'s `r_sensitivity` test, and
-//! against `evalues.RD` and `svalues.RR` 4.1.4 in this crate's `r_evalue`
-//! test. An estimate that is zero is an error here, where R returns an
-//! infinite E-value.
-//!
-//! # References
-//!
-//! 1. VanderWeele TJ, Ding P. Sensitivity analysis in observational research:
-//!    introducing the E-value. Ann Intern Med. 2017;167(4):268-74.
-//! 2. Ding P, VanderWeele TJ. Sensitivity analysis without assumptions.
-//!    Epidemiology. 2016;27(3):368-77.
-//! 3. Smith LH, VanderWeele TJ. Bounding bias due to selection. Epidemiology.
-//!    2019;30(4):509-16.
+//! Deprecated: this module moved to `epistat_epi::evalue` in 0.3.0, where its
+//! documentation, explainer and tests are. The copy here keeps the items and
+//! the results of 0.2 for one release and is removed in 0.4.0.
+
+#![expect(deprecated, reason = "the copy of 0.2 calls its own deprecated items")]
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -77,6 +10,7 @@ use std::fmt::{Display, Formatter};
 /// What is wrong with an E-value input.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::EValueError`")]
 pub enum EValueError {
     /// A ratio that is not finite and positive.
     NotPositive {
@@ -148,6 +82,7 @@ impl Error for EValueError {}
 
 /// The E-values of an estimate and of its confidence limits.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::EValues`")]
 pub struct EValues {
     /// The risk ratio the E-values are for: the estimate, on the risk ratio
     /// scale.
@@ -169,6 +104,7 @@ pub struct EValues {
 /// Whether the outcome is rare enough to treat an odds or hazard ratio as a
 /// risk ratio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::Outcome`")]
 pub enum Outcome {
     /// Rare: the ratio is taken as the risk ratio.
     Rare,
@@ -191,6 +127,10 @@ fn positive(what: &'static str, value: f64) -> Result<f64, EValueError> {
 ///
 /// [`EValueError::NotPositive`] when `x` or `true_rr` is not finite and
 /// positive.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::evalue::evalue_threshold`"
+)]
 pub fn evalue_threshold(x: f64, true_rr: f64) -> Result<f64, EValueError> {
     let mut x = positive("risk ratio", x)?;
     let mut t = positive("true value", true_rr)?;
@@ -215,6 +155,7 @@ pub fn evalue_threshold(x: f64, true_rr: f64) -> Result<f64, EValueError> {
 /// [`EValueError::LimitsReversed`] when `lower > upper` and
 /// [`EValueError::EstimateOutsideInterval`] when the estimate is not between
 /// the limits given.
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::evalues_rr`")]
 pub fn evalues_rr(
     estimate: f64,
     lower: Option<f64>,
@@ -289,6 +230,10 @@ fn interval_evalues(
 /// # Errors
 ///
 /// [`EValueError::NotPositive`] for an odds ratio that is not positive.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::evalue::odds_ratio_to_rr`"
+)]
 pub fn odds_ratio_to_rr(odds_ratio: f64, outcome: Outcome) -> Result<f64, EValueError> {
     let or = positive("odds ratio", odds_ratio)?;
     Ok(match outcome {
@@ -302,6 +247,10 @@ pub fn odds_ratio_to_rr(odds_ratio: f64, outcome: Outcome) -> Result<f64, EValue
 /// # Errors
 ///
 /// [`EValueError::NotPositive`] for a hazard ratio that is not positive.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::evalue::hazard_ratio_to_rr`"
+)]
 pub fn hazard_ratio_to_rr(hazard_ratio: f64, outcome: Outcome) -> Result<f64, EValueError> {
     let hr = positive("hazard ratio", hazard_ratio)?;
     Ok(match outcome {
@@ -317,6 +266,10 @@ pub fn hazard_ratio_to_rr(hazard_ratio: f64, outcome: Outcome) -> Result<f64, EV
 /// # Errors
 ///
 /// [`EValueError::NotFinite`] for a difference that is not finite.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::evalue::mean_difference_to_rr`"
+)]
 pub fn mean_difference_to_rr(difference: f64) -> Result<f64, EValueError> {
     if difference.is_finite() {
         Ok((0.91 * difference).exp())
@@ -331,6 +284,7 @@ pub fn mean_difference_to_rr(difference: f64) -> Result<f64, EValueError> {
 /// # Errors
 ///
 /// As [`evalues_rr`] and [`odds_ratio_to_rr`].
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::evalues_or`")]
 pub fn evalues_or(
     estimate: f64,
     lower: Option<f64>,
@@ -353,6 +307,7 @@ pub fn evalues_or(
 /// # Errors
 ///
 /// As [`evalues_rr`] and [`hazard_ratio_to_rr`].
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::evalues_hr`")]
 pub fn evalues_hr(
     estimate: f64,
     lower: Option<f64>,
@@ -377,6 +332,7 @@ pub fn evalues_hr(
 ///
 /// [`EValueError::NegativeStandardError`], [`EValueError::NotFinite`], and
 /// those of [`evalues_rr`].
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::evalue::evalues_md`")]
 pub fn evalues_md(
     estimate: f64,
     standard_error: Option<f64>,
@@ -398,383 +354,4 @@ pub fn evalues_md(
         ),
     };
     evalues_rr(rr, lower, upper, true_rr)
-}
-
-/// The largest factor by which a confounder can move a risk ratio, given its
-/// risk ratio `rr_eu` with the exposure and `rr_ud` with the outcome, both at
-/// least 1: `rr_eu rr_ud / (rr_eu + rr_ud - 1)` \[2\]. The observed risk ratio
-/// divided by it is the most the confounder could take it towards the null.
-/// An infinite argument gives the other argument.
-///
-/// # Errors
-///
-/// [`EValueError::BelowOne`] for an argument below 1 or not a number.
-pub fn bounding_factor(rr_eu: f64, rr_ud: f64) -> Result<f64, EValueError> {
-    for (what, value) in [
-        ("the risk ratio with the exposure", rr_eu),
-        ("the risk ratio with the outcome", rr_ud),
-    ] {
-        if value.is_nan() || value < 1.0 {
-            return Err(EValueError::BelowOne { what, value });
-        }
-    }
-    if rr_eu.is_infinite() {
-        return Ok(rr_ud);
-    }
-    if rr_ud.is_infinite() {
-        return Ok(rr_eu);
-    }
-    Ok(rr_eu * rr_ud / (rr_eu + rr_ud - 1.0))
-}
-
-/// What is assumed about selection when computing a selection-bias E-value
-/// \[3\]. The names follow `EValue::svalues.RR`'s arguments. `U` is a factor
-/// that affects both selection `S` and the outcome `Y`; `A` is the exposure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionBias {
-    /// No assumption, the default of `svalues.RR`. The E-value is the common
-    /// value of `RR_UY|A=0`, `RR_UY|A=1`, `RR_SU|A=0` and `RR_SU|A=1`.
-    General,
-    /// The inference is about the selected population only (`sel_pop`). The
-    /// E-value is the common value of `RR_UY|S=1` and `RR_AU|S=1`.
-    SelectedPopulation,
-    /// The risk of the outcome is higher in the selected exposed than in the
-    /// unselected exposed (`risk_inc`). The E-value is the common value of
-    /// `RR_UY|A=1` and `RR_SU|A=1`.
-    IncreasedRisk,
-    /// The risk of the outcome is lower in the selected unexposed than in the
-    /// unselected unexposed (`risk_dec`). The E-value is the common value of
-    /// `RR_UY|A=0` and `RR_SU|A=0`.
-    DecreasedRisk,
-    /// The factor is selection itself, `S = U` (`S_eq_U`). The E-value is the
-    /// common value of `RR_UY|A=0` and `RR_UY|A=1`.
-    SelectionIsTheFactor,
-    /// `S = U` and increased risk. The E-value is `RR_UY|A=1`.
-    SelectionIsTheFactorIncreasedRisk,
-    /// `S = U` and decreased risk. The E-value is `RR_UY|A=0`.
-    SelectionIsTheFactorDecreasedRisk,
-}
-
-/// The selection-bias E-value of a risk ratio `x` for moving it to `true_rr`,
-/// as `EValue::threshold_selection`. With `x` and `true_rr` on the side above
-/// 1 (a value below 1 is replaced by its reciprocal, for both) and `r` the
-/// ratio of the larger to the smaller, it is `E(sqrt(r))` for
-/// [`SelectionBias::General`], `sqrt(r)` when selection is the factor, `r`
-/// when selection is the factor and the risk is increased or decreased, and
-/// `E(r)` otherwise, with `E(x) = x + sqrt(x (x - 1))`.
-///
-/// # Errors
-///
-/// [`EValueError::NotPositive`] when `x` or `true_rr` is not finite and
-/// positive.
-pub fn selection_evalue_threshold(
-    x: f64,
-    true_rr: f64,
-    assumption: SelectionBias,
-) -> Result<f64, EValueError> {
-    let mut x = positive("risk ratio", x)?;
-    let mut t = positive("true value", true_rr)?;
-    if x <= 1.0 {
-        x = 1.0 / x;
-        t = 1.0 / t;
-    }
-    let r = if t <= x { x / t } else { t / x };
-    let e = |v: f64| v + (v * (v - 1.0)).sqrt();
-    Ok(match assumption {
-        SelectionBias::General => e(r.sqrt()),
-        SelectionBias::SelectedPopulation
-        | SelectionBias::IncreasedRisk
-        | SelectionBias::DecreasedRisk => e(r),
-        SelectionBias::SelectionIsTheFactor => r.sqrt(),
-        SelectionBias::SelectionIsTheFactorIncreasedRisk
-        | SelectionBias::SelectionIsTheFactorDecreasedRisk => r,
-    })
-}
-
-/// The selection-bias E-values of a risk ratio and its confidence limits
-/// \[3\], as `EValue::svalues.RR`: how strong the selection would have to be,
-/// under `assumption`, to move the estimate and the interval to `true_rr`.
-/// The rules for the limits are those of [`evalues_rr`]. An odds or hazard
-/// ratio is converted first with [`odds_ratio_to_rr`] or
-/// [`hazard_ratio_to_rr`], as `svalues.OR` and `svalues.HR` do.
-///
-/// # Errors
-///
-/// As [`evalues_rr`].
-pub fn selection_evalues_rr(
-    estimate: f64,
-    lower: Option<f64>,
-    upper: Option<f64>,
-    true_rr: f64,
-    assumption: SelectionBias,
-) -> Result<EValues, EValueError> {
-    interval_evalues(estimate, lower, upper, true_rr, |x, t| {
-        selection_evalue_threshold(x, t, assumption)
-    })
-}
-
-/// The E-values of a risk difference and of its lower confidence limit.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RdEValues {
-    /// The risk difference of the table.
-    pub risk_difference: f64,
-    /// Its Wald lower limit at the level given.
-    pub lower_limit: f64,
-    /// The bias factor that moves the risk difference to the true value.
-    pub bias_factor: f64,
-    /// The bias factor that moves the lower limit to the true value, 1 when
-    /// the interval contains it.
-    pub bias_factor_lower: f64,
-    /// The E-value of the estimate.
-    pub estimate: f64,
-    /// The E-value of the lower limit, 1 when the interval contains the true
-    /// value.
-    pub lower: f64,
-}
-
-/// The E-values of the risk difference of a table and of its lower limit, as
-/// `EValue::evalues.RD` \[2\]. The table is that of [`crate::bias`]: `a`
-/// exposed cases, `b` unexposed cases, `c` exposed non-cases and `d`
-/// unexposed non-cases. `true_rd` is the value to move to, 0 for the null,
-/// and the lower limit is the Wald limit at level `1 - alpha`.
-///
-/// # Algorithm
-///
-/// With `f` the exposed share of the table, `p1` and `p0` the risks of the
-/// exposed and unexposed, and `t = true_rd`, the bias factor `B` that moves
-/// the difference to `t` solves `(p1 - p0 B) (f + (1 - f) / B) = t`, the
-/// positive root of a quadratic, and the E-value is `B + sqrt(B (B - 1))`.
-/// For the lower limit, the corrected limit under a bias factor `B` is
-///
-/// ```text
-/// L(B) = (p1 - p0 B) f_B - z sqrt( (v1 + v0 B^2) f_B^2 + (p1 - p0 B)^2 (1 - 1/B)^2 vf )
-/// ```
-///
-/// with `f_B = f + (1 - f) / B`, `v1` and `v0` the binomial variances of the
-/// two risks, `vf` that of `f` and `z` the normal quantile at `1 - alpha / 2`.
-/// The bias factor of the limit is the smallest `B` with `L(B) <= t`.
-/// `evalues.RD` finds it on a grid of step `1e-4` in `B`. Here `B` is scanned
-/// on a grid of relative step `1e-4` and the first crossing is then bisected
-/// to adjacent doubles, so the value is the crossing itself and lies at most
-/// one grid step below that of `evalues.RD`.
-///
-/// # Errors
-///
-/// [`EValueError::Table`] for a table with a negative or non-finite cell, an
-/// empty exposure group or no unexposed case, [`EValueError::Alpha`],
-/// [`EValueError::NotFinite`] for `true_rd`,
-/// [`EValueError::NegativeDifference`] when the risk difference is negative
-/// (exchange the exposure groups), and [`EValueError::TrueNotBelowEstimate`]
-/// when the difference is not above `true_rd`.
-pub fn evalues_rd(
-    t: &crate::bias::Table2x2,
-    true_rd: f64,
-    alpha: f64,
-) -> Result<RdEValues, EValueError> {
-    if [t.a, t.b, t.c, t.d]
-        .iter()
-        .any(|x| !x.is_finite() || *x < 0.0)
-    {
-        return Err(EValueError::Table("cells must be finite and not negative"));
-    }
-    let (n1, n0) = (t.a + t.c, t.b + t.d);
-    if !(n1 > 0.0 && n0 > 0.0) {
-        return Err(EValueError::Table("both exposure groups need people"));
-    }
-    if t.b <= 0.0 {
-        return Err(EValueError::Table(
-            "the unexposed need a case, or no bias factor is finite",
-        ));
-    }
-    if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(EValueError::Alpha(alpha));
-    }
-    if !true_rd.is_finite() {
-        return Err(EValueError::NotFinite { what: "true value" });
-    }
-    let n = n1 + n0;
-    let f = n1 / n;
-    let p1 = t.a / n1;
-    let p0 = t.b / n0;
-    if p1 < p0 {
-        return Err(EValueError::NegativeDifference);
-    }
-    if p1 - p0 <= true_rd {
-        return Err(EValueError::TrueNotBelowEstimate);
-    }
-    let v1 = p1 * (1.0 - p1) / n1;
-    let v0 = p0 * (1.0 - p0) / n0;
-    let vf = f * (1.0 - f) / n;
-    let diff = p0 * (1.0 - f) - p1 * f;
-    let shifted = true_rd + diff;
-    let bias_factor =
-        ((shifted * shifted + 4.0 * p1 * p0 * f * (1.0 - f)).sqrt() - shifted) / (2.0 * p0 * f);
-    let estimate = evalue_threshold(bias_factor, 1.0)?;
-    let z = crate::normal::quantile(1.0 - alpha / 2.0);
-    let lower_limit = p1 - p0 - z * (v1 + v0).sqrt();
-    if lower_limit <= true_rd {
-        return Ok(RdEValues {
-            risk_difference: p1 - p0,
-            lower_limit,
-            bias_factor,
-            bias_factor_lower: 1.0,
-            estimate,
-            lower: 1.0,
-        });
-    }
-    let corrected_limit = |b: f64| {
-        let rd = p1 - p0 * b;
-        let fb = f + (1.0 - f) / b;
-        let shrink = 1.0 - 1.0 / b;
-        rd * fb - z * ((v1 + v0 * b * b) * fb * fb + rd * rd * shrink * shrink * vf).sqrt()
-    };
-    let bias_factor_lower = first_crossing(1.0, bias_factor, |b| corrected_limit(b) <= true_rd);
-    Ok(RdEValues {
-        risk_difference: p1 - p0,
-        lower_limit,
-        bias_factor,
-        bias_factor_lower,
-        estimate,
-        lower: evalue_threshold(bias_factor_lower, 1.0)?,
-    })
-}
-
-/// The first `x` in `(from, to]` at which `crossed` holds, scanning on a grid
-/// of relative step `1e-4` and bisecting the first step that crosses to
-/// adjacent doubles; `to` when no grid point before it crosses.
-fn first_crossing(from: f64, to: f64, crossed: impl Fn(f64) -> bool) -> f64 {
-    const STEP: f64 = 1e-4;
-    let mut previous = from;
-    let mut k = 1.0_f64;
-    let mut high = to;
-    loop {
-        let x = from * (k * STEP).exp();
-        if x >= to {
-            break;
-        }
-        if crossed(x) {
-            high = x;
-            break;
-        }
-        previous = x;
-        k += 1.0;
-    }
-    let mut low = previous;
-    loop {
-        let mid = low + (high - low) / 2.0;
-        if mid <= low || mid >= high {
-            return high;
-        }
-        if crossed(mid) {
-            high = mid;
-        } else {
-            low = mid;
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn null_evalue_of_two_is_the_published_value() {
-        // VanderWeele and Ding: RR 2 has E-value 2 + sqrt(2) = 3.41.
-        let e = evalue_threshold(2.0, 1.0).unwrap();
-        assert!((e - (2.0 + 2.0_f64.sqrt())).abs() < 1e-15);
-        assert!((evalue_threshold(0.5, 1.0).unwrap() - e).abs() < 1e-15);
-    }
-
-    #[test]
-    fn the_null_has_evalue_one() {
-        assert_eq!(
-            evalue_threshold(1.0, 1.0).unwrap().to_bits(),
-            1.0_f64.to_bits()
-        );
-    }
-
-    #[test]
-    fn interval_crossing_the_null_gives_one() {
-        let e = evalues_rr(1.5, Some(0.9), Some(2.5), 1.0).unwrap();
-        assert_eq!(e.lower, Some(1.0));
-        assert_eq!(e.upper, None);
-    }
-
-    #[test]
-    fn protective_estimate_uses_the_upper_limit() {
-        let e = evalues_rr(0.5, Some(0.3), Some(0.8), 1.0).unwrap();
-        assert_eq!(e.lower, None);
-        let expected = evalue_threshold(0.8, 1.0).unwrap();
-        assert_eq!(e.upper, Some(expected));
-    }
-
-    #[test]
-    fn the_bounding_factor_of_the_evalue_is_the_estimate() {
-        // B(E, E) = E^2 / (2 E - 1) = RR when E = RR + sqrt(RR (RR - 1)).
-        // E has a few roundings, and B doubles their relative error at most:
-        // 1e-14 relative.
-        for rr in [1.01, 1.5, 2.0, 3.7, 25.0] {
-            let e = evalue_threshold(rr, 1.0).unwrap();
-            let b = bounding_factor(e, e).unwrap();
-            assert!((b - rr).abs() <= 1e-14 * rr, "{rr} {b}");
-        }
-        assert_eq!(bounding_factor(1.0, 7.0).unwrap(), 1.0);
-        assert_eq!(bounding_factor(f64::INFINITY, 2.5).unwrap(), 2.5);
-        assert!(bounding_factor(0.9, 2.0).is_err());
-        assert!(bounding_factor(2.0, f64::NAN).is_err());
-    }
-
-    #[test]
-    fn selection_evalues_follow_the_assumptions() {
-        let rr: f64 = 2.25;
-        let e = |x: f64| x + (x * (x - 1.0)).sqrt();
-        let get = |a| selection_evalue_threshold(rr, 1.0, a).unwrap();
-        assert_eq!(get(SelectionBias::General), e(1.5));
-        assert_eq!(get(SelectionBias::IncreasedRisk), e(rr));
-        assert_eq!(get(SelectionBias::SelectionIsTheFactor), 1.5);
-        assert_eq!(get(SelectionBias::SelectionIsTheFactorDecreasedRisk), rr);
-        // A protective estimate is taken by its reciprocal.
-        let p = selection_evalue_threshold(1.0 / rr, 1.0, SelectionBias::General).unwrap();
-        assert!((p - e(1.5)).abs() < 1e-15);
-    }
-
-    #[test]
-    fn the_risk_difference_evalue_of_the_estimate_is_that_of_the_risk_ratio() {
-        // At the null, the bias factor that removes the difference is the
-        // ratio of the risks, here 1.5, to rounding.
-        let t = crate::bias::Table2x2 {
-            a: 150.0,
-            b: 900.0,
-            c: 9_850.0,
-            d: 89_100.0,
-        };
-        let e = evalues_rd(&t, 0.0, 0.05).unwrap();
-        assert!((e.bias_factor - 1.5).abs() < 1e-12);
-        assert!(e.bias_factor_lower > 1.0 && e.bias_factor_lower < e.bias_factor);
-        assert!(e.lower < e.estimate);
-        let swapped = crate::bias::Table2x2 {
-            a: 900.0,
-            b: 150.0,
-            c: 89_100.0,
-            d: 9_850.0,
-        };
-        assert_eq!(
-            evalues_rd(&swapped, 0.0, 0.05),
-            Err(EValueError::NegativeDifference)
-        );
-        assert_eq!(
-            evalues_rd(&t, 0.01, 0.05),
-            Err(EValueError::TrueNotBelowEstimate)
-        );
-        assert!(evalues_rd(&t, 0.0, 1.5).is_err());
-    }
-
-    #[test]
-    fn invalid_input_is_an_error() {
-        assert!(evalue_threshold(0.0, 1.0).is_err());
-        assert!(evalue_threshold(f64::NAN, 1.0).is_err());
-        assert!(evalues_rr(2.0, Some(3.0), None, 1.0).is_err());
-        assert!(evalues_rr(2.0, Some(2.5), Some(2.0), 1.0).is_err());
-        assert!(evalues_md(0.3, Some(-1.0), 0.0).is_err());
-    }
 }

@@ -16,7 +16,7 @@ use epistat_did::{
     LeastFavorableSimulation, SensitivitySummaryMethod,
     summarize_smoothness_sensitivity_with_simulation,
 };
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use epistat_testkit::{assert_same_on_threads, load_json, na_f64};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -117,7 +117,7 @@ fn folded_quantile_standard_error(
 ) -> f64 {
     let h = standard_deviation(&result.optimal_vec, sigma);
     let chi = result.optimal_half_length / h;
-    let quantile = |mu: f64| normal::folded_quantile(p, mu).expect("quantile");
+    let quantile = |mu: f64| normal::folded_quantile(p, mu);
     let (mut low, mut high) = (0.0, chi);
     if quantile(low) < chi {
         for _ in 0..200 {

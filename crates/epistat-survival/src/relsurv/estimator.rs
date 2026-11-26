@@ -13,7 +13,7 @@ use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 const BLOCK: usize = 1024;
 const WAVE: usize = 64;
@@ -228,7 +228,7 @@ pub fn net_survival(
         let g = data.stratum().map_or(0, |s| s[i] as usize);
         groups[g].push(i);
     }
-    let z = normal::two_sided_z(opts.level);
+    let z = normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
     groups
         .into_iter()
         .enumerate()

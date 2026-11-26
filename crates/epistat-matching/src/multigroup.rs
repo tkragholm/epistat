@@ -71,7 +71,8 @@ use std::fmt::{Display, Formatter};
 use chrono::NaiveDate;
 use epistat_glm::{Multinom, MultinomError};
 use epistat_linalg::Mat;
-use epistat_stats::cluster::{KMeansAlgorithm, KMeansError, kmeans};
+use epistat_stats::Error as KMeansError;
+use epistat_stats::cluster::{KMeansAlgorithm, kmeans};
 use rayon::prelude::*;
 
 use crate::matching::{

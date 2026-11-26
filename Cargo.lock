@@ -679,6 +679,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "epistat-epi"
+version = "0.1.0"
+dependencies = [
+ "epistat-core",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "epistat-glm"
 version = "0.3.0"
 dependencies = [
@@ -714,6 +727,7 @@ name = "epistat-inference"
 version = "0.3.2"
 dependencies = [
  "epistat-core",
+ "epistat-epi",
  "epistat-linalg",
  "epistat-rng",
  "epistat-stats",
@@ -747,6 +761,7 @@ dependencies = [
  "chrono",
  "criterion",
  "epistat-core",
+ "epistat-epi",
  "epistat-glm",
  "epistat-inference",
  "epistat-linalg",
@@ -851,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-stats"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "epistat-core",
  "epistat-rng",
@@ -868,6 +883,7 @@ version = "0.4.0"
 dependencies = [
  "arrow-array",
  "epistat-core",
+ "epistat-epi",
  "epistat-glm",
  "epistat-inference",
  "epistat-linalg",

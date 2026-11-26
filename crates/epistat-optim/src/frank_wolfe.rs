@@ -339,7 +339,7 @@ const LANES: usize = 8;
 /// `len mod 8` terms are summed from left to right and added last. The width is
 /// fixed, so the bits do not depend on the target; the loop vectorises because
 /// the eight running sums are independent. The order is that of
-/// `epistat_stats::lanes`.
+/// `epistat_stats::sum::lanes`.
 #[inline]
 fn sum_map2(a: &[f64], b: &[f64], f: impl Fn(f64, f64) -> f64) -> f64 {
     debug_assert_eq!(a.len(), b.len());

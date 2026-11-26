@@ -3,7 +3,7 @@
 //! `survival::coxph` and `summary.coxph`.
 
 use epistat_linalg::Mat;
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{ChiSquareTest, CoxModelFit, CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};

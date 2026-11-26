@@ -1,7 +1,7 @@
 //! The Student t distribution: log density and derivatives for the location-scale
-//! family. The distribution and quantile functions are in [`epistat_stats::student`].
+//! family. The distribution and quantile functions are in [`epistat_stats::dist::t`].
 
-use epistat_stats::student::{t_cdf_sf, t_ln_density, t_quantile};
+use epistat_stats::dist::t;
 
 /// `ln f(z)`, `(ln f)'` and `(ln f)''` of the density with `nu` degrees of
 /// freedom: `(ln f)' = -(nu + 1) z / (nu + z^2)` and
@@ -9,7 +9,7 @@ use epistat_stats::student::{t_cdf_sf, t_ln_density, t_quantile};
 pub(super) fn log_density(z: f64, nu: f64) -> (f64, f64, f64) {
     let q = nu + z * z;
     (
-        t_ln_density(z, nu),
+        t::ln_pdf(z, nu),
         -(nu + 1.0) * z / q,
         -(nu + 1.0) * (nu - z * z) / (q * q),
     )
@@ -17,12 +17,12 @@ pub(super) fn log_density(z: f64, nu: f64) -> (f64, f64, f64) {
 
 /// The distribution function and the survival function at `z`.
 pub(super) fn cdf_sf(z: f64, nu: f64) -> (f64, f64) {
-    t_cdf_sf(z, nu)
+    (t::cdf(z, nu), t::sf(z, nu))
 }
 
 /// The quantile function for `p` in `(0, 1)`, NaN when it is out of range.
 pub(super) fn quantile(p: f64, nu: f64) -> f64 {
-    t_quantile(p, nu).unwrap_or(f64::NAN)
+    t::quantile(p, nu)
 }
 
 #[cfg(test)]

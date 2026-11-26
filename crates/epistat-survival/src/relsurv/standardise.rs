@@ -3,7 +3,7 @@
 
 use super::{NetSurvival, Transform};
 use crate::error::{Error, Result};
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 /// The weights of the International Cancer Survival Standards 1, 2 and 3 for
 /// the age groups 15 to 44, 45 to 54, 55 to 64, 65 to 74 and 75 and over at
@@ -91,7 +91,7 @@ pub fn standardise_net(
     if !(level > 0.0 && level < 1.0) {
         return Err(Error::input("level must be in (0, 1)"));
     }
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     let mut out = StandardisedNet {
         times: times.to_vec(),
         survival: Vec::with_capacity(times.len()),

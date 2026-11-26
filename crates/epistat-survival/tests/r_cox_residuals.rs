@@ -62,7 +62,7 @@
 use std::collections::HashMap;
 
 use epistat_linalg::Mat;
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
     Collapse, CoxModelFit, CoxOptions, CoxResiduals, ResidualKind, ResidualOptions, Ties,

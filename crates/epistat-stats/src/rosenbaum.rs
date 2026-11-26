@@ -1,181 +1,24 @@
-//! Rosenbaum bounds for sensitivity to hidden bias in matched studies.
-//!
-//! In a matched study without hidden bias, the units in a matched set have the
-//! same chance of being the treated one. If an unmeasured covariate changes
-//! the odds of treatment of two units in a set by at most a factor `gamma >= 1`,
-//! each unit's chance of being the treated one lies in bounds that depend
-//! on `gamma` \[1\]. A test statistic then has a range of null distributions,
-//! and the largest p-value over the range is the p-value bound. `gamma = 1`
-//! is no hidden bias. The functions here report the bounds for a given
-//! `gamma`; the study's sensitivity is the `gamma` at which the upper bound
-//! crosses the significance level, the sensitivity value \[5\], which
-//! [`sensitivity_value`] finds for any bound and [`wilcoxon_sensitivity_value`],
-//! [`scores_sensitivity_value`] and [`binary_sensitivity_value`] find for
-//! the bounds here.
-//!
-//! # Matched pairs: the signed rank test
-//!
-//! For pair differences `d_i` (treated minus control), with zero differences
-//! left out and `r_i` the average ranks of `|d_i|`, the statistic is
-//! `T = sum r_i 1[d_i > 0]`. Each pair is positive with probability at most
-//! `p+ = gamma / (1 + gamma)` and at least `p- = 1 / (1 + gamma)`. The bounds
-//! on the one-sided p-value of `T` are the upper tails of `sum r_i B_i` with
-//! `B_i` Bernoulli(`p-`), the smaller, and Bernoulli(`p+`), the larger, by the
-//! normal approximation with mean `p sum r_i` and variance
-//! `p (1 - p) sum r_i^2` ([`WilcoxonDistribution::Normal`]) or exactly
-//! ([`WilcoxonDistribution::Exact`], by [`crate::signed_rank`]).
-//!
-//! # Matched pairs: the Hodges-Lehmann estimate
-//!
-//! For a shift `tau` the signed rank statistic of `d_i - tau` is
-//! `T(tau)`, which does not increase in `tau`. With `n` pairs, the point
-//! estimate of the shift is where `T` crosses `n (n + 1) / 4`, the median of
-//! the Walsh averages `(d_i + d_j) / 2`. Under `gamma` the expectation of `T`
-//! lies between `n (n + 1) / (2 (1 + gamma))` and `gamma n (n + 1) / (2
-//! (1 + gamma))`. The bounds of the estimate are the shifts where `T` crosses
-//! these. The upper bound is the smallest `tau` with `T(tau)` at most the
-//! lower expectation, and the lower bound the largest `tau` with `T(tau)` at
-//! least the upper one. `T` is a step function that changes only at Walsh
-//! averages, so the bounds are Walsh averages. Zero differences stay in, at the
-//! lowest ranks.
-//!
-//! ## Algorithm
-//!
-//! The Walsh averages are never listed. With the differences sorted, the
-//! averages form a matrix `w[i][j] = (d_i + d_j) / 2`, `i <= j`, whose rows and
-//! columns do not decrease. A bound is the first Walsh average `v` for which
-//! `T` evaluated just above `v` (halfway to the next larger average) has
-//! crossed its threshold. `T` does not increase in `tau`, so the crossing is
-//! found as a quickselect does it, in the manner of Johnson and Mizoguchi
-//! \[3\] and Monahan \[4\]. Two values bracket the answer, and per row the
-//! columns whose averages lie between them. A random average between them is
-//! drawn, the number of averages at most it in each row is found by a pointer
-//! that only moves one way along the sorted differences, `T` is evaluated just
-//! above it, and the bracket narrows to one side. One step costs `O(n)`: the
-//! row pointers, the next larger average (the least entry just past the pointer
-//! of each row), and `T` itself, which is a merge of the shifted differences
-//! below and above `tau`, already in order of their absolute values. The
-//! expected number of steps is `O(log n)` because the number of averages in
-//! the bracket falls by a constant factor in expectation, so a bound at one
-//! `gamma` costs expected `O(n log n)` time, after one `O(n log n)` sort, and
-//! `O(n)` memory. The number of pairs is not limited. The random draws come
-//! from a fixed generator, so a call gives the same result every time.
-//!
-//! `T` is a sum of ranks that are multiples of one half, which is exact in
-//! floating point while `n (n + 1) / 2` is below `2^52`, so the order in which
-//! ranks are added does not matter.
-//!
-//! # Matched sets: m-statistics
-//!
-//! For matched sets of one treated unit and one or more controls, the
-//! statistic is the sum over sets of a score of the treated unit \[2\].
-//! In a set with responses `y_1 .. y_m` (the treated unit first) the score of
-//! unit `j` is
-//!
-//! ```text
-//! q_j = (1 / m) sum_{k != j} psi((y_j - y_k) / h)
-//! ```
-//!
-//! with `psi` the Huber-type function with inner trim `a` and outer trim `b`,
-//! `psi(x) = sign(x) min(1, max(0, |x| - a) / (b - a))`, and `h` the
-//! `lambda` quantile of all `|y_j - y_k|`, `lambda = 1/2` by default (the
-//! scores are the raw differences when there is no trim at all, `b` infinite
-//! and `a = 0`; with an infinite `b` and `a > 0`, `psi` is soft thresholding,
-//! and with `a = b` it is the sign of the differences larger than `a`).
-//! Under `gamma`, the unit in a set that is treated has
-//! probability proportional to `gamma` for the units with the larger scores,
-//! so with the scores of a set sorted, the expectation of the treated unit's
-//! score is largest when the `a` lowest scores have weight 1 and the rest
-//! `gamma`, for the `a` that maximises it. The upper bounds on the expectation
-//! and the variance, summed over sets, standardise `T`, and the p-value
-//! bound is the upper normal tail of the deviate.
-//!
-//! The scores can instead be divided by `m - 1` and by the number of sets
-//! (`treated_on_treated`), the form of the "treatment-on-the-treated"
-//! statistic with `b` infinite, which is the mean difference between the
-//! treated unit and its controls.
-//!
-//! # Other outcomes
-//!
-//! A binary outcome is tested by the Mantel-Haenszel statistic over the sets,
-//! whose bounds are exact sums of noncentral hypergeometric variables
-//! ([`binary_bounds`]); an m-statistic fails there, because most differences
-//! within sets are zero and so is their scale. A censored time to an event
-//! is scored by Gehan's comparison of every two units in a set
-//! ([`gehan_scores`]), and the scores go to [`set_bounds`].
-//!
-//! # Estimates and intervals
-//!
-//! [`m_statistic_interval`] inverts the m-statistic bound over additive
-//! effects for the range of point estimates and the confidence interval
-//! under `gamma`. [`hodges_lehmann_gamma`] gives the `gamma` at which the
-//! lower bound of the Hodges-Lehmann estimate reaches a value, in closed
-//! form from the signed rank statistic.
-//!
-//! # Amplification
-//!
-//! A `gamma` is equivalent to every pair of an odds ratio `lambda` of an
-//! unmeasured covariate with treatment and `delta` with a positive pair
-//! difference with `gamma = (lambda delta + 1) / (lambda + delta)` \[6\]
-//! ([`amplify`]).
-//!
-//! # Sensitivity value
-//!
-//! The bounds rise with `gamma`, so the crossing is bracketed by doubling
-//! `gamma` from 2 and bisected to adjacent doubles. Each step evaluates one
-//! bound; the signed ranks, the m-scores and the grouped strata are computed
-//! once.
-//!
-//! # Validation
-//!
-//! Checked against `rbounds::psens` and `hlsens` 2.2, `sensitivitymv::senmv`
-//! 1.4.4 and `sensitivitymw::senmw` 2.1 in `epistat-matching`'s
-//! `r_sensitivity` test, and against `uniroot` on `senmv` and on the normal
-//! bound of the signed rank test, `sensitivitymv::amplify` and `separable1v`,
-//! `sensitivitymw::senmwCI` and `sensitivity2x2xk::mh` and `mhLS` 1.1 in its
-//! `r_rosenbaum_methods` test. `psens` rounds its p-values to four digits and
-//! `hlsens` finds its bounds by steps of its argument `pr`, which the
-//! comparisons allow for. Weighting of sets by the range of their scores
-//! (`method` `"w"`, `"q"`, `"s"`, `"l"`) is not implemented.
-//!
-//! # References
-//!
-//! 1. Rosenbaum PR. Observational Studies, 2nd ed. Springer; 2002. Chapter 4.
-//! 2. Rosenbaum PR. Sensitivity analysis for m-estimates, tests, and
-//!    confidence intervals in matched observational studies. Biometrics.
-//!    2007;63(2):456-64.
-//! 3. Johnson DB, Mizoguchi T. Selecting the K-th element in X + Y and
-//!    X1 + X2 + ... + Xm. SIAM Journal on Computing. 1978;7(2):147-53.
-//! 4. Monahan JF. Algorithm 616: fast computation of the Hodges-Lehmann
-//!    location estimator. ACM Transactions on Mathematical Software.
-//!    1984;10(3):265-70.
-//! 5. Zhao Q. On sensitivity value of pair-matched observational studies.
-//!    J Am Stat Assoc. 2019;114(526):713-22.
-//! 6. Rosenbaum PR, Silber JH. Amplification of sensitivity analysis in
-//!    matched observational studies. J Am Stat Assoc. 2009;104(488):1398-405.
+//! Deprecated: this module moved to `epistat_epi::rosenbaum` in 0.3.0, where its
+//! documentation, explainer and tests are. The copy here keeps the items and
+//! the results of 0.2 for one release and is removed in 0.4.0.
+
+#![expect(deprecated, reason = "the copy of 0.2 calls its own deprecated items")]
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-mod binary;
-mod censored;
-mod interval;
-
-pub use binary::{
-    BinaryBounds, BinaryDistribution, BinaryStratum, MAX_CONVOLUTION_WORK, binary_bounds,
-    binary_sensitivity_value,
-};
-pub use censored::{Censored, EventDirection, gehan_scores};
-pub use interval::{EffectInterval, Sides, m_statistic_interval};
-
-use crate::lanes;
-use crate::normal;
+use crate::dist::normal;
 use crate::quantile::type7_unsorted;
 use crate::signed_rank::{self, SignedRankError, average_ranks};
+use crate::sum::lanes;
 
 /// What goes wrong in a sensitivity analysis.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::SensitivityError`"
+)]
 pub enum SensitivityError {
     /// `gamma` below 1 or not finite.
     Gamma(f64),
@@ -232,6 +75,10 @@ fn check_gamma(gamma: f64) -> Result<(), SensitivityError> {
 
 /// How the p-value bounds of the signed rank test are computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::WilcoxonDistribution`"
+)]
 pub enum WilcoxonDistribution {
     /// The normal approximation.
     Normal,
@@ -241,6 +88,10 @@ pub enum WilcoxonDistribution {
 
 /// The bounds of the signed rank test at one `gamma`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::WilcoxonBounds`"
+)]
 pub struct WilcoxonBounds {
     /// The sensitivity parameter.
     pub gamma: f64,
@@ -261,6 +112,10 @@ pub struct WilcoxonBounds {
 /// [`SensitivityError::Gamma`], [`SensitivityError::NotFinite`],
 /// [`SensitivityError::NoInformation`] when every difference is zero, and
 /// from the exact distribution.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::wilcoxon_bounds`"
+)]
 pub fn wilcoxon_bounds(
     differences: &[f64],
     gamma: f64,
@@ -268,25 +123,6 @@ pub fn wilcoxon_bounds(
 ) -> Result<WilcoxonBounds, SensitivityError> {
     check_gamma(gamma)?;
     SignedRanks::new(differences)?.bounds(gamma, distribution)
-}
-
-/// The sensitivity value of the one-sided signed rank test: the smallest
-/// `gamma` at which the upper bound of the p-value reaches `alpha`, found as
-/// [`sensitivity_value`] does. The ranks are computed once.
-///
-/// # Errors
-///
-/// As [`wilcoxon_bounds`], and [`SensitivityError::Parameter`] for `alpha`
-/// outside `(0, 1)`.
-pub fn wilcoxon_sensitivity_value(
-    differences: &[f64],
-    alpha: f64,
-    distribution: WilcoxonDistribution,
-) -> Result<f64, SensitivityError> {
-    let ranks = SignedRanks::new(differences)?;
-    sensitivity_value(alpha, |gamma| {
-        ranks.bounds(gamma, distribution).map(|b| b.p_upper)
-    })
 }
 
 /// The ranks of the non-zero differences and the signed rank statistic.
@@ -341,88 +177,6 @@ impl SignedRanks {
     }
 }
 
-/// The sensitivity value: the smallest `gamma` at which `p_upper(gamma)`, the
-/// upper bound of a one-sided p-value, reaches `alpha` \[5\].
-///
-/// `p_upper` must not decrease in `gamma`, which holds for every bound in
-/// this module. The search doubles `gamma` from 2 until the bound reaches
-/// `alpha` and then bisects to adjacent doubles, so the value is the crossing
-/// to the last bit of the bracket. The result is 1 when the bound reaches
-/// `alpha` already at `gamma = 1`, where the test is not significant without
-/// hidden bias, and infinite when it stays below `alpha` up to `gamma =
-/// 2^64`.
-///
-/// # Errors
-///
-/// [`SensitivityError::Parameter`] for `alpha` outside `(0, 1)` or a bound
-/// that is not a number, and those of `p_upper`.
-pub fn sensitivity_value<E: From<SensitivityError>>(
-    alpha: f64,
-    mut p_upper: impl FnMut(f64) -> Result<f64, E>,
-) -> Result<f64, E> {
-    if !(alpha > 0.0 && alpha < 1.0) {
-        return Err(SensitivityError::Parameter("alpha").into());
-    }
-    let mut reached = |gamma: f64| -> Result<bool, E> {
-        let p = p_upper(gamma)?;
-        if p.is_nan() {
-            return Err(SensitivityError::Parameter("a p-value bound").into());
-        }
-        Ok(p >= alpha)
-    };
-    if reached(1.0)? {
-        return Ok(1.0);
-    }
-    let mut low = 1.0_f64;
-    let mut high = 2.0_f64;
-    while !reached(high)? {
-        low = high;
-        high *= 2.0;
-        if high > 18_446_744_073_709_551_616.0 {
-            return Ok(f64::INFINITY);
-        }
-    }
-    loop {
-        let mid = low + (high - low) / 2.0;
-        if mid <= low || mid >= high {
-            return Ok(high);
-        }
-        if reached(mid)? {
-            high = mid;
-        } else {
-            low = mid;
-        }
-    }
-}
-
-/// The amplification of a sensitivity parameter \[6\], as
-/// `sensitivitymv::amplify`: the `delta` that goes with `lambda` for a given
-/// `gamma`, where an unmeasured covariate that multiplies the odds of
-/// treatment by `lambda` and the odds of a positive pair difference by
-/// `delta` is equivalent to `gamma = (lambda delta + 1) / (lambda + delta)`.
-/// Solving for `delta` gives `(gamma lambda - 1) / (lambda - gamma)`. The
-/// relation is symmetric, so the same function gives `lambda` from `delta`.
-/// `None` when `lambda <= gamma`, for which no `delta` exists; an infinite
-/// `lambda` gives `gamma`.
-///
-/// # Errors
-///
-/// [`SensitivityError::Gamma`] and [`SensitivityError::Parameter`] for a
-/// `lambda` that is not a number.
-pub fn amplify(gamma: f64, lambda: f64) -> Result<Option<f64>, SensitivityError> {
-    check_gamma(gamma)?;
-    if lambda.is_nan() {
-        return Err(SensitivityError::Parameter("lambda"));
-    }
-    if lambda <= gamma {
-        return Ok(None);
-    }
-    if lambda.is_infinite() {
-        return Ok(Some(gamma));
-    }
-    Ok(Some((gamma * lambda - 1.0) / (lambda - gamma)))
-}
-
 /// The signed rank statistic of the sorted differences shifted by `tau`, with
 /// the zeros at the lowest ranks and tied absolute values at their average
 /// rank. The shifted differences below `tau` and above it are each in order of
@@ -469,6 +223,10 @@ fn shifted_statistic(sorted: &[f64], tau: f64) -> f64 {
 
 /// The bounds of the Hodges-Lehmann estimate of the shift at one `gamma`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::HodgesLehmannBounds`"
+)]
 pub struct HodgesLehmannBounds {
     /// The sensitivity parameter.
     pub gamma: f64,
@@ -487,6 +245,10 @@ pub struct HodgesLehmannBounds {
 /// [`SensitivityError::NoInformation`] for no pairs, and
 /// [`SensitivityError::SignedRank`] when the range of the differences is not
 /// finite, since a shifted difference could then overflow.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::hodges_lehmann_bounds`"
+)]
 pub fn hodges_lehmann_bounds(
     differences: &[f64],
     gammas: &[f64],
@@ -527,68 +289,6 @@ pub fn hodges_lehmann_bounds(
         });
     }
     Ok(out)
-}
-
-/// The smallest `gamma` at which the lower bound of the Hodges-Lehmann
-/// estimate of [`hodges_lehmann_bounds`] reaches `tau0`, for example 0 for no
-/// effect.
-///
-/// The lower bound at `gamma` is at most `tau0` when the signed rank
-/// statistic `T*`, taken just above the largest Walsh average `v* <= tau0`,
-/// is below `gamma n (n + 1) / (2 (1 + gamma))`. With `N = n (n + 1) / 2`
-/// this holds for every `gamma > T* / (N - T*)`, which is the value returned.
-/// It is 1 when the bound is at or below `tau0` already at `gamma = 1`, and
-/// infinite when no Walsh average is at or below `tau0`, or `T* = N`, so
-/// that no `gamma` brings the bound there. `T*` is a sum of half-integers and
-/// exact, so the value is one division.
-///
-/// # Errors
-///
-/// As [`hodges_lehmann_bounds`], and [`SensitivityError::NotFinite`] for a
-/// `tau0` that is not finite.
-pub fn hodges_lehmann_gamma(differences: &[f64], tau0: f64) -> Result<f64, SensitivityError> {
-    if differences.iter().any(|d| !d.is_finite()) || !tau0.is_finite() {
-        return Err(SensitivityError::NotFinite);
-    }
-    let n = differences.len();
-    if n == 0 {
-        return Err(SensitivityError::NoInformation);
-    }
-    let mut sorted = differences.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    if !(sorted[n - 1] - sorted[0]).is_finite() {
-        return Err(SensitivityError::SignedRank(SignedRankError::NotFinite));
-    }
-    // The largest Walsh average at or below tau0, by a pointer per row that
-    // moves down as the row moves up.
-    let mut largest: Option<f64> = None;
-    let mut column = n;
-    for row in 0..n {
-        while column > row && sorted[row].midpoint(sorted[column - 1]) > tau0 {
-            column -= 1;
-        }
-        if column <= row {
-            break;
-        }
-        let v = sorted[row].midpoint(sorted[column - 1]);
-        if largest.is_none_or(|best| v > best) {
-            largest = Some(v);
-        }
-    }
-    let Some(largest) = largest else {
-        return Ok(f64::INFINITY);
-    };
-    let mut walsh = WalshSearch::new(&sorted);
-    let tau = match walsh.cut_above(largest) {
-        Some(next) => largest + (next - largest) / 2.0,
-        None => largest + 1.0,
-    };
-    let statistic = shifted_statistic(&sorted, tau);
-    let total = (n * (n + 1)) as f64 / 2.0;
-    if statistic >= total {
-        return Ok(f64::INFINITY);
-    }
-    Ok((statistic / (total - statistic)).max(1.0))
 }
 
 /// Search among the Walsh averages `(d_i + d_j) / 2`, `i <= j`, of sorted
@@ -715,6 +415,7 @@ impl<'a> WalshSearch<'a> {
 
 /// The scores of an m-statistic over matched sets.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::rosenbaum::MScore`")]
 pub struct MScore {
     /// The inner trim `a` in units of the scale.
     pub inner: f64,
@@ -747,6 +448,7 @@ impl Default for MScore {
 ///
 /// [`SensitivityError::SetTooSmall`], [`SensitivityError::NotFinite`],
 /// [`SensitivityError::Parameter`] and [`SensitivityError::ZeroScale`].
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::rosenbaum::m_scores`")]
 pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, SensitivityError> {
     if !(spec.lambda > 0.0 && spec.lambda < 1.0) {
         return Err(SensitivityError::Parameter("lambda"));
@@ -833,6 +535,7 @@ pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, Sensi
 
 /// The bound of a test on the treated unit's score summed over sets.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::rosenbaum::SetBounds`")]
 pub struct SetBounds {
     /// The sensitivity parameter.
     pub gamma: f64,
@@ -856,6 +559,10 @@ pub struct SetBounds {
 ///
 /// [`SensitivityError::Gamma`], [`SensitivityError::SetTooSmall`],
 /// [`SensitivityError::NotFinite`] and [`SensitivityError::ZeroVariance`].
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::set_bounds`"
+)]
 pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, SensitivityError> {
     check_gamma(gamma)?;
     if scores.is_empty() {
@@ -910,274 +617,20 @@ pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, Sensitiv
     })
 }
 
-/// The sensitivity value of a test on the treated unit's score summed over
-/// sets: the smallest `gamma` at which the upper bound of [`set_bounds`]
-/// reaches `alpha`. The scores can be those of [`m_scores`] or
-/// [`gehan_scores`], or any scores fixed under the null hypothesis.
-///
-/// # Errors
-///
-/// As [`set_bounds`] and [`sensitivity_value`].
-pub fn scores_sensitivity_value(scores: &[Vec<f64>], alpha: f64) -> Result<f64, SensitivityError> {
-    sensitivity_value(alpha, |gamma| set_bounds(scores, gamma).map(|b| b.p_upper))
-}
-
 /// The m-statistic bound for matched sets of raw responses, the treated unit
 /// first in each: [`m_scores`] followed by [`set_bounds`].
 ///
 /// # Errors
 ///
 /// Those of the two.
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::rosenbaum::matched_sets_bounds`"
+)]
 pub fn matched_sets_bounds(
     sets: &[Vec<f64>],
     gamma: f64,
     spec: &MScore,
 ) -> Result<SetBounds, SensitivityError> {
     set_bounds(&m_scores(sets, spec)?, gamma)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The bounds from all the Walsh averages, sorted, bisected one by one.
-    fn reference(differences: &[f64], gammas: &[f64]) -> Vec<HodgesLehmannBounds> {
-        let shifted = |tau: f64| -> f64 {
-            let s: Vec<f64> = differences.iter().map(|d| d - tau).collect();
-            let a: Vec<f64> = s.iter().map(|d| d.abs()).collect();
-            let ranks = average_ranks(&a).unwrap();
-            ranks
-                .iter()
-                .zip(&s)
-                .filter(|(_, d)| **d > 0.0)
-                .map(|(r, _)| *r)
-                .sum()
-        };
-        let n = differences.len();
-        let mut walsh = Vec::new();
-        for i in 0..n {
-            for j in i..n {
-                walsh.push(differences[i].midpoint(differences[j]));
-            }
-        }
-        walsh.sort_by(f64::total_cmp);
-        walsh.dedup();
-        let k = walsh.len();
-        let representative = |m: usize| -> f64 {
-            if m == 0 {
-                walsh[0] - 1.0
-            } else if m == k {
-                walsh[k - 1] + 1.0
-            } else {
-                walsh[m - 1] + (walsh[m] - walsh[m - 1]) / 2.0
-            }
-        };
-        let total = (n * (n + 1)) as f64 / 2.0;
-        let mut out = Vec::new();
-        for &gamma in gammas {
-            let t_low = total / (1.0 + gamma);
-            let t_high = total * gamma / (1.0 + gamma);
-            let (mut lo, mut hi) = (0, k);
-            while lo < hi {
-                let mid = lo + (hi - lo) / 2;
-                if shifted(representative(mid)) <= t_low {
-                    hi = mid;
-                } else {
-                    lo = mid + 1;
-                }
-            }
-            let upper = if lo == 0 { walsh[0] } else { walsh[lo - 1] };
-            let (mut lo, mut hi) = (0, k);
-            while lo < hi {
-                let mid = lo + (hi - lo).div_ceil(2);
-                if shifted(representative(mid)) >= t_high {
-                    lo = mid;
-                } else {
-                    hi = mid - 1;
-                }
-            }
-            let lower = if lo == k { walsh[k - 1] } else { walsh[lo] };
-            out.push(HodgesLehmannBounds {
-                gamma,
-                lower,
-                upper,
-            });
-        }
-        out
-    }
-
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn next(&mut self) -> u64 {
-            self.0 = self
-                .0
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            self.0 >> 33
-        }
-    }
-
-    #[test]
-    fn hodges_lehmann_equals_the_listing_of_all_averages_to_the_bit() {
-        let gammas = [1.0, 1.1, 1.5, 2.0, 3.7, 9.0];
-        let mut rng = Lcg(12345);
-        for case in 0..400 {
-            let n = 1 + (rng.next() % 120) as usize;
-            let kind = case % 4;
-            let d: Vec<f64> = (0..n)
-                .map(|_| match kind {
-                    // Continuous.
-                    0 => (rng.next() % 1_000_000) as f64 / 1000.0 - 400.0,
-                    // Small integers, many ties and zeros.
-                    1 => (rng.next() % 9) as f64 - 3.0,
-                    // Halves and negative zeros.
-                    2 => {
-                        let v = (rng.next() % 7) as f64 / 2.0 - 1.5;
-                        if v == 0.0 && rng.next().is_multiple_of(2) {
-                            -0.0
-                        } else {
-                            v
-                        }
-                    }
-                    // Mostly positive.
-                    _ => (rng.next() % 100) as f64 / 10.0 - 1.0,
-                })
-                .collect();
-            let want = reference(&d, &gammas);
-            let got = hodges_lehmann_bounds(&d, &gammas).unwrap();
-            for (w, g) in want.iter().zip(&got) {
-                assert_eq!(w.lower.to_bits(), g.lower.to_bits(), "case {case} lower");
-                assert_eq!(w.upper.to_bits(), g.upper.to_bits(), "case {case} upper");
-            }
-        }
-    }
-
-    #[test]
-    fn hodges_lehmann_takes_more_than_five_thousand_pairs() {
-        let mut rng = Lcg(7);
-        let d: Vec<f64> = (0..40_000)
-            .map(|_| (rng.next() % 2_000_001) as f64 / 1000.0 - 900.0)
-            .collect();
-        let b = hodges_lehmann_bounds(&d, &[1.0, 2.0]).unwrap();
-        assert!(b[0].lower <= b[0].upper);
-        assert!(b[1].lower <= b[0].lower && b[0].upper <= b[1].upper);
-    }
-
-    #[test]
-    fn gamma_one_signed_rank_bounds_coincide() {
-        let d = [1.2, -0.4, 2.2, 0.7, 3.1, -1.5, 0.9];
-        let b = wilcoxon_bounds(&d, 1.0, WilcoxonDistribution::Normal).unwrap();
-        assert!((b.p_lower - b.p_upper).abs() < 1e-15);
-        let e = wilcoxon_bounds(&d, 1.0, WilcoxonDistribution::Exact).unwrap();
-        assert!((e.p_lower - e.p_upper).abs() < 1e-15);
-    }
-
-    #[test]
-    fn bounds_widen_with_gamma() {
-        let d = [1.2, -0.4, 2.2, 0.7, 3.1, -1.5, 0.9, 2.4, 1.1];
-        let a = wilcoxon_bounds(&d, 1.5, WilcoxonDistribution::Exact).unwrap();
-        let b = wilcoxon_bounds(&d, 3.0, WilcoxonDistribution::Exact).unwrap();
-        assert!(b.p_upper > a.p_upper);
-        assert!(b.p_lower < a.p_lower);
-    }
-
-    #[test]
-    fn hodges_lehmann_at_gamma_one_is_the_median_walsh_average() {
-        let d = [1.0, 2.0, 4.0, 7.0, 8.0];
-        let b = hodges_lehmann_bounds(&d, &[1.0]).unwrap();
-        // The 15 Walsh averages have median 4.5.
-        assert!(b[0].lower <= 4.5 && 4.5 <= b[0].upper);
-    }
-
-    #[test]
-    fn hodges_lehmann_bounds_are_ordered_and_widen() {
-        let d = [0.3, 1.2, -0.5, 2.0, 1.7, 0.9, 2.6, 0.1];
-        let b = hodges_lehmann_bounds(&d, &[1.0, 1.5, 2.0]).unwrap();
-        assert!(b[1].lower <= b[0].lower && b[0].upper <= b[1].upper);
-        assert!(b[2].lower <= b[1].lower && b[1].upper <= b[2].upper);
-    }
-
-    #[test]
-    fn set_bound_at_gamma_one_has_the_plain_expectation() {
-        let scores = vec![vec![0.5, -0.1, -0.4], vec![0.2, 0.3, -0.5]];
-        let b = set_bounds(&scores, 1.0).unwrap();
-        assert!(b.expectation.abs() < 1e-12);
-    }
-
-    #[test]
-    fn invalid_input_is_an_error() {
-        assert!(wilcoxon_bounds(&[1.0], 0.5, WilcoxonDistribution::Normal).is_err());
-        assert!(wilcoxon_bounds(&[0.0, 0.0], 1.0, WilcoxonDistribution::Normal).is_err());
-        assert!(m_scores(&[vec![1.0]], &MScore::default()).is_err());
-        assert!(m_scores(&[vec![1.0, 1.0], vec![2.0, 2.0]], &MScore::default()).is_err());
-    }
-
-    #[test]
-    fn hodges_lehmann_gamma_is_where_the_lower_bound_reaches_the_value() {
-        // Just above the value the lower bound is at or below tau0, and just
-        // below it above; the margin 1e-9 relative is far above the rounding
-        // of gamma / (1 + gamma) in the bound.
-        let mut rng = Lcg(99);
-        for case in 0..200 {
-            let n = 3 + (rng.next() % 60) as usize;
-            let d: Vec<f64> = (0..n)
-                .map(|_| match case % 3 {
-                    0 => (rng.next() % 10_000) as f64 / 1000.0 - 2.0,
-                    1 => (rng.next() % 7) as f64 - 1.0,
-                    _ => (rng.next() % 9) as f64 / 2.0 - 0.5,
-                })
-                .collect();
-            for tau0 in [0.0, 0.5, 1.0] {
-                let g = hodges_lehmann_gamma(&d, tau0).unwrap();
-                let at_one = hodges_lehmann_bounds(&d, &[1.0]).unwrap()[0].lower;
-                if g.to_bits() == 1.0_f64.to_bits() {
-                    let above = hodges_lehmann_bounds(&d, &[1.0 + 1e-9]).unwrap()[0].lower;
-                    assert!(above <= tau0 || at_one <= tau0, "case {case}");
-                    continue;
-                }
-                if g.is_infinite() {
-                    let far = hodges_lehmann_bounds(&d, &[1e12]).unwrap()[0].lower;
-                    assert!(far > tau0, "case {case} {far}");
-                    continue;
-                }
-                let b = hodges_lehmann_bounds(&d, &[g * (1.0 - 1e-9), g * (1.0 + 1e-9)]).unwrap();
-                assert!(b[0].lower > tau0, "case {case} below {g}: {}", b[0].lower);
-                assert!(b[1].lower <= tau0, "case {case} above {g}: {}", b[1].lower);
-            }
-        }
-    }
-
-    #[test]
-    fn the_sensitivity_value_is_the_crossing() {
-        let d: Vec<f64> = (0..40).map(|i| f64::from(i % 7) - 1.5).collect();
-        let g = wilcoxon_sensitivity_value(&d, 0.05, WilcoxonDistribution::Normal).unwrap();
-        let below = wilcoxon_bounds(&d, g * (1.0 - 1e-12), WilcoxonDistribution::Normal).unwrap();
-        let at = wilcoxon_bounds(&d, g, WilcoxonDistribution::Normal).unwrap();
-        assert!(below.p_upper < 0.05 && at.p_upper >= 0.05);
-        // Not significant without hidden bias.
-        let none = [1.0, -1.0, 2.0, -2.0];
-        assert_eq!(
-            wilcoxon_sensitivity_value(&none, 0.05, WilcoxonDistribution::Exact).unwrap(),
-            1.0
-        );
-        assert!(wilcoxon_sensitivity_value(&d, 0.0, WilcoxonDistribution::Normal).is_err());
-    }
-
-    #[test]
-    fn amplification_inverts_its_relation() {
-        let (gamma, lambda) = (2.0, 3.0);
-        let delta = amplify(gamma, lambda).unwrap().unwrap();
-        assert!(((lambda * delta + 1.0) / (lambda + delta) - gamma).abs() < 1e-15);
-        assert_eq!(amplify(gamma, f64::INFINITY).unwrap(), Some(gamma));
-        assert_eq!(amplify(gamma, 1.5).unwrap(), None);
-        assert!(amplify(0.5, 3.0).is_err());
-        assert!(amplify(2.0, f64::NAN).is_err());
-    }
-
-    #[test]
-    fn hodges_lehmann_with_overflowing_shift_is_an_error() {
-        let d = [1.7e308, -1.7e308, 1.0e308, -1.0e308, 5.0e307];
-        assert!(hodges_lehmann_bounds(&d, &[1.0, 2.0]).is_err());
-    }
 }

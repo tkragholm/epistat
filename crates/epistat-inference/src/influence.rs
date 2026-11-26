@@ -76,7 +76,7 @@
 //! 3. Cameron AC, Gelbach JB, Miller DL. Bootstrap-based improvements for
 //!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
-use epistat_stats::lanes;
+use epistat_stats::sum::lanes;
 
 use crate::{Clusters, InferenceError, check_length};
 

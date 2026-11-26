@@ -284,7 +284,7 @@ fn make_estimate(value: f64, variance: f64, alpha: f64) -> Result<Estimate> {
     let se = variance.max(0.0).sqrt();
     let (lower, upper) = epistat_inference::interval::normal(value, se, alpha)
         .map_err(|e| Error::input(format!("alpha: {e}")))?;
-    let p_value = (se > 0.0).then(|| 2.0 * epistat_stats::normal::cdf(-(value / se).abs()));
+    let p_value = (se > 0.0).then(|| 2.0 * epistat_stats::dist::normal::cdf(-(value / se).abs()));
     Ok(Estimate {
         estimate: value,
         se,

@@ -238,7 +238,7 @@ use std::borrow::Cow;
 
 use epistat_linalg::{Mat, MatRef};
 use epistat_optim::brent;
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use self::em::{EmInput, fit_em};
 use self::engine::{Eval, Failure, Layout, Penalty, Rows, State};
@@ -1180,8 +1180,8 @@ mod tests {
                 .iter()
                 .map(|&d| {
                     let d = f64::from(d);
-                    d + nu * (nu / (nu + d)).ln() + epistat_stats::gamma::ln_gamma(nu + d)
-                        - epistat_stats::gamma::ln_gamma(nu)
+                    d + nu * (nu / (nu + d)).ln() + epistat_stats::dist::gamma::ln_gamma(nu + d)
+                        - epistat_stats::dist::gamma::ln_gamma(nu)
                         - d * (nu + d).ln()
                 })
                 .sum();

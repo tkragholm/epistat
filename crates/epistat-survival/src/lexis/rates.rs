@@ -57,7 +57,7 @@
 
 use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_linalg::Mat;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use crate::error::{Error, Result};
 

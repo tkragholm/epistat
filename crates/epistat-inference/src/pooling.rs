@@ -134,7 +134,8 @@
 //!    current practice and guidelines. BMC Med Res Methodol. 2009;9:57.
 
 use epistat_linalg::{Attempt, Mat, Method, solve};
-use epistat_stats::student::{f_sf, t_quantile};
+use epistat_stats::dist::f::sf as f_sf;
+use epistat_stats::dist::t::quantile as t_quantile;
 
 use crate::{InferenceError, check_length};
 
@@ -190,7 +191,7 @@ impl Pooled {
         let z = ((self.estimate - null) / se).abs();
         // P(|T| > z) on df degrees of freedom is the upper tail of F(1, df) at z^2.
         let p = if df.is_infinite() {
-            2.0 * epistat_stats::normal::cdf(-z)
+            2.0 * epistat_stats::dist::normal::cdf(-z)
         } else {
             f_sf(z * z, 1.0, df)
         };
@@ -213,11 +214,11 @@ impl Pooled {
             return Ok(None);
         };
         let t = if df.is_infinite() {
-            epistat_stats::normal::quantile(1.0 - alpha / 2.0)
+            epistat_stats::dist::normal::quantile(1.0 - alpha / 2.0)
         } else {
             match t_quantile(1.0 - alpha / 2.0, df) {
-                Some(t) => t,
-                None => return Ok(None),
+                t if t.is_nan() => return Ok(None),
+                t => t,
             }
         };
         Ok(Some((self.estimate - t * se, self.estimate + t * se)))

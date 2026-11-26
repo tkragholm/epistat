@@ -83,8 +83,8 @@ feols_chain2_cg:epistat-glm:tier1_feols:chn:10000000:tier1/bench.R:900
 feols_chain3_cg:epistat-glm:tier1_feols:chn:10000000:tier1/bench.R:900
 glm_logit_p5:epistat-glm:tier1_glm_scale:none:10000000:-:300
 glm_logit_p20:epistat-glm:tier1_glm_scale:none:10000000:-:300
-mh_or:epistat-stats:tier1_stats:mh:10000000:tier1/bench.R:120
-mh_rr:epistat-stats:tier1_stats:mhr:10000000:tier1/bench.R:120
+mh_or:epistat-epi:tier1_epi:mh:10000000:tier1/bench.R:120
+mh_rr:epistat-epi:tier1_epi:mhr:10000000:tier1/bench.R:120
 padj_holm:epistat-inference:tier1_inference:pv:10000000:tier1/bench.R:120
 padj_hochberg:epistat-inference:tier1_inference:pv:10000000:tier1/bench.R:120
 padj_bh:epistat-inference:tier1_inference:pv:10000000:tier1/bench.R:120
@@ -129,8 +129,8 @@ lexis:epistat-register:tier2_register:lx:10000000:tier2/bench.R:120
 intervals:epistat-register:tier2_register:iv:10000000:tier2/bench.R:120
 residence:epistat-register:tier2_register:rs:10000000:tier2/bench.R:120
 pedigree:epistat-register:tier2_register:pd:10000000:tier2/bench.R:120
-bias_exposure:epistat-stats:tier2_bias:none:10000000:tier2/bench.R:120
-bias_outcome:epistat-stats:tier2_bias:none:10000000:tier2/bench.R:120
+bias_exposure:epistat-epi:tier2_bias:none:10000000:tier2/bench.R:120
+bias_outcome:epistat-epi:tier2_bias:none:10000000:tier2/bench.R:120
 gee_exch:epistat-glm:tier2_glm:gpanel:10000000:tier2/glm_bench.R:120
 gee_ar1:epistat-glm:tier2_glm:gpanel:10000000:tier2/glm_bench.R:120
 gee_unstr:epistat-glm:tier2_glm:gpanel:10000000:-:120

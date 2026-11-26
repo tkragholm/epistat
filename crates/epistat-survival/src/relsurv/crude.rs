@@ -12,7 +12,7 @@ use super::cohort::{SWEEP_LIMIT, rows_by_stratum};
 use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 /// The crude probabilities of death of one stratum.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,7 +97,7 @@ pub fn crude_mortality(
     let groups = rows_by_stratum(data, expected)?;
     let surv = data.followup()?;
     let (start, stop, status) = (surv.start(), surv.stop(), surv.status());
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     groups
         .into_iter()
         .enumerate()

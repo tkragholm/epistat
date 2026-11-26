@@ -1,10 +1,16 @@
-//! `beta_quantile` against R's `qbeta` on a grid of 1,210 cases.
+//! `dist::beta::quantile` against R's `qbeta` on a grid of 1,210 cases.
 //!
 //! The reference is `tests/data/beta_quantile.json`, written by
 //! `tests/data/beta_quantile.R`: shapes from 1e-3 to 1e4 and probabilities
 //! from 1e-12 to 1 - 1e-12.
 
-use epistat_stats::student::{beta_quantile, regularised_beta};
+use epistat_stats::dist::beta::{quantile, regularised as regularised_beta};
+
+/// The beta quantile, `None` where it is NaN.
+fn beta_quantile(p: f64, a: f64, b: f64) -> Option<f64> {
+    let q = quantile(p, a, b);
+    (!q.is_nan()).then_some(q)
+}
 use epistat_testkit::load_json;
 use serde::Deserialize;
 

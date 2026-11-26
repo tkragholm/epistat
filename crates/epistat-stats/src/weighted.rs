@@ -1,4 +1,5 @@
-//! The weighted mean and the variance with reliability weights.
+//! The weighted mean and the variance with reliability weights, the effective
+//! sample size of a set of weights, and limits on weights and probabilities.
 //!
 //! # Algorithm
 //!
@@ -50,12 +51,30 @@
 //! the polars computation that `weighted_mean` and `weighted_variance` of the
 //! `dansk_register` Python package run, bit for bit, on fixed data.
 //!
+//! # Effective sample size and limits
+//!
+//! [`effective_sample_size`] is Kish's `(sum w_i)^2 / sum w_i^2` \[3\], which
+//! does not depend on the scale of the weights. The sums run in the order
+//! given; when the squares would overflow or lose precision, the weights are
+//! divided by the largest first.
+//!
+//! [`WeightLimits`] cuts weights at fixed values or at R's type 1 quantiles of
+//! the weights, as `TrialEmulation`'s `limit_weight` does, and
+//! [`ProbabilityBounds`] keeps a fitted probability, such as a propensity
+//! score, inside `[lower, upper]` before it is inverted into a weight. Both
+//! replace a value below the lower limit by the limit and one above the upper
+//! by that, `w.max(lower).min(upper)`.
+//!
 //! # References
 //!
 //! 1. Cochran WG. Sampling Techniques. 3rd ed. New York: Wiley; 1977.
 //!    Section 2.
 //! 2. R Core Team. `cov.wt` in the R package stats, method `"unbiased"`.
+//! 3. Kish L. Survey Sampling. New York: Wiley; 1965, p. 427.
 
+use epistat_core::InputError;
+
+use crate::Error;
 use crate::sum::blocked;
 
 /// The number of decimals each term of the weighted mean is rounded to.
@@ -203,6 +222,190 @@ pub fn variance(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
         .map(|(&x, &w)| w * (x - mean).powi(2))
         .collect();
     Some(blocked(&deviations) / divisor)
+}
+
+/// Kish's effective sample size, `(sum w)^2 / sum w^2`, of the weights.
+///
+/// The value does not depend on the scale of the weights: equal weights of any
+/// size give their number. A zero weight is a unit that is not in the sample
+/// and counts for nothing. The result is `None` when no weight is positive,
+/// since there is no sample to have a size.
+///
+/// # Errors
+///
+/// [`Error::Input`] for the first weight that is negative or not finite.
+pub fn effective_sample_size(weights: &[f64]) -> Result<Option<f64>, Error> {
+    let mut largest = 0.0_f64;
+    for (row, &weight) in weights.iter().enumerate() {
+        if !weight.is_finite() {
+            return Err(InputError::NotFinite {
+                what: "weights",
+                row,
+            }
+            .into());
+        }
+        if weight < 0.0 {
+            return Err(InputError::Domain {
+                what: "weights",
+                value: weight,
+                domain: "[0, inf)",
+            }
+            .into());
+        }
+        largest = largest.max(weight);
+    }
+    if largest == 0.0 {
+        return Ok(None);
+    }
+    let sums = |scale: f64| {
+        weights
+            .iter()
+            .fold((0.0_f64, 0.0_f64), |(sum, sum_sq), &weight| {
+                let weight = weight / scale;
+                (sum + weight, sum_sq + weight * weight)
+            })
+    };
+    let (mut sum, mut sum_sq) = sums(1.0);
+    // The squares are accurate while the largest one is a normal number, and
+    // the sums are finite while they have not overflowed.
+    let plain = largest * largest >= f64::MIN_POSITIVE
+        && sum.is_finite()
+        && sum_sq.is_finite()
+        && (sum * sum).is_finite();
+    if !plain {
+        (sum, sum_sq) = sums(largest);
+    }
+    Ok(Some((sum * sum) / sum_sq))
+}
+
+/// Where weights are cut.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WeightLimits {
+    /// At the `lower` and `upper` quantiles of the weights, R's type 1 (the
+    /// inverse of the empirical distribution function), as `TrialEmulation`
+    /// takes them. [`WeightLimits::P99`] is its `"p99"`.
+    Quantiles {
+        /// The probability of the lower quantile.
+        lower: f64,
+        /// The probability of the upper quantile.
+        upper: f64,
+    },
+    /// At fixed values, as its `"weight_limits"`.
+    Values {
+        /// The smallest weight kept.
+        lower: f64,
+        /// The largest weight kept.
+        upper: f64,
+    },
+}
+
+impl WeightLimits {
+    /// The 1st and 99th percentiles.
+    pub const P99: Self = Self::Quantiles {
+        lower: 0.01,
+        upper: 0.99,
+    };
+
+    /// The weights cut to the limits: each weight below the lower limit set
+    /// to it and each above the upper set to it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] for no weights, a weight that is negative or not
+    /// finite, quantile probabilities outside `[0, 1]` or limits with the
+    /// lower above the upper.
+    pub fn apply(self, weights: &[f64]) -> Result<Vec<f64>, Error> {
+        if weights.is_empty() {
+            return Err(InputError::Empty { what: "weights" }.into());
+        }
+        if let Some(row) = weights.iter().position(|w| !w.is_finite()) {
+            return Err(InputError::NotFinite {
+                what: "weights",
+                row,
+            }
+            .into());
+        }
+        if let Some(&value) = weights.iter().find(|w| **w < 0.0) {
+            return Err(InputError::Domain {
+                what: "weights",
+                value,
+                domain: "[0, inf)",
+            }
+            .into());
+        }
+        let (lower, upper) = match self {
+            Self::Quantiles { lower, upper } => {
+                ordered("limits", lower, upper)?;
+                for p in [lower, upper] {
+                    epistat_core::check::probability("limits", p)?;
+                }
+                let mut sorted = weights.to_vec();
+                sorted.sort_by(f64::total_cmp);
+                let at = |p| {
+                    crate::quantile::type1(&sorted, p).ok_or(InputError::Empty { what: "weights" })
+                };
+                (at(lower)?, at(upper)?)
+            }
+            Self::Values { lower, upper } => {
+                ordered("limits", lower, upper)?;
+                (lower, upper)
+            }
+        };
+        Ok(weights.iter().map(|&w| w.max(lower).min(upper)).collect())
+    }
+}
+
+/// `lower <= upper`, neither NaN.
+fn ordered(what: &'static str, lower: f64, upper: f64) -> Result<(), InputError> {
+    if lower.is_nan() || upper.is_nan() || lower > upper {
+        return Err(InputError::Domain {
+            what,
+            value: lower,
+            domain: "at most the upper limit",
+        });
+    }
+    Ok(())
+}
+
+/// Bounds a fitted probability is kept within, such as `[0.01, 0.99]` for a
+/// propensity score before it is inverted into a weight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProbabilityBounds {
+    lower: f64,
+    upper: f64,
+}
+
+impl ProbabilityBounds {
+    /// The bounds `[lower, upper]`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] unless `0 <= lower <= upper <= 1`.
+    pub fn new(lower: f64, upper: f64) -> Result<Self, Error> {
+        epistat_core::check::probability("lower bound", lower)?;
+        epistat_core::check::probability("upper bound", upper)?;
+        ordered("lower bound", lower, upper)?;
+        Ok(Self { lower, upper })
+    }
+
+    /// The lower bound.
+    #[must_use]
+    pub const fn lower(self) -> f64 {
+        self.lower
+    }
+
+    /// The upper bound.
+    #[must_use]
+    pub const fn upper(self) -> f64 {
+        self.upper
+    }
+
+    /// `p` moved into the bounds, `p.max(lower).min(upper)`.
+    #[must_use]
+    pub fn apply(self, p: f64) -> f64 {
+        p.max(self.lower).min(self.upper)
+    }
 }
 
 #[cfg(test)]
@@ -381,5 +584,70 @@ mod tests {
                 assert_eq!(g.to_bits(), e, "n = {n}");
             }
         }
+    }
+
+    #[test]
+    fn kish_effective_sample_size() {
+        assert_eq!(effective_sample_size(&[2.0; 5]), Ok(Some(5.0)));
+        assert_eq!(effective_sample_size(&[0.0, 0.0]), Ok(None));
+        assert_eq!(effective_sample_size(&[]), Ok(None));
+        // (1 + 3)^2 / (1 + 9).
+        assert_eq!(effective_sample_size(&[1.0, 3.0, 0.0]), Ok(Some(1.6)));
+        // Squares that underflow are scaled first.
+        assert_eq!(effective_sample_size(&[1e-200, 1e-200]), Ok(Some(2.0)));
+        assert!(effective_sample_size(&[1.0, -1.0]).is_err());
+        assert!(effective_sample_size(&[1.0, f64::NAN]).is_err());
+    }
+
+    #[test]
+    fn weight_limits_cut_at_values_and_quantiles() {
+        let w = WeightLimits::Values {
+            lower: 1.0,
+            upper: 3.0,
+        }
+        .apply(&[5.0, 0.5, 2.0])
+        .unwrap();
+        assert_eq!(w, vec![3.0, 1.0, 2.0]);
+        // quantile(1:10, c(0.1, 0.99), type = 1) in R is 1 and 10.
+        let x: Vec<f64> = (1..=10).map(f64::from).collect();
+        let cut = WeightLimits::Quantiles {
+            lower: 0.15,
+            upper: 0.85,
+        }
+        .apply(&x)
+        .unwrap();
+        assert_eq!(cut[0], 2.0);
+        assert_eq!(cut[9], 9.0);
+        assert_eq!(WeightLimits::P99.apply(&x).unwrap(), x);
+        assert!(
+            WeightLimits::Values {
+                lower: 2.0,
+                upper: 1.0
+            }
+            .apply(&[1.0])
+            .is_err()
+        );
+        assert!(WeightLimits::P99.apply(&[]).is_err());
+        assert!(WeightLimits::P99.apply(&[-1.0]).is_err());
+        assert!(
+            WeightLimits::Quantiles {
+                lower: -0.1,
+                upper: 0.5
+            }
+            .apply(&[1.0])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn probability_bounds_clamp() {
+        let b = ProbabilityBounds::new(0.01, 0.99).unwrap();
+        assert_eq!(b.apply(0.0), 0.01);
+        assert_eq!(b.apply(0.5), 0.5);
+        assert_eq!(b.apply(1.0), 0.99);
+        assert_eq!((b.lower(), b.upper()), (0.01, 0.99));
+        assert!(ProbabilityBounds::new(0.6, 0.4).is_err());
+        assert!(ProbabilityBounds::new(-0.1, 0.4).is_err());
+        assert!(ProbabilityBounds::new(0.1, f64::NAN).is_err());
     }
 }

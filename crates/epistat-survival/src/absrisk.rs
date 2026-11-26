@@ -175,7 +175,7 @@
 //!    models with R. New York: Springer; 2012.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, refuse_non_finite};
@@ -427,7 +427,7 @@ impl<'a> CauseSpecificCox<'a> {
         }
         let (lower, upper) = match &std_err {
             Some(se) if opts.limits != RiskLimits::None => {
-                let z = normal::two_sided_z(opts.conf_level);
+                let z = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
                 let (lo, up) = limits::limits(&risk, se, opts.limits, z);
                 (Some(lo), Some(up))
             }

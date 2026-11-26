@@ -31,7 +31,7 @@
 //!   the statistic, plus the error of the tail function, which is measured
 //!   against R's own `pchisq` at R's statistic in `tail_function_agrees`.
 
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_survival::SurvData;
 use epistat_survival::survdiff::{Options, one_sample, test};
 use epistat_testkit::load_json;

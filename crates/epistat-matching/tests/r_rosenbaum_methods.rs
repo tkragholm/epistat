@@ -27,13 +27,13 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_epi::rosenbaum::{self, BinaryStratum};
 use epistat_matching::sensitivity::{
     BinaryDistribution, Censored, CensoredSet, EventDirection, MScore, MatchedSet, Sides,
     WilcoxonDistribution, amplify, binary_bounds, binary_sensitivity_value, censored_bounds,
     censored_sensitivity_value, m_statistic_bounds, m_statistic_interval,
     m_statistic_sensitivity_value, wilcoxon_bounds, wilcoxon_sensitivity_value,
 };
-use epistat_stats::rosenbaum::{self, BinaryStratum};
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 

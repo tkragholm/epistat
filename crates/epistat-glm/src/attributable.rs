@@ -94,7 +94,7 @@
 //!    sum to more than one. Am J Prev Med 2004;26(3):243-9.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use crate::fit::Fit;
 
@@ -391,7 +391,7 @@ pub fn attributable_logistic(
         let var = ss / (m - 1) as f64 * factor;
         let se = var.max(0.0).sqrt();
         result.se = Some(se);
-        let zq = normal::two_sided_z(opts.level);
+        let zq = normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
         match opts.scale {
             IntervalScale::Identity => {
                 result.lower = Some(af - zq * se);

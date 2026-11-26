@@ -19,9 +19,9 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_epi::rates::{direct_standardised, rate_ratio};
+use epistat_epi::sir::{SirInterval, sir};
 use epistat_linalg::Mat;
-use epistat_stats::rates::{direct_standardised, rate_ratio};
-use epistat_stats::sir::{SirInterval, sir};
 use epistat_survival::SurvData;
 use epistat_survival::pyears::{Dimension, PyearsOptions, pyears};
 use epistat_survival::ratetable::{RateDim, RateTable};

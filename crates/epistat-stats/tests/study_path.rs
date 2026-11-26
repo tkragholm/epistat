@@ -12,8 +12,12 @@
 //! The hashes were recorded on aarch64 macOS. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+// The 0.2 paths of decomposition and standardisation are what PHD compiles
+// against at the bump; epistat-epi hashes the same calls at their new paths.
+#![expect(deprecated, reason = "the hashes cover the deprecated 0.2 paths too")]
 
-use epistat_stats::{decomposition, gamma, normal, quantile, standardisation, sum, weighted};
+use epistat_stats::dist::{chi_square, normal};
+use epistat_stats::{compat, decomposition, standardisation, sum, weighted};
 use epistat_testkit::{Fingerprint, SplitMix64};
 
 /// A fingerprint that hashes NaN and `None` alike, so a value that becomes
@@ -95,11 +99,11 @@ fn cases() -> Vec<(&'static str, u64)> {
     let mut h = Hash::new();
     for i in -4_000..=4_000 {
         let x = f64::from(i) / 500.0;
-        h.f(normal::cdf_as26(x));
-        h.f(normal::erf_as26(x));
+        h.f(compat::cdf_as26(x));
+        h.f(compat::erf_as26(x));
     }
     for &p in &p {
-        h.f(normal::quantile_acklam(
+        h.f(compat::quantile_acklam(
             p.clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON),
         ));
     }
@@ -112,7 +116,7 @@ fn cases() -> Vec<(&'static str, u64)> {
     }
     for df in 1..=12 {
         for i in 0..=400 {
-            h.f(gamma::chi_square_sf(f64::from(i) / 10.0, f64::from(df)));
+            h.f(chi_square::sf(f64::from(i) / 10.0, f64::from(df)));
         }
     }
     out.push(("normal_quantile_chi_square_sf", h.finish()));
@@ -123,7 +127,7 @@ fn cases() -> Vec<(&'static str, u64)> {
     sorted.sort_by(f64::total_cmp);
     let mut h = Hash::new();
     for &p in &p {
-        h.o(quantile::rounded_rank(&sorted, p.clamp(0.0, 1.0)));
+        h.o(compat::rounded_rank(&sorted, p.clamp(0.0, 1.0)));
     }
     out.push(("rounded_rank", h.finish()));
 

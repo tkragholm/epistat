@@ -1,2 +1,4 @@
 target/
 .DS_Store
+# A global ignore of dist/ would hide the distribution module.
+!crates/epistat-stats/src/dist/

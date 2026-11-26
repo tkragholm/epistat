@@ -122,7 +122,7 @@ use epistat_linalg::design::independent_columns;
 use epistat_linalg::{
     Attempt, DesignError, Factor, Mat, MatRef, Method, SolveError, weighted_gram,
 };
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use rayon::prelude::*;
 
 use crate::{Family, Glm, GlmError, Link, expit};

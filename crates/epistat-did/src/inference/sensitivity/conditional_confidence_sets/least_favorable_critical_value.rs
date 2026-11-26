@@ -193,6 +193,6 @@ pub(in crate::inference::sensitivity) fn compute_least_favorable_cv_from_draws(
     }
     let p = (1.0 - hybrid_kappa).clamp(0.0, 1.0);
     etas.sort_by(f64::total_cmp);
-    epistat_stats::quantile::rounded_rank(&etas, p)
+    epistat_stats::compat::rounded_rank(&etas, p)
         .ok_or_else(|| "failed to compute least-favorable critical value".to_string())
 }

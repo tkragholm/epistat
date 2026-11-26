@@ -373,7 +373,7 @@ fn distribution_tails_match_r() {
     let r = reference();
     let mut worst_f = Worst(0.0);
     for g in &r.pf {
-        let got = epistat_stats::student::f_sf(g.f, g.k, g.nu);
+        let got = epistat_stats::dist::f::sf(g.f, g.k, g.nu);
         worst_f.prob(
             &format!("pf k {} nu {} f {}", g.k, g.nu, g.f),
             got,

@@ -1,66 +1,14 @@
-//! Covariate balance between two groups, such as treated and control
-//! samples after matching or weighting.
-//!
-//! Each function returns `None` when the statistic is undefined: an empty
-//! group, or a pooled variance that is not positive.
-//!
-//! # Formulas
-//!
-//! [`smd`] is the standardised mean difference of a continuous variable \[2\], and
-//! [`smd_proportion`] the same for a binary variable from its proportions \[1\]:
-//!
-//! ```text
-//! d = (mean_a - mean_b) / sqrt((var_a + var_b) / 2)
-//! d = (p_a - p_b) / sqrt((p_a (1 - p_a) + p_b (1 - p_b)) / 2)
-//! ```
-//!
-//! The denominator is not weighted by group size. [`variance_ratio`] is
-//! `var_a / var_b`.
-//!
-//! [`ecdf_distance`] compares the empirical distribution functions `F_a` and
-//! `F_b` at every distinct value `v_1, ..., v_K` in the pooled sample, and returns
-//!
-//! ```text
-//! mean = (1/K) sum_k |F_a(v_k) - F_b(v_k)|,    max = max_k |F_a(v_k) - F_b(v_k)|
-//! ```
-//!
-//! The maximum is the Kolmogorov-Smirnov statistic. [`ecdf_distance_weighted`]
-//! is the same on weighted points, and [`ecdf_gaps_sorted`] gives the gaps
-//! themselves. [`eqq_distance`] does the same
-//! for the empirical quantile functions \[3\]. For groups of equal size it
-//! compares the order statistics pair by pair. Otherwise it reads both groups at
-//! `N = max(n_a, n_b)` probabilities `k / (N - 1)`, `k = 0, ..., N - 1`, with the
-//! type 7 quantile. Both functions ignore non-finite values and return `None` if a
-//! group has none left.
-//!
-//! [`cramers_v`] is `sqrt(chi² / n)` for the two-way table of group by category,
-//! with expected counts `row * n_group / n`. With two groups the usual divisor
-//! `min(rows - 1, columns - 1)` is 1. Categories absent from both groups are
-//! skipped, and so is a group with an expected count of exactly zero, which
-//! only happens when that group is empty.
-//! [`cramers_v_weighted`] is the same on weights, which are scale free.
-//!
-//! [`eqq_distance_weighted`] is the weighted quantile distance of MatchIt's
-//! `summary()`: the larger group is read at the smaller group's cumulative
-//! weights as a step function, where [`eqq_distance`] interpolates.
-//!
-//! # References
-//!
-//! 1. Austin PC. Balance diagnostics for comparing the distribution of baseline
-//!    covariates between treatment groups in propensity-score matched samples.
-//!    Statistics in Medicine 2009;28:3083-3107.
-//! 2. Cohen J. Statistical Power Analysis for the Behavioral Sciences. 2nd ed.
-//!    Hillsdale: Lawrence Erlbaum Associates; 1988.
-//! 3. Ho DE, Imai K, King G, Stuart EA. MatchIt: nonparametric preprocessing for
-//!    parametric causal inference. Journal of Statistical Software
-//!    2011;42(8):1-28.
+//! Deprecated: this module moved to `epistat_epi::balance` in 0.3.0, where its
+//! documentation, explainer and tests are. The copy here keeps the items and
+//! the results of 0.2 for one release and is removed in 0.4.0.
 
-use crate::lanes;
 use crate::quantile;
+use crate::sum::lanes;
 
 /// Standardised mean difference of a continuous variable, the difference in
 /// means over the square root of the mean of the two variances (Cohen 1988).
 #[must_use]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::balance::smd`")]
 pub fn smd(mean_a: f64, mean_b: f64, var_a: f64, var_b: f64) -> Option<f64> {
     let pooled = f64::midpoint(var_a, var_b);
     (pooled > 0.0).then(|| (mean_a - mean_b) / pooled.sqrt())
@@ -69,6 +17,10 @@ pub fn smd(mean_a: f64, mean_b: f64, var_a: f64, var_b: f64) -> Option<f64> {
 /// Standardised mean difference of a binary variable from its two
 /// proportions (Austin 2009).
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::smd_proportion`"
+)]
 pub fn smd_proportion(p_a: f64, p_b: f64) -> Option<f64> {
     let pooled = f64::midpoint(p_a * (1.0 - p_a), p_b * (1.0 - p_b));
     (pooled > 0.0).then(|| (p_a - p_b) / pooled.sqrt())
@@ -76,6 +28,10 @@ pub fn smd_proportion(p_a: f64, p_b: f64) -> Option<f64> {
 
 /// `var_a / var_b`, for finite variances with `var_b` positive.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::variance_ratio`"
+)]
 pub fn variance_ratio(var_a: f64, var_b: f64) -> Option<f64> {
     (var_a.is_finite() && var_b.is_finite() && var_a >= 0.0 && var_b > 0.0).then(|| var_a / var_b)
 }
@@ -86,6 +42,10 @@ pub fn variance_ratio(var_a: f64, var_b: f64) -> Option<f64> {
 ///
 /// Non-finite values are ignored.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::ecdf_distance`"
+)]
 pub fn ecdf_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
     let a = sorted_finite(a)?;
     let b = sorted_finite(b)?;
@@ -103,7 +63,7 @@ pub fn ecdf_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
 ///
 /// Both samples are given in ascending order, without NaN, and neither is
 /// empty. Negative and positive zero are one value.
-pub fn ecdf_gaps_sorted<'a>(a: &'a [f64], b: &'a [f64]) -> impl Iterator<Item = f64> + 'a {
+fn ecdf_gaps_sorted<'a>(a: &'a [f64], b: &'a [f64]) -> impl Iterator<Item = f64> + 'a {
     let (na, nb) = (a.len() as f64, b.len() as f64);
     let (mut i, mut j) = (0, 0);
     std::iter::from_fn(move || {
@@ -123,70 +83,6 @@ pub fn ecdf_gaps_sorted<'a>(a: &'a [f64], b: &'a [f64]) -> impl Iterator<Item = 
     })
 }
 
-/// The mean and the maximum absolute difference between two weighted
-/// empirical distribution functions, `None` when a group has no positive
-/// weight, or when there are more than `u32::MAX` points.
-///
-/// Each point is a value, whether it belongs to the first group, and a
-/// non-negative weight. The two distribution functions are evaluated at every
-/// distinct value among all points, units of weight zero included, and each
-/// group's weights are scaled to sum to one. A point of weight zero adds an
-/// evaluation point and no mass. Negative and positive zero are one value.
-/// This is the definition in the documentation of MatchIt's `summary.matchit()`.
-#[must_use]
-pub fn ecdf_distance_weighted(points: &[(f64, bool, f64)]) -> Option<(f64, f64)> {
-    let mut order = (0..points.len())
-        .map(|idx| u32::try_from(idx).ok())
-        .collect::<Option<Vec<_>>>()?;
-    order.sort_by(|&left, &right| points[left as usize].0.total_cmp(&points[right as usize].0));
-    ecdf_distance_weighted_ordered(points, &order)
-}
-
-/// [`ecdf_distance_weighted`] with the points' order given: `order` lists the
-/// indices of `points` in ascending order of value under `f64::total_cmp`,
-/// units that tie in their original order. The same order serves any weights
-/// on the same values.
-#[must_use]
-pub fn ecdf_distance_weighted_ordered(
-    points: &[(f64, bool, f64)],
-    order: &[u32],
-) -> Option<(f64, f64)> {
-    let total = |first: bool| {
-        points
-            .iter()
-            .filter(|(_, in_first, _)| *in_first == first)
-            .map(|(_, _, weight)| *weight)
-            .sum::<f64>()
-    };
-    let (total_first, total_second) = (total(true), total(false));
-    if !(total_first > 0.0 && total_second > 0.0) {
-        return None;
-    }
-
-    let (mut cumulative_first, mut cumulative_second) = (0.0_f64, 0.0_f64);
-    let (mut sum, mut max, mut distinct) = (0.0_f64, 0.0_f64, 0usize);
-    let mut idx = 0;
-    while idx < order.len() {
-        let value = points[order[idx] as usize].0;
-        while idx < order.len()
-            && points[order[idx] as usize].0.partial_cmp(&value) == Some(std::cmp::Ordering::Equal)
-        {
-            let (_, in_first, weight) = points[order[idx] as usize];
-            if in_first {
-                cumulative_first += weight;
-            } else {
-                cumulative_second += weight;
-            }
-            idx += 1;
-        }
-        let gap = (cumulative_first / total_first - cumulative_second / total_second).abs();
-        sum += gap;
-        max = max.max(gap);
-        distinct += 1;
-    }
-    Some((sum / distinct as f64, max))
-}
-
 /// The mean and the maximum absolute difference between the two empirical
 /// quantile functions (Ho, Imai, King and Stuart 2011).
 ///
@@ -194,6 +90,10 @@ pub fn ecdf_distance_weighted_ordered(
 /// read at `max(n_a, n_b)` evenly spaced probabilities from 0 to 1 by R's
 /// type 7 quantile. Non-finite values are ignored.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::eqq_distance`"
+)]
 pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
     let a = sorted_finite(a)?;
     let b = sorted_finite(b)?;
@@ -241,6 +141,10 @@ pub fn eqq_distance(a: &[f64], b: &[f64]) -> Option<(f64, f64)> {
 /// `None` when a group has no unit of positive weight, or the lengths of a
 /// group's values and weights differ, or a weight is negative or not finite.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::eqq_distance_weighted`"
+)]
 pub fn eqq_distance_weighted(
     a: &[f64],
     weights_a: &[f64],
@@ -264,6 +168,10 @@ pub fn eqq_distance_weighted(
 /// `None` when a group has no unit of positive weight, or the lengths of a
 /// group's values and weights differ, or a weight is negative or not finite.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::eqq_distance_weighted_sorted`"
+)]
 pub fn eqq_distance_weighted_sorted(
     a: &[f64],
     weights_a: &[f64],
@@ -455,6 +363,10 @@ impl QuantileGroup {
 /// MatchIt and cobalt have no Cramér's V, so there is no R reference. The
 /// weighted form treats the weights as counts.
 #[must_use]
+#[deprecated(
+    since = "0.3.0",
+    note = "moved to `epistat_epi::balance::cramers_v_weighted`"
+)]
 pub fn cramers_v_weighted(weights_a: &[f64], weights_b: &[f64]) -> Option<f64> {
     if weights_a.len() != weights_b.len()
         || weights_a
@@ -494,6 +406,7 @@ pub fn cramers_v_weighted(weights_a: &[f64], weights_b: &[f64]) -> Option<f64> {
 /// Categories absent from both groups are skipped. Returns `None` when both
 /// groups are empty.
 #[must_use]
+#[deprecated(since = "0.3.0", note = "moved to `epistat_epi::balance::cramers_v`")]
 pub fn cramers_v(counts_a: &[usize], counts_b: &[usize]) -> Option<f64> {
     let total_a: usize = counts_a.iter().sum();
     let total_b: usize = counts_b.iter().sum();
@@ -529,207 +442,4 @@ fn sorted_finite(values: &[f64]) -> Option<Vec<f64>> {
     }
     sorted.sort_by(f64::total_cmp);
     Some(sorted)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn undefined_statistics_are_none() {
-        assert_eq!(smd(1.0, 0.0, 0.0, 0.0), None);
-        assert_eq!(smd_proportion(1.0, 1.0), None);
-        assert_eq!(variance_ratio(1.0, 0.0), None);
-        assert_eq!(ecdf_distance(&[], &[1.0]), None);
-        assert_eq!(eqq_distance(&[f64::NAN], &[1.0]), None);
-        assert_eq!(cramers_v(&[0, 0], &[0, 0]), None);
-    }
-
-    #[test]
-    fn identical_groups_are_balanced() {
-        let x = [1.0, 2.0, 2.0, 5.0];
-        assert_eq!(ecdf_distance(&x, &x), Some((0.0, 0.0)));
-        assert_eq!(eqq_distance(&x, &x), Some((0.0, 0.0)));
-        assert_eq!(cramers_v(&[3, 5], &[6, 10]), Some(0.0));
-    }
-
-    #[test]
-    fn known_values() {
-        assert!((smd(1.0, 0.0, 1.0, 1.0).unwrap() - 1.0).abs() < 1e-15);
-        assert!((smd_proportion(0.5, 0.5).unwrap()).abs() < 1e-15);
-        // Disjoint supports: the empirical distribution functions differ by 1
-        // at the top of the lower group.
-        let (_, ks) = ecdf_distance(&[0.0, 1.0], &[2.0, 3.0]).unwrap();
-        assert!((ks - 1.0).abs() < 1e-15);
-        // A shift by 2 moves every quantile by 2.
-        let (mean, max) = eqq_distance(&[0.0, 1.0, 2.0], &[2.0, 3.0, 4.0, 2.5]).unwrap();
-        assert!(mean > 0.0 && max <= 2.0 + 1e-12);
-        // Perfect association between group and category.
-        assert!((cramers_v(&[10, 0], &[0, 10]).unwrap() - 1.0).abs() < 1e-12);
-    }
-
-    /// Sorting by hand with the ties kept in order, as the caller of the sorted
-    /// form does, gives the unsorted form's result bit for bit.
-    #[test]
-    fn weighted_eqq_sorted_form_equals_the_unsorted_form() {
-        let a = [2.0, -0.0, 0.0, 1.0, 2.0, 0.0, 3.5, 1.0];
-        let wa = [0.1, 0.3, 0.7, 0.2, 1.1, 0.0, 0.4, 0.9];
-        let b = [1.0, 0.0, -0.0, 2.0, 2.0];
-        let wb = [0.3, 0.1, 0.7, 0.2, 0.5];
-        let sorted = |values: &[f64], weights: &[f64]| {
-            let mut units: Vec<(f64, f64)> = values
-                .iter()
-                .copied()
-                .zip(weights.iter().copied())
-                .collect();
-            units.sort_by(|p, q| p.0.partial_cmp(&q.0).unwrap());
-            let (v, w): (Vec<f64>, Vec<f64>) = units.into_iter().unzip();
-            (v, w, lanes::sum(weights))
-        };
-        let ((va, swa, ta), (vb, swb, tb)) = (sorted(&a, &wa), sorted(&b, &wb));
-        let expected = eqq_distance_weighted(&a, &wa, &b, &wb).unwrap();
-        let got = eqq_distance_weighted_sorted(&va, &swa, ta, &vb, &swb, tb).unwrap();
-        assert_eq!(expected.0.to_bits(), got.0.to_bits());
-        assert_eq!(expected.1.to_bits(), got.1.to_bits());
-    }
-
-    #[test]
-    fn weighted_eqq_with_equal_counts_compares_order_statistics() {
-        let a = [3.0, 1.0, 2.0];
-        let b = [2.5, 4.0, 0.0];
-        let weights = [1.0, 2.0, 5.0];
-        // Sorted: 1, 2, 3 against 0, 2.5, 4 whatever the positive weights.
-        let (mean, max) = eqq_distance_weighted(&a, &weights, &b, &weights).unwrap();
-        assert!((mean - (1.0 + 0.5 + 1.0) / 3.0).abs() < 1e-15);
-        assert!((max - 1.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn weighted_eqq_reads_the_larger_group_as_a_step_function() {
-        // Six distinct values, so the step branch applies. The smaller group
-        // has cumulative weights 0.5 and 1. The larger group has cumulative
-        // weights 0.25, 0.5, 0.75 and 1 at 10, 20, 30 and 40, so it reads 20
-        // at 0.5 (the last unit not above it) and 40 at 1.
-        let small = [11.0, 45.0];
-        let large = [10.0, 20.0, 30.0, 40.0];
-        let (mean, max) = eqq_distance_weighted(&small, &[1.0, 1.0], &large, &[1.0; 4]).unwrap();
-        assert!((mean - 7.0).abs() < 1e-15);
-        assert!((max - 9.0).abs() < 1e-15);
-        // Zero weights remove units from the comparison but not their values
-        // from the count of distinct values.
-        let with_zero =
-            eqq_distance_weighted(&[11.0, 45.0, 99.0], &[1.0, 1.0, 0.0], &large, &[1.0; 4])
-                .unwrap();
-        assert_eq!(with_zero, (mean, max));
-    }
-
-    #[test]
-    fn weighted_eqq_few_values_read_the_largest_value_of_the_larger_group() {
-        // Larger group: 1 1 1 2. Smaller group: 2 3. At p = 0.5 the larger
-        // group reads 1 and at p = 1 its own maximum, 2, so the gaps are 1 and 1.
-        let (mean, max) =
-            eqq_distance_weighted(&[2.0, 3.0], &[1.0, 1.0], &[1.0, 1.0, 1.0, 2.0], &[1.0; 4])
-                .unwrap();
-        assert!((mean - 1.0).abs() < 1e-15);
-        assert!((max - 1.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn weighted_eqq_is_undefined_without_weight_in_a_group() {
-        assert_eq!(
-            eqq_distance_weighted(&[1.0, 2.0], &[0.0, 0.0], &[1.0], &[1.0]),
-            None
-        );
-        assert_eq!(eqq_distance_weighted(&[1.0], &[-1.0], &[1.0], &[1.0]), None);
-        assert_eq!(
-            eqq_distance_weighted(&[1.0], &[1.0, 1.0], &[1.0], &[1.0]),
-            None
-        );
-    }
-
-    #[test]
-    fn weighted_cramers_v_matches_a_hand_computation() {
-        // Weights 2 and 1 against 1 and 2: n = 6, every expected weight is
-        // 1.5, chi-square = 4 * 0.25 / 1.5 = 2/3 and V = sqrt(2/3 / 6) = 1/3.
-        let v = cramers_v_weighted(&[2.0, 1.0], &[1.0, 2.0]).unwrap();
-        assert!((v - 1.0 / 3.0).abs() < 1e-15);
-        let scaled = cramers_v_weighted(&[5.0, 2.5], &[2.5, 5.0]).unwrap();
-        assert!((scaled - v).abs() < 1e-15);
-        // Weights of one are the counts.
-        let counts = cramers_v(&[3, 5, 0], &[6, 2, 0]).unwrap();
-        let weights = cramers_v_weighted(&[3.0, 5.0, 0.0], &[6.0, 2.0, 0.0]).unwrap();
-        assert_eq!(counts.to_bits(), weights.to_bits());
-        assert_eq!(cramers_v_weighted(&[0.0], &[0.0]), None);
-        assert_eq!(cramers_v_weighted(&[1.0], &[-1.0]), None);
-    }
-
-    #[test]
-    fn weighted_cramers_v_does_not_depend_on_the_weight_scale() {
-        let a = [3.0, 1.0, 2.0];
-        let b = [1.0, 3.0, 2.0];
-        let base = cramers_v_weighted(&a, &b).unwrap();
-        let scaled_a: Vec<f64> = a.iter().map(|v| v * 1e-13).collect();
-        let scaled_b: Vec<f64> = b.iter().map(|v| v * 1e-13).collect();
-        let small = cramers_v_weighted(&scaled_a, &scaled_b).unwrap();
-        // Scaling by a power of ten changes each term by a few rounding errors.
-        assert!((base - small).abs() < 1e-12, "{base} {small}");
-    }
-
-    #[test]
-    fn weighted_ecdf_with_unit_weights_matches_the_unweighted_distance() {
-        let case = [1.0, 2.0, 2.0, 5.0];
-        let control = [0.5, 2.0, 4.0];
-        let points: Vec<(f64, bool, f64)> = case
-            .iter()
-            .map(|value| (*value, true, 1.0))
-            .chain(control.iter().map(|value| (*value, false, 1.0)))
-            .collect();
-        let weighted = ecdf_distance_weighted(&points).unwrap();
-        let plain = ecdf_distance(&case, &control).unwrap();
-        assert!((weighted.0 - plain.0).abs() < 1e-15);
-        assert!((weighted.1 - plain.1).abs() < 1e-15);
-    }
-
-    #[test]
-    fn weighted_ecdf_counts_zero_weight_points_as_evaluation_points() {
-        // The point at 9 carries no mass but is an evaluation point where the
-        // two distribution functions already agree at one, so the mean gap is a third.
-        let points = [(1.0, true, 1.0), (2.0, false, 1.0), (9.0, false, 0.0)];
-        let (mean, max) = ecdf_distance_weighted(&points).unwrap();
-        assert!((max - 1.0).abs() < 1e-15);
-        assert!((mean - 1.0 / 3.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn weighted_ecdf_is_undefined_without_mass_in_a_group() {
-        assert_eq!(ecdf_distance_weighted(&[(1.0, true, 1.0)]), None);
-        assert_eq!(
-            ecdf_distance_weighted(&[(1.0, true, 1.0), (2.0, false, 0.0)]),
-            None
-        );
-    }
-
-    /// The gaps are those of the empirical distribution functions evaluated by
-    /// counting, at each distinct pooled value, ties and signed zeros included.
-    #[test]
-    fn ecdf_gaps_follow_the_counting_definition() {
-        let a = [-1.0, -0.0, 0.0, 2.0, 2.0, 5.0];
-        let b = [0.0, 1.0, 2.0, 7.0];
-        let mut pooled: Vec<f64> = a.iter().chain(&b).copied().collect();
-        pooled.sort_by(f64::total_cmp);
-        pooled.dedup();
-        let expected: Vec<f64> = pooled
-            .iter()
-            .map(|&point| {
-                let fa = a.partition_point(|&v| v <= point) as f64 / a.len() as f64;
-                let fb = b.partition_point(|&v| v <= point) as f64 / b.len() as f64;
-                (fa - fb).abs()
-            })
-            .collect();
-        let got: Vec<f64> = ecdf_gaps_sorted(&a, &b).collect();
-        assert_eq!(got.len(), expected.len());
-        for (g, e) in got.iter().zip(&expected) {
-            assert_eq!(g.to_bits(), e.to_bits());
-        }
-    }
 }

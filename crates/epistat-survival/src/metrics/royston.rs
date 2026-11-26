@@ -119,7 +119,7 @@ use crate::error::{Error, Result};
 use crate::order::par_sort_by_key;
 use crate::surv::{SurvBuf, SurvData};
 use crate::timefix::TimeFix;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use epistat_stats::sum::compensated;
 
 /// The correction for overfitting of Royston and Sauerbrei: the number of

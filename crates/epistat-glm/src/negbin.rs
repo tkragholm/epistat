@@ -94,7 +94,8 @@
 //!    Cambridge: Cambridge University Press; 2013. Section 3.4.
 
 use epistat_linalg::MatRef;
-use epistat_stats::gamma::{chi_square_sf, digamma, ln_gamma, trigamma};
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
+use epistat_stats::dist::gamma::{digamma, ln_gamma, trigamma};
 
 use crate::{Family, Fit, Glm, GlmError, Link};
 

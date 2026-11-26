@@ -626,7 +626,7 @@ fn survfit_matches_r() {
                 "{name}: variance"
             );
             assert_eq!(got.groups.len(), fit.groups.len(), "{name}: groups");
-            let z = epistat_stats::normal::quantile(1.0 - (1.0 - fit.conf_int) / 2.0);
+            let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - fit.conf_int) / 2.0);
             for (g, r) in got.groups.iter().zip(&fit.groups) {
                 compared += 1;
                 assert_eq!(g.group, r.group, "{name}: group code");

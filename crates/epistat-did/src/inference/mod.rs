@@ -280,7 +280,7 @@ pub fn quantile_unsorted(values: &mut [f64], q: f64) -> f64 {
 #[inline]
 #[must_use]
 pub fn inverse_standard_normal_cdf(p: f64) -> f64 {
-    epistat_stats::normal::quantile(p)
+    epistat_stats::dist::normal::quantile(p)
 }
 
 #[cfg(test)]

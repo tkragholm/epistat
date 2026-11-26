@@ -48,6 +48,7 @@
 //!    J R Stat Soc Ser C. 1979;28(1):100-8.
 
 /// The algorithm that moves points between clusters.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KMeansAlgorithm {
     /// Lloyd and Forgy.
@@ -57,48 +58,12 @@ pub enum KMeansAlgorithm {
     HartiganWong,
 }
 
-/// Why a clustering could not be made.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum KMeansError {
-    /// The data are empty, or the dimension is zero.
-    #[error("no points or no dimensions")]
-    Empty,
-    /// `points` or `centres` is not a whole number of rows of `d` values.
-    #[error("{what} has {found} values, not a multiple of {d}")]
-    Shape {
-        /// The input.
-        what: &'static str,
-        /// Its length.
-        found: usize,
-        /// The dimension.
-        d: usize,
-    },
-    /// A value is not finite.
-    #[error("{what} has a value that is not finite")]
-    NotFinite {
-        /// The input.
-        what: &'static str,
-    },
-    /// There are no centres, or more centres than points.
-    #[error("{k} centres for {n} points")]
-    Centres {
-        /// The number of centres.
-        k: usize,
-        /// The number of points.
-        n: usize,
-    },
-    /// `max_iterations` is zero, so no pass could assign the points.
-    #[error("max_iterations must be at least 1")]
-    NoIterations,
-    /// A cluster has no points.
-    #[error("cluster {cluster} is empty")]
-    EmptyCluster {
-        /// The cluster.
-        cluster: usize,
-    },
-}
+/// The error of [`kmeans`] before 0.3.0.
+#[deprecated(since = "0.3.0", note = "use `epistat_stats::Error`")]
+pub type KMeansError = Error;
 
 /// A partition into clusters.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct KMeans {
     /// The cluster of each point, in `0..k`.
@@ -115,50 +80,73 @@ pub struct KMeans {
     pub converged: bool,
 }
 
+use epistat_core::InputError;
 use rayon::prelude::*;
+
+use crate::Error;
+
+/// The error for a count `what` that must be at least 1.
+fn at_least_one(what: &'static str, value: usize) -> Error {
+    InputError::Domain {
+        what,
+        value: value as f64,
+        domain: "[1, inf)",
+    }
+    .into()
+}
 
 /// Clusters the rows of `points` (`n * d` values, row by row) from the rows of
 /// `start` (`k * d` values), with at most `max_iterations` passes.
 ///
 /// # Errors
 ///
-/// See [`KMeansError`].
+/// [`Error::Input`] for no points, a dimension or `max_iterations` of 0, a
+/// length of `points` or `start` that is not a multiple of `d`, a value that
+/// is not finite, and no centres or more centres than points;
+/// [`Error::EmptyCluster`] when a cluster loses all its points.
 pub fn kmeans(
     points: &[f64],
     d: usize,
     start: &[f64],
     algorithm: KMeansAlgorithm,
     max_iterations: usize,
-) -> Result<KMeans, KMeansError> {
-    if d == 0 || points.is_empty() {
-        return Err(KMeansError::Empty);
+) -> Result<KMeans, Error> {
+    if points.is_empty() {
+        return Err(InputError::Empty { what: "points" }.into());
+    }
+    if d == 0 {
+        return Err(at_least_one("d", 0));
     }
     if max_iterations == 0 {
-        return Err(KMeansError::NoIterations);
+        return Err(at_least_one("max_iterations", 0));
     }
-    if !points.len().is_multiple_of(d) {
-        return Err(KMeansError::Shape {
-            what: "points",
-            found: points.len(),
-            d,
-        });
+    for (what, values) in [("points", points), ("start", start)] {
+        if !values.len().is_multiple_of(d) {
+            return Err(InputError::Domain {
+                what: if what == "points" {
+                    "length of points"
+                } else {
+                    "length of start"
+                },
+                value: values.len() as f64,
+                domain: "a multiple of d",
+            }
+            .into());
+        }
     }
-    if !start.len().is_multiple_of(d) {
-        return Err(KMeansError::Shape {
-            what: "start",
-            found: start.len(),
-            d,
-        });
-    }
-    if points.iter().any(|v| !v.is_finite()) {
-        return Err(KMeansError::NotFinite { what: "points" });
-    }
-    if start.iter().any(|v| !v.is_finite()) {
-        return Err(KMeansError::NotFinite { what: "start" });
+    for (what, values) in [("points", points), ("start", start)] {
+        if let Some(row) = values.iter().position(|v| !v.is_finite()) {
+            return Err(InputError::NotFinite { what, row }.into());
+        }
     }
     let (n, k) = (points.len() / d, start.len() / d);
     if k == 0 || k > n {
-        return Err(KMeansError::Centres { k, n });
+        return Err(InputError::Domain {
+            what: "number of centres",
+            value: k as f64,
+            domain: "1 to the number of points",
+        }
+        .into());
     }
     let mut centres = start.to_vec();
     let mut cluster = vec![usize::MAX; n];
@@ -186,7 +174,7 @@ pub fn kmeans(
         size[c] += 1;
     }
     if let Some(empty) = size.iter().position(|&s| s == 0) {
-        return Err(KMeansError::EmptyCluster { cluster: empty });
+        return Err(Error::EmptyCluster { cluster: empty });
     }
     centres = means(points, d, &cluster, k)?;
     let mut within_ss = vec![0.0; k];
@@ -249,7 +237,7 @@ fn nearest_centre(x: &[f64], centres: &[f64], d: usize) -> usize {
     best
 }
 
-fn means(points: &[f64], d: usize, cluster: &[usize], k: usize) -> Result<Vec<f64>, KMeansError> {
+fn means(points: &[f64], d: usize, cluster: &[usize], k: usize) -> Result<Vec<f64>, Error> {
     let mut sums = vec![0.0; k * d];
     let mut size = vec![0usize; k];
     for (i, &c) in cluster.iter().enumerate() {
@@ -259,7 +247,7 @@ fn means(points: &[f64], d: usize, cluster: &[usize], k: usize) -> Result<Vec<f6
         }
     }
     if let Some(empty) = size.iter().position(|&s| s == 0) {
-        return Err(KMeansError::EmptyCluster { cluster: empty });
+        return Err(Error::EmptyCluster { cluster: empty });
     }
     for c in 0..k {
         for j in 0..d {
@@ -432,7 +420,7 @@ fn hartigan_wong(
     cluster: &mut [usize],
     k: usize,
     max_passes: usize,
-) -> Result<(bool, usize), KMeansError> {
+) -> Result<(bool, usize), Error> {
     let n = cluster.len();
     // The nearest and second nearest centre of every point. With one centre
     // the second does not exist and the clustering is trivial.
@@ -554,13 +542,17 @@ mod tests {
     fn bad_input_is_an_error() {
         assert_eq!(
             kmeans(&[], 1, &[0.0], KMeansAlgorithm::Lloyd, 10),
-            Err(KMeansError::Empty)
+            Err(Error::Input(InputError::Empty { what: "points" }))
         );
         assert!(kmeans(&[1.0, 2.0, 3.0], 2, &[1.0, 2.0], KMeansAlgorithm::Lloyd, 10).is_err());
         assert!(kmeans(&[1.0, f64::NAN], 1, &[1.0], KMeansAlgorithm::Lloyd, 10).is_err());
         assert_eq!(
             kmeans(&[1.0, 2.0], 1, &[1.0, 2.0, 3.0], KMeansAlgorithm::Lloyd, 10),
-            Err(KMeansError::Centres { k: 3, n: 2 })
+            Err(Error::Input(InputError::Domain {
+                what: "number of centres",
+                value: 3.0,
+                domain: "1 to the number of points"
+            }))
         );
         // A start far from every point leaves its cluster empty.
         assert_eq!(
@@ -571,7 +563,7 @@ mod tests {
                 KMeansAlgorithm::Lloyd,
                 10
             ),
-            Err(KMeansError::EmptyCluster { cluster: 1 })
+            Err(Error::EmptyCluster { cluster: 1 })
         );
     }
 
@@ -580,7 +572,11 @@ mod tests {
         for algorithm in [KMeansAlgorithm::Lloyd, KMeansAlgorithm::HartiganWong] {
             assert_eq!(
                 kmeans(&[0.0, 1.0, 10.0, 11.0], 1, &[0.0, 10.0], algorithm, 0),
-                Err(KMeansError::NoIterations)
+                Err(Error::Input(InputError::Domain {
+                    what: "max_iterations",
+                    value: 0.0,
+                    domain: "[1, inf)"
+                }))
             );
         }
     }

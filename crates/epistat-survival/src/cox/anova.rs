@@ -45,7 +45,7 @@
 //!    Model. Springer, 2000, section 3.4.
 
 use epistat_linalg::{Mat, MatRef};
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use super::{CoxModelFit, CoxOptions, fit};
 use crate::error::{Error, Result};

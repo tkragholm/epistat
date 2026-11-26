@@ -3,7 +3,7 @@
 //! the module documentation of [`crate::frailty`].
 
 use epistat_linalg::MatRef;
-use epistat_stats::gamma::ln_gamma;
+use epistat_stats::dist::gamma::ln_gamma;
 
 use super::engine::{Layout, State};
 use crate::cox::{CoxOptions, Ties};

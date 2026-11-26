@@ -160,7 +160,7 @@ fn bootstrap_limits_follow_the_method() {
         ..GFormulaOptions::default()
     };
     let g = run(&sim, &interventions(), &options);
-    let z = epistat_stats::normal::quantile(0.975);
+    let z = epistat_stats::dist::normal::quantile(0.975);
     for s in &g.strategies {
         for e in s.value.iter().chain(&s.difference).chain(&s.ratio) {
             let (x, se) = (e.estimate.unwrap(), e.se.unwrap());

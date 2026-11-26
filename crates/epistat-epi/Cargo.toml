@@ -1,0 +1,35 @@
+[package]
+name = "epistat-epi"
+description = "Rates, standardised and Mantel-Haenszel estimates, standardised incidence ratios, the Kitagawa decomposition, E-values, quantitative bias analysis, Rosenbaum bounds and balance statistics, checked against R"
+keywords = ["epidemiology", "statistics", "bias-analysis", "standardisation"]
+categories = ["science", "mathematics"]
+readme = "README.md"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
+epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
+epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
+thiserror = "2"
+
+[dev-dependencies]
+epistat-testkit = { path = "../epistat-testkit" }
+serde = { version = "1.0.200", features = ["derive"] }
+# Parses floats to the nearest double, so the R references are compared to the bit.
+serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
+
+[[bench]]
+name = "tier1_epi"
+harness = false
+
+[[bench]]
+name = "tier2_bias"
+harness = false
+
+[lints]
+workspace = true

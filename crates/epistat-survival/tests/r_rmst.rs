@@ -189,7 +189,7 @@ fn rmst2_agrees_with_survrm2() {
             let r_tau = fit.tau.unwrap();
             assert_eq!(got.tau.to_bits(), r_tau.to_bits(), "{label}: tau");
             let (r0, r1) = (fit.arm0.as_ref().unwrap(), fit.arm1.as_ref().unwrap());
-            let z = epistat_stats::normal::quantile(1.0 - fit.alpha / 2.0);
+            let z = epistat_stats::dist::normal::quantile(1.0 - fit.alpha / 2.0);
             let (n0, n1) = (n_arm(0), n_arm(1));
             check_arm(
                 &mut worst,

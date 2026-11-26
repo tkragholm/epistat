@@ -178,8 +178,8 @@ pub fn sample_size(spec: &SampleSizeSpec<'_>) -> Result<f64> {
         * (0..bands)
             .map(|j| v[j] * pi[j] * (1.0 - pi[j]))
             .sum::<f64>();
-    let za = epistat_stats::normal::quantile(1.0 - spec.alpha / 2.0);
-    let zb = epistat_stats::normal::quantile(spec.power);
+    let za = epistat_stats::dist::normal::quantile(1.0 - spec.alpha / 2.0);
+    let zb = epistat_stats::dist::normal::quantile(spec.power);
     let root = za + zb * b.sqrt();
     Ok(root * root / a)
 }

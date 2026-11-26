@@ -17,7 +17,7 @@
 //! Mills ratio, so `H' = p` for the odds and `H' = l` for the probit, and
 //! `H'' = p (1 - p)` and `l (l - eta)`.
 
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use super::Scale;
 

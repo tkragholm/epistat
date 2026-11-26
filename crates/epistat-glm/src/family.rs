@@ -174,7 +174,7 @@ impl Link {
             Self::Log => mu.ln(),
             Self::Logit => (mu / (1.0 - mu)).ln(),
             Self::Cloglog => (-(-mu).ln_1p()).ln(),
-            Self::Probit => epistat_stats::normal::quantile(mu),
+            Self::Probit => epistat_stats::dist::normal::quantile(mu),
         }
     }
 
@@ -197,8 +197,8 @@ impl Link {
             }
             Self::Cloglog => (-(-eta.exp()).exp_m1()).clamp(EPS, 1.0 - EPS),
             Self::Probit => {
-                let bound = -epistat_stats::normal::quantile(EPS);
-                epistat_stats::normal::cdf(eta.clamp(-bound, bound)).clamp(EPS, 1.0 - EPS)
+                let bound = -epistat_stats::dist::normal::quantile(EPS);
+                epistat_stats::dist::normal::cdf(eta.clamp(-bound, bound)).clamp(EPS, 1.0 - EPS)
             }
         }
     }
@@ -246,7 +246,7 @@ impl Link {
                 let e = eta.min(CLOGLOG_ETA_CAP);
                 (e - e.exp()).exp().max(EPS)
             }
-            Self::Probit => epistat_stats::normal::pdf(eta).max(EPS),
+            Self::Probit => epistat_stats::dist::normal::pdf(eta).max(EPS),
         }
     }
 }
