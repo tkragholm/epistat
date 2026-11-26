@@ -94,6 +94,11 @@
 //! 3. Benkeser D, Carone M, Gilbert PB. Improved estimation of the cumulative
 //!    incidence of rare outcomes. Stat Med. 2018;37(2):280-93.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
 
@@ -282,7 +287,7 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
         let offset: Vec<f64> = rows.iter().map(|&ik| logit(lam[ik])).collect();
         let weights: Vec<f64> = rows.iter().map(|&ik| c.w[ik / t]).collect();
         let fit = Glm::new(Family::Binomial, Link::Logit)
-            .fit(design.as_ref(), &dn, Some(&weights), Some(&offset), None)
+            .fit_slices(design.as_ref(), &dn, Some(&weights), Some(&offset), None)
             .map_err(|e| Error::input(format!("fluctuation: {e}")))?;
         if !fit.converged {
             return Err(Error::NoConvergence(
@@ -551,7 +556,7 @@ pub struct SurvivalTmleGlm {
 
 fn fit_logistic(x: MatRef<'_, f64>, y: &[f64], w: &[f64], what: &str) -> Result<Vec<f64>> {
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(x, y, Some(w), None, None)
+        .fit_slices(x, y, Some(w), None, None)
         .map_err(|e| Error::input(format!("{what} model: {e}")))?;
     if !fit.converged {
         return Err(Error::NoConvergence(format!("{what} model")));

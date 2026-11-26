@@ -1,6 +1,11 @@
 //! Weighted least squares with the elastic-net penalty, fitted by
 //! [`epistat_glm::ElasticNet`] with the Gaussian family.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{ElasticNet, Family, ResponseScaling};
 use epistat_linalg::{Mat, MatRef};
 
@@ -56,7 +61,7 @@ pub(super) fn elastic_net_wls(
     model.tolerance = TOLERANCE;
     model.scaling = ResponseScaling::None;
     let fit = model
-        .fit(x, &target, Some(&w), None, Some(&penalty_factor), None)
+        .fit_slices(x, &target, Some(&w), None, Some(&penalty_factor), None)
         .map_err(|_| TwoPartError::SolveFailed)?;
     Ok(Mat::from_fn(p, 1, |j, _| fit.coefficients[j]))
 }

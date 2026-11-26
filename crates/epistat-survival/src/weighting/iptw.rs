@@ -75,6 +75,11 @@
 //! 5. Zhou T, Tong G, Li F, Thomas LE, Li F. PSweight: an R package for
 //!    propensity score weighting analysis. R J. 2022;14(1):282-300.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
 
@@ -275,7 +280,7 @@ fn fit_with<'a>(
     }
     let y: Vec<f64> = treatment.iter().map(|&a| f64::from(u8::from(a))).collect();
     let model = Glm::new(Family::Binomial, Link::Logit)
-        .fit(design, &y, None, None, None)
+        .fit_slices(design, &y, None, None, None)
         .map_err(|e| Error::input(format!("propensity model: {e}")))?;
     if !model.converged {
         return Err(Error::input("propensity model: no convergence"));

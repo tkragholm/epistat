@@ -86,7 +86,7 @@ fn lexis_does_not_depend_on_the_number_of_threads() {
             )
             .unwrap();
             v.extend(fit.fit.coefficients.iter().map(|c| c.unwrap()));
-            v.extend(fit.fit.covariance.iter().map(|c| c.unwrap()));
+            v.extend(fit.fit.covariance.as_slice().iter().map(|c| c.unwrap()));
             v.push(fit.fit.deviance);
             let direct = split_cells(
                 &data,

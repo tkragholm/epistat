@@ -62,6 +62,11 @@
 //!    in multiple imputation of incomplete categorical variables. Comput Stat
 //!    Data Anal. 2010;54(10):2267-75.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use std::ops::Range;
 
 use epistat_glm::{Family, Glm, Link, Multinom};
@@ -110,12 +115,12 @@ pub fn linear_fit(x: MatRef<'_, f64>, y: &[f64], column: usize) -> Result<Linear
             parameters: p,
         });
     }
-    let fit = Glm::new(Family::Gaussian, Link::Identity).fit(x, y, None, None, None)?;
+    let fit = Glm::new(Family::Gaussian, Link::Identity).fit_slices(x, y, None, None, None)?;
     if !fit.converged {
         return Err(ImputeError::NotConverged { column });
     }
     let active: Vec<bool> = fit.coefficients.iter().map(Option::is_some).collect();
-    let covariance = unscaled_covariance(&fit.covariance, &active, fit.dispersion);
+    let covariance = unscaled_covariance(fit.covariance.as_slice(), &active, fit.dispersion);
     Ok(LinearFit {
         coefficients: fit.coefficients.iter().map(|c| c.unwrap_or(0.0)).collect(),
         active,
@@ -426,7 +431,8 @@ pub fn logistic_fit(
     weights: &[f64],
     column: usize,
 ) -> Result<LogisticFit> {
-    let fit = Glm::new(Family::Binomial, Link::Logit).fit(x, y, Some(weights), None, None)?;
+    let fit =
+        Glm::new(Family::Binomial, Link::Logit).fit_slices(x, y, Some(weights), None, None)?;
     if !fit.converged {
         return Err(ImputeError::NotConverged { column });
     }
@@ -436,7 +442,9 @@ pub fn logistic_fit(
     let mut covariance = Vec::with_capacity(keep.len() * keep.len());
     for &i in &keep {
         for &j in &keep {
-            covariance.push(fit.covariance[i * p + j].ok_or(ImputeError::Covariance { column })?);
+            covariance.push(
+                fit.covariance.as_slice()[i * p + j].ok_or(ImputeError::Covariance { column })?,
+            );
         }
     }
     Ok(LogisticFit {
@@ -477,9 +485,11 @@ pub fn multinomial_fit(
 ) -> Result<MultinomialFit> {
     let p = x.ncols();
     let active = independent_columns(x, weights, None, 1e-8)
-        .map_err(|e| ImputeError::Glm(epistat_glm::GlmError::Design(e)))?;
+        .map_err(|e| ImputeError::Glm(epistat_glm::Error::Design(e)))?;
     let reduced = select_columns(x, &active);
-    let fit = Multinom::default().fit(reduced.as_ref(), y, classes, Some(weights))?;
+    let fit = Multinom::default()
+        .fit_slices(reduced.as_ref(), y, classes, Some(weights))
+        .map_err(ImputeError::Multinom)?;
     let pa = reduced.ncols();
     let mut coefficients = vec![0.0; (classes - 1) * p];
     for class in 0..classes - 1 {
@@ -496,7 +506,12 @@ pub fn multinomial_fit(
         columns: p,
         coefficients,
         active,
-        covariance: fit.covariance,
+        covariance: fit
+            .covariance
+            .as_slice()
+            .iter()
+            .map(|v| v.unwrap_or(f64::NAN))
+            .collect(),
     })
 }
 

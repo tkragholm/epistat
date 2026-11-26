@@ -187,7 +187,7 @@ pub fn estimate_did2s(
         absorb: config.absorb,
     };
     let x = prepared.covariates.as_ref();
-    let fit = feols.fit(panel.outcome, x, &fe)?;
+    let fit = feols.fit(x, panel.outcome, &fe)?;
     let stage = FirstStage::new(
         panel.unit,
         &prepared.time,
@@ -195,8 +195,9 @@ pub fn estimate_did2s(
         panel.outcome,
         prepared.weight.clone(),
         x,
+        &fe,
         &fit,
-    );
+    )?;
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();

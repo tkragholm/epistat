@@ -61,7 +61,7 @@ pub enum MixedError {
     Parameters(usize),
     /// The starting fit without random effects failed.
     #[error(transparent)]
-    Start(#[from] epistat_glm::GlmError),
+    Start(#[from] epistat_glm::Error),
     /// The conditional mode of a cluster could not be found.
     #[error("the conditional mode of cluster {0} did not converge")]
     Mode(usize),

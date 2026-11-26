@@ -1,5 +1,10 @@
 //! Maximum-likelihood logistic regression, through `epistat_glm`.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use std::collections::HashMap;
 
 use epistat_glm::{Family, Glm, GlmError, Link};
@@ -36,7 +41,7 @@ pub fn fit_logit(
         max_iterations,
         ..Glm::new(Family::Binomial, Link::Logit)
     };
-    let fit = model.fit(design, treated, weights, None, None)?;
+    let fit = model.fit_slices(design, treated, weights, None, None)?;
     Ok(LogitFit {
         coefficients: fit
             .coefficients
@@ -101,7 +106,8 @@ pub fn fit_logit_collapsed(
     };
     for iteration in 1..=max_iterations {
         if iteration > 1 {
-            let step = model.fit(grouped.as_ref(), &shares, Some(&counts), None, Some(&beta))?;
+            let step =
+                model.fit_slices(grouped.as_ref(), &shares, Some(&counts), None, Some(&beta))?;
             beta = step
                 .coefficients
                 .iter()

@@ -93,6 +93,11 @@
 //! 3. van der Wal WM, Geskus RB. ipw: an R package for inverse probability
 //!    weighting. J Stat Softw 2011;43(13):1-23.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
 
@@ -238,7 +243,7 @@ fn fit_model(
     };
     let ys: Vec<f64> = kept.iter().map(|&i| y[i]).collect();
     let model = Glm::new(Family::Binomial, Link::Logit)
-        .fit(x, &ys, None, None, None)
+        .fit_slices(x, &ys, None, None, None)
         .map_err(|e| Error::input(format!("{what} model: {e}")))?;
     if !model.converged {
         return Err(Error::input(format!("{what} model: no convergence")));

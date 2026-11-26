@@ -125,6 +125,11 @@
 //! 4. Liu Q, Pierce DA. A note on Gauss-Hermite quadrature. Biometrika.
 //!    1994;81(3):624-9.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef, matvec_into, xtv};
 use epistat_optim::bfgs::Bfgs;
@@ -887,7 +892,7 @@ impl Glmm {
     ) -> Result<GlmmFit, MixedError> {
         let problem = Problem::new(self, x, y, cluster, weights, offset)?;
         let p = problem.p;
-        let start = Glm::new(self.family, self.link).fit(x, y, weights, offset, None)?;
+        let start = Glm::new(self.family, self.link).fit_slices(x, y, weights, offset, None)?;
         let mut params = Vec::with_capacity(p + 1);
         params.push(1.0);
         for c in &start.coefficients {
@@ -899,8 +904,8 @@ impl Glmm {
         h0[0] = 1.0;
         for i in 0..p {
             for j in 0..p {
-                h0[(1 + i) * k + 1 + j] =
-                    scale * start.covariance[i * p + j].ok_or(MixedError::RankDeficient)?;
+                h0[(1 + i) * k + 1 + j] = scale
+                    * start.covariance.as_slice()[i * p + j].ok_or(MixedError::RankDeficient)?;
             }
         }
         let mut modes = vec![0.0; problem.groups.count()];

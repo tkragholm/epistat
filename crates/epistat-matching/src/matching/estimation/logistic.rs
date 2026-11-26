@@ -1,6 +1,11 @@
 //! Binomial propensity models: the generalised linear model by IRLS, and the
 //! elastic net by coordinate descent.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use super::EstimationError;
 use super::config::{ElasticNetLogisticConfig, LogisticRegressionConfig, PropensityLink};
 use super::cross_validation::CrossValidation;
@@ -57,7 +62,7 @@ pub(super) fn fit_glm(
     model.max_iterations = config.max_iter;
     let design = MatRef::from_row_major_slice(&matrix.values, matrix.n_rows, matrix.n_cols);
     let fit = model
-        .fit(design, labels, weights, None, None)
+        .fit_slices(design, labels, weights, None, None)
         .map_err(EstimationError::GlmFitFailed)?;
     let aliased_columns = fit
         .coefficients
@@ -212,7 +217,7 @@ impl NetProblem {
         model.max_iterations = settings.max_iter;
         model.probability_clip = settings.probability_clip;
         model
-            .fit(
+            .fit_slices(
                 design,
                 &self.y,
                 self.weights.as_deref(),

@@ -162,7 +162,7 @@ pub use glm::{
     estimate_etwfe_glm,
 };
 
-use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 
 use crate::methods::imputation::check_constant_within_units;
@@ -828,22 +828,22 @@ pub fn estimate_etwfe(
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit_owned(panel.outcome, x, &fe)?;
-    let cov = fit.vcov(config.vcov, config.ssc)?;
+    .fit_owned(x, panel.outcome, &fe)?;
+    let cov = fit.vcov(&fe, config.vcov, config.ssc)?;
     let coefficients: Vec<EtwfeCoefficient> = terms
         .iter()
         .enumerate()
         .map(|(j, &term)| EtwfeCoefficient {
             term,
             estimate: fit.coefficients[j],
-            std_error: cov.matrix[j * q + j].map(|v| v.max(0.0).sqrt()),
+            std_error: cov.matrix.as_slice()[j * q + j].map(|v| v.max(0.0).sqrt()),
         })
         .collect();
 
     // Influence by unit: the units are the panel's units in either case.
     let (units, unit_codes) = unit_codes(panel.unit, fe.rows());
     let n_units = units.len();
-    let sums = fit.influence_sums(&unit_codes, n_units)?;
+    let sums = fit.influence_sums(&fe, &unit_codes, n_units)?;
     let mut influence = vec![None; q];
     for (a, &j) in fit.kept_columns().iter().enumerate() {
         influence[j] = Some(
@@ -905,7 +905,7 @@ pub fn estimate_etwfe(
                     if jb == 0.0 {
                         continue;
                     }
-                    match cov.matrix[i * q + j] {
+                    match cov.matrix.as_slice()[i * q + j] {
                         Some(v) => total += ja * jb * v,
                         None => defined = false,
                     }
@@ -954,7 +954,7 @@ pub fn estimate_etwfe(
 
     Ok(EtwfeResult {
         coefficients,
-        covariance: cov.matrix,
+        covariance: cov.matrix.into_values(),
         effects,
         effect_covariance,
         effect_influence,

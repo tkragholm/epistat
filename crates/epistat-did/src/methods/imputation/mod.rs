@@ -105,7 +105,7 @@ pub(crate) mod first_stage;
 
 use std::collections::{BTreeSet, HashMap};
 
-use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 
@@ -537,7 +537,7 @@ pub fn estimate_did_imputation(
         absorb: config.absorb,
     };
     let x = prepared.covariates.as_ref();
-    let fit = feols.fit(panel.outcome, x, &fe)?;
+    let fit = feols.fit(x, panel.outcome, &fe)?;
     let stage = FirstStage::new(
         panel.unit,
         &prepared.time,
@@ -545,8 +545,9 @@ pub fn estimate_did_imputation(
         panel.outcome,
         prepared.weight.clone(),
         x,
+        &fe,
         &fit,
-    );
+    )?;
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
@@ -803,12 +804,12 @@ fn pretrend_regression(
             x[(i, k_terms + j)] = prepared.covariates[(i, j)];
         }
     }
-    let fit = feols.fit(panel.outcome, x.as_ref(), fe)?;
+    let fit = feols.fit(x.as_ref(), panel.outcome, fe)?;
     let codes = clusters.unwrap_or(panel.unit);
     let ways = [codes];
-    let cov = fit.vcov(Vcov::Cluster(&ways), Ssc::new())?;
+    let cov = fit.vcov(fe, Vcov::Cluster(&ways), Ssc::new())?;
     let p = k_terms + p_cov;
-    let rows_influence = fit.influence();
+    let rows_influence = fit.influence(fe)?;
     let n_units = index.units.len();
     let mut column_influence: Vec<Option<Vec<f64>>> = vec![None; p];
     for (a, &j) in fit.kept_columns().iter().enumerate() {
@@ -829,7 +830,7 @@ fn pretrend_regression(
         let j = fitted.binary_search(&k).ok();
         position.push(j);
         let estimate = j.and_then(|j| fit.coefficients[j]);
-        let std_error = j.and_then(|j| cov.matrix[j * p + j].map(|v| v.max(0.0).sqrt()));
+        let std_error = j.and_then(|j| cov.matrix.as_slice()[j * p + j].map(|v| v.max(0.0).sqrt()));
         terms.push(PretrendTerm {
             relative_period: k,
             estimate,
@@ -840,7 +841,7 @@ fn pretrend_regression(
     for a in 0..m {
         for b in 0..m {
             if let (Some(i), Some(j)) = (position[a], position[b]) {
-                covariance[a * m + b] = cov.matrix[i * p + j];
+                covariance[a * m + b] = cov.matrix.as_slice()[i * p + j];
             }
         }
     }

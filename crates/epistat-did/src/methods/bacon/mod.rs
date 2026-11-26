@@ -81,7 +81,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons};
+use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::methods::staggered::StaggeredPanel;
@@ -208,7 +208,7 @@ fn first_coefficient(
     y: &[f64],
     x: MatRef<'_, f64>,
 ) -> Result<Option<f64>, AbsorbError> {
-    let fit = Feols { absorb: ABSORB }.fit(y, x, fe)?;
+    let fit = Feols { absorb: ABSORB }.fit(x, y, fe)?;
     Ok(fit.coefficients[0])
 }
 
@@ -477,7 +477,7 @@ fn controlled(
     let all: Vec<usize> = (0..n).collect();
     let fe_all = window(&all).fixed_effects()?;
     // The treatment on the covariates and both effects.
-    let fit = Feols { absorb: ABSORB }.fit(d, controls, &fe_all)?;
+    let fit = Feols { absorb: ABSORB }.fit(controls, d, &fe_all)?;
     let resid = fit.residuals.clone();
     let p: Vec<f64> = d.iter().zip(&resid).map(|(a, b)| a - b).collect();
     let key_g = |i: usize| cohort[i].unwrap_or(i32::MAX);
@@ -525,7 +525,7 @@ fn controlled(
             let constant = vec![0u32; m];
             let fe_one = FixedEffects::new(&[&constant], None, Singletons::Keep)?;
             let gx_tilde = Mat::from_fn(m, q, |r, j| tilde[2 + j][r]);
-            let fit_p = Feols { absorb: ABSORB }.fit(d_tilde, gx_tilde.as_ref(), &fe_one)?;
+            let fit_p = Feols { absorb: ABSORB }.fit(gx_tilde.as_ref(), d_tilde, &fe_one)?;
             let pgj: Vec<f64> = d_tilde
                 .iter()
                 .zip(&fit_p.residuals)

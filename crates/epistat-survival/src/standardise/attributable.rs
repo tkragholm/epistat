@@ -150,7 +150,7 @@ pub fn af_from_standardised(
                     let half = z * se / r;
                     Some((1.0 - r * half.exp(), 1.0 - r * (-half).exp()))
                 }
-                IntervalScale::LogComplement => None,
+                _ => None,
             },
             _ => None,
         };

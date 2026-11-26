@@ -151,7 +151,6 @@ pub struct FeolsFit {
 }
 
 /// The covariance to compute.
-#[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub enum Vcov<'c> {
     /// Homoskedastic.

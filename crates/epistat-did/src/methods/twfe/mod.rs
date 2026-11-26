@@ -72,7 +72,7 @@
 
 use std::collections::BTreeSet;
 
-use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 
 use crate::methods::staggered::StaggeredPanel;
@@ -305,12 +305,12 @@ pub fn estimate_twfe(
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit(panel.outcome, x.as_ref(), &fe)?;
+    .fit(x.as_ref(), panel.outcome, &fe)?;
     let clusters = config.clusters.unwrap_or(panel.unit);
     let ways = [clusters];
-    let cov = fit.vcov(Vcov::Cluster(&ways), config.ssc)?;
+    let cov = fit.vcov(&fe, Vcov::Cluster(&ways), config.ssc)?;
     let p = k_terms + p_cov;
-    let se = |j: usize| cov.matrix[j * p + j].map(|v| v.max(0.0).sqrt());
+    let se = |j: usize| cov.matrix.as_slice()[j * p + j].map(|v| v.max(0.0).sqrt());
     let terms = periods
         .iter()
         .enumerate()
@@ -325,7 +325,7 @@ pub fn estimate_twfe(
     let unit_codes = fe.codes(0);
     let units = fe.labels(0).to_vec();
     let n_units = units.len();
-    let sums = fit.influence_sums(unit_codes, n_units)?;
+    let sums = fit.influence_sums(&fe, unit_codes, n_units)?;
     let mut influence = vec![None; p];
     for (a, &j) in fit.kept_columns().iter().enumerate() {
         influence[j] = Some(
@@ -337,7 +337,7 @@ pub fn estimate_twfe(
     Ok(TwfeResult {
         terms,
         covariate_coefficients: fit.coefficients[k_terms..].to_vec(),
-        covariance: cov.matrix,
+        covariance: cov.matrix.into_values(),
         df_k: cov.df_k,
         n_clusters: cov.min_clusters.unwrap_or(0),
         influence,

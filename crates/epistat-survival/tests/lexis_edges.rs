@@ -416,15 +416,15 @@ fn fit_on_cells_equals_fit_on_pieces() {
             on_pieces.fit.coefficients[j].unwrap(),
             on_cells.fit.coefficients[j].unwrap(),
         );
-        let se = on_pieces.fit.covariance[j * p + j].unwrap().sqrt();
+        let se = on_pieces.fit.covariance.get(j, j).unwrap().sqrt();
         worst_coef = worst_coef.max((x - y).abs() / se);
         for k in 0..p {
             let (u, v) = (
-                on_pieces.fit.covariance[j * p + k].unwrap(),
-                on_cells.fit.covariance[j * p + k].unwrap(),
+                on_pieces.fit.covariance.get(j, k).unwrap(),
+                on_cells.fit.covariance.get(j, k).unwrap(),
             );
             worst_cov = worst_cov
-                .max((u - v).abs() / (se * on_pieces.fit.covariance[k * p + k].unwrap().sqrt()));
+                .max((u - v).abs() / (se * on_pieces.fit.covariance.get(k, k).unwrap().sqrt()));
         }
     }
     println!(

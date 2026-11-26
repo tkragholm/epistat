@@ -109,6 +109,11 @@
 //!    time with the subject's baseline covariates in survival analysis,
 //!    Biostatistics 15: 222-233.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::sandwich::sandwich;
 use epistat_linalg::{Attempt, Mat, MatRef, weighted_gram};
@@ -559,7 +564,7 @@ pub fn rmst2_regression(
         ),
     };
     let fit = Glm::new(family, link)
-        .fit(x.as_ref(), &response, Some(&weight), None, None)
+        .fit_slices(x.as_ref(), &response, Some(&weight), None, None)
         .map_err(|e| Error::input(format!("the regression could not be fitted: {e}")))?;
     if !fit.converged {
         return Err(Error::input("the regression did not converge"));

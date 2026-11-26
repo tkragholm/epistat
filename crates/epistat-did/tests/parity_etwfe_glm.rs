@@ -45,11 +45,17 @@
 //! - The normal equations of either side round to `8 kappa eps`, with
 //!   `kappa` the condition number of `I`.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
+use epistat_core::InputError;
 use epistat_did::{
     EtwfeControl, EtwfeError, EtwfeFamily, EtwfeGlmConfig, EtwfeGlmTerm, EtwfeTerm, EtwfeType,
     StaggeredPanel, did_covariance, estimate_etwfe_glm,
 };
-use epistat_glm::{AbsorbError, Family, Glm, GlmError, Link, Ssc, Vcov};
+use epistat_glm::{Error as GlmError, Family, Glm, Link, Ssc, Vcov};
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
@@ -348,7 +354,7 @@ fn etwfe_glm_matches_the_package() {
             ..Glm::new(fam, link)
         };
         let plain_fit = glm
-            .fit(dense.as_ref(), &y, w.as_deref(), None, None)
+            .fit_slices(dense.as_ref(), &y, w.as_deref(), None, None)
             .unwrap();
         for j in 0..q {
             assert_eq!(
@@ -582,7 +588,7 @@ fn unusable_inputs_are_errors() {
     };
     assert!(matches!(
         estimate_etwfe_glm(&panel(case, x.as_ref()), &two_ways),
-        Err(EtwfeError::Fit(AbsorbError::Invalid(_)))
+        Err(EtwfeError::Fit(GlmError::Invalid(_)))
     ));
     let never = EtwfeGlmConfig {
         control: EtwfeControl::NeverTreated,
@@ -600,10 +606,11 @@ fn unusable_inputs_are_errors() {
     };
     assert_eq!(
         estimate_etwfe_glm(&weighted, &base).unwrap_err(),
-        EtwfeError::Fit(AbsorbError::Weight {
-            index: 7,
-            value: -1.0
-        })
+        EtwfeError::Fit(GlmError::Input(InputError::Domain {
+            what: "weights",
+            value: -1.0,
+            domain: "[0, inf)"
+        }))
     );
     // A response outside the family's support names its input row; the row
     // must be one of the fit.
@@ -619,10 +626,7 @@ fn unusable_inputs_are_errors() {
     };
     assert_eq!(
         estimate_etwfe_glm(&bad, &base).unwrap_err(),
-        EtwfeError::Fit(AbsorbError::Glm(GlmError::Response {
-            index: row,
-            value: 2.0
-        }))
+        EtwfeError::Fit(GlmError::Response { row, value: 2.0 })
     );
 }
 

@@ -64,6 +64,11 @@
 //! 2. Lopez MJ, Gutman R. Estimation of causal effects with multiple
 //!    treatments: a review and new ideas. Stat Sci. 2017;32(3):432-54.
 
+#![expect(
+    deprecated,
+    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
+)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -265,7 +270,7 @@ pub fn generalised_propensity_score<R: CovariateRecord>(
     let x = Mat::from_fn(matrix.n_rows, matrix.n_cols, |i, j| {
         matrix.values[i * matrix.n_cols + j]
     });
-    let fit = config.fit.fit(x.as_ref(), groups, n_groups, None)?;
+    let fit = config.fit.fit_slices(x.as_ref(), groups, n_groups, None)?;
     Ok(GeneralisedPropensityScore {
         groups: n_groups,
         ids: matrix.row_ids,
