@@ -27,6 +27,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_core::Level;
 use epistat_epi::rosenbaum::{self, BinaryStratum};
 use epistat_matching::sensitivity::{
     BinaryDistribution, Censored, CensoredSet, EventDirection, MScore, MatchedSet, Sides,
@@ -401,7 +402,8 @@ fn the_interval_agrees_with_senmw_ci() {
         } else {
             Sides::Two
         };
-        let got = m_statistic_interval(&mw, case.gamma, &spec, r.alpha, sides).unwrap();
+        let level = Level::alpha(r.alpha).unwrap();
+        let got = m_statistic_interval(&mw, case.gamma, &spec, level, sides).unwrap();
         let slack = 2.0 * case.tol;
         close(
             got.estimate_lower,
@@ -417,10 +419,11 @@ fn the_interval_agrees_with_senmw_ci() {
             slack,
             "estimate upper",
         );
-        close(got.lower, case.limits[0].unwrap(), 0.0, slack, "lower");
+        let lower = got.interval.lower.unwrap();
+        close(lower, case.limits[0].unwrap(), 0.0, slack, "lower");
         match case.limits[1] {
-            Some(upper) => close(got.upper, upper, 0.0, slack, "upper"),
-            None => assert!(got.upper.is_infinite()),
+            Some(upper) => close(got.interval.upper.unwrap(), upper, 0.0, slack, "upper"),
+            None => assert_eq!(got.interval.upper, None),
         }
     }
 }

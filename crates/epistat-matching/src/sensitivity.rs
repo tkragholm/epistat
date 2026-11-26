@@ -62,6 +62,7 @@ pub use epistat_epi::evalue::{
     EValues, Outcome, RdEValues, SelectionBias, bounding_factor, evalues_hr, evalues_md,
     evalues_or, evalues_rd, evalues_rr, selection_evalues_rr,
 };
+use epistat_core::Level;
 use epistat_epi::rosenbaum::{self, BinaryStratum};
 pub use epistat_epi::rosenbaum::{
     BinaryBounds, BinaryDistribution, Censored, EffectInterval, EventDirection,
@@ -385,8 +386,8 @@ pub fn m_statistic_sensitivity_value(
 }
 
 /// The range of point estimates and the confidence interval of an additive
-/// effect under `gamma`, from the m-statistic over matched sets, as
-/// `sensitivitymw::senmwCI`. See
+/// effect under `gamma` at `level`, from the m-statistic over matched sets,
+/// as `sensitivitymw::senmwCI`. See
 /// [`epistat_epi::rosenbaum::m_statistic_interval`].
 ///
 /// # Errors
@@ -396,14 +397,14 @@ pub fn m_statistic_interval(
     sets: &[MatchedSet],
     gamma: f64,
     spec: &MScore,
-    alpha: f64,
+    level: Level,
     sides: Sides,
 ) -> Result<EffectInterval, BoundsError> {
     Ok(rosenbaum::m_statistic_interval(
         &raw_sets(sets)?,
         gamma,
         spec,
-        alpha,
+        level,
         sides,
     )?)
 }

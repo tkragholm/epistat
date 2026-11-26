@@ -19,6 +19,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_core::Level;
 use epistat_epi::rates::{direct_standardised, rate_ratio};
 use epistat_epi::sir::{SirInterval, sir};
 use epistat_linalg::Mat;
@@ -188,24 +189,23 @@ fn main() {
                             }
                         }
                         let standardised =
-                            direct_standardised(&events, &time, &weights, 0.95).expect("rate");
+                            direct_standardised(&events, &time, &weights, Level::default())
+                                .expect("rate");
                         by_sex.push((events, time, standardised));
                     }
                     let (e0, t0) = (by_sex[0].0.iter().sum::<f64>(), by_sex[0].1.iter().sum());
                     let (e1, t1) = (by_sex[1].0.iter().sum::<f64>(), by_sex[1].1.iter().sum());
-                    let ratio = rate_ratio(e1, t1, e0, t0, 0.95).expect("rate ratio");
+                    let ratio = rate_ratio(e1, t1, e0, t0, Level::default()).expect("rate ratio");
                     (by_sex, ratio)
                 });
                 for (s, (events, time, standardised)) in out.0.iter().enumerate() {
                     lines.push(&format!("events_sex{s}"), events.iter().sum());
                     lines.push(&format!("person_time_sex{s}"), time.iter().sum());
-                    lines.push_opt(&format!("std_rate_sex{s}"), standardised.rate);
-                    lines.push_opt(
-                        &format!("std_se_sex{s}"),
-                        standardised.variance.map(f64::sqrt),
-                    );
+                    let rate = standardised.map(|s| s.rate);
+                    lines.push_opt(&format!("std_rate_sex{s}"), rate.map(|r| r.estimate));
+                    lines.push_opt(&format!("std_se_sex{s}"), rate.and_then(|r| r.se));
                 }
-                lines.push_opt("rate_ratio", out.1.estimate);
+                lines.push_opt("rate_ratio", out.1.map(|r| r.estimate));
                 times
             } else {
                 let table = rate_table();
@@ -214,15 +214,16 @@ fn main() {
                 let (times, result) = common::timed(common::reps(), || {
                     let expected = table.expected(&data, &origins, &[&sex]).expect("expected");
                     let ratio =
-                        sir(observed, expected.total, 0.95, SirInterval::Exact).expect("sir");
+                        sir(observed, expected.total, Level::default(), SirInterval::Exact)
+                            .expect("sir");
                     (expected, ratio)
                 });
                 lines.push("observed", observed);
                 lines.push("expected", result.0.total);
                 lines.push("offtable", result.0.offtable);
-                lines.push_opt("sir", result.1.sir);
-                lines.push_opt("lower", result.1.lower);
-                lines.push_opt("upper", result.1.upper);
+                lines.push_opt("sir", result.1.map(|r| r.estimate));
+                lines.push_opt("lower", result.1.and_then(|r| r.lower()));
+                lines.push_opt("upper", result.1.and_then(|r| r.upper()));
                 times
             }
         }
