@@ -683,15 +683,17 @@ fn summarise(
         let mean = values.iter().sum::<f64>() / b;
         let se = (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (b - 1.0)).sqrt();
         e.se = Some(se);
-        let (lower, upper) = match options.interval {
+        let level =
+            epistat_core::Level::alpha(options.alpha).map_err(|e| Error::input(e.to_string()))?;
+        let limits = match options.interval {
             IntervalMethod::Percentile => {
-                interval::percentile(&mut values, options.alpha, Percentile::Type7)
+                interval::percentile(&mut values, level, Percentile::Type7)
+                    .map_err(|e| Error::input(e.to_string()))?
             }
-            IntervalMethod::Normal => interval::normal(estimate, se, options.alpha),
-        }
-        .map_err(|e| Error::input(e.to_string()))?;
-        e.lower = Some(lower);
-        e.upper = Some(upper);
+            IntervalMethod::Normal => interval::normal(estimate, se, level),
+        };
+        e.lower = Some(limits.lower.unwrap_or(f64::NAN));
+        e.upper = Some(limits.upper.unwrap_or(f64::NAN));
         Ok(e)
     };
     let mut out = Vec::with_capacity(strategies);

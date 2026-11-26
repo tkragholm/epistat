@@ -282,8 +282,13 @@ fn covariance(columns: &[Vec<f64>], cluster: Option<&[u32]>) -> Result<Vec<f64>>
 
 fn make_estimate(value: f64, variance: f64, alpha: f64) -> Result<Estimate> {
     let se = variance.max(0.0).sqrt();
-    let (lower, upper) = epistat_inference::interval::normal(value, se, alpha)
-        .map_err(|e| Error::input(format!("alpha: {e}")))?;
+    let level =
+        epistat_core::Level::alpha(alpha).map_err(|e| Error::input(format!("alpha: {e}")))?;
+    let interval = epistat_inference::interval::normal(value, se, level);
+    let (lower, upper) = (
+        interval.lower.unwrap_or(f64::NAN),
+        interval.upper.unwrap_or(f64::NAN),
+    );
     let p_value = (se > 0.0).then(|| 2.0 * epistat_stats::dist::normal::cdf(-(value / se).abs()));
     Ok(Estimate {
         estimate: value,
