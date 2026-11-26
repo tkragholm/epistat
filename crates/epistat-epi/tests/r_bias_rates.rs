@@ -9,9 +9,10 @@
 //! medians and limits of ten runs on each side, in standard errors of their
 //! difference.
 
+use epistat_core::{Estimate, Level};
 use epistat_epi::PersonTime2;
 use epistat_epi::bias::{
-    Dist, Misclass, Pair, ProbOptions, Summary, correct_exposure_rates,
+    Dist, Misclass, Pair, ProbOptions, correct_exposure_rates,
     probabilistic_misclass_rates,
 };
 use epistat_testkit::load_json;
@@ -117,7 +118,7 @@ fn probabilistic_rates_agree_with_a_direct_simulation() {
         d: 0.95,
     });
     let sp = Pair::Same(Dist::Uniform { lo: 0.97, hi: 1.0 });
-    let fits: Vec<(Summary, Summary)> = (0..r.k)
+    let fits: Vec<(Estimate, Estimate)> = (0..r.k)
         .map(|i| {
             let p = probabilistic_misclass_rates(
                 &t,
@@ -127,11 +128,11 @@ fn probabilistic_rates_agree_with_a_direct_simulation() {
                     draws: r.reps,
                     seed: 5_000 + i as u64,
                     random_error: true,
-                    alpha: 0.05,
+                    level: Level::alpha(0.05).unwrap(),
                 },
             )
             .unwrap();
-            (p.adjusted, p.adjusted_total.unwrap())
+            (p.adjusted.unwrap(), p.adjusted_total.unwrap())
         })
         .collect();
     let mut worst = 0.0_f64;
@@ -146,7 +147,7 @@ fn probabilistic_rates_agree_with_a_direct_simulation() {
                 .iter()
                 .map(|(s, tot)| {
                     let x = if which == 0 { s } else { tot };
-                    [x.median, x.lower, x.upper][k]
+                    [x.estimate, x.lower().unwrap(), x.upper().unwrap()][k]
                 })
                 .collect();
             let ((m1, v1), (m2, v2)) = (mean_var(&from_r), mean_var(&from_rust));

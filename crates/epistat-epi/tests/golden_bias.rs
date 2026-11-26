@@ -4,9 +4,10 @@
 //! confounding. Recorded on aarch64 macOS.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
+use epistat_core::{Estimate, Level};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
-    ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, Summary, probabilistic_confounding,
+    ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, probabilistic_confounding,
     probabilistic_misclass, probabilistic_selection,
 };
 use epistat_testkit::Fingerprint;
@@ -23,12 +24,15 @@ fn options(random_error: bool) -> ProbOptions {
         draws: 20_000,
         seed: 2026,
         random_error,
-        alpha: 0.05,
+        level: Level::alpha(0.05).unwrap(),
     }
 }
 
-fn summary(fp: Fingerprint, s: &Summary) -> Fingerprint {
-    fp.f64(s.median).f64(s.lower).f64(s.upper)
+fn summary(fp: Fingerprint, s: &Option<Estimate>) -> Fingerprint {
+    let s = s.expect("a summary");
+    fp.f64(s.estimate)
+        .f64(s.lower().expect("a lower percentile"))
+        .f64(s.upper().expect("an upper percentile"))
 }
 
 #[test]
@@ -56,9 +60,9 @@ fn probabilistic_results_are_unchanged() {
             let r = probabilistic_misclass(&T, kind, &se, &sp, &options(random_error)).unwrap();
             fp = summary(fp, &r.risk_ratio);
             fp = summary(fp, &r.odds_ratio);
-            if let (Some(rr), Some(or)) = (&r.risk_ratio_total, &r.odds_ratio_total) {
-                fp = summary(fp, rr);
-                fp = summary(fp, or);
+            if random_error {
+                fp = summary(fp, &r.risk_ratio_total);
+                fp = summary(fp, &r.odds_ratio_total);
             }
             fp = fp.u64(r.n_draws_used as u64).u64(r.n_discarded as u64);
         }
@@ -76,7 +80,7 @@ fn probabilistic_results_are_unchanged() {
     let r = probabilistic_selection(&T, &s, &options(true)).unwrap();
     fp = summary(fp, &r.risk_ratio);
     fp = summary(fp, &r.odds_ratio);
-    fp = summary(fp, r.risk_ratio_total.as_ref().unwrap());
+    fp = summary(fp, &r.risk_ratio_total);
     let prevalence = Pair::Independent([
         Dist::Beta {
             alpha: 30.0,
@@ -107,7 +111,7 @@ fn probabilistic_results_are_unchanged() {
         let a = probabilistic_confounding(&T, measure, &prevalence, &association, &options(true))
             .unwrap();
         fp = summary(fp, &a.adjusted);
-        fp = summary(fp, a.adjusted_total.as_ref().unwrap());
+        fp = summary(fp, &a.adjusted_total);
         fp = fp.u64(a.n_discarded as u64);
     }
     assert_eq!(fp.finish(), 8_580_821_384_644_866_469, "golden hash");

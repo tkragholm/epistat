@@ -14,7 +14,8 @@ mod common;
 
 use common::Lines;
 use epistat_epi::Counts2x2;
-use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, Summary, probabilistic_misclass};
+use epistat_core::{Estimate, Level};
+use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, probabilistic_misclass};
 
 const TABLE: Counts2x2 = Counts2x2 {
     exposed_cases: 215.0,
@@ -23,10 +24,10 @@ const TABLE: Counts2x2 = Counts2x2 {
     unexposed_noncases: 1202.0,
 };
 
-fn push(lines: &mut Lines, name: &str, s: Summary) {
-    lines.push(&format!("info_{name}_median"), s.median);
-    lines.push(&format!("info_{name}_lower"), s.lower);
-    lines.push(&format!("info_{name}_upper"), s.upper);
+fn push(lines: &mut Lines, name: &str, s: Option<Estimate>) {
+    lines.push_opt(&format!("info_{name}_median"), s.map(|s| s.estimate));
+    lines.push_opt(&format!("info_{name}_lower"), s.and_then(|s| s.lower()));
+    lines.push_opt(&format!("info_{name}_upper"), s.and_then(|s| s.upper()));
 }
 
 fn main() {
@@ -36,7 +37,7 @@ fn main() {
         draws: n,
         seed: 20_261_223,
         random_error: true,
-        alpha: 0.05,
+        level: Level::alpha(0.05).expect("a level"),
     };
     let (kind, se, sp) = match method.as_str() {
         "bias_exposure" => (
@@ -70,16 +71,8 @@ fn main() {
     });
     push(&mut lines, "rr", result.risk_ratio);
     push(&mut lines, "or", result.odds_ratio);
-    push(
-        &mut lines,
-        "rr_total",
-        result.risk_ratio_total.expect("total"),
-    );
-    push(
-        &mut lines,
-        "or_total",
-        result.odds_ratio_total.expect("total"),
-    );
+    push(&mut lines, "rr_total", result.risk_ratio_total);
+    push(&mut lines, "or_total", result.odds_ratio_total);
     lines.push("info_discarded", result.n_discarded as f64);
     common::finish(&method, n, &times, &lines);
 }

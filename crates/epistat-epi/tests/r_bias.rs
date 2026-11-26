@@ -7,9 +7,10 @@
 //! standard errors of their difference, estimated from the ten runs on each
 //! side.
 
+use epistat_core::{Estimate, Level};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
-    Confounder, ConfoundingMeasure, Dist, Kind, Misclass, Pair, ProbOptions, ProbResult, Summary,
+    Confounder, ConfoundingMeasure, Dist, Kind, Misclass, Pair, ProbOptions, ProbResult,
     adjust_confounding, correct_exposure, correct_exposure_predictive, correct_outcome,
     correct_selection, probabilistic_confounding, probabilistic_misclass, probabilistic_selection,
 };
@@ -199,13 +200,13 @@ fn mean_var(values: &[f64]) -> (f64, f64) {
 
 /// The largest standardised difference of the means over the medians and
 /// limits of one summary.
-fn compare(label: &str, r: &[Option<[f64; 3]>], rust: &[Summary]) -> f64 {
+fn compare(label: &str, r: &[Option<[f64; 3]>], rust: &[Estimate]) -> f64 {
     let mut worst = 0.0_f64;
     for (k, name) in ["median", "lower", "upper"].iter().enumerate() {
         let from_r: Vec<f64> = r.iter().map(|x| x.unwrap()[k]).collect();
         let from_rust: Vec<f64> = rust
             .iter()
-            .map(|s| [s.median, s.lower, s.upper][k])
+            .map(|s| [s.estimate, s.lower().unwrap(), s.upper().unwrap()][k])
             .collect();
         let ((m1, v1), (m2, v2)) = (mean_var(&from_r), mean_var(&from_rust));
         let z = (m1 - m2) / ((v1 + v2) / from_r.len() as f64).sqrt();
@@ -224,7 +225,7 @@ struct Runs {
 }
 
 impl Runs {
-    fn summaries(&self, f: impl Fn(&ProbResult) -> Option<Summary>) -> Vec<Summary> {
+    fn summaries(&self, f: impl Fn(&ProbResult) -> Option<Estimate>) -> Vec<Estimate> {
         self.results.iter().map(|r| f(r).unwrap()).collect()
     }
 }
@@ -237,7 +238,7 @@ fn runs(k: usize, reps: usize, f: impl Fn(&ProbOptions) -> ProbResult) -> Runs {
                     draws: reps,
                     seed: 4_000 + i as u64,
                     random_error: true,
-                    alpha: 0.05,
+                    level: Level::alpha(0.05).unwrap(),
                 })
             })
             .collect(),
@@ -329,7 +330,7 @@ fn check_misclass(label: &str, reference: &[Replicate], fits: &Runs) -> f64 {
         (
             "rr",
             pick(|x| x.syst_rr),
-            fits.summaries(|p| Some(p.risk_ratio)),
+            fits.summaries(|p| p.risk_ratio),
         ),
         (
             "rr total",
@@ -339,7 +340,7 @@ fn check_misclass(label: &str, reference: &[Replicate], fits: &Runs) -> f64 {
         (
             "or",
             pick(|x| x.syst_or),
-            fits.summaries(|p| Some(p.odds_ratio)),
+            fits.summaries(|p| p.odds_ratio),
         ),
         (
             "or total",
@@ -385,12 +386,12 @@ fn probabilistic_selection_agrees_with_episensr_on_the_systematic_error() {
     let a = compare(
         "selection rr",
         &pick(|x| x.syst_rr),
-        &fits.summaries(|p| Some(p.risk_ratio)),
+        &fits.summaries(|p| p.risk_ratio),
     );
     let b = compare(
         "selection or",
         &pick(|x| x.syst_or),
-        &fits.summaries(|p| Some(p.odds_ratio)),
+        &fits.summaries(|p| p.odds_ratio),
     );
     assert!(a.max(b) < Z_MAX, "{a} {b}");
 }
@@ -413,7 +414,7 @@ fn probabilistic_confounding_agrees_with_a_direct_simulation() {
         mu: 2.0_f64.ln(),
         sigma: 0.25,
     };
-    let results: Vec<Summary> = (0..r.k)
+    let results: Vec<Estimate> = (0..r.k)
         .map(|i| {
             probabilistic_confounding(
                 &t,
@@ -424,11 +425,12 @@ fn probabilistic_confounding_agrees_with_a_direct_simulation() {
                     draws: r.reps,
                     seed: 9_000 + i as u64,
                     random_error: false,
-                    alpha: 0.05,
+                    level: Level::alpha(0.05).unwrap(),
                 },
             )
             .unwrap()
             .adjusted
+            .unwrap()
         })
         .collect();
     let reference: Vec<Option<[f64; 3]>> =
@@ -452,16 +454,16 @@ fn the_draws_do_not_depend_on_the_thread_pool() {
                 draws: 3_000,
                 seed: 1,
                 random_error: true,
-                alpha: 0.05,
+                level: Level::alpha(0.05).unwrap(),
             },
         )
         .unwrap();
-        let (rr, or) = (p.risk_ratio_total.unwrap(), p.odds_ratio);
+        let (rr, or) = (p.risk_ratio_total.unwrap(), p.odds_ratio.unwrap());
         vec![
-            rr.median,
-            rr.lower,
-            rr.upper,
-            or.median,
+            rr.estimate,
+            rr.lower().unwrap(),
+            rr.upper().unwrap(),
+            or.estimate,
             p.n_discarded as f64,
         ]
     });

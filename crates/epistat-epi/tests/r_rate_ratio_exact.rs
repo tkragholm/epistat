@@ -15,6 +15,7 @@
 //! probabilities, each accurate to `1e-14`. The
 //! test prints the largest deviation in units of its bound.
 
+use epistat_core::Level;
 use epistat_epi::rates::rate_ratio_exact;
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -61,20 +62,23 @@ fn agrees_with_poisson_test() {
     let mut worst = 0.0_f64;
     for c in &r.cases {
         let label = format!("{} {} {} {} {}", c.e1, c.e0, c.t1, c.t0, c.level);
-        let got = rate_ratio_exact(c.e1, c.t1, c.e0, c.t0, c.level).unwrap();
+        let level = Level::confidence(c.level).unwrap();
+        let got = rate_ratio_exact(c.e1, c.t1, c.e0, c.t0, level)
+            .unwrap()
+            .unwrap();
         let limit_bound = if c.e1.max(c.e0) > 1000.0 { 1e-6 } else { 1e-9 };
         if c.lower == 0.0 {
-            assert_eq!(got.lower, Some(0.0), "{label}");
+            assert_eq!(got.lower(), Some(0.0), "{label}");
         } else {
-            ratio(&mut worst, got.lower.unwrap(), c.lower, limit_bound);
+            ratio(&mut worst, got.lower().unwrap(), c.lower, limit_bound);
         }
         match number(&c.upper) {
-            Some(want) => ratio(&mut worst, got.upper.unwrap(), want, limit_bound),
-            None => assert_eq!(got.upper, None, "{label}"),
+            Some(want) => ratio(&mut worst, got.upper().unwrap(), want, limit_bound),
+            None => assert_eq!(got.upper(), None, "{label}"),
         }
         match number(&c.estimate) {
-            Some(want) => ratio(&mut worst, got.estimate.unwrap(), want, 1e-13),
-            None => assert_eq!(got.estimate, None, "{label}"),
+            Some(want) => ratio(&mut worst, got.estimate, want, 1e-13),
+            None => assert_eq!(got.estimate, f64::INFINITY, "{label}"),
         }
         let p_bound = if c.e1.max(c.e0) > 1000.0 { 1e-9 } else { 1e-11 };
         ratio(&mut worst, got.p_value.unwrap(), c.p, p_bound);
@@ -85,14 +89,9 @@ fn agrees_with_poisson_test() {
 
 #[test]
 fn undefined_and_invalid_input() {
-    let none = rate_ratio_exact(0.0, 1.0, 0.0, 1.0, 0.95).unwrap();
-    assert_eq!(
-        (none.estimate, none.lower, none.upper, none.p_value),
-        (None, None, None, None)
-    );
-    let zero_time = rate_ratio_exact(1.0, 0.0, 2.0, 1.0, 0.95).unwrap();
-    assert_eq!(zero_time.lower, None);
-    assert!(rate_ratio_exact(1.5, 1.0, 2.0, 1.0, 0.95).is_err());
-    assert!(rate_ratio_exact(1.0, 1.0, 2.0, 1.0, 1.0).is_err());
-    assert!(rate_ratio_exact(-1.0, 1.0, 2.0, 1.0, 0.95).is_err());
+    let level = Level::default();
+    assert_eq!(rate_ratio_exact(0.0, 1.0, 0.0, 1.0, level).unwrap(), None);
+    assert_eq!(rate_ratio_exact(1.0, 0.0, 2.0, 1.0, level).unwrap(), None);
+    assert!(rate_ratio_exact(1.5, 1.0, 2.0, 1.0, level).is_err());
+    assert!(rate_ratio_exact(-1.0, 1.0, 2.0, 1.0, level).is_err());
 }

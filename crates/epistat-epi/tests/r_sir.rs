@@ -19,6 +19,7 @@
 //! are compared to `5.1e-5`. Its profile limits interpolate a profile on a grid,
 //! which differs from the root by up to `2e-3` for these counts.
 
+use epistat_core::Level;
 use epistat_epi::sir::{SirInterval, excess_absolute_risk, sir, sir_homogeneity, sir_trend};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -99,12 +100,14 @@ fn grid_of_counts() {
     let mut worst = 0.0;
     for g in reference().grid {
         let what = format!("o {} e {} level {}", g.o, g.e, g.level);
-        let exact = sir(g.o, g.e, g.level, SirInterval::Exact).unwrap();
+        let exact = sir(g.o, g.e, Level::confidence(g.level).unwrap(), SirInterval::Exact)
+            .unwrap()
+            .unwrap();
         ratio(&mut worst, &what, exact.p_value.unwrap(), g.exact_p, 1e-11);
         ratio(
             &mut worst,
             &what,
-            exact.upper.unwrap(),
+            exact.upper().unwrap(),
             g.exact_upper,
             1e-12,
         );
@@ -112,18 +115,20 @@ fn grid_of_counts() {
             ratio(
                 &mut worst,
                 &what,
-                exact.lower.unwrap(),
+                exact.lower().unwrap(),
                 g.exact_lower,
                 1e-12,
             );
         } else {
-            assert_eq!(exact.lower, Some(0.0));
+            assert_eq!(exact.lower(), Some(0.0));
         }
-        let profile = sir(g.o, g.e, g.level, SirInterval::Profile).unwrap();
+        let profile = sir(g.o, g.e, Level::confidence(g.level).unwrap(), SirInterval::Profile)
+            .unwrap()
+            .unwrap();
         ratio(
             &mut worst,
             &what,
-            profile.upper.unwrap(),
+            profile.upper().unwrap(),
             g.profile_upper,
             1e-11,
         );
@@ -131,20 +136,22 @@ fn grid_of_counts() {
             ratio(
                 &mut worst,
                 &what,
-                profile.lower.unwrap(),
+                profile.lower().unwrap(),
                 g.profile_lower,
                 1e-11,
             );
         } else {
-            assert_eq!(profile.lower, Some(0.0));
+            assert_eq!(profile.lower(), Some(0.0));
         }
-        let wald = sir(g.o, g.e, g.level, SirInterval::Wald).unwrap();
+        let wald = sir(g.o, g.e, Level::confidence(g.level).unwrap(), SirInterval::Wald)
+            .unwrap()
+            .unwrap();
         match (g.wald_lower, g.wald_upper) {
             (Some(lo), Some(hi)) => {
-                ratio(&mut worst, &what, wald.lower.unwrap(), lo, 1e-13);
-                ratio(&mut worst, &what, wald.upper.unwrap(), hi, 1e-13);
+                ratio(&mut worst, &what, wald.lower().unwrap(), lo, 1e-13);
+                ratio(&mut worst, &what, wald.upper().unwrap(), hi, 1e-13);
             }
-            _ => assert_eq!((wald.lower, wald.upper), (None, None)),
+            _ => assert_eq!((wald.lower(), wald.upper()), (None, None)),
         }
     }
     eprintln!("grid: worst deviation {worst:.3} of its bound");
@@ -161,11 +168,13 @@ fn popepi_strata() {
         (SirInterval::Profile, &r.popepi.profile, 2e-3),
     ] {
         for g in 0..r.observed.len() {
-            let s = sir(r.observed[g], r.expected[g], 0.95, kind).unwrap();
+            let s = sir(r.observed[g], r.expected[g], Level::default(), kind)
+            .unwrap()
+            .unwrap();
             for (got, want) in [
-                (s.sir.unwrap(), interval.sir[g]),
-                (s.lower.unwrap(), interval.lower[g]),
-                (s.upper.unwrap(), interval.upper[g]),
+                (s.estimate, interval.sir[g]),
+                (s.lower().unwrap(), interval.lower[g]),
+                (s.upper().unwrap(), interval.upper[g]),
             ] {
                 let d = (got - want).abs() / tolerance;
                 worst = worst.max(d);
@@ -277,11 +286,13 @@ fn fingerprint_of_the_strata() {
         SirInterval::Profile,
     ] {
         for g in 0..r.strata.observed.len() {
-            let s = sir(r.strata.observed[g], r.strata.expected[g], 0.95, kind).unwrap();
+            let s = sir(r.strata.observed[g], r.strata.expected[g], Level::default(), kind)
+            .unwrap()
+            .unwrap();
             hash = hash
-                .option_f64(s.sir)
-                .option_f64(s.lower)
-                .option_f64(s.upper)
+                .option_f64(Some(s.estimate))
+                .option_f64(s.lower())
+                .option_f64(s.upper())
                 .option_f64(s.p_value);
         }
     }

@@ -10,6 +10,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_core::Level;
 use epistat_epi::PersonTime2;
 use epistat_epi::mantel_haenszel::{
     Pooled, odds_ratio, rate_difference, rate_ratio, risk_difference, risk_ratio,
@@ -47,10 +48,11 @@ fn generate_mhr(n: usize) {
 }
 
 fn pooled(lines: &mut Lines, name: &str, p: &Pooled) {
-    lines.push_opt(&format!("{name}_estimate"), p.estimate);
-    lines.push_opt(&format!("{name}_se"), p.se);
-    lines.push_opt(&format!("{name}_lower"), p.lower);
-    lines.push_opt(&format!("{name}_upper"), p.upper);
+    let e = p.estimate;
+    lines.push_opt(&format!("{name}_estimate"), e.map(|e| e.estimate));
+    lines.push_opt(&format!("{name}_se"), e.and_then(|e| e.se));
+    lines.push_opt(&format!("{name}_lower"), e.and_then(|e| e.lower()));
+    lines.push_opt(&format!("{name}_upper"), e.and_then(|e| e.upper()));
 }
 
 fn main() {
@@ -69,9 +71,9 @@ fn main() {
             let (times, results) = common::timed(common::reps(), || {
                 let tables = tables_from_records(&stratum, &exposed, &case).expect("tables");
                 (
-                    odds_ratio(&tables, 0.95).expect("or"),
-                    risk_ratio(&tables, 0.95).expect("rr"),
-                    risk_difference(&tables, 0.95).expect("rd"),
+                    odds_ratio(&tables, Level::default()).expect("or"),
+                    risk_ratio(&tables, Level::default()).expect("rr"),
+                    risk_difference(&tables, Level::default()).expect("rd"),
                 )
             });
             pooled(&mut lines, "or", &results.0);
@@ -91,8 +93,8 @@ fn main() {
                 .collect();
             let (times, results) = common::timed(common::reps(), || {
                 (
-                    rate_ratio(&strata, 0.95).expect("rate ratio"),
-                    rate_difference(&strata, 0.95).expect("rate difference"),
+                    rate_ratio(&strata, Level::default()).expect("rate ratio"),
+                    rate_difference(&strata, Level::default()).expect("rate difference"),
                 )
             });
             pooled(&mut lines, "irr", &results.0);

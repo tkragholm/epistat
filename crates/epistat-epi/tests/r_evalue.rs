@@ -11,6 +11,7 @@
 //! * `svalues.RR`: a square root or two of the same ratio, to 1e-14 relative.
 
 use epistat_epi::Counts2x2;
+use epistat_core::Level;
 use epistat_epi::evalue::{SelectionBias, bounding_factor, evalues_rd, selection_evalues_rr};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -70,7 +71,7 @@ fn risk_difference_evalues_agree_with_evalues_rd() {
                 unexposed_noncases: d,
             },
             case.true_value,
-            case.alpha,
+            Level::alpha(case.alpha).unwrap(),
         )
         .unwrap();
         assert!(

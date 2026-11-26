@@ -105,21 +105,18 @@ fn ratio(worst: &mut f64, got: f64, expected: f64, bound: f64) {
 fn crude_rates_and_byar() {
     let mut worst = 0.0;
     for c in reference().crude {
-        let r = crude_rate(c.events, c.time, c.level, c.scale).unwrap();
-        ratio(&mut worst, r.rate.unwrap(), c.rate, 1e-13);
-        ratio(&mut worst, r.upper.unwrap(), c.upper, 1e-12);
+        let level = Level::confidence(c.level).unwrap();
+        let r = crude_rate(c.events, c.time, level, c.scale)
+            .unwrap()
+            .unwrap();
+        ratio(&mut worst, r.estimate, c.rate, 1e-13);
+        ratio(&mut worst, r.upper().unwrap(), c.upper, 1e-12);
         if c.lower > 0.0 {
-            ratio(&mut worst, r.lower.unwrap(), c.lower, 1e-12);
+            ratio(&mut worst, r.lower().unwrap(), c.lower, 1e-12);
         } else {
-            assert_eq!(r.lower, Some(0.0));
+            assert_eq!(r.lower(), Some(0.0));
         }
-        let b = cipoisson(
-            c.events,
-            c.time,
-            Level::confidence(c.level).unwrap(),
-            Method::Byar,
-        )
-        .unwrap();
+        let b = cipoisson(c.events, c.time, level, Method::Byar).unwrap();
         ratio(&mut worst, b.upper.unwrap(), c.byar_upper, 1e-13);
         match c.byar_lower {
             Some(x) if x > 0.0 => ratio(&mut worst, b.lower.unwrap(), x, 1e-13),
@@ -135,17 +132,21 @@ fn crude_rates_and_byar() {
 fn standardised_rates() {
     let mut worst = 0.0;
     for s in reference().standardised {
-        let got = direct_standardised(&s.events, &s.time, &s.weights, s.level).unwrap();
+        let level = Level::confidence(s.level).unwrap();
+        let got = direct_standardised(&s.events, &s.time, &s.weights, level)
+            .unwrap()
+            .unwrap();
         let name = &s.name;
+        let rate = got.rate;
         if s.rate > 0.0 {
-            ratio(&mut worst, got.rate.unwrap(), s.rate, 1e-13);
-            ratio(&mut worst, got.rate.unwrap(), s.popepi_rate, 1e-13);
-            ratio(&mut worst, got.variance.unwrap(), s.variance, 1e-13);
-            ratio(&mut worst, got.lower.unwrap(), s.lower, 1e-12);
+            ratio(&mut worst, rate.estimate, s.rate, 1e-13);
+            ratio(&mut worst, rate.estimate, s.popepi_rate, 1e-13);
+            ratio(&mut worst, got.variance, s.variance, 1e-13);
+            ratio(&mut worst, rate.lower().unwrap(), s.lower, 1e-12);
         } else {
-            assert_eq!((got.rate, got.lower), (Some(0.0), Some(0.0)), "{name}");
+            assert_eq!((rate.estimate, rate.lower()), (0.0, Some(0.0)), "{name}");
         }
-        ratio(&mut worst, got.upper.unwrap(), s.upper, 1e-12);
+        ratio(&mut worst, rate.upper().unwrap(), s.upper, 1e-12);
     }
     eprintln!("standardised: worst deviation {worst:.3} of its bound");
     assert!(worst <= 1.0, "{worst}");
@@ -156,8 +157,11 @@ fn ratios_and_differences() {
     let mut worst = 0.0;
     for p in reference().pairs {
         for (level, rr, rd) in [(0.95, &p.rr95, &p.rd95), (0.99, &p.rr99, &p.rd99)] {
-            let d = rate_difference(p.e1, p.t1, p.e0, p.t0, level).unwrap();
-            for (got, want) in [d.estimate, d.lower, d.upper, d.p_value]
+            let level = Level::confidence(level).unwrap();
+            let d = rate_difference(p.e1, p.t1, p.e0, p.t0, level)
+                .unwrap()
+                .unwrap();
+            for (got, want) in [Some(d.estimate), d.lower(), d.upper(), d.p_value]
                 .into_iter()
                 .zip(rd)
             {
@@ -166,22 +170,25 @@ fn ratios_and_differences() {
             let r = rate_ratio(p.e1, p.t1, p.e0, p.t0, level).unwrap();
             match rr {
                 Some(rr) => {
-                    for (got, want) in [r.estimate, r.lower, r.upper, r.p_value]
+                    let r = r.unwrap();
+                    for (got, want) in [Some(r.estimate), r.lower(), r.upper(), r.p_value]
                         .into_iter()
                         .zip(rr)
                     {
                         ratio(&mut worst, got.unwrap(), *want, 1e-12);
                     }
                 }
-                None => assert_eq!(r.lower, None),
+                None => assert_eq!(r.and_then(|r| r.lower()), None),
             }
         }
         if p.e0 > 0.0 {
-            let r = rate_ratio(p.e1, p.t1, p.e0, p.t0, 0.95).unwrap();
+            let r = rate_ratio(p.e1, p.t1, p.e0, p.t0, Level::default())
+                .unwrap()
+                .unwrap();
             assert!(
                 Tolerance::exact()
                     .rel(1e-13)
-                    .accepts(r.estimate.unwrap(), p.estimate)
+                    .accepts(r.estimate, p.estimate)
             );
         }
         let got = rate_ratio_exact_test(p.e1, p.t1, p.e0, p.t0)
@@ -213,19 +220,22 @@ fn exact_test_grid() {
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_a_fixed_table() {
     let s = &reference().standardised[0];
-    let g = direct_standardised(&s.events, &s.time, &s.weights, 0.95).unwrap();
-    let c = crude_rate(7.0, 12.5, 0.95, 1000.0).unwrap();
-    let r = rate_ratio(5.0, 100.0, 9.0, 120.0, 0.95).unwrap();
+    let level = Level::default();
+    let g = direct_standardised(&s.events, &s.time, &s.weights, level)
+        .unwrap()
+        .unwrap();
+    let c = crude_rate(7.0, 12.5, level, 1000.0).unwrap().unwrap();
+    let r = rate_ratio(5.0, 100.0, 9.0, 120.0, level).unwrap().unwrap();
     let p = rate_ratio_exact_test(5.0, 100.0, 9.0, 120.0).unwrap();
     let hash = epistat_testkit::Fingerprint::new()
-        .option_f64(g.rate)
-        .option_f64(g.variance)
-        .option_f64(g.lower)
-        .option_f64(g.upper)
-        .option_f64(c.lower)
-        .option_f64(c.upper)
-        .option_f64(r.lower)
-        .option_f64(r.upper)
+        .option_f64(Some(g.rate.estimate))
+        .option_f64(Some(g.variance))
+        .option_f64(g.rate.lower())
+        .option_f64(g.rate.upper())
+        .option_f64(c.lower())
+        .option_f64(c.upper())
+        .option_f64(r.lower())
+        .option_f64(r.upper())
         .option_f64(p)
         .finish();
     eprintln!("rates fingerprint {hash:#018x}");

@@ -2157,7 +2157,7 @@ mod tests {
             .flatten()
             .map(|m| m.risk_difference)
             .collect();
-        let s = summarise(&mut rd, 0.05);
+        let s = summarise(&mut rd, Level::alpha(0.05).unwrap());
         assert_eq!(s, r.risk_difference);
         assert!(r.risk_difference_total.is_some());
     }

@@ -23,6 +23,7 @@
 //! there, is checked to `1e-12`. The Breslow-Day statistics are sums written
 //! out in the same order, `1e-12`.
 
+use epistat_core::Level;
 use epistat_epi::PersonTime2;
 use epistat_epi::mantel_haenszel::{rate_ratio_breslow_day, rate_ratio_homogeneity};
 use epistat_epi::rates::{RatioInterval, Strata, standardised_difference, standardised_ratio};
@@ -95,47 +96,52 @@ fn ratio_and_difference_of_standardised_rates() {
             time: &case.time0,
         };
         let name = &case.name;
+        let level = Level::confidence(case.level).unwrap();
         for (interval, limits) in [
             (RatioInterval::F, &case.fay),
             (RatioInterval::ModifiedF, &case.tcz),
         ] {
-            let r =
-                standardised_ratio(group, reference, &case.weights, case.level, interval).unwrap();
-            check(&mut worst, r.estimate.unwrap(), case.ratio, 1e-13);
+            let r = standardised_ratio(group, reference, &case.weights, level, interval)
+                .unwrap()
+                .unwrap();
+            check(&mut worst, r.estimate, case.ratio, 1e-13);
             if limits[0] == 0.0 {
-                assert_eq!(r.lower, Some(0.0), "{name}");
+                assert_eq!(r.lower(), Some(0.0), "{name}");
             } else {
-                check(&mut worst, r.lower.unwrap(), limits[0], 1e-12);
+                check(&mut worst, r.lower().unwrap(), limits[0], 1e-12);
             }
-            check(&mut worst, r.upper.unwrap(), limits[1], 1e-12);
+            check(&mut worst, r.upper().unwrap(), limits[1], 1e-12);
             assert_eq!(r.p_value, None);
         }
         let log = standardised_ratio(
             group,
             reference,
             &case.weights,
-            case.level,
+            level,
             RatioInterval::Log,
         )
+        .unwrap()
         .unwrap();
         match &case.log_limits {
             Some(l) => {
-                for (got, want) in [log.lower, log.upper, log.p_value].into_iter().zip(l) {
+                for (got, want) in [log.lower(), log.upper(), log.p_value].into_iter().zip(l) {
                     check(&mut worst, got.unwrap(), *want, 1e-13);
                 }
             }
-            None => assert_eq!((log.estimate, log.lower), (Some(0.0), None), "{name}"),
+            None => assert_eq!((log.estimate, log.lower()), (0.0, None), "{name}"),
         }
-        let d = standardised_difference(group, reference, &case.weights, case.level).unwrap();
+        let d = standardised_difference(group, reference, &case.weights, level)
+            .unwrap()
+            .unwrap();
         // The difference is a difference of two sums: its error is relative to
         // the rates, not to the difference.
         let scale = case.difference.abs().max(case.difference_limits[1].abs());
         let mut absolute = |got: f64, want: f64, bound: f64| {
             worst = f64::max(worst, (got - want).abs() / (bound * scale));
         };
-        absolute(d.estimate.unwrap(), case.difference, 1e-13);
-        absolute(d.lower.unwrap(), case.difference_limits[0], 1e-13);
-        absolute(d.upper.unwrap(), case.difference_limits[1], 1e-13);
+        absolute(d.estimate, case.difference, 1e-13);
+        absolute(d.lower().unwrap(), case.difference_limits[0], 1e-13);
+        absolute(d.upper().unwrap(), case.difference_limits[1], 1e-13);
         check(
             &mut worst,
             d.p_value.unwrap(),
@@ -207,13 +213,16 @@ fn undefined_comparisons() {
         RatioInterval::ModifiedF,
         RatioInterval::Log,
     ] {
-        let r = standardised_ratio(some, none, &weights, 0.95, interval).unwrap();
-        assert_eq!((r.estimate, r.lower, r.upper), (None, None, None));
-        let r = standardised_ratio(some, missing, &weights, 0.95, interval).unwrap();
-        assert_eq!(r.estimate, None);
+        let level = Level::default();
+        let r = standardised_ratio(some, none, &weights, level, interval).unwrap();
+        assert_eq!(r, None);
+        let r = standardised_ratio(some, missing, &weights, level, interval).unwrap();
+        assert_eq!(r, None);
     }
-    let d = standardised_difference(none, none, &weights, 0.95).unwrap();
-    assert_eq!((d.estimate, d.lower), (Some(0.0), None));
+    let d = standardised_difference(none, none, &weights, Level::default())
+        .unwrap()
+        .unwrap();
+    assert_eq!((d.estimate, d.interval), (0.0, None));
     // A common ratio with every event in one arm has no finite estimate.
     let strata = [
         PersonTime2 {

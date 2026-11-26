@@ -23,6 +23,7 @@ use epistat_epi::mantel_haenszel::{
     breslow_day, cmh_test, odds_ratio, rate_difference, rate_ratio, rate_ratio_test,
     risk_difference, risk_ratio,
 };
+use epistat_core::Level;
 use epistat_epi::{Counts2x2, PersonTime2};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -117,16 +118,21 @@ impl Worst {
     }
 
     fn pooled(&mut self, what: &str, got: &epistat_epi::mantel_haenszel::Pooled, want: &Pooled) {
+        let got = got.estimate;
         self.check(
             &format!("{what} estimate"),
-            got.estimate,
+            got.map(|e| e.estimate),
             want.estimate,
             1e-12,
         );
-        self.check(&format!("{what} se"), got.se, want.se, 1e-12);
-        self.check(&format!("{what} lower"), got.lower, want.lower, 1e-12);
-        self.check(&format!("{what} upper"), got.upper, want.upper, 1e-12);
-        self.check(&format!("{what} p"), got.p_value, want.p, 1e-8);
+        let se = got.and_then(|e| e.se);
+        self.check(&format!("{what} se"), se, want.se, 1e-12);
+        let lower = got.and_then(|e| e.lower());
+        self.check(&format!("{what} lower"), lower, want.lower, 1e-12);
+        let upper = got.and_then(|e| e.upper());
+        self.check(&format!("{what} upper"), upper, want.upper, 1e-12);
+        let p = got.and_then(|e| e.p_value);
+        self.check(&format!("{what} p"), p, want.p, 1e-8);
     }
 }
 
@@ -149,17 +155,17 @@ fn table_estimators_and_tests() {
         let name = &case.name;
         worst.pooled(
             &format!("{name} OR"),
-            &odds_ratio(&tables, 0.95).unwrap(),
+            &odds_ratio(&tables, Level::default()).unwrap(),
             &case.or,
         );
         worst.pooled(
             &format!("{name} RR"),
-            &risk_ratio(&tables, 0.95).unwrap(),
+            &risk_ratio(&tables, Level::default()).unwrap(),
             &case.rr,
         );
         worst.pooled(
             &format!("{name} RD"),
-            &risk_difference(&tables, 0.95).unwrap(),
+            &risk_difference(&tables, Level::default()).unwrap(),
             &case.rd,
         );
 
@@ -177,11 +183,11 @@ fn table_estimators_and_tests() {
             1e-8,
         );
         if let Some(hh) = &case.mantelhaen {
-            let or = odds_ratio(&tables, 0.95).unwrap();
-            if or.estimate.is_some() {
-                worst.check(&format!("{name} mh or"), or.estimate, hh.or, 1e-12);
-                worst.check(&format!("{name} mh lower"), or.lower, hh.lower, 1e-12);
-                worst.check(&format!("{name} mh upper"), or.upper, hh.upper, 1e-12);
+            let or = odds_ratio(&tables, Level::default()).unwrap();
+            if let Some(or) = or.estimate {
+                worst.check(&format!("{name} mh or"), Some(or.estimate), hh.or, 1e-12);
+                worst.check(&format!("{name} mh lower"), or.lower(), hh.lower, 1e-12);
+                worst.check(&format!("{name} mh upper"), or.upper(), hh.upper, 1e-12);
             } else {
                 // R reports an odds ratio of 0 without an interval where the
                 // pooled ratio is undefined here.
@@ -262,12 +268,12 @@ fn rate_estimators_and_tests() {
         let name = &case.name;
         worst.pooled(
             &format!("{name} IRR"),
-            &rate_ratio(&strata, 0.95).unwrap(),
+            &rate_ratio(&strata, Level::default()).unwrap(),
             &case.irr,
         );
         worst.pooled(
             &format!("{name} IRD"),
-            &rate_difference(&strata, 0.95).unwrap(),
+            &rate_difference(&strata, Level::default()).unwrap(),
             &case.ird,
         );
         let plain = rate_ratio_test(&strata, false).unwrap();
@@ -304,17 +310,22 @@ fn rate_estimators_and_tests() {
 fn fingerprint_of_the_bcg_data() {
     let case = reference().tables.remove(0);
     let tables = tables_of(&case);
-    let or = odds_ratio(&tables, 0.95).unwrap();
-    let rr = risk_ratio(&tables, 0.95).unwrap();
-    let rd = risk_difference(&tables, 0.95).unwrap();
+    let or = odds_ratio(&tables, Level::default()).unwrap();
+    let rr = risk_ratio(&tables, Level::default()).unwrap();
+    let rd = risk_difference(&tables, Level::default()).unwrap();
     let bd = breslow_day(&tables, true).unwrap().unwrap();
     let cmh = cmh_test(&tables, true).unwrap().unwrap();
+    let (or, rr, rd) = (
+        or.estimate.unwrap(),
+        rr.estimate.unwrap(),
+        rd.estimate.unwrap(),
+    );
     let hash = epistat_testkit::Fingerprint::new()
-        .option_f64(or.estimate)
+        .option_f64(Some(or.estimate))
         .option_f64(or.se)
-        .option_f64(rr.estimate)
+        .option_f64(Some(rr.estimate))
         .option_f64(rr.se)
-        .option_f64(rd.estimate)
+        .option_f64(Some(rd.estimate))
         .option_f64(rd.se)
         .f64(bd.statistic)
         .f64(cmh.statistic)
