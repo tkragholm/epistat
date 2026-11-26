@@ -779,6 +779,8 @@ dependencies = [
 name = "epistat-register"
 version = "0.1.2"
 dependencies = [
+ "epistat-optim",
+ "epistat-stats",
  "epistat-testkit",
  "serde",
  "serde_json",

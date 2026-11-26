@@ -92,7 +92,8 @@
 //!
 //! # Other implementations
 //!
-//! The tests compare the periods with `AdhereR::compute.treatment.episodes`
+//! The tests compare the dose rules, [`exposed_on`] and both cumulative doses
+//! with base R and the periods with `AdhereR::compute.treatment.episodes`
 //! and with `heaven::medicinMacro` (type `"dynamic"`), and agree exactly where
 //! the rules coincide: whole-day durations with AdhereR, and with heaven a
 //! fixed daily dose (equal minimum, maximum and default), no permitted gap,
@@ -107,10 +108,11 @@
 //!   and can join periods that are separate here, so the comparison uses the
 //!   persons whose admissions start with no supply running.
 //!
-//! # Not covered
+//! # Related methods
 //!
-//! PRE2DUP \[3\], the person-specific model of drug use periods, is not here.
-//! Waiting time distributions \[4\] are not either.
+//! PRE2DUP \[3\], the person-specific model of drug use periods, is in
+//! [`crate::pre2dup`], and the parametric waiting time distribution \[4\],
+//! which gives the duration of a prescription, in [`crate::wtd`].
 //!
 //! # References
 //!

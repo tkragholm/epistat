@@ -37,6 +37,11 @@
 //!   relatedness from the mother and father of each person.
 //! - [`residence`] turns dated emigrations and immigrations into residence
 //!   spells and gives the end of observation.
+//! - [`wtd`] fits the parametric waiting time distribution and gives the
+//!   duration of a prescription as a percentile of the time between
+//!   redemptions.
+//! - [`pre2dup`] estimates drug use periods from each person's own pattern of
+//!   purchases, by the PRE2DUP method.
 //! - [`cpi`] deflates nominal values to the prices of a reference year with an
 //!   annual price index the caller supplies. The Statistics Denmark index is
 //!   available behind the cargo feature `denmark`.
@@ -61,9 +66,11 @@ pub mod intervals;
 pub mod lexis;
 pub mod pedigree;
 pub mod person_time;
+pub mod pre2dup;
 pub mod relations;
 pub mod residence;
 pub mod spans;
+pub mod wtd;
 
 pub use age::{AgeRule, LeapBirthday, age_in_years, birthday_on_age};
 pub use cpi::CpiTable;
