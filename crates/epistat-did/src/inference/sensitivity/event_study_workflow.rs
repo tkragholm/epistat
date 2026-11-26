@@ -15,34 +15,6 @@ use super::super::{
 use super::HonestEventStudyInput;
 use crate::types::InferenceConfig;
 use rayon::prelude::*;
-use std::time::Instant;
-use tracing::debug;
-
-const fn sensitivity_label(sensitivity: HonestSensitivity) -> &'static str {
-    match sensitivity {
-        HonestSensitivity::RelativeMagnitude(_) => "relative_magnitude",
-        HonestSensitivity::Smoothness(_) => "smoothness",
-    }
-}
-
-fn emit_workflow_timing(
-    step: &str,
-    sensitivity: HonestSensitivity,
-    functionals: usize,
-    post_periods: usize,
-    duration_ms: u128,
-) {
-    debug!(
-        target: "did_profile",
-        scope = "honest_workflow",
-        step,
-        sensitivity_kind = sensitivity_label(sensitivity),
-        functionals,
-        post_periods,
-        duration_ms,
-        "honest workflow timing"
-    );
-}
 
 /// All study-facing `HonestDiD` outputs for one event study in one call.
 ///
@@ -135,7 +107,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
     config: &HonestWorkflowConfig,
     counter: &crate::inference::sensitivity::SolverCounter,
 ) -> Result<HonestStudyWorkflowResult, String> {
-    let workflow_started = Instant::now();
     if functionals.is_empty() {
         return Err("workflow requires at least one functional".to_string());
     }
@@ -143,7 +114,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
         .iter()
         .map(|functional| super::post_weights_for_functional(input, functional))
         .collect::<Result<Vec<_>, String>>()?;
-    let prepare_started = Instant::now();
     let prepared_relative_magnitude = match sensitivity {
         HonestSensitivity::RelativeMagnitude(mbar) => {
             Some(super::prepare_relative_magnitude_base_context(input, mbar)?)
@@ -167,15 +137,7 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
         ),
         None => None,
     };
-    emit_workflow_timing(
-        "prepare_relative_magnitude",
-        sensitivity,
-        functionals.len(),
-        input.num_post_periods(),
-        prepare_started.elapsed().as_millis(),
-    );
 
-    let functional_started = Instant::now();
     let functional_assessments = match (
         &prepared_relative_magnitude,
         &prepared_functional_branch_sets,
@@ -224,15 +186,7 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
             })
             .collect::<Result<Vec<_>, String>>()?,
     };
-    emit_workflow_timing(
-        "functional_assessments",
-        sensitivity,
-        functionals.len(),
-        input.num_post_periods(),
-        functional_started.elapsed().as_millis(),
-    );
 
-    let joint_started = Instant::now();
     let joint_path_region =
         super::regions::assess_honest_event_study_joint_path_region_with_optional_prepared_relative_magnitude(
             input,
@@ -243,15 +197,7 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
             config.joint,
             prepared_relative_magnitude.as_ref(), counter,
         )?;
-    emit_workflow_timing(
-        "joint_path_region",
-        sensitivity,
-        functionals.len(),
-        input.num_post_periods(),
-        joint_started.elapsed().as_millis(),
-    );
 
-    let directional_started = Instant::now();
     let directional_region = match config.direction_mode {
         HonestWorkflowDirectionMode::Basis => {
             directional_region_from_joint_path_region(input, &joint_path_region)
@@ -266,14 +212,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
             counter,
         )?,
     };
-    emit_workflow_timing(
-        "directional_region",
-        sensitivity,
-        functionals.len(),
-        input.num_post_periods(),
-        directional_started.elapsed().as_millis(),
-    );
-    let multi_flci_started = Instant::now();
     let multi_flci = build_workflow_multi_function_intervals(
         input,
         &workflow_post_weights,
@@ -285,20 +223,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_workflow_with
         prepared_functional_branch_sets.as_deref(),
         counter,
     )?;
-    emit_workflow_timing(
-        "multi_flci",
-        sensitivity,
-        functionals.len(),
-        input.num_post_periods(),
-        multi_flci_started.elapsed().as_millis(),
-    );
-    emit_workflow_timing(
-        "total",
-        sensitivity,
-        functionals.len(),
-        input.num_post_periods(),
-        workflow_started.elapsed().as_millis(),
-    );
 
     Ok(HonestStudyWorkflowResult {
         functional_assessments,

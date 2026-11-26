@@ -13,33 +13,6 @@ use crate::types::InferenceConfig;
 use crate::util::usize_to_f64;
 use rayon::prelude::*;
 
-use std::time::Instant;
-use tracing::debug;
-
-const fn sensitivity_label(sensitivity: HonestSensitivity) -> &'static str {
-    match sensitivity {
-        HonestSensitivity::RelativeMagnitude(_) => "relative_magnitude",
-        HonestSensitivity::Smoothness(_) => "smoothness",
-    }
-}
-
-fn emit_directional_region_timing(
-    step: &str,
-    sensitivity: HonestSensitivity,
-    directions: usize,
-    duration_ms: u128,
-) {
-    debug!(
-        target: "did_profile",
-        scope = "directional_region",
-        step,
-        sensitivity_kind = sensitivity_label(sensitivity),
-        directions,
-        duration_ms,
-        "directional region timing"
-    );
-}
-
 fn validate_direction(direction: &[f64], num_post: usize) -> Result<(), String> {
     if direction.len() != num_post {
         return Err(format!(
@@ -203,15 +176,8 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
     prepared_relative_magnitude: Option<&super::super::PreparedRelativeMagnitudeBaseContext>,
     counter: &crate::inference::sensitivity::SolverCounter,
 ) -> Result<HonestDirectionalRegion, String> {
-    let calibrate_started = Instant::now();
     let (pointwise_confidence_level, calibrated_max_t_critical_value) =
         calibrate_directional_region(input, directions, inference, joint_config)?;
-    emit_directional_region_timing(
-        "calibrate",
-        sensitivity,
-        directions.len(),
-        calibrate_started.elapsed().as_millis(),
-    );
     assess_honest_event_study_directional_region_with_precalibrated_pointwise(
         input,
         directions,
@@ -240,7 +206,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
     calibrated_max_t_critical_value: f64,
     counter: &crate::inference::sensitivity::SolverCounter,
 ) -> Result<HonestDirectionalRegion, String> {
-    let total_started = Instant::now();
     let pointwise_inference = InferenceConfig::new(pointwise_confidence_level);
     let pointwise_relative_magnitude_config =
         RelativeMagnitudeConfidenceSetConfig::from_inference(pointwise_inference);
@@ -256,7 +221,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
         .iter()
         .map(|direction| basis_vector_index(direction))
         .collect::<Option<Vec<_>>>();
-    let prepare_started = Instant::now();
     let prepared_functional_branch_sets =
         match (prepared_relative_magnitude, &basis_direction_indices) {
             (Some(prepared), None) => Some(
@@ -275,14 +239,7 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
             ),
             _ => None,
         };
-    emit_directional_region_timing(
-        "prepare_functional_branches",
-        sensitivity,
-        directions.len(),
-        prepare_started.elapsed().as_millis(),
-    );
 
-    let scalar_started = Instant::now();
     let points = directions
         .par_iter()
         .enumerate()
@@ -340,18 +297,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_directional_r
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    emit_directional_region_timing(
-        "scalar_evaluations",
-        sensitivity,
-        directions.len(),
-        scalar_started.elapsed().as_millis(),
-    );
-    emit_directional_region_timing(
-        "total_precalibrated",
-        sensitivity,
-        directions.len(),
-        total_started.elapsed().as_millis(),
-    );
 
     Ok(HonestDirectionalRegion {
         confidence_level,

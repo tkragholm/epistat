@@ -1,7 +1,6 @@
 use epistat_linalg::SolveLstsq;
 use epistat_linalg::{Mat, MatRef};
 use epistat_linalg::{weighted_gram as linalg_weighted_gram, weighted_xtz};
-use itertools::izip;
 
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};
 use crate::estimators::common::linalg::{solve_spd_system, solve_spd_system_multi_rhs};
@@ -610,15 +609,15 @@ fn estimate_panel_att_and_influence(
 
     for (
         row_index,
-        (treated, outcome_delta, propensity_score, normalized_weight, outcome_prediction),
-    ) in izip!(
-        prepared.treated_indicator.iter(),
-        prepared.outcome_delta.iter(),
-        propensity_scores.iter(),
-        normalized_weights.iter(),
-        outcome_predictions.iter()
-    )
-    .enumerate()
+        ((((treated, outcome_delta), propensity_score), normalized_weight), outcome_prediction),
+    ) in prepared
+        .treated_indicator
+        .iter()
+        .zip(&prepared.outcome_delta)
+        .zip(propensity_scores)
+        .zip(normalized_weights)
+        .zip(outcome_predictions)
+        .enumerate()
     {
         let residual = outcome_delta - outcome_prediction;
         if *treated < 0.5 && *propensity_score >= PANEL_TRIM_LEVEL {

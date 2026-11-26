@@ -41,13 +41,10 @@ epistat-linalg = { path = "../epistat-linalg", version = "0.4.0" }
 epistat-optim = { path = "../epistat-optim", version = "0.2.0" }
 epistat-rng = { path = "../epistat-rng", version = "0.2.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
-itertools = "0.14"
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
 thiserror = "2.0.18"
-tracing = "0.1.41"
-once_map = "0.4.23"
 
 [dev-dependencies]
 # The unit tests draw their data through rand on an epistat-rng stream.

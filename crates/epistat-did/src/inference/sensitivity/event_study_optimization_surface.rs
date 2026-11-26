@@ -2,8 +2,6 @@ use epistat_optim::nelder_mead::NelderMead;
 use epistat_rng::Stream;
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::time::Instant;
-use tracing::debug;
 
 use super::super::super::linear_algebra::post_covariance_block;
 use super::super::super::{
@@ -15,34 +13,6 @@ use super::directional_region::calibrate_directional_region;
 use crate::types::InferenceConfig;
 
 const DIRECTION_DEDUP_SCALE: f64 = 1e10;
-
-const fn sensitivity_label(sensitivity: HonestSensitivity) -> &'static str {
-    match sensitivity {
-        HonestSensitivity::RelativeMagnitude(_) => "relative_magnitude",
-        HonestSensitivity::Smoothness(_) => "smoothness",
-    }
-}
-
-fn emit_optimization_surface_timing(
-    step: &str,
-    sensitivity: HonestSensitivity,
-    directions: usize,
-    random_directions: usize,
-    iteration: usize,
-    duration_ms: u128,
-) {
-    debug!(
-        target: "did_profile",
-        scope = "optimization_surface",
-        step,
-        sensitivity_kind = sensitivity_label(sensitivity),
-        directions,
-        random_directions,
-        iteration,
-        duration_ms,
-        "optimization surface timing"
-    );
-}
 
 struct OptimizationSurfaceDirections {
     directions: Vec<Vec<f64>>,
@@ -397,7 +367,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
     config: HonestOptimizationSurfaceAdaptiveRunConfig,
     counter: &crate::inference::sensitivity::SolverCounter,
 ) -> Result<HonestDirectionalRegion, String> {
-    let total_started = Instant::now();
     config.adaptive.validate()?;
 
     if config.surface.random_unit_directions == 0 {
@@ -424,20 +393,10 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
     while iterations < config.adaptive.max_iterations {
         let mut cfg = config.surface;
         cfg.random_unit_directions = random_count;
-        let generate_started = Instant::now();
         let OptimizationSurfaceDirections {
             mut directions,
             mut random_direction_count,
         } = generate_optimization_surface_directions(input.num_post_periods(), cfg)?;
-        emit_optimization_surface_timing(
-            "generate_directions",
-            sensitivity,
-            directions.len(),
-            random_direction_count,
-            iterations,
-            generate_started.elapsed().as_millis(),
-        );
-        let refine_started = Instant::now();
         let refined = refine_optimization_surface_directions_with_argmin(
             input,
             &mut directions,
@@ -447,29 +406,12 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
         let mut is_random = vec![false; directions.len().saturating_sub(random_direction_count)];
         is_random.extend(std::iter::repeat_n(true, random_direction_count));
         random_direction_count = deduplicate_unit_directions(&mut directions, &mut is_random);
-        emit_optimization_surface_timing(
-            "refine_directions",
-            sensitivity,
-            directions.len(),
-            random_direction_count,
-            iterations,
-            refine_started.elapsed().as_millis(),
-        );
-        let calibrate_started = Instant::now();
         // Only the pointwise level is read here: it is what the convergence
         // test compares. The region is recomputed at the chosen count once the
         // loop has decided, so this calibration only answers whether to draw
         // more.
         let (current_pointwise, _) =
             calibrate_directional_region(input, &directions, inference, config.joint)?;
-        emit_optimization_surface_timing(
-            "calibrate",
-            sensitivity,
-            directions.len(),
-            random_direction_count,
-            iterations,
-            calibrate_started.elapsed().as_millis(),
-        );
         let converged_this_iter = previous_pointwise.is_some_and(|previous| {
             (current_pointwise - previous).abs() <= config.adaptive.pointwise_tolerance
                 && random_direction_count >= config.adaptive.min_random_for_convergence
@@ -514,7 +456,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
     // costs is one extra evaluation at that chosen count.
     let mut cfg = config.surface;
     cfg.random_unit_directions = chosen_random_draw;
-    let final_started = Instant::now();
     let mut region = assess_honest_event_study_optimization_surface_region_with_config_counted(
         input,
         sensitivity,
@@ -526,14 +467,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
         counter,
     )?;
     let settled_random_count = region.diagnostics.random_direction_count;
-    emit_optimization_surface_timing(
-        "final_directional_assessment",
-        sensitivity,
-        region.points.len(),
-        settled_random_count,
-        iterations + 1,
-        final_started.elapsed().as_millis(),
-    );
     region.diagnostics = HonestDirectionalRegionDiagnostics::adaptive(
         region.points.len(),
         settled_random_count,
@@ -541,14 +474,6 @@ pub(in crate::inference::sensitivity) fn assess_honest_event_study_optimization_
         did_converge,
     )
     .with_solver_counts(counter.counts());
-    emit_optimization_surface_timing(
-        "total",
-        sensitivity,
-        region.points.len(),
-        settled_random_count,
-        iterations + 1,
-        total_started.elapsed().as_millis(),
-    );
     Ok(region)
 }
 

@@ -15,10 +15,9 @@
 mod identified_set_lp_workspace;
 
 use clarabel::algebra::CscMatrix;
-use once_map::OnceMap;
 use rayon::prelude::*;
-use std::time::Instant;
-use tracing::{debug, warn};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 #[cfg(test)]
 use super::super::adaptive_grid::compute_accepted_grid_range_full_grid;
@@ -75,11 +74,16 @@ pub(in crate::inference::sensitivity) struct RelativeMagnitudePreparedInputBranc
     pub(in crate::inference::sensitivity) sd_arp: Vec<f64>,
 }
 
+type LeastFavorableCache = BTreeMap<(u64, usize, u64), Arc<OnceLock<Result<f64, String>>>>;
+
 pub(in crate::inference::sensitivity) struct RelativeMagnitudePreparedFunctionalBranch {
     pub(in crate::inference::sensitivity) a_target_arp: Vec<f64>,
     pub(in crate::inference::sensitivity) x_arp: Vec<Vec<f64>>,
     pub(in crate::inference::sensitivity) w_t: Vec<Vec<f64>>,
-    least_favorable_cv_cache: OnceMap<(u64, usize, u64), Result<f64, String>>,
+    /// Critical values by `(hybrid_kappa bits, draws, seed)`, each computed
+    /// once: the map hands out the cell under its lock and the value is
+    /// computed outside it.
+    least_favorable_cv_cache: Mutex<LeastFavorableCache>,
 }
 
 impl RelativeMagnitudePreparedFunctionalBranch {
@@ -91,9 +95,17 @@ impl RelativeMagnitudePreparedFunctionalBranch {
         seed: u64,
     ) -> Result<f64, String> {
         let cache_key = (normalized_f64_bits(hybrid_kappa), draws, seed);
-        self.least_favorable_cv_cache.insert_cloned(cache_key, |_| {
+        let cell = {
+            let mut cache = self
+                .least_favorable_cv_cache
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(cache.entry(cache_key).or_default())
+        };
+        cell.get_or_init(|| {
             compute_least_favorable_cv_uncached(&self.x_arp, sigma_arp, hybrid_kappa, draws, seed)
         })
+        .clone()
     }
 }
 
@@ -119,76 +131,6 @@ struct RelativeMagnitudeThetaEvaluator<'a> {
     v_b_scratch: Vec<f64>,
     inv_m_scratch: Vec<f64>,
     rho_tmp_scratch: Vec<f64>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ThetaSearchSummary {
-    feasible_branches: usize,
-    branches_with_accepted_points: usize,
-    full_grid_branches: usize,
-    fallback_branches: usize,
-    nearest_anchor_branches: usize,
-    anchor_accepted_branches: usize,
-    unique_evaluations_total: usize,
-    cache_hits_total: usize,
-    max_unique_evaluations: usize,
-    early_full_grid_exit: bool,
-}
-
-impl ThetaSearchSummary {
-    fn record(
-        &mut self,
-        range: Option<AcceptedGridRange>,
-        diagnostics: AdaptiveGridDiagnostics,
-        grid_len: usize,
-    ) {
-        self.feasible_branches = self.feasible_branches.saturating_add(1);
-        if range.is_some() {
-            self.branches_with_accepted_points =
-                self.branches_with_accepted_points.saturating_add(1);
-        }
-        if diagnostics.anchor_accepted {
-            self.anchor_accepted_branches = self.anchor_accepted_branches.saturating_add(1);
-        }
-        if diagnostics.used_nearest_accepted_anchor {
-            self.nearest_anchor_branches = self.nearest_anchor_branches.saturating_add(1);
-        }
-        if diagnostics.used_full_grid_fallback {
-            self.fallback_branches = self.fallback_branches.saturating_add(1);
-        }
-        self.unique_evaluations_total = self
-            .unique_evaluations_total
-            .saturating_add(diagnostics.unique_evaluations);
-        self.cache_hits_total = self.cache_hits_total.saturating_add(diagnostics.cache_hits);
-        self.max_unique_evaluations = self
-            .max_unique_evaluations
-            .max(diagnostics.unique_evaluations);
-        if let Some(accepted) = range
-            && accepted.lower_idx == 0
-            && accepted.upper_idx + 1 == grid_len
-        {
-            self.full_grid_branches = self.full_grid_branches.saturating_add(1);
-        }
-    }
-}
-
-fn log_theta_search_summary(scope: &'static str, grid_len: usize, summary: ThetaSearchSummary) {
-    tracing::trace!(
-        target: "did_methods::theta_search",
-        scope,
-        grid_len,
-        feasible_branches = summary.feasible_branches,
-        branches_with_accepted_points = summary.branches_with_accepted_points,
-        full_grid_branches = summary.full_grid_branches,
-        fallback_branches = summary.fallback_branches,
-        nearest_anchor_branches = summary.nearest_anchor_branches,
-        anchor_accepted_branches = summary.anchor_accepted_branches,
-        unique_evaluations_total = summary.unique_evaluations_total,
-        cache_hits_total = summary.cache_hits_total,
-        max_unique_evaluations = summary.max_unique_evaluations,
-        early_full_grid_exit = summary.early_full_grid_exit,
-        "relative-magnitude theta search summary"
-    );
 }
 
 fn merge_accepted_range(global_range: &mut Option<AcceptedGridRange>, range: AcceptedGridRange) {
@@ -369,7 +311,7 @@ pub(in crate::inference::sensitivity) fn prepare_relative_magnitude_functional_b
                 a_target_arp,
                 x_arp,
                 w_t,
-                least_favorable_cv_cache: OnceMap::new(),
+                least_favorable_cv_cache: Mutex::default(),
             })
         })
         .collect()
@@ -555,7 +497,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
             counter,
         )?;
     let mut global_range: Option<AcceptedGridRange> = None;
-    let mut theta_summary = ThetaSearchSummary::default();
     let prepared_functional_branches = prepared_branches
         .iter()
         .zip(prepared_input_branches.iter())
@@ -573,7 +514,7 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
                 a_target_arp,
                 x_arp,
                 w_t,
-                least_favorable_cv_cache: OnceMap::new(),
+                least_favorable_cv_cache: Mutex::default(),
             };
             let lf_cv = match config.hybrid {
                 RelativeMagnitudeHybrid::LeastFavorable => prepared_functional.least_favorable_cv(
@@ -597,7 +538,7 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
         // licence to skip it.
         let anchor_idx = branch_anchor_idx(&grid, original.estimate, branch_identified.as_ref());
         let (prepared_functional, lf_cv) = prepared_functional;
-        let (range, diagnostics) = compute_relative_magnitude_branch_accepted_range_for_branch(
+        let (range, _diagnostics) = compute_relative_magnitude_branch_accepted_range_for_branch(
             &grid,
             anchor_idx,
             &prepared_input.y_arp_base,
@@ -611,11 +552,8 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
             *lf_cv,
             counter,
         )?;
-        theta_summary.record(range, diagnostics, grid.len());
         if let Some(range) = range {
             if is_full_grid_range(range, grid.len()) {
-                theta_summary.early_full_grid_exit = true;
-                log_theta_search_summary("basis_period", grid.len(), theta_summary);
                 return Ok(HonestConditionalConfidenceSet {
                     lb: grid[0],
                     ub: grid[grid.len() - 1],
@@ -625,20 +563,10 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
         }
     }
     let Some(accepted_range) = global_range else {
-        log_theta_search_summary("basis_period", grid.len(), theta_summary);
-        warn!(
-            grid_lower,
-            grid_upper,
-            grid_points,
-            prepared_branch_count = prepared_branches.len(),
-            branches_with_accepted_points = theta_summary.branches_with_accepted_points,
-            "relative_magnitude_confidence_set_empty_grid"
-        );
         return Err(
             "relative-magnitude conditional confidence set accepted no grid points".to_string(),
         );
     };
-    log_theta_search_summary("basis_period", grid.len(), theta_summary);
     Ok(HonestConditionalConfidenceSet {
         lb: grid[accepted_range.lower_idx],
         ub: grid[accepted_range.upper_idx],
@@ -741,7 +669,6 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
     let alpha = 1.0 - inference.confidence_level;
     let grid = linear_grid(grid_lower, grid_upper, grid_points);
     let mut global_range: Option<AcceptedGridRange> = None;
-    let mut theta_summary = ThetaSearchSummary::default();
     for ((prepared_functional, prepared_input), branch_identified) in prepared_functional_branches
         .iter()
         .zip(prepared_input_branches.iter())
@@ -760,7 +687,7 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
             )?,
             RelativeMagnitudeHybrid::ArpOnly => f64::INFINITY,
         };
-        let (range, diagnostics) = compute_relative_magnitude_branch_accepted_range_for_branch(
+        let (range, _diagnostics) = compute_relative_magnitude_branch_accepted_range_for_branch(
             &grid,
             anchor_idx,
             &prepared_input.y_arp_base,
@@ -774,11 +701,8 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
             lf_cv,
             counter,
         )?;
-        theta_summary.record(range, diagnostics, grid.len());
         if let Some(range) = range {
             if is_full_grid_range(range, grid.len()) {
-                theta_summary.early_full_grid_exit = true;
-                log_theta_search_summary("functional", grid.len(), theta_summary);
                 return Ok(HonestConditionalConfidenceSet {
                     lb: grid[0],
                     ub: grid[grid.len() - 1],
@@ -788,12 +712,10 @@ pub(in crate::inference::sensitivity) fn compute_relative_magnitude_confidence_s
         }
     }
     let Some(accepted_range) = global_range else {
-        log_theta_search_summary("functional", grid.len(), theta_summary);
         return Err(
             "relative-magnitude conditional confidence set accepted no grid points".to_string(),
         );
     };
-    log_theta_search_summary("functional", grid.len(), theta_summary);
     Ok(HonestConditionalConfidenceSet {
         lb: grid[accepted_range.lower_idx],
         ub: grid[accepted_range.upper_idx],
@@ -1145,8 +1067,6 @@ fn relative_magnitude_lp_conditional_test_prepared(
     rho_tmp_scratch: &mut Vec<f64>,
     counter: &crate::inference::sensitivity::SolverCounter,
 ) -> Result<bool, String> {
-    let started = Instant::now();
-    let lp_started = Instant::now();
     if workspace.solve_in_place(y_arp).is_err() {
         // Clarabel returned NumericalError (typically a near-degenerate KKT factorisation
         // for high-variance outcomes such as income in large monetary units).  Including
@@ -1154,13 +1074,11 @@ fn relative_magnitude_lp_conditional_test_prepared(
         // be wider than the true conditional CI.
         return Ok(true);
     }
-    let eta_delta_lp_ms = lp_started.elapsed().as_millis();
     let mod_size = (alpha - hybrid_kappa) / (1.0 - hybrid_kappa);
     if workspace.eta_star() > lf_cv {
         return Ok(true);
     }
     if workspace.lambda().len() == y_arp.len() {
-        let dual_started = Instant::now();
         let accepted = dual_conditional_test(
             y_arp,
             sigma_arp,
@@ -1173,20 +1091,6 @@ fn relative_magnitude_lp_conditional_test_prepared(
             s_t_scratch,
             counter,
         )?;
-        let dual_ms = dual_started.elapsed().as_millis();
-        let total_ms = started.elapsed().as_millis();
-        if total_ms >= 10 {
-            debug!(
-                target: "did_methods::theta_eval",
-                mode = "explicit_lambda",
-                eta_delta_lp_ms,
-                dual_ms,
-                total_ms,
-                rows = y_arp.len(),
-                cols = x_arp.first().map_or(0, Vec::len),
-                "relative-magnitude theta evaluation"
-            );
-        }
         return Ok(accepted);
     }
 
@@ -1224,7 +1128,6 @@ fn relative_magnitude_lp_conditional_test_prepared(
                 k
             ));
         }
-        let recovery_started = Instant::now();
         let gamma_tilde = recover_dual_vertex_from_binding(
             binding_scratch,
             sd_vec,
@@ -1232,8 +1135,6 @@ fn relative_magnitude_lp_conditional_test_prepared(
             y_arp,
             workspace.eta_star(),
         )?;
-        let recovery_ms = recovery_started.elapsed().as_millis();
-        let dual_started = Instant::now();
         let accepted = dual_conditional_test(
             y_arp,
             sigma_arp,
@@ -1246,22 +1147,6 @@ fn relative_magnitude_lp_conditional_test_prepared(
             s_t_scratch,
             counter,
         )?;
-        let dual_ms = dual_started.elapsed().as_millis();
-        let total_ms = started.elapsed().as_millis();
-        if total_ms >= 10 {
-            debug!(
-                target: "did_methods::theta_eval",
-                mode = "recovered_dual",
-                eta_delta_lp_ms,
-                recovery_ms,
-                dual_ms,
-                total_ms,
-                rows = y_arp.len(),
-                cols = k,
-                binding = binding_scratch.len(),
-                "relative-magnitude theta evaluation"
-            );
-        }
         return Ok(accepted);
     }
     let inv_m_flat = inv_m_scratch.as_slice();
@@ -1316,19 +1201,6 @@ fn relative_magnitude_lp_conditional_test_prepared(
     }
     let cval = super::super::linear_algebra::truncated_normal_quantile(1.0 - mod_size, zlo, zup)?;
     let accepted = maxstat > cval.max(0.0);
-    let total_ms = started.elapsed().as_millis();
-    if total_ms >= 10 {
-        debug!(
-                target: "did_methods::theta_eval",
-                mode = "binding_closed_form",
-            eta_delta_lp_ms,
-            total_ms,
-            rows = y_arp.len(),
-            cols = k,
-            binding = binding_scratch.len(),
-            "relative-magnitude theta evaluation"
-        );
-    }
     Ok(accepted)
 }
 

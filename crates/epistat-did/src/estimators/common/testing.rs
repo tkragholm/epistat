@@ -4,7 +4,6 @@
 
 use crate::util::usize_to_f64;
 use epistat_linalg::Mat;
-use tracing::warn;
 
 /// Compute `X' W X` given a precomputed `X' W`.
 #[must_use]
@@ -38,7 +37,6 @@ pub fn stabilize(weights: &[f64]) -> Vec<f64> {
     }
     let mean_weight = weights.iter().sum::<f64>() / usize_to_f64(weights.len());
     if !mean_weight.is_finite() || mean_weight.abs() < f64::EPSILON {
-        warn!("stabilize: mean weight is non-finite or zero; returning unscaled weights");
         return weights.to_vec();
     }
     weights.iter().map(|weight| weight / mean_weight).collect()
@@ -63,12 +61,6 @@ pub fn horvitz_thompson(
         || treated.len() != observation_count
         || propensity_scores.len() != observation_count
     {
-        warn!(
-            "horvitz_thompson: length mismatch or empty inputs (outcome={}, treated={}, propensity_scores={})",
-            outcome.len(),
-            treated.len(),
-            propensity_scores.len()
-        );
         return Err("length mismatch or empty inputs");
     }
 
@@ -80,7 +72,6 @@ pub fn horvitz_thompson(
         let mut propensity_score = propensity_scores[row_index];
         if !outcome_value.is_finite() || !treated_value.is_finite() || !propensity_score.is_finite()
         {
-            warn!("horvitz_thompson: non-finite input at row {row_index}; returning error");
             return Err("non-finite input");
         }
 
