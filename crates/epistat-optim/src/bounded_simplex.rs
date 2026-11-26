@@ -75,8 +75,8 @@
 //! reduced cost has the wrong sign beyond the tolerance below is flipped to its
 //! other bound, which restores dual feasibility when both bounds are finite. A
 //! slack with one infinite bound cannot flip. Its cost is shifted to make the
-//! reduced cost zero, and [`BoundedSimplex::relaxation_bound`] is raised by the
-//! shift times the largest activity the row can have, so that it stays an upper
+//! reduced cost zero, and the bound on the optimum is raised by the shift
+//! times the largest activity the row can have, so that it stays an upper
 //! bound. A structural column in that state is [`BoundedLpError::DualInfeasible`].
 //! The shifts are of the size of the tolerance.
 //!
@@ -236,7 +236,7 @@ enum Status {
 /// A bound on the program from the duals of a basis, see
 /// [`BoundedSimplex::dual_bound`].
 #[derive(Debug, Clone)]
-pub struct DualBound {
+pub(crate) struct DualBound {
     /// An upper bound on `c'x`, with the costs as given, over every point
     /// within the current bounds, rounding error included.
     pub value: f64,
@@ -252,7 +252,7 @@ pub struct DualBound {
 
 /// A row of the simplex tableau, see [`BoundedSimplex::tableau_row`].
 #[derive(Debug, Clone)]
-pub struct TableauRow {
+pub(crate) struct TableauRow {
     /// The basic variable of the row: a structural column below `n`, the slack
     /// of row `i` as `n + i`.
     pub variable: usize,
@@ -312,7 +312,7 @@ pub struct BoundedSimplex {
     /// max(|l_j|, |u_j|)`, infinite when a column with a nonzero entry has an
     /// infinite bound.
     row_extent: Vec<f64>,
-    /// Added to [`BoundedSimplex::relaxation_bound`] for the costs of slacks
+    /// Added to `relaxation_bound` for the costs of slacks
     /// that were shifted, see [`BoundedSimplex::solve`].
     bound_margin: f64,
     lo: Vec<f64>,
@@ -654,7 +654,7 @@ impl BoundedSimplex {
 
     /// The structural columns that are basic, with their values, in basis
     /// order. At most `m`.
-    pub fn basic_columns(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
+    pub(crate) fn basic_columns(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
         self.basis
             .iter()
             .zip(&self.xb)
@@ -676,8 +676,8 @@ impl BoundedSimplex {
     /// the optimum of the program with the costs as given and exceeds it by at
     /// most [`Self::perturbation_total`], so it is an upper bound on that
     /// optimum.
-    #[must_use]
-    pub fn relaxation_bound(&self) -> f64 {
+    #[cfg(test)]
+    fn relaxation_bound(&self) -> f64 {
         let x = self.values();
         -x.iter().zip(&self.q).map(|(v, q)| v * q).sum::<f64>() + self.bound_margin
     }
@@ -685,7 +685,7 @@ impl BoundedSimplex {
     /// The largest amount the perturbation can add to the objective,
     /// `Σ ε_j max(|l_j|, |u_j|)` over the perturbed columns.
     #[must_use]
-    pub fn perturbation_total(&self) -> f64 {
+    pub(crate) fn perturbation_total(&self) -> f64 {
         (0..self.n)
             .map(|j| {
                 self.eps[j] * finite_or(self.lo[j].abs(), 0.0).max(finite_or(self.hi[j].abs(), 0.0))
@@ -712,7 +712,7 @@ impl BoundedSimplex {
     /// for the perturbed costs. [`Self::dual_bound`] gives a bound with the costs
     /// as given that does not depend on the perturbation. Call it before the
     /// first solve.
-    pub fn perturb_costs(&mut self) {
+    pub(crate) fn perturb_costs(&mut self) {
         let n = self.n;
         let c_max = self.cost.iter().fold(0.0_f64, |a, c| a.max(c.abs()));
         let eps_max = PERTURBATION * c_max;
@@ -740,38 +740,13 @@ impl BoundedSimplex {
     /// effect. Solving again from that basis with a small fraction of the
     /// perturbation takes few pivots and gives a bound that is that fraction as
     /// far from the optimum.
-    pub fn scale_perturbation(&mut self, factor: f64) {
+    pub(crate) fn scale_perturbation(&mut self, factor: f64) {
         for j in 0..self.n {
             if self.eps[j] != 0.0 {
                 self.eps[j] *= factor;
                 self.q[j] = -(self.cost[j] + self.eps[j]);
             }
         }
-    }
-
-    /// The reduced cost of each structural column at the current basis, in the
-    /// minimisation form with the perturbed costs: 0 for a basic column, and
-    /// otherwise the amount by which the objective changes per unit the column
-    /// moves away from its bound. Meaningful after a successful solve.
-    #[must_use]
-    pub fn reduced_costs(&self) -> Vec<f64> {
-        let y = self.duals();
-        let m = self.m;
-        chunked(self.n, |start, end| {
-            (start..end)
-                .map(|j| {
-                    if self.status[j] == Status::Basic {
-                        return 0.0;
-                    }
-                    let column = &self.a[j * m..(j + 1) * m];
-                    let mut ay = 0.0;
-                    for i in 0..m {
-                        ay += column[i] * y[i];
-                    }
-                    self.q[j] - ay
-                })
-                .collect()
-        })
     }
 
     /// The bound of non-basic structural column `j`: its value when it sits at
@@ -793,7 +768,7 @@ impl BoundedSimplex {
     /// structural column and `-e_i` for the slack of row `i`. See
     /// [`TableauRow`].
     #[must_use]
-    pub fn tableau_row(&self, position: usize) -> TableauRow {
+    pub(crate) fn tableau_row(&self, position: usize) -> TableauRow {
         let (m, n) = (self.m, self.n);
         let rho = &self.binv[position * m..(position + 1) * m];
         let columns = chunked(n, |start, end| {
@@ -865,7 +840,7 @@ impl BoundedSimplex {
     /// `k` the length of the longest chain of additions (the `m + 2` terms of
     /// one reduced cost, a chunk of 4096 columns, and the chunk sums).
     #[must_use]
-    pub fn dual_bound(&self) -> DualBound {
+    pub(crate) fn dual_bound(&self) -> DualBound {
         let (m, n) = (self.m, self.n);
         let mut y = self.duals();
         for (i, yi) in y.iter_mut().enumerate() {
@@ -943,22 +918,6 @@ impl BoundedSimplex {
         }
     }
 
-    /// The activity `A x` of each row at the current point.
-    #[must_use]
-    pub fn row_activity(&self) -> Vec<f64> {
-        let x = self.values();
-        let mut out = vec![0.0; self.m];
-        for (j, &xj) in x.iter().enumerate() {
-            if xj != 0.0 {
-                let column = &self.a[j * self.m..(j + 1) * self.m];
-                for (o, c) in out.iter_mut().zip(column) {
-                    *o += c * xj;
-                }
-            }
-        }
-        out
-    }
-
     /// Column `j` of the matrix, `m` entries.
     #[must_use]
     pub fn column(&self, j: usize) -> &[f64] {
@@ -968,7 +927,7 @@ impl BoundedSimplex {
     /// The scale `1e-9`-tolerance of row `i` is built on, see the
     /// [module](self) documentation.
     #[must_use]
-    pub fn row_tolerance(&self, i: usize) -> f64 {
+    pub(crate) fn row_tolerance(&self, i: usize) -> f64 {
         self.tol[self.n + i]
     }
 
@@ -1398,7 +1357,7 @@ impl BoundedSimplex {
     /// As [`Self::solve`], with [`BoundedLpError::IterationLimit`] after `limit`
     /// pivots. The basis is then dual feasible but not primal feasible, and
     /// [`Self::dual_bound`] is still a valid bound.
-    pub fn solve_within(
+    pub(crate) fn solve_within(
         &mut self,
         deadline: Option<Instant>,
         limit: usize,
