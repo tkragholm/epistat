@@ -130,7 +130,8 @@ use super::optimal::{
 };
 use super::records::MatchingRecord;
 use crate::types::MatchOutcome;
-use epistat_optim::min_cost_flow::{Basis, FlowError, FlowSolution, MinCostFlow};
+use epistat_optim::Error as OptimError;
+use epistat_optim::min_cost_flow::{Basis, FlowSolution, MinCostFlow};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1550,7 +1551,7 @@ impl Network<'_> {
                 .iter()
                 .map(|p| (p.clamp(-1e18, 1e18) as i64).clamp(-limit, limit))
                 .collect();
-            let solved: Vec<Result<FlowSolution, FlowError>> = blocks
+            let solved: Vec<Result<FlowSolution, OptimError>> = blocks
                 .par_iter()
                 .zip(bases.par_iter())
                 .map(|(block, basis)| {
@@ -1565,8 +1566,8 @@ impl Network<'_> {
             for result in solved {
                 match result {
                     Ok(solution) => solutions.push(solution),
-                    Err(FlowError::Infeasible) => return Ok(None),
-                    Err(FlowError::Overflow | FlowError::InvalidInput) => {
+                    Err(OptimError::Infeasible) => return Ok(None),
+                    Err(_) => {
                         return Err(OptimalError::TooLarge { stratum: 0 });
                     }
                 }
@@ -1903,7 +1904,7 @@ impl Network<'_> {
                         selected.insert(pair.k);
                     }
                 }
-                let solved: Vec<Result<Block, FlowError>> = touched
+                let solved: Vec<Result<Block, OptimError>> = touched
                     .par_iter()
                     .map(|(b, more)| {
                         let mut block = coupled.blocks[*b].with(more, leaf_of);
@@ -2505,7 +2506,8 @@ mod tests {
             OptimalError, OptimalRequest, StrataEdges, pair_outcome, strata_edges,
         };
         use crate::matching::records::MatchingRecord;
-        use epistat_optim::min_cost_flow::{Basis, FlowError, MinCostFlow};
+        use epistat_optim::Error as OptimError;
+        use epistat_optim::min_cost_flow::{Basis, MinCostFlow};
         use rayon::prelude::*;
         use std::collections::BTreeMap;
 
@@ -2945,7 +2947,7 @@ mod tests {
                     };
                     let solution = match solved {
                         Ok(solution) => solution,
-                        Err(FlowError::Infeasible) if !everything => {
+                        Err(OptimError::Infeasible) if !everything => {
                             // Too few pairs for the anchors to get their candidates.
                             per = per.saturating_mul(4);
                             let mut more = self.nearest(pairs, &costs, runs, per);
@@ -2958,7 +2960,7 @@ mod tests {
                             basis = None;
                             continue;
                         }
-                        Err(FlowError::Infeasible) => {
+                        Err(OptimError::Infeasible) => {
                             return Err(OptimalError::Infeasible {
                                 stratum: 0,
                                 message: format!(
@@ -2968,7 +2970,7 @@ mod tests {
                                 ),
                             });
                         }
-                        Err(FlowError::Overflow | FlowError::InvalidInput) => {
+                        Err(_) => {
                             return Err(OptimalError::TooLarge { stratum: 0 });
                         }
                     };

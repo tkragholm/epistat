@@ -35,7 +35,7 @@
 //! of the artificials, with cost 0 on the original columns and -1 on the
 //! artificial ones. If the optimum leaves artificials with a total above `1e-8`
 //! times the largest `|g_i|`,
-//! the problem is [`LpError::Infeasible`]. Otherwise the basis is feasible for
+//! the problem is [`Error::Infeasible`]. Otherwise the basis is feasible for
 //! every `c`. [`DenseSimplex::prepare`] runs phase one alone, so a solver can be
 //! cloned after it and each clone solve for its own `c`.
 //!
@@ -49,7 +49,7 @@
 //!    within a step tolerance of `1e-12` times the largest `|g_i|` over the largest
 //!    `|A_ij|` of each other are ties, and the row whose basic column has the
 //!    lowest index wins. If no row has `α_i > 1e-10`, the problem is
-//!    [`LpError::Unbounded`]. A basic artificial in phase two sits at zero, and it
+//!    [`Error::Unbounded`]. A basic artificial in phase two sits at zero, and it
 //!    leaves at step 0 as soon as the entering column has `|α_i| > 1e-10` in its
 //!    row, whichever way the pivot would move it, so it cannot become positive.
 //! 3. Update. The basic values and `B^{-1}` are updated by the elementary row
@@ -60,7 +60,7 @@
 //!
 //! `B^{-1}` is rebuilt from the basis by Gauss-Jordan elimination with partial
 //! pivoting after every 40 pivots, and `x_B` and `y` with it. A pivot below
-//! `1e-13` in that elimination is [`LpError::Singular`].
+//! `1e-13` in that elimination is [`Error::Singular`].
 //!
 //! # Degeneracy
 //!
@@ -72,7 +72,7 @@
 //! resets the count, but not the switch.
 //!
 //! Each phase is limited to `100 (m + n) + 1000` pivots, after which the solve
-//! fails with [`LpError::IterationLimit`].
+//! fails with [`Error::IterationLimit`].
 //!
 //! # Warm starts
 //!
@@ -109,7 +109,7 @@
 //!    1977;2(2):103-7.
 //! 3. Chvátal V. Linear Programming. New York: W. H. Freeman; 1983.
 
-use std::fmt;
+use crate::Error;
 
 /// Relative tolerances. Each is multiplied by the size of the quantity it
 /// judges: the largest cost for a reduced cost, the largest right-hand side
@@ -125,31 +125,9 @@ const REFACTOR_EVERY: usize = 40;
 /// which cannot cycle.
 const BLAND_AFTER_DEGENERATE: usize = 25;
 
-/// Why a solve did not reach an optimum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LpError {
-    /// No `λ ≥ 0` satisfies `A λ = g`.
-    Infeasible,
-    /// The objective increases without bound.
-    Unbounded,
-    /// The pivot budget ran out.
-    IterationLimit,
-    /// The basis could not be factorised.
-    Singular,
-}
-
-impl fmt::Display for LpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Infeasible => "Infeasible",
-            Self::Unbounded => "Unbounded",
-            Self::IterationLimit => "IterationLimit",
-            Self::Singular => "Singular",
-        })
-    }
-}
-
-impl std::error::Error for LpError {}
+/// The error of [`DenseSimplex::solve`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type LpError = Error;
 
 #[derive(Clone)]
 struct RememberedBasis {
@@ -355,9 +333,10 @@ impl DenseSimplex {
     /// one.
     ///
     /// # Errors
-    /// See [`LpError`]. After an error the basis is still primal feasible
+    /// [`Error::Infeasible`], [`Error::Unbounded`], [`Error::IterationLimit`]
+    /// or [`Error::Singular`]. After an error the basis is still primal feasible
     /// (except after `Singular`), so a later call can start from it.
-    pub fn solve(&mut self) -> Result<(), LpError> {
+    pub fn solve(&mut self) -> Result<(), Error> {
         self.prepare()?;
         if !self.memory.is_empty() {
             self.start_from_best_remembered();
@@ -492,7 +471,7 @@ impl DenseSimplex {
         }
     }
 
-    fn remember_current(&mut self) -> Result<(), LpError> {
+    fn remember_current(&mut self) -> Result<(), Error> {
         self.key_scratch.copy_from_slice(&self.basis);
         self.key_scratch.sort_unstable();
         if self
@@ -530,7 +509,7 @@ impl DenseSimplex {
     ///
     /// # Errors
     /// `Infeasible` when no `λ ≥ 0` satisfies `A λ = g`.
-    pub fn prepare(&mut self) -> Result<(), LpError> {
+    pub fn prepare(&mut self) -> Result<(), Error> {
         if self.has_feasible_basis {
             return Ok(());
         }
@@ -544,7 +523,7 @@ impl DenseSimplex {
             .map(|(_, x)| *x)
             .sum();
         if infeasibility > TOL_PHASE_ONE * self.g_scale {
-            return Err(LpError::Infeasible);
+            return Err(Error::Infeasible);
         }
         self.has_feasible_basis = true;
         Ok(())
@@ -603,7 +582,7 @@ impl DenseSimplex {
         &self.a[j * self.m..(j + 1) * self.m]
     }
 
-    fn iterate(&mut self, phase: Phase) -> Result<(), LpError> {
+    fn iterate(&mut self, phase: Phase) -> Result<(), Error> {
         let m = self.m;
         let n = self.n;
         let limit = 100 * (m + n) + 1_000;
@@ -678,7 +657,7 @@ impl DenseSimplex {
                 }
             }
             let Some(r) = leaving else {
-                return Err(LpError::Unbounded);
+                return Err(Error::Unbounded);
             };
             if theta <= tol_step {
                 degenerate_streak += 1;
@@ -697,7 +676,7 @@ impl DenseSimplex {
                 duals_stale = true;
             }
         }
-        Err(LpError::IterationLimit)
+        Err(Error::IterationLimit)
     }
 
     fn pivot(&mut self, r: usize, q: usize, theta: f64) {
@@ -742,7 +721,7 @@ impl DenseSimplex {
 
     /// Rebuild `B^{-1}` from the basis by Gauss-Jordan elimination with partial
     /// pivoting, and `x_B = B^{-1} g` with it.
-    fn refactor(&mut self) -> Result<(), LpError> {
+    fn refactor(&mut self) -> Result<(), Error> {
         let m = self.m;
         let mut b = vec![0.0; m * m];
         for (position, &j) in self.basis.iter().enumerate() {
@@ -770,7 +749,7 @@ impl DenseSimplex {
                 }
             }
             if pivot_abs < 1e-13 {
-                return Err(LpError::Singular);
+                return Err(Error::Singular);
             }
             if pivot_row != k {
                 for c in 0..m {
@@ -833,7 +812,8 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DenseSimplex, LpError};
+    use super::DenseSimplex;
+    use crate::Error;
 
     use epistat_testkit::SplitMix64 as Rng;
 
@@ -1044,7 +1024,7 @@ mod tests {
         let columns = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
         let mut lp = DenseSimplex::new(&columns, &[-1.0, 1.0]);
         lp.set_cost(&[1.0, 1.0, 1.0]);
-        assert_eq!(lp.solve(), Err(LpError::Infeasible));
+        assert_eq!(lp.solve(), Err(Error::Infeasible));
     }
 
     #[test]
@@ -1053,13 +1033,13 @@ mod tests {
         let columns = vec![vec![1.0], vec![-1.0]];
         let mut lp = DenseSimplex::new(&columns, &[1.0]);
         lp.set_cost(&[1.0, 1.0]);
-        assert_eq!(lp.solve(), Err(LpError::Unbounded));
+        assert_eq!(lp.solve(), Err(Error::Unbounded));
     }
 
     #[test]
     fn error_displays_and_is_an_error() {
-        let error: Box<dyn std::error::Error> = Box::new(LpError::Infeasible);
-        assert_eq!(error.to_string(), "Infeasible");
+        let error: Box<dyn std::error::Error> = Box::new(Error::Infeasible);
+        assert_eq!(error.to_string(), "the problem has no feasible point");
     }
 
     #[test]
@@ -1109,9 +1089,9 @@ mod tests {
                         solved = true;
                         assert_optimal(&mut lp, &columns, &g, &c);
                     }
-                    Err(LpError::Unbounded) => {}
+                    Err(Error::Unbounded) => {}
                     // Feasibility does not depend on the costs.
-                    Err(LpError::Infeasible) => break,
+                    Err(Error::Infeasible) => break,
                     Err(error) => panic!("unexpected {error}"),
                 }
             }

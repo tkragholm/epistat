@@ -12,7 +12,7 @@
 //! `b_v` (a node with `b_v > 0` supplies flow, one with `b_v < 0` demands it),
 //! `sum_v b_v = 0`. Because the data are integers, the solution is integer and
 //! the optimum is exact. A problem with no feasible flow is
-//! [`FlowError::Infeasible`].
+//! [`Error::Infeasible`].
 //!
 //! # Algorithm
 //!
@@ -103,7 +103,7 @@
 //!
 //! Costs and potentials are `i64`. The solver refuses input for which
 //! `4 (n + 2)(max |c_a| + 1)` or the sum of the supplies could overflow, with
-//! [`FlowError::Overflow`]. A capacity may be any non-negative `i64`, including
+//! [`Error::Overflow`]. A capacity may be any non-negative `i64`, including
 //! `i64::MAX`, and a capacity of 0 gives an arc that carries no flow. There are at most `u32::MAX - 1` nodes and `u32::MAX` arcs.
 //!
 //! # References
@@ -121,37 +121,18 @@
     reason = "node and arc counts are checked against u32::MAX before any index is narrowed"
 )]
 
-use std::fmt;
+use epistat_core::InputError;
+
+use crate::Error;
 
 const NONE: u32 = u32::MAX;
 const LOWER: i8 = 1;
 const UPPER: i8 = -1;
 const TREE: i8 = 0;
 
-/// Why a flow could not be found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlowError {
-    /// No flow meets the supplies within the capacities, or the supplies do
-    /// not sum to zero.
-    Infeasible,
-    /// A cost, capacity or supply is too large for 64-bit arithmetic, or
-    /// there are more nodes or arcs than the solver indexes.
-    Overflow,
-    /// An arc names a node that does not exist, or has a negative capacity.
-    InvalidInput,
-}
-
-impl fmt::Display for FlowError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Infeasible => f.write_str("no flow satisfies the supplies within the capacities"),
-            Self::Overflow => f.write_str("a cost, capacity or supply is too large to solve"),
-            Self::InvalidInput => f.write_str("an arc has an unknown node or a negative capacity"),
-        }
-    }
-}
-
-impl std::error::Error for FlowError {}
+/// The error of [`MinCostFlow::solve`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type FlowError = Error;
 
 /// An optimal flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,11 +249,11 @@ impl MinCostFlow {
     ///
     /// # Errors
     ///
-    /// [`FlowError::Infeasible`] when no flow meets the supplies,
-    /// [`FlowError::Overflow`] when the data are too large, and
-    /// [`FlowError::InvalidInput`] for an arc with an unknown node or a
+    /// [`Error::Infeasible`] when no flow meets the supplies,
+    /// [`Error::Overflow`] when the data are too large, and
+    /// [`Error::Input`] for an arc with an unknown node or a
     /// negative capacity.
-    pub fn solve(&self) -> Result<FlowSolution, FlowError> {
+    pub fn solve(&self) -> Result<FlowSolution, Error> {
         Solver::new(self)?.run()
     }
 
@@ -289,7 +270,7 @@ impl MinCostFlow {
     /// # Errors
     ///
     /// As [`MinCostFlow::solve`].
-    pub fn solve_from(&self, basis: &Basis) -> Result<FlowSolution, FlowError> {
+    pub fn solve_from(&self, basis: &Basis) -> Result<FlowSolution, Error> {
         let mut solver = Solver::new(self)?;
         solver.adopt(self, basis);
         solver.run()
@@ -305,7 +286,7 @@ impl MinCostFlow {
     /// # Errors
     ///
     /// As [`MinCostFlow::solve`].
-    pub fn solve_from_flow(&self, flow: &[i64]) -> Result<FlowSolution, FlowError> {
+    pub fn solve_from_flow(&self, flow: &[i64]) -> Result<FlowSolution, Error> {
         let mut solver = Solver::new(self)?;
         solver.adopt_flow(self, flow);
         solver.run()
@@ -357,17 +338,25 @@ struct Solver {
 }
 
 impl Solver {
-    fn new(problem: &MinCostFlow) -> Result<Self, FlowError> {
+    fn new(problem: &MinCostFlow) -> Result<Self, Error> {
         let n = problem.supply.len();
         let m = problem.tail.len();
         if n >= NONE as usize || m >= NONE as usize - n {
-            return Err(FlowError::Overflow);
+            return Err(Error::Overflow);
         }
-        if problem.cap.iter().any(|cap| *cap < 0) {
-            return Err(FlowError::InvalidInput);
+        if let Some(row) = problem.cap.iter().position(|cap| *cap < 0) {
+            return Err(Error::Input(InputError::Domain {
+                what: "capacity",
+                value: problem.cap[row] as f64,
+                domain: "[0, inf)",
+            }));
         }
-        if problem.tail.contains(&NONE) {
-            return Err(FlowError::InvalidInput);
+        if let Some(row) = problem.tail.iter().position(|tail| *tail == NONE) {
+            return Err(Error::Input(InputError::Domain {
+                what: "arc",
+                value: row as f64,
+                domain: "arcs between nodes of the problem",
+            }));
         }
         let mut total: i128 = 0;
         let mut positive: i128 = 0;
@@ -376,7 +365,7 @@ impl Solver {
             positive += i128::from((*supply).max(0));
         }
         if total != 0 {
-            return Err(FlowError::Infeasible);
+            return Err(Error::Infeasible);
         }
         let max_cost = problem
             .cost
@@ -386,11 +375,10 @@ impl Solver {
             .unwrap_or(0);
         let limit = i128::from(i64::MAX / 4);
         if positive > limit || 4 * (n as i128 + 2) * (max_cost + 1) > limit {
-            return Err(FlowError::Overflow);
+            return Err(Error::Overflow);
         }
         let inf = i64::MAX / 4;
-        let big_m =
-            i64::try_from((n as i128 + 1) * (max_cost + 1)).map_err(|_| FlowError::Overflow)?;
+        let big_m = i64::try_from((n as i128 + 1) * (max_cost + 1)).map_err(|_| Error::Overflow)?;
         let root = n as u32;
 
         let total_arcs = m + n;
@@ -968,12 +956,12 @@ impl Solver {
         }
     }
 
-    fn run(mut self) -> Result<FlowSolution, FlowError> {
+    fn run(mut self) -> Result<FlowSolution, Error> {
         while let Some(entering) = self.find_entering() {
             self.pivot(entering);
         }
         if self.flow[self.m..].iter().any(|flow| *flow != 0) {
-            return Err(FlowError::Infeasible);
+            return Err(Error::Infeasible);
         }
         let mut cost: i128 = 0;
         for arc in 0..self.m {
@@ -1131,7 +1119,7 @@ mod tests {
         problem.set_supply(0, 3);
         problem.set_supply(1, -3);
         problem.add_arc(0, 1, 2, 1);
-        assert_eq!(problem.solve(), Err(FlowError::Infeasible));
+        assert_eq!(problem.solve(), Err(Error::Infeasible));
     }
 
     #[test]
@@ -1140,17 +1128,17 @@ mod tests {
         problem.set_supply(0, 3);
         problem.set_supply(1, -2);
         problem.add_arc(0, 1, 5, 1);
-        assert_eq!(problem.solve(), Err(FlowError::Infeasible));
+        assert_eq!(problem.solve(), Err(Error::Infeasible));
     }
 
     #[test]
     fn invalid_arcs_are_reported() {
         let mut problem = MinCostFlow::new(2);
         problem.add_arc(0, 2, 1, 1);
-        assert_eq!(problem.solve(), Err(FlowError::InvalidInput));
+        assert!(matches!(problem.solve(), Err(Error::Input(_))));
         let mut problem = MinCostFlow::new(2);
         problem.add_arc(0, 1, -1, 1);
-        assert_eq!(problem.solve(), Err(FlowError::InvalidInput));
+        assert!(matches!(problem.solve(), Err(Error::Input(_))));
     }
 
     #[test]
@@ -1159,7 +1147,7 @@ mod tests {
         problem.set_supply(0, 1);
         problem.set_supply(1, -1);
         problem.add_arc(0, 1, 1, i64::MAX / 2);
-        assert_eq!(problem.solve(), Err(FlowError::Overflow));
+        assert_eq!(problem.solve(), Err(Error::Overflow));
     }
 
     #[test]
@@ -1301,7 +1289,7 @@ mod tests {
                     assert_eq!(Some(solution.cost), expected, "round {round}");
                     assert_certificate(&problem, &solution);
                 }
-                Err(FlowError::Infeasible) => assert_eq!(expected, None, "round {round}"),
+                Err(Error::Infeasible) => assert_eq!(expected, None, "round {round}"),
                 Err(other) => panic!("round {round}: {other}"),
             }
         }
@@ -1484,7 +1472,7 @@ mod tests {
                     );
                     assert_certificate(&sink_problem, &solution);
                 }
-                Err(FlowError::Infeasible) => assert_eq!(expected, None, "round {round}"),
+                Err(Error::Infeasible) => assert_eq!(expected, None, "round {round}"),
                 Err(other) => panic!("round {round}: {other}"),
             }
         }

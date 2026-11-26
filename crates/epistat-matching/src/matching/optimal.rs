@@ -89,7 +89,8 @@ use crate::types::{
     ControlIdx, CriteriaValidationError, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair,
     MatchingCriteria,
 };
-use epistat_optim::min_cost_flow::{FlowError, MinCostFlow};
+use epistat_optim::Error as OptimError;
+use epistat_optim::min_cost_flow::MinCostFlow;
 use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -541,10 +542,10 @@ fn full_match_stratum(
         flow.add_arc(nt + col, sink, 1, 0);
     }
     let solution = flow.solve().map_err(|error| match error {
-        FlowError::Infeasible => StratumError::Infeasible(format!(
+        OptimError::Infeasible => StratumError::Infeasible(format!(
             "{nt} anchors with an admissible candidate cannot be matched to {to_match} of {nc} candidates within the limits and the admissible pairs"
         )),
-        FlowError::Overflow | FlowError::InvalidInput => StratumError::TooLarge,
+        _ => StratumError::TooLarge,
     })?;
 
     // Matched pairs, in the stratum's own numbering and orientation.

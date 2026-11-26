@@ -38,7 +38,7 @@
 //!    Cliffs: Prentice-Hall; 1973. Chapter 5.
 //! 2. R Core Team. `optimize`, src/library/stats/src/optimize.c, R 4.6.2.
 
-use std::fmt;
+use crate::error::{Error, domain};
 
 /// The result of [`minimize`].
 #[non_exhaustive]
@@ -59,33 +59,13 @@ pub struct Minimum {
     pub converged: bool,
 }
 
-/// Why [`minimize`] refused its input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrentError {
-    /// The ends are not finite, or `lower` is not below `upper`.
-    Interval,
-    /// The tolerance is not finite and positive.
-    Tolerance,
-}
-
-impl fmt::Display for BrentError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Interval => write!(f, "the interval must have finite ends, lower below upper"),
-            Self::Tolerance => write!(f, "the tolerance must be finite and positive"),
-        }
-    }
-}
-
-impl std::error::Error for BrentError {}
-
 /// A local minimum of `f` on `[lower, upper]` to within about `tol`, by
 /// Brent's method as R's `optimize(f, c(lower, upper), tol = tol)`.
 ///
 /// # Errors
 ///
-/// [`BrentError::Interval`] when an end is not finite or `lower >= upper`,
-/// and [`BrentError::Tolerance`] when `tol` is not finite and positive.
+/// [`Error::Input`] when an end is not finite, `lower >= upper`, or `tol` is
+/// not finite and positive.
 #[expect(
     clippy::float_cmp,
     reason = "Brent's algorithm tests whether a trial point is exactly one of the stored points"
@@ -103,12 +83,15 @@ pub fn minimize(
     lower: f64,
     upper: f64,
     tol: f64,
-) -> Result<Minimum, BrentError> {
-    if !(lower.is_finite() && upper.is_finite() && lower < upper) {
-        return Err(BrentError::Interval);
+) -> Result<Minimum, Error> {
+    if !lower.is_finite() {
+        return Err(domain("lower", lower, "finite"));
+    }
+    if !(upper.is_finite() && upper > lower) {
+        return Err(domain("upper", upper, "finite and above lower"));
     }
     if !(tol.is_finite() && tol > 0.0) {
-        return Err(BrentError::Tolerance);
+        return Err(domain("tol", tol, "(0, inf)"));
     }
     let mut evaluations = 0_usize;
     let mut eval = |x: f64| {
@@ -210,15 +193,14 @@ pub fn minimize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     #[test]
     fn refuses_bad_input() {
-        assert_eq!(minimize(|x| x, 1.0, 1.0, 1e-5), Err(BrentError::Interval));
-        assert_eq!(
-            minimize(|x| x, f64::NAN, 1.0, 1e-5),
-            Err(BrentError::Interval)
-        );
-        assert_eq!(minimize(|x| x, 0.0, 1.0, 0.0), Err(BrentError::Tolerance));
+        let input = |r: Result<Minimum, Error>, name: &str| matches!(r, Err(Error::Input(InputError::Domain { what, .. })) if what == name);
+        assert!(input(minimize(|x| x, 1.0, 1.0, 1e-5), "upper"));
+        assert!(input(minimize(|x| x, f64::NAN, 1.0, 1e-5), "lower"));
+        assert!(input(minimize(|x| x, 0.0, 1.0, 0.0), "tol"));
     }
 
     #[test]

@@ -70,25 +70,25 @@
 //! drift. When a pivot in the elimination is below `1e-12`, the basic column at
 //! that position is replaced by a slack, the first that makes the basis
 //! factorise, and only when none does is the solve
-//! [`BoundedLpError::Singular`]. At the start of a solve and after each
+//! [`Error::Singular`]. At the start of a solve and after each
 //! refactorisation, a non-basic column whose
 //! reduced cost has the wrong sign beyond the tolerance below is flipped to its
 //! other bound, which restores dual feasibility when both bounds are finite. A
 //! slack with one infinite bound cannot flip. Its cost is shifted to make the
 //! reduced cost zero, and the bound on the optimum is raised by the shift
 //! times the largest activity the row can have, so that it stays an upper
-//! bound. A structural column in that state is [`BoundedLpError::DualInfeasible`].
+//! bound. A structural column in that state is [`Error::DualInfeasible`].
 //! The shifts are of the size of the tolerance.
 //!
 //! # Degeneracy
 //!
-//! Cost perturbation ([`BoundedSimplex::perturb_costs`]) keeps ties rare.
+//! Cost perturbation (`BoundedSimplex::perturb_costs`) keeps ties rare.
 //! A step of length at most the dual tolerance is degenerate. After 20000 in a
 //! row, the leaving variable becomes the infeasible basic variable of lowest
 //! index and the entering column the candidate of lowest index among the minimum
 //! ratios, with no flips, for the rest of that solve, which cannot cycle \[4\].
 //! A solve is limited to `100 (m + n) + 1000` pivots, after which it fails with
-//! [`BoundedLpError::IterationLimit`].
+//! [`Error::IterationLimit`].
 //!
 //! # Warm starts
 //!
@@ -165,7 +165,9 @@
               bounds, an integer cost equals its rounding, and ties are exact"
 )]
 
-use std::fmt;
+use epistat_core::check;
+
+use crate::error::{Error, domain};
 use std::time::Instant;
 
 const CHUNK: usize = 4096;
@@ -190,39 +192,9 @@ const TOL_SINGULAR: f64 = 1e-12;
 /// A candidate below this absolute size cannot be a pivot.
 const TOL_PIVOT_ABS: f64 = 1e-11;
 
-/// Why a solve did not reach an optimum.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BoundedLpError {
-    /// The input is malformed, with the reason.
-    InvalidInput(String),
-    /// No point satisfies the rows and bounds.
-    Infeasible,
-    /// A non-basic column has a reduced cost that its bounds cannot absorb, so
-    /// the starting basis is not dual feasible. The program is unbounded or
-    /// infeasible. No primal phase is run.
-    DualInfeasible,
-    /// The pivot budget ran out.
-    IterationLimit,
-    /// The deadline passed.
-    TimeLimit,
-    /// The basis could not be factorised.
-    Singular,
-}
-
-impl fmt::Display for BoundedLpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidInput(why) => write!(f, "InvalidInput: {why}"),
-            Self::Infeasible => f.write_str("Infeasible"),
-            Self::DualInfeasible => f.write_str("DualInfeasible"),
-            Self::IterationLimit => f.write_str("IterationLimit"),
-            Self::TimeLimit => f.write_str("TimeLimit"),
-            Self::Singular => f.write_str("Singular"),
-        }
-    }
-}
-
-impl std::error::Error for BoundedLpError {}
+/// The error of [`BoundedSimplex`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type BoundedLpError = Error;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Status {
@@ -382,6 +354,24 @@ where
     }
 }
 
+/// A lower bound `lo` and upper bound `hi`: neither NaN, `lo <= hi`, `lo`
+/// below infinity and `hi` above minus infinity.
+fn check_bounds(what: &'static str, lo: f64, hi: f64) -> Result<(), Error> {
+    if lo.is_nan() || hi.is_nan() || lo > hi || lo == f64::INFINITY || hi == f64::NEG_INFINITY {
+        let value = if lo.is_nan() || lo == f64::INFINITY || !hi.is_nan() {
+            lo
+        } else {
+            hi
+        };
+        return Err(domain(
+            what,
+            value,
+            "a bound pair, neither NaN, lower at most upper",
+        ));
+    }
+    Ok(())
+}
+
 impl BoundedSimplex {
     /// Builds a solver for `max c'x  s.t.  r_lo ≤ A x ≤ r_hi,  l ≤ x ≤ u`.
     ///
@@ -389,7 +379,7 @@ impl BoundedSimplex {
     /// `columns[j * m..(j + 1) * m]`. `n` is `cost.len()`.
     ///
     /// # Errors
-    /// [`BoundedLpError::InvalidInput`] for a length that does not match, a NaN
+    /// [`Error::Input`] for a length that does not match, a NaN
     /// or infinite matrix entry or cost, a NaN bound, or a lower bound above its
     /// upper bound.
     pub fn new(
@@ -400,24 +390,15 @@ impl BoundedSimplex {
         col_hi: &[f64],
         row_lo: &[f64],
         row_hi: &[f64],
-    ) -> Result<Self, BoundedLpError> {
+    ) -> Result<Self, Error> {
         let n = cost.len();
-        let bad = |why: &str| Err(BoundedLpError::InvalidInput(why.to_string()));
-        if columns.len() != n * m {
-            return bad("the matrix does not have n * m entries");
-        }
-        if col_lo.len() != n || col_hi.len() != n {
-            return bad("the column bounds do not have one entry per column");
-        }
-        if row_lo.len() != m || row_hi.len() != m {
-            return bad("the row bounds do not have one entry per row");
-        }
-        if columns.iter().any(|v| !v.is_finite()) {
-            return bad("the matrix has a non-finite entry");
-        }
-        if cost.iter().any(|v| !v.is_finite()) {
-            return bad("a cost is not finite");
-        }
+        check::same_length("columns", n.saturating_mul(m), columns.len())?;
+        check::same_length("col_lo", n, col_lo.len())?;
+        check::same_length("col_hi", n, col_hi.len())?;
+        check::same_length("row_lo", m, row_lo.len())?;
+        check::same_length("row_hi", m, row_hi.len())?;
+        check::finite("columns", columns)?;
+        check::finite("cost", cost)?;
         let mut lo = Vec::with_capacity(n + m);
         let mut hi = Vec::with_capacity(n + m);
         lo.extend_from_slice(col_lo);
@@ -425,12 +406,7 @@ impl BoundedSimplex {
         lo.extend_from_slice(row_lo);
         hi.extend_from_slice(row_hi);
         for j in 0..n + m {
-            if lo[j].is_nan() || hi[j].is_nan() {
-                return bad("a bound is NaN");
-            }
-            if lo[j] > hi[j] || lo[j] == f64::INFINITY || hi[j] == f64::NEG_INFINITY {
-                return bad("a lower bound exceeds its upper bound");
-            }
+            check_bounds(if j < n { "col_lo" } else { "row_lo" }, lo[j], hi[j])?;
         }
         let mut q = Vec::with_capacity(n + m);
         q.extend(cost.iter().map(|c| -c));
@@ -556,18 +532,12 @@ impl BoundedSimplex {
     /// the current basis.
     ///
     /// # Errors
-    /// [`BoundedLpError::InvalidInput`] for a NaN bound or `lo > hi`.
-    pub fn set_bounds(&mut self, j: usize, lo: f64, hi: f64) -> Result<(), BoundedLpError> {
+    /// [`Error::Input`] for a NaN bound or `lo > hi`.
+    pub fn set_bounds(&mut self, j: usize, lo: f64, hi: f64) -> Result<(), Error> {
         if j >= self.n {
-            return Err(BoundedLpError::InvalidInput(
-                "column index out of range".to_string(),
-            ));
+            return Err(domain("j", j as f64, "a column of the program"));
         }
-        if lo.is_nan() || hi.is_nan() || lo > hi || lo == f64::INFINITY || hi == f64::NEG_INFINITY {
-            return Err(BoundedLpError::InvalidInput(
-                "a lower bound exceeds its upper bound".to_string(),
-            ));
-        }
+        check_bounds("lo", lo, hi)?;
         self.lo[j] = lo;
         self.hi[j] = hi;
         self.tol[j] = self.bound_tol(j);
@@ -952,12 +922,12 @@ impl BoundedSimplex {
     /// that makes it factorise takes that position, and the column leaves at the
     /// bound nearer its value. This happens when rounding over many updates of
     /// `B^{-1}` let a nearly dependent column in.
-    fn refactor(&mut self) -> Result<(), BoundedLpError> {
+    fn refactor(&mut self) -> Result<(), Error> {
         let (m, n) = (self.m, self.n);
         let mut repairs = 0;
         while let Err(position) = self.factorise() {
             if repairs >= m {
-                return Err(BoundedLpError::Singular);
+                return Err(Error::Singular);
             }
             repairs += 1;
             let out = self.basis[position];
@@ -986,7 +956,7 @@ impl BoundedSimplex {
             }
             if !repaired {
                 self.basis[position] = out;
-                return Err(BoundedLpError::Singular);
+                return Err(Error::Singular);
             }
         }
         self.since_refactor = 0;
@@ -1127,7 +1097,7 @@ impl BoundedSimplex {
 
     /// Flip every non-basic variable whose reduced cost has the wrong sign
     /// beyond the dual tolerance to its other bound.
-    fn restore_dual_feasibility(&mut self) -> Result<(), BoundedLpError> {
+    fn restore_dual_feasibility(&mut self) -> Result<(), Error> {
         let m = self.m;
         let n = self.n;
         let y = self.duals();
@@ -1177,12 +1147,12 @@ impl BoundedSimplex {
                         f64::INFINITY
                     };
                     if !reach.is_finite() {
-                        return Err(BoundedLpError::DualInfeasible);
+                        return Err(Error::DualInfeasible);
                     }
                     let d = if j >= n {
                         self.q[j] + y[j - n]
                     } else {
-                        return Err(BoundedLpError::DualInfeasible);
+                        return Err(Error::DualInfeasible);
                     };
                     self.q[j] -= d;
                     self.bound_margin += d.abs() * reach;
@@ -1344,9 +1314,9 @@ impl BoundedSimplex {
     /// is checked once per pivot.
     ///
     /// # Errors
-    /// See [`BoundedLpError`]. After `Infeasible` the basis is dual feasible
+    /// See [`Error`]. After `Infeasible` the basis is dual feasible
     /// and can be reused after the bounds change back.
-    pub fn solve(&mut self, deadline: Option<Instant>) -> Result<(), BoundedLpError> {
+    pub fn solve(&mut self, deadline: Option<Instant>) -> Result<(), Error> {
         let limit = 100 * (self.m + self.n) + 1000;
         self.solve_within(deadline, limit)
     }
@@ -1354,14 +1324,14 @@ impl BoundedSimplex {
     /// [`Self::solve`] with at most `limit` pivots.
     ///
     /// # Errors
-    /// As [`Self::solve`], with [`BoundedLpError::IterationLimit`] after `limit`
+    /// As [`Self::solve`], with [`Error::IterationLimit`] after `limit`
     /// pivots. The basis is then dual feasible but not primal feasible, and
     /// [`Self::dual_bound`] is still a valid bound.
     pub(crate) fn solve_within(
         &mut self,
         deadline: Option<Instant>,
         limit: usize,
-    ) -> Result<(), BoundedLpError> {
+    ) -> Result<(), Error> {
         let (m, n) = (self.m, self.n);
         if self.since_refactor >= REFACTOR_EVERY {
             self.refactor()?;
@@ -1376,7 +1346,7 @@ impl BoundedSimplex {
         let mut a_q = vec![0.0; m];
         loop {
             if deadline.is_some_and(|d| Instant::now() >= d) {
-                return Err(BoundedLpError::TimeLimit);
+                return Err(Error::TimeLimit);
             }
             if self.since_refactor >= REFACTOR_EVERY {
                 self.refactor()?;
@@ -1415,7 +1385,7 @@ impl BoundedSimplex {
             pivots += 1;
             self.iterations += 1;
             if pivots > limit {
-                return Err(BoundedLpError::IterationLimit);
+                return Err(Error::IterationLimit);
             }
             let p = self.basis[r];
             let increase = self.xb[r] < self.lo[p];
@@ -1432,7 +1402,7 @@ impl BoundedSimplex {
                     self.refactor()?;
                     continue;
                 }
-                return Err(BoundedLpError::Infeasible);
+                return Err(Error::Infeasible);
             }
 
             let entering = if bland {
@@ -1442,7 +1412,7 @@ impl BoundedSimplex {
                     .filter(|c| c.ratio <= min_ratio + self.dual_tol * 1e-3)
                     .min_by_key(|c| c.j);
                 let Some(&c) = lowest else {
-                    return Err(BoundedLpError::Infeasible);
+                    return Err(Error::Infeasible);
                 };
                 c
             } else {
@@ -1451,7 +1421,7 @@ impl BoundedSimplex {
                         self.refactor()?;
                         continue;
                     }
-                    return Err(BoundedLpError::Infeasible);
+                    return Err(Error::Infeasible);
                 };
                 // Harris's rule: no candidate that is not flipped may end with a
                 // reduced cost more than the dual tolerance on the wrong side, so
@@ -1543,7 +1513,7 @@ impl BoundedSimplex {
                     self.restore_dual_feasibility()?;
                     continue;
                 }
-                return Err(BoundedLpError::Singular);
+                return Err(Error::Singular);
             }
             let x_q0 = self.nonbasic_value(q);
             let delta_q = (self.xb[r] - target) / alpha_r;
@@ -1717,17 +1687,17 @@ mod tests {
             &[INF],
         )
         .unwrap();
-        assert_eq!(lp.solve(None), Err(BoundedLpError::Infeasible));
+        assert_eq!(lp.solve(None), Err(Error::Infeasible));
     }
 
     #[test]
     fn invalid_input_is_an_error() {
         let bad = BoundedSimplex::new(1, &[1.0], &[1.0], &[1.0], &[0.0], &[0.0], &[1.0]);
-        assert!(matches!(bad, Err(BoundedLpError::InvalidInput(_))));
+        assert!(matches!(bad, Err(Error::Input(_))));
         let bad = BoundedSimplex::new(1, &[f64::NAN], &[1.0], &[0.0], &[1.0], &[0.0], &[1.0]);
-        assert!(matches!(bad, Err(BoundedLpError::InvalidInput(_))));
+        assert!(matches!(bad, Err(Error::Input(_))));
         let bad = BoundedSimplex::new(1, &[1.0, 1.0], &[1.0], &[0.0], &[1.0], &[0.0], &[1.0]);
-        assert!(matches!(bad, Err(BoundedLpError::InvalidInput(_))));
+        assert!(matches!(bad, Err(Error::Input(_))));
     }
 
     /// Compare with the primal simplex of this crate on random equality

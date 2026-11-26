@@ -174,7 +174,7 @@ mod staggered;
 mod variance;
 
 use epistat_inference::Clusters;
-use epistat_optim::frank_wolfe::FrankWolfeError;
+use epistat_optim::Error as FrankWolfeError;
 
 use fit::{Data, Opts, Start};
 pub use panel::SynthObservation;

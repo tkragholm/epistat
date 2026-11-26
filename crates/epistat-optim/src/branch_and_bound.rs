@@ -21,10 +21,10 @@
 //! with few rows and many columns.
 //!
 //! 1. **Root.** The relaxation, the binary columns in `[0, 1]`, is solved with
-//!    perturbed costs ([`BoundedSimplex::perturb_costs`]), then again from that
+//!    perturbed costs (`BoundedSimplex::perturb_costs`), then again from that
 //!    basis with a hundredth of the perturbation, which takes few pivots.
 //! 2. **Bounds.** Every bound is the weak-duality bound
-//!    ([`BoundedSimplex::dual_bound`]) `L(y) = Σ_j max(r_j l_j, r_j u_j) +
+//!    (`BoundedSimplex::dual_bound`) `L(y) = Σ_j max(r_j l_j, r_j u_j) +
 //!    Σ_i max(-y_i r_lo_i, -y_i r_hi_i)` with `r_j = c_j + a_j'y`, from the duals
 //!    `y` of the basis. It holds for any `y`, so it does not depend on the
 //!    perturbation or on the tolerances of the simplex method, and it includes
@@ -196,11 +196,13 @@
               bounds, an integer cost equals its rounding, and ties are exact"
 )]
 
-use std::fmt;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::bounded_simplex::{BoundedLpError, BoundedSimplex, DualBound, Snapshot};
+use epistat_core::{InputError, check};
+
+use crate::Error;
+use crate::bounded_simplex::{BoundedSimplex, DualBound, Snapshot};
 
 /// Backtracks to the latest open node before the one with the best bound is taken.
 const PLUNGE: usize = 50;
@@ -300,50 +302,15 @@ impl Solution {
     }
 }
 
-/// Why no solution is returned.
-#[derive(Debug, Clone, PartialEq)]
-pub enum MipError {
-    /// The input is malformed, with the reason.
-    InvalidInput(String),
-    /// The relaxation has no feasible point, so the program has none.
-    Infeasible,
-    /// A limit was reached before any integer solution was found. `bound` is
-    /// the best upper bound proved.
-    NoSolution {
-        /// How the search ended.
-        status: Status,
-        /// The best upper bound proved.
-        bound: f64,
-    },
-    /// The relaxation failed for a reason other than infeasibility.
-    Lp(BoundedLpError),
-    /// An integer solution broke a row by more than rounding explains.
-    Numerical,
-}
-
-impl fmt::Display for MipError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidInput(why) => write!(f, "InvalidInput: {why}"),
-            Self::Infeasible => f.write_str("Infeasible"),
-            Self::NoSolution { status, bound } => {
-                write!(f, "NoSolution after {status:?}, bound {bound}")
-            }
-            Self::Lp(e) => write!(f, "the relaxation failed: {e}"),
-            Self::Numerical => {
-                f.write_str("an integer solution broke a row by more than rounding explains")
-            }
-        }
-    }
-}
-
-impl std::error::Error for MipError {}
+/// The error of [`solve`] under its name in 0.1.
+#[deprecated(since = "0.2.0", note = "use `epistat_optim::Error`")]
+pub type MipError = Error;
 
 /// Solves the program by branch and bound.
 ///
 /// # Errors
-/// See [`MipError`].
-pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solution, MipError> {
+/// See [`Error`].
+pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solution, Error> {
     let deadline = options.time_limit.map(|d| Instant::now() + d);
     validate(program)?;
     let mut budget = Budget {
@@ -364,9 +331,9 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
     match outcome.best {
         None => {
             if outcome.status == Status::Optimal {
-                Err(MipError::Infeasible)
+                Err(Error::Infeasible)
             } else {
-                Err(MipError::NoSolution {
+                Err(Error::NoSolution {
                     status: outcome.status,
                     bound: outcome.bound,
                 })
@@ -392,33 +359,30 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
     }
 }
 
-fn validate(program: &MixedBinaryProgram<'_>) -> Result<(), MipError> {
+fn validate(program: &MixedBinaryProgram<'_>) -> Result<(), Error> {
     let n = program.cost.len();
-    if program.binary.len() != n {
-        return Err(MipError::InvalidInput(
-            "binary needs one entry per column".to_string(),
-        ));
-    }
-    if !(program.integer.is_empty() || program.integer.len() == n) {
-        return Err(MipError::InvalidInput(
-            "integer needs no entries or one per column".to_string(),
-        ));
+    check::same_length("binary", n, program.binary.len())?;
+    if !program.integer.is_empty() {
+        check::same_length("integer", n, program.integer.len())?;
     }
     for j in 0..n {
         let general = program.integer.get(j).copied().unwrap_or(false) && !program.binary[j];
         if general && !(program.col_lo[j].is_finite() && program.col_hi[j].is_finite()) {
-            return Err(MipError::InvalidInput(
-                "an integer column needs finite bounds".to_string(),
-            ));
+            return Err(Error::Input(InputError::NotFinite {
+                what: "bounds of an integer column",
+                row: j,
+            }));
         }
         if program.binary[j]
             && !((program.col_lo[j] == 0.0 || program.col_lo[j] == 1.0)
                 && (program.col_hi[j] == 0.0 || program.col_hi[j] == 1.0)
                 && program.col_lo[j] <= program.col_hi[j])
         {
-            return Err(MipError::InvalidInput(
-                "a binary column needs bounds in {0, 1}".to_string(),
-            ));
+            return Err(Error::Input(InputError::Domain {
+                what: "bounds of a binary column",
+                value: program.col_lo[j],
+                domain: "{0, 1}",
+            }));
         }
     }
     Ok(())
@@ -566,7 +530,7 @@ fn search_program(
     program: &MixedBinaryProgram<'_>,
     goal: &Goal,
     budget: &mut Budget,
-) -> Result<Outcome, MipError> {
+) -> Result<Outcome, Error> {
     let mut lp = BoundedSimplex::new(
         program.rows,
         program.columns,
@@ -575,11 +539,7 @@ fn search_program(
         program.col_hi,
         program.row_lo,
         program.row_hi,
-    )
-    .map_err(|e| match e {
-        BoundedLpError::InvalidInput(why) => MipError::InvalidInput(why),
-        other => MipError::Lp(other),
-    })?;
+    )?;
     lp.perturb_costs();
     let result = match lp.solve(budget.deadline) {
         Ok(()) => {
@@ -608,17 +568,17 @@ fn search_program(
                 search_lp(&mut lp, program, goal, budget)
             }
         }
-        Err(BoundedLpError::Infeasible) => Ok(Outcome {
+        Err(Error::Infeasible) => Ok(Outcome {
             best: None,
             bound: f64::NEG_INFINITY,
             status: Status::Optimal,
         }),
-        Err(BoundedLpError::TimeLimit) => Ok(Outcome {
+        Err(Error::TimeLimit) => Ok(Outcome {
             best: None,
             bound: goal.ceiling,
             status: Status::TimeLimit,
         }),
-        Err(e) => Err(MipError::Lp(e)),
+        Err(e) => Err(e),
     };
     budget.pivots += lp.iterations();
     result
@@ -631,7 +591,7 @@ fn search_lp(
     program: &MixedBinaryProgram<'_>,
     goal: &Goal,
     budget: &mut Budget,
-) -> Result<Outcome, MipError> {
+) -> Result<Outcome, Error> {
     let shape = shape(program);
     let root = tight_bound(lp, budget)?;
     let step = shape.step;
@@ -842,7 +802,7 @@ fn cut_rounds(
     lp: &mut BoundedSimplex,
     pinned: bool,
     budget: &mut Budget,
-) -> Result<Cuts, MipError> {
+) -> Result<Cuts, Error> {
     let shape = shape(program);
     let n = program.cost.len();
     let mut rows = CutRows {
@@ -894,20 +854,19 @@ fn cut_rounds(
             program.col_hi,
             &next.row_lo,
             &next.row_hi,
-        )
-        .map_err(MipError::Lp)?;
+        )?;
         next_lp.perturb_costs();
         match next_lp.solve(budget.deadline) {
             Ok(()) => budget.nodes += 1,
-            Err(BoundedLpError::Infeasible) => {
+            Err(Error::Infeasible) => {
                 budget.pivots += next_lp.iterations();
                 return Ok(Cuts::Infeasible);
             }
-            Err(BoundedLpError::TimeLimit) => {
+            Err(Error::TimeLimit) => {
                 budget.pivots += next_lp.iterations();
                 break;
             }
-            Err(e) => return Err(MipError::Lp(e)),
+            Err(e) => return Err(e),
         }
         let next_bound = tight_bound(&mut next_lp, budget)?.value;
         if let Some(old) = current.replace(next_lp) {
@@ -1796,7 +1755,7 @@ const CLEANUP: f64 = 1e-2;
 /// 100` pivots, and whatever basis it ends with gives a valid bound. The basis
 /// is then optimal for the clean-up costs, or, when the clean-up did not
 /// finish, solved again with the full perturbation.
-fn tight_bound(lp: &mut BoundedSimplex, budget: &Budget) -> Result<DualBound, MipError> {
+fn tight_bound(lp: &mut BoundedSimplex, budget: &Budget) -> Result<DualBound, Error> {
     let first = lp.dual_bound();
     if lp.perturbation_total() == 0.0 {
         return Ok(first);
@@ -1807,8 +1766,8 @@ fn tight_bound(lp: &mut BoundedSimplex, budget: &Budget) -> Result<DualBound, Mi
     lp.scale_perturbation(1.0 / CLEANUP);
     if finished.is_err() {
         match lp.solve(budget.deadline) {
-            Ok(()) | Err(BoundedLpError::TimeLimit) => {}
-            Err(e) => return Err(MipError::Lp(e)),
+            Ok(()) | Err(Error::TimeLimit) => {}
+            Err(e) => return Err(e),
         }
     }
     Ok(if second.value <= first.value {
@@ -1890,7 +1849,7 @@ impl Context<'_, '_> {
         threshold: f64,
         improve: bool,
         best: &mut Option<(Vec<f64>, f64)>,
-    ) -> Result<End, MipError> {
+    ) -> Result<End, Error> {
         let n = self.program.cost.len();
         let gap = self.root.value - threshold;
         let fixed: Vec<(usize, f64)> = (0..n)
@@ -1958,7 +1917,7 @@ impl Context<'_, '_> {
         threshold: f64,
         improve: bool,
         best: &mut Option<(Vec<f64>, f64)>,
-    ) -> Result<End, MipError> {
+    ) -> Result<End, Error> {
         let n = self.program.cost.len();
         let mut keep = vec![true; n];
         let mut value: Vec<f64> = vec![0.0; n];
@@ -2020,7 +1979,7 @@ impl Context<'_, '_> {
         mut threshold: f64,
         improve: bool,
         best: &mut Option<(Vec<f64>, f64)>,
-    ) -> Result<End, MipError> {
+    ) -> Result<End, Error> {
         let n = self.program.cost.len();
         let root_snapshot = self.lp.snapshot();
         let mut base_lo = Vec::with_capacity(n);
@@ -2031,7 +1990,7 @@ impl Context<'_, '_> {
             base_hi.push(hi);
         }
         for &(j, b) in fixed {
-            self.lp.set_bounds(j, b, b).map_err(MipError::Lp)?;
+            self.lp.set_bounds(j, b, b)?;
             base_lo[j] = b;
             base_hi[j] = b;
         }
@@ -2039,18 +1998,18 @@ impl Context<'_, '_> {
         // The fixed columns may sit at their other bound in the root basis.
         match self.lp.solve(self.budget.deadline) {
             Ok(()) => {}
-            Err(BoundedLpError::Infeasible) => {
+            Err(Error::Infeasible) => {
                 self.restore_root(&[], fixed, &root_snapshot)?;
                 return Ok(End::Done);
             }
-            Err(BoundedLpError::TimeLimit) => {
+            Err(Error::TimeLimit) => {
                 self.restore_root(&[], fixed, &root_snapshot)?;
                 return Ok(End::Stopped {
                     status: Status::TimeLimit,
                     bound: self.root.value,
                 });
             }
-            Err(e) => return Err(MipError::Lp(e)),
+            Err(e) => return Err(e),
         }
         let mut bound = tight_bound(self.lp, self.budget)?;
         let mut current = Rc::new(Changes {
@@ -2076,7 +2035,7 @@ impl Context<'_, '_> {
                         continue;
                     };
                     if self.lp.at_bound(j) == Some(b) {
-                        self.lp.set_bounds(j, b, b).map_err(MipError::Lp)?;
+                        self.lp.set_bounds(j, b, b)?;
                         applied.push(j);
                         fixings.push((j, b, b));
                     }
@@ -2186,9 +2145,7 @@ impl Context<'_, '_> {
                     list: vec![(j, near.0, near.1)],
                     parent: Some(parent),
                 });
-                self.lp
-                    .set_bounds(j, near.0, near.1)
-                    .map_err(MipError::Lp)?;
+                self.lp.set_bounds(j, near.0, near.1)?;
                 applied.push(j);
                 match self.lp.solve(self.budget.deadline) {
                     Ok(()) => {
@@ -2196,14 +2153,14 @@ impl Context<'_, '_> {
                         bound = tight_bound(self.lp, self.budget)?;
                         continue 'search;
                     }
-                    Err(BoundedLpError::Infeasible) => {}
-                    Err(BoundedLpError::TimeLimit) => {
+                    Err(Error::Infeasible) => {}
+                    Err(Error::TimeLimit) => {
                         break 'search End::Stopped {
                             status: Status::TimeLimit,
                             bound: open_bound(&stack, bound.value),
                         };
                     }
-                    Err(e) => return Err(MipError::Lp(e)),
+                    Err(e) => return Err(e),
                 }
             }
             // Backtrack: the latest open node, for `PLUNGE` times in a row, then
@@ -2234,13 +2191,11 @@ impl Context<'_, '_> {
                 }
                 let node = stack.remove(pick);
                 for &j in &applied {
-                    self.lp
-                        .set_bounds(j, base_lo[j], base_hi[j])
-                        .map_err(MipError::Lp)?;
+                    self.lp.set_bounds(j, base_lo[j], base_hi[j])?;
                 }
                 applied.clear();
                 for (j, lo, hi) in node.changes.flatten() {
-                    self.lp.set_bounds(j, lo, hi).map_err(MipError::Lp)?;
+                    self.lp.set_bounds(j, lo, hi)?;
                     applied.push(j);
                 }
                 current = node.changes;
@@ -2251,14 +2206,14 @@ impl Context<'_, '_> {
                         bound = tight_bound(self.lp, self.budget)?;
                         continue 'search;
                     }
-                    Err(BoundedLpError::Infeasible) => {}
-                    Err(BoundedLpError::TimeLimit) => {
+                    Err(Error::Infeasible) => {}
+                    Err(Error::TimeLimit) => {
                         break 'search End::Stopped {
                             status: Status::TimeLimit,
                             bound: open_bound(&stack, node.bound),
                         };
                     }
-                    Err(e) => return Err(MipError::Lp(e)),
+                    Err(e) => return Err(e),
                 }
             }
         };
@@ -2273,16 +2228,15 @@ impl Context<'_, '_> {
         applied: &[usize],
         fixed: &[(usize, f64)],
         snapshot: &Snapshot,
-    ) -> Result<(), MipError> {
+    ) -> Result<(), Error> {
         for j in applied.iter().copied().chain(fixed.iter().map(|f| f.0)) {
             self.lp
-                .set_bounds(j, self.program.col_lo[j], self.program.col_hi[j])
-                .map_err(MipError::Lp)?;
+                .set_bounds(j, self.program.col_lo[j], self.program.col_hi[j])?;
         }
         self.lp.restore(snapshot);
         match self.lp.solve(self.budget.deadline) {
-            Ok(()) | Err(BoundedLpError::TimeLimit) => Ok(()),
-            Err(e) => Err(MipError::Lp(e)),
+            Ok(()) | Err(Error::TimeLimit) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 }
@@ -2452,7 +2406,7 @@ fn neighbourhood_search(
     cutoff: f64,
     budget: &mut Budget,
     best: &mut Option<(Vec<f64>, f64)>,
-) -> Result<(), MipError> {
+) -> Result<(), Error> {
     let n = program.cost.len();
     let m = program.rows;
     let Some((x, centre_bound, basic)) = centre(program, shape, lp, root, budget)? else {
@@ -2554,7 +2508,7 @@ fn centre(
     lp: &mut BoundedSimplex,
     root: &DualBound,
     budget: &mut Budget,
-) -> Result<Option<(Vec<f64>, DualBound, Vec<bool>)>, MipError> {
+) -> Result<Option<(Vec<f64>, DualBound, Vec<bool>)>, Error> {
     let n = program.cost.len();
     let snapshot = lp.snapshot();
     let mut changed: Vec<usize> = Vec::new();
@@ -2569,7 +2523,7 @@ fn centre(
         let other = if near > v { v.floor() } else { v.ceil() };
         let mut placed = false;
         for value in [near, other] {
-            lp.set_bounds(j, value, value).map_err(MipError::Lp)?;
+            lp.set_bounds(j, value, value)?;
             changed.push(j);
             match lp.solve(budget.deadline) {
                 Ok(()) => {
@@ -2577,8 +2531,8 @@ fn centre(
                     placed = true;
                     break;
                 }
-                Err(BoundedLpError::Infeasible | BoundedLpError::TimeLimit) => {}
-                Err(e) => return Err(MipError::Lp(e)),
+                Err(Error::Infeasible | Error::TimeLimit) => {}
+                Err(e) => return Err(e),
             }
         }
         if !placed {
@@ -2596,13 +2550,12 @@ fn centre(
     });
     if !changed.is_empty() {
         for &j in &changed {
-            lp.set_bounds(j, program.col_lo[j], program.col_hi[j])
-                .map_err(MipError::Lp)?;
+            lp.set_bounds(j, program.col_lo[j], program.col_hi[j])?;
         }
         lp.restore(&snapshot);
         match lp.solve(budget.deadline) {
-            Ok(()) | Err(BoundedLpError::TimeLimit) => {}
-            Err(e) => return Err(MipError::Lp(e)),
+            Ok(()) | Err(Error::TimeLimit) => {}
+            Err(e) => return Err(e),
         }
     }
     Ok(result)
@@ -2616,7 +2569,7 @@ fn objective(program: &MixedBinaryProgram<'_>, x: &[f64]) -> f64 {
 fn rounded_point(
     lp: &BoundedSimplex,
     program: &MixedBinaryProgram<'_>,
-) -> Result<(Vec<f64>, f64), MipError> {
+) -> Result<(Vec<f64>, f64), Error> {
     let mut x = lp.values();
     let mut moved = vec![0.0; program.rows];
     let m = program.rows;
@@ -2637,7 +2590,7 @@ fn rounded_point(
     for i in 0..m {
         let allowed = lp.row_tolerance(i) + moved[i];
         if activity[i] < program.row_lo[i] - allowed || activity[i] > program.row_hi[i] + allowed {
-            return Err(MipError::Numerical);
+            return Err(Error::Numerical);
         }
     }
     let objective = objective(program, &x);
@@ -2760,7 +2713,7 @@ mod tests {
         };
         assert!(matches!(
             solve(&program, &Options::default()),
-            Err(MipError::Infeasible)
+            Err(Error::Infeasible)
         ));
     }
 
@@ -2829,7 +2782,7 @@ mod tests {
                     assert!(s.max_row_violation < 1e-7, "trial {trial}");
                     solved += 1;
                 }
-                (None, Err(MipError::Infeasible)) => {}
+                (None, Err(Error::Infeasible)) => {}
                 (r, g) => panic!("trial {trial}: reference {r:?}, solver {g:?}"),
             }
         }
@@ -2886,7 +2839,7 @@ mod tests {
                     assert!(s.bound >= full.objective - 1e-9);
                     assert!(s.objective <= full.bound + 1e-9);
                 }
-                Err(MipError::NoSolution { status, bound }) => {
+                Err(Error::NoSolution { status, bound }) => {
                     assert_eq!(status, Status::NodeLimit);
                     assert!(bound >= full.objective - 1e-9);
                 }
@@ -3085,7 +3038,7 @@ mod tests {
                         assert!(s.max_row_violation < 1e-7, "trial {trial}");
                         solved += 1;
                     }
-                    Err(MipError::Infeasible) => assert!(best.is_infinite(), "trial {trial}"),
+                    Err(Error::Infeasible) => assert!(best.is_infinite(), "trial {trial}"),
                     Err(e) => panic!("trial {trial}: {e}"),
                 }
             }
@@ -3349,7 +3302,7 @@ mod tests {
                         assert!(s.max_row_violation < 1e-7, "trial {trial}");
                         solved += 1;
                     }
-                    Err(MipError::Infeasible) => assert!(best.is_infinite(), "trial {trial}"),
+                    Err(Error::Infeasible) => assert!(best.is_infinite(), "trial {trial}"),
                     Err(e) => panic!("trial {trial}: {e}"),
                 }
             }
