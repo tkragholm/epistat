@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Rows {
-    pub id: Vec<u32>,
+    pub id: Vec<u64>,
     pub period: Vec<i64>,
     pub treatment: Vec<f64>,
     pub am_1: Vec<f64>,
@@ -39,7 +39,7 @@ pub struct Rows {
 
 #[derive(Deserialize)]
 pub struct Trials {
-    pub id: Vec<u32>,
+    pub id: Vec<u64>,
     pub trial_period: Vec<i64>,
     pub followup_time: Vec<i64>,
     pub outcome: Vec<f64>,
