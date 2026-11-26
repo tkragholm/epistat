@@ -102,8 +102,8 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::relations::{DisjointSets, connected_components};
 use crate::RegisterError;
+use crate::relations::{DisjointSets, connected_components};
 
 /// How [`consensus_parents`] picks one parent from the rows of a person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1485,7 +1485,10 @@ mod tests {
                 assert_eq!(p.ids, rid, "{name}");
                 assert_eq!(&p.mother[..p.persons], &rm[..], "{name}");
                 assert_eq!(&p.father[..p.persons], &rf[..], "{name}");
-                assert_eq!(p.family_clusters(FamilyLinks::SharedParents).unwrap(), reference_family_clusters(&p));
+                assert_eq!(
+                    p.family_clusters(FamilyLinks::SharedParents).unwrap(),
+                    reference_family_clusters(&p)
+                );
                 for degree in 1..4 {
                     let got = p.cousin_pairs(degree, CousinKinds::ALL, 100_000).unwrap();
                     assert!(degree > 1 || !got.a.is_empty(), "{name}: no cousins");
@@ -1679,7 +1682,17 @@ mod tests {
         let p = Pedigree::new(
             &person,
             &mother,
-            &[Some(2), Some(2), None, None, Some(31), Some(31), None, None, None],
+            &[
+                Some(2),
+                Some(2),
+                None,
+                None,
+                Some(31),
+                Some(31),
+                None,
+                None,
+                None,
+            ],
         )
         .unwrap();
         assert_eq!(
@@ -1693,7 +1706,15 @@ mod tests {
         // Mother 50: twins either side of midnight, then a birth a year later.
         // Mother 60: births on days 0, 1 and 2, where the window counts from
         // the first birth, and day 2 is beyond a tolerance of 1.
-        let mother = [Some(50), Some(50), Some(50), Some(60), Some(60), Some(60), None];
+        let mother = [
+            Some(50),
+            Some(50),
+            Some(50),
+            Some(60),
+            Some(60),
+            Some(60),
+            None,
+        ];
         let day = [
             Some(100),
             Some(101),
@@ -1716,11 +1737,21 @@ mod tests {
             [Some(0), Some(0), Some(1), Some(0), Some(0), Some(0), None]
         );
         let b = multiple_birth_groups(&mother, &day, 1).unwrap();
-        assert_eq!(b.group, [Some(0), Some(0), Some(1), Some(2), Some(2), Some(3), None]);
-        assert_eq!(b.size, [Some(2), Some(2), Some(1), Some(2), Some(2), Some(1), None]);
+        assert_eq!(
+            b.group,
+            [Some(0), Some(0), Some(1), Some(2), Some(2), Some(3), None]
+        );
+        assert_eq!(
+            b.size,
+            [Some(2), Some(2), Some(1), Some(2), Some(2), Some(1), None]
+        );
         // Groups are numbered by first row, also when rows are not in day order.
-        let b = multiple_birth_groups(&[Some(1), Some(1), Some(1)], &[Some(9), Some(0), Some(8)], 1)
-            .unwrap();
+        let b = multiple_birth_groups(
+            &[Some(1), Some(1), Some(1)],
+            &[Some(9), Some(0), Some(8)],
+            1,
+        )
+        .unwrap();
         assert_eq!(b.group, [Some(0), Some(1), Some(0)]);
     }
 

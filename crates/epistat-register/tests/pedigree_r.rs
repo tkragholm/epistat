@@ -41,12 +41,12 @@ struct Kinds {
     size: Vec<Option<u32>>,
     order: Vec<Option<u32>>,
     birth_day2: Vec<Option<f64>>,
-    tolerance: Vec<Tolerance>,
+    tolerance: Vec<ByTolerance>,
     pedigree_clusters: Vec<u32>,
 }
 
 #[derive(Deserialize)]
-struct Tolerance {
+struct ByTolerance {
     tolerance: u32,
     group: Vec<Option<u32>>,
     size: Vec<Option<u32>>,
@@ -169,7 +169,10 @@ fn pair_kinds_clusters_and_births_agree_with_r() {
         }
     }
 
-    assert_eq!(ped.family_clusters(FamilyLinks::SharedParents).unwrap(), k.clusters);
+    assert_eq!(
+        ped.family_clusters(FamilyLinks::SharedParents).unwrap(),
+        k.clusters
+    );
     fp = fp.u64(k.clusters.iter().map(|&c| u64::from(c)).sum());
 
     let births = multiple_birth_groups(&opt(&k.birth_mother), &opt_i(&k.birth_day), 0).unwrap();
@@ -182,7 +185,8 @@ fn pair_kinds_clusters_and_births_agree_with_r() {
     assert_eq!(fp.finish(), 12_360_024_851_349_320_220, "golden hash");
 
     assert_eq!(
-        ped.family_clusters(FamilyLinks::ParentsAndChildren).unwrap(),
+        ped.family_clusters(FamilyLinks::ParentsAndChildren)
+            .unwrap(),
         k.pedigree_clusters
     );
     let day2 = opt_i(&k.birth_day2);

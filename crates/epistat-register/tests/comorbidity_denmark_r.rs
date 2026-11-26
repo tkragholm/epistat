@@ -95,7 +95,7 @@ fn every_code_has_the_conditions_heaven_finds() {
     }
     assert_eq!(matched, r.masks.raw.len());
     // Every condition is reached by some code of each revision.
-    for bit in 0..keys.len() {
+    for (bit, key) in keys.iter().enumerate() {
         for icd8 in [true, false] {
             assert!(
                 r.masks
@@ -103,8 +103,7 @@ fn every_code_has_the_conditions_heaven_finds() {
                     .iter()
                     .zip(&r.masks.mask)
                     .any(|(c, m)| m >> bit & 1 == 1 && c.starts_with('D') != icd8),
-                "condition {} in {}",
-                keys[bit],
+                "condition {key} in {}",
                 if icd8 { "ICD-8" } else { "ICD-10" }
             );
         }

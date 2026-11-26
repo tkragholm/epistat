@@ -294,7 +294,7 @@ pub(crate) fn temporal_averages(
                 }
             };
             let dd = |i: usize| ddd[i].unwrap_or(f64::NAN);
-            for i in run_start..run_end {
+            for (i, slot) in avg.iter_mut().enumerate().take(run_end).skip(run_start) {
                 let (num, den) = if i == run_start {
                     (
                         tt(i).zip(tt(i + 1)).map(|_| 5.0 * dd(i) + dd(i + 1)),
@@ -312,7 +312,7 @@ pub(crate) fn temporal_averages(
                         all.map(|((a, b), c)| a + 4.0 * b + c),
                     )
                 };
-                avg[i] = match (num, den) {
+                *slot = match (num, den) {
                     (Some(n), Some(d)) if d > 0.0 => Some(n / d),
                     _ => None,
                 };
@@ -515,8 +515,7 @@ pub fn drug_use_periods(
             }
             let t = refill_times(&series, &person_stays);
             let ddd: Vec<Option<f64>> = series.iter().map(|s| s.ddd).collect();
-            let (avg, cv) =
-                temporal_averages(&ddd, &t, globals.max_refill_for_average_days);
+            let (avg, cv) = temporal_averages(&ddd, &t, globals.max_refill_for_average_days);
             let erfl = |i: usize, amount: f64| -> Option<f64> {
                 avg[i].map(|a| {
                     (amount * (1.0 + globals.dvar * cv) / a.min(upper)).min(q.max_refill_days)

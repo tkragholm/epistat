@@ -70,8 +70,8 @@ fn fits_agree_with_the_likelihood_in_r() {
             "lognormal" => Family::LogNormal,
             _ => Family::Weibull,
         };
-        let times = waiting_times(&offsets, &r.day, r.window.start, r.window.end, direction)
-            .unwrap();
+        let times =
+            waiting_times(&offsets, &r.day, r.window.start, r.window.end, direction).unwrap();
         assert_eq!(times.len(), f.n, "{} {}", f.direction, f.family);
         let fit = fit_wtd(&times, delta, family).unwrap();
         assert!(fit.converged, "{} {}", f.direction, f.family);

@@ -123,9 +123,9 @@ fn observed_and_fixed_rules_give_the_episodes_of_adherer() {
         assert_eq!(p.person, e.id, "{label}");
         assert_eq!(p.start, e.start, "{label}");
         assert_close(&p.end, &e.end, Tolerance::exact());
-        for i in 0..p.len() {
-            assert_eq!(p.end_day(i) as f64, e.end[i], "{label}: whole end days");
-        }
+        // The ends are whole days, so the first day without supply is the end.
+        let whole: Vec<f64> = (0..p.len()).map(|i| p.end_day(i) as f64).collect();
+        assert_close(&whole, &e.end, Tolerance::exact());
     }
 }
 
@@ -175,9 +175,8 @@ fn exposure_on_a_day_and_cumulative_doses_agree_with_base_r() {
         };
         let at = cumulative_dose(&d, &one, w.lag[i], DoseMode::AtDispensing).unwrap();
         assert_eq!(at[0].to_bits(), w.at_dispensing[i].to_bits(), "window {i}");
-        let spread =
-            cumulative_dose(&d, &one, w.lag[i], DoseMode::ProratedOverSupply(&s)).unwrap();
+        let spread = cumulative_dose(&d, &one, w.lag[i], DoseMode::ProratedOverSupply(&s)).unwrap();
         assert_close(&spread, &w.prorated[i..=i], Tolerance::exact().rel(1e-12));
     }
-    assert!(w.prorated.iter().any(|&x| x != x.round()));
+    assert!(w.prorated.iter().any(|&x| x.fract().abs() > 1e-9));
 }

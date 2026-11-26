@@ -72,7 +72,10 @@ fn pieces_agree_with_epi_and_popepi() {
         })
         .collect();
     assert_eq!(got_labels, want_labels);
-    assert!(want_labels.iter().any(|w| w.3.is_none()), "a piece below the first age");
+    assert!(
+        want_labels.iter().any(|w| w.3.is_none()),
+        "a piece below the first age"
+    );
     // R drops the rows that are empty, and numbers the others from 0 in the
     // reference; ours keeps the source row, so the same rows appear.
     let mut got: Vec<(i64, i64, i64)> = (0..split.start.len())

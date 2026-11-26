@@ -227,13 +227,19 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
     for cut in cuts {
         match *cut {
             Cuts::AgeYears { birth, .. } if birth.len() < rows_needed => {
-                return Err(RegisterError::input("a piece names a row beyond the birth column"));
+                return Err(RegisterError::input(
+                    "a piece names a row beyond the birth column",
+                ));
             }
             Cuts::TimeSinceEntry { entry, .. } if entry.len() < rows_needed => {
-                return Err(RegisterError::input("a piece names a row beyond the entry column"));
+                return Err(RegisterError::input(
+                    "a piece names a row beyond the entry column",
+                ));
             }
             Cuts::PerRow { offsets, .. } if offsets.len() < rows_needed + 1 => {
-                return Err(RegisterError::input("a piece names a row beyond the cut offsets"));
+                return Err(RegisterError::input(
+                    "a piece names a row beyond the cut offsets",
+                ));
             }
             _ => {}
         }
@@ -242,9 +248,7 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
                 || offsets.last() != Some(&at.len())
                 || offsets.windows(2).any(|w| w[0] > w[1]))
         {
-            return Err(RegisterError::input(
-                "the cut offsets are not a CSR layout",
-            ));
+            return Err(RegisterError::input("the cut offsets are not a CSR layout"));
         }
         let mut column = Vec::with_capacity(pieces);
         for i in 0..pieces {
@@ -265,9 +269,7 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
                     }
                     reached
                 }
-                Cuts::CalendarPeriods(days) => {
-                    latest(&mut days.iter().map(|&c| (c, c)), day)
-                }
+                Cuts::CalendarPeriods(days) => latest(&mut days.iter().map(|&c| (c, c)), day),
                 Cuts::TimeSinceEntry { entry, offsets } => latest(
                     &mut offsets
                         .iter()
@@ -452,7 +454,10 @@ mod tests {
         assert_eq!(ages, [17, 17, 18, 18, 18, 19, 19, 20]);
         // The age label is the completed age on the first day of each piece.
         for (i, &age) in ages.iter().enumerate() {
-            assert_eq!(age_in_years(birth[0], s.start[i], MARCH1).map(i64::from), Some(age));
+            assert_eq!(
+                age_in_years(birth[0], s.start[i], MARCH1).map(i64::from),
+                Some(age)
+            );
         }
         assert_eq!(l[2][..4], [None, None, None, None]);
         assert_eq!(l[2][4..], [Some(d(2019, 1, 1)); 4]);

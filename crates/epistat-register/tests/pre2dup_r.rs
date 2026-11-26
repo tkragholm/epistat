@@ -10,9 +10,7 @@
 //! `10 * eps` relative.
 
 use epistat_register::exposure::Pauses;
-use epistat_register::pre2dup::{
-    GlobalParameters, GroupParameters, Purchases, drug_use_periods,
-};
+use epistat_register::pre2dup::{GlobalParameters, GroupParameters, Purchases, drug_use_periods};
 use epistat_testkit::{Tolerance, assert_close, load_json};
 use serde::Deserialize;
 
@@ -102,8 +100,7 @@ fn periods_agree_with_the_method_written_in_r() {
         min_period_days: r.group.min_period,
         max_refill_days: r.group.max_refill,
     };
-    let got = drug_use_periods(&p, &[g], &GlobalParameters::TANSKANEN_2015, Some(&stays))
-        .unwrap();
+    let got = drug_use_periods(&p, &[g], &GlobalParameters::TANSKANEN_2015, Some(&stays)).unwrap();
     assert_eq!(got.person, r.periods.person);
     assert_eq!(got.start, r.periods.start);
     assert_eq!(got.n_purchases, r.periods.n);
@@ -117,6 +114,6 @@ fn periods_agree_with_the_method_written_in_r() {
     // The data reach the stockpiling test, the lower limit, hospital days
     // and lone purchases.
     assert!(r.periods.hd.iter().any(|&h| h > 0.0));
-    assert!(r.periods.n.iter().any(|&k| k == 1));
+    assert!(r.periods.n.contains(&1));
     assert!(r.periods.n.iter().any(|&k| k >= 8));
 }

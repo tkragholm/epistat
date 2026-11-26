@@ -240,10 +240,7 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
             "the waiting time distribution needs at least three times",
         ));
     }
-    if let Some(i) = times
-        .iter()
-        .position(|&t| !(t > 0.0 && t <= window_days))
-    {
+    if let Some(i) = times.iter().position(|&t| !(t > 0.0 && t <= window_days)) {
         return Err(RegisterError::input(format!(
             "time {i} is {}, outside (0, {window_days}]",
             times[i]
@@ -272,11 +269,7 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
         ..Bfgs::default()
     };
     let minimum = bfgs
-        .minimize(
-            &start,
-            |x| objective(family, times, window_days, x),
-            None,
-        )
+        .minimize(&start, |x| objective(family, times, window_days, x), None)
         .map_err(|e| RegisterError::numerical(format!("the WTD fit could not run: {e}")))?;
     let (x, gradient) = polish(family, times, window_days, &minimum.x, &minimum.gradient);
     let converged = minimum.converged || norm(&gradient) < bfgs.gradient_tolerance;
@@ -334,7 +327,7 @@ fn polish(
         // Symmetrise, then solve h d = g by Cramer's rule.
         for i in 0..3 {
             for j in 0..i {
-                let m = 0.5 * (h[i][j] + h[j][i]);
+                let m = f64::midpoint(h[i][j], h[j][i]);
                 h[i][j] = m;
                 h[j][i] = m;
             }
@@ -357,7 +350,7 @@ fn polish(
             next[j] = x[j] - det(&m) / d0;
         }
         let gn = grad(&next);
-        if !(norm(&gn) < norm(&g)) {
+        if norm(&gn).partial_cmp(&norm(&g)) != Some(std::cmp::Ordering::Less) {
             break;
         }
         x = next;
@@ -399,9 +392,7 @@ pub fn waiting_times(
         ));
     }
     if window_end <= window_start {
-        return Err(RegisterError::input(
-            "the window must end after it starts",
-        ));
+        return Err(RegisterError::input("the window must end after it starts"));
     }
     let inside = |d: &&i64| (window_start..window_end).contains(*d);
     Ok(person_offsets
@@ -409,12 +400,8 @@ pub fn waiting_times(
         .filter_map(|w| {
             let days = day[w[0]..w[1]].iter().filter(inside);
             match direction {
-                Direction::Forward => days
-                    .min()
-                    .map(|&d| (d - window_start) as f64 + 0.5),
-                Direction::Reverse => days
-                    .max()
-                    .map(|&d| (window_end - d) as f64 - 0.5),
+                Direction::Forward => days.min().map(|&d| (d - window_start) as f64 + 0.5),
+                Direction::Reverse => days.max().map(|&d| (window_end - d) as f64 - 0.5),
             }
         })
         .collect())

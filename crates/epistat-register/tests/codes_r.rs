@@ -91,8 +91,16 @@ fn sets_and_their_combinations_agree_with_r() {
         assert_eq!(bits(&a, &r.universe), s.a_in, "{label}");
         assert_eq!(bits(&b, &r.universe), s.b_in, "{label}");
         assert_eq!(bits(&a.union(&b), &r.universe), s.union, "{label}");
-        assert_eq!(bits(&a.intersection(&b), &r.universe), s.intersection, "{label}");
-        assert_eq!(bits(&a.difference(&b), &r.universe), s.difference, "{label}");
+        assert_eq!(
+            bits(&a.intersection(&b), &r.universe),
+            s.intersection,
+            "{label}"
+        );
+        assert_eq!(
+            bits(&a.difference(&b), &r.universe),
+            s.difference,
+            "{label}"
+        );
         let map = CodeMap::new(vec![("a".to_owned(), a), ("b".to_owned(), b)]).unwrap();
         for (code, want) in r.universe.iter().zip(s.longest.chars()) {
             let got = map.longest_match(&[code.as_str()]);
@@ -125,7 +133,11 @@ fn atc_levels_and_ancestors_agree_with_r() {
         assert_eq!(atc::is_valid(code), want.is_some(), "{code:?}");
         for (l, &level) in levels.iter().enumerate() {
             let expected = Some(r.atc.ancestors[i][l].as_str()).filter(|s| !s.is_empty());
-            assert_eq!(atc::ancestor(code, level), expected, "{code:?} at {level:?}");
+            assert_eq!(
+                atc::ancestor(code, level),
+                expected,
+                "{code:?} at {level:?}"
+            );
         }
     }
     assert!(r.atc.level.iter().filter(|&&l| l == 4).count() > 50);

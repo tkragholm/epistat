@@ -642,9 +642,8 @@ impl SpanSet {
             )));
         }
         let mut out = Switches::default();
-        for key in 0..self.n_keys() {
+        for (key, &o) in origin.iter().enumerate() {
             let range = self.range(key);
-            let o = origin[key];
             let mut row = range.start;
             while row < range.end {
                 let s = self.start[row];
@@ -656,7 +655,8 @@ impl SpanSet {
                 }
                 for (day, value) in [(s, 1.0), (e, 0.0)] {
                     out.key.push(key as u32);
-                    out.time.push(Some((i128::from(day) - i128::from(o)) as f64));
+                    out.time
+                        .push(Some((i128::from(day) - i128::from(o)) as f64));
                     out.value.push(Some(value));
                 }
             }
@@ -872,7 +872,11 @@ mod tests {
         assert_eq!(pieces(&s, 0), [(1, 13)]);
         assert_eq!(pieces(&s, 2), [(3, 9)]);
         let empty = merge_sorted_spans(&[], &[], &[], 0).unwrap();
-        assert!(SpanSet::from_merged_spans(&empty, &[], &[], &[]).unwrap().is_empty());
+        assert!(
+            SpanSet::from_merged_spans(&empty, &[], &[], &[])
+                .unwrap()
+                .is_empty()
+        );
         assert!(SpanSet::from_merged_spans(&merged, &new_key[..3], &start, &last).is_err());
     }
 
@@ -881,10 +885,7 @@ mod tests {
         let a = set(&[&[(10, 15), (15, 20), (30, 31)], &[]]);
         let sw = a.switches(&[10, 0]).unwrap();
         assert_eq!(sw.key, [0, 0, 0, 0]);
-        assert_eq!(
-            sw.time,
-            [Some(0.0), Some(10.0), Some(20.0), Some(21.0)]
-        );
+        assert_eq!(sw.time, [Some(0.0), Some(10.0), Some(20.0), Some(21.0)]);
         assert_eq!(sw.value, [Some(1.0), Some(0.0), Some(1.0), Some(0.0)]);
         assert!(a.switches(&[0]).is_err());
     }

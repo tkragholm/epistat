@@ -546,7 +546,10 @@ fn a_fractional_end_rounds_up_to_the_first_day_without_supply() {
     };
     assert_eq!(exposed_on(&p, &q, 0).unwrap(), [true, false]);
     let set = p.span_set(0, 1).unwrap();
-    assert_eq!((set.start.as_slice(), set.end.as_slice()), (&[0][..], &[5][..]));
+    assert_eq!(
+        (set.start.as_slice(), set.end.as_slice()),
+        (&[0][..], &[5][..])
+    );
 }
 
 /// Every day of a random history is in the set of a group exactly when
@@ -582,7 +585,7 @@ fn span_sets_agree_with_exposed_on_day_by_day() {
             day: &day,
             quantity: &quantity,
         };
-        let rule = if rng.next_u64() % 2 == 0 {
+        let rule = if rng.next_u64().is_multiple_of(2) {
             DoseRule::Default
         } else {
             DoseRule::Observed
