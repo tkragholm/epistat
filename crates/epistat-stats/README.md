@@ -16,9 +16,18 @@ differences and directly standardised rates with Fay-Feuer intervals,
 Mantel-Haenszel estimators with the Breslow-Day test, standardised incidence
 ratios with exact, Byar, Wald and profile intervals and tests of homogeneity
 and trend, the F tail,
-E-values, quantitative bias analysis (misclassification of exposure or
-outcome, selection and an unmeasured binary confounder, simple and
-probabilistic, checked against `episensr`), Rosenbaum bounds with the signed rank statistic and its ranks, k-means
+E-values (for risk, odds and hazard ratios, mean and risk differences, and
+selection, with the bounding factor for benchmarks, checked against
+`EValue`), quantitative bias analysis (misclassification of exposure or
+outcome from sensitivity and specificity or from predictive values,
+selection, an unmeasured binary confounder and misclassified person-time,
+simple and probabilistic with every draw returned, several biases in one
+draw, and record-level correction with any model, checked against
+`episensr`), Rosenbaum bounds (the signed rank statistic and its ranks, the
+Hodges-Lehmann estimate, m-statistics with their interval under hidden bias,
+the Mantel-Haenszel test for binary outcomes, Gehan's scores for censored
+times, sensitivity values and amplification, checked against `rbounds`,
+`sensitivitymv`, `sensitivitymw` and `sensitivity2x2xk`), k-means
 clustering from given centres, and sums and dot products over eight fixed lanes.
 
 The quantiles and the normal distribution function give the same doubles as
