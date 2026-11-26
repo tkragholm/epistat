@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-inference"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "epistat-core",
  "epistat-epi",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-linalg"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "dyn-stack",
  "epistat-core",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-optim"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "epistat-core",
  "epistat-rng",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-rng"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "epistat-core",
  "epistat-testkit",

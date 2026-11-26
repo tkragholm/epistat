@@ -23,9 +23,9 @@ nightly = ["epistat-linalg/nightly"]
 [dependencies]
 epistat-core = { path = "../epistat-core", version = "0.1.0" }
 epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
-epistat-inference = { path = "../epistat-inference", version = "0.3.2" }
-epistat-linalg = { path = "../epistat-linalg", version = "0.3.1" }
-epistat-rng = { path = "../epistat-rng", version = "0.1.3" }
+epistat-inference = { path = "../epistat-inference", version = "0.4.0" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.4.0" }
+epistat-rng = { path = "../epistat-rng", version = "0.2.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
 bon = "3"
 thiserror = "2.0.18"
