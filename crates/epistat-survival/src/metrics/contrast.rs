@@ -153,7 +153,7 @@ fn contrast(
              keep_influence",
         ));
     };
-    let z = epistat_stats::normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
+    let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
     let mut out = Contrast {
         times: times.to_vec(),
         difference: Vec::new(),
@@ -184,7 +184,7 @@ fn contrast(
         out.lower.push(se.map(|s| delta - z * s));
         out.upper.push(se.map(|s| delta + z * s));
         out.p_value
-            .push(se.map(|s| 2.0 * epistat_stats::normal::cdf(-(delta / s).abs())));
+            .push(se.map(|s| 2.0 * epistat_stats::dist::normal::cdf(-(delta / s).abs())));
     }
     Ok(out)
 }

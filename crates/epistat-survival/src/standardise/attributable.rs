@@ -69,7 +69,7 @@
 //!    2016;31(6):575-82.
 
 use epistat_glm::attributable::IntervalScale;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use super::Standardised;
 use crate::error::{Error, Result};

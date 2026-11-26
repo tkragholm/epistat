@@ -16,7 +16,7 @@ use epistat_did::{
     LeastFavorableSimulation, SensitivitySummaryMethod,
     summarize_smoothness_sensitivity_with_simulation,
 };
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use epistat_testkit::{assert_same_on_threads, load_json, na_f64};
 use serde::Deserialize;
 use std::collections::BTreeMap;

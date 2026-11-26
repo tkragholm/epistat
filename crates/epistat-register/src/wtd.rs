@@ -91,7 +91,7 @@
 //!    Drug Saf. 2016;25(12):1451-9.
 
 use epistat_optim::bfgs::Bfgs;
-use epistat_stats::{gamma, normal};
+use epistat_stats::dist::{gamma, normal};
 
 use crate::RegisterError;
 

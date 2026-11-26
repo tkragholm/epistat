@@ -1,7 +1,7 @@
 //! Knots, aliased columns and starting values.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use epistat_stats::quantile::type7;
 
 use super::Scale;

@@ -87,8 +87,8 @@
 //!    version 3.8.
 
 use epistat_linalg::eigen::pinv_quadratic_form;
-use epistat_stats::gamma::chi_square_sf;
-use epistat_stats::normal;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
+use epistat_stats::dist::normal;
 
 use super::{Counterfactual, ordered_reduce};
 use crate::error::{Error, Result};

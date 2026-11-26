@@ -389,7 +389,7 @@
 
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use rayon::prelude::*;
 
 use super::sweep::{BLOCK_ROWS, Block, Moments, RiskSets, Sums, terms};

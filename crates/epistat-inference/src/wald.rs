@@ -17,7 +17,7 @@
 
 use epistat_linalg::{Attempt, Method, solve};
 use epistat_linalg::{Mat, MatRef};
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use crate::{InferenceError, check_length};
 

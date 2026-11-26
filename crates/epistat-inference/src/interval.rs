@@ -85,7 +85,8 @@
 //! 5. Abramowitz M, Stegun IA, editors. Handbook of mathematical functions.
 //!    Washington, DC: National Bureau of Standards; 1964.
 
-use epistat_stats::{normal, quantile};
+use epistat_stats::dist::normal;
+use epistat_stats::{compat, quantile};
 
 use crate::InferenceError;
 
@@ -211,11 +212,11 @@ pub fn bias_corrected(
     let sorted = &*replicates;
     let n = sorted.len() as f64;
     let below = sorted.iter().filter(|&&v| v < estimate).count() as f64;
-    let z0 = normal::quantile_acklam((below / n).clamp(0.5 / n, 1.0 - 0.5 / n));
-    let z_lower = normal::quantile_acklam(alpha / 2.0);
-    let z_upper = normal::quantile_acklam(1.0 - alpha / 2.0);
+    let z0 = compat::quantile_acklam((below / n).clamp(0.5 / n, 1.0 - 0.5 / n));
+    let z_lower = compat::quantile_acklam(alpha / 2.0);
+    let z_upper = compat::quantile_acklam(1.0 - alpha / 2.0);
     let at = |z: f64| {
-        quantile::rounded_rank(sorted, normal::cdf_as26(2.0 * z0 + z)).ok_or(InferenceError::Empty)
+        compat::rounded_rank(sorted, compat::cdf_as26(2.0 * z0 + z)).ok_or(InferenceError::Empty)
     };
     Ok((at(z_lower)?, at(z_upper)?))
 }

@@ -53,7 +53,9 @@
 use epistat_linalg::MatRef;
 use epistat_linalg::basis::Basis;
 use epistat_rng::{Stream, replicate_seed};
-use epistat_stats::{lanes, normal, quantile};
+use epistat_stats::dist::normal;
+use epistat_stats::quantile;
+use epistat_stats::sum::lanes;
 use rayon::prelude::*;
 
 use crate::simultaneous::{correlation, lower_cholesky};

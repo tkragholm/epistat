@@ -1,6 +1,6 @@
 //! Likelihood and numerical-stability helpers for MTP.
 
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 const EPS_PROBABILITY: f64 = 1.0e-12;
 

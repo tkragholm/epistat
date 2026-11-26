@@ -1207,7 +1207,7 @@ impl Model {
                 influence[1][i * k + s] = (phi[i * 2 * k + k + s] - est[k + s]) / nf;
             }
         }
-        let z = epistat_stats::normal::two_sided_z(opts.conf_level);
+        let z = epistat_stats::dist::normal::two_sided_z(opts.conf_level);
         let mut risk = vec![None; 2 * k];
         let mut std_err = vec![None; 2 * k];
         let mut lower = vec![None; 2 * k];

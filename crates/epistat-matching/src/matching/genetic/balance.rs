@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 
 use epistat_rng::Stream;
 use epistat_stats::balance::ecdf_gaps_sorted;
-use epistat_stats::student::t_cdf_sf;
+use epistat_stats::dist::t;
 
 use super::ks;
 
@@ -162,7 +162,7 @@ fn paired_t_pvalue(rows: &MatchedRows<'_>) -> Option<f64> {
         return Some(0.0);
     }
     let statistic = (estimate / variance.sqrt()).abs();
-    Some(2.0 * t_cdf_sf(statistic, df).1)
+    Some(2.0 * t::sf(statistic, df))
 }
 
 /// The p-value of Welch's test on the weighted groups, as `GenMatch` computes
@@ -199,7 +199,7 @@ fn unpaired_t_pvalue(rows: &MatchedRows<'_>) -> Option<f64> {
     let a1 = var_t / obs;
     let a2 = var_c / obs;
     let dof = (a1 + a2) * (a1 + a2) / (a1 * a1 / (obs - 1.0) + a2 * a2 / (obs - 1.0));
-    Some(2.0 * t_cdf_sf((estimate / spread).abs(), dof).1)
+    Some(2.0 * t::sf((estimate / spread).abs(), dof))
 }
 
 /// The bootstrap p-value of the Kolmogorov-Smirnov statistic: the share of

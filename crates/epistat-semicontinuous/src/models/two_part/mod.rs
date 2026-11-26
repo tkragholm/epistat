@@ -81,7 +81,7 @@ use crate::utils::linear_predictor;
 #[cfg(feature = "bench-internals")]
 use crate::utils::weighted_xtz;
 use epistat_linalg::{Mat, MatRef};
-use epistat_stats::gamma::ln_gamma;
+use epistat_stats::dist::gamma::ln_gamma;
 use std::collections::HashSet;
 use std::time::Instant;
 use thiserror::Error;
@@ -933,7 +933,7 @@ pub fn coefficient_confidence_intervals(
     cov: &Mat<f64>,
     alpha: f64,
 ) -> Vec<ConfidenceInterval> {
-    let z = epistat_stats::normal::quantile(1.0 - alpha / 2.0);
+    let z = epistat_stats::dist::normal::quantile(1.0 - alpha / 2.0);
     let mut intervals = Vec::with_capacity(beta.nrows());
     for i in 0..beta.nrows() {
         let se = cov[(i, i)].max(0.0).sqrt();

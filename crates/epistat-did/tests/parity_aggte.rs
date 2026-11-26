@@ -666,7 +666,7 @@ fn the_uniform_critical_value_has_the_stated_coverage_on_fresh_draws() {
             (share - level).abs() <= bound,
             "clustered={clustered}: share below the critical value {share}, level {level}, bound {bound}"
         );
-        assert!(got.critical_value > epistat_stats::normal::quantile(1.0 - r.bootstrap.alp / 2.0));
+        assert!(got.critical_value > epistat_stats::dist::normal::quantile(1.0 - r.bootstrap.alp / 2.0));
     }
 }
 

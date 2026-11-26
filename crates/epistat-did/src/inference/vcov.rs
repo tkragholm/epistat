@@ -1,6 +1,6 @@
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
-use epistat_stats::lanes;
+use epistat_stats::sum::lanes;
 use std::hash::Hash;
 
 use crate::util::usize_to_f64;
@@ -10,7 +10,7 @@ use crate::util::usize_to_f64;
 /// Returns the centred covariance estimate
 /// `Sigma = (1/n^2) * sum_i (psi_i - mean(psi)) (psi_i - mean(psi))'`, the
 /// convention of [`standard_error_from_influence`](crate::inference::standard_error_from_influence):
-/// every sum runs over the fixed lanes of `epistat_stats::lanes`, as that
+/// every sum runs over the fixed lanes of `epistat_stats::sum::lanes`, as that
 /// standard error's does, so the diagonal is the square of the standard error
 /// before its square root is taken, and the entries do not depend on the
 /// platform or the number of threads. R's `did` and the `HonestDiD` vignette

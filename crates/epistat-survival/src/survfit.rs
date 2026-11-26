@@ -510,7 +510,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let z = if opts.conf_type == ConfType::None {
         f64::NAN
     } else {
-        epistat_stats::normal::two_sided_z(opts.conf_level)
+        epistat_stats::dist::normal::two_sided_z(opts.conf_level)
     };
     let settings = group::Settings {
         survival: opts.survival,

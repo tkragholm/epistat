@@ -12,7 +12,7 @@ use super::cohort::{SWEEP_LIMIT, rows_by_stratum};
 use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 /// The crude probabilities of death of one stratum.
 #[derive(Clone, Debug, PartialEq)]

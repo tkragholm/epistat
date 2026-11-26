@@ -616,7 +616,7 @@ fn curves_match_r() {
             b_se_kp: 8.0 * eps * (base + tab.variance_amplification) * pf * kappa,
             b_ln: 8.0 * eps * (base + tab.single_amplification),
             n: n as f64,
-            z: epistat_stats::normal::quantile(0.975),
+            z: epistat_stats::dist::normal::quantile(0.975),
         };
         let name = &r.name;
         let mut note = |what: &str, value: f64| {

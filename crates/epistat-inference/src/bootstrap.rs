@@ -61,7 +61,7 @@
 //!    Chapman & Hall; 1993.
 
 use epistat_rng::{Stream, rademacher_sum, rademacher_sums, replicate_seed, resample_counts};
-use epistat_stats::lanes;
+use epistat_stats::sum::lanes;
 use rayon::prelude::*;
 
 use crate::{InferenceError, check_length};

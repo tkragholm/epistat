@@ -717,7 +717,7 @@ impl SccsFit {
         } else {
             &self.standard_errors
         };
-        let z = epistat_stats::normal::two_sided_z(level);
+        let z = epistat_stats::dist::normal::two_sided_z(level);
         Ok(self
             .coefficients
             .iter()
@@ -733,7 +733,7 @@ impl SccsFit {
                     lower: (b - z * s).exp(),
                     upper: (b + z * s).exp(),
                     z: wald,
-                    p_value: 2.0 * epistat_stats::normal::cdf(-wald.abs()),
+                    p_value: 2.0 * epistat_stats::dist::normal::cdf(-wald.abs()),
                 })
             })
             .collect())

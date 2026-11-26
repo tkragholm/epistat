@@ -175,7 +175,7 @@
 //!    models with R. New York: Springer; 2012.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, refuse_non_finite};

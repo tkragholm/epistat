@@ -2,7 +2,7 @@
 //! and the derivatives of a row's log likelihood in them.
 
 use super::tdist;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 /// `ln(sqrt(2 pi))`.
 const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;

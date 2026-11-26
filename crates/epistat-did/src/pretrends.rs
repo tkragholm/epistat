@@ -79,7 +79,7 @@
 //!    multi-normal distribution. J R Stat Soc B 1961;23(1):223-9.
 
 use epistat_rng::Stream;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 

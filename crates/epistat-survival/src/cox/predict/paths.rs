@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use super::{
     CurveType, FittedModel, Model, NewData, SurvfitOptions, bands, centred_row, curve_baseline,

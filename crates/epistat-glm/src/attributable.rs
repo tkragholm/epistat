@@ -94,7 +94,7 @@
 //!    sum to more than one. Am J Prev Med 2004;26(3):243-9.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use crate::fit::Fit;
 

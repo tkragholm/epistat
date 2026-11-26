@@ -128,7 +128,7 @@
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef, matvec_into, xtv};
 use epistat_optim::bfgs::Bfgs;
-use epistat_stats::gamma::ln_gamma;
+use epistat_stats::dist::gamma::ln_gamma;
 use rayon::prelude::*;
 
 use crate::groups::Groups;

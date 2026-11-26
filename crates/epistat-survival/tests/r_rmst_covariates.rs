@@ -233,7 +233,7 @@ fn rmst_covariates_agree_with_r() {
                 fit.tau.to_bits(),
                 "{label}: tau"
             );
-            let z_alpha = epistat_stats::normal::two_sided_z(opts.conf_level);
+            let z_alpha = epistat_stats::dist::normal::two_sided_z(opts.conf_level);
             // The arm is the stratum, with `xmax` at least 1 for it.
             let (nf, xm) = (n as f64, xmax);
             check(

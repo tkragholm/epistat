@@ -211,7 +211,7 @@
 use std::borrow::Cow;
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 use epistat_stats::sum::compensated;
 
 use super::{CoxModelFit, CoxOptions, Ties};

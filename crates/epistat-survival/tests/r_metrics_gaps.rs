@@ -166,7 +166,7 @@ fn cox_censoring_and_contrasts_against_riskregression() {
     let n = d.time.len();
     let t = d.times.len();
     let eps = f64::EPSILON;
-    let z = epistat_stats::normal::quantile(0.975);
+    let z = epistat_stats::dist::normal::quantile(0.975);
     let mut worst = Worst::default();
     for case in &r.cases {
         let (status, n_codes, ra, rb) = if case.kind == "survival" {

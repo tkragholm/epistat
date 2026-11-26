@@ -1,4 +1,4 @@
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use super::linear_algebra::{diag_sqrt, linear_grid, mat_vec_mul_into, sandwich_covariance};
 use super::relative_magnitude::{

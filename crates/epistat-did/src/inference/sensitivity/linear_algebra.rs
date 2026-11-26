@@ -2,7 +2,7 @@ use clarabel::algebra::CscMatrix;
 use epistat_linalg::{
     Accum, Mat, MatMut, MatRef, Par, Regularisation, Side, Solve, cholesky_factor, matmul,
 };
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use crate::util::usize_to_f64;
 
@@ -596,7 +596,7 @@ pub(super) fn truncated_normal_quantile(p: f64, l: f64, u: f64) -> Result<f64, S
     if l == u {
         return Ok(l);
     }
-    epistat_stats::normal::truncated_quantile(p, l, u)
+    epistat_stats::dist::normal::truncated_quantile(p, l, u)
         .or_else(|| far_tail_truncated_quantile(p, l, u))
         .ok_or_else(undefined)
 }
@@ -762,7 +762,7 @@ mod tests {
             (0.7, 20.0, f64::INFINITY),
             (0.3, f64::NEG_INFINITY, -8.0),
         ] {
-            let direct = epistat_stats::normal::truncated_quantile(p, l, u).expect("direct");
+            let direct = epistat_stats::dist::normal::truncated_quantile(p, l, u).expect("direct");
             let tail = super::far_tail_truncated_quantile(p, l, u).expect("tail");
             assert!(
                 ((direct - tail) / direct).abs() < 1e-12,

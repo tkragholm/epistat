@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 const BLOCK: usize = 1024;
 const WAVE: usize = 64;

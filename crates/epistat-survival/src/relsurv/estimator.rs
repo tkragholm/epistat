@@ -13,7 +13,7 @@ use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 const BLOCK: usize = 1024;
 const WAVE: usize = 64;

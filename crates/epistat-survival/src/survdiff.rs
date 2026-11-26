@@ -73,7 +73,7 @@
 use rayon::prelude::*;
 
 use epistat_linalg::eigen::pinv_quadratic_form;
-use epistat_stats::gamma::chi_square_sf;
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use crate::check::check_lengths;
 use crate::error::{Error, Result};

@@ -1,7 +1,7 @@
 //! Predictions and contrasts with delta-method intervals.
 
 use epistat_linalg::MatRef;
-use epistat_stats::normal;
+use epistat_stats::dist::normal;
 
 use super::link;
 use super::{FlexParFit, Scale};
