@@ -1,8 +1,11 @@
 //! Generalised linear models fitted by iteratively reweighted least squares,
 //! as R's `glm.fit` does.
 //!
-//! [`Glm::fit`] takes a design matrix, a response and optional prior weights,
-//! offset and starting coefficients, and returns a [`Fit`]. The families and
+//! [`Glm::fit`] takes a [`GlmData`], a design matrix, a response and optional
+//! prior weights, offset and starting coefficients checked once, and returns a
+//! [`Fit`]. [`Fit::full_rank`] gives every coefficient of a fit that converged
+//! with no aliased column, and [`Glm::linear_predictor`] and [`Glm::predict`]
+//! carry a fit to new rows. The families and
 //! links, with their formulas, are described in the documentation of [`Family`]
 //! and [`Link`]. The fit is checked against R's `glm()`, including the `NA` that
 //! R reports for an aliased column, which is `None` here. The [`fit`] module
@@ -35,6 +38,17 @@
 //! variance function and the classic Park test. [`attributable`] gives the
 //! attributable fraction of an exposure from a logistic fit with a sandwich
 //! standard error, as `AFglm` of the R package AF.
+//!
+//! # Conventions
+//!
+//! Each model takes its data as one borrowed view built by a builder that
+//! checks it once: [`GlmData`] for [`Glm`], [`NegBin`] and [`ElasticNet`],
+//! [`GeeData`], [`OrdinalData`] and [`MultinomData`]. Every covariance is an
+//! [`epistat_core::Covariance`], which knows its dimension. Every fallible
+//! function returns the one [`Error`], whose kind and stable code
+//! [`epistat_core::Classify`] gives; [`GlmError`], [`ElasticNetError`] and
+//! [`MultinomError`] are its deprecated names from 0.2. Results are owned and
+//! `#[non_exhaustive]`, and [`expit`] is that of `epistat_stats::logistic`.
 #![warn(missing_docs)]
 
 pub mod absorb;
