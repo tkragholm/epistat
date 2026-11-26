@@ -113,15 +113,9 @@ fn ratio_and_difference_of_standardised_rates() {
             check(&mut worst, r.upper().unwrap(), limits[1], 1e-12);
             assert_eq!(r.p_value, None);
         }
-        let log = standardised_ratio(
-            group,
-            reference,
-            &case.weights,
-            level,
-            RatioInterval::Log,
-        )
-        .unwrap()
-        .unwrap();
+        let log = standardised_ratio(group, reference, &case.weights, level, RatioInterval::Log)
+            .unwrap()
+            .unwrap();
         match &case.log_limits {
             Some(l) => {
                 for (got, want) in [log.lower(), log.upper(), log.p_value].into_iter().zip(l) {

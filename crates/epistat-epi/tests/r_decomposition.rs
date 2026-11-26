@@ -119,13 +119,24 @@ fn decompositions_and_their_variances() {
             );
             assert_eq!(p.rate.estimate.to_bits(), d.rate.to_bits(), "{name}");
             let of = want[0] + want[1];
-            check(p.gap.se.unwrap() * p.gap.se.unwrap(), case.var_gap, 1e-13, case.var_gap);
-            check(p.composition.se.unwrap() * p.composition.se.unwrap(), want[0], 1e-13, of);
+            check(
+                p.gap.se.unwrap() * p.gap.se.unwrap(),
+                case.var_gap,
+                1e-13,
+                case.var_gap,
+            );
+            check(
+                p.composition.se.unwrap() * p.composition.se.unwrap(),
+                want[0],
+                1e-13,
+                of,
+            );
             check(p.rate.se.unwrap() * p.rate.se.unwrap(), want[1], 1e-13, of);
             check(p.covariance, want[2], 1e-13, of);
             // The gap is the sum of the parts, so its variance is the sum of
             // theirs and twice their covariance.
-            let total = p.composition.se.unwrap().powi(2) + p.rate.se.unwrap().powi(2) + 2.0 * p.covariance;
+            let total =
+                p.composition.se.unwrap().powi(2) + p.rate.se.unwrap().powi(2) + 2.0 * p.covariance;
             check(total, case.var_gap, 1e-12, of);
         }
     }

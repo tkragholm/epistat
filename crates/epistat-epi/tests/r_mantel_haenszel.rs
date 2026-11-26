@@ -19,11 +19,11 @@
 //! relative, the sensitivity of the tail to its argument. The checks print the
 //! largest deviation in units of its bound.
 
+use epistat_core::Level;
 use epistat_epi::mantel_haenszel::{
     breslow_day, cmh_test, odds_ratio, rate_difference, rate_ratio, rate_ratio_test,
     risk_difference, risk_ratio,
 };
-use epistat_core::Level;
 use epistat_epi::{Counts2x2, PersonTime2};
 use epistat_testkit::load_json;
 use serde::Deserialize;

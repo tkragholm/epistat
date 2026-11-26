@@ -100,9 +100,14 @@ fn grid_of_counts() {
     let mut worst = 0.0;
     for g in reference().grid {
         let what = format!("o {} e {} level {}", g.o, g.e, g.level);
-        let exact = sir(g.o, g.e, Level::confidence(g.level).unwrap(), SirInterval::Exact)
-            .unwrap()
-            .unwrap();
+        let exact = sir(
+            g.o,
+            g.e,
+            Level::confidence(g.level).unwrap(),
+            SirInterval::Exact,
+        )
+        .unwrap()
+        .unwrap();
         ratio(&mut worst, &what, exact.p_value.unwrap(), g.exact_p, 1e-11);
         ratio(
             &mut worst,
@@ -122,9 +127,14 @@ fn grid_of_counts() {
         } else {
             assert_eq!(exact.lower(), Some(0.0));
         }
-        let profile = sir(g.o, g.e, Level::confidence(g.level).unwrap(), SirInterval::Profile)
-            .unwrap()
-            .unwrap();
+        let profile = sir(
+            g.o,
+            g.e,
+            Level::confidence(g.level).unwrap(),
+            SirInterval::Profile,
+        )
+        .unwrap()
+        .unwrap();
         ratio(
             &mut worst,
             &what,
@@ -143,9 +153,14 @@ fn grid_of_counts() {
         } else {
             assert_eq!(profile.lower(), Some(0.0));
         }
-        let wald = sir(g.o, g.e, Level::confidence(g.level).unwrap(), SirInterval::Wald)
-            .unwrap()
-            .unwrap();
+        let wald = sir(
+            g.o,
+            g.e,
+            Level::confidence(g.level).unwrap(),
+            SirInterval::Wald,
+        )
+        .unwrap()
+        .unwrap();
         match (g.wald_lower, g.wald_upper) {
             (Some(lo), Some(hi)) => {
                 ratio(&mut worst, &what, wald.lower().unwrap(), lo, 1e-13);
@@ -169,8 +184,8 @@ fn popepi_strata() {
     ] {
         for g in 0..r.observed.len() {
             let s = sir(r.observed[g], r.expected[g], Level::default(), kind)
-            .unwrap()
-            .unwrap();
+                .unwrap()
+                .unwrap();
             for (got, want) in [
                 (s.estimate, interval.sir[g]),
                 (s.lower().unwrap(), interval.lower[g]),
@@ -286,7 +301,12 @@ fn fingerprint_of_the_strata() {
         SirInterval::Profile,
     ] {
         for g in 0..r.strata.observed.len() {
-            let s = sir(r.strata.observed[g], r.strata.expected[g], Level::default(), kind)
+            let s = sir(
+                r.strata.observed[g],
+                r.strata.expected[g],
+                Level::default(),
+                kind,
+            )
             .unwrap()
             .unwrap();
             hash = hash

@@ -224,7 +224,11 @@ pub fn crude_rate(
     let ci =
         poisson::cipoisson(events, time, level, Method::Exact).map_err(|_| RateError::Events)?;
     Ok(Some(Estimate::point(events / time * scale).with_interval(
-        interval(ci.lower.map(|x| x * scale), ci.upper.map(|x| x * scale), level),
+        interval(
+            ci.lower.map(|x| x * scale),
+            ci.upper.map(|x| x * scale),
+            level,
+        ),
     )))
 }
 
@@ -420,11 +424,7 @@ pub fn standardised_ratio(
                 Scale::Log,
             );
             return Ok(Some(Estimate::new(
-                estimate,
-                w.se,
-                w.interval,
-                w.p_value,
-                w.scale,
+                estimate, w.se, w.interval, w.p_value, w.scale,
             )));
         }
         RatioInterval::F => {

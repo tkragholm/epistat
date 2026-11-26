@@ -13,8 +13,8 @@
 mod common;
 
 use common::Lines;
-use epistat_epi::Counts2x2;
 use epistat_core::{Estimate, Level};
+use epistat_epi::Counts2x2;
 use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, probabilistic_misclass};
 
 const TABLE: Counts2x2 = Counts2x2 {

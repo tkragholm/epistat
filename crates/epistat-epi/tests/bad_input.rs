@@ -74,7 +74,9 @@ fn rates_refuse_bad_columns() {
     let level = Level::default();
     assert_rejects_bad_input("direct_standardised", |bad| {
         columns(bad).then(|| match bad {
-            BadInput::Mismatched => direct_standardised(&EVENTS, &bad.column(&TIME), &WEIGHTS, level),
+            BadInput::Mismatched => {
+                direct_standardised(&EVENTS, &bad.column(&TIME), &WEIGHTS, level)
+            }
             _ => direct_standardised(&bad.column(&EVENTS), &TIME, &WEIGHTS, level),
         })
     });
@@ -160,21 +162,17 @@ fn mantel_haenszel_refuses_bad_strata() {
         one(bad).then(|| mantel_haenszel::rate_ratio(&strata(&bad.column(&EVENTS)), level))
     });
     assert_rejects_bad_input("mantel_haenszel::rate_difference", |bad| {
-        one(bad)
-            .then(|| mantel_haenszel::rate_difference(&strata(&bad.column(&EVENTS)), level))
+        one(bad).then(|| mantel_haenszel::rate_difference(&strata(&bad.column(&EVENTS)), level))
     });
     assert_rejects_bad_input("mantel_haenszel::rate_ratio_test", |bad| {
-        one(bad)
-            .then(|| mantel_haenszel::rate_ratio_test(&strata(&bad.column(&EVENTS)), false))
+        one(bad).then(|| mantel_haenszel::rate_ratio_test(&strata(&bad.column(&EVENTS)), false))
     });
     assert_rejects_bad_input("mantel_haenszel::rate_ratio_breslow_day", |bad| {
-        one(bad).then(|| {
-            mantel_haenszel::rate_ratio_breslow_day(&strata(&bad.column(&EVENTS)), true)
-        })
+        one(bad)
+            .then(|| mantel_haenszel::rate_ratio_breslow_day(&strata(&bad.column(&EVENTS)), true))
     });
     assert_rejects_bad_input("mantel_haenszel::rate_ratio_homogeneity", |bad| {
-        one(bad)
-            .then(|| mantel_haenszel::rate_ratio_homogeneity(&strata(&bad.column(&EVENTS))))
+        one(bad).then(|| mantel_haenszel::rate_ratio_homogeneity(&strata(&bad.column(&EVENTS))))
     });
 }
 
@@ -233,13 +231,8 @@ fn kitagawa_poisson_refuses_bad_columns() {
 #[test]
 fn rosenbaum_and_signed_rank_refuse_bad_columns() {
     assert_rejects_bad_input("wilcoxon_bounds", |bad| {
-        one(bad).then(|| {
-            wilcoxon_bounds(
-                &bad.column(&DIFFERENCES),
-                2.0,
-                WilcoxonDistribution::Exact,
-            )
-        })
+        one(bad)
+            .then(|| wilcoxon_bounds(&bad.column(&DIFFERENCES), 2.0, WilcoxonDistribution::Exact))
     });
     assert_rejects_bad_input("hodges_lehmann_bounds", |bad| {
         one(bad).then(|| hodges_lehmann_bounds(&bad.column(&DIFFERENCES), &[1.0, 2.0]))

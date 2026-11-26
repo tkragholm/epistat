@@ -327,21 +327,13 @@ fn check_misclass(label: &str, reference: &[Replicate], fits: &Runs) -> f64 {
     let pick = |f: fn(&Replicate) -> Option<[f64; 3]>| reference.iter().map(f).collect::<Vec<_>>();
     let mut worst = 0.0_f64;
     for (name, r, rust) in [
-        (
-            "rr",
-            pick(|x| x.syst_rr),
-            fits.summaries(|p| p.risk_ratio),
-        ),
+        ("rr", pick(|x| x.syst_rr), fits.summaries(|p| p.risk_ratio)),
         (
             "rr total",
             pick(|x| x.tot_rr),
             fits.summaries(|p| p.risk_ratio_total),
         ),
-        (
-            "or",
-            pick(|x| x.syst_or),
-            fits.summaries(|p| p.odds_ratio),
-        ),
+        ("or", pick(|x| x.syst_or), fits.summaries(|p| p.odds_ratio)),
         (
             "or total",
             pick(|x| x.tot_or),

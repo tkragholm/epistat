@@ -213,9 +213,13 @@ fn main() {
                 let observed: f64 = status.iter().map(|&s| f64::from(s)).sum();
                 let (times, result) = common::timed(common::reps(), || {
                     let expected = table.expected(&data, &origins, &[&sex]).expect("expected");
-                    let ratio =
-                        sir(observed, expected.total, Level::default(), SirInterval::Exact)
-                            .expect("sir");
+                    let ratio = sir(
+                        observed,
+                        expected.total,
+                        Level::default(),
+                        SirInterval::Exact,
+                    )
+                    .expect("sir");
                     (expected, ratio)
                 });
                 lines.push("observed", observed);

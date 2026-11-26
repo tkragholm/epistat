@@ -58,11 +58,11 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use epistat_core::Level;
 pub use epistat_epi::evalue::{
     EValues, Outcome, RdEValues, SelectionBias, bounding_factor, evalues_hr, evalues_md,
     evalues_or, evalues_rd, evalues_rr, selection_evalues_rr,
 };
-use epistat_core::Level;
 use epistat_epi::rosenbaum::{self, BinaryStratum};
 pub use epistat_epi::rosenbaum::{
     BinaryBounds, BinaryDistribution, Censored, EffectInterval, EventDirection,

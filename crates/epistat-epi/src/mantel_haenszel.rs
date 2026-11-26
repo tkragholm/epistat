@@ -243,7 +243,12 @@ fn ratio_result(ratio: f64, variance: f64, level: Level, used: usize) -> Pooled 
 /// The Wald estimate of a difference from its variance.
 fn difference_result(difference: f64, variance: f64, level: Level, used: usize) -> Pooled {
     Pooled {
-        estimate: Some(wald(difference, Some(variance.sqrt()), level, Scale::Identity)),
+        estimate: Some(wald(
+            difference,
+            Some(variance.sqrt()),
+            level,
+            Scale::Identity,
+        )),
         n_strata_used: used,
     }
 }
@@ -732,7 +737,8 @@ pub fn rate_ratio_homogeneity(strata: &[PersonTime2]) -> Result<Option<RateHomog
     let Some(psi) = rate_ratio(strata, Level::default())?
         .estimate
         .map(|r| r.estimate)
-        .filter(|&r| r > 0.0) else {
+        .filter(|&r| r > 0.0)
+    else {
         return Ok(None);
     };
     let log_likelihood = |beta: f64| {
@@ -881,7 +887,10 @@ mod tests {
 
     #[test]
     fn refuses_bad_input() {
-        assert_eq!(odds_ratio(&[], Level::default()), Err(MhError::Empty.into()));
+        assert_eq!(
+            odds_ratio(&[], Level::default()),
+            Err(MhError::Empty.into())
+        );
         assert_eq!(
             odds_ratio(&[tab(0.0, 0.0, 0.0, 0.0)], Level::default()),
             Err(MhError::EmptyStratum.into())

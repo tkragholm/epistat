@@ -12,8 +12,7 @@
 use epistat_core::{Estimate, Level};
 use epistat_epi::PersonTime2;
 use epistat_epi::bias::{
-    Dist, Misclass, Pair, ProbOptions, correct_exposure_rates,
-    probabilistic_misclass_rates,
+    Dist, Misclass, Pair, ProbOptions, correct_exposure_rates, probabilistic_misclass_rates,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;

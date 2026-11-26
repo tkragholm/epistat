@@ -1455,9 +1455,7 @@ fn finish_single(draws: Draws<f64>, level: Level) -> Result<AdjustedResult, Erro
         n_draws_used: systematic.len(),
         n_discarded: discarded,
         adjusted: summarise(&mut systematic, level),
-        adjusted_total: random_error
-            .then(|| summarise(&mut total, level))
-            .flatten(),
+        adjusted_total: random_error.then(|| summarise(&mut total, level)).flatten(),
         draws,
     })
 }
