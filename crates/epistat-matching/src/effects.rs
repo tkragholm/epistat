@@ -113,10 +113,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use epistat_core::{Interval, Level};
 use epistat_glm::{Family, Glm, GlmError, Link, expit};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::sandwich::{meat, sandwich};
-use epistat_inference::{Clusters, InferenceError};
+use epistat_inference::{Clusters, Error as InferenceError};
 use epistat_linalg::{Attempt, Mat, row_scaled_gram};
 use epistat_rng::{Stream, replicate_seed};
 use rayon::prelude::*;
@@ -1055,9 +1056,11 @@ pub fn bootstrap(
         let n = values.len() as f64;
         let mean = values.iter().sum::<f64>() / n;
         let se = (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0)).sqrt();
-        let normal = interval::normal(estimate, se, settings.alpha)?;
+        let level = Level::alpha(settings.alpha).map_err(InferenceError::from)?;
+        let bounds = |i: Interval| (i.lower.unwrap_or(f64::NAN), i.upper.unwrap_or(f64::NAN));
+        let normal = bounds(interval::normal(estimate, se, level));
         let mut sorted = values.clone();
-        let percentile = interval::percentile(&mut sorted, settings.alpha, Percentile::Type7)?;
+        let percentile = bounds(interval::percentile(&mut sorted, level, Percentile::Type7)?);
         Ok(BootstrapStatistic {
             replicates: values,
             summary: BootstrapSummary {

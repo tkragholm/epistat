@@ -1,5 +1,5 @@
 use epistat_glm::{GlmError, MultinomError};
-use epistat_inference::InferenceError;
+use epistat_inference::Error as InferenceError;
 
 /// Why an imputation could not be made.
 #[derive(Debug, thiserror::Error)]

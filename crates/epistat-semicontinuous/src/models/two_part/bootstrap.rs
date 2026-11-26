@@ -84,8 +84,12 @@ pub fn bootstrap_percentile_ci(betas: &[Mat<f64>], alpha: f64) -> Vec<Confidence
     for col in 0..n {
         values.clear();
         values.extend(betas.iter().map(|b| b[(col, 0)]));
-        let (lower, upper) =
-            percentile(&mut values, alpha, Percentile::Type7).unwrap_or((f64::NAN, f64::NAN));
+        let (lower, upper) = epistat_core::Level::alpha(alpha)
+            .ok()
+            .and_then(|level| percentile(&mut values, level, Percentile::Type7).ok())
+            .map_or((f64::NAN, f64::NAN), |i| {
+                (i.lower.unwrap_or(f64::NAN), i.upper.unwrap_or(f64::NAN))
+            });
         intervals.push(ConfidenceInterval { lower, upper });
     }
     intervals

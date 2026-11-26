@@ -53,7 +53,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use epistat_inference::InferenceError;
+use epistat_inference::Error as InferenceError;
 use epistat_inference::pooling::{Pooled, dfcom_residual, rubin};
 
 use crate::effects::{

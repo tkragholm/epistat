@@ -312,7 +312,7 @@ pub enum GlmError {
     Solve(#[from] SolveError),
     /// A sandwich variance or cluster sum could not be formed.
     #[error(transparent)]
-    Inference(#[from] epistat_inference::InferenceError),
+    Inference(#[from] epistat_inference::Error),
     /// The link is not one the model is defined for.
     #[error("the link is not available for this model")]
     Link,

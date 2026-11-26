@@ -1,4 +1,7 @@
+use epistat_core::check;
+use epistat_inference::Error as InferenceError;
 use epistat_inference::pooling::{Pooled, PooledVector, rubin, rubin_vector};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::data::Incomplete;
 use crate::error::{ImputeError, Result};
@@ -99,8 +102,16 @@ impl Imputed {
             estimates.push(q);
             covariances.push(u);
         }
-        let q: Vec<&[f64]> = estimates.iter().map(Vec::as_slice).collect();
-        let u: Vec<&[f64]> = covariances.iter().map(Vec::as_slice).collect();
-        Ok(rubin_vector(&q, &u, k)?)
+        for (q, u) in estimates.iter().zip(&covariances) {
+            check::same_length("estimates", k, q.len()).map_err(InferenceError::from)?;
+            check::same_length("covariance", k * k, u.len()).map_err(InferenceError::from)?;
+        }
+        let q = Mat::from_fn(estimates.len(), k, |i, j| estimates[i][j]);
+        let u: Vec<Mat<f64>> = covariances
+            .iter()
+            .map(|u| Mat::from_fn(k, k, |i, j| u[i * k + j]))
+            .collect();
+        let views: Vec<MatRef<'_, f64>> = u.iter().map(Mat::as_ref).collect();
+        Ok(rubin_vector(q.as_ref(), &views)?)
     }
 }

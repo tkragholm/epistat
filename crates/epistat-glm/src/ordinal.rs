@@ -117,7 +117,7 @@
 
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_inference::wald::{Wald, wald};
-use epistat_inference::{Clusters, InferenceError};
+use epistat_inference::{Clusters, Error as InferenceError};
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{
     Attempt, DesignError, Factor, Mat, MatRef, Method, SolveError, weighted_gram,
