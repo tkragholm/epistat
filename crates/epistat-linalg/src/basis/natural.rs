@@ -53,7 +53,8 @@
 //! 3. Dongarra JJ, Bunch JR, Moler CB, Stewart GW. LINPACK Users' Guide.
 //!    Philadelphia: SIAM; 1979. The routines `dqrdc` and `dqrsl`.
 
-use super::{BSpline, Basis, KnotError};
+use super::{BSpline, Basis};
+use crate::Error;
 
 /// The natural cubic spline basis of `splines::ns`.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,21 +97,19 @@ impl NaturalSpline {
     ///
     /// # Errors
     ///
-    /// [`KnotError`] as [`BSpline::new`] gives it, for a boundary that is not an
+    /// [`Error`] as [`BSpline::new`] gives it, for a boundary that is not an
     /// increasing pair of finite numbers and interior knots that are unsorted
     /// or not strictly inside it.
-    pub fn new(interior: &[f64], boundary: (f64, f64), intercept: bool) -> Result<Self, KnotError> {
+    pub fn new(interior: &[f64], boundary: (f64, f64), intercept: bool) -> Result<Self, Error> {
         let bspline = BSpline::new(3, interior, boundary.0, boundary.1)?;
         let full = bspline.len();
         let skip = usize::from(!intercept);
         let kept = full - skip;
         let second = |x: f64| {
-            let (first, ders) = bspline
-                .nonzero_derivatives(x, 2)
-                .ok_or(KnotError::Boundary)?;
+            let (first, ders) = bspline.nonzero_derivatives(x, 2).ok_or(Error::Boundary)?;
             let mut row = vec![0.0; full];
             row[first..first + 4].copy_from_slice(&ders[2]);
-            Ok(row.split_off(skip))
+            Ok::<_, Error>(row.split_off(skip))
         };
         let (mut left, mut right) = (second(boundary.0)?, second(boundary.1)?);
         let h0 = reflector(&left);
@@ -148,13 +147,13 @@ impl NaturalSpline {
         Ok(spline)
     }
 
-    fn at_boundary(&self, x: f64) -> Result<(Vec<f64>, Vec<f64>), KnotError> {
+    fn at_boundary(&self, x: f64) -> Result<(Vec<f64>, Vec<f64>), Error> {
         let mut value = vec![0.0; self.columns];
         let mut slope = vec![0.0; self.columns];
         let (first, ders) = self
             .bspline
             .nonzero_derivatives(x, 1)
-            .ok_or(KnotError::Boundary)?;
+            .ok_or(Error::Boundary)?;
         self.project(first, &ders[0], &mut value);
         self.project(first, &ders[1], &mut slope);
         Ok((value, slope))
@@ -289,7 +288,7 @@ mod tests {
     fn invalid_knots_are_errors() {
         assert_eq!(
             NaturalSpline::new(&[1.5], (0.0, 1.0), false),
-            Err(KnotError::OutsideBoundary)
+            Err(Error::OutsideBoundary)
         );
     }
 }

@@ -1,4 +1,4 @@
-//! Helpers for design matrices: finding the columns that are linearly
+//! Helpers for design matrices: building one from columns, finding the columns that are linearly
 //! independent within every group of rows, and selecting columns and rows.
 //!
 //! # Algorithm
@@ -50,7 +50,9 @@
 
 use faer::{Mat, MatRef};
 
-use crate::error::{DesignError, check_length, check_weights};
+use epistat_core::{InputError, check};
+
+use crate::error::{Error, check_length, check_weights};
 
 /// The columns of a design that are linearly independent of the first
 /// column and of the columns kept before them, in the weighted Gram matrix
@@ -71,20 +73,24 @@ use crate::error::{DesignError, check_length, check_weights};
 ///
 /// # Errors
 ///
-/// [`DesignError::Length`] when `weights` or `groups` does not have one entry
-/// per row of `x`, [`DesignError::Weight`] for a weight that is negative or
-/// not finite, as in [`weighted_gram`](crate::weighted_gram), and
-/// [`DesignError::Tolerance`] for a tolerance that is negative or not finite.
+/// [`Error::Input`] when `weights` or `groups` does not have one entry per
+/// row of `x`, for a weight that is negative or not finite, as in
+/// [`weighted_gram`](crate::weighted_gram), and for a tolerance that is
+/// negative or not finite.
 pub fn independent_columns(
     x: MatRef<'_, f64>,
     weights: &[f64],
     groups: Option<&[usize]>,
     tolerance: f64,
-) -> Result<Vec<bool>, DesignError> {
+) -> Result<Vec<bool>, Error> {
     let (rows, p) = (x.nrows(), x.ncols());
     check_weights(weights, rows)?;
     if !(tolerance.is_finite() && tolerance >= 0.0) {
-        return Err(DesignError::Tolerance);
+        return Err(Error::Input(InputError::Domain {
+            what: "tolerance",
+            value: tolerance,
+            domain: "[0, inf)",
+        }));
     }
     if let Some(groups) = groups {
         check_length("groups", groups.len(), rows)?;
@@ -164,6 +170,37 @@ pub fn independent_columns(
     Ok(flags)
 }
 
+/// The design matrix with the given columns, in order, after a column of ones
+/// when `intercept` is true: column-major, one row per entry of a column.
+///
+/// This is the way from columns of a table to the `MatRef` the estimators
+/// take, without a closure over the row and column index.
+///
+/// # Errors
+///
+/// [`Error::Input`] when there are no columns and no intercept, when a column
+/// has no rows, when the columns differ in length, or when an entry is not
+/// finite.
+pub fn from_columns(columns: &[&[f64]], intercept: bool) -> Result<Mat<f64>, Error> {
+    let Some(first) = columns.first() else {
+        return Err(Error::Input(InputError::Empty { what: "columns" }));
+    };
+    let n = first.len();
+    check::non_empty("columns", n)?;
+    for column in columns {
+        check::same_length("columns", n, column.len())?;
+        check::finite("columns", column)?;
+    }
+    let offset = usize::from(intercept);
+    Ok(Mat::from_fn(n, columns.len() + offset, |i, j| {
+        if j < offset {
+            1.0
+        } else {
+            columns[j - offset][i]
+        }
+    }))
+}
+
 /// The columns of `x` whose flag is true, in order.
 ///
 /// # Panics
@@ -231,6 +268,29 @@ mod tests {
     }
 
     #[test]
+    fn a_design_from_columns_has_the_intercept_first() {
+        let age = [30.0, 41.0, 52.0];
+        let treated = [0.0, 1.0, 1.0];
+        let x = from_columns(&[&age, &treated], true).unwrap();
+        assert_eq!((x.nrows(), x.ncols()), (3, 3));
+        assert_eq!([x[(1, 0)], x[(1, 1)], x[(1, 2)]], [1.0, 41.0, 1.0]);
+        let without = from_columns(&[&age], false).unwrap();
+        assert_eq!((without.ncols(), without[(2, 0)]), (1, 52.0));
+        assert!(matches!(
+            from_columns(&[], true),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
+        assert!(matches!(
+            from_columns(&[&age, &treated[..2]], true),
+            Err(Error::Input(InputError::Length { .. }))
+        ));
+        assert!(matches!(
+            from_columns(&[&[1.0, f64::NAN]], false),
+            Err(Error::Input(InputError::NotFinite { row: 1, .. }))
+        ));
+    }
+
+    #[test]
     fn invalid_input_is_an_error() {
         let x = design(&[&[1.0, 1.0], &[1.0, 0.0], &[1.0, 2.0]]);
         let check = |w: &[f64], groups: Option<&[usize]>, tol: f64| {
@@ -238,17 +298,30 @@ mod tests {
         };
         assert_eq!(
             check(&[1.0, -1.0, 1.0], None, 1e-8),
-            DesignError::Weight { row: 1 }
+            Error::Input(InputError::Domain {
+                what: "weights",
+                value: -1.0,
+                domain: "[0, inf)"
+            })
         );
         assert_eq!(
             check(&[1.0, 1.0, f64::NAN], None, 1e-8),
-            DesignError::Weight { row: 2 }
+            Error::Input(InputError::NotFinite {
+                what: "weights",
+                row: 2
+            })
         );
         assert!(matches!(
             check(&[1.0; 3], Some(&[0, 1]), 1e-8),
-            DesignError::Length { .. }
+            Error::Input(InputError::Length { .. })
         ));
-        assert_eq!(check(&[1.0; 3], None, -1.0), DesignError::Tolerance);
+        assert!(matches!(
+            check(&[1.0; 3], None, -1.0),
+            Error::Input(InputError::Domain {
+                what: "tolerance",
+                ..
+            })
+        ));
     }
 
     #[test]

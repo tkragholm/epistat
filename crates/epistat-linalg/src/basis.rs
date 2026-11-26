@@ -45,7 +45,7 @@
 //!
 //! # Edge cases
 //!
-//! [`BSpline::new`] returns a [`KnotError`] for internal knots that are
+//! [`BSpline::new`] returns an [`Error`] for internal knots that are
 //! unsorted or not strictly inside the boundary, and for a boundary that is
 //! not finite and increasing. The degree-0 functions are half open, which would leave the right end of
 //! the interval with every function zero. The last function is therefore also
@@ -91,7 +91,11 @@ pub use knots::{harrell_knots, natural_spline_knots};
 pub use natural::NaturalSpline;
 pub use rcs::{RcsScale, RestrictedCubic};
 
-use crate::Mat;
+use std::cmp::Ordering;
+
+use epistat_core::check;
+
+use crate::{Error, Mat};
 use rayon::prelude::*;
 
 /// A finite set of functions of one variable and their derivatives.
@@ -156,32 +160,9 @@ impl Basis for Polynomial {
     }
 }
 
-/// Invalid knots given to [`BSpline::new`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum KnotError {
-    /// The boundary knots are not finite, or the lower is not below the upper.
-    #[error("the boundary knots must be finite with lower below upper")]
-    Boundary,
-    /// A knot is not finite.
-    #[error("the knots must be finite")]
-    NotFinite,
-    /// Fewer than three knots were given for a restricted cubic spline, or
-    /// fewer were asked for.
-    #[error("a restricted cubic spline needs at least three knots")]
-    TooFewKnots,
-    /// The sample has too few values to place knots.
-    #[error("too few observations to place the knots")]
-    TooFewObservations,
-    /// Fewer than three distinct knots can be placed.
-    #[error("fewer than three distinct knots can be placed")]
-    TooFewDistinct,
-    /// An internal knot is not strictly inside the boundary.
-    #[error("the internal knots must lie strictly inside the boundary")]
-    OutsideBoundary,
-    /// The knots are not in increasing order.
-    #[error("the internal knots must be sorted")]
-    Unsorted,
-}
+/// The error of the bases and knot rules under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "use `epistat_linalg::Error`")]
+pub type KnotError = crate::Error;
 
 /// B-splines of a given degree on `[lower, upper]` with sorted internal
 /// knots, by the Cox-de Boor recursion. The same basis as R's
@@ -198,7 +179,7 @@ pub struct BSpline {
 impl BSpline {
     /// # Errors
     ///
-    /// [`KnotError`] when the boundary is not an increasing pair of finite
+    /// [`Error`] when the boundary is not an increasing pair of finite
     /// numbers, or the internal knots are not sorted or do not lie strictly
     /// inside `(lower, upper)`. A NaN knot is refused as unsorted.
     pub fn new(
@@ -206,16 +187,16 @@ impl BSpline {
         internal_knots: &[f64],
         lower: f64,
         upper: f64,
-    ) -> Result<Self, KnotError> {
+    ) -> Result<Self, Error> {
         if !(lower.is_finite() && upper.is_finite() && lower < upper) {
-            return Err(KnotError::Boundary);
+            return Err(Error::Boundary);
         }
         if !internal_knots.iter().all(|&k| lower < k && k < upper) {
-            return Err(KnotError::OutsideBoundary);
+            return Err(Error::OutsideBoundary);
         }
-        if !internal_knots.windows(2).all(|pair| pair[0] <= pair[1]) {
-            return Err(KnotError::Unsorted);
-        }
+        check::sorted_by("internal_knots", internal_knots, |a, b| {
+            a.partial_cmp(b).unwrap_or(Ordering::Greater)
+        })?;
         let mut knots = vec![lower; degree + 1];
         knots.extend_from_slice(internal_knots);
         knots.extend(std::iter::repeat_n(upper, degree + 1));
@@ -431,6 +412,7 @@ pub fn basis_matrix<B: Basis + Sync + ?Sized>(basis: &B, x: &[f64]) -> Mat<f64> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     #[test]
     fn nonzero_functions_equal_the_full_recursion() {
@@ -494,24 +476,27 @@ mod tests {
     fn invalid_knots_are_errors() {
         assert_eq!(
             BSpline::new(2, &[1.5], 0.0, 1.0),
-            Err(KnotError::OutsideBoundary)
+            Err(Error::OutsideBoundary)
         );
         assert_eq!(
             BSpline::new(2, &[0.0], 0.0, 1.0),
-            Err(KnotError::OutsideBoundary)
+            Err(Error::OutsideBoundary)
         );
         assert_eq!(
             BSpline::new(2, &[0.6, 0.4], 0.0, 1.0),
-            Err(KnotError::Unsorted)
+            Err(Error::Input(InputError::Unsorted {
+                what: "internal_knots",
+                row: 1
+            }))
         );
         assert_eq!(
             BSpline::new(2, &[f64::NAN], 0.0, 1.0),
-            Err(KnotError::OutsideBoundary)
+            Err(Error::OutsideBoundary)
         );
-        assert_eq!(BSpline::new(2, &[], 1.0, 0.0), Err(KnotError::Boundary));
+        assert_eq!(BSpline::new(2, &[], 1.0, 0.0), Err(Error::Boundary));
         assert_eq!(
             BSpline::new(2, &[], 0.0, f64::INFINITY),
-            Err(KnotError::Boundary)
+            Err(Error::Boundary)
         );
     }
 }

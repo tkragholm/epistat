@@ -55,7 +55,10 @@
 //! 2. Durrleman S, Simon R. Flexible regression models with cubic splines. Stat
 //!    Med. 1989;8(5):551-61.
 
-use super::{Basis, KnotError};
+use epistat_core::check;
+
+use super::Basis;
+use crate::Error;
 
 /// How the truncated cubes are scaled, as the `norm` argument of
 /// `Hmisc::rcspline.eval`.
@@ -84,10 +87,10 @@ impl RestrictedCubic {
     ///
     /// # Errors
     ///
-    /// [`KnotError::TooFewKnots`] for fewer than three knots,
-    /// [`KnotError::NotFinite`] for a knot that is not finite and
-    /// [`KnotError::Unsorted`] when the knots do not strictly increase.
-    pub fn new(knots: &[f64], include_linear: bool) -> Result<Self, KnotError> {
+    /// [`Error::TooFewKnots`] for fewer than three knots,
+    /// [`Error::Input`] for a knot that is not finite or when the knots do not
+    /// strictly increase.
+    pub fn new(knots: &[f64], include_linear: bool) -> Result<Self, Error> {
         Self::with_scale(knots, include_linear, RcsScale::Range)
     }
 
@@ -96,20 +99,12 @@ impl RestrictedCubic {
     /// # Errors
     ///
     /// As [`RestrictedCubic::new`].
-    pub fn with_scale(
-        knots: &[f64],
-        include_linear: bool,
-        scale: RcsScale,
-    ) -> Result<Self, KnotError> {
+    pub fn with_scale(knots: &[f64], include_linear: bool, scale: RcsScale) -> Result<Self, Error> {
         if knots.len() < 3 {
-            return Err(KnotError::TooFewKnots);
+            return Err(Error::TooFewKnots);
         }
-        if knots.iter().any(|k| !k.is_finite()) {
-            return Err(KnotError::NotFinite);
-        }
-        if !knots.windows(2).all(|pair| pair[0] < pair[1]) {
-            return Err(KnotError::Unsorted);
-        }
+        check::finite("knots", knots)?;
+        check::strictly_sorted_by("knots", knots, f64::total_cmp)?;
         let k = knots.len();
         let range = knots[k - 1] - knots[0];
         let gap = knots[k - 1] - knots[k - 2];
@@ -200,6 +195,7 @@ impl Basis for RestrictedCubic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::InputError;
 
     fn basis() -> RestrictedCubic {
         RestrictedCubic::new(&[1.0, 2.5, 4.0, 7.0, 9.0], true).unwrap()
@@ -260,15 +256,21 @@ mod tests {
     fn invalid_knots_are_errors() {
         assert_eq!(
             RestrictedCubic::new(&[1.0, 2.0], false),
-            Err(KnotError::TooFewKnots)
+            Err(Error::TooFewKnots)
         );
         assert_eq!(
             RestrictedCubic::new(&[1.0, 1.0, 2.0], false),
-            Err(KnotError::Unsorted)
+            Err(Error::Input(InputError::Duplicate {
+                what: "knots",
+                row: 1
+            }))
         );
         assert_eq!(
             RestrictedCubic::new(&[1.0, f64::NAN, 2.0], false),
-            Err(KnotError::NotFinite)
+            Err(Error::Input(InputError::NotFinite {
+                what: "knots",
+                row: 1
+            }))
         );
     }
 
