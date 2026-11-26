@@ -17,8 +17,8 @@
 //! [`OrdinalLink::Loglog`] `F(z) = exp(-exp(-z))`. The parametrisation is that
 //! of `MASS::polr` and `ordinal::clm`.
 //!
-//! [`Ordinal::fit_partial`] lets the columns of a second matrix `W` have a
-//! coefficient for each threshold, `η_k = x'β + w'τ_k`, the partial
+//! Category-specific columns, a second matrix `W` given to
+//! [`OrdinalData`]'s builder, have a coefficient for each threshold, `η_k = x'β + w'τ_k`, the partial
 //! proportional odds model of Peterson and Harrell \[2\].
 //!
 //! # Algorithm
@@ -67,7 +67,7 @@
 //! are `None` as in [`Glm`]. A category with no row of positive
 //! weight is an error, since its threshold would diverge. Complete or
 //! quasi-complete separation sends a coefficient to infinity: the information
-//! becomes singular, which is [`OrdinalError::Separation`] when an observed
+//! becomes singular, which is [`Error::Separation`] when an observed
 //! category has probability within ten machine epsilons of 1 or 0, or the
 //! iteration reaches its limit with [`OrdinalFit::converged`] false. The null
 //! log-likelihood is that of the thresholds alone, without covariates or
@@ -117,18 +117,21 @@
 
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_inference::wald::{Wald, wald};
-use epistat_inference::{Clusters, Error as InferenceError};
+use epistat_core::Covariance;
+use epistat_inference::Clusters;
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, weighted_gram};
 use epistat_stats::dist::normal;
 use rayon::prelude::*;
 
-use crate::{Family, Glm, GlmError, Link, expit};
+use crate::fit::covariance;
+use crate::{Error, Family, Glm, GlmData, Link, OrdinalData, expit};
 
 /// Rows per block of the sums.
 const ROWS: usize = 1024;
 
 /// The distribution function `F` of the cumulative link model.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrdinalLink {
     /// The logistic distribution: the proportional odds model.
@@ -230,78 +233,8 @@ impl Ordinal {
     }
 }
 
-/// Why an ordinal model could not be fitted.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum OrdinalError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A weight is negative or not finite.
-    #[error("weight {index} is {value}, which is negative or not finite")]
-    Weight {
-        /// The row.
-        index: usize,
-        /// Its value.
-        value: f64,
-    },
-    /// The design or the offset has a value that is not finite, or there are
-    /// no rows.
-    #[error("the design or the offset is empty or has a value that is not finite")]
-    Design,
-    /// There are fewer than two categories.
-    #[error("the outcome has fewer than two categories")]
-    Classes,
-    /// A category has no row of positive weight.
-    #[error("category {class} has no row with positive weight")]
-    EmptyCategory {
-        /// The category.
-        class: usize,
-    },
-    /// A column of the design is constant and not zero: the thresholds are
-    /// the intercepts of the model.
-    #[error("column {column} is constant, and the thresholds already are the intercepts")]
-    Intercept {
-        /// The column.
-        column: usize,
-    },
-    /// A category-specific column is aliased with the other columns.
-    #[error("a category-specific column is a combination of the other columns")]
-    NominalAliased,
-    /// The tolerance is not positive and finite.
-    #[error("the tolerance must be positive and finite")]
-    Tolerance,
-    /// The information matrix is singular, with an observed category at
-    /// probability 0 or 1: the covariates separate the categories.
-    #[error("the categories are separated by the covariates")]
-    Separation,
-    /// The information matrix is singular.
-    #[error("the information matrix is singular")]
-    Singular,
-    /// The starting thresholds could not be formed.
-    #[error("the starting thresholds are not finite")]
-    Start,
-    /// The Brant test needs the logit link and a binary fit failed.
-    #[error(transparent)]
-    Glm(#[from] GlmError),
-    /// A design check failed.
-    #[error(transparent)]
-    DesignCheck(epistat_linalg::Error),
-    /// A linear solve failed.
-    #[error(transparent)]
-    Solve(#[from] epistat_linalg::Error),
-    /// A sandwich or a test could not be formed.
-    #[error(transparent)]
-    Inference(#[from] InferenceError),
-}
-
 /// A fitted cumulative link model.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrdinalFit {
     /// The link of the fit.
@@ -315,13 +248,13 @@ pub struct OrdinalFit {
     /// The category-specific coefficients `τ`, row-major `(K - 1)` by the
     /// number of columns of `W`, empty for the proportional odds model.
     pub nominal: Vec<f64>,
-    /// The covariance of the parameters, row-major, with the thresholds
-    /// first, then the coefficients and then `τ`, `None` in the rows and
-    /// columns of an aliased coefficient.
-    pub covariance: Vec<Option<f64>>,
+    /// The covariance of the parameters, with the thresholds first, then the
+    /// coefficients and then `τ`, `None` in the rows and columns of an aliased
+    /// coefficient.
+    pub covariance: Covariance,
     /// The cluster-robust covariance, in the same layout, when clusters were
     /// given.
-    pub robust_covariance: Option<Vec<Option<f64>>>,
+    pub robust_covariance: Option<Covariance>,
     /// The log-likelihood at the fit.
     pub log_likelihood: f64,
     /// The log-likelihood of the thresholds alone.
@@ -343,29 +276,34 @@ impl OrdinalFit {
     /// [`covariance`](Self::covariance), `None` for an aliased coefficient.
     #[must_use]
     pub fn standard_errors(&self) -> Vec<Option<f64>> {
-        let t = self.thresholds.len() + self.coefficients.len() + self.nominal.len();
-        (0..t)
-            .map(|i| self.covariance[i * t + i].map(|v| v.max(0.0).sqrt()))
-            .collect()
+        self.covariance.standard_errors()
     }
 
     /// The probabilities of the categories for the rows of `x`, row-major `n`
     /// by `K`, with `nominal` the category-specific columns of a partial model.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If `x` has another number of columns than the fit, or `nominal` or
-    /// `offset` do not match.
-    #[must_use]
+    /// [`Error::Input`] when `x` has another number of columns than the fit,
+    /// `nominal` is missing for a partial model or has the wrong shape, or
+    /// `offset` has another number of rows than `x`.
     pub fn probabilities(
         &self,
         x: MatRef<'_, f64>,
         nominal: Option<MatRef<'_, f64>>,
         offset: Option<&[f64]>,
-    ) -> Vec<f64> {
+    ) -> Result<Vec<f64>, Error> {
         let k1 = self.classes - 1;
         let q = self.nominal.len().checked_div(k1).unwrap_or(0);
-        assert_eq!(x.ncols(), self.coefficients.len(), "columns of x");
+        crate::error::length("x columns", self.coefficients.len(), x.ncols())?;
+        if let Some(o) = offset {
+            crate::error::length("offset", x.nrows(), o.len())?;
+        }
+        if q > 0 {
+            let w = nominal.ok_or(epistat_core::InputError::Empty { what: "nominal" })?;
+            crate::error::length("nominal", x.nrows(), w.nrows())?;
+            crate::error::length("nominal columns", q, w.ncols())?;
+        }
         let mut out = Vec::with_capacity(x.nrows() * self.classes);
         for i in 0..x.nrows() {
             let mut xb = offset.map_or(0.0, |o| o[i]);
@@ -376,8 +314,7 @@ impl OrdinalFit {
             }
             let eta = |k: usize| {
                 let mut e = xb;
-                if q > 0 {
-                    let w = nominal.expect("the partial model needs its columns");
+                if let (true, Some(w)) = (q > 0, nominal) {
                     for l in 0..q {
                         e += w[(i, l)] * self.nominal[k * q + l];
                     }
@@ -398,7 +335,7 @@ impl OrdinalFit {
                 out.push(self.link.interval(v, u));
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -678,113 +615,50 @@ impl Spec<'_> {
 }
 
 /// The inverse of a symmetric positive definite matrix.
-fn inverse_of(information: &[f64], t: usize) -> Result<Mat<f64>, OrdinalError> {
+fn inverse_of(information: &[f64], t: usize) -> Result<Mat<f64>, Error> {
     let a = Mat::from_fn(t, t, |i, j| information[i * t + j]);
-    let factor = Factor::new(a.as_ref(), &[Attempt::plain(Method::Cholesky)])
-        .map_err(|_| OrdinalError::Singular)?;
-    Ok(factor.solve(Mat::<f64>::identity(t, t).as_ref())?)
+    epistat_linalg::inverse(a.as_ref(), &[Attempt::plain(Method::Cholesky)])
+        .map(|solution| solution.x)
+        .map_err(|_| Error::Singular)
 }
 
 impl Ordinal {
-    /// Fits the proportional odds model of `y` (categories `0..K`) on the
-    /// columns of `x`, which must not hold an intercept. `weights` are case
-    /// weights, `offset` is added to the linear predictor and `cluster`, if
-    /// given, labels the clusters of the robust covariance.
+    /// Fits the cumulative link model of the categories of `data` (numbered
+    /// `0..K`) on the columns of its design, which must not hold an
+    /// intercept. With category-specific columns in the data it is the
+    /// partial proportional odds model, in which those columns have a
+    /// coefficient for each threshold. Case weights are 1 when the data have
+    /// none, the offset is added to the linear predictor, and clusters, if
+    /// given, sum the scores of the robust covariance.
     ///
     /// # Errors
     ///
-    /// See [`OrdinalError`].
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[u32],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        cluster: Option<&[u32]>,
-    ) -> Result<OrdinalFit, OrdinalError> {
-        self.fit_inner(x, None, y, weights, offset, cluster)
-    }
-
-    /// Fits the partial proportional odds model, in which the columns of
-    /// `nominal` have a coefficient for each threshold.
-    ///
-    /// # Errors
-    ///
-    /// See [`OrdinalError`].
-    pub fn fit_partial(
-        &self,
-        x: MatRef<'_, f64>,
-        nominal: MatRef<'_, f64>,
-        y: &[u32],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        cluster: Option<&[u32]>,
-    ) -> Result<OrdinalFit, OrdinalError> {
-        self.fit_inner(x, Some(nominal), y, weights, offset, cluster)
-    }
-
-    fn fit_inner(
-        &self,
-        x: MatRef<'_, f64>,
-        nominal: Option<MatRef<'_, f64>>,
-        y: &[u32],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        cluster: Option<&[u32]>,
-    ) -> Result<OrdinalFit, OrdinalError> {
+    /// [`Error::Input`] for a tolerance that is not positive and finite,
+    /// [`Error::Invalid`] for fewer than two categories,
+    /// [`Error::EmptyClass`] for a category without a row of positive
+    /// weight, [`Error::Intercept`] for a constant column, [`Error::Aliased`]
+    /// for a category-specific column that is a combination of the other
+    /// columns, and [`Error::Separation`] or [`Error::Singular`] when the
+    /// information is singular.
+    pub fn fit(&self, data: &OrdinalData<'_>) -> Result<OrdinalFit, Error> {
+        let (x, nominal, y) = (data.x(), data.nominal(), data.y());
+        let (weights, offset, cluster) = (data.weights(), data.offset(), data.clusters());
         let n = x.nrows();
         let ones = vec![1.0; n];
         let zeros = vec![0.0; n];
         let w = weights.unwrap_or(&ones);
         let o = offset.unwrap_or(&zeros);
-        let length = |what, found| {
-            if found == n {
-                Ok(())
-            } else {
-                Err(OrdinalError::Length {
-                    what,
-                    expected: n,
-                    found,
-                })
-            }
-        };
-        length("y", y.len())?;
-        length("weights", w.len())?;
-        length("offset", o.len())?;
-        if let Some(c) = cluster {
-            length("cluster", c.len())?;
-        }
-        if let Some(nominal) = nominal {
-            length("nominal", nominal.nrows())?;
-        }
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
-            return Err(OrdinalError::Tolerance);
-        }
-        if let Some((index, &value)) = w
-            .iter()
-            .enumerate()
-            .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-        {
-            return Err(OrdinalError::Weight { index, value });
-        }
-        let finite = |m: MatRef<'_, f64>| epistat_linalg::is_finite(m);
-        if n == 0
-            || !finite(x)
-            || nominal.is_some_and(|m| !finite(m))
-            || o.iter().any(|v| !v.is_finite())
-        {
-            return Err(OrdinalError::Design);
-        }
+        crate::error::tolerance("tolerance", self.tolerance)?;
         let classes = y.iter().copied().max().map_or(0, |m| m as usize + 1);
         if classes < 2 {
-            return Err(OrdinalError::Classes);
+            return Err(Error::Invalid("the outcome has fewer than two categories"));
         }
         let mut totals = vec![0.0; classes];
         for (&c, &wi) in y.iter().zip(w) {
             totals[c as usize] += wi;
         }
         if let Some(class) = totals.iter().position(|&t| t <= 0.0) {
-            return Err(OrdinalError::EmptyCategory { class });
+            return Err(Error::EmptyClass { class });
         }
         let constant = |m: MatRef<'_, f64>, j: usize| {
             let first = (0..n).find(|&i| w[i] > 0.0);
@@ -794,13 +668,13 @@ impl Ordinal {
         };
         for j in 0..x.ncols() {
             if constant(x, j) {
-                return Err(OrdinalError::Intercept { column: j });
+                return Err(Error::Intercept { column: j });
             }
         }
         if let Some(m) = nominal {
             for j in 0..m.ncols() {
                 if constant(m, j) {
-                    return Err(OrdinalError::Intercept { column: j });
+                    return Err(Error::Intercept { column: j });
                 }
             }
         }
@@ -813,10 +687,10 @@ impl Ordinal {
             j if j <= p_in => x[(i, j - 1)],
             j => nominal.map_or(0.0, |m| m[(i, j - 1 - p_in)]),
         });
-        let keep = independent_columns(joint.as_ref(), w, None, 1e-8)
-            .map_err(OrdinalError::DesignCheck)?;
-        if keep[1 + p_in..].iter().any(|&k| !k) {
-            return Err(OrdinalError::NominalAliased);
+        let keep =
+            independent_columns(joint.as_ref(), w, None, 1e-8).map_err(Error::Design)?;
+        if let Some(l) = keep[1 + p_in..].iter().position(|&k| !k) {
+            return Err(Error::Aliased { column: p_in + l });
         }
         let kept: Vec<usize> = (0..p_in).filter(|&j| keep[1 + j]).collect();
         let p = kept.len();
@@ -825,9 +699,10 @@ impl Ordinal {
             xs.extend((0..n).map(|i| x[(i, j)]));
         }
         let mut ws = Vec::with_capacity(n * q);
-        for l in 0..q {
-            let m = nominal.expect("q > 0 means nominal columns");
-            ws.extend((0..n).map(|i| m[(i, l)]));
+        if let Some(m) = nominal {
+            for l in 0..q {
+                ws.extend((0..n).map(|i| m[(i, l)]));
+            }
         }
         let spec = Spec {
             link: self.link,
@@ -861,7 +736,7 @@ impl Ordinal {
             cumulative += totals[k];
             theta[k] = self.link.quantile(cumulative / total);
             if !theta[k].is_finite() {
-                return Err(OrdinalError::Start);
+                return Err(Error::Undefined("the starting thresholds"));
             }
         }
         let first = self.newton(&base, theta)?;
@@ -873,12 +748,12 @@ impl Ordinal {
             self.newton(&spec, start)?
         };
 
-        let log_likelihood = spec.log_likelihood(&theta).ok_or(OrdinalError::Singular)?;
-        let (_, information) = spec.information(&theta).ok_or(OrdinalError::Singular)?;
+        let log_likelihood = spec.log_likelihood(&theta).ok_or(Error::Singular)?;
+        let (_, information) = spec.information(&theta).ok_or(Error::Singular)?;
         let t = spec.dimension();
         let inverse = inverse_of(&information, t).map_err(|e| {
             if boundary(&spec, &theta) {
-                OrdinalError::Separation
+                Error::Separation
             } else {
                 e
             }
@@ -892,7 +767,7 @@ impl Ordinal {
                 for i in 0..n {
                     if w[i] > 0.0 {
                         row_score.fill(0.0);
-                        let row = spec.row(i, &theta, true).ok_or(OrdinalError::Singular)?;
+                        let row = spec.row(i, &theta, true).ok_or(Error::Singular)?;
                         spec.add_gradient(i, &row, &mut row_score);
                         for (j, v) in row_score.iter().enumerate() {
                             scores[(i, j)] = *v;
@@ -917,7 +792,7 @@ impl Ordinal {
                 }
             })
             .collect();
-        let expand = |m: &Mat<f64>| -> Vec<Option<f64>> {
+        let expand = |m: &Mat<f64>| -> Result<Covariance, Error> {
             let mut out = vec![None; full * full];
             for a in 0..full {
                 for b in 0..full {
@@ -926,7 +801,7 @@ impl Ordinal {
                     }
                 }
             }
-            out
+            covariance(full, out)
         };
         let mut coefficients = vec![None; p_in];
         for (r, &j) in kept.iter().enumerate() {
@@ -943,8 +818,8 @@ impl Ordinal {
             thresholds: theta[..k1].to_vec(),
             coefficients,
             nominal: theta[k1 + p..].to_vec(),
-            covariance: expand(&inverse),
-            robust_covariance: robust.as_ref().map(expand),
+            covariance: expand(&inverse)?,
+            robust_covariance: robust.as_ref().map(expand).transpose()?,
             log_likelihood,
             null_log_likelihood: null,
             iterations,
@@ -960,21 +835,23 @@ impl Ordinal {
         &self,
         spec: &Spec<'_>,
         mut theta: Vec<f64>,
-    ) -> Result<(Vec<f64>, usize, bool), OrdinalError> {
+    ) -> Result<(Vec<f64>, usize, bool), Error> {
         let t = spec.dimension();
-        let mut loglik = spec.log_likelihood(&theta).ok_or(OrdinalError::Start)?;
+        let mut loglik = spec
+            .log_likelihood(&theta)
+            .ok_or(Error::Undefined("the starting thresholds"))?;
         let mut converged = false;
         let mut iterations = 0;
         for iteration in 1..=self.max_iterations {
             iterations = iteration;
-            let (gradient, information) = spec.information(&theta).ok_or(OrdinalError::Singular)?;
+            let (gradient, information) = spec.information(&theta).ok_or(Error::Singular)?;
             let a = Mat::from_fn(t, t, |i, j| information[i * t + j]);
             let factor =
                 Factor::new(a.as_ref(), &[Attempt::plain(Method::Cholesky)]).map_err(|_| {
                     if boundary(spec, &theta) {
-                        OrdinalError::Separation
+                        Error::Separation
                     } else {
-                        OrdinalError::Singular
+                        Error::Singular
                     }
                 })?;
             let rhs = Mat::from_fn(t, 1, |i, _| gradient[i]);
@@ -1063,6 +940,7 @@ fn count_violations(spec: &Spec<'_>, theta: &[f64]) -> usize {
 }
 
 /// The result of [`brant`].
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BrantTest {
     /// The slopes of the binary logistic models of `y > k`, row-major
@@ -1075,34 +953,30 @@ pub struct BrantTest {
     pub per_covariate: Vec<Wald>,
 }
 
-/// The Brant test of the proportional odds assumption for `y` (categories
-/// `0..K`, `K >= 3`) on the columns of `x`, which must not hold an intercept,
-/// with optional case weights.
+/// The Brant test of the proportional odds assumption for the categories of
+/// `data` (numbered `0..K`, `K >= 3`) on the columns of its design, which must
+/// not hold an intercept, with the case weights of the data.
 ///
 /// # Errors
 ///
-/// See [`OrdinalError`]. A binary model that cannot be fitted, such as one
-/// with separation, is [`OrdinalError::Glm`] or [`OrdinalError::Singular`].
-pub fn brant(
-    x: MatRef<'_, f64>,
-    y: &[u32],
-    weights: Option<&[f64]>,
-) -> Result<BrantTest, OrdinalError> {
+/// [`Error::Unsupported`] for data with category-specific columns, an offset
+/// or clusters, which the test does not take, [`Error::Invalid`] for fewer
+/// than three categories, and the errors of the binary fits: a binary model
+/// that cannot be fitted, such as one with separation, is an error of
+/// [`Glm::fit`] or [`Error::Singular`].
+pub fn brant(data: &OrdinalData<'_>) -> Result<BrantTest, Error> {
+    if data.nominal().is_some() || data.offset().is_some() || data.clusters().is_some() {
+        return Err(Error::Unsupported {
+            what: "the Brant test with category-specific columns, an offset or clusters",
+        });
+    }
+    let (x, y, weights) = (data.x(), data.y(), data.weights());
     let (n, p) = (x.nrows(), x.ncols());
     let ones = vec![1.0; n];
     let w = weights.unwrap_or(&ones);
-    for (what, found) in [("y", y.len()), ("weights", w.len())] {
-        if found != n {
-            return Err(OrdinalError::Length {
-                what,
-                expected: n,
-                found,
-            });
-        }
-    }
     let classes = y.iter().copied().max().map_or(0, |m| m as usize + 1);
     if classes < 3 {
-        return Err(OrdinalError::Classes);
+        return Err(Error::Invalid("the Brant test needs three categories"));
     }
     let k1 = classes - 1;
     let z = Mat::from_fn(n, p + 1, |i, j| if j == 0 { 1.0 } else { x[(i, j - 1)] });
@@ -1117,9 +991,9 @@ pub fn brant(
             .iter()
             .map(|&c| f64::from(u8::from(c as usize > k)))
             .collect();
-        let fit = model.fit(z.as_ref(), &response, Some(w), None, None)?;
+        let fit = model.fit(&GlmData::from_parts(z.as_ref(), &response, Some(w), None, None)?)?;
         for j in 0..=p {
-            let b = fit.coefficients[j].ok_or(OrdinalError::Singular)?;
+            let b = fit.coefficients[j].ok_or(Error::Singular)?;
             if j > 0 {
                 slopes[k * p + j - 1] = b;
             }
@@ -1127,9 +1001,9 @@ pub fn brant(
         let weight_k: Vec<f64> = (0..n)
             .map(|i| w[i] * fit.fitted[i] * (1.0 - fit.fitted[i]))
             .collect();
-        let info = weighted_gram(z.as_ref(), &weight_k).map_err(OrdinalError::DesignCheck)?;
+        let info = weighted_gram(z.as_ref(), &weight_k).map_err(Error::Design)?;
         let factor = Factor::new(info.as_ref(), &[Attempt::plain(Method::Cholesky)])
-            .map_err(|_| OrdinalError::Singular)?;
+            .map_err(|_| Error::Singular)?;
         inverses.push(factor.solve(Mat::<f64>::identity(p + 1, p + 1).as_ref())?);
         pis.push(fit.fitted);
     }
@@ -1141,7 +1015,7 @@ pub fn brant(
             let pair: Vec<f64> = (0..n)
                 .map(|i| w[i] * pis[k][i] * (1.0 - pis[j][i]))
                 .collect();
-            let middle = weighted_gram(z.as_ref(), &pair).map_err(OrdinalError::DesignCheck)?;
+            let middle = weighted_gram(z.as_ref(), &pair).map_err(Error::Design)?;
             let left = Mat::from_fn(p + 1, p + 1, |a, b| {
                 (0..=p)
                     .map(|c| inverses[j][(a, c)] * middle[(c, b)])
@@ -1157,7 +1031,7 @@ pub fn brant(
         }
     }
     // The differences b_k - b_{k+1}, for the covariates in `which`.
-    let test = |which: &[usize]| -> Result<Wald, OrdinalError> {
+    let test = |which: &[usize]| -> Result<Wald, Error> {
         let rows: Vec<(usize, usize)> = which
             .iter()
             .flat_map(|&j| (0..k1 - 1).map(move |k| (j, k)))

@@ -101,7 +101,10 @@
     reason = "the special powers and zero responses are exact values"
 )]
 
+use epistat_core::InputError;
+
 /// The link between the mean and the linear predictor.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Link {
     /// `eta = mu`.
@@ -118,6 +121,7 @@ pub enum Link {
 }
 
 /// The distribution of the response.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Family {
     /// Constant variance.
@@ -150,20 +154,6 @@ pub enum Family {
 const EPS: f64 = f64::EPSILON;
 const THRESHOLD: f64 = 30.0;
 const CLOGLOG_ETA_CAP: f64 = 700.0;
-
-/// The logistic function `1 / (1 + exp(-eta))`, evaluated with the
-/// exponential of a non-positive argument so that it neither overflows nor
-/// loses the small tail. Unlike [`Link::inverse`] it does not keep the result
-/// off 0 and 1.
-#[must_use]
-pub fn expit(eta: f64) -> f64 {
-    if eta >= 0.0 {
-        1.0 / (1.0 + (-eta).exp())
-    } else {
-        let e = eta.exp();
-        e / (1.0 + e)
-    }
-}
 
 impl Link {
     /// The linear predictor `g(mu)` at the mean `mu`.
@@ -357,14 +347,34 @@ impl Family {
         }
     }
 
-    /// Whether the family's parameter is in its range: a Tweedie power not in
+    /// The family's parameter is in its range: a Tweedie power not in
     /// `(0, 1)`, where no Tweedie distribution exists, and a finite positive
-    /// negative binomial `theta`.
-    pub(crate) fn valid(self) -> bool {
-        match self {
-            Self::Tweedie { power } => power.is_finite() && !(power > 0.0 && power < 1.0),
-            Self::NegativeBinomial { theta } => theta.is_finite() && theta > 0.0,
-            _ => true,
+    /// negative binomial `theta`; otherwise [`InputError::Domain`].
+    pub(crate) fn check(self) -> Result<(), crate::Error> {
+        let (what, value, domain, valid) = match self {
+            Self::Tweedie { power } => (
+                "Tweedie power",
+                power,
+                "finite and outside (0, 1)",
+                power.is_finite() && !(power > 0.0 && power < 1.0),
+            ),
+            Self::NegativeBinomial { theta } => (
+                "negative binomial theta",
+                theta,
+                "(0, inf)",
+                theta.is_finite() && theta > 0.0,
+            ),
+            _ => return Ok(()),
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(InputError::Domain {
+                what,
+                value,
+                domain,
+            }
+            .into())
         }
     }
 
@@ -444,19 +454,6 @@ mod tests {
                     "{link:?} {eta}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn expit_is_the_logistic_function_without_overflow() {
-        assert_eq!(expit(0.0), 0.5);
-        assert_eq!(expit(f64::NEG_INFINITY), 0.0);
-        assert_eq!(expit(f64::INFINITY), 1.0);
-        assert_eq!(expit(-800.0), 0.0);
-        let tiny = expit(-40.0);
-        assert!((tiny / (-40.0_f64).exp() - 1.0).abs() < 1e-15);
-        for eta in [-5.0, -0.3, 0.7, 12.0] {
-            assert!((expit(eta) + expit(-eta) - 1.0).abs() < 1e-15);
         }
     }
 }

@@ -62,8 +62,8 @@
 //! well above 0, the default start (the Poisson fit of `y + 0.1`) works and
 //! `MASS::glm.nb(link = identity)` agrees with this crate. With an offset the
 //! first Poisson fit can leave the region, in R ("no valid set of coefficients
-//! has been found") and here ([`GlmError::NoValidStart`]), and
-//! [`NegBin::fit_from`] takes starting coefficients, as `glm.nb`'s `start`.
+//! has been found") and here ([`Error::NoValidStart`]), and starting
+//! coefficients in the [`GlmData`], as `glm.nb`'s `start`, avoid it.
 //!
 //! # Large `θ` and the Poisson limit
 //!
@@ -93,13 +93,13 @@
 //! 3. Cameron AC, Trivedi PK. Regression Analysis of Count Data. 2nd ed.
 //!    Cambridge: Cambridge University Press; 2013. Section 3.4.
 
-use epistat_linalg::MatRef;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::dist::gamma::{digamma, ln_gamma, trigamma};
 
-use crate::{Family, Fit, Glm, GlmError, Link};
+use crate::{Error, Family, Fit, Glm, GlmData, Link};
 
 /// How `θ` is located.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThetaRule {
     /// The loops and stopping rules of `MASS::glm.nb` and `MASS::theta.ml`.
@@ -148,6 +148,7 @@ impl Default for NegBin {
 }
 
 /// A fitted negative binomial model.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct NegBinFit {
     /// The fit of the coefficients, with the dispersion fixed at 1 and the
@@ -370,54 +371,33 @@ fn theta_tight(y: &[f64], mu: &[f64], w: &[f64], start: f64) -> Located {
 }
 
 impl NegBin {
-    /// Fits the model to the counts `y` on the columns of `x`.
+    /// Fits the model to the counts, the response of `data`, on the columns
+    /// of its design.
     ///
-    /// `weights` are prior weights, which enter the likelihood as frequencies,
-    /// so `θ` is estimated as if each row were repeated. `offset` is added to
-    /// the linear predictor.
-    ///
-    /// # Errors
-    ///
-    /// [`GlmError::Link`] for a link other than log or identity,
-    /// [`GlmError::Tolerance`] for a tolerance that is not positive and finite
-    /// or no iterations, [`GlmError::Family`] for an `init_theta` that is not
-    /// finite and positive, and the errors of [`Glm::fit`], such as
-    /// [`GlmError::Response`] for a negative count.
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-    ) -> Result<NegBinFit, GlmError> {
-        self.fit_from(x, y, weights, offset, None)
-    }
-
-    /// Fits the model as [`fit`](Self::fit) does, with starting coefficients
-    /// `start` (one per column of `x`) for the first fit, as the `start`
-    /// argument of `glm.nb`. The identity link needs them when the default
-    /// start, the fit of `y + 0.1`, gives a negative mean, as it can with an
-    /// offset.
+    /// Prior weights enter the likelihood as frequencies, so `θ` is estimated
+    /// as if each row were repeated. The offset is added to the linear
+    /// predictor. Starting coefficients, as the `start` argument of `glm.nb`,
+    /// are those of the first fit; the identity link needs them when the
+    /// default start, the fit of `y + 0.1`, gives a negative mean, as it can
+    /// with an offset.
     ///
     /// # Errors
     ///
-    /// The errors of [`fit`](Self::fit), and [`GlmError::Length`] when `start`
-    /// does not have one entry per column, and [`GlmError::NoValidStart`] when
-    /// the first fit leaves the domain of the link.
-    pub fn fit_from(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        start: Option<&[f64]>,
-    ) -> Result<NegBinFit, GlmError> {
+    /// [`Error::Unsupported`] for a link other than log or identity,
+    /// [`Error::Input`] for a tolerance that is not positive and finite, no
+    /// iterations or an `init_theta` that is not finite and positive, and the
+    /// errors of [`Glm::fit`], such as [`Error::Response`] for a negative count
+    /// and [`Error::NoValidStart`] when the first fit leaves the domain of the
+    /// link.
+    pub fn fit(&self, data: &GlmData<'_>) -> Result<NegBinFit, Error> {
         if !matches!(self.link, Link::Log | Link::Identity) {
-            return Err(GlmError::Link);
+            return Err(Error::Unsupported {
+                what: "a negative binomial link other than log or identity",
+            });
         }
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) || self.max_iterations == 0 {
-            return Err(GlmError::Tolerance);
-        }
+        crate::error::tolerance("tolerance", self.tolerance)?;
+        crate::error::iterations("max_iterations", self.max_iterations)?;
+        let (y, weights) = (data.y(), data.weights());
         let n = y.len();
         let ones = vec![1.0; n];
         let w = weights.unwrap_or(&ones);
@@ -433,10 +413,8 @@ impl NegBin {
             |fit: &Fit| -> Vec<f64> { fit.coefficients.iter().map(|c| c.unwrap_or(0.0)).collect() };
 
         let first = match self.init_theta {
-            None => glm(Family::Poisson).fit(x, y, weights, offset, start)?,
-            Some(theta) => {
-                glm(Family::NegativeBinomial { theta }).fit(x, y, weights, offset, start)?
-            }
+            None => glm(Family::Poisson).fit(data)?,
+            Some(theta) => glm(Family::NegativeBinomial { theta }).fit(data)?,
         };
         let poisson_ll = self
             .init_theta
@@ -478,13 +456,9 @@ impl NegBin {
                     {
                         break;
                     }
-                    fit = glm(Family::NegativeBinomial { theta: th }).fit(
-                        x,
-                        y,
-                        weights,
-                        offset,
-                        Some(&start_of(&fit)),
-                    )?;
+                    let start = start_of(&fit);
+                    fit = glm(Family::NegativeBinomial { theta: th })
+                        .fit(&data.with_start(Some(&start))?)?;
                     converged &= fit.converged;
                     let previous = th;
                     let update = theta_ml(y, &mu, w, n_w, self.max_iterations, eps);
@@ -520,13 +494,9 @@ impl NegBin {
                 let mut done = false;
                 while count < self.max_iterations {
                     count += 1;
-                    fit = glm(Family::NegativeBinomial { theta: th }).fit(
-                        x,
-                        y,
-                        weights,
-                        offset,
-                        Some(&start_of(&fit)),
-                    )?;
+                    let start = start_of(&fit);
+                    fit = glm(Family::NegativeBinomial { theta: th })
+                        .fit(&data.with_start(Some(&start))?)?;
                     converged &= fit.converged;
                     mu.clone_from(&fit.fitted);
                     let (new_th, new_info) = match theta_tight(y, &mu, w, th) {
@@ -620,14 +590,15 @@ mod tests {
         // Counts that are less dispersed than the Poisson.
         let y: Vec<f64> = (0..60).map(|i| f64::from(3 + (i % 2))).collect();
         let x = epistat_linalg::Mat::from_fn(60, 1, |_, _| 1.0);
-        let fit = NegBin::new().fit(x.as_ref(), &y, None, None).unwrap();
+        let data = GlmData::builder(x.as_ref(), &y).build().unwrap();
+        let fit = NegBin::new().fit(&data).unwrap();
         assert!(fit.poisson_limit);
         assert!(fit.theta.is_none());
         let fit = NegBin {
             theta_rule: ThetaRule::RParity,
             ..NegBin::new()
         }
-        .fit(x.as_ref(), &y, None, None)
+        .fit(&data)
         .unwrap();
         assert!(fit.poisson_limit);
     }
@@ -635,18 +606,18 @@ mod tests {
     #[test]
     fn invalid_arguments_are_errors() {
         let x = epistat_linalg::Mat::from_fn(3, 1, |_, _| 1.0);
-        assert_eq!(
+        assert!(matches!(
             NegBin {
                 link: Link::Logit,
                 ..NegBin::new()
             }
-            .fit(x.as_ref(), &[1.0; 3], None, None)
+            .fit(&GlmData::builder(x.as_ref(), &[1.0; 3]).build().unwrap())
             .unwrap_err(),
-            GlmError::Link
-        );
+            Error::Unsupported { .. }
+        ));
         assert!(matches!(
-            NegBin::new().fit(x.as_ref(), &[1.0, -1.0, 2.0], None, None),
-            Err(GlmError::Response { .. })
+            NegBin::new().fit(&GlmData::builder(x.as_ref(), &[1.0, -1.0, 2.0]).build().unwrap()),
+            Err(Error::Response { .. })
         ));
     }
 }

@@ -53,9 +53,11 @@
 
 use epistat_linalg::Mat;
 
-use crate::{Family, Glm, GlmError, Link};
+use crate::error::{length, weights as check_weights};
+use crate::{Error, Family, Glm, GlmData, Link};
 
 /// The result of [`modified_park_test`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParkTest {
     /// The intercept `γ`.
@@ -73,6 +75,7 @@ pub struct ParkTest {
 }
 
 /// The result of [`classic_park_test`].
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClassicParkTest {
     /// The intercept of `ln r²` on `ln μ`.
@@ -93,14 +96,13 @@ pub struct ClassicParkTest {
 ///
 /// # Errors
 ///
-/// [`GlmError::Length`] when the inputs differ in length, [`GlmError::Weight`]
-/// for a weight that is negative or not finite, and the errors of
-/// [`Glm::fit`].
+/// [`Error::Input`] when the inputs differ in length or a weight is negative
+/// or not finite, and the errors of [`Glm::fit`].
 pub fn modified_park_test(
     fitted: &[f64],
     outcome: &[f64],
     weights: Option<&[f64]>,
-) -> Result<Option<ParkTest>, GlmError> {
+) -> Result<Option<ParkTest>, Error> {
     modified_park_test_with(Glm::new(Family::Gamma, Link::Log), fitted, outcome, weights)
 }
 
@@ -115,18 +117,12 @@ pub fn modified_park_test_with(
     fitted: &[f64],
     outcome: &[f64],
     weights: Option<&[f64]>,
-) -> Result<Option<ParkTest>, GlmError> {
+) -> Result<Option<ParkTest>, Error> {
     let n = fitted.len();
-    check(n, outcome.len(), "outcome")?;
+    length("outcome", n, outcome.len())?;
     if let Some(w) = weights {
-        check(n, w.len(), "weights")?;
-        if let Some((index, &value)) = w
-            .iter()
-            .enumerate()
-            .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-        {
-            return Err(GlmError::Weight { index, value });
-        }
+        length("weights", n, w.len())?;
+        check_weights("weights", w)?;
     }
     let rows = usable(fitted, outcome, weights);
     if rows.len() < 3 {
@@ -148,7 +144,8 @@ pub fn modified_park_test_with(
         link: Link::Log,
         ..controls
     };
-    let fit = model.fit(design.as_ref(), &squared, prior.as_deref(), None, None)?;
+    let data = GlmData::from_parts(design.as_ref(), &squared, prior.as_deref(), None, None)?;
+    let fit = model.fit(&data)?;
     let (Some(intercept), Some(power), Some(Some(standard_error))) = (
         fit.coefficients[0],
         fit.coefficients[1],
@@ -174,12 +171,12 @@ pub fn modified_park_test_with(
 ///
 /// # Errors
 ///
-/// [`GlmError::Length`] when the inputs differ in length.
+/// [`Error::Input`] when the inputs differ in length.
 pub fn classic_park_test(
     fitted: &[f64],
     outcome: &[f64],
-) -> Result<Option<ClassicParkTest>, GlmError> {
-    check(fitted.len(), outcome.len(), "outcome")?;
+) -> Result<Option<ClassicParkTest>, Error> {
+    length("outcome", fitted.len(), outcome.len())?;
     let rows = usable(fitted, outcome, None);
     if rows.len() < 3 {
         return Ok(None);
@@ -236,16 +233,4 @@ fn usable(fitted: &[f64], outcome: &[f64], weights: Option<&[f64]>) -> Vec<usize
                 && squared.is_finite()
         })
         .collect()
-}
-
-fn check(expected: usize, found: usize, what: &'static str) -> Result<(), GlmError> {
-    if expected == found {
-        Ok(())
-    } else {
-        Err(GlmError::Length {
-            what,
-            expected,
-            found,
-        })
-    }
 }
