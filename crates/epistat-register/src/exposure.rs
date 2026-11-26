@@ -48,10 +48,14 @@
 //! group never decreases, so a pointer over the pauses only moves forward and
 //! the work for a person is `O(dispensings + pauses)`.
 //!
-//! The end of a period is the real day `e` of its last supply, and
-//! [`Periods::end_day`] is its floor, as a supply that runs out at 4.9 days
-//! after a day 0 start ends on day 4. A period covers a day `t` when `start <=
-//! t < e`.
+//! The end of a period is the real day `e` of its last supply. A period
+//! covers a day `t` when `start <= t < e`, so a day on which some supply is
+//! left is a day of exposure, and [`Periods::end_day`] is `ceil(e)`, the first
+//! whole day with no supply left: a supply that starts on day 0 and runs out
+//! at 4.9 covers days 0 to 4 and ends on day 5. [`Periods::last_day`] is the
+//! day before, the last day covered. Under this rule [`exposed_on`],
+//! [`Periods::end_day`] and [`Periods::span_set`] agree on every day, also
+//! when the supply is not a whole number of days.
 //!
 //! The daily dose of a period is the total quantity over the sum of the
 //! durations of its supplies, fixed-order sums in dispensing order. Under
@@ -124,6 +128,7 @@
 //!    Epidemiology. 1997;8(6):666-70.
 
 use crate::RegisterError;
+use crate::intervals::SpanSet;
 
 /// How one group of drugs is taken, declared by the caller.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -243,14 +248,62 @@ impl Periods {
         self.person.is_empty()
     }
 
-    /// The end of period `i` truncated to a day.
+    /// The first whole day of period `i` with no supply left, `ceil(end)`.
+    /// The period covers the days `start..end_day`, which are the days
+    /// [`exposed_on`] reads as exposed.
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
         reason = "an end day is far inside the i64 range"
     )]
     pub fn end_day(&self, i: usize) -> i64 {
-        self.end[i].floor() as i64
+        self.end[i].ceil() as i64
+    }
+
+    /// The last day of period `i` with some supply left, `end_day - 1`.
+    #[must_use]
+    pub fn last_day(&self, i: usize) -> i64 {
+        self.end_day(i) - 1
+    }
+
+    /// The periods of one group as a half-open [`SpanSet`] over `persons`
+    /// keys, period `i` as `[start, end_day)`. A person with no period of the
+    /// group is an empty key.
+    ///
+    /// Periods of one person and group never share a day: a period begins
+    /// only on a dispensing day later than the end of the one before, which is
+    /// at least its `end_day`. Periods of different groups can overlap, so a
+    /// set is per group, and [`crate::intervals`] combines them.
+    ///
+    /// # Errors
+    ///
+    /// [`RegisterError::Input`] when a period names a person at or beyond
+    /// `persons`, or `persons` does not fit a `u32`.
+    pub fn span_set(&self, group: u32, persons: usize) -> Result<SpanSet, RegisterError> {
+        if u32::try_from(persons).is_err() {
+            return Err(RegisterError::input("more persons than a u32 holds"));
+        }
+        let mut start = Vec::new();
+        let mut end = Vec::new();
+        let mut offsets = vec![0_usize; persons + 1];
+        for i in 0..self.len() {
+            if self.group[i] != group {
+                continue;
+            }
+            let p = self.person[i] as usize;
+            if p >= persons {
+                return Err(RegisterError::input(format!(
+                    "period {i} names person {p} of {persons}"
+                )));
+            }
+            offsets[p + 1] += 1;
+            start.push(self.start[i]);
+            end.push(self.end_day(i));
+        }
+        for p in 0..persons {
+            offsets[p + 1] += offsets[p];
+        }
+        SpanSet::new(start, end, offsets)
     }
 }
 

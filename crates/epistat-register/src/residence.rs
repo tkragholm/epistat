@@ -52,6 +52,7 @@
 //!    as a tool in epidemiology. Eur J Epidemiol. 2014;29(8):541-9.
 
 use crate::RegisterError;
+use crate::intervals::SpanSet;
 
 /// The direction of a move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -94,6 +95,65 @@ pub struct Spells {
     pub from: Vec<Option<i64>>,
     /// Last day of residence, or `None` for residence that has not ended.
     pub to: Vec<Option<i64>>,
+}
+
+impl Spells {
+    /// The days of residence of each person inside the window
+    /// `[window_start[p], window_end[p])`, as a half-open [`SpanSet`].
+    ///
+    /// An unknown start is the start of the window, a spell that has not ended
+    /// runs to the end of the window, and a closed last day `d` becomes the
+    /// half-open end `d + 1`. A person with no spell is resident in the whole
+    /// window, as [`resident_on`] reads them, so their set is the window and
+    /// not empty.
+    ///
+    /// # Errors
+    ///
+    /// [`RegisterError::Input`] when the window columns do not have one entry
+    /// per person, a window ends before it starts, or the spells are not a
+    /// layout of sorted, disjoint spells, which [`residence_spells`] always
+    /// gives.
+    pub fn span_set(
+        &self,
+        window_start: &[i64],
+        window_end: &[i64],
+    ) -> Result<SpanSet, RegisterError> {
+        let persons = self.person_offsets.len().saturating_sub(1);
+        if window_start.len() != persons || window_end.len() != persons {
+            return Err(RegisterError::input(format!(
+                "the window needs one entry per person, {persons}; got {} and {}",
+                window_start.len(),
+                window_end.len()
+            )));
+        }
+        if self.from.len() != self.to.len() {
+            return Err(RegisterError::input(
+                "from and to must have one entry per spell",
+            ));
+        }
+        // A person with no spell is given one spell open at both ends.
+        let mut from = Vec::with_capacity(self.from.len() + persons);
+        let mut to = Vec::with_capacity(self.to.len() + persons);
+        let mut offsets = Vec::with_capacity(persons + 1);
+        offsets.push(0);
+        for p in 0..persons {
+            let (a, b) = (self.person_offsets[p], self.person_offsets[p + 1]);
+            if a > b || b > self.from.len() {
+                return Err(RegisterError::input(
+                    "person offsets must be non-decreasing from 0 to the number of spells",
+                ));
+            }
+            if a == b {
+                from.push(None);
+                to.push(None);
+            } else {
+                from.extend_from_slice(&self.from[a..b]);
+                to.extend_from_slice(&self.to[a..b]);
+            }
+            offsets.push(from.len());
+        }
+        SpanSet::from_closed_within(&from, &to, &offsets, window_start, window_end)
+    }
 }
 
 impl Events<'_> {
@@ -314,6 +374,33 @@ mod tests {
     use Direction::{In, Out};
 
     type Spell = (Option<i64>, Option<i64>);
+
+    #[test]
+    fn spells_become_a_span_set_in_the_window() {
+        // Person 0 leaves on day 9 and returns on day 20; person 1 has no
+        // move; person 2 arrives on day 50, after the window.
+        let day = [9, 20, 50];
+        let direction = [Out, In, In];
+        let e = Events {
+            person_offsets: &[0, 2, 2, 3],
+            day: &day,
+            direction: &direction,
+        };
+        let spells = residence_spells(&e, SameDay::Cancel).unwrap();
+        let set = spells.span_set(&[0; 3], &[30; 3]).unwrap();
+        assert_eq!(set.key_offsets, [0, 2, 3, 3]);
+        assert_eq!(set.start, [0, 20, 0]);
+        assert_eq!(set.end, [10, 30, 30]);
+        // Every day in the window agrees with resident_on.
+        for p in 0..3_u32 {
+            for d in 0..30 {
+                let rows = set.key_offsets[p as usize]..set.key_offsets[p as usize + 1];
+                let in_set = rows.clone().any(|r| set.start[r] <= d && d < set.end[r]);
+                assert_eq!(in_set, resident_on(&spells, &[p], &[d]).unwrap()[0]);
+            }
+        }
+        assert!(spells.span_set(&[0; 2], &[30; 2]).is_err());
+    }
 
     fn run(events: &[&[(i64, Direction)]], same_day: SameDay) -> Vec<Vec<Spell>> {
         let mut offsets = vec![0];

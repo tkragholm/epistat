@@ -65,7 +65,7 @@ fn every_operation_agrees_with_day_arrays() {
     let zero = vec![0_i64; n];
     let end = vec![r.days; n];
     same(
-        &complement_within(&zero, &end, &a).unwrap(),
+        &complement_within(&a, &zero, &end).unwrap(),
         &r.complement,
         "complement",
         &mut fp,
