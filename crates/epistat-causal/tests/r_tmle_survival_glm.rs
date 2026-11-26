@@ -158,11 +158,7 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
             ratio.se,
         ];
         for (v, want) in values.iter().zip(&s.numbers) {
-            assert!(
-                (v - want).abs() < 1e-8,
-                "{}: {v} against {want}",
-                s.name
-            );
+            assert!((v - want).abs() < 1e-8, "{}: {v} against {want}", s.name);
         }
     }
 }

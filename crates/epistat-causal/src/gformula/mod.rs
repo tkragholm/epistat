@@ -599,8 +599,9 @@ pub fn gformula(
                 return Ok(None);
             };
             let sources = simulate::sources(&counts, options.simulated, seed);
-            let run =
-                simulate::run(&prepared, covariates, outcome, &fitted, &sources, seed, false)?;
+            let run = simulate::run(
+                &prepared, covariates, outcome, &fitted, &sources, seed, false,
+            )?;
             Ok(Some(run.means()))
         })
         .collect::<Result<_>>()?;

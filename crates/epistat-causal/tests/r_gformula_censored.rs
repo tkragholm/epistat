@@ -15,8 +15,8 @@
 //! five of them, by `20` times that, `2e-9`; it is checked to `1e-8`.
 
 use epistat_causal::gformula::{
-    Censoring, Competing, Covariate, CovariateKind, GFormulaOptions, Outcome, PersonPeriods,
-    Term, gformula,
+    Censoring, Competing, Covariate, CovariateKind, GFormulaOptions, Outcome, PersonPeriods, Term,
+    gformula,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;

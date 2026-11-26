@@ -76,7 +76,9 @@ fn the_two_models_and_the_risks_agree_with_r() {
     ));
     let d = &r.rows;
     let n = d.id.len();
-    let design = Mat::from_fn(n, 5, |i, j| [1.0, d.a[i], d.t[i], d.t[i] * d.t[i], d.x[i]][j]);
+    let design = Mat::from_fn(n, 5, |i, j| {
+        [1.0, d.a[i], d.t[i], d.t[i] * d.t[i], d.x[i]][j]
+    });
     let y: Vec<bool> = d.y.iter().map(|&v| v == 1).collect();
     let competing: Vec<bool> = d.d.iter().map(|&v| v == 1).collect();
     let input = MsmInput {

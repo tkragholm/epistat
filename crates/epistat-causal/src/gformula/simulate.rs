@@ -228,10 +228,7 @@ fn simulate_block(
                 &mut values,
                 &mut sums,
                 &mut person[s * reported..(s + 1) * reported],
-                block
-                    .courses
-                    .as_mut()
-                    .map(|c| (&mut c[s], first + i)),
+                block.courses.as_mut().map(|c| (&mut c[s], first + i)),
             )?;
             if intervened > 0 {
                 block.persons[s] += 1;

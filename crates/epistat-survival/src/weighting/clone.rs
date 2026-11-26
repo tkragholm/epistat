@@ -454,14 +454,7 @@ fn for_each_clone_row(
                         first,
                         last,
                         adherence,
-                    } => initiation(
-                        started,
-                        j,
-                        i64::from(first),
-                        i64::from(last),
-                        adherence,
-                        a,
-                    ),
+                    } => initiation(started, j, i64::from(first), i64::from(last), adherence, a),
                     Strategy::NeverInitiate { until } => {
                         let risk = until.is_none_or(|u| j <= i64::from(u));
                         (risk && a, risk)
@@ -477,7 +470,9 @@ fn for_each_clone_row(
                             triggered = Some(j);
                         }
                         match triggered {
-                            Some(t) => initiation(started, j, t, t + i64::from(grace), adherence, a),
+                            Some(t) => {
+                                initiation(started, j, t, t + i64::from(grace), adherence, a)
+                            }
                             // Before the trigger every period is one in which
                             // starting deviates; once started, the adherence
                             // applies as in the other strategies.

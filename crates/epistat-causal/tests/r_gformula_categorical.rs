@@ -21,8 +21,7 @@
 //! simulated persons.
 
 use epistat_causal::gformula::{
-    Covariate, CovariateKind, GFormulaOptions, Intervention, Outcome, PersonPeriods, Term,
-    gformula,
+    Covariate, CovariateKind, GFormulaOptions, Intervention, Outcome, PersonPeriods, Term, gformula,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;

@@ -617,7 +617,15 @@ impl TrialColumns {
         (start, end)
     }
 
-    fn push(&mut self, person: u64, trial: i64, rows: &[TrialPeriod], start: usize, at: usize, e: &Enrolment) {
+    fn push(
+        &mut self,
+        person: u64,
+        trial: i64,
+        rows: &[TrialPeriod],
+        start: usize,
+        at: usize,
+        e: &Enrolment,
+    ) {
         let row = &rows[at];
         self.person.push(person);
         self.trial_period.push(trial);
@@ -1200,7 +1208,9 @@ mod tests {
             match_trials(&[a, d], &TrialOptions::default(), |pool| {
                 Ok::<_, std::convert::Infallible>(pool.job(1).run())
             }),
-            Err(TrialsError::Input(TrialInputError::InconsistentDate { period: 0 }))
+            Err(TrialsError::Input(TrialInputError::InconsistentDate {
+                period: 0
+            }))
         ));
     }
 
@@ -1328,7 +1338,8 @@ mod tests {
             let (rows, trial) = matched_trial_columns(&people, &matched, &options).expect("valid");
             assert_eq!(rows.len(), trial.len());
             let key = |t: &TrialColumns, i: usize| (t.person[i], t.trial_period[i], t.row[i]);
-            let expanded: HashSet<(u64, i64, usize)> = (0..all.len()).map(|i| key(&all, i)).collect();
+            let expanded: HashSet<(u64, i64, usize)> =
+                (0..all.len()).map(|i| key(&all, i)).collect();
             for i in 0..rows.len() {
                 assert!(expanded.contains(&key(&rows, i)));
                 assert_eq!(rows.trial_period[i], matched.trials[trial[i]].period);

@@ -175,9 +175,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     let factor = g as f64 / (g - 1) as f64;
     let am = product(&a_inv, &meat);
     let cross = product(&am, &b_inv);
-    let cross_covariance = (0..p * p)
-        .map(|k| cross[(k / p, k % p)] * factor)
-        .collect();
+    let cross_covariance = (0..p * p).map(|k| cross[(k / p, k % p)] * factor).collect();
     Ok(MsmCompeting {
         event,
         competing: competing_fit,

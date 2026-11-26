@@ -33,8 +33,8 @@ use epistat_matching::{
 };
 use epistat_survival::weighting::trials::{
     Fit, Msm, MsmInput, Panel, PersonPeriod, TrialRows, WeightModel, WeightRows,
-    censoring_weights_with, cumulative_incidence_rows, fit_msm, protocol_rows,
-    switch_weights_with, trial_weights,
+    censoring_weights_with, cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights_with,
+    trial_weights,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -281,8 +281,14 @@ fn the_chain_agrees_with_trial_emulation() {
         let what = format!("{} censoring {}", a.estimand, a.use_censor);
         assert!(worst(&msm.coefficients, &a.msm_coef) < tol, "{what}");
         assert!(worst(&msm.covariance, &a.msm_vcov) < tol, "{what}");
-        assert!(worst(&risk(&msm, p, &t, false), &a.cum_inc_0) < tol, "{what}");
-        assert!(worst(&risk(&msm, p, &t, true), &a.cum_inc_1) < tol, "{what}");
+        assert!(
+            worst(&risk(&msm, p, &t, false), &a.cum_inc_0) < tol,
+            "{what}"
+        );
+        assert!(
+            worst(&risk(&msm, p, &t, true), &a.cum_inc_1) < tol,
+            "{what}"
+        );
     }
 }
 

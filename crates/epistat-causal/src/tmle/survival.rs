@@ -586,7 +586,10 @@ fn intervals(
             x[(r, j)] = v;
         }
     }
-    let y = rows.iter().map(|&(_, _, y)| f64::from(u8::from(y))).collect();
+    let y = rows
+        .iter()
+        .map(|&(_, _, y)| f64::from(u8::from(y)))
+        .collect();
     let weight = rows.iter().map(|&(i, _, _)| w[i]).collect();
     Ok((x, y, weight))
 }

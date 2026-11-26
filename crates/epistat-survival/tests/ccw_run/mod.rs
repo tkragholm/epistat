@@ -106,9 +106,7 @@ pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
         let p = r.input.period[s] as f64;
         [1.0, r.input.l[s], r.input.l0[s], p, p * p][j]
     });
-    let num = Mat::from_fn(m, 2, |i, j| {
-        [1.0, r.input.period[c.source[i]] as f64][j]
-    });
+    let num = Mat::from_fn(m, 2, |i, j| [1.0, r.input.period[c.source[i]] as f64][j]);
     let model = DeviationModel {
         denominator: den.as_ref(),
         numerator: Some(num.as_ref()),
