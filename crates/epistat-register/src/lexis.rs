@@ -41,11 +41,19 @@
 //! - Missing end of follow-up (open follow-up) is for the caller to close with
 //!   an explicit end day before the call.
 //!
+//! # Labels
+//!
+//! [`labels`] gives each piece the left end of its band on each source: the
+//! calendar year, the age reached, the period or the time since entry, as
+//! `Epi::timeBand(x, scale, "left")` does after `Epi::splitLexis`. A piece
+//! that starts before the first cut of a source has no label on it.
+//!
 //! # Validation
 //!
 //! The pieces are compared with `Epi::splitLexis` and `popEpi::splitMulti` in
 //! `tests/lexis_r.rs`, with calendar years and with ages on the
-//! [`AgeRule::DaysOver365_25`] scale, where R's day scales are exact.
+//! [`AgeRule::DaysOver365_25`] scale, where R's day scales are exact, and the
+//! labels with `Epi::timeBand` on the same pieces.
 
 use crate::RegisterError;
 use crate::age::{AgeRule, birthday_on_age};
@@ -165,6 +173,117 @@ pub fn split_at_into(
         emit(row, from, e);
     }
     Ok(())
+}
+
+/// The label of each piece on each cut source: the left end of the band the
+/// piece lies in, as `Epi::timeBand(x, scale, "left")` gives it after
+/// `Epi::splitLexis`.
+///
+/// `cuts` are the sources the split was made with, in the same order, and the
+/// result has one column per source with one value per piece.
+///
+/// - [`Cuts::CalendarYears`]: the calendar year of the piece.
+/// - [`Cuts::AgeYears`]: the largest of `ages` that the person has reached on
+///   the first day of the piece, under the rule of the cut.
+/// - [`Cuts::CalendarPeriods`]: the latest cut day on or before the first day
+///   of the piece.
+/// - [`Cuts::TimeSinceEntry`]: the largest offset with `entry + offset` on or
+///   before the first day of the piece.
+/// - [`Cuts::PerRow`]: the latest of the row's cut days on or before the first
+///   day of the piece.
+///
+/// A piece that starts before the first cut of a source is [`None`] on it, as
+/// R gives `NA` below the first break. Every day of a piece has the label of
+/// its first day, because the split cut the interval at every instant where a
+/// label changes, so a piece is in one band of each source. To label each
+/// piece with the completed age in years, list every age from the youngest in
+/// the data, as the ages that fall before a row's start add no piece.
+///
+/// # Errors
+///
+/// [`RegisterError::Input`] when a cut source does not have one entry per
+/// source row of the split, a piece names a row beyond it, or an age has no
+/// birthday that fits in an `i64`.
+pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>, RegisterError> {
+    let pieces = split.start.len();
+    if split.source_row.len() != pieces || split.end.len() != pieces {
+        return Err(RegisterError::input(
+            "the split must have one source row, start and end per piece",
+        ));
+    }
+    let latest = |values: &mut dyn Iterator<Item = (i64, i64)>, day: i64| {
+        values
+            .filter(|&(at, _)| at <= day)
+            .max_by_key(|&(at, label)| (at, label))
+            .map(|(_, label)| label)
+    };
+    let rows_needed = split
+        .source_row
+        .iter()
+        .map(|&r| r as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(cuts.len());
+    for cut in cuts {
+        match *cut {
+            Cuts::AgeYears { birth, .. } if birth.len() < rows_needed => {
+                return Err(RegisterError::input("a piece names a row beyond the birth column"));
+            }
+            Cuts::TimeSinceEntry { entry, .. } if entry.len() < rows_needed => {
+                return Err(RegisterError::input("a piece names a row beyond the entry column"));
+            }
+            Cuts::PerRow { offsets, .. } if offsets.len() < rows_needed + 1 => {
+                return Err(RegisterError::input("a piece names a row beyond the cut offsets"));
+            }
+            _ => {}
+        }
+        if let Cuts::PerRow { offsets, at } = *cut
+            && (offsets.first() != Some(&0)
+                || offsets.last() != Some(&at.len())
+                || offsets.windows(2).any(|w| w[0] > w[1]))
+        {
+            return Err(RegisterError::input(
+                "the cut offsets are not a CSR layout",
+            ));
+        }
+        let mut column = Vec::with_capacity(pieces);
+        for i in 0..pieces {
+            let (row, day) = (split.source_row[i] as usize, split.start[i]);
+            let label = match *cut {
+                Cuts::CalendarYears => Some(year_from_days(day)),
+                Cuts::AgeYears { birth, ages, rule } => {
+                    let mut reached = None;
+                    for &age in ages {
+                        let at = birthday_on_age(birth[row], age, rule).ok_or_else(|| {
+                            RegisterError::input(format!(
+                                "row {row}: the birthday at age {age} does not fit in an i64"
+                            ))
+                        })?;
+                        if at <= day {
+                            reached = reached.max(Some(i64::from(age)));
+                        }
+                    }
+                    reached
+                }
+                Cuts::CalendarPeriods(days) => {
+                    latest(&mut days.iter().map(|&c| (c, c)), day)
+                }
+                Cuts::TimeSinceEntry { entry, offsets } => latest(
+                    &mut offsets
+                        .iter()
+                        .filter_map(|&o| entry[row].checked_add(o).map(|c| (c, o))),
+                    day,
+                ),
+                Cuts::PerRow { offsets, at } => latest(
+                    &mut at[offsets[row]..offsets[row + 1]].iter().map(|&c| (c, c)),
+                    day,
+                ),
+            };
+            column.push(label);
+        }
+        out.push(column);
+    }
+    Ok(out)
 }
 
 fn check_cut(cut: &Cuts<'_>, n: usize) -> Result<(), RegisterError> {
@@ -305,6 +424,55 @@ mod tests {
                 (0, d(2019, 3, 5), d(2020, 3, 5))
             ]
         );
+    }
+
+    #[test]
+    fn labels_are_the_left_ends_of_the_bands() {
+        // Born 29 February 2000, followed from 1 June 2017 to 31 May 2020.
+        let birth = [d(2000, 2, 29)];
+        let cuts = [
+            Cuts::CalendarYears,
+            Cuts::AgeYears {
+                birth: &birth,
+                ages: &[17, 18, 19, 20],
+                rule: MARCH1,
+            },
+            Cuts::CalendarPeriods(&[d(2019, 1, 1)]),
+            Cuts::TimeSinceEntry {
+                entry: &[d(2017, 6, 1)],
+                offsets: &[0, 365],
+            },
+        ];
+        let s = split_at(&[d(2017, 6, 1)], &[d(2020, 6, 1)], &cuts).unwrap();
+        let l = labels(&s, &cuts).unwrap();
+        assert_eq!(s.start.len(), 8);
+        let years: Vec<i64> = l[0].iter().map(|y| y.unwrap()).collect();
+        assert_eq!(years, [2017, 2018, 2018, 2018, 2019, 2019, 2020, 2020]);
+        let ages: Vec<i64> = l[1].iter().map(|a| a.unwrap()).collect();
+        assert_eq!(ages, [17, 17, 18, 18, 18, 19, 19, 20]);
+        // The age label is the completed age on the first day of each piece.
+        for (i, &age) in ages.iter().enumerate() {
+            assert_eq!(age_in_years(birth[0], s.start[i], MARCH1).map(i64::from), Some(age));
+        }
+        assert_eq!(l[2][..4], [None, None, None, None]);
+        assert_eq!(l[2][4..], [Some(d(2019, 1, 1)); 4]);
+        assert_eq!(l[3][..3], [Some(0); 3]);
+        assert_eq!(l[3][3..], [Some(365); 5]);
+        // Ages that start above the follow-up leave the first pieces unlabelled.
+        let late = [Cuts::AgeYears {
+            birth: &birth,
+            ages: &[19],
+            rule: MARCH1,
+        }];
+        let s = split_at(&[d(2017, 6, 1)], &[d(2020, 6, 1)], &late).unwrap();
+        assert_eq!(labels(&s, &late).unwrap()[0], [None, Some(19)]);
+        let short: [i64; 0] = [];
+        let bad = [Cuts::AgeYears {
+            birth: &short,
+            ages: &[19],
+            rule: MARCH1,
+        }];
+        assert!(labels(&s, &bad).is_err());
     }
 
     #[test]
