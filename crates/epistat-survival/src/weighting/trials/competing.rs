@@ -138,7 +138,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     .map_err(|e| Error::input(format!("competing event: {e}")))?;
 
     let clusters = Clusters::from_labels(input.person);
-    let g = clusters.len();
+    let g = clusters.count();
     let of = clusters.of();
     let mut u = vec![0.0; g * p];
     let mut v = vec![0.0; g * p];

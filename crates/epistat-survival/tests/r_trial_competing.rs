@@ -96,7 +96,12 @@ fn the_two_models_and_the_risks_agree_with_r() {
             largest(&r.competing_vcov)
         ) < 1e-8
     );
-    assert!(worst(&fit.cross_covariance, &r.cross, largest(&r.cross)) < 1e-8);
+    assert!(
+        worst(&fit.cross_covariance, &r.cross, largest(&r.cross)) < 1e-8,
+        "{:?} against {:?}",
+        fit.cross_covariance,
+        r.cross
+    );
     // The competing model is fit_msm on every row with the competing event as
     // the outcome.
     let alone = fit_msm(&MsmInput {
