@@ -228,7 +228,7 @@ impl<'a> Walker<'a> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a dimension has the wrong length, a factor code is
+/// An input error when a dimension has the wrong length, a factor code is
 /// not below its number of levels, the cuts are fewer than two, not finite or
 /// decreasing, a value used is not finite, the table has too many cells to
 /// index, the scale is not finite and positive, the cause is missing with
@@ -311,7 +311,7 @@ impl<'d, 'x> Layout<'d, 'x> {
         needs_cause: bool,
     ) -> Result<Self> {
         if !(opts.scale.is_finite() && opts.scale > 0.0) {
-            return Err(Error::input("scale must be finite and positive"));
+            return Err(Error::invalid("scale must be finite and positive"));
         }
         let data = data.clone().with_timefix(opts.timefix)?;
         let surv = data.followup()?;
@@ -320,13 +320,13 @@ impl<'d, 'x> Layout<'d, 'x> {
             Some(code) => data.cause(code)?.code(),
             None if surv.n_codes() == 1 => 1,
             None => {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "the status has {} event codes, so the cause to count must be given",
                     surv.n_codes()
                 )));
             }
         };
-        let code = i32::try_from(code).map_err(|_| Error::input("cause does not fit an i32"))?;
+        let code = i32::try_from(code).map_err(|_| Error::invalid("cause does not fit an i32"))?;
         let n_rows = data.n_rows();
 
         let mut sizes = Vec::with_capacity(dims.len());
@@ -338,13 +338,13 @@ impl<'d, 'x> Layout<'d, 'x> {
                         return Err(length_error(d, codes.len(), n_rows));
                     }
                     if levels == 0 {
-                        return Err(Error::input(format!("dimension {d} has no levels")));
+                        return Err(Error::invalid(format!("dimension {d} has no levels")));
                     }
                     if let Some(row) = codes
                         .iter()
                         .position(|&c| usize::try_from(c).map_or(true, |c| c >= levels))
                     {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d}: the code {} in row {row} is not below the {levels} levels",
                             codes[row]
                         )));
@@ -356,18 +356,18 @@ impl<'d, 'x> Layout<'d, 'x> {
                         return Err(length_error(d, origin.len(), n_rows));
                     }
                     if cuts.len() < 2 {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d} needs at least two cut points"
                         )));
                     }
                     if cuts.iter().any(|c| !c.is_finite()) || cuts.windows(2).any(|w| w[0] > w[1]) {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d}: the cut points must be finite and not decreasing"
                         )));
                     }
                     let bad = data.used_rows().find(|&r| !origin[r as usize].is_finite());
                     if let Some(row) = bad {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d}: the value in row {row} is not finite"
                         )));
                     }
@@ -377,7 +377,7 @@ impl<'d, 'x> Layout<'d, 'x> {
             cells = cells
                 .checked_mul(size)
                 .filter(|&c| c <= isize::MAX as usize / 24)
-                .ok_or_else(|| Error::input("the table has too many cells"))?;
+                .ok_or_else(|| Error::invalid("the table has too many cells"))?;
             sizes.push(size);
         }
 
@@ -385,7 +385,7 @@ impl<'d, 'x> Layout<'d, 'x> {
         if surv.start().is_none()
             && let Some(row) = data.used_rows().find(|&r| stop[r as usize] < 0.0)
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "row {row} has a negative follow-up time and no start time"
             )));
         }
@@ -587,7 +587,7 @@ fn reach(cut: f64, x0: f64, begin: f64, end: f64) -> f64 {
 }
 
 fn length_error(dimension: usize, got: usize, rows: usize) -> Error {
-    Error::input(format!(
+    Error::invalid(format!(
         "dimension {dimension} has {got} values against {rows} rows"
     ))
 }

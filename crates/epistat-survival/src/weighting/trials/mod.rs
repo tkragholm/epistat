@@ -93,6 +93,7 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
+use epistat_core::InputError;
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
@@ -136,18 +137,18 @@ impl PersonPeriod<'_> {
             ("previous", self.previous.len()),
         ] {
             if len != n {
-                return Err(Error::input(format!("{name}: {len} values for {n} rows")));
+                return Err(Error::invalid(format!("{name}: {len} values for {n} rows")));
             }
         }
         for i in 1..n {
             if self.id[i] == self.id[i - 1] && self.period[i] <= self.period[i - 1] {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "period: row {i} is not after the row before it for person {}",
                     self.id[i]
                 )));
             }
             if self.id[i] < self.id[i - 1] {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "id: the rows of a person must be next to each other and ordered, row {i}"
                 )));
             }
@@ -194,16 +195,16 @@ pub struct RowWeights {
 
 fn check_design(name: &str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
     if x.nrows() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{name}: {} rows for {n} rows of data",
             x.nrows()
         )));
     }
     if x.ncols() == 0 {
-        return Err(Error::input(format!("{name}: no columns")));
+        return Err(Error::invalid(format!("{name}: no columns")));
     }
     if !epistat_linalg::is_finite(x) {
-        return Err(Error::input(format!("{name}: a value is not finite")));
+        return Err(Error::invalid(format!("{name}: a value is not finite")));
     }
     Ok(())
 }
@@ -223,21 +224,22 @@ fn fit_logistic(
     let total = rows.iter().filter(|&&r| counted(r)).count();
     let positives = rows.iter().filter(|&&r| counted(r) && y[r]).count();
     if positives == 0 || positives == total {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{what}: the rows of the fit need both values of the response"
         )));
     }
     let subset = Subset { x, y, rows, case };
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_rows(&subset)
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        .map_err(Error::model(what))?;
     if !fit.converged {
-        return Err(Error::input(format!("{what}: no convergence")));
+        return Err(Error::invalid(format!("{what}: no convergence")));
     }
     let mut coefficients = Vec::with_capacity(fit.coefficients.len());
     for (j, c) in fit.coefficients.iter().enumerate() {
-        coefficients
-            .push(c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?);
+        coefficients.push(
+            c.ok_or_else(|| Error::invalid(format!("{what}: design column {j} is aliased")))?,
+        );
     }
     Ok((coefficients, fit.fitted(&subset)))
 }
@@ -294,15 +296,16 @@ impl WeightRows<'_> {
         if let Some(f) = self.fitted
             && f.len() != n
         {
-            return Err(Error::input(format!(
-                "fitted: {} values for {n} rows",
-                f.len()
-            )));
+            return Err(Error::from(InputError::Length {
+                what: "fitted",
+                expected: n,
+                found: f.len(),
+            }));
         }
         if let Some(c) = self.case_weight
             && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
         {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "case_weight: one non-negative finite value per row",
             ));
         }
@@ -342,7 +345,7 @@ fn ratio_weights(
     let mut denominator_coefficients = Vec::new();
     for (g, group) in groups.iter().enumerate() {
         if group.is_empty() {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{what}: no rows with previous treatment {g}"
             )));
         }
@@ -396,7 +399,7 @@ fn ratio_weights(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for rows that are not ordered by person and period, for
+/// An input error for rows that are not ordered by person and period, for
 /// slices or designs of another length than the rows, a design with no column or
 /// a value that is not finite, a group of the previous treatment without rows or
 /// without both treated and untreated rows, a model that has an aliased column
@@ -465,10 +468,11 @@ pub fn censoring_weights_with(
 ) -> Result<RowWeights> {
     let n = data.check()?;
     if censored.len() != n {
-        return Err(Error::input(format!(
-            "censored: {} values for {n} rows",
-            censored.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "censored",
+            expected: n,
+            found: censored.len(),
+        }));
     }
     let uncensored: Vec<bool> = censored.iter().map(|&c| !c).collect();
     ratio_weights(
@@ -503,7 +507,7 @@ pub struct TrialRows<'a> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for rows or weights that do not match, and for a row of a
+/// An input error for rows or weights that do not match, and for a row of a
 /// trial whose person has no row in the period of the start of the trial or of
 /// the row.
 pub fn trial_weights(
@@ -513,14 +517,15 @@ pub fn trial_weights(
 ) -> Result<Vec<f64>> {
     let n = data.check()?;
     if row_weight.len() != n {
-        return Err(Error::input(format!(
-            "row_weight: {} values for {n} rows",
-            row_weight.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "row_weight",
+            expected: n,
+            found: row_weight.len(),
+        }));
     }
     let m = rows.id.len();
     if rows.trial_period.len() != m || rows.follow_up.len() != m {
-        return Err(Error::input("trial rows: columns of different lengths"));
+        return Err(Error::invalid("trial rows: columns of different lengths"));
     }
     let mut cumulative = vec![0.0; n];
     for i in 0..n {
@@ -550,7 +555,7 @@ pub fn trial_weights(
             let (id, s) = (rows.id[r], rows.trial_period[r]);
             let t = s + rows.follow_up[r];
             let (Some(a), Some(b)) = (find(id, s), find(id, t)) else {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "trial row {r}: person {id} has no row in period {s} or {t}"
                 )));
             };
@@ -602,14 +607,14 @@ impl Msm {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for inputs of different lengths, a weight that is negative
+/// An input error for inputs of different lengths, a weight that is negative
 /// or not finite, a model that has an aliased column or does not converge, and
 /// fewer than two persons.
 pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
     let n = input.outcome.len();
     check_design("design", input.design, n)?;
     if input.weight.len() != n || input.person.len() != n {
-        return Err(Error::input("weight and person need one value per row"));
+        return Err(Error::invalid("weight and person need one value per row"));
     }
     let y: Vec<f64> = input
         .outcome
@@ -619,9 +624,9 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
     let model = Glm::new(Family::Binomial, Link::Logit);
     let fit = model
         .fit_slices(input.design, &y, Some(input.weight), None, None)
-        .map_err(|e| Error::input(format!("outcome model: {e}")))?;
+        .map_err(Error::model("outcome model"))?;
     if !fit.converged {
-        return Err(Error::input("outcome model: no convergence"));
+        return Err(Error::invalid("outcome model: no convergence"));
     }
     let p = input.design.ncols();
     let coefficients: Vec<f64> = fit
@@ -629,7 +634,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         .iter()
         .enumerate()
         .map(|(j, c)| {
-            c.ok_or_else(|| Error::input(format!("outcome model: design column {j} is aliased")))
+            c.ok_or_else(|| Error::invalid(format!("outcome model: design column {j} is aliased")))
         })
         .collect::<Result<_>>()?;
     let clusters = Clusters::from_labels(input.person);
@@ -641,10 +646,10 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         Some(&clusters),
         SandwichType::Hc0,
     )
-    .map_err(|e| Error::input(format!("outcome model: {e}")))?;
+    .map_err(Error::model("outcome model"))?;
     let g = clusters.count();
     if g < 2 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "outcome model: at least two persons are needed",
         ));
     }
@@ -654,7 +659,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         .iter()
         .map(|v| {
             v.map(|v| v * factor)
-                .ok_or_else(|| Error::input("outcome model: the covariance is not defined"))
+                .ok_or_else(|| Error::invalid("outcome model: the covariance is not defined"))
         })
         .collect::<Result<_>>()?;
     debug_assert_eq!(covariance.len(), p * p);
@@ -699,7 +704,7 @@ pub struct TrialSpans<'a> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for rows that are not ordered by person and period, a
+/// An input error for rows that are not ordered by person and period, a
 /// `row_weight` or `outcome` of another length than the rows, spans of
 /// different lengths, a trial that is empty, ends beyond the data or leaves
 /// its person, trials not ordered by their first row, `columns` of 0, and the
@@ -714,33 +719,35 @@ pub fn fit_msm_trials(
 ) -> Result<Msm> {
     let n = data.check()?;
     if row_weight.len() != n {
-        return Err(Error::input(format!(
-            "row_weight: {} values for {n} rows",
-            row_weight.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "row_weight",
+            expected: n,
+            found: row_weight.len(),
+        }));
     }
     if outcome.len() != n {
-        return Err(Error::input(format!(
-            "outcome: {} values for {n} rows",
-            outcome.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "outcome",
+            expected: n,
+            found: outcome.len(),
+        }));
     }
     if trials.start.len() != trials.end.len() {
-        return Err(Error::input("trial spans: columns of different lengths"));
+        return Err(Error::invalid("trial spans: columns of different lengths"));
     }
     for (k, (&a, &b)) in trials.start.iter().zip(trials.end).enumerate() {
         if !(a < b && b <= n) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "trial {k}: the rows {a} to {b} are not a span of the {n} rows"
             )));
         }
         if data.id[a] != data.id[b - 1] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "trial {k}: the rows {a} to {b} have more than one person"
             )));
         }
         if k > 0 && a < trials.start[k - 1] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "trial {k}: the trials must be ordered by their first row"
             )));
         }
@@ -870,7 +877,7 @@ impl Rows for TrialStack<'_> {
 /// cluster numbers, with the number of persons `rows` has.
 pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Result<Msm> {
     if columns == 0 {
-        return Err(Error::input("design: no columns"));
+        return Err(Error::invalid("design has no columns"));
     }
     let n = rows.n_rows();
     let finite = (0..n.div_ceil(ROW_BLOCK)).into_par_iter().all(|b| {
@@ -890,29 +897,29 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
         epistat_linalg::is_finite(x.as_ref())
     });
     if !finite {
-        return Err(Error::input("design: a value is not finite"));
+        return Err(Error::invalid("design: a value is not finite"));
     }
     let model = Glm::new(Family::Binomial, Link::Logit);
     let fit = model
         .fit_rows(rows)
-        .map_err(|e| Error::input(format!("outcome model: {e}")))?;
+        .map_err(Error::model("outcome model"))?;
     if !fit.converged {
-        return Err(Error::input("outcome model: no convergence"));
+        return Err(Error::invalid("outcome model: no convergence"));
     }
     let coefficients: Vec<f64> = fit
         .coefficients
         .iter()
         .enumerate()
         .map(|(j, c)| {
-            c.ok_or_else(|| Error::input(format!("outcome model: design column {j} is aliased")))
+            c.ok_or_else(|| Error::invalid(format!("outcome model: design column {j} is aliased")))
         })
         .collect::<Result<_>>()?;
     let cov = fit
         .robust_covariance(rows, true, SandwichType::Hc0)
-        .map_err(|e| Error::input(format!("outcome model: {e}")))?;
+        .map_err(Error::model("outcome model"))?;
     let g = rows.n_clusters();
     if g < 2 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "outcome model: at least two persons are needed",
         ));
     }
@@ -922,7 +929,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
         .iter()
         .map(|v| {
             v.map(|v| v * factor)
-                .ok_or_else(|| Error::input("outcome model: the covariance is not defined"))
+                .ok_or_else(|| Error::invalid("outcome model: the covariance is not defined"))
         })
         .collect::<Result<_>>()?;
     Ok(Msm {
@@ -964,17 +971,17 @@ pub struct CumulativeIncidence {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no time, designs with another number of columns than the
+/// An input error for no time, designs with another number of columns than the
 /// model or of different numbers of rows, or no row.
 pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<CumulativeIncidence> {
     let p = msm.coefficients.len();
     let Some(first) = designs.first() else {
-        return Err(Error::input("designs: no times"));
+        return Err(Error::invalid("designs: no times"));
     };
     let rows = first.nrows();
     for (t, d) in designs.iter().enumerate() {
         if d.nrows() != rows || d.ncols() != p {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "designs[{t}]: {} by {} where {rows} by {p} is needed",
                 d.nrows(),
                 d.ncols()
@@ -1001,7 +1008,7 @@ pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<Cu
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no time, no row, and a design value that is not
+/// An input error for no time, no row, and a design value that is not
 /// finite.
 pub fn cumulative_incidence_rows(
     msm: &Msm,
@@ -1011,10 +1018,10 @@ pub fn cumulative_incidence_rows(
 ) -> Result<CumulativeIncidence> {
     let p = msm.coefficients.len();
     if times == 0 {
-        return Err(Error::input("designs: no times"));
+        return Err(Error::invalid("designs: no times"));
     }
     if rows == 0 {
-        return Err(Error::input("designs: no rows"));
+        return Err(Error::from(InputError::Empty { what: "designs" }));
     }
     let mut mean = vec![0.0; times];
     let mut grad = vec![0.0; times * p];
@@ -1028,7 +1035,7 @@ pub fn cumulative_incidence_rows(
         for t in 0..times {
             design(r, t, &mut x);
             if x.iter().any(|v| !v.is_finite()) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "design: a value of row {r} at time {t} is not finite"
                 )));
             }

@@ -159,29 +159,29 @@ fn prepare<'a>(data: &SurvData<'a>, opts: &Options) -> Result<SurvData<'a>> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.start().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "survdiff is defined for right-censored data: leave the start column out",
         ));
     }
     if surv.n_codes() != 1 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "survdiff is defined for one event type: n_codes must be 1",
         ));
     }
     if !opts.rho.is_finite() {
-        return Err(Error::input("rho must be finite"));
+        return Err(Error::invalid("rho must be finite"));
     }
     #[expect(clippy::float_cmp, reason = "a weight of 0 or 1 is exact")]
     if data
         .weight()
         .is_some_and(|w| w.iter().any(|&w| w != 0.0 && w != 1.0))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "survdiff has no case weights: a weight is 0, to leave the row out, or 1",
         ));
     }
     if data.n_used() == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "no row has weight 1, so there is nothing to test",
         ));
     }
@@ -215,7 +215,7 @@ struct Block {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `group` is not as long as the data, when the data have
+/// An input error when `group` is not as long as the data, when the data have
 /// a start column or more than one event code, when a weight is neither 0 nor
 /// 1, when no row has weight 1, when `rho` is not finite, or when the tie rule
 /// fails.
@@ -460,7 +460,7 @@ fn quadratic_form(v: &[f64], d: &[f64], event_times: usize) -> (Option<f64>, usi
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`fn@test`] where it applies, when the expected
+/// An input error as for [`fn@test`] where it applies, when the expected
 /// survival is not as long as the data, or when a value of it is outside
 /// `(0, 1]`, since a subject cannot have died under an expected survival of 0.
 pub fn one_sample(
@@ -482,7 +482,7 @@ pub fn one_sample(
     for row in data.used_rows() {
         let s = expected_survival[row as usize];
         if !(s > 0.0 && s <= 1.0) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the expected survival must be a probability in (0, 1]",
             ));
         }

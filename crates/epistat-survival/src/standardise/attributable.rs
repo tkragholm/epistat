@@ -97,7 +97,7 @@ pub struct AfCurve {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for a level outside the levels of `s`, the same level
+/// An input error for a level outside the levels of `s`, the same level
 /// twice, `times` of another length than the times of `s`, and a `level` outside
 /// `(0, 1)`.
 pub fn af_from_standardised(
@@ -109,19 +109,19 @@ pub fn af_from_standardised(
     scale: IntervalScale,
 ) -> Result<AfCurve> {
     if times.len() != s.n_times {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "times has {} entries and the standardised risks {}",
             times.len(),
             s.n_times
         )));
     }
     if unexposed == observed {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the unexposed and the observed level must be different levels",
         ));
     }
     if !(level > 0.0 && level < 1.0) {
-        return Err(Error::input("level must be in (0, 1)"));
+        return Err(Error::invalid("level must be in (0, 1)"));
     }
     let contrast = s.contrast(unexposed, observed)?;
     let z = normal::quantile(1.0 - (1.0 - level) / 2.0);

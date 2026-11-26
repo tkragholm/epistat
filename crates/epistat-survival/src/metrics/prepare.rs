@@ -59,13 +59,13 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
     let data = data.clone().with_timefix(timefix)?;
     let surv = data.followup()?;
     if surv.start().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "data with delayed entry has no censoring distribution to weight by; \
              give follow-up from time 0",
         ));
     }
     if cause == 0 || cause > surv.n_codes() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "cause {cause} is outside 1..={}; 0 is censoring",
             surv.n_codes()
         )));
@@ -73,7 +73,7 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
     if let Some(weight) = data.weight()
         && let Some(position) = weight.iter().position(|&w| w != 0.0 && w != 1.0)
     {
-        return Err(Error::input(format!(
+        return Err(Error::unsupported(format!(
             "weights other than 0 and 1 are not supported, as in riskRegression::Score and \
                  timeROC: row {position} has weight {}",
             weight[position]
@@ -81,7 +81,7 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
     }
     let mut rows: Vec<u32> = data.used_rows().collect();
     if rows.is_empty() {
-        return Err(Error::input("no row has positive weight"));
+        return Err(Error::invalid("no row has positive weight"));
     }
     let stop = surv.stop();
     rows.sort_unstable_by(|&a, &b| {
@@ -114,13 +114,13 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
 /// lie after the last observed time.
 pub(super) fn check_times(times: &[f64], max_time: f64) -> Result<()> {
     if times.is_empty() {
-        return Err(Error::input("times: at least one time is needed"));
+        return Err(Error::invalid("times: at least one time is needed"));
     }
     check_ascending(times, "times", true)?;
     if let Some(&last) = times.last()
         && last > max_time
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "time {last} is after the last observed time {max_time}; riskRegression::Score \
                  drops such times, here they are refused"
         )));
@@ -137,7 +137,7 @@ pub(super) fn check_matrix(
     n_times: usize,
 ) -> Result<()> {
     if m.nrows() != n_rows || m.ncols() != n_times {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{name} is {} by {}, but there are {n_rows} rows and {n_times} times",
             m.nrows(),
             m.ncols()
@@ -146,7 +146,7 @@ pub(super) fn check_matrix(
     for j in 0..n_times {
         for i in 0..n_rows {
             if !m[(i, j)].is_finite() {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "{name}: row {i}, column {j} is not finite"
                 )));
             }
@@ -165,23 +165,23 @@ pub(super) fn check_common_start(data: &SurvData<'_>) -> Result<()> {
         return Ok(());
     };
     let ids = data.id().ok_or_else(|| {
-        Error::input("data with delayed entry needs an id column, as survival::brier does")
+        Error::invalid("data with delayed entry needs an id column, as survival::brier does")
     })?;
     if data.istate().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the data has an istate column: only data with one starting state is supported",
         ));
     }
     let mut seen = vec![false; data.n_ids()];
     for (row, &id) in ids.iter().enumerate() {
         if std::mem::replace(&mut seen[id as usize], true) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "a subject has several rows, the second at row {row}: survival::brier counts                  every row as a subject, which makes the score wrong, so one row per subject is                  required with a start column"
             )));
         }
     }
     if let Some(row) = start.iter().position(|&s| s != start[0]) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "subjects start at different times (row {row} starts at {}, row 0 at {}); one              common start is required",
             start[row], start[0]
         )));

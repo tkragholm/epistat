@@ -252,13 +252,13 @@ fn refusals_keep_their_messages() {
     let short = fit(&data, short.as_ref(), &options(1, Ties::Breslow));
     assert_eq!(
         short.unwrap_err().to_string(),
-        "columns differ in length: x has 59 values against 60 in stop"
+        "x has length 59, expected 60"
     );
     assert_eq!(
         risk_rows(&data, 1, &s.group[1..], &ROWS)
             .unwrap_err()
             .to_string(),
-        "columns differ in length: level has 59 values against 60 in stop"
+        "level has length 59, expected 60"
     );
 }
 

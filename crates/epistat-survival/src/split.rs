@@ -128,18 +128,18 @@ impl Split {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a cut point is not finite, when the tie rule fails
+/// An input error when a cut point is not finite, when the tie rule fails
 /// (see [`crate::timefix::fix_times`]), when `zero` is not finite, or when the
 /// data has no start column and a stop is not above `zero`.
 pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Result<Split> {
     let data = data.followup()?;
     if let Some(bad) = cuts.iter().find(|c| !c.is_finite()) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "cut points must be finite, found {bad}"
         )));
     }
     if !options.zero.is_finite() {
-        return Err(Error::input("zero must be finite"));
+        return Err(Error::invalid("zero must be finite"));
     }
     let n = data.len();
     let mut cut = cuts.to_vec();
@@ -161,7 +161,7 @@ pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Resul
     }
     if data.start().is_none() {
         if let Some(i) = stop.iter().position(|&s| s <= options.zero) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "zero must be less than every stop, but row {i} stops at {}",
                 stop[i]
             )));
@@ -194,7 +194,7 @@ pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Resul
     for i in 0..n {
         let lo = before(start[i], false);
         let hi = before(stop[i], true);
-        let row = u32::try_from(i).map_err(|_| Error::input("more rows than u32::MAX"))?;
+        let row = u32::try_from(i).map_err(|_| Error::invalid("more rows than u32::MAX"))?;
         for p in lo..=hi {
             let last = p == hi;
             out.start.push(if p == lo { start[i] } else { cut[p - 1] });
@@ -203,7 +203,8 @@ pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Resul
             out.row.push(row);
             // `p` cuts are at or before the start of this piece.
             out.episode.push(
-                u32::try_from(p + 1).map_err(|_| Error::input("more cut points than u32::MAX"))?,
+                u32::try_from(p + 1)
+                    .map_err(|_| Error::invalid("more cut points than u32::MAX"))?,
             );
             out.ends_at_cut.push(!last);
         }

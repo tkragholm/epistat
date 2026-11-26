@@ -96,6 +96,7 @@
     reason = "tied predictions are equal values, which is the definition of a tie"
 )]
 
+use epistat_core::InputError;
 use epistat_glm::{Family, Glm};
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, inverse, weighted_gram};
@@ -183,7 +184,7 @@ fn pseudo_risk(
     cause: u32,
 ) -> Result<(Vec<u32>, Vec<f64>)> {
     if data.cluster().is_some() || data.id().is_some() || data.stratum().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "pseudo-values of the risk are of the whole sample: the data must have no \
              cluster, id or stratum column",
         ));
@@ -198,7 +199,9 @@ fn pseudo_risk(
     let made = pseudo(data, &[time], &options)?;
     // Without a cluster or id column the subjects are the used rows, ascending.
     if made.subject.windows(2).any(|w| w[1] <= w[0]) {
-        return Err(Error::input("internal: pseudo-value subjects are not rows"));
+        return Err(Error::invalid(
+            "internal: pseudo-value subjects are not rows",
+        ));
     }
     Ok((made.subject, made.values))
 }
@@ -244,7 +247,7 @@ fn round_like_r(x: f64, digits: i32) -> f64 {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data is interval-censored, has a start column, a
+/// An input error when the data is interval-censored, has a start column, a
 /// cluster, id or stratum column or a weight other than 0 and 1, has no row of
 /// positive weight, or `cause` is outside the event codes; when `time` is not
 /// finite or after the last observed time; when `risk` has another length than
@@ -259,7 +262,7 @@ pub fn smoothed_curve(
     let (rows, y) = pseudo_risk(data, time, opts.timefix, opts.cause)?;
     let n = rows.len();
     if n < 2 {
-        return Err(Error::input("at least two rows are needed to smooth"));
+        return Err(Error::invalid("at least two rows are needed to smooth"));
     }
     check_risk(risk, data.n_rows(), false)?;
     let nf = n as f64;
@@ -268,7 +271,7 @@ pub fn smoothed_curve(
         Bandwidth::Smooth => nf.powf(-0.25),
     };
     if !(bandwidth.is_finite() && bandwidth > 0.0) {
-        return Err(Error::input("the bandwidth must be positive and finite"));
+        return Err(Error::invalid("the bandwidth must be positive and finite"));
     }
     let mut p: Vec<f64> = rows.iter().map(|&r| risk[r as usize]).collect();
     if bandwidth >= 1.0 {
@@ -327,7 +330,7 @@ pub fn smoothed_curve(
             c + radius
         };
         if last < first {
-            return Err(Error::input("internal: an empty neighbourhood"));
+            return Err(Error::invalid("internal: an empty neighbourhood"));
         }
         let mut members: Vec<usize> = order[first - 1..last].to_vec();
         members.sort_unstable();
@@ -349,10 +352,11 @@ pub fn smoothed_curve(
 
 fn check_risk(risk: &[f64], n_rows: usize, open: bool) -> Result<()> {
     if risk.len() != n_rows {
-        return Err(Error::input(format!(
-            "risk has {} values for {n_rows} rows",
-            risk.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "risk",
+            expected: n_rows,
+            found: risk.len(),
+        }));
     }
     for (position, &p) in risk.iter().enumerate() {
         let ok = if open {
@@ -361,7 +365,7 @@ fn check_risk(risk: &[f64], n_rows: usize, open: bool) -> Result<()> {
             (0.0..=1.0).contains(&p)
         };
         if !ok {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "risk: row {position} is {p}, which is not a probability{}",
                 if open {
                     " strictly between 0 and 1"
@@ -487,10 +491,10 @@ pub fn slope_intercept(
     let n = rows.len();
     check_risk(risk, data.n_rows(), true)?;
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::input("the tolerance must be positive and finite"));
+        return Err(Error::invalid("the tolerance must be positive and finite"));
     }
     if opts.max_iterations == 0 {
-        return Err(Error::input("at least one iteration must be allowed"));
+        return Err(Error::invalid("at least one iteration must be allowed"));
     }
     let link = opts.scale.link();
     let x = Mat::from_fn(n, 2, |i, j| {
@@ -535,14 +539,14 @@ fn gee_independence(
 ) -> Result<Gee> {
     let n = x.nrows();
     let aliased = || {
-        Error::input(
+        Error::invalid(
             "the predictions are all equal on the scale of the link: the slope is not \
              estimable",
         )
     };
     let mean = y.iter().sum::<f64>() / n as f64;
     if !(mean > 0.0 && mean < 1.0) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the mean {mean} of the pseudo-values is outside the range of the link, so \
              there is no start"
         )));
@@ -552,7 +556,7 @@ fn gee_independence(
     let z: Vec<f64> = y.iter().map(|&v| eta0 + (v - mean) / derivative).collect();
     let start = Glm::new(Family::Gaussian, epistat_glm::Link::Identity)
         .fit_slices(x.as_ref(), &z, None, None, None)
-        .map_err(|e| Error::input(format!("the start could not be found: {e}")))?;
+        .map_err(Error::model("the starting regression"))?;
     let mut beta: Vec<f64> = start
         .coefficients
         .into_iter()
@@ -568,7 +572,7 @@ fn gee_independence(
         iterations += 1;
         let step = model
             .fit_slices(x.as_ref(), y, None, None, Some(&beta))
-            .map_err(|e| Error::input(format!("the regression could not be fitted: {e}")))?;
+            .map_err(Error::model("the regression"))?;
         let next: Vec<f64> = step
             .coefficients
             .iter()
@@ -586,7 +590,7 @@ fn gee_independence(
             break;
         }
     }
-    let solved = solved.ok_or_else(|| Error::input("no iteration ran"))?;
+    let solved = solved.ok_or_else(|| Error::invalid("no iteration ran"))?;
     let fitted = solved.fitted;
     let d: Vec<f64> = solved
         .linear_predictor
@@ -594,16 +598,11 @@ fn gee_independence(
         .map(|&e| link.derivative(e))
         .collect();
     let weight: Vec<f64> = d.iter().map(|v| v * v).collect();
-    let a = weighted_gram(x.as_ref(), &weight)
-        .map_err(|e| Error::input(format!("the information could not be formed: {e}")))?;
+    let a = weighted_gram(x.as_ref(), &weight)?;
     let scored = Mat::from_fn(n, 2, |i, j| d[i] * x[(i, j)]);
-    let m = meat(scored.as_ref(), |i| y[i] - fitted[i], None)
-        .map_err(|e| Error::input(format!("the sandwich could not be formed: {e}")))?;
-    let cov = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
-    let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?
-        .x;
+    let m = meat(scored.as_ref(), |i| y[i] - fitted[i], None)?;
+    let cov = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)?;
+    let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)?.x;
     let one_norm = |m: &Mat<f64>| {
         (0..2)
             .map(|j| (0..2).map(|i| m[(i, j)].abs()).sum::<f64>())

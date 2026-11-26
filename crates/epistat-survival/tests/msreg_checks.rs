@@ -288,7 +288,7 @@ fn bad_input_is_refused_with_the_reason() {
         Mat::<f64>::zeros(n - 1, 1).as_ref(),
         &MsOptions::default(),
     ));
-    assert!(msg.contains("differ in length"), "{msg}");
+    assert!(msg.contains("x has length"), "{msg}");
     // Terms.
     for (terms, what) in [
         (vec![MsTerm::covariate(5, &[0])], "column 5 of 2"),

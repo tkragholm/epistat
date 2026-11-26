@@ -65,7 +65,7 @@ pub(super) fn run(
             let per_time = clusters.saturating_mul(states);
             let fit = limit.checked_div(per_time).unwrap_or(0);
             if fit == 0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "the influence of {clusters} clusters in {states} states at one time is \
                      {per_time} values, more than the {limit} allowed"
                 )));

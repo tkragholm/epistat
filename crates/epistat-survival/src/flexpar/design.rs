@@ -25,19 +25,16 @@ impl Spline {
     /// `knots.len() - 1` functions.
     pub(super) fn new(knots: &[f64]) -> Result<Self> {
         if knots.len() < 2 {
-            return Err(Error::input("a spline needs at least two knots"));
+            return Err(Error::invalid("a spline needs at least two knots"));
         }
         if knots.iter().any(|k| !k.is_finite()) || !knots.windows(2).all(|p| p[0] < p[1]) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the knots of the spline in log time must be finite and strictly increasing, \
                  which fails when the event times are too few or too tied for the degrees of freedom",
             ));
         }
         let cubic = if knots.len() >= 3 {
-            Some(
-                RestrictedCubic::new(knots, true)
-                    .map_err(|e| Error::input(format!("knots of the spline: {e:?}")))?,
-            )
+            Some(RestrictedCubic::new(knots, true)?)
         } else {
             None
         };

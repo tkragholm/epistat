@@ -157,7 +157,7 @@ fn step(eval: &Eval, q: usize, toler: f64, outer: &mut u32) -> Result<Vec<f64>> 
         a.copy_from_slice(&eval.jj);
         *outer += 1;
         if !factorise(&mut a, q, toler) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the likelihood has no usable derivatives at the starting values or along the \
                  iteration; check the times and the design"
                     .to_owned(),
@@ -187,7 +187,7 @@ pub(super) fn newton(problem: &Problem<'_>, start: Vec<f64>, control: Control) -
     let mut beta = start;
     let first = problem.eval(&beta);
     if !all_finite(&first, q) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the log likelihood or its derivatives are not finite at the starting values; \
              check the times against the distribution"
                 .to_owned(),

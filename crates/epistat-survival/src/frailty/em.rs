@@ -97,13 +97,13 @@ pub(super) fn fit_em(
         let mut beta = Vec::with_capacity(layout.p);
         for c in &fit.coefficients {
             beta.push(c.ok_or_else(|| {
-                Error::input("the Cox fit of an EM step has no estimate for a coefficient")
+                Error::invalid("the Cox fit of an EM step has no estimate for a coefficient")
             })?);
         }
         state.beta = beta;
         let (lambda, events_part) = layout
             .cluster_hazards(&state)
-            .ok_or_else(|| Error::input("a risk score of an EM step is not finite"))?;
+            .ok_or_else(|| Error::undefined("a risk score of an EM step is not finite"))?;
         marginal = events_part + gamma_part(&layout.events, &lambda, theta);
         for (i, w) in state.w.iter_mut().enumerate() {
             let d = f64::from(layout.events[i]);

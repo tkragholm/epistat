@@ -218,7 +218,7 @@ impl<'a> IntervalDataBuilder<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`](crate::Error::Input) for the first rule that fails.
+    /// An input error for the first rule that fails.
     pub fn build(self) -> Result<SurvData<'a>> {
         let n_rows = match self.source {
             Source::Bounds { lower, .. } => lower.len(),

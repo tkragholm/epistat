@@ -81,12 +81,12 @@ pub(super) struct Prepared<'a> {
 pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Estimated<'a>) -> Result<Prepared<'a>> {
     let n = data.n_rows();
     if est.iptw.is_none() && est.censoring.is_none() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "weights: neither treatment nor censoring weights are given",
         ));
     }
     if est.iptw.is_none() && est.subject.is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "subject: it indexes the treatment weights, which are not given",
         ));
     }
@@ -123,7 +123,7 @@ pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Estimated<'a>) -> Result<Pr
         None => {}
         Some(Censoring::Pooled { fit, at }) => {
             if fit.len() != n {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "censoring: the pooled fit has {} rows for {n} rows of data",
                     fit.len()
                 )));

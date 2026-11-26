@@ -178,7 +178,7 @@ impl Iptw<'_> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `design` has another number of rows than `treatment`,
+/// An input error when `design` has another number of rows than `treatment`,
 /// no column, or a value that is not finite, when everyone or no one is
 /// treated, when `stabilise` is set for an estimand other than `Ate`, when the
 /// propensity model has an aliased column or does not converge, and when a
@@ -200,7 +200,7 @@ pub fn fit<'a>(
 ///
 /// # Errors
 ///
-/// As [`fit`], and [`Error::Input`] when `alpha` is not in `[0, 0.5)`.
+/// As [`fit`], and an input error when `alpha` is not in `[0, 0.5)`.
 pub fn fit_atos<'a>(
     treatment: &'a [bool],
     design: MatRef<'a, f64>,
@@ -209,7 +209,7 @@ pub fn fit_atos<'a>(
     if let Some(a) = alpha
         && !(0.0..0.5).contains(&a)
     {
-        return Err(Error::input(format!("alpha: {a} is not in [0, 0.5)")));
+        return Err(Error::invalid(format!("alpha: {a} is not in [0, 0.5)")));
     }
     let opts = IptwOptions {
         estimand: Estimand::Atos,
@@ -258,42 +258,42 @@ fn fit_with<'a>(
 ) -> Result<Iptw<'a>> {
     let n = treatment.len();
     if design.nrows() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "design has {} rows for {n} subjects",
             design.nrows()
         )));
     }
     if design.ncols() == 0 {
-        return Err(Error::input("design has no columns"));
+        return Err(Error::invalid("design has no columns"));
     }
     if !epistat_linalg::is_finite(design) {
-        return Err(Error::input("design: a value is not finite"));
+        return Err(Error::invalid("design: a value is not finite"));
     }
     let n_treated = treatment.iter().filter(|&&a| a).count();
     if n_treated == 0 || n_treated == n {
-        return Err(Error::input("treatment: both groups need subjects"));
+        return Err(Error::invalid("treatment: both groups need subjects"));
     }
     if opts.stabilise && opts.estimand != Estimand::Ate {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "stabilise: weights are stabilised for the average treatment effect only",
         ));
     }
     let y: Vec<f64> = treatment.iter().map(|&a| f64::from(u8::from(a))).collect();
     let model = Glm::new(Family::Binomial, Link::Logit)
         .fit_slices(design, &y, None, None, None)
-        .map_err(|e| Error::input(format!("propensity model: {e}")))?;
+        .map_err(Error::model("propensity model"))?;
     if !model.converged {
-        return Err(Error::input("propensity model: no convergence"));
+        return Err(Error::invalid("propensity model: no convergence"));
     }
     let mut coefficients = Vec::with_capacity(model.coefficients.len());
     for (j, c) in model.coefficients.iter().enumerate() {
         coefficients.push(c.ok_or_else(|| {
-            Error::input(format!("propensity model: design column {j} is aliased"))
+            Error::invalid(format!("propensity model: design column {j} is aliased"))
         })?);
     }
     let propensity = model.fitted;
     if let Some(i) = propensity.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "propensity model: subject {i} has fitted probability {}",
             propensity[i]
         )));

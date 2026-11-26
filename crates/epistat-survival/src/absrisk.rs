@@ -333,7 +333,7 @@ impl<'a> CauseSpecificCox<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] as for [`cox::fit`](crate::cox::fit), for a number of
+    /// An input error as for [`cox::fit`](crate::cox::fit), for a number of
     /// designs other than the models need, for a data set with a single event
     /// code, and for a cause outside the codes.
     pub fn fit(
@@ -362,7 +362,7 @@ impl<'a> CauseSpecificCox<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] as for [`fit`](Self::fit), and for a number of fits
+    /// An input error as for [`fit`](Self::fit), and for a number of fits
     /// other than the number of designs.
     pub fn from_fits(
         data: &SurvData<'a>,
@@ -390,7 +390,7 @@ impl<'a> CauseSpecificCox<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `cause` is outside the codes of the data or, for
+    /// An input error when `cause` is outside the codes of the data or, for
     /// [`SurvType::Survival`], is not the cause of the fit, when a time or a new
     /// covariate is not finite, when the new designs do not match the models in
     /// number or in columns, when a new stratum is not one of the data or is
@@ -461,7 +461,7 @@ impl<'a> Plan<'a> {
         let fixed = data.clone().with_timefix(opts.timefix)?;
         let n_codes = fixed.followup()?.n_codes();
         if n_codes < 2 {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "data: absolute risk needs competing causes, so the status needs at least two codes",
             ));
         }
@@ -469,7 +469,7 @@ impl<'a> Plan<'a> {
             SurvType::Hazard => n_codes as usize,
             SurvType::Survival { cause } => {
                 if cause == 0 || cause > n_codes {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "cause {cause} is outside 1..={n_codes}"
                     )));
                 }
@@ -609,12 +609,12 @@ impl CauseSpecificCox<'_> {
         opts: &RiskOptions,
     ) -> Result<Context> {
         if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-            return Err(Error::input("conf_level: must be in (0, 1)"));
+            return Err(Error::invalid("conf_level: must be in (0, 1)"));
         }
         refuse_non_finite(times, "times")?;
         let n_codes = self.data.followup()?.n_codes();
         if cause == 0 || cause > n_codes {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "cause {cause} is outside 1..={n_codes}"
             )));
         }
@@ -622,7 +622,7 @@ impl CauseSpecificCox<'_> {
             SurvType::Hazard => ((cause - 1) as usize, (0..self.fits.len()).collect()),
             SurvType::Survival { cause: fitted } => {
                 if cause != fitted {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "cause {cause}: the models were fitted for cause {fitted}"
                     )));
                 }
@@ -636,13 +636,13 @@ impl CauseSpecificCox<'_> {
         let rows = new.designs[0].nrows();
         for (m, d) in new.designs.iter().enumerate() {
             if d.nrows() != rows {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "new designs: model {m} has {} rows against {rows}",
                     d.nrows()
                 )));
             }
             if d.ncols() != self.designs[m].ncols() {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "new designs: model {m} has {} columns, the model has {}",
                     d.ncols(),
                     self.designs[m].ncols()
@@ -651,7 +651,7 @@ impl CauseSpecificCox<'_> {
             for j in 0..d.ncols() {
                 for i in 0..rows {
                     if !d[(i, j)].is_finite() {
-                        return Err(Error::input("new designs: a value is not finite"));
+                        return Err(Error::invalid("new designs: a value is not finite"));
                     }
                 }
             }
@@ -663,7 +663,7 @@ impl CauseSpecificCox<'_> {
                     check_lengths(&[("new designs", rows), ("new stratum", codes.len())])?;
                 }
                 None => {
-                    return Err(Error::input("new stratum: required, the data has strata"));
+                    return Err(Error::invalid("new stratum: required, the data has strata"));
                 }
             }
         }
@@ -674,7 +674,7 @@ impl CauseSpecificCox<'_> {
                 .iter()
                 .map(|code| {
                     levels.binary_search(code).map_err(|_| {
-                        Error::input(format!("new stratum: {code} is not a stratum of the data"))
+                        Error::invalid(format!("new stratum: {code} is not a stratum of the data"))
                     })
                 })
                 .collect::<Result<Vec<usize>>>()?,
@@ -684,7 +684,7 @@ impl CauseSpecificCox<'_> {
             check_lengths(&[("new designs", rows), ("new offset", offset.len())])?;
             refuse_non_finite(offset, "new offset")?;
             if self.options[0].offset.is_none() {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "new offset: the models were fitted without an offset",
                 ));
             }
@@ -701,7 +701,7 @@ impl CauseSpecificCox<'_> {
                 }
                 let value = eta.exp();
                 if !value.is_finite() {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "new designs: the risk score of row {r} in model {m} is not finite"
                     )));
                 }

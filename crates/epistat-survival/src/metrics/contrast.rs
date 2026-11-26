@@ -82,7 +82,7 @@ pub struct Contrast {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a score has no influence function, when the two are
+/// An input error when a score has no influence function, when the two are
 /// at different times or from data of different numbers of rows, or when
 /// `opts.level` is not in `(0, 1)`.
 pub fn brier_difference(
@@ -94,7 +94,7 @@ pub fn brier_difference(
         || model.n_rows != reference.n_rows
         || model.n_used != reference.n_used
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the two scores must be on the same data and times",
         ));
     }
@@ -120,7 +120,7 @@ pub fn auc_difference(model: &Auc, reference: &Auc, opts: &ContrastOptions) -> R
         || model.n_rows != reference.n_rows
         || model.n_used != reference.n_used
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the two areas must be on the same data and times",
         ));
     }
@@ -145,10 +145,10 @@ fn contrast(
     opts: ContrastOptions,
 ) -> Result<Contrast> {
     if !(opts.level > 0.0 && opts.level < 1.0) {
-        return Err(Error::input("level must be in (0, 1)"));
+        return Err(Error::invalid("level must be in (0, 1)"));
     }
     let (Some(a), Some(b)) = (model_influence, reference_influence) else {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the scores need their influence functions: compute them with variance and \
              keep_influence",
         ));

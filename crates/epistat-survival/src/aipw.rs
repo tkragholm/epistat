@@ -146,6 +146,7 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
+use epistat_core::InputError;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
@@ -287,7 +288,7 @@ pub struct AipwSurv {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for data that is not right-censored or has an entry time, a
+/// An input error for data that is not right-censored or has an entry time, a
 /// case weight or strata, a status outside 0 and 1, columns of another length
 /// than the data, times that are not finite, positive and increasing, a
 /// treatment that is the same for every row, a model that has an aliased column
@@ -386,13 +387,15 @@ fn linear_predictor(x: MatRef<'_, f64>, cf: Counterfactual<'_>, beta: &[f64], ro
 
 fn coefficients(fit: &crate::cox::CoxModelFit, what: &str) -> Result<Vec<f64>> {
     if !fit.converged {
-        return Err(Error::input(format!("the {what} model did not converge")));
+        return Err(Error::NotConverged {
+            iterations: fit.iterations as usize,
+        });
     }
     fit.coefficients
         .iter()
         .enumerate()
         .map(|(j, c)| {
-            c.ok_or_else(|| Error::input(format!("the {what} model has an aliased column {j}")))
+            c.ok_or_else(|| Error::invalid(format!("the {what} model has an aliased column {j}")))
         })
         .collect()
 }
@@ -443,16 +446,16 @@ fn cox_model(
 
 fn check_design(name: &str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
     if x.nrows() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{name}: {} rows for {n} rows of data",
             x.nrows()
         )));
     }
     if x.ncols() == 0 {
-        return Err(Error::input(format!("{name}: no columns")));
+        return Err(Error::invalid(format!("{name}: no columns")));
     }
     if !epistat_linalg::is_finite(x) {
-        return Err(Error::input(format!("{name}: a value is not finite")));
+        return Err(Error::invalid(format!("{name}: a value is not finite")));
     }
     Ok(())
 }
@@ -469,12 +472,12 @@ impl Model {
         opts: &AipwSurvOptions,
     ) -> Result<Self> {
         if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-            return Err(Error::input("conf_level must be in (0, 1)"));
+            return Err(Error::invalid("conf_level must be in (0, 1)"));
         }
         if let Some((lo, hi)) = opts.truncation
             && !(0.0 < lo && lo < hi && hi < 1.0)
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "truncation: ({lo}, {hi}) are not probabilities in increasing order"
             )));
         }
@@ -482,7 +485,7 @@ impl Model {
             || times.iter().any(|t| !(t.is_finite() && *t > 0.0))
             || times.windows(2).any(|w| w[0] >= w[1])
         {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "times: need at least one, finite, positive and increasing",
             ));
         }
@@ -493,27 +496,28 @@ impl Model {
             || fixed.stratum().is_some()
             || fixed.cluster().is_some()
         {
-            return Err(Error::input(
+            return Err(Error::unsupported(
                 "data: entry times, case weights, strata and clusters are not supported",
             ));
         }
         let n = fixed.n_rows();
         if spec.treatment.len() != n {
-            return Err(Error::input(format!(
-                "treatment: {} values for {n} rows",
-                spec.treatment.len()
-            )));
+            return Err(Error::from(InputError::Length {
+                what: "treatment",
+                expected: n,
+                found: spec.treatment.len(),
+            }));
         }
         let n_treated = spec.treatment.iter().filter(|&&a| a).count();
         if n_treated == 0 || n_treated == n {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "treatment: both treated and untreated rows are needed",
             ));
         }
         let stop = surv.stop().to_vec();
         let status = surv.status().to_vec();
         if status.iter().any(|&s| s != 0 && s != 1) {
-            return Err(Error::input("data: the status must be 0 or 1"));
+            return Err(Error::invalid("data: the status must be 0 or 1"));
         }
         check_design("outcome_x", spec.outcome_x, n)?;
         check_design("propensity_x", spec.propensity_x, n)?;
@@ -521,7 +525,7 @@ impl Model {
             if let Counterfactual::Design(m) = cf {
                 check_design(&format!("levels[{l}]"), *m, n)?;
                 if m.ncols() != spec.outcome_x.ncols() {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "levels[{l}]: {} columns for the {} of the model",
                         m.ncols(),
                         spec.outcome_x.ncols()
@@ -531,7 +535,7 @@ impl Model {
             if let Counterfactual::Columns(set) = cf
                 && set.iter().any(|&(c, _)| c >= spec.outcome_x.ncols())
             {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "levels[{l}]: a column is outside the design"
                 )));
             }
@@ -555,14 +559,14 @@ impl Model {
             .collect();
         let glm = Glm::new(Family::Binomial, Link::Logit)
             .fit_slices(spec.propensity_x, &y, None, None, None)
-            .map_err(|e| Error::input(format!("treatment model: {e}")))?;
+            .map_err(Error::model("treatment model"))?;
         if !glm.converged {
-            return Err(Error::input("treatment model: no convergence"));
+            return Err(Error::invalid("treatment model: no convergence"));
         }
         let mut gamma = Vec::with_capacity(glm.coefficients.len());
         for (j, c) in glm.coefficients.iter().enumerate() {
             gamma.push(c.ok_or_else(|| {
-                Error::input(format!("treatment model: design column {j} is aliased"))
+                Error::invalid(format!("treatment model: design column {j} is aliased"))
             })?);
         }
         let mut n_trimmed = 0;
@@ -573,7 +577,7 @@ impl Model {
                 .sum();
             let mut e = expit(eta);
             if !(e > 0.0 && e < 1.0) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "treatment model: row {i} has fitted probability {e}"
                 )));
             }
@@ -598,7 +602,7 @@ impl Model {
         let cens = match spec.censoring {
             Censoring::None => {
                 if !jump.is_empty() {
-                    return Err(Error::input(
+                    return Err(Error::invalid(
                         "data: rows with status 0 need a censoring model",
                     ));
                 }
@@ -608,10 +612,11 @@ impl Model {
                 let group: Vec<u32> = match groups {
                     Some(g) if g.len() == n => g.to_vec(),
                     Some(g) => {
-                        return Err(Error::input(format!(
-                            "groups: {} values for {n} rows",
-                            g.len()
-                        )));
+                        return Err(Error::from(InputError::Length {
+                            what: "groups",
+                            expected: n,
+                            found: g.len(),
+                        }));
                     }
                     None => vec![0; n],
                 };
@@ -699,7 +704,7 @@ impl Model {
         // The weight of the event at each time.
         let g_t = if d_i == 1 { self.g_before(i, t_i) } else { 1.0 };
         if d_i == 1 && (g_t.is_nan() || g_t <= 0.0) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the censoring survival is 0 before the event of row {i}"
             )));
         }
@@ -739,7 +744,7 @@ impl Model {
             }
         }
         if out.iter().any(|v| !v.is_finite()) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "row {i} has a value that is not finite"
             )));
         }
@@ -1579,7 +1584,7 @@ fn runs(rows: &[usize], value: impl Fn(usize) -> f64, width: f64) -> Vec<&[usize
 /// on both sides of a time asked for.
 fn cells_of(jump: &[f64], times: &[f64], k: usize) -> Result<Vec<(usize, usize)>> {
     if k == 0 {
-        return Err(Error::input("grid: at least one cell is needed"));
+        return Err(Error::invalid("grid: at least one cell is needed"));
     }
     let j = jump.len();
     let mut cuts: Vec<usize> = (0..=k).map(|c| c * j / k).collect();

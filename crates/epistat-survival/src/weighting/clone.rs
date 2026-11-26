@@ -267,7 +267,7 @@ impl Cloned {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for columns of different lengths, no strategy, rows that
+/// An input error for columns of different lengths, no strategy, rows that
 /// are not ordered by person with the periods 0, 1, 2, ... in a person, and a
 /// grace period or `until` beyond the longest follow-up, which no person can
 /// reach.
@@ -279,31 +279,31 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         ("outcome", input.outcome.len()),
     ] {
         if len != n {
-            return Err(Error::input(format!("{name}: {len} values for {n} rows")));
+            return Err(Error::invalid(format!("{name}: {len} values for {n} rows")));
         }
     }
     if strategies.is_empty() {
-        return Err(Error::input("strategies: at least one is needed"));
+        return Err(Error::invalid("strategies: at least one is needed"));
     }
     let mut n_persons = 0usize;
     let mut starts = Vec::new();
     for i in 0..n {
         if i == 0 || input.id[i] != input.id[i - 1] {
             if input.period[i] != 0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "period: person {} does not start at period 0 in row {i}",
                     input.id[i]
                 )));
             }
             if i > 0 && input.id[i] < input.id[i - 1] {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "id: the rows of a person must be next to each other and ordered, row {i}"
                 )));
             }
             starts.push(i);
             n_persons += 1;
         } else if input.period[i] != input.period[i - 1] + 1 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "period: row {i} does not follow the row before it"
             )));
         }
@@ -315,7 +315,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
             Strategy::InitiateWithin { grace, .. } => Some(grace),
             Strategy::InitiateBetween { first, last, .. } => {
                 if first > last {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strategy {s:?}: the first period of starting is after the last"
                     )));
                 }
@@ -325,19 +325,19 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
             Strategy::InitiateWhen { trigger, .. } => {
                 let k = trigger.covariate();
                 let Some(column) = input.covariates.get(k) else {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strategy {s:?}: covariate {k} is not among the {} covariates",
                         input.covariates.len()
                     )));
                 };
                 if column.len() != n {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "covariate {k}: {} values for {n} rows",
                         column.len()
                     )));
                 }
                 if let Some(r) = column.iter().position(|v| !v.is_finite()) {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "covariate {k}: the value of row {r} is not finite"
                     )));
                 }
@@ -347,7 +347,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         if let Some(r) = reach
             && r as usize >= longest
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "strategy {s:?}: period {r} is beyond the longest follow-up of {longest} periods"
             )));
         }
@@ -356,7 +356,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         | Strategy::InitiateWhen { adherence, .. } = *s
             && adherence == Adherence::For(0)
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "strategy {s:?}: treatment must go on for at least one period"
             )));
         }
@@ -536,7 +536,7 @@ fn fit_deviation(
 ) -> Result<Vec<f64>> {
     let positives = rows.iter().filter(|&&r| d[r]).count();
     if positives == 0 || positives == rows.len() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{what}: the rows at risk need both deviations and rows that are not"
         )));
     }
@@ -545,13 +545,15 @@ fn fit_deviation(
     let ws: Option<Vec<f64>> = case.map(|c| rows.iter().map(|&r| c[r]).collect());
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_slices(xs.as_ref(), &ys, ws.as_deref(), None, None)
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        .map_err(Error::model(what))?;
     if !fit.converged {
-        return Err(Error::input(format!("{what}: no convergence")));
+        return Err(Error::invalid(format!("{what}: no convergence")));
     }
     let mut coef = Vec::with_capacity(fit.coefficients.len());
     for (j, c) in fit.coefficients.iter().enumerate() {
-        coef.push(c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?);
+        coef.push(
+            c.ok_or_else(|| Error::invalid(format!("{what}: design column {j} is aliased")))?,
+        );
     }
     Ok(coef)
 }
@@ -582,7 +584,7 @@ pub struct DeviationWeights {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for models or designs that do not match the clones, a
+/// An input error for models or designs that do not match the clones, a
 /// strategy without rows at risk or whose rows at risk are all deviations or none,
 /// a model that has an aliased column or does not converge, and a case weight of
 /// the wrong length, negative or not finite.
@@ -594,7 +596,7 @@ pub fn deviation_weights(
     let n = cloned.len();
     let n_arms = cloned.arm.iter().copied().max().map_or(0, |a| a + 1);
     if models.len() < n_arms {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "models: {} for {n_arms} strategies",
             models.len()
         )));
@@ -602,7 +604,7 @@ pub fn deviation_weights(
     if let Some(c) = case_weight
         && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "case_weight: one non-negative finite value per clone row",
         ));
     }
@@ -616,14 +618,14 @@ pub fn deviation_weights(
         ] {
             if let Some(m) = m {
                 if m.nrows() != n || m.ncols() == 0 {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strategy {k} {name}: {} rows and {} columns for {n} clone rows",
                         m.nrows(),
                         m.ncols()
                     )));
                 }
                 if !epistat_linalg::is_finite(m) {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strategy {k} {name}: a value is not finite"
                     )));
                 }
@@ -729,7 +731,7 @@ pub fn deviation_weights_rows(
     let n = cloned.len();
     let n_arms = cloned.arm.iter().copied().max().map_or(0, |a| a + 1);
     if models.len() < n_arms {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "models: {} for {n_arms} strategies",
             models.len()
         )));
@@ -737,7 +739,7 @@ pub fn deviation_weights_rows(
     if let Some(c) = case_weight
         && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "case_weight: one non-negative finite value per clone row",
         ));
     }
@@ -751,12 +753,12 @@ pub fn deviation_weights_rows(
         ] {
             if let Some(m) = m {
                 if m.columns == 0 {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strategy {k} {name}: {n} rows and 0 columns for {n} clone rows"
                     )));
                 }
                 if !finite_design(m, n) {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strategy {k} {name}: a value is not finite"
                     )));
                 }
@@ -943,19 +945,21 @@ fn fit_deviation_rows(
     what: &str,
 ) -> Result<Vec<f64>> {
     if at_risk.deviations == 0 || at_risk.deviations == at_risk.rows {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{what}: the rows at risk need both deviations and rows that are not"
         )));
     }
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_rows(&AtRiskRows { at_risk, design })
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        .map_err(Error::model(what))?;
     if !fit.converged {
-        return Err(Error::input(format!("{what}: no convergence")));
+        return Err(Error::invalid(format!("{what}: no convergence")));
     }
     let mut coef = Vec::with_capacity(fit.coefficients.len());
     for (j, c) in fit.coefficients.iter().enumerate() {
-        coef.push(c.ok_or_else(|| Error::input(format!("{what}: design column {j} is aliased")))?);
+        coef.push(
+            c.ok_or_else(|| Error::invalid(format!("{what}: design column {j} is aliased")))?,
+        );
     }
     Ok(coef)
 }
@@ -974,7 +978,7 @@ fn fit_deviation_rows(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for a `weight` of another length than the clone rows,
+/// An input error for a `weight` of another length than the clone rows,
 /// clone rows whose persons are not in order, `columns` of 0, and the errors
 /// of `fit_msm`.
 pub fn fit_msm_clones(
@@ -985,7 +989,7 @@ pub fn fit_msm_clones(
 ) -> Result<super::trials::Msm> {
     let n = cloned.len();
     if weight.len() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "weight: {} values for {n} clone rows",
             weight.len()
         )));
@@ -997,7 +1001,7 @@ pub fn fit_msm_clones(
         ("outcome", cloned.outcome.len()),
     ] {
         if len != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{name}: {len} values for {n} clone rows"
             )));
         }
@@ -1013,7 +1017,7 @@ pub fn fit_msm_clones(
         if let Some(l) = last
             && person < l
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "person: clone row {r} is before the rows of an earlier person"
             )));
         }

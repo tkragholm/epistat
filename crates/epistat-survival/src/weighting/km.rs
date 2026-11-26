@@ -184,7 +184,7 @@ struct Correction<'a> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for data with case weights or interval-censored data, for
+/// An input error for data with case weights or interval-censored data, for
 /// `subject` of another length than the data or naming a subject that does not
 /// exist, for a status with several codes and no `cause`, for a time that is
 /// not finite, and when the stacked system cannot be solved.
@@ -213,9 +213,7 @@ pub fn estimate(
         }
     }
     let bread = iptw.bread()?;
-    let solved = Factor::new(bread.as_ref(), &GENERAL)
-        .and_then(|f| f.solve(psi.as_ref()))
-        .map_err(|e| Error::input(format!("the propensity model: {e}")))?;
+    let solved = Factor::new(bread.as_ref(), &GENERAL).and_then(|f| f.solve(psi.as_ref()))?;
     // The influence of the parameters is minus the solution, one row per unit.
     let influence = Mat::from_fn(n_units, k, |u, m| -solved[(m, u)]);
     let unit_of_row: Vec<usize> = (0..n).map(|row| unit_of_subject[subj(row)]).collect();
@@ -247,7 +245,7 @@ pub fn estimate(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`estimate`] and for the models of the weights.
+/// An input error as for [`estimate`] and for the models of the weights.
 pub fn estimate_estimated(
     data: &SurvData<'_>,
     times: &[f64],
@@ -319,25 +317,25 @@ fn curves(
     general: Option<&[Box<dyn Nuisance + '_>]>,
 ) -> Result<WeightedKm> {
     if let Some(t) = times.iter().find(|t| !t.is_finite()) {
-        return Err(Error::input(format!("times: {t} is not finite")));
+        return Err(Error::invalid(format!("times: {t} is not finite")));
     }
     let surv = data.followup()?;
     let code = match (surv.n_codes(), opts.cause) {
         (1, None | Some(1)) => 1,
         (1, Some(c)) => {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "cause: {c} is outside the single code 1"
             )));
         }
         (_, Some(c)) if (1..=surv.n_codes()).contains(&c) => i32::try_from(c).unwrap_or(i32::MAX),
         (_, Some(c)) => {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "cause: {c} is outside 1..={}",
                 surv.n_codes()
             )));
         }
         (_, None) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "cause: needed when the status has several codes",
             ));
         }

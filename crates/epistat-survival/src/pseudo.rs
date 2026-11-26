@@ -171,6 +171,7 @@ mod states;
 mod steps;
 mod table;
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 
 use crate::check::check_ascending;
@@ -309,7 +310,7 @@ pub struct Pseudo {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `times` is empty, not finite or not strictly
+/// An input error when `times` is empty, not finite or not strictly
 /// ascending, or a time of a restricted mean is before the origin of the
 /// curves; the data have no row of positive weight, a subject has rows in more
 /// than one stratum, the tie rule fails (see [`SurvData::with_timefix`]), a
@@ -317,7 +318,7 @@ pub struct Pseudo {
 /// than two subjects, or the bound on influence values is exceeded.
 pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Result<Pseudo> {
     if times.is_empty() {
-        return Err(Error::input("times is empty"));
+        return Err(Error::from(InputError::Empty { what: "times" }));
     }
     check_ascending(times, "times", true)?;
     let data = data.clone().with_timefix(opts.timefix)?;
@@ -331,7 +332,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
         Target::RestrictedMean | Target::RestrictedTimeLost { .. }
     ) && times[0] < origin
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the time {} of a restricted mean is before the start of the curves, {origin}",
             times[0]
         )));
@@ -428,7 +429,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
         match opts.method {
             Method::Jackknife => {
                 if n < 2 {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "the jackknife needs two subjects in a group, and group {} has {n}",
                         group.code
                     )));
@@ -494,7 +495,7 @@ impl Pseudo {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `covariates` does not have one row per subject.
+    /// An input error when `covariates` does not have one row per subject.
     pub fn stacked(
         &self,
         covariates: Option<MatRef<'_, f64>>,
@@ -506,7 +507,7 @@ impl Pseudo {
         if let Some(c) = covariates
             && c.nrows() != n
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the covariates have {} rows and there are {n} subjects",
                 c.nrows()
             )));
@@ -527,7 +528,8 @@ impl Pseudo {
             x,
             cluster: (0..n * k)
                 .map(|row| {
-                    u32::try_from(row / k).map_err(|_| Error::input("more subjects than u32::MAX"))
+                    u32::try_from(row / k)
+                        .map_err(|_| Error::invalid("more subjects than u32::MAX"))
                 })
                 .collect::<Result<_>>()?,
         })

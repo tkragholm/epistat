@@ -45,25 +45,25 @@ impl CurveIndex {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `curve_time` is empty or not ascending, `times`
+    /// An input error when `curve_time` is empty or not ascending, `times`
     /// is empty or holds a NaN, or `sum` is `Some(true)` and `times` is not
     /// strictly increasing.
     pub fn new(curve_time: &[f64], times: &[f64], opts: &ReadOptions) -> Result<Self> {
         if curve_time.is_empty() {
-            return Err(Error::input("the curve has no times to read"));
+            return Err(Error::invalid("the curve has no times to read"));
         }
         check_ascending(curve_time, "curve_time", true)?;
         if times.is_empty() {
-            return Err(Error::input("no values in times"));
+            return Err(Error::invalid("no values in times"));
         }
         if times.iter().any(|t| t.is_nan()) {
-            return Err(Error::input("times contains a missing value"));
+            return Err(Error::invalid("times contains a missing value"));
         }
         let increasing = times.windows(2).all(|w| w[0] < w[1]);
         let sum = match opts.sum {
             None => increasing,
             Some(true) if !increasing => {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "summing between times needs strictly increasing times",
                 ));
             }
@@ -106,7 +106,7 @@ impl CurveIndex {
         if values.len() == self.n {
             Ok(())
         } else {
-            Err(Error::input(format!(
+            Err(Error::invalid(format!(
                 "a column has {} values and the curve {} times",
                 values.len(),
                 self.n
@@ -119,7 +119,7 @@ impl CurveIndex {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `values` does not have one entry per curve time.
+    /// An input error when `values` does not have one entry per curve time.
     pub fn pick<T: Copy>(&self, values: &[T]) -> Result<Vec<T>> {
         self.check(values)?;
         Ok(self.last.iter().map(|&k| values[k.max(1) - 1]).collect())
@@ -130,7 +130,7 @@ impl CurveIndex {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `values` does not have one entry per curve time.
+    /// An input error when `values` does not have one entry per curve time.
     pub fn at_risk<T: Copy + Default>(&self, values: &[T]) -> Result<Vec<T>> {
         self.check(values)?;
         Ok(self
@@ -145,7 +145,7 @@ impl CurveIndex {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `values` does not have one entry per curve time.
+    /// An input error when `values` does not have one entry per curve time.
     pub fn counts<T: Copy + Default + AddAssign>(&self, values: &[T]) -> Result<Vec<T>> {
         if !self.sum {
             return self.pick(values);
@@ -233,7 +233,7 @@ impl GroupCurve {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] as [`CurveIndex::new`].
+    /// An input error as [`CurveIndex::new`].
     pub fn at(&self, times: &[f64], opts: &ReadOptions) -> Result<CurveAt> {
         let c = self.with_start();
         let index = CurveIndex::new(&c.time, times, opts)?;
@@ -269,7 +269,7 @@ impl Survfit {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] as [`CurveIndex::new`].
+    /// An input error as [`CurveIndex::new`].
     pub fn at(&self, times: &[f64], opts: &ReadOptions) -> Result<Vec<CurveAt>> {
         self.groups.iter().map(|g| g.at(times, opts)).collect()
     }

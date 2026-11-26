@@ -102,7 +102,7 @@ use crate::surv::{IntervalDataBuilder, SurvData, SurvDataBuilder};
 ///
 /// # Errors
 ///
-/// [`Error::Input`] naming the column and the columns present, when there is
+/// An input error naming the column and the columns present, when there is
 /// no column of that name.
 pub fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array> {
     batch
@@ -115,7 +115,7 @@ pub fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array> {
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect();
-            Error::input(format!(
+            Error::invalid(format!(
                 "column {name} is not in the record batch; it has {}",
                 present.join(", ")
             ))
@@ -133,7 +133,7 @@ fn first_null(array: &dyn Array) -> Option<usize> {
 
 fn check_no_nulls(name: &str, array: &dyn Array) -> Result<()> {
     match first_null(array) {
-        Some(row) => Err(Error::input(format!(
+        Some(row) => Err(Error::invalid(format!(
             "column {name} has a null at row {row}; drop or resolve missing values before \
              building the data"
         ))),
@@ -142,7 +142,7 @@ fn check_no_nulls(name: &str, array: &dyn Array) -> Result<()> {
 }
 
 fn wrong_type(name: &str, array: &dyn Array, expected: &str) -> Error {
-    Error::input(format!(
+    Error::invalid(format!(
         "column {name} has type {}, expected {expected}; cast it before building the data",
         array.data_type()
     ))
@@ -178,7 +178,7 @@ fn codes<'a>(name: &str, array: &'a dyn Array) -> Result<&'a [u32]> {
                 check_no_nulls(name, array)?;
                 Ok(typed.keys().values())
             }
-            None => Err(Error::input(format!(
+            None => Err(Error::invalid(format!(
                 "column {name} is a dictionary with {} keys, expected {expected}; cast the keys \
                  before building the data",
                 dictionary.keys().data_type()
@@ -270,7 +270,7 @@ impl<'a> ArrowSurv<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for a column of the wrong type or with a null, in the
+    /// An input error for a column of the wrong type or with a null, in the
     /// order stop, status, start, weight, stratum, cluster, id, istate, and
     /// then for the first rule of [`SurvDataBuilder::build`] that fails.
     pub fn build(self) -> Result<SurvData<'a>> {
@@ -394,7 +394,7 @@ impl<'a> ArrowInterval<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for a column of the wrong type or with a null, and
+    /// An input error for a column of the wrong type or with a null, and
     /// then for the first rule of [`IntervalDataBuilder::build`] that fails.
     pub fn build(self) -> Result<SurvData<'a>> {
         self.builder()?.build()

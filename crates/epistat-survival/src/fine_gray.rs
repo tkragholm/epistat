@@ -335,7 +335,7 @@ impl<'a> Expansion<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the slices differ in length or `cause` is 0.
+    /// An input error when the slices differ in length or `cause` is 0.
     #[cfg(test)]
     fn new(time: &'a [f64], event: &'a [i32], weight: &'a [f64], cause: i32) -> Result<Self> {
         Self::with_strata(time, event, weight, cause, &[], 0)
@@ -361,7 +361,7 @@ impl<'a> Expansion<'a> {
         }
         check_row_count(time.len())?;
         if cause == 0 {
-            return Err(Error::input("cause 0 is censoring, not a cause"));
+            return Err(Error::invalid("cause 0 is censoring, not a cause"));
         }
         let horizon = time.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let curves = if group.is_empty() {
@@ -491,7 +491,7 @@ impl<'a> Expansion<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `level` does not hold one code per individual.
+    /// An input error when `level` does not hold one code per individual.
     fn risk_rows(&self, level: &[u32]) -> Result<Rows> {
         check_lengths(&[("time", self.time.len()), ("level", level.len())])?;
         let mut rows = Rows::default();
@@ -654,7 +654,7 @@ fn with_expansion<T>(
     body: impl FnOnce(&Expansion<'_>, Option<&[u32]>) -> Result<T>,
 ) -> Result<T> {
     if data.followup()?.start().is_some() {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "Fine-Gray follows every individual from time 0, so data with a start column is not supported",
         ));
     }
@@ -700,7 +700,7 @@ fn original_rows(mut rows: Rows, index: Option<&[u32]>) -> Rows {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `data` has a start column, when `cause` is not a
+/// An input error when `data` has a start column, when `cause` is not a
 /// status code of `data`, or as for [`SurvData::with_timefix`].
 pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<Rows> {
     with_expansion(data, cause, opts.timefix, |expansion, index| {
@@ -718,7 +718,7 @@ pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<Rows>
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`rows`], and when `level` does not hold one code
+/// An input error as for [`rows`], and when `level` does not hold one code
 /// per row of `data`.
 pub fn risk_rows(
     data: &SurvData<'_>,
@@ -753,7 +753,7 @@ pub fn risk_rows(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` has no column, does not hold one row per row of
+/// An input error when `x` has no column, does not hold one row per row of
 /// `data` or has a value that is not finite, when `opts.eps` is not positive
 /// and finite, for `Ties::Exact` with clusters, with case weights other than 1
 /// or with a censoring after a competing event in its stratum, and as for
@@ -761,16 +761,16 @@ pub fn risk_rows(
 pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> Result<CoxModelFit> {
     check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() == 0 {
-        return Err(Error::input("x has no columns"));
+        return Err(Error::invalid("x has no columns"));
     }
     if (0..x.ncols()).any(|j| (0..x.nrows()).any(|i| !x[(i, j)].is_finite())) {
-        return Err(Error::input("x: a value is not finite"));
+        return Err(Error::invalid("x: a value is not finite"));
     }
     if !(opts.eps.is_finite() && opts.eps > 0.0) {
-        return Err(Error::input("eps: must be finite and positive"));
+        return Err(Error::invalid("eps: must be finite and positive"));
     }
     if opts.ties == Ties::Exact && data.cluster().is_some() {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "ties: the exact method has no cluster-robust variance",
         ));
     }
@@ -833,7 +833,7 @@ fn exact(
     opts: &FineGrayOptions,
 ) -> Result<CoxModelFit> {
     if expansion.weight.iter().any(|&w| w - 1.0 != 0.0) {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "weight: the exact method supports case weights of 1 only",
         ));
     }
@@ -852,7 +852,7 @@ fn exact(
             next > curve.time[j] && curve.value[j] > 0.0
         });
         if later && curve.before(t) > 0.0 {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "ties: the exact method needs every Fine-Gray weight to be 1, so no \
                  censoring after a competing event in its stratum",
             ));
@@ -1072,7 +1072,7 @@ mod tests {
     ) -> Result<CoxModelFit> {
         check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
         if x.ncols() == 0 {
-            return Err(Error::input("x has no columns"));
+            return Err(Error::invalid("x has no columns"));
         }
         with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
             let source =
@@ -1438,7 +1438,7 @@ mod tests {
         let short = fit(&d, column(&x[..19]).as_ref(), &options(1, Ties::Breslow));
         assert_eq!(
             short.unwrap_err().to_string(),
-            "columns differ in length: x has 19 values against 20 in stop"
+            "x has length 19, expected 20"
         );
         let none = Mat::<f64>::zeros(20, 0);
         let error = fit(&d, none.as_ref(), &options(1, Ties::Breslow)).unwrap_err();

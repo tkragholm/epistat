@@ -205,7 +205,7 @@ fn index_u32(i: usize) -> u32 {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, there are more rows
+/// An input error when the columns differ in length, there are more rows
 /// than `u32::MAX`, a time is not finite, a status is outside its range, a
 /// subject has two observations at one time, the subjects disagree on having
 /// an initial state, or a binary status has one.
@@ -226,7 +226,7 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     ])?;
     for (k, c) in timeline.covariates.iter().enumerate() {
         if c.len() != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "columns differ in length: covariate {k} has {} values against {n} in id",
                 c.len()
             )));
@@ -236,19 +236,21 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     let n_states = match opts.status {
         StatusKind::Binary => 1,
         StatusKind::States(0) => {
-            return Err(Error::input("a status of states needs at least one state"));
+            return Err(Error::invalid(
+                "a status of states needs at least one state",
+            ));
         }
         StatusKind::States(m) => m,
     };
     if let Some(i) = timeline.time.iter().position(|t| !t.is_finite()) {
-        return Err(Error::input(format!("the time of row {i} is not finite")));
+        return Err(Error::invalid(format!("the time of row {i} is not finite")));
     }
     if let Some(i) = timeline
         .status
         .iter()
         .position(|s| s.is_some_and(|v| v > n_states))
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the status of row {i} is above {n_states}"
         )));
     }
@@ -265,7 +267,7 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     for w in order.windows(2) {
         let (a, b) = (w[0] as usize, w[1] as usize);
         if id[a] == id[b] && time[a] == time[b] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "subject {} has two observations at time {}",
                 id[a], time[a]
             )));
@@ -307,12 +309,12 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     let has_istate = if censored_first == bounds.len() {
         false
     } else if censored_first > 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "everyone or no one should have an initial state: \
              some subjects have a status at their first observation and some do not",
         ));
     } else if opts.status == StatusKind::Binary {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "a binary status cannot have an initial state, \
              but every subject has an event at its first observation",
         ));

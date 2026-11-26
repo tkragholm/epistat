@@ -190,7 +190,7 @@ struct Plan {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` has no column, has a number of rows other than
+/// An input error when `x` has no column, has a number of rows other than
 /// `data`, or holds a value that is not finite, when `transforms` is empty,
 /// names a column that does not exist or names one twice, when a transform
 /// gives a value that is not finite, when the expansion would have more rows
@@ -204,10 +204,10 @@ pub fn fit_tt(
 ) -> Result<CoxTtFit> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() == 0 {
-        return Err(Error::input("x has no columns"));
+        return Err(Error::invalid("x has no columns"));
     }
     if transforms.is_empty() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "transforms is empty; without a time transform use cox::fit",
         ));
     }
@@ -215,14 +215,14 @@ pub fn fit_tt(
     for t in transforms {
         match seen.get_mut(t.column) {
             None => {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "transforms: column {} is outside the {} columns of x",
                     t.column,
                     x.ncols()
                 )));
             }
             Some(flag) if *flag => {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "transforms: column {} is named twice",
                     t.column
                 )));
@@ -232,7 +232,7 @@ pub fn fit_tt(
     }
     for j in 0..x.ncols() {
         if (0..x.nrows()).any(|i| !x[(i, j)].is_finite()) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "x: column {j} has a value that is not finite"
             )));
         }
@@ -247,7 +247,7 @@ pub fn fit_tt(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -305,7 +305,7 @@ pub fn fit_tt(
 
     let total: usize = plans.iter().map(|p| p.size).sum();
     if let Some(limit) = opts.max_expanded_rows.filter(|&limit| total > limit) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the expansion has {total} rows, more than max_expanded_rows = {limit}"
         )));
     }
@@ -364,7 +364,7 @@ pub fn fit_tt(
                     data.weight(),
                 );
                 if let Some(k) = (0..total).find(|&k| !design[(k, j)].is_finite()) {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "transforms: column {j} is not finite at time {}",
                         time[k]
                     )));

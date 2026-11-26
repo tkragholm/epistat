@@ -98,6 +98,7 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
+use epistat_core::InputError;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
 
@@ -244,15 +245,15 @@ fn fit_model(
     let ys: Vec<f64> = kept.iter().map(|&i| y[i]).collect();
     let model = Glm::new(Family::Binomial, Link::Logit)
         .fit_slices(x, &ys, None, None, None)
-        .map_err(|e| Error::input(format!("{what} model: {e}")))?;
+        .map_err(Error::model(format!("{what} model")))?;
     if !model.converged {
-        return Err(Error::input(format!("{what} model: no convergence")));
+        return Err(Error::invalid(format!("{what} model: no convergence")));
     }
     let mut coefficients = Vec::with_capacity(model.coefficients.len());
     for (j, c) in model.coefficients.iter().enumerate() {
-        coefficients.push(
-            c.ok_or_else(|| Error::input(format!("{what} model: design column {j} is aliased")))?,
-        );
+        coefficients.push(c.ok_or_else(|| {
+            Error::invalid(format!("{what} model: design column {j} is aliased"))
+        })?);
     }
     let probability: Vec<f64> = (0..design.nrows())
         .map(|i| {
@@ -263,7 +264,7 @@ fn fit_model(
         })
         .collect();
     if let Some(i) = probability.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{what} model: row {i} has fitted probability {}",
             probability[i]
         )));
@@ -314,7 +315,7 @@ pub enum TreatmentHistory {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for interval-censored data, for a design or `censored` of
+/// An input error for interval-censored data, for a design or `censored` of
 /// another length than the data, a design without columns or with a value that is
 /// not finite, when two rows of a subject have the same stop, when no row or
 /// every row of the fit is a censoring event, when a model has an aliased
@@ -345,7 +346,7 @@ pub fn fit<'a>(
 ///
 /// # Errors
 ///
-/// The errors of [`fit`], [`Error::Input`] for `treated` of another length than
+/// The errors of [`fit`], an input error for `treated` of another length than
 /// the data, when the rows of the fit are all treated or all untreated, and for
 /// limits of truncation that are not ordered probabilities.
 pub fn fit_pooled<'a>(
@@ -360,7 +361,7 @@ pub fn fit_pooled<'a>(
     if let Some((lo, hi)) = trunc
         && !(0.0 <= lo && lo < hi && hi <= 1.0)
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "trunc: ({lo}, {hi}) are not probabilities in increasing order"
         )));
     }
@@ -375,33 +376,35 @@ pub fn fit_pooled<'a>(
     if let Some(t) = treated
         && t.len() != n
     {
-        return Err(Error::input(format!(
-            "treated: {} values for {n} rows",
-            t.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "treated",
+            expected: n,
+            found: t.len(),
+        }));
     }
     for (name, m) in [("design", Some(design)), ("numerator", numerator)] {
         let Some(m) = m else { continue };
         if m.nrows() != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{name}: {} rows for {n} rows of data",
                 m.nrows()
             )));
         }
         if m.ncols() == 0 {
-            return Err(Error::input(format!("{name}: no columns")));
+            return Err(Error::invalid(format!("{name}: no columns")));
         }
         if !epistat_linalg::is_finite(m) {
-            return Err(Error::input(format!("{name}: a value is not finite")));
+            return Err(Error::invalid(format!("{name}: a value is not finite")));
         }
     }
     if let Some(c) = censored
         && c.len() != n
     {
-        return Err(Error::input(format!(
-            "censored: {} values for {n} rows",
-            c.len()
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "censored",
+            expected: n,
+            found: c.len(),
+        }));
     }
     let stop = surv.stop();
     let subject: Vec<u32> = data
@@ -416,7 +419,7 @@ pub fn fit_pooled<'a>(
     for w in order.windows(2) {
         let (a, b) = (w[0] as usize, w[1] as usize);
         if subject[a] == subject[b] && stop[a].total_cmp(&stop[b]).is_eq() {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "id: rows {a} and {b} of one subject have the same stop"
             )));
         }
@@ -465,7 +468,7 @@ pub fn fit_pooled<'a>(
     let n_positive = (0..n).filter(|&r| active[r] && response[r]).count();
     let n_active = active.iter().filter(|&&a| a).count();
     if n_positive == 0 || n_positive == n_active {
-        return Err(Error::input(if treated.is_some() {
+        return Err(Error::invalid(if treated.is_some() {
             "treated: the rows of the fit need both treated and untreated rows"
         } else {
             "censored: the rows of the fit need both censoring events and rows that are not"
@@ -516,7 +519,7 @@ pub fn fit_pooled<'a>(
         )]
         let limit = |p: f64| -> Result<Limit> {
             let value = epistat_stats::quantile::type7(&sorted, p)
-                .ok_or_else(|| Error::input("trunc: there are no weights"))?;
+                .ok_or_else(|| Error::invalid("trunc: there are no weights"))?;
             // The position of R's type 7, as epistat_stats::quantile computes it.
             let index = 1.0 + (n - 1) as f64 * p;
             let (j, k) = (index.floor() as usize - 1, index.ceil() as usize - 1);

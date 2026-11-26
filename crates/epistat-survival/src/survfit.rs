@@ -359,10 +359,10 @@ impl GroupCurve {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when a probability is outside `[0, 1]` or NaN.
+    /// An input error when a probability is outside `[0, 1]` or NaN.
     pub fn quantiles(&self, probs: &[f64]) -> Result<Vec<Quantile>> {
         if let Some(bad) = probs.iter().find(|p| !(0.0..=1.0).contains(*p)) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "quantile probability {bad} is outside [0, 1]"
             )));
         }
@@ -412,7 +412,7 @@ impl GroupCurve {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `tau` is not finite or is before the origin of
+    /// An input error when `tau` is not finite or is before the origin of
     /// the curve.
     pub fn rmean(&self, tau: f64) -> Result<RestrictedMean> {
         rmean::restricted_mean(self, tau)
@@ -442,7 +442,7 @@ impl Survfit {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `data` has more than one event code, no row has
+/// An input error when `data` has more than one event code, no row has
 /// positive weight, the tie rule fails (see [`SurvData::with_timefix`]), the
 /// confidence level is not in `(0, 1)`, `robust` is `Some(false)` with a
 /// cluster column, or `robust` is `Some(true)` for counting-process data with
@@ -459,20 +459,20 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "survfit takes one event code and the data has {}; \
              use aalen_johansen::estimate for competing events",
             surv.n_codes()
         )));
     }
     if opts.conf_type != ConfType::None && !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the confidence level {} is not in (0, 1)",
             opts.conf_level
         )));
     }
     if data.n_used() == 0 {
-        return Err(Error::input("no row has positive weight"));
+        return Err(Error::invalid("no row has positive weight"));
     }
     let counting = surv.start().is_some();
     let has_cluster = data.cluster().is_some();
@@ -480,7 +480,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let robust = match opts.robust {
         Some(true) => {
             if counting && !has_cluster && !has_id {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "the jackknife variance of counting-process data needs a cluster or an id column",
                 ));
             }
@@ -488,7 +488,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
         }
         Some(false) => {
             if has_cluster {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "a cluster column needs the jackknife variance, but robust is false",
                 ));
             }

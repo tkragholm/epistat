@@ -78,25 +78,25 @@ impl Cells {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a key or a column has the wrong length, a key has no
+/// An input error when a key or a column has the wrong length, a key has no
 /// levels or a code outside its levels, a length or an event count is not
 /// finite or is negative, or the number of possible cells does not fit a
 /// `u64`.
 pub fn aggregate(keys: &[CellKey<'_>], length: &[f64], events: &[f64]) -> Result<Cells> {
     let n = length.len();
     if events.len() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "events has {} values against {n} lengths",
             events.len()
         )));
     }
     if let Some(i) = length.iter().position(|v| !(v.is_finite() && *v >= 0.0)) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the length of piece {i} is not finite and non-negative"
         )));
     }
     if let Some(i) = events.iter().position(|v| !(v.is_finite() && *v >= 0.0)) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the events of piece {i} are not finite and non-negative"
         )));
     }
@@ -104,20 +104,20 @@ pub fn aggregate(keys: &[CellKey<'_>], length: &[f64], events: &[f64]) -> Result
     let mut possible = 1_usize;
     for (k, key) in keys.iter().enumerate() {
         if key.codes.len() != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "key {k} has {} codes against {n} pieces",
                 key.codes.len()
             )));
         }
         if key.levels == 0 {
-            return Err(Error::input(format!("key {k} has no levels")));
+            return Err(Error::invalid(format!("key {k} has no levels")));
         }
         if let Some(i) = key
             .codes
             .iter()
             .position(|&c| usize::try_from(c).map_or(true, |c| c >= key.levels))
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "key {k}: the code {} of piece {i} is not below its {} levels",
                 key.codes[i], key.levels
             )));
@@ -125,7 +125,7 @@ pub fn aggregate(keys: &[CellKey<'_>], length: &[f64], events: &[f64]) -> Result
         strides.push(possible);
         possible = possible
             .checked_mul(key.levels)
-            .ok_or_else(|| Error::input("the number of possible cells does not fit a usize"))?;
+            .ok_or_else(|| Error::invalid("the number of possible cells does not fit a usize"))?;
     }
     let combined = |i: usize| -> usize {
         keys.iter()

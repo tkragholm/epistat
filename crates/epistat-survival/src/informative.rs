@@ -95,7 +95,7 @@ pub struct InformativeSets {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, `x` has no column or a
+/// An input error when the columns differ in length, `x` has no column or a
 /// value that is not finite, or a weight is negative or not finite.
 pub fn informative_sets(
     case: &[bool],
@@ -107,7 +107,7 @@ pub fn informative_sets(
     if let Some(w) = weight {
         check_lengths(&[("case", case.len()), ("weight", w.len())])?;
         if w.iter().any(|v| !v.is_finite() || *v < 0.0) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "a weight is negative or not finite".to_owned(),
             ));
         }
@@ -123,7 +123,7 @@ pub fn informative_sets(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` does not have one row per row of the data, has no
+/// An input error when `x` does not have one row per row of the data, has no
 /// column or has a value that is not finite, and for interval-censored data.
 pub fn informative_strata(data: &SurvData<'_>, x: MatRef<'_, f64>) -> Result<InformativeSets> {
     let status = data.followup()?.status();
@@ -147,12 +147,14 @@ fn count(
 ) -> Result<InformativeSets> {
     let p = x.ncols();
     if p == 0 {
-        return Err(Error::input("x has no column".to_owned()));
+        return Err(Error::invalid("x has no column".to_owned()));
     }
     check_row_count(case.len())?;
     for j in 0..p {
         if (0..x.nrows()).any(|i| !x[(i, j)].is_finite()) {
-            return Err(Error::input("x has a value that is not finite".to_owned()));
+            return Err(Error::invalid(
+                "x has a value that is not finite".to_owned(),
+            ));
         }
     }
     let used = |row: usize| weight.is_none_or(|w| w[row] > 0.0);

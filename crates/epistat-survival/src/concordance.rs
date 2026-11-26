@@ -359,7 +359,7 @@ struct Swept {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `score` has another length than the data or holds a
+/// An input error when `score` has another length than the data or holds a
 /// NaN or an infinity, when the status has more than one event code, when
 /// `ymin` or `ymax` is not finite, when `influence` is asked for without
 /// `variance`, when `S/G` or `N/G2` is asked for with a start column, when a
@@ -374,25 +374,25 @@ pub fn estimate(
     refuse_non_finite(score, "score")?;
     for (name, value) in [("ymin", opts.ymin), ("ymax", opts.ymax)] {
         if value.is_some_and(|v| !v.is_finite()) {
-            return Err(Error::input(format!("{name} must be a finite number")));
+            return Err(Error::invalid(format!("{name} must be a finite number")));
         }
     }
     if opts.influence && !opts.variance {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "influence: the influence of the rows is part of the variance, which is off",
         ));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "status has {} event codes, and concordance takes one; pass one cause as 0 and 1",
             surv.n_codes()
         )));
     }
     let counting = surv.start().is_some();
     if counting && matches!(opts.time_weight, TimeWeight::SOverG | TimeWeight::NOverG2) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "time weight S/G and N/G2 need a censoring distribution, which data with delayed entry does not have",
         ));
     }
@@ -669,7 +669,7 @@ fn time_weights(local: &Local, order: &[u32], opts: &ConcordanceOptions) -> Resu
         times.reverse();
     }
     if weights.iter().any(|v| !v.is_finite()) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "a time weight is not finite: the censoring distribution or the risk set is empty at an event time",
         ));
     }

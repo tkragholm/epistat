@@ -421,9 +421,9 @@ fn gather(columns: &[Option<Vec<f64>>], kept: &[usize], rows: &[usize]) -> Resul
     let kept_columns: Vec<&Vec<f64>> = kept
         .iter()
         .map(|&j| {
-            columns[j]
-                .as_ref()
-                .ok_or_else(|| Error::input("fit: a residual column is missing for a coefficient"))
+            columns[j].as_ref().ok_or_else(|| {
+                Error::invalid("fit: a residual column is missing for a coefficient")
+            })
         })
         .collect::<Result<_>>()?;
     Ok(rows
@@ -440,7 +440,7 @@ fn kept_covariance(model: &CoxModelFit, kept: &[usize]) -> Result<Dense> {
         for &b in kept {
             out.push(
                 model.covariance[a * p + b]
-                    .ok_or_else(|| Error::input("fit: the model covariance has no value"))?,
+                    .ok_or_else(|| Error::invalid("fit: the model covariance has no value"))?,
             );
         }
     }
@@ -531,7 +531,7 @@ fn pieces_from(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of the Cox fit; for `data` with case
+/// An input error for the invalid input of the Cox fit; for `data` with case
 /// weights, strata or clusters, or an id that occurs twice; for a row outside
 /// the subcohort that is not a case; for `subcohort` or `stratum` of another
 /// length than the data; for `robust` with a method other than Lin-Ying; for a
@@ -558,7 +558,7 @@ pub fn fit(
     ])?;
     refuse_non_finite_matrix(x, "x")?;
     if x.ncols() == 0 {
-        return Err(Error::input("x: the design has no columns"));
+        return Err(Error::invalid("x: the design has no columns"));
     }
     check_inputs(data, stratum, opts)?;
     let surv = data.followup()?;
@@ -566,7 +566,7 @@ pub fn fit(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -574,7 +574,7 @@ pub fn fit(
     let event: Vec<bool> = data.cause(code)?.iter().collect();
     if let Some(i) = (0..rows).find(|&i| !event[i] && !subcohort[i]) {
         let count = (0..rows).filter(|&i| !event[i] && !subcohort[i]).count();
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "subcohort: {count} censored observations are outside the subcohort, the first is row {i}"
         )));
     }
@@ -600,7 +600,7 @@ pub fn fit(
         .count();
     let n_cases_inside = n_cases - n_cases_outside;
     if n_cases == 0 {
-        return Err(Error::input("data: there is no case"));
+        return Err(Error::invalid("data: there is no case"));
     }
     let counts = Counts {
         cases: n_cases,
@@ -616,7 +616,7 @@ pub fn fit(
         }
         CaseCohortMethod::LinYing => lin_ying(&sample, control, opts, counts)?,
         CaseCohortMethod::BorganI | CaseCohortMethod::BorganII => {
-            let stratum = stratum.ok_or_else(|| Error::input("stratum: required for Borgan"))?;
+            let stratum = stratum.ok_or_else(|| Error::invalid("stratum: required for Borgan"))?;
             borgan(&sample, control, opts, stratum)?
         }
     };
@@ -651,10 +651,12 @@ fn check_inputs(
 ) -> Result<()> {
     let rows = data.n_rows();
     if opts.ties == Ties::Exact {
-        return Err(Error::input("ties: the exact method is not supported"));
+        return Err(Error::unsupported(
+            "ties: the exact method is not supported",
+        ));
     }
     if data.weight().is_some() || data.stratum().is_some() || data.cluster().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "data: case weights, strata and clusters are set by the design, so the data may not carry them",
         ));
     }
@@ -662,40 +664,42 @@ fn check_inputs(
         let mut sorted = id.to_vec();
         sorted.sort_unstable();
         if sorted.windows(2).any(|w| w[0] == w[1]) {
-            return Err(Error::input(
+            return Err(Error::unsupported(
                 "id: more than one row per id is not supported",
             ));
         }
     }
     if opts.robust && opts.method != CaseCohortMethod::LinYing {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "robust: only the Lin-Ying method has a robust variance",
         ));
     }
     refuse_non_finite(opts.cohort_size, "cohort_size")?;
     if opts.cohort_size.iter().any(|&n| n <= 0.0) {
-        return Err(Error::input("cohort_size: every value must be positive"));
+        return Err(Error::invalid("cohort_size: every value must be positive"));
     }
     if !(opts.eps.is_finite() && opts.eps > 0.0) {
-        return Err(Error::input("eps: must be finite and positive"));
+        return Err(Error::invalid("eps: must be finite and positive"));
     }
     match (opts.method.stratified(), stratum) {
         (false, Some(_)) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "stratum: the unstratified methods take no stratum",
             ));
         }
         (true, None) => {
-            return Err(Error::input("stratum: Borgan's methods require it"));
+            return Err(Error::invalid("stratum: Borgan's methods require it"));
         }
         (false, None) => {
             if opts.cohort_size.len() != 1 {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "cohort_size: the unstratified methods take one value",
                 ));
             }
             if opts.cohort_size[0] < rows as f64 {
-                return Err(Error::input("cohort_size: smaller than the number of rows"));
+                return Err(Error::invalid(
+                    "cohort_size: smaller than the number of rows",
+                ));
             }
         }
         (true, Some(stratum)) => {
@@ -725,7 +729,7 @@ fn prentice(
         times.sort_by(f64::total_cmp);
         times.dedup();
         if times.len() < 2 {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "data: Prentice's method needs at least two distinct failure times",
             ));
         }
@@ -772,7 +776,7 @@ fn prentice(
     }
     let kept = kept_columns(&second);
     if kept_columns(coefficients_fit) != kept {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "x: the first and the second fit alias different columns",
         ));
     }
@@ -807,13 +811,15 @@ fn lin_ying(
     let cohort = opts.cohort_size[0];
     let non_cases = counts.subcohort - counts.cases_inside;
     if non_cases == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "subcohort: Lin-Ying's weights need a subcohort member that is not a case",
         ));
     }
     let cases = counts.cases as f64;
     if cohort <= cases {
-        return Err(Error::input("cohort_size: must exceed the number of cases"));
+        return Err(Error::invalid(
+            "cohort_size: must exceed the number of cases",
+        ));
     }
     let weight = (cohort - cases) / non_cases as f64;
     let all: Vec<(usize, bool, f64, f64)> = (0..rows)
@@ -890,7 +896,7 @@ fn borgan(
     let rows = sample.rows();
     let (dense, strata) = dense_strata(stratum);
     if opts.cohort_size.len() != strata {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "cohort_size: {} values for {strata} strata",
             opts.cohort_size.len()
         )));
@@ -913,7 +919,7 @@ fn borgan(
     }
     for (j, (&size, &count)) in opts.cohort_size.iter().zip(&in_stratum).enumerate() {
         if size < count as f64 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "cohort_size: stratum {j} has {count} rows and a cohort size of {size}"
             )));
         }
@@ -932,7 +938,7 @@ fn borgan(
                 (members[j], opts.cohort_size[j])
             };
             if count == 0 || n <= 0.0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "stratum: stratum {j} has no {} or no cohort members to weight",
                     if second {
                         "subcohort non-case"
@@ -1003,7 +1009,7 @@ fn borgan(
         let mut s = weighted_crossproduct(&centred, |_| 1.0, q);
         if divisor[j] < 2 {
             if weight[j] - 1.0 != 0.0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "stratum: stratum {j} has one member and a weight other than 1, so its covariance is not defined"
                 )));
             }

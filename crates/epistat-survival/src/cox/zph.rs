@@ -345,16 +345,16 @@ fn terms_of(groups: Option<&[Vec<usize>]>, keep: &[usize], columns: usize) -> Re
     let mut by_column = Vec::new();
     for group in &groups {
         if group.is_empty() {
-            return Err(Error::input("groups: a term has no column"));
+            return Err(Error::invalid("groups: a term has no column"));
         }
         for &j in group {
             if j >= columns {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "groups: column {j} is outside the {columns} columns of x"
                 )));
             }
             if std::mem::replace(&mut seen[j], true) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "groups: column {j} is in more than one term, or twice in one"
                 )));
             }
@@ -380,7 +380,7 @@ fn terms_of(groups: Option<&[Vec<usize>]>, keep: &[usize], columns: usize) -> Re
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of [`fit`](super::fit), for a fit
+/// An input error for the invalid input of [`fit`](super::fit), for a fit
 /// without a coefficient or without an event, for ties other than Breslow and
 /// Efron, for `groups` that name a column outside the design, name a column
 /// twice or hold an empty term, for the `Log` transform with an event time that
@@ -398,13 +398,13 @@ pub fn zph(
         ("fit coefficients", fit.coefficients.len()),
     ])?;
     if fit.n_used != data.n_used() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "fit: the number of rows used differs from the data's, so it is not a fit of these data",
         ));
     }
     let prep = prepare(data, x, &opts.cox, &fit.coefficients)?;
     if prep.n_events == 0 {
-        return Err(Error::input("the data have no event"));
+        return Err(Error::invalid("the data have no event"));
     }
     let p = prep.p;
     let (terms, term_columns) = terms_of(opts.groups, &prep.keep, columns)?;
@@ -423,7 +423,7 @@ pub fn zph(
             .iter()
             .any(|s| s.event_times.iter().any(|&t| t <= 0.0))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "transform: the log of a time that is not positive is not defined",
         ));
     }
@@ -490,7 +490,7 @@ pub fn zph(
             }
         });
         if failed {
-            return Err(Error::input(
+            return Err(Error::undefined(
                 "the risk score or the denominator of a partial-likelihood term is not finite and positive at the coefficients",
             ));
         }

@@ -58,7 +58,7 @@ pub struct StandardisedNet {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no curve, a number of weights other than the number of
+/// An input error for no curve, a number of weights other than the number of
 /// curves, a weight that is negative or not finite, weights that sum to 0,
 /// times that are not finite, or a level outside `(0, 1)`.
 pub fn standardise_net(
@@ -69,27 +69,29 @@ pub fn standardise_net(
     transform: Transform,
 ) -> Result<StandardisedNet> {
     if curves.is_empty() {
-        return Err(Error::input("no curve to standardise"));
+        return Err(Error::invalid("no curve to standardise"));
     }
     if weights.len() != curves.len() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{} weights for {} curves",
             weights.len(),
             curves.len()
         )));
     }
     if weights.iter().any(|w| !(w.is_finite() && *w >= 0.0)) {
-        return Err(Error::input("the weights must be finite and not negative"));
+        return Err(Error::invalid(
+            "the weights must be finite and not negative",
+        ));
     }
     let total = epistat_stats::sum::exact(weights.iter().copied());
     if total <= 0.0 {
-        return Err(Error::input("the weights sum to 0"));
+        return Err(Error::invalid("the weights sum to 0"));
     }
     if times.iter().any(|t| !t.is_finite()) {
-        return Err(Error::input("the times must be finite"));
+        return Err(Error::invalid("the times must be finite"));
     }
     if !(level > 0.0 && level < 1.0) {
-        return Err(Error::input("level must be in (0, 1)"));
+        return Err(Error::invalid("level must be in (0, 1)"));
     }
     let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     let mut out = StandardisedNet {

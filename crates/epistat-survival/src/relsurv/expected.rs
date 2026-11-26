@@ -55,7 +55,7 @@ impl ExpectedHazard {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] as for [`RateTable::expected`], and when a used row
+    /// An input error as for [`RateTable::expected`], and when a used row
     /// has follow-up off the table, which has no expected hazard and is not
     /// assumed to be zero.
     pub fn from_table(
@@ -101,7 +101,7 @@ impl ExpectedHazard {
             &mut |_, _| {},
         )?;
         if let Some(row) = off {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "row {row} has follow-up off the rate table, which has no expected hazard"
             )));
         }

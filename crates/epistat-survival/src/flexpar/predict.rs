@@ -77,10 +77,10 @@ struct Point {
 
 fn covariance<'a>(fit: &'a FlexParFit, opts: &PredictOptions) -> Result<&'a [Option<f64>]> {
     if !(opts.alpha > 0.0 && opts.alpha < 1.0) {
-        return Err(Error::input("alpha must be in (0, 1)"));
+        return Err(Error::invalid("alpha must be in (0, 1)"));
     }
     if !fit.monotone_on_data && !opts.allow_non_monotone {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the fitted spline is not increasing on the data, so its curves are not survivor functions: set allow_non_monotone to predict anyway",
         ));
     }
@@ -90,7 +90,7 @@ fn covariance<'a>(fit: &'a FlexParFit, opts: &PredictOptions) -> Result<&'a [Opt
         fit.covariance.as_ref()
     };
     c.map(Vec::as_slice).ok_or_else(|| {
-        Error::input(if opts.robust {
+        Error::invalid(if opts.robust {
             "the fit has no robust covariance: it needs clusters and a positive definite information"
         } else {
             "the information of the fit is not positive definite, so it has no covariance"
@@ -100,7 +100,7 @@ fn covariance<'a>(fit: &'a FlexParFit, opts: &PredictOptions) -> Result<&'a [Opt
 
 fn point(fit: &FlexParFit, x: MatRef<'_, f64>, row: usize, time: f64) -> Result<Point> {
     if !(time > 0.0 && time.is_finite()) {
-        return Err(Error::input("times must be positive and finite"));
+        return Err(Error::invalid("times must be positive and finite"));
     }
     let q = fit.design.dim();
     let (mut z, mut w) = (vec![0.0; q], vec![0.0; q]);
@@ -125,14 +125,14 @@ fn variance(fit: &FlexParFit, cov: &[Option<f64>], g: &[f64]) -> f64 {
 
 fn check_columns(fit: &FlexParFit, x: MatRef<'_, f64>) -> Result<()> {
     if x.ncols() != fit.n_covariates() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the covariates have {} columns and the fit {}",
             x.ncols(),
             fit.n_covariates()
         )));
     }
     if (0..x.nrows()).any(|i| (0..x.ncols()).any(|j| !x[(i, j)].is_finite())) {
-        return Err(Error::input("the covariates must be finite"));
+        return Err(Error::invalid("the covariates must be finite"));
     }
     Ok(())
 }
@@ -177,7 +177,7 @@ fn survival_gradient(scale: Scale, p: &Point) -> (f64, Vec<f64>) {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for a time that is not positive and finite, an `alpha`
+/// An input error for a time that is not positive and finite, an `alpha`
 /// outside `(0, 1)`, covariates that do not have the columns of the fit, a
 /// fit without the covariance asked for, and a fit that is not monotone on the
 /// data unless allowed. At a time where the derivative in log time is not
@@ -256,7 +256,7 @@ pub fn predict(
 ///
 /// # Errors
 ///
-/// As [`predict`], and [`Error::Input`] for a reference of another number of
+/// As [`predict`], and an input error for a reference of another number of
 /// rows.
 pub fn contrast(
     fit: &FlexParFit,
@@ -270,7 +270,7 @@ pub fn contrast(
     check_columns(fit, x_new)?;
     check_columns(fit, x_ref)?;
     if x_ref.nrows() != 1 && x_ref.nrows() != x_new.nrows() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the reference has one row or as many as the rows to compare",
         ));
     }

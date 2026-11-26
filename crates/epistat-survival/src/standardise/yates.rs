@@ -220,7 +220,7 @@ pub struct Yates {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no levels, a covariance that is not `p` by `p`, finite
+/// An input error for no levels, a covariance that is not `p` by `p`, finite
 /// and symmetric, a coefficient that is not finite (an aliased column included),
 /// a level whose design has another number of columns than `p`, a `centre` or
 /// weights of the wrong length or not finite, weights that are negative or
@@ -234,15 +234,15 @@ pub fn yates(
 ) -> Result<Yates> {
     let p = coefficients.len();
     if levels.is_empty() {
-        return Err(Error::input("levels: at least one level is needed"));
+        return Err(Error::invalid("levels: at least one level is needed"));
     }
     if coefficients.iter().any(|b| !b.is_finite()) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "coefficients: every coefficient must be defined and finite; drop an aliased column",
         ));
     }
     if covariance.len() != p * p || covariance.iter().any(|v| !v.is_finite()) {
-        return Err(Error::input("covariance: must be p by p and finite"));
+        return Err(Error::invalid("covariance: must be p by p and finite"));
     }
     for a in 0..p {
         for b in 0..a {
@@ -250,14 +250,14 @@ pub fn yates(
             if (covariance[a * p + b] - covariance[b * p + a]).abs()
                 > f64::EPSILON.sqrt() * scale.max(f64::MIN_POSITIVE)
             {
-                return Err(Error::input("covariance: must be symmetric"));
+                return Err(Error::invalid("covariance: must be symmetric"));
             }
         }
     }
     if let Some(c) = opts.centre
         && (c.len() != p || c.iter().any(|v| !v.is_finite()))
     {
-        return Err(Error::input("centre: one finite value per coefficient"));
+        return Err(Error::invalid("centre: one finite value per coefficient"));
     }
     let n_levels = levels.len();
     let mut estimate = Vec::with_capacity(n_levels);
@@ -312,7 +312,7 @@ fn one_level(
             let mut over = vec![None; p];
             for &(col, value) in *set {
                 if col >= p || !value.is_finite() {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "level {l}: column {col} is outside the {p} columns or its value is not finite"
                     )));
                 }
@@ -321,24 +321,26 @@ fn one_level(
             (base.nrows(), Some(over), base)
         }
         (Counterfactual::Columns(_), None) => {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "level {l}: a population of set columns needs its base design"
             )));
         }
     };
     if design.ncols() != p {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "level {l}: the design has {} columns, the model {p}",
             design.ncols()
         )));
     }
     if rows == 0 {
-        return Err(Error::input(format!("level {l}: the population is empty")));
+        return Err(Error::invalid(format!(
+            "level {l}: the population is empty"
+        )));
     }
     let total_weight = match level.weights {
         Some(w) => {
             if w.len() != rows || w.iter().any(|v| !v.is_finite() || *v < 0.0) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "level {l}: weights must be one non-negative finite value per row"
                 )));
             }
@@ -347,7 +349,9 @@ fn one_level(
         None => rows as f64,
     };
     if total_weight <= 0.0 {
-        return Err(Error::input(format!("level {l}: the weights sum to zero")));
+        return Err(Error::invalid(format!(
+            "level {l}: the weights sum to zero"
+        )));
     }
     let centre = opts.centre;
     let link = opts.link;
@@ -365,7 +369,7 @@ fn one_level(
                         None => design[(i, a)],
                     };
                     if !v.is_finite() {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "level {l}: a design value is not finite"
                         )));
                     }
@@ -378,7 +382,7 @@ fn one_level(
                 }
                 let (m, d) = link.apply(eta);
                 if !m.is_finite() || !d.is_finite() {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "level {l}: the inverse link is not finite at the linear predictor {eta}"
                     )));
                 }
@@ -412,15 +416,15 @@ fn one_level(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for fewer than two estimates (a pairwise or mean test needs
+/// An input error for fewer than two estimates (a pairwise or mean test needs
 /// two), a covariance of the wrong size and a value that is not finite.
 pub fn wald_tests(estimate: &[f64], cov: &[f64], kind: Test) -> Result<Vec<WaldTest>> {
     let n = estimate.len();
     if n < 2 {
-        return Err(Error::input("tests: at least two levels are needed"));
+        return Err(Error::invalid("tests: at least two levels are needed"));
     }
     if cov.len() != n * n || cov.iter().chain(estimate).any(|v| !v.is_finite()) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "tests: the covariance must be finite and n by n",
         ));
     }

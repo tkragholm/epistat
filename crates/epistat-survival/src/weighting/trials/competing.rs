@@ -76,6 +76,7 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
+use epistat_core::InputError;
 use epistat_inference::Clusters;
 use epistat_linalg::{Attempt, Mat, inverse};
 
@@ -100,19 +101,19 @@ pub struct MsmCompeting {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for `competing` of another length than the rows, a row
+/// An input error for `competing` of another length than the rows, a row
 /// with both events, the errors of [`fit_msm`] for either model, and an
 /// information matrix that cannot be inverted.
 pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<MsmCompeting> {
     let n = input.outcome.len();
     check_design("design", input.design, n)?;
     if competing.len() != n || input.weight.len() != n || input.person.len() != n {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "competing, weight and person need one value per row",
         ));
     }
     if let Some(r) = (0..n).find(|&r| input.outcome[r] && competing[r]) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "row {r} has both the event and the competing event; give each row at most one"
         )));
     }
@@ -127,15 +128,13 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
         outcome: &outcome,
         weight: &weight,
         person: &person,
-    })
-    .map_err(|e| Error::input(format!("event: {e}")))?;
+    })?;
     let competing_fit = fit_msm(&MsmInput {
         design: input.design,
         outcome: competing,
         weight: input.weight,
         person: input.person,
-    })
-    .map_err(|e| Error::input(format!("competing event: {e}")))?;
+    })?;
 
     let clusters = Clusters::from_labels(input.person);
     let g = clusters.count();
@@ -165,13 +164,13 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     let meat = Mat::from_fn(p, p, |i, j| {
         (0..g).map(|k| u[k * p + i] * v[k * p + j]).sum::<f64>()
     });
-    let invert = |m: &Mat<f64>, what: &str| {
+    let invert = |m: &Mat<f64>| {
         inverse(m.as_ref(), &Attempt::SYMMETRIC)
             .map(|s| s.x)
-            .map_err(|e| Error::input(format!("{what}: the information matrix: {e}")))
+            .map_err(Error::from)
     };
-    let a_inv = invert(&a, "event")?;
-    let b_inv = invert(&b, "competing event")?;
+    let a_inv = invert(&a)?;
+    let b_inv = invert(&b)?;
     let factor = g as f64 / (g - 1) as f64;
     let am = product(&a_inv, &meat);
     let cross = product(&am, &b_inv);
@@ -234,7 +233,7 @@ pub struct CompetingIncidence {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no time, no row, models of different numbers of
+/// An input error for no time, no row, models of different numbers of
 /// coefficients, and a design value that is not finite.
 pub fn cumulative_incidence_competing(
     fit: &MsmCompeting,
@@ -244,15 +243,15 @@ pub fn cumulative_incidence_competing(
 ) -> Result<CompetingIncidence> {
     let p = fit.event.coefficients.len();
     if fit.competing.coefficients.len() != p || fit.cross_covariance.len() != p * p {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the two models need the same number of coefficients",
         ));
     }
     if times == 0 {
-        return Err(Error::input("designs: no times"));
+        return Err(Error::invalid("designs: no times"));
     }
     if rows == 0 {
-        return Err(Error::input("designs: no rows"));
+        return Err(Error::from(InputError::Empty { what: "designs" }));
     }
     // Sums over rows of F and its gradient (beta then gamma), and of the
     // incidence of D and its gradient, at each time.
@@ -276,7 +275,7 @@ pub fn cumulative_incidence_competing(
         for t in 0..times {
             design(r, t, &mut x);
             if x.iter().any(|v| !v.is_finite()) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "design: a value of row {r} at time {t} is not finite"
                 )));
             }

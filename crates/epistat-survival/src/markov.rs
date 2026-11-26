@@ -468,7 +468,7 @@ fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64
 /// states, and a stay in a state at or above it qualifies for none.
 fn run(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> Result<Computed> {
     if qualifying == 0 || grid.is_empty() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the test needs at least one qualifying state and one landmark",
         ));
     }
@@ -531,7 +531,7 @@ pub struct Test {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data have no id or start column, when a row has no
+/// An input error when the data have no id or start column, when a row has no
 /// starting state, when the rows of a subject overlap or jump or teleport
 /// between states, when the tie rule fails, when a weight is neither 0 nor 1,
 /// when no row has weight 1, when `qualifying` is empty, has a repeat or a code
@@ -552,17 +552,17 @@ pub fn test(
     let surv = data.followup()?;
     let n_codes = surv.n_codes();
     if qualifying.is_empty() || grid.is_empty() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the test needs at least one qualifying state and one landmark",
         ));
     }
     if let Some(&code) = qualifying.iter().find(|&&code| code == 0 || code > n_codes) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "qualifying state {code} is outside 1..={n_codes}"
         )));
     }
     if target == 0 || target > n_codes {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the target state {target} is outside 1..={n_codes}"
         )));
     }
@@ -570,23 +570,23 @@ pub fn test(
     let mut positions: Vec<(u32, u32)> = qualifying.iter().copied().zip(0_u32..).collect();
     positions.sort_unstable();
     if positions.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(Error::input("the qualifying states must be distinct"));
+        return Err(Error::invalid("the qualifying states must be distinct"));
     }
     let start = surv.start().ok_or_else(|| {
-        Error::input("the test needs the start of each interval, the start column")
+        Error::invalid("the test needs the start of each interval, the start column")
     })?;
     let ids = data.id().ok_or_else(|| {
-        Error::input("the test needs an id column to know which rows belong together")
+        Error::invalid("the test needs an id column to know which rows belong together")
     })?;
     if let Some(weight) = data.weight()
         && weight.iter().any(|&w| w != 0.0 && w != 1.0)
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the test is unweighted: a weight is 0, to leave the row out, or 1",
         ));
     }
     if data.n_used() == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "no row has weight 1, so there is nothing to test",
         ));
     }
@@ -602,7 +602,7 @@ pub fn test(
         let row = row as usize;
         let code = check.istate[row];
         if code == 0 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "row {row} has no starting state: give istate, or drop the row"
             )));
         }

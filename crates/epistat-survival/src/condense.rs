@@ -87,7 +87,7 @@ fn order_index(i: usize) -> u32 {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `data` has no start column or no id, or `key` has
+/// An input error when `data` has no start column or no id, or `key` has
 /// the wrong length.
 #[expect(
     clippy::float_cmp,
@@ -96,13 +96,13 @@ fn order_index(i: usize) -> u32 {
 pub fn condense(data: &SurvData<'_>, key: &[u64], options: &CondenseOptions) -> Result<Condensed> {
     let id = data
         .id()
-        .ok_or_else(|| Error::input("condense needs an id column"))?;
+        .ok_or_else(|| Error::invalid("condense needs an id column"))?;
     let data = data.followup()?;
     let n = data.len();
     check_lengths(&[("status", n), ("key", key.len())])?;
     let start = data
         .start()
-        .ok_or_else(|| Error::input("condense needs a start column"))?;
+        .ok_or_else(|| Error::invalid("condense needs a start column"))?;
     let stop = data.stop();
     let status = data.status();
 

@@ -74,7 +74,7 @@ fn impossible_bounds_are_refused() {
     assert!(build(&[0.0], &[-INF]).contains("wrong side"));
     assert!(build(&[-INF], &[INF]).contains("both infinite"));
     assert!(build(&[2.0], &[1.0]).contains("above their upper"));
-    assert!(build(&[1.0, 2.0], &[1.0]).contains("upper has 1"));
+    assert!(build(&[1.0, 2.0], &[1.0]).contains("upper has length 1"));
     let statuses = |t: &[f64], t2: &[f64], s: &[i32]| {
         message(SurvData::interval_status_builder(t, t2, s).build())
     };

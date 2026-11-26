@@ -115,7 +115,7 @@ impl Default for ClogitOptions<'_> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`](crate::Error::Input) when the columns differ in length,
+/// An input error when the columns differ in length,
 /// when `x` has no column or a value that is not finite, for the invalid
 /// weights, offset, starting values and `eps` that [`cox::fit`](crate::cox::fit)
 /// refuses, and with the exact method when case weights or clusters are given.

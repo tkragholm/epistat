@@ -235,7 +235,7 @@ pub struct Rmst2 {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `data` has more than one event code or no row of
+/// An input error when `data` has more than one event code or no row of
 /// positive weight, a stratum column with other than two levels used, or a
 /// group with no row used, the tie rule fails (see
 /// [`SurvData::with_timefix`]), the confidence level is not in `(0, 1)`, or
@@ -243,13 +243,13 @@ pub struct Rmst2 {
 /// the largest the data determine.
 pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
     if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the confidence level {} is not in (0, 1)",
             opts.conf_level
         )));
     }
     if data.n_strata() != 2 {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "rmst2 compares two groups, and the stratum column has {} levels",
             data.n_strata()
         )));
@@ -308,7 +308,7 @@ fn horizon(data: &SurvData<'_>, opts: &RmstOptions) -> Result<(GroupCurve, Group
         },
     )?;
     let [curve0, curve1] = fit.groups.as_slice() else {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "rmst2 needs rows of positive weight in both groups",
         ));
     };
@@ -319,10 +319,10 @@ fn horizon(data: &SurvData<'_>, opts: &RmstOptions) -> Result<(GroupCurve, Group
         Tau::Largest => tau_largest,
         Tau::Fixed(tau) => {
             if !tau.is_finite() {
-                return Err(Error::input("the horizon must be finite"));
+                return Err(Error::invalid("the horizon must be finite"));
             }
             if tau > tau_largest {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "the horizon {tau} is above {tau_largest}, the largest up to which \
                      both curves are determined by the data"
                 )));
@@ -473,7 +473,7 @@ pub fn rmst2_adjusted(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`rmst2`], and when the data have case weights or
+/// An input error as for [`rmst2`], and when the data have case weights or
 /// delayed entry, `covariates` has the wrong number of rows or a value that is
 /// not finite, the design is rank deficient, or the fit does not converge.
 pub fn rmst2_regression(
@@ -483,24 +483,24 @@ pub fn rmst2_regression(
     opts: &RmstOptions,
 ) -> Result<RmstRegression> {
     if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the confidence level {} is not in (0, 1)",
             opts.conf_level
         )));
     }
     if data.n_strata() != 2 {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the arm is the stratum column, which must have two levels, and it has {}",
             data.n_strata()
         )));
     }
     if data.weight().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the regression of the restricted mean takes no case weights",
         ));
     }
     if data.followup()?.start().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the regression of the restricted mean takes no delayed entry",
         ));
     }
@@ -508,13 +508,13 @@ pub fn rmst2_regression(
     let q = covariates.map_or(0, |c| c.ncols());
     if let Some(c) = covariates {
         if c.nrows() != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the covariates have {} rows and the data {n}",
                 c.nrows()
             )));
         }
         if (0..n).any(|i| (0..q).any(|j| !c[(i, j)].is_finite())) {
-            return Err(Error::input("the covariates must be finite"));
+            return Err(Error::invalid("the covariates must be finite"));
         }
     }
     let (_, _, tau, tau_largest) = horizon(data, opts)?;
@@ -522,7 +522,7 @@ pub fn rmst2_regression(
     let surv = data.followup()?;
     let arm_of = data
         .stratum()
-        .ok_or_else(|| Error::input("the arm is the stratum column"))?;
+        .ok_or_else(|| Error::invalid("the arm is the stratum column"))?;
     let p = 2 + q;
     let x = Mat::from_fn(n, p, |i, j| match j {
         0 => 1.0,
@@ -565,18 +565,8 @@ pub fn rmst2_regression(
     };
     let fit = Glm::new(family, link)
         .fit_slices(x.as_ref(), &response, Some(&weight), None, None)
-        .map_err(|e| Error::input(format!("the regression could not be fitted: {e}")))?;
-    if !fit.converged {
-        return Err(Error::input("the regression did not converge"));
-    }
-    let beta: Vec<f64> = fit
-        .coefficients
-        .iter()
-        .copied()
-        .collect::<Option<Vec<f64>>>()
-        .ok_or_else(|| {
-            Error::input("the design is rank deficient, a column is a combination of the others")
-        })?;
+        .map_err(Error::model("the regression"))?;
+    let beta = fit.full_rank().map_err(Error::model("the regression"))?;
     let log_link = link == Link::Log;
     let mean: Vec<f64> = (0..n)
         .map(|i| {
@@ -635,13 +625,10 @@ pub fn rmst2_regression(
         }
     }
     let ones = vec![1.0f64; n];
-    let gamma = weighted_gram(kappa.as_ref(), &ones)
-        .map_err(|e| Error::input(format!("the score could not be summed: {e}")))?;
+    let gamma = weighted_gram(kappa.as_ref(), &ones)?;
     let a_weight: Vec<f64> = if log_link { mean.clone() } else { ones };
-    let a = weighted_gram(x.as_ref(), &a_weight)
-        .map_err(|e| Error::input(format!("the information could not be formed: {e}")))?;
-    let covariance = sandwich(a.as_ref(), gamma.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
+    let a = weighted_gram(x.as_ref(), &a_weight)?;
+    let covariance = sandwich(a.as_ref(), gamma.as_ref(), &Attempt::SYMMETRIC)?;
     let std_err: Vec<f64> = (0..p).map(|j| covariance[(j, j)].max(0.0).sqrt()).collect();
     let z_value = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
     let z: Vec<f64> = (0..p).map(|j| beta[j] / std_err[j]).collect();

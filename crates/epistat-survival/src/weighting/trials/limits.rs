@@ -2,6 +2,7 @@
 //! `analysis_weights = "p99"` and `"weight_limits"`.
 
 use crate::error::{Error, Result};
+use epistat_core::InputError;
 
 /// Where the weights of the rows of the trials are cut.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,22 +55,22 @@ fn quantile_type1(x: &[f64], p: f64) -> f64 {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no weights, a weight that is negative or not finite,
+/// An input error for no weights, a weight that is negative or not finite,
 /// quantile probabilities outside `[0, 1]` or limits with the lower above the
 /// upper.
 pub fn limit_weights(weight: &[f64], limits: WeightLimits) -> Result<Vec<f64>> {
     if weight.is_empty() {
-        return Err(Error::input("weight: no values"));
+        return Err(Error::from(InputError::Empty { what: "weight" }));
     }
     if let Some(i) = weight.iter().position(|w| !(w.is_finite() && *w >= 0.0)) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "weight: value {i} is negative or not finite"
         )));
     }
     let (lower, upper) = match limits {
         WeightLimits::Quantiles { lower, upper } => {
             if !((0.0..=1.0).contains(&lower) && (0.0..=1.0).contains(&upper) && lower <= upper) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "limits: the quantiles {lower} and {upper} are not probabilities in order"
                 )));
             }
@@ -82,7 +83,7 @@ pub fn limit_weights(weight: &[f64], limits: WeightLimits) -> Result<Vec<f64>> {
         }
         WeightLimits::Values { lower, upper } => {
             if lower.is_nan() || upper.is_nan() || lower > upper {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "limits: {lower} and {upper} are not in order"
                 )));
             }

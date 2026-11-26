@@ -339,7 +339,7 @@ impl Stratum {
 }
 
 fn not_finite_risk() -> Error {
-    Error::input(
+    Error::undefined(
         "the risk score or the denominator of a partial-likelihood term is not finite and positive at the coefficients",
     )
 }
@@ -352,7 +352,7 @@ fn efron(ties: Ties) -> Result<bool> {
     } else if ties == Ties::Breslow {
         Ok(false)
     } else {
-        Err(Error::input(
+        Err(Error::invalid(
             "ties: residuals are defined for Breslow and Efron ties only",
         ))
     }
@@ -377,23 +377,23 @@ pub(crate) fn prepare(
         ("coefficients", coefficients.len()),
     ])?;
     if x.ncols() == 0 {
-        return Err(Error::input("x has no columns"));
+        return Err(Error::invalid("x has no columns"));
     }
     refuse_non_finite_matrix(x, "x")?;
     if coefficients.iter().flatten().any(|c| !c.is_finite()) {
-        return Err(Error::input("coefficients: a value is not finite"));
+        return Err(Error::invalid("coefficients: a value is not finite"));
     }
     if let Some(offset) = opts.offset {
         check_lengths(&[("data", data.n_rows()), ("offset", offset.len())])?;
         if offset.iter().any(|o| !o.is_finite()) {
-            return Err(Error::input("offset: a value is not finite"));
+            return Err(Error::invalid("offset: a value is not finite"));
         }
     }
     let keep: Vec<usize> = (0..x.ncols())
         .filter(|&j| coefficients[j].is_some())
         .collect();
     if keep.is_empty() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the fit has no coefficient: there are no residuals of a fit without an estimate",
         ));
     }
@@ -409,7 +409,7 @@ pub(crate) fn prepare(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -550,7 +550,7 @@ pub(crate) fn prepare(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of [`fit`](super::fit), for a fit
+/// An input error for the invalid input of [`fit`](super::fit), for a fit
 /// whose coefficients or covariance matrix do not have the shape of `x`, for a
 /// fit without a coefficient, for ties other than Breslow and Efron, for
 /// `collapse` of the Schoenfeld kinds, for `collapse` by cluster or id on data
@@ -569,12 +569,12 @@ pub fn residuals(
         ("fit coefficients", fit.coefficients.len()),
     ])?;
     if fit.covariance.len() != p * p {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "fit: the covariance matrix does not have one row and column per column of x",
         ));
     }
     if fit.n_used != data.n_used() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "fit: the number of rows used differs from the data's, so it is not a fit of these data",
         ));
     }
@@ -584,12 +584,12 @@ pub fn residuals(
         ResidualKind::Schoenfeld | ResidualKind::ScaledSchoenfeld
     );
     if schoenfeld && opts.collapse != Collapse::None {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "collapse: the Schoenfeld residuals have one row per event and cannot be collapsed",
         ));
     }
     if kind == ResidualKind::Deviance && opts.weighted == Some(true) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "weighted: deviance residuals are defined for the unweighted martingale residuals",
         ));
     }
@@ -664,11 +664,11 @@ pub fn residuals(
         Collapse::None => None,
         Collapse::Cluster => Some(
             data.cluster()
-                .ok_or_else(|| Error::input("collapse: the data have no clusters"))?,
+                .ok_or_else(|| Error::invalid("collapse: the data have no clusters"))?,
         ),
         Collapse::Id => Some(
             data.id()
-                .ok_or_else(|| Error::input("collapse: the data have no ids"))?,
+                .ok_or_else(|| Error::invalid("collapse: the data have no ids"))?,
         ),
         Collapse::Codes(codes) => {
             check_lengths(&[("data", rows), ("collapse", codes.len())])?;
@@ -770,7 +770,7 @@ fn deviance(m: f64, status: f64) -> Result<f64> {
     } else {
         let argument = status - m;
         if argument <= 0.0 || !argument.is_finite() {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the martingale residual is not below the status, so its deviance residual is not defined",
             ));
         }

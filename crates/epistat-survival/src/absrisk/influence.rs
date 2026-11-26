@@ -64,7 +64,7 @@ impl Baselines {
         let mut offset_centres = Vec::with_capacity(models.len());
         for (m, model) in models.iter().enumerate() {
             if model.fit.coefficients.iter().any(Option::is_none) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "model {m}: a coefficient is not defined; drop the aliased column"
                 )));
             }
@@ -106,7 +106,7 @@ impl Baselines {
                 let mut jumps = Vec::with_capacity(b.time.len());
                 for (t, h) in b.time.iter().zip(&b.hazard) {
                     let j = grid.binary_search_by(|g| g.total_cmp(t)).map_err(|_| {
-                        Error::input("internal: an event time is missing from the grid")
+                        Error::invalid("internal: an event time is missing from the grid")
                     })?;
                     lam[j] = *h;
                     jumps.push(j);
@@ -280,7 +280,7 @@ fn train_model(
         .collect();
     let weighted_risk: Vec<f64> = risk.iter().zip(weight).map(|(r, w)| r * w).collect();
     if risk.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "model {m}: a risk score of the fit is not finite"
         )));
     }
@@ -346,7 +346,7 @@ fn train_model(
                 let l = jumps
                     .binary_search_by(|&j| base.grid[j].total_cmp(&t))
                     .map_err(|_| {
-                        Error::input("internal: an event time is not a jump of its model")
+                        Error::invalid("internal: an event time is not a jump of its model")
                     })?;
                 event_over_s0[i] = 1.0 / s0[l];
             }
@@ -394,13 +394,15 @@ fn covariance(model: &ModelInput<'_>, m: usize) -> Result<Vec<f64>> {
         .unwrap_or(&model.fit.covariance);
     let p = model.x.ncols();
     if chosen.len() != p * p {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "model {m}: the covariance is not p by p"
         )));
     }
     chosen
         .iter()
-        .map(|v| v.ok_or_else(|| Error::input(format!("model {m}: the covariance is not defined"))))
+        .map(|v| {
+            v.ok_or_else(|| Error::invalid(format!("model {m}: the covariance is not defined")))
+        })
         .collect()
 }
 

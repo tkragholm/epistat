@@ -111,7 +111,7 @@ pub struct WeightedCox {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of [`crate::cox::fit`], for data
+/// An input error for the invalid input of [`crate::cox::fit`], for data
 /// with case weights, for `subject` of another length than `data` or naming a
 /// subject that does not exist, for rows of one subject in several clusters,
 /// for exact ties, when the fit does not converge or has an aliased column, and
@@ -132,24 +132,26 @@ pub fn fit(
     let weighted = buf.as_data();
     let model = cox_fit(&weighted, x, opts)?;
     if !model.converged {
-        return Err(Error::input("the weighted Cox fit did not converge"));
+        return Err(Error::NotConverged {
+            iterations: model.iterations as usize,
+        });
     }
     let p = x.ncols();
     let coefficients: Vec<f64> = model
         .coefficients
         .iter()
         .enumerate()
-        .map(|(j, c)| c.ok_or_else(|| Error::input(format!("x: column {j} is aliased"))))
+        .map(|(j, c)| c.ok_or_else(|| Error::invalid(format!("x: column {j} is aliased"))))
         .collect::<Result<_>>()?;
     let v: Vec<f64> = model
         .covariance
         .iter()
-        .map(|c| c.ok_or_else(|| Error::input("the covariance of the fit is undefined")))
+        .map(|c| c.ok_or_else(|| Error::undefined("the covariance of the fit is undefined")))
         .collect::<Result<_>>()?;
     let residuals = score_residuals(&weighted, x, &model.coefficients, opts)?;
     let residuals: Vec<Vec<f64>> = residuals
         .into_iter()
-        .map(|r| r.ok_or_else(|| Error::input("a score residual is undefined")))
+        .map(|r| r.ok_or_else(|| Error::undefined("a score residual is undefined")))
         .collect::<Result<_>>()?;
 
     let k = iptw.n_params();
@@ -177,9 +179,7 @@ pub fn fit(
     }
 
     let vmat = Mat::from_fn(p, p, |i, j| v[i * p + j]);
-    let information = inverse(vmat.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information of the fit: {e}")))?
-        .x;
+    let information = inverse(vmat.as_ref(), &Attempt::SYMMETRIC)?.x;
     let bread_ps = iptw.bread()?;
     let size = k + p;
     let a = Mat::from_fn(size, size, |i, j| {
@@ -194,18 +194,15 @@ pub fn fit(
         }
     });
     let ones = Clusters::singletons(n_units);
-    let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))
-        .map_err(|e| Error::input(format!("the stacked estimating functions: {e}")))?;
-    let stacked = sandwich(a.as_ref(), b.as_ref(), &GENERAL)
-        .map_err(|e| Error::input(format!("the stacked system: {e}")))?;
+    let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))?;
+    let stacked = sandwich(a.as_ref(), b.as_ref(), &GENERAL)?;
     let b_beta = Mat::from_fn(p, p, |i, j| b[(k + i, k + j)]);
     let minus_information = Mat::from_fn(p, p, |i, j| -information[(i, j)]);
     let ignoring = sandwich(
         minus_information.as_ref(),
         b_beta.as_ref(),
         &Attempt::SYMMETRIC,
-    )
-    .map_err(|e| Error::input(format!("the robust variance: {e}")))?;
+    )?;
 
     let flat = |m: &Mat<f64>, offset: usize, size: usize| -> Vec<f64> {
         (0..size)
@@ -267,7 +264,7 @@ pub struct EstimatedCox {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of [`crate::cox::fit`] and of the models of
+/// An input error for the invalid input of [`crate::cox::fit`] and of the models of
 /// the weights, for data with case weights, for neither kind of weights given,
 /// for `subject` without propensity weights or with the wrong length or an unknown
 /// subject, for rows of one subject in several clusters, for exact ties, when the
@@ -284,24 +281,26 @@ pub fn fit_estimated(
     let weighted = buf.as_data();
     let model = cox_fit(&weighted, x, opts)?;
     if !model.converged {
-        return Err(Error::input("the weighted Cox fit did not converge"));
+        return Err(Error::NotConverged {
+            iterations: model.iterations as usize,
+        });
     }
     let p = x.ncols();
     let coefficients: Vec<f64> = model
         .coefficients
         .iter()
         .enumerate()
-        .map(|(j, c)| c.ok_or_else(|| Error::input(format!("x: column {j} is aliased"))))
+        .map(|(j, c)| c.ok_or_else(|| Error::invalid(format!("x: column {j} is aliased"))))
         .collect::<Result<_>>()?;
     let v: Vec<f64> = model
         .covariance
         .iter()
-        .map(|c| c.ok_or_else(|| Error::input("the covariance of the fit is undefined")))
+        .map(|c| c.ok_or_else(|| Error::undefined("the covariance of the fit is undefined")))
         .collect::<Result<_>>()?;
     let residuals = score_residuals(&weighted, x, &model.coefficients, opts)?;
     let residuals: Vec<Vec<f64>> = residuals
         .into_iter()
-        .map(|r| r.ok_or_else(|| Error::input("a score residual is undefined")))
+        .map(|r| r.ok_or_else(|| Error::undefined("a score residual is undefined")))
         .collect::<Result<_>>()?;
     let a = Mat::from_fn(n, p, |row, j| residuals[j][row]);
     let mut known = Mat::<f64>::zeros(prepared.n_units, p);
@@ -315,16 +314,12 @@ pub fn fit_estimated(
         nuisance.add(a.as_ref(), &mut influence)?;
     }
     let vmat = Mat::from_fn(p, p, |i, j| v[i * p + j]);
-    let information = inverse(vmat.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information of the fit: {e}")))?
-        .x;
+    let information = inverse(vmat.as_ref(), &Attempt::SYMMETRIC)?.x;
     let minus_information = Mat::from_fn(p, p, |i, j| -information[(i, j)]);
     let ones = Clusters::singletons(prepared.n_units);
     let form = |psi: &Mat<f64>| -> Result<Mat<f64>> {
-        let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))
-            .map_err(|e| Error::input(format!("the estimating functions: {e}")))?;
-        sandwich(minus_information.as_ref(), b.as_ref(), &Attempt::SYMMETRIC)
-            .map_err(|e| Error::input(format!("the variance: {e}")))
+        let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))?;
+        sandwich(minus_information.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).map_err(Error::from)
     };
     let adjusted = form(&influence)?;
     let ignoring = form(&known)?;

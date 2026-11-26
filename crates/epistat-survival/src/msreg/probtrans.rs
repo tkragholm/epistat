@@ -277,7 +277,7 @@ fn step_matrix(h: &CumulativeHazards, j: usize, s: usize) -> Result<Vec<f64>> {
         b[from * s + from] -= d;
     }
     if let Some(from) = (0..s).find(|&i| b[i * s + i] < 0.0) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the diagonal of I + dA for state {} is negative at time {}: the hazards are too large \
              for the product integral",
             from + 1,
@@ -309,7 +309,7 @@ fn std_errs(var_p: &[f64], s: usize) -> impl Iterator<Item = Option<f64>> + '_ {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `predt` is not finite, when the standard errors or
+/// An input error when `predt` is not finite, when the standard errors or
 /// the covariance are asked for and the cumulative hazards have no covariances,
 /// when no time is after `predt` (forward) or at or before it (fixed horizon),
 /// and when the diagonal of `I + dA` is negative at an event time, which is where
@@ -317,11 +317,11 @@ fn std_errs(var_p: &[f64], s: usize) -> impl Iterator<Item = Option<f64>> + '_ {
 /// the profile are too large for one step of the product integral.
 pub fn probtrans(h: &CumulativeHazards, predt: f64, opts: &ProbTransOptions) -> Result<ProbTrans> {
     if !predt.is_finite() {
-        return Err(Error::input("predt: must be finite"));
+        return Err(Error::invalid("predt: must be finite"));
     }
     let variance = opts.se || opts.covariance;
     if variance && h.covariance.is_none() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "se: the cumulative hazards have no covariances; ask `msfit` for them or set `se` false",
         ));
     }
@@ -361,7 +361,7 @@ fn forward(
     let n = s * s;
     let first = h.time.partition_point(|&t| t <= predt);
     if first == h.time.len() {
-        return Err(Error::input("predt: no event time is after it"));
+        return Err(Error::invalid("predt: no event time is after it"));
     }
     let mut time = vec![predt];
     let mut probability = identity(s);
@@ -435,7 +435,7 @@ fn fixed_horizon(
     let n = s * s;
     let last = h.time.partition_point(|&t| t <= predt);
     if last == 0 {
-        return Err(Error::input("predt: no event time is at or before it"));
+        return Err(Error::invalid("predt: no event time is at or before it"));
     }
     let eye = identity(s);
     let mut p = identity(s);

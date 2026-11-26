@@ -346,45 +346,45 @@ impl FlexParFit {
 fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'_>) -> Result<()> {
     let n = data.n_rows();
     if x.nrows() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the covariate matrix has {} rows and the follow-up {n}",
             x.nrows()
         )));
     }
     if opts.df == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the baseline needs at least one degree of freedom",
         ));
     }
     if opts.tolerance.is_nan() || opts.tolerance <= 0.0 || opts.max_iterations == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "tolerance and max_iterations must be positive",
         ));
     }
     if let Some(o) = opts.offset
         && (o.len() != n || o.iter().any(|v| !v.is_finite()))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the offset must be finite and have one value per row",
         ));
     }
     if let Some(h) = opts.bhazard {
         if opts.scale != Scale::Hazard {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "an expected hazard needs the hazard scale: the excess hazard is additive on the hazard",
             ));
         }
         if h.len() != n || h.iter().any(|v| !v.is_finite() || *v < 0.0) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the expected hazard must be finite, not negative and have one value per row",
             ));
         }
     }
     if data.n_strata() > 0 {
-        return Err(Error::input("strata are not supported by flexpar"));
+        return Err(Error::unsupported("strata are not supported by flexpar"));
     }
     if (0..x.nrows()).any(|i| (0..x.ncols()).any(|j| !x[(i, j)].is_finite())) {
-        return Err(Error::input("the covariates must be finite"));
+        return Err(Error::invalid("the covariates must be finite"));
     }
     Ok(())
 }
@@ -399,7 +399,7 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for inputs of other lengths, a covariate that is not
+/// An input error for inputs of other lengths, a covariate that is not
 /// finite, an event code above 1, a time of a used row that is not positive, a
 /// tvc column out of range or aliased, knots that are not increasing (which
 /// is what ties among the event times do to the quantiles), no events or fewer
@@ -417,7 +417,7 @@ pub fn fit(
     check_inputs(data, x, opts)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "flexpar needs a binary status: use SurvData::cause for competing events",
         ));
     }
@@ -428,12 +428,12 @@ pub fn fit(
     let used = |i: usize| weight.is_none_or(|w| w[i] > 0.0);
     for i in (0..n).filter(|&i| used(i)) {
         if stop[i] <= 0.0 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "row {i} has a time that is not positive, and ln t is needed"
             )));
         }
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::input(format!("row {i} has a negative entry time")));
+            return Err(Error::invalid(format!("row {i} has a negative entry time")));
         }
     }
     if opts.scale != Scale::Hazard
@@ -441,7 +441,7 @@ pub fn fit(
     {
         let mut seen = HashSet::new();
         if (0..n).filter(|&i| used(i)).any(|i| !seen.insert(id[i])) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "a subject has several rows: only the hazard scale accepts split follow-up",
             ));
         }
@@ -451,14 +451,14 @@ pub fn fit(
         .map(|i| stop[i].ln())
         .collect();
     if events.is_empty() {
-        return Err(Error::input("there are no events with positive weight"));
+        return Err(Error::invalid("there are no events with positive weight"));
     }
     events.sort_by(f64::total_cmp);
 
     let baseline_knots = match opts.knots {
         Some(k) => {
             if k.len() != opts.df + 1 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "df = {} needs {} knots, boundary knots included, and {} were given",
                     opts.df,
                     opts.df + 1,
@@ -475,24 +475,24 @@ pub fn fit(
     let mut tvc = Vec::with_capacity(opts.tvc.len());
     for (j, t) in opts.tvc.iter().enumerate() {
         if t.column >= p {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the time-varying column {} is out of range",
                 t.column
             )));
         }
         if t.df == 0 {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "a time-varying effect needs at least one degree of freedom",
             ));
         }
         if aliased[t.column] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the time-varying column {} is aliased with the intercept or another column",
                 t.column
             )));
         }
         if opts.tvc[..j].iter().any(|u| u.column == t.column) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "column {} has two time-varying terms",
                 t.column
             )));
@@ -512,7 +512,7 @@ pub fn fit(
     let n_used = (0..n).filter(|&i| used(i)).count();
     let n_event_rows = (0..n).filter(|&i| used(i) && event[i] != 0).count();
     if n_event_rows < q {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{n_event_rows} events cannot fit {q} parameters"
         )));
     }
@@ -529,7 +529,7 @@ pub fn fit(
     };
     let theta0 = start::starting_values(&design, opts.scale, stop, start, event, weight);
     let best = maximise(&model, &theta0, opts.tolerance, opts.max_iterations).ok_or_else(|| {
-        Error::input("the model is undefined at the starting values: the derivative of the spline is not positive at every event")
+        Error::undefined("the model is undefined at the starting values: the derivative of the spline is not positive at every event")
     })?;
 
     let null_log_likelihood = if opts.offset.is_some() {

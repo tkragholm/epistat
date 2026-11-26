@@ -292,7 +292,7 @@ struct Persons {
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::input(message)
+    Error::invalid(message)
 }
 
 fn persons_of(data: &SccsData<'_>) -> Result<Persons> {
@@ -470,7 +470,7 @@ fn check_data(data: &SccsData<'_>, x: MatRef<'_, f64>) -> Result<()> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, `x` has no column or a
+/// An input error when the columns differ in length, `x` has no column or a
 /// value that is not finite, a length is not positive, an event count is
 /// negative or not finite, the pieces of a person are not contiguous, the
 /// tolerance is not positive and finite, or the information is not positive
@@ -698,7 +698,7 @@ impl SccsFit {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `level` is not strictly between 0 and 1, or
+    /// An input error when `level` is not strictly between 0 and 1, or
     /// `robust` is asked for a fit without the sandwich.
     pub fn relative_incidence(
         &self,
@@ -1316,7 +1316,7 @@ fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns and offsets disagree in length, a time is
+/// An input error when the columns and offsets disagree in length, a time is
 /// not finite, an observation period is empty, an event lies outside its
 /// person's observation period, the age or calendar cut points are not
 /// strictly increasing, a window is empty, two windows of one series overlap,

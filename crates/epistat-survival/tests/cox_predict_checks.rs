@@ -277,7 +277,10 @@ fn refusals() {
     let t1 = [2.0];
     let expect_err = |r: Result<_, _>, what: &str| {
         assert!(
-            matches!(r, Err(epistat_survival::Error::Input(_))),
+            matches!(
+                r,
+                Err(epistat_survival::Error::Input(_) | epistat_survival::Error::Invalid(_))
+            ),
             "{what} should be refused"
         );
     };

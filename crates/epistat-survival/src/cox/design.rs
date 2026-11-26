@@ -662,7 +662,7 @@ fn with_input<R>(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -694,14 +694,14 @@ fn with_input<R>(
 /// that are used, and clusters, which need score residuals.
 fn check_exact(data: &SurvData<'_>) -> Result<()> {
     if data.cluster().is_some() {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "ties: the exact method has no cluster-robust variance",
         ));
     }
     if let Some(weight) = data.weight()
         && weight.iter().any(|&w| w > 0.0 && w - 1.0 != 0.0)
     {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "weight: the exact method supports case weights of 1 only",
         ));
     }
@@ -711,7 +711,7 @@ fn check_exact(data: &SurvData<'_>) -> Result<()> {
 /// The checks on the offset, the starting values and the convergence limit.
 fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<()> {
     if !(opts.eps.is_finite() && opts.eps > 0.0) {
-        return Err(Error::input("eps: must be finite and positive"));
+        return Err(Error::invalid("eps: must be finite and positive"));
     }
     if let Some(offset) = opts.offset {
         check_lengths(&[("data", rows), ("offset", offset.len())])?;
@@ -719,7 +719,7 @@ fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<(
             .iter()
             .any(|o| !o.is_finite() || !o.exp().is_finite())
         {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "offset: a value is not finite or gives a risk score that is not finite",
             ));
         }
@@ -752,7 +752,7 @@ fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` has a number of rows other than
+/// An input error when `x` has a number of rows other than
 /// `data`, or holds a value that is not finite, when `opts.cause` is missing
 /// for a status with several codes or outside the codes, when the rule for
 /// the times finds an interval of length zero, when `opts.offset` has another
@@ -1896,7 +1896,7 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
     let beta0 = beta.clone();
     let Some(start) = model.evaluate(&beta) else {
         if init.is_some() {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "init: the starting coefficients give a risk score or a partial \
                  likelihood that is not finite",
             ));
@@ -2197,7 +2197,7 @@ fn on_input_scale(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of [`fit`], for `coefficients` of
+/// An input error for the invalid input of [`fit`], for `coefficients` of
 /// another length than `x` has columns, for a coefficient that is not finite,
 /// and for coefficients at which a risk score or the denominator of a
 /// partial-likelihood term is not finite and positive.
@@ -2208,7 +2208,7 @@ pub fn score_residuals(
     opts: &CoxOptions<'_>,
 ) -> Result<Vec<Option<Vec<f64>>>> {
     if opts.ties == Ties::Exact {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "ties: score residuals are not available for the exact method",
         ));
     }
@@ -2223,13 +2223,13 @@ fn score_residuals_checked(
 ) -> Result<Vec<Option<Vec<f64>>>> {
     let (rows, p) = (data.x.nrows(), data.x.ncols());
     if coefficients.len() != p {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "coefficients: {} values for {p} columns",
             coefficients.len()
         )));
     }
     if coefficients.iter().flatten().any(|c| !c.is_finite()) {
-        return Err(Error::input("coefficients: a value is not finite"));
+        return Err(Error::invalid("coefficients: a value is not finite"));
     }
     let mut columns: Vec<Option<Vec<f64>>> = coefficients
         .iter()
@@ -2261,7 +2261,7 @@ fn score_residuals_checked(
             }
         })
         .ok_or_else(|| {
-            Error::input(
+            Error::invalid(
                 "coefficients: a risk score or a denominator of the partial likelihood \
                  is not finite and positive at these values",
             )
@@ -2345,7 +2345,7 @@ mod tests {
             design(&x, None)
                 .unwrap_err()
                 .to_string()
-                .starts_with("x: 1 non-finite")
+                .starts_with("x is not finite at row 7")
         );
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
         let mut weight = [1.0; 8];

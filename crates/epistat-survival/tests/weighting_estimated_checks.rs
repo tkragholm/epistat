@@ -66,7 +66,8 @@ fn pooled_fit_refuses_invalid_input() {
     let err = |r: epistat_survival::Result<pooled::PooledIpcw<'_>>| r.err().unwrap().to_string();
     assert!(err(pooled::fit(&d, None, short.as_ref(), None)).contains("design: 3 rows"));
     assert!(
-        err(pooled::fit(&d, Some(&[true]), t.design.as_ref(), None)).contains("censored: 1 values")
+        err(pooled::fit(&d, Some(&[true]), t.design.as_ref(), None))
+            .contains("censored has length 1")
     );
     // No censoring event among the rows of the fit.
     let none = vec![false; t.id.len()];

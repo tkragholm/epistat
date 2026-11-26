@@ -262,7 +262,7 @@ struct Piece {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a scale's entry has not as many values as the data
+/// An input error when a scale's entry has not as many values as the data
 /// has rows, an entry or a break is not finite, a stop is below its start (or
 /// below 0 without a start column), there are more rows than `u32::MAX`,
 /// the pieces cannot be indexed, or [`LexisOptions::crop`] is set and a scale
@@ -293,7 +293,7 @@ pub fn split_lexis(
     for &c in &counts {
         total = total
             .checked_add(c)
-            .ok_or_else(|| Error::input("too many pieces to index"))?;
+            .ok_or_else(|| Error::invalid("too many pieces to index"))?;
     }
 
     let mut out = Lexis {
@@ -414,7 +414,7 @@ struct Table {
 ///
 /// # Errors
 ///
-/// As [`split_lexis`], and [`Error::Input`] when a key has the wrong length,
+/// As [`split_lexis`], and an input error when a key has the wrong length,
 /// no levels or a code outside its levels, the cause is missing with several
 /// event codes or is not one of them, or the number of possible cells is too
 /// large to index.
@@ -430,32 +430,32 @@ pub fn split_cells(
         Some(code) => data.cause(code)?.code(),
         None if surv.n_codes() == 1 => 1,
         None => {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the status has {} event codes, so the cause to count must be given",
                 surv.n_codes()
             )));
         }
     };
-    let code = i32::try_from(code).map_err(|_| Error::input("cause does not fit an i32"))?;
+    let code = i32::try_from(code).map_err(|_| Error::invalid("cause does not fit an i32"))?;
     let walk = Walk::new(data, scales, *options)?;
     let n = data.n_rows();
     let mut levels: Vec<usize> = walk.breaks.iter().map(|b| b.len() + 1).collect();
     for (k, key) in keys.iter().enumerate() {
         if key.codes.len() != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "key {k} has {} codes against {n} rows",
                 key.codes.len()
             )));
         }
         if key.levels == 0 {
-            return Err(Error::input(format!("key {k} has no levels")));
+            return Err(Error::invalid(format!("key {k} has no levels")));
         }
         if let Some(i) = key
             .codes
             .iter()
             .position(|&c| usize::try_from(c).map_or(true, |c| c >= key.levels))
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "key {k}: the code {} of row {i} is not below its {} levels",
                 key.codes[i], key.levels
             )));
@@ -470,7 +470,7 @@ pub fn split_cells(
         possible = possible
             .checked_mul(l)
             .filter(|&p| p <= (isize::MAX as usize) / 24 / (WAVE + 1))
-            .ok_or_else(|| Error::input("the number of possible cells is too large to index"))?;
+            .ok_or_else(|| Error::invalid("the number of possible cells is too large to index"))?;
     }
     let size = possible;
 
@@ -519,7 +519,7 @@ pub fn split_cells(
             c.push(count[cell]);
         }
     }
-    let pieces = usize::try_from(pieces).map_err(|_| Error::input("too many pieces to count"))?;
+    let pieces = usize::try_from(pieces).map_err(|_| Error::invalid("too many pieces to count"))?;
     Ok(cells::finish(&levels, &strides, &ids, l, e, c, pieces))
 }
 
@@ -547,13 +547,13 @@ impl<'a> Walk<'a> {
     ) -> Result<Self> {
         let surv = data.followup()?;
         let n = data.n_rows();
-        u32::try_from(n).map_err(|_| Error::input("more rows than u32::MAX"))?;
+        u32::try_from(n).map_err(|_| Error::invalid("more rows than u32::MAX"))?;
         let stop = surv.stop();
         let start = surv.start();
         for i in 0..n {
             let begin = start.map_or(0.0, |s| s[i]);
             if stop[i] < begin || stop[i].is_nan() {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "row {i} stops at {}, before its start {begin}",
                     stop[i]
                 )));
@@ -562,18 +562,18 @@ impl<'a> Walk<'a> {
         let mut breaks = Vec::with_capacity(scales.len());
         for (j, scale) in scales.iter().enumerate() {
             if scale.entry.len() != n {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "scale {j} has {} entry values against {n} rows",
                     scale.entry.len()
                 )));
             }
             if let Some(i) = scale.entry.iter().position(|v| !v.is_finite()) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "scale {j}: the entry value of row {i} is not finite"
                 )));
             }
             if let Some(b) = scale.breaks.iter().find(|b| !b.is_finite()) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "scale {j}: the breaks must be finite, found {b}"
                 )));
             }
@@ -581,7 +581,7 @@ impl<'a> Walk<'a> {
             b.sort_unstable_by(f64::total_cmp);
             b.dedup();
             if options.crop && b.len() == 1 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "scale {j} has one break, and cropping needs none or at least two"
                 )));
             }

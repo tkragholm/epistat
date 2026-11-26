@@ -57,6 +57,7 @@
     reason = "state, row and cluster counts are checked to fit in u32 by the data type"
 )]
 
+use epistat_core::InputError;
 use rayon::prelude::*;
 
 use crate::check::check_ascending;
@@ -167,7 +168,7 @@ pub struct StatePseudo {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `times` is empty, not finite or not strictly
+/// An input error when `times` is empty, not finite or not strictly
 /// ascending, the origin is not finite, a time in state is asked for before the
 /// origin, the first exit time is before the origin, the data are not valid
 /// multi-state data (see [`multistate::estimate`]), a cluster has rows in more
@@ -184,14 +185,14 @@ pub fn pseudo_states(
     opts: &StateOptions,
 ) -> Result<StatePseudo> {
     if times.is_empty() {
-        return Err(Error::input("times is empty"));
+        return Err(Error::from(InputError::Empty { what: "times" }));
     }
     check_ascending(times, "times", true)?;
     if !opts.origin.is_finite() {
-        return Err(Error::input("origin must be finite"));
+        return Err(Error::invalid("origin must be finite"));
     }
     if opts.target == StateTarget::TimeInState && times[0] < opts.origin {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the time {} of a time in state is before the origin, {}",
             times[0], opts.origin
         )));
@@ -220,7 +221,7 @@ pub fn pseudo_states(
         Some(codes) => {
             let levels = data
                 .stratum_levels()
-                .ok_or_else(|| Error::input("a stratum column has no levels"))?;
+                .ok_or_else(|| Error::invalid("a stratum column has no levels"))?;
             let cluster_codes = data.cluster().or_else(|| data.id());
             if let Some(subjects) = cluster_codes {
                 let mut owner = vec![u32::MAX; data.n_ids().max(data.n_clusters())];
@@ -229,7 +230,7 @@ pub fn pseudo_states(
                     if *slot == u32::MAX {
                         *slot = codes[row as usize];
                     } else if *slot != codes[row as usize] {
-                        return Err(Error::input(
+                        return Err(Error::invalid(
                             "a cluster has rows in more than one stratum, so its \
                              pseudo-values cannot be collapsed",
                         ));
@@ -257,7 +258,7 @@ pub fn pseudo_states(
         }
     };
     if parts.is_empty() {
-        return Err(Error::input("no row has positive weight"));
+        return Err(Error::invalid("no row has positive weight"));
     }
 
     let mut results = Vec::new();
@@ -370,10 +371,10 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
     let k = at.len();
     let grid = exit_times(data)?;
     let Some(&last) = grid.last() else {
-        return Err(Error::input("no row has positive weight"));
+        return Err(Error::invalid("no row has positive weight"));
     };
     if grid[0] < opts.origin {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the first exit time {} is before the origin {}",
             grid[0], opts.origin
         )));
@@ -426,7 +427,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
             let per_time = n.saturating_mul(states);
             let fit = limit.checked_div(per_time).unwrap_or(0);
             if fit == 0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "the influence of {n} clusters in {states} states at one time is \
                      {per_time} values, more than the {limit} allowed"
                 )));
@@ -525,10 +526,10 @@ fn hazards(data: &SurvData<'_>, grid: &[f64], at: &[f64], beyond: Vec<bool>) -> 
     let surv = data.followup()?;
     let start = surv
         .start()
-        .ok_or_else(|| Error::input("multi-state estimates need the start of each interval"))?;
+        .ok_or_else(|| Error::invalid("multi-state estimates need the start of each interval"))?;
     let ids = data
         .id()
-        .ok_or_else(|| Error::input("multi-state estimates need an id column"))?;
+        .ok_or_else(|| Error::invalid("multi-state estimates need an id column"))?;
     let states = surv.n_codes() as usize;
     let k = at.len();
     let m = grid.len();
@@ -551,7 +552,7 @@ fn hazards(data: &SurvData<'_>, grid: &[f64], at: &[f64], beyond: Vec<bool>) -> 
         let r = r as usize;
         let from = check.istate[r];
         if from == 0 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "row {r} has no starting state: give istate, or drop the row"
             )));
         }

@@ -223,7 +223,7 @@ impl GeeFit {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the inputs differ in length, `y`, `x`, the weights or
+/// An input error when the inputs differ in length, `y`, `x`, the weights or
 /// the offset are not finite, a weight is negative, there are fewer rows than
 /// columns, the tolerance is not positive and finite, no iteration is allowed, the mean of `y` is
 /// outside the range of the link and no start is given, the design is rank
@@ -246,7 +246,7 @@ pub fn fit(
         .chain(offset.map(|o| ("offset", o.len())))
     {
         if length != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{name} has {length} entries and the design has {n} rows"
             )));
         }
@@ -254,33 +254,33 @@ pub fn fit(
     if let Some(start) = start
         && start.len() != p
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "start has {} entries and the design has {p} columns",
             start.len()
         )));
     }
     if p == 0 || n < p {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "a design of {n} rows and {p} columns cannot be fitted"
         )));
     }
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::input("the tolerance must be positive and finite"));
+        return Err(Error::invalid("the tolerance must be positive and finite"));
     }
     if opts.max_iterations == 0 {
-        return Err(Error::input("at least one iteration must be allowed"));
+        return Err(Error::invalid("at least one iteration must be allowed"));
     }
     let finite = y.iter().all(|v| v.is_finite())
         && (0..n).all(|i| (0..p).all(|j| x[(i, j)].is_finite()))
         && weights.is_none_or(|w| w.iter().all(|v| v.is_finite()))
         && offset.is_none_or(|o| o.iter().all(|v| v.is_finite()));
     if !finite {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "y, the design, the weights and the offset must be finite",
         ));
     }
     if weights.is_some_and(|w| w.iter().any(|&v| v < 0.0)) {
-        return Err(Error::input("a weight is negative"));
+        return Err(Error::invalid("a weight is negative"));
     }
     let w: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
     let o: Vec<f64> = offset.map_or_else(|| vec![0.0; n], <[f64]>::to_vec);
@@ -288,10 +288,10 @@ pub fn fit(
     let glm_link = link.glm();
     let total_weight: f64 = w.iter().sum();
     if total_weight <= 0.0 {
-        return Err(Error::input("the weights sum to zero"));
+        return Err(Error::invalid("the weights sum to zero"));
     }
     let rank_deficient =
-        || Error::input("the design is rank deficient, a column is a combination of the others");
+        || Error::invalid("the design is rank deficient, a column is a combination of the others");
 
     let beta0: Vec<f64> = if let Some(start) = start {
         start.to_vec()
@@ -300,7 +300,7 @@ pub fn fit(
         // pseudo-values, and one weighted least squares step on it.
         let mean = y.iter().zip(&w).map(|(v, wi)| v * wi).sum::<f64>() / total_weight;
         if !link.admits(mean) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the mean {mean} of the pseudo-values is outside the range of the link, \
                  so there is no start; supply one"
             )));
@@ -312,7 +312,7 @@ pub fn fit(
             .collect();
         let step = Glm::new(Family::Gaussian, epistat_glm::Link::Identity)
             .fit_slices(x, &z, Some(&w), None, None)
-            .map_err(|e| Error::input(format!("the start could not be found: {e}")))?;
+            .map_err(Error::model("the starting regression"))?;
         step.coefficients
             .into_iter()
             .collect::<Option<Vec<f64>>>()
@@ -333,7 +333,7 @@ pub fn fit(
         iterations += 1;
         let step = model
             .fit_slices(x, y, Some(&w), Some(&o), Some(&beta))
-            .map_err(|e| Error::input(format!("the regression could not be fitted: {e}")))?;
+            .map_err(Error::model("the regression"))?;
         let next = step
             .coefficients
             .iter()
@@ -351,7 +351,7 @@ pub fn fit(
             break;
         }
     }
-    let solved = solved.ok_or_else(|| Error::input("no iteration ran"))?;
+    let solved = solved.ok_or_else(|| Error::invalid("no iteration ran"))?;
     let fitted = solved.fitted;
     let derivative: Vec<f64> = solved
         .linear_predictor
@@ -361,19 +361,16 @@ pub fn fit(
     let weight: Vec<f64> = (0..n)
         .map(|i| w[i] * derivative[i] * derivative[i])
         .collect();
-    let a = weighted_gram(x, &weight)
-        .map_err(|e| Error::input(format!("the information could not be formed: {e}")))?;
+    let a = weighted_gram(x, &weight)?;
     let scored = Mat::from_fn(n, p, |i, j| w[i] * derivative[i] * x[(i, j)]);
     let clusters = Clusters::from_sorted_labels(cluster);
-    let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?
-        .x;
+    let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)?.x;
     // The factor of each score: 1, or 1 / (1 - h) with h the leverage.
     let (factor, leverage): (Vec<f64>, Option<Vec<f64>>) = match opts.covariance {
         Covariance::Hc0 => (vec![1.0; n], None),
         Covariance::Hc3 => {
             if clusters.count() != n {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "HC3 is defined for one observation in each cluster",
                 ));
             }
@@ -397,7 +394,7 @@ pub fn fit(
                     if h < 1.0 {
                         Ok(1.0 / (1.0 - h))
                     } else {
-                        Err(Error::input(format!("observation {i} has leverage 1")))
+                        Err(Error::invalid(format!("observation {i} has leverage 1")))
                     }
                 })
                 .collect::<Result<_>>()?;
@@ -408,10 +405,8 @@ pub fn fit(
         scored.as_ref(),
         |i| factor[i] * (y[i] - fitted[i]),
         Some(&clusters),
-    )
-    .map_err(|e| Error::input(format!("the sandwich could not be formed: {e}")))?;
-    let covariance = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
+    )?;
+    let covariance = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)?;
     let one_norm = |m: &Mat<f64>| {
         (0..p)
             .map(|j| (0..p).map(|i| m[(i, j)].abs()).sum::<f64>())

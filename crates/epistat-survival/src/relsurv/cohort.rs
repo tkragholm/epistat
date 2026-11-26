@@ -63,7 +63,7 @@ pub(crate) fn rows_by_stratum(
     expected: &ExpectedHazard,
 ) -> Result<Vec<Vec<usize>>> {
     if expected.n_rows() != data.n_rows() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the expected hazards are for {} rows and the data has {}",
             expected.n_rows(),
             data.n_rows()
@@ -72,7 +72,7 @@ pub(crate) fn rows_by_stratum(
     if let Some(w) = data.weight()
         && w.iter().any(|&v| v != 0.0 && v != 1.0)
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the expected survival takes weights of 0 and 1 only, which select rows",
         ));
     }
@@ -82,10 +82,10 @@ pub(crate) fn rows_by_stratum(
     for row in data.used_rows() {
         let i = row as usize;
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::input(format!("row {i} has a negative entry time")));
+            return Err(Error::invalid(format!("row {i} has a negative entry time")));
         }
         if expected.horizon(i) < stop[i] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the expected hazard of row {i} ends at {} before its follow-up at {}",
                 expected.horizon(i),
                 stop[i]
@@ -140,7 +140,7 @@ pub(crate) fn rows_by_stratum(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for expected hazards of another number of rows than the
+/// An input error for expected hazards of another number of rows than the
 /// data, weights other than 0 and 1, times that are not finite, not negative
 /// and increasing, an entry before time 0, follow-up beyond what `expected`
 /// covers, a potential follow-up of another length than the data or not
@@ -154,7 +154,7 @@ pub fn expected_survival(
 ) -> Result<Vec<ExpectedCurve>> {
     if times.iter().any(|t| !(t.is_finite() && *t >= 0.0)) || times.windows(2).any(|w| w[0] >= w[1])
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the times must be finite, not negative and strictly increasing",
         ));
     }
@@ -165,13 +165,13 @@ pub fn expected_survival(
         && let Some(s) = start
         && let Some(i) = groups.iter().flatten().find(|&&i| s[i] > 0.0)
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "row {i} has delayed entry, which Ederer I and Hakulinen do not take"
         )));
     }
     if let ExpectedMethod::Hakulinen { potential } = method {
         if potential.len() != data.n_rows() {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{} potential follow-up times for {} rows",
                 potential.len(),
                 data.n_rows()
@@ -182,7 +182,7 @@ pub fn expected_survival(
             .flatten()
             .find(|&&i| !(potential[i].is_finite() && potential[i] >= 0.0))
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the potential follow-up of row {i} is not finite and not negative"
             )));
         }
@@ -232,7 +232,7 @@ pub(crate) fn ederer_one(
             for &i in &rows[range] {
                 let end = t_max.max(expected.horizon(i));
                 let pieces = reader.row_until(i, end).ok_or_else(|| {
-                    Error::input(format!(
+                    Error::invalid(format!(
                         "row {i} leaves the rate table before time {t_max}, which has no expected hazard"
                     ))
                 })?;
@@ -240,7 +240,7 @@ pub(crate) fn ederer_one(
                     *s += (-pieces.cumulative_within(t)).exp();
                 }
             }
-            Ok(sums)
+            Ok::<_, Error>(sums)
         },
         |total: &mut Vec<f64>, part| {
             for (t, p) in total.iter_mut().zip(part) {
@@ -290,7 +290,7 @@ pub(crate) fn sweep(
         })
         .sum();
     if work > SWEEP_LIMIT {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the expected survival would visit {work:.3e} pairs of a person and a time point, \
              above the limit of {SWEEP_LIMIT:.0e}: round the times"
         )));
@@ -325,7 +325,7 @@ pub(crate) fn sweep(
                 continue;
             }
             let at = reader.append_until(i, exit(i).max(expected.horizon(i)), &mut pieces).ok_or_else(|| {
-                Error::input(format!(
+                Error::invalid(format!(
                     "row {i} leaves the rate table before time {}, which has no expected hazard",
                     exit(i)
                 ))

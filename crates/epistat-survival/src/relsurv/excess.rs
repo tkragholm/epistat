@@ -373,7 +373,7 @@ fn reduced(info: &[f64], fixed: &[bool], q: usize) -> Vec<f64> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for cut points that are not finite and strictly
+/// An input error for cut points that are not finite and strictly
 /// increasing from 0, columns of other lengths than the data, covariates that
 /// are not finite, expected hazards for another number of rows, follow-up
 /// beyond what `expected` covers, weights other than 0 and 1, a status with
@@ -391,18 +391,18 @@ pub fn excess_hazard(
         || cuts.iter().any(|c| !c.is_finite())
         || cuts.windows(2).any(|w| w[1] <= w[0])
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the cut points must be at least two, finite and strictly increasing from 0",
         ));
     }
     if opts.tolerance.is_nan() || opts.tolerance <= 0.0 || opts.max_iterations == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "tolerance and max_iterations must be positive",
         ));
     }
     let n = data.n_rows();
     if expected.n_rows() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the expected hazards are for {} rows and the data has {n}",
             expected.n_rows()
         )));
@@ -410,13 +410,13 @@ pub fn excess_hazard(
     if x.iter()
         .any(|c| c.len() != n || c.iter().any(|v| !v.is_finite()))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "each covariate must be finite and have one value per row",
         ));
     }
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the excess hazard model needs a binary status: use SurvData::cause",
         ));
     }
@@ -424,7 +424,7 @@ pub fn excess_hazard(
         .weight()
         .is_some_and(|w| w.iter().any(|&v| v != 0.0 && v != 1.0))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the excess hazard model takes weights of 0 and 1 only, which select rows",
         ));
     }
@@ -432,10 +432,10 @@ pub fn excess_hazard(
     let (stop, start) = (surv.stop(), surv.start());
     for &i in &rows {
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::input(format!("row {i} has a negative entry time")));
+            return Err(Error::invalid(format!("row {i} has a negative entry time")));
         }
         if expected.horizon(i) < stop[i] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the expected hazard of row {i} ends at {} before its follow-up at {}",
                 expected.horizon(i),
                 stop[i]
@@ -467,7 +467,7 @@ pub fn excess_hazard(
     }
     let kept: Vec<usize> = (0..n_all).filter(|&k| years[k] > 0.0).collect();
     if kept.is_empty() {
-        return Err(Error::input("there is no person-time"));
+        return Err(Error::invalid("there is no person-time"));
     }
     for (s, &k) in kept.iter().enumerate() {
         setup.slot[k] = s;
@@ -500,7 +500,7 @@ pub fn excess_hazard(
     }
     let mut current = setup
         .pass(&units, &theta, true)
-        .ok_or_else(|| Error::input("the model is undefined at the starting values"))?;
+        .ok_or_else(|| Error::undefined("the model is undefined at the starting values"))?;
     let mut converged = false;
     let mut iterations = 0;
     for _ in 0..opts.max_iterations {
@@ -516,7 +516,7 @@ pub fn excess_hazard(
         if moved {
             current = setup
                 .pass(&units, &theta, true)
-                .ok_or_else(|| Error::input("the model is undefined at the boundary"))?;
+                .ok_or_else(|| Error::undefined("the model is undefined at the boundary"))?;
         }
         // Newton's step where the observed information is positive definite,
         // which converges quadratically near the maximum, and Fisher scoring
@@ -527,9 +527,8 @@ pub fn excess_hazard(
             a = reduced(&current.info, &fixed, q);
             let pivots = ldl::factorise(&mut a, q, 1e-13);
             if !(pivots.clean && pivots.rank == q) {
-                return Err(Error::input(
-                    "the information matrix is singular: a covariate is constant or collinear",
-                ));
+                // A covariate is constant or collinear.
+                return Err(Error::Singular);
             }
         }
         let mut delta: Vec<f64> = current
@@ -563,7 +562,7 @@ pub fn excess_hazard(
         if accepted {
             current = setup
                 .pass(&units, &theta, true)
-                .ok_or_else(|| Error::input("the model is undefined at the estimate"))?;
+                .ok_or_else(|| Error::undefined("the model is undefined at the estimate"))?;
         }
         if finishing {
             converged = true;

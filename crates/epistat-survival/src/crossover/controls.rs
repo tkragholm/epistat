@@ -119,7 +119,7 @@ impl Controls {
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::input(message)
+    Error::invalid(message)
 }
 
 /// The candidates of one key, sorted by first event with `None` last.
@@ -136,7 +136,7 @@ struct Group {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns of the cases or the candidates differ in
+/// An input error when the columns of the cases or the candidates differ in
 /// length, one side has a key and the other not, an observation period ends
 /// before it starts, `per_case` is 0, a gap is negative, or there are more
 /// cases than a `u32` addresses.

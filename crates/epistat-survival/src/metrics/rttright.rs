@@ -136,7 +136,7 @@ pub struct Rttright {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data is interval-censored, when a time is not
+/// An input error when the data is interval-censored, when a time is not
 /// finite, when `timefix` is refused as for [`SurvData::with_timefix`], or when
 /// a stratum with positive weights has a total weight that overflows. With a
 /// start column also when there is no id column or an `istate` column, when the
@@ -149,12 +149,12 @@ pub fn estimate(
     opts: &RttrightOptions,
 ) -> Result<Rttright> {
     if let Some(position) = times.and_then(|t| t.iter().position(|v| !v.is_finite())) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "times: value {position} is not finite"
         )));
     }
     if times.is_some_and(<[f64]>::is_empty) {
-        return Err(Error::input("times: give at least one time, or none"));
+        return Err(Error::invalid("times: give at least one time, or none"));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
@@ -194,7 +194,7 @@ pub fn estimate(
         if opts.renorm {
             let total: f64 = w.iter().sum();
             if !total.is_finite() {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "the case weights of a stratum sum to more than a double can hold",
                 ));
             }
@@ -256,17 +256,17 @@ fn counting(
         surv.status(),
     );
     let ids = data.id().ok_or_else(|| {
-        Error::input("data with delayed entry needs an id column, as rttright does")
+        Error::invalid("data with delayed entry needs an id column, as rttright does")
     })?;
     if data.istate().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "rttright is for one starting state: the data has an istate column",
         ));
     }
     let check = survcheck(data)?;
     check.enforce(crate::survcheck::Policy::Strict)?;
     if !check.gap.rows.is_empty() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "a subject has a gap between rows, first at row {}; rttright refuses data that              survcheck flags",
             check.gap.rows[0]
         )));
@@ -298,7 +298,7 @@ fn counting(
         let first = subject.rows[0];
         let s = start[first as usize];
         if *common_start.get_or_insert(s) != s {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "subjects start at different times; rttright needs one common start",
             ));
         }
@@ -306,7 +306,7 @@ fn counting(
             .iter()
             .any(|&r| status[r as usize] != 0)
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "a row that is not the last of its subject ends in an event, near row {};                  only the last row of a subject may",
                 subject.rows[0]
             )));
@@ -318,7 +318,7 @@ fn counting(
             .iter()
             .any(|&r| case_weight(r) != subject.weight || stratum_of(r) != subject.stratum)
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "a subject has several case weights or strata, near row {}",
                 subject.rows[0]
             )));
@@ -328,7 +328,7 @@ fn counting(
     if let Some(times) = times
         && let Some(t) = times.iter().find(|&&t| t <= origin)
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the reporting time {t} is not after the common start {origin}"
         )));
     }
@@ -362,7 +362,7 @@ fn counting(
         if opts.renorm {
             let total: f64 = w.iter().sum();
             if !total.is_finite() {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "the case weights of a stratum sum to more than a double can hold",
                 ));
             }

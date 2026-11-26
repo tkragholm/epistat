@@ -264,12 +264,12 @@ impl<'a> SurvData<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the outcome is interval-censored data, which a
+    /// An input error when the outcome is interval-censored data, which a
     /// follow-up estimator has no use for.
     pub fn followup(&self) -> Result<&Surv<'a>> {
         match &self.outcome {
             Outcome::Followup(surv) => Ok(surv),
-            Outcome::Interval(_) => Err(Error::input(
+            Outcome::Interval(_) => Err(Error::invalid(
                 "the outcome is interval-censored; this estimator needs follow-up data \
                  (stop and status)"
                     .to_owned(),
@@ -281,11 +281,11 @@ impl<'a> SurvData<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the outcome is follow-up data.
+    /// An input error when the outcome is follow-up data.
     pub fn interval(&self) -> Result<&IntervalSurv<'a>> {
         match &self.outcome {
             Outcome::Interval(surv) => Ok(surv),
-            Outcome::Followup(_) => Err(Error::input(
+            Outcome::Followup(_) => Err(Error::invalid(
                 "the outcome is follow-up data; this estimator needs interval-censored data"
                     .to_owned(),
             )),
@@ -397,7 +397,7 @@ impl<'a> SurvData<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] as for [`fix_times`]: a negative or non-finite
+    /// An input error as for [`fix_times`]: a negative or non-finite
     /// tolerance, a sum of absolute times that overflows, or a row whose
     /// start and stop become equal. Also when the outcome is
     /// interval-censored and the policy is not [`TimeFix::Exact`]. The data
@@ -407,7 +407,7 @@ impl<'a> SurvData<'a> {
             Outcome::Followup(surv) => surv.apply_timefix(policy)?,
             Outcome::Interval(_) => {
                 if !matches!(policy, TimeFix::Exact | TimeFix::Aeq { tolerance: 0.0 }) {
-                    return Err(Error::input(
+                    return Err(Error::invalid(
                         "a tie policy applies to follow-up times, not to interval-censored data"
                             .to_owned(),
                     ));
@@ -455,7 +455,7 @@ impl<'a> SurvData<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `code` is 0, which is censoring, or above
+    /// An input error when `code` is 0, which is censoring, or above
     /// `n_codes`.
     pub fn cause(&self, code: u32) -> Result<Cause<'a>> {
         let surv = self.followup()?;
@@ -465,7 +465,7 @@ impl<'a> SurvData<'a> {
                 weight: self.weight,
                 code: signed,
             }),
-            _ => Err(Error::input(format!(
+            _ => Err(Error::invalid(format!(
                 "cause {code} is outside 1..={}; 0 is censoring",
                 surv.n_codes
             ))),
@@ -612,7 +612,7 @@ impl<'a> SurvDataBuilder<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for the first rule that fails, in the order of the
+    /// An input error for the first rule that fails, in the order of the
     /// list in the [module documentation](self).
     pub fn build(self) -> Result<SurvData<'a>> {
         let c = self.columns;
@@ -776,7 +776,7 @@ impl SurvBufBuilder {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for the first rule that fails, as for
+    /// An input error for the first rule that fails, as for
     /// [`SurvDataBuilder::build`].
     pub fn build(self) -> Result<SurvBuf> {
         let columns = Columns {

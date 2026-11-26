@@ -24,7 +24,7 @@ fn data() -> SurvData<'static> {
 }
 
 fn is_input_error<T>(result: &Result<T, Error>) -> bool {
-    matches!(result, Err(Error::Input(_)))
+    matches!(result, Err(Error::Input(_) | Error::Invalid(_)))
 }
 
 #[test]

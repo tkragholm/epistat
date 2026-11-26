@@ -85,7 +85,7 @@ impl Csc<'_> {
             }
             let value = f64::exp(eta);
             if !value.is_finite() {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "levels: the risk score of row {row} in model {m} is not finite"
                 )));
             }

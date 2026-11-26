@@ -149,7 +149,7 @@ fn recalibration_refuses_what_it_cannot_use() {
         "{e}"
     );
     let e = curve(&risk[..n - 1], 1.0, Bandwidth::Smooth).unwrap_err();
-    assert!(e.to_string().contains("values for"), "{e}");
+    assert!(e.to_string().contains("has length"), "{e}");
     let mut bad = risk.clone();
     bad[2] = 1.5;
     assert!(curve(&bad, 1.0, Bandwidth::Smooth).is_err());

@@ -188,17 +188,17 @@ impl RateTable {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for no dimension, a time dimension with fewer than two cuts or with
+    /// An input error for no dimension, a time dimension with fewer than two cuts or with
     /// cuts that are not finite and strictly increasing, a factor with no
     /// level, a number of hazards other than the number of cells, a hazard
     /// that is negative, NaN or infinite, or a scale that is not finite and
     /// positive.
     pub fn new(dims: Vec<RateDim>, rates: Vec<f64>, scale: f64) -> Result<Self> {
         if dims.is_empty() {
-            return Err(Error::input("a rate table needs at least one dimension"));
+            return Err(Error::invalid("a rate table needs at least one dimension"));
         }
         if !(scale.is_finite() && scale > 0.0) {
-            return Err(Error::input("scale must be finite and positive"));
+            return Err(Error::invalid("scale must be finite and positive"));
         }
         let mut sizes = Vec::with_capacity(dims.len());
         let mut cells = 1_usize;
@@ -206,7 +206,7 @@ impl RateTable {
             match dim {
                 RateDim::Time { cuts } => {
                     if cuts.len() < 2 {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d} needs at least two cut points"
                         )));
                     }
@@ -215,30 +215,30 @@ impl RateTable {
                             .windows(2)
                             .any(|w| w[0].partial_cmp(&w[1]) != Some(std::cmp::Ordering::Less))
                     {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d}: the cut points must be finite and strictly increasing"
                         )));
                     }
                 }
                 RateDim::Factor { levels } => {
                     if *levels == 0 {
-                        return Err(Error::input(format!("dimension {d} has no levels")));
+                        return Err(Error::invalid(format!("dimension {d} has no levels")));
                     }
                 }
             }
             cells = cells
                 .checked_mul(dim.len())
-                .ok_or_else(|| Error::input("the table has too many cells"))?;
+                .ok_or_else(|| Error::invalid("the table has too many cells"))?;
             sizes.push(dim.len());
         }
         if rates.len() != cells {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{} rates for a table of {cells} cells",
                 rates.len()
             )));
         }
         if let Some(i) = rates.iter().position(|r| !(r.is_finite() && *r >= 0.0)) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the rate of cell {i} is not finite and non-negative"
             )));
         }
@@ -277,17 +277,17 @@ impl RateTable {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for no dimension or no row, a dimension of another
+    /// An input error for no dimension or no row, a dimension of another
     /// length than the rates, a start that is not finite, an end that is not
     /// finite or not above every start, a combination that appears twice or
     /// not at all (the error names it), and the cases of [`RateTable::new`].
     pub fn from_long(dims: &[LongDim<'_>], rates: &[f64], scale: f64) -> Result<Self> {
         let n = rates.len();
         if dims.is_empty() {
-            return Err(Error::input("a rate table needs at least one dimension"));
+            return Err(Error::invalid("a rate table needs at least one dimension"));
         }
         if n == 0 {
-            return Err(Error::input("the long table has no rows"));
+            return Err(Error::invalid("the long table has no rows"));
         }
         let mut table_dims = Vec::with_capacity(dims.len());
         for (d, dim) in dims.iter().enumerate() {
@@ -296,14 +296,14 @@ impl RateTable {
                 LongDim::Factor { level } => level.len(),
             };
             if length != n {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "dimension {d} has {length} values against {n} rates"
                 )));
             }
             table_dims.push(match *dim {
                 LongDim::Time { start, end } => {
                     if let Some(row) = start.iter().position(|x| !x.is_finite()) {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d}: the start in row {row} is not finite"
                         )));
                     }
@@ -312,7 +312,7 @@ impl RateTable {
                     cuts.dedup();
                     let last = cuts[cuts.len() - 1];
                     if !(end.is_finite() && end > last) {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "dimension {d}: the end {end} must be finite and above the last start {last}"
                         )));
                     }
@@ -328,7 +328,7 @@ impl RateTable {
         let cells = sizes
             .iter()
             .try_fold(1_usize, |c, &s| c.checked_mul(s))
-            .ok_or_else(|| Error::input("the table has too many cells"))?;
+            .ok_or_else(|| Error::invalid("the table has too many cells"))?;
         let mut dense: Vec<Option<usize>> = vec![None; cells];
         let describe = |position: usize| -> String {
             let mut rest = position;
@@ -362,7 +362,7 @@ impl RateTable {
                 stride *= size;
             }
             if let Some(first) = dense[position] {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "rows {first} and {row} are both the cell with {}",
                     describe(position)
                 )));
@@ -370,7 +370,7 @@ impl RateTable {
             dense[position] = Some(row);
         }
         if let Some(position) = dense.iter().position(Option::is_none) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "no row gives the cell with {}",
                 describe(position)
             )));
@@ -456,11 +456,11 @@ impl RateTable {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the length is not the number of cells or a
+    /// An input error when the length is not the number of cells or a
     /// person-time is negative or not finite.
     pub fn expected_cells(&self, person_time: &[f64]) -> Result<Vec<f64>> {
         if person_time.len() != self.rates.len() {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{} person-times for a table of {} cells",
                 person_time.len(),
                 self.rates.len()
@@ -470,7 +470,7 @@ impl RateTable {
             .iter()
             .position(|v| !(v.is_finite() && *v >= 0.0))
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the person-time of cell {i} is not finite and non-negative"
             )));
         }
@@ -491,13 +491,13 @@ impl RateTable {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for a number of dimensions other than the table's, slices of
+    /// An input error for a number of dimensions other than the table's, slices of
     /// different length, a code outside the levels of its dimension (a time
     /// dimension has one more level than it has cuts), or a
     /// length that is negative or not finite.
     pub fn expected_keyed(&self, codes: &[&[u32]], length: &[f64]) -> Result<KeyedExpected> {
         if codes.len() != self.dims.len() {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{} code columns for a table of {} dimensions",
                 codes.len(),
                 self.dims.len()
@@ -505,13 +505,13 @@ impl RateTable {
         }
         let n = length.len();
         if let Some(i) = length.iter().position(|v| !(v.is_finite() && *v >= 0.0)) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the length of cell {i} is not finite and non-negative"
             )));
         }
         for (d, column) in codes.iter().enumerate() {
             if column.len() != n {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "dimension {d} has {} codes against {n} cells",
                     column.len()
                 )));
@@ -521,7 +521,7 @@ impl RateTable {
                 RateDim::Factor { levels } => *levels,
             };
             if let Some(k) = column.iter().position(|&c| c as usize >= top) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "dimension {d}: the code {} of cell {k} is not below {top}",
                     column[k]
                 )));
@@ -578,7 +578,7 @@ impl RateTable {
             .filter(|d| matches!(d, RateDim::Time { .. }))
             .count();
         if origins.len() != n_time || factors.len() != self.dims.len() - n_time {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the table has {n_time} time dimensions and {} factors, and {} origins and {} factors were given",
                 self.dims.len() - n_time,
                 origins.len(),
@@ -619,7 +619,7 @@ impl RateTable {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the number of slices does not match the table's
+    /// An input error when the number of slices does not match the table's
     /// dimensions, a slice has the wrong length, a level is outside its
     /// factor, a value used is not finite, or the follow-up is invalid as in
     /// [`crate::pyears::pyears`].

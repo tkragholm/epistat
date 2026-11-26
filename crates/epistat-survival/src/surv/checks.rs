@@ -21,7 +21,7 @@ fn count_and_first(len: usize, mut offends: impl FnMut(usize) -> bool) -> Option
 }
 
 fn refuse(name: &str, problem: &str, (count, first): (usize, usize)) -> Error {
-    Error::input(format!(
+    Error::invalid(format!(
         "{name}: {count} values {problem}, first at row {first}"
     ))
 }
@@ -29,7 +29,7 @@ fn refuse(name: &str, problem: &str, (count, first): (usize, usize)) -> Error {
 /// Refuse `n_codes == 0`, which leaves no code for an event.
 pub(super) fn check_n_codes(n_codes: u32) -> Result<()> {
     if n_codes == 0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "n_codes is 0; status needs at least one event code".to_owned(),
         ));
     }

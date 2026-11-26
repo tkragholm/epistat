@@ -72,7 +72,7 @@ pub struct NetSurvivalTest {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for groups of another length than the data or with fewer
+/// An input error for groups of another length than the data or with fewer
 /// than two levels with rows, a status with more than one event code,
 /// weights other than 0 and 1, a grid step that is not positive and finite, an
 /// entry before time 0, follow-up beyond what `expected` covers, more than
@@ -85,7 +85,7 @@ pub fn net_survival_test(
     grid_step: Option<f64>,
 ) -> Result<NetSurvivalTest> {
     if groups.len() != data.n_rows() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{} groups for {} rows",
             groups.len(),
             data.n_rows()
@@ -94,10 +94,10 @@ pub fn net_survival_test(
     if let Some(w) = grid_step
         && !(w.is_finite() && w > 0.0)
     {
-        return Err(Error::input("the step must be finite and positive"));
+        return Err(Error::invalid("the step must be finite and positive"));
     }
     if data.followup()?.n_codes() != 1 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the test needs a binary status of death from any cause",
         ));
     }
@@ -116,7 +116,7 @@ pub fn net_survival_test(
         present[groups[i] as usize] = true;
     }
     if present.iter().filter(|&&p| p).count() < 2 || present.iter().any(|&p| !p) {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the groups must be coded 0 to G - 1, each with rows, and G at least 2",
         ));
     }
@@ -139,7 +139,7 @@ pub fn net_survival_test(
         })
         .sum();
     if work > SWEEP_LIMIT {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the test would visit {work:.3e} pairs of a person and a point, above the limit of \
              {SWEEP_LIMIT:.0e}: use a coarser step"
         )));
@@ -161,7 +161,7 @@ pub fn net_survival_test(
                 for &i in &rows[range] {
                     let pieces = reader
                         .row_until(i, expected.horizon(i))
-                        .ok_or_else(|| Error::input(format!("row {i} has no expected hazard")))?;
+                        .ok_or_else(|| Error::invalid(format!("row {i} has no expected hazard")))?;
                     let first = points.partition_point(|&p| p <= begin(i));
                     let last = points.partition_point(|&p| p <= stop[i]);
                     let mut h_prev = if first == 0 {
@@ -183,7 +183,7 @@ pub fn net_survival_test(
                         h_prev = h;
                     }
                 }
-                Ok(s)
+                Ok::<_, Error>(s)
             },
             |total: &mut Vec<[f64; 3]>, part| {
                 for (t, p) in total.iter_mut().zip(part) {
@@ -224,7 +224,7 @@ pub fn net_survival_test(
         .map(|e| covariance[(e / r) * g + e % r])
         .collect();
     let lower = cholesky_lower(&reduced, r, Pivot::Strict).ok_or_else(|| {
-        Error::input(
+        Error::undefined(
             "the covariance of the test is not positive definite, as when a group has no deaths",
         )
     })?;

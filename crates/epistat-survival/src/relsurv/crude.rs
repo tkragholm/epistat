@@ -76,7 +76,7 @@ pub struct CrudeMortality {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for expected hazards of another number of rows than the
+/// An input error for expected hazards of another number of rows than the
 /// data, a status with more than one event code, weights other than 0 and 1,
 /// a level outside `(0, 1)`, an entry before time 0, follow-up beyond what
 /// `expected` covers, or more than 3e8 pairs of a person at risk and a time
@@ -87,10 +87,10 @@ pub fn crude_mortality(
     level: f64,
 ) -> Result<Vec<CrudeMortality>> {
     if !(level > 0.0 && level < 1.0) {
-        return Err(Error::input("level must be in (0, 1)"));
+        return Err(Error::invalid("level must be in (0, 1)"));
     }
     if data.followup()?.n_codes() != 1 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the crude probabilities need a binary status of death from any cause",
         ));
     }
@@ -128,7 +128,7 @@ fn one(
         })
         .sum();
     if work > SWEEP_LIMIT {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the crude probabilities would visit {work:.3e} pairs of a person and a time point, \
              above the limit of {SWEEP_LIMIT:.0e}"
         )));

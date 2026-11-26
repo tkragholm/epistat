@@ -130,7 +130,7 @@ pub struct FixedTimes {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, a value is not finite,
+/// An input error when the columns differ in length, a value is not finite,
 /// the tolerance is negative or not finite, the sum of the absolute values
 /// overflows, or a row whose start and stop differed ends with equal values.
 #[expect(
@@ -146,7 +146,7 @@ pub fn fix_times(
         TimeFix::Exact => 0.0,
         TimeFix::Aeq { tolerance } => {
             if !tolerance.is_finite() || tolerance < 0.0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "time tolerance must be finite and not negative, got {tolerance}"
                 )));
             }
@@ -178,7 +178,7 @@ pub fn fix_times(
 
     let total = epistat_stats::sum::exact(unique.iter().map(|v| v.abs()));
     if !total.is_finite() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "times are too large to average; rescale them before estimating",
         ));
     }
@@ -217,7 +217,7 @@ pub fn fix_times(
             .zip(new.iter().zip(&new_stop))
             .any(|((&a, &b), (&na, &nb))| na == nb && a != b);
         if collapsed {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "an interval has effective length 0 after times equal up to rounding \
                  error are made equal",
             ));

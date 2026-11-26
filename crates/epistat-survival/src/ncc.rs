@@ -184,7 +184,7 @@ fn quick_two_sum(a: f64, b: f64) -> (f64, f64) {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for columns of different lengths, an exit time that is not
+/// An input error for columns of different lengths, an exit time that is not
 /// finite, an entry time that is not finite or is not before the exit, no case,
 /// `controls_per_case` of 0, and a case whose risk set has fewer than
 /// `controls_per_case + 1` people.
@@ -195,7 +195,7 @@ pub fn inclusion_probabilities(design: &NccDesign<'_>) -> Result<InclusionProbab
         check_lengths(&[("exit", n), ("entry", entry.len())])?;
         refuse_non_finite(entry, "entry")?;
         if entry.iter().zip(design.exit).any(|(a, b)| a >= b) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "entry: a person enters at or after their exit",
             ));
         }
@@ -205,14 +205,14 @@ pub fn inclusion_probabilities(design: &NccDesign<'_>) -> Result<InclusionProbab
     }
     refuse_non_finite(design.exit, "exit")?;
     if u32::try_from(n).is_err() {
-        return Err(Error::input("exit: more rows than a u32 index addresses"));
+        return Err(Error::invalid("exit: more rows than a u32 index addresses"));
     }
     let m = design.controls_per_case;
     if m == 0 {
-        return Err(Error::input("controls_per_case: must be at least 1"));
+        return Err(Error::invalid("controls_per_case: must be at least 1"));
     }
     if !design.case.iter().any(|&c| c) {
-        return Err(Error::input("case: there is no case"));
+        return Err(Error::invalid("case: there is no case"));
     }
 
     // The rows of each stratum, in the order of the stratum codes.
@@ -282,7 +282,7 @@ fn stratum_probabilities(
         let at_or_after_entry = entries.len() - entries.partition_point(|&e| e < t);
         let size = at_or_after_exit - at_or_after_entry;
         if size < m + 1 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "case: the risk set of row {row} has {size} people, fewer than the {} needed for {m} controls",
                 m + 1
             )));
@@ -323,7 +323,7 @@ fn stratum_probabilities(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for columns of different lengths, and for a sampled control
+/// An input error for columns of different lengths, and for a sampled control
 /// whose inclusion probability is 0, which means no case time falls in their
 /// follow-up and they cannot have been sampled.
 pub fn weights(
@@ -344,7 +344,7 @@ pub fn weights(
         } else if sampled[i] {
             let p = probabilities.probability[i];
             if p <= 0.0 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "sampled: row {i} is a sampled control with inclusion probability 0"
                 )));
             }
@@ -364,7 +364,7 @@ fn weighted_data<'a>(
 ) -> Result<SurvData<'a>> {
     check_lengths(&[("data", data.n_rows()), ("weights", weights.len())])?;
     if data.weight().is_some() || data.cluster().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "data: the weights and the clusters are set by the analysis, so the data may not carry them",
         ));
     }
@@ -395,7 +395,7 @@ fn weighted_data<'a>(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the invalid input of the Cox fit, for `data` with
+/// An input error for the invalid input of the Cox fit, for `data` with
 /// weights or clusters, and for weights of another length than the data or
 /// that are not finite.
 pub fn fit_weighted(
@@ -429,7 +429,7 @@ pub struct NccBaseline {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`cox::basehaz`](crate::cox::basehaz), for `data`
+/// An input error as for [`cox::basehaz`](crate::cox::basehaz), for `data`
 /// with weights or clusters, and for data with strata.
 pub fn baseline(
     fit: &CoxModelFit,
@@ -439,7 +439,7 @@ pub fn baseline(
     opts: &CoxOptions<'_>,
 ) -> Result<NccBaseline> {
     if data.stratum().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "data: the baseline of a stratified fit is not provided",
         ));
     }
@@ -462,7 +462,7 @@ pub fn baseline(
     let stratum = result
         .strata
         .first()
-        .ok_or_else(|| Error::input("fit: the baseline has no stratum"))?;
+        .ok_or_else(|| Error::invalid("fit: the baseline has no stratum"))?;
     let last_time = weighted
         .followup()?
         .stop()
@@ -493,7 +493,7 @@ pub fn baseline(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for profiles of another width than the coefficients, a
+/// An input error for profiles of another width than the coefficients, a
 /// profile value or a time that is not finite.
 pub fn absolute_risk(
     baseline: &NccBaseline,

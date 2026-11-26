@@ -130,7 +130,7 @@ pub struct Brier {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`SurvData::with_timefix`] and
+/// An input error as for [`SurvData::with_timefix`] and
 /// [`SurvData::followup`].
 pub fn event_times(data: &SurvData<'_>, timefix: TimeFix) -> Result<Vec<f64>> {
     let data = data.clone().with_timefix(timefix)?;
@@ -159,7 +159,7 @@ fn km_risk(time: &[f64], event: &[bool], weight: &[f64], times: &[f64]) -> Vec<f
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data is interval-censored, has more than one
+/// An input error when the data is interval-censored, has more than one
 /// event code, has fewer than two distinct times, or has a start column without
 /// an id column, with a subject on several rows or with subjects starting at
 /// different times; when
@@ -173,10 +173,10 @@ pub fn estimate(
     opts: &BrierOptions,
 ) -> Result<Brier> {
     if times.is_empty() {
-        return Err(Error::input("times: at least one time is needed"));
+        return Err(Error::invalid("times: at least one time is needed"));
     }
     if let Some(position) = times.iter().position(|t| !t.is_finite()) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "times: value {position} is not finite"
         )));
     }
@@ -184,14 +184,14 @@ pub fn estimate(
     let surv = data.followup()?;
     check_common_start(&data)?;
     if surv.n_codes() != 1 {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "status has {} event codes, and the Brier score takes one; pass one cause as 0 and 1",
             surv.n_codes()
         )));
     }
     let n = data.n_rows();
     if predicted.nrows() != n || predicted.ncols() != times.len() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "predicted is {} by {}, but there are {n} rows and {} times",
             predicted.nrows(),
             predicted.ncols(),
@@ -202,7 +202,7 @@ pub fn estimate(
         for i in 0..n {
             let p = predicted[(i, j)];
             if !(0.0..=1.0).contains(&p) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "predicted: row {i}, column {j} is {p}, which is not a probability"
                 )));
             }
@@ -215,7 +215,7 @@ pub fn estimate(
     unique.sort_by(f64::total_cmp);
     unique.dedup();
     if unique.len() < 2 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the follow-up times take one value, so no gap between them exists",
         ));
     }
@@ -231,7 +231,7 @@ pub fn estimate(
         .collect();
     let total: f64 = case_weight.iter().sum();
     if !total.is_finite() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the case weights sum to more than a double can hold",
         ));
     }

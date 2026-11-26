@@ -106,7 +106,7 @@ pub struct PathCurves {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`survfit`](super::survfit), and when the lengths of
+/// An input error as for [`survfit`](super::survfit), and when the lengths of
 /// the columns of `paths` differ, a start or stop is not finite, a start is not
 /// before its stop, or the intervals of a subject are out of order or overlap.
 pub fn survfit_paths(
@@ -115,7 +115,7 @@ pub fn survfit_paths(
     opts: &SurvfitOptions<'_>,
 ) -> Result<PathCurves> {
     if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::input("conf_level: must be between 0 and 1"));
+        return Err(Error::invalid("conf_level: must be between 0 and 1"));
     }
     let m = Model::new(model, opts.variance)?;
     let rows = paths.x.nrows();
@@ -127,10 +127,10 @@ pub fn survfit_paths(
     ])?;
     for (&a, &b) in paths.start.iter().zip(paths.stop) {
         if !(a.is_finite() && b.is_finite()) {
-            return Err(Error::input("paths: a start or stop is not finite"));
+            return Err(Error::invalid("paths: a start or stop is not finite"));
         }
         if a >= b {
-            return Err(Error::input("paths: a start is not before its stop"));
+            return Err(Error::invalid("paths: a start is not before its stop"));
         }
     }
     let as_new = NewData {
@@ -156,7 +156,7 @@ pub fn survfit_paths(
     for rows_of in members.values() {
         for pair in rows_of.windows(2) {
             if paths.start[pair[1]] < paths.stop[pair[0]] {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "paths: the intervals of a subject must be in time order and not overlap",
                 ));
             }
@@ -191,7 +191,7 @@ pub fn survfit_paths(
             let eta = m.dot_beta(&z) + paths.offset.map_or(0.0, |o| o[i]) - baseline.offset_centre;
             let theta = eta.exp();
             if !theta.is_finite() {
-                return Err(Error::input("the risk score of a row is not finite"));
+                return Err(Error::invalid("the risk score of a row is not finite"));
             }
             let s = strata[i];
             let base = &baseline.strata[s];

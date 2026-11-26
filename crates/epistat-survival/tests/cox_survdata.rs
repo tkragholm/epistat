@@ -156,11 +156,11 @@ fn the_event_code_picks_the_cause() {
         let opts = CoxOptions { cause, ..NO_FIX };
         assert!(matches!(
             fit(&data, x.as_ref(), &opts),
-            Err(Error::Input(_))
+            Err(Error::Input(_) | Error::Invalid(_))
         ));
         assert!(matches!(
             score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &opts),
-            Err(Error::Input(_))
+            Err(Error::Input(_) | Error::Invalid(_))
         ));
     }
     let binary: Vec<i32> = s.status.iter().map(|&c| i32::from(c == 1)).collect();
@@ -216,10 +216,13 @@ fn the_design_must_fit_the_data() {
     let empty = Mat::<f64>::zeros(n, 0);
     let nan = Mat::from_fn(n, 1, |i, _| if i == 3 { f64::NAN } else { 1.0 });
     for x in [short.as_ref(), nan.as_ref()] {
-        assert!(matches!(fit(&data, x, &NO_FIX), Err(Error::Input(_))));
+        assert!(matches!(
+            fit(&data, x, &NO_FIX),
+            Err(Error::Input(_) | Error::Invalid(_))
+        ));
         assert!(matches!(
             score_residuals(&data, x, &[Some(0.0)], &NO_FIX),
-            Err(Error::Input(_))
+            Err(Error::Input(_) | Error::Invalid(_))
         ));
     }
     // A design without columns is the null model, as coxph(~ 1); a coefficient
@@ -232,7 +235,7 @@ fn the_design_must_fit_the_data() {
     );
     assert!(matches!(
         score_residuals(&data, empty.as_ref(), &[Some(0.0)], &NO_FIX),
-        Err(Error::Input(_))
+        Err(Error::Input(_) | Error::Invalid(_))
     ));
     let x = Mat::from_fn(n, 1, |i, _| s.x[(i, 0)]);
     assert!(score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &NO_FIX).is_err());

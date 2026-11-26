@@ -400,7 +400,7 @@ impl MsModel {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`fit`], for the data and the follow-up.
+/// An input error as for [`fit`], for the data and the follow-up.
 pub fn observed_transitions(data: &SurvData<'_>, timefix: TimeFix) -> Result<Vec<(u32, u32)>> {
     let (data, istate) = resolve(data, timefix)?;
     stack::observed(&data, &istate)
@@ -411,7 +411,7 @@ fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, V
     let data = data.clone().with_timefix(timefix)?;
     let surv = data.followup()?;
     if surv.n_codes() < 2 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the status has one code, so there is one transition and no multi-state model; \
              use `cox::fit` for it",
         ));
@@ -436,7 +436,7 @@ fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, V
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `data` has no id column, one status code, or
+/// An input error when `data` has no id column, one status code, or
 /// interval-censored times, when the follow-up of a subject has an overlap, a
 /// jump or a teleport, when a row of positive weight starts in an unknown state
 /// or ends in the state it starts in, when `x` has another number of rows than

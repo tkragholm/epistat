@@ -53,12 +53,12 @@ impl PersonCounts {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for an id that was not among the persons drawn from.
+    /// An input error for an id that was not among the persons drawn from.
     pub fn case_weights(&self, ids: &[u64]) -> Result<Vec<f64>> {
         ids.iter()
             .map(|&id| {
                 self.count(id).map(f64::from).ok_or_else(|| {
-                    Error::input(format!("id {id} is not among the persons resampled"))
+                    Error::invalid(format!("id {id} is not among the persons resampled"))
                 })
             })
             .collect()

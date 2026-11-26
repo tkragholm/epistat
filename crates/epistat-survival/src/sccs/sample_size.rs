@@ -67,7 +67,7 @@ pub struct SampleSizeSpec<'a> {
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::input(message)
+    Error::invalid(message)
 }
 
 /// The number of cases a self-controlled case series needs to detect
@@ -76,7 +76,7 @@ fn invalid(message: impl Into<String>) -> Error {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the relative incidence is not positive and finite or
+/// An input error when the relative incidence is not positive and finite or
 /// is 1, the risk window is not positive or not shorter than every age band,
 /// the observation period is empty, the age cuts are not strictly increasing
 /// inside it, the age relative incidences or the exposure probabilities do not

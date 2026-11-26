@@ -261,7 +261,7 @@ pub struct ExposureIntervals<'a> {
 const BLOCK: usize = 1024;
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::input(message)
+    Error::invalid(message)
 }
 
 /// Days since 1970-01-01 of a civil date.
@@ -354,7 +354,7 @@ fn shifts(t: i64, referent: Referent) -> Vec<i64> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, `hazard_days` is below
+/// An input error when the columns differ in length, `hazard_days` is below
 /// 1, `lag` is negative, a referent has no window or a step below
 /// `hazard_days` (below 7 days for a time-stratified referent, whose smallest
 /// shift is 7, and below the spacing of a stratified one), a fixed stratum or
@@ -572,7 +572,7 @@ fn build_with(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns of `exposure` differ in length or an
+/// An input error when the columns of `exposure` differ in length or an
 /// interval ends before it starts.
 pub fn exposure_in_windows(
     windows: &Windows,
@@ -626,7 +626,7 @@ pub fn exposure_in_windows(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the two have different lengths.
+/// An input error when the two have different lengths.
 pub fn case_time_control_design(exposure: &[f64], case_group: &[bool]) -> Result<Mat<f64>> {
     if exposure.len() != case_group.len() {
         return Err(invalid(

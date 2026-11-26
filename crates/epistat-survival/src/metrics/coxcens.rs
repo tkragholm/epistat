@@ -87,20 +87,20 @@ impl CoxCens {
         let n = sorted.n();
         let p = spec.x.ncols();
         if spec.x.nrows() != sorted.n_rows {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the censoring model's x has {} rows for {} rows of data",
                 spec.x.nrows(),
                 sorted.n_rows
             )));
         }
         if spec.options.ties == Ties::Exact {
-            return Err(Error::input(
+            return Err(Error::unsupported(
                 "the censoring model cannot use the exact ties method: its score residuals \
                  are not available",
             ));
         }
         if spec.options.offset.is_some() {
-            return Err(Error::input("the censoring model cannot have an offset"));
+            return Err(Error::invalid("the censoring model cannot have an offset"));
         }
         let status: Vec<i32> = sorted
             .kind
@@ -118,14 +118,16 @@ impl CoxCens {
         };
         let model = fit(&data, x.as_ref(), &options)?;
         if !model.converged {
-            return Err(Error::input("the censoring model did not converge"));
+            return Err(Error::NotConverged {
+                iterations: model.iterations as usize,
+            });
         }
         let beta: Vec<f64> = model
             .coefficients
             .iter()
             .map(|c| {
                 c.ok_or_else(|| {
-                    Error::input("the censoring model has an aliased or diverging coefficient")
+                    Error::undefined("the censoring model has an aliased or diverging coefficient")
                 })
             })
             .collect::<Result<_>>()?;
@@ -139,7 +141,7 @@ impl CoxCens {
             })
             .collect();
         if q.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "a risk score of the censoring model is not finite",
             ));
         }
@@ -302,7 +304,7 @@ fn influence_of_coefficients(
     let v: Vec<f64> = model
         .covariance
         .iter()
-        .map(|c| c.ok_or_else(|| Error::input("the censoring model's covariance is not defined")))
+        .map(|c| c.ok_or_else(|| Error::invalid("the censoring model's covariance is not defined")))
         .collect::<Result<_>>()?;
     let mut out = vec![0.0; n * p];
     for i in 0..n {

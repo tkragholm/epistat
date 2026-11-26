@@ -16,12 +16,12 @@ pub struct RestrictedMean {
 
 pub(super) fn restricted_mean(curve: &GroupCurve, tau: f64) -> Result<RestrictedMean> {
     if !tau.is_finite() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the horizon of a restricted mean must be finite",
         ));
     }
     if tau < curve.origin {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the horizon {tau} of a restricted mean is before the start of the curve, {}",
             curve.origin
         )));

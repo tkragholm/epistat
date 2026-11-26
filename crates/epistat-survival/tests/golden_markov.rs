@@ -31,7 +31,7 @@ use epistat_testkit::{Fingerprint, absent_all};
 const EXPECTED: &[(&str, usize, u64)] = &[
     ("refuse/no states", 61, 0x0122_be26_44a9_c212),
     ("refuse/no landmark", 61, 0x0122_be26_44a9_c212),
-    ("refuse/lengths", 64, 0xecf2_4aba_7052_f6ef),
+    ("refuse/lengths", 32, 0xd323_0afd_6ede_6465),
     ("refuse/nan start", 84, 0x20ee_653f_0e0c_5105),
     ("refuse/infinite stop", 83, 0x1593_d5d1_9847_47d2),
     ("dense q1/trace", 7, 0x5535_2787_a143_1629),

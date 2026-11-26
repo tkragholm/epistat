@@ -189,6 +189,7 @@
     reason = "times and markers tie when they are equal, which is the definition of a tie"
 )]
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
@@ -399,11 +400,11 @@ impl<'a> Core<'a> {
             ),
             Censoring::Supplied(s) => {
                 if s.before_own_time.len() != sorted.n_rows {
-                    return Err(Error::input(format!(
-                        "before_own_time has {} values for {} rows",
-                        s.before_own_time.len(),
-                        sorted.n_rows
-                    )));
+                    return Err(Error::from(InputError::Length {
+                        what: "before_own_time",
+                        expected: sorted.n_rows,
+                        found: s.before_own_time.len(),
+                    }));
                 }
                 check_matrix("at_times", s.at_times, sorted.n_rows, n_times)?;
                 let g_own: Vec<f64> = sorted
@@ -418,7 +419,7 @@ impl<'a> Core<'a> {
                     .flat_map(|&r| (0..n_times).map(move |j| at[(r as usize, j)]));
                 for g in g_own.iter().copied().chain(at_values) {
                     if !(g > 0.0 && g <= 1.0) {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "censoring probabilities must be in (0, 1], got {g}"
                         )));
                     }
@@ -616,7 +617,7 @@ fn collect_score(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data is interval-censored, has a start column, has
+/// An input error when the data is interval-censored, has a start column, has
 /// a weight other than 0 and 1, or has no row of positive weight; when `cause`
 /// is outside the event codes; when `times` is empty, not strictly increasing,
 /// not finite or after the last observed time; when `predicted` has another
@@ -636,7 +637,7 @@ pub fn brier(
         Predicted::AbsoluteRisk => false,
         Predicted::EventFreeProbability => {
             if core.sorted.kind.contains(&Kind::Competing) || data.followup()?.n_codes() > 1 {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "event-free probabilities are for data with one event code; with competing \
                      risks give the absolute risk of the cause",
                 ));
@@ -647,7 +648,7 @@ pub fn brier(
     for j in 0..times.len() {
         for i in 0..predicted.nrows() {
             if !(0.0..=1.0).contains(&predicted[(i, j)]) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "predicted: row {i}, column {j} is {}, which is not a probability",
                     predicted[(i, j)]
                 )));
@@ -694,11 +695,11 @@ pub fn null_brier(data: &SurvData<'_>, times: &[f64], opts: &ScoreOptions<'_>) -
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the two scores are at different times or from data of
+/// An input error when the two scores are at different times or from data of
 /// different numbers of rows.
 pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
     if model.times != null.times || model.n_rows != null.n_rows || model.n_used != null.n_used {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the model and the null model must be scored on the same data and times",
         ));
     }
@@ -880,7 +881,7 @@ fn auc_column(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`brier`], except that a marker may be any finite
+/// An input error as for [`brier`], except that a marker may be any finite
 /// number, and [`ScoreOptions::predicted`] is not read.
 pub fn auc(
     data: &SurvData<'_>,

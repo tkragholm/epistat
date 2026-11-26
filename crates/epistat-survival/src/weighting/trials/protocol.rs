@@ -58,7 +58,7 @@ pub struct ProtocolRows {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for columns of different lengths and rows that are not
+/// An input error for columns of different lengths and rows that are not
 /// ordered by person and period.
 pub fn protocol_rows(panel: &Panel<'_>) -> Result<ProtocolRows> {
     let n = panel.id.len();
@@ -69,17 +69,17 @@ pub fn protocol_rows(panel: &Panel<'_>) -> Result<ProtocolRows> {
         ("outcome", panel.outcome.len()),
     ] {
         if len != n {
-            return Err(Error::input(format!("{name}: {len} values for {n} rows")));
+            return Err(Error::invalid(format!("{name}: {len} values for {n} rows")));
         }
     }
     for i in 1..n {
         if panel.id[i] < panel.id[i - 1] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "id: the rows of a person must be next to each other and ordered, row {i}"
             )));
         }
         if panel.id[i] == panel.id[i - 1] && panel.period[i] <= panel.period[i - 1] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "period: row {i} is not after the row before it for person {}",
                 panel.id[i]
             )));

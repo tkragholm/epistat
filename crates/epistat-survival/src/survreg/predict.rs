@@ -161,7 +161,7 @@ impl SurvregFit {
                 Some(value) => v[k] = *value,
                 None if aliased(a) || aliased(b) => {}
                 None => {
-                    return Err(Error::input(
+                    return Err(Error::invalid(
                         "the variance of the fit is not defined, so standard errors and \
                          displacements are not either"
                             .to_owned(),
@@ -187,7 +187,7 @@ impl SurvregFit {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for a design with another number of columns or a
+    /// An input error for a design with another number of columns or a
     /// value that is not finite; a probability outside `(0, 1)`; for a
     /// quantile of a fit with several strata, missing or wrong strata; and
     /// standard errors when the variance of the fit is not defined.
@@ -199,20 +199,20 @@ impl SurvregFit {
         let p = self.n_coef();
         let n = x.nrows();
         if x.ncols() != p {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the design has {} columns; the fit has {p} coefficients",
                 x.ncols()
             )));
         }
         if (0..p).any(|j| (0..n).any(|i| !x[(i, j)].is_finite())) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the design has a value that is not finite".to_owned(),
             ));
         }
         let quantiles: &[f64] = match &options.kind {
             PredictType::Quantile { p } => {
                 if p.is_empty() || p.iter().any(|&v| !(v > 0.0 && v < 1.0)) {
-                    return Err(Error::input(
+                    return Err(Error::invalid(
                         "quantile probabilities must be in (0, 1), at least one".to_owned(),
                     ));
                 }
@@ -223,7 +223,7 @@ impl SurvregFit {
         let strata: Vec<usize> = match (&options.kind, &options.strata) {
             (PredictType::Quantile { .. }, Some(codes)) => {
                 if codes.len() != n || codes.iter().any(|&c| c as usize >= self.n_strata) {
-                    return Err(Error::input(format!(
+                    return Err(Error::invalid(format!(
                         "strata need one code below {} for each of the {n} rows",
                         self.n_strata
                     )));
@@ -231,7 +231,7 @@ impl SurvregFit {
                 codes.iter().map(|&c| c as usize).collect()
             }
             (PredictType::Quantile { .. }, None) if self.n_strata > 1 => {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "a quantile of a fit with strata on the scale needs the stratum of each row"
                         .to_owned(),
                 ));
@@ -241,17 +241,17 @@ impl SurvregFit {
         if let Some(offset) = &options.offset
             && (offset.len() != n || offset.iter().any(|v| !v.is_finite()))
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the offset needs one finite value for each of the {n} rows"
             )));
         }
         let terms: &[Vec<usize>] = match &options.kind {
             PredictType::Terms { groups, .. } => {
                 if groups.is_empty() {
-                    return Err(Error::input("terms needs at least one group".to_owned()));
+                    return Err(Error::invalid("terms needs at least one group".to_owned()));
                 }
                 if groups.iter().flatten().any(|&a| a >= p) {
-                    return Err(Error::input(
+                    return Err(Error::invalid(
                         "terms: an index is not a column of the design".to_owned(),
                     ));
                 }
@@ -264,7 +264,7 @@ impl SurvregFit {
                 match &self.robust_variance {
                     Some(v) => self.dense_of(v)?,
                     None => {
-                        return Err(Error::input("the fit has no robust variance".to_owned()));
+                        return Err(Error::invalid("the fit has no robust variance".to_owned()));
                     }
                 }
             } else {
@@ -393,7 +393,7 @@ impl SurvregFit {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for data or a design that does not match the fit, and
+    /// An input error for data or a design that does not match the fit, and
     /// for a displacement when the variance of the fit is not defined.
     ///
     /// # Panics
@@ -409,13 +409,13 @@ impl SurvregFit {
         let n = data.n_rows();
         let p = self.n_coef();
         if n != self.n_rows || x.nrows() != n || x.ncols() != p {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the data and design must be those of the fit: {} rows and {p} columns",
                 self.n_rows
             )));
         }
         if data.n_strata().max(1) != self.n_strata {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the strata of the data differ from those of the fit".to_owned(),
             ));
         }
@@ -514,7 +514,7 @@ impl SurvregFit {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for data or a design that does not match the fit, for
+    /// An input error for data or a design that does not match the fit, for
     /// a `collapse` of another length than the data, and when the variance of
     /// the fit is not defined.
     pub fn dfbeta(
@@ -526,20 +526,20 @@ impl SurvregFit {
         let n = data.n_rows();
         let p = self.n_coef();
         if n != self.n_rows || x.nrows() != n || x.ncols() != p {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the data and design must be those of the fit: {} rows and {p} columns",
                 self.n_rows
             )));
         }
         if data.n_strata().max(1) != self.n_strata {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the strata of the data differ from those of the fit".to_owned(),
             ));
         }
         if let Some(codes) = options.collapse
             && codes.len() != n
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "collapse has {} codes for {n} rows",
                 codes.len()
             )));

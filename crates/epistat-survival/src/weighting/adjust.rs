@@ -58,9 +58,7 @@ pub(super) trait Nuisance {
 /// Solve `A N = -K` for the symmetric derivative `A` of a logistic model.
 fn influence_matrix(factor: &Factor, k: &Mat<f64>) -> Result<Mat<f64>> {
     let minus = Mat::from_fn(k.nrows(), k.ncols(), |i, j| -k[(i, j)]);
-    factor
-        .solve(minus.as_ref())
-        .map_err(|e| Error::input(format!("the model of the weights: {e}")))
+    factor.solve(minus.as_ref()).map_err(Error::from)
 }
 
 /// The propensity model of treatment weights.
@@ -78,8 +76,7 @@ impl<'a> IptwNuisance<'a> {
         unit_of_subject: Vec<usize>,
     ) -> Result<Self> {
         let bread = iptw.bread()?;
-        let factor = Factor::new(bread.as_ref(), &GENERAL)
-            .map_err(|e| Error::input(format!("the propensity model: {e}")))?;
+        let factor = Factor::new(bread.as_ref(), &GENERAL)?;
         Ok(Self {
             iptw,
             subject_of_row,
@@ -137,7 +134,7 @@ impl<'a> PooledNuisance<'a> {
                 .zip(&pooled.active)
                 .map(|(&p, &on)| if on { p * (1.0 - p) } else { 0.0 })
                 .collect();
-            weighted_gram(design, &var).map_err(|e| Error::input(format!("censoring model: {e}")))
+            weighted_gram(design, &var).map_err(Error::from)
         };
         let gd = fisher(pooled.design, &pooled.probability)?;
         let gn = match (pooled.numerator_design, &pooled.numerator_probability) {
@@ -153,8 +150,7 @@ impl<'a> PooledNuisance<'a> {
                 0.0
             }
         });
-        let factor = Factor::new(bread.as_ref(), &GENERAL)
-            .map_err(|e| Error::input(format!("censoring model: {e}")))?;
+        let factor = Factor::new(bread.as_ref(), &GENERAL)?;
         Ok(Self {
             pooled,
             at,

@@ -142,40 +142,40 @@ struct Raw {
 
 fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) -> Result<()> {
     if expected.n_rows() != data.n_rows() {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the expected hazards are for {} rows and the data has {}",
             expected.n_rows(),
             data.n_rows()
         )));
     }
     if !(opts.level > 0.0 && opts.level < 1.0) {
-        return Err(Error::input("level must be in (0, 1)"));
+        return Err(Error::invalid("level must be in (0, 1)"));
     }
     if let Grid::Width(w) = opts.grid
         && !(w.is_finite() && w > 0.0)
     {
-        return Err(Error::input("the grid width must be finite and positive"));
+        return Err(Error::invalid("the grid width must be finite and positive"));
     }
     if data.followup()?.n_codes() != 1 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "net survival needs a binary status: use SurvData::cause for competing events",
         ));
     }
     if let Some(w) = data.weight()
         && w.iter().any(|&v| v != 0.0 && v != 1.0)
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "net survival takes weights of 0 and 1 only, which select rows",
         ));
     }
     let hakulinen = opts.method == Method::Hakulinen;
     if hakulinen && opts.potential.is_none() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the Hakulinen estimator needs the potential follow-up of every row",
         ));
     }
     if !hakulinen && opts.potential.is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "only the Hakulinen estimator takes a potential follow-up",
         ));
     }
@@ -192,7 +192,7 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for expected hazards of another number of rows than the
+/// An input error for expected hazards of another number of rows than the
 /// data, a status with more than one event code, weights other than 0 and 1,
 /// a level outside `(0, 1)`, a grid width that is not positive, an entry
 /// before time 0, follow-up beyond what `expected` covers, a potential
@@ -216,10 +216,10 @@ pub fn net_survival(
     for row in data.used_rows() {
         let i = row as usize;
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::input(format!("row {i} has a negative entry time")));
+            return Err(Error::invalid(format!("row {i} has a negative entry time")));
         }
         if expected.horizon(i) < stop[i] {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the expected hazard of row {i} ends at {} before its follow-up at {}",
                 expected.horizon(i),
                 stop[i]
@@ -272,7 +272,7 @@ fn exact(
         })
         .sum();
     if work > EXACT_LIMIT {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the exact estimator would visit {work:.3e} pairs of a person and a time point, \
              above the limit of {EXACT_LIMIT:.0e}: use a grid width"
         )));
@@ -375,7 +375,7 @@ fn relative(
     if let Some(s) = start
         && let Some(&i) = rows.iter().find(|&&i| s[i] > 0.0)
     {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "row {i} has delayed entry, which Ederer I and Hakulinen do not take"
         )));
     }
@@ -386,7 +386,7 @@ fn relative(
     let method = match (opts.method, opts.potential) {
         (Method::Hakulinen, Some(potential)) => {
             if potential.len() != stop.len() {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "{} potential follow-up times for {} rows",
                     potential.len(),
                     stop.len()
@@ -396,7 +396,7 @@ fn relative(
                 .iter()
                 .find(|&&i| !(potential[i].is_finite() && potential[i] >= 0.0))
             {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "the potential follow-up of row {i} is not finite and not negative"
                 )));
             }
@@ -421,7 +421,7 @@ fn relative(
     };
     for (k, s) in survival.into_iter().enumerate() {
         let s = s.ok_or_else(|| {
-            Error::input(format!(
+            Error::invalid(format!(
                 "no row has potential follow-up to time {}, where the observed survival is estimated",
                 raw.times[k]
             ))

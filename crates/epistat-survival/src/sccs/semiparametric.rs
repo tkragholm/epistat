@@ -110,7 +110,7 @@ impl SemiparametricPieces {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for the input [`super::build_pieces`] refuses, and when
+/// An input error for the input [`super::build_pieces`] refuses, and when
 /// `spec` has age cuts or a calendar.
 #[expect(
     clippy::cast_possible_truncation,
@@ -120,7 +120,7 @@ impl SemiparametricPieces {
 pub fn semiparametric_pieces(spec: &PieceSpec<'_>) -> Result<SemiparametricPieces> {
     let n = check_spec(spec)?;
     if !spec.age_cuts.is_empty() || spec.calendar.is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the semiparametric case series has a free age effect and takes no age cuts or calendar",
         ));
     }
@@ -130,7 +130,7 @@ pub fn semiparametric_pieces(spec: &PieceSpec<'_>) -> Result<SemiparametricPiece
             .iter()
             .find(|&&t| !(t >= a && t < b))
         {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "person {i} has an event at {t} outside the observation period [{a}, {b})"
             )));
         }

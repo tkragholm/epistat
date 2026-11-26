@@ -170,10 +170,10 @@ fn score_refuses_what_it_cannot_score() {
             .unwrap_err()
             .to_string()
     };
-    assert!(msg(&[5.0, 2.0]).contains("strictly ascending"));
-    assert!(msg(&[5.0, 5.0]).contains("strictly ascending"));
+    assert!(msg(&[5.0, 2.0]).contains("is not sorted"));
+    assert!(msg(&[5.0, 5.0]).contains("repeats at row 1"));
     assert!(msg(&[5.0, 11.0]).contains("after the last observed time"));
-    assert!(msg(&[5.0, f64::NAN]).contains("must be finite"));
+    assert!(msg(&[5.0, f64::NAN]).contains("is not finite"));
     assert!(msg(&[]).contains("at least one time"));
     assert!(msg(&[5.0]).contains("is 11 by 2, but there are 11 rows and 1 times"));
 
@@ -297,7 +297,7 @@ fn calibration_by_hand_and_its_refusals() {
     let e = calibration::estimate(&data, &risk, 5.0, &o(Groups::Breaks(&[0.2, 1.0]))).unwrap_err();
     assert!(e.to_string().contains("cover every predicted risk"));
     let e = calibration::estimate(&data, &risk[..3], 5.0, &o(Groups::Quantiles(2))).unwrap_err();
-    assert!(e.to_string().contains("risk has 3 values for 11 rows"));
+    assert!(e.to_string().contains("risk has length 3, expected 11"));
     let mut off = risk.clone();
     off[4] = 1.5;
     let e = calibration::estimate(&data, &off, 5.0, &o(Groups::Quantiles(2))).unwrap_err();

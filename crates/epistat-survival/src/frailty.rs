@@ -554,9 +554,9 @@ struct Problem<'a> {
 
 fn failure(f: Failure) -> Error {
     match f {
-        Failure::NotFinite => Error::input("a risk score or a risk-set total is not finite"),
+        Failure::NotFinite => Error::undefined("a risk score or a risk-set total is not finite"),
         Failure::Information => {
-            Error::input("the penalised information is not positive definite at a trial point")
+            Error::undefined("the penalised information is not positive definite at a trial point")
         }
     }
 }
@@ -723,8 +723,7 @@ fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaS
         bracket.0,
         bracket.1,
         tolerance,
-    )
-    .map_err(|e| Error::input(e.to_string()))?;
+    )?;
     if let Some(e) = failed {
         return Err(e);
     }
@@ -841,27 +840,29 @@ fn coxph_search(
 
 fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
     if opts.ties == Ties::Exact {
-        return Err(Error::input(
+        return Err(Error::unsupported(
             "ties: the frailty model supports Breslow and Efron ties only",
         ));
     }
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::input("tolerance: must be finite and positive"));
+        return Err(Error::invalid("tolerance: must be finite and positive"));
     }
     if opts.max_iterations == 0 {
-        return Err(Error::input("max_iterations: must be at least 1"));
+        return Err(Error::invalid("max_iterations: must be at least 1"));
     }
     if !(opts.theta_tolerance.is_finite() && opts.theta_tolerance > 0.0) {
-        return Err(Error::input("theta_tolerance: must be finite and positive"));
+        return Err(Error::invalid(
+            "theta_tolerance: must be finite and positive",
+        ));
     }
     match opts.theta {
         Theta::Fixed(t) if !(t.is_finite() && t >= 0.0) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "theta: a fixed theta must be finite and not negative",
             ));
         }
         Theta::Coxph { eps, outer_max } if !(eps.is_finite() && eps > 0.0) || outer_max < 3 => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "theta: the coxph search needs a positive eps and at least 3 fits",
             ));
         }
@@ -873,12 +874,12 @@ fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
     } = opts.method
     {
         if opts.ties != Ties::Breslow {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "method: EM gives the maximum of the marginal likelihood for Breslow ties only",
             ));
         }
         if max_iterations == 0 || !(tolerance.is_finite() && tolerance > 0.0) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "method: EM needs at least one step and a positive tolerance",
             ));
         }
@@ -889,7 +890,7 @@ fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
             .iter()
             .any(|o| !o.is_finite() || !o.exp().is_finite())
         {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "offset: a value is not finite or gives a risk score that is not finite",
             ));
         }
@@ -902,7 +903,7 @@ fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `x` has another number of rows than `data` or a
+/// An input error when `x` has another number of rows than `data` or a
 /// value that is not finite, when the data has no cluster column, when the
 /// ties are exact, when an option is out of its range, when theta is
 /// estimated or EM is asked for and a case weight is not 1, when EM is asked
@@ -925,7 +926,7 @@ pub fn fit(
     refuse_non_finite_matrix(x, "x")?;
     check_options(opts, data.n_rows())?;
     if data.cluster().is_none() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "cluster: the frailty model needs a cluster column",
         ));
     }
@@ -935,7 +936,7 @@ pub fn fit(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -1002,7 +1003,7 @@ pub fn fit(
     let estimated = !matches!(opts.theta, Theta::Fixed(_));
     let em = matches!(opts.method, Method::Em { .. });
     if (estimated || em) && !layout.unit_weights {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "weight: estimating theta and EM need case weights of 1, for which the marginal \
              likelihood is defined",
         ));
@@ -1013,7 +1014,7 @@ pub fn fit(
         .map(|&i| weight[i])
         .sum();
     if n_events == 0.0 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "status: there is no event among the rows used",
         ));
     }

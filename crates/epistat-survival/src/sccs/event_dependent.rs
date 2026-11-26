@@ -177,7 +177,7 @@ struct Row {
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::input(message)
+    Error::invalid(message)
 }
 
 #[expect(
@@ -302,7 +302,7 @@ fn cut(spec: &EventDependentSpec<'_>, i: usize) -> (Vec<Piece>, usize) {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns and offsets disagree in length, an
+/// An input error when the columns and offsets disagree in length, an
 /// observation period is empty, an event lies outside it, the doses of a case
 /// are not increasing, the windows are not contiguous, start before the dose
 /// or end at an infinite time, the age cuts are not strictly increasing, the
@@ -508,9 +508,7 @@ pub fn fit_event_dependent(
         k = e;
     }
     let bread = Mat::from_fn(p, p, |j, l| a[j * p + l] - info[j * p + l]);
-    let inv = inverse(bread.as_ref(), &[Attempt::plain(Method::PartialPivLu)])
-        .map_err(|e| invalid(format!("the derivative of the estimating equations: {e}")))?
-        .x;
+    let inv = inverse(bread.as_ref(), &[Attempt::plain(Method::PartialPivLu)])?.x;
     let mut meat = vec![0.0; p * p];
     for i in 0..n {
         for j in 0..p {

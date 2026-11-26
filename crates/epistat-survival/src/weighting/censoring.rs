@@ -177,12 +177,12 @@ impl<'a> ProcessNuisance<'a> {
         n_units: usize,
     ) -> Result<(Vec<f64>, Self)> {
         if data.weight().is_some() {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "data: carries case weights, but the weights come from the weighting",
             ));
         }
         if opts.ties == Ties::Exact && matches!(model, CensoringModel::Cox { .. }) {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "ties: the variance of weights from a Cox model of censoring is not \
                  available for the exact method",
             ));
@@ -212,14 +212,14 @@ impl<'a> ProcessNuisance<'a> {
                 let mut beta = Vec::with_capacity(p);
                 for (j, c) in coefficients.iter().enumerate() {
                     beta.push(c.ok_or_else(|| {
-                        Error::input(format!("the censoring model: column {j} is aliased"))
+                        Error::invalid(format!("the censoring model: column {j} is aliased"))
                     })?);
                 }
                 let v: Vec<f64> = covariance
                     .iter()
                     .map(|c| {
                         c.ok_or_else(|| {
-                            Error::input("the covariance of the censoring model is undefined")
+                            Error::undefined("the covariance of the censoring model is undefined")
                         })
                     })
                     .collect::<Result<_>>()?;
@@ -246,7 +246,7 @@ impl<'a> ProcessNuisance<'a> {
                 let mut score = Mat::<f64>::zeros(n_units, p);
                 for (j, column) in residuals.iter().enumerate() {
                     let column = column.as_ref().ok_or_else(|| {
-                        Error::input("a score residual of the censoring model is undefined")
+                        Error::undefined("a score residual of the censoring model is undefined")
                     })?;
                     for r in 0..n {
                         score[(unit_of_row[r], j)] += column[r];
@@ -325,7 +325,7 @@ impl<'a> ProcessNuisance<'a> {
                     }
                 }
                 let bad =
-                    || Error::input("the sum of the risk scores of a risk set is not positive");
+                    || Error::undefined("the sum of the risk scores of a risk set is not positive");
                 for i in 0..l {
                     let count = counts[i];
                     let w = count as f64;

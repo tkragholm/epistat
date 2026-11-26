@@ -176,7 +176,7 @@ impl SurvCheck {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] under [`Policy::Strict`] when there is an overlap, a
+    /// An input error under [`Policy::Strict`] when there is an overlap, a
     /// jump or a teleport. The message names the flag of the lowest row among
     /// them, that row, its subject's dense id code and the number of rows with
     /// that flag.
@@ -196,7 +196,7 @@ impl SurvCheck {
             return Ok(());
         };
         let id = flag.first_id;
-        Err(Error::input(format!(
+        Err(Error::invalid(format!(
             "follow-up of one subject is inconsistent: {count} rows with {name}, first at row {row} \
              (id code {id}); multi-state data allows gaps only",
             count = flag.count(),
@@ -234,7 +234,7 @@ impl Policy {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data have no id column.
+/// An input error when the data have no id column.
 ///
 /// # Panics
 ///
@@ -242,7 +242,7 @@ impl Policy {
 /// `u32::MAX`, or a time that is not finite.
 pub fn survcheck(data: &SurvData<'_>) -> Result<SurvCheck> {
     let ids = data.id().ok_or_else(|| {
-        Error::input("survcheck needs an id column to know which rows belong together".to_owned())
+        Error::invalid("survcheck needs an id column to know which rows belong together".to_owned())
     })?;
     let surv = data.followup()?;
     let (stop, start, status) = (surv.stop(), surv.start(), surv.status());

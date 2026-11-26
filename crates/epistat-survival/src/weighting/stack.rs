@@ -19,6 +19,7 @@
 //! with `p_i < 1/2` under matching weights, as the average treatment effect inside
 //! the optimal subset and 0 outside it, and 0 otherwise.
 
+use epistat_core::InputError;
 use epistat_linalg::{Attempt, Mat, Method, weighted_gram};
 
 use super::iptw::{Estimand, Iptw};
@@ -107,8 +108,7 @@ impl Iptw<'_> {
     pub(super) fn bread(&self) -> Result<Mat<f64>> {
         let (n, p) = (self.len(), self.design.ncols());
         let var: Vec<f64> = self.propensity.iter().map(|&q| q * (1.0 - q)).collect();
-        let gram = weighted_gram(self.design, &var)
-            .map_err(|e| Error::input(format!("propensity model: {e}")))?;
+        let gram = weighted_gram(self.design, &var)?;
         let k = self.n_params();
         Ok(Mat::from_fn(k, k, |i, j| {
             if i < p && j < p {
@@ -143,7 +143,7 @@ pub(super) fn units(
         if unit[s] == usize::MAX {
             unit[s] = c;
         } else if unit[s] != c {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "cluster: the rows of subject {s} are in more than one cluster"
             )));
         }
@@ -166,17 +166,18 @@ pub(super) fn check_subjects(
     subject: Option<&[u32]>,
 ) -> Result<()> {
     match subject {
-        None if n_rows != n_subjects => Err(Error::input(format!(
+        None if n_rows != n_subjects => Err(Error::invalid(format!(
             "subject: the data has {n_rows} rows and the weights {n_subjects} subjects, \
              so a subject for each row is needed"
         ))),
         None => Ok(()),
-        Some(s) if s.len() != n_rows => Err(Error::input(format!(
-            "subject: {} values for {n_rows} rows",
-            s.len()
-        ))),
+        Some(s) if s.len() != n_rows => Err(Error::from(InputError::Length {
+            what: "subject",
+            expected: n_rows,
+            found: s.len(),
+        })),
         Some(s) => match s.iter().position(|&v| v as usize >= n_subjects) {
-            Some(row) => Err(Error::input(format!(
+            Some(row) => Err(Error::invalid(format!(
                 "subject: row {row} names subject {} of {n_subjects}",
                 s[row]
             ))),
@@ -189,7 +190,7 @@ pub(super) fn check_subjects(
 /// refusing data that already has weights.
 pub(super) fn with_weights(data: &SurvData<'_>, weight: Vec<f64>) -> Result<SurvBuf> {
     if data.weight().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "data: carries case weights, but the weights come from the weighting",
         ));
     }

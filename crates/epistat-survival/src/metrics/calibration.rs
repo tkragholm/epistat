@@ -71,6 +71,7 @@ use super::prepare::sort_rows;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
+use epistat_core::InputError;
 
 /// How the rows are divided into groups.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,7 +149,7 @@ pub struct Calibration {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the data is interval-censored, has a start column or
+/// An input error when the data is interval-censored, has a start column or
 /// a weight other than 0 and 1, has no row of positive weight, or `cause` is
 /// outside the event codes; when `time` is not finite; when `risk` has another
 /// length than the data or a value outside `[0, 1]`; when the number of
@@ -161,17 +162,17 @@ pub fn estimate(
 ) -> Result<Calibration> {
     let sorted = sort_rows(data, opts.timefix, opts.cause)?;
     if !time.is_finite() {
-        return Err(Error::input("time is not finite"));
+        return Err(Error::invalid("time is not finite"));
     }
     if risk.len() != sorted.n_rows {
-        return Err(Error::input(format!(
-            "risk has {} values for {} rows",
-            risk.len(),
-            sorted.n_rows
-        )));
+        return Err(Error::from(InputError::Length {
+            what: "risk",
+            expected: sorted.n_rows,
+            found: risk.len(),
+        }));
     }
     if let Some(position) = risk.iter().position(|p| !(0.0..=1.0).contains(p)) {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "risk: row {position} is {}, which is not a probability",
             risk[position]
         )));
@@ -187,16 +188,16 @@ pub fn estimate(
     let mut breaks: Vec<f64> = match opts.groups {
         Groups::Quantiles(q) => {
             if q == 0 {
-                return Err(Error::input("the number of groups must be at least 1"));
+                return Err(Error::invalid("the number of groups must be at least 1"));
             }
             (0..=q)
                 .map(|k| epistat_stats::quantile::type7_ratio(&values, k, q))
                 .collect::<Option<Vec<f64>>>()
-                .ok_or_else(|| Error::input("no predicted risk to cut into groups"))?
+                .ok_or_else(|| Error::invalid("no predicted risk to cut into groups"))?
         }
         Groups::Breaks(b) => {
             if let Some(position) = b.iter().position(|v| !v.is_finite()) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "breaks: value {position} is not finite"
                 )));
             }
@@ -209,7 +210,7 @@ pub fn estimate(
         && (breaks.first().is_none_or(|&b| b > values[0])
             || breaks.last().is_none_or(|&b| b < values[n - 1]))
     {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the breaks must cover every predicted risk, from the smallest to the largest",
         ));
     }

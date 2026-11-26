@@ -253,21 +253,21 @@ impl Standardised {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] without `std_err`, for a time that does not exist or
+    /// An input error without `std_err`, for a time that does not exist or
     /// where a risk is not defined, and for fewer than two levels.
     pub fn tests(&self, k: usize, kind: yates::Test) -> Result<Vec<yates::WaldTest>> {
         let Some(cov) = &self.covariance else {
-            return Err(Error::input("tests: the result has no standard errors"));
+            return Err(Error::invalid("tests: the result has no standard errors"));
         };
         if k >= self.n_times {
-            return Err(Error::input(format!("time {k} is outside the times")));
+            return Err(Error::invalid(format!("time {k} is outside the times")));
         }
         let l = self.n_levels;
         let estimate: Option<Vec<f64>> = (0..l).map(|a| self.risk[a * self.n_times + k]).collect();
         let block: Option<Vec<f64>> = cov[k * l * l..(k + 1) * l * l].iter().copied().collect();
         match (estimate, block) {
             (Some(e), Some(b)) => yates::wald_tests(&e, &b, kind),
-            _ => Err(Error::input(format!("time {k}: a risk is not defined"))),
+            _ => Err(Error::invalid(format!("time {k}: a risk is not defined"))),
         }
     }
 
@@ -276,11 +276,11 @@ impl Standardised {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for a level that does not exist.
+    /// An input error for a level that does not exist.
     pub fn contrast(&self, first: usize, second: usize) -> Result<Contrast> {
         let l = self.n_levels;
         if first >= l || second >= l {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "levels: {first} and {second} must be below {l}"
             )));
         }
@@ -369,7 +369,7 @@ fn inference(estimate: &[Option<f64>], se: &[Option<f64>], null: f64, z: f64) ->
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for no level, a level that does not match the design, a
+/// An input error for no level, a level that does not match the design, a
 /// value that is not finite, a time that is not finite, a coefficient that is
 /// `None`, a risk score that is not finite, a `conf_level` outside `(0, 1)`, no
 /// row of positive weight, and with `std_err` for a covariance that is not
@@ -404,7 +404,7 @@ pub fn standardise_cox<'a>(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as for [`standardise_cox`], for designs and fits that do
+/// An input error as for [`standardise_cox`], for designs and fits that do
 /// not match the event codes of the data, and for a cause outside the codes or,
 /// with `SurvType::Survival`, not the cause of the fit.
 #[expect(
@@ -424,12 +424,12 @@ pub fn standardise_cause_specific<'a>(
     let fixed = data.clone().with_timefix(csc.timefix)?;
     let n_codes = fixed.followup()?.n_codes();
     if n_codes < 2 {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "data: absolute risk needs competing causes, so the status needs at least two codes",
         ));
     }
     if cause == 0 || cause > n_codes {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "cause {cause} is outside 1..={n_codes}"
         )));
     }
@@ -471,7 +471,7 @@ pub fn standardise_cause_specific<'a>(
         }
         SurvType::Survival { cause: fitted } => {
             if cause != fitted {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "cause {cause}: the models were fitted for cause {fitted}"
                 )));
             }
@@ -543,7 +543,7 @@ fn prepare<'a>(
     rows: &[usize],
 ) -> Result<Vec<LevelRows<'a>>> {
     if levels.is_empty() {
-        return Err(Error::input("levels: at least one level is needed"));
+        return Err(Error::invalid("levels: at least one level is needed"));
     }
     let mut out = Vec::with_capacity(levels.len());
     for (l, level) in levels.iter().enumerate() {
@@ -559,12 +559,12 @@ fn prepare<'a>(
                     let mut over = vec![None; p];
                     for &(col, value) in *set {
                         if col >= p {
-                            return Err(Error::input(format!(
+                            return Err(Error::invalid(format!(
                                 "level {l}, model {m}: column {col} is outside the {p} columns"
                             )));
                         }
                         if !value.is_finite() {
-                            return Err(Error::input(format!(
+                            return Err(Error::invalid(format!(
                                 "level {l}, model {m}: a value is not finite"
                             )));
                         }
@@ -574,7 +574,7 @@ fn prepare<'a>(
                 }
                 Counterfactual::Design(d) => {
                     if d.nrows() != model.x.nrows() || d.ncols() != p {
-                        return Err(Error::input(format!(
+                        return Err(Error::invalid(format!(
                             "level {l}, model {m}: the design is {} by {}, the model's is {} by {p}",
                             d.nrows(),
                             d.ncols(),
@@ -584,7 +584,7 @@ fn prepare<'a>(
                     for &i in rows {
                         for a in 0..p {
                             if !d[(i, a)].is_finite() {
-                                return Err(Error::input(format!(
+                                return Err(Error::invalid(format!(
                                     "level {l}, model {m}: a value is not finite"
                                 )));
                             }
@@ -607,19 +607,22 @@ fn run(
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {
     if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::input("conf_level: must be in (0, 1)"));
+        return Err(Error::invalid("conf_level: must be in (0, 1)"));
     }
     refuse_non_finite(times, "times")?;
     let data = &models[0].data;
     for (m, model) in models.iter().enumerate() {
-        check_lengths(&[
-            ("data", data.n_rows()),
-            (&format!("design {m}"), model.x.nrows()),
-        ])?;
+        if model.x.nrows() != data.n_rows() {
+            return Err(Error::invalid(format!(
+                "design {m}: {} rows for {} rows of data",
+                model.x.nrows(),
+                data.n_rows()
+            )));
+        }
     }
     let rows: Vec<usize> = data.used_rows().map(|i| i as usize).collect();
     if rows.is_empty() {
-        return Err(Error::input("data: no row has positive weight"));
+        return Err(Error::invalid("data: no row has positive weight"));
     }
     let n = rows.len();
     let stratum: Vec<usize> = rows
@@ -709,7 +712,7 @@ fn run(
         }
         let u = needed
             .binary_search(&c)
-            .map_err(|_| Error::input("internal: count"))?;
+            .map_err(|_| Error::invalid("internal: count"))?;
         for l in 0..n_levels {
             risk[l * n_times + k] = evaluated.risk[l * n_needed + u];
         }

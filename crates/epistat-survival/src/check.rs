@@ -1,81 +1,67 @@
 //! Input checks shared by the estimators, so a refusal reads the same whichever
 //! estimator raised it.
 
+use epistat_core::{InputError, check};
 use epistat_linalg::MatRef;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// Refuse columns of different lengths.
 ///
 /// `columns` pairs each column's name with its length. The first is the
-/// reference, and the message names the first column that differs from it.
+/// reference, and the error names the first column that differs from it.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when any length differs from the first.
-pub(crate) fn check_lengths(columns: &[(&str, usize)]) -> Result<()> {
-    let Some(&(reference, expected)) = columns.first() else {
+/// [`InputError::Length`] when any length differs from the first.
+pub(crate) fn check_lengths(columns: &[(&'static str, usize)]) -> Result<()> {
+    let Some(&(_, expected)) = columns.first() else {
         return Ok(());
     };
-    match columns.iter().find(|&&(_, len)| len != expected) {
-        Some(&(name, len)) => Err(Error::input(format!(
-            "columns differ in length: {name} has {len} values against {expected} in {reference}"
-        ))),
-        None => Ok(()),
+    for &(name, len) in columns {
+        check::same_length(name, expected, len)?;
     }
+    Ok(())
 }
 
 /// Refuse more rows than a `u32` row index addresses.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `rows` exceeds `u32::MAX`.
+/// [`InputError::TooLarge`] when `rows` exceeds `u32::MAX`.
 pub(crate) fn check_row_count(rows: usize) -> Result<()> {
     if u32::try_from(rows).is_err() {
-        return Err(Error::input(format!(
-            "{rows} rows is more than the {} the estimators index",
-            u32::MAX
-        )));
+        return Err(InputError::TooLarge {
+            what: "rows",
+            limit: u64::from(u32::MAX),
+            found: rows as u64,
+        }
+        .into());
     }
     Ok(())
 }
 
 /// Refuse a column holding NaN or an infinity.
 ///
-/// `name` is in the message, with the count of offending values.
-///
 /// # Errors
 ///
-/// [`Error::Input`] when any of `values` is not finite.
-pub(crate) fn refuse_non_finite(values: &[f64], name: &str) -> Result<()> {
-    non_finite_result(
-        values.iter().filter(|value| !value.is_finite()).count(),
-        name,
-    )
+/// [`InputError::NotFinite`] naming `name` and the first row that is not
+/// finite.
+pub(crate) fn refuse_non_finite(values: &[f64], name: &'static str) -> Result<()> {
+    Ok(check::finite(name, values)?)
 }
 
 /// Refuse a matrix holding NaN or an infinity.
 ///
-/// `name` is in the message, with the count of offending values.
-///
 /// # Errors
 ///
-/// [`Error::Input`] when any entry of `x` is not finite.
-pub(crate) fn refuse_non_finite_matrix(x: MatRef<'_, f64>, name: &str) -> Result<()> {
-    let count = (0..x.nrows())
-        .flat_map(|i| (0..x.ncols()).map(move |j| (i, j)))
-        .filter(|&(i, j)| !x[(i, j)].is_finite())
-        .count();
-    non_finite_result(count, name)
-}
-
-fn non_finite_result(count: usize, name: &str) -> Result<()> {
-    if count > 0 {
-        return Err(Error::input(format!(
-            "{name}: {count} non-finite values; drop or resolve them before estimating"
-        )));
+/// [`InputError::NotFinite`] naming `name` and the first row of `x` that holds
+/// an entry that is not finite.
+pub(crate) fn refuse_non_finite_matrix(x: MatRef<'_, f64>, name: &'static str) -> Result<()> {
+    match (0..x.nrows()).find(|&i| (0..x.ncols()).any(|j| !x[(i, j)].is_finite())) {
+        Some(row) => Err(InputError::NotFinite { what: name, row }.into()),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Refuse values that are not finite and ascending.
@@ -84,20 +70,18 @@ fn non_finite_result(count: usize, name: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] naming `name` when a value is not finite or a value is
-/// below the one before it, or equal to it when `strict`.
-pub(crate) fn check_ascending(values: &[f64], name: &str, strict: bool) -> Result<()> {
-    if values.iter().any(|v| !v.is_finite()) {
-        return Err(Error::input(format!("{name} must be finite")));
-    }
-    if values
-        .windows(2)
-        .any(|w| if strict { w[0] >= w[1] } else { w[0] > w[1] })
-    {
-        return Err(Error::input(format!(
-            "{name} must be {}ascending",
-            if strict { "strictly " } else { "" }
-        )));
+/// [`InputError::NotFinite`] naming `name` when a value is not finite,
+/// [`InputError::Unsorted`] when a value is below the one before it, and
+/// [`InputError::Duplicate`] when it equals it and `strict`.
+pub(crate) fn check_ascending(values: &[f64], name: &'static str, strict: bool) -> Result<()> {
+    check::finite(name, values)?;
+    // The values are finite here, so `partial_cmp` orders every pair, and
+    // -0 and 0 compare equal.
+    let order = |a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal);
+    if strict {
+        check::strictly_sorted_by(name, values, order)?;
+    } else {
+        check::sorted_by(name, values, order)?;
     }
     Ok(())
 }
@@ -111,10 +95,7 @@ mod tests {
     fn a_non_finite_value_is_refused_with_its_column_and_count() {
         assert!(refuse_non_finite(&[0.0, -1.5, 1e308], "time").is_ok());
         let error = refuse_non_finite(&[f64::NAN, 1.0, f64::INFINITY], "time").unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "time: 2 non-finite values; drop or resolve them before estimating"
-        );
+        assert_eq!(error.to_string(), "time is not finite at row 0");
     }
 
     #[test]
@@ -122,10 +103,7 @@ mod tests {
         assert!(check_lengths(&[]).is_ok());
         assert!(check_lengths(&[("time", 3), ("event", 3)]).is_ok());
         let error = check_lengths(&[("time", 3), ("event", 3), ("weight", 2)]).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "columns differ in length: weight has 2 values against 3 in time"
-        );
+        assert_eq!(error.to_string(), "weight has length 2, expected 3");
     }
 
     #[test]
@@ -137,7 +115,7 @@ mod tests {
             refuse_non_finite_matrix(dirty.as_ref(), "x")
                 .unwrap_err()
                 .to_string(),
-            "x: 2 non-finite values; drop or resolve them before estimating"
+            "x is not finite at row 0"
         );
     }
 
@@ -149,19 +127,19 @@ mod tests {
             check_ascending(&[1.0, 2.0, 2.0], "times", true)
                 .unwrap_err()
                 .to_string(),
-            "times must be strictly ascending"
+            "times repeats at row 2 the row above it"
         );
         assert_eq!(
             check_ascending(&[2.0, 1.0], "times", false)
                 .unwrap_err()
                 .to_string(),
-            "times must be ascending"
+            "times is not sorted: row 1 sorts before the row above it"
         );
         assert_eq!(
             check_ascending(&[1.0, f64::NAN], "times", false)
                 .unwrap_err()
                 .to_string(),
-            "times must be finite"
+            "times is not finite at row 1"
         );
     }
 }

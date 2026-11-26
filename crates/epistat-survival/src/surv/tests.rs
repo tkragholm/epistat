@@ -44,9 +44,12 @@ fn no_rows_is_a_valid_input() {
 #[test]
 fn columns_of_different_lengths_are_refused() {
     let (stop, status) = simple();
-    assert!(message(SurvData::builder(&stop, &status[..2]).build()).contains("status has 2"));
     assert!(
-        message(SurvData::builder(&stop, &status).weight(&[1.0]).build()).contains("weight has 1")
+        message(SurvData::builder(&stop, &status[..2]).build()).contains("status has length 2")
+    );
+    assert!(
+        message(SurvData::builder(&stop, &status).weight(&[1.0]).build())
+            .contains("weight has length 1")
     );
     assert!(
         message(
@@ -54,7 +57,7 @@ fn columns_of_different_lengths_are_refused() {
                 .stratum(&[0, 1, 2, 3])
                 .build()
         )
-        .contains("stratum has 4")
+        .contains("stratum has length 4")
     );
     SurvData::builder(&stop, &status)
         .weight(&[1.0; 3])

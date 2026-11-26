@@ -138,7 +138,7 @@ pub struct ExpCi {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a column or `events` has the wrong length, a value is
+/// An input error when a column or `events` has the wrong length, a value is
 /// not finite, a length or event count is negative, a piece with length 0 has
 /// events, there is no column, no piece has exposure, or the fit fails, see
 /// [`epistat_glm::GlmError`].
@@ -150,23 +150,23 @@ pub fn fit_rates(
 ) -> Result<Rates> {
     let n = length.len();
     if events.len() != n {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "events has {} values against {n} lengths",
             events.len()
         )));
     }
     if columns.is_empty() {
-        return Err(Error::input("the design has no columns"));
+        return Err(Error::invalid("the design has no columns"));
     }
     for (j, c) in columns.iter().enumerate() {
         if c.len() != n {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "column {j} has {} values against {n} pieces",
                 c.len()
             )));
         }
         if let Some(i) = c.iter().position(|v| !v.is_finite()) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "column {j}: the value of piece {i} is not finite"
             )));
         }
@@ -175,25 +175,25 @@ pub fn fit_rates(
     for i in 0..n {
         let (y, d) = (length[i], events[i]);
         if !(y.is_finite() && y >= 0.0) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the length of piece {i} is not finite and non-negative"
             )));
         }
         if !(d.is_finite() && d >= 0.0) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the events of piece {i} are not finite and non-negative"
             )));
         }
         if y > 0.0 {
             keep.push(i);
         } else if d > 0.0 {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "piece {i} has events and no exposure, so its rate is not defined"
             )));
         }
     }
     if keep.is_empty() {
-        return Err(Error::input("no piece has exposure"));
+        return Err(Error::invalid("no piece has exposure"));
     }
     let x = Mat::from_fn(keep.len(), columns.len(), |r, j| columns[j][keep[r]]);
     let y: Vec<f64> = keep.iter().map(|&i| events[i]).collect();
@@ -203,7 +203,7 @@ pub fn fit_rates(
     glm.max_iterations = options.max_iterations;
     let fit = glm
         .fit_slices(x.as_ref(), &y, None, Some(&offset), None)
-        .map_err(|e| Error::input(format!("the Poisson fit failed: {e}")))?;
+        .map_err(Error::model("the Poisson model"))?;
     Ok(Rates {
         fit,
         n_input: n,
@@ -223,24 +223,24 @@ impl Rates {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when a contrast has the wrong length or a weight that
+    /// An input error when a contrast has the wrong length or a weight that
     /// is not finite, or `alpha` is not in `(0, 1)`.
     pub fn ci_lin(&self, contrasts: &[&[f64]], alpha: f64) -> Result<Vec<LinCi>> {
         let p = self.fit.coefficients.len();
         if !(alpha > 0.0 && alpha < 1.0) {
-            return Err(Error::input("alpha must be in (0, 1)"));
+            return Err(Error::invalid("alpha must be in (0, 1)"));
         }
         let z = normal::quantile(1.0 - alpha / 2.0);
         let mut out = Vec::with_capacity(contrasts.len());
         for (r, l) in contrasts.iter().enumerate() {
             if l.len() != p {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "contrast {r} has {} weights against {p} coefficients",
                     l.len()
                 )));
             }
             if l.iter().any(|w| !w.is_finite()) {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "contrast {r} has a weight that is not finite"
                 )));
             }

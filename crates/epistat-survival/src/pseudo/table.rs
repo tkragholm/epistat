@@ -70,7 +70,7 @@ impl Group {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when no row has positive weight or a cluster has rows in
+/// An input error when no row has positive weight or a cluster has rows in
 /// more than one group.
 #[expect(
     clippy::cast_possible_truncation,
@@ -80,7 +80,7 @@ impl Group {
 pub(super) fn build(data: &SurvData<'_>, cause: Option<u32>) -> Result<Vec<Group>> {
     let surv = data.followup()?;
     if data.n_used() == 0 {
-        return Err(Error::input("no row has positive weight"));
+        return Err(Error::invalid("no row has positive weight"));
     }
     let n_groups = data.n_strata().max(1);
     let mut members: Vec<Vec<u32>> = vec![Vec::new(); n_groups];
@@ -106,7 +106,7 @@ pub(super) fn build(data: &SurvData<'_>, cause: Option<u32>) -> Result<Vec<Group
                 if *slot == u32::MAX {
                     *slot = g as u32;
                 } else if *slot != g as u32 {
-                    return Err(Error::input(
+                    return Err(Error::invalid(
                         "a cluster has rows in more than one stratum, so its pseudo-values \
                          cannot be collapsed",
                     ));

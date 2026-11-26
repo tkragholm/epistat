@@ -455,13 +455,13 @@ pub(super) fn times_of(data: &SurvData<'_>, distribution: Distribution) -> Resul
     let mut times = match data.outcome() {
         Outcome::Followup(surv) => {
             if surv.start().is_some() {
-                return Err(Error::input(
+                return Err(Error::unsupported(
                     "survreg takes times from the origin; delayed entry is not supported"
                         .to_owned(),
                 ));
             }
             if surv.n_codes() != 1 {
-                return Err(Error::input(format!(
+                return Err(Error::invalid(format!(
                     "survreg needs a binary status; the data has {} event codes",
                     surv.n_codes()
                 )));
@@ -587,7 +587,7 @@ fn design_of(x: MatRef<'_, f64>, used: &[usize]) -> Design {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] as listed in the module documentation.
+/// An input error as listed in the module documentation.
 ///
 /// # Panics
 ///
@@ -604,18 +604,18 @@ pub fn fit(
     let dist = options.distribution;
     match (dist, options.df) {
         (Distribution::StudentT, None) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the t distribution needs its degrees of freedom (df)".to_owned(),
             ));
         }
         (Distribution::StudentT, Some(df)) if !(df.is_finite() && df > 2.0) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "the degrees of freedom of the t distribution must be greater than 2".to_owned(),
             ));
         }
         (Distribution::StudentT, Some(_)) => {}
         (_, Some(_)) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "df applies to the t distribution only".to_owned(),
             ));
         }
@@ -625,47 +625,49 @@ pub fn fit(
     let n_all = data.n_rows();
     let p = x.ncols();
     if x.nrows() != n_all {
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "the design has {} rows against {n_all} rows of data",
             x.nrows()
         )));
     }
     if p == 0 {
-        return Err(Error::input("the design has no columns".to_owned()));
+        return Err(Error::invalid("the design has no columns".to_owned()));
     }
     for col in 0..p {
         if (0..n_all).any(|row| !x[(row, col)].is_finite()) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "design column {col} has a value that is not finite"
             )));
         }
     }
     if let Some(offset) = options.offset {
         if offset.len() != n_all {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the offset has {} values against {n_all} rows of data",
                 offset.len()
             )));
         }
         if offset.iter().any(|v| !v.is_finite()) {
-            return Err(Error::input("an offset is not finite".to_owned()));
+            return Err(Error::invalid("an offset is not finite".to_owned()));
         }
     }
     if options.max_iterations == 0 {
-        return Err(Error::input("max_iterations is 0".to_owned()));
+        return Err(Error::invalid("max_iterations is 0".to_owned()));
     }
     for (name, value) in [
         ("rel_tolerance", options.rel_tolerance),
         ("toler_chol", options.toler_chol),
     ] {
         if !(value.is_finite() && value > 0.0) {
-            return Err(Error::input(format!("{name} must be positive and finite")));
+            return Err(Error::invalid(format!(
+                "{name} must be positive and finite"
+            )));
         }
     }
     let n_strata = data.n_strata().max(1);
     let fixed_scale = match (dist.fixed_scale(), options.scale) {
         (Some(_), Some(_)) => {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "this distribution has a fixed scale; the scale option does not apply".to_owned(),
             ));
         }
@@ -674,10 +676,10 @@ pub fn fit(
     };
     if let Some(scale) = fixed_scale {
         if !(scale.is_finite() && scale > 0.0) {
-            return Err(Error::input("a fixed scale must be positive".to_owned()));
+            return Err(Error::invalid("a fixed scale must be positive".to_owned()));
         }
         if n_strata > 1 {
-            return Err(Error::input(
+            return Err(Error::invalid(
                 "a fixed scale cannot be combined with strata on the scale".to_owned(),
             ));
         }
@@ -688,12 +690,12 @@ pub fn fit(
     let times = times_of(data, dist)?;
     let used: Vec<usize> = data.used_rows().map(|row| row as usize).collect();
     if used.is_empty() {
-        return Err(Error::input("no row has a positive weight".to_owned()));
+        return Err(Error::invalid("no row has a positive weight".to_owned()));
     }
     let bad_times = used.iter().filter(|&&row| times.y1[row].is_nan()).count();
     if bad_times > 0 {
         let first = used.iter().find(|&&row| times.y1[row].is_nan()).unwrap();
-        return Err(Error::input(format!(
+        return Err(Error::invalid(format!(
             "{bad_times} times are not positive, which this distribution needs, first at row {first}"
         )));
     }
@@ -716,7 +718,7 @@ pub fn fit(
             seen[c as usize] = true;
         }
         if let Some(empty) = seen.iter().position(|&s| !s) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "stratum {empty} has no row with a positive weight"
             )));
         }
@@ -796,7 +798,7 @@ pub fn fit(
             let eta_i = centre_of_row(i) - offset.as_ref().map_or(0.0, |o| o[i]);
             let target = wt * eta_i + weight[i] * d.g_eta;
             if !(wt.is_finite() && target.is_finite()) {
-                return Err(Error::input(
+                return Err(Error::invalid(
                     "the starting values are not finite; check the times against the \
                      distribution"
                         .to_owned(),

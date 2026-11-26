@@ -48,6 +48,7 @@
 //! dependent censoring using surrogate markers. In: AIDS Epidemiology,
 //! Birkhauser 1992:297-331.
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 
 use crate::cox::{
@@ -114,7 +115,7 @@ pub struct Ipcw {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for interval-censored data, for a design with another
+/// An input error for interval-censored data, for a design with another
 /// number of rows than the data or a value that is not finite, when a subject
 /// has two last rows at the same stop, when the Cox model of censoring does
 /// not converge, and when the censoring survival is 0 before a row.
@@ -183,7 +184,7 @@ pub(super) fn fit_parts<'a>(
             }
         }
         if let Some(bad) = last.iter().find(|l| l.2 > 1) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "id: row {} has the same stop as another row of its subject",
                 bad.1
             )));
@@ -245,10 +246,11 @@ pub(super) fn fit_parts<'a>(
     let mut baseline: Vec<Steps> = Vec::new();
     if let CensoringModel::Cox { x } = model {
         if x.nrows() != n {
-            return Err(Error::input(format!(
-                "x: {} rows for {n} rows of data",
-                x.nrows()
-            )));
+            return Err(Error::from(InputError::Length {
+                what: "x",
+                expected: n,
+                found: x.nrows(),
+            }));
         }
         let cox_opts = CoxOptions {
             ties: opts.ties,
@@ -257,7 +259,9 @@ pub(super) fn fit_parts<'a>(
         };
         let model_fit = cox_fit(&process, x, &cox_opts)?;
         if !model_fit.converged {
-            return Err(Error::input("the Cox model of censoring did not converge"));
+            return Err(Error::NotConverged {
+                iterations: model_fit.iterations as usize,
+            });
         }
         let zero = vec![0.0; x.ncols()];
         let base = basehaz(
@@ -359,7 +363,7 @@ pub(super) fn fit_parts<'a>(
             (lambda_start - num_start).exp(),
         );
         if !(ws.is_finite() && w0.is_finite()) {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "the censoring survival is 0 before row {r}, so its weight is infinite"
             )));
         }

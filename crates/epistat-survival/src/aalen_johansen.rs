@@ -425,13 +425,13 @@ pub struct AalenJohansenOptions {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the tie rule fails, see
+/// An input error when the tie rule fails, see
 /// [`SurvData::with_timefix`], or `n_codes` does not fit an `i32`.
 pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curves> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let n_codes = i32::try_from(surv.n_codes())
-        .map_err(|_| Error::input("n_codes must fit an i32 status"))?;
+        .map_err(|_| Error::invalid("n_codes must fit an i32 status"))?;
     let used = data.used_index();
     let index = used.as_deref();
     let time = pick_used(surv.stop(), index);
@@ -570,7 +570,7 @@ pub struct Variance {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the tie rule fails, see [`SurvData::with_timefix`],
+/// An input error when the tie rule fails, see [`SurvData::with_timefix`],
 /// `n_codes` does not fit an `i32`, or `horizons` or `influence_times` is not
 /// ascending or holds a value that is not finite.
 pub fn variance(
@@ -583,7 +583,7 @@ pub fn variance(
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let n_codes = i32::try_from(surv.n_codes())
-        .map_err(|_| Error::input("n_codes must fit an i32 status"))?;
+        .map_err(|_| Error::invalid("n_codes must fit an i32 status"))?;
     let causes: Vec<i32> = (1..=n_codes).collect();
     let k = causes.len();
     let states = k + 1;
@@ -985,19 +985,21 @@ impl RowWindows {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the offsets are empty, decrease or run past
+    /// An input error when the offsets are empty, decrease or run past
     /// `rows`, or a row indexes past `n_rows`.
     pub fn new(rows: Vec<u32>, offsets: Vec<u32>, n_rows: usize, label: &str) -> Result<Self> {
         let Some(&last) = offsets.last() else {
-            return Err(Error::input(format!("{label}_offsets must not be empty")));
+            return Err(Error::invalid(format!("{label}_offsets must not be empty")));
         };
         if offsets.windows(2).any(|pair| pair[0] > pair[1]) || last as usize > rows.len() {
-            return Err(Error::input(format!(
+            return Err(Error::invalid(format!(
                 "{label}_offsets must be non-decreasing and within {label}_rows"
             )));
         }
         if rows.iter().any(|&row| row as usize >= n_rows) {
-            return Err(Error::input(format!("{label}_rows indexes past the frame")));
+            return Err(Error::invalid(format!(
+                "{label}_rows indexes past the frame"
+            )));
         }
         Ok(Self {
             rows,
@@ -1088,7 +1090,7 @@ impl BootstrapOptions {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the tie rule fails, `data` has no cluster column or
+/// An input error when the tie rule fails, `data` has no cluster column or
 /// has a start column, `cause` is outside `1..=n_codes`, `exposed` does not
 /// have one value per row, `cell_seeds` does not hold one seed per cell, or
 /// `cells` was built for a frame of another size than `data`.
@@ -1103,15 +1105,15 @@ pub fn bootstrap(
 ) -> Result<ArmDraws> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let code = i32::try_from(data.cause(cause)?.code())
-        .map_err(|_| Error::input("the cause must fit an i32 status"))?;
+        .map_err(|_| Error::invalid("the cause must fit an i32 status"))?;
     let surv = data.followup()?;
     if surv.start().is_some() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the bootstrap takes no start times, everyone is at risk from a common origin",
         ));
     }
     let Some(cluster) = data.cluster() else {
-        return Err(Error::input("the bootstrap needs a cluster column"));
+        return Err(Error::invalid("the bootstrap needs a cluster column"));
     };
     check_lengths(&[("stop", data.n_rows()), ("exposed", exposed.len())])?;
     let weight = data
@@ -1165,12 +1167,12 @@ fn bootstrap_core(
     } = *frame;
     let n_cells = cells.len();
     if cells.frame_rows() != time.len() {
-        return Err(Error::input(
+        return Err(Error::invalid(
             "the cell windows were built for a frame of another size than the columns",
         ));
     }
     if cell_seeds.len() != n_cells {
-        return Err(Error::input("cell_seeds must have one seed per cell"));
+        return Err(Error::invalid("cell_seeds must have one seed per cell"));
     }
     if n_cells == 0 {
         return Ok((Vec::new(), Vec::new(), Vec::new()));
@@ -1615,7 +1617,7 @@ mod tests {
         };
         assert_eq!(
             refused(vec![0], vec![], 1),
-            Some(Error::input("cell_offsets must not be empty"))
+            Some(Error::invalid("cell_offsets must not be empty"))
         );
         assert!(
             refused(vec![0, 1], vec![0, 2, 1], 2).is_some(),
@@ -1624,7 +1626,7 @@ mod tests {
         assert!(refused(vec![0], vec![0, 2], 1).is_some(), "past the rows");
         assert_eq!(
             refused(vec![0, 5], vec![0, 2], 3),
-            Some(Error::input("cell_rows indexes past the frame"))
+            Some(Error::invalid("cell_rows indexes past the frame"))
         );
     }
 
@@ -2117,7 +2119,10 @@ mod variance_tests {
                 influence_times: vec![f64::NAN],
             },
         ] {
-            assert!(matches!(variance(&data, &opts, &v), Err(Error::Input(_))));
+            assert!(matches!(
+                variance(&data, &opts, &v),
+                Err(Error::Input(_) | Error::Invalid(_))
+            ));
         }
     }
 }
