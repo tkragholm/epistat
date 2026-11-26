@@ -35,7 +35,7 @@
 use epistat_rng::{Stream, replicate_seed};
 
 use super::{
-    AdjustedResult, BiasError, Draws, Kind, Pair, ProbOptions, Table2x2, check_options,
+    AdjustedResult, BiasError, Counts2x2, Draws, Kind, Pair, ProbOptions, check_options,
     exposure_cells, finish_single, names, outcome_cells, positive_cells,
 };
 
@@ -75,18 +75,18 @@ where
     se.validate()?;
     sp.validate()?;
     check_options(opts)?;
-    let mut t = Table2x2 {
-        a: 0.0,
-        b: 0.0,
-        c: 0.0,
-        d: 0.0,
+    let mut t = Counts2x2 {
+        exposed_cases: 0.0,
+        unexposed_cases: 0.0,
+        exposed_noncases: 0.0,
+        unexposed_noncases: 0.0,
     };
     for (&e, &y) in exposed.iter().zip(case) {
         match (e, y) {
-            (true, true) => t.a += 1.0,
-            (false, true) => t.b += 1.0,
-            (true, false) => t.c += 1.0,
-            (false, false) => t.d += 1.0,
+            (true, true) => t.exposed_cases += 1.0,
+            (false, true) => t.unexposed_cases += 1.0,
+            (true, false) => t.exposed_noncases += 1.0,
+            (false, false) => t.unexposed_noncases += 1.0,
         }
     }
     t.check()?;
@@ -129,8 +129,22 @@ where
             // Per stratum (0 is cases for the exposure, exposed for the
             // outcome): true positives, recorded positives, size.
             let (strata_true, strata_recorded, strata_size) = match kind {
-                Kind::Exposure => ([cells.a, cells.c], [t.a, t.c], [t.a + t.b, t.c + t.d]),
-                Kind::Outcome => ([cells.a, cells.b], [t.a, t.b], [t.a + t.c, t.b + t.d]),
+                Kind::Exposure => (
+                    [cells.exposed_cases, cells.exposed_noncases],
+                    [t.exposed_cases, t.exposed_noncases],
+                    [
+                        t.exposed_cases + t.unexposed_cases,
+                        t.exposed_noncases + t.unexposed_noncases,
+                    ],
+                ),
+                Kind::Outcome => (
+                    [cells.exposed_cases, cells.unexposed_cases],
+                    [t.exposed_cases, t.unexposed_cases],
+                    [
+                        t.exposed_cases + t.exposed_noncases,
+                        t.unexposed_cases + t.unexposed_noncases,
+                    ],
+                ),
             };
             let mut ppv = [0.0; 2];
             let mut npv = [0.0; 2];
@@ -178,14 +192,14 @@ mod tests {
         clippy::cast_sign_loss,
         reason = "the test tables hold whole counts"
     )]
-    fn records(t: &Table2x2) -> (Vec<bool>, Vec<bool>) {
+    fn records(t: &Counts2x2) -> (Vec<bool>, Vec<bool>) {
         let mut exposed = Vec::new();
         let mut case = Vec::new();
         for (e, y, n) in [
-            (true, true, t.a),
-            (false, true, t.b),
-            (true, false, t.c),
-            (false, false, t.d),
+            (true, true, t.exposed_cases),
+            (false, true, t.unexposed_cases),
+            (true, false, t.exposed_noncases),
+            (false, false, t.unexposed_noncases),
         ] {
             for _ in 0..n as usize {
                 exposed.push(e);
@@ -209,11 +223,11 @@ mod tests {
 
     #[test]
     fn perfect_classification_refits_the_records_as_they_are() {
-        let t = Table2x2 {
-            a: 40.0,
-            b: 60.0,
-            c: 360.0,
-            d: 1540.0,
+        let t = Counts2x2 {
+            exposed_cases: 40.0,
+            unexposed_cases: 60.0,
+            exposed_noncases: 360.0,
+            unexposed_noncases: 1540.0,
         };
         let (exposed, case) = records(&t);
         let r = record_level_misclass(
@@ -245,11 +259,11 @@ mod tests {
         // ratios of the draws (about 0.11 here); four of those are allowed,
         // which also covers the small difference between the median of the
         // log and the log of the expected table.
-        let t = Table2x2 {
-            a: 40.0,
-            b: 60.0,
-            c: 360.0,
-            d: 1540.0,
+        let t = Counts2x2 {
+            exposed_cases: 40.0,
+            unexposed_cases: 60.0,
+            exposed_noncases: 360.0,
+            unexposed_noncases: 1540.0,
         };
         let m = Misclass {
             se: [0.85, 0.85],

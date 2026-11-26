@@ -107,6 +107,8 @@ use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::dist::normal;
 use epistat_stats::sum::compensated;
 
+use crate::tables::{Counts2x2, PersonTime2};
+
 /// Why a Mantel-Haenszel estimate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MhError {
@@ -136,32 +138,6 @@ impl fmt::Display for MhError {
 }
 
 impl std::error::Error for MhError {}
-
-/// The 2 x 2 table of one stratum.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Table {
-    /// Exposed cases.
-    pub a: f64,
-    /// Exposed non-cases.
-    pub b: f64,
-    /// Unexposed cases.
-    pub c: f64,
-    /// Unexposed non-cases.
-    pub d: f64,
-}
-
-/// The events and person-time of one stratum.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RateStratum {
-    /// Events among the exposed.
-    pub x1: f64,
-    /// Person-time of the exposed.
-    pub t1: f64,
-    /// Events among the unexposed.
-    pub x0: f64,
-    /// Person-time of the unexposed.
-    pub t0: f64,
-}
 
 /// A pooled estimate.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,33 +181,51 @@ fn check_level(level: f64) -> Result<(), MhError> {
     }
 }
 
-fn check_tables(tables: &[Table]) -> Result<(), MhError> {
+fn check_tables(tables: &[Counts2x2]) -> Result<(), MhError> {
     if tables.is_empty() {
         return Err(MhError::Empty);
     }
     for t in tables {
-        if ![t.a, t.b, t.c, t.d].into_iter().all(finite_count) {
+        if ![
+            t.exposed_cases,
+            t.exposed_noncases,
+            t.unexposed_cases,
+            t.unexposed_noncases,
+        ]
+        .into_iter()
+        .all(finite_count)
+        {
             return Err(MhError::Cell);
         }
-        if t.a + t.b + t.c + t.d == 0.0 {
+        if t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases == 0.0 {
             return Err(MhError::EmptyStratum);
         }
     }
     Ok(())
 }
 
-fn check_strata(strata: &[RateStratum]) -> Result<(), MhError> {
+fn check_strata(strata: &[PersonTime2]) -> Result<(), MhError> {
     if strata.is_empty() {
         return Err(MhError::Empty);
     }
     for s in strata {
-        if ![s.x1, s.t1, s.x0, s.t0].into_iter().all(finite_count) {
+        if ![
+            s.exposed_events,
+            s.exposed_time,
+            s.unexposed_events,
+            s.unexposed_time,
+        ]
+        .into_iter()
+        .all(finite_count)
+        {
             return Err(MhError::Cell);
         }
-        if (s.t1 == 0.0 && s.x1 > 0.0) || (s.t0 == 0.0 && s.x0 > 0.0) {
+        if (s.exposed_time == 0.0 && s.exposed_events > 0.0)
+            || (s.unexposed_time == 0.0 && s.unexposed_events > 0.0)
+        {
             return Err(MhError::Cell);
         }
-        if s.t1 + s.t0 == 0.0 {
+        if s.exposed_time + s.unexposed_time == 0.0 {
             return Err(MhError::EmptyStratum);
         }
     }
@@ -280,15 +274,21 @@ fn difference_result(difference: f64, variance: f64, level: f64, used: usize) ->
     }
 }
 
-fn used_tables(tables: &[Table]) -> usize {
+fn used_tables(tables: &[Counts2x2]) -> usize {
     tables
         .iter()
-        .filter(|t| t.a + t.b > 0.0 && t.c + t.d > 0.0)
+        .filter(|t| {
+            t.exposed_cases + t.exposed_noncases > 0.0
+                && t.unexposed_cases + t.unexposed_noncases > 0.0
+        })
         .count()
 }
 
-fn used_strata(strata: &[RateStratum]) -> usize {
-    strata.iter().filter(|s| s.t1 > 0.0 && s.t0 > 0.0).count()
+fn used_strata(strata: &[PersonTime2]) -> usize {
+    strata
+        .iter()
+        .filter(|s| s.exposed_time > 0.0 && s.unexposed_time > 0.0)
+        .count()
 }
 
 /// The Mantel-Haenszel common odds ratio with the variance of Robins,
@@ -298,15 +298,17 @@ fn used_strata(strata: &[RateStratum]) -> usize {
 ///
 /// [`MhError`] for no strata, a negative or non-finite cell, an empty
 /// stratum, or a level outside `(0, 1)`.
-pub fn odds_ratio(tables: &[Table], level: f64) -> Result<Pooled, MhError> {
+pub fn odds_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
     check_level(level)?;
     check_tables(tables)?;
     let used = used_tables(tables);
-    let n = |t: &Table| t.a + t.b + t.c + t.d;
-    let r_i = |t: &Table| (t.a / n(t)) * t.d;
-    let s_i = |t: &Table| (t.b / n(t)) * t.c;
-    let p_i = |t: &Table| t.a / n(t) + t.d / n(t);
-    let q_i = |t: &Table| t.b / n(t) + t.c / n(t);
+    let n = |t: &Counts2x2| {
+        t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
+    };
+    let r_i = |t: &Counts2x2| (t.exposed_cases / n(t)) * t.unexposed_noncases;
+    let s_i = |t: &Counts2x2| (t.exposed_noncases / n(t)) * t.unexposed_cases;
+    let p_i = |t: &Counts2x2| t.exposed_cases / n(t) + t.unexposed_noncases / n(t);
+    let q_i = |t: &Counts2x2| t.exposed_noncases / n(t) + t.unexposed_cases / n(t);
     let r = total(tables.iter().map(r_i));
     let s = total(tables.iter().map(s_i));
     if r == 0.0 || s == 0.0 {
@@ -325,20 +327,34 @@ pub fn odds_ratio(tables: &[Table], level: f64) -> Result<Pooled, MhError> {
 /// # Errors
 ///
 /// As [`odds_ratio`].
-pub fn risk_ratio(tables: &[Table], level: f64) -> Result<Pooled, MhError> {
+pub fn risk_ratio(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
     check_level(level)?;
     check_tables(tables)?;
     let used = used_tables(tables);
-    let n = |t: &Table| t.a + t.b + t.c + t.d;
-    let r = total(tables.iter().map(|t| t.a * ((t.c + t.d) / n(t))));
-    let s = total(tables.iter().map(|t| t.c * ((t.a + t.b) / n(t))));
-    if total(tables.iter().map(|t| t.a)) == 0.0 || total(tables.iter().map(|t| t.c)) == 0.0 {
+    let n = |t: &Counts2x2| {
+        t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
+    };
+    let r = total(
+        tables
+            .iter()
+            .map(|t| t.exposed_cases * ((t.unexposed_cases + t.unexposed_noncases) / n(t))),
+    );
+    let s = total(
+        tables
+            .iter()
+            .map(|t| t.unexposed_cases * ((t.exposed_cases + t.exposed_noncases) / n(t))),
+    );
+    if total(tables.iter().map(|t| t.exposed_cases)) == 0.0
+        || total(tables.iter().map(|t| t.unexposed_cases)) == 0.0
+    {
         return Ok(undefined(used));
     }
-    let numerator =
-        total(tables.iter().map(|t| {
-            ((t.a + t.b) / n(t)) * ((t.c + t.d) / n(t)) * (t.a + t.c) - (t.a / n(t)) * t.c
-        }));
+    let numerator = total(tables.iter().map(|t| {
+        ((t.exposed_cases + t.exposed_noncases) / n(t))
+            * ((t.unexposed_cases + t.unexposed_noncases) / n(t))
+            * (t.exposed_cases + t.unexposed_cases)
+            - (t.exposed_cases / n(t)) * t.unexposed_cases
+    }));
     Ok(ratio_result(r / s, numerator / (r * s), level, used))
 }
 
@@ -348,21 +364,31 @@ pub fn risk_ratio(tables: &[Table], level: f64) -> Result<Pooled, MhError> {
 /// # Errors
 ///
 /// As [`odds_ratio`], for strata of events and person-time.
-pub fn rate_ratio(strata: &[RateStratum], level: f64) -> Result<Pooled, MhError> {
+pub fn rate_ratio(strata: &[PersonTime2], level: f64) -> Result<Pooled, MhError> {
     check_level(level)?;
     check_strata(strata)?;
     let used = used_strata(strata);
-    let tt = |s: &RateStratum| s.t1 + s.t0;
-    let r = total(strata.iter().map(|s| s.x1 * (s.t0 / tt(s))));
-    let q = total(strata.iter().map(|s| s.x0 * (s.t1 / tt(s))));
-    if total(strata.iter().map(|s| s.x1)) == 0.0 || total(strata.iter().map(|s| s.x0)) == 0.0 {
-        return Ok(undefined(used));
-    }
-    let numerator = total(
+    let tt = |s: &PersonTime2| s.exposed_time + s.unexposed_time;
+    let r = total(
         strata
             .iter()
-            .map(|s| (s.t1 / tt(s)) * (s.t0 / tt(s)) * (s.x1 + s.x0)),
+            .map(|s| s.exposed_events * (s.unexposed_time / tt(s))),
     );
+    let q = total(
+        strata
+            .iter()
+            .map(|s| s.unexposed_events * (s.exposed_time / tt(s))),
+    );
+    if total(strata.iter().map(|s| s.exposed_events)) == 0.0
+        || total(strata.iter().map(|s| s.unexposed_events)) == 0.0
+    {
+        return Ok(undefined(used));
+    }
+    let numerator = total(strata.iter().map(|s| {
+        (s.exposed_time / tt(s))
+            * (s.unexposed_time / tt(s))
+            * (s.exposed_events + s.unexposed_events)
+    }));
     Ok(ratio_result(r / q, numerator / (r * q), level, used))
 }
 
@@ -372,31 +398,34 @@ pub fn rate_ratio(strata: &[RateStratum], level: f64) -> Result<Pooled, MhError>
 /// # Errors
 ///
 /// As [`odds_ratio`].
-pub fn risk_difference(tables: &[Table], level: f64) -> Result<Pooled, MhError> {
+pub fn risk_difference(tables: &[Counts2x2], level: f64) -> Result<Pooled, MhError> {
     check_level(level)?;
     check_tables(tables)?;
     let used = used_tables(tables);
-    let n = |t: &Table| t.a + t.b + t.c + t.d;
-    let weight = total(tables.iter().map(|t| (t.a + t.b) * ((t.c + t.d) / n(t))));
+    let n = |t: &Counts2x2| {
+        t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
+    };
+    let weight = total(tables.iter().map(|t| {
+        (t.exposed_cases + t.exposed_noncases) * ((t.unexposed_cases + t.unexposed_noncases) / n(t))
+    }));
     if weight == 0.0 {
         return Ok(undefined(used));
     }
-    let beta = total(
-        tables
-            .iter()
-            .map(|t| t.a * ((t.c + t.d) / n(t)) - t.c * ((t.a + t.b) / n(t))),
-    ) / weight;
-    let n1 = |t: &Table| t.a + t.b;
-    let n0 = |t: &Table| t.c + t.d;
+    let beta = total(tables.iter().map(|t| {
+        t.exposed_cases * ((t.unexposed_cases + t.unexposed_noncases) / n(t))
+            - t.unexposed_cases * ((t.exposed_cases + t.exposed_noncases) / n(t))
+    })) / weight;
+    let n1 = |t: &Counts2x2| t.exposed_cases + t.exposed_noncases;
+    let n0 = |t: &Counts2x2| t.unexposed_cases + t.unexposed_noncases;
     let first = total(tables.iter().map(|t| {
-        t.c * (n1(t) / n(t)) * (n1(t) / n(t)) - t.a * (n0(t) / n(t)) * (n0(t) / n(t))
+        t.unexposed_cases * (n1(t) / n(t)) * (n1(t) / n(t))
+            - t.exposed_cases * (n0(t) / n(t)) * (n0(t) / n(t))
             + (n1(t) / n(t)) * (n0(t) / n(t)) * (n0(t) - n1(t)) / 2.0
     }));
-    let second = total(
-        tables
-            .iter()
-            .map(|t| t.a * (n0(t) - t.c) / n(t) + t.c * (n1(t) - t.a) / n(t)),
-    ) / 2.0;
+    let second = total(tables.iter().map(|t| {
+        t.exposed_cases * (n0(t) - t.unexposed_cases) / n(t)
+            + t.unexposed_cases * (n1(t) - t.exposed_cases) / n(t)
+    })) / 2.0;
     let variance = (beta * first + second) / (weight * weight);
     Ok(difference_result(beta, variance, level, used))
 }
@@ -407,20 +436,33 @@ pub fn risk_difference(tables: &[Table], level: f64) -> Result<Pooled, MhError> 
 /// # Errors
 ///
 /// As [`odds_ratio`], for strata of events and person-time.
-pub fn rate_difference(strata: &[RateStratum], level: f64) -> Result<Pooled, MhError> {
+pub fn rate_difference(strata: &[PersonTime2], level: f64) -> Result<Pooled, MhError> {
     check_level(level)?;
     check_strata(strata)?;
     let used = used_strata(strata);
-    let tt = |s: &RateStratum| s.t1 + s.t0;
-    let weight = total(strata.iter().map(|s| (s.t1 / tt(s)) * s.t0));
+    let tt = |s: &PersonTime2| s.exposed_time + s.unexposed_time;
+    let weight = total(
+        strata
+            .iter()
+            .map(|s| (s.exposed_time / tt(s)) * s.unexposed_time),
+    );
     if weight == 0.0 {
         return Ok(undefined(used));
     }
-    let beta = total(strata.iter().map(|s| (s.x1 * s.t0 - s.x0 * s.t1) / tt(s))) / weight;
-    let spread = total(strata.iter().filter(|s| s.t1 > 0.0 && s.t0 > 0.0).map(|s| {
-        let w = (s.t1 / tt(s)) * s.t0;
-        w * w * (s.x1 / (s.t1 * s.t1) + s.x0 / (s.t0 * s.t0))
-    }));
+    let beta = total(strata.iter().map(|s| {
+        (s.exposed_events * s.unexposed_time - s.unexposed_events * s.exposed_time) / tt(s)
+    })) / weight;
+    let spread = total(
+        strata
+            .iter()
+            .filter(|s| s.exposed_time > 0.0 && s.unexposed_time > 0.0)
+            .map(|s| {
+                let w = (s.exposed_time / tt(s)) * s.unexposed_time;
+                w * w
+                    * (s.exposed_events / (s.exposed_time * s.exposed_time)
+                        + s.unexposed_events / (s.unexposed_time * s.unexposed_time))
+            }),
+    );
     Ok(difference_result(
         beta,
         spread / (weight * weight),
@@ -454,22 +496,34 @@ fn continuity_shift(delta: f64, continuity: bool) -> f64 {
 ///
 /// [`MhError`] for no strata, a negative or non-finite cell, or an empty
 /// stratum.
-pub fn cmh_test(tables: &[Table], continuity: bool) -> Result<Option<Test>, MhError> {
+pub fn cmh_test(tables: &[Counts2x2], continuity: bool) -> Result<Option<Test>, MhError> {
     check_tables(tables)?;
-    let n = |t: &Table| t.a + t.b + t.c + t.d;
-    let cases = total(tables.iter().map(|t| t.a + t.c));
-    let non_cases = total(tables.iter().map(|t| t.b + t.d));
+    let n = |t: &Counts2x2| {
+        t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
+    };
+    let cases = total(tables.iter().map(|t| t.exposed_cases + t.unexposed_cases));
+    let non_cases = total(
+        tables
+            .iter()
+            .map(|t| t.exposed_noncases + t.unexposed_noncases),
+    );
     if cases == 0.0 || non_cases == 0.0 {
         return Ok(None);
     }
-    let delta = total(
-        tables
-            .iter()
-            .map(|t| t.a - ((t.a + t.b) / n(t)) * (t.a + t.c)),
-    );
+    let delta = total(tables.iter().map(|t| {
+        t.exposed_cases
+            - ((t.exposed_cases + t.exposed_noncases) / n(t))
+                * (t.exposed_cases + t.unexposed_cases)
+    }));
     let variance = total(tables.iter().filter(|t| n(t) > 1.0).map(|t| {
-        let (n1, n0) = (t.a + t.b, t.c + t.d);
-        let (m1, m0) = (t.a + t.c, t.b + t.d);
+        let (n1, n0) = (
+            t.exposed_cases + t.exposed_noncases,
+            t.unexposed_cases + t.unexposed_noncases,
+        );
+        let (m1, m0) = (
+            t.exposed_cases + t.unexposed_cases,
+            t.exposed_noncases + t.unexposed_noncases,
+        );
         (n1 / n(t)) * (n0 / n(t)) * (m1 * (m0 / (n(t) - 1.0)))
     }));
     if variance == 0.0 {
@@ -487,18 +541,20 @@ pub fn cmh_test(tables: &[Table], continuity: bool) -> Result<Option<Test>, MhEr
 ///
 /// [`MhError`] for no strata, a negative or non-finite value, or an empty
 /// stratum.
-pub fn rate_ratio_test(strata: &[RateStratum], continuity: bool) -> Result<Option<Test>, MhError> {
+pub fn rate_ratio_test(strata: &[PersonTime2], continuity: bool) -> Result<Option<Test>, MhError> {
     check_strata(strata)?;
-    let tt = |s: &RateStratum| s.t1 + s.t0;
-    if total(strata.iter().map(|s| s.x1 + s.x0)) == 0.0 {
+    let tt = |s: &PersonTime2| s.exposed_time + s.unexposed_time;
+    if total(strata.iter().map(|s| s.exposed_events + s.unexposed_events)) == 0.0 {
         return Ok(None);
     }
-    let delta = total(strata.iter().map(|s| s.x1 - (s.x1 + s.x0) * (s.t1 / tt(s))));
-    let variance = total(
-        strata
-            .iter()
-            .map(|s| (s.x1 + s.x0) * (s.t1 / tt(s)) * (s.t0 / tt(s))),
-    );
+    let delta = total(strata.iter().map(|s| {
+        s.exposed_events - (s.exposed_events + s.unexposed_events) * (s.exposed_time / tt(s))
+    }));
+    let variance = total(strata.iter().map(|s| {
+        (s.exposed_events + s.unexposed_events)
+            * (s.exposed_time / tt(s))
+            * (s.unexposed_time / tt(s))
+    }));
     if variance == 0.0 {
         return Ok(None);
     }
@@ -516,18 +572,33 @@ pub fn rate_ratio_test(strata: &[RateStratum], continuity: bool) -> Result<Optio
 ///
 /// [`MhError`] for no strata, a negative or non-finite cell, or an empty
 /// stratum.
-pub fn breslow_day(tables: &[Table], tarone: bool) -> Result<Option<Test>, MhError> {
+pub fn breslow_day(tables: &[Counts2x2], tarone: bool) -> Result<Option<Test>, MhError> {
     check_tables(tables)?;
-    let n = |t: &Table| t.a + t.b + t.c + t.d;
-    let r = total(tables.iter().map(|t| (t.a / n(t)) * t.d));
-    let s = total(tables.iter().map(|t| (t.b / n(t)) * t.c));
+    let n = |t: &Counts2x2| {
+        t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases
+    };
+    let r = total(
+        tables
+            .iter()
+            .map(|t| (t.exposed_cases / n(t)) * t.unexposed_noncases),
+    );
+    let s = total(
+        tables
+            .iter()
+            .map(|t| (t.exposed_noncases / n(t)) * t.unexposed_cases),
+    );
     if r == 0.0 || s == 0.0 {
         return Ok(None);
     }
     let or = r / s;
     let mut terms = Vec::new();
     for t in tables {
-        let (n1, n0, m1, m0) = (t.a + t.b, t.c + t.d, t.a + t.c, t.b + t.d);
+        let (n1, n0, m1, m0) = (
+            t.exposed_cases + t.exposed_noncases,
+            t.unexposed_cases + t.unexposed_noncases,
+            t.exposed_cases + t.unexposed_cases,
+            t.exposed_noncases + t.unexposed_noncases,
+        );
         let nn = n(t);
         let a_coef = or * (n1 + m1) + (n0 - m1);
         let root = (a_coef * a_coef - 4.0 * or * (or - 1.0) * n1 * m1).sqrt();
@@ -539,7 +610,7 @@ pub fn breslow_day(tables: &[Table], tarone: bool) -> Result<Option<Test>, MhErr
         let n21 = m1 - n11;
         let n22 = n11 - n1 - m1 + nn;
         let variance = 1.0 / (1.0 / n11 + 1.0 / n12 + 1.0 / n21 + 1.0 / n22);
-        terms.push((t.a - n11, variance));
+        terms.push((t.exposed_cases - n11, variance));
     }
     if terms.len() < 2 {
         return Ok(None);
@@ -556,11 +627,21 @@ pub fn breslow_day(tables: &[Table], tarone: bool) -> Result<Option<Test>, MhErr
 /// The strata that say something about a common rate ratio, as
 /// `(x1, n, ln(t1 / t0))` with `n = x1 + x0`: both arms have person-time and
 /// there is at least one event.
-fn informative(strata: &[RateStratum]) -> Vec<(f64, f64, f64)> {
+fn informative(strata: &[PersonTime2]) -> Vec<(f64, f64, f64)> {
     strata
         .iter()
-        .filter(|s| s.t1 > 0.0 && s.t0 > 0.0 && s.x1 + s.x0 > 0.0)
-        .map(|s| (s.x1, s.x1 + s.x0, s.t1.ln() - s.t0.ln()))
+        .filter(|s| {
+            s.exposed_time > 0.0
+                && s.unexposed_time > 0.0
+                && s.exposed_events + s.unexposed_events > 0.0
+        })
+        .map(|s| {
+            (
+                s.exposed_events,
+                s.exposed_events + s.unexposed_events,
+                s.exposed_time.ln() - s.unexposed_time.ln(),
+            )
+        })
         .collect()
 }
 
@@ -594,7 +675,7 @@ fn arm_probabilities(eta: f64) -> (f64, f64) {
 /// [`MhError`] for no strata, a negative or non-finite value, events without
 /// person-time, or an empty stratum.
 pub fn rate_ratio_breslow_day(
-    strata: &[RateStratum],
+    strata: &[PersonTime2],
     tarone: bool,
 ) -> Result<Option<Test>, MhError> {
     check_strata(strata)?;
@@ -666,7 +747,7 @@ pub struct RateHomogeneity {
 ///
 /// [`MhError`] for no strata, a negative or non-finite value, events without
 /// person-time, or an empty stratum.
-pub fn rate_ratio_homogeneity(strata: &[RateStratum]) -> Result<Option<RateHomogeneity>, MhError> {
+pub fn rate_ratio_homogeneity(strata: &[PersonTime2]) -> Result<Option<RateHomogeneity>, MhError> {
     check_strata(strata)?;
     let cells = informative(strata);
     if cells.len() < 2 {
@@ -757,7 +838,7 @@ pub fn tables_from_records(
     stratum: &[usize],
     exposed: &[bool],
     case: &[bool],
-) -> Result<Vec<Table>, MhError> {
+) -> Result<Vec<Counts2x2>, MhError> {
     if stratum.len() != exposed.len() || stratum.len() != case.len() {
         return Err(MhError::Length);
     }
@@ -765,21 +846,21 @@ pub fn tables_from_records(
         return Err(MhError::Empty);
     };
     let mut tables = vec![
-        Table {
-            a: 0.0,
-            b: 0.0,
-            c: 0.0,
-            d: 0.0,
+        Counts2x2 {
+            exposed_cases: 0.0,
+            exposed_noncases: 0.0,
+            unexposed_cases: 0.0,
+            unexposed_noncases: 0.0,
         };
         top + 1
     ];
     for ((&s, &e), &c) in stratum.iter().zip(exposed).zip(case) {
         let t = &mut tables[s];
         match (e, c) {
-            (true, true) => t.a += 1.0,
-            (true, false) => t.b += 1.0,
-            (false, true) => t.c += 1.0,
-            (false, false) => t.d += 1.0,
+            (true, true) => t.exposed_cases += 1.0,
+            (true, false) => t.exposed_noncases += 1.0,
+            (false, true) => t.unexposed_cases += 1.0,
+            (false, false) => t.unexposed_noncases += 1.0,
         }
     }
     Ok(tables)
@@ -789,8 +870,13 @@ pub fn tables_from_records(
 mod tests {
     use super::*;
 
-    fn tab(a: f64, b: f64, c: f64, d: f64) -> Table {
-        Table { a, b, c, d }
+    fn tab(a: f64, b: f64, c: f64, d: f64) -> Counts2x2 {
+        Counts2x2 {
+            exposed_cases: a,
+            exposed_noncases: b,
+            unexposed_cases: c,
+            unexposed_noncases: d,
+        }
     }
 
     #[test]
@@ -806,11 +892,11 @@ mod tests {
         let p = odds_ratio(&[tab(0.0, 5.0, 3.0, 4.0)], 0.95).unwrap();
         assert_eq!(p.estimate, None);
         let p = rate_ratio(
-            &[RateStratum {
-                x1: 0.0,
-                t1: 4.0,
-                x0: 2.0,
-                t0: 3.0,
+            &[PersonTime2 {
+                exposed_events: 0.0,
+                exposed_time: 4.0,
+                unexposed_events: 2.0,
+                unexposed_time: 3.0,
             }],
             0.95,
         )

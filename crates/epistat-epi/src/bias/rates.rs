@@ -38,56 +38,29 @@
 
 use epistat_rng::{Stream, replicate_seed};
 
+use crate::tables::PersonTime2;
+
 use super::{
     AdjustedResult, BiasError, Draws, Misclass, Pair, ProbOptions, check_options, finish_single,
     names,
 };
 
-/// Cases and person-time by exposure.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RateTable {
-    /// Cases among the exposed.
-    pub cases_exposed: f64,
-    /// Cases among the unexposed.
-    pub cases_unexposed: f64,
-    /// Person-time of the exposed.
-    pub time_exposed: f64,
-    /// Person-time of the unexposed.
-    pub time_unexposed: f64,
-}
-
-impl RateTable {
-    /// The rate ratio, or `None` when it is undefined.
-    #[must_use]
-    pub fn rate_ratio(&self) -> Option<f64> {
-        let ratio =
-            (self.cases_exposed / self.time_exposed) / (self.cases_unexposed / self.time_unexposed);
-        ratio.is_finite().then_some(ratio)
-    }
-
-    /// The rate difference, or `None` when it is undefined.
-    #[must_use]
-    pub fn rate_difference(&self) -> Option<f64> {
-        let difference =
-            self.cases_exposed / self.time_exposed - self.cases_unexposed / self.time_unexposed;
-        difference.is_finite().then_some(difference)
-    }
-
+impl PersonTime2 {
     fn check(&self) -> Result<(), BiasError> {
         let all = [
-            self.cases_exposed,
-            self.cases_unexposed,
-            self.time_exposed,
-            self.time_unexposed,
+            self.exposed_events,
+            self.unexposed_events,
+            self.exposed_time,
+            self.unexposed_time,
         ];
         if all.iter().any(|x| !x.is_finite() || *x < 0.0) {
             return Err(BiasError::Table(
                 "cases and person-time must be finite and not negative",
             ));
         }
-        if self.cases_exposed + self.cases_unexposed <= 0.0
-            || self.time_exposed <= 0.0
-            || self.time_unexposed <= 0.0
+        if self.exposed_events + self.unexposed_events <= 0.0
+            || self.exposed_time <= 0.0
+            || self.unexposed_time <= 0.0
         {
             return Err(BiasError::Table(
                 "there must be cases and person-time in both groups",
@@ -98,10 +71,10 @@ impl RateTable {
 
     fn positive(&self) -> bool {
         [
-            self.cases_exposed,
-            self.cases_unexposed,
-            self.time_exposed,
-            self.time_unexposed,
+            self.exposed_events,
+            self.unexposed_events,
+            self.exposed_time,
+            self.unexposed_time,
         ]
         .iter()
         .all(|x| *x > 0.0)
@@ -113,7 +86,7 @@ impl RateTable {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CorrectedRates {
     /// The corrected cases and person-time.
-    pub table: Option<RateTable>,
+    pub table: Option<PersonTime2>,
     /// The corrected rate ratio.
     pub rate_ratio: Option<f64>,
     /// The corrected rate difference.
@@ -121,12 +94,12 @@ pub struct CorrectedRates {
 }
 
 impl CorrectedRates {
-    fn from_table(t: RateTable) -> Self {
+    fn from_table(t: PersonTime2) -> Self {
         let cells = [
-            t.cases_exposed,
-            t.cases_unexposed,
-            t.time_exposed,
-            t.time_unexposed,
+            t.exposed_events,
+            t.unexposed_events,
+            t.exposed_time,
+            t.unexposed_time,
         ];
         if cells.iter().any(|x| !x.is_finite() || *x < 0.0) {
             return Self {
@@ -143,16 +116,16 @@ impl CorrectedRates {
     }
 }
 
-fn exposure_rate_cells(t: &RateTable, se: [f64; 2], sp: [f64; 2]) -> RateTable {
-    let cases = t.cases_exposed + t.cases_unexposed;
-    let time = t.time_exposed + t.time_unexposed;
-    let big_a = (t.cases_exposed - (1.0 - sp[0]) * cases) / (se[0] - (1.0 - sp[0]));
-    let big_c = (t.time_exposed - (1.0 - sp[1]) * time) / (se[1] - (1.0 - sp[1]));
-    RateTable {
-        cases_exposed: big_a,
-        cases_unexposed: cases - big_a,
-        time_exposed: big_c,
-        time_unexposed: time - big_c,
+fn exposure_rate_cells(t: &PersonTime2, se: [f64; 2], sp: [f64; 2]) -> PersonTime2 {
+    let cases = t.exposed_events + t.unexposed_events;
+    let time = t.exposed_time + t.unexposed_time;
+    let big_a = (t.exposed_events - (1.0 - sp[0]) * cases) / (se[0] - (1.0 - sp[0]));
+    let big_c = (t.exposed_time - (1.0 - sp[1]) * time) / (se[1] - (1.0 - sp[1]));
+    PersonTime2 {
+        exposed_events: big_a,
+        unexposed_events: cases - big_a,
+        exposed_time: big_c,
+        unexposed_time: time - big_c,
     }
 }
 
@@ -163,7 +136,7 @@ fn exposure_rate_cells(t: &RateTable, se: [f64; 2], sp: [f64; 2]) -> RateTable {
 /// # Errors
 ///
 /// [`BiasError`] when the table or a parameter is invalid.
-pub fn correct_exposure_rates(t: &RateTable, m: &Misclass) -> Result<CorrectedRates, BiasError> {
+pub fn correct_exposure_rates(t: &PersonTime2, m: &Misclass) -> Result<CorrectedRates, BiasError> {
     t.check()?;
     m.check()?;
     Ok(CorrectedRates::from_table(exposure_rate_cells(
@@ -182,15 +155,15 @@ pub fn correct_exposure_rates(t: &RateTable, m: &Misclass) -> Result<CorrectedRa
 /// [`BiasError`] when the table is invalid, a predictive value is outside
 /// `[0, 1]` or a sensitivity outside `(0, 1]`.
 pub fn correct_outcome_rates_ppv(
-    t: &RateTable,
+    t: &PersonTime2,
     ppv: [f64; 2],
     se: [f64; 2],
 ) -> Result<CorrectedRates, BiasError> {
     t.check()?;
     super::check_ppv_sensitivity(ppv, se)?;
-    Ok(CorrectedRates::from_table(RateTable {
-        cases_exposed: t.cases_exposed * ppv[0] / se[0],
-        cases_unexposed: t.cases_unexposed * ppv[1] / se[1],
+    Ok(CorrectedRates::from_table(PersonTime2 {
+        exposed_events: t.exposed_events * ppv[0] / se[0],
+        unexposed_events: t.unexposed_events * ppv[1] / se[1],
         ..*t
     }))
 }
@@ -206,7 +179,7 @@ pub fn correct_outcome_rates_ppv(
 /// [`BiasError`] when the table, a distribution or an option is invalid, and
 /// [`BiasError::NoValidDraws`] when every draw is discarded.
 pub fn probabilistic_misclass_rates(
-    t: &RateTable,
+    t: &PersonTime2,
     se: &Pair,
     sp: &Pair,
     opts: &ProbOptions,
@@ -215,10 +188,10 @@ pub fn probabilistic_misclass_rates(
     se.validate()?;
     sp.validate()?;
     check_options(opts)?;
-    if !(t.cases_exposed > 0.0 && t.cases_unexposed > 0.0) {
+    if !(t.exposed_events > 0.0 && t.unexposed_events > 0.0) {
         return Err(BiasError::Table("both groups need cases"));
     }
-    let standard_error = (1.0 / t.cases_exposed + 1.0 / t.cases_unexposed).sqrt();
+    let standard_error = (1.0 / t.exposed_events + 1.0 / t.unexposed_events).sqrt();
     let mut draws = Draws::new(
         names(&[
             "sensitivity 0",
@@ -265,11 +238,11 @@ mod tests {
     use super::*;
     use crate::bias::Dist;
 
-    const TRUE: RateTable = RateTable {
-        cases_exposed: 120.0,
-        cases_unexposed: 300.0,
-        time_exposed: 20_000.0,
-        time_unexposed: 90_000.0,
+    const TRUE: PersonTime2 = PersonTime2 {
+        exposed_events: 120.0,
+        unexposed_events: 300.0,
+        exposed_time: 20_000.0,
+        unexposed_time: 90_000.0,
     };
 
     fn close(x: f64, y: f64) -> bool {
@@ -288,18 +261,18 @@ mod tests {
                 (1.0 - m.se[k]) * exposed + m.sp[k] * unexposed,
             )
         };
-        let (a, b) = seen(TRUE.cases_exposed, TRUE.cases_unexposed, 0);
-        let (c, d) = seen(TRUE.time_exposed, TRUE.time_unexposed, 1);
-        let observed = RateTable {
-            cases_exposed: a,
-            cases_unexposed: b,
-            time_exposed: c,
-            time_unexposed: d,
+        let (a, b) = seen(TRUE.exposed_events, TRUE.unexposed_events, 0);
+        let (c, d) = seen(TRUE.exposed_time, TRUE.unexposed_time, 1);
+        let observed = PersonTime2 {
+            exposed_events: a,
+            unexposed_events: b,
+            exposed_time: c,
+            unexposed_time: d,
         };
         let corrected = correct_exposure_rates(&observed, &m).unwrap();
         let t = corrected.table.unwrap();
-        assert!(close(t.cases_exposed, TRUE.cases_exposed));
-        assert!(close(t.time_unexposed, TRUE.time_unexposed));
+        assert!(close(t.exposed_events, TRUE.exposed_events));
+        assert!(close(t.unexposed_time, TRUE.unexposed_time));
         assert!(close(
             corrected.rate_ratio.unwrap(),
             TRUE.rate_ratio().unwrap()

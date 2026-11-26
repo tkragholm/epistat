@@ -30,9 +30,9 @@
 use epistat_rng::{Stream, replicate_seed};
 
 use super::{
-    AdjustedResult, BiasError, Confounder, ConfoundingMeasure, Dist, Draws, Kind, Pair,
-    ProbOptions, Table2x2, adjust_confounding, check_options, draw_selection, exposure_cells,
-    finish_single, outcome_cells, positive_cells, selection_cells, shift_measure, standard_errors,
+    AdjustedResult, BiasError, Confounder, ConfoundingMeasure, Counts2x2, Dist, Draws, Kind, Pair,
+    ProbOptions, adjust_confounding, check_options, draw_selection, exposure_cells, finish_single,
+    outcome_cells, positive_cells, selection_cells, shift_measure, standard_errors,
 };
 
 /// One correction of a table within a draw.
@@ -88,7 +88,12 @@ impl BiasStep {
 
     /// Draws the step's parameters into `parameters`, four of them, and
     /// corrects `t`.
-    fn apply(&self, t: &Table2x2, stream: &mut Stream, parameters: &mut [f64]) -> Option<Table2x2> {
+    fn apply(
+        &self,
+        t: &Counts2x2,
+        stream: &mut Stream,
+        parameters: &mut [f64],
+    ) -> Option<Counts2x2> {
         let cells = match self {
             Self::Misclassification { kind, se, sp } => {
                 let se = se.draw(stream)?;
@@ -123,7 +128,7 @@ impl BiasStep {
 /// [`BiasError::Parameter`] when there is neither a step nor a confounder,
 /// and [`BiasError::NoValidDraws`] when every draw is discarded.
 pub fn probabilistic_multiple(
-    t: &Table2x2,
+    t: &Counts2x2,
     steps: &[BiasStep],
     confounding: Option<&ConfoundingStep>,
     measure: ConfoundingMeasure,

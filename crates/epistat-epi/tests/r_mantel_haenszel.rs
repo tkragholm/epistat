@@ -20,9 +20,10 @@
 //! largest deviation in units of its bound.
 
 use epistat_epi::mantel_haenszel::{
-    RateStratum, Table, breslow_day, cmh_test, odds_ratio, rate_difference, rate_ratio,
-    rate_ratio_test, risk_difference, risk_ratio,
+    breslow_day, cmh_test, odds_ratio, rate_difference, rate_ratio, rate_ratio_test,
+    risk_difference, risk_ratio,
 };
+use epistat_epi::{Counts2x2, PersonTime2};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -129,13 +130,13 @@ impl Worst {
     }
 }
 
-fn tables_of(c: &TableCase) -> Vec<Table> {
+fn tables_of(c: &TableCase) -> Vec<Counts2x2> {
     (0..c.a.len())
-        .map(|i| Table {
-            a: c.a[i],
-            b: c.b[i],
-            c: c.c[i],
-            d: c.d[i],
+        .map(|i| Counts2x2 {
+            exposed_cases: c.a[i],
+            exposed_noncases: c.b[i],
+            unexposed_cases: c.c[i],
+            unexposed_noncases: c.d[i],
         })
         .collect()
 }
@@ -250,12 +251,12 @@ fn table_estimators_and_tests() {
 fn rate_estimators_and_tests() {
     let mut worst = Worst(0.0);
     for case in reference().rates {
-        let strata: Vec<RateStratum> = (0..case.x1.len())
-            .map(|i| RateStratum {
-                x1: case.x1[i],
-                t1: case.t1[i],
-                x0: case.x0[i],
-                t0: case.t0[i],
+        let strata: Vec<PersonTime2> = (0..case.x1.len())
+            .map(|i| PersonTime2 {
+                exposed_events: case.x1[i],
+                exposed_time: case.t1[i],
+                unexposed_events: case.x0[i],
+                unexposed_time: case.t0[i],
             })
             .collect();
         let name = &case.name;

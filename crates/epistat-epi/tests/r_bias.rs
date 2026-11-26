@@ -7,9 +7,10 @@
 //! standard errors of their difference, estimated from the ten runs on each
 //! side.
 
+use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
     Confounder, ConfoundingMeasure, Dist, Kind, Misclass, Pair, ProbOptions, ProbResult, Summary,
-    Table2x2, adjust_confounding, correct_exposure, correct_exposure_predictive, correct_outcome,
+    adjust_confounding, correct_exposure, correct_exposure_predictive, correct_outcome,
     correct_selection, probabilistic_confounding, probabilistic_misclass, probabilistic_selection,
 };
 use epistat_testkit::{Fingerprint, assert_same_on_threads, load_json};
@@ -63,12 +64,12 @@ fn reference() -> Reference {
     ))
 }
 
-fn table(c: [f64; 4]) -> Table2x2 {
-    Table2x2 {
-        a: c[0],
-        b: c[1],
-        c: c[2],
-        d: c[3],
+fn table(c: [f64; 4]) -> Counts2x2 {
+    Counts2x2 {
+        exposed_cases: c[0],
+        unexposed_cases: c[1],
+        exposed_noncases: c[2],
+        unexposed_noncases: c[3],
     }
 }
 
@@ -135,14 +136,14 @@ fn deterministic_corrections_agree_to_machine_precision() {
                 )
                 .unwrap();
                 let got = [
-                    c.present.a,
-                    c.present.b,
-                    c.present.c,
-                    c.present.d,
-                    c.absent.a,
-                    c.absent.b,
-                    c.absent.c,
-                    c.absent.d,
+                    c.present.exposed_cases,
+                    c.present.unexposed_cases,
+                    c.present.exposed_noncases,
+                    c.present.unexposed_noncases,
+                    c.absent.exposed_cases,
+                    c.absent.unexposed_cases,
+                    c.absent.exposed_noncases,
+                    c.absent.unexposed_noncases,
                 ];
                 for (g, w) in got.iter().zip(&case.corrected) {
                     check(*g, *w, "stratum cell");
@@ -156,9 +157,14 @@ fn deterministic_corrections_agree_to_machine_precision() {
                 continue;
             }
         };
-        for (g, w) in [cells.a, cells.b, cells.c, cells.d]
-            .iter()
-            .zip(&case.corrected)
+        for (g, w) in [
+            cells.exposed_cases,
+            cells.unexposed_cases,
+            cells.exposed_noncases,
+            cells.unexposed_noncases,
+        ]
+        .iter()
+        .zip(&case.corrected)
         {
             check(*g, *w, "cell");
         }

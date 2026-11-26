@@ -2,7 +2,7 @@
 //! outcome misclassification, selection and an unmeasured binary confounder,
 //! and their probabilistic versions.
 //!
-//! The table is `Table2x2 { a, b, c, d }` with `a` exposed cases, `b`
+//! The table is a [`Counts2x2`], written `a, b, c, d` here with `a` exposed cases, `b`
 //! unexposed cases, `c` exposed non-cases and `d` unexposed non-cases. The
 //! risk ratio is `(a / (a + c)) / (b / (b + d))`, the odds ratio `a d / (b c)`
 //! and the risk difference `a / (a + c) - b / (b + d)`. Bias parameters are
@@ -64,7 +64,7 @@
 //! the ratios are; with random error it is shifted by a standard normal draw
 //! times its standard error `sqrt(a c / (a + c)^3 + b d / (b + d)^3)`.
 //!
-//! Rates (cases and person-time) are corrected in [`RateTable`]'s functions,
+//! Rates (cases and person-time) are corrected in [`PersonTime2`]'s functions,
 //! several biases in one draw by [`probabilistic_multiple`], and an adjusted
 //! estimate from any model by the record-level correction of
 //! [`record_level_misclass`].
@@ -108,14 +108,15 @@ mod record;
 
 pub use multiple::{BiasStep, ConfoundingStep, probabilistic_multiple};
 pub use rates::{
-    CorrectedRates, RateTable, correct_exposure_rates, correct_outcome_rates_ppv,
-    probabilistic_misclass_rates,
+    CorrectedRates, correct_exposure_rates, correct_outcome_rates_ppv, probabilistic_misclass_rates,
 };
 pub use record::record_level_misclass;
 
 use epistat_stats::dist::beta;
 use epistat_stats::dist::normal;
 use epistat_stats::quantile::type7;
+
+use crate::tables::Counts2x2;
 
 /// `x`, or `None` for NaN.
 fn finite(x: f64) -> Option<f64> {
@@ -143,51 +144,21 @@ pub enum BiasError {
     },
 }
 
-/// A 2 x 2 table of counts: `a` exposed cases, `b` unexposed cases, `c` exposed
-/// non-cases and `d` unexposed non-cases. Cells may be fractional in a
-/// corrected table.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Table2x2 {
-    /// Exposed cases.
-    pub a: f64,
-    /// Unexposed cases.
-    pub b: f64,
-    /// Exposed non-cases.
-    pub c: f64,
-    /// Unexposed non-cases.
-    pub d: f64,
-}
-
-impl Table2x2 {
-    /// The risk ratio, or `None` when a risk is undefined or the unexposed
-    /// risk is zero.
-    #[must_use]
-    pub fn risk_ratio(&self) -> Option<f64> {
-        let (r1, r0) = (self.a / (self.a + self.c), self.b / (self.b + self.d));
-        defined(r1 / r0)
-    }
-
-    /// The odds ratio `a d / (b c)`, or `None` when it is undefined.
-    #[must_use]
-    pub fn odds_ratio(&self) -> Option<f64> {
-        defined((self.a * self.d) / (self.b * self.c))
-    }
-
-    /// The risk difference, or `None` when a risk is undefined.
-    #[must_use]
-    pub fn risk_difference(&self) -> Option<f64> {
-        defined(self.a / (self.a + self.c) - self.b / (self.b + self.d))
-    }
-
+impl Counts2x2 {
     fn check(&self) -> Result<(), BiasError> {
-        let cells = [self.a, self.b, self.c, self.d];
+        let cells = [
+            self.exposed_cases,
+            self.unexposed_cases,
+            self.exposed_noncases,
+            self.unexposed_noncases,
+        ];
         if cells.iter().any(|x| !x.is_finite() || *x < 0.0) {
             return Err(BiasError::Table("cells must be finite and not negative"));
         }
-        if self.a + self.b <= 0.0
-            || self.c + self.d <= 0.0
-            || self.a + self.c <= 0.0
-            || self.b + self.d <= 0.0
+        if self.exposed_cases + self.unexposed_cases <= 0.0
+            || self.exposed_noncases + self.unexposed_noncases <= 0.0
+            || self.exposed_cases + self.exposed_noncases <= 0.0
+            || self.unexposed_cases + self.unexposed_noncases <= 0.0
         {
             return Err(BiasError::Table("every row and column needs a count"));
         }
@@ -195,14 +166,15 @@ impl Table2x2 {
     }
 
     fn is_integer(&self) -> bool {
-        [self.a, self.b, self.c, self.d]
-            .iter()
-            .all(|x| x.fract() == 0.0)
+        [
+            self.exposed_cases,
+            self.unexposed_cases,
+            self.exposed_noncases,
+            self.unexposed_noncases,
+        ]
+        .iter()
+        .all(|x| x.fract() == 0.0)
     }
-}
-
-fn defined(x: f64) -> Option<f64> {
-    x.is_finite().then_some(x)
 }
 
 /// A corrected table and its measures. `cells` is `None`, and so are the
@@ -211,7 +183,7 @@ fn defined(x: f64) -> Option<f64> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Corrected {
     /// The corrected cells.
-    pub cells: Option<Table2x2>,
+    pub cells: Option<Counts2x2>,
     /// The corrected risk ratio.
     pub risk_ratio: Option<f64>,
     /// The corrected odds ratio.
@@ -221,10 +193,15 @@ pub struct Corrected {
 }
 
 impl Corrected {
-    fn from_cells(t: Table2x2) -> Self {
-        if [t.a, t.b, t.c, t.d]
-            .iter()
-            .any(|x| !x.is_finite() || *x < 0.0)
+    fn from_cells(t: Counts2x2) -> Self {
+        if [
+            t.exposed_cases,
+            t.unexposed_cases,
+            t.exposed_noncases,
+            t.unexposed_noncases,
+        ]
+        .iter()
+        .any(|x| !x.is_finite() || *x < 0.0)
         {
             return Self {
                 cells: None,
@@ -273,26 +250,30 @@ impl Misclass {
 }
 
 /// The corrected cells for exposure misclassification.
-fn exposure_cells(t: &Table2x2, se: [f64; 2], sp: [f64; 2]) -> Table2x2 {
-    let big_a = (t.a - (1.0 - sp[0]) * (t.a + t.b)) / (se[0] - (1.0 - sp[0]));
-    let big_c = (t.c - (1.0 - sp[1]) * (t.c + t.d)) / (se[1] - (1.0 - sp[1]));
-    Table2x2 {
-        a: big_a,
-        b: (t.a + t.b) - big_a,
-        c: big_c,
-        d: (t.c + t.d) - big_c,
+fn exposure_cells(t: &Counts2x2, se: [f64; 2], sp: [f64; 2]) -> Counts2x2 {
+    let big_a = (t.exposed_cases - (1.0 - sp[0]) * (t.exposed_cases + t.unexposed_cases))
+        / (se[0] - (1.0 - sp[0]));
+    let big_c = (t.exposed_noncases - (1.0 - sp[1]) * (t.exposed_noncases + t.unexposed_noncases))
+        / (se[1] - (1.0 - sp[1]));
+    Counts2x2 {
+        exposed_cases: big_a,
+        unexposed_cases: (t.exposed_cases + t.unexposed_cases) - big_a,
+        exposed_noncases: big_c,
+        unexposed_noncases: (t.exposed_noncases + t.unexposed_noncases) - big_c,
     }
 }
 
 /// The corrected cells for outcome misclassification.
-fn outcome_cells(t: &Table2x2, se: [f64; 2], sp: [f64; 2]) -> Table2x2 {
-    let big_a = (t.a - (1.0 - sp[0]) * (t.a + t.c)) / (se[0] - (1.0 - sp[0]));
-    let big_b = (t.b - (1.0 - sp[1]) * (t.b + t.d)) / (se[1] - (1.0 - sp[1]));
-    Table2x2 {
-        a: big_a,
-        b: big_b,
-        c: (t.a + t.c) - big_a,
-        d: (t.b + t.d) - big_b,
+fn outcome_cells(t: &Counts2x2, se: [f64; 2], sp: [f64; 2]) -> Counts2x2 {
+    let big_a = (t.exposed_cases - (1.0 - sp[0]) * (t.exposed_cases + t.exposed_noncases))
+        / (se[0] - (1.0 - sp[0]));
+    let big_b = (t.unexposed_cases - (1.0 - sp[1]) * (t.unexposed_cases + t.unexposed_noncases))
+        / (se[1] - (1.0 - sp[1]));
+    Counts2x2 {
+        exposed_cases: big_a,
+        unexposed_cases: big_b,
+        exposed_noncases: (t.exposed_cases + t.exposed_noncases) - big_a,
+        unexposed_noncases: (t.unexposed_cases + t.unexposed_noncases) - big_b,
     }
 }
 
@@ -303,7 +284,7 @@ fn outcome_cells(t: &Table2x2, se: [f64; 2], sp: [f64; 2]) -> Table2x2 {
 /// # Errors
 ///
 /// [`BiasError`] when the table or a parameter is invalid.
-pub fn correct_exposure(t: &Table2x2, m: &Misclass) -> Result<Corrected, BiasError> {
+pub fn correct_exposure(t: &Counts2x2, m: &Misclass) -> Result<Corrected, BiasError> {
     t.check()?;
     m.check()?;
     Ok(Corrected::from_cells(exposure_cells(t, m.se, m.sp)))
@@ -316,7 +297,7 @@ pub fn correct_exposure(t: &Table2x2, m: &Misclass) -> Result<Corrected, BiasErr
 /// # Errors
 ///
 /// [`BiasError`] when the table or a parameter is invalid.
-pub fn correct_outcome(t: &Table2x2, m: &Misclass) -> Result<Corrected, BiasError> {
+pub fn correct_outcome(t: &Counts2x2, m: &Misclass) -> Result<Corrected, BiasError> {
     t.check()?;
     m.check()?;
     Ok(Corrected::from_cells(outcome_cells(t, m.se, m.sp)))
@@ -331,7 +312,7 @@ pub fn correct_outcome(t: &Table2x2, m: &Misclass) -> Result<Corrected, BiasErro
 /// [`BiasError`] when the table is invalid or a predictive value is outside
 /// `[0, 1]`.
 pub fn correct_exposure_predictive(
-    t: &Table2x2,
+    t: &Counts2x2,
     ppv: [f64; 2],
     npv: [f64; 2],
 ) -> Result<Corrected, BiasError> {
@@ -339,13 +320,13 @@ pub fn correct_exposure_predictive(
     if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
         return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
     }
-    let big_a = t.a * ppv[0] + t.b * (1.0 - npv[0]);
-    let big_c = t.c * ppv[1] + t.d * (1.0 - npv[1]);
-    Ok(Corrected::from_cells(Table2x2 {
-        a: big_a,
-        b: (t.a + t.b) - big_a,
-        c: big_c,
-        d: (t.c + t.d) - big_c,
+    let big_a = t.exposed_cases * ppv[0] + t.unexposed_cases * (1.0 - npv[0]);
+    let big_c = t.exposed_noncases * ppv[1] + t.unexposed_noncases * (1.0 - npv[1]);
+    Ok(Corrected::from_cells(Counts2x2 {
+        exposed_cases: big_a,
+        unexposed_cases: (t.exposed_cases + t.unexposed_cases) - big_a,
+        exposed_noncases: big_c,
+        unexposed_noncases: (t.exposed_noncases + t.unexposed_noncases) - big_c,
     }))
 }
 
@@ -360,7 +341,7 @@ pub fn correct_exposure_predictive(
 /// [`BiasError`] when the table is invalid or a predictive value is outside
 /// `[0, 1]`.
 pub fn correct_outcome_predictive(
-    t: &Table2x2,
+    t: &Counts2x2,
     ppv: [f64; 2],
     npv: [f64; 2],
 ) -> Result<Corrected, BiasError> {
@@ -368,13 +349,13 @@ pub fn correct_outcome_predictive(
     if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
         return Err(BiasError::Parameter("predictive values must be in [0, 1]"));
     }
-    let big_a = t.a * ppv[0] + t.c * (1.0 - npv[0]);
-    let big_b = t.b * ppv[1] + t.d * (1.0 - npv[1]);
-    Ok(Corrected::from_cells(Table2x2 {
-        a: big_a,
-        b: big_b,
-        c: (t.a + t.c) - big_a,
-        d: (t.b + t.d) - big_b,
+    let big_a = t.exposed_cases * ppv[0] + t.exposed_noncases * (1.0 - npv[0]);
+    let big_b = t.unexposed_cases * ppv[1] + t.unexposed_noncases * (1.0 - npv[1]);
+    Ok(Corrected::from_cells(Counts2x2 {
+        exposed_cases: big_a,
+        unexposed_cases: big_b,
+        exposed_noncases: (t.exposed_cases + t.exposed_noncases) - big_a,
+        unexposed_noncases: (t.unexposed_cases + t.unexposed_noncases) - big_b,
     }))
 }
 
@@ -404,19 +385,19 @@ fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), BiasError> {
 /// [`BiasError`] when the table is invalid, a predictive value is outside
 /// `[0, 1]` or a sensitivity outside `(0, 1]`.
 pub fn correct_outcome_ppv(
-    t: &Table2x2,
+    t: &Counts2x2,
     ppv: [f64; 2],
     se: [f64; 2],
 ) -> Result<Corrected, BiasError> {
     t.check()?;
     check_ppv_sensitivity(ppv, se)?;
-    let big_a = t.a * ppv[0] / se[0];
-    let big_b = t.b * ppv[1] / se[1];
-    Ok(Corrected::from_cells(Table2x2 {
-        a: big_a,
-        b: big_b,
-        c: (t.a + t.c) - big_a,
-        d: (t.b + t.d) - big_b,
+    let big_a = t.exposed_cases * ppv[0] / se[0];
+    let big_b = t.unexposed_cases * ppv[1] / se[1];
+    Ok(Corrected::from_cells(Counts2x2 {
+        exposed_cases: big_a,
+        unexposed_cases: big_b,
+        exposed_noncases: (t.exposed_cases + t.exposed_noncases) - big_a,
+        unexposed_noncases: (t.unexposed_cases + t.unexposed_noncases) - big_b,
     }))
 }
 
@@ -429,19 +410,19 @@ pub fn correct_outcome_ppv(
 ///
 /// As [`correct_outcome_ppv`].
 pub fn correct_exposure_ppv(
-    t: &Table2x2,
+    t: &Counts2x2,
     ppv: [f64; 2],
     se: [f64; 2],
 ) -> Result<Corrected, BiasError> {
     t.check()?;
     check_ppv_sensitivity(ppv, se)?;
-    let big_a = t.a * ppv[0] / se[0];
-    let big_c = t.c * ppv[1] / se[1];
-    Ok(Corrected::from_cells(Table2x2 {
-        a: big_a,
-        b: (t.a + t.b) - big_a,
-        c: big_c,
-        d: (t.c + t.d) - big_c,
+    let big_a = t.exposed_cases * ppv[0] / se[0];
+    let big_c = t.exposed_noncases * ppv[1] / se[1];
+    Ok(Corrected::from_cells(Counts2x2 {
+        exposed_cases: big_a,
+        unexposed_cases: (t.exposed_cases + t.unexposed_cases) - big_a,
+        exposed_noncases: big_c,
+        unexposed_noncases: (t.exposed_noncases + t.unexposed_noncases) - big_c,
     }))
 }
 
@@ -475,18 +456,18 @@ pub fn selection_bias_factor(s: &Selection) -> Result<f64, BiasError> {
 /// # Errors
 ///
 /// [`BiasError`] when the table or a probability is invalid.
-pub fn correct_selection(t: &Table2x2, s: &Selection) -> Result<Corrected, BiasError> {
+pub fn correct_selection(t: &Counts2x2, s: &Selection) -> Result<Corrected, BiasError> {
     t.check()?;
     check_selection(s)?;
     Ok(Corrected::from_cells(selection_cells(t, s)))
 }
 
-fn selection_cells(t: &Table2x2, s: &Selection) -> Table2x2 {
-    Table2x2 {
-        a: t.a / s[0][0],
-        b: t.b / s[0][1],
-        c: t.c / s[1][0],
-        d: t.d / s[1][1],
+fn selection_cells(t: &Counts2x2, s: &Selection) -> Counts2x2 {
+    Counts2x2 {
+        exposed_cases: t.exposed_cases / s[0][0],
+        unexposed_cases: t.unexposed_cases / s[0][1],
+        exposed_noncases: t.exposed_noncases / s[1][0],
+        unexposed_noncases: t.unexposed_noncases / s[1][1],
     }
 }
 
@@ -545,9 +526,9 @@ pub struct Confounded {
     /// The adjusted measure by Mantel-Haenszel weighting.
     pub adjusted_mh: f64,
     /// The cells of persons with the confounder.
-    pub present: Table2x2,
+    pub present: Counts2x2,
     /// The cells of persons without it.
-    pub absent: Table2x2,
+    pub absent: Counts2x2,
 }
 
 /// Splits a table by an unmeasured binary confounder and adjusts the crude
@@ -559,7 +540,7 @@ pub struct Confounded {
 /// [`BiasError`] when the table or a parameter is invalid, or the parameters
 /// give a negative cell in a stratum ([`BiasError::NegativeCell`]).
 pub fn adjust_confounding(
-    t: &Table2x2,
+    t: &Counts2x2,
     measure: ConfoundingMeasure,
     c: &Confounder,
 ) -> Result<Confounded, BiasError> {
@@ -579,7 +560,12 @@ pub fn adjust_confounding(
     if !c.association.is_finite() {
         return Err(BiasError::Parameter("the association must be finite"));
     }
-    let (a, b, cc, d) = (t.a, t.b, t.c, t.d);
+    let (a, b, cc, d) = (
+        t.exposed_cases,
+        t.unexposed_cases,
+        t.exposed_noncases,
+        t.unexposed_noncases,
+    );
     let r = c.association;
     let (present, absent, crude, smr, mh) = match measure {
         ConfoundingMeasure::RiskRatio => {
@@ -594,17 +580,17 @@ pub fn adjust_confounding(
             let mh = (a1 * n1 / (m1 + n1) + a0 * n0 / (m0 + n0))
                 / (b1 * m1 / (m1 + n1) + b0 * m0 / (m0 + n0));
             (
-                Table2x2 {
-                    a: a1,
-                    b: b1,
-                    c: c1,
-                    d: d1,
+                Counts2x2 {
+                    exposed_cases: a1,
+                    unexposed_cases: b1,
+                    exposed_noncases: c1,
+                    unexposed_noncases: d1,
                 },
-                Table2x2 {
-                    a: a0,
-                    b: b0,
-                    c: c0,
-                    d: d0,
+                Counts2x2 {
+                    exposed_cases: a0,
+                    unexposed_cases: b0,
+                    exposed_noncases: c0,
+                    unexposed_noncases: d0,
                 },
                 t.risk_ratio(),
                 Some(smr),
@@ -624,17 +610,17 @@ pub fn adjust_confounding(
             let mh = (a1 * d1 / (m1 + n1) + a0 * d0 / (m0 + n0))
                 / (b1 * c1 / (m1 + n1) + b0 * c0 / (m0 + n0));
             (
-                Table2x2 {
-                    a: a1,
-                    b: b1,
-                    c: c1,
-                    d: d1,
+                Counts2x2 {
+                    exposed_cases: a1,
+                    unexposed_cases: b1,
+                    exposed_noncases: c1,
+                    unexposed_noncases: d1,
                 },
-                Table2x2 {
-                    a: a0,
-                    b: b0,
-                    c: c0,
-                    d: d0,
+                Counts2x2 {
+                    exposed_cases: a0,
+                    unexposed_cases: b0,
+                    exposed_noncases: c0,
+                    unexposed_noncases: d0,
                 },
                 t.odds_ratio(),
                 Some(smr),
@@ -652,17 +638,17 @@ pub fn adjust_confounding(
             let mh = (((a1 * n1 - b1 * m1) / (m1 + n1)) + ((a0 * n0 - b0 * m0) / (m0 + n0)))
                 / ((m1 * n1 / (m1 + n1)) + (m0 * n0 / (m0 + n0)));
             (
-                Table2x2 {
-                    a: a1,
-                    b: b1,
-                    c: c1,
-                    d: d1,
+                Counts2x2 {
+                    exposed_cases: a1,
+                    unexposed_cases: b1,
+                    exposed_noncases: c1,
+                    unexposed_noncases: d1,
                 },
-                Table2x2 {
-                    a: a0,
-                    b: b0,
-                    c: c0,
-                    d: d0,
+                Counts2x2 {
+                    exposed_cases: a0,
+                    unexposed_cases: b0,
+                    exposed_noncases: c0,
+                    unexposed_noncases: d0,
                 },
                 t.risk_difference(),
                 None,
@@ -670,7 +656,14 @@ pub fn adjust_confounding(
             )
         }
     };
-    let cells = [present, absent].map(|s| [s.a, s.b, s.c, s.d]);
+    let cells = [present, absent].map(|s| {
+        [
+            s.exposed_cases,
+            s.unexposed_cases,
+            s.exposed_noncases,
+            s.unexposed_noncases,
+        ]
+    });
     if cells.iter().flatten().any(|x| x.is_nan() || *x < 0.0) {
         return Err(BiasError::NegativeCell);
     }
@@ -1157,7 +1150,7 @@ fn count(x: f64) -> u64 {
     x as u64
 }
 
-fn measures(t: &Table2x2) -> Option<Measures> {
+fn measures(t: &Counts2x2) -> Option<Measures> {
     Some(Measures {
         risk_ratio: t.risk_ratio()?,
         odds_ratio: t.odds_ratio()?,
@@ -1166,8 +1159,11 @@ fn measures(t: &Table2x2) -> Option<Measures> {
 }
 
 /// The standard error of the risk difference of a table.
-fn rd_standard_error(t: &Table2x2) -> f64 {
-    (t.a * t.c / (t.a + t.c).powi(3) + t.b * t.d / (t.b + t.d).powi(3)).sqrt()
+fn rd_standard_error(t: &Counts2x2) -> f64 {
+    (t.exposed_cases * t.exposed_noncases / (t.exposed_cases + t.exposed_noncases).powi(3)
+        + t.unexposed_cases * t.unexposed_noncases
+            / (t.unexposed_cases + t.unexposed_noncases).powi(3))
+    .sqrt()
 }
 
 /// The measures shifted by the sampling error `z` times the standard errors
@@ -1180,15 +1176,29 @@ fn shifted(m: &Measures, z: f64, se: [f64; 3]) -> Measures {
     }
 }
 
-fn positive_cells(t: &Table2x2) -> bool {
-    [t.a, t.b, t.c, t.d].iter().all(|x| *x > 0.0)
+fn positive_cells(t: &Counts2x2) -> bool {
+    [
+        t.exposed_cases,
+        t.unexposed_cases,
+        t.exposed_noncases,
+        t.unexposed_noncases,
+    ]
+    .iter()
+    .all(|x| *x > 0.0)
 }
 
 /// The standard errors of the log risk ratio, the log odds ratio and the risk
 /// difference of a table.
-fn standard_errors(t: &Table2x2) -> [f64; 3] {
-    let rr = (1.0 / t.a + 1.0 / t.b - 1.0 / (t.a + t.c) - 1.0 / (t.b + t.d)).sqrt();
-    let or = (1.0 / t.a + 1.0 / t.b + 1.0 / t.c + 1.0 / t.d).sqrt();
+fn standard_errors(t: &Counts2x2) -> [f64; 3] {
+    let rr = (1.0 / t.exposed_cases + 1.0 / t.unexposed_cases
+        - 1.0 / (t.exposed_cases + t.exposed_noncases)
+        - 1.0 / (t.unexposed_cases + t.unexposed_noncases))
+        .sqrt();
+    let or = (1.0 / t.exposed_cases
+        + 1.0 / t.unexposed_cases
+        + 1.0 / t.exposed_noncases
+        + 1.0 / t.unexposed_noncases)
+        .sqrt();
     [rr, or, rd_standard_error(t)]
 }
 
@@ -1206,7 +1216,7 @@ fn standard_errors(t: &Table2x2) -> [f64; 3] {
 /// random error is requested for a table with fractional cells, and
 /// [`BiasError::NoValidDraws`] when every draw is discarded.
 pub fn probabilistic_misclass(
-    t: &Table2x2,
+    t: &Counts2x2,
     kind: Kind,
     se: &Pair,
     sp: &Pair,
@@ -1246,7 +1256,7 @@ pub fn probabilistic_misclass(
 }
 
 fn misclass_draw(
-    t: &Table2x2,
+    t: &Counts2x2,
     kind: Kind,
     se: &Pair,
     sp: &Pair,
@@ -1280,8 +1290,18 @@ fn misclass_draw(
     // Strata 0 and 1 hold the cells (A, B) and (C, D) for the exposure, and
     // (A, C) and (B, D) for the outcome.
     let (true_0, rest_0, true_1, rest_1) = match kind {
-        Kind::Exposure => (cells.a, cells.b, cells.c, cells.d),
-        Kind::Outcome => (cells.a, cells.c, cells.b, cells.d),
+        Kind::Exposure => (
+            cells.exposed_cases,
+            cells.unexposed_cases,
+            cells.exposed_noncases,
+            cells.unexposed_noncases,
+        ),
+        Kind::Outcome => (
+            cells.exposed_cases,
+            cells.exposed_noncases,
+            cells.unexposed_cases,
+            cells.unexposed_noncases,
+        ),
     };
     let prevalence = [
         stream.beta(true_0, rest_0).ok()?,
@@ -1294,34 +1314,40 @@ fn misclass_draw(
         let npv = (s_p * (1.0 - p)) / ((1.0 - s_e) * p + s_p * (1.0 - p));
         // Observed cells of the stratum: those classified positive and negative.
         let (pos, neg) = match (kind, k) {
-            (Kind::Exposure, 0) => (t.a, t.b),
-            (Kind::Exposure, _) => (t.c, t.d),
-            (Kind::Outcome, 0) => (t.a, t.c),
-            (Kind::Outcome, _) => (t.b, t.d),
+            (Kind::Exposure, 0) => (t.exposed_cases, t.unexposed_cases),
+            (Kind::Exposure, _) => (t.exposed_noncases, t.unexposed_noncases),
+            (Kind::Outcome, 0) => (t.exposed_cases, t.exposed_noncases),
+            (Kind::Outcome, _) => (t.unexposed_cases, t.unexposed_noncases),
         };
         reclassified[k] =
             binomial(stream, count(pos), ppv)? + binomial(stream, count(neg), 1.0 - npv)?;
     }
     let totals = match kind {
-        Kind::Exposure => [t.a + t.b, t.c + t.d],
-        Kind::Outcome => [t.a + t.c, t.b + t.d],
+        Kind::Exposure => [
+            t.exposed_cases + t.unexposed_cases,
+            t.exposed_noncases + t.unexposed_noncases,
+        ],
+        Kind::Outcome => [
+            t.exposed_cases + t.exposed_noncases,
+            t.unexposed_cases + t.unexposed_noncases,
+        ],
     };
     let stratum = [
         (reclassified[0] as f64, totals[0] - reclassified[0] as f64),
         (reclassified[1] as f64, totals[1] - reclassified[1] as f64),
     ];
     let again = match kind {
-        Kind::Exposure => Table2x2 {
-            a: stratum[0].0,
-            b: stratum[0].1,
-            c: stratum[1].0,
-            d: stratum[1].1,
+        Kind::Exposure => Counts2x2 {
+            exposed_cases: stratum[0].0,
+            unexposed_cases: stratum[0].1,
+            exposed_noncases: stratum[1].0,
+            unexposed_noncases: stratum[1].1,
         },
-        Kind::Outcome => Table2x2 {
-            a: stratum[0].0,
-            b: stratum[1].0,
-            c: stratum[0].1,
-            d: stratum[1].1,
+        Kind::Outcome => Counts2x2 {
+            exposed_cases: stratum[0].0,
+            unexposed_cases: stratum[1].0,
+            exposed_noncases: stratum[0].1,
+            unexposed_noncases: stratum[1].1,
         },
     };
     if !positive_cells(&again) {
@@ -1344,7 +1370,7 @@ fn misclass_draw(
 ///
 /// As [`probabilistic_misclass`], without the restriction on counts.
 pub fn probabilistic_selection(
-    t: &Table2x2,
+    t: &Counts2x2,
     s: &[[Dist; 2]; 2],
     opts: &ProbOptions,
 ) -> Result<ProbResult, BiasError> {
@@ -1455,7 +1481,7 @@ fn shift_measure(measure: ConfoundingMeasure, value: f64, z: f64, se: [f64; 3]) 
 /// [`BiasError`] when the table, a distribution or an option is invalid, and
 /// [`BiasError::NoValidDraws`] when every draw is discarded.
 pub fn probabilistic_confounding(
-    t: &Table2x2,
+    t: &Counts2x2,
     measure: ConfoundingMeasure,
     prevalence: &Pair,
     association: &Dist,
@@ -1496,7 +1522,7 @@ pub fn probabilistic_confounding(
 /// Draws a confounder into `parameters` and gives the Mantel-Haenszel
 /// adjusted measure, `None` when a draw fails or a stratum cell is negative.
 fn draw_confounding(
-    t: &Table2x2,
+    t: &Counts2x2,
     measure: ConfoundingMeasure,
     prevalence: &Pair,
     association: &Dist,
@@ -1530,11 +1556,11 @@ fn draw_confounding(
 mod tests {
     use super::*;
 
-    const TRUE: Table2x2 = Table2x2 {
-        a: 300.0,
-        b: 200.0,
-        c: 2000.0,
-        d: 3500.0,
+    const TRUE: Counts2x2 = Counts2x2 {
+        exposed_cases: 300.0,
+        unexposed_cases: 200.0,
+        exposed_noncases: 2000.0,
+        unexposed_noncases: 3500.0,
     };
 
     fn close(x: f64, y: f64) -> bool {
@@ -1543,16 +1569,21 @@ mod tests {
 
     /// Observed exposure counts when each exposed person is classified with
     /// sensitivity `se` and each unexposed with specificity `sp`.
-    fn observed_exposure(t: &Table2x2, m: &Misclass) -> Table2x2 {
+    fn observed_exposure(t: &Counts2x2, m: &Misclass) -> Counts2x2 {
         let seen = |exposed: f64, unexposed: f64, k: usize| {
             (
                 m.se[k] * exposed + (1.0 - m.sp[k]) * unexposed,
                 (1.0 - m.se[k]) * exposed + m.sp[k] * unexposed,
             )
         };
-        let (a, b) = seen(t.a, t.b, 0);
-        let (c, d) = seen(t.c, t.d, 1);
-        Table2x2 { a, b, c, d }
+        let (a, b) = seen(t.exposed_cases, t.unexposed_cases, 0);
+        let (c, d) = seen(t.exposed_noncases, t.unexposed_noncases, 1);
+        Counts2x2 {
+            exposed_cases: a,
+            unexposed_cases: b,
+            exposed_noncases: c,
+            unexposed_noncases: d,
+        }
     }
 
     #[test]
@@ -1563,10 +1594,19 @@ mod tests {
         };
         let corrected = correct_exposure(&observed_exposure(&TRUE, &m), &m).unwrap();
         let cells = corrected.cells.unwrap();
-        for (got, want) in [cells.a, cells.b, cells.c, cells.d]
-            .into_iter()
-            .zip([TRUE.a, TRUE.b, TRUE.c, TRUE.d])
-        {
+        for (got, want) in [
+            cells.exposed_cases,
+            cells.unexposed_cases,
+            cells.exposed_noncases,
+            cells.unexposed_noncases,
+        ]
+        .into_iter()
+        .zip([
+            TRUE.exposed_cases,
+            TRUE.unexposed_cases,
+            TRUE.exposed_noncases,
+            TRUE.unexposed_noncases,
+        ]) {
             assert!(close(got, want), "{got} {want}");
         }
         assert!(close(
@@ -1583,24 +1623,33 @@ mod tests {
             se: [0.85, 0.75],
             sp: [0.99, 0.96],
         };
-        let flipped = Table2x2 {
-            a: TRUE.a,
-            b: TRUE.c,
-            c: TRUE.b,
-            d: TRUE.d,
+        let flipped = Counts2x2 {
+            exposed_cases: TRUE.exposed_cases,
+            unexposed_cases: TRUE.exposed_noncases,
+            exposed_noncases: TRUE.unexposed_cases,
+            unexposed_noncases: TRUE.unexposed_noncases,
         };
         let seen = observed_exposure(&flipped, &m);
-        let observed = Table2x2 {
-            a: seen.a,
-            b: seen.c,
-            c: seen.b,
-            d: seen.d,
+        let observed = Counts2x2 {
+            exposed_cases: seen.exposed_cases,
+            unexposed_cases: seen.exposed_noncases,
+            exposed_noncases: seen.unexposed_cases,
+            unexposed_noncases: seen.unexposed_noncases,
         };
         let cells = correct_outcome(&observed, &m).unwrap().cells.unwrap();
-        for (got, want) in [cells.a, cells.b, cells.c, cells.d]
-            .into_iter()
-            .zip([TRUE.a, TRUE.b, TRUE.c, TRUE.d])
-        {
+        for (got, want) in [
+            cells.exposed_cases,
+            cells.unexposed_cases,
+            cells.exposed_noncases,
+            cells.unexposed_noncases,
+        ]
+        .into_iter()
+        .zip([
+            TRUE.exposed_cases,
+            TRUE.unexposed_cases,
+            TRUE.exposed_noncases,
+            TRUE.unexposed_noncases,
+        ]) {
             assert!(close(got, want), "{got} {want}");
         }
     }
@@ -1624,11 +1673,11 @@ mod tests {
         // Observing 50 exposed cases of 500 cannot come from a classification
         // that is 99% specific, which would give at least 5 false positives
         // among 500 and then a negative number of true exposed cases.
-        let t = Table2x2 {
-            a: 2.0,
-            b: 498.0,
-            c: 100.0,
-            d: 900.0,
+        let t = Counts2x2 {
+            exposed_cases: 2.0,
+            unexposed_cases: 498.0,
+            exposed_noncases: 100.0,
+            unexposed_noncases: 900.0,
         };
         let m = Misclass {
             se: [0.9, 0.9],
@@ -1666,11 +1715,11 @@ mod tests {
     #[test]
     fn the_known_sensitivity_case_is_the_inflation_factor() {
         let (pi, se, r1, r0, n) = (0.2, 0.7, 0.3, 0.1, 1_000_000.0);
-        let truth = Table2x2 {
-            a: r1 * pi * n,
-            b: r0 * (1.0 - pi) * n,
-            c: (1.0 - r1) * pi * n,
-            d: (1.0 - r0) * (1.0 - pi) * n,
+        let truth = Counts2x2 {
+            exposed_cases: r1 * pi * n,
+            unexposed_cases: r0 * (1.0 - pi) * n,
+            exposed_noncases: (1.0 - r1) * pi * n,
+            unexposed_noncases: (1.0 - r0) * (1.0 - pi) * n,
         };
         // Exposure is classified for everyone with the same sensitivity and no
         // false positives; the strata are cases and non-cases.
@@ -1681,14 +1730,18 @@ mod tests {
         // The table above has exposed in `a`, `c` and unexposed in `b`, `d`
         // within outcome rows; reshape to cases (a, b) and non-cases (c, d)
         // with exposure columns.
-        let by_outcome = Table2x2 {
-            a: truth.a,
-            b: r0 * (1.0 - pi) * n,
-            c: truth.c,
-            d: truth.d,
+        let by_outcome = Counts2x2 {
+            exposed_cases: truth.exposed_cases,
+            unexposed_cases: r0 * (1.0 - pi) * n,
+            exposed_noncases: truth.exposed_noncases,
+            unexposed_noncases: truth.unexposed_noncases,
         };
         let observed = observed_exposure(&by_outcome, &m);
-        let p = (observed.a + observed.c) / (observed.a + observed.b + observed.c + observed.d);
+        let p = (observed.exposed_cases + observed.exposed_noncases)
+            / (observed.exposed_cases
+                + observed.unexposed_cases
+                + observed.exposed_noncases
+                + observed.unexposed_noncases);
         let rd_observed = observed.risk_difference().unwrap();
         let corrected = correct_exposure(&observed, &m).unwrap();
         let factor = (1.0 - p) / (1.0 - p / se);
@@ -1738,11 +1791,11 @@ mod tests {
             prevalence_exposed: 0.001,
             prevalence_unexposed: 0.5,
         };
-        let t = Table2x2 {
-            a: 40.0,
-            b: 100.0,
-            c: 2000.0,
-            d: 3500.0,
+        let t = Counts2x2 {
+            exposed_cases: 40.0,
+            unexposed_cases: 100.0,
+            exposed_noncases: 2000.0,
+            unexposed_noncases: 3500.0,
         };
         assert_eq!(
             adjust_confounding(&t, ConfoundingMeasure::RiskRatio, &c).unwrap_err(),
@@ -1878,11 +1931,11 @@ mod tests {
     #[test]
     fn discards_are_counted_and_the_seed_fixes_the_result() {
         // Se and Sp wide enough that some draws give a negative cell.
-        let t = Table2x2 {
-            a: 30.0,
-            b: 470.0,
-            c: 500.0,
-            d: 4500.0,
+        let t = Counts2x2 {
+            exposed_cases: 30.0,
+            unexposed_cases: 470.0,
+            exposed_noncases: 500.0,
+            unexposed_noncases: 4500.0,
         };
         let se = Pair::Same(Dist::Uniform { lo: 0.55, hi: 1.0 });
         let sp = Pair::Same(Dist::Uniform { lo: 0.9, hi: 1.0 });
@@ -1910,11 +1963,11 @@ mod tests {
 
     #[test]
     fn every_draw_discarded_is_an_error() {
-        let t = Table2x2 {
-            a: 2.0,
-            b: 498.0,
-            c: 100.0,
-            d: 900.0,
+        let t = Counts2x2 {
+            exposed_cases: 2.0,
+            unexposed_cases: 498.0,
+            exposed_noncases: 100.0,
+            unexposed_noncases: 900.0,
         };
         let r = probabilistic_misclass(
             &t,
@@ -1929,14 +1982,20 @@ mod tests {
     #[test]
     fn refusals() {
         let ok = Pair::Same(Dist::Constant(0.9));
-        let bad = Table2x2 { a: -1.0, ..TRUE };
+        let bad = Counts2x2 {
+            exposed_cases: -1.0,
+            ..TRUE
+        };
         assert!(
             probabilistic_misclass(&bad, Kind::Exposure, &ok, &ok, &options(5, false)).is_err()
         );
         assert!(
             probabilistic_misclass(&TRUE, Kind::Exposure, &ok, &ok, &options(0, false)).is_err()
         );
-        let fractional = Table2x2 { a: 300.5, ..TRUE };
+        let fractional = Counts2x2 {
+            exposed_cases: 300.5,
+            ..TRUE
+        };
         assert!(
             probabilistic_misclass(&fractional, Kind::Exposure, &ok, &ok, &options(5, true))
                 .is_err()
@@ -1972,17 +2031,31 @@ mod tests {
             let fneg = (1.0 - m.se[k]) * cases;
             (tp + fp, fneg + tn, tp / (tp + fp), tn / (tn + fneg))
         };
-        let (a, c, ppv0, npv0) = recorded(TRUE.a, TRUE.c, 0);
-        let (b, d, ppv1, npv1) = recorded(TRUE.b, TRUE.d, 1);
-        let observed = Table2x2 { a, b, c, d };
+        let (a, c, ppv0, npv0) = recorded(TRUE.exposed_cases, TRUE.exposed_noncases, 0);
+        let (b, d, ppv1, npv1) = recorded(TRUE.unexposed_cases, TRUE.unexposed_noncases, 1);
+        let observed = Counts2x2 {
+            exposed_cases: a,
+            unexposed_cases: b,
+            exposed_noncases: c,
+            unexposed_noncases: d,
+        };
         let back = correct_outcome_predictive(&observed, [ppv0, ppv1], [npv0, npv1])
             .unwrap()
             .cells
             .unwrap();
-        for (got, want) in [back.a, back.b, back.c, back.d]
-            .into_iter()
-            .zip([TRUE.a, TRUE.b, TRUE.c, TRUE.d])
-        {
+        for (got, want) in [
+            back.exposed_cases,
+            back.unexposed_cases,
+            back.exposed_noncases,
+            back.unexposed_noncases,
+        ]
+        .into_iter()
+        .zip([
+            TRUE.exposed_cases,
+            TRUE.unexposed_cases,
+            TRUE.exposed_noncases,
+            TRUE.unexposed_noncases,
+        ]) {
             assert!(close(got, want), "{got} {want}");
         }
         // The positive predictive value and the sensitivity give the true
@@ -1991,9 +2064,12 @@ mod tests {
             .unwrap()
             .cells
             .unwrap();
-        assert!(close(by_ppv.a, TRUE.a) && close(by_ppv.b, TRUE.b));
+        assert!(
+            close(by_ppv.exposed_cases, TRUE.exposed_cases)
+                && close(by_ppv.unexposed_cases, TRUE.unexposed_cases)
+        );
         let by_se_sp = correct_outcome(&observed, &m).unwrap().cells.unwrap();
-        assert!(close(by_ppv.a, by_se_sp.a));
+        assert!(close(by_ppv.exposed_cases, by_se_sp.exposed_cases));
         // With the same PPV and Se in both groups the risk ratio is kept.
         let same = correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.8, 0.8]).unwrap();
         assert!(close(same.risk_ratio.unwrap(), TRUE.risk_ratio().unwrap()));
@@ -2007,22 +2083,31 @@ mod tests {
             sp: [0.95, 0.97],
         };
         let observed = observed_exposure(&TRUE, &m);
-        let ppv = [m.se[0] * TRUE.a / observed.a, m.se[1] * TRUE.c / observed.c];
+        let ppv = [
+            m.se[0] * TRUE.exposed_cases / observed.exposed_cases,
+            m.se[1] * TRUE.exposed_noncases / observed.exposed_noncases,
+        ];
         let cells = correct_exposure_ppv(&observed, ppv, m.se)
             .unwrap()
             .cells
             .unwrap();
-        assert!(close(cells.a, TRUE.a) && close(cells.c, TRUE.c));
-        assert!(close(cells.b, TRUE.b) && close(cells.d, TRUE.d));
+        assert!(
+            close(cells.exposed_cases, TRUE.exposed_cases)
+                && close(cells.exposed_noncases, TRUE.exposed_noncases)
+        );
+        assert!(
+            close(cells.unexposed_cases, TRUE.unexposed_cases)
+                && close(cells.unexposed_noncases, TRUE.unexposed_noncases)
+        );
     }
 
     #[test]
     fn each_draw_is_the_simple_correction_of_its_parameters() {
-        let t = Table2x2 {
-            a: 150.0,
-            b: 900.0,
-            c: 9_850.0,
-            d: 89_100.0,
+        let t = Counts2x2 {
+            exposed_cases: 150.0,
+            unexposed_cases: 900.0,
+            exposed_noncases: 9_850.0,
+            unexposed_noncases: 89_100.0,
         };
         let se = Pair::Independent([
             Dist::Uniform { lo: 0.7, hi: 0.9 },
@@ -2072,11 +2157,11 @@ mod tests {
 
     #[test]
     fn one_step_of_the_multiple_analysis_is_the_single_analysis() {
-        let t = Table2x2 {
-            a: 150.0,
-            b: 900.0,
-            c: 9_850.0,
-            d: 89_100.0,
+        let t = Counts2x2 {
+            exposed_cases: 150.0,
+            unexposed_cases: 900.0,
+            exposed_noncases: 9_850.0,
+            unexposed_noncases: 89_100.0,
         };
         let se = Pair::Same(Dist::Trapezoidal {
             a: 0.7,
@@ -2168,11 +2253,11 @@ mod tests {
 
     #[test]
     fn chained_steps_are_the_chained_simple_corrections() {
-        let t = Table2x2 {
-            a: 150.0,
-            b: 900.0,
-            c: 9_850.0,
-            d: 89_100.0,
+        let t = Counts2x2 {
+            exposed_cases: 150.0,
+            unexposed_cases: 900.0,
+            exposed_noncases: 9_850.0,
+            unexposed_noncases: 89_100.0,
         };
         let steps = [
             BiasStep::Misclassification {

@@ -10,7 +10,7 @@
 //!   last place, allowed as 1e-12.
 //! * `svalues.RR`: a square root or two of the same ratio, to 1e-14 relative.
 
-use epistat_epi::bias::Table2x2;
+use epistat_epi::Counts2x2;
 use epistat_epi::evalue::{SelectionBias, bounding_factor, evalues_rd, selection_evalues_rr};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -62,7 +62,17 @@ fn risk_difference_evalues_agree_with_evalues_rd() {
     let r = reference();
     for case in &r.rd {
         let [a, b, c, d] = case.table;
-        let e = evalues_rd(&Table2x2 { a, b, c, d }, case.true_value, case.alpha).unwrap();
+        let e = evalues_rd(
+            &Counts2x2 {
+                exposed_cases: a,
+                exposed_noncases: c,
+                unexposed_cases: b,
+                unexposed_noncases: d,
+            },
+            case.true_value,
+            case.alpha,
+        )
+        .unwrap();
         assert!(
             (e.estimate - case.estimate).abs() <= 1e-12 * case.estimate,
             "{:?}: {} against {}",

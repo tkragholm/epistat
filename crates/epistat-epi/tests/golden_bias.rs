@@ -4,17 +4,18 @@
 //! confounding. Recorded on aarch64 macOS.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
+use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
-    ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, Summary, Table2x2,
-    probabilistic_confounding, probabilistic_misclass, probabilistic_selection,
+    ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, Summary, probabilistic_confounding,
+    probabilistic_misclass, probabilistic_selection,
 };
 use epistat_testkit::Fingerprint;
 
-const T: Table2x2 = Table2x2 {
-    a: 150.0,
-    b: 900.0,
-    c: 9_850.0,
-    d: 89_100.0,
+const T: Counts2x2 = Counts2x2 {
+    exposed_cases: 150.0,
+    unexposed_cases: 900.0,
+    exposed_noncases: 9_850.0,
+    unexposed_noncases: 89_100.0,
 };
 
 fn options(random_error: bool) -> ProbOptions {

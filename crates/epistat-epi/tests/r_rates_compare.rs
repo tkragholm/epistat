@@ -23,7 +23,8 @@
 //! there, is checked to `1e-12`. The Breslow-Day statistics are sums written
 //! out in the same order, `1e-12`.
 
-use epistat_epi::mantel_haenszel::{RateStratum, rate_ratio_breslow_day, rate_ratio_homogeneity};
+use epistat_epi::PersonTime2;
+use epistat_epi::mantel_haenszel::{rate_ratio_breslow_day, rate_ratio_homogeneity};
 use epistat_epi::rates::{RatioInterval, Strata, standardised_difference, standardised_ratio};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -150,12 +151,12 @@ fn ratio_and_difference_of_standardised_rates() {
 fn tests_of_a_common_rate_ratio() {
     let mut worst = 0.0;
     for case in reference().homogeneity {
-        let strata: Vec<RateStratum> = (0..case.x1.len())
-            .map(|k| RateStratum {
-                x1: case.x1[k],
-                t1: case.t1[k],
-                x0: case.x0[k],
-                t0: case.t0[k],
+        let strata: Vec<PersonTime2> = (0..case.x1.len())
+            .map(|k| PersonTime2 {
+                exposed_events: case.x1[k],
+                exposed_time: case.t1[k],
+                unexposed_events: case.x0[k],
+                unexposed_time: case.t0[k],
             })
             .collect();
         let h = rate_ratio_homogeneity(&strata).unwrap().unwrap();
@@ -215,17 +216,17 @@ fn undefined_comparisons() {
     assert_eq!((d.estimate, d.lower), (Some(0.0), None));
     // A common ratio with every event in one arm has no finite estimate.
     let strata = [
-        RateStratum {
-            x1: 3.0,
-            t1: 10.0,
-            x0: 0.0,
-            t0: 10.0,
+        PersonTime2 {
+            exposed_events: 3.0,
+            exposed_time: 10.0,
+            unexposed_events: 0.0,
+            unexposed_time: 10.0,
         },
-        RateStratum {
-            x1: 2.0,
-            t1: 10.0,
-            x0: 0.0,
-            t0: 12.0,
+        PersonTime2 {
+            exposed_events: 2.0,
+            exposed_time: 10.0,
+            unexposed_events: 0.0,
+            unexposed_time: 12.0,
         },
     ];
     assert_eq!(rate_ratio_homogeneity(&strata).unwrap(), None);

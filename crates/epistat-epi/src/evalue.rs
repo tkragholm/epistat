@@ -567,21 +567,29 @@ pub struct RdEValues {
 /// (exchange the exposure groups), and [`EValueError::TrueNotBelowEstimate`]
 /// when the difference is not above `true_rd`.
 pub fn evalues_rd(
-    t: &crate::bias::Table2x2,
+    t: &crate::tables::Counts2x2,
     true_rd: f64,
     alpha: f64,
 ) -> Result<RdEValues, EValueError> {
-    if [t.a, t.b, t.c, t.d]
-        .iter()
-        .any(|x| !x.is_finite() || *x < 0.0)
+    if [
+        t.exposed_cases,
+        t.unexposed_cases,
+        t.exposed_noncases,
+        t.unexposed_noncases,
+    ]
+    .iter()
+    .any(|x| !x.is_finite() || *x < 0.0)
     {
         return Err(EValueError::Table("cells must be finite and not negative"));
     }
-    let (n1, n0) = (t.a + t.c, t.b + t.d);
+    let (n1, n0) = (
+        t.exposed_cases + t.exposed_noncases,
+        t.unexposed_cases + t.unexposed_noncases,
+    );
     if !(n1 > 0.0 && n0 > 0.0) {
         return Err(EValueError::Table("both exposure groups need people"));
     }
-    if t.b <= 0.0 {
+    if t.unexposed_cases <= 0.0 {
         return Err(EValueError::Table(
             "the unexposed need a case, or no bias factor is finite",
         ));
@@ -594,8 +602,8 @@ pub fn evalues_rd(
     }
     let n = n1 + n0;
     let f = n1 / n;
-    let p1 = t.a / n1;
-    let p0 = t.b / n0;
+    let p1 = t.exposed_cases / n1;
+    let p0 = t.unexposed_cases / n0;
     if p1 < p0 {
         return Err(EValueError::NegativeDifference);
     }
@@ -742,21 +750,21 @@ mod tests {
     fn the_risk_difference_evalue_of_the_estimate_is_that_of_the_risk_ratio() {
         // At the null, the bias factor that removes the difference is the
         // ratio of the risks, here 1.5, to rounding.
-        let t = crate::bias::Table2x2 {
-            a: 150.0,
-            b: 900.0,
-            c: 9_850.0,
-            d: 89_100.0,
+        let t = crate::tables::Counts2x2 {
+            exposed_cases: 150.0,
+            unexposed_cases: 900.0,
+            exposed_noncases: 9_850.0,
+            unexposed_noncases: 89_100.0,
         };
         let e = evalues_rd(&t, 0.0, 0.05).unwrap();
         assert!((e.bias_factor - 1.5).abs() < 1e-12);
         assert!(e.bias_factor_lower > 1.0 && e.bias_factor_lower < e.bias_factor);
         assert!(e.lower < e.estimate);
-        let swapped = crate::bias::Table2x2 {
-            a: 900.0,
-            b: 150.0,
-            c: 89_100.0,
-            d: 9_850.0,
+        let swapped = crate::tables::Counts2x2 {
+            exposed_cases: 900.0,
+            unexposed_cases: 150.0,
+            exposed_noncases: 89_100.0,
+            unexposed_noncases: 9_850.0,
         };
         assert_eq!(
             evalues_rd(&swapped, 0.0, 0.05),

@@ -10,8 +10,9 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_epi::PersonTime2;
 use epistat_epi::mantel_haenszel::{
-    Pooled, RateStratum, odds_ratio, rate_difference, rate_ratio, risk_difference, risk_ratio,
+    Pooled, odds_ratio, rate_difference, rate_ratio, risk_difference, risk_ratio,
     tables_from_records,
 };
 
@@ -80,12 +81,12 @@ fn main() {
         }
         "mh_rr" => {
             let t = Table::read(&common::data_path("mhr", n));
-            let strata: Vec<RateStratum> = (0..t.len())
-                .map(|i| RateStratum {
-                    x1: t.col("x1")[i],
-                    t1: t.col("t1")[i],
-                    x0: t.col("x0")[i],
-                    t0: t.col("t0")[i],
+            let strata: Vec<PersonTime2> = (0..t.len())
+                .map(|i| PersonTime2 {
+                    exposed_events: t.col("x1")[i],
+                    exposed_time: t.col("t1")[i],
+                    unexposed_events: t.col("x0")[i],
+                    unexposed_time: t.col("t0")[i],
                 })
                 .collect();
             let (times, results) = common::timed(common::reps(), || {

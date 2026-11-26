@@ -11,6 +11,7 @@
 //! | [`bias`] | quantitative bias analysis, simple and probabilistic, of misclassification, selection and confounding | `episensr` |
 //! | [`rosenbaum`] | Rosenbaum bounds for matched designs | `rbounds`, `sensitivitymv`, `sensitivitymw`, `sensitivity2x2xk` |
 //! | [`signed_rank`] | the signed rank statistic, its exact and normal tails | `stats::wilcox.test` |
+//! | [`tables`] | the 2 x 2 table and the person-time table every measure starts from | |
 //! | [`balance`] | standardised mean differences, variance ratios, eCDF and eQQ distances, Cramér's V | `cobalt`, `MatchIt` |
 //!
 //! The distribution functions these rest on are in `epistat_stats::dist`.
@@ -29,3 +30,6 @@ pub mod rosenbaum;
 pub mod signed_rank;
 pub mod sir;
 pub mod standardisation;
+pub mod tables;
+
+pub use tables::{Counts2x2, PersonTime2};

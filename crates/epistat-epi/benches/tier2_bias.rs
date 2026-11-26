@@ -13,13 +13,14 @@
 mod common;
 
 use common::Lines;
-use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, Summary, Table2x2, probabilistic_misclass};
+use epistat_epi::Counts2x2;
+use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, Summary, probabilistic_misclass};
 
-const TABLE: Table2x2 = Table2x2 {
-    a: 215.0,
-    b: 83.0,
-    c: 1021.0,
-    d: 1202.0,
+const TABLE: Counts2x2 = Counts2x2 {
+    exposed_cases: 215.0,
+    unexposed_cases: 83.0,
+    exposed_noncases: 1021.0,
+    unexposed_noncases: 1202.0,
 };
 
 fn push(lines: &mut Lines, name: &str, s: Summary) {

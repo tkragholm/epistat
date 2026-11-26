@@ -9,8 +9,9 @@
 //! medians and limits of ten runs on each side, in standard errors of their
 //! difference.
 
+use epistat_epi::PersonTime2;
 use epistat_epi::bias::{
-    Dist, Misclass, Pair, ProbOptions, RateTable, Summary, correct_exposure_rates,
+    Dist, Misclass, Pair, ProbOptions, Summary, correct_exposure_rates,
     probabilistic_misclass_rates,
 };
 use epistat_testkit::load_json;
@@ -54,12 +55,12 @@ fn reference() -> Reference {
     r
 }
 
-fn table(r: &Reference) -> RateTable {
-    RateTable {
-        cases_exposed: r.counts[0],
-        cases_unexposed: r.counts[1],
-        time_exposed: r.pt[0],
-        time_unexposed: r.pt[1],
+fn table(r: &Reference) -> PersonTime2 {
+    PersonTime2 {
+        exposed_events: r.counts[0],
+        unexposed_events: r.counts[1],
+        exposed_time: r.pt[0],
+        unexposed_time: r.pt[1],
     }
 }
 
@@ -78,10 +79,10 @@ fn the_correction_of_rates_agrees_with_probsens_irr() {
         .unwrap();
         let cells = c.table.unwrap();
         let got = [
-            cells.cases_exposed,
-            cells.cases_unexposed,
-            cells.time_exposed,
-            cells.time_unexposed,
+            cells.exposed_events,
+            cells.unexposed_events,
+            cells.exposed_time,
+            cells.unexposed_time,
         ];
         for (g, w) in got.iter().zip(&case.cells) {
             assert!((g - w).abs() <= 1e-12 * w.abs(), "{g} against {w}");
