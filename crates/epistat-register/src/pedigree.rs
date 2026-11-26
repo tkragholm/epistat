@@ -65,6 +65,17 @@
 //! refused with the parent's id, because a group of `k` people has `k(k-1)/2`
 //! pairs and a corrupt record would give millions.
 //!
+//! Family clusters follow the links the caller names in [`FamilyLinks`]: a
+//! shared parent, by [`connected_components`] over the mother and father
+//! columns, or every person-to-parent link, by a disjoint-set forest over all
+//! nodes whose roots are the smallest node, so that the root of a person's
+//! set is a person and the numbering is by first row.
+//!
+//! Multiple births and birth order group a mother's births into deliveries.
+//! Her births are sorted by day, and a birth opens a new delivery when it lies
+//! more than the caller's tolerance of days after the first birth of the
+//! current one. With a tolerance of 0 a delivery is one day.
+//!
 //! # Not included
 //!
 //! A pair kind is never inferred from birth dates, and full siblings are not
@@ -91,7 +102,8 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::{RegisterError, relations::connected_components};
+use crate::relations::{DisjointSets, connected_components};
+use crate::RegisterError;
 
 /// How [`consensus_parents`] picks one parent from the rows of a person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +115,17 @@ pub enum ParentRule {
     MostFrequent,
     /// The first non-missing identifier in row order. Depends on row order.
     FirstObserved,
+}
+
+/// Which links [`Pedigree::family_clusters`] follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FamilyLinks {
+    /// A shared mother or father, so a cluster is a sibship and the half
+    /// siblings it reaches.
+    SharedParents,
+    /// Every link from a person to a parent, so a cluster is a connected
+    /// component of the whole pedigree.
+    ParentsAndChildren,
 }
 
 /// One parent per person, chosen from rows that may disagree.
@@ -325,16 +348,60 @@ pub struct Ancestors {
 /// Multiple births among the rows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MultipleBirths {
-    /// A number for each group of rows with the same mother and birth day,
-    /// from 0 in order of first row, or `None` when the mother or day is
-    /// missing.
+    /// A number for each delivery, the rows of one mother born on one day or
+    /// within the tolerance of its first birth, from 0 in order of first row,
+    /// or `None` when the mother or day is missing.
     pub group: Vec<Option<u32>>,
     /// The size of the group: 1 for a single birth, 2 for twins.
     pub size: Vec<Option<u32>>,
 }
 
-/// Groups rows by mother and birth day. A group of two or more is a multiple
+/// The rows with a mother and a birth day, sorted by mother, day and row, and
+/// for each the number of its delivery among all mothers' deliveries in that
+/// order. A delivery is a run of a mother's births whose days lie within
+/// `tolerance_days` of the first birth of the run.
+fn deliveries(
+    mother: &[Option<u64>],
+    birth_day: &[Option<i64>],
+    tolerance_days: u32,
+) -> (Vec<u32>, Vec<u32>) {
+    let n = mother.len();
+    let mut rows: Vec<u32> = (0..n as u32)
+        .filter(|&r| mother[r as usize].is_some() && birth_day[r as usize].is_some())
+        .collect();
+    rows.sort_by_key(|&r| (mother[r as usize], birth_day[r as usize], r));
+    let mut delivery = Vec::with_capacity(rows.len());
+    let mut current = 0_u32;
+    let mut first_day = i64::MIN;
+    for (k, &r) in rows.iter().enumerate() {
+        let r = r as usize;
+        let day = birth_day[r].unwrap_or(i64::MIN);
+        let same_mother = k > 0 && mother[rows[k - 1] as usize] == mother[r];
+        let joins = same_mother && day.saturating_sub(first_day) <= i64::from(tolerance_days);
+        if k > 0 && !joins {
+            current += 1;
+        }
+        if !joins {
+            first_day = day;
+        }
+        delivery.push(current);
+    }
+    (rows, delivery)
+}
+
+/// Groups rows by mother and delivery. A group of two or more is a multiple
 /// birth.
+///
+/// With `tolerance_days` 0 a delivery is the births of one mother on one day.
+/// With a tolerance of `k`, a birth within `k` days of the first birth of the
+/// mother's current delivery joins it, so twins born either side of midnight
+/// are one delivery with a tolerance of 1. The window is counted from the
+/// first birth of the delivery, not from the birth before, so a chain of
+/// births a day apart does not grow a delivery beyond `k` days. Two
+/// deliveries of one mother cannot be days apart, so a tolerance of a day or
+/// two joins only births the register dates on different days; a tolerance of
+/// weeks would also join a delayed delivery of a second twin, which is rare
+/// and is the caller's choice to make.
 ///
 /// # Errors
 ///
@@ -343,52 +410,41 @@ pub struct MultipleBirths {
 pub fn multiple_birth_groups(
     mother: &[Option<u64>],
     birth_day: &[Option<i64>],
+    tolerance_days: u32,
 ) -> Result<MultipleBirths, RegisterError> {
     let n = mother.len();
     check_rows(n, birth_day.len())?;
-    let mut rows: Vec<u32> = (0..n as u32)
-        .filter(|&r| mother[r as usize].is_some() && birth_day[r as usize].is_some())
-        .collect();
-    rows.sort_by_key(|&r| (mother[r as usize], birth_day[r as usize], r));
-    let mut first = vec![u32::MAX; n];
-    let mut count = vec![0_u32; n];
-    let mut i = 0;
-    while i < rows.len() {
-        let key = (mother[rows[i] as usize], birth_day[rows[i] as usize]);
-        let mut j = i;
-        while j < rows.len() && (mother[rows[j] as usize], birth_day[rows[j] as usize]) == key {
-            j += 1;
-        }
-        let head = rows[i];
-        for &r in &rows[i..j] {
-            first[r as usize] = head;
-        }
-        count[head as usize] = (j - i) as u32;
-        i = j;
+    let (rows, delivery) = deliveries(mother, birth_day, tolerance_days);
+    let groups = delivery.last().map_or(0, |&d| d as usize + 1);
+    let mut head = vec![u32::MAX; groups];
+    let mut count = vec![0_u32; groups];
+    for (&r, &d) in rows.iter().zip(&delivery) {
+        head[d as usize] = head[d as usize].min(r);
+        count[d as usize] += 1;
+    }
+    // Number the groups in order of their first row.
+    let mut by_head: Vec<u32> = (0..groups as u32).collect();
+    by_head.sort_by_key(|&g| head[g as usize]);
+    let mut id = vec![0_u32; groups];
+    for (k, &g) in by_head.iter().enumerate() {
+        id[g as usize] = k as u32;
     }
     let mut out = MultipleBirths {
         group: vec![None; n],
         size: vec![None; n],
     };
-    let mut ids = vec![0_u32; n];
-    let mut next = 0_u32;
-    for r in 0..n {
-        if first[r] == r as u32 {
-            ids[r] = next;
-            next += 1;
-        }
-        if first[r] != u32::MAX {
-            let head = first[r] as usize;
-            out.group[r] = Some(ids[head]);
-            out.size[r] = Some(count[head]);
-        }
+    for (&r, &d) in rows.iter().zip(&delivery) {
+        out.group[r as usize] = Some(id[d as usize]);
+        out.size[r as usize] = Some(count[d as usize]);
     }
     Ok(out)
 }
 
 /// The birth order of each row within its mother: 0 for the first delivery.
-/// Rows with the same mother and birth day share an order, so twins are one
-/// delivery. `None` when the mother or the day is missing.
+/// Rows of one delivery share an order, so twins are one delivery. A delivery
+/// is the births of one mother on one day, or within `tolerance_days` of its
+/// first birth, as in [`multiple_birth_groups`]. `None` when the mother or
+/// the day is missing.
 ///
 /// The rows must hold every birth of every mother present, or the order is
 /// too low.
@@ -400,25 +456,18 @@ pub fn multiple_birth_groups(
 pub fn delivery_order(
     mother: &[Option<u64>],
     birth_day: &[Option<i64>],
+    tolerance_days: u32,
 ) -> Result<Vec<Option<u32>>, RegisterError> {
     let n = mother.len();
     check_rows(n, birth_day.len())?;
-    let mut rows: Vec<u32> = (0..n as u32)
-        .filter(|&r| mother[r as usize].is_some() && birth_day[r as usize].is_some())
-        .collect();
-    rows.sort_by_key(|&r| (mother[r as usize], birth_day[r as usize], r));
+    let (rows, delivery) = deliveries(mother, birth_day, tolerance_days);
     let mut out = vec![None; n];
-    let mut rank = 0_u32;
+    let mut first_of_mother = 0_u32;
     for (k, &r) in rows.iter().enumerate() {
-        if k > 0 {
-            let p = rows[k - 1] as usize;
-            if mother[p] != mother[r as usize] {
-                rank = 0;
-            } else if birth_day[p] != birth_day[r as usize] {
-                rank += 1;
-            }
+        if k == 0 || mother[rows[k - 1] as usize] != mother[r as usize] {
+            first_of_mother = delivery[k];
         }
-        out[r as usize] = Some(rank);
+        out[r as usize] = Some(delivery[k] - first_of_mother);
     }
     Ok(out)
 }
@@ -605,18 +654,36 @@ impl Pedigree {
         complete
     }
 
-    /// The family cluster of each person: persons who share a mother or a
-    /// father, directly or through a chain of persons who do, have the same
-    /// number. Numbered from 0 in order of first row. Half siblings joined
-    /// through a third are one cluster. Persons with no known parent are their
-    /// own cluster.
+    /// The family cluster of each person under the links the caller names.
+    ///
+    /// - [`FamilyLinks::SharedParents`]: persons who share a mother or a
+    ///   father, directly or through a chain of persons who do, have the same
+    ///   number. Half siblings joined through a third are one cluster, a
+    ///   mother is not in the cluster of her children, and persons with no
+    ///   known parent are their own cluster.
+    /// - [`FamilyLinks::ParentsAndChildren`]: every link from a person to a
+    ///   parent joins them, whether or not the parent is a row, so a cluster
+    ///   is a connected component of the pedigree. Parents and their children,
+    ///   grandparents, aunts, uncles and cousins who are rows are together.
+    ///
+    /// Clusters are numbered from 0 in order of first row. The second reading
+    /// suits rows that hold parents and children together, or a cluster that
+    /// should keep cousins together; the first suits rows of children only,
+    /// clustered on their sibship.
     ///
     /// # Errors
     ///
     /// [`RegisterError::Input`] if the pedigree is too large for
     /// [`connected_components`], which cannot happen for one built by
     /// [`Pedigree::new`].
-    pub fn family_clusters(&self) -> Result<Vec<u32>, RegisterError> {
+    pub fn family_clusters(&self, links: FamilyLinks) -> Result<Vec<u32>, RegisterError> {
+        match links {
+            FamilyLinks::SharedParents => self.sibship_clusters(),
+            FamilyLinks::ParentsAndChildren => Ok(self.pedigree_components()),
+        }
+    }
+
+    fn sibship_clusters(&self) -> Result<Vec<u32>, RegisterError> {
         // The same code in the mother and the father column is two parents, and
         // a column holds at most one distinct parent per person, so each
         // column is renumbered from 0 and stays below the number of rows.
@@ -639,6 +706,30 @@ impl Pedigree {
         };
         let (m, f) = (dense(&self.mother), dense(&self.father));
         connected_components(&[&m, &f])
+    }
+
+    /// Components of the graph of nodes joined by person-to-parent links. The
+    /// root of a set is its smallest node, and persons are the first nodes, so
+    /// the root of a person's component is a person.
+    fn pedigree_components(&self) -> Vec<u32> {
+        let mut sets = DisjointSets::new(self.ids.len());
+        for x in 0..self.persons {
+            for p in [self.mother[x], self.father[x]].into_iter().flatten() {
+                sets.union(x as u32, p);
+            }
+        }
+        let mut number = vec![u32::MAX; self.persons];
+        let mut next = 0_u32;
+        (0..self.persons)
+            .map(|x| {
+                let root = sets.find(x as u32) as usize;
+                if number[root] == u32::MAX {
+                    number[root] = next;
+                    next += 1;
+                }
+                number[root]
+            })
+            .collect()
     }
 
     /// The parents with more than `threshold` children among the rows, mothers
@@ -1394,7 +1485,7 @@ mod tests {
                 assert_eq!(p.ids, rid, "{name}");
                 assert_eq!(&p.mother[..p.persons], &rm[..], "{name}");
                 assert_eq!(&p.father[..p.persons], &rf[..], "{name}");
-                assert_eq!(p.family_clusters().unwrap(), reference_family_clusters(&p));
+                assert_eq!(p.family_clusters(FamilyLinks::SharedParents).unwrap(), reference_family_clusters(&p));
                 for degree in 1..4 {
                     let got = p.cousin_pairs(degree, CousinKinds::ALL, 100_000).unwrap();
                     assert!(degree > 1 || !got.a.is_empty(), "{name}: no cousins");
@@ -1539,11 +1630,98 @@ mod tests {
         // 3, 4, 5 and 9 share mother 1; 6, 7, 8 are linked through 7 and 6:
         // 8's mother is 6, father 7 (rows), different codes from 6's and 7's
         // own parents, so only 8 is alone with them unrelated.
-        let c = p.family_clusters().unwrap();
+        let c = p.family_clusters(FamilyLinks::SharedParents).unwrap();
         assert_eq!(c[2], c[3]);
         assert_eq!(c[2], c[8]);
         assert_ne!(c[2], c[5]);
         assert_eq!(c[0], 0);
+    }
+
+    #[test]
+    fn whole_pedigree_clusters_join_parents_and_children() {
+        // The family of the guide: mother 10 and her brother 11 are children
+        // of 1 and 2; 20 to 24 are her children, 25 is his; 30 is a father
+        // who is a row.
+        let person = [10, 11, 20, 21, 22, 23, 24, 25, 30];
+        let mother = [
+            Some(1),
+            Some(1),
+            Some(10),
+            Some(10),
+            Some(10),
+            Some(10),
+            Some(10),
+            Some(40),
+            None,
+        ];
+        let father = [
+            Some(2),
+            Some(2),
+            Some(30),
+            Some(30),
+            Some(31),
+            Some(31),
+            None,
+            Some(11),
+            None,
+        ];
+        let p = Pedigree::new(&person, &mother, &father).unwrap();
+        assert_eq!(
+            p.family_clusters(FamilyLinks::SharedParents).unwrap(),
+            [0, 0, 1, 1, 1, 1, 1, 2, 3]
+        );
+        assert_eq!(
+            p.family_clusters(FamilyLinks::ParentsAndChildren).unwrap(),
+            [0; 9]
+        );
+        // Without the link from 25 to 11 and from the children to 30, the
+        // brother's child and the father are clusters of their own.
+        let p = Pedigree::new(
+            &person,
+            &mother,
+            &[Some(2), Some(2), None, None, Some(31), Some(31), None, None, None],
+        )
+        .unwrap();
+        assert_eq!(
+            p.family_clusters(FamilyLinks::ParentsAndChildren).unwrap(),
+            [0, 0, 0, 0, 0, 0, 0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn deliveries_within_a_tolerance() {
+        // Mother 50: twins either side of midnight, then a birth a year later.
+        // Mother 60: births on days 0, 1 and 2, where the window counts from
+        // the first birth, and day 2 is beyond a tolerance of 1.
+        let mother = [Some(50), Some(50), Some(50), Some(60), Some(60), Some(60), None];
+        let day = [
+            Some(100),
+            Some(101),
+            Some(466),
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(5),
+        ];
+        assert_eq!(
+            delivery_order(&mother, &day, 0).unwrap(),
+            [Some(0), Some(1), Some(2), Some(0), Some(1), Some(2), None]
+        );
+        assert_eq!(
+            delivery_order(&mother, &day, 1).unwrap(),
+            [Some(0), Some(0), Some(1), Some(0), Some(0), Some(1), None]
+        );
+        assert_eq!(
+            delivery_order(&mother, &day, 2).unwrap(),
+            [Some(0), Some(0), Some(1), Some(0), Some(0), Some(0), None]
+        );
+        let b = multiple_birth_groups(&mother, &day, 1).unwrap();
+        assert_eq!(b.group, [Some(0), Some(0), Some(1), Some(2), Some(2), Some(3), None]);
+        assert_eq!(b.size, [Some(2), Some(2), Some(1), Some(2), Some(2), Some(1), None]);
+        // Groups are numbered by first row, also when rows are not in day order.
+        let b = multiple_birth_groups(&[Some(1), Some(1), Some(1)], &[Some(9), Some(0), Some(8)], 1)
+            .unwrap();
+        assert_eq!(b.group, [Some(0), Some(1), Some(0)]);
     }
 
     #[test]
@@ -1588,11 +1766,11 @@ mod tests {
     fn births_and_order() {
         let mother = [Some(1), Some(1), Some(1), Some(2), None, Some(1)];
         let day = [Some(10), Some(10), Some(30), Some(10), Some(10), None];
-        let b = multiple_birth_groups(&mother, &day).unwrap();
+        let b = multiple_birth_groups(&mother, &day, 0).unwrap();
         assert_eq!(b.group, [Some(0), Some(0), Some(1), Some(2), None, None]);
         assert_eq!(b.size, [Some(2), Some(2), Some(1), Some(1), None, None]);
         assert_eq!(
-            delivery_order(&mother, &day).unwrap(),
+            delivery_order(&mother, &day, 0).unwrap(),
             [Some(0), Some(0), Some(1), Some(0), None, None]
         );
     }

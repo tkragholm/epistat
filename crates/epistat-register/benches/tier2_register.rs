@@ -267,7 +267,7 @@ fn main() {
                     let cousins = ped
                         .cousin_pairs(1, CousinKinds::ALL, 10_000)
                         .expect("cousins");
-                    let clusters = ped.family_clusters().expect("clusters");
+                    let clusters = ped.family_clusters(FamilyLinks::SharedParents).expect("clusters");
                     (siblings, cousins, clusters, ped.depth())
                 });
             let by = |k: SiblingKind| siblings.kind.iter().filter(|&&x| x == k).count() as f64;

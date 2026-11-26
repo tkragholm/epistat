@@ -3,9 +3,10 @@
 # 1. kinship: 2 * kinship2::kinship on a simulated pedigree of 5 generations
 #    with a small mating pool per generation (so full and half siblings,
 #    cousins and inbred persons occur), for every pair of persons.
-# 2. pair kinds, family clusters, multiple births and birth order by direct
-#    loops in base R on a pedigree of 200 persons with unknown and external
-#    parents.
+# 2. pair kinds, family clusters of sibships and of the whole pedigree,
+#    multiple births and birth order, on one day and within a tolerance of
+#    days, by direct loops in base R on a pedigree of 200 persons with
+#    unknown and external parents.
 #
 # Run from the crate directory:
 #   Rscript tests/data/pedigree_reference.R > tests/data/pedigree_reference.json
@@ -126,11 +127,51 @@ grp[ok] <- match(first_of[ok], sort(unique(first_of[ok]))) - 1
 size[ok] <- sapply(which(ok), function(r) sum(ok & key == key[r]))
 for (r in which(ok)) order_[r] <- length(unique(bday[ok & bmom == bmom[r] & bday < bday[r]]))
 
+# Deliveries within a tolerance: for each mother, the earliest birth not yet
+# in a delivery opens one, and every birth within `tol` days of it joins.
+# Birth days are drawn a few days apart so that the tolerance matters.
+bday2 <- 10000 + sample(0:30, n, replace = TRUE) * 100 + sample(0:3, n, replace = TRUE)
+bday2[sample(n, 5)] <- NA
+by_tolerance <- function(tol) {
+  g <- rep(NA_real_, n); sz <- g; ord <- g; first <- g
+  ok <- !is.na(bmom) & !is.na(bday2)
+  for (mm in unique(bmom[ok])) {
+    left <- which(ok & bmom == mm); k <- 0
+    while (length(left) > 0) {
+      a <- min(bday2[left])
+      j <- left[bday2[left] <= a + tol]
+      ord[j] <- k; sz[j] <- length(j); first[j] <- min(j)
+      left <- setdiff(left, j); k <- k + 1
+    }
+  }
+  g[ok] <- match(first[ok], sort(unique(first[ok]))) - 1
+  list(tolerance = tol, group = g, size = sz, order = ord)
+}
+tolerance <- lapply(c(0, 1, 2), by_tolerance)
+
+# Clusters of the whole pedigree: every person joined to each recorded
+# parent, parents who are not rows included, by label propagation over the
+# links, numbered by first row.
+node <- unique(c(pid, mom[!is.na(mom)], dad[!is.na(dad)]))
+lab2 <- seq_along(node)
+edges <- rbind(cbind(pid, mom), cbind(pid, dad))
+edges <- edges[!is.na(edges[, 2]), , drop = FALSE]
+ea <- match(edges[, 1], node); eb <- match(edges[, 2], node)
+repeat {
+  old <- lab2
+  for (e in seq_along(ea)) { v <- min(lab2[ea[e]], lab2[eb[e]]); lab2[ea[e]] <- v; lab2[eb[e]] <- v }
+  if (all(old == lab2)) break
+}
+plab <- lab2[match(pid, node)]
+pedigree_clusters <- match(plab, unique(plab)) - 1
+
 cat(toJSON(list(
   versions = list(R = as.character(getRversion()), kinship2 = as.character(packageVersion("kinship2"))),
   kinship = list(person = p1$id, mother = p1$mom, father = p1$dad, founder = founder,
                  relatedness = R2, inbred_count = sum(inbred)),
   kinds = list(person = pid, mother = mom, father = dad, birth_mother = bmom, birth_day = bday,
                siblings = sib, cousins1 = cous1, cousins2 = cous2, clusters = clusters,
-               group = grp, size = size, order = order_)
+               group = grp, size = size, order = order_,
+               birth_day2 = bday2, tolerance = tolerance,
+               pedigree_clusters = pedigree_clusters)
 ), digits = NA, auto_unbox = TRUE, na = "null"))
