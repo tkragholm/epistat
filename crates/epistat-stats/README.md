@@ -1,39 +1,20 @@
 # epistat-stats
 
-Sample quantiles (R's types 1 and 7, and a weighted type 1), the normal distribution function and
-its inverse with truncated and folded quantiles, the log-gamma, digamma, trigamma and
-regularised incomplete gamma functions with the chi-square distribution, the
-Student t distribution, the incomplete beta function and its quantile,
-floating-point sums in the order Python computes them, and log-sum-exp, softmax, information criteria and covariate balance statistics
-(standardised mean differences, variance ratios, eCDF and eQQ distances,
-Cramér's V), and MCMC diagnostics (autocorrelation, effective sample size,
-split R-hat).
+Distribution functions (normal, t, chi-square, F, beta, gamma, Poisson and
+binomial, with R's names and NaN outside the domain), sample quantiles (R's
+types 1 and 7, and a weighted type 1), floating-point sums in the order
+Python and polars compute them and over eight fixed lanes, weighted means and
+variances with reliability weights, Kish's effective sample size and weight
+limits, plain moments, the logistic function, Wald estimates, log-sum-exp,
+softmax and information criteria, MCMC diagnostics (autocorrelation,
+effective sample size, split R-hat) and k-means clustering from given
+centres. The approximations that published analyses reproduce are in
+`compat`.
 
-Also weighted means and variances with reliability weights, direct
-standardisation and the Kitagawa decomposition with the variances of its parts
-(checked against `DasGuptR` and `MatchIt`), Poisson confidence intervals
-(exact, Anscombe and Byar), rates with exact intervals, rate ratios (with an exact interval) and
-differences and directly standardised rates with Fay-Feuer intervals, the ratio
-of two standardised rates with Fay's F, the modified F of Tiwari, Clegg and Zou
-or the log interval, and their difference, the F quantile,
-Mantel-Haenszel estimators with the Breslow-Day test, tests of a common rate
-ratio over strata (Breslow-Day for rates, likelihood ratio and Pearson at the
-conditional maximum likelihood estimate), standardised incidence
-ratios with exact, Byar, Wald and profile intervals and tests of homogeneity
-and trend, the F tail,
-E-values (for risk, odds and hazard ratios, mean and risk differences, and
-selection, with the bounding factor for benchmarks, checked against
-`EValue`), quantitative bias analysis (misclassification of exposure or
-outcome from sensitivity and specificity or from predictive values,
-selection, an unmeasured binary confounder and misclassified person-time,
-simple and probabilistic with every draw returned, several biases in one
-draw, and record-level correction with any model, checked against
-`episensr`), Rosenbaum bounds (the signed rank statistic and its ranks, the
-Hodges-Lehmann estimate, m-statistics with their interval under hidden bias,
-the Mantel-Haenszel test for binary outcomes, Gehan's scores for censored
-times, sensitivity values and amplification, checked against `rbounds`,
-`sensitivitymv`, `sensitivitymw` and `sensitivity2x2xk`), k-means
-clustering from given centres, and sums and dot products over eight fixed lanes.
+The epidemiological measures that were here until 0.2 are in `epistat-epi`.
+The modules `balance`, `decomposition`, `evalue`, `rosenbaum`, `signed_rank`
+and `standardisation`, and the 0.2 paths of the distribution functions, stay
+for 0.3 as deprecated copies and forwarders, and are removed in 0.4.
 
 The quantiles and the normal distribution function give the same doubles as
 R; the normal quantile is within two units in the last place of R's `qnorm`.
