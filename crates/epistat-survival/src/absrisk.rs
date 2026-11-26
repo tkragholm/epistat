@@ -427,7 +427,7 @@ impl<'a> CauseSpecificCox<'a> {
         }
         let (lower, upper) = match &std_err {
             Some(se) if opts.limits != RiskLimits::None => {
-                let z = normal::two_sided_z(opts.conf_level);
+                let z = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
                 let (lo, up) = limits::limits(&risk, se, opts.limits, z);
                 (Some(lo), Some(up))
             }

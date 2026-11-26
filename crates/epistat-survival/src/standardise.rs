@@ -299,7 +299,7 @@ impl Standardised {
         }
         let (difference_inference, ratio_inference) = match &self.covariance {
             Some(cov) => {
-                let z = normal::two_sided_z(self.conf_level);
+                let z = normal::quantile(1.0 - (1.0 - self.conf_level) / 2.0);
                 let mut d_se = Vec::with_capacity(t);
                 let mut r_se = Vec::with_capacity(t);
                 for k in 0..t {
@@ -732,7 +732,7 @@ fn run(
     }
     let (lower, upper) = match &std_err {
         Some(se) => {
-            let z = normal::two_sided_z(opts.conf_level);
+            let z = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
             let lo = risk
                 .iter()
                 .zip(se)

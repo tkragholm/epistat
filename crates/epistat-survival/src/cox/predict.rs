@@ -1667,7 +1667,7 @@ pub fn survfit(
     let baseline = curve_baseline(&m, opts)?;
     let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     let p = m.p;
-    let z_value = normal::two_sided_z(opts.conf_level);
+    let z_value = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
     let mut z = vec![0.0; p];
     let mut g = vec![0.0; p];
     let mut curves = Vec::with_capacity(newdata.x.nrows());

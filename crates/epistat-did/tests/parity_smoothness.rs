@@ -117,7 +117,7 @@ fn folded_quantile_standard_error(
 ) -> f64 {
     let h = standard_deviation(&result.optimal_vec, sigma);
     let chi = result.optimal_half_length / h;
-    let quantile = |mu: f64| normal::folded_quantile(p, mu).expect("quantile");
+    let quantile = |mu: f64| normal::folded_quantile(p, mu);
     let (mut low, mut high) = (0.0, chi);
     if quantile(low) < chi {
         for _ in 0..200 {

@@ -97,7 +97,7 @@ pub fn crude_mortality(
     let groups = rows_by_stratum(data, expected)?;
     let surv = data.followup()?;
     let (start, stop, status) = (surv.start(), surv.stop(), surv.status());
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     groups
         .into_iter()
         .enumerate()

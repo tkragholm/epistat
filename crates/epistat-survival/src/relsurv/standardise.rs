@@ -91,7 +91,7 @@ pub fn standardise_net(
     if !(level > 0.0 && level < 1.0) {
         return Err(Error::input("level must be in (0, 1)"));
     }
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     let mut out = StandardisedNet {
         times: times.to_vec(),
         survival: Vec::with_capacity(times.len()),

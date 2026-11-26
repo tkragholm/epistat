@@ -251,7 +251,7 @@ pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
     }
     let (curve0, curve1, tau, tau_largest) = horizon(data, opts)?;
     let (curve0, curve1) = (&curve0, &curve1);
-    let z = epistat_stats::dist::normal::two_sided_z(opts.conf_level);
+    let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
     let group0 = group_rmst(curve0, tau, z)?;
     let group1 = group_rmst(curve1, tau, z)?;
     let (v0, v1) = (group0.se * group0.se, group1.se * group1.se);
@@ -638,7 +638,7 @@ pub fn rmst2_regression(
     let covariance = sandwich(a.as_ref(), gamma.as_ref(), &Attempt::SYMMETRIC)
         .map_err(|e| Error::input(format!("the information could not be inverted: {e}")))?;
     let std_err: Vec<f64> = (0..p).map(|j| covariance[(j, j)].max(0.0).sqrt()).collect();
-    let z_value = epistat_stats::dist::normal::two_sided_z(opts.conf_level);
+    let z_value = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
     let z: Vec<f64> = (0..p).map(|j| beta[j] / std_err[j]).collect();
     let p_value: Vec<f64> = z
         .iter()

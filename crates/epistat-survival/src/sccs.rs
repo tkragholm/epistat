@@ -717,7 +717,7 @@ impl SccsFit {
         } else {
             &self.standard_errors
         };
-        let z = epistat_stats::dist::normal::two_sided_z(level);
+        let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - level) / 2.0);
         Ok(self
             .coefficients
             .iter()

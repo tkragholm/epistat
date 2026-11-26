@@ -124,7 +124,7 @@ pub fn af_from_standardised(
         return Err(Error::input("level must be in (0, 1)"));
     }
     let contrast = s.contrast(unexposed, observed)?;
-    let z = normal::two_sided_z(level);
+    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
     let t = s.n_times;
     let mut curve = AfCurve {
         times: times.to_vec(),

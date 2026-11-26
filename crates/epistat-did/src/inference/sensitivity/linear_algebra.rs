@@ -596,7 +596,8 @@ pub(super) fn truncated_normal_quantile(p: f64, l: f64, u: f64) -> Result<f64, S
     if l == u {
         return Ok(l);
     }
-    epistat_stats::dist::normal::truncated_quantile(p, l, u)
+    Some(epistat_stats::dist::normal::truncated_quantile(p, l, u))
+        .filter(|q| !q.is_nan())
         .or_else(|| far_tail_truncated_quantile(p, l, u))
         .ok_or_else(undefined)
 }
@@ -762,7 +763,8 @@ mod tests {
             (0.7, 20.0, f64::INFINITY),
             (0.3, f64::NEG_INFINITY, -8.0),
         ] {
-            let direct = epistat_stats::dist::normal::truncated_quantile(p, l, u).expect("direct");
+            let direct = epistat_stats::dist::normal::truncated_quantile(p, l, u);
+            assert!(direct.is_finite(), "direct");
             let tail = super::far_tail_truncated_quantile(p, l, u).expect("tail");
             assert!(
                 ((direct - tail) / direct).abs() < 1e-12,
