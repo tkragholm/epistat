@@ -577,6 +577,75 @@ fn zero_weights_select_the_same_fit_as_dropping_the_rows() {
     }
 }
 
+/// Every output of a fit, as bits, for comparing two fits.
+fn all_bits(fit: &epistat_glm::FeolsFit<'_>, ways: &[&[u32]]) -> Vec<u64> {
+    let mut out: Vec<u64> = fit
+        .coefficients
+        .iter()
+        .map(|c| c.map_or(1, f64::to_bits))
+        .collect();
+    out.extend(fit.residuals.iter().map(|v| v.to_bits()));
+    out.extend([fit.rss.to_bits(), fit.sigma2.map_or(1, f64::to_bits)]);
+    out.extend([fit.r2_within.map_or(1, f64::to_bits), fit.rank as u64]);
+    out.extend(fit.iterations.iter().map(|&i| i as u64));
+    out.extend(fit.dropped_columns.iter().map(|&i| i as u64));
+    let d = fit.design();
+    for j in 0..d.ncols() {
+        out.extend((0..d.nrows()).map(|i| d[(i, j)].to_bits()));
+    }
+    let b = fit.bread();
+    for j in 0..b.ncols() {
+        out.extend((0..b.nrows()).map(|i| b[(i, j)].to_bits()));
+    }
+    for kind in [Vcov::Iid, Vcov::Hetero, Vcov::Cluster(ways)] {
+        let cov = fit.vcov(kind, Ssc::new()).unwrap();
+        out.extend(cov.matrix.iter().map(|c| c.map_or(1, f64::to_bits)));
+    }
+    for v in &fit.fixed_effects().values {
+        out.extend(v.iter().map(|c| c.map_or(1, f64::to_bits)));
+    }
+    out
+}
+
+#[test]
+fn a_fit_of_an_owned_design_has_the_bits_of_a_fit_of_a_borrowed_one() {
+    let reference = reference();
+    for case in &reference.cases {
+        let fe = fixed_effects(case);
+        let mut names: Vec<&String> = case.variables.keys().collect();
+        names.sort();
+        let ways: Vec<&[u32]> = vec![case.variables[names[0]].as_slice()];
+        let x = design(case);
+        // The same design with the first column repeated as the second, so
+        // that one column is aliased and the kept ones move left.
+        let p = x.ncols();
+        let aliased = Mat::from_fn(x.nrows(), p + 1, |i, j| match j {
+            0 | 1 => x[(i, 0)],
+            _ => x[(i, j - 1)],
+        });
+        for x in [x, aliased] {
+            let feols = Feols { absorb: TIGHT };
+            let a = feols.fit(&case.y, x.as_ref(), &fe).unwrap();
+            let b = feols.fit_owned(&case.y, x.clone(), &fe).unwrap();
+            assert_eq!(all_bits(&a, &ways), all_bits(&b, &ways), "{}", case.name);
+        }
+        // The errors are those of the borrowed fit.
+        let mut x = design(case);
+        let row = fe.rows()[fe.n_rows() / 2];
+        x[(row, 0)] = f64::NAN;
+        let feols = Feols::default();
+        assert_eq!(
+            feols.fit(&case.y, x.as_ref(), &fe).unwrap_err(),
+            feols.fit_owned(&case.y, x.clone(), &fe).unwrap_err()
+        );
+        let short = Mat::<f64>::zeros(x.nrows() - 1, x.ncols());
+        assert_eq!(
+            feols.fit(&case.y, short.as_ref(), &fe).unwrap_err(),
+            feols.fit_owned(&case.y, short, &fe).unwrap_err()
+        );
+    }
+}
+
 fn fit_bits() -> Vec<f64> {
     let reference = reference();
     let mut out = Vec::new();

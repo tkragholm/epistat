@@ -25,9 +25,24 @@ pub(super) struct Panel {
     pub t_max: i64,
     /// Number of periods in the grid.
     pub nt: usize,
+    /// The input period of each rank, `times[rank - 1]`.
+    pub times: Vec<i64>,
     /// Outcome and treatment of each cell, NaN where missing or filled in.
+    /// With `trends_lin` the outcome is its first difference.
     pub y: Vec<f64>,
     pub d: Vec<f64>,
+    /// The outcome in levels, as `outcome_non_diff_XX`.
+    pub y_level: Vec<f64>,
+    /// The treatment that defines the switchers' cohorts: the treatment
+    /// itself, or with `continuous` the indicator of having switched times
+    /// the direction of the switch, as the package recodes it.
+    pub d_cohort: Vec<f64>,
+    /// The baseline that groups are compared within: `d_sq`, or 0 for every
+    /// group with `continuous`.
+    pub base_value: Vec<f64>,
+    /// The controls that `continuous` adds: `(rank, power)` of each, after
+    /// the user's controls.
+    pub generated: Vec<(i64, i32)>,
     /// `N_gt`: the weight where outcome and treatment are both observed, else 0.
     pub n_gt: Vec<f64>,
     /// Sampling weight of the cell, NaN for a cell the balancing filled in.
@@ -76,18 +91,19 @@ struct Row {
     group: usize,
     rank: i64,
     y: f64,
+    y_level: f64,
     d: f64,
     weight: f64,
     controls: Vec<f64>,
 }
 
-fn key(value: f64) -> u64 {
+pub(super) fn key(value: f64) -> u64 {
     // R groups by value, for which -0 and 0 are equal.
     (value + 0.0).to_bits()
 }
 
 /// Dense indices of the distinct keys, in increasing order of the keys.
-fn index_of<K: Ord + Clone + std::hash::Hash>(keys: &[K]) -> (Vec<usize>, usize) {
+pub(super) fn index_of<K: Ord + Clone + std::hash::Hash>(keys: &[K]) -> (Vec<usize>, usize) {
     let mut distinct: Vec<K> = keys.to_vec();
     distinct.sort();
     distinct.dedup();
@@ -99,7 +115,7 @@ fn index_of<K: Ord + Clone + std::hash::Hash>(keys: &[K]) -> (Vec<usize>, usize)
     (keys.iter().map(|k| map[k]).collect(), distinct.len())
 }
 
-fn ordered(x: f64) -> i64 {
+pub(super) fn ordered(x: f64) -> i64 {
     // A total order on finite values for use as a sort key.
     let bits = key(x).cast_signed();
     if bits < 0 { bits ^ i64::MAX } else { bits }
@@ -209,6 +225,7 @@ pub(super) fn prepare(
             group: pos_of[&o.group],
             rank: rank_of[&o.time],
             y: o.outcome.unwrap_or(NA),
+            y_level: NA,
             d: o.treatment.unwrap_or(NA),
             weight: o.weight,
             controls: o.controls.clone(),
@@ -290,7 +307,11 @@ pub(super) fn prepare(
     // one first-switch date, are dropped. R takes the standard deviation of
     // F_g over the rows of the cell, so a cell of one row goes too.
     let stratum: Vec<i64> = ids.iter().map(|g| stratum_of[g]).collect();
-    let base_key = |g: usize| (ordered(d_sq[g]), stratum[g]);
+    // With `continuous` every group has the baseline 0 from here on, for the
+    // comparisons; the switching direction keeps the original one.
+    let continuous = config.continuous.is_some();
+    let base_of = |g: usize| if continuous { 0.0 } else { d_sq[g] };
+    let base_key = |g: usize| (ordered(base_of(g)), stratum[g]);
     let mut cell_f: HashMap<(i64, i64), (i64, bool, usize)> = HashMap::new();
     for r in &rows {
         let e = cell_f
@@ -350,7 +371,7 @@ pub(super) fn prepare(
     }
     rows = kept_rows;
     ever = kept_ever;
-    let t_min = rows
+    let mut t_min = rows
         .iter()
         .map(|r| r.rank)
         .min()
@@ -435,6 +456,56 @@ pub(super) fn prepare(
             trunc[g] = Some(max_d[g] + 1);
         }
     }
+    for r in &mut rows {
+        r.y_level = r.y;
+    }
+
+    // `trends_lin`: groups that switch in the second period go, the outcome
+    // and the controls become first differences, and the first period goes.
+    // The differences are between consecutive periods; a period missing from
+    // a group's rows leaves the next difference missing.
+    if config.trends_lin {
+        let mut kept_rows = Vec::with_capacity(rows.len());
+        let mut kept_ever = Vec::with_capacity(rows.len());
+        for (r, e) in rows.into_iter().zip(ever) {
+            if f_g[r.group] != 2 {
+                kept_rows.push(r);
+                kept_ever.push(e);
+            }
+        }
+        let mut diffed: Vec<(f64, Vec<f64>)> = Vec::with_capacity(kept_rows.len());
+        for (i, r) in kept_rows.iter().enumerate() {
+            let prev = (i > 0)
+                .then(|| &kept_rows[i - 1])
+                .filter(|p| p.group == r.group && p.rank == r.rank - 1);
+            diffed.push(match prev {
+                Some(p) => (
+                    r.y - p.y,
+                    r.controls
+                        .iter()
+                        .zip(&p.controls)
+                        .map(|(a, b)| a - b)
+                        .collect(),
+                ),
+                None => (NA, vec![NA; n_controls]),
+            });
+        }
+        rows = Vec::with_capacity(kept_rows.len());
+        ever = Vec::with_capacity(kept_rows.len());
+        for ((mut r, e), (y, x)) in kept_rows.into_iter().zip(kept_ever).zip(diffed) {
+            if r.rank != 1 {
+                r.y = y;
+                r.controls = x;
+                rows.push(r);
+                ever.push(e);
+            }
+        }
+        t_min = rows
+            .iter()
+            .map(|r| r.rank)
+            .min()
+            .ok_or(DcdhError::NoEffect)?;
+    }
 
     // The balanced grid of the groups that still have rows.
     let mut in_grid = vec![false; ng];
@@ -450,6 +521,7 @@ pub(super) fn prepare(
     let gn = grid_groups.len();
     let cells = gn * nt;
     let mut y = vec![NA; cells];
+    let mut y_level = vec![NA; cells];
     let mut d = vec![NA; cells];
     let mut weight = vec![NA; cells];
     let mut ever_change = vec![NA; cells];
@@ -458,6 +530,7 @@ pub(super) fn prepare(
     for (r, &e) in rows.iter().zip(&ever) {
         let c = grid_pos[r.group] * nt + usize::try_from(r.rank - t_min).expect("rank");
         y[c] = r.y;
+        y_level[c] = r.y_level;
         d[c] = r.d;
         weight[c] = r.weight;
         ever_change[c] = if e { 1.0 } else { 0.0 };
@@ -483,11 +556,7 @@ pub(super) fn prepare(
     let gd_sq: Vec<f64> = grid_groups.iter().map(|&g| d_sq[g]).collect();
     let gstratum: Vec<i64> = grid_groups.iter().map(|&g| stratum[g]).collect();
     let gf: Vec<i64> = grid_groups.iter().map(|&g| f_g[g]).collect();
-    let (base_id, n_base) = index_of(
-        &(0..gn)
-            .map(|i| (ordered(gd_sq[i]), gstratum[i]))
-            .collect::<Vec<_>>(),
-    );
+    let (base_id, n_base) = index_of(&grid_groups.iter().map(|&g| base_key(g)).collect::<Vec<_>>());
     let mut base_max = vec![i64::MIN; n_base];
     for i in 0..gn {
         let g = grid_groups[i];
@@ -525,44 +594,13 @@ pub(super) fn prepare(
             s_g[i] = if avg > gd_sq[i] { 1.0 } else { 0.0 };
         }
     }
-    if drop.iter().any(|&x| x) {
-        let keep_idx: Vec<usize> = (0..gn).filter(|&i| !drop[i]).collect();
-        return Ok(finish(
-            &Subset {
-                keep: &keep_idx,
-                nt,
-                y: &y,
-                d: &d,
-                n_gt: &n_gt,
-                weight: &weight,
-                ever_change: &ever_change,
-                controls: &controls,
-            },
-            &Groups {
-                ids: grid_groups.iter().map(|&g| ids[g]).collect(),
-                d_sq: gd_sq,
-                stratum: gstratum,
-                f_g: gf,
-                t_g,
-                s_g,
-                cluster: grid_groups
-                    .iter()
-                    .map(|&g| cluster_of.get(&ids[g]).copied())
-                    .collect(),
-            },
-            counted_ids,
-            n_groups,
-            t_min,
-            t_max,
-            clustered,
-        ));
-    }
-    let all: Vec<usize> = (0..gn).collect();
+    let keep_idx: Vec<usize> = (0..gn).filter(|&i| !drop[i]).collect();
     Ok(finish(
         &Subset {
-            keep: &all,
+            keep: &keep_idx,
             nt,
             y: &y,
+            y_level: &y_level,
             d: &d,
             n_gt: &n_gt,
             weight: &weight,
@@ -583,9 +621,10 @@ pub(super) fn prepare(
         },
         counted_ids,
         n_groups,
-        t_min,
-        t_max,
+        (t_min, t_max),
+        times,
         clustered,
+        config,
     ))
 }
 
@@ -593,6 +632,7 @@ struct Subset<'a> {
     keep: &'a [usize],
     nt: usize,
     y: &'a [f64],
+    y_level: &'a [f64],
     d: &'a [f64],
     n_gt: &'a [f64],
     weight: &'a [f64],
@@ -617,19 +657,29 @@ fn take(values: &[f64], keep: &[usize], nt: usize) -> Vec<f64> {
 }
 
 /// The group variables that follow S_g, on the groups that remain.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the state of did_multiplegt_main at this point"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the steps of did_multiplegt_main after S_g, in R's order"
+)]
 fn finish(
     sub: &Subset<'_>,
     groups: &Groups,
     counted_ids: Vec<i64>,
     n_groups: usize,
-    t_min: i64,
-    t_max: i64,
+    (t_min, t_max): (i64, i64),
+    times: Vec<i64>,
     clustered: bool,
+    config: &DcdhConfig,
 ) -> Panel {
     let &Subset {
         keep,
         nt,
         y,
+        y_level,
         d,
         n_gt,
         weight,
@@ -637,11 +687,12 @@ fn finish(
         controls,
     } = sub;
     let y = take(y, keep, nt);
+    let y_level = take(y_level, keep, nt);
     let d = take(d, keep, nt);
     let n_gt = take(n_gt, keep, nt);
     let weight = take(weight, keep, nt);
     let ever_change = take(ever_change, keep, nt);
-    let controls: Vec<Vec<f64>> = controls.iter().map(|x| take(x, keep, nt)).collect();
+    let mut controls: Vec<Vec<f64>> = controls.iter().map(|x| take(x, keep, nt)).collect();
     let pick = |v: &[i64]| keep.iter().map(|&i| v[i]).collect::<Vec<_>>();
     let pickf = |v: &[f64]| keep.iter().map(|&i| v[i]).collect::<Vec<_>>();
     let group_ids = pick(&groups.ids);
@@ -652,20 +703,62 @@ fn finish(
     let s_g = pickf(&groups.s_g);
     let gn = group_ids.len();
     let never_f = t_max + 1;
+    let time_of = |tp: usize| t_min + i64::try_from(tp).expect("period index fits i64");
+
+    // With `continuous` the comparisons are within the baseline 0, the
+    // cohorts use the indicator of having switched times the direction (1
+    // in, -1 out, missing for a group that never switches), and the
+    // controls gain the period effects times the powers of the baseline.
+    let base_value: Vec<f64> = if config.continuous.is_some() {
+        vec![0.0; gn]
+    } else {
+        d_sq.clone()
+    };
+    let d_cohort: Vec<f64> = if config.continuous.is_some() {
+        (0..gn * nt)
+            .map(|c| {
+                let g = c / nt;
+                let direction = if s_g[g] == 0.0 { -1.0 } else { s_g[g] };
+                f64::from(u8::from(f_g[g] <= time_of(c % nt))) * direction
+            })
+            .collect()
+    } else {
+        d.clone()
+    };
+    let mut generated = Vec::new();
+    if let Some(degree) = config.continuous {
+        let degree = i32::try_from(degree).expect("degree fits i32");
+        for j in t_min + 1..=t_max {
+            for k in 1..=degree {
+                generated.push((j, k));
+                controls.push(
+                    (0..gn * nt)
+                        .map(|c| {
+                            if weight[c].is_nan() {
+                                NA
+                            } else {
+                                f64::from(u8::from(time_of(c % nt) >= j)) * d_sq[c / nt].powi(k)
+                            }
+                        })
+                        .collect(),
+                );
+            }
+        }
+    }
 
     // D at F_g; the baseline for a group that never switches.
     let d_fg: Vec<f64> = (0..gn)
         .map(|i| {
             let tp = f_g[i] - t_min;
             if f_g[i] <= t_max && tp >= 0 {
-                let v = d[i * nt + usize::try_from(tp).expect("period")];
+                let v = d_cohort[i * nt + usize::try_from(tp).expect("period")];
                 if v.is_nan() && f_g[i] == never_f {
-                    d_sq[i]
+                    base_value[i]
                 } else {
                     v
                 }
             } else {
-                d_sq[i]
+                base_value[i]
             }
         })
         .collect();
@@ -675,13 +768,13 @@ fn finish(
         .collect();
     let (base_id, n_base) = index_of(
         &(0..gn)
-            .map(|i| (ordered(d_sq[i]), stratum[i]))
+            .map(|i| (ordered(base_value[i]), stratum[i]))
             .collect::<Vec<_>>(),
     );
-    let (level, n_level) = index_of(&d_sq.iter().map(|&v| ordered(v)).collect::<Vec<_>>());
+    let (level, n_level) = index_of(&base_value.iter().map(|&v| ordered(v)).collect::<Vec<_>>());
     let (cohort_id, n_cohort) = index_of(
         &(0..gn)
-            .map(|i| (ordered(d_sq[i]), f_g[i], ordered(d_fg[i]), stratum[i]))
+            .map(|i| (ordered(base_value[i]), f_g[i], ordered(d_fg[i]), stratum[i]))
             .collect::<Vec<_>>(),
     );
     let (cluster, n_cluster) = if clustered {
@@ -701,8 +794,13 @@ fn finish(
         t_min,
         t_max,
         nt,
+        times,
         y,
         d,
+        y_level,
+        d_cohort,
+        base_value,
+        generated,
         n_gt,
         weight,
         ever_change,

@@ -11,6 +11,10 @@
 //! beta = (X~' W X~)^-1 X~' W y~,      e = y~ - X~ beta
 //! ```
 //!
+//! [`Feols::fit_owned`] takes the design by value and demeans its columns in
+//! their own storage, so the demeaned design is the only copy of it; the
+//! results are those of `fit` to the bit.
+//!
 //! A covariate is aliased when its demeaned column, after the columns before
 //! it are projected out, keeps less than `1e-7` of the weighted norm of the
 //! covariate centred at its mean, which is the rule of `Glm::fit` applied to
@@ -83,7 +87,6 @@ use std::collections::HashMap;
 
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
-use epistat_linalg::design::select_columns;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, ROW_BLOCK, matvec_into, row_scaled_gram, xtv};
 use rayon::prelude::*;
 
@@ -366,24 +369,61 @@ impl Feols {
             })
             .collect();
         columns.push(y);
-        let demeaned = fe.demean(&columns, &self.absorb)?;
+        let mut demeaned = fe.demean(&columns, &self.absorb)?;
         drop(copies);
-        Self::solve(fe, demeaned, p)
+        let y_tilde = demeaned.columns.col_as_slice(p).to_vec();
+        let mut matrix = std::mem::replace(&mut demeaned.columns, Mat::<f64>::zeros(0, 0));
+        matrix.truncate(fe.n_rows(), p);
+        Self::solve(fe, matrix, &y_tilde, demeaned)
     }
 
-    /// The fit from the demeaned columns: covariates first, outcome last.
-    fn solve(fe: &FixedEffects, demeaned: Demeaned, p: usize) -> Result<FeolsFit<'_>, AbsorbError> {
+    /// [`Feols::fit`] with the design taken by value and demeaned in its own
+    /// storage, so that no demeaned copy is made: the peak memory is about
+    /// half that of `fit`. The results are those of `fit` to the bit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Feols::fit`].
+    pub fn fit_owned<'a>(
+        &self,
+        y: &[f64],
+        mut x: Mat<f64>,
+        fe: &'a FixedEffects,
+    ) -> Result<FeolsFit<'a>, AbsorbError> {
+        let n_input = fe.n_input();
+        for (what, found) in [("y", y.len()), ("x", x.nrows())] {
+            if found != n_input {
+                return Err(AbsorbError::Length {
+                    what,
+                    expected: n_input,
+                    found,
+                });
+            }
+        }
+        let (y_tilde, demeaned) = fe.demean_matrix(&mut x, y, &self.absorb)?;
+        Self::solve(fe, x, &y_tilde, demeaned)
+    }
+
+    /// The fit from the demeaned covariates, one row per row that enters,
+    /// and the demeaned outcome; `demeaned` carries the scales, iterations
+    /// and coefficients of the covariates and then of the outcome.
+    fn solve<'a>(
+        fe: &'a FixedEffects,
+        mut matrix: Mat<f64>,
+        y_tilde: &[f64],
+        demeaned: Demeaned,
+    ) -> Result<FeolsFit<'a>, AbsorbError> {
         let Demeaned {
-            columns: mut matrix,
             scale,
             iterations,
             coefficients: column_coefficients,
+            ..
         } = demeaned;
+        let p = matrix.ncols();
         let n = fe.n_rows();
         let w = fe.weights();
         let total_weight = w.map_or(n as f64, |w| blocked_total(w.len(), |k| w[k]));
-        let y_tilde = matrix.col_as_slice(p).to_vec();
-        let x_tilde = matrix.as_ref().subcols(0, p);
+        let x_tilde = matrix.as_ref();
         let reference: Vec<f64> = scale[..p].iter().map(|s| s * total_weight.sqrt()).collect();
         let root: Vec<f64> = w.map_or_else(Vec::new, |w| w.iter().map(|v| v.sqrt()).collect());
         let scaled = |k: usize| root.get(k).copied().unwrap_or(1.0);
@@ -397,13 +437,18 @@ impl Feols {
         let rank = columns.len();
         let dropped_columns: Vec<usize> = (0..p).filter(|&j| !keep[j]).collect();
         let (design, gram) = if rank == p {
-            // The demeaned covariates are the design: drop the outcome.
-            matrix.truncate(n, p);
             (matrix, full_gram)
         } else {
-            let design = select_columns(x_tilde, &keep);
-            let gram = row_scaled_gram(design.as_ref(), scaled);
-            (design, gram)
+            // The kept columns move left in place, in order.
+            for (a, &j) in columns.iter().enumerate() {
+                if a < j {
+                    let (left, right) = matrix.as_mut().split_at_col_mut(j);
+                    left.col_mut(a).copy_from(right.col(0));
+                }
+            }
+            matrix.truncate(n, rank);
+            let gram = row_scaled_gram(matrix.as_ref(), scaled);
+            (matrix, gram)
         };
         let weighted_y: Vec<f64> = (0..n)
             .map(|k| w.map_or(1.0, |w| w[k]) * y_tilde[k])

@@ -171,6 +171,7 @@ fn config(args: &Args) -> DcdhConfig {
             DcdhEffectsEqual::No
         },
         confidence_level: 0.95,
+        ..DcdhConfig::default()
     }
 }
 

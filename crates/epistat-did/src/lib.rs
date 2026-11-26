@@ -62,8 +62,14 @@
 //!   with the cohort and relative period coefficients and their summaries by
 //!   relative period, by cohort and overall.
 //! - Wooldridge's extended two-way fixed-effects regression \[15\] and its
-//!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them for
-//!   linear models: [`estimate_etwfe`].
+//!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them:
+//!   [`estimate_etwfe`] for linear models and [`estimate_etwfe_glm`] for the
+//!   Poisson and logit models.
+//! - The two-period ATT when the pre-treatment outcome is missing at random,
+//!   after Testa, Kennedy and Reimherr \[16\]: [`att_missing_pre`] with
+//!   parametric nuisance models, with or without cross-fitting, and
+//!   [`att_missing_pre_from_predictions`] for out-of-fold predictions of any
+//!   learner; the module [`missing`] gives the algorithm.
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
@@ -158,6 +164,9 @@
 //! 15. Wooldridge JM. Two-way fixed effects, the two-way Mundlak regression,
 //!     and difference-in-differences estimators. Empir Econ
 //!     2025;69:2545-87. doi:10.1007/s00181-025-02807-z
+//! 16. Testa L, Kennedy EH, Reimherr M. Efficient difference-in-differences
+//!     estimation when outcomes are missing at random. arXiv:2509.25009
+//!     [stat.ME]; 2025.
 #![warn(missing_docs)]
 
 #[expect(
@@ -273,8 +282,11 @@ pub use methods::bacon::{
 };
 pub use methods::continuous::sieve::estimate_acrt_sieve;
 pub use methods::dcdh::{
-    DcdhConfig, DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhObservation, DcdhResult,
-    DcdhSwitchers, estimate_dcdh,
+    DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapEstimate, DcdhConfig, DcdhDesign,
+    DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhHeterogeneity, DcdhObservation, DcdhPath,
+    DcdhPathResult, DcdhResult, DcdhSubgroup, DcdhSwitchDate, DcdhSwitchDates, DcdhSwitchers,
+    dcdh_design, dcdh_first_switch_dates, estimate_dcdh, estimate_dcdh_bootstrap, estimate_dcdh_by,
+    estimate_dcdh_by_path, estimate_dcdh_heterogeneity,
 };
 pub use methods::did_cc::{
     DidCcObservationView, estimate_did_cc_robust, estimate_did_cc_robust_from_views,
@@ -300,14 +312,22 @@ pub use methods::efficient::{
     aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
     aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
 };
+pub use methods::etwfe;
 pub use methods::etwfe::{
     EtwfeCoefficient, EtwfeConfig, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeError,
-    EtwfeResult, EtwfeTerm, EtwfeType, estimate_etwfe,
+    EtwfeFamily, EtwfeGlmCoefficient, EtwfeGlmConfig, EtwfeGlmResult, EtwfeGlmTerm, EtwfeResult,
+    EtwfeTerm, EtwfeType, estimate_etwfe, estimate_etwfe_glm,
 };
 pub use methods::imputation;
 pub use methods::imputation::{
     ImputationConfig, ImputationError, ImputationEstimate, ImputationResult, ImputationTarget,
     ImputationTerm, PretrendResult, PretrendTerm, Pretrends, estimate_did_imputation,
+};
+pub use methods::missing;
+pub use methods::missing::{
+    CrossFitFolds, MissingAssumption, MissingAtt, MissingConfig, MissingError, MissingFolds,
+    MissingModels, MissingNuisance, MissingPreData, MissingPredictions, NestedOutcome,
+    att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
 pub use methods::staggered::StaggeredPanel;
 #[expect(

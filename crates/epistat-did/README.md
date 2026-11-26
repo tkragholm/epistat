@@ -34,6 +34,19 @@ package polars; the module documentation lists where the two differ and
 where this crate departs from both. The work is linear in the cells of the
 panel.
 
+The package's other options are there too: group-specific linear trends
+(`trends_lin`), a continuous baseline treatment through a polynomial in it
+(`continuous`), effects over the same switchers at every horizon
+(`same_switchers`, `same_switchers_pl`), standard errors that demean the
+switchers within their treatment paths (`less_conservative_se`), the weights
+of the normalised effects on the treatment's lags and the average number of
+periods over which a dose accumulates. Separate functions give the
+regressions of the effects on group-level covariates (`predict_het`, with HC2
+standard errors), the estimates by subgroup and by treatment path, the
+switchers' treatment paths and first-switch dates, and a bootstrap whose
+replicates are seeded one by one, so its result does not depend on the
+number of threads.
+
 The efficient ATT(g,t) on a panel without covariates uses the sampling
 weights, which must be constant within a unit, and indexes every cell's
 influence function by unit over the whole panel, so the cells of an
@@ -72,9 +85,14 @@ cohort or unit effects and not-yet-treated or never-treated controls, as
 by cohort, by period and by event time, come with their delta-method standard
 errors from the exact Jacobian, where `marginaleffects` uses forward
 differences, and with influence functions by unit. The fit is the same
-absorbed regression, so the cost is linear in the rows. Poisson and logit
-models, which `etwfe` fits with cohort and period dummies, are not offered
-yet.
+absorbed regression, so the cost is linear in the rows. The Poisson and logit
+models of `etwfe(family = "poisson" / "logit")` are fitted as `fixest::feglm`
+fits them, with an intercept and cohort and period dummies in place of the
+absorbed effects, by `epistat-glm`'s iteratively reweighted least squares on
+rows formed block by block, so no design matrix is held. Their average effects
+are means of differences of predicted means, with the delta method on the
+exact Jacobian of the mean, the iid, robust or clustered covariance of
+`fixest` and influence functions by unit.
 
 Synthetic difference-in-differences (Arkhangelsky, Athey, Hirshberg, Imbens
 and Wager), synthetic control and the plain difference-in-differences
@@ -101,6 +119,22 @@ follow `didimputation` 0.5.1 and `did2s` 1.2.1, except that a row whose unit
 and period effects are not jointly identified is dropped rather than imputed,
 and that with varying prior weights the imputation variance is the derivative
 of the estimate, which the package's is not.
+
+When the pre-treatment outcome is missing for some units, missing at random
+given the covariates and treatment, or given those and the post-treatment
+outcome, `att_missing_pre` estimates the two-period ATT by the efficient
+estimators of Testa, Kennedy and Reimherr, including the nested regression
+that the outcome-dependent case needs. It fits logistic models for the
+propensity and the probability of an observed baseline and least squares for
+the outcome regressions, on all units or cross-fitted over folds dealt from a
+seed (by cluster when there are clusters). `att_missing_pre_from_predictions`
+takes out-of-fold predictions from any learner instead, which is how random
+forests or other flexible models are used. Probabilities near 0 or 1 are
+reported and can be refused at a floor of the caller's; they are not clipped.
+With every baseline observed the estimator is the panel doubly robust one with
+the control weights divided by the number treated rather than by their sum.
+It is checked against the authors' Python code on their simulation design,
+with correctly and wrongly specified models.
 
 Inference uses influence functions: analytic and cluster-robust standard
 errors, and multiplier-bootstrap simultaneous bands, as `did::mboot` does.
@@ -137,5 +171,7 @@ The tests compare estimates, standard errors and influence functions with
 0.1.2, `DIDmultiplegtDYN` 2.2.0, `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), `didimputation` 0.5.1 and `did2s` 1.2.1, the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
-whole procedure, from reference values written by the R scripts in `tests/`. They run with
+whole procedure, from reference values written by the R scripts in `tests/`;
+the estimator for a missing baseline is compared with the Python replication
+code of Testa, Kennedy and Reimherr through a Python script there. They run with
 `cargo test --features parity-tests`.

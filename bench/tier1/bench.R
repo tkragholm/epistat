@@ -358,22 +358,35 @@ if (method %in% c("rcs", "ns")) {
   rel <- as.integer(sub("rel::", "", names(coef(r$value))))
   finish(r$times, c(setNames(coef(r$value), sprintf("coef_rel%d", rel)),
                     setNames(se(r$value), sprintf("se_rel%d", rel))))
-} else if (method == "dcdh") {
+} else if (startsWith(method, "dcdh")) {
   # DIDmultiplegtDYN 2.4.0 needs polars, which is not on CRAN; 2.2.0 from the
   # CRAN archive is installed into its own library (DCDH_LIB).
   lib <- Sys.getenv("DCDH_LIB", path.expand("~/.cache/r-didmultiplegtdyn-2.2.0"))
   suppressMessages(library(DIDmultiplegtDYN, lib.loc = lib))
   stopifnot(as.character(packageVersion("DIDmultiplegtDYN", lib.loc = lib)) == "2.2.0")
   d <- as.data.frame(rd("dcdh"))
-  r <- timed(function() suppressMessages(did_multiplegt_dyn(d, "y", "id", "time", "d",
-                                                            effects = 3, placebo = 2,
-                                                            graph_off = TRUE))$results)
+  opts <- switch(method,
+                 dcdh_trends_lin = list(trends_lin = TRUE),
+                 dcdh_same_switchers = list(same_switchers = TRUE),
+                 dcdh_less_conservative = list(less_conservative_se = TRUE),
+                 dcdh_bootstrap = list(bootstrap = 50),
+                 list())
+  r <- timed(function() suppressMessages(do.call(did_multiplegt_dyn,
+    c(list(d, "y", "id", "time", "d", effects = 3, placebo = 2, graph_off = TRUE), opts)))$results)
   o <- r$value
-  finish(r$times, c(setNames(o$Effects[, "Estimate"], paste0("est_effect", 1:3)),
-                    setNames(o$Effects[, "SE"], paste0("se_effect", 1:3)),
-                    setNames(o$Placebos[, "Estimate"], paste0("est_placebo", 1:2)),
-                    setNames(o$Placebos[, "SE"], paste0("se_placebo", 1:2)),
-                    est_average = o$ATE[1, "Estimate"], se_average = o$ATE[1, "SE"]))
+  if (method == "dcdh_bootstrap") {
+    finish(r$times, c(setNames(o$Effects[, "Estimate"], paste0("est_effect", 1:3)),
+                      setNames(o$Effects[, "SE"], paste0("bse_effect", 1:3))))
+  } else {
+    v <- c(setNames(o$Effects[, "Estimate"], paste0("est_effect", 1:3)),
+           setNames(o$Effects[, "SE"], paste0("se_effect", 1:3)),
+           setNames(o$Placebos[, "Estimate"], paste0("est_placebo", 1:2)),
+           setNames(o$Placebos[, "SE"], paste0("se_placebo", 1:2)))
+    if (method != "dcdh_trends_lin") {
+      v <- c(v, est_average = o$ATE[1, "Estimate"], se_average = o$ATE[1, "SE"])
+    }
+    finish(r$times, v)
+  }
 } else if (method %in% c("imputation_es", "did2s_es")) {
   # didimputation 0.5.1 and did2s 1.2.1 (CRAN), on fixest 0.14.2.
   suppressMessages({library(fixest); library(didimputation); library(did2s)})
@@ -419,6 +432,23 @@ if (method %in% c("rcs", "ns")) {
   r <- timed(function() {
     m <- etwfe(y ~ x1, tvar = t, gvar = g, data = d, vcov = ~cl)
     list(simple = suppressWarnings(emfx(m, "simple")), event = suppressWarnings(emfx(m, "event")))
+  })
+  s <- r$value$simple; e <- r$value$event
+  finish(r$times, c(est_simple = s$estimate, se_simple = s$std.error,
+                    setNames(e$estimate, paste0("est_", e$event)),
+                    setNames(e$std.error, paste0("se_", e$event))))
+} else if (method %in% c("etwfe_poisson", "etwfe_logit")) {
+  # etwfe(family = "poisson" / "logit") on fixest 0.14.2's feglm, with
+  # emfx(compress = FALSE): emfx replaces the rows by cohort and period means
+  # from 5e5 rows by default, which changes the averages of a nonlinear model.
+  suppressMessages({library(fixest); library(etwfe); library(marginaleffects)})
+  setFixest_nthreads(parallel::detectCores())
+  d <- as.data.frame(rd("stagc"))
+  fam <- if (method == "etwfe_poisson") "poisson" else "logit"
+  f <- if (method == "etwfe_poisson") yc ~ x1 else yb ~ x1
+  r <- timed(function() {
+    m <- etwfe(f, tvar = t, gvar = g, data = d, family = fam, vcov = ~cl)
+    list(simple = emfx(m, "simple", compress = FALSE), event = emfx(m, "event", compress = FALSE))
   })
   s <- r$value$simple; e <- r$value$event
   finish(r$times, c(est_simple = s$estimate, se_simple = s$std.error,

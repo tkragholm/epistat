@@ -1,6 +1,7 @@
 //! Wooldridge's extended two-way fixed-effects regression \[1\] and its
 //! average effects, as `etwfe::etwfe` and `etwfe::emfx` 0.6.2 compute them
-//! \[2\] (linear models).
+//! \[2\], for linear models and, with cohort and period dummies, for Poisson
+//! and logit models.
 //!
 //! # Algorithm
 //!
@@ -72,12 +73,63 @@
 //!
 //! # Nonlinear models
 //!
-//! `etwfe` fits Poisson and logit models with cohort and period dummies in
-//! place of absorbed effects (`fe = "none"`), and `emfx` then averages
-//! differences of predicted means, with the Jacobian of the mean function.
-//! The design has a fixed number of columns (cells, cohorts, periods and the
-//! covariate terms), so the fit is an ordinary GLM in `epistat-glm` with the
-//! dummies as columns; it is not offered here.
+//! [`estimate_etwfe_glm`] fits the Poisson (log link) and logit models of
+//! `etwfe(family = "poisson" / "logit")`. `etwfe` then calls `fixest::feglm`
+//! with `fe = "none"` and cohort effects: the absorbed effects become an
+//! intercept and the dummies of the cohorts other than the reference and of
+//! the periods after the first,
+//!
+//! ```text
+//! g(E y_it) = a + c_{g_i} + l_t + x_it' b + sum_{g != r} 1[g_i = g] x_it' b_g + sum_{s != t_1} 1[t = s] x_it' c_s
+//!             + sum_{(g, s) in C} D_it 1[g_i = g, t = s] (tau_gs + x.._it' d_gs)
+//! ```
+//!
+//! with the cells, the indicator and the covariates of the linear model and
+//! `c_r = l_{t_1} = 0`. The columns are, in `etwfe`'s order, the intercept,
+//! the covariates and their cohort and period slopes, the cohort and period
+//! dummies, the cells and the cells' slopes ([`EtwfeGlmTerm`]). The rows of
+//! weight zero are removed, as `fixest` removes them. The model is fitted by
+//! [`Glm::fit_rows`](epistat_glm::Glm::fit_rows), the iteration of R's
+//! `glm.fit` \[3\] on rows formed block by block, so the memory is that of the
+//! panel and the cost linear in the rows; `feglm` iterates the same way, and
+//! both stop when the deviance changes by less than `tol (|D| + 0.1)`.
+//!
+//! With `B = (X'WX)^-1` at the working weights of the last iteration, the
+//! scores `s_i = w_i (y_i - mu_i) x_i`, `n` rows and `K` coefficients, the
+//! covariances are those of `fixest` for a model without fixed effects:
+//!
+//! ```text
+//! iid        (n - 1) / (n - K) B
+//! hetero     n / (n - K) B (sum_i s_i s_i') B
+//! cluster    G / (G - 1) (n - 1) / (n - K) B (sum_g s_g s_g') B
+//! ```
+//!
+//! with the factors in `n` and `K` dropped without [`Ssc::k_adj`] and the
+//! one in `G` without [`Ssc::g_adj`]. `fixest`'s default is iid.
+//!
+//! `emfx` averages over the rows of the linear case the contrast of the
+//! predicted mean with `D = 1` and with `D = 0`, `mu = g^-1`:
+//!
+//! ```text
+//! theta = mean_S [mu(eta1_it) - mu(eta0_it)],     eta1_it = eta0_it + tau_{g_i t} + x.._it' d_{g_i t}
+//! J     = mean_S [mu'(eta1_it) x1_it - mu'(eta0_it) x0_it]
+//! ```
+//!
+//! with `x0` the row's design without its cell and `x1` with it, and
+//! `Var(theta) = J V J'`. `marginaleffects` finds `J` by forward differences
+//! with steps `max(|beta_j| sqrt(eps), 1e-10)`, which err by about half the
+//! step times the second derivative; here `J` is exact. The influence
+//! function of a coefficient for unit `u` is `N_u B sum_{rows of u} s_i`, and
+//! that of an average `J psi_u`; summed within unit clusters they give the
+//! unit-clustered covariance without small-sample factors.
+//!
+//! `emfx` replaces the rows by their cohort and period means from 500 000
+//! rows on (`compress = "auto"`), which for these models changes the
+//! averages; here every row enters, as with `compress = FALSE`. `fixest`
+//! forms the clustered and robust scores from the working residuals of the
+//! last iteration, at the coefficients before the last update; here they are
+//! taken at the estimates. The two differ at the size of the convergence
+//! criterion. One cluster variable is supported.
 //!
 //! # Where this differs from `etwfe` 0.6.2
 //!
@@ -96,9 +148,19 @@
 //!    and difference-in-differences estimators. Empir Econ.
 //!    2025;69:2545-87. doi:10.1007/s00181-025-02807-z (working paper 2021)
 //! 2. McDermott G. The R package `etwfe` 0.6.2: `etwfe` and `emfx`; with
-//!    `marginaleffects` 1.0.0 (`slopes`) and `fixest` 0.14.2.
+//!    `marginaleffects` 1.0.0 (`slopes`) and `fixest` 0.14.2 (`feols`,
+//!    `feglm`).
+//! 3. R Core Team. Fitting generalized linear models: `glm` and `glm.fit`.
+//!    Help pages of the stats package of R.
+
+mod glm;
 
 use std::collections::BTreeSet;
+
+pub use glm::{
+    EtwfeFamily, EtwfeGlmCoefficient, EtwfeGlmConfig, EtwfeGlmResult, EtwfeGlmTerm,
+    estimate_etwfe_glm,
+};
 
 use epistat_glm::{Absorb, AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
@@ -316,6 +378,379 @@ pub struct EtwfeResult {
 /// The cohort of a row as a key: `None` for never treated.
 type Key = Option<i32>;
 
+/// The reference, the cells, the columns and the rows of the regression of
+/// one panel under one choice of controls, shared by the linear and the
+/// nonlinear fits.
+struct Layout<'p> {
+    panel: &'p StaggeredPanel<'p>,
+    control: EtwfeControl,
+    /// The number of covariates.
+    p: usize,
+    /// The period codes of the fixed effects, from 0.
+    time: Vec<u32>,
+    /// Every cohort, never treated left out.
+    cohorts: BTreeSet<i32>,
+    /// The cohorts with cell indicators.
+    treated: Vec<i32>,
+    excluded: Vec<bool>,
+    excluded_rows: usize,
+    /// The index of each row's cohort: 0 for never treated, then the
+    /// cohorts in increasing order.
+    row_key: Vec<usize>,
+    /// The cohort means of the covariates, `row_key` by covariate.
+    means: Vec<f64>,
+    /// The cohorts other than the reference with rows in the fit.
+    slope_cohorts: Vec<i32>,
+    /// The periods after the first with rows in the fit.
+    slope_periods: Vec<i32>,
+    cells: Vec<(i32, i32)>,
+    /// The cell of each row whose indicator is one.
+    row_cell: Vec<Option<usize>>,
+    /// The columns of the linear regression.
+    terms: Vec<EtwfeTerm>,
+    /// The position of the first cell among `terms`.
+    first_cell: usize,
+}
+
+impl<'p> Layout<'p> {
+    fn new(panel: &'p StaggeredPanel<'p>, control: EtwfeControl) -> Result<Self, EtwfeError> {
+        let n = panel.unit.len();
+        for (what, found) in [
+            ("time", panel.time.len()),
+            ("first_treated", panel.first_treated.len()),
+            ("outcome", panel.outcome.len()),
+            ("weights", panel.weights.map_or(n, <[f64]>::len)),
+            ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
+        ] {
+            if found != n {
+                return Err(EtwfeError::Length {
+                    what,
+                    expected: n,
+                    found,
+                });
+            }
+        }
+        check_constant_within_units(panel.unit, panel.first_treated)
+            .map_err(|unit| EtwfeError::Cohort { unit })?;
+        let time = period_codes(panel.time).ok_or(EtwfeError::Periods)?;
+        let p = panel.covariates.map_or(0, |x| x.ncols());
+        if let Some(x) = panel.covariates {
+            for column in 0..p {
+                if let Some(row) = (0..n).find(|&i| !x[(i, column)].is_finite()) {
+                    return Err(EtwfeError::NotFinite { column, row });
+                }
+            }
+        }
+        let Some(t_first) = panel.time.iter().copied().min() else {
+            return Err(EtwfeError::NoTreatment);
+        };
+        let t_last = panel.time.iter().copied().max().unwrap_or(t_first);
+
+        // The reference, the treated cohorts and the rows removed.
+        let cohorts: BTreeSet<i32> = panel.first_treated.iter().flatten().copied().collect();
+        let has_never = panel.first_treated.iter().any(Option::is_none);
+        let after: Vec<i32> = cohorts.iter().copied().filter(|&g| g > t_last).collect();
+        let mut treated: Vec<i32> = cohorts
+            .iter()
+            .copied()
+            .filter(|&g| g > t_first && g <= t_last)
+            .collect();
+        let (reference, cutoff): (Key, Option<i32>) = if has_never {
+            (None, None)
+        } else if let Some(&g) = after.first() {
+            (Some(g), None)
+        } else if control == EtwfeControl::NeverTreated {
+            return Err(EtwfeError::NoNeverTreated);
+        } else {
+            let last = treated.pop().ok_or(EtwfeError::NoTreatment)?;
+            (Some(last), Some(last))
+        };
+        let excluded: Vec<bool> = (0..n)
+            .map(|i| {
+                panel.first_treated[i].is_some_and(|g| g <= t_first)
+                    || cutoff.is_some_and(|c| panel.time[i] >= c)
+            })
+            .collect();
+        let excluded_rows = excluded.iter().filter(|&&b| b).count();
+
+        // The cohort means of the covariates, over every row of the input.
+        let key_index = |g: Key| -> usize {
+            g.map_or(0, |g| 1 + cohorts.iter().position(|&c| c == g).unwrap_or(0))
+        };
+        let groups = 1 + cohorts.len();
+        let mut means = vec![0.0; groups * p];
+        let mut counts = vec![0usize; groups];
+        let row_key: Vec<usize> = panel.first_treated.iter().map(|&g| key_index(g)).collect();
+        for (i, &k) in row_key.iter().enumerate() {
+            counts[k] += 1;
+            if let Some(x) = panel.covariates {
+                for j in 0..p {
+                    means[k * p + j] += x[(i, j)];
+                }
+            }
+        }
+        for k in 0..groups {
+            for j in 0..p {
+                if counts[k] > 0 {
+                    means[k * p + j] /= counts[k] as f64;
+                }
+            }
+        }
+
+        let mut layout = Self {
+            panel,
+            control,
+            p,
+            time,
+            cohorts,
+            treated,
+            excluded,
+            excluded_rows,
+            row_key,
+            means,
+            slope_cohorts: Vec::new(),
+            slope_periods: Vec::new(),
+            cells: Vec::new(),
+            row_cell: Vec::new(),
+            terms: Vec::new(),
+            first_cell: 0,
+        };
+
+        // The columns.
+        let kept_rows = |i: usize| !layout.excluded[i];
+        layout.slope_cohorts = layout
+            .cohorts
+            .iter()
+            .copied()
+            .filter(|&g| {
+                Some(g) != reference
+                    && (0..n).any(|i| kept_rows(i) && panel.first_treated[i] == Some(g))
+            })
+            .collect();
+        layout.slope_periods = (0..n)
+            .filter(|&i| kept_rows(i) && panel.time[i] != t_first)
+            .map(|i| panel.time[i])
+            .collect::<BTreeSet<i32>>()
+            .into_iter()
+            .collect();
+        layout.cells = (0..n)
+            .filter(|&i| layout.indicator(i))
+            .map(|i| (panel.first_treated[i].unwrap_or(0), panel.time[i]))
+            .collect::<BTreeSet<(i32, i32)>>()
+            .into_iter()
+            .collect();
+        if layout.cells.is_empty() {
+            return Err(EtwfeError::NoTreatment);
+        }
+        let mut terms: Vec<EtwfeTerm> = (0..p).map(EtwfeTerm::Covariate).collect();
+        for k in 0..p {
+            terms.extend(
+                layout
+                    .slope_cohorts
+                    .iter()
+                    .map(|&cohort| EtwfeTerm::CohortSlope {
+                        cohort,
+                        covariate: k,
+                    }),
+            );
+        }
+        for k in 0..p {
+            terms.extend(
+                layout
+                    .slope_periods
+                    .iter()
+                    .map(|&period| EtwfeTerm::PeriodSlope {
+                        period,
+                        covariate: k,
+                    }),
+            );
+        }
+        layout.first_cell = terms.len();
+        terms.extend(
+            layout
+                .cells
+                .iter()
+                .map(|&(cohort, period)| EtwfeTerm::Cell { cohort, period }),
+        );
+        for k in 0..p {
+            terms.extend(
+                layout
+                    .cells
+                    .iter()
+                    .map(|&(cohort, period)| EtwfeTerm::CellSlope {
+                        cohort,
+                        period,
+                        covariate: k,
+                    }),
+            );
+        }
+        layout.terms = terms;
+        layout.row_cell = (0..n)
+            .map(|i| {
+                if layout.indicator(i) {
+                    layout.cell_of(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Ok(layout)
+    }
+
+    fn n(&self) -> usize {
+        self.panel.unit.len()
+    }
+
+    fn is_treated(&self, g: Key) -> bool {
+        g.is_some_and(|g| self.treated.binary_search(&g).is_ok())
+    }
+
+    /// Whether the cell indicator `D_it 1[g_i = g, t = s]` of row `i` is one
+    /// for its own cohort and period.
+    fn indicator(&self, i: usize) -> bool {
+        let g = self.panel.first_treated[i];
+        if self.excluded[i] || !self.is_treated(g) {
+            return false;
+        }
+        let g = g.unwrap_or(0);
+        match self.control {
+            EtwfeControl::NotYetTreated => self.panel.time[i] >= g,
+            EtwfeControl::NeverTreated => self.panel.time[i] != g - 1,
+        }
+    }
+
+    /// Covariate `j` of row `i` less its cohort mean.
+    fn demeaned(&self, i: usize, j: usize) -> f64 {
+        self.panel.covariates.map_or(0.0, |x| {
+            x[(i, j)] - self.means[self.row_key[i] * self.p + j]
+        })
+    }
+
+    /// The cell of row `i`'s cohort and period, whatever its indicator.
+    fn cell_of(&self, i: usize) -> Option<usize> {
+        let g = self.panel.first_treated[i]?;
+        self.cells.binary_search(&(g, self.panel.time[i])).ok()
+    }
+
+    /// The prior weights of the fit: zero for the rows removed, `None` when
+    /// every row has weight one.
+    fn fit_weights(&self) -> Option<Vec<f64>> {
+        (self.panel.weights.is_some() || self.excluded_rows > 0).then(|| {
+            (0..self.n())
+                .map(|i| {
+                    if self.excluded[i] {
+                        0.0
+                    } else {
+                        self.panel.weights.map_or(1.0, |w| w[i])
+                    }
+                })
+                .collect()
+        })
+    }
+
+    /// Whether row `i` enters the effects overall, by cohort and by period.
+    fn effect_row(&self, i: usize) -> bool {
+        match self.control {
+            EtwfeControl::NotYetTreated => self.indicator(i),
+            EtwfeControl::NeverTreated => {
+                self.indicator(i) && self.panel.time[i] >= self.panel.first_treated[i].unwrap_or(0)
+            }
+        }
+    }
+
+    /// Whether row `i` enters the effects by event time.
+    fn event_row(&self, i: usize) -> bool {
+        match self.control {
+            EtwfeControl::NotYetTreated => self.indicator(i),
+            EtwfeControl::NeverTreated => {
+                !self.excluded[i] && self.is_treated(self.panel.first_treated[i])
+            }
+        }
+    }
+
+    /// The averages of `emfx`.
+    fn averages(&self) -> Averages {
+        let panel = self.panel;
+        let set = |f: &dyn Fn(usize) -> Option<i32>| -> Vec<i32> {
+            (0..self.n())
+                .filter_map(f)
+                .collect::<BTreeSet<i32>>()
+                .into_iter()
+                .collect()
+        };
+        let group = set(&|i| {
+            self.effect_row(i)
+                .then(|| panel.first_treated[i].unwrap_or(0))
+        });
+        let calendar = set(&|i| self.effect_row(i).then_some(panel.time[i]));
+        let event = set(&|i| {
+            self.event_row(i)
+                .then(|| panel.time[i] - panel.first_treated[i].unwrap_or(0))
+        });
+        let mut keys: Vec<EtwfeType> = vec![EtwfeType::Simple];
+        keys.extend(group.iter().map(|&g| EtwfeType::Group(g)));
+        keys.extend(calendar.iter().map(|&t| EtwfeType::Calendar(t)));
+        keys.extend(event.iter().map(|&e| EtwfeType::Event(e)));
+        Averages {
+            keys,
+            group,
+            calendar,
+            event,
+        }
+    }
+}
+
+/// The averages of `emfx`: overall, by cohort, by period and by event time,
+/// each in increasing key.
+struct Averages {
+    keys: Vec<EtwfeType>,
+    group: Vec<i32>,
+    calendar: Vec<i32>,
+    event: Vec<i32>,
+}
+
+impl Averages {
+    /// The averages row `i` enters, `usize::MAX` in the slots of those it
+    /// does not: overall, by cohort, by period and by event time. `None`
+    /// when it enters none.
+    fn targets(&self, layout: &Layout<'_>, i: usize) -> Option<[usize; 4]> {
+        let in_effect = layout.effect_row(i);
+        let in_event = layout.event_row(i);
+        if !in_effect && !in_event {
+            return None;
+        }
+        let panel = layout.panel;
+        let g = panel.first_treated[i].unwrap_or(0);
+        let g_offset = 1;
+        let c_offset = g_offset + self.group.len();
+        let e_offset = c_offset + self.calendar.len();
+        let mut targets = [usize::MAX; 4];
+        if in_effect {
+            targets[0] = 0;
+            targets[1] = g_offset + self.group.binary_search(&g).unwrap_or(0);
+            targets[2] = c_offset + self.calendar.binary_search(&panel.time[i]).unwrap_or(0);
+        }
+        if in_event {
+            targets[3] = e_offset + self.event.binary_search(&(panel.time[i] - g)).unwrap_or(0);
+        }
+        Some(targets)
+    }
+}
+
+/// The units of the rows `rows`, in increasing code, and the position of
+/// each row's unit among them.
+fn unit_codes(unit: &[u32], rows: &[usize]) -> (Vec<u32>, Vec<u32>) {
+    let unit_rows: Vec<u32> = rows.iter().map(|&i| unit[i]).collect();
+    let mut units: Vec<u32> = unit_rows.clone();
+    units.sort_unstable();
+    units.dedup();
+    let codes: Vec<u32> = unit_rows
+        .iter()
+        .map(|u| u32::try_from(units.binary_search(u).unwrap_or(0)).unwrap_or(u32::MAX))
+        .collect();
+    (units, codes)
+}
+
 /// Fits the extended two-way fixed-effects regression of `config` to `panel`
 /// and its average effects. See the module documentation.
 ///
@@ -326,171 +761,22 @@ type Key = Option<i32>;
 /// no treated cell, periods out of range, and the errors of the fit.
 #[expect(
     clippy::too_many_lines,
-    reason = "one pass from the panel to the design, the fit and the averages"
+    reason = "one pass from the layout to the design, the fit and the averages"
 )]
 pub fn estimate_etwfe(
     panel: &StaggeredPanel<'_>,
     config: &EtwfeConfig<'_>,
 ) -> Result<EtwfeResult, EtwfeError> {
-    let n = panel.unit.len();
-    for (what, found) in [
-        ("time", panel.time.len()),
-        ("first_treated", panel.first_treated.len()),
-        ("outcome", panel.outcome.len()),
-        ("weights", panel.weights.map_or(n, <[f64]>::len)),
-        ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-    ] {
-        if found != n {
-            return Err(EtwfeError::Length {
-                what,
-                expected: n,
-                found,
-            });
-        }
-    }
-    check_constant_within_units(panel.unit, panel.first_treated)
-        .map_err(|unit| EtwfeError::Cohort { unit })?;
-    let time = period_codes(panel.time).ok_or(EtwfeError::Periods)?;
-    let p = panel.covariates.map_or(0, |x| x.ncols());
-    if let Some(x) = panel.covariates {
-        for column in 0..p {
-            if let Some(row) = (0..n).find(|&i| !x[(i, column)].is_finite()) {
-                return Err(EtwfeError::NotFinite { column, row });
-            }
-        }
-    }
-    let Some(t_first) = panel.time.iter().copied().min() else {
-        return Err(EtwfeError::NoTreatment);
-    };
-    let t_last = panel.time.iter().copied().max().unwrap_or(t_first);
-
-    // The reference, the treated cohorts and the rows removed.
-    let cohorts: BTreeSet<i32> = panel.first_treated.iter().flatten().copied().collect();
-    let has_never = panel.first_treated.iter().any(Option::is_none);
-    let after: Vec<i32> = cohorts.iter().copied().filter(|&g| g > t_last).collect();
-    let mut treated: Vec<i32> = cohorts
-        .iter()
-        .copied()
-        .filter(|&g| g > t_first && g <= t_last)
-        .collect();
-    let (reference, cutoff): (Key, Option<i32>) = if has_never {
-        (None, None)
-    } else if let Some(&g) = after.first() {
-        (Some(g), None)
-    } else if config.control == EtwfeControl::NeverTreated {
-        return Err(EtwfeError::NoNeverTreated);
-    } else {
-        let last = treated.pop().ok_or(EtwfeError::NoTreatment)?;
-        (Some(last), Some(last))
-    };
-    let is_treated = |g: Key| g.is_some_and(|g| treated.binary_search(&g).is_ok());
-    let excluded: Vec<bool> = (0..n)
-        .map(|i| {
-            panel.first_treated[i].is_some_and(|g| g <= t_first)
-                || cutoff.is_some_and(|c| panel.time[i] >= c)
-        })
-        .collect();
-    let excluded_rows = excluded.iter().filter(|&&b| b).count();
-    let indicator = |i: usize| -> bool {
-        let g = panel.first_treated[i];
-        if excluded[i] || !is_treated(g) {
-            return false;
-        }
-        let g = g.unwrap_or(0);
-        match config.control {
-            EtwfeControl::NotYetTreated => panel.time[i] >= g,
-            EtwfeControl::NeverTreated => panel.time[i] != g - 1,
-        }
-    };
-
-    // The cohort means of the covariates, over every row of the input.
-    let key_index = |g: Key| -> usize {
-        g.map_or(0, |g| 1 + cohorts.iter().position(|&c| c == g).unwrap_or(0))
-    };
-    let groups = 1 + cohorts.len();
-    let mut means = vec![0.0; groups * p];
-    let mut counts = vec![0usize; groups];
-    let row_key: Vec<usize> = panel.first_treated.iter().map(|&g| key_index(g)).collect();
-    for (i, &k) in row_key.iter().enumerate() {
-        counts[k] += 1;
-        if let Some(x) = panel.covariates {
-            for j in 0..p {
-                means[k * p + j] += x[(i, j)];
-            }
-        }
-    }
-    for k in 0..groups {
-        for j in 0..p {
-            if counts[k] > 0 {
-                means[k * p + j] /= counts[k] as f64;
-            }
-        }
-    }
-    let demeaned = |i: usize, j: usize| -> f64 {
-        panel
-            .covariates
-            .map_or(0.0, |x| x[(i, j)] - means[row_key[i] * p + j])
-    };
-
-    // The columns.
-    let kept_rows = |i: usize| !excluded[i];
-    let slope_cohorts: Vec<i32> = cohorts
-        .iter()
-        .copied()
-        .filter(|&g| {
-            Some(g) != reference
-                && (0..n).any(|i| kept_rows(i) && panel.first_treated[i] == Some(g))
-        })
-        .collect();
-    let slope_periods: Vec<i32> = (0..n)
-        .filter(|&i| kept_rows(i) && panel.time[i] != t_first)
-        .map(|i| panel.time[i])
-        .collect::<BTreeSet<i32>>()
-        .into_iter()
-        .collect();
-    let cells: Vec<(i32, i32)> = (0..n)
-        .filter(|&i| indicator(i))
-        .map(|i| (panel.first_treated[i].unwrap_or(0), panel.time[i]))
-        .collect::<BTreeSet<(i32, i32)>>()
-        .into_iter()
-        .collect();
-    if cells.is_empty() {
-        return Err(EtwfeError::NoTreatment);
-    }
-    let mut terms: Vec<EtwfeTerm> = (0..p).map(EtwfeTerm::Covariate).collect();
-    for k in 0..p {
-        terms.extend(slope_cohorts.iter().map(|&cohort| EtwfeTerm::CohortSlope {
-            cohort,
-            covariate: k,
-        }));
-    }
-    for k in 0..p {
-        terms.extend(slope_periods.iter().map(|&period| EtwfeTerm::PeriodSlope {
-            period,
-            covariate: k,
-        }));
-    }
-    let first_cell = terms.len();
-    terms.extend(
-        cells
-            .iter()
-            .map(|&(cohort, period)| EtwfeTerm::Cell { cohort, period }),
-    );
-    for k in 0..p {
-        terms.extend(cells.iter().map(|&(cohort, period)| EtwfeTerm::CellSlope {
-            cohort,
-            period,
-            covariate: k,
-        }));
-    }
-    let n_cells = cells.len();
-    let cell_of = |i: usize| -> Option<usize> {
-        let g = panel.first_treated[i]?;
-        cells.binary_search(&(g, panel.time[i])).ok()
-    };
-    let row_cell: Vec<Option<usize>> = (0..n)
-        .map(|i| if indicator(i) { cell_of(i) } else { None })
-        .collect();
+    let layout = Layout::new(panel, config.control)?;
+    let n = layout.n();
+    let p = layout.p;
+    let terms = &layout.terms;
+    let first_cell = layout.first_cell;
+    let n_cells = layout.cells.len();
+    let row_cell = &layout.row_cell;
+    let excluded_rows = layout.excluded_rows;
+    let slope_cohorts = &layout.slope_cohorts;
+    let slope_periods = &layout.slope_periods;
 
     let q = terms.len();
     let mut x = Mat::<f64>::zeros(n, q);
@@ -517,26 +803,17 @@ pub fn estimate_etwfe(
         if let Some(c) = *c {
             x[(i, first_cell + c)] = 1.0;
             for k in 0..p {
-                x[(i, first_cell + n_cells * (k + 1) + c)] = demeaned(i, k);
+                x[(i, first_cell + n_cells * (k + 1) + c)] = layout.demeaned(i, k);
             }
         }
     }
-    let fit_weights: Option<Vec<f64>> = (panel.weights.is_some() || excluded_rows > 0).then(|| {
-        (0..n)
-            .map(|i| {
-                if excluded[i] {
-                    0.0
-                } else {
-                    panel.weights.map_or(1.0, |w| w[i])
-                }
-            })
-            .collect()
-    });
+    let fit_weights = layout.fit_weights();
     let cohort_code: Vec<u32>;
     let first_factor: &[u32] = match config.effects {
         EtwfeEffects::Unit => panel.unit,
         EtwfeEffects::Cohort => {
-            cohort_code = row_key
+            cohort_code = layout
+                .row_key
                 .iter()
                 .map(|&k| u32::try_from(k).unwrap_or(u32::MAX))
                 .collect();
@@ -544,15 +821,14 @@ pub fn estimate_etwfe(
         }
     };
     let fe = FixedEffects::new(
-        &[first_factor, &time],
+        &[first_factor, &layout.time],
         fit_weights.as_deref(),
         Singletons::Remove,
     )?;
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit(panel.outcome, x.as_ref(), &fe)?;
-    drop(x);
+    .fit_owned(panel.outcome, x, &fe)?;
     let cov = fit.vcov(config.vcov, config.ssc)?;
     let coefficients: Vec<EtwfeCoefficient> = terms
         .iter()
@@ -565,14 +841,7 @@ pub fn estimate_etwfe(
         .collect();
 
     // Influence by unit: the units are the panel's units in either case.
-    let unit_rows: Vec<u32> = fe.rows().iter().map(|&i| panel.unit[i]).collect();
-    let mut units: Vec<u32> = unit_rows.clone();
-    units.sort_unstable();
-    units.dedup();
-    let unit_codes: Vec<u32> = unit_rows
-        .iter()
-        .map(|u| u32::try_from(units.binary_search(u).unwrap_or(0)).unwrap_or(u32::MAX))
-        .collect();
+    let (units, unit_codes) = unit_codes(panel.unit, fe.rows());
     let n_units = units.len();
     let sums = fit.influence_sums(&unit_codes, n_units)?;
     let mut influence = vec![None; q];
@@ -586,68 +855,25 @@ pub fn estimate_etwfe(
 
     // The averages: sums of the cell indicators and demeaned covariates over
     // each set of rows.
-    let event_row = |i: usize| -> bool { !excluded[i] && is_treated(panel.first_treated[i]) };
-    let effect_row = |i: usize| -> bool {
-        match config.control {
-            EtwfeControl::NotYetTreated => indicator(i),
-            EtwfeControl::NeverTreated => {
-                indicator(i) && panel.time[i] >= panel.first_treated[i].unwrap_or(0)
-            }
-        }
-    };
-    let event_rows = |i: usize| -> bool {
-        match config.control {
-            EtwfeControl::NotYetTreated => indicator(i),
-            EtwfeControl::NeverTreated => event_row(i),
-        }
-    };
-    let mut keys: Vec<EtwfeType> = vec![EtwfeType::Simple];
-    let set = |f: &dyn Fn(usize) -> Option<i32>| -> Vec<i32> {
-        (0..n)
-            .filter_map(f)
-            .collect::<BTreeSet<i32>>()
-            .into_iter()
-            .collect()
-    };
-    let group_keys = set(&|i| effect_row(i).then(|| panel.first_treated[i].unwrap_or(0)));
-    let calendar_keys = set(&|i| effect_row(i).then_some(panel.time[i]));
-    let event_keys =
-        set(&|i| event_rows(i).then(|| panel.time[i] - panel.first_treated[i].unwrap_or(0)));
-    keys.extend(group_keys.iter().map(|&g| EtwfeType::Group(g)));
-    keys.extend(calendar_keys.iter().map(|&t| EtwfeType::Calendar(t)));
-    keys.extend(event_keys.iter().map(|&e| EtwfeType::Event(e)));
+    let averages = layout.averages();
+    let keys = &averages.keys;
     let m = keys.len();
     let width = n_cells * (1 + p);
     let mut sums_j = vec![0.0; m * width];
     let mut rows_in = vec![0usize; m];
-    let g_offset = 1;
-    let c_offset = g_offset + group_keys.len();
-    let e_offset = c_offset + calendar_keys.len();
     for i in 0..n {
-        let in_effect = effect_row(i);
-        let in_event = event_rows(i);
-        if !in_effect && !in_event {
+        let Some(targets) = averages.targets(&layout, i) else {
             continue;
-        }
-        let g = panel.first_treated[i].unwrap_or(0);
-        let mut targets = [usize::MAX; 4];
-        if in_effect {
-            targets[0] = 0;
-            targets[1] = g_offset + group_keys.binary_search(&g).unwrap_or(0);
-            targets[2] = c_offset + calendar_keys.binary_search(&panel.time[i]).unwrap_or(0);
-        }
-        if in_event {
-            targets[3] = e_offset + event_keys.binary_search(&(panel.time[i] - g)).unwrap_or(0);
-        }
+        };
         // The contrast's derivative: the row's cell and its slopes, zero
         // for a row whose cell has no column.
-        let cell = cell_of(i);
+        let cell = layout.cell_of(i);
         for &a in targets.iter().filter(|&&a| a != usize::MAX) {
             rows_in[a] += 1;
             if let Some(c) = cell {
                 sums_j[a * width + c] += 1.0;
                 for k in 0..p {
-                    sums_j[a * width + n_cells * (k + 1) + c] += demeaned(i, k);
+                    sums_j[a * width + n_cells * (k + 1) + c] += layout.demeaned(i, k);
                 }
             }
         }
