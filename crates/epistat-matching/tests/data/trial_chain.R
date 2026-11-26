@@ -104,4 +104,4 @@ out <- list(
     eligible = d$eligible, outcome = d$outcome, censored = d$censored,
     x1 = d$x1, x2 = d$x2),
   analyses = list(analysis("ITT", FALSE), analysis("PP", FALSE), analysis("PP", TRUE)))
-cat(toJSON(out, digits = I(17), auto_unbox = TRUE, na = "null"))
+cat(toJSON(out, digits = I(17), auto_unbox = TRUE, na = "null", null = "null"))
