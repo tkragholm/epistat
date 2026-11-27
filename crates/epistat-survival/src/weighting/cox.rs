@@ -68,61 +68,90 @@ use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, MatRef, inverse};
 
-use super::estimated::{Estimated, prepare};
+use super::estimated::{Weights, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
 use crate::cox::{CoxModelFit, CoxOptions, fit as cox_fit, score_residuals};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 
-/// A weighted Cox fit and its two variances.
-#[derive(Debug, Clone)]
-pub struct WeightedCox {
-    /// The weighted fit of [`crate::cox::fit`], with its model-based and
-    /// cluster-robust covariances for the case weights taken as known.
-    pub fit: CoxModelFit,
-    /// The coefficients.
-    pub coefficients: Vec<f64>,
-    /// The covariance of the coefficients that accounts for the estimation
-    /// of the weights, `p x p` row-major.
-    pub covariance: Vec<f64>,
-    /// The standard errors from `covariance`.
-    pub standard_errors: Vec<f64>,
-    /// The covariance that takes the weights as known, over the same units,
-    /// `p x p` row-major.
-    pub robust_covariance: Vec<f64>,
-    /// The standard errors from `robust_covariance`.
-    pub robust_standard_errors: Vec<f64>,
-    /// The covariance of the parameters of the weights from the stacked
-    /// sandwich: the propensity coefficients, then the marginal probability
-    /// of treatment for stabilised weights. Row-major.
-    pub weight_covariance: Vec<f64>,
-    /// The number of units the estimating functions were summed over.
-    pub n_units: usize,
-}
+/// A weighted Cox fit and its two variances, under its name in 0.3.
+#[deprecated(
+    since = "0.4.0",
+    note = "`fit` returns an `EstimatedCox` for every kind of weights"
+)]
+pub type WeightedCox = EstimatedCox;
 
-/// Fit the Cox model of `data` on `x` weighted by `iptw`, and give the
-/// variance that accounts for the weights being estimated.
+/// Fit the Cox model of `data` on `x` weighted by the product of the estimated
+/// weights of `weights`, and give the variance that accounts for each model of
+/// the weights being estimated.
 ///
-/// `subject` gives the subject of each row, a position in `iptw.weights`. It
-/// is `None` when the rows are the subjects. A subject may have several rows,
-/// as in counting-process data, and a subject may have none. `data` must carry
-/// no case weights.
+/// The weights are the propensity weights of the subject of each row and the
+/// censoring weights of the row, see [`Weights`]; the censoring weights of the
+/// Kaplan-Meier and Cox models are fitted here to `data`. With propensity
+/// weights alone, the variance is that of the stacked estimating equations, and
+/// [`EstimatedCox::weight_covariance`] holds the covariance of the parameters
+/// of the weights. Otherwise the variance adds to the influence of each unit
+/// the influence of the weights through every model, see the [module
+/// documentation of `weighting`](super), and treats the models as separate
+/// estimating equations. The two agree up to rounding for propensity weights.
+///
+/// The influence of a unit sums the score residuals of its rows, and the units
+/// are the clusters of `data`, the subjects of the propensity weights, the `id`
+/// of `data` or the rows, in that order of preference. `data` must carry no
+/// case weights.
 ///
 /// # Errors
 ///
-/// An input error for the invalid input of [`crate::cox::fit`], for data
-/// with case weights, for `subject` of another length than `data` or naming a
-/// subject that does not exist, for rows of one subject in several clusters,
-/// for exact ties, when the fit does not converge or has an aliased column, and
-/// when a solve of the stacked system fails.
+/// An input error for the invalid input of [`crate::cox::fit`] and of the models
+/// of the weights, for data with case weights, for [`Weights::known`], which
+/// [`crate::cox::fit`] fits with its robust variance, for `subject` without
+/// propensity weights or with the wrong length or an unknown subject, for rows of
+/// one subject in several clusters, and for exact ties; [`Error::NotConverged`]
+/// and [`Error::Aliased`] for a fit that does not converge or has an aliased
+/// column, and the errors of a solve that fails.
 pub fn fit(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     opts: &CoxOptions<'_>,
-    iptw: &Iptw<'_>,
+    weights: &Weights<'_>,
+) -> Result<EstimatedCox> {
+    if weights.is_known() {
+        return Err(Error::invalid(
+            "weights: no model of the weights is given; cox::fit takes case weights as known",
+        ));
+    }
+    match (weights.iptw, weights.censoring) {
+        (Some(iptw), None) => fit_iptw(data, x, opts, iptw, weights.subject),
+        _ => fit_general(data, x, opts, weights),
+    }
+}
+
+/// The fit of [`fit`] for `weights`, through the terms of every model of the
+/// weights also for propensity weights alone, as 0.3 gave it.
+///
+/// # Errors
+///
+/// As [`fit`].
+#[deprecated(since = "0.4.0", note = "use `fit`")]
+pub fn fit_estimated(
+    data: &SurvData<'_>,
+    x: MatRef<'_, f64>,
+    opts: &CoxOptions<'_>,
+    weights: &Weights<'_>,
+) -> Result<EstimatedCox> {
+    fit_general(data, x, opts, weights)
+}
+
+/// The fit weighted by the propensity weights of `iptw` alone, with the
+/// stacked variance.
+fn fit_iptw(
+    data: &SurvData<'_>,
+    x: MatRef<'_, f64>,
+    opts: &CoxOptions<'_>,
+    iptw: &Iptw,
     subject: Option<&[u32]>,
-) -> Result<WeightedCox> {
+) -> Result<EstimatedCox> {
     let n = data.n_rows();
     let n_subjects = iptw.len();
     check_subjects(n, n_subjects, subject)?;
@@ -213,13 +242,13 @@ pub fn fit(
     let covariance = flat(&stacked, k, p);
     let robust_covariance = flat(&ignoring, 0, p);
     let se = |c: &[f64]| (0..p).map(|i| c[i * p + i].max(0.0).sqrt()).collect();
-    Ok(WeightedCox {
+    Ok(EstimatedCox {
         coefficients,
         standard_errors: se(&covariance),
         robust_standard_errors: se(&robust_covariance),
         covariance,
         robust_covariance,
-        weight_covariance: flat(&stacked, 0, k),
+        weight_covariance: Some(flat(&stacked, 0, k)),
         n_units,
         fit: model,
     })
@@ -241,39 +270,22 @@ pub struct EstimatedCox {
     pub robust_covariance: Vec<f64>,
     /// The standard errors from `robust_covariance`.
     pub robust_standard_errors: Vec<f64>,
+    /// For propensity weights alone, the covariance of the parameters of the
+    /// weights from the stacked sandwich: the propensity coefficients, then
+    /// the marginal probability of treatment for stabilised weights.
+    /// Row-major. `None` otherwise.
+    pub weight_covariance: Option<Vec<f64>>,
     /// The number of units the estimating functions were summed over.
     pub n_units: usize,
 }
 
-/// Fit the Cox model of `data` on `x` weighted by the product of the estimated
-/// weights of `estimated`, and give the variance that accounts for each model of
-/// the weights being estimated.
-///
-/// The weights are the propensity weights of the subject of each row and the
-/// censoring weights of the row, see [`Estimated`]; the censoring weights of the
-/// Kaplan-Meier and Cox models are fitted here to `data`. With propensity
-/// weights alone this is [`fit`], which also gives the covariance of the
-/// parameters of the weights. The variance adds to the influence of each unit
-/// the influence of the weights through every model, see the [module
-/// documentation of `weighting`](super), and treats the models as separate
-/// estimating equations.
-///
-/// The influence of a unit sums the score residuals of its rows, and the units are
-/// the clusters of `data`, the subjects of the propensity weights, the `id` of
-/// `data` or the rows, in that order of preference.
-///
-/// # Errors
-///
-/// An input error for the invalid input of [`crate::cox::fit`] and of the models of
-/// the weights, for data with case weights, for neither kind of weights given,
-/// for `subject` without propensity weights or with the wrong length or an unknown
-/// subject, for rows of one subject in several clusters, for exact ties, when the
-/// fit does not converge or has an aliased column, and when a solve fails.
-pub fn fit_estimated(
+/// The fit weighted by the weights of `estimated`, with the terms of every model
+/// of the weights.
+fn fit_general(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     opts: &CoxOptions<'_>,
-    estimated: &Estimated<'_>,
+    estimated: &Weights<'_>,
 ) -> Result<EstimatedCox> {
     let n = data.n_rows();
     let prepared = prepare(data, estimated)?;
@@ -338,6 +350,7 @@ pub fn fit_estimated(
         robust_standard_errors: se(&robust_covariance),
         covariance,
         robust_covariance,
+        weight_covariance: None,
         n_units: prepared.n_units,
         fit: model,
     })

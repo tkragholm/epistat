@@ -9,8 +9,9 @@ use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
-use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory, fit_pooled};
-use epistat_survival::weighting::{Censoring, Estimated, WeightAt};
+use epistat_survival::weighting::pooled::PooledOptions;
+use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
+use epistat_survival::weighting::{Censoring, WeightAt, Weights};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
@@ -24,6 +25,7 @@ fn overlap_weights_are_the_same_on_every_pool() {
                 &IptwOptions {
                     estimand,
                     stabilise: false,
+                    alpha: None,
                 },
             )
             .unwrap();
@@ -69,7 +71,7 @@ fn treatment_weights_are_the_same_on_every_pool() {
         (TreatmentHistory::First, true, None),
     ] {
         assert_same_on_pools(&POOLS, || {
-            let w = fit_pooled(
+            let w = epistat_survival::weighting::pooled::fit(
                 &data,
                 PooledEvent::Treatment {
                     treated: &s.row_treated,
@@ -77,7 +79,7 @@ fn treatment_weights_are_the_same_on_every_pool() {
                 },
                 s.design.as_ref(),
                 stabilise.then(|| numerator.as_ref()),
-                trunc,
+                &PooledOptions { truncation: trunc },
             )
             .unwrap();
             let mut out = w.weight.clone();
@@ -85,7 +87,7 @@ fn treatment_weights_are_the_same_on_every_pool() {
             out.extend(&w.probability);
             out.extend(&w.coefficients);
             out.extend(w.untruncated.iter().flatten());
-            let estimated = Estimated {
+            let estimated = Weights {
                 iptw: None,
                 subject: None,
                 censoring: Some(Censoring::Pooled {
@@ -93,8 +95,7 @@ fn treatment_weights_are_the_same_on_every_pool() {
                     at: WeightAt::Stop,
                 }),
             };
-            let cox =
-                wcox::fit_estimated(&data, x.as_ref(), &CoxOptions::default(), &estimated).unwrap();
+            let cox = wcox::fit(&data, x.as_ref(), &CoxOptions::default(), &estimated).unwrap();
             out.extend(&cox.coefficients);
             out.extend(&cox.covariance);
             out.extend(&cox.robust_covariance);

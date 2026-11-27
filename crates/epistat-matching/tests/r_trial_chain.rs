@@ -1,6 +1,6 @@
 //! The whole chain of a sequential trial emulation against TrialEmulation 0.0.5
 //! `initiators`: `expand_trial_columns` of this crate, then
-//! `protocol_rows`, `switch_weights_with`, `censoring_weights_with`,
+//! `protocol_rows`, `switch_weights`, `censoring_weights`,
 //! `trial_weights`, `fit_msm` and `cumulative_incidence_rows` of
 //! `epistat_survival::weighting::trials`, on the person-period data of
 //! `data/trial_chain.R`, by intention to treat, per protocol with switch
@@ -32,9 +32,8 @@ use epistat_matching::{
     expand_trial_columns,
 };
 use epistat_survival::weighting::trials::{
-    Fit, Msm, MsmInput, Panel, PersonPeriod, TrialRows, WeightModel, WeightRows,
-    censoring_weights_with, cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights_with,
-    trial_weights,
+    Fit, Msm, MsmInput, Panel, PersonPeriod, TrialRows, WeightModel, WeightRows, censoring_weights,
+    cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights, trial_weights,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -169,7 +168,7 @@ fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -
     };
     let den = Mat::from_fn(n, 4, |i, j| [1.0, p.x1[i], p.x2[i], p.period[i] as f64][j]);
     let num = Mat::from_fn(n, 2, |i, j| [1.0, p.x1[i]][j]);
-    let switch = switch_weights_with(
+    let switch = switch_weights(
         &data,
         &WeightModel {
             numerator: num.as_ref(),
@@ -198,7 +197,7 @@ fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -
     if a.use_censor {
         let censored: Vec<bool> = p.censored.iter().map(|&c| c == 1).collect();
         let den = Mat::from_fn(n, 3, |i, j| [1.0, p.x1[i], p.x2[i]][j]);
-        let cens = censoring_weights_with(
+        let cens = censoring_weights(
             &data,
             &censored,
             &WeightModel {

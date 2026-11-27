@@ -63,7 +63,7 @@ fn influence_matrix(factor: &Factor, k: &Mat<f64>) -> Result<Mat<f64>> {
 
 /// The propensity model of treatment weights.
 pub(super) struct IptwNuisance<'a> {
-    pub iptw: &'a Iptw<'a>,
+    pub iptw: &'a Iptw,
     pub subject_of_row: Vec<u32>,
     pub unit_of_subject: Vec<usize>,
     factor: Factor,
@@ -71,7 +71,7 @@ pub(super) struct IptwNuisance<'a> {
 
 impl<'a> IptwNuisance<'a> {
     pub fn new(
-        iptw: &'a Iptw<'a>,
+        iptw: &'a Iptw,
         subject_of_row: Vec<u32>,
         unit_of_subject: Vec<usize>,
     ) -> Result<Self> {
@@ -119,14 +119,14 @@ impl Nuisance for IptwNuisance<'_> {
 
 /// The pooled logistic models of censoring weights.
 pub(super) struct PooledNuisance<'a> {
-    pub pooled: &'a PooledIpcw<'a>,
+    pub pooled: &'a PooledIpcw,
     pub at: WeightAt,
     pub unit_of_row: Vec<usize>,
     factor: Factor,
 }
 
 impl<'a> PooledNuisance<'a> {
-    pub fn new(pooled: &'a PooledIpcw<'a>, at: WeightAt, unit_of_row: Vec<usize>) -> Result<Self> {
+    pub fn new(pooled: &'a PooledIpcw, at: WeightAt, unit_of_row: Vec<usize>) -> Result<Self> {
         let (qd, q) = (pooled.design.ncols(), pooled.n_params());
         let fisher = |design: MatRef<'_, f64>, p: &[f64]| -> Result<Mat<f64>> {
             let var: Vec<f64> = p
@@ -136,9 +136,9 @@ impl<'a> PooledNuisance<'a> {
                 .collect();
             weighted_gram(design, &var).map_err(Error::from)
         };
-        let gd = fisher(pooled.design, &pooled.probability)?;
-        let gn = match (pooled.numerator_design, &pooled.numerator_probability) {
-            (Some(d), Some(p)) => Some(fisher(d, p)?),
+        let gd = fisher(pooled.design.as_ref(), &pooled.probability)?;
+        let gn = match (&pooled.numerator_design, &pooled.numerator_probability) {
+            (Some(d), Some(p)) => Some(fisher(d.as_ref(), p)?),
             _ => None,
         };
         let bread = Mat::from_fn(q, q, |i, j| {
@@ -271,7 +271,7 @@ impl Nuisance for PooledNuisance<'_> {
                             big_k[(j, c)] += sc * pd * p.design[(r, j)];
                         }
                     }
-                    if let (Some(zn), Some(pn)) = (p.numerator_design, &p.numerator_probability) {
+                    if let (Some(zn), Some(pn)) = (&p.numerator_design, &p.numerator_probability) {
                         let pn = o - pn[r];
                         for (c, &sc) in s.iter().enumerate() {
                             for j in 0..zn.ncols() {
@@ -304,7 +304,7 @@ impl Nuisance for PooledNuisance<'_> {
             for (j, v) in psi.iter_mut().enumerate().take(qd) {
                 *v = p.design[(r, j)] * res;
             }
-            if let (Some(zn), Some(pn)) = (p.numerator_design, &p.numerator_probability) {
+            if let (Some(zn), Some(pn)) = (&p.numerator_design, &p.numerator_probability) {
                 let res = y - pn[r];
                 for j in 0..zn.ncols() {
                     psi[qd + j] = zn[(r, j)] * res;

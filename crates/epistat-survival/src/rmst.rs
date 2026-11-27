@@ -109,11 +109,6 @@
 //!    time with the subject's baseline covariates in survival analysis,
 //!    Biostatistics 15: 222-233.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::sandwich::sandwich;
 use epistat_linalg::{Attempt, Mat, MatRef, weighted_gram};
@@ -564,7 +559,13 @@ pub fn rmst2_regression(
         ),
     };
     let fit = Glm::new(family, link)
-        .fit_slices(x.as_ref(), &response, Some(&weight), None, None)
+        .fit(&crate::logistic::data(
+            x.as_ref(),
+            &response,
+            Some(&weight),
+            None,
+            None,
+        )?)
         .map_err(Error::model("the regression"))?;
     let beta = fit.full_rank().map_err(Error::model("the regression"))?;
     let log_link = link == Link::Log;

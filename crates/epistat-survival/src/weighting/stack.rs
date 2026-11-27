@@ -32,7 +32,7 @@ pub(super) const GENERAL: [Attempt; 2] = [
     Attempt::plain(Method::FullPivLu),
 ];
 
-impl Iptw<'_> {
+impl Iptw {
     /// The number of parameters of the weights.
     pub(super) fn n_params(&self) -> usize {
         self.design.ncols() + usize::from(self.stabilised)
@@ -108,7 +108,7 @@ impl Iptw<'_> {
     pub(super) fn bread(&self) -> Result<Mat<f64>> {
         let (n, p) = (self.len(), self.design.ncols());
         let var: Vec<f64> = self.propensity.iter().map(|&q| q * (1.0 - q)).collect();
-        let gram = weighted_gram(self.design, &var)?;
+        let gram = weighted_gram(self.design.as_ref(), &var)?;
         let k = self.n_params();
         Ok(Mat::from_fn(k, k, |i, j| {
             if i < p && j < p {

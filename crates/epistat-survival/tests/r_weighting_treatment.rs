@@ -32,8 +32,9 @@ use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
-use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory, fit_pooled};
-use epistat_survival::weighting::{Censoring, Estimated, WeightAt};
+use epistat_survival::weighting::pooled::PooledOptions;
+use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
+use epistat_survival::weighting::{Censoring, WeightAt, Weights};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -137,7 +138,7 @@ fn weights_match_ipwtm() {
             .unwrap();
         let treated: Vec<bool> = c.treated.iter().map(|&a| a == 1).collect();
         let trunc = c.trunc.map(|t| (t, 1.0 - t));
-        let w = fit_pooled(
+        let w = epistat_survival::weighting::pooled::fit(
             &data,
             PooledEvent::Treatment {
                 treated: &treated,
@@ -145,7 +146,7 @@ fn weights_match_ipwtm() {
             },
             z.as_ref(),
             zn.as_ref().map(Mat::as_ref),
-            trunc,
+            &PooledOptions { truncation: trunc },
         )
         .unwrap();
         assert_eq!(c.stabilise, zn.is_some());
@@ -258,7 +259,7 @@ fn variances_match_the_jackknife_of_refits() {
             .unwrap();
         let treated: Vec<bool> = c.treated.iter().map(|&a| a == 1).collect();
         let trunc = c.trunc.map(|t| (t, 1.0 - t));
-        let w = fit_pooled(
+        let w = epistat_survival::weighting::pooled::fit(
             &data,
             PooledEvent::Treatment {
                 treated: &treated,
@@ -266,7 +267,7 @@ fn variances_match_the_jackknife_of_refits() {
             },
             z.as_ref(),
             zn.as_ref().map(Mat::as_ref),
-            trunc,
+            &PooledOptions { truncation: trunc },
         )
         .unwrap();
         let x = Mat::from_fn(rows, 2, |i, j| {
@@ -281,7 +282,7 @@ fn variances_match_the_jackknife_of_refits() {
             iter_max: 100,
             ..CoxOptions::default()
         };
-        let estimated = Estimated {
+        let estimated = Weights {
             iptw: None,
             subject: None,
             censoring: Some(Censoring::Pooled {
@@ -289,7 +290,7 @@ fn variances_match_the_jackknife_of_refits() {
                 at: WeightAt::Stop,
             }),
         };
-        let fit = wcox::fit_estimated(&data, x.as_ref(), &opts, &estimated).unwrap();
+        let fit = wcox::fit(&data, x.as_ref(), &opts, &estimated).unwrap();
         let n = fit.n_units as f64;
         let used = c.ipw_truncated.as_ref().unwrap_or(&c.ipw_weights);
         let omega = w

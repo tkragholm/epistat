@@ -34,6 +34,7 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties};
+use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_testkit::load_json;
@@ -172,6 +173,7 @@ fn weights_and_summaries_match_weightit() {
         let opts = IptwOptions {
             estimand: estimand(&r.estimand),
             stabilise: r.stabilise,
+            alpha: None,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
@@ -287,6 +289,7 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
     let opts = IptwOptions {
         estimand: estimand(&ri.estimand),
         stabilise: ri.stabilise,
+        alpha: None,
     };
     let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
     let rows = c.stop.len();
@@ -314,7 +317,13 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
         cox_opts.eps = 1e-13;
         cox_opts.iter_max = 100;
     }
-    let fit = wcox::fit(&data, x.as_ref(), &cox_opts, &w, c.subject.as_deref()).unwrap();
+    let fit = wcox::fit(
+        &data,
+        x.as_ref(),
+        &cox_opts,
+        &Weights::iptw(&w, c.subject.as_deref()),
+    )
+    .unwrap();
 
     let eta = eta_bounds(&z, &ri.coefficients, ri.kappa);
     let omega = eta.iter().map(|e| 2.0 * e + 4.0 * EPS).fold(0.0, f64::max);

@@ -55,11 +55,6 @@
 //! 3. Clayton D, Hills M. Statistical Models in Epidemiology. Oxford 1993,
 //!    chapters 22 to 24.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_linalg::Mat;
 use epistat_stats::dist::normal;
@@ -202,7 +197,13 @@ pub fn fit_rates(
     glm.tolerance = options.tolerance;
     glm.max_iterations = options.max_iterations;
     let fit = glm
-        .fit_slices(x.as_ref(), &y, None, Some(&offset), None)
+        .fit(&crate::logistic::data(
+            x.as_ref(),
+            &y,
+            None,
+            Some(&offset),
+            None,
+        )?)
         .map_err(Error::model("the Poisson model"))?;
     Ok(Rates {
         fit,

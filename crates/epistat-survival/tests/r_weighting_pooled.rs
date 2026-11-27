@@ -18,7 +18,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::weighting::pooled::fit;
+use epistat_survival::weighting::pooled::{PooledEvent, PooledOptions, fit};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -94,9 +94,12 @@ fn pooled_weights_match_ipwtm_and_glm() {
         let censored: Vec<bool> = c.censored.iter().map(|&x| x == 1).collect();
         let w = fit(
             &data,
-            Some(&censored),
+            PooledEvent::Censoring {
+                censored: Some(&censored),
+            },
             z.as_ref(),
             zn.as_ref().map(Mat::as_ref),
+            &PooledOptions::default(),
         )
         .unwrap();
         assert_eq!(c.stabilise, zn.is_some());
@@ -166,7 +169,14 @@ fn pooled_weights_match_ipwtm_and_glm() {
         // The default rule for the censoring events gives the same weights on data
         // that end at the censoring row.
         if c.name != "pooled_stab_extra_rows" {
-            let d = fit(&data, None, z.as_ref(), zn.as_ref().map(Mat::as_ref)).unwrap();
+            let d = fit(
+                &data,
+                PooledEvent::Censoring { censored: None },
+                z.as_ref(),
+                zn.as_ref().map(Mat::as_ref),
+                &PooledOptions::default(),
+            )
+            .unwrap();
             assert_eq!(d.censored, censored);
             assert_eq!(
                 d.weight.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),

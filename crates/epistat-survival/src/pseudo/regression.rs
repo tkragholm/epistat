@@ -87,11 +87,6 @@
 //!    covariance matrix estimators with improved finite sample properties,
 //!    J Econometrics 29: 305-325.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_glm::{Family, Glm};
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
@@ -311,7 +306,7 @@ pub fn fit(
             .map(|i| eta0 - o[i] + (y[i] - mean) / derivative)
             .collect();
         let step = Glm::new(Family::Gaussian, epistat_glm::Link::Identity)
-            .fit_slices(x, &z, Some(&w), None, None)
+            .fit(&crate::logistic::data(x, &z, Some(&w), None, None)?)
             .map_err(Error::model("the starting regression"))?;
         step.coefficients
             .into_iter()
@@ -332,7 +327,13 @@ pub fn fit(
     for _ in 0..opts.max_iterations {
         iterations += 1;
         let step = model
-            .fit_slices(x, y, Some(&w), Some(&o), Some(&beta))
+            .fit(&crate::logistic::data(
+                x,
+                y,
+                Some(&w),
+                Some(&o),
+                Some(&beta),
+            )?)
             .map_err(Error::model("the regression"))?;
         let next = step
             .coefficients

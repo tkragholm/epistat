@@ -18,6 +18,7 @@ use epistat_survival::weighting::clone::{
     Adherence, CloneInput, DeviationDesign, DeviationModel, DeviationRows, DeviationWeights,
     Strategy, clone_censor, deviation_weights, deviation_weights_rows, fit_msm_clones,
 };
+use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
     Msm, MsmInput, PersonPeriod, TrialRows, TrialSpans, WeightModel, fit_msm, fit_msm_trials,
     switch_weights, trial_weights,
@@ -109,6 +110,7 @@ fn trial_msm_both(d: &Periods) -> (Msm, Msm) {
             numerator: num.as_ref(),
             denominator: den.as_ref(),
         },
+        &WeightRows::default(),
     )
     .unwrap();
     let (mut tid, mut tstart, mut tfollow, mut src) =

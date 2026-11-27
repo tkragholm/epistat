@@ -20,7 +20,7 @@
 //!   `ipw::ipwtm(type = "cens", family = "binomial")`, stabilised by a numerator
 //!   model, and inverse probability weights for a treatment that changes over
 //!   time from a pooled logistic model of treatment, as `ipwtm(type = "first"`
-//!   or `"all")`, with truncation. Its fit goes into [`Estimated`] as a
+//!   or `"all")`, with truncation. Its fit goes into [`Weights`] as a
 //!   [`Censoring::Pooled`], since the variance treats it as any other pooled
 //!   model of weights.
 //! - [`clone`] clones persons under treatment strategies with grace periods,
@@ -32,10 +32,10 @@
 //!   weighted logistic outcome model with its person-clustered covariance and the
 //!   cumulative incidence it implies, as `TrialEmulation::initiators(estimand_type =
 //!   "PP")`.
-//! - [`estimated`] names the estimated weights of an outcome model, of treatment,
-//!   of censoring or both, and [`cox::fit_estimated`] and
-//!   [`km::estimate_estimated`] give the variance that accounts for every model
-//!   being estimated.
+//! - [`estimated`] names the weights of an outcome model, known or estimated by
+//!   models of treatment, of censoring or both, and [`cox::fit`] and
+//!   [`km::estimate`] give the variance that accounts for every model being
+//!   estimated.
 //!
 //! # Variance
 //!
@@ -61,14 +61,14 @@
 //!
 //! The estimating functions of a unit (a subject, or a cluster of subjects)
 //! are summed before the outer product is formed, so subjects with several
-//! rows and clustered data are handled by the units. The stacked matrix of
-//! [`cox::fit`] and [`km::estimate`] is held in memory as one row per unit and
+//! rows and clustered data are handled by the units. With propensity weights
+//! alone, the stacked matrix of [`cox::fit`] and [`km::estimate`] is held in memory as one row per unit and
 //! one column per parameter.
 //!
 //! # Estimated censoring weights, and both kinds together
 //!
-//! [`cox::fit_estimated`] and [`km::estimate_estimated`] take the weights as the
-//! product of those of the models named in an [`Estimated`]: the propensity model
+//! With censoring weights, [`cox::fit`] and [`km::estimate`] take the weights as
+//! the product of those of the models named in a [`Weights`]: the propensity model
 //! of treatment, and the pooled logistic, Kaplan-Meier or Cox model of
 //! censoring. Write the stacked equations for one model of weights with parameters
 //! `theta` as above. The influence of a unit `u` on the outcome estimate is
@@ -83,7 +83,8 @@
 //! added to the influence, and the models, fitted separately, do not affect each
 //! other's parameters. The variance is the sum over units of the outer products of
 //! the total influences, `V (sum (U_u + terms)(U_u + terms)') V`. With treatment
-//! weights alone it is that of [`cox::fit`] and [`km::estimate`].
+//! weights alone it equals the stacked variance above up to rounding, and the
+//! stacked form is the one used for them.
 //!
 //! The terms for a logistic model (propensity, pooled censoring) need the
 //! derivative `d log w_k / d theta` and `psi_u` of its items, which are added into
@@ -97,12 +98,12 @@
 //!
 //! # Memory and cost
 //!
-//! [`cox::fit_estimated`] holds the score residuals of the rows (`rows x p`, in
+//! With censoring weights, [`cox::fit`] holds the score residuals of the rows (`rows x p`, in
 //! two copies), the sums of the residuals by unit (`units x p`), and again the
 //! sums with the terms of the weights added. No matrix of units by parameters of
 //! the weights is formed, as stacking would: a term is added into the same
 //! `units x p` matrix, so the memory does not grow with the number of parameters of
-//! the weights. [`km::estimate_estimated`] holds `rows x curves` and `units x
+//! the weights. [`km::estimate`] holds `rows x curves` and `units x
 //! curves` for one time at a time. At register scale, with `10^7` units and `p =
 //! 10`, a matrix of units is `10^7 x 10 x 8` bytes, 0.8 GB, and there are two of
 //! them besides the residuals. The matrices of units could be streamed by
@@ -111,9 +112,9 @@
 //!
 //! The time is `O((n + L) log n)` per outcome parameter for the Kaplan-Meier and
 //! Cox models of censoring, with `L` the number of censoring times, and `O(n q)`
-//! per outcome parameter for logistic models with `q` parameters. [`cox::fit`]
-//! and [`km::estimate`], which stack the propensity model, hold `units x (q + p)`
-//! and `units x q`.
+//! per outcome parameter for logistic models with `q` parameters. With propensity
+//! weights alone, [`cox::fit`] and [`km::estimate`] stack the propensity model and
+//! hold `units x (q + p)` and `units x q`.
 //!
 //! # What is not here
 //!
@@ -162,6 +163,8 @@ mod summary;
 pub mod trials;
 
 pub use adjust::WeightAt;
-pub use estimated::{Censoring, Estimated};
+#[expect(deprecated, reason = "the 0.3 name stays for one release")]
+pub use estimated::Estimated;
+pub use estimated::{Censoring, Weights};
 pub use iptw::{Estimand, Iptw, IptwOptions, IptwSummary};
 pub use summary::WeightSummary;

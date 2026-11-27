@@ -22,8 +22,9 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
+use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
-use epistat_survival::weighting::km::{KmOptions, estimate, estimate_known};
+use epistat_survival::weighting::km::{KmOptions, estimate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -90,7 +91,13 @@ fn weighted_curves_match_survfit_and_finite_differences() {
             }
             b.build().unwrap()
         };
-        let k = estimate_known(&known_data, &r.times, &KmOptions::default()).unwrap();
+        let k = estimate(
+            &known_data,
+            &r.times,
+            &KmOptions::default(),
+            &Weights::known(),
+        )
+        .unwrap();
         assert_eq!(k.groups, vec![0, 1]);
         let mut worst = [0.0f64; 4];
         for g in 0..2 {
@@ -120,10 +127,17 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 _ => Estimand::Atc,
             },
             stabilise: r.stabilise,
+            alpha: None,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let data = builder.build().unwrap();
-        let est = estimate(&data, &r.times, &KmOptions::default(), &w, None).unwrap();
+        let est = estimate(
+            &data,
+            &r.times,
+            &KmOptions::default(),
+            &Weights::iptw(&w, None),
+        )
+        .unwrap();
         let ri = reference
             .iptw
             .iter()

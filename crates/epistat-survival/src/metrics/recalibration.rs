@@ -88,10 +88,6 @@
 //!    models. Biometrika 1986;73(1):13-22.
 
 #![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-#![expect(
     clippy::float_cmp,
     reason = "tied predictions are equal values, which is the definition of a tie"
 )]
@@ -555,7 +551,7 @@ fn gee_independence(
     let derivative = link.derivative(eta0);
     let z: Vec<f64> = y.iter().map(|&v| eta0 + (v - mean) / derivative).collect();
     let start = Glm::new(Family::Gaussian, epistat_glm::Link::Identity)
-        .fit_slices(x.as_ref(), &z, None, None, None)
+        .fit(&crate::logistic::data(x.as_ref(), &z, None, None, None)?)
         .map_err(Error::model("the starting regression"))?;
     let mut beta: Vec<f64> = start
         .coefficients
@@ -571,7 +567,13 @@ fn gee_independence(
     for _ in 0..opts.max_iterations {
         iterations += 1;
         let step = model
-            .fit_slices(x.as_ref(), y, None, None, Some(&beta))
+            .fit(&crate::logistic::data(
+                x.as_ref(),
+                y,
+                None,
+                None,
+                Some(&beta),
+            )?)
             .map_err(Error::model("the regression"))?;
         let next: Vec<f64> = step
             .coefficients

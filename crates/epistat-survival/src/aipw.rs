@@ -141,11 +141,6 @@
 //!    differences in restricted mean lifetimes in observational studies.
 //!    Biometrics 2012;68(4):999-1009.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_core::InputError;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
@@ -558,17 +553,15 @@ impl Model {
             .map(|&a| f64::from(u8::from(a)))
             .collect();
         let glm = Glm::new(Family::Binomial, Link::Logit)
-            .fit_slices(spec.propensity_x, &y, None, None, None)
+            .fit(&crate::logistic::data(
+                spec.propensity_x,
+                &y,
+                None,
+                None,
+                None,
+            )?)
             .map_err(Error::model("treatment model"))?;
-        if !glm.converged {
-            return Err(Error::invalid("treatment model: no convergence"));
-        }
-        let mut gamma = Vec::with_capacity(glm.coefficients.len());
-        for (j, c) in glm.coefficients.iter().enumerate() {
-            gamma.push(c.ok_or_else(|| {
-                Error::invalid(format!("treatment model: design column {j} is aliased"))
-            })?);
-        }
+        let gamma = glm.full_rank().map_err(Error::model("treatment model"))?;
         let mut n_trimmed = 0;
         let mut pi = Vec::with_capacity(n);
         for i in 0..n {

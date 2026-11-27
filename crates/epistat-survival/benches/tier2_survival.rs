@@ -46,6 +46,7 @@ use epistat_survival::weighting::clone::{
     Adherence, CloneInput, DeviationDesign, DeviationModel, DeviationRows, Strategy, clone_censor,
     deviation_weights, deviation_weights_rows, fit_msm_clones,
 };
+use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
     MsmInput, PersonPeriod, TrialRows, TrialSpans, WeightModel, fit_msm, fit_msm_trials,
     switch_weights, trial_weights,
@@ -220,7 +221,8 @@ fn main() {
                 denominator: den.as_ref(),
             };
             let (times, msm) = common::timed(common::reps(), || {
-                let w = switch_weights(&data, &model).expect("switch weights");
+                let w =
+                    switch_weights(&data, &model, &WeightRows::default()).expect("switch weights");
                 let tw = trial_weights(
                     &data,
                     &w.weight,
@@ -347,7 +349,8 @@ fn main() {
                 denominator: den.as_ref(),
             };
             let (times, msm) = common::timed(common::reps(), || {
-                let w = switch_weights(&data, &model).expect("switch weights");
+                let w =
+                    switch_weights(&data, &model, &WeightRows::default()).expect("switch weights");
                 fit_msm_trials(
                     &data,
                     &w.weight,

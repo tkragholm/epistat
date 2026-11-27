@@ -105,11 +105,6 @@
 //!    effectiveness of dynamic treatment regimes: an application of the
 //!    parametric g-formula. Stat Biosci 2011;3(1):119-43.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
@@ -567,17 +562,15 @@ fn fit_deviation(
     let ys: Vec<f64> = rows.iter().map(|&r| f64::from(u8::from(d[r]))).collect();
     let ws: Option<Vec<f64>> = case.map(|c| rows.iter().map(|&r| c[r]).collect());
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(xs.as_ref(), &ys, ws.as_deref(), None, None)
+        .fit(&crate::logistic::data(
+            xs.as_ref(),
+            &ys,
+            ws.as_deref(),
+            None,
+            None,
+        )?)
         .map_err(Error::model(what))?;
-    if !fit.converged {
-        return Err(Error::invalid(format!("{what}: no convergence")));
-    }
-    let mut coef = Vec::with_capacity(fit.coefficients.len());
-    for (j, c) in fit.coefficients.iter().enumerate() {
-        coef.push(
-            c.ok_or_else(|| Error::invalid(format!("{what}: design column {j} is aliased")))?,
-        );
-    }
+    let coef = fit.full_rank().map_err(Error::model(what))?;
     Ok(coef)
 }
 
@@ -975,15 +968,7 @@ fn fit_deviation_rows(
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_rows(&AtRiskRows { at_risk, design })
         .map_err(Error::model(what))?;
-    if !fit.converged {
-        return Err(Error::invalid(format!("{what}: no convergence")));
-    }
-    let mut coef = Vec::with_capacity(fit.coefficients.len());
-    for (j, c) in fit.coefficients.iter().enumerate() {
-        coef.push(
-            c.ok_or_else(|| Error::invalid(format!("{what}: design column {j} is aliased")))?,
-        );
-    }
+    let coef = crate::logistic::full_rank(&fit, what)?;
     Ok(coef)
 }
 

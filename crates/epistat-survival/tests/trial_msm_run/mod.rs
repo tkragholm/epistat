@@ -8,6 +8,7 @@
 )]
 
 use epistat_linalg::Mat;
+use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
     CumulativeIncidence, Fit, MsmInput, PersonPeriod, TrialRows, WeightModel, censoring_weights,
     cumulative_incidence, fit_msm, switch_weights, trial_weights,
@@ -108,12 +109,19 @@ pub fn run(a: &Analysis) -> Outputs {
         numerator: num.as_ref(),
         denominator: den.as_ref(),
     };
-    let sw = switch_weights(&data, &model).unwrap();
+    let sw = switch_weights(&data, &model, &WeightRows::default()).unwrap();
     let mut row_weight = sw.weight.clone();
     let (mut censor_denominator, mut censor_numerator) = (Vec::new(), Vec::new());
     if a.use_censor {
         let censored: Vec<bool> = w.censored.iter().map(|&v| v > 0.5).collect();
-        let cw = censoring_weights(&data, &censored, &model, Fit::ByPreviousTreatment).unwrap();
+        let cw = censoring_weights(
+            &data,
+            &censored,
+            &model,
+            Fit::ByPreviousTreatment,
+            &WeightRows::default(),
+        )
+        .unwrap();
         for (v, c) in row_weight.iter_mut().zip(&cw.weight) {
             *v *= c;
         }

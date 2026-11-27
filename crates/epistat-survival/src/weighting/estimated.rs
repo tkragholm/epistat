@@ -1,10 +1,11 @@
 //! The weights of an outcome model when they come from estimated models: of
 //! treatment, of censoring, or of both.
 //!
-//! An [`Estimated`] names the models. [`cox::fit_estimated`](super::cox::fit_estimated)
-//! and [`km::estimate_estimated`](super::km::estimate_estimated) weight the rows
-//! of the data with their product and give the variance that accounts for every
-//! model being estimated. The theory is in the [module documentation of
+//! A [`Weights`] names the models. [`cox::fit`](super::cox::fit) and
+//! [`km::estimate`](super::km::estimate) weight the rows of the data with their
+//! product and give the variance that accounts for every model being
+//! estimated. [`Weights::known`] names none: the case weights of the data are
+//! taken as known. The theory is in the [module documentation of
 //! `weighting`](super), and the term each model adds in `adjust`.
 //!
 //! The row weight is the weight of the subject from the propensity model, which
@@ -42,23 +43,27 @@ pub enum Censoring<'a> {
         at: WeightAt,
     },
     /// The pooled logistic model of [`pooled::fit`](super::pooled::fit), whose
-    /// rows are those of the data. A fit of
-    /// [`pooled::fit_pooled`](super::pooled::fit_pooled) to a treatment that
-    /// changes over time goes here too: its weights multiply the rows and its
-    /// models add their terms in the same way.
+    /// rows are those of the data. A fit to a treatment that changes over time
+    /// goes here too: its weights multiply the rows and its models add their
+    /// terms in the same way.
     Pooled {
         /// The fit.
-        fit: &'a PooledIpcw<'a>,
+        fit: &'a PooledIpcw,
         /// The weight of each row that the outcome uses.
         at: WeightAt,
     },
 }
 
-/// The estimated weights of an outcome model.
+/// The weights of an outcome model: the models they are estimated from, or
+/// none for case weights taken as known.
+///
+/// Build it with [`Weights::known`], [`Weights::iptw`] and
+/// [`Weights::with_censoring`], or as a struct with `..Default::default()`;
+/// the default is [`Weights::known`].
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Estimated<'a> {
+pub struct Weights<'a> {
     /// The propensity weights of the subjects, `None` for none.
-    pub iptw: Option<&'a Iptw<'a>>,
+    pub iptw: Option<&'a Iptw>,
     /// The subject of each row, a position in the weights of `iptw`. `None` when
     /// the rows are the subjects. A subject may have several rows, and a subject
     /// may have none. It needs `iptw`.
@@ -66,6 +71,49 @@ pub struct Estimated<'a> {
     /// The censoring weights, `None` for none.
     pub censoring: Option<Censoring<'a>>,
 }
+
+impl<'a> Weights<'a> {
+    /// No estimated weights: the case weights of the data, or none, are taken
+    /// as known.
+    #[must_use]
+    pub const fn known() -> Self {
+        Self {
+            iptw: None,
+            subject: None,
+            censoring: None,
+        }
+    }
+
+    /// The propensity weights of `iptw`, with `subject` the subject of each row
+    /// (a position in the weights of `iptw`), or `None` when the rows are the
+    /// subjects.
+    #[must_use]
+    pub const fn iptw(iptw: &'a Iptw, subject: Option<&'a [u32]>) -> Self {
+        Self {
+            iptw: Some(iptw),
+            subject,
+            censoring: None,
+        }
+    }
+
+    /// These weights times the censoring weights of `censoring`.
+    #[must_use]
+    pub const fn with_censoring(self, censoring: Censoring<'a>) -> Self {
+        Self {
+            censoring: Some(censoring),
+            ..self
+        }
+    }
+
+    /// Whether no model of the weights is named.
+    pub(super) const fn is_known(&self) -> bool {
+        self.iptw.is_none() && self.censoring.is_none()
+    }
+}
+
+/// The weights of an outcome model, under their name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `Weights`")]
+pub type Estimated<'a> = Weights<'a>;
 
 /// What the outcome fits need: the weight of every row, the units, and one term
 /// of the variance for each model of weights.
@@ -78,7 +126,7 @@ pub(super) struct Prepared<'a> {
 
 /// Fit the models of the weights that are fitted here, check the input, and form
 /// the weights and the terms.
-pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Estimated<'a>) -> Result<Prepared<'a>> {
+pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Weights<'a>) -> Result<Prepared<'a>> {
     let n = data.n_rows();
     if est.iptw.is_none() && est.censoring.is_none() {
         return Err(Error::invalid(

@@ -57,7 +57,7 @@ use epistat_linalg::{Factor, Mat};
 use epistat_stats::sum::Compensated;
 
 use super::adjust::Nuisance;
-use super::estimated::{Estimated, prepare};
+use super::estimated::{Weights, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
 use crate::error::{Error, Result};
@@ -168,31 +168,54 @@ pub struct KmDifference {
 
 /// What the variance needs of the estimated weights.
 struct Correction<'a> {
-    iptw: &'a Iptw<'a>,
+    iptw: &'a Iptw,
     /// The influence of the parameters of the weights, one row per unit.
     influence: Mat<f64>,
     /// The subject of each row.
     subject: Vec<u32>,
 }
 
-/// The curves of `data` weighted by `iptw`, with the variance that accounts
-/// for the weights being estimated.
+/// The weighted curves of `data` at `times`, with the variance that accounts for
+/// each model of the weights being estimated.
 ///
-/// `subject` and the groups are as for [`cox::fit`](super::cox::fit): the
-/// stratum of `data` gives the groups, normally the treatment arm. `data` must
-/// carry no case weights.
+/// The groups are the strata of `data`, normally the treatment arm. With
+/// [`Weights::known`], the case weights of `data`, or none, are taken as known
+/// and the variance is the infinitesimal jackknife of `survfit(robust = TRUE)`.
+/// With propensity weights alone, the variance stacks the propensity model
+/// with the curves. Otherwise each model of the weights adds its term to the
+/// influence of a unit, as for [`cox::fit`](super::cox::fit); for propensity
+/// weights the two agree up to rounding. The units are those of
+/// [`cox::fit`](super::cox::fit). With estimated weights `data` must carry no
+/// case weights.
 ///
 /// # Errors
 ///
-/// An input error for data with case weights or interval-censored data, for
-/// `subject` of another length than the data or naming a subject that does not
-/// exist, for a status with several codes and no `cause`, for a time that is
-/// not finite, and when the stacked system cannot be solved.
+/// An input error for interval-censored data, for data with case weights and
+/// estimated weights, for `subject` of another length than the data or naming
+/// a subject that does not exist, for a status with several codes and no
+/// `cause`, for a time that is not finite, for the invalid input of the models
+/// of the weights, and the errors of a solve that fails.
 pub fn estimate(
     data: &SurvData<'_>,
     times: &[f64],
     opts: &KmOptions,
-    iptw: &Iptw<'_>,
+    weights: &Weights<'_>,
+) -> Result<WeightedKm> {
+    if weights.is_known() {
+        return estimate_known_core(data, times, opts);
+    }
+    match (weights.iptw, weights.censoring) {
+        (Some(iptw), None) => estimate_iptw(data, times, opts, iptw, weights.subject),
+        _ => estimate_general(data, times, opts, weights),
+    }
+}
+
+/// The curves weighted by `iptw`, with the stacked variance.
+fn estimate_iptw(
+    data: &SurvData<'_>,
+    times: &[f64],
+    opts: &KmOptions,
+    iptw: &Iptw,
     subject: Option<&[u32]>,
 ) -> Result<WeightedKm> {
     let n = data.n_rows();
@@ -233,24 +256,29 @@ pub fn estimate(
     )
 }
 
-/// The curves of `data` weighted by the product of the estimated weights of
-/// `estimated`, with the variance that accounts for each model of the weights
-/// being estimated.
-///
-/// The weights, the units and the models are as for
-/// [`cox::fit_estimated`](super::cox::fit_estimated), and the groups are the
-/// strata of `data`. The curves are those of [`estimate`] for propensity
-/// weights alone, with the same covariance up to rounding. `data` must carry
-/// no case weights.
+/// The curves of [`estimate`] for `weights`, through the terms of every model
+/// of the weights also for propensity weights alone, as 0.3 gave them.
 ///
 /// # Errors
 ///
-/// An input error as for [`estimate`] and for the models of the weights.
+/// As [`estimate`].
+#[deprecated(since = "0.4.0", note = "use `estimate`")]
 pub fn estimate_estimated(
     data: &SurvData<'_>,
     times: &[f64],
     opts: &KmOptions,
-    estimated: &Estimated<'_>,
+    weights: &Weights<'_>,
+) -> Result<WeightedKm> {
+    estimate_general(data, times, opts, weights)
+}
+
+/// The curves weighted by the weights of `estimated`, with the terms of every
+/// model of the weights.
+fn estimate_general(
+    data: &SurvData<'_>,
+    times: &[f64],
+    opts: &KmOptions,
+    estimated: &Weights<'_>,
 ) -> Result<WeightedKm> {
     let prepared = prepare(data, estimated)?;
     let buf = with_weights(data, prepared.weight.clone())?;
@@ -266,16 +294,20 @@ pub fn estimate_estimated(
     )
 }
 
-/// The curves of `data` with its case weights taken as known, with the
-/// infinitesimal jackknife variance of `survfit(robust = TRUE)`.
-///
-/// Use it for weights that are not estimated here, or for the comparison with
-/// [`estimate`].
+/// The curves of `data` with its case weights taken as known, as
+/// [`estimate`] gives them for [`Weights::known`].
 ///
 /// # Errors
 ///
-/// As for [`estimate`], except for the checks of the weights.
+/// As [`estimate`].
+#[deprecated(since = "0.4.0", note = "use `estimate` with `Weights::known()`")]
 pub fn estimate_known(data: &SurvData<'_>, times: &[f64], opts: &KmOptions) -> Result<WeightedKm> {
+    estimate_known_core(data, times, opts)
+}
+
+/// The curves with the case weights of `data` taken as known, with the
+/// infinitesimal jackknife variance of `survfit(robust = TRUE)`.
+fn estimate_known_core(data: &SurvData<'_>, times: &[f64], opts: &KmOptions) -> Result<WeightedKm> {
     let weighted = data.clone().with_timefix(opts.timefix)?;
     let n = weighted.n_rows();
     let (unit_of_row, n_units): (Vec<usize>, usize) = match (weighted.cluster(), weighted.id()) {

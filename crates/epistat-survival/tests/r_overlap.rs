@@ -30,6 +30,7 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
+use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_testkit::load_json;
@@ -146,6 +147,7 @@ fn weights_match_weightit_and_psweight() {
         let opts = IptwOptions {
             estimand: estimand(&r.estimand),
             stabilise: false,
+            alpha: None,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
@@ -240,16 +242,65 @@ fn weights_match_weightit_and_psweight() {
 fn caller_alpha_trims_the_optimal_subset() {
     let reference = load();
     let (z, treat) = inputs(&reference);
-    let crump = iptw::fit_atos(&treat, z.as_ref(), None).unwrap();
-    let same = iptw::fit_atos(&treat, z.as_ref(), crump.alpha).unwrap();
+    let crump = iptw::fit(
+        &treat,
+        z.as_ref(),
+        &IptwOptions {
+            estimand: Estimand::Atos,
+            alpha: None,
+            ..IptwOptions::default()
+        },
+    )
+    .unwrap();
+    let same = iptw::fit(
+        &treat,
+        z.as_ref(),
+        &IptwOptions {
+            estimand: Estimand::Atos,
+            alpha: crump.alpha,
+            ..IptwOptions::default()
+        },
+    )
+    .unwrap();
     assert_eq!(crump.weights, same.weights);
-    let wide = iptw::fit_atos(&treat, z.as_ref(), Some(0.05)).unwrap();
+    let wide = iptw::fit(
+        &treat,
+        z.as_ref(),
+        &IptwOptions {
+            estimand: Estimand::Atos,
+            alpha: Some(0.05),
+            ..IptwOptions::default()
+        },
+    )
+    .unwrap();
     for (i, &p) in wide.propensity.iter().enumerate() {
         let inside = (0.05..=0.95).contains(&p);
         assert_eq!(wide.weights[i] != 0.0, inside);
     }
-    assert!(iptw::fit_atos(&treat, z.as_ref(), Some(0.5)).is_err());
-    assert!(iptw::fit_atos(&treat, z.as_ref(), Some(-0.1)).is_err());
+    assert!(
+        iptw::fit(
+            &treat,
+            z.as_ref(),
+            &IptwOptions {
+                estimand: Estimand::Atos,
+                alpha: Some(0.5),
+                ..IptwOptions::default()
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        iptw::fit(
+            &treat,
+            z.as_ref(),
+            &IptwOptions {
+                estimand: Estimand::Atos,
+                alpha: Some(-0.1),
+                ..IptwOptions::default()
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -267,6 +318,7 @@ fn cox_variances_match_finite_differences_of_refits() {
         let opts = IptwOptions {
             estimand: estimand(&c.estimand),
             stabilise: false,
+            alpha: None,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         // Rows of weight 0 do not enter the fit.
@@ -287,7 +339,13 @@ fn cox_variances_match_finite_differences_of_refits() {
             iter_max: 100,
             ..CoxOptions::default()
         };
-        let fit = wcox::fit(&data, x.as_ref(), &cox_opts, &w, Some(&subject)).unwrap();
+        let fit = wcox::fit(
+            &data,
+            x.as_ref(),
+            &cox_opts,
+            &Weights::iptw(&w, Some(&subject)),
+        )
+        .unwrap();
         let eta = eta_bounds(&z, &ri.coefficients, ri.kappa);
         let omega = eta.iter().map(|e| 2.0 * e + 4.0 * EPS).fold(0.0, f64::max);
         let v = &fit.fit.covariance;

@@ -14,6 +14,7 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
+use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
@@ -43,6 +44,7 @@ fn propensity_model_input_is_checked() {
     let att = IptwOptions {
         estimand: Estimand::Att,
         stabilise: true,
+        alpha: None,
     };
     assert!(iptw::fit(&treat, z.as_ref(), &att).is_err());
     let aliased = Mat::from_fn(
@@ -69,6 +71,7 @@ fn weights_of_each_estimand() {
         &IptwOptions {
             estimand: Estimand::Att,
             stabilise: false,
+            alpha: None,
         },
     )
     .unwrap();
@@ -84,6 +87,7 @@ fn weights_of_each_estimand() {
         &IptwOptions {
             estimand: Estimand::Atc,
             stabilise: false,
+            alpha: None,
         },
     )
     .unwrap();
@@ -104,28 +108,76 @@ fn outcome_input_is_checked() {
     let status: Vec<i32> = (0..30).map(|i| i32::from(i % 3 != 0)).collect();
     let x = Mat::from_fn(30, 1, |i, _| f64::from(u8::from(treat[i])));
     let data = SurvData::builder(&stop, &status).build().unwrap();
-    assert!(wcox::fit(&data, x.as_ref(), &CoxOptions::default(), &w, None).is_ok());
+    assert!(
+        wcox::fit(
+            &data,
+            x.as_ref(),
+            &CoxOptions::default(),
+            &Weights::iptw(&w, None)
+        )
+        .is_ok()
+    );
     // Weights already on the data.
     let weights = vec![1.0; 30];
     let weighted = SurvData::builder(&stop, &status)
         .weight(&weights)
         .build()
         .unwrap();
-    assert!(wcox::fit(&weighted, x.as_ref(), &CoxOptions::default(), &w, None).is_err());
+    assert!(
+        wcox::fit(
+            &weighted,
+            x.as_ref(),
+            &CoxOptions::default(),
+            &Weights::iptw(&w, None)
+        )
+        .is_err()
+    );
     // A subject map of the wrong length, or naming a missing subject.
-    assert!(wcox::fit(&data, x.as_ref(), &CoxOptions::default(), &w, Some(&[0, 1])).is_err());
+    assert!(
+        wcox::fit(
+            &data,
+            x.as_ref(),
+            &CoxOptions::default(),
+            &Weights::iptw(&w, Some(&[0, 1]))
+        )
+        .is_err()
+    );
     let beyond: Vec<u32> = (0..30).map(|_| 30).collect();
-    assert!(wcox::fit(&data, x.as_ref(), &CoxOptions::default(), &w, Some(&beyond)).is_err());
+    assert!(
+        wcox::fit(
+            &data,
+            x.as_ref(),
+            &CoxOptions::default(),
+            &Weights::iptw(&w, Some(&beyond))
+        )
+        .is_err()
+    );
     // Rows are not subjects.
     let few = SurvData::builder(&stop[..20], &status[..20])
         .build()
         .unwrap();
     let x20 = Mat::from_fn(20, 1, |i, _| x[(i, 0)]);
-    assert!(wcox::fit(&few, x20.as_ref(), &CoxOptions::default(), &w, None).is_err());
+    assert!(
+        wcox::fit(
+            &few,
+            x20.as_ref(),
+            &CoxOptions::default(),
+            &Weights::iptw(&w, None)
+        )
+        .is_err()
+    );
     // A status with several codes needs a cause.
     let multi: Vec<i32> = (0..30).map(|i| i % 3).collect();
     let competing = SurvData::builder(&stop, &multi).n_codes(2).build().unwrap();
-    assert!(km::estimate(&competing, &[3.0], &KmOptions::default(), &w, None).is_err());
+    assert!(
+        km::estimate(
+            &competing,
+            &[3.0],
+            &KmOptions::default(),
+            &Weights::iptw(&w, None)
+        )
+        .is_err()
+    );
     assert!(
         km::estimate(
             &competing,
@@ -134,8 +186,7 @@ fn outcome_input_is_checked() {
                 cause: Some(2),
                 ..KmOptions::default()
             },
-            &w,
-            None
+            &Weights::iptw(&w, None)
         )
         .is_ok()
     );
@@ -147,12 +198,19 @@ fn outcome_input_is_checked() {
                 cause: Some(3),
                 ..KmOptions::default()
             },
-            &w,
-            None
+            &Weights::iptw(&w, None)
         )
         .is_err()
     );
-    assert!(km::estimate(&data, &[f64::NAN], &KmOptions::default(), &w, None).is_err());
+    assert!(
+        km::estimate(
+            &data,
+            &[f64::NAN],
+            &KmOptions::default(),
+            &Weights::iptw(&w, None)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -169,7 +227,13 @@ fn the_covariance_between_two_curves_is_symmetric_and_holds_the_variance() {
         .build()
         .unwrap();
     let times = [3.0, 8.0, 12.0];
-    let curves = km::estimate(&data, &times, &KmOptions::default(), &w, None).unwrap();
+    let curves = km::estimate(
+        &data,
+        &times,
+        &KmOptions::default(),
+        &Weights::iptw(&w, None),
+    )
+    .unwrap();
     assert_eq!(curves.groups.len(), 2);
     for time in 0..times.len() {
         let (a, b) = (
@@ -196,7 +260,13 @@ fn a_curve_at_zero_has_no_variance() {
     let stop: Vec<f64> = (1..=60).map(f64::from).collect();
     let status = vec![1; 60];
     let data = SurvData::builder(&stop, &status).build().unwrap();
-    let curves = km::estimate(&data, &[0.5, 6.0, 60.0], &KmOptions::default(), &w, None).unwrap();
+    let curves = km::estimate(
+        &data,
+        &[0.5, 6.0, 60.0],
+        &KmOptions::default(),
+        &Weights::iptw(&w, None),
+    )
+    .unwrap();
     assert_eq!(curves.surv[0], 1.0);
     assert_eq!(curves.standard_error(0, 0), Some(0.0));
     assert!(curves.standard_error(0, 1).is_some());

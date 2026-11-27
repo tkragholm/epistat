@@ -14,7 +14,9 @@ use epistat_survival::weighting::ipcw::{CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_survival::weighting::pooled;
-use epistat_survival::weighting::{Censoring, Estimated, WeightAt};
+use epistat_survival::weighting::pooled::PooledEvent;
+use epistat_survival::weighting::pooled::PooledOptions;
+use epistat_survival::weighting::{Censoring, WeightAt, Weights};
 
 /// Four subjects with two or three rows each.
 struct Tiny {
@@ -63,25 +65,69 @@ fn pooled_fit_refuses_invalid_input() {
     let t = tiny();
     let d = data(&t);
     let short = Mat::from_fn(3, 2, |_, _| 1.0);
-    let err = |r: epistat_survival::Result<pooled::PooledIpcw<'_>>| r.err().unwrap().to_string();
-    assert!(err(pooled::fit(&d, None, short.as_ref(), None)).contains("design: 3 rows"));
+    let err = |r: epistat_survival::Result<pooled::PooledIpcw>| r.err().unwrap().to_string();
     assert!(
-        err(pooled::fit(&d, Some(&[true]), t.design.as_ref(), None))
-            .contains("censored has length 1")
+        err(pooled::fit(
+            &d,
+            PooledEvent::Censoring { censored: None },
+            short.as_ref(),
+            None,
+            &PooledOptions::default()
+        ))
+        .contains("design: 3 rows")
+    );
+    assert!(
+        err(pooled::fit(
+            &d,
+            PooledEvent::Censoring {
+                censored: Some(&[true])
+            },
+            t.design.as_ref(),
+            None,
+            &PooledOptions::default()
+        ))
+        .contains("censored has length 1")
     );
     // No censoring event among the rows of the fit.
     let none = vec![false; t.id.len()];
     assert!(
-        err(pooled::fit(&d, Some(&none), t.design.as_ref(), None)).contains("censoring events")
+        err(pooled::fit(
+            &d,
+            PooledEvent::Censoring {
+                censored: Some(&none)
+            },
+            t.design.as_ref(),
+            None,
+            &PooledOptions::default()
+        ))
+        .contains("censoring events")
     );
     // A column that repeats another.
     let aliased = Mat::from_fn(t.id.len(), 3, |i, j| t.design[(i, j.min(1))]);
-    assert!(err(pooled::fit(&d, None, aliased.as_ref(), None)).contains("aliased"));
+    assert!(
+        err(pooled::fit(
+            &d,
+            PooledEvent::Censoring { censored: None },
+            aliased.as_ref(),
+            None,
+            &PooledOptions::default()
+        ))
+        .contains("aliased")
+    );
     // Two rows of a subject with the same stop.
     let same = vec![1.0; t.id.len()];
     let status = vec![0; t.id.len()];
     let bad = SurvData::builder(&same, &status).id(&t.id).build().unwrap();
-    assert!(err(pooled::fit(&bad, None, t.design.as_ref(), None)).contains("same stop"));
+    assert!(
+        err(pooled::fit(
+            &bad,
+            PooledEvent::Censoring { censored: None },
+            t.design.as_ref(),
+            None,
+            &PooledOptions::default()
+        ))
+        .contains("same stop")
+    );
 }
 
 #[test]
@@ -90,15 +136,15 @@ fn estimated_variances_refuse_invalid_input() {
     let d = data(&t);
     let x = Mat::from_fn(t.id.len(), 1, |i, _| t.design[(i, 1)]);
     let opts = CoxOptions::default();
-    let nothing = Estimated::default();
-    let e = wcox::fit_estimated(&d, x.as_ref(), &opts, &nothing).unwrap_err();
-    assert!(e.to_string().contains("neither treatment nor censoring"));
-    let e = km::estimate_estimated(&d, &[1.0], &KmOptions::default(), &nothing).unwrap_err();
-    assert!(e.to_string().contains("neither treatment nor censoring"));
+    let nothing = Weights::known();
+    let e = wcox::fit(&d, x.as_ref(), &opts, &nothing).unwrap_err();
+    assert!(e.to_string().contains("no model of the weights"));
+    // Known weights are the curves of `survfit(robust = TRUE)`.
+    assert!(km::estimate(&d, &[1.0], &KmOptions::default(), &nothing).is_ok());
     // A subject map without treatment weights.
     let ids = t.id.clone();
     let km_model = IpcwOptions::default();
-    let est = Estimated {
+    let est = Weights {
         iptw: None,
         subject: Some(&ids),
         censoring: Some(Censoring::Hazard {
@@ -107,7 +153,7 @@ fn estimated_variances_refuse_invalid_input() {
             at: WeightAt::Stop,
         }),
     };
-    let e = wcox::fit_estimated(&d, x.as_ref(), &opts, &est).unwrap_err();
+    let e = wcox::fit(&d, x.as_ref(), &opts, &est).unwrap_err();
     assert!(e.to_string().contains("subject: it indexes"));
     // Case weights in the data.
     let w = vec![1.0; t.id.len()];
@@ -117,7 +163,7 @@ fn estimated_variances_refuse_invalid_input() {
         .weight(&w)
         .build()
         .unwrap();
-    let est = Estimated {
+    let est = Weights {
         iptw: None,
         subject: None,
         censoring: Some(Censoring::Hazard {
@@ -126,14 +172,14 @@ fn estimated_variances_refuse_invalid_input() {
             at: WeightAt::Stop,
         }),
     };
-    let e = wcox::fit_estimated(&weighted, x.as_ref(), &opts, &est).unwrap_err();
+    let e = wcox::fit(&weighted, x.as_ref(), &opts, &est).unwrap_err();
     assert!(e.to_string().contains("case weights"));
     // Exact ties with a Cox model of censoring.
     let exact = IpcwOptions {
         ties: Ties::Exact,
         ..IpcwOptions::default()
     };
-    let est = Estimated {
+    let est = Weights {
         iptw: None,
         subject: None,
         censoring: Some(Censoring::Hazard {
@@ -142,7 +188,7 @@ fn estimated_variances_refuse_invalid_input() {
             at: WeightAt::Stop,
         }),
     };
-    let e = wcox::fit_estimated(&d, x.as_ref(), &opts, &est).unwrap_err();
+    let e = wcox::fit(&d, x.as_ref(), &opts, &est).unwrap_err();
     assert!(e.to_string().contains("exact method"));
     // A pooled fit of other rows than the data.
     let other = SurvData::builder(&t.stop[..10], &t.status[..10])
@@ -150,9 +196,15 @@ fn estimated_variances_refuse_invalid_input() {
         .id(&t.id[..10])
         .build()
         .unwrap();
-    let fit = pooled::fit(&d, None, t.design.as_ref(), None);
+    let fit = pooled::fit(
+        &d,
+        PooledEvent::Censoring { censored: None },
+        t.design.as_ref(),
+        None,
+        &PooledOptions::default(),
+    );
     if let Ok(fit) = fit {
-        let est = Estimated {
+        let est = Weights {
             iptw: None,
             subject: None,
             censoring: Some(Censoring::Pooled {
@@ -161,7 +213,7 @@ fn estimated_variances_refuse_invalid_input() {
             }),
         };
         let x10 = Mat::from_fn(10, 1, |i, _| t.design[(i, 1)]);
-        let e = wcox::fit_estimated(&other, x10.as_ref(), &opts, &est).unwrap_err();
+        let e = wcox::fit(&other, x10.as_ref(), &opts, &est).unwrap_err();
         assert!(e.to_string().contains("pooled fit has"));
     }
 }
@@ -234,13 +286,13 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
         )
         .unwrap();
         let opts = CoxOptions::default();
-        let old = wcox::fit(&d, x.as_ref(), &opts, &w, Some(&subject)).unwrap();
-        let est = Estimated {
+        let old = wcox::fit(&d, x.as_ref(), &opts, &Weights::iptw(&w, Some(&subject))).unwrap();
+        let est = Weights {
             iptw: Some(&w),
             subject: Some(&subject),
             censoring: None,
         };
-        let new = wcox::fit_estimated(&d, x.as_ref(), &opts, &est).unwrap();
+        let new = wcox::fit(&d, x.as_ref(), &opts, &est).unwrap();
         assert_eq!(old.n_units, new.n_units);
         assert_eq!(old.coefficients, new.coefficients);
         for (a, b) in [
@@ -252,8 +304,14 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
                 worst = worst.max((u - v).abs() / scale);
             }
         }
-        let old = km::estimate(&arms, &times, &KmOptions::default(), &w, Some(&subject)).unwrap();
-        let new = km::estimate_estimated(&arms, &times, &KmOptions::default(), &est).unwrap();
+        let old = km::estimate(
+            &arms,
+            &times,
+            &KmOptions::default(),
+            &Weights::iptw(&w, Some(&subject)),
+        )
+        .unwrap();
+        let new = km::estimate(&arms, &times, &KmOptions::default(), &est).unwrap();
         assert_eq!(old.surv, new.surv);
         for (a, b) in old.covariance.iter().zip(&new.covariance) {
             let (a, b) = (a.unwrap(), b.unwrap());

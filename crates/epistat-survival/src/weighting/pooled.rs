@@ -93,11 +93,6 @@
 //! 3. van der Wal WM, Geskus RB. ipw: an R package for inverse probability
 //!    weighting. J Stat Softw 2011;43(13):1-23.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_core::InputError;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
@@ -109,9 +104,9 @@ use crate::surv::SurvData;
 /// The weights of a pooled logistic model of censoring, and what the variance of
 /// an outcome fitted with them needs.
 ///
-/// It borrows the designs, which the variance reads again.
+/// It keeps the designs, which the variance reads again.
 #[derive(Debug, Clone)]
-pub struct PooledIpcw<'a> {
+pub struct PooledIpcw {
     /// The weight of each row through the row: the product over the rows of its
     /// subject up to and including it.
     pub weight: Vec<f64>,
@@ -145,11 +140,11 @@ pub struct PooledIpcw<'a> {
     pub(super) subject: Vec<u32>,
     /// The rows in the order of their subject and stop.
     pub(super) order: Vec<u32>,
-    pub(super) design: MatRef<'a, f64>,
-    pub(super) numerator_design: Option<MatRef<'a, f64>>,
+    pub(super) design: Mat<f64>,
+    pub(super) numerator_design: Option<Mat<f64>>,
 }
 
-impl PooledIpcw<'_> {
+impl PooledIpcw {
     /// The number of rows.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -176,7 +171,7 @@ impl PooledIpcw<'_> {
     /// The number of parameters of the models, the denominator's then the
     /// numerator's.
     pub(super) fn n_params(&self) -> usize {
-        self.design.ncols() + self.numerator_design.map_or(0, |m| m.ncols())
+        self.design.ncols() + self.numerator_design.as_ref().map_or(0, Mat::ncols)
     }
 
     /// The derivative of the log of the weight through `row`, before truncation,
@@ -203,7 +198,7 @@ impl PooledIpcw<'_> {
             for (j, g) in out.iter_mut().enumerate().take(qd) {
                 *g += pd * self.design[(r, j)];
             }
-            if let (Some(zn), Some(pn)) = (self.numerator_design, &self.numerator_probability) {
+            if let (Some(zn), Some(pn)) = (&self.numerator_design, &self.numerator_probability) {
                 let v = o - pn[r];
                 for j in 0..zn.ncols() {
                     out[qd + j] += v * zn[(r, j)];
@@ -244,17 +239,11 @@ fn fit_model(
     };
     let ys: Vec<f64> = kept.iter().map(|&i| y[i]).collect();
     let model = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(x, &ys, None, None, None)
+        .fit(&crate::logistic::data(x, &ys, None, None, None)?)
         .map_err(Error::model(format!("{what} model")))?;
-    if !model.converged {
-        return Err(Error::invalid(format!("{what} model: no convergence")));
-    }
-    let mut coefficients = Vec::with_capacity(model.coefficients.len());
-    for (j, c) in model.coefficients.iter().enumerate() {
-        coefficients.push(c.ok_or_else(|| {
-            Error::invalid(format!("{what} model: design column {j} is aliased"))
-        })?);
-    }
+    let coefficients = model
+        .full_rank()
+        .map_err(Error::model(format!("{what} model")))?;
     let probability: Vec<f64> = (0..design.nrows())
         .map(|i| {
             let eta: f64 = (0..design.ncols())
@@ -275,7 +264,7 @@ fn fit_model(
 /// What the rows of a pooled logistic model are events of.
 #[derive(Debug, Clone, Copy)]
 pub enum PooledEvent<'a> {
-    /// The rows are intervals at risk of censoring, as in [`fit`]. `censored`
+    /// The rows are intervals at risk of censoring. `censored`
     /// marks the censoring events, `None` takes the last row of each subject
     /// when its status is 0.
     Censoring {
@@ -302,60 +291,46 @@ pub enum TreatmentHistory {
     All,
 }
 
-/// Fit the pooled logistic model of censoring on `design` and weight the rows
-/// of `data`.
-///
-/// `design` has one row per row of `data` and includes the intercept column, as
-/// the design of `glm`; it may hold the interval, the covariates at the start of
-/// the interval and anything else the model uses. `numerator` is the design of
-/// the numerator model of stabilised weights, `None` for unstabilised weights.
-/// `censored` marks the censoring events; `None` takes the last row of each
-/// subject when its status is 0. The data needs an `id` for subjects with several
-/// rows, and carries the stop that orders them.
-///
-/// # Errors
-///
-/// An input error for interval-censored data, for a design or `censored` of
-/// another length than the data, a design without columns or with a value that is
-/// not finite, when two rows of a subject have the same stop, when no row or
-/// every row of the fit is a censoring event, when a model has an aliased
-/// column or does not converge, and when a fitted probability is exactly 0 or 1.
-pub fn fit<'a>(
-    data: &SurvData<'_>,
-    censored: Option<&[bool]>,
-    design: MatRef<'a, f64>,
-    numerator: Option<MatRef<'a, f64>>,
-) -> Result<PooledIpcw<'a>> {
-    fit_pooled(
-        data,
-        PooledEvent::Censoring { censored },
-        design,
-        numerator,
-        None,
-    )
+/// What [`fit`] does besides the data and the designs.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PooledOptions {
+    /// The truncation of the weights, `trunc` of `ipwtm`: `(lower, upper)`,
+    /// two probabilities with `0 <= lower < upper <= 1`, at whose type 7
+    /// quantiles the weights are truncated; `ipwtm(trunc = t)` is
+    /// `(t, 1 - t)`. The default, `None`, does not truncate.
+    pub truncation: Option<(f64, f64)>,
 }
 
 /// Fit the pooled logistic model of `event` on `design` and weight the rows of
 /// `data`.
 ///
-/// `design`, `numerator` and the rules of the rows are those of [`fit`] for
-/// censoring. For treatment, `design` holds the covariates that change over
-/// time and `numerator` those of the stabilising model. `trunc` is `(lower,
-/// upper)`, two probabilities with `0 <= lower < upper <= 1`, at whose quantiles
-/// the weights are truncated; `ipwtm(trunc = t)` is `(t, 1 - t)`.
+/// `design` has one row per row of `data` and includes the intercept column, as
+/// the design of `glm`; it may hold the interval, the covariates at the start of
+/// the interval and anything else the model uses. `numerator` is the design of
+/// the numerator model of stabilised weights, `None` for unstabilised weights.
+/// For censoring, `censored` marks the censoring events; `None` takes the last
+/// row of each subject when its status is 0. For treatment, `design` holds the
+/// covariates that change over time and `numerator` those of the stabilising
+/// model. The data needs an `id` for subjects with several rows, and carries
+/// the stop that orders them.
 ///
 /// # Errors
 ///
-/// The errors of [`fit`], an input error for `treated` of another length than
-/// the data, when the rows of the fit are all treated or all untreated, and for
-/// limits of truncation that are not ordered probabilities.
-pub fn fit_pooled<'a>(
+/// An input error for interval-censored data, for a design, `censored` or
+/// `treated` of another length than the data, a design without columns or with
+/// a value that is not finite, when two rows of a subject have the same stop,
+/// when the rows of the fit are all events or none are, for limits of
+/// truncation that are not ordered probabilities, and when a fitted
+/// probability is exactly 0 or 1; [`Error::Model`] when a model has an aliased
+/// column or does not converge.
+pub fn fit(
     data: &SurvData<'_>,
     event: PooledEvent<'_>,
-    design: MatRef<'a, f64>,
-    numerator: Option<MatRef<'a, f64>>,
-    trunc: Option<(f64, f64)>,
-) -> Result<PooledIpcw<'a>> {
+    design: MatRef<'_, f64>,
+    numerator: Option<MatRef<'_, f64>>,
+    options: &PooledOptions,
+) -> Result<PooledIpcw> {
+    let trunc = options.truncation;
     let surv = data.followup()?;
     let n = data.n_rows();
     if let Some((lo, hi)) = trunc
@@ -563,7 +538,7 @@ pub fn fit_pooled<'a>(
         numerator_probability,
         subject,
         order,
-        design,
-        numerator_design: numerator,
+        design: design.to_owned(),
+        numerator_design: numerator.map(|m| m.to_owned()),
     })
 }

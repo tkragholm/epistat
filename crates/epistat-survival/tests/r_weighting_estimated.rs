@@ -35,7 +35,9 @@ use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_survival::weighting::pooled;
-use epistat_survival::weighting::{Censoring, Estimated, WeightAt};
+use epistat_survival::weighting::pooled::PooledEvent;
+use epistat_survival::weighting::pooled::PooledOptions;
+use epistat_survival::weighting::{Censoring, WeightAt, Weights};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -152,6 +154,7 @@ fn run(reference: &Reference, c: &Case) -> Output {
             &IptwOptions {
                 estimand: Estimand::Ate,
                 stabilise: s.stab,
+                alpha: None,
             },
         )
         .unwrap()
@@ -161,7 +164,16 @@ fn run(reference: &Reference, c: &Case) -> Output {
         .cens
         .as_ref()
         .filter(|s| s.model == "pooled")
-        .map(|s| pooled::fit(&data, None, z.as_ref(), s.stab.then(|| zn.as_ref())).unwrap());
+        .map(|s| {
+            pooled::fit(
+                &data,
+                PooledEvent::Censoring { censored: None },
+                z.as_ref(),
+                s.stab.then(|| zn.as_ref()),
+                &PooledOptions::default(),
+            )
+            .unwrap()
+        });
     let cens_cols: Vec<Vec<f64>> = c
         .spec
         .cens
@@ -232,7 +244,7 @@ fn run(reference: &Reference, c: &Case) -> Output {
         },
     });
     let subject: Vec<u32> = c.id.clone();
-    let estimated = Estimated {
+    let estimated = Weights {
         iptw: iptw_fit.as_ref(),
         subject: iptw_fit.as_ref().map(|_| subject.as_slice()),
         censoring,
@@ -271,9 +283,7 @@ fn run(reference: &Reference, c: &Case) -> Output {
     }
     if km_outcome {
         let t = reference.times.len();
-        let est =
-            km::estimate_estimated(&data, &reference.times, &KmOptions::default(), &estimated)
-                .unwrap();
+        let est = km::estimate(&data, &reference.times, &KmOptions::default(), &estimated).unwrap();
         assert_eq!(est.groups, vec![0, 1]);
         let m = 2 * t;
         let mut adjusted = vec![vec![f64::NAN; m]; m];
@@ -305,7 +315,7 @@ fn run(reference: &Reference, c: &Case) -> Output {
             iter_max: 100,
             ..CoxOptions::default()
         };
-        let fit = wcox::fit_estimated(&data, x.as_ref(), &opts, &estimated).unwrap();
+        let fit = wcox::fit(&data, x.as_ref(), &opts, &estimated).unwrap();
         let p = 3;
         let flat = |v: &[f64]| {
             (0..p)

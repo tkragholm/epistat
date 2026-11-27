@@ -26,7 +26,8 @@ use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::pyears::{Dimension, PyearsOptions, pyears};
 use epistat_survival::ratetable::{RateDim, RateTable};
-use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory, fit_pooled};
+use epistat_survival::weighting::pooled::PooledOptions;
+use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
 use epistat_survival::weighting::{Estimand, IptwOptions, iptw};
 
 const SEED: u64 = 20_261_206;
@@ -239,6 +240,7 @@ fn main() {
             let options = IptwOptions {
                 estimand: Estimand::Ato,
                 stabilise: false,
+                alpha: None,
             };
             let (times, fit) = common::timed(common::reps(), || {
                 iptw::fit(&treated, design.as_ref(), &options).expect("overlap weights")
@@ -286,7 +288,7 @@ fn main() {
                 .build()
                 .expect("data");
             let (times, fit) = common::timed(common::reps(), || {
-                fit_pooled(
+                epistat_survival::weighting::pooled::fit(
                     &data,
                     PooledEvent::Treatment {
                         treated: &treated,
@@ -294,7 +296,7 @@ fn main() {
                     },
                     z.as_ref(),
                     Some(zn.as_ref()),
-                    None,
+                    &PooledOptions { truncation: None },
                 )
                 .expect("ipwtm")
             });

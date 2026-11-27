@@ -88,11 +88,6 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_core::InputError;
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
@@ -232,15 +227,7 @@ fn fit_logistic(
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit_rows(&subset)
         .map_err(Error::model(what))?;
-    if !fit.converged {
-        return Err(Error::invalid(format!("{what}: no convergence")));
-    }
-    let mut coefficients = Vec::with_capacity(fit.coefficients.len());
-    for (j, c) in fit.coefficients.iter().enumerate() {
-        coefficients.push(
-            c.ok_or_else(|| Error::invalid(format!("{what}: design column {j} is aliased")))?,
-        );
-    }
+    let coefficients = crate::logistic::full_rank(&fit, what)?;
     Ok((coefficients, fit.fitted(&subset)))
 }
 
@@ -394,28 +381,19 @@ fn ratio_weights(
 /// treatment among the rows of each previous treatment, `p_n / p_d` for a
 /// treated row and `(1 - p_n) / (1 - p_d)` for an untreated one.
 ///
-/// The models are fitted on every row; [`switch_weights_with`] fits them on
-/// chosen rows with case weights.
+/// The models are fitted on the rows of `rows` with its case weights;
+/// [`WeightRows::default`] fits them on every row with weight 1. The designs
+/// have one row for every row of `data`.
 ///
 /// # Errors
 ///
 /// An input error for rows that are not ordered by person and period, for
 /// slices or designs of another length than the rows, a design with no column or
 /// a value that is not finite, a group of the previous treatment without rows or
-/// without both treated and untreated rows, a model that has an aliased column
-/// or does not converge.
-pub fn switch_weights(data: &PersonPeriod<'_>, model: &WeightModel<'_>) -> Result<RowWeights> {
-    switch_weights_with(data, model, &WeightRows::default())
-}
-
-/// [`switch_weights`] with the models fitted on the rows of `rows` and with
-/// its case weights. The designs have one row for every row of `data`.
-///
-/// # Errors
-///
-/// As [`switch_weights`], with `rows` of another length than the data or a
-/// case weight that is negative or not finite.
-pub fn switch_weights_with(
+/// without both treated and untreated rows, `rows` of another length than the
+/// data or a case weight that is negative or not finite, and a model that has
+/// an aliased column or does not converge.
+pub fn switch_weights(
     data: &PersonPeriod<'_>,
     model: &WeightModel<'_>,
     rows: &WeightRows<'_>,
@@ -437,29 +415,15 @@ pub fn switch_weights_with(
 /// fitted by the previous treatment or on all rows.
 ///
 /// `censored` marks the rows of persons who are censored in the period. The
-/// rows are all used in the fit, so that a data set from which the rows after a
-/// deviation have been removed gives the weights of `TrialEmulation`;
-/// [`censoring_weights_with`] fits on chosen rows.
+/// models are fitted on the rows of `rows` with its case weights. With
+/// [`WeightRows::default`] every row is in the fit, so that a data set from
+/// which the rows after a deviation have been removed gives the weights of
+/// `TrialEmulation`.
 ///
 /// # Errors
 ///
 /// As [`switch_weights`], with `censored` of another length than the rows.
 pub fn censoring_weights(
-    data: &PersonPeriod<'_>,
-    censored: &[bool],
-    model: &WeightModel<'_>,
-    fit: Fit,
-) -> Result<RowWeights> {
-    censoring_weights_with(data, censored, model, fit, &WeightRows::default())
-}
-
-/// [`censoring_weights`] with the models fitted on the rows of `rows` and with
-/// its case weights.
-///
-/// # Errors
-///
-/// As [`censoring_weights`] and [`switch_weights_with`].
-pub fn censoring_weights_with(
     data: &PersonPeriod<'_>,
     censored: &[bool],
     model: &WeightModel<'_>,
@@ -623,20 +587,16 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         .collect();
     let model = Glm::new(Family::Binomial, Link::Logit);
     let fit = model
-        .fit_slices(input.design, &y, Some(input.weight), None, None)
+        .fit(&crate::logistic::data(
+            input.design,
+            &y,
+            Some(input.weight),
+            None,
+            None,
+        )?)
         .map_err(Error::model("outcome model"))?;
-    if !fit.converged {
-        return Err(Error::invalid("outcome model: no convergence"));
-    }
     let p = input.design.ncols();
-    let coefficients: Vec<f64> = fit
-        .coefficients
-        .iter()
-        .enumerate()
-        .map(|(j, c)| {
-            c.ok_or_else(|| Error::invalid(format!("outcome model: design column {j} is aliased")))
-        })
-        .collect::<Result<_>>()?;
+    let coefficients = fit.full_rank().map_err(Error::model("outcome model"))?;
     let clusters = Clusters::from_labels(input.person);
     let cov = robust_covariance(
         &model,
@@ -903,17 +863,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
     let fit = model
         .fit_rows(rows)
         .map_err(Error::model("outcome model"))?;
-    if !fit.converged {
-        return Err(Error::invalid("outcome model: no convergence"));
-    }
-    let coefficients: Vec<f64> = fit
-        .coefficients
-        .iter()
-        .enumerate()
-        .map(|(j, c)| {
-            c.ok_or_else(|| Error::invalid(format!("outcome model: design column {j} is aliased")))
-        })
-        .collect::<Result<_>>()?;
+    let coefficients = crate::logistic::full_rank(&fit, "outcome model")?;
     let cov = fit
         .robust_covariance(rows, true, SandwichType::Hc0)
         .map_err(Error::model("outcome model"))?;

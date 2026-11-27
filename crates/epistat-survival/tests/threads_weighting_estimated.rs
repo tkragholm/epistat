@@ -11,7 +11,9 @@ use epistat_survival::weighting::ipcw::{CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_survival::weighting::pooled;
-use epistat_survival::weighting::{Censoring, Estimated, WeightAt};
+use epistat_survival::weighting::pooled::PooledEvent;
+use epistat_survival::weighting::pooled::PooledOptions;
+use epistat_survival::weighting::{Censoring, WeightAt, Weights};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 struct Simulated {
@@ -112,7 +114,14 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
     for stabilise in [false, true] {
         assert_same_on_pools(&POOLS, || {
             let num = stabilise.then(|| numerator.as_ref());
-            let pooled_fit = pooled::fit(&plain, None, s.z.as_ref(), num).unwrap();
+            let pooled_fit = pooled::fit(
+                &plain,
+                PooledEvent::Censoring { censored: None },
+                s.z.as_ref(),
+                num,
+                &PooledOptions::default(),
+            )
+            .unwrap();
             let propensity =
                 iptw::fit(&s.treat, s.z_subject.as_ref(), &IptwOptions::default()).unwrap();
             let ipcw_opts = IpcwOptions {
@@ -123,7 +132,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
             out.extend(&pooled_fit.weight_before);
             out.extend(&pooled_fit.coefficients);
             let cox_cases = [
-                Estimated {
+                Weights {
                     iptw: None,
                     subject: None,
                     censoring: Some(Censoring::Pooled {
@@ -131,7 +140,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                         at: WeightAt::Stop,
                     }),
                 },
-                Estimated {
+                Weights {
                     iptw: Some(&propensity),
                     subject: Some(&s.id),
                     censoring: Some(Censoring::Hazard {
@@ -140,7 +149,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                         at: WeightAt::Start,
                     }),
                 },
-                Estimated {
+                Weights {
                     iptw: None,
                     subject: None,
                     censoring: Some(Censoring::Hazard {
@@ -151,13 +160,13 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 },
             ];
             for est in &cox_cases {
-                let fit = wcox::fit_estimated(&plain, x_out.as_ref(), &cox_opts, est).unwrap();
+                let fit = wcox::fit(&plain, x_out.as_ref(), &cox_opts, est).unwrap();
                 out.extend(&fit.coefficients);
                 out.extend(&fit.covariance);
                 out.extend(&fit.robust_covariance);
             }
             let km_cases = [
-                Estimated {
+                Weights {
                     iptw: Some(&propensity),
                     subject: Some(&s.id),
                     censoring: Some(Censoring::Pooled {
@@ -165,7 +174,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                         at: WeightAt::Start,
                     }),
                 },
-                Estimated {
+                Weights {
                     iptw: None,
                     subject: None,
                     censoring: Some(Censoring::Hazard {
@@ -176,8 +185,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 },
             ];
             for est in &km_cases {
-                let curves =
-                    km::estimate_estimated(&arms, &times, &KmOptions::default(), est).unwrap();
+                let curves = km::estimate(&arms, &times, &KmOptions::default(), est).unwrap();
                 out.extend(&curves.surv);
                 out.extend(curves.covariance.iter().map(|v| v.unwrap_or(f64::NAN)));
                 out.extend(

@@ -75,13 +75,8 @@
 //! 5. Zhou T, Tong G, Li F, Thomas LE, Li F. PSweight: an R package for
 //!    propensity score weighting analysis. R J. 2022;14(1):282-300.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_glm::{Family, Glm, Link};
-use epistat_linalg::MatRef;
+use epistat_linalg::{Mat, MatRef};
 
 use super::summary::WeightSummary;
 use crate::error::{Error, Result};
@@ -110,7 +105,7 @@ pub enum Estimand {
 }
 
 /// What [`fit`] does besides the data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct IptwOptions {
     /// The population the weights standardise to. The default is `ATE`, as in
     /// `weightit`.
@@ -119,6 +114,10 @@ pub struct IptwOptions {
     /// subject received, `stabilize = TRUE` of `weightit`. Only for the average
     /// treatment effect. The default is unstabilised weights.
     pub stabilise: bool,
+    /// The cut-off `alpha` of the optimal subset for [`Estimand::Atos`], in
+    /// `[0, 0.5)`, or `None` for the one of Crump et al. as `WeightIt` finds
+    /// it. Ignored for the other estimands.
+    pub alpha: Option<f64>,
 }
 
 /// The summary of the weights in each treatment group.
@@ -133,10 +132,10 @@ pub struct IptwSummary {
 /// The weights of a propensity model, and what the variance of an outcome fitted
 /// with them needs.
 ///
-/// It borrows the treatment and the design, which the stacked variance reads
+/// It keeps the treatment and the design, which the stacked variance reads
 /// again.
 #[derive(Debug, Clone)]
-pub struct Iptw<'a> {
+pub struct Iptw {
     /// The estimand of the weights.
     pub estimand: Estimand,
     /// Whether the weights are stabilised.
@@ -153,11 +152,11 @@ pub struct Iptw<'a> {
     pub alpha: Option<f64>,
     /// The summary of the weights by treatment group.
     pub summary: IptwSummary,
-    pub(super) treatment: &'a [bool],
-    pub(super) design: MatRef<'a, f64>,
+    pub(super) treatment: Vec<bool>,
+    pub(super) design: Mat<f64>,
 }
 
-impl Iptw<'_> {
+impl Iptw {
     /// The number of subjects.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -174,48 +173,32 @@ impl Iptw<'_> {
 /// Fit the propensity model of `treatment` on `design` and weight the subjects.
 ///
 /// `design` holds one row per subject and includes the intercept column, as
-/// the design of `glm`. `treatment` is true for the treated.
+/// the design of `glm`. `treatment` is true for the treated. For
+/// [`Estimand::Atos`] the weights are those of the average treatment effect
+/// inside the optimal subset between `alpha` and `1 - alpha` and 0 outside,
+/// and [`Iptw::alpha`] holds the cut-off used.
 ///
 /// # Errors
 ///
 /// An input error when `design` has another number of rows than `treatment`,
 /// no column, or a value that is not finite, when everyone or no one is
-/// treated, when `stabilise` is set for an estimand other than `Ate`, when the
-/// propensity model has an aliased column or does not converge, and when a
-/// fitted probability is exactly 0 or 1.
-pub fn fit<'a>(
-    treatment: &'a [bool],
-    design: MatRef<'a, f64>,
-    opts: &IptwOptions,
-) -> Result<Iptw<'a>> {
-    fit_with(treatment, design, *opts, None)
-}
-
-/// Fit the propensity model and weight the subjects of the optimal subset
-/// between `alpha` and `1 - alpha`, a cut-off of the caller's, or the one of
-/// Crump et al. for `None`.
-///
-/// The weights are those of the average treatment effect inside the subset and 0
-/// outside, and [`Iptw::alpha`] holds the cut-off used.
-///
-/// # Errors
-///
-/// As [`fit`], and an input error when `alpha` is not in `[0, 0.5)`.
-pub fn fit_atos<'a>(
-    treatment: &'a [bool],
-    design: MatRef<'a, f64>,
-    alpha: Option<f64>,
-) -> Result<Iptw<'a>> {
-    if let Some(a) = alpha
+/// treated, when `stabilise` is set for an estimand other than `Ate`, when
+/// `alpha` is not in `[0, 0.5)`, and when a fitted probability is exactly 0
+/// or 1; [`Error::Model`] when the propensity model has an aliased column or
+/// does not converge.
+pub fn fit(treatment: &[bool], design: MatRef<'_, f64>, opts: &IptwOptions) -> Result<Iptw> {
+    if opts.estimand == Estimand::Atos
+        && let Some(a) = opts.alpha
         && !(0.0..0.5).contains(&a)
     {
         return Err(Error::invalid(format!("alpha: {a} is not in [0, 0.5)")));
     }
-    let opts = IptwOptions {
-        estimand: Estimand::Atos,
-        stabilise: false,
+    let alpha = if opts.estimand == Estimand::Atos {
+        opts.alpha
+    } else {
+        None
     };
-    fit_with(treatment, design, opts, alpha)
+    fit_with(treatment, design, *opts, alpha)
 }
 
 /// The cut-off of Crump et al. as `WeightIt` finds it, 0 if none qualifies.
@@ -250,12 +233,12 @@ fn crump_alpha(propensity: &[f64]) -> f64 {
     0.0
 }
 
-fn fit_with<'a>(
-    treatment: &'a [bool],
-    design: MatRef<'a, f64>,
+fn fit_with(
+    treatment: &[bool],
+    design: MatRef<'_, f64>,
     opts: IptwOptions,
     alpha: Option<f64>,
-) -> Result<Iptw<'a>> {
+) -> Result<Iptw> {
     let n = treatment.len();
     if design.nrows() != n {
         return Err(Error::invalid(format!(
@@ -280,17 +263,11 @@ fn fit_with<'a>(
     }
     let y: Vec<f64> = treatment.iter().map(|&a| f64::from(u8::from(a))).collect();
     let model = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(design, &y, None, None, None)
+        .fit(&crate::logistic::data(design, &y, None, None, None)?)
         .map_err(Error::model("propensity model"))?;
-    if !model.converged {
-        return Err(Error::invalid("propensity model: no convergence"));
-    }
-    let mut coefficients = Vec::with_capacity(model.coefficients.len());
-    for (j, c) in model.coefficients.iter().enumerate() {
-        coefficients.push(c.ok_or_else(|| {
-            Error::invalid(format!("propensity model: design column {j} is aliased"))
-        })?);
-    }
+    let coefficients = model
+        .full_rank()
+        .map_err(Error::model("propensity model"))?;
     let propensity = model.fitted;
     if let Some(i) = propensity.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
         return Err(Error::invalid(format!(
@@ -353,7 +330,7 @@ fn fit_with<'a>(
         marginal,
         alpha,
         summary,
-        treatment,
-        design,
+        treatment: treatment.to_vec(),
+        design: design.to_owned(),
     })
 }

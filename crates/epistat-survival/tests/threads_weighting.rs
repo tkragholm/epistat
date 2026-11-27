@@ -12,6 +12,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
+use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
 use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
@@ -108,6 +109,7 @@ fn weighting_is_the_same_on_every_pool() {
                 &IptwOptions {
                     estimand,
                     stabilise,
+                    alpha: None,
                 },
             )
             .unwrap();
@@ -128,16 +130,20 @@ fn weighting_is_the_same_on_every_pool() {
                 &data,
                 x.as_ref(),
                 &CoxOptions::default(),
-                &w,
-                Some(&s.subject),
+                &Weights::iptw(&w, Some(&s.subject)),
             )
             .unwrap();
             out.extend(&cox.coefficients);
             out.extend(&cox.covariance);
             out.extend(&cox.robust_covariance);
-            out.extend(&cox.weight_covariance);
-            let curves =
-                km::estimate(&arms, &times, &KmOptions::default(), &w, Some(&s.subject)).unwrap();
+            out.extend(cox.weight_covariance.as_deref().unwrap());
+            let curves = km::estimate(
+                &arms,
+                &times,
+                &KmOptions::default(),
+                &Weights::iptw(&w, Some(&s.subject)),
+            )
+            .unwrap();
             out.extend(&curves.surv);
             out.extend(curves.covariance.iter().map(|v| v.unwrap_or(f64::NAN)));
             out.extend(

@@ -161,6 +161,7 @@ pub mod frailty;
 pub mod informative;
 mod ldl;
 pub mod lexis;
+mod logistic;
 pub mod markov;
 pub mod metrics;
 pub mod msreg;
