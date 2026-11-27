@@ -6,10 +6,10 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use super::EstimationError;
 use super::config::{ElasticNetLogisticConfig, LogisticRegressionConfig, PropensityLink};
 use super::cross_validation::CrossValidation;
 use super::encoding::CovariateMatrix;
+use crate::Error;
 use epistat_glm::{ElasticNet, Family, Glm, Link};
 use epistat_linalg::MatRef;
 
@@ -45,12 +45,12 @@ pub(super) fn fit_glm(
     labels: &[f64],
     weights: Option<&[f64]>,
     config: &LogisticRegressionConfig,
-) -> Result<LogisticFit, EstimationError> {
+) -> Result<LogisticFit, Error> {
     if labels.len() != matrix.n_rows || weights.is_some_and(|w| w.len() != matrix.n_rows) {
-        return Err(EstimationError::LinearSystemSolveFailed);
+        return Err(Error::LinearSystem);
     }
     if config.max_iter == 0 || !(config.tolerance.is_finite() && config.tolerance > 0.0) {
-        return Err(EstimationError::InvalidGlmConfig);
+        return Err(Error::InvalidModelControl);
     }
     let link = match config.link {
         PropensityLink::Logit => Link::Logit,
@@ -63,7 +63,7 @@ pub(super) fn fit_glm(
     let design = MatRef::from_row_major_slice(&matrix.values, matrix.n_rows, matrix.n_cols);
     let fit = model
         .fit_slices(design, labels, weights, None, None)
-        .map_err(EstimationError::GlmFitFailed)?;
+        .map_err(Error::Glm)?;
     let aliased_columns = fit
         .coefficients
         .iter()
@@ -107,7 +107,7 @@ pub(super) struct NetSettings {
 }
 
 impl NetSettings {
-    pub(super) fn validate(&self) -> Result<(), EstimationError> {
+    pub(super) fn validate(&self) -> Result<(), Error> {
         if !(0.0..=1.0).contains(&self.alpha)
             || !self.tolerance.is_finite()
             || !self.probability_clip.is_finite()
@@ -116,7 +116,7 @@ impl NetSettings {
             || self.probability_clip <= 0.0
             || self.probability_clip >= 0.5
         {
-            return Err(EstimationError::InvalidElasticNetConfig);
+            return Err(Error::InvalidElasticNet);
         }
         Ok(())
     }
@@ -210,7 +210,7 @@ impl NetProblem {
         lambda: f64,
         penalty: &[f64],
         start: Option<&[f64]>,
-    ) -> Result<epistat_glm::ElasticNetFit, EstimationError> {
+    ) -> Result<epistat_glm::ElasticNetFit, Error> {
         let design = MatRef::from_row_major_slice(&self.values, self.n_rows, self.n_cols);
         let mut model = ElasticNet::new(Family::Binomial, lambda, settings.alpha);
         model.tolerance = settings.tolerance;
@@ -225,7 +225,7 @@ impl NetProblem {
                 Some(penalty),
                 start,
             )
-            .map_err(EstimationError::ElasticNetFitFailed)
+            .map_err(Error::Glm)
     }
 
     /// Coefficients on the scale of the original covariates.
@@ -259,9 +259,9 @@ pub(super) fn fit_elastic_net_logistic(
     labels: &[f64],
     weights: Option<&[f64]>,
     config: &ElasticNetLogisticConfig,
-) -> Result<LogisticFit, EstimationError> {
+) -> Result<LogisticFit, Error> {
     if labels.len() != matrix.n_rows || weights.is_some_and(|w| w.len() != matrix.n_rows) {
-        return Err(EstimationError::LinearSystemSolveFailed);
+        return Err(Error::LinearSystem);
     }
     let settings = NetSettings {
         alpha: config.alpha,
@@ -272,7 +272,7 @@ pub(super) fn fit_elastic_net_logistic(
     };
     settings.validate()?;
     if !config.lambda.is_finite() || config.lambda < 0.0 || matrix.n_rows == 0 {
-        return Err(EstimationError::InvalidElasticNetConfig);
+        return Err(Error::InvalidElasticNet);
     }
     let penalty = penalty_factors(matrix);
     let rows: Vec<usize> = (0..matrix.n_rows).collect();

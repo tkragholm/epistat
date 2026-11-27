@@ -98,6 +98,7 @@ use super::engine::{
 use super::index::StrataValues;
 use super::records::MatchingRecord;
 use super::selection::{Assignment, SelectionStrategy};
+use crate::Error;
 use crate::constraints::sample_sd;
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 use crate::types::{
@@ -156,36 +157,6 @@ pub struct NearestSelection {
     variable_ratio: Option<VariableRatio>,
 }
 
-/// Why a variable ratio is refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariableRatioError {
-    /// The average is not a finite number above 1.
-    AverageNotAboveOne,
-    /// The minimum is below 1.
-    MinimumBelowOne,
-    /// The minimum is not below the average.
-    MinimumNotBelowAverage,
-    /// The maximum is not above the average.
-    MaximumNotAboveAverage,
-}
-
-impl std::fmt::Display for VariableRatioError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::AverageNotAboveOne => "the average ratio must be a number above 1",
-            Self::MinimumBelowOne => "the minimum number of controls must be at least 1",
-            Self::MinimumNotBelowAverage => {
-                "the minimum number of controls must be below the average ratio"
-            }
-            Self::MaximumNotAboveAverage => {
-                "the maximum number of controls must be above the average ratio"
-            }
-        })
-    }
-}
-
-impl std::error::Error for VariableRatioError {}
-
 /// Extremal variable ratio matching (Ming and Rosenbaum, 2000), the
 /// `min.controls` and `max.controls` of `matchit()`.
 ///
@@ -220,21 +191,21 @@ impl VariableRatio {
     ///
     /// # Errors
     ///
-    /// Returns a [`VariableRatioError`] unless `1 <= min < average < max`.
-    pub fn new(average: f64, min: usize, max: usize) -> Result<Self, VariableRatioError> {
+    /// Returns a [`Error`] unless `1 <= min < average < max`.
+    pub fn new(average: f64, min: usize, max: usize) -> Result<Self, Error> {
         if !(average.is_finite() && average > 1.0) {
-            return Err(VariableRatioError::AverageNotAboveOne);
+            return Err(Error::AverageNotAboveOne);
         }
         if min < 1 {
-            return Err(VariableRatioError::MinimumBelowOne);
+            return Err(Error::MinimumBelowOne);
         }
         #[expect(clippy::cast_precision_loss, reason = "control counts are small")]
         let (low, high) = (min as f64, max as f64);
         if low >= average {
-            return Err(VariableRatioError::MinimumNotBelowAverage);
+            return Err(Error::MinimumNotBelowAverage);
         }
         if high <= average {
-            return Err(VariableRatioError::MaximumNotAboveAverage);
+            return Err(Error::MaximumNotAboveAverage);
         }
         Ok(Self { average, min, max })
     }

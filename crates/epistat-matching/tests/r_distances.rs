@@ -42,6 +42,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, IdMapEuclideanDistance, IdMapMahalanobisDistance,
@@ -337,7 +338,7 @@ fn only_constant_columns_are_an_error() {
             None,
             &EuclideanPreparationConfig::default()
         ),
-        Err(EstimationError::NoCovariatesAvailable)
+        Err(Error::NoCovariates)
     ));
     assert!(matches!(
         prepare_mahalanobis_distance_config(
@@ -346,7 +347,7 @@ fn only_constant_columns_are_an_error() {
             None,
             &MahalanobisPreparationConfig::default()
         ),
-        Err(EstimationError::NoCovariatesAvailable)
+        Err(Error::NoCovariates)
     ));
 }
 
@@ -380,7 +381,7 @@ fn column_without_variance_within_groups_cannot_be_scaled() {
         .build();
     assert!(matches!(
         prepare_euclidean_distance_config(&anchors, &candidates, None, &scaled),
-        Err(EstimationError::ZeroWithinGroupVariance { column }) if column == "b"
+        Err(Error::ZeroWithinGroupVariance { column }) if column == "b"
     ));
     assert!(
         prepare_euclidean_distance_config(

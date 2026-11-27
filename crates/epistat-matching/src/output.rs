@@ -27,6 +27,7 @@
 //!    for parametric causal inference. Journal of Statistical Software
 //!    2011;42(8).
 
+use crate::Error;
 use crate::matching::to_f64;
 use crate::matching::{
     MatchWeightMethod, PropensityScoreEstimate, SubclassedUnits, SubclassificationOutcome,
@@ -34,8 +35,6 @@ use crate::matching::{
 };
 use crate::types::{Estimand, MatchOutcome};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 /// The units of a match in input order, with the group of each.
 ///
@@ -53,19 +52,16 @@ impl Units {
     ///
     /// # Errors
     ///
-    /// [`OutputError::LengthMismatch`] when the two lists differ in length and
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn new(ids: Vec<String>, anchor: Vec<bool>) -> Result<Self, OutputError> {
+    /// [`Error::LengthMismatch`] when the two lists differ in length and
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn new(ids: Vec<String>, anchor: Vec<bool>) -> Result<Self, Error> {
         if ids.len() != anchor.len() {
-            return Err(OutputError::LengthMismatch {
-                ids: ids.len(),
-                anchor: anchor.len(),
-            });
+            return Err(Error::length("case flags", ids.len(), anchor.len()));
         }
         let mut seen: HashSet<&str> = HashSet::with_capacity(ids.len());
         for id in &ids {
             if !seen.insert(id.as_str()) {
-                return Err(OutputError::DuplicateId { id: id.clone() });
+                return Err(Error::DuplicateId { id: id.clone() });
             }
         }
         Ok(Self {
@@ -85,8 +81,8 @@ impl Units {
     ///
     /// # Errors
     ///
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn without_fixed_roles(ids: Vec<String>) -> Result<Self, OutputError> {
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn without_fixed_roles(ids: Vec<String>) -> Result<Self, Error> {
         let anchor = vec![false; ids.len()];
         let mut units = Self::new(ids, anchor)?;
         units.fixed_roles = false;
@@ -101,11 +97,11 @@ impl Units {
         self.fixed_roles
     }
 
-    fn require_fixed_roles(&self, output: &'static str) -> Result<(), OutputError> {
+    fn require_fixed_roles(&self, output: &'static str) -> Result<(), Error> {
         if self.fixed_roles {
             Ok(())
         } else {
-            Err(OutputError::NoFixedRoles { output })
+            Err(Error::NoFixedRoles { output })
         }
     }
 
@@ -153,103 +149,6 @@ impl Units {
     }
 }
 
-/// Why an output could not be built.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputError {
-    /// The id list and the group list differ in length.
-    LengthMismatch {
-        /// Number of ids.
-        ids: usize,
-        /// Number of group flags.
-        anchor: usize,
-    },
-    /// An id occurs twice among the units.
-    DuplicateId {
-        /// The id.
-        id: String,
-    },
-    /// A pair names an anchor that is not among the anchors given.
-    UnknownAnchor {
-        /// The id.
-        id: String,
-    },
-    /// A pair names a candidate that is not among the candidates given.
-    UnknownCandidate {
-        /// The id.
-        id: String,
-    },
-    /// The units have no fixed group, and the output needs one.
-    NoFixedRoles {
-        /// The output that was asked for.
-        output: &'static str,
-    },
-    /// A per-unit column is not as long as the list of units.
-    ColumnLength {
-        /// The column.
-        column: &'static str,
-        /// Number of units.
-        units: usize,
-        /// Length of the column.
-        length: usize,
-    },
-    /// Pairs were asked for from a selection that was not paired.
-    NotPaired,
-    /// A weight is NaN, infinite or negative.
-    InvalidWeight {
-        /// The id of the unit.
-        id: String,
-        /// The weight.
-        weight: f64,
-    },
-}
-
-impl Display for OutputError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LengthMismatch { ids, anchor } => write!(
-                f,
-                "{ids} ids but {anchor} group flags; give one flag for every id"
-            ),
-            Self::DuplicateId { id } => write!(
-                f,
-                "the id {id} occurs more than once; the ids of the units must be unique"
-            ),
-            Self::UnknownAnchor { id } => write!(
-                f,
-                "a pair has the anchor {id}, which is not an anchor among the units given; \
-                 pass the units the match was run on"
-            ),
-            Self::UnknownCandidate { id } => write!(
-                f,
-                "a pair has the candidate {id}, which is not a candidate among the units given; \
-                 pass the units the match was run on"
-            ),
-            Self::NoFixedRoles { output } => write!(
-                f,
-                "{output} needs each unit to be an anchor or a candidate throughout; \
-                 these units have a role in each pair"
-            ),
-            Self::ColumnLength {
-                column,
-                units,
-                length,
-            } => write!(
-                f,
-                "{column} has {length} values for {units} units; give one for every unit"
-            ),
-            Self::InvalidWeight { id, weight } => write!(
-                f,
-                "the weight {weight} of {id} is not a finite number of at least 0"
-            ),
-            Self::NotPaired => {
-                f.write_str("the selection was not paired; give mahvars to pair the selected units")
-            }
-        }
-    }
-}
-
-impl Error for OutputError {}
-
 /// MatchIt's `match.matrix`: one row per anchor, in input order, holding its
 /// controls in the order they were assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,13 +192,13 @@ impl MatchMatrix {
 ///
 /// # Errors
 ///
-/// [`OutputError::UnknownAnchor`] when a pair's anchor is not an anchor in
+/// [`Error::UnknownCase`] when a pair's anchor is not an anchor in
 /// `units`.
 pub fn match_matrix(
     outcome: &MatchOutcome,
     units: &Units,
     ratio: usize,
-) -> Result<MatchMatrix, OutputError> {
+) -> Result<MatchMatrix, Error> {
     units.require_fixed_roles("match_matrix")?;
     let anchors = units.anchor_ids();
     let row_of: HashMap<&str, usize> = anchors
@@ -311,7 +210,7 @@ pub fn match_matrix(
     for pair in &outcome.pairs {
         let row = *row_of
             .get(pair.anchor_id())
-            .ok_or_else(|| OutputError::UnknownAnchor {
+            .ok_or_else(|| Error::UnknownCase {
                 id: pair.anchor_id().to_string(),
             })?;
         controls[row].push(pair.comparator_id());
@@ -389,15 +288,15 @@ impl LongMatches {
 ///
 /// # Errors
 ///
-/// [`OutputError::UnknownAnchor`] or [`OutputError::UnknownCandidate`] when a
+/// [`Error::UnknownCase`] or [`Error::UnknownControl`] when a
 /// pair names a unit that is not in `units` in that role, and
-/// [`OutputError::NoFixedRoles`] when `include_unmatched` is set for units with
+/// [`Error::NoFixedRoles`] when `include_unmatched` is set for units with
 /// no fixed roles.
 pub fn get_matches(
     outcome: &MatchOutcome,
     units: &Units,
     include_unmatched: bool,
-) -> Result<LongMatches, OutputError> {
+) -> Result<LongMatches, Error> {
     if include_unmatched {
         units.require_fixed_roles("get_matches with include_unmatched")?;
     }
@@ -469,7 +368,7 @@ struct PairLayout {
 impl PairLayout {
     /// The positions of the pairs of `outcome`, or the error for the first pair
     /// that names a unit that is not in `units` in its role.
-    fn new(outcome: &MatchOutcome, units: &Units) -> Result<Self, OutputError> {
+    fn new(outcome: &MatchOutcome, units: &Units) -> Result<Self, Error> {
         let position = units.positions();
         let mut pairs = Vec::with_capacity(outcome.pairs.len());
         for pair in &outcome.pairs {
@@ -477,14 +376,14 @@ impl PairLayout {
                 .get(pair.anchor_id())
                 .copied()
                 .filter(|at| !units.fixed_roles || units.anchor[*at])
-                .ok_or_else(|| OutputError::UnknownAnchor {
+                .ok_or_else(|| Error::UnknownCase {
                     id: pair.anchor_id().to_string(),
                 })?;
             let control = position
                 .get(pair.comparator_id())
                 .copied()
                 .filter(|at| !units.fixed_roles || !units.anchor[*at])
-                .ok_or_else(|| OutputError::UnknownCandidate {
+                .ok_or_else(|| Error::UnknownControl {
                     id: pair.comparator_id().to_string(),
                 })?;
             pairs.push((anchor, control));
@@ -598,13 +497,13 @@ impl MatchData {
 ///
 /// # Errors
 ///
-/// [`OutputError::UnknownAnchor`] or [`OutputError::UnknownCandidate`] when a
+/// [`Error::UnknownCase`] or [`Error::UnknownControl`] when a
 /// pair names a unit that is not in `units` in that role.
 pub fn match_data(
     outcome: &MatchOutcome,
     units: &Units,
     options: MatchDataOptions,
-) -> Result<MatchData, OutputError> {
+) -> Result<MatchData, Error> {
     units.require_fixed_roles("match_data")?;
     let layout = PairLayout::new(outcome, units)?;
     let n = units.len();
@@ -711,15 +610,11 @@ pub(crate) fn normalize_columns(ids: &[String], anchor: &[bool], weights: &mut [
     }
 }
 
-fn check_column(column: &'static str, units: &Units, length: usize) -> Result<(), OutputError> {
+fn check_column(column: &'static str, units: &Units, length: usize) -> Result<(), Error> {
     if length == units.len() {
         Ok(())
     } else {
-        Err(OutputError::ColumnLength {
-            column,
-            units: units.len(),
-            length,
-        })
+        Err(Error::length(column, units.len(), length))
     }
 }
 
@@ -736,21 +631,21 @@ fn check_column(column: &'static str, units: &Units, length: usize) -> Result<()
 ///
 /// # Errors
 ///
-/// [`OutputError::ColumnLength`] when a column is not as long as `units`,
-/// [`OutputError::InvalidWeight`] for a weight that is NaN, infinite or
-/// negative, and [`OutputError::NoFixedRoles`] for units with no fixed group.
+/// [`Error::ColumnLength`] when a column is not as long as `units`,
+/// [`Error::InvalidWeight`] for a weight that is NaN, infinite or
+/// negative, and [`Error::NoFixedRoles`] for units with no fixed group.
 pub fn match_data_from_weights(
     weights: &[f64],
     pair: &[Option<usize>],
     units: &Units,
     options: MatchDataOptions,
-) -> Result<MatchData, OutputError> {
+) -> Result<MatchData, Error> {
     units.require_fixed_roles("match_data_from_weights")?;
     check_column("weights", units, weights.len())?;
     check_column("pair", units, pair.len())?;
     for (id, weight) in units.ids.iter().zip(weights) {
         if !weight.is_finite() || *weight < 0.0 {
-            return Err(OutputError::InvalidWeight {
+            return Err(Error::InvalidWeight {
                 id: id.clone(),
                 weight: *weight,
             });
@@ -821,16 +716,16 @@ pub fn match_data_from_weights(
 ///
 /// # Errors
 ///
-/// [`OutputError::ColumnLength`] when a column is not as long as `units`,
-/// [`OutputError::InvalidWeight`] for a selected unit whose weight is NaN,
-/// infinite or negative, and [`OutputError::NoFixedRoles`] for units with no
+/// [`Error::ColumnLength`] when a column is not as long as `units`,
+/// [`Error::InvalidWeight`] for a selected unit whose weight is NaN,
+/// infinite or negative, and [`Error::NoFixedRoles`] for units with no
 /// fixed group.
 pub fn get_matches_from_pairs(
     pair: &[Option<usize>],
     weights: &[f64],
     units: &Units,
     include_unmatched: bool,
-) -> Result<LongMatches, OutputError> {
+) -> Result<LongMatches, Error> {
     units.require_fixed_roles("get_matches_from_pairs")?;
     check_column("pair", units, pair.len())?;
     check_column("weights", units, weights.len())?;
@@ -840,7 +735,7 @@ pub fn get_matches_from_pairs(
         if let Some(pair) = pair {
             let weight = weights[position];
             if !weight.is_finite() || weight < 0.0 {
-                return Err(OutputError::InvalidWeight {
+                return Err(Error::InvalidWeight {
                     id: units.ids[position].clone(),
                     weight,
                 });
@@ -982,14 +877,14 @@ impl SubclassedUnits {
     ///
     /// # Errors
     ///
-    /// [`OutputError::DuplicateId`] when an id occurs twice, and
-    /// [`OutputError::InvalidWeight`] for a weight that is not finite and
+    /// [`Error::DuplicateId`] when an id occurs twice, and
+    /// [`Error::InvalidWeight`] for a weight that is not finite and
     /// non-negative.
     pub fn match_data(
         &self,
         estimand: Estimand,
         options: MatchDataOptions,
-    ) -> Result<Option<MatchData>, OutputError> {
+    ) -> Result<Option<MatchData>, Error> {
         let Some(weights) = self.weights(estimand) else {
             return Ok(None);
         };
@@ -1229,11 +1124,11 @@ mod tests {
         assert_eq!(long.weight, [1.0, 0.5, 0.5, 1.0, 0.5, 0.5]);
         assert!(matches!(
             get_matches(&outcome, &units, true),
-            Err(OutputError::NoFixedRoles { .. })
+            Err(Error::NoFixedRoles { .. })
         ));
         assert!(matches!(
             match_matrix(&outcome, &units, 2),
-            Err(OutputError::NoFixedRoles { .. })
+            Err(Error::NoFixedRoles { .. })
         ));
         assert!(
             match_data(&outcome, &units, MatchDataOptions::default())
@@ -1244,7 +1139,7 @@ mod tests {
         let stray = test_outcome(vec![MatchedPair::new("zz", "p1")], 1, 0);
         assert_eq!(
             get_matches(&stray, &units, false),
-            Err(OutputError::UnknownAnchor { id: "zz".into() })
+            Err(Error::UnknownCase { id: "zz".into() })
         );
     }
 
@@ -1285,12 +1180,12 @@ mod tests {
         let stray = test_outcome(vec![MatchedPair::new("zz", "c1")], 1, 0);
         assert_eq!(
             match_matrix(&stray, &units(), 1),
-            Err(OutputError::UnknownAnchor { id: "zz".into() })
+            Err(Error::UnknownCase { id: "zz".into() })
         );
         let stray = test_outcome(vec![MatchedPair::new("a1", "a2")], 1, 0);
         assert_eq!(
             get_matches(&stray, &units(), false),
-            Err(OutputError::UnknownCandidate { id: "a2".into() })
+            Err(Error::UnknownControl { id: "a2".into() })
         );
         assert!(
             Units::new(vec!["x".into(), "x".into()], vec![true, false])
@@ -1343,11 +1238,11 @@ mod tests {
             let weights = [1.0, bad];
             assert!(matches!(
                 match_data_from_weights(&weights, &pair, &units, MatchDataOptions::default()),
-                Err(OutputError::InvalidWeight { .. })
+                Err(Error::InvalidWeight { .. })
             ));
             assert!(matches!(
                 get_matches_from_pairs(&pair, &weights, &units, false),
-                Err(OutputError::InvalidWeight { .. })
+                Err(Error::InvalidWeight { .. })
             ));
         }
         // The weight of a unit that is not selected is not read.
@@ -1403,7 +1298,7 @@ mod tests {
             outcome: &MatchOutcome,
             units: &Units,
             include_unmatched: bool,
-        ) -> Result<LongMatches, OutputError> {
+        ) -> Result<LongMatches, Error> {
             if include_unmatched {
                 units.require_fixed_roles("get_matches with include_unmatched")?;
             }
@@ -1418,7 +1313,7 @@ mod tests {
                     .get(anchor)
                     .is_some_and(|at| !units.fixed_roles || units.anchor[*at]);
                 if !anchor_known {
-                    return Err(OutputError::UnknownAnchor {
+                    return Err(Error::UnknownCase {
                         id: anchor.to_string(),
                     });
                 }
@@ -1426,7 +1321,7 @@ mod tests {
                     .get(control)
                     .is_some_and(|at| !units.fixed_roles || !units.anchor[*at]);
                 if !control_known {
-                    return Err(OutputError::UnknownCandidate {
+                    return Err(Error::UnknownControl {
                         id: control.to_string(),
                     });
                 }
@@ -1495,7 +1390,7 @@ mod tests {
             outcome: &MatchOutcome,
             units: &Units,
             options: MatchDataOptions,
-        ) -> Result<MatchData, OutputError> {
+        ) -> Result<MatchData, Error> {
             units.require_fixed_roles("match_data")?;
             let long = get_matches_by_maps(outcome, units, false)?;
             let mut subclass_of: HashMap<&str, usize> = HashMap::new();

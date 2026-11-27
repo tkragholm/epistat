@@ -1,6 +1,6 @@
 //! Match outcomes, diagnostics and the typed reasons they count.
 
-use super::criteria::{CommonSupport, CriteriaValidationError, Estimand};
+use super::criteria::{CommonSupport, Estimand};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -38,6 +38,43 @@ impl ExclusionReason {
                 | Self::EventBeforeBirth(_)
                 | Self::DuplicateId(_)
         )
+    }
+}
+
+impl ExclusionReason {
+    /// The error for a reason that refuses the whole job, `None` for a reason
+    /// that excludes pairs or units.
+    pub(crate) fn refusal(&self) -> Option<crate::Error> {
+        use crate::Error;
+        Some(match self {
+            Self::InvalidCriteria(InvalidCriteriaReason::NegativeBirthDateWindow) => {
+                Error::NegativeBirthDateWindow
+            }
+            Self::InvalidCriteria(InvalidCriteriaReason::ZeroMatchRatio) => Error::ZeroMatchRatio,
+            Self::InvalidCriteria(reason) => Error::InvalidCriteria(*reason),
+            Self::CommonSupportFailure(reason) => Error::CommonSupport(*reason),
+            Self::EventBeforeBirth(id) => Error::EventBeforeBirth { id: id.clone() },
+            Self::DuplicateId(id) => Error::DuplicateId { id: id.clone() },
+            Self::AdditionalFilter | Self::Constraint(_) | Self::DistanceCaliper(_) => return None,
+        })
+    }
+}
+
+/// The outcome, or the error when the matcher refused the job: the outcome
+/// then has no pairs and counts the reason once.
+///
+/// # Errors
+///
+/// The error of the first reason in the diagnostics that refuses the job.
+pub(crate) fn reject_invalid(outcome: MatchOutcome) -> Result<MatchOutcome, crate::Error> {
+    match outcome
+        .diagnostics
+        .exclusion_counts
+        .keys()
+        .find_map(ExclusionReason::refusal)
+    {
+        Some(error) => Err(error),
+        None => Ok(outcome),
     }
 }
 
@@ -223,11 +260,13 @@ impl Display for InvalidCriteriaReason {
     }
 }
 
-impl From<CriteriaValidationError> for InvalidCriteriaReason {
-    fn from(err: CriteriaValidationError) -> Self {
-        match err {
-            CriteriaValidationError::NegativeBirthDateWindow => Self::NegativeBirthDateWindow,
-            CriteriaValidationError::ZeroMatchRatio => Self::ZeroMatchRatio,
+impl InvalidCriteriaReason {
+    /// The reason for an error of the criteria's validation.
+    pub(crate) const fn of(error: &crate::Error) -> Self {
+        match error {
+            crate::Error::NegativeBirthDateWindow => Self::NegativeBirthDateWindow,
+            crate::Error::ZeroMatchRatio => Self::ZeroMatchRatio,
+            _ => Self::StudyOptions,
         }
     }
 }

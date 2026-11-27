@@ -13,6 +13,7 @@
 mod r_reference;
 
 use chrono::{Days, NaiveDate};
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
@@ -98,7 +99,7 @@ fn sets(
     r: &Reference,
     panel: &[TrialPerson<BaseRecord>],
     matching: &TrialMatching<'_>,
-) -> Result<BTreeMap<String, Vec<String>>, TrialsError<std::convert::Infallible>> {
+) -> Result<BTreeMap<String, Vec<String>>, Error> {
     let outcome = match_trials_with(panel, &TrialOptions::default(), matching, |pool| {
         Ok(pool
             .job(trial_seed(1, pool.period()))
@@ -173,7 +174,7 @@ fn shared_dates_and_short_strata_are_errors() {
     let (panel, _) = panel(&r);
     assert!(matches!(
         sets(&r, &panel, &TrialMatching::default()),
-        Err(TrialsError::Input(TrialInputError::InconsistentDate { .. }))
+        Err(Error::InconsistentDate { .. })
     ));
     let short = PeriodStrata::new(vec!["flare".into()], vec![r.panel.flare[1..].to_vec()]);
     assert!(matches!(
@@ -185,6 +186,6 @@ fn shared_dates_and_short_strata_are_errors() {
                 strata: Some(&short),
             }
         ),
-        Err(TrialsError::Input(TrialInputError::StrataRows { .. }))
+        Err(Error::StrataRows { .. })
     ));
 }

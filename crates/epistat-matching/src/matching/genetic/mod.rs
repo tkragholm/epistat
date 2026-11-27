@@ -88,7 +88,7 @@ mod balance;
 mod ks;
 mod search;
 
-use std::fmt;
+use crate::Error;
 
 use epistat_rng::Stream;
 use rayon::prelude::*;
@@ -137,29 +137,6 @@ pub fn ks_two_sample(x: &[f64], y: &[f64]) -> Option<KsTest> {
 pub fn ks_limit_upper(x: f64) -> f64 {
     ks::kolmogorov_upper(x).clamp(0.0, 1.0)
 }
-
-/// What can go wrong in genetic matching.
-#[derive(Debug, Clone, PartialEq)]
-pub enum GeneticError {
-    /// An input has the wrong length or is empty.
-    Shape(String),
-    /// A value that must be finite is not.
-    NotFinite(String),
-    /// An argument is outside its range.
-    Invalid(String),
-}
-
-impl fmt::Display for GeneticError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Shape(message) | Self::NotFinite(message) | Self::Invalid(message) => {
-                f.write_str(message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for GeneticError {}
 
 /// The constraints and size of a match.
 #[derive(Debug, Clone, PartialEq)]
@@ -294,15 +271,15 @@ impl GeneticProblem {
         order: &[usize],
         options: GeneticMatchOptions,
         tolerance: f64,
-    ) -> Result<Self, GeneticError> {
+    ) -> Result<Self, Error> {
         let n = focal.len();
         if variables.is_empty() {
-            return Err(GeneticError::Shape(
+            return Err(Error::Shape(
                 "genetic matching needs at least one matching variable".into(),
             ));
         }
         if balance.is_empty() {
-            return Err(GeneticError::Shape(
+            return Err(Error::Shape(
                 "genetic matching needs at least one balance covariate".into(),
             ));
         }
@@ -312,35 +289,35 @@ impl GeneticProblem {
         ] {
             for (k, column) in set.iter().enumerate() {
                 if column.len() != n {
-                    return Err(GeneticError::Shape(format!(
+                    return Err(Error::Shape(format!(
                         "{name} {k} has {} values for {n} units",
                         column.len()
                     )));
                 }
                 if let Some(at) = column.iter().position(|v| !v.is_finite()) {
-                    return Err(GeneticError::NotFinite(format!(
+                    return Err(Error::NotFinite(format!(
                         "{name} {k} is not finite at unit {at}"
                     )));
                 }
             }
         }
         if !(tolerance.is_finite() && tolerance > 0.0) {
-            return Err(GeneticError::Invalid(
+            return Err(Error::Invalid(
                 "the tolerance must be positive and finite".into(),
             ));
         }
         if options.ratio == 0 {
-            return Err(GeneticError::Invalid("the ratio must be at least 1".into()));
+            return Err(Error::Invalid("the ratio must be at least 1".into()));
         }
         let p = variables.len();
         if !options.calipers.is_empty() && options.calipers.len() != p {
-            return Err(GeneticError::Shape(format!(
+            return Err(Error::Shape(format!(
                 "calipers has {} entries for {p} matching variables",
                 options.calipers.len()
             )));
         }
         if !options.exact.is_empty() && options.exact.len() != p {
-            return Err(GeneticError::Shape(format!(
+            return Err(Error::Shape(format!(
                 "exact has {} entries for {p} matching variables",
                 options.exact.len()
             )));
@@ -351,14 +328,14 @@ impl GeneticProblem {
             .flatten()
             .find(|c| !(c.is_finite() && **c >= 0.0))
         {
-            return Err(GeneticError::Invalid(format!(
+            return Err(Error::Invalid(format!(
                 "a caliper must be finite and not negative, got {bad}"
             )));
         }
         let mut seen = vec![false; n];
         for &position in order {
             if position >= n || std::mem::replace(&mut seen[position], true) {
-                return Err(GeneticError::Invalid(format!(
+                return Err(Error::Invalid(format!(
                     "the order repeats or leaves out of range the position {position}"
                 )));
             }
@@ -367,14 +344,12 @@ impl GeneticProblem {
         let n_focal = order.iter().filter(|&&i| focal[i]).count();
         let n_control = used - n_focal;
         if n_focal == 0 || n_control == 0 {
-            return Err(GeneticError::Invalid(
+            return Err(Error::Invalid(
                 "both the focal and the control group need at least one unit".into(),
             ));
         }
         if used < 2 {
-            return Err(GeneticError::Invalid(
-                "at least two units are needed".into(),
-            ));
+            return Err(Error::Invalid("at least two units are needed".into()));
         }
 
         let mut limits = vec![f64::INFINITY; p];
@@ -522,16 +497,16 @@ impl GeneticProblem {
         }
     }
 
-    fn check_weights(&self, weights: &[f64]) -> Result<(), GeneticError> {
+    fn check_weights(&self, weights: &[f64]) -> Result<(), Error> {
         if weights.len() != self.variables {
-            return Err(GeneticError::Shape(format!(
+            return Err(Error::Shape(format!(
                 "{} weights for {} matching variables",
                 weights.len(),
                 self.variables
             )));
         }
         if let Some(bad) = weights.iter().find(|w| !(w.is_finite() && **w >= 0.0)) {
-            return Err(GeneticError::Invalid(format!(
+            return Err(Error::Invalid(format!(
                 "a weight must be finite and not negative, got {bad}"
             )));
         }
@@ -544,7 +519,7 @@ impl GeneticProblem {
     ///
     /// When the weights have the wrong length or a weight is negative or not
     /// finite.
-    pub fn match_pairs(&self, weights: &[f64]) -> Result<GeneticMatches, GeneticError> {
+    pub fn match_pairs(&self, weights: &[f64]) -> Result<GeneticMatches, Error> {
         self.check_weights(weights)?;
         let pairs = self.pairs_by_row(&self.effective_weights(weights));
         let mut focal = Vec::with_capacity(pairs.len());
@@ -796,12 +771,7 @@ impl GeneticProblem {
     ///
     /// When the weights have the wrong length or a weight is negative or not
     /// finite.
-    pub fn loss(
-        &self,
-        weights: &[f64],
-        fit: &GeneticFit,
-        seed: u64,
-    ) -> Result<GeneticLoss, GeneticError> {
+    pub fn loss(&self, weights: &[f64], fit: &GeneticFit, seed: u64) -> Result<GeneticLoss, Error> {
         self.check_weights(weights)?;
         Ok(self.loss_unchecked(weights, fit, seed))
     }

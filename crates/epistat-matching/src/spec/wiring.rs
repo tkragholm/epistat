@@ -5,16 +5,17 @@
 //! their results into a [`SpecOutput`].
 
 use super::{
-    CovariatesSpec, DistanceSpec, MatchMode, MatchSpec, OrderSpec, SpecError, SpecOutput,
-    build_distance, scores_of,
+    CovariatesSpec, DistanceSpec, MatchMode, MatchSpec, OrderSpec, SpecOutput, build_distance,
+    scores_of,
 };
+use crate::Error;
 use crate::matching::{
     BalanceMeasure, CardinalityLimits, CardinalityOutcome, CardinalityRequest, CovariateRecord,
     GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, LossRule, MatchingRecord,
     encode_covariates_pooled, match_cardinality,
 };
 use crate::output::{
-    LongMatches, MatchData, MatchDataOptions, OutputError, Units, get_matches_from_pairs,
+    LongMatches, MatchData, MatchDataOptions, Units, get_matches_from_pairs,
     match_data_from_weights,
 };
 use crate::types::{Estimand, MatchDiagnostics, MatchOutcome, MatchedPair, MatchingCriteria};
@@ -214,8 +215,8 @@ impl CardinalityMatch {
     ///
     /// # Errors
     ///
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn units(&self) -> Result<Units, OutputError> {
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn units(&self) -> Result<Units, Error> {
         Units::new(self.ids.clone(), self.anchor.clone())
     }
 
@@ -237,8 +238,8 @@ impl CardinalityMatch {
     ///
     /// # Errors
     ///
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn match_data(&self, options: MatchDataOptions) -> Result<MatchData, OutputError> {
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn match_data(&self, options: MatchDataOptions) -> Result<MatchData, Error> {
         let pair = self
             .outcome
             .pairs
@@ -251,10 +252,10 @@ impl CardinalityMatch {
     ///
     /// # Errors
     ///
-    /// [`OutputError::NotPaired`] when the selection was not paired and
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn get_matches(&self, include_unmatched: bool) -> Result<LongMatches, OutputError> {
-        let pair = self.outcome.pairs.as_ref().ok_or(OutputError::NotPaired)?;
+    /// [`Error::NotPaired`] when the selection was not paired and
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn get_matches(&self, include_unmatched: bool) -> Result<LongMatches, Error> {
+        let pair = self.outcome.pairs.as_ref().ok_or(Error::NotPaired)?;
         get_matches_from_pairs(
             pair,
             &self.outcome.weights,
@@ -265,7 +266,7 @@ impl CardinalityMatch {
 }
 
 impl MatchSpec {
-    fn reject_unused(&self, method: &str, extra: &[(&'static str, bool)]) -> Result<(), SpecError> {
+    fn reject_unused(&self, method: &str, extra: &[(&'static str, bool)]) -> Result<(), Error> {
         let mut conflicts: Vec<(&'static str, bool)> = vec![
             ("ratio_fallback", !self.ratio_fallback.is_empty()),
             ("unique_by_key", self.unique_by_key.is_some()),
@@ -277,7 +278,7 @@ impl MatchSpec {
         ];
         conflicts.extend_from_slice(extra);
         match conflicts.iter().find(|(_, set)| *set) {
-            Some((option, _)) => Err(SpecError::option(
+            Some((option, _)) => Err(Error::option(
                 option,
                 format!("the {method} method does not use it; drop it"),
             )),
@@ -285,9 +286,9 @@ impl MatchSpec {
         }
     }
 
-    pub(super) fn validate_genetic(&self) -> Result<(), SpecError> {
+    pub(super) fn validate_genetic(&self) -> Result<(), Error> {
         if self.mode != MatchMode::Standard {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "method",
                 "genetic matching needs anchors and candidates in standard mode",
             ));
@@ -295,7 +296,7 @@ impl MatchSpec {
         self.reject_unused("genetic", &[])?;
         let genetic = &self.genetic;
         if genetic.pop_size == 1 {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "genetic.pop_size",
                 "a population of 1 cannot recombine; use 0 or at least 2",
             ));
@@ -305,17 +306,17 @@ impl MatchSpec {
             ("genetic.wait_generations", genetic.wait_generations),
         ] {
             if value == 0 {
-                return Err(SpecError::option(name, "this is 0; use 1 or more"));
+                return Err(Error::option(name, "this is 0; use 1 or more"));
             }
         }
         if !(genetic.tolerance.is_finite() && genetic.tolerance > 0.0) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "genetic.tolerance",
                 "the tolerance must be positive and finite",
             ));
         }
         if self.estimand != Estimand::Att {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "estimand",
                 "genetic matching takes its focal group from the anchors; \
                  give the focal group as the anchors and use att",
@@ -327,7 +328,7 @@ impl MatchSpec {
         );
         let plain = matches!(self.distance, DistanceSpec::Date { caliper: None });
         if !score && !plain {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "genetic matching adds a propensity score or a score of your own to the \
                  covariates it matches on; set the distance to one of them, or drop it",
@@ -335,14 +336,14 @@ impl MatchSpec {
         }
         match genetic.m_order {
             Some(OrderSpec::Largest | OrderSpec::Smallest) if !score => {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "genetic.m_order",
                     "largest and smallest order the anchors by a score; \
                      set the distance to propensity or scores, or use data",
                 ));
             }
             Some(OrderSpec::Random | OrderSpec::Closest | OrderSpec::Farthest) => {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "genetic.m_order",
                     "genetic matching orders anchors by largest, smallest or data",
                 ));
@@ -352,9 +353,9 @@ impl MatchSpec {
         Ok(())
     }
 
-    pub(super) fn validate_cardinality(&self) -> Result<(), SpecError> {
+    pub(super) fn validate_cardinality(&self) -> Result<(), Error> {
         if self.mode != MatchMode::Standard {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "method",
                 "cardinality matching needs anchors and candidates in standard mode",
             ));
@@ -373,7 +374,7 @@ impl MatchSpec {
         )?;
         let cardinality = &self.cardinality;
         if self.estimand == Estimand::Atm {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "estimand",
                 "cardinality matching gives the effect in the treated, the controls or the \
                  whole sample; use att, atc or ate",
@@ -383,7 +384,7 @@ impl MatchSpec {
             .ratio
             .is_some_and(|ratio| !(ratio.is_finite() && ratio > 0.0))
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cardinality.ratio",
                 "the ratio must be positive and finite, or absent for profile matching",
             ));
@@ -394,13 +395,13 @@ impl MatchSpec {
                 .iter()
                 .any(|tol| !(tol.is_finite() && *tol >= 0.0))
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cardinality.tols",
                 "give one tolerance, or one for each covariate column, each 0 or more",
             ));
         }
         if cardinality.std_tols.is_empty() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cardinality.std_tols",
                 "give one flag, or one for each covariate column",
             ));
@@ -409,14 +410,14 @@ impl MatchSpec {
             .time
             .is_some_and(|time| !(time > 0.0 && Duration::try_from_secs_f64(time).is_ok()))
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cardinality.time",
                 "the time limit must be a positive number of seconds that a duration can \
                  hold, or absent for none",
             ));
         }
         if cardinality.nodes == Some(0) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cardinality.nodes",
                 "the node limit is 0; use 1 or more, or leave it out",
             ));
@@ -424,13 +425,13 @@ impl MatchSpec {
         let profile = cardinality.ratio.is_none() || self.estimand == Estimand::Ate;
         if let Some(weights) = &cardinality.sampling_weights {
             if !profile {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "cardinality.sampling_weights",
                     "sampling weights need profile matching: leave the ratio out, or use ate",
                 ));
             }
             if weights.values().any(|w| !(w.is_finite() && *w >= 0.0)) {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "cardinality.sampling_weights",
                     "a sampling weight is negative or not finite",
                 ));
@@ -439,7 +440,7 @@ impl MatchSpec {
         if !cardinality.mahvars.is_empty() {
             let whole = cardinality.ratio.is_some_and(|r| r.fract() == 0.0);
             if !whole || self.estimand == Estimand::Atc {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "cardinality.mahvars",
                     "pairing needs a whole-number ratio and att or ate",
                 ));
@@ -455,13 +456,13 @@ fn strata_values<R: MatchingRecord>(
     key: &str,
     anchors: &[R],
     candidates: &[R],
-) -> Result<Vec<String>, SpecError> {
+) -> Result<Vec<String>, Error> {
     anchors
         .iter()
         .chain(candidates)
         .map(|record| {
             record.stratum(key).map(str::to_owned).ok_or_else(|| {
-                SpecError::option(
+                Error::option(
                     option,
                     format!("the unit {} has no value for the key {key}", record.id()),
                 )
@@ -485,7 +486,7 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let genetic = &spec.genetic;
     let ids: Vec<&str> = anchors
         .iter()
@@ -509,7 +510,7 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
         .keys()
         .find(|field| !encoded.column_names.contains(field))
     {
-        return Err(SpecError::option(
+        return Err(Error::option(
             "calipers",
             format!("{field} is not one of the covariate columns the method matches on"),
         ));
@@ -532,10 +533,10 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
             ids.iter()
                 .map(|id| {
                     scores.get(id).copied().ok_or_else(|| {
-                        SpecError::option("distance", format!("the unit {id} has no score"))
+                        Error::option("distance", format!("the unit {id} has no score"))
                     })
                 })
-                .collect::<Result<Vec<f64>, SpecError>>()
+                .collect::<Result<Vec<f64>, Error>>()
         })
         .transpose()?;
     if let Some(score) = &score {
@@ -675,7 +676,7 @@ pub(super) fn run_cardinality<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let options = &spec.cardinality;
     let ids: Vec<String> = anchors
         .iter()
@@ -726,13 +727,13 @@ pub(super) fn run_cardinality<R: MatchingRecord + CovariateRecord>(
             ids.iter()
                 .map(|id| {
                     weights.get(id).copied().ok_or_else(|| {
-                        SpecError::option(
+                        Error::option(
                             "cardinality.sampling_weights",
                             format!("the unit {id} has no sampling weight"),
                         )
                     })
                 })
-                .collect::<Result<Vec<f64>, SpecError>>()
+                .collect::<Result<Vec<f64>, Error>>()
         })
         .transpose()?;
 
@@ -750,7 +751,7 @@ pub(super) fn run_cardinality<R: MatchingRecord + CovariateRecord>(
             .map(Duration::try_from_secs_f64)
             .transpose()
             .map_err(|_| {
-                SpecError::option(
+                Error::option(
                     "cardinality.time",
                     "the time limit is not a number of seconds that a duration can hold",
                 )

@@ -15,7 +15,7 @@
 //!
 //! What is checked, on every run:
 //!
-//! * Where R finds no match, the crate reports [`OptimalError::Infeasible`].
+//! * Where R finds no match, the crate reports [`Error::Infeasible`].
 //! * The balance table of every level, which is determined by the optimum.
 //! * The total distance. The crate's costs are scaled to `2^b` with `b` at
 //!   least 30 for these sizes, so it is within `3 n d_max / 2^30` of the
@@ -31,6 +31,7 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, RapidHashMap, match_fine_balance,
@@ -94,7 +95,7 @@ fn record(id: String, units: &Units, i: usize) -> BaseRecord {
     record
 }
 
-fn run_ours(run: &Run, mode: BalanceMode) -> Result<FineBalanceOutcome, OptimalError> {
+fn run_ours(run: &Run, mode: BalanceMode) -> Result<FineBalanceOutcome, Error> {
     let anchors: Vec<BaseRecord> = (0..run.t.a.len())
         .map(|i| record(format!("t{}", i + 1), &run.t, i))
         .collect();
@@ -166,7 +167,7 @@ fn balance_tables_totals_and_pairs_match_rcbalance() {
         let got = run_ours(run, BalanceMode::Near);
         if run.error {
             assert!(
-                matches!(got, Err(OptimalError::Infeasible { .. })),
+                matches!(got, Err(Error::Infeasible { .. })),
                 "{label}: R found no match but the crate gave {:?}",
                 got.map(|o| o.outcome.pairs.len())
             );
@@ -260,7 +261,7 @@ fn balance_tables_totals_and_pairs_match_rcbalance() {
             assert_eq!(pairs_of(&exact.outcome), pairs, "{label}: exact mode");
         } else {
             assert!(
-                matches!(exact, Err(OptimalError::Infeasible { .. })),
+                matches!(exact, Err(Error::Infeasible { .. })),
                 "{label}: exact mode accepted a deviation of {deviation}"
             );
         }
@@ -283,13 +284,13 @@ fn input_errors() {
     bad.fb = Vec::new();
     assert!(matches!(
         run_ours(&bad, BalanceMode::Near),
-        Err(OptimalError::Option { .. })
+        Err(Error::Option { .. })
     ));
     // "b" is not nested in "a": the units of one category of b differ in a.
     bad.fb = vec![vec!["a".into()], vec!["b".into()]];
     assert!(matches!(
         run_ours(&bad, BalanceMode::Near),
-        Err(OptimalError::Option { .. })
+        Err(Error::Option { .. })
     ));
 }
 

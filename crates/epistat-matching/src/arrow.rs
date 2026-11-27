@@ -88,6 +88,7 @@
 //! column to `large_string` first. A chunked column is several arrays, so
 //! rechunk it first.
 
+use crate::Error;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -98,109 +99,22 @@ use arrow_array::{
 };
 use chrono::{Days, NaiveDate};
 
-use crate::cohort::{Cohort, CohortBuilder, CohortError};
+use crate::cohort::{Cohort, CohortBuilder};
 use crate::types::{BalanceRecord, BaseRecord, CovariateValue, RoleTransitionRecord};
 
-/// Why records could not be built from Arrow arrays.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ArrowInputError {
-    /// A column of a record batch is not there.
-    MissingColumn {
-        /// The name asked for.
-        column: String,
-        /// The names present.
-        present: Vec<String>,
-    },
-    /// A column has a type that is not accepted for its role.
-    WrongType {
-        /// The column.
-        column: String,
-        /// The type found.
-        found: String,
-        /// The types accepted.
-        expected: &'static str,
-    },
-    /// A column has a null where the record needs a value.
-    NullValue {
-        /// The column.
-        column: String,
-        /// The first row with a null, counted from 0.
-        row: usize,
-    },
-    /// A column has another length than the id column.
-    LengthMismatch {
-        /// The column.
-        column: String,
-        /// Its length.
-        found: usize,
-        /// The length of the id column.
-        expected: usize,
-    },
-    /// A date is outside the range a calendar date can hold.
-    DateOutOfRange {
-        /// The column.
-        column: String,
-        /// The row, counted from 0.
-        row: usize,
-    },
-    /// The columns do not make a [`Cohort`], as when two strata have one
-    /// name.
-    Cohort(CohortError),
-}
-
-impl fmt::Display for ArrowInputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingColumn { column, present } => write!(
-                f,
-                "column {column} is not in the record batch; it has {}",
-                present.join(", ")
-            ),
-            Self::WrongType {
-                column,
-                found,
-                expected,
-            } => write!(
-                f,
-                "column {column} has type {found}, expected {expected}; cast it before building \
-                 the records"
-            ),
-            Self::NullValue { column, row } => write!(
-                f,
-                "column {column} has a null at row {row}; every record needs a value there"
-            ),
-            Self::LengthMismatch {
-                column,
-                found,
-                expected,
-            } => write!(
-                f,
-                "column {column} has {found} rows, but the id column has {expected}"
-            ),
-            Self::DateOutOfRange { column, row } => {
-                write!(f, "column {column} has a date at row {row} out of range")
-            }
-            Self::Cohort(error) => error.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for ArrowInputError {}
-
-type Result<T> = std::result::Result<T, ArrowInputError>;
+type Result<T> = std::result::Result<T, Error>;
 
 /// The column `name` of `batch`.
 ///
 /// # Errors
 ///
-/// [`ArrowInputError::MissingColumn`] naming the column and the columns
+/// [`Error::MissingColumn`] naming the column and the columns
 /// present, when there is no column of that name.
 pub fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array> {
     batch
         .column_by_name(name)
         .map(|array| &**array)
-        .ok_or_else(|| ArrowInputError::MissingColumn {
+        .ok_or_else(|| Error::MissingColumn {
             column: name.to_string(),
             present: batch
                 .schema_ref()
@@ -211,8 +125,8 @@ pub fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array> {
         })
 }
 
-fn wrong_type(name: &str, array: &dyn Array, expected: &'static str) -> ArrowInputError {
-    ArrowInputError::WrongType {
+fn wrong_type(name: &str, array: &dyn Array, expected: &'static str) -> Error {
+    Error::WrongType {
         column: name.to_string(),
         found: array.data_type().to_string(),
         expected,
@@ -343,15 +257,14 @@ impl<'a> Dates<'a> {
         } else {
             epoch.checked_sub_days(Days::new(u64::from(days.unsigned_abs())))
         };
-        date.map(Some)
-            .ok_or_else(|| ArrowInputError::DateOutOfRange {
-                column: self.name.to_string(),
-                row,
-            })
+        date.map(Some).ok_or_else(|| Error::DateOutOfRange {
+            column: self.name.to_string(),
+            row,
+        })
     }
 
     fn required(&self, row: usize) -> Result<NaiveDate> {
-        self.get(row)?.ok_or_else(|| ArrowInputError::NullValue {
+        self.get(row)?.ok_or_else(|| Error::NullValue {
             column: self.name.to_string(),
             row,
         })
@@ -362,7 +275,7 @@ fn check_len(name: &str, array: &dyn Array, expected: usize) -> Result<()> {
     if array.len() == expected {
         Ok(())
     } else {
-        Err(ArrowInputError::LengthMismatch {
+        Err(Error::ColumnLength {
             column: name.to_string(),
             found: array.len(),
             expected,
@@ -498,7 +411,7 @@ impl<'a> ArrowRecords<'a> {
     ///
     /// # Errors
     ///
-    /// An [`ArrowInputError`] for a column of the wrong type or length, or a
+    /// An [`Error`] for a column of the wrong type or length, or a
     /// null in the id or birth date column.
     pub fn base_records(&self) -> Result<Vec<BaseRecord>> {
         self.build(|core, _row| Ok(core))
@@ -577,13 +490,13 @@ impl<'a> ArrowRecords<'a> {
     /// # Errors
     ///
     /// As [`balance_records`](Self::balance_records), and
-    /// [`ArrowInputError::Cohort`] when two strata, two numeric fields or two
+    /// [`Error::Cohort`] when two strata, two numeric fields or two
     /// covariates have one name.
     pub fn cohort(&self) -> Result<Cohort> {
         let len = self.id.len();
         let ids = Ids::new(self.id)?;
         if let Some(row) = (0..len).find(|&row| self.id.is_null(row)) {
-            return Err(ArrowInputError::NullValue {
+            return Err(Error::NullValue {
                 column: "id".to_string(),
                 row,
             });
@@ -661,7 +574,7 @@ impl<'a> ArrowRecords<'a> {
                 builder = set(builder, dates);
             }
         }
-        builder.build().map_err(ArrowInputError::Cohort)
+        builder.build()
     }
 
     fn build<T>(&self, finish: impl Fn(BaseRecord, usize) -> Result<T>) -> Result<Vec<T>> {
@@ -691,7 +604,7 @@ impl<'a> ArrowRecords<'a> {
 
         let mut out = Vec::with_capacity(len);
         for row in 0..len {
-            let id = ids.get(row).ok_or_else(|| ArrowInputError::NullValue {
+            let id = ids.get(row).ok_or_else(|| Error::NullValue {
                 column: "id".to_string(),
                 row,
             })?;

@@ -6,6 +6,7 @@
 )]
 
 use super::ids::{AgeLimitYears, BirthDateWindowDays, DistanceCaliper, MatchRatio};
+use crate::Error;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
@@ -72,15 +73,6 @@ pub struct MatchingCriteria {
     pub common_support: Option<CommonSupport>,
 }
 
-/// Errors returned by matching criteria validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CriteriaValidationError {
-    /// Birth date window must be non-negative.
-    NegativeBirthDateWindow,
-    /// Match ratio must be at least one.
-    ZeroMatchRatio,
-}
-
 impl Default for MatchingCriteria {
     fn default() -> Self {
         Self {
@@ -100,8 +92,8 @@ impl MatchingCriteria {
     ///
     /// # Errors
     ///
-    /// Returns [`CriteriaValidationError`] when one or more criteria values are invalid.
-    pub fn validate(&self) -> Result<ValidatedMatchingCriteria, CriteriaValidationError> {
+    /// Returns [`Error`] when one or more criteria values are invalid.
+    pub fn validate(&self) -> Result<ValidatedMatchingCriteria, Error> {
         self.clone().build()
     }
 
@@ -109,13 +101,13 @@ impl MatchingCriteria {
     ///
     /// # Errors
     ///
-    /// Returns [`CriteriaValidationError`] when one or more criteria values are invalid.
-    pub fn build(self) -> Result<ValidatedMatchingCriteria, CriteriaValidationError> {
+    /// Returns [`Error`] when one or more criteria values are invalid.
+    pub fn build(self) -> Result<ValidatedMatchingCriteria, Error> {
         if self.typed_birth_date_window().is_none() {
-            return Err(CriteriaValidationError::NegativeBirthDateWindow);
+            return Err(Error::NegativeBirthDateWindow);
         }
         if self.match_ratio == 0 {
-            return Err(CriteriaValidationError::ZeroMatchRatio);
+            return Err(Error::ZeroMatchRatio);
         }
         Ok(ValidatedMatchingCriteria { inner: self })
     }
@@ -204,14 +196,11 @@ mod tests {
             .build();
         assert!(matches!(
             negative_window.validate(),
-            Err(CriteriaValidationError::NegativeBirthDateWindow)
+            Err(Error::NegativeBirthDateWindow)
         ));
 
         let zero_ratio = MatchingCriteria::builder().match_ratio(0).build();
-        assert!(matches!(
-            zero_ratio.validate(),
-            Err(CriteriaValidationError::ZeroMatchRatio)
-        ));
+        assert!(matches!(zero_ratio.validate(), Err(Error::ZeroMatchRatio)));
     }
 
     #[test]

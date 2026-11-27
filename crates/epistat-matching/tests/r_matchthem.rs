@@ -28,10 +28,10 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::Error;
 use epistat_matching::effects::{Clustering, EffectEstimates, EffectSpec, OutcomeModel, UnitData};
 use epistat_matching::imputation::{
-    CompleteDataDf, ImputationApproach, ImputationError, ImputedSet, estimate_pooled,
-    match_imputed, pool_effects,
+    CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed, pool_effects,
 };
 use epistat_matching::prelude::*;
 
@@ -287,7 +287,7 @@ fn check_given_degrees_of_freedom(per_set: &[EffectEstimates]) {
     assert_eq!(pooled.complete_data_df, Some(1.0));
     assert!(matches!(
         pool_effects(&tiny, CompleteDataDf::RowsLessCoefficients),
-        Err(ImputationError::Pooling(_))
+        Err(Error::Inference(_))
     ));
 }
 
@@ -317,12 +317,12 @@ fn input_errors_are_reported() {
     let config = PropensityScoreConfig::default();
     assert!(matches!(
         run(&sets[..1], ImputationApproach::Within, &config),
-        Err(ImputationError::TooFewSets { found: 1 })
+        Err(Error::TooFewSets { found: 1 })
     ));
     let reestimate = PropensityScoreConfig::builder().reestimate(true).build();
     assert!(matches!(
         run(&sets, ImputationApproach::Across, &reestimate),
-        Err(ImputationError::ReestimateAcross)
+        Err(Error::ReestimateAcross)
     ));
     // A unit missing from the second set.
     let short = [
@@ -334,6 +334,6 @@ fn input_errors_are_reported() {
     ];
     assert!(matches!(
         run(&short, ImputationApproach::Across, &config),
-        Err(ImputationError::UnitsDiffer { set: 1, .. })
+        Err(Error::UnitsDiffer { set: 1, .. })
     ));
 }

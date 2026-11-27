@@ -38,6 +38,7 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{CbpsConfig, CbpsEstimand, CbpsMethod};
 
@@ -501,10 +502,7 @@ fn equal_sampling_weights_change_nothing_and_bad_settings_are_errors() {
         )
         .estimator(PropensityEstimator::Cbps(CbpsConfig::default()))
         .build();
-    assert!(matches!(
-        fit(no_intercept),
-        Err(EstimationError::CbpsNeedsIntercept)
-    ));
+    assert!(matches!(fit(no_intercept), Err(Error::CbpsNeedsIntercept)));
     let (mut anchors, mut candidates) = records_of(data, &["x1", "x2", "x3"]);
     for record in anchors.iter_mut().chain(candidates.iter_mut()) {
         let CovariateValue::Numeric(x1) = record.covariates["x1"] else {
@@ -516,6 +514,6 @@ fn equal_sampling_weights_change_nothing_and_bad_settings_are_errors() {
     }
     assert!(matches!(
         prepare_propensity_distance_config(&anchors, &candidates, &cbps(CbpsConfig::default())),
-        Err(EstimationError::CbpsNotFullRank)
+        Err(Error::NotFullRank)
     ));
 }

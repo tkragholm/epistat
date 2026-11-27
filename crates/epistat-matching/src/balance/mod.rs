@@ -5,7 +5,7 @@ mod report;
 mod stats;
 
 pub use diagnostics::balance_diagnostics;
-pub use input::{BalanceInputError, BalanceWeights};
+pub use input::BalanceWeights;
 pub use projected::{
     CategoricalCovariateSpec, NumericCovariateSpec, ProjectedBalanceRow,
     build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values,

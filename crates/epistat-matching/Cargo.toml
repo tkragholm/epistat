@@ -48,6 +48,7 @@ rapidhash = "4"
 rayon = "1.11.0"
 rustc-hash = "2"
 serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2"
 
 [[test]]
 name = "invariants"

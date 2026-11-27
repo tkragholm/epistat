@@ -9,7 +9,7 @@
 //!
 //! Invalid options are errors here. The typed job reports an invalid
 //! configuration as a count in the diagnostics of an empty outcome, and
-//! [`run_spec`] turns that into a [`SpecError`] as well, so a caller never
+//! [`run_spec`] turns that into a [`Error`] as well, so a caller never
 //! mistakes it for a match that found nothing.
 //!
 //! # Algorithm
@@ -31,42 +31,39 @@ mod wiring;
 
 pub use wiring::{CardinalityMatch, CardinalitySpec, FitFuncSpec, GeneticSpec, LossSpec};
 
+use crate::Error;
 use crate::constraints::{AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field};
 use crate::matching::{
-    Assignment, CardinalityError, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemError,
-    CemRule, CemVariable, Chained, CovariateEncodingConfig, CovariateRecord,
-    DeterministicSelection, DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig,
-    EstimationError, EuclideanPreparationConfig, EuclideanScale, ExactMatchError,
-    ExactMatchOutcome, FineBalance, FullMatchConfig, FullMatchOutcome, GeneticError,
-    GeneticOutcome, LambdaRule, LogisticRegressionConfig, MahalanobisCovarianceStrategy,
-    MahalanobisPreparationConfig, MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord,
-    MissingValuePolicy, NearestBirthDateSelection, NearestSelection, OptimalError, OptimalRequest,
-    PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
-    PropensityScoreEstimate, PropensityScoreOutputScale, QuickMatchError, QuickMatchOptions,
-    QuickMatchOutcome, RandomSelection, Retain, RoleIndexedRecord, Rounds, ScoreTable, SeedMethod,
-    SelectionStrategy, SubclassReferenceGroup, SubclassificationConfig, SubclassificationOutcome,
-    VariableRatio, apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses,
-    estimate_propensity_and_match, exact_match_subclasses, match_fine_balance, match_full,
-    match_optimal, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    Assignment, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemRule, CemVariable, Chained,
+    CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
+    ElasticNetCvConfig, ElasticNetLogisticConfig, EuclideanPreparationConfig, EuclideanScale,
+    ExactMatchOutcome, FineBalance, FullMatchConfig, FullMatchOutcome, GeneticOutcome, LambdaRule,
+    LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisPreparationConfig,
+    MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord, MissingValuePolicy,
+    NearestBirthDateSelection, NearestSelection, OptimalRequest, PairDistanceMatrix,
+    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
+    PropensityScoreOutputScale, QuickMatchOptions, QuickMatchOutcome, RandomSelection, Retain,
+    RoleIndexedRecord, Rounds, ScoreTable, SeedMethod, SelectionStrategy, SubclassReferenceGroup,
+    SubclassificationConfig, SubclassificationOutcome, VariableRatio, apply_transposed,
+    cem_k2k_pairs, cem_strata, cem_subclasses, estimate_propensity_and_match,
+    exact_match_subclasses, match_fine_balance, match_full, match_optimal,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, quick_match_subclasses,
     subclassify_by_propensity_score_map,
 };
 use crate::role_transition::IdOrder;
 use crate::role_transition::{ExposureDensityOutcome, exposure_density_sets};
-use crate::trials::{
-    TrialOptions, TrialOutcome, TrialPerson, TrialsError, match_trials, trial_seed,
-};
+use crate::trials::{TrialOptions, TrialOutcome, TrialPerson, match_trials, trial_seed};
+use crate::types::reject_invalid;
 use crate::types::{
-    AgeLimitYears, BirthDateWindowDays, CommonSupport, CriteriaValidationError, DistanceCaliper,
-    Estimand, ExclusionReason, MatchOutcome, MatchRatio, MatchingCriteria, RoleTransitionRecord,
+    AgeLimitYears, BirthDateWindowDays, CommonSupport, DistanceCaliper, Estimand, MatchOutcome,
+    MatchRatio, MatchingCriteria, RoleTransitionRecord,
 };
 use chrono::NaiveDate;
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 /// Standard matching of a set of anchors to a set of candidates, or risk-set
 /// matching within one cohort.
@@ -988,149 +985,6 @@ pub enum SpecOutput {
     },
 }
 
-/// Why a spec could not be run.
-#[derive(Debug, Clone)]
-pub enum SpecError {
-    /// The ratio or the birth date window is out of range.
-    Criteria(CriteriaValidationError),
-    /// One option is out of range, or does not fit the others.
-    Option {
-        /// The name of the option, as in the spec.
-        option: &'static str,
-        /// What is wrong and how to fix it.
-        message: String,
-    },
-    /// The units given are not those of the spec's mode.
-    InputMode {
-        /// The mode of the spec.
-        mode: MatchMode,
-    },
-    /// The distance could not be built from the covariates.
-    Distance(EstimationError),
-    /// Exact matching could not run.
-    Exact(ExactMatchError),
-    /// Coarsened exact matching could not run.
-    Cem(CemError),
-    /// Generalised full matching could not run.
-    Quick(QuickMatchError),
-    /// Optimal matching could not run.
-    Optimal(OptimalError),
-    /// Genetic matching could not run.
-    Genetic(GeneticError),
-    /// Cardinality matching could not run.
-    Cardinality(CardinalityError),
-    /// The matcher refused the configuration.
-    Rejected(ExclusionReason),
-}
-
-impl SpecError {
-    fn option(option: &'static str, message: impl Into<String>) -> Self {
-        Self::Option {
-            option,
-            message: message.into(),
-        }
-    }
-}
-
-impl Display for SpecError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Criteria(error) => write!(f, "{error}"),
-            Self::Option { option, message } => write!(f, "option `{option}`: {message}"),
-            Self::InputMode { mode } => match mode {
-                MatchMode::Standard => f.write_str(
-                    "the spec is for standard matching and needs anchors and candidates; \
-                     pass them, or set the mode to risk_set",
-                ),
-                MatchMode::RiskSet | MatchMode::ExposureDensity => f.write_str(
-                    "the spec is for risk-set matching and needs one cohort; \
-                     pass it, or set the mode to standard",
-                ),
-                MatchMode::SequentialTrials => f.write_str(
-                    "the spec is for sequential trials and needs a panel of people \
-                     with their periods; pass it, or set the mode to standard",
-                ),
-            },
-            Self::Distance(error) => write!(f, "the distance could not be built: {error}"),
-            Self::Exact(error) => write!(f, "exact matching could not run: {error}"),
-            Self::Cem(error) => write!(f, "coarsened exact matching could not run: {error}"),
-            Self::Quick(error) => write!(f, "generalised full matching could not run: {error}"),
-            Self::Optimal(error) => write!(f, "optimal matching could not run: {error}"),
-            Self::Genetic(error) => write!(f, "genetic matching could not run: {error}"),
-            Self::Cardinality(error) => write!(f, "cardinality matching could not run: {error}"),
-            Self::Rejected(reason) => write!(
-                f,
-                "the matcher refused the configuration ({reason}); \
-                 check the options of the nearest method against the distance"
-            ),
-        }
-    }
-}
-
-impl Error for SpecError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Criteria(error) => Some(error),
-            Self::Distance(error) => Some(error),
-            Self::Exact(error) => Some(error),
-            Self::Cem(error) => Some(error),
-            Self::Quick(error) => Some(error),
-            Self::Optimal(error) => Some(error),
-            Self::Genetic(error) => Some(error),
-            Self::Cardinality(error) => Some(error),
-            Self::Option { .. } | Self::InputMode { .. } | Self::Rejected(_) => None,
-        }
-    }
-}
-
-impl From<CriteriaValidationError> for SpecError {
-    fn from(error: CriteriaValidationError) -> Self {
-        Self::Criteria(error)
-    }
-}
-
-impl From<EstimationError> for SpecError {
-    fn from(error: EstimationError) -> Self {
-        Self::Distance(error)
-    }
-}
-
-impl From<CemError> for SpecError {
-    fn from(error: CemError) -> Self {
-        Self::Cem(error)
-    }
-}
-
-impl From<ExactMatchError> for SpecError {
-    fn from(error: ExactMatchError) -> Self {
-        Self::Exact(error)
-    }
-}
-
-impl From<QuickMatchError> for SpecError {
-    fn from(error: QuickMatchError) -> Self {
-        Self::Quick(error)
-    }
-}
-
-impl From<OptimalError> for SpecError {
-    fn from(error: OptimalError) -> Self {
-        Self::Optimal(error)
-    }
-}
-
-impl From<GeneticError> for SpecError {
-    fn from(error: GeneticError) -> Self {
-        Self::Genetic(error)
-    }
-}
-
-impl From<CardinalityError> for SpecError {
-    fn from(error: CardinalityError) -> Self {
-        Self::Cardinality(error)
-    }
-}
-
 impl DistanceSpec {
     const fn caliper(&self) -> Option<f64> {
         match self {
@@ -1161,11 +1015,11 @@ impl DistanceSpec {
 fn typed_caliper(
     option: &'static str,
     value: Option<f64>,
-) -> Result<Option<DistanceCaliper>, SpecError> {
+) -> Result<Option<DistanceCaliper>, Error> {
     value
         .map(|width| {
             DistanceCaliper::new(width).ok_or_else(|| {
-                SpecError::option(
+                Error::option(
                     option,
                     format!(
                         "the caliper {width} is negative or not finite; use a width of 0 or more"
@@ -1183,13 +1037,13 @@ impl MatchSpec {
     ///
     /// # Errors
     ///
-    /// A [`SpecError`] naming the option that is out of range or conflicts
+    /// A [`Error`] naming the option that is out of range or conflicts
     /// with another, and how to fix it.
-    pub fn validate(&self) -> Result<(), SpecError> {
+    pub fn validate(&self) -> Result<(), Error> {
         self.criteria().validate()?;
         for ratio in &self.ratio_fallback {
             if MatchRatio::new(*ratio).is_none() {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "ratio_fallback",
                     "a fallback ratio is 0; use ratios of 1 or more",
                 ));
@@ -1197,7 +1051,7 @@ impl MatchSpec {
         }
         for (field, width) in &self.calipers {
             if !(width.is_finite() && *width >= 0.0) {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "calipers",
                     format!("the caliper on {field} is {width}; use a width of 0 or more"),
                 ));
@@ -1207,7 +1061,7 @@ impl MatchSpec {
         if let DistanceSpec::Scores { scores, .. } = &self.distance
             && let Some((id, score)) = scores.iter().find(|(_, score)| !score.is_finite())
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 format!("the score of {id} is {score}; scores must be finite numbers"),
             ));
@@ -1216,34 +1070,34 @@ impl MatchSpec {
             typed_caliper("nearest.mahvars", mahvars.caliper())?;
         }
         if self.subclass.n == 0 {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "subclass.n",
                 "the number of subclasses is 0; use 1 or more",
             ));
         }
 
         if self.cem != CemSpec::default() && self.method != MatchMethod::Cem {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cem",
                 "the cem options belong to the cem method; set the method to cem or drop them",
             ));
         }
         if self.quick != QuickSpec::default() && self.method != MatchMethod::Quick {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "quick",
                 "the size, minimums and seed method belong to the quick method; \
                  set the method to quick or drop them",
             ));
         }
         if self.full != FullSpec::default() && self.method != MatchMethod::Full {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "full",
                 "min_controls, max_controls, omit_fraction and mean_controls belong to the \
                  full method; set the method to full or drop them",
             ));
         }
         if self.genetic != GeneticSpec::default() && self.method != MatchMethod::Genetic {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "genetic",
                 "the genetic options belong to the genetic method; \
                  set the method to genetic or drop them",
@@ -1251,7 +1105,7 @@ impl MatchSpec {
         }
         if self.cardinality != CardinalitySpec::default() && self.method != MatchMethod::Cardinality
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cardinality",
                 "the cardinality options belong to the cardinality method; \
                  set the method to cardinality or drop them",
@@ -1259,7 +1113,7 @@ impl MatchSpec {
         }
         let nearest_options = self.nearest != NearestSpec::default() || self.std_caliper.any();
         if nearest_options && self.method != MatchMethod::Nearest {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "nearest",
                 "m_order, mahvars, variable_ratio and std_caliper belong to the nearest method; \
                  set the method to nearest or drop them",
@@ -1280,7 +1134,7 @@ impl MatchSpec {
                 if self.assignment == Some(AssignmentSpec::Rounds)
                     && !self.ratio_fallback.is_empty()
                 {
-                    return Err(SpecError::option(
+                    return Err(Error::option(
                         "assignment",
                         "rounds cannot be combined with ratio_fallback; \
                          use sequential assignment or drop the fallback",
@@ -1298,16 +1152,16 @@ impl MatchSpec {
 
     /// Options that only some methods read. A method that does not read one
     /// would ignore it, so it is an error naming the option.
-    fn validate_read_by_method(&self) -> Result<(), SpecError> {
+    fn validate_read_by_method(&self) -> Result<(), Error> {
         if self.trials != TrialOptions::default() && self.mode != MatchMode::SequentialTrials {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "trials",
                 "the trial options belong to sequential trial emulation; \
                  set the mode to sequential_trials or drop them",
             ));
         }
         if self.fine_balance.is_some() && self.method != MatchMethod::Optimal {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "fine_balance",
                 "fine balance belongs to the optimal method; set the method to optimal or drop it",
             ));
@@ -1322,7 +1176,7 @@ impl MatchSpec {
         let reads_estimand = self.method == MatchMethod::Subclass
             || (self.method == MatchMethod::Cem && self.cem.k2k.is_some());
         if self.method == MatchMethod::Subclass && self.distance.caliper().is_some() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "the subclass method cuts the score into classes and takes no caliper; \
                  drop the caliper",
@@ -1339,7 +1193,7 @@ impl MatchSpec {
             ),
         ];
         match unread.iter().find(|(_, set)| *set) {
-            Some((option, _)) => Err(SpecError::option(
+            Some((option, _)) => Err(Error::option(
                 option,
                 format!("the {method} method does not use it; drop it"),
             )),
@@ -1359,32 +1213,32 @@ impl MatchSpec {
         }
     }
 
-    fn validate_nearest(&self) -> Result<(), SpecError> {
+    fn validate_nearest(&self) -> Result<(), Error> {
         if self.mode != MatchMode::Standard {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "method",
                 "the nearest method ranks candidates by a distance and runs in standard mode; \
                  use random, lowest_index or nearest_birth_date for risk-set matching",
             ));
         }
         if !self.ratio_fallback.is_empty() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "ratio_fallback",
                 "the nearest method has no fallback ratios; drop them or use another method",
             ));
         }
         if let Some(variable) = self.nearest.variable_ratio {
             VariableRatio::new(variable.average, variable.min, variable.max)
-                .map_err(|error| SpecError::option("nearest.variable_ratio", error.to_string()))?;
+                .map_err(|error| Error::option("nearest.variable_ratio", error.to_string()))?;
             if !self.distance.is_score() {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "nearest.variable_ratio",
                     "a variable ratio is set by the scores of the units; use a propensity \
                      score or a score of your own as the distance",
                 ));
             }
             if self.ratio != 1 {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "ratio",
                     "a variable ratio sets the number of controls; drop the ratio",
                 ));
@@ -1396,7 +1250,7 @@ impl MatchSpec {
             Some(OrderSpec::Closest | OrderSpec::Farthest)
         ) && assignment == AssignmentSpec::Sequential
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "nearest.m_order",
                 "closest and farthest need rounds; set assignment to rounds",
             ));
@@ -1406,7 +1260,7 @@ impl MatchSpec {
             Some(OrderSpec::Largest | OrderSpec::Smallest)
         ) && !self.distance.is_score()
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "nearest.m_order",
                 "largest and smallest order the anchors by a score, which a Mahalanobis or \
                  Euclidean distance does not have; use data, random, closest or farthest",
@@ -1416,7 +1270,7 @@ impl MatchSpec {
             && !self.distance.is_score()
             && self.distance.caliper().is_some()
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "std_caliper",
                 "a caliper in standard deviations needs a score distance; \
                  give the caliper in the units of the distance",
@@ -1425,7 +1279,7 @@ impl MatchSpec {
         Ok(())
     }
 
-    fn validate_optimal(&self) -> Result<(), SpecError> {
+    fn validate_optimal(&self) -> Result<(), Error> {
         let name = if self.method == MatchMethod::Full {
             "full"
         } else {
@@ -1438,20 +1292,20 @@ impl MatchSpec {
             ("assignment", self.assignment.is_some()),
         ];
         if let Some((option, _)) = conflicts.iter().find(|(_, set)| *set) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 option,
                 format!("the {name} method does not use it; drop it"),
             ));
         }
         if self.method == MatchMethod::Full && self.ratio != 1 {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "ratio",
                 "the full method sizes its subclasses by min_controls and max_controls; \
                  drop the ratio",
             ));
         }
         if self.full.omit_fraction.is_some() && self.full.mean_controls.is_some() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "full",
                 "omit_fraction and mean_controls cannot both be set",
             ));
@@ -1459,9 +1313,9 @@ impl MatchSpec {
         Ok(())
     }
 
-    fn validate_exact(&self) -> Result<(), SpecError> {
+    fn validate_exact(&self) -> Result<(), Error> {
         if self.exact.is_empty() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "exact",
                 "the exact method needs the strata keys to match on; name at least one",
             ));
@@ -1469,15 +1323,15 @@ impl MatchSpec {
         self.reject_pair_options("exact")
     }
 
-    fn validate_cem(&self) -> Result<(), SpecError> {
+    fn validate_cem(&self) -> Result<(), Error> {
         if self.mode != MatchMode::Standard {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "method",
                 "coarsened exact matching needs anchors and candidates in standard mode",
             ));
         }
         if self.cem.variables.is_empty() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "cem.variables",
                 "coarsened exact matching needs the variables to match on; name at least one",
             ));
@@ -1499,34 +1353,34 @@ impl MatchSpec {
                 _ => None,
             };
             if let Some(problem) = problem {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "cem.variables",
                     format!("the binning of {name} has {problem}"),
                 ));
             }
         }
         if !self.exact.is_empty() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "exact",
                 "coarsened exact matching takes its variables from cem.variables; drop the keys",
             ));
         }
         if let Some(k2k) = &self.cem.k2k {
             if matches!(k2k.m_order, Some(OrderSpec::Largest | OrderSpec::Smallest)) {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "cem.k2k.m_order",
                     "largest and smallest need a score; use data, random, closest or farthest",
                 ));
             }
             if let Some(distance) = &k2k.distance {
                 if distance.caliper().is_some() {
-                    return Err(SpecError::option(
+                    return Err(Error::option(
                         "cem.k2k.distance",
                         "k:k matching pairs within strata and takes no caliper; drop it",
                     ));
                 }
                 if matches!(distance, DistanceSpec::Date { .. }) {
-                    return Err(SpecError::option(
+                    return Err(Error::option(
                         "cem.k2k.distance",
                         "give a covariate distance, a score or a matrix",
                     ));
@@ -1536,19 +1390,19 @@ impl MatchSpec {
         self.reject_pair_options("cem")
     }
 
-    fn validate_subclass(&self) -> Result<(), SpecError> {
+    fn validate_subclass(&self) -> Result<(), Error> {
         if !matches!(
             self.distance,
             DistanceSpec::Propensity { .. } | DistanceSpec::Scores { .. }
         ) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "the subclass method needs a propensity score or a score of your own; \
                  set the distance to propensity or scores",
             ));
         }
         if !self.exact.is_empty() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "exact",
                 "the subclass method does not take exact keys; drop them",
             ));
@@ -1556,16 +1410,16 @@ impl MatchSpec {
         self.reject_pair_options("subclass")
     }
 
-    fn validate_quick(&self) -> Result<(), SpecError> {
+    fn validate_quick(&self) -> Result<(), Error> {
         if matches!(self.distance, DistanceSpec::Date { .. }) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "the quick method needs a propensity score, a score of your own, or a \
                  Euclidean or Mahalanobis distance; set the distance",
             ));
         }
         if self.std_caliper.any() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "std_caliper",
                 "the quick method takes its caliper in the units of the distance; drop it",
             ));
@@ -1575,7 +1429,7 @@ impl MatchSpec {
 
     /// The options that pair formation reads, which a method that forms no
     /// pairs would silently ignore.
-    fn reject_pair_options(&self, method: &str) -> Result<(), SpecError> {
+    fn reject_pair_options(&self, method: &str) -> Result<(), Error> {
         let conflicts: [(&'static str, bool); 8] = [
             ("ratio", self.ratio != 1),
             ("ratio_fallback", !self.ratio_fallback.is_empty()),
@@ -1587,19 +1441,19 @@ impl MatchSpec {
             ("assignment", self.assignment.is_some()),
         ];
         if let Some((option, _)) = conflicts.iter().find(|(_, set)| *set) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 option,
                 format!("the {method} method forms no pairs and does not use it; drop it"),
             ));
         }
         if method == "exact" && !self.distance.is_default() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "the exact method does not use a distance; drop it",
             ));
         }
         if method == "cem" && !self.distance.is_default() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "coarsened exact matching takes its distance from cem.k2k.distance; drop it",
             ));
@@ -1608,21 +1462,21 @@ impl MatchSpec {
     }
 
     /// The options on calipers in standard deviations and on common support.
-    fn validate_support(&self) -> Result<(), SpecError> {
+    fn validate_support(&self) -> Result<(), Error> {
         if let StdCaliperSpec::Each(each) = &self.std_caliper {
             let unnamed = each
                 .fields
                 .keys()
                 .find(|name| !self.calipers.contains_key(*name));
             if let Some(name) = unnamed {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "std_caliper",
                     format!("{name} has no caliper in calipers; add one or drop the entry"),
                 ));
             }
         }
         if self.reestimate && self.discard.is_none() {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "reestimate",
                 "the model is fitted again on the units that discard leaves; set discard",
             ));
@@ -1645,7 +1499,7 @@ impl MatchSpec {
                         | MatchMethod::Genetic
                 ));
         if !supported {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "discard",
                 "common support is trimmed in risk-set mode and in standard mode with the \
                  random, lowest_index, nearest_birth_date, nearest, subclass, full, optimal, \
@@ -1660,14 +1514,14 @@ impl MatchSpec {
             ),
         };
         if !score_distance {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "discard",
                 "common support is read from a propensity score or a score of your own; \
                  set the distance to propensity or scores",
             ));
         }
         if self.reestimate && !matches!(self.distance, DistanceSpec::Propensity { .. }) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "reestimate",
                 "only a propensity model can be fitted again; set the distance to propensity",
             ));
@@ -1675,14 +1529,14 @@ impl MatchSpec {
         Ok(())
     }
 
-    fn validate_standard(&self) -> Result<(), SpecError> {
+    fn validate_standard(&self) -> Result<(), Error> {
         for (option, set) in [
             ("require_alive", self.require_alive),
             ("require_resident", self.require_resident),
             ("age_limit_years", self.age_limit_years.is_some()),
         ] {
             if set {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     option,
                     "this option is read by risk-set matching only; \
                      set the mode to risk_set or drop it",
@@ -1692,12 +1546,12 @@ impl MatchSpec {
         Ok(())
     }
 
-    fn validate_risk_set(&self) -> Result<(), SpecError> {
+    fn validate_risk_set(&self) -> Result<(), Error> {
         if !matches!(
             self.method,
             MatchMethod::Random | MatchMethod::LowestIndex | MatchMethod::NearestBirthDate
         ) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "method",
                 "risk-set matching chooses among the units at risk; \
                  use random, lowest_index or nearest_birth_date",
@@ -1707,7 +1561,7 @@ impl MatchSpec {
             self.distance,
             DistanceSpec::Date { .. } | DistanceSpec::Scores { .. }
         ) {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "risk-set matching takes a birth date or a score of your own as distance; \
                  covariate distances need anchors and candidates in standard mode",
@@ -1717,7 +1571,7 @@ impl MatchSpec {
             .assignment
             .is_some_and(|a| a != AssignmentSpec::Sequential)
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "assignment",
                 "risk-set matching assigns sequentially; drop the option",
             ));
@@ -1726,7 +1580,7 @@ impl MatchSpec {
             .age_limit_years
             .is_some_and(|years| AgeLimitYears::new(years).is_none())
         {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "age_limit_years",
                 "the age limit is 0; use 1 year or more",
             ));
@@ -1742,7 +1596,7 @@ fn propensity_config(
     seed: u64,
     caliper: Option<DistanceCaliper>,
     reestimate: bool,
-) -> Result<PropensityScoreConfig, SpecError> {
+) -> Result<PropensityScoreConfig, Error> {
     let DistanceSpec::Propensity {
         covariates,
         link,
@@ -1752,7 +1606,7 @@ fn propensity_config(
         ..
     } = spec
     else {
-        return Err(SpecError::option(
+        return Err(Error::option(
             "distance",
             "reestimate needs a propensity score distance",
         ));
@@ -1776,7 +1630,7 @@ fn propensity_config(
                     Estimand::Att => CbpsEstimand::Att,
                     Estimand::Ate => CbpsEstimand::Ate,
                     Estimand::Atc | Estimand::Atm => {
-                        return Err(SpecError::option(
+                        return Err(Error::option(
                             "estimand",
                             "the covariate balancing propensity score is defined for the \
                              ATT and the ATE only",
@@ -1851,7 +1705,7 @@ fn build_distance<R: CovariateRecord>(
     estimand: Estimand,
     seed: u64,
     mahvars: bool,
-) -> Result<BuiltDistance, SpecError> {
+) -> Result<BuiltDistance, Error> {
     let caliper = typed_caliper(
         if mahvars {
             "nearest.mahvars"
@@ -1925,13 +1779,13 @@ fn build_distance<R: CovariateRecord>(
                 .flat_map(|row| row.iter().map(|value| value.unwrap_or(f64::INFINITY)))
                 .collect::<Vec<_>>();
             if values.iter().any(|row| row.len() != candidate_ids.len()) {
-                return Err(SpecError::option(
+                return Err(Error::option(
                     "distance",
                     "every row of the distance matrix needs one value for each candidate id",
                 ));
             }
             let matrix = PairDistanceMatrix::new(anchor_ids.clone(), candidate_ids.clone(), flat)
-                .map_err(|error| SpecError::option("distance", error.to_string()))?;
+                .map_err(|error| Error::option("distance", error.to_string()))?;
             BuiltDistance {
                 config: Some(DistanceConfig::matrix(matrix, caliper)),
                 propensity: None,
@@ -1967,7 +1821,7 @@ fn run_quick<R: MatchingRecord>(
     candidates: &[R],
     exact: &[String],
     options: &QuickMatchOptions,
-) -> Result<QuickMatchOutcome, SpecError> {
+) -> Result<QuickMatchOutcome, Error> {
     let outcome = match config {
         DistanceConfig::PropensityScoreMap { scores, .. } => quick_match_subclasses(
             anchors,
@@ -1993,7 +1847,7 @@ fn run_quick<R: MatchingRecord>(
             let dimension = vectors.dimension();
             let factor =
                 cholesky_lower(inverse_covariance, dimension, Pivot::Strict).ok_or_else(|| {
-                    SpecError::option(
+                    Error::option(
                         "distance",
                         "the inverse covariance matrix is not positive definite; \
                      drop covariates that are collinear or constant",
@@ -2016,13 +1870,13 @@ fn run_quick<R: MatchingRecord>(
             )
         }
         DistanceConfig::Date { .. } => {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "the quick method needs a score or a covariate distance",
             ));
         }
         DistanceConfig::Matrix { .. } => {
-            return Err(SpecError::option(
+            return Err(Error::option(
                 "distance",
                 "the quick method clusters points and cannot take a distance matrix; \
                  give it a score or the covariates",
@@ -2043,20 +1897,6 @@ fn scores_of(config: &DistanceConfig) -> Option<&ScoreTable> {
     }
 }
 
-/// Fail on an outcome that the matcher built to say the job was invalid.
-fn reject_invalid(outcome: MatchOutcome) -> Result<MatchOutcome, SpecError> {
-    let rejected = outcome
-        .diagnostics
-        .exclusion_counts
-        .keys()
-        .find(|reason| reason.refuses_job())
-        .cloned();
-    match rejected {
-        Some(reason) => Err(SpecError::Rejected(reason)),
-        None => Ok(outcome),
-    }
-}
-
 /// Calipers on fields with their widths, in standard deviations if asked.
 ///
 /// A caliper in standard deviations is scaled by the standard deviation of the
@@ -2068,7 +1908,7 @@ fn field_calipers<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     scores: Option<&ScoreTable>,
-) -> Result<Vec<(String, f64)>, SpecError> {
+) -> Result<Vec<(String, f64)>, Error> {
     let kept = match (spec.discard, scores) {
         (Some(policy), Some(scores)) => {
             units_after_trimming(anchors, candidates, policy.into(), scores)
@@ -2089,7 +1929,7 @@ fn field_calipers<R: MatchingRecord>(
                 .filter(|value| value.is_finite())
                 .collect();
             let sd = crate::constraints::sample_sd(&values).ok_or_else(|| {
-                SpecError::option(
+                Error::option(
                     "std_caliper",
                     format!(
                         "fewer than two units have a value of {field}, so its standard \
@@ -2140,13 +1980,12 @@ struct StandardPlan<'a, R> {
     rounds: bool,
 }
 
-fn typed_ratio(spec: &MatchSpec) -> Result<MatchRatio, SpecError> {
-    Ok(MatchRatio::new(spec.ratio).ok_or(CriteriaValidationError::ZeroMatchRatio)?)
+fn typed_ratio(spec: &MatchSpec) -> Result<MatchRatio, Error> {
+    Ok(MatchRatio::new(spec.ratio).ok_or(Error::ZeroMatchRatio)?)
 }
 
-fn typed_window(spec: &MatchSpec) -> Result<BirthDateWindowDays, SpecError> {
-    Ok(BirthDateWindowDays::new(spec.birth_window_days)
-        .ok_or(CriteriaValidationError::NegativeBirthDateWindow)?)
+fn typed_window(spec: &MatchSpec) -> Result<BirthDateWindowDays, Error> {
+    Ok(BirthDateWindowDays::new(spec.birth_window_days).ok_or(Error::NegativeBirthDateWindow)?)
 }
 
 fn typed_fallback(spec: &MatchSpec) -> Vec<MatchRatio> {
@@ -2159,7 +1998,7 @@ fn typed_fallback(spec: &MatchSpec) -> Vec<MatchRatio> {
 fn run_standard_with<R, S>(
     plan: StandardPlan<'_, R>,
     strategy: S,
-) -> Result<(MatchOutcome, Option<PropensityScoreEstimate>), SpecError>
+) -> Result<(MatchOutcome, Option<PropensityScoreEstimate>), Error>
 where
     R: MatchingRecord + CovariateRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
@@ -2251,10 +2090,10 @@ where
 ///
 /// # Errors
 ///
-/// A [`SpecError`] when the spec is invalid, when the units are not those of
+/// A [`Error`] when the spec is invalid, when the units are not those of
 /// the spec's mode, when a distance cannot be built from the covariates, or
 /// when exact matching cannot run.
-pub fn run_spec<R>(spec: &MatchSpec, input: SpecInput<'_, R>) -> Result<SpecOutput, SpecError>
+pub fn run_spec<R>(spec: &MatchSpec, input: SpecInput<'_, R>) -> Result<SpecOutput, Error>
 where
     R: MatchingRecord + CovariateRecord,
 {
@@ -2272,7 +2111,7 @@ where
             run_exposure_density(spec, cohort)
         }
         (MatchMode::SequentialTrials, SpecInput::Trials { panel }) => run_trials(spec, panel),
-        (mode, _) => Err(SpecError::InputMode { mode }),
+        (mode, _) => Err(Error::InputMode { mode }),
     }
 }
 
@@ -2282,12 +2121,12 @@ where
 fn check_scores_cover<'a>(
     distance: &DistanceSpec,
     ids: impl IntoIterator<Item = &'a str>,
-) -> Result<(), SpecError> {
+) -> Result<(), Error> {
     let DistanceSpec::Scores { scores, .. } = distance else {
         return Ok(());
     };
     match ids.into_iter().find(|id| !scores.contains_key(*id)) {
-        Some(id) => Err(SpecError::option(
+        Some(id) => Err(Error::option(
             "distance",
             format!("the unit {id} has no score; give every unit a score"),
         )),
@@ -2299,7 +2138,7 @@ fn run_standard<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     check_scores_cover(
         &spec.distance,
         anchors.iter().chain(candidates).map(MatchingRecord::id),
@@ -2325,7 +2164,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     match spec.method {
         MatchMethod::Exact => {
             let outcome = exact_match_subclasses(anchors, candidates, &spec.exact)?;
@@ -2345,7 +2184,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 .config
                 .as_ref()
                 .and_then(scores_of)
-                .ok_or_else(|| SpecError::option("distance", "no scores were built"))?;
+                .ok_or_else(|| Error::option("distance", "no scores were built"))?;
             let config = SubclassificationConfig {
                 subclasses: spec.subclass.n,
                 reference_group: spec.subclass.reference.map(Into::into),
@@ -2358,7 +2197,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 spec.estimand,
                 &config,
             )
-            .map_err(|error| SpecError::option("subclass.n", error.to_string()))?;
+            .map_err(|error| Error::option("subclass.n", error.to_string()))?;
             return Ok(SpecOutput::Subclass {
                 outcome: Box::new(outcome),
                 propensity: built.propensity.map(Box::new),
@@ -2376,7 +2215,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
             let config = built
                 .config
                 .as_ref()
-                .ok_or_else(|| SpecError::option("distance", "no distance was built"))?;
+                .ok_or_else(|| Error::option("distance", "no distance was built"))?;
             let options = QuickMatchOptions {
                 min_anchors: spec.quick.min_anchors,
                 min_candidates: spec.quick.min_candidates,
@@ -2522,7 +2361,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
             if let Some(variable) = spec.nearest.variable_ratio {
                 strategy = strategy.with_variable_ratio(
                     VariableRatio::new(variable.average, variable.min, variable.max).map_err(
-                        |error| SpecError::option("nearest.variable_ratio", error.to_string()),
+                        |error| Error::option("nearest.variable_ratio", error.to_string()),
                     )?,
                 );
             }
@@ -2574,11 +2413,11 @@ fn run_trimmed<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let policy: CommonSupport = spec
         .discard
         .map(Into::into)
-        .ok_or_else(|| SpecError::option("discard", "no common support was asked for"))?;
+        .ok_or_else(|| Error::option("discard", "no common support was asked for"))?;
     let first = build_distance(
         &spec.distance,
         anchors,
@@ -2591,9 +2430,9 @@ fn run_trimmed<R: MatchingRecord + CovariateRecord>(
         .config
         .as_ref()
         .and_then(scores_of)
-        .ok_or_else(|| SpecError::option("distance", "no scores were built"))?;
+        .ok_or_else(|| Error::option("distance", "no scores were built"))?;
     let support = crate::matching::standard_common_support(anchors, candidates, policy, scores)
-        .map_err(|reason| SpecError::Rejected(ExclusionReason::CommonSupportFailure(reason)))?;
+        .map_err(Error::CommonSupport)?;
     let kept = |rows: &'_ [R], out: &std::collections::HashSet<usize>| -> Vec<usize> {
         (0..rows.len()).filter(|idx| !out.contains(idx)).collect()
     };
@@ -2691,7 +2530,7 @@ fn run_trimmed_subclass<R: MatchingRecord>(
     kept: (&[&R], &[&R]),
     support: &crate::matching::StandardCommonSupport,
     fit: (&ScoreTable, Option<PropensityScoreEstimate>),
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let (scores, propensity) = fit;
     let config = SubclassificationConfig {
         subclasses: spec.subclass.n,
@@ -2714,7 +2553,7 @@ fn run_trimmed_subclass<R: MatchingRecord>(
         &set_aside(all.0, &support.anchors),
         &set_aside(all.1, &support.candidates),
     )
-    .map_err(|error| SpecError::option("subclass.n", error.to_string()))?;
+    .map_err(|error| Error::option("subclass.n", error.to_string()))?;
     let mut output = SpecOutput::Subclass {
         outcome: Box::new(outcome),
         propensity: propensity.map(Box::new),
@@ -2747,7 +2586,7 @@ fn run_cem<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     anchors: &[R],
     candidates: &[R],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let variables: Vec<CemVariable> = spec
         .cem
         .variables
@@ -2807,19 +2646,19 @@ type ResidentSelector<R> = fn(&Rec<R>, NaiveDate) -> bool;
 fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let SpecOutput::Pairs { outcome, .. } = run_risk_set(spec, cohort, None)? else {
         unreachable!("risk-set matching returns pairs")
     };
     let sets = exposure_density_sets(cohort, *outcome)
-        .map_err(|error| SpecError::option("cohort", error.to_string()))?;
+        .map_err(|error| Error::option("cohort", error.to_string()))?;
     Ok(SpecOutput::ExposureDensity(Box::new(sets)))
 }
 
 fn run_trials<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     panel: &[TrialPerson<R>],
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     let outcome = match_trials(panel, &spec.trials, |pool| {
         let in_trial = MatchSpec {
             seed: trial_seed(spec.seed, pool.period()),
@@ -2832,8 +2671,8 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
         }
     })
     .map_err(|error| match error {
-        TrialsError::Input(error) => SpecError::option("panel", error.to_string()),
-        TrialsError::Matching { error, .. } => error,
+        Error::Trial { source, .. } => *source,
+        other => Error::option("panel", other.to_string()),
     })?;
     Ok(SpecOutput::Trials(Box::new(outcome)))
 }
@@ -2842,7 +2681,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
     id_order: Option<&IdOrder>,
-) -> Result<SpecOutput, SpecError> {
+) -> Result<SpecOutput, Error> {
     check_scores_cover(&spec.distance, cohort.iter().map(MatchingRecord::id))?;
     let distance = match &spec.distance {
         DistanceSpec::Date { caliper } => {
@@ -2859,10 +2698,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         | DistanceSpec::Mahalanobis { .. }
         | DistanceSpec::Euclidean { .. }
         | DistanceSpec::Matrix { .. } => {
-            return Err(SpecError::option(
-                "distance",
-                "not available in risk-set mode",
-            ));
+            return Err(Error::option("distance", "not available in risk-set mode"));
         }
     };
 

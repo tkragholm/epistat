@@ -43,6 +43,7 @@
 
 use super::exact::unit_ids;
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::Estimand;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -238,23 +239,6 @@ struct ScoredUnit {
     subclass: usize,
 }
 
-/// Settings for which subclassification cannot run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubclassificationError {
-    /// `subclasses` is 0.
-    NoSubclasses,
-}
-
-impl std::fmt::Display for SubclassificationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoSubclasses => f.write_str("the number of subclasses must be at least 1"),
-        }
-    }
-}
-
-impl std::error::Error for SubclassificationError {}
-
 /// Build propensity-score subclasses and estimand-specific subclass weights.
 ///
 /// The cutpoints are the quantiles of the reference group's scores that R's
@@ -275,7 +259,7 @@ impl std::error::Error for SubclassificationError {}
 ///
 /// # Errors
 ///
-/// Returns [`SubclassificationError::NoSubclasses`] when `config.subclasses`
+/// Returns [`Error::NoSubclasses`] when `config.subclasses`
 /// is 0.
 pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + Sync>(
     anchors: &[R],
@@ -283,7 +267,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
     propensity_scores: &HashMap<String, f64, H>,
     estimand: Estimand,
     config: &SubclassificationConfig,
-) -> Result<SubclassificationOutcome, SubclassificationError> {
+) -> Result<SubclassificationOutcome, Error> {
     subclassify_with_set_aside_scores(
         anchors,
         candidates,
@@ -316,9 +300,9 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
     config: &SubclassificationConfig,
     set_aside_anchors: &[f64],
     set_aside_candidates: &[f64],
-) -> Result<SubclassificationOutcome, SubclassificationError> {
+) -> Result<SubclassificationOutcome, Error> {
     if config.subclasses == 0 {
-        return Err(SubclassificationError::NoSubclasses);
+        return Err(Error::NoSubclasses);
     }
     let requested_subclasses = config.subclasses;
     let reference_group = resolve_reference_group(config.reference_group, estimand);

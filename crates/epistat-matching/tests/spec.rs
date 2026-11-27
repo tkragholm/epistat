@@ -18,11 +18,12 @@
 mod common;
 
 use common::{Level, Person, cohort, records};
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    CardinalityError, CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand, CbpsMethod,
-    GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions,
-    match_cardinality, quick_match_subclasses,
+    CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand, CbpsMethod, GeneticFit,
+    GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions, match_cardinality,
+    quick_match_subclasses,
 };
 use std::collections::BTreeMap;
 
@@ -958,8 +959,7 @@ fn a_covariate_that_is_missing_from_the_units_is_a_distance_error() {
         },
     )
     .expect_err("weight is not a covariate of the units");
-    assert!(matches!(error, SpecError::Distance(_)), "{error}");
-    assert!(error.to_string().contains("distance could not be built"));
+    assert!(matches!(error, Error::NoObservedValues { .. }), "{error}");
 }
 
 #[test]
@@ -1025,18 +1025,18 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
 #[test]
 fn error_types_display_and_are_errors() {
     fn is_error<E: std::error::Error>(_: &E) {}
-    let criteria = CriteriaValidationError::ZeroMatchRatio;
+    let criteria = Error::ZeroMatchRatio;
     is_error(&criteria);
     assert!(criteria.to_string().contains("ratio"));
-    let negative = CriteriaValidationError::NegativeBirthDateWindow;
+    let negative = Error::NegativeBirthDateWindow;
     assert!(negative.to_string().contains("window"));
-    let estimation = EstimationError::NoCovariatesAvailable;
+    let estimation = Error::NoCovariates;
     is_error(&estimation);
     assert!(estimation.to_string().contains("covariate"));
-    let mahalanobis = MahalanobisError::ZeroDimension;
+    let mahalanobis = Error::ZeroDimension;
     is_error(&mahalanobis);
     assert!(mahalanobis.to_string().contains("covariates"));
-    let spec_error = SpecError::InputMode {
+    let spec_error = Error::InputMode {
         mode: MatchMode::Standard,
     };
     is_error(&spec_error);
@@ -1073,13 +1073,7 @@ fn a_configuration_the_matcher_refuses_is_an_error_not_an_empty_match() {
         },
     )
     .expect_err("refused by the matcher");
-    assert!(
-        matches!(
-            error,
-            SpecError::Rejected(ExclusionReason::InvalidCriteria(_))
-        ),
-        "{error}"
-    );
+    assert!(matches!(error, Error::InvalidCriteria(_)), "{error}");
     assert!(error.to_string().contains("nearest_options"));
 }
 
@@ -1495,7 +1489,7 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
     ] {
         assert!(matches!(
             run_spec(&bad, input.clone()),
-            Err(SpecError::Option { .. })
+            Err(Error::Option { .. })
         ));
     }
 }
@@ -2189,10 +2183,7 @@ fn fine_balance_spec_equals_the_typed_call() {
         fine_balance: Some(balance),
         ..MatchSpec::default()
     };
-    assert!(matches!(
-        run_spec(&bad, input),
-        Err(SpecError::Option { .. })
-    ));
+    assert!(matches!(run_spec(&bad, input), Err(Error::Option { .. })));
     let again: MatchSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
     assert_eq!(spec, again);
 }
@@ -2268,9 +2259,9 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
     assert!(error.to_string().contains("discard"), "{error}");
 }
 
-fn option_named(error: &SpecError) -> &str {
+fn option_named(error: &Error) -> &str {
     match error {
-        SpecError::Option { option, .. } => option,
+        Error::Option { option, .. } => option,
         other => panic!("expected an option error, got {other}"),
     }
 }
@@ -2835,10 +2826,7 @@ fn spec_cardinality_profile_and_errors() {
     )
     .expect_err("no subset meets the tolerance");
     assert!(
-        matches!(
-            error,
-            SpecError::Cardinality(CardinalityError::Infeasible { key: 0 })
-        ),
+        matches!(error, Error::InfeasibleBalance { stratum: 0 }),
         "{error}"
     );
 }

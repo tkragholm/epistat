@@ -4,13 +4,13 @@
 //! output reaches the bounds with the right treated and control outcomes.
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::UnitRole;
 use epistat_matching::effects::UnitData;
 use epistat_matching::output::{LongMatches, Units, get_matches};
 use epistat_matching::prelude::*;
 use epistat_matching::sensitivity::{
-    SetsError, WilcoxonDistribution, hodges_lehmann_bounds, matched_sets, pair_differences,
-    wilcoxon_bounds,
+    WilcoxonDistribution, hodges_lehmann_bounds, matched_sets, pair_differences, wilcoxon_bounds,
 };
 
 #[test]
@@ -82,6 +82,6 @@ fn a_control_in_two_sets_is_refused() {
     .expect("valid units");
     assert_eq!(
         matched_sets(&long, &data),
-        Err(SetsError::Reused { id: "c1".into() })
+        Err(Error::ReusedUnit { id: "c1".into() })
     );
 }

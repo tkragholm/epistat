@@ -25,40 +25,10 @@ use super::records::MatchingRecord;
 use super::subclassification::{
     SubclassSummary, build_subclass_summaries, subclass_weight_for_estimand,
 };
+use crate::Error;
 use crate::types::Estimand;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-
-/// Why exact matching could not run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExactMatchError {
-    /// No exact matching variable was given.
-    NoVariables,
-    /// A unit has no value for one of the variables.
-    MissingValue {
-        /// Id of the unit.
-        id: String,
-        /// Name of the variable.
-        variable: String,
-    },
-    /// No stratum holds units of both groups.
-    NoSharedStratum,
-}
-
-impl fmt::Display for ExactMatchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoVariables => write!(f, "no exact matching variable was given"),
-            Self::MissingValue { id, variable } => {
-                write!(f, "unit {id} has no value for the variable {variable}")
-            }
-            Self::NoSharedStratum => write!(f, "no stratum holds units of both groups"),
-        }
-    }
-}
-
-impl std::error::Error for ExactMatchError {}
 
 /// Units sorted into subclasses, with the weights of each subclass.
 ///
@@ -231,20 +201,20 @@ pub(super) fn unit_ids<R: MatchingRecord>(anchors: &[R], candidates: &[R]) -> Ve
 ///
 /// # Errors
 ///
-/// [`ExactMatchError::NoVariables`] without variables,
-/// [`ExactMatchError::MissingValue`] when a unit lacks a variable, and
-/// [`ExactMatchError::NoSharedStratum`] when no stratum holds both groups.
+/// [`Error::NoVariables`] without variables,
+/// [`Error::MissingValue`] when a unit lacks a variable, and
+/// [`Error::NoSharedStratum`] when no stratum holds both groups.
 pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
     anchors: &[R],
     candidates: &[R],
     variables: &[V],
-) -> Result<ExactMatchOutcome, ExactMatchError> {
+) -> Result<ExactMatchOutcome, Error> {
     if variables.is_empty() {
-        return Err(ExactMatchError::NoVariables);
+        return Err(Error::NoVariables);
     }
     let (numbers, count) =
         stratum_numbers(anchors, candidates, variables).map_err(|(position, variable)| {
-            ExactMatchError::MissingValue {
+            Error::MissingValue {
                 id: unit_at(anchors, candidates, position).id().to_string(),
                 variable: variables[variable].as_ref().to_string(),
             }
@@ -308,7 +278,7 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
     candidates: &[R],
     numbers: &[u32],
     strata: usize,
-) -> Result<ExactMatchOutcome, ExactMatchError> {
+) -> Result<ExactMatchOutcome, Error> {
     let mut anchor_counts = vec![0_usize; strata];
     let mut candidate_counts = vec![0_usize; strata];
     let (anchor_numbers, candidate_numbers) = numbers.split_at(anchors.len());
@@ -333,7 +303,7 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
         }
     }
     if kept_anchor_counts.is_empty() {
-        return Err(ExactMatchError::NoSharedStratum);
+        return Err(Error::NoSharedStratum);
     }
     Ok(SubclassedUnits {
         ids: unit_ids(anchors, candidates),
@@ -372,17 +342,17 @@ pub(super) mod reference {
         anchors: &[R],
         candidates: &[R],
         variables: &[V],
-    ) -> Result<Maps, ExactMatchError> {
+    ) -> Result<Maps, Error> {
         if variables.is_empty() {
-            return Err(ExactMatchError::NoVariables);
+            return Err(Error::NoVariables);
         }
-        let key = |row: &R| -> Result<Vec<String>, ExactMatchError> {
+        let key = |row: &R| -> Result<Vec<String>, Error> {
             variables
                 .iter()
                 .map(|variable| {
                     row.stratum(variable.as_ref())
                         .map(str::to_owned)
-                        .ok_or_else(|| ExactMatchError::MissingValue {
+                        .ok_or_else(|| Error::MissingValue {
                             id: row.id().to_string(),
                             variable: variable.as_ref().to_string(),
                         })
@@ -416,7 +386,7 @@ pub(super) mod reference {
         anchor_strata: &[usize],
         candidate_strata: &[usize],
         strata: usize,
-    ) -> Result<Maps, ExactMatchError> {
+    ) -> Result<Maps, Error> {
         let mut anchor_counts = vec![0_usize; strata];
         let mut candidate_counts = vec![0_usize; strata];
         for stratum in anchor_strata {
@@ -436,7 +406,7 @@ pub(super) mod reference {
             }
         }
         if kept_anchor_counts.is_empty() {
-            return Err(ExactMatchError::NoSharedStratum);
+            return Err(Error::NoSharedStratum);
         }
         let subclasses = build_subclass_summaries(&kept_anchor_counts, &kept_candidate_counts);
         let mut outcome = Maps {
@@ -663,7 +633,7 @@ mod tests {
         let error = exact_match_subclasses(&a, &c, &["area", "sex"]).unwrap_err();
         assert_eq!(
             error,
-            ExactMatchError::MissingValue {
+            Error::MissingValue {
                 id: "a10".into(),
                 variable: "sex".into()
             }
@@ -726,15 +696,15 @@ mod tests {
         let candidates = vec![record("c1", "m", "n")];
         assert_eq!(
             exact_match_subclasses::<_, &str>(&anchors, &candidates, &[]).unwrap_err(),
-            ExactMatchError::NoVariables
+            Error::NoVariables
         );
         assert_eq!(
             exact_match_subclasses(&anchors, &candidates, &["sex"]).unwrap_err(),
-            ExactMatchError::NoSharedStratum
+            Error::NoSharedStratum
         );
         assert_eq!(
             exact_match_subclasses(&anchors, &candidates, &["age"]).unwrap_err(),
-            ExactMatchError::MissingValue {
+            Error::MissingValue {
                 id: "a1".into(),
                 variable: "age".into()
             }

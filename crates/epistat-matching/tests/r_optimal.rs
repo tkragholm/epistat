@@ -28,7 +28,7 @@
 //!   data set) the pairs, and MatchIt's weights, equal the crate's. Distances
 //!   on a line tie often, so those runs are compared by total only.
 //! * Where R finds no feasible matching, the crate reports
-//!   [`OptimalError::Infeasible`].
+//!   [`Error::Infeasible`].
 //!
 //! The weights in the file carry 17 significant digits. The crate's weights are
 //! reciprocals of small integers rescaled by a mean, so they agree with R's to
@@ -38,6 +38,7 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{RapidHashMap, match_full, match_optimal};
 
@@ -171,7 +172,7 @@ fn setup(name: &str, scenario: &Scenario, focal: u8, caliper: Option<f64>) -> Se
     }
 }
 
-fn run_ours(setup: &Setup, ratio: usize, exact: bool) -> Result<MatchOutcome, OptimalError> {
+fn run_ours(setup: &Setup, ratio: usize, exact: bool) -> Result<MatchOutcome, Error> {
     let criteria = MatchingCriteria::builder()
         .match_ratio(ratio)
         .required_strata(if exact {
@@ -296,10 +297,7 @@ fn pairs_totals_and_weights_match_matchit() {
         let got = run_ours(&built, ratio, run.exact);
         if run.error {
             assert!(
-                matches!(
-                    got,
-                    Err(OptimalError::Infeasible { .. } | OptimalError::NoMatches)
-                ),
+                matches!(got, Err(Error::Infeasible { .. } | Error::NoMatches)),
                 "{label}: R failed but the crate gave {got:?}"
             );
             errors += 1;
@@ -366,10 +364,7 @@ fn calipers_forbid_pairs_as_optmatch_does() {
         let got = run_ours(&built, ratio, false);
         if run.error {
             assert!(
-                matches!(
-                    got,
-                    Err(OptimalError::Infeasible { .. } | OptimalError::NoMatches)
-                ),
+                matches!(got, Err(Error::Infeasible { .. } | Error::NoMatches)),
                 "{label}: optmatch failed but the crate gave {got:?}"
             );
             errors += 1;
@@ -416,7 +411,7 @@ fn replacement_and_unique_keys_are_refused() {
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&built.distance);
     assert!(matches!(
         match_optimal(&built.anchors, &built.candidates, &request),
-        Err(OptimalError::Option {
+        Err(Error::Option {
             option: "replace",
             ..
         })

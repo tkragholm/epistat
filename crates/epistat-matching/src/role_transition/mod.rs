@@ -13,6 +13,6 @@ pub use algorithm::{
 mod exposure_density;
 
 pub use exposure_density::{
-    ExposedPerson, ExposureDensityControl, ExposureDensityError, ExposureDensityOutcome,
-    exposure_density_sets, match_exposure_density,
+    ExposedPerson, ExposureDensityControl, ExposureDensityOutcome, exposure_density_sets,
+    match_exposure_density,
 };

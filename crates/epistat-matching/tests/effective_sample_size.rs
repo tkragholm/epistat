@@ -1,7 +1,9 @@
 //! Effective sample size: the value does not depend on the scale of the weights,
 //! and a weight that is negative or not finite is an error.
 
+use epistat_core::{Classify, ErrorKind};
 use epistat_matching::prelude::*;
+use epistat_stats::weighted::effective_sample_size;
 use std::collections::HashMap;
 
 fn day() -> chrono::NaiveDate {
@@ -19,7 +21,7 @@ fn rec(id: &str, x: f64) -> BalanceRecord {
 #[test]
 fn ess_of_equal_weights_is_n_at_any_scale() {
     for scale in [1e-300, 1e-160, 1e-9, 1.0, 1e9, 1e160, 1e300] {
-        let ess = effective_sample_size(vec![scale; 100]).unwrap().unwrap();
+        let ess = effective_sample_size(&[scale; 100]).unwrap().unwrap();
         assert!((ess - 100.0).abs() < 1e-9, "scale {scale}: {ess}");
     }
 }
@@ -28,17 +30,17 @@ fn ess_of_equal_weights_is_n_at_any_scale() {
 /// is no size.
 #[test]
 fn ess_is_none_without_a_positive_weight() {
-    assert_eq!(effective_sample_size(Vec::<f64>::new()), Ok(None));
-    assert_eq!(effective_sample_size([0.0, 0.0]), Ok(None));
-    let ess = effective_sample_size([0.0, 2.0, 2.0]).unwrap().unwrap();
+    assert_eq!(effective_sample_size(&[]), Ok(None));
+    assert_eq!(effective_sample_size(&[0.0, 0.0]), Ok(None));
+    let ess = effective_sample_size(&[0.0, 2.0, 2.0]).unwrap().unwrap();
     assert!((ess - 2.0).abs() < 1e-12);
 }
 
 #[test]
 fn ess_refuses_a_negative_or_non_finite_weight() {
     for bad in [-1.0, f64::NAN, f64::INFINITY] {
-        let err = effective_sample_size([1.0, bad]).unwrap_err();
-        assert_eq!(err.position, 1);
+        let err = effective_sample_size(&[1.0, bad]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Input);
     }
 }
 

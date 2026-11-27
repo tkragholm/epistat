@@ -1049,7 +1049,7 @@ pub fn match_standard_with_discard<
     let validated = match request.criteria.validate() {
         Ok(validated) => validated,
         Err(err) => {
-            return refused_outcome(anchors.len(), InvalidCriteriaReason::from(err));
+            return refused_outcome(anchors.len(), InvalidCriteriaReason::of(&err));
         }
     };
     let criteria = validated.as_ref();

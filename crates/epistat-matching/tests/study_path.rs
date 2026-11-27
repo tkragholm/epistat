@@ -23,6 +23,7 @@ use chrono::{Days, NaiveDate};
 use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
 use epistat_matching::prelude::*;
 use epistat_matching::{PairWeightTable, UnitRole, UnitWeightTable};
+use epistat_stats::weighted::effective_sample_size;
 use epistat_testkit::{Fingerprint, SplitMix64};
 
 struct CohortRow {
@@ -275,10 +276,16 @@ fn run_matching(
             .map(|row| row.match_weight)
     };
     let effective_sample_sizes = [
-        effective_sample_size(role(UnitRole::Anchor)).expect("weights"),
-        effective_sample_size(role(UnitRole::Candidate)).expect("weights"),
-        effective_sample_size(unit_weights.rows.iter().map(|row| row.analysis_weight))
-            .expect("weights"),
+        effective_sample_size(&role(UnitRole::Anchor).collect::<Vec<_>>()).expect("weights"),
+        effective_sample_size(&role(UnitRole::Candidate).collect::<Vec<_>>()).expect("weights"),
+        effective_sample_size(
+            &unit_weights
+                .rows
+                .iter()
+                .map(|row| row.analysis_weight)
+                .collect::<Vec<_>>(),
+        )
+        .expect("weights"),
     ];
     let unit_weight_total = unit_weights.rows.iter().map(|row| row.match_weight).sum();
     MatchOutput {

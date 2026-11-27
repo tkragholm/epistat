@@ -69,6 +69,7 @@ use super::engine::{
 };
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
+use crate::Error;
 use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{CommonSupport, DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
 use cbps::fit_cbps;
@@ -292,82 +293,6 @@ pub struct PropensityMatchedOutcome {
     pub propensity: PropensityScoreEstimate,
 }
 
-/// Errors for in-crate preprocessing and estimation.
-#[derive(Debug, Clone)]
-pub enum EstimationError {
-    /// There are no records.
-    EmptyInput,
-    /// A covariate has a missing value where none is allowed.
-    MissingValuesNotAllowed {
-        /// The name of the covariate.
-        covariate: String,
-    },
-    /// A numeric covariate has a value that is not finite.
-    NonFiniteNumericCovariate {
-        /// The record with the value.
-        record_id: String,
-        /// The name of the covariate.
-        covariate: String,
-    },
-    /// A covariate is numeric for some records and categorical for others.
-    MixedCovariateType {
-        /// The name of the covariate.
-        covariate: String,
-    },
-    /// A covariate has no observed value in any record.
-    NoObservedValuesForCovariate {
-        /// The name of the covariate.
-        covariate: String,
-    },
-    /// No covariate is available to model.
-    NoCovariatesAvailable,
-    /// The elastic net settings are out of range.
-    InvalidElasticNetConfig,
-    /// The iteration limit is 0 or the tolerance is not positive and finite.
-    InvalidGlmConfig,
-    /// The cross-validation settings are out of range, a training set lacks one
-    /// of the two groups, or the penalty path is undefined.
-    InvalidCrossValidation,
-    /// A sampling weight is missing for a record, negative or not finite.
-    InvalidSamplingWeight {
-        /// The record with the bad weight.
-        record_id: String,
-    },
-    /// `reestimate` was set but no common-support policy was given.
-    ReestimateWithoutDiscard,
-    /// The anchors' and the candidates' scores do not overlap, so common-support
-    /// trimming leaves nothing to refit on.
-    NoCommonSupport,
-    /// The generalised linear model could not be fitted.
-    GlmFitFailed(epistat_glm::Error),
-    /// The elastic net could not be fitted.
-    ElasticNetFitFailed(epistat_glm::Error),
-    /// A covariate balancing propensity score needs a column named `intercept`.
-    CbpsNeedsIntercept,
-    /// The design of a covariate balancing propensity score is not of full
-    /// rank, or has no more rows than columns.
-    CbpsNotFullRank,
-    /// The iteration limit or tolerance of a covariate balancing propensity
-    /// score is unusable, or one treatment group has no weight.
-    InvalidCbpsConfig,
-    /// The optimiser of a covariate balancing propensity score could not start:
-    /// the objective is not finite at the start, or a direction does not
-    /// descend.
-    CbpsFitFailed(epistat_optim::Error),
-    /// A linear system in the fit could not be solved.
-    LinearSystemSolveFailed,
-    /// The covariance matrix is not usable.
-    InvalidCovarianceMatrix,
-    /// The Mahalanobis distance could not be built from the covariance matrix.
-    MahalanobisConfigBuildFailed,
-    /// A column varies, but not within either group, so it has no pooled
-    /// within-group standard deviation to scale by.
-    ZeroWithinGroupVariance {
-        /// The name of the column.
-        column: String,
-    },
-}
-
 /// Build propensity-score distance config directly from covariate records.
 ///
 /// With `config.reestimate` set, use
@@ -376,13 +301,13 @@ pub enum EstimationError {
 ///
 /// # Errors
 ///
-/// Returns [`EstimationError`] when preprocessing or model fitting fails, or
+/// Returns [`Error`] when preprocessing or model fitting fails, or
 /// when `config.reestimate` is set, since no trimming policy is given here.
 pub fn prepare_propensity_distance_config<R: CovariateRecord>(
     anchors: &[R],
     candidates: &[R],
     config: &PropensityScoreConfig,
-) -> Result<PropensityDistancePreparation, EstimationError> {
+) -> Result<PropensityDistancePreparation, Error> {
     prepare_propensity_distance_config_with_discard(anchors, candidates, config, None)
 }
 
@@ -392,7 +317,7 @@ fn fit_estimator(
     labels: &[f64],
     weights: Option<&[f64]>,
     config: &PropensityScoreConfig,
-) -> Result<(logistic::LogisticFit, &'static str), EstimationError> {
+) -> Result<(logistic::LogisticFit, &'static str), Error> {
     Ok(match &config.estimator {
         PropensityEstimator::GlmLogit => (
             fit_glm(matrix, labels, weights, &config.logistic)?,
@@ -474,7 +399,7 @@ fn rows_outside_common_support(
 ///
 /// # Errors
 ///
-/// Returns [`EstimationError`] when preprocessing or model fitting fails, when
+/// Returns [`Error`] when preprocessing or model fitting fails, when
 /// a sampling weight is missing or invalid, when `config.reestimate` is set
 /// without a `discard` policy, or when the two groups' scores do not overlap.
 pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
@@ -482,12 +407,12 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
     candidates: &[R],
     config: &PropensityScoreConfig,
     discard: Option<CommonSupport>,
-) -> Result<PropensityDistancePreparation, EstimationError> {
+) -> Result<PropensityDistancePreparation, Error> {
     if anchors.is_empty() || candidates.is_empty() {
-        return Err(EstimationError::EmptyInput);
+        return Err(Error::EmptyGroup);
     }
     if config.reestimate && discard.is_none() {
-        return Err(EstimationError::ReestimateWithoutDiscard);
+        return Err(Error::ReestimateWithoutDiscard);
     }
 
     let records = anchors.iter().chain(candidates.iter()).collect_vec();
@@ -505,9 +430,7 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
                 .iter()
                 .map(|id| match by_id.get(id) {
                     Some(weight) if weight.is_finite() && *weight >= 0.0 => Ok(*weight),
-                    _ => Err(EstimationError::InvalidSamplingWeight {
-                        record_id: id.clone(),
-                    }),
+                    _ => Err(Error::InvalidSamplingWeight { id: id.clone() }),
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
@@ -526,7 +449,7 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
 
     if let (true, Some(policy)) = (config.reestimate, discard) {
         let outside = rows_outside_common_support(&distance, anchors.len(), policy)
-            .ok_or(EstimationError::NoCommonSupport)?;
+            .ok_or(Error::NoCommonSupport)?;
         let dropped: std::collections::HashSet<usize> = outside.iter().copied().collect();
         let kept = (0..matrix.n_rows)
             .filter(|row| !dropped.contains(row))
@@ -593,15 +516,15 @@ pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
 ///
 /// # Errors
 ///
-/// Returns [`EstimationError`] when preprocessing or covariance inversion fails.
+/// Returns [`Error`] when preprocessing or covariance inversion fails.
 pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
     anchors: &[R],
     candidates: &[R],
     caliper: Option<DistanceCaliper>,
     config: &MahalanobisPreparationConfig,
-) -> Result<MahalanobisDistancePreparation, EstimationError> {
+) -> Result<MahalanobisDistancePreparation, Error> {
     if anchors.is_empty() || candidates.is_empty() {
-        return Err(EstimationError::EmptyInput);
+        return Err(Error::EmptyGroup);
     }
 
     let tie_adjusted = matches!(config.transform, MahalanobisTransform::RankTieAdjusted);
@@ -632,10 +555,10 @@ pub fn prepare_mahalanobis_distance_config<R: CovariateRecord>(
 
     let dimension = matrix.n_cols;
     let vectors = VectorTable::new(matrix.row_ids.into(), dimension, matrix.values.into())
-        .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+        .map_err(|_| Error::DistanceBuild)?;
     let distance_config =
         DistanceConfig::mahalanobis_table(vectors.clone(), inverse_covariance.clone(), caliper)
-            .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+            .map_err(|_| Error::DistanceBuild)?;
 
     Ok(MahalanobisDistancePreparation {
         distance_config,
@@ -661,16 +584,16 @@ const GENERALISED_INVERSE_TOLERANCE: f64 = 1e-8;
 ///
 /// # Errors
 ///
-/// Returns [`EstimationError`] when encoding fails, or when a scaled column
+/// Returns [`Error`] when encoding fails, or when a scaled column
 /// has no variance within either group.
 pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
     anchors: &[R],
     candidates: &[R],
     caliper: Option<DistanceCaliper>,
     config: &EuclideanPreparationConfig,
-) -> Result<EuclideanDistancePreparation, EstimationError> {
+) -> Result<EuclideanDistancePreparation, Error> {
     if anchors.is_empty() || candidates.is_empty() {
-        return Err(EstimationError::EmptyInput);
+        return Err(Error::EmptyGroup);
     }
 
     let mut encoding = config.encoding.clone();
@@ -689,7 +612,7 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
     let mut divisors = vec![1.0_f64; matrix.n_cols];
     if config.scale == EuclideanScale::PooledWithinGroupSd {
         if matrix.n_rows <= 2 {
-            return Err(EstimationError::EmptyInput);
+            return Err(Error::EmptyGroup);
         }
         for (col_idx, divisor) in divisors.iter_mut().enumerate() {
             let variance = covariance::pooled_within_group_variance(
@@ -700,7 +623,7 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
             );
             let valid = variance.is_finite() && variance > 0.0;
             if !valid {
-                return Err(EstimationError::ZeroWithinGroupVariance {
+                return Err(Error::ZeroWithinGroupVariance {
                     column: matrix.column_names[col_idx].clone(),
                 });
             }
@@ -715,9 +638,9 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
 
     let dimension = matrix.n_cols;
     let vectors = VectorTable::new(matrix.row_ids.into(), dimension, matrix.values.into())
-        .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+        .map_err(|_| Error::DistanceBuild)?;
     let distance_config = DistanceConfig::euclidean_table(vectors.clone(), caliper)
-        .map_err(|_| EstimationError::MahalanobisConfigBuildFailed)?;
+        .map_err(|_| Error::DistanceBuild)?;
 
     Ok(EuclideanDistancePreparation {
         distance_config,
@@ -736,12 +659,12 @@ pub fn prepare_euclidean_distance_config<R: CovariateRecord>(
 ///
 /// # Errors
 ///
-/// [`EstimationError`] for no records, a missing or non-finite value the
+/// [`Error`] for no records, a missing or non-finite value the
 /// policy does not allow, or a covariate of mixed type.
 pub fn encode_covariates<R: CovariateRecord>(
     records: &[R],
     config: &CovariateEncodingConfig,
-) -> Result<CovariateMatrix, EstimationError> {
+) -> Result<CovariateMatrix, Error> {
     let refs = records.iter().collect_vec();
     build_covariate_matrix(&refs, config)
 }
@@ -752,7 +675,7 @@ pub(crate) fn encode_covariates_pooled<R: CovariateRecord>(
     first: &[R],
     second: &[R],
     config: &CovariateEncodingConfig,
-) -> Result<CovariateMatrix, EstimationError> {
+) -> Result<CovariateMatrix, Error> {
     let refs = first.iter().chain(second).collect_vec();
     build_covariate_matrix(&refs, config)
 }
@@ -768,7 +691,7 @@ pub(crate) fn encode_covariates_pooled<R: CovariateRecord>(
 ///
 /// # Errors
 ///
-/// Returns [`EstimationError`] when preprocessing or model fitting fails.
+/// Returns [`Error`] when preprocessing or model fitting fails.
 pub fn estimate_propensity_and_match<
     R: MatchingRecord + CovariateRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
@@ -781,7 +704,7 @@ pub fn estimate_propensity_and_match<
     ratio_fallback: &[MatchRatio],
     extra_constraints: &G,
     propensity_config: &PropensityScoreConfig,
-) -> Result<PropensityMatchedOutcome, EstimationError> {
+) -> Result<PropensityMatchedOutcome, Error> {
     let prepared = prepare_propensity_distance_config_with_discard(
         anchors,
         candidates,
@@ -984,7 +907,7 @@ mod tests {
                 .build(),
         )
         .expect_err("invalid elastic-net configuration should fail");
-        assert!(matches!(err, EstimationError::InvalidElasticNetConfig));
+        assert!(matches!(err, Error::InvalidElasticNet));
     }
 
     #[test]
@@ -1206,10 +1129,7 @@ mod tests {
 
         let err = prepare_propensity_distance_config(&[anchor], &[candidate], &config)
             .expect_err("missing values should fail");
-        assert!(matches!(
-            err,
-            EstimationError::MissingValuesNotAllowed { .. }
-        ));
+        assert!(matches!(err, Error::MissingValues { .. }));
     }
 
     #[test]
@@ -1359,12 +1279,12 @@ mod tests {
             let config = PropensityScoreConfig::builder().logistic(logistic).build();
             let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
                 .expect_err("invalid settings are refused");
-            assert!(matches!(err, EstimationError::InvalidGlmConfig));
+            assert!(matches!(err, Error::InvalidModelControl));
         }
         let config = PropensityScoreConfig::builder().reestimate(true).build();
         let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
             .expect_err("reestimate needs a policy");
-        assert!(matches!(err, EstimationError::ReestimateWithoutDiscard));
+        assert!(matches!(err, Error::ReestimateWithoutDiscard));
     }
 
     #[test]

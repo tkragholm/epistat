@@ -53,10 +53,9 @@
 //! `mhLS`, the binomial tail and `uniroot` searches for the sensitivity
 //! values in `tests/r_rosenbaum_methods.rs`.
 
+use crate::Error;
 #[cfg(test)]
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 use epistat_core::Level;
 pub use epistat_epi::evalue::{
@@ -70,7 +69,7 @@ pub use epistat_epi::rosenbaum::{
     sensitivity_value,
 };
 
-use crate::effects::{EffectError, UnitData};
+use crate::effects::UnitData;
 use crate::output::LongMatches;
 
 /// A matched set: the outcome of the treated unit and of its controls.
@@ -82,69 +81,6 @@ pub struct MatchedSet {
     pub controls: Vec<f64>,
 }
 
-/// What stops matched sets being made from the output of a match.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum SetsError {
-    /// A unit is not in the data.
-    Unit(EffectError),
-    /// A set with no treated unit or with several.
-    NotOneTreated {
-        /// The pair number.
-        pair: usize,
-        /// Its number of treated units.
-        treated: usize,
-    },
-    /// A set with no control.
-    NoControl {
-        /// The pair number.
-        pair: usize,
-    },
-    /// A set that is not a pair, where pairs are needed.
-    NotAPair {
-        /// The pair number.
-        pair: usize,
-        /// Its number of controls.
-        controls: usize,
-    },
-    /// A unit in more than one set, as after matching with replacement. The
-    /// bounds assume independent sets.
-    Reused {
-        /// The unit's id.
-        id: String,
-    },
-    /// No sets.
-    Empty,
-}
-
-impl Display for SetsError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unit(e) => write!(f, "{e}"),
-            Self::NotOneTreated { pair, treated } => {
-                write!(f, "set {pair} has {treated} treated units, not one")
-            }
-            Self::NoControl { pair } => write!(f, "set {pair} has no control"),
-            Self::NotAPair { pair, controls } => {
-                write!(f, "set {pair} has {controls} controls, not one")
-            }
-            Self::Reused { id } => write!(
-                f,
-                "unit {id} has more than one row in the matched sets, so the sets are not independent"
-            ),
-            Self::Empty => write!(f, "there are no matched sets"),
-        }
-    }
-}
-
-impl Error for SetsError {}
-
-impl From<EffectError> for SetsError {
-    fn from(e: EffectError) -> Self {
-        Self::Unit(e)
-    }
-}
-
 /// The matched sets of a match in long form, with the outcomes from `units`.
 ///
 /// Each pair number is a set. Rows with no pair number are left out. The
@@ -153,12 +89,12 @@ impl From<EffectError> for SetsError {
 ///
 /// # Errors
 ///
-/// [`SetsError::Unit`] for a unit not in `units`, [`SetsError::NotOneTreated`]
-/// and [`SetsError::NoControl`] for a set that is not one treated unit with
-/// controls, [`SetsError::Reused`] for a unit that appears in more than one row
+/// [`Error::Unit`] for a unit not in `units`, [`Error::NotOneTreated`]
+/// and [`Error::NoControl`] for a set that is not one treated unit with
+/// controls, [`Error::ReusedUnit`] for a unit that appears in more than one row
 /// with a pair number, in one set or in several, and
-/// [`SetsError::Empty`].
-pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedSet>, SetsError> {
+/// [`Error::NoSets`].
+pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedSet>, Error> {
     // Each row is read once: its unit's row in `units`, which identifies the
     // unit because `units` has no id twice, marks the unit as used.
     let mut used = vec![false; units.treated_flags().len()];
@@ -169,7 +105,7 @@ pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedS
         };
         let unit = units.row_of(&long.id[row])?;
         if std::mem::replace(&mut used[unit], true) {
-            return Err(SetsError::Reused {
+            return Err(Error::ReusedUnit {
                 id: long.id[row].clone(),
             });
         }
@@ -177,7 +113,7 @@ pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedS
         rows.push((pair, treated, outcome));
     }
     if rows.is_empty() {
-        return Err(SetsError::Empty);
+        return Err(Error::NoSets);
     }
     // Stable, so the rows of a set stay in the order of `long`.
     rows.sort_by_key(|&(pair, _, _)| pair);
@@ -186,8 +122,8 @@ pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedS
         let pair = group[0].0;
         let treated = group.iter().filter(|row| row.1).collect::<Vec<_>>();
         if treated.len() != 1 {
-            return Err(SetsError::NotOneTreated {
-                pair,
+            return Err(Error::NotOneTreated {
+                set: pair,
                 treated: treated.len(),
             });
         }
@@ -197,7 +133,7 @@ pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedS
             .map(|row| row.2)
             .collect::<Vec<_>>();
         if controls.is_empty() {
-            return Err(SetsError::NoControl { pair });
+            return Err(Error::NoControl { set: pair });
         }
         sets.push(MatchedSet {
             treated: treated[0].2,
@@ -211,58 +147,22 @@ pub fn matched_sets(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedS
 ///
 /// # Errors
 ///
-/// [`SetsError::NotAPair`] for a set with other than one control, and
-/// [`SetsError::Empty`].
-pub fn pair_differences(sets: &[MatchedSet]) -> Result<Vec<f64>, SetsError> {
+/// [`Error::NotAPair`] for a set with other than one control, and
+/// [`Error::NoSets`].
+pub fn pair_differences(sets: &[MatchedSet]) -> Result<Vec<f64>, Error> {
     if sets.is_empty() {
-        return Err(SetsError::Empty);
+        return Err(Error::NoSets);
     }
     sets.iter()
         .enumerate()
         .map(|(i, s)| match s.controls.as_slice() {
             [c] => Ok(s.treated - c),
-            other => Err(SetsError::NotAPair {
-                pair: i + 1,
+            other => Err(Error::NotAPair {
+                set: i + 1,
                 controls: other.len(),
             }),
         })
         .collect()
-}
-
-/// What goes wrong in a bound.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum BoundsError {
-    /// The sets cannot be used.
-    Sets(SetsError),
-    /// The bound cannot be computed.
-    Bound(epistat_epi::Error),
-    /// An outcome other than 0 or 1 where a binary outcome is needed.
-    NotBinary(f64),
-}
-
-impl Display for BoundsError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Sets(e) => write!(f, "{e}"),
-            Self::Bound(e) => write!(f, "{e}"),
-            Self::NotBinary(v) => write!(f, "the outcome {v} is not 0 or 1"),
-        }
-    }
-}
-
-impl Error for BoundsError {}
-
-impl From<SetsError> for BoundsError {
-    fn from(e: SetsError) -> Self {
-        Self::Sets(e)
-    }
-}
-
-impl From<epistat_epi::Error> for BoundsError {
-    fn from(e: epistat_epi::Error) -> Self {
-        Self::Bound(e)
-    }
 }
 
 /// The bounds of the signed rank test of matched pairs at each `gamma`, as
@@ -270,18 +170,17 @@ impl From<epistat_epi::Error> for BoundsError {
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn wilcoxon_bounds(
     sets: &[MatchedSet],
     gammas: &[f64],
     distribution: WilcoxonDistribution,
-) -> Result<Vec<WilcoxonBounds>, BoundsError> {
+) -> Result<Vec<WilcoxonBounds>, Error> {
     let diffs = pair_differences(sets)?;
     gammas
         .iter()
         .map(|&g| {
-            epistat_epi::rosenbaum::wilcoxon_bounds(&diffs, g, distribution)
-                .map_err(BoundsError::from)
+            epistat_epi::rosenbaum::wilcoxon_bounds(&diffs, g, distribution).map_err(Error::from)
         })
         .collect()
 }
@@ -291,11 +190,11 @@ pub fn wilcoxon_bounds(
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn hodges_lehmann_bounds(
     sets: &[MatchedSet],
     gammas: &[f64],
-) -> Result<Vec<HodgesLehmannBounds>, BoundsError> {
+) -> Result<Vec<HodgesLehmannBounds>, Error> {
     let diffs = pair_differences(sets)?;
     Ok(epistat_epi::rosenbaum::hodges_lehmann_bounds(
         &diffs, gammas,
@@ -307,16 +206,16 @@ pub fn hodges_lehmann_bounds(
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn m_statistic_bounds(
     sets: &[MatchedSet],
     gammas: &[f64],
     spec: &MScore,
-) -> Result<Vec<SetBounds>, BoundsError> {
+) -> Result<Vec<SetBounds>, Error> {
     let scores = epistat_epi::rosenbaum::m_scores(&raw_sets(sets)?, spec)?;
     gammas
         .iter()
-        .map(|&g| epistat_epi::rosenbaum::set_bounds(&scores, g).map_err(BoundsError::from))
+        .map(|&g| epistat_epi::rosenbaum::set_bounds(&scores, g).map_err(Error::from))
         .collect()
 }
 
@@ -327,12 +226,12 @@ pub fn m_statistic_bounds(
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn wilcoxon_sensitivity_value(
     sets: &[MatchedSet],
     alpha: f64,
     distribution: WilcoxonDistribution,
-) -> Result<f64, BoundsError> {
+) -> Result<f64, Error> {
     let diffs = pair_differences(sets)?;
     Ok(rosenbaum::wilcoxon_sensitivity_value(
         &diffs,
@@ -348,15 +247,15 @@ pub fn wilcoxon_sensitivity_value(
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
-pub fn hodges_lehmann_gamma(sets: &[MatchedSet], tau0: f64) -> Result<f64, BoundsError> {
+/// [`Error`].
+pub fn hodges_lehmann_gamma(sets: &[MatchedSet], tau0: f64) -> Result<f64, Error> {
     let diffs = pair_differences(sets)?;
     Ok(rosenbaum::hodges_lehmann_gamma(&diffs, tau0)?)
 }
 
-fn raw_sets(sets: &[MatchedSet]) -> Result<Vec<Vec<f64>>, SetsError> {
+fn raw_sets(sets: &[MatchedSet]) -> Result<Vec<Vec<f64>>, Error> {
     if sets.is_empty() {
-        return Err(SetsError::Empty);
+        return Err(Error::NoSets);
     }
     Ok(sets
         .iter()
@@ -375,12 +274,12 @@ fn raw_sets(sets: &[MatchedSet]) -> Result<Vec<Vec<f64>>, SetsError> {
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn m_statistic_sensitivity_value(
     sets: &[MatchedSet],
     alpha: f64,
     spec: &MScore,
-) -> Result<f64, BoundsError> {
+) -> Result<f64, Error> {
     let scores = rosenbaum::m_scores(&raw_sets(sets)?, spec)?;
     Ok(rosenbaum::scores_sensitivity_value(&scores, alpha)?)
 }
@@ -392,14 +291,14 @@ pub fn m_statistic_sensitivity_value(
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn m_statistic_interval(
     sets: &[MatchedSet],
     gamma: f64,
     spec: &MScore,
     level: Level,
     sides: Sides,
-) -> Result<EffectInterval, BoundsError> {
+) -> Result<EffectInterval, Error> {
     Ok(rosenbaum::m_statistic_interval(
         &raw_sets(sets)?,
         gamma,
@@ -410,24 +309,24 @@ pub fn m_statistic_interval(
 }
 
 /// The strata of matched sets whose outcomes are 0 or 1.
-fn binary_strata(sets: &[MatchedSet]) -> Result<Vec<BinaryStratum>, BoundsError> {
+fn binary_strata(sets: &[MatchedSet]) -> Result<Vec<BinaryStratum>, Error> {
     if sets.is_empty() {
-        return Err(SetsError::Empty.into());
+        return Err(Error::NoSets.into());
     }
     #[expect(clippy::float_cmp, reason = "a binary outcome is exactly 0 or 1")]
-    let case = |v: f64| -> Result<bool, BoundsError> {
+    let case = |v: f64| -> Result<bool, Error> {
         if v == 0.0 {
             Ok(false)
         } else if v == 1.0 {
             Ok(true)
         } else {
-            Err(BoundsError::NotBinary(v))
+            Err(Error::NotBinary(v))
         }
     };
     sets.iter()
         .map(|s| {
             if s.controls.is_empty() {
-                return Err(BoundsError::Bound(epistat_epi::Error::Invalid {
+                return Err(Error::Epi(epistat_epi::Error::Invalid {
                     what: "matched set",
                     rule: "has fewer than two units",
                 }));
@@ -456,17 +355,17 @@ fn binary_strata(sets: &[MatchedSet]) -> Result<Vec<BinaryStratum>, BoundsError>
 ///
 /// # Errors
 ///
-/// [`BoundsError::NotBinary`] for an outcome other than 0 or 1, and
-/// [`BoundsError`].
+/// [`Error::NotBinary`] for an outcome other than 0 or 1, and
+/// [`Error`].
 pub fn binary_bounds(
     sets: &[MatchedSet],
     gammas: &[f64],
     distribution: BinaryDistribution,
-) -> Result<Vec<BinaryBounds>, BoundsError> {
+) -> Result<Vec<BinaryBounds>, Error> {
     let strata = binary_strata(sets)?;
     gammas
         .iter()
-        .map(|&g| rosenbaum::binary_bounds(&strata, g, distribution).map_err(BoundsError::from))
+        .map(|&g| rosenbaum::binary_bounds(&strata, g, distribution).map_err(Error::from))
         .collect()
 }
 
@@ -480,7 +379,7 @@ pub fn binary_sensitivity_value(
     sets: &[MatchedSet],
     alpha: f64,
     distribution: BinaryDistribution,
-) -> Result<f64, BoundsError> {
+) -> Result<f64, Error> {
     let strata = binary_strata(sets)?;
     Ok(rosenbaum::binary_sensitivity_value(
         &strata,
@@ -498,9 +397,9 @@ pub struct CensoredSet {
     pub controls: Vec<Censored>,
 }
 
-fn gehan(sets: &[CensoredSet], direction: EventDirection) -> Result<Vec<Vec<f64>>, BoundsError> {
+fn gehan(sets: &[CensoredSet], direction: EventDirection) -> Result<Vec<Vec<f64>>, Error> {
     if sets.is_empty() {
-        return Err(SetsError::Empty.into());
+        return Err(Error::NoSets.into());
     }
     let units: Vec<Vec<Censored>> = sets
         .iter()
@@ -524,16 +423,16 @@ fn gehan(sets: &[CensoredSet], direction: EventDirection) -> Result<Vec<Vec<f64>
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn censored_bounds(
     sets: &[CensoredSet],
     gammas: &[f64],
     direction: EventDirection,
-) -> Result<Vec<SetBounds>, BoundsError> {
+) -> Result<Vec<SetBounds>, Error> {
     let scores = gehan(sets, direction)?;
     gammas
         .iter()
-        .map(|&g| rosenbaum::set_bounds(&scores, g).map_err(BoundsError::from))
+        .map(|&g| rosenbaum::set_bounds(&scores, g).map_err(Error::from))
         .collect()
 }
 
@@ -541,12 +440,12 @@ pub fn censored_bounds(
 ///
 /// # Errors
 ///
-/// [`BoundsError`].
+/// [`Error`].
 pub fn censored_sensitivity_value(
     sets: &[CensoredSet],
     alpha: f64,
     direction: EventDirection,
-) -> Result<f64, BoundsError> {
+) -> Result<f64, Error> {
     let scores = gehan(sets, direction)?;
     Ok(rosenbaum::scores_sensitivity_value(&scores, alpha)?)
 }
@@ -585,8 +484,8 @@ mod tests {
         assert_eq!(sets[1].controls, vec![4.0, 1.0]);
         assert_eq!(
             pair_differences(&sets),
-            Err(SetsError::NotAPair {
-                pair: 2,
+            Err(Error::NotAPair {
+                set: 2,
                 controls: 2
             })
         );
@@ -602,10 +501,7 @@ mod tests {
         };
         assert_eq!(
             matched_sets(&long, &units()),
-            Err(SetsError::NotOneTreated {
-                pair: 1,
-                treated: 0
-            })
+            Err(Error::NotOneTreated { set: 1, treated: 0 })
         );
     }
 
@@ -619,13 +515,10 @@ mod tests {
         };
         assert_eq!(
             matched_sets(&long, &units()),
-            Err(SetsError::Reused { id: "b".into() })
+            Err(Error::ReusedUnit { id: "b".into() })
         );
     }
-    fn matched_sets_by_map(
-        long: &LongMatches,
-        units: &UnitData,
-    ) -> Result<Vec<MatchedSet>, SetsError> {
+    fn matched_sets_by_map(long: &LongMatches, units: &UnitData) -> Result<Vec<MatchedSet>, Error> {
         let mut by_pair: BTreeMap<usize, (Vec<f64>, Vec<f64>)> = BTreeMap::new();
         let mut set_of: BTreeMap<&str, usize> = BTreeMap::new();
         for row in 0..long.len() {
@@ -634,7 +527,7 @@ mod tests {
             };
             let id = long.id[row].as_str();
             if set_of.insert(id, pair).is_some() {
-                return Err(SetsError::Reused { id: id.to_owned() });
+                return Err(Error::ReusedUnit { id: id.to_owned() });
             }
             let (treated, outcome) = units.treatment_and_outcome(&long.id[row])?;
             let entry = by_pair.entry(pair).or_default();
@@ -645,19 +538,19 @@ mod tests {
             }
         }
         if by_pair.is_empty() {
-            return Err(SetsError::Empty);
+            return Err(Error::NoSets);
         }
         by_pair
             .into_iter()
             .map(|(pair, (treated, controls))| {
                 if treated.len() != 1 {
-                    return Err(SetsError::NotOneTreated {
-                        pair,
+                    return Err(Error::NotOneTreated {
+                        set: pair,
                         treated: treated.len(),
                     });
                 }
                 if controls.is_empty() {
-                    return Err(SetsError::NoControl { pair });
+                    return Err(Error::NoControl { set: pair });
                 }
                 Ok(MatchedSet {
                     treated: treated[0],

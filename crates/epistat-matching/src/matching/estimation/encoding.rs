@@ -16,8 +16,8 @@
 //! A column whose value is exactly the same in every row is left out, the
 //! intercept excepted, and listed in `dropped_columns`.
 
-use super::EstimationError;
 use super::config::{CovariateEncodingConfig, MissingValuePolicy};
+use crate::Error;
 use crate::matching::{ColumnReader, CovariateRecord, NameScan, to_f64};
 use crate::types::CovariateRef;
 use itertools::Itertools;
@@ -65,7 +65,7 @@ enum CovariateSchema {
 pub(super) fn build_covariate_matrix<R: CovariateRecord>(
     records: &[&R],
     config: &CovariateEncodingConfig,
-) -> Result<CovariateMatrix, EstimationError> {
+) -> Result<CovariateMatrix, Error> {
     build_covariate_matrix_marked(records, config).map(|(matrix, _)| matrix)
 }
 
@@ -74,9 +74,9 @@ pub(super) fn build_covariate_matrix<R: CovariateRecord>(
 pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
     records: &[&R],
     config: &CovariateEncodingConfig,
-) -> Result<(CovariateMatrix, Vec<bool>), EstimationError> {
+) -> Result<(CovariateMatrix, Vec<bool>), Error> {
     if records.is_empty() {
-        return Err(EstimationError::EmptyInput);
+        return Err(Error::EmptyGroup);
     }
 
     let keys = resolve_covariate_keys(records, &config.covariate_keys);
@@ -88,7 +88,7 @@ pub(super) fn build_covariate_matrix_marked<R: CovariateRecord>(
         schemas.push(schema);
     }
     if schemas.is_empty() && !config.include_intercept {
-        return Err(EstimationError::NoCovariatesAvailable);
+        return Err(Error::NoCovariates);
     }
 
     let mut column_names = Vec::new();
@@ -206,7 +206,7 @@ fn build_schema_for_key<R: CovariateRecord>(
     records: &[&R],
     key: &str,
     config: &CovariateEncodingConfig,
-) -> Result<Option<CovariateSchema>, EstimationError> {
+) -> Result<Option<CovariateSchema>, Error> {
     let mut numeric_sum = 0.0_f64;
     let mut numeric_count = 0usize;
     let mut categorical_levels = BTreeSet::new();
@@ -219,8 +219,8 @@ fn build_schema_for_key<R: CovariateRecord>(
         match reader.read(record) {
             Some(CovariateRef::Numeric(value)) => {
                 if !value.is_finite() {
-                    return Err(EstimationError::NonFiniteNumericCovariate {
-                        record_id: record.id().to_string(),
+                    return Err(Error::NonFiniteCovariate {
+                        id: record.id().to_string(),
                         covariate: key.to_string(),
                     });
                 }
@@ -241,7 +241,7 @@ fn build_schema_for_key<R: CovariateRecord>(
     }
 
     if observed_numeric && observed_categorical {
-        return Err(EstimationError::MixedCovariateType {
+        return Err(Error::MixedCovariateType {
             covariate: key.to_string(),
         });
     }
@@ -250,14 +250,14 @@ fn build_schema_for_key<R: CovariateRecord>(
         if config.covariate_keys.is_empty() {
             return Ok(None);
         }
-        return Err(EstimationError::NoObservedValuesForCovariate {
+        return Err(Error::NoObservedValues {
             covariate: key.to_string(),
         });
     }
 
     if observed_numeric {
         if saw_missing && matches!(config.missing_value_policy, MissingValuePolicy::Error) {
-            return Err(EstimationError::MissingValuesNotAllowed {
+            return Err(Error::MissingValues {
                 covariate: key.to_string(),
             });
         }
@@ -276,13 +276,13 @@ fn build_schema_for_key<R: CovariateRecord>(
         categorical_levels.insert(MISSING_LEVEL.to_string());
     }
     if saw_missing && matches!(config.missing_value_policy, MissingValuePolicy::Error) {
-        return Err(EstimationError::MissingValuesNotAllowed {
+        return Err(Error::MissingValues {
             covariate: key.to_string(),
         });
     }
     let levels = categorical_levels.into_iter().collect_vec();
     if levels.is_empty() {
-        return Err(EstimationError::NoObservedValuesForCovariate {
+        return Err(Error::NoObservedValues {
             covariate: key.to_string(),
         });
     }
@@ -304,22 +304,22 @@ fn encode_numeric_value<R: CovariateRecord>(
     key: &str,
     mean: f64,
     policy: MissingValuePolicy,
-) -> Result<f64, EstimationError> {
+) -> Result<f64, Error> {
     match value {
         Some(CovariateRef::Numeric(value)) => {
             if !value.is_finite() {
-                return Err(EstimationError::NonFiniteNumericCovariate {
-                    record_id: record.id().to_string(),
+                return Err(Error::NonFiniteCovariate {
+                    id: record.id().to_string(),
                     covariate: key.to_string(),
                 });
             }
             Ok(value)
         }
-        Some(CovariateRef::Categorical(_)) => Err(EstimationError::MixedCovariateType {
+        Some(CovariateRef::Categorical(_)) => Err(Error::MixedCovariateType {
             covariate: key.to_string(),
         }),
         Some(CovariateRef::Missing) | None => match policy {
-            MissingValuePolicy::Error => Err(EstimationError::MissingValuesNotAllowed {
+            MissingValuePolicy::Error => Err(Error::MissingValues {
                 covariate: key.to_string(),
             }),
             MissingValuePolicy::Impute => Ok(mean),
@@ -331,14 +331,14 @@ fn encode_categorical_level<'r>(
     value: Option<CovariateRef<'r>>,
     key: &str,
     policy: MissingValuePolicy,
-) -> Result<&'r str, EstimationError> {
+) -> Result<&'r str, Error> {
     match value {
         Some(CovariateRef::Categorical(value)) => Ok(value),
-        Some(CovariateRef::Numeric(_)) => Err(EstimationError::MixedCovariateType {
+        Some(CovariateRef::Numeric(_)) => Err(Error::MixedCovariateType {
             covariate: key.to_string(),
         }),
         Some(CovariateRef::Missing) | None => match policy {
-            MissingValuePolicy::Error => Err(EstimationError::MissingValuesNotAllowed {
+            MissingValuePolicy::Error => Err(Error::MissingValues {
                 covariate: key.to_string(),
             }),
             MissingValuePolicy::Impute => Ok(MISSING_LEVEL),
@@ -352,9 +352,9 @@ fn encode_categorical_level<'r>(
 fn drop_constant_columns(
     matrix: &mut CovariateMatrix,
     indicator: &mut Vec<bool>,
-) -> Result<(), EstimationError> {
+) -> Result<(), Error> {
     if matrix.n_cols == 0 {
-        return Err(EstimationError::NoCovariatesAvailable);
+        return Err(Error::NoCovariates);
     }
 
     let keep = (0..matrix.n_cols)
@@ -374,7 +374,7 @@ fn drop_constant_columns(
         .collect_vec();
 
     if keep.is_empty() {
-        return Err(EstimationError::NoCovariatesAvailable);
+        return Err(Error::NoCovariates);
     }
     if keep.len() == matrix.n_cols {
         return Ok(());

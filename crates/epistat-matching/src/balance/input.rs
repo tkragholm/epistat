@@ -1,3 +1,4 @@
+use crate::Error;
 use crate::matching::MatchingRecord;
 use crate::matching::UnitWeightSet;
 use crate::types::{Estimand, MatchOutcome, MatchedPair};
@@ -30,31 +31,6 @@ pub struct BalanceWeights {
     /// pair units.
     pub pairs: Vec<MatchedPair>,
 }
-
-/// A weight that cannot be used.
-#[derive(Debug, Clone, PartialEq)]
-pub enum BalanceInputError {
-    /// A matching or sampling weight is negative or not finite.
-    InvalidWeight {
-        /// Identifier of the unit.
-        id: String,
-        /// The weight.
-        weight: f64,
-    },
-}
-
-impl std::fmt::Display for BalanceInputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidWeight { id, weight } => write!(
-                f,
-                "the weight of unit {id} is {weight}, which is negative or not finite"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for BalanceInputError {}
 
 impl BalanceWeights {
     /// Weights from matching weights alone.
@@ -154,9 +130,9 @@ impl BalanceWeights {
     ///
     /// # Errors
     ///
-    /// [`BalanceInputError::InvalidWeight`] for the weight that is not, the one
+    /// [`Error::InvalidWeight`] for the weight that is not, the one
     /// of the unit whose identifier sorts first when there are several.
-    pub fn validate(&self) -> Result<(), BalanceInputError> {
+    pub fn validate(&self) -> Result<(), Error> {
         let mut checks: Vec<(&String, f64)> = Vec::new();
         for group in [&self.matching.anchor, &self.matching.candidate] {
             checks.extend(group.iter().map(|(id, weight)| (id, *weight)));
@@ -170,7 +146,7 @@ impl BalanceWeights {
             .collect();
         bad.sort_by(|left, right| left.0.cmp(right.0));
         match bad.first() {
-            Some((id, weight)) => Err(BalanceInputError::InvalidWeight {
+            Some((id, weight)) => Err(Error::InvalidWeight {
                 id: (*id).clone(),
                 weight: *weight,
             }),

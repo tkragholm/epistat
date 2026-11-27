@@ -126,9 +126,10 @@
 
 use super::constraints::ConstraintGroup;
 use super::optimal::{
-    Edge, OptimalError, OptimalRequest, Stratum, StratumPairs, pair_outcome, with_strata_pairs,
+    Edge, OptimalRequest, Stratum, StratumPairs, pair_outcome, with_strata_pairs,
 };
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::MatchOutcome;
 use epistat_optim::Error as OptimError;
 use epistat_optim::min_cost_flow::{Basis, FlowSolution, MinCostFlow};
@@ -144,7 +145,7 @@ pub enum BalanceMode {
     #[default]
     Near,
     /// Require fine balance on every level. When it cannot be met the result is
-    /// [`OptimalError::Infeasible`], and its message gives the least deviation.
+    /// [`Error::Infeasible`], and its message gives the least deviation.
     /// Fine balance matches one set of anchors, so the stratum in that error is
     /// always 0.
     Exact,
@@ -246,8 +247,8 @@ struct LevelData {
     anchors: Vec<usize>,
 }
 
-fn option_error(message: impl Into<String>) -> OptimalError {
-    OptimalError::Option {
+fn option_error(message: impl Into<String>) -> Error {
+    Error::Option {
         option: "fine_balance",
         message: message.into(),
     }
@@ -269,7 +270,7 @@ fn level_data<R: MatchingRecord>(
     candidates: &[R],
     keys: &[String],
     above: Option<&LevelData>,
-) -> Result<LevelData, OptimalError> {
+) -> Result<LevelData, Error> {
     let units: Vec<&R> = anchors.iter().chain(candidates.iter()).collect();
     // The rank of each unit's key among the keys present, built one key at a
     // time: a rank over the first keys is joined with the rank of the next
@@ -1160,7 +1161,7 @@ impl Coupled {
 
     /// Successive shortest paths: while a hub node has flow to spare, send it
     /// along a cheapest path to a hub node short of flow.
-    fn balance(&mut self) -> Result<(), OptimalError> {
+    fn balance(&mut self) -> Result<(), Error> {
         let nodes = self.hub_nodes();
         while let Some(source) = (0..nodes).find(|&v| self.excess[v] > 0) {
             let mut start = vec![i64::MAX; nodes];
@@ -1170,7 +1171,7 @@ impl Coupled {
                 .filter(|&v| self.excess[v] < 0 && dist[v] != i64::MAX)
                 .min_by_key(|&v| (dist[v], v))
             else {
-                return Err(OptimalError::Infeasible {
+                return Err(Error::Infeasible {
                     stratum: 0,
                     message: "the categories cannot be given their candidates".into(),
                 });
@@ -1523,7 +1524,7 @@ impl Network<'_> {
     /// [`PATIENCE`] rounds in a row bring them no nearer. The blocks are left
     /// with the flows of the round nearest the targets. `None` when a block
     /// has no flow.
-    fn start(&self, blocks: &mut [Block]) -> Result<Option<Vec<i64>>, OptimalError> {
+    fn start(&self, blocks: &mut [Block]) -> Result<Option<Vec<i64>>, Error> {
         let leaf = self.leaf();
         let categories = leaf.categories.len();
         let target: Vec<usize> = leaf.anchors.iter().map(|a| self.ratio * a).collect();
@@ -1568,7 +1569,7 @@ impl Network<'_> {
                     Ok(solution) => solutions.push(solution),
                     Err(OptimError::Infeasible) => return Ok(None),
                     Err(_) => {
-                        return Err(OptimalError::TooLarge { stratum: 0 });
+                        return Err(Error::TooLarge { stratum: 0 });
                     }
                 }
             }
@@ -1800,7 +1801,7 @@ impl Network<'_> {
         pairs: &Pairs<'_>,
         start: Vec<Nearest>,
         arcs: Arcs,
-    ) -> Result<(Vec<(usize, usize)>, i128), OptimalError> {
+    ) -> Result<(Vec<(usize, usize)>, i128), Error> {
         let total = pairs.total();
         let leaf_of = self.leaf_of();
         let mut per = FIRST_PER_CATEGORY * self.ratio;
@@ -1842,7 +1843,7 @@ impl Network<'_> {
                 .collect();
             let Some(price) = self.start(&mut blocks)? else {
                 if everything {
-                    return Err(OptimalError::Infeasible {
+                    return Err(Error::Infeasible {
                         stratum: 0,
                         message: format!(
                             "the anchors cannot all be given {} candidates within the \
@@ -1917,7 +1918,7 @@ impl Network<'_> {
                     .collect();
                 let mut changed = Vec::with_capacity(touched.len());
                 for ((b, _), result) in touched.iter().zip(solved) {
-                    let block = result.map_err(|_| OptimalError::TooLarge { stratum: 0 })?;
+                    let block = result.map_err(|_| Error::TooLarge { stratum: 0 })?;
                     let old = std::mem::replace(&mut coupled.blocks[*b], block);
                     for (entry, &k) in old.leaf.iter().enumerate() {
                         let node = coupled.leaf_node(k);
@@ -1948,7 +1949,7 @@ impl Network<'_> {
 ///
 /// The anchors are the focal group, as in [`super::match_optimal`]. Every anchor
 /// gets `ratio` candidates: where the admissible pairs or the number of
-/// candidates do not allow it, the result is [`OptimalError::Infeasible`]
+/// candidates do not allow it, the result is [`Error::Infeasible`]
 /// (`rcbalance`'s `exclude.treated` is not available). The targets are those of
 /// the anchors, so the balance is that of the anchors' distribution of each
 /// level, whatever the estimand.
@@ -1959,7 +1960,7 @@ impl Network<'_> {
 ///
 /// # Errors
 ///
-/// [`OptimalError`] for invalid criteria, replacement, a unique key, no levels,
+/// [`Error`] for invalid criteria, replacement, a unique key, no levels,
 /// a level without keys or not nested in the one before, a match that is not
 /// feasible (or, in exact mode, not exactly balanced), a problem too large for
 /// the integer arithmetic of the solver, or when no pair is admissible.
@@ -1968,7 +1969,7 @@ pub fn match_fine_balance<R, G>(
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
     balance: &FineBalance,
-) -> Result<FineBalanceOutcome, OptimalError>
+) -> Result<FineBalanceOutcome, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -1984,7 +1985,7 @@ fn run<R, G>(
     request: &OptimalRequest<'_, G>,
     balance: &FineBalance,
     arcs: Arcs,
-) -> Result<(FineBalanceOutcome, i128), OptimalError>
+) -> Result<(FineBalanceOutcome, i128), Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -2028,7 +2029,7 @@ where
             row_start,
         };
         if pairs.total() == 0 {
-            return Err(OptimalError::NoMatches);
+            return Err(Error::NoMatches);
         }
         let n = ratio * na;
         let mut admissible = vec![false; na];
@@ -2038,7 +2039,7 @@ where
             }
         }
         if let Some(anchor) = admissible.iter().position(|ok| !ok) {
-            return Err(OptimalError::Infeasible {
+            return Err(Error::Infeasible {
                 stratum: 0,
                 message: format!(
                     "anchor {} has no admissible candidate, and every anchor needs {ratio}",
@@ -2047,7 +2048,7 @@ where
             });
         }
         if n > nc {
-            return Err(OptimalError::Infeasible {
+            return Err(Error::Infeasible {
                 stratum: 0,
                 message: format!("{na} anchors need {n} candidates and there are {nc}"),
             });
@@ -2061,7 +2062,7 @@ where
             .map(|summary| summary.max_distance)
             .fold(0.0_f64, f64::max);
         let Some(costs) = costs(max_distance, n, levels.len(), nodes) else {
-            return Err(OptimalError::TooLarge { stratum: 0 });
+            return Err(Error::TooLarge { stratum: 0 });
         };
         let start: Vec<Nearest> = summaries.into_iter().map(|summary| summary.near).collect();
 
@@ -2080,7 +2081,7 @@ where
                 .enumerate()
                 .find(|(_, level)| level.total_deviation() > 0)
         {
-            return Err(OptimalError::Infeasible {
+            return Err(Error::Infeasible {
                 stratum: 0,
                 message: format!(
                     "fine balance on level {depth} (keys {:?}) is not possible with these \
@@ -2267,7 +2268,7 @@ mod tests {
         candidates: &[R],
         keys: &[String],
         above: Option<&LevelData>,
-    ) -> Result<LevelData, OptimalError> {
+    ) -> Result<LevelData, Error> {
         let key_of = |record: &R| -> Key {
             keys.iter()
                 .map(|key| record.stratum(key).map(str::to_owned))
@@ -2501,10 +2502,9 @@ mod tests {
             BalanceCategory, BalanceLevel, BalanceMode, Costs, FineBalance, FineBalanceOutcome,
             Key, LevelData, costs, level_data, option_error, to_i64,
         };
+        use crate::Error;
         use crate::matching::constraints::ConstraintGroup;
-        use crate::matching::optimal::{
-            OptimalError, OptimalRequest, StrataEdges, pair_outcome, strata_edges,
-        };
+        use crate::matching::optimal::{OptimalRequest, StrataEdges, pair_outcome, strata_edges};
         use crate::matching::records::MatchingRecord;
         use epistat_optim::Error as OptimError;
         use epistat_optim::min_cost_flow::{Basis, MinCostFlow};
@@ -2919,7 +2919,7 @@ mod tests {
                 &self,
                 pairs: &[(usize, usize, f64)],
                 runs: &[std::ops::Range<usize>],
-            ) -> Result<(Vec<(usize, usize)>, i128), OptimalError> {
+            ) -> Result<(Vec<(usize, usize)>, i128), Error> {
                 let costs: Vec<i64> = pairs
                     .par_iter()
                     .map(|pair| self.pair_cost(pair.2))
@@ -2961,7 +2961,7 @@ mod tests {
                             continue;
                         }
                         Err(OptimError::Infeasible) => {
-                            return Err(OptimalError::Infeasible {
+                            return Err(Error::Infeasible {
                                 stratum: 0,
                                 message: format!(
                                     "the anchors cannot all be given {} candidates within the \
@@ -2971,7 +2971,7 @@ mod tests {
                             });
                         }
                         Err(_) => {
-                            return Err(OptimalError::TooLarge { stratum: 0 });
+                            return Err(Error::TooLarge { stratum: 0 });
                         }
                     };
                     // A pair left out has no flow. Its reduced cost against the
@@ -3015,7 +3015,7 @@ mod tests {
             candidates: &[R],
             request: &OptimalRequest<'_, G>,
             balance: &FineBalance,
-        ) -> Result<(FineBalanceOutcome, i128), OptimalError>
+        ) -> Result<(FineBalanceOutcome, i128), Error>
         where
             R: MatchingRecord,
             G: ConstraintGroup<R> + ?Sized,
@@ -3053,7 +3053,7 @@ mod tests {
             }
             drop(strata);
             if pairs.is_empty() {
-                return Err(OptimalError::NoMatches);
+                return Err(Error::NoMatches);
             }
             let (na, nc) = (anchors.len(), candidates.len());
             let n = ratio * na;
@@ -3062,7 +3062,7 @@ mod tests {
                 admissible[*anchor] = true;
             }
             if let Some(anchor) = admissible.iter().position(|ok| !ok) {
-                return Err(OptimalError::Infeasible {
+                return Err(Error::Infeasible {
                     stratum: 0,
                     message: format!(
                         "anchor {} has no admissible candidate, and every anchor needs {ratio}",
@@ -3071,7 +3071,7 @@ mod tests {
                 });
             }
             if n > nc {
-                return Err(OptimalError::Infeasible {
+                return Err(Error::Infeasible {
                     stratum: 0,
                     message: format!("{na} anchors need {n} candidates and there are {nc}"),
                 });
@@ -3088,7 +3088,7 @@ mod tests {
             let nodes = next + 1;
             let max_distance = pairs.iter().map(|pair| pair.2).fold(0.0_f64, f64::max);
             let Some(costs) = costs(max_distance, n, levels.len(), nodes) else {
-                return Err(OptimalError::TooLarge { stratum: 0 });
+                return Err(Error::TooLarge { stratum: 0 });
             };
 
             let network = Network {
@@ -3130,7 +3130,7 @@ mod tests {
                     .enumerate()
                     .find(|(_, level)| level.total_deviation() > 0)
             {
-                return Err(OptimalError::Infeasible {
+                return Err(Error::Infeasible {
                     stratum: 0,
                     message: format!(
                         "fine balance on level {depth} (keys {:?}) is not possible with these \

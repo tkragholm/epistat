@@ -47,25 +47,22 @@
 //! 3. Rubin DB. Multiple Imputation for Nonresponse in Surveys. New York:
 //!    Wiley; 1987.
 
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use crate::Error;
 use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use epistat_inference::Error as InferenceError;
 use epistat_inference::pooling::{Pooled, dfcom_residual, rubin};
 
 use crate::effects::{
-    Effect, EffectError, EffectEstimates, EffectSpec, MatchedSample, UnitData, estimate_effects,
+    Effect, EffectEstimates, EffectSpec, MatchedSample, UnitData, estimate_effects,
 };
 use crate::matching::{
-    ConstraintGroup, CovariateRecord, DistanceConfig, EstimationError, MatchingRecord,
-    PropensityMatchedOutcome, PropensityScoreConfig, ScoreTable, SelectionStrategy,
-    StandardMatchRequest, estimate_propensity_and_match, match_standard,
-    prepare_propensity_distance_config,
+    ConstraintGroup, CovariateRecord, DistanceConfig, MatchingRecord, PropensityMatchedOutcome,
+    PropensityScoreConfig, ScoreTable, SelectionStrategy, StandardMatchRequest,
+    estimate_propensity_and_match, match_standard, prepare_propensity_distance_config,
 };
-use crate::output::{MatchDataOptions, OutputError, Units, match_data};
+use crate::output::{MatchDataOptions, Units, match_data};
 use crate::types::{MatchRatio, MatchingCriteria};
 
 /// How the imputed data sets are combined in matching.
@@ -95,101 +92,6 @@ impl<R> Clone for ImputedSet<'_, R> {
 
 impl<R> Copy for ImputedSet<'_, R> {}
 
-/// Why a match or a pooled effect could not be made.
-#[derive(Debug, Clone)]
-pub enum ImputationError {
-    /// No data set was given, or one: Rubin's rules need at least two.
-    TooFewSets {
-        /// The number given.
-        found: usize,
-    },
-    /// An input list does not have one entry per data set.
-    SetCount {
-        /// The input.
-        what: &'static str,
-        /// The number of data sets.
-        expected: usize,
-        /// The number of entries.
-        found: usize,
-    },
-    /// The across approach found a unit in one set that another set lacks.
-    UnitsDiffer {
-        /// The data set, counted from 0.
-        set: usize,
-        /// The unit.
-        id: String,
-    },
-    /// `reestimate` was set with the across approach, which fits the score
-    /// before it is averaged.
-    ReestimateAcross,
-    /// A propensity score could not be estimated.
-    Estimation(EstimationError),
-    /// The matched data of a set could not be made.
-    Output(OutputError),
-    /// The effect could not be estimated in a set.
-    Effect(EffectError),
-    /// The effects could not be pooled.
-    Pooling(InferenceError),
-}
-
-impl Display for ImputationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TooFewSets { found } => write!(
-                f,
-                "{found} imputed data sets were given; pooling needs at least 2"
-            ),
-            Self::SetCount {
-                what,
-                expected,
-                found,
-            } => write!(
-                f,
-                "{what} has {found} entries for {expected} data sets; give one for each"
-            ),
-            Self::UnitsDiffer { set, id } => write!(
-                f,
-                "unit {id} of data set {set} is not in the first data set; \
-                 the across approach needs the same units in every set"
-            ),
-            Self::ReestimateAcross => f.write_str(
-                "reestimate is not available with the across approach; \
-                 the score is fitted in each set before it is averaged",
-            ),
-            Self::Estimation(e) => write!(f, "{e}"),
-            Self::Output(e) => write!(f, "{e}"),
-            Self::Effect(e) => write!(f, "{e}"),
-            Self::Pooling(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl Error for ImputationError {}
-
-impl From<EstimationError> for ImputationError {
-    fn from(e: EstimationError) -> Self {
-        Self::Estimation(e)
-    }
-}
-
-impl From<OutputError> for ImputationError {
-    fn from(e: OutputError) -> Self {
-        Self::Output(e)
-    }
-}
-
-impl From<EffectError> for ImputationError {
-    fn from(e: EffectError) -> Self {
-        Self::Effect(e)
-    }
-}
-
-impl From<InferenceError> for ImputationError {
-    fn from(e: InferenceError) -> Self {
-        Self::Pooling(e)
-    }
-}
-
 /// The matches of the imputed data sets.
 #[derive(Debug, Clone)]
 pub struct ImputedMatches {
@@ -208,7 +110,7 @@ pub struct ImputedMatches {
 ///
 /// # Errors
 ///
-/// See [`ImputationError`].
+/// See [`Error`].
 pub fn match_imputed<R, S, G>(
     sets: &[ImputedSet<'_, R>],
     approach: ImputationApproach,
@@ -217,14 +119,14 @@ pub fn match_imputed<R, S, G>(
     ratio_fallback: &[MatchRatio],
     extra_constraints: &G,
     config: &PropensityScoreConfig,
-) -> Result<ImputedMatches, ImputationError>
+) -> Result<ImputedMatches, Error>
 where
     R: MatchingRecord + CovariateRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
     G: ConstraintGroup<R> + ?Sized,
 {
     if sets.len() < 2 {
-        return Err(ImputationError::TooFewSets { found: sets.len() });
+        return Err(Error::TooFewSets { found: sets.len() });
     }
     match approach {
         ImputationApproach::Within => {
@@ -240,7 +142,7 @@ where
                             extra_constraints,
                             config,
                         )
-                        .map_err(ImputationError::from)
+                        .map_err(Error::from)
                     })
                     .collect(),
             )?;
@@ -251,14 +153,14 @@ where
         }
         ImputationApproach::Across => {
             if config.reestimate {
-                return Err(ImputationError::ReestimateAcross);
+                return Err(Error::ReestimateAcross);
             }
             let estimates = in_set_order(
                 sets.par_iter()
                     .map(|set| {
                         prepare_propensity_distance_config(set.anchors, set.candidates, config)
                             .map(|prepared| prepared.estimate)
-                            .map_err(ImputationError::from)
+                            .map_err(Error::from)
                     })
                     .collect(),
             )?;
@@ -297,7 +199,7 @@ where
 fn average_scores<R: MatchingRecord>(
     estimates: &[crate::PropensityScoreEstimate],
     sets: &[ImputedSet<'_, R>],
-) -> Result<ScoreTable, ImputationError> {
+) -> Result<ScoreTable, Error> {
     let first = &estimates[0];
     let mut total: Vec<f64> = first.distance_scores.to_vec();
     for (index, estimate) in estimates.iter().enumerate().skip(1) {
@@ -311,7 +213,7 @@ fn average_scores<R: MatchingRecord>(
                 .find(|id| first.position(id).is_none())
                 .unwrap_or("")
                 .to_string();
-            return Err(ImputationError::UnitsDiffer { set: index, id });
+            return Err(Error::UnitsDiffer { set: index, id });
         }
         for (position, id) in estimate.ids.iter().enumerate() {
             let at = if same_order {
@@ -322,7 +224,7 @@ fn average_scores<R: MatchingRecord>(
             match at {
                 Some(at) => total[at] += estimate.distance_scores[position],
                 None => {
-                    return Err(ImputationError::UnitsDiffer {
+                    return Err(Error::UnitsDiffer {
                         set: index,
                         id: id.clone(),
                     });
@@ -347,7 +249,7 @@ pub enum CompleteDataDf {
     /// The smallest over the sets of the rows of the fit less the number of
     /// coefficients, not limited below. A set with no more rows than
     /// coefficients makes the pooling fail with
-    /// [`ImputationError::Pooling`].
+    /// [`Error::Inference`].
     RowsLessCoefficients,
     /// A value of the caller's, for a model whose information is not in its
     /// rows (the events of a Cox model, see
@@ -406,36 +308,35 @@ pub struct ImputedEffects {
 ///
 /// # Errors
 ///
-/// [`ImputationError::TooFewSets`] for fewer than two sets and
-/// [`ImputationError::Pooling`] when the pooling fails, for instance when
+/// [`Error::TooFewSets`] for fewer than two sets and
+/// [`Error::Inference`] when the pooling fails, for instance when
 /// `df` is [`CompleteDataDf::RowsLessCoefficients`] and a data set has no more
 /// rows than coefficients.
 pub fn pool_effects(
     estimates: &[EffectEstimates],
     df: CompleteDataDf,
-) -> Result<PooledEffects, ImputationError> {
+) -> Result<PooledEffects, Error> {
     if estimates.len() < 2 {
-        return Err(ImputationError::TooFewSets {
+        return Err(Error::TooFewSets {
             found: estimates.len(),
         });
     }
     let dfcom = df.value(estimates);
-    let pool =
-        |pick: fn(&EffectEstimates) -> Option<Effect>| -> Result<Option<Pooled>, ImputationError> {
-            let mut q = Vec::with_capacity(estimates.len());
-            let mut u = Vec::with_capacity(estimates.len());
-            for e in estimates {
-                let Some(effect) = pick(e) else {
-                    return Ok(None);
-                };
-                let Some(se) = effect.se else {
-                    return Ok(None);
-                };
-                q.push(effect.estimate);
-                u.push(se * se);
-            }
-            Ok(Some(rubin(&q, &u, dfcom)?))
-        };
+    let pool = |pick: fn(&EffectEstimates) -> Option<Effect>| -> Result<Option<Pooled>, Error> {
+        let mut q = Vec::with_capacity(estimates.len());
+        let mut u = Vec::with_capacity(estimates.len());
+        for e in estimates {
+            let Some(effect) = pick(e) else {
+                return Ok(None);
+            };
+            let Some(se) = effect.se else {
+                return Ok(None);
+            };
+            q.push(effect.estimate);
+            u.push(se * se);
+        }
+        Ok(Some(rubin(&q, &u, dfcom)?))
+    };
     Ok(PooledEffects {
         difference: pool(|e| Some(e.difference))?,
         ratio: pool(|e| e.ratio)?,
@@ -454,7 +355,7 @@ pub fn pool_effects(
 ///
 /// # Errors
 ///
-/// See [`ImputationError`].
+/// See [`Error`].
 pub fn estimate_pooled<R: MatchingRecord>(
     sets: &[ImputedSet<'_, R>],
     matches: &ImputedMatches,
@@ -462,16 +363,12 @@ pub fn estimate_pooled<R: MatchingRecord>(
     options: MatchDataOptions,
     spec: &EffectSpec,
     df: CompleteDataDf,
-) -> Result<ImputedEffects, ImputationError> {
+) -> Result<ImputedEffects, Error> {
     let check = |what, found| {
         if found == sets.len() {
             Ok(())
         } else {
-            Err(ImputationError::SetCount {
-                what,
-                expected: sets.len(),
-                found,
-            })
+            Err(Error::length(what, sets.len(), found))
         }
     };
     check("matches", matches.sets.len())?;
@@ -496,7 +393,7 @@ fn estimate_set<R: MatchingRecord>(
     units_data: &UnitData,
     options: MatchDataOptions,
     spec: &EffectSpec,
-) -> Result<EffectEstimates, ImputationError> {
+) -> Result<EffectEstimates, Error> {
     let ids = set
         .anchors
         .iter()
@@ -514,6 +411,6 @@ fn estimate_set<R: MatchingRecord>(
 
 /// The results of the sets in the order of the sets, or the error of the
 /// first set that failed, whichever thread finished first.
-fn in_set_order<T>(results: Vec<Result<T, ImputationError>>) -> Result<Vec<T>, ImputationError> {
+fn in_set_order<T>(results: Vec<Result<T, Error>>) -> Result<Vec<T>, Error> {
     results.into_iter().collect()
 }

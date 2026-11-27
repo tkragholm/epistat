@@ -30,6 +30,7 @@
 //! 2. Stuart EA. Matching methods for causal inference: a review and a look
 //!    forward. Statistical Science 2010;25:1-21.
 
+use crate::Error;
 use crate::types::{Estimand, MatchOutcome, MatchedPair};
 use itertools::Itertools;
 use rapidhash::RapidHashMap;
@@ -225,9 +226,9 @@ impl UnitWeightSet {
     ///
     /// # Errors
     ///
-    /// [`InvalidWeightError`] for a weight that is negative or not finite.
-    pub fn anchor_effective_sample_size(&self) -> Result<Option<f64>, InvalidWeightError> {
-        effective_sample_size(in_id_order(&self.anchor))
+    /// [`Error`] for a weight that is negative or not finite.
+    pub fn anchor_effective_sample_size(&self) -> Result<Option<f64>, Error> {
+        kish(in_id_order(&self.anchor))
     }
 
     /// Effective sample size for candidate weights, summed in the order of the
@@ -235,9 +236,9 @@ impl UnitWeightSet {
     ///
     /// # Errors
     ///
-    /// [`InvalidWeightError`] for a weight that is negative or not finite.
-    pub fn candidate_effective_sample_size(&self) -> Result<Option<f64>, InvalidWeightError> {
-        effective_sample_size(in_id_order(&self.candidate))
+    /// [`Error`] for a weight that is negative or not finite.
+    pub fn candidate_effective_sample_size(&self) -> Result<Option<f64>, Error> {
+        kish(in_id_order(&self.candidate))
     }
 
     /// Sum of all anchor-side unit weights, in the order of the unit
@@ -441,76 +442,29 @@ pub fn pair_weights_from_pairs(pairs: &[MatchedPair], method: MatchWeightMethod)
     }
 }
 
-/// A weight that is negative or not finite, with its position in the input.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InvalidWeightError {
-    /// Position of the weight, counting from 0.
-    pub position: usize,
-    /// The weight.
-    pub weight: f64,
-}
-
-impl std::fmt::Display for InvalidWeightError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "the weight at position {} is {}, which is negative or not finite",
-            self.position, self.weight
-        )
-    }
-}
-
-impl std::error::Error for InvalidWeightError {}
-
 /// Kish's effective sample size, `(sum w)^2 / sum w^2`, of the weights.
 ///
-/// The value does not depend on the scale of the weights: equal weights of any
-/// size give their number. A zero weight is a unit that is not in the sample
-/// and counts for nothing. The result is `None` when no weight is positive,
-/// since there is no sample to have a size.
-///
-/// The sums are taken in the order given. When the weights are so large or
-/// so small that their squares overflow or lose precision, they are divided
-/// by the largest first.
+/// This is [`epistat_stats::weighted::effective_sample_size`], which takes a
+/// slice; the weights are collected first.
 ///
 /// # Errors
 ///
-/// [`InvalidWeightError`] for the first weight that is negative or not
-/// finite.
-pub fn effective_sample_size<I>(weights: I) -> Result<Option<f64>, InvalidWeightError>
+/// [`Error::Input`] for the first weight that is negative or not finite.
+#[deprecated(
+    since = "0.3.0",
+    note = "use epistat_stats::weighted::effective_sample_size on a slice"
+)]
+pub fn effective_sample_size<I>(weights: I) -> Result<Option<f64>, Error>
 where
     I: IntoIterator<Item = f64>,
 {
+    kish(weights)
+}
+
+/// Kish's effective sample size of the weights, in the order given.
+pub(crate) fn kish(weights: impl IntoIterator<Item = f64>) -> Result<Option<f64>, Error> {
     let weights: Vec<f64> = weights.into_iter().collect();
-    let mut largest = 0.0_f64;
-    for (position, &weight) in weights.iter().enumerate() {
-        if !weight.is_finite() || weight < 0.0 {
-            return Err(InvalidWeightError { position, weight });
-        }
-        largest = largest.max(weight);
-    }
-    if largest == 0.0 {
-        return Ok(None);
-    }
-    let sums = |scale: f64| {
-        weights
-            .iter()
-            .fold((0.0_f64, 0.0_f64), |(sum, sum_sq), &weight| {
-                let weight = weight / scale;
-                (sum + weight, sum_sq + weight * weight)
-            })
-    };
-    let (mut sum, mut sum_sq) = sums(1.0);
-    // The squares are accurate while the largest one is a normal number, and
-    // the sums are finite while they have not overflowed.
-    let plain = largest * largest >= f64::MIN_POSITIVE
-        && sum.is_finite()
-        && sum_sq.is_finite()
-        && (sum * sum).is_finite();
-    if !plain {
-        (sum, sum_sq) = sums(largest);
-    }
-    Ok(Some((sum * sum) / sum_sq))
+    epistat_stats::weighted::effective_sample_size(&weights).map_err(Error::from)
 }
 
 fn pair_count_weights(pairs: &[MatchedPair]) -> UnitWeightSet {
@@ -771,7 +725,7 @@ mod tests {
         assert_eq!(composed.anchor.get("a2").copied(), Some(6.0));
         assert_eq!(composed.candidate.get("c1").copied(), Some(2.0));
 
-        let ess = effective_sample_size([1.0, 2.0, 3.0]).unwrap().unwrap();
+        let ess = kish([1.0, 2.0, 3.0]).unwrap().unwrap();
         assert!((ess - (36.0 / 14.0)).abs() < 1e-12);
     }
 

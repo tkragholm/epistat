@@ -19,12 +19,11 @@
 //! Without replacement each person is a control at most once.
 
 use super::{TransitionMatchRequest, match_transition};
+use crate::Error;
 use crate::matching::{ConstraintGroup, RoleIndexedRecord, SelectionStrategy};
 use crate::types::MatchOutcome;
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 use super::RiskSetPolicy;
 
@@ -77,59 +76,21 @@ pub struct ExposureDensityOutcome {
     pub controls: Vec<ExposureDensityControl>,
 }
 
-/// Why the sets could not be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExposureDensityError {
-    /// Two units share an id, so a pair does not say which unit it means.
-    DuplicateId {
-        /// The id that occurs twice.
-        id: String,
-    },
-    /// A pair names a unit that is not in the cohort, or a unit without an
-    /// exposure date as the exposed person.
-    InconsistentPair {
-        /// The exposed id of the pair.
-        exposed_id: String,
-        /// The control id of the pair.
-        control_id: String,
-    },
-}
-
-impl Display for ExposureDensityError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DuplicateId { id } => write!(
-                f,
-                "the id `{id}` occurs more than once in the cohort; give every unit its own id"
-            ),
-            Self::InconsistentPair {
-                exposed_id,
-                control_id,
-            } => write!(
-                f,
-                "the pair `{exposed_id}`, `{control_id}` does not match the cohort"
-            ),
-        }
-    }
-}
-
-impl Error for ExposureDensityError {}
-
 /// The index and exposure dates of the pairs of a risk-set match.
 ///
 /// # Errors
 ///
-/// [`ExposureDensityError::DuplicateId`] when two units share an id.
-/// [`ExposureDensityError::InconsistentPair`] when a pair names a unit that is
+/// [`Error::DuplicateId`] when two units share an id.
+/// [`Error::InconsistentPair`] when a pair names a unit that is
 /// not in the cohort, or an exposed person without an exposure date.
 pub fn exposure_density_sets<R: RoleIndexedRecord>(
     cohort: &[R],
     outcome: MatchOutcome,
-) -> Result<ExposureDensityOutcome, ExposureDensityError> {
+) -> Result<ExposureDensityOutcome, Error> {
     let mut position: RapidHashMap<&str, usize> = RapidHashMap::default();
     for (idx, unit) in cohort.iter().enumerate() {
         if position.insert(unit.id(), idx).is_some() {
-            return Err(ExposureDensityError::DuplicateId {
+            return Err(Error::DuplicateId {
                 id: unit.id().to_string(),
             });
         }
@@ -137,8 +98,8 @@ pub fn exposure_density_sets<R: RoleIndexedRecord>(
     let mut controls = Vec::with_capacity(outcome.pairs.len());
     let mut counts: RapidHashMap<&str, usize> = RapidHashMap::default();
     for pair in &outcome.pairs {
-        let inconsistent = || ExposureDensityError::InconsistentPair {
-            exposed_id: pair.anchor_id().to_string(),
+        let inconsistent = || Error::InconsistentPair {
+            case_id: pair.anchor_id().to_string(),
             control_id: pair.comparator_id().to_string(),
         };
         let exposed = position
@@ -197,6 +158,6 @@ pub fn match_exposure_density<
 >(
     cohort: &[R],
     request: TransitionMatchRequest<'_, S, G, P>,
-) -> Result<ExposureDensityOutcome, ExposureDensityError> {
+) -> Result<ExposureDensityOutcome, Error> {
     exposure_density_sets(cohort, match_transition(cohort, request))
 }

@@ -524,9 +524,11 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                 ("Control", &candidate, n_control),
             ] {
                 let expect = |row: &str| fit.standardised.nn.get(row).map(|cells| cells[group].0);
-                let ess = effective_sample_size(weights.values().copied())
-                    .unwrap()
-                    .unwrap();
+                let ess = epistat_stats::weighted::effective_sample_size(
+                    &weights.values().copied().collect::<Vec<_>>(),
+                )
+                .unwrap()
+                .unwrap();
                 let matched = weights.len();
                 assert!(
                     tolerance().accepts(matched as f64, expect("Matched").unwrap()),

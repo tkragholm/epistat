@@ -28,6 +28,7 @@ mod r_reference;
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
@@ -352,7 +353,7 @@ fn duplicate_ids_are_an_error() {
     let outcome = run_job(&reference, &recs, 1, true, 1);
     assert!(matches!(
         exposure_density_sets(&recs, outcome),
-        Err(ExposureDensityError::DuplicateId { .. })
+        Err(Error::DuplicateId { .. })
     ));
 }
 
@@ -502,7 +503,7 @@ fn spec_mode_needs_a_cohort_and_risk_set_options() {
                 candidates: &[]
             }
         ),
-        Err(SpecError::InputMode {
+        Err(Error::InputMode {
             mode: MatchMode::ExposureDensity
         })
     ));
@@ -512,7 +513,7 @@ fn spec_mode_needs_a_cohort_and_risk_set_options() {
     };
     assert!(matches!(
         run_spec(&nearest, SpecInput::RiskSet { cohort: &recs }),
-        Err(SpecError::Option {
+        Err(Error::Option {
             option: "method",
             ..
         })

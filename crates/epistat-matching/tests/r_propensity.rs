@@ -24,6 +24,7 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
@@ -365,7 +366,7 @@ fn invalid_sampling_weights_are_errors() {
         let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
             .expect_err("an invalid weight is refused");
         assert!(
-            matches!(err, EstimationError::InvalidSamplingWeight { ref record_id } if record_id == "u7"),
+            matches!(err, Error::InvalidSamplingWeight { ref id } if id == "u7"),
             "{err:?}"
         );
     }

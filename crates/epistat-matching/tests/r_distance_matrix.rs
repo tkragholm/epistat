@@ -23,8 +23,9 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
-use epistat_matching::{MatchOrder, PairDistanceMatrix, PairDistanceMatrixError};
+use epistat_matching::{MatchOrder, PairDistanceMatrix};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
@@ -324,18 +325,21 @@ fn invalid_matrices_are_refused() {
     let ids = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
     assert_eq!(
         PairDistanceMatrix::new(vec![], ids(&["x"]), vec![]).unwrap_err(),
-        PairDistanceMatrixError::Empty
+        Error::Input(epistat_core::InputError::Empty {
+            what: "distance matrix ids"
+        })
     );
     assert_eq!(
         PairDistanceMatrix::new(ids(&["a"]), ids(&["x", "y"]), vec![1.0]).unwrap_err(),
-        PairDistanceMatrixError::Shape {
+        Error::Input(epistat_core::InputError::Length {
+            what: "distance matrix values",
             expected: 2,
             found: 1
-        }
+        })
     );
     assert_eq!(
         PairDistanceMatrix::new(ids(&["a", "a"]), ids(&["x"]), vec![1.0, 2.0]).unwrap_err(),
-        PairDistanceMatrixError::DuplicateId("a".into())
+        Error::DuplicateId { id: "a".into() }
     );
     assert_eq!(
         PairDistanceMatrix::new(
@@ -344,9 +348,9 @@ fn invalid_matrices_are_refused() {
             vec![1.0, 2.0, f64::NAN, 4.0]
         )
         .unwrap_err(),
-        PairDistanceMatrixError::NotANumber {
-            anchor: 1,
-            candidate: 0
+        Error::DistanceNotANumber {
+            case: 1,
+            control: 0
         }
     );
     // A negative distance is refused, with its cell named.
@@ -357,9 +361,9 @@ fn invalid_matrices_are_refused() {
             vec![-5.0, 0.0, 0.0, 1.0]
         )
         .unwrap_err(),
-        PairDistanceMatrixError::Negative {
-            anchor: 0,
-            candidate: 0
+        Error::NegativeDistance {
+            case: 0,
+            control: 0
         }
     );
     assert_eq!(
@@ -369,9 +373,9 @@ fn invalid_matrices_are_refused() {
             vec![1.0, 2.0, 3.0, f64::NEG_INFINITY]
         )
         .unwrap_err(),
-        PairDistanceMatrixError::Negative {
-            anchor: 1,
-            candidate: 1
+        Error::NegativeDistance {
+            case: 1,
+            control: 1
         }
     );
 }

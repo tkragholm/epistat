@@ -85,9 +85,9 @@ use super::exact::{SubclassedUnits, unit_ids};
 use super::index::StrataValues;
 use super::records::MatchingRecord;
 use super::subclassification::build_subclass_summaries;
+use crate::Error;
 use crate::types::{
-    ControlIdx, CriteriaValidationError, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair,
-    MatchingCriteria,
+    ControlIdx, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair, MatchingCriteria,
 };
 use epistat_optim::Error as OptimError;
 use epistat_optim::min_cost_flow::MinCostFlow;
@@ -95,70 +95,6 @@ use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-
-/// Why optimal matching could not run.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OptimalError {
-    /// The criteria are invalid.
-    Criteria(CriteriaValidationError),
-    /// One option is out of range or does not fit the others.
-    Option {
-        /// The name of the option.
-        option: &'static str,
-        /// What is wrong.
-        message: String,
-    },
-    /// The limits on the sizes of the matched sets cannot be met in an exact
-    /// stratum, or the pairs the constraints admit are too few for them.
-    Infeasible {
-        /// The stratum, numbered from 0 in order of the first anchor in it.
-        stratum: usize,
-        /// What cannot be met.
-        message: String,
-    },
-    /// No stratum has an admissible pair of an anchor and a candidate.
-    NoMatches,
-    /// A stratum is too large for the integer arithmetic of the solver.
-    TooLarge {
-        /// The stratum, numbered as in [`OptimalError::Infeasible`].
-        stratum: usize,
-    },
-}
-
-impl fmt::Display for OptimalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Criteria(error) => write!(f, "{error}"),
-            Self::Option { option, message } => write!(f, "option `{option}`: {message}"),
-            Self::Infeasible { stratum, message } => {
-                write!(
-                    f,
-                    "no matching satisfies the limits in stratum {stratum}: {message}"
-                )
-            }
-            Self::NoMatches => f.write_str("no anchor and candidate form an admissible pair"),
-            Self::TooLarge { stratum } => {
-                write!(f, "stratum {stratum} is too large to solve")
-            }
-        }
-    }
-}
-
-impl std::error::Error for OptimalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Criteria(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
-impl From<CriteriaValidationError> for OptimalError {
-    fn from(error: CriteriaValidationError) -> Self {
-        Self::Criteria(error)
-    }
-}
 
 /// How many of the candidates a full match uses.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -852,7 +788,7 @@ pub(super) fn strata_edges<R, G>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-) -> Result<StrataEdges, OptimalError>
+) -> Result<StrataEdges, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -878,8 +814,8 @@ pub(super) fn with_strata_pairs<R, G, T>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-    f: impl FnOnce(Vec<Stratum>, &StratumPairs<'_>) -> Result<T, OptimalError>,
-) -> Result<T, OptimalError>
+    f: impl FnOnce(Vec<Stratum>, &StratumPairs<'_>) -> Result<T, Error>,
+) -> Result<T, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -888,13 +824,13 @@ where
     let validated = criteria.validate()?;
     let criteria = validated.as_ref();
     if criteria.allow_replacement {
-        return Err(OptimalError::Option {
+        return Err(Error::Option {
             option: "replace",
             message: "optimal matching uses each candidate once; drop replacement".into(),
         });
     }
     if criteria.unique_by_key.is_some() {
-        return Err(OptimalError::Option {
+        return Err(Error::Option {
             option: "unique_by_key",
             message: "optimal matching does not take a unique key; drop it".into(),
         });
@@ -925,7 +861,7 @@ fn solve_strata<R, G>(
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
     solve: &StratumSolver<'_>,
-) -> Result<Solved, OptimalError>
+) -> Result<Solved, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -952,19 +888,19 @@ where
                 }
             }
             Err(StratumError::Option(option, message)) => {
-                return Err(OptimalError::Option { option, message });
+                return Err(Error::Option { option, message });
             }
             Err(StratumError::Infeasible(message)) => {
-                return Err(OptimalError::Infeasible {
+                return Err(Error::Infeasible {
                     stratum: number,
                     message,
                 });
             }
-            Err(StratumError::TooLarge) => return Err(OptimalError::TooLarge { stratum: number }),
+            Err(StratumError::TooLarge) => return Err(Error::TooLarge { stratum: number }),
         }
     }
     if solved.is_empty() {
-        return Err(OptimalError::NoMatches);
+        return Err(Error::NoMatches);
     }
     // Sets in the order of their first anchor, and then of their first
     // candidate, which does not depend on how the strata were scheduled.
@@ -988,18 +924,18 @@ where
 /// Pairs outside the caliper or blocked by a constraint are forbidden. Where
 /// they leave a stratum with no assignment that gives every anchor with an
 /// admissible candidate its candidates, the result is
-/// [`OptimalError::Infeasible`]. `matchit(method = "optimal")` itself ignores
+/// [`Error::Infeasible`]. `matchit(method = "optimal")` itself ignores
 /// calipers.
 ///
 /// # Errors
 ///
-/// [`OptimalError`] for invalid criteria, replacement, a unique key, a stratum
+/// [`Error`] for invalid criteria, replacement, a unique key, a stratum
 /// without a feasible assignment, or when no stratum has an admissible pair.
 pub fn match_optimal<R, G>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-) -> Result<MatchOutcome, OptimalError>
+) -> Result<MatchOutcome, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -1091,7 +1027,7 @@ pub type FullMatchOutcome = SubclassedUnits;
 ///
 /// # Errors
 ///
-/// [`OptimalError`] for invalid criteria, replacement, a unique key, limits
+/// [`Error`] for invalid criteria, replacement, a unique key, limits
 /// that are out of range, a stratum where the limits cannot be met, or when no
 /// stratum has an admissible pair.
 pub fn match_full<R, G>(
@@ -1099,7 +1035,7 @@ pub fn match_full<R, G>(
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
     config: &FullMatchConfig,
-) -> Result<FullMatchOutcome, OptimalError>
+) -> Result<FullMatchOutcome, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,

@@ -34,9 +34,10 @@
 //! 3. Cramér H. Mathematical Methods of Statistics. Princeton University Press,
 //!    1946.
 
-use super::input::{BalanceInputError, BalanceWeights};
+use super::input::BalanceWeights;
 use super::stats::{standard_deviation, standardised_difference};
-use crate::matching::{ColumnReader, CovariateRecord, NameScan, effective_sample_size};
+use crate::Error;
+use crate::matching::{ColumnReader, CovariateRecord, NameScan};
 use crate::types::{
     BalanceImprovement, BalanceReport, BalanceReportOptions, BalanceSummary,
     BalanceThresholdSummary, BalanceThresholds, CategoricalBalance, CategoricalLevelBalance,
@@ -114,14 +115,14 @@ pub fn balance_report_with_options<R: CovariateRecord>(
 ///
 /// # Errors
 ///
-/// [`BalanceInputError::InvalidWeight`] for a weight that is negative or not
+/// [`Error::InvalidWeight`] for a weight that is negative or not
 /// finite.
 pub fn balance_report_on_weights<R: CovariateRecord>(
     cases: &[R],
     controls: &[R],
     weights: &BalanceWeights,
     options: &BalanceReportOptions,
-) -> Result<BalanceReport, BalanceInputError> {
+) -> Result<BalanceReport, Error> {
     Ok(balance_summary(cases, controls, weights, options)?.report)
 }
 
@@ -132,14 +133,14 @@ pub fn balance_report_on_weights<R: CovariateRecord>(
 ///
 /// # Errors
 ///
-/// [`BalanceInputError::InvalidWeight`] for a weight that is negative or not
+/// [`Error::InvalidWeight`] for a weight that is negative or not
 /// finite.
 pub fn balance_summary<R: CovariateRecord>(
     cases: &[R],
     controls: &[R],
     weights: &BalanceWeights,
     options: &BalanceReportOptions,
-) -> Result<BalanceSummary, BalanceInputError> {
+) -> Result<BalanceSummary, Error> {
     weights.validate()?;
     Ok(compute_summary(cases, controls, weights, options, true))
 }
@@ -242,7 +243,9 @@ fn sample_sizes<R: CovariateRecord>(
         let ess = |values: Vec<f64>| {
             // The weights have been validated, so only a size that is
             // undefined, with no positive weight, is left as `None`.
-            effective_sample_size(values.iter().copied()).ok().flatten()
+            epistat_stats::weighted::effective_sample_size(&values)
+                .ok()
+                .flatten()
         };
         GroupSampleSizes {
             all: records.len(),
@@ -2019,7 +2022,7 @@ mod tests {
         );
         assert_eq!(
             result.unwrap_err(),
-            BalanceInputError::InvalidWeight {
+            Error::InvalidWeight {
                 id: "t1".to_string(),
                 weight: -1.0
             }

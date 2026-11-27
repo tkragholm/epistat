@@ -14,6 +14,7 @@
 
 mod common;
 
+use epistat_matching::Error;
 use std::sync::Arc;
 
 use arrow_array::types::{Int8Type, UInt16Type};
@@ -23,11 +24,9 @@ use arrow_array::{
 };
 use chrono::NaiveDate;
 use common::{Level, Person, Rec, cohort, records};
-use epistat_matching::arrow::{ArrowInputError, ArrowRecords, column};
+use epistat_matching::arrow::{ArrowRecords, column};
 use epistat_matching::prelude::*;
-use epistat_matching::{
-    Cohort, CohortError, CovariateRef, CovariateValue, NearestBirthDateSelection,
-};
+use epistat_matching::{Cohort, CovariateRef, CovariateValue, NearestBirthDateSelection};
 
 fn epoch() -> NaiveDate {
     NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
@@ -289,13 +288,13 @@ fn a_cohort_holds_the_balance_records() {
         .cohort();
     assert!(matches!(
         twice,
-        Err(ArrowInputError::Cohort(CohortError::DuplicateName { column })) if column == "sex"
+        Err(Error::DuplicateColumn { column }) if column == "sex"
     ));
     // A null id is an error, as for the records.
     let ids = strings([Some("a"), None, Some("c")].into_iter());
     assert_eq!(
         failure(ArrowRecords::new(&*ids, &*born).cohort()),
-        ArrowInputError::NullValue {
+        Error::NullValue {
             column: "id".into(),
             row: 1
         }
@@ -377,7 +376,7 @@ fn sliced_arrays_read_the_rows_they_show() {
     assert_eq!(names, ["b", "c"]);
 }
 
-fn failure(result: Result<impl Sized, ArrowInputError>) -> ArrowInputError {
+fn failure(result: Result<impl Sized, Error>) -> Error {
     match result {
         Ok(_) => panic!("expected an error"),
         Err(error) => error,
@@ -394,7 +393,7 @@ fn nulls_and_types_are_errors_that_name_the_column() {
     let error = failure(ArrowRecords::new(&null_id, &*born).base_records());
     assert_eq!(
         error,
-        ArrowInputError::NullValue {
+        Error::NullValue {
             column: "id".into(),
             row: 1
         }
@@ -405,7 +404,7 @@ fn nulls_and_types_are_errors_that_name_the_column() {
     let error = failure(ArrowRecords::new(&id, &*null_birth).base_records());
     assert_eq!(
         error,
-        ArrowInputError::NullValue {
+        Error::NullValue {
             column: "birth_date".into(),
             row: 1
         }
@@ -413,12 +412,12 @@ fn nulls_and_types_are_errors_that_name_the_column() {
 
     let bad_birth = Int32Array::from(vec![1, 2]);
     let error = failure(ArrowRecords::new(&id, &bad_birth).base_records());
-    assert!(matches!(&error, ArrowInputError::WrongType { column, .. } if column == "birth_date"));
+    assert!(matches!(&error, Error::WrongType { column, .. } if column == "birth_date"));
     assert!(error.to_string().contains("Int32"));
 
     let bad_id = arrow_array::BooleanArray::from(vec![true, false]);
     let error = failure(ArrowRecords::new(&bad_id, &*born).base_records());
-    assert!(matches!(&error, ArrowInputError::WrongType { column, .. } if column == "id"));
+    assert!(matches!(&error, Error::WrongType { column, .. } if column == "id"));
 
     let float_stratum = Float64Array::from(vec![1.0, 2.0]);
     let error = failure(
@@ -426,7 +425,7 @@ fn nulls_and_types_are_errors_that_name_the_column() {
             .strata("sex", &float_stratum)
             .base_records(),
     );
-    assert!(matches!(&error, ArrowInputError::WrongType { column, .. } if column == "sex"));
+    assert!(matches!(&error, Error::WrongType { column, .. } if column == "sex"));
 
     let text_numeric = StringArray::from(vec!["1", "2"]);
     let error = failure(
@@ -434,7 +433,7 @@ fn nulls_and_types_are_errors_that_name_the_column() {
             .numeric("year", &text_numeric)
             .base_records(),
     );
-    assert!(matches!(&error, ArrowInputError::WrongType { column, .. } if column == "year"));
+    assert!(matches!(&error, Error::WrongType { column, .. } if column == "year"));
 
     let int_dictionary: DictionaryArray<Int8Type> = DictionaryArray::new(
         arrow_array::Int8Array::from(vec![0, 0]),
@@ -445,7 +444,7 @@ fn nulls_and_types_are_errors_that_name_the_column() {
             .strata("g", &int_dictionary)
             .base_records(),
     );
-    assert!(matches!(&error, ArrowInputError::WrongType { column, .. } if column == "g"));
+    assert!(matches!(&error, Error::WrongType { column, .. } if column == "g"));
 
     let short = Float64Array::from(vec![1.0]);
     let error = failure(
@@ -455,7 +454,7 @@ fn nulls_and_types_are_errors_that_name_the_column() {
     );
     assert_eq!(
         error,
-        ArrowInputError::LengthMismatch {
+        Error::ColumnLength {
             column: "year".into(),
             found: 1,
             expected: 2
@@ -468,13 +467,13 @@ fn nulls_and_types_are_errors_that_name_the_column() {
             .event_date(&bad_event)
             .risk_set_records(),
     );
-    assert!(matches!(&error, ArrowInputError::WrongType { column, .. } if column == "event_date"));
+    assert!(matches!(&error, Error::WrongType { column, .. } if column == "event_date"));
 
     let far = Date32Array::from(vec![i32::MAX, 0]);
     let error = failure(ArrowRecords::new(&id, &far).base_records());
     assert_eq!(
         error,
-        ArrowInputError::DateOutOfRange {
+        Error::DateOutOfRange {
             column: "birth_date".into(),
             row: 0
         }

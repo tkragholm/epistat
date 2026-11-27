@@ -3,6 +3,7 @@
 //! error names the option or the unit.
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{CardinalitySpec, FineBalance};
 use std::collections::BTreeMap;
@@ -30,7 +31,7 @@ fn units() -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
     (anchors, candidates)
 }
 
-fn run(spec: &MatchSpec) -> Result<SpecOutput, SpecError> {
+fn run(spec: &MatchSpec) -> Result<SpecOutput, Error> {
     let (anchors, candidates) = units();
     run_spec(
         spec,
@@ -41,7 +42,7 @@ fn run(spec: &MatchSpec) -> Result<SpecOutput, SpecError> {
     )
 }
 
-fn names(error: &SpecError, option: &str) {
+fn names(error: &Error, option: &str) {
     let text = error.to_string();
     assert!(
         text.contains(option),

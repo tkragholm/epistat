@@ -101,11 +101,11 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use super::EstimationError;
 use super::config::{CbpsConfig, CbpsEstimand, CbpsMethod};
 use super::encoding::CovariateMatrix;
 use super::linalg::pseudo_inverse;
 use super::logistic::LogisticFit;
+use crate::Error;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::eigen::symmetric_eigen_jacobi;
 use epistat_linalg::{Mat, MatRef, matvec_into, weighted_gram, xtv};
@@ -161,13 +161,13 @@ struct Orthogonal {
     sd: Vec<f64>,
 }
 
-fn orthogonalise(matrix: &CovariateMatrix) -> Result<Orthogonal, EstimationError> {
+fn orthogonalise(matrix: &CovariateMatrix) -> Result<Orthogonal, Error> {
     let n = matrix.n_rows;
     let intercept = matrix
         .column_names
         .iter()
         .position(|name| name == "intercept")
-        .ok_or(EstimationError::CbpsNeedsIntercept)?;
+        .ok_or(Error::CbpsNeedsIntercept)?;
     let mut columns = vec![intercept];
     let mut mean = Vec::new();
     let mut sd = Vec::new();
@@ -189,7 +189,7 @@ fn orthogonalise(matrix: &CovariateMatrix) -> Result<Orthogonal, EstimationError
     }
     let k = columns.len();
     if n <= k {
-        return Err(EstimationError::CbpsNotFullRank);
+        return Err(Error::NotFullRank);
     }
     let mut z = Mat::<f64>::zeros(n, k);
     for row in 0..n {
@@ -199,7 +199,7 @@ fn orthogonalise(matrix: &CovariateMatrix) -> Result<Orthogonal, EstimationError
         }
     }
     let ones = vec![1.0; n];
-    let gram = weighted_gram(z.as_ref(), &ones).map_err(|_| EstimationError::CbpsNotFullRank)?;
+    let gram = weighted_gram(z.as_ref(), &ones).map_err(|_| Error::NotFullRank)?;
     let flat: Vec<f64> = (0..k)
         .flat_map(|i| (0..k).map(move |j| (i, j)))
         .map(|(i, j)| gram[(i, j)])
@@ -209,7 +209,7 @@ fn orthogonalise(matrix: &CovariateMatrix) -> Result<Orthogonal, EstimationError
     order.sort_by(|&a, &b| values[b].total_cmp(&values[a]).then(a.cmp(&b)));
     let d: Vec<f64> = order.iter().map(|&i| values[i].max(0.0).sqrt()).collect();
     if !(d[0].is_finite() && d[k - 1] > RANK_TOLERANCE * d[0]) {
-        return Err(EstimationError::CbpsNotFullRank);
+        return Err(Error::NotFullRank);
     }
     let mut v = vec![0.0; k * k];
     for (new, &old) in order.iter().enumerate() {
@@ -364,7 +364,7 @@ impl Problem<'_> {
 
     /// The generalised inverse of the covariance, with the rule of
     /// `MASS::ginv`.
-    fn weight_matrix(&self, p: &[f64]) -> Result<Dense, EstimationError> {
+    fn weight_matrix(&self, p: &[f64]) -> Result<Dense, Error> {
         pseudo_inverse(&self.covariance(p), f64::EPSILON.sqrt()).map(|(inverse, _)| inverse)
     }
 
@@ -457,11 +457,11 @@ impl Problem<'_> {
 ///
 /// # Errors
 ///
-/// [`EstimationError::CbpsNeedsIntercept`] when the design has no column named
-/// `intercept`, [`EstimationError::CbpsNotFullRank`] when it is not of full
-/// rank, [`EstimationError::InvalidCbpsConfig`] for an unusable configuration
-/// or a group with no weight, [`EstimationError::GlmFitFailed`] when the
-/// logistic starting fit fails, and [`EstimationError::CbpsFitFailed`] when the
+/// [`Error::CbpsNeedsIntercept`] when the design has no column named
+/// `intercept`, [`Error::NotFullRank`] when it is not of full
+/// rank, [`Error::InvalidCbps`] for an unusable configuration
+/// or a group with no weight, [`Error::Glm`] when the
+/// logistic starting fit fails, and [`Error::Optim`] when the
 /// objective is not finite at the starting value or a search direction is not
 /// a descent direction. A fit that does not reach the gradient tolerance is
 /// returned with `converged` false.
@@ -470,21 +470,21 @@ pub(super) fn fit_cbps(
     labels: &[f64],
     weights: Option<&[f64]>,
     config: &CbpsConfig,
-) -> Result<LogisticFit, EstimationError> {
+) -> Result<LogisticFit, Error> {
     let n = matrix.n_rows;
     if labels.len() != n
         || weights.is_some_and(|w| w.len() != n)
         || config.max_iter == 0
         || !(config.gradient_tolerance.is_finite() && config.gradient_tolerance > 0.0)
     {
-        return Err(EstimationError::InvalidCbpsConfig);
+        return Err(Error::InvalidCbps);
     }
     let orthogonal = orthogonalise(matrix)?;
     let k = orthogonal.d.len();
     let mut s: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
     let total: f64 = s.iter().sum();
     if !(total.is_finite() && total > 0.0) {
-        return Err(EstimationError::InvalidCbpsConfig);
+        return Err(Error::InvalidCbps);
     }
     for value in &mut s {
         *value *= n as f64 / total;
@@ -498,7 +498,7 @@ pub(super) fn fit_cbps(
         .sum();
     let n_total: f64 = s.iter().sum();
     if n_t <= 0.0 || n_t >= n_total {
-        return Err(EstimationError::InvalidCbpsConfig);
+        return Err(Error::InvalidCbps);
     }
     let problem = Problem {
         u: orthogonal.u.as_ref(),
@@ -514,7 +514,7 @@ pub(super) fn fit_cbps(
     logistic.max_iterations = 25;
     let start = logistic
         .fit_slices(problem.u, labels, Some(&problem.s), None, None)
-        .map_err(EstimationError::GlmFitFailed)?;
+        .map_err(Error::Glm)?;
     let g0: Vec<f64> = start
         .coefficients
         .iter()
@@ -524,7 +524,7 @@ pub(super) fn fit_cbps(
     // The scale of the logistic fit that minimises J, with the weight matrix
     // recomputed at each trial.
     let scaled = |a: f64| -> Vec<f64> { g0.iter().map(|g| g * a).collect() };
-    let objective = |a: f64| -> Result<f64, EstimationError> {
+    let objective = |a: f64| -> Result<f64, Error> {
         let g = scaled(a);
         let p = problem.probabilities(&g);
         let w = problem.weight_matrix(&p)?;
@@ -577,18 +577,18 @@ pub(super) fn fit_cbps(
         |g| problem.balance_loss_with_gradient(g, &m_inv),
         None,
     )
-    .map_err(EstimationError::CbpsFitFailed)?;
+    .map_err(Error::Optim)?;
 
     let chosen = match config.method {
         CbpsMethod::Exact => balance,
         CbpsMethod::Over => {
             let from_logistic = bfgs_with(ROUNDING_FACTOR * problem.j_rounding(&g_init, &w_fixed))
                 .minimize(&g_init, |g| problem.j_with_gradient(g, &w_fixed), None)
-                .map_err(EstimationError::CbpsFitFailed)?;
+                .map_err(Error::Optim)?;
             let from_balance =
                 bfgs_with(ROUNDING_FACTOR * problem.j_rounding(&balance.x, &w_fixed))
                     .minimize(&balance.x, |g| problem.j_with_gradient(g, &w_fixed), None)
-                    .map_err(EstimationError::CbpsFitFailed)?;
+                    .map_err(Error::Optim)?;
             if from_logistic.value < from_balance.value {
                 from_logistic
             } else {

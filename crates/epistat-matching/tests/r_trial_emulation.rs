@@ -34,6 +34,7 @@
 mod r_reference;
 
 use chrono::{Days, NaiveDate};
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
@@ -338,7 +339,7 @@ fn run(
     seed: u64,
 ) -> TrialOutcome {
     match_trials(panel, options, |pool| {
-        Ok::<_, std::convert::Infallible>(run_trial(
+        Ok(run_trial(
             reference,
             pool.records(),
             k,
@@ -633,7 +634,7 @@ fn spec_mode_needs_a_panel() {
                 candidates: &[]
             }
         ),
-        Err(SpecError::InputMode {
+        Err(Error::InputMode {
             mode: MatchMode::SequentialTrials
         })
     ));
@@ -643,7 +644,7 @@ fn spec_mode_needs_a_panel() {
     };
     assert!(matches!(
         run_spec(&nearest, SpecInput::Trials { panel: &panel }),
-        Err(SpecError::Option {
+        Err(Error::Option {
             option: "method",
             ..
         })
@@ -652,7 +653,7 @@ fn spec_mode_needs_a_panel() {
     twice.push(panel[0].clone());
     assert!(matches!(
         run_spec(&spec, SpecInput::Trials { panel: &twice }),
-        Err(SpecError::Option {
+        Err(Error::Option {
             option: "panel",
             ..
         })

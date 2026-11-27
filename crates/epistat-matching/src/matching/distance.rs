@@ -54,6 +54,7 @@
 //!    forward. Statistical Science 2010;25:1-21.
 
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::DistanceCaliper;
 use epistat_linalg::{Attempt, Factor, Mat, Method};
 use ordered_float::OrderedFloat;
@@ -260,19 +261,15 @@ impl VectorTable {
     ///
     /// # Errors
     ///
-    /// [`MahalanobisError::ZeroDimension`] when `dimension` is zero, and
-    /// [`MahalanobisError::InvalidVectorLength`] when `values` does not hold
+    /// [`Error::ZeroDimension`] when `dimension` is zero, and
+    /// [`Error::VectorLength`] when `values` does not hold
     /// `dimension` values for each id.
-    pub fn new(
-        ids: Arc<[String]>,
-        dimension: usize,
-        values: Arc<[f64]>,
-    ) -> Result<Self, MahalanobisError> {
+    pub fn new(ids: Arc<[String]>, dimension: usize, values: Arc<[f64]>) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         if values.len() != ids.len().saturating_mul(dimension) {
-            return Err(MahalanobisError::InvalidVectorLength);
+            return Err(Error::VectorLength);
         }
         Ok(Self {
             ids,
@@ -470,7 +467,7 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix shape
+    /// Returns [`Error`] when `dimension` is zero, the matrix shape
     /// is invalid or the matrix is not positive semi-definite.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn mahalanobis_map(
@@ -478,9 +475,9 @@ impl DistanceConfig {
         inverse_covariance: Vec<f64>,
         dimension: usize,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         Self::mahalanobis_table(
             VectorTable::from_map(&vectors, dimension),
@@ -494,19 +491,19 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when the matrix is not `dimension` squared
+    /// Returns [`Error`] when the matrix is not `dimension` squared
     /// long for the dimension of the vectors or is not positive semi-definite.
     pub fn mahalanobis_table(
         vectors: VectorTable,
         inverse_covariance: Vec<f64>,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         let dimension = vectors.dimension();
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
-            return Err(MahalanobisError::InvalidInverseCovarianceLength);
+            return Err(Error::InverseCovarianceLength);
         }
         check_positive_semi_definite(&inverse_covariance, dimension)?;
 
@@ -523,15 +520,15 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError::ZeroDimension`] when `dimension` is zero.
+    /// Returns [`Error::ZeroDimension`] when `dimension` is zero.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn euclidean_map(
         vectors: RapidHashMap<String, Vec<f64>>,
         dimension: usize,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         Self::euclidean_table(VectorTable::from_map(&vectors, dimension), caliper)
     }
@@ -541,14 +538,14 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError::ZeroDimension`] when the vectors have no
+    /// Returns [`Error::ZeroDimension`] when the vectors have no
     /// values.
     pub fn euclidean_table(
         vectors: VectorTable,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         if vectors.dimension() == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         Ok(Self::EuclideanMap {
             vectors,
@@ -787,63 +784,6 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
     }
 }
 
-/// Why a table of pair distances is refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PairDistanceMatrixError {
-    /// There are no anchors or no candidates.
-    Empty,
-    /// The number of values is not the number of anchors times candidates.
-    Shape {
-        /// Anchors times candidates.
-        expected: usize,
-        /// Values given.
-        found: usize,
-    },
-    /// An id appears twice among the anchors or among the candidates.
-    DuplicateId(String),
-    /// A value is not a number. An infinite value is allowed and forbids the
-    /// pair.
-    NotANumber {
-        /// Row of the value.
-        anchor: usize,
-        /// Column of the value.
-        candidate: usize,
-    },
-    /// A value is negative. Optimal and fine-balance matching need distances of
-    /// at least 0.
-    Negative {
-        /// Row of the value.
-        anchor: usize,
-        /// Column of the value.
-        candidate: usize,
-    },
-}
-
-impl std::fmt::Display for PairDistanceMatrixError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => f.write_str("the distance matrix has no anchors or no candidates"),
-            Self::Shape { expected, found } => write!(
-                f,
-                "the distance matrix needs {expected} values, one for each anchor and \
-                 candidate, and has {found}"
-            ),
-            Self::DuplicateId(id) => write!(f, "the id {id} appears twice in the distance matrix"),
-            Self::NotANumber { anchor, candidate } => write!(
-                f,
-                "the distance matrix has no number at row {anchor}, column {candidate}; \
-                 use an infinite value to forbid a pair"
-            ),
-            Self::Negative { anchor, candidate } => write!(
-                f,
-                "the distance matrix has a negative distance at row {anchor}, column {candidate}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for PairDistanceMatrixError {}
-
 /// Distances between every anchor and every candidate, as the matrix a caller
 /// gives as `distance` to `matchit()`.
 ///
@@ -864,40 +804,41 @@ impl PairDistanceMatrix {
     ///
     /// # Errors
     ///
-    /// [`PairDistanceMatrixError`] when a group is empty, the values do not
+    /// [`Error`] when a group is empty, the values do not
     /// fill the table, an id repeats, a value is not a number, or a value is negative.
     pub fn new(
         anchor_ids: Vec<String>,
         candidate_ids: Vec<String>,
         values: Vec<f64>,
-    ) -> Result<Self, PairDistanceMatrixError> {
+    ) -> Result<Self, Error> {
         if anchor_ids.is_empty() || candidate_ids.is_empty() {
-            return Err(PairDistanceMatrixError::Empty);
+            return Err(Error::empty("distance matrix ids"));
         }
         let expected = anchor_ids.len().saturating_mul(candidate_ids.len());
         if values.len() != expected {
-            return Err(PairDistanceMatrixError::Shape {
+            return Err(Error::length(
+                "distance matrix values",
                 expected,
-                found: values.len(),
-            });
+                values.len(),
+            ));
         }
         if let Some(at) = values.iter().position(|value| value.is_nan()) {
-            return Err(PairDistanceMatrixError::NotANumber {
-                anchor: at / candidate_ids.len(),
-                candidate: at % candidate_ids.len(),
+            return Err(Error::DistanceNotANumber {
+                case: at / candidate_ids.len(),
+                control: at % candidate_ids.len(),
             });
         }
         if let Some(at) = values.iter().position(|value| *value < 0.0) {
-            return Err(PairDistanceMatrixError::Negative {
-                anchor: at / candidate_ids.len(),
-                candidate: at % candidate_ids.len(),
+            return Err(Error::NegativeDistance {
+                case: at / candidate_ids.len(),
+                control: at % candidate_ids.len(),
             });
         }
         let positions = |ids: &[String]| -> Result<RapidHashMap<String, usize>, _> {
             let mut map = RapidHashMap::default();
             for (position, id) in ids.iter().enumerate() {
                 if map.insert(id.clone(), position).is_some() {
-                    return Err(PairDistanceMatrixError::DuplicateId(id.clone()));
+                    return Err(Error::DuplicateId { id: id.clone() });
                 }
             }
             Ok(map)
@@ -1202,9 +1143,9 @@ impl QuadraticForm {
 /// eigenvalue below minus `dimension * eps` times the largest in absolute value,
 /// the size of the error of the eigenvalue computation, and every value is
 /// finite.
-fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), MahalanobisError> {
+fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), Error> {
     if matrix.iter().any(|value| !value.is_finite()) {
-        return Err(MahalanobisError::NotPositiveSemiDefinite);
+        return Err(Error::NotPositiveSemiDefinite);
     }
     let symmetric: Vec<f64> = (0..dimension * dimension)
         .map(|index| {
@@ -1218,7 +1159,7 @@ fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), 
         .fold(0.0_f64, |acc, value| acc.max(value.abs()));
     let floor = -(dimension as f64) * f64::EPSILON * largest;
     if values.iter().any(|value| *value < floor) {
-        return Err(MahalanobisError::NotPositiveSemiDefinite);
+        return Err(Error::NotPositiveSemiDefinite);
     }
     Ok(())
 }
@@ -1458,22 +1399,6 @@ where
     }
 }
 
-/// Errors constructing [`MahalanobisDistance`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MahalanobisError {
-    /// The vectors have no dimension.
-    ZeroDimension,
-    /// The inverse covariance matrix does not have one value per pair of dimensions.
-    InvalidInverseCovarianceLength,
-    /// The values of a vector table are not a whole number of vectors.
-    InvalidVectorLength,
-    /// The inverse covariance matrix has a negative eigenvalue or a value that
-    /// is not finite, so its quadratic form is not a distance. A generalised
-    /// inverse of a singular covariance matrix is positive semi-definite and
-    /// is accepted.
-    NotPositiveSemiDefinite,
-}
-
 /// Mahalanobis distance using a precomputed inverse covariance matrix.
 ///
 /// The inverse covariance matrix is supplied in row-major format.
@@ -1488,24 +1413,20 @@ impl<F> MahalanobisDistance<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix length
+    /// Returns [`Error`] when `dimension` is zero, the matrix length
     /// does not equal `dimension * dimension` or the matrix is not positive
     /// semi-definite.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
-    pub fn new(
-        accessor: F,
-        inverse_covariance: Vec<f64>,
-        dimension: usize,
-    ) -> Result<Self, MahalanobisError> {
+    pub fn new(accessor: F, inverse_covariance: Vec<f64>, dimension: usize) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
-            return Err(MahalanobisError::InvalidInverseCovarianceLength);
+            return Err(Error::InverseCovarianceLength);
         }
         check_positive_semi_definite(&inverse_covariance, dimension)?;
         let form = QuadraticForm::new(&inverse_covariance, dimension)
-            .ok_or(MahalanobisError::InvalidInverseCovarianceLength)?;
+            .ok_or(Error::InverseCovarianceLength)?;
 
         Ok(Self { accessor, form })
     }
@@ -1633,10 +1554,7 @@ mod tests {
     fn mahalanobis_distance_rejects_invalid_matrix_length() {
         let result =
             MahalanobisDistance::new(|_row: &DemoRecord| None::<Vec<f64>>, vec![1.0, 0.0, 0.0], 2);
-        assert!(matches!(
-            result,
-            Err(MahalanobisError::InvalidInverseCovarianceLength)
-        ));
+        assert!(matches!(result, Err(Error::InverseCovarianceLength)));
     }
 
     #[test]
@@ -1663,10 +1581,7 @@ mod tests {
             invalid_inverse,
             2,
         );
-        assert!(matches!(
-            result,
-            Err(MahalanobisError::NotPositiveSemiDefinite)
-        ));
+        assert!(matches!(result, Err(Error::NotPositiveSemiDefinite)));
     }
 
     /// The per-pair form: two faer matrix products per distance.
@@ -1812,11 +1727,11 @@ mod tests {
         let inverse = vec![1.0, 2.0, 2.0, 1.0];
         assert!(matches!(
             MahalanobisDistance::new(|_row: &BaseRecord| None::<Vec<f64>>, inverse.clone(), 2),
-            Err(MahalanobisError::NotPositiveSemiDefinite)
+            Err(Error::NotPositiveSemiDefinite)
         ));
         assert!(matches!(
             DistanceConfig::mahalanobis_map(RapidHashMap::default(), inverse, 2, None),
-            Err(MahalanobisError::NotPositiveSemiDefinite)
+            Err(Error::NotPositiveSemiDefinite)
         ));
         // A singular positive semi-definite matrix is a distance.
         assert!(
@@ -1904,11 +1819,11 @@ mod tests {
         assert_eq!(table.to_map(), expected);
         assert_eq!(
             VectorTable::new(table.ids().into(), 3, table.values().into()).unwrap_err(),
-            MahalanobisError::InvalidVectorLength
+            Error::VectorLength
         );
         assert_eq!(
             VectorTable::new(table.ids().into(), 0, Vec::new().into()).unwrap_err(),
-            MahalanobisError::ZeroDimension
+            Error::ZeroDimension
         );
         let euclidean = IdMapEuclideanDistance::new(&table);
         let a = BaseRecord::new("a", date(2010, 1, 1));

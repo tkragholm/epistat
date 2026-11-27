@@ -4,6 +4,7 @@
 //! documentation requires: an undefined value is `None` and invalid input an error.
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions,
@@ -49,7 +50,7 @@ fn subclasses_zero_is_an_error_not_one() {
         min_n: 1,
     };
     let out = subclassify_by_propensity_score_map(&anchors, &cands, &scores, Estimand::Att, &cfg);
-    assert_eq!(out.err(), Some(SubclassificationError::NoSubclasses));
+    assert_eq!(out.err(), Some(Error::NoSubclasses));
 }
 
 /// A fold count of 0 is an error, not a division by zero.

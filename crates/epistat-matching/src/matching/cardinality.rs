@@ -116,6 +116,7 @@
               ratio is checked to be whole before it is cast"
 )]
 
+use crate::Error;
 use crate::types::Estimand;
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_optim::Error as OptimError;
@@ -124,7 +125,6 @@ use epistat_optim::branch_and_bound::{
 };
 use epistat_optim::min_cost_flow::MinCostFlow;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::time::Duration;
 
 const SD_FLOOR: f64 = 1e-10;
@@ -238,82 +238,6 @@ pub struct CardinalityOutcome {
     pub strata: Vec<StratumReport>,
 }
 
-/// Why cardinality or profile matching could not run.
-#[derive(Debug, Clone, PartialEq)]
-pub enum CardinalityError {
-    /// An input has the wrong length, or there are no covariates.
-    Shape(String),
-    /// A covariate, weight or tolerance is not finite.
-    NonFinite(String),
-    /// A tolerance is negative.
-    NegativeTolerance,
-    /// The ratio is not positive and finite, or is not a whole number where one
-    /// is needed.
-    InvalidRatio(String),
-    /// Sampling weights with cardinality matching, which has no fixed target.
-    SamplingWeightsNeedProfileMatching,
-    /// The estimand is not one of the ATT, the ATC and the ATE.
-    UnsupportedEstimand,
-    /// No stratum holds both groups.
-    NoCommonStratum,
-    /// The program of a stratum has no solution, or its best solution selects
-    /// no unit of one group: relax the tolerances.
-    Infeasible {
-        /// The stratum.
-        key: u64,
-    },
-    /// A limit ended the search of a stratum before any subset was found.
-    NoSolutionInTime {
-        /// The stratum.
-        key: u64,
-    },
-    /// A group has no variance where one is needed to standardise.
-    ZeroVarianceGroup,
-    /// The covariance of the pairing covariates is singular.
-    SingularCovariance,
-    /// Pairing needs the ATT or the ATE and a whole-number ratio.
-    PairingNeedsWholeRatio,
-    /// The solver failed.
-    Solver(String),
-}
-
-impl fmt::Display for CardinalityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Shape(why) => write!(f, "malformed input: {why}"),
-            Self::NonFinite(what) => write!(f, "{what} is not finite"),
-            Self::NegativeTolerance => f.write_str("a tolerance is negative"),
-            Self::InvalidRatio(why) => write!(f, "invalid ratio: {why}"),
-            Self::SamplingWeightsNeedProfileMatching => f.write_str(
-                "sampling weights need profile matching (ratio unset or the ATE): \
-                 cardinality matching has no fixed target population",
-            ),
-            Self::UnsupportedEstimand => f.write_str("the estimand must be ATT, ATC or ATE"),
-            Self::NoCommonStratum => f.write_str("no exact stratum holds both groups"),
-            Self::Infeasible { key } => write!(
-                f,
-                "no subset satisfies the balance constraints in stratum {key}; relax the tolerances"
-            ),
-            Self::NoSolutionInTime { key } => {
-                write!(
-                    f,
-                    "the solver found no subset in stratum {key} within its limits"
-                )
-            }
-            Self::ZeroVarianceGroup => f.write_str("a group has no variance to standardise by"),
-            Self::SingularCovariance => {
-                f.write_str("the covariance of the pairing covariates is singular")
-            }
-            Self::PairingNeedsWholeRatio => {
-                f.write_str("pairing needs the ATT or the ATE and a whole-number ratio")
-            }
-            Self::Solver(why) => write!(f, "the solver failed: {why}"),
-        }
-    }
-}
-
-impl std::error::Error for CardinalityError {}
-
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Cardinality,
@@ -348,7 +272,7 @@ fn standardise(
     focal: bool,
     weights: Option<&[f64]>,
     std_tols: &[bool],
-) -> Result<(), CardinalityError> {
+) -> Result<(), Error> {
     let ate = request.estimand == Estimand::Ate;
     for (c, column) in columns.iter_mut().enumerate() {
         if !std_tols[c] {
@@ -375,7 +299,7 @@ fn standardise(
             weighted_variance(&values, w.as_deref(), is_binary(&values))
         };
         if !variance.is_finite() {
-            return Err(CardinalityError::ZeroVarianceGroup);
+            return Err(Error::ZeroVarianceGroup);
         }
         let sd = variance.sqrt();
         if sd >= SD_FLOOR {
@@ -387,11 +311,11 @@ fn standardise(
     Ok(())
 }
 
-fn expand<T: Copy>(values: &[T], p: usize, what: &str) -> Result<Vec<T>, CardinalityError> {
+fn expand<T: Copy>(values: &[T], p: usize, what: &str) -> Result<Vec<T>, Error> {
     match values.len() {
         1 => Ok(vec![values[0]; p]),
         k if k == p => Ok(values.to_vec()),
-        _ => Err(CardinalityError::Shape(format!(
+        _ => Err(Error::Shape(format!(
             "{what} must have one entry or one per covariate"
         ))),
     }
@@ -415,7 +339,7 @@ fn solve_stratum(
     input: &StratumInput<'_>,
     key: u64,
     limits: CardinalityLimits,
-) -> Result<(Vec<bool>, StratumReport), CardinalityError> {
+) -> Result<(Vec<bool>, StratumReport), Error> {
     let p = input.x.len();
     let nu = input.units.len();
     let group = |i: usize| usize::from(input.treated[input.units[i]]);
@@ -611,9 +535,9 @@ fn solve_stratum(
         ..SolverOptions::default()
     };
     let solution = solve(&program, &options).map_err(|e| match e {
-        OptimError::Infeasible => CardinalityError::Infeasible { key },
-        OptimError::NoSolution { .. } => CardinalityError::NoSolutionInTime { key },
-        other => CardinalityError::Solver(other.to_string()),
+        OptimError::Infeasible => Error::InfeasibleBalance { stratum: key },
+        OptimError::NoSolution { .. } => Error::NoSolutionInTime { stratum: key },
+        other => Error::Solver(other.to_string()),
     })?;
 
     let mut selected = vec![false; nu];
@@ -629,7 +553,7 @@ fn solve_stratum(
     }
     let count = |g: usize| (0..nu).filter(|&i| selected[i] && group(i) == g).count();
     if count(0) == 0 || count(1) == 0 {
-        return Err(CardinalityError::Infeasible { key });
+        return Err(Error::InfeasibleBalance { stratum: key });
     }
     let report = StratumReport {
         key,
@@ -648,50 +572,45 @@ fn solve_stratum(
 /// Cardinality or profile matching. See [`match_cardinality`].
 ///
 /// # Errors
-/// A [`CardinalityError`] for malformed input, for a stratum whose program has no
+/// A [`Error`] for malformed input, for a stratum whose program has no
 /// solution, or when the solver fails or runs out of time before it has one.
-pub fn match_cardinality(
-    request: &CardinalityRequest<'_>,
-) -> Result<CardinalityOutcome, CardinalityError> {
+pub fn match_cardinality(request: &CardinalityRequest<'_>) -> Result<CardinalityOutcome, Error> {
     let n = request.treated.len();
     let p = request.covariates.len();
     if p == 0 {
-        return Err(CardinalityError::Shape("no covariates".to_string()));
+        return Err(Error::Shape("no covariates".to_string()));
     }
     for column in request.covariates {
         if column.len() != n {
-            return Err(CardinalityError::Shape(
-                "a covariate has the wrong length".to_string(),
-            ));
+            return Err(Error::Shape("a covariate has the wrong length".to_string()));
         }
         if column.iter().any(|v| !v.is_finite()) {
-            return Err(CardinalityError::NonFinite("a covariate".to_string()));
+            return Err(Error::NotFinite("a covariate".to_string()));
         }
     }
     if request.exact.is_some_and(|e| e.len() != n) {
-        return Err(CardinalityError::Shape(
-            "exact has the wrong length".to_string(),
-        ));
+        return Err(Error::Shape("exact has the wrong length".to_string()));
     }
     if request.discarded.is_some_and(|d| d.len() != n) {
-        return Err(CardinalityError::Shape(
-            "discarded has the wrong length".to_string(),
-        ));
+        return Err(Error::Shape("discarded has the wrong length".to_string()));
     }
     if request.estimand == Estimand::Atm {
-        return Err(CardinalityError::UnsupportedEstimand);
+        return Err(Error::UnsupportedEstimand {
+            estimand: request.estimand,
+            method: "cardinality matching",
+        });
     }
     let tols = expand(&request.tols, p, "tols")?;
     if tols.iter().any(|t| !t.is_finite()) {
-        return Err(CardinalityError::NonFinite("a tolerance".to_string()));
+        return Err(Error::NotFinite("a tolerance".to_string()));
     }
     if tols.iter().any(|&t| t < 0.0) {
-        return Err(CardinalityError::NegativeTolerance);
+        return Err(Error::NegativeTolerance);
     }
     let std_tols = expand(&request.std_tols, p, "std_tols")?;
     let mut ratio = request.ratio;
     if ratio.is_some_and(|r| !(r.is_finite() && r > 0.0)) {
-        return Err(CardinalityError::InvalidRatio(
+        return Err(Error::InvalidRatio(
             "the ratio must be positive and finite, or unset".to_string(),
         ));
     }
@@ -703,7 +622,7 @@ pub fn match_cardinality(
         Kind::ProfileAtt
     };
     if kind == Kind::Cardinality && ratio.is_some_and(|r| r.fract() != 0.0) {
-        return Err(CardinalityError::InvalidRatio(
+        return Err(Error::InvalidRatio(
             "cardinality matching needs a whole-number ratio".to_string(),
         ));
     }
@@ -715,15 +634,15 @@ pub fn match_cardinality(
         None => vec![1.0; n],
         Some(w) => {
             if w.len() != n {
-                return Err(CardinalityError::Shape(
+                return Err(Error::Shape(
                     "sampling_weights has the wrong length".to_string(),
                 ));
             }
             if w.iter().any(|v| !v.is_finite() || *v < 0.0) {
-                return Err(CardinalityError::NonFinite("a sampling weight".to_string()));
+                return Err(Error::NotFinite("a sampling weight".to_string()));
             }
             if kind == Kind::Cardinality && w.iter().any(|&v| v != w[0]) {
-                return Err(CardinalityError::SamplingWeightsNeedProfileMatching);
+                return Err(Error::SamplingWeightsNeedProfile);
             }
             w.to_vec()
         }
@@ -753,7 +672,7 @@ pub fn match_cardinality(
         units.iter().any(|&i| request.treated[i]) && units.iter().any(|&i| !request.treated[i])
     });
     if by_key.is_empty() {
-        return Err(CardinalityError::NoCommonStratum);
+        return Err(Error::NoSharedStratum);
     }
 
     let mut weights = vec![0.0; n];
@@ -840,12 +759,12 @@ fn pair_selected(
     kind: Kind,
     by_key: &BTreeMap<u64, Vec<usize>>,
     selected: &[bool],
-) -> Result<Vec<Option<usize>>, CardinalityError> {
+) -> Result<Vec<Option<usize>>, Error> {
     let Some(r) = ratio else {
-        return Err(CardinalityError::PairingNeedsWholeRatio);
+        return Err(Error::PairingNeedsWholeRatio);
     };
     if r.fract() != 0.0 || request.estimand == Estimand::Atc || kind == Kind::ProfileAtt {
-        return Err(CardinalityError::PairingNeedsWholeRatio);
+        return Err(Error::PairingNeedsWholeRatio);
     }
     let strata: Vec<&[usize]> = by_key.values().map(Vec::as_slice).collect();
     pair_units(
@@ -871,9 +790,9 @@ fn pair_selected(
 /// paired. The distance matrix of a stratum is dense.
 ///
 /// # Errors
-/// [`CardinalityError::PairingNeedsWholeRatio`] when a stratum does not hold
+/// [`Error::PairingNeedsWholeRatio`] when a stratum does not hold
 /// `ratio` selected controls per selected treated unit, and
-/// [`CardinalityError::SingularCovariance`] when the covariance cannot be
+/// [`Error::SingularCovariance`] when the covariance cannot be
 /// inverted.
 pub fn pair_units(
     treated: &[bool],
@@ -883,43 +802,41 @@ pub fn pair_units(
     strata: &[&[usize]],
     discarded: Option<&[bool]>,
     sampling_weights: Option<&[f64]>,
-) -> Result<Vec<Option<usize>>, CardinalityError> {
+) -> Result<Vec<Option<usize>>, Error> {
     let n = treated.len();
     if selected.len() != n {
-        return Err(CardinalityError::Shape(
+        return Err(Error::Shape(
             "selected must have one entry per unit".to_string(),
         ));
     }
     if discarded.is_some_and(|d| d.len() != n) {
-        return Err(CardinalityError::Shape(
+        return Err(Error::Shape(
             "discarded must have one entry per unit".to_string(),
         ));
     }
     if sampling_weights.is_some_and(|w| w.len() != n) {
-        return Err(CardinalityError::Shape(
+        return Err(Error::Shape(
             "sampling_weights must have one entry per unit".to_string(),
         ));
     }
     if strata.iter().any(|units| units.iter().any(|&i| i >= n)) {
-        return Err(CardinalityError::Shape(
+        return Err(Error::Shape(
             "a stratum holds a position beyond the units".to_string(),
         ));
     }
     if ratio_int < 1 {
-        return Err(CardinalityError::InvalidRatio(
+        return Err(Error::InvalidRatio(
             "the ratio must be at least 1".to_string(),
         ));
     }
     for column in pair_on {
         if column.len() != n {
-            return Err(CardinalityError::Shape(
+            return Err(Error::Shape(
                 "a pairing covariate has the wrong length".to_string(),
             ));
         }
         if column.iter().any(|v| !v.is_finite()) {
-            return Err(CardinalityError::NonFinite(
-                "a pairing covariate".to_string(),
-            ));
+            return Err(Error::NotFinite("a pairing covariate".to_string()));
         }
     }
     // Columns without variance are dropped. A column is kept when its range
@@ -976,7 +893,7 @@ pub fn pair_units(
     let chol = if d == 0 {
         Vec::new()
     } else {
-        cholesky_lower(&scatter, d, Pivot::Strict).ok_or(CardinalityError::SingularCovariance)?
+        cholesky_lower(&scatter, d, Pivot::Strict).ok_or(Error::SingularCovariance)?
     };
     let transformed = |i: usize| -> Vec<f64> {
         // Solve L z = x for z.
@@ -1012,7 +929,7 @@ pub fn pair_units(
         let nc = controls.len();
         let want = i64::try_from(nt).unwrap_or(i64::MAX) * ratio_int;
         if i64::try_from(nc).unwrap_or(-1) != want {
-            return Err(CardinalityError::PairingNeedsWholeRatio);
+            return Err(Error::PairingNeedsWholeRatio);
         }
         let zt: Vec<Vec<f64>> = tr.iter().map(|&i| transformed(i)).collect();
         let zc: Vec<Vec<f64>> = controls.iter().map(|&i| transformed(i)).collect();
@@ -1050,8 +967,8 @@ pub fn pair_units(
             }
         }
         let solution = flow.solve().map_err(|e| match e {
-            OptimError::Infeasible => CardinalityError::PairingNeedsWholeRatio,
-            other => CardinalityError::Solver(other.to_string()),
+            OptimError::Infeasible => Error::PairingNeedsWholeRatio,
+            other => Error::Solver(other.to_string()),
         })?;
         for a in 0..nt {
             let id = next_pair;

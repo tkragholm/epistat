@@ -51,16 +51,16 @@ use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::distance::DistanceConfig;
 use super::distance::DistanceMetric;
 use super::engine::{build_outcome, finalize_estimand_diagnostics};
-use super::exact::{ExactMatchError, ExactMatchOutcome, subclasses_of_strata, unit_at};
+use super::exact::{ExactMatchOutcome, subclasses_of_strata, unit_at};
 use super::nearest::MatchOrder;
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::{Estimand, MatchDiagnostics, MatchOutcome, MatchedPair};
 use epistat_rng::Stream;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::fmt;
 
 /// A rule that gives a number of bins from the values of a variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -141,68 +141,6 @@ impl CemVariable {
     }
 }
 
-/// Why coarsened exact matching could not run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CemError {
-    /// No variable was given.
-    NoVariables,
-    /// A unit has no value, or no finite value, for a variable.
-    MissingValue {
-        /// Id of the unit.
-        id: String,
-        /// Name of the variable.
-        variable: String,
-    },
-    /// The binning of a variable is out of range.
-    Binning {
-        /// Name of the variable.
-        variable: String,
-        /// What is wrong.
-        message: String,
-    },
-    /// No stratum holds units of both groups.
-    NoSharedStratum,
-    /// The order of the anchors needs a score, which a pair distance lacks.
-    Order,
-}
-
-impl fmt::Display for CemError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoVariables => write!(f, "no variable to coarsen and match on was given"),
-            Self::MissingValue { id, variable } => write!(
-                f,
-                "unit {id} has no finite value for the variable {variable}"
-            ),
-            Self::Binning { variable, message } => {
-                write!(f, "the binning of {variable} is invalid: {message}")
-            }
-            Self::NoSharedStratum => write!(
-                f,
-                "no stratum holds units of both groups; coarsen the variables further \
-                 or use fewer of them"
-            ),
-            Self::Order => write!(
-                f,
-                "the largest and smallest orders need a score; use data, random, \
-                 closest or farthest"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CemError {}
-
-impl From<ExactMatchError> for CemError {
-    fn from(error: ExactMatchError) -> Self {
-        match error {
-            ExactMatchError::NoVariables => Self::NoVariables,
-            ExactMatchError::MissingValue { id, variable } => Self::MissingValue { id, variable },
-            ExactMatchError::NoSharedStratum => Self::NoSharedStratum,
-        }
-    }
-}
-
 /// The stratum of every anchor and candidate, or `None` where a unit is in a
 /// stratum that lacks one of the groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,8 +154,8 @@ pub struct CemStrata {
     pub count: usize,
 }
 
-fn binning_error(variable: &str, message: impl Into<String>) -> CemError {
-    CemError::Binning {
+fn binning_error(variable: &str, message: impl Into<String>) -> Error {
+    Error::Binning {
         variable: variable.to_string(),
         message: message.into(),
     }
@@ -318,7 +256,7 @@ fn cutpoints(
     variable: &str,
     binning: &CemBinning,
     values: &[f64],
-) -> Result<Option<Vec<f64>>, CemError> {
+) -> Result<Option<Vec<f64>>, Error> {
     let equal_width = |bins: usize| -> Vec<f64> {
         let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
         let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -378,13 +316,13 @@ fn cutpoints(
 ///
 /// # Errors
 ///
-/// [`CemError`] when no variable is given, a unit has no value for a
+/// [`Error`] when no variable is given, a unit has no value for a
 /// variable, a binning is out of range, or no stratum holds both groups.
 pub fn cem_strata<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<CemStrata, CemError> {
+) -> Result<CemStrata, Error> {
     coarsen(anchors, candidates, variables).map(|(strata, _)| strata)
 }
 
@@ -401,7 +339,7 @@ pub fn cem_subclasses<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<ExactMatchOutcome, CemError> {
+) -> Result<ExactMatchOutcome, Error> {
     coarsen(anchors, candidates, variables).map(|(_, outcome)| outcome)
 }
 
@@ -409,9 +347,9 @@ fn coarsen<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<(CemStrata, ExactMatchOutcome), CemError> {
+) -> Result<(CemStrata, ExactMatchOutcome), Error> {
     if variables.is_empty() {
-        return Err(CemError::NoVariables);
+        return Err(Error::NoVariables);
     }
     // One code per unit and variable. Codes of one variable are equal exactly
     // when the coarsened values are, and they need no particular order: the
@@ -419,7 +357,7 @@ fn coarsen<R: MatchingRecord>(
     let mut columns: Vec<Vec<u32>> = Vec::with_capacity(variables.len());
     for variable in variables {
         let name = variable.name.as_str();
-        let missing = |position: usize| CemError::MissingValue {
+        let missing = |position: usize| Error::MissingValue {
             id: unit_at(anchors, candidates, position).id().to_string(),
             variable: variable.name.clone(),
         };
@@ -578,7 +516,7 @@ fn nearest_available<R: MatchingRecord>(
 ///
 /// # Errors
 ///
-/// [`CemError::Order`] for the largest and smallest orders, which need a
+/// [`Error::CemOrder`] for the largest and smallest orders, which need a
 /// score.
 pub fn cem_k2k_pairs<R: MatchingRecord>(
     anchors: &[R],
@@ -588,9 +526,9 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
     order: MatchOrder,
     seed: u64,
     estimand: Estimand,
-) -> Result<MatchOutcome, CemError> {
+) -> Result<MatchOutcome, Error> {
     if matches!(order, MatchOrder::Largest | MatchOrder::Smallest) {
-        return Err(CemError::Order);
+        return Err(Error::CemOrder);
     }
     let metric = distance.map(DistanceConfig::metric);
 
@@ -746,14 +684,14 @@ mod tests {
             anchors: &[R],
             candidates: &[R],
             variables: &[CemVariable],
-        ) -> Result<(CemStrata, Maps), CemError> {
+        ) -> Result<(CemStrata, Maps), Error> {
             if variables.is_empty() {
-                return Err(CemError::NoVariables);
+                return Err(Error::NoVariables);
             }
             let units: Vec<&R> = anchors.iter().chain(candidates.iter()).collect();
             let mut cells: Vec<Vec<Cell>> = vec![Vec::with_capacity(variables.len()); units.len()];
             for variable in variables {
-                let missing = |unit: &R| CemError::MissingValue {
+                let missing = |unit: &R| Error::MissingValue {
                     id: unit.id().to_string(),
                     variable: variable.name.clone(),
                 };
@@ -915,7 +853,7 @@ mod tests {
         let candidates = vec![unit("c1", 2.0, "p")];
         assert_eq!(
             cem_strata(&anchors, &candidates, &[]).unwrap_err(),
-            CemError::NoVariables
+            Error::NoVariables
         );
         assert_eq!(
             cem_strata(
@@ -924,7 +862,7 @@ mod tests {
                 &[CemVariable::numeric("w", CemBinning::default())]
             )
             .unwrap_err(),
-            CemError::MissingValue {
+            Error::MissingValue {
                 id: "a1".into(),
                 variable: "w".into()
             }
@@ -936,7 +874,7 @@ mod tests {
                 &[CemVariable::numeric("x", CemBinning::Bins(0))]
             )
             .unwrap_err(),
-            CemError::Binning { .. }
+            Error::Binning { .. }
         ));
         assert_eq!(
             cem_strata(
@@ -945,7 +883,7 @@ mod tests {
                 &[CemVariable::numeric("x", CemBinning::Exact)]
             )
             .unwrap_err(),
-            CemError::NoSharedStratum
+            Error::NoSharedStratum
         );
     }
 

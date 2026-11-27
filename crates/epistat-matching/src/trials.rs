@@ -77,6 +77,7 @@
 //! each person at the deviation. Weights for the censoring are the task of the
 //! analysis and are not computed here.
 
+use crate::Error;
 use crate::matching::job::TransitionMode;
 use crate::matching::{CovariateRecord, MatchJob, MatchingRecord, RandomSelection};
 use crate::role_transition::IdOrder;
@@ -87,8 +88,7 @@ use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+
 use std::sync::OnceLock;
 
 /// One period of one person.
@@ -163,121 +163,6 @@ impl Default for TrialOptions {
             initiators_as_earlier_controls: true,
             censor_at_deviation: true,
         }
-    }
-}
-
-/// Why the panel could not be used.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrialInputError {
-    /// Two people share an id, so a pair does not say which person it means.
-    DuplicateId {
-        /// The id that occurs twice.
-        id: String,
-    },
-    /// The periods of a person are not strictly increasing.
-    PeriodsNotIncreasing {
-        /// The person.
-        id: String,
-        /// The period that does not follow its predecessor.
-        period: i64,
-    },
-    /// Two people give different dates for one period.
-    InconsistentDate {
-        /// The period.
-        period: i64,
-    },
-    /// The dates of the periods do not increase with the period number.
-    DatesNotIncreasing {
-        /// The period whose date is not after the date of the period before.
-        period: i64,
-    },
-    /// The period strata do not have a value for every row of the panel.
-    StrataRows {
-        /// The rows of the panel.
-        expected: usize,
-        /// The values of a key of the strata.
-        found: usize,
-    },
-    /// A matched member of a trial is not in the panel or not enrolled in the
-    /// trial.
-    UnknownMember {
-        /// The member.
-        id: String,
-        /// The period at which the trial starts.
-        period: i64,
-    },
-}
-
-impl Display for TrialInputError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DuplicateId { id } => write!(
-                f,
-                "the id `{id}` occurs more than once in the panel; give every person their own id"
-            ),
-            Self::PeriodsNotIncreasing { id, period } => write!(
-                f,
-                "the periods of `{id}` do not increase: period {period} does not follow the one before it"
-            ),
-            Self::InconsistentDate { period } => write!(
-                f,
-                "period {period} has more than one date; every person needs the same date for a period"
-            ),
-            Self::DatesNotIncreasing { period } => write!(
-                f,
-                "the date of period {period} is not after the date of the period before it"
-            ),
-            Self::StrataRows { expected, found } => write!(
-                f,
-                "the period strata have {found} values for the {expected} rows of the panel; give one per row, in the order of PanelColumns"
-            ),
-            Self::UnknownMember { id, period } => write!(
-                f,
-                "`{id}` is a member of the trial of period {period} but is not enrolled in it; give the panel and options the trials were matched with"
-            ),
-        }
-    }
-}
-
-impl Error for TrialInputError {}
-
-/// Why trials could not be matched.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrialsError<E> {
-    /// The panel is not valid.
-    Input(TrialInputError),
-    /// The matching of one trial failed.
-    Matching {
-        /// The period at which the trial starts.
-        period: i64,
-        /// What the matching reported.
-        error: E,
-    },
-}
-
-impl<E: Display> Display for TrialsError<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Input(error) => write!(f, "{error}"),
-            Self::Matching { period, error } => {
-                write!(f, "the trial that starts at period {period}: {error}")
-            }
-        }
-    }
-}
-
-impl<E: Error + 'static> Error for TrialsError<E> {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::Matching { error, .. } => Some(error),
-        }
-    }
-}
-
-impl<E> From<TrialInputError> for TrialsError<E> {
-    fn from(error: TrialInputError) -> Self {
-        Self::Input(error)
     }
 }
 
@@ -378,18 +263,18 @@ struct Plan {
 fn validate<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
     dates: Option<PeriodDates>,
-) -> Result<(), TrialInputError> {
+) -> Result<(), Error> {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut by_period: BTreeMap<i64, NaiveDate> = BTreeMap::new();
     for person in panel {
         if !seen.insert(person.record.id()) {
-            return Err(TrialInputError::DuplicateId {
+            return Err(Error::DuplicateId {
                 id: person.record.id().to_string(),
             });
         }
         for pair in person.periods.windows(2) {
             if pair[1].period <= pair[0].period {
-                return Err(TrialInputError::PeriodsNotIncreasing {
+                return Err(Error::PeriodsNotIncreasing {
                     id: person.record.id().to_string(),
                     period: pair[1].period,
                 });
@@ -400,14 +285,14 @@ fn validate<R: MatchingRecord>(
             Some(PeriodDates::Shared) => {
                 for row in &person.periods {
                     if *by_period.entry(row.period).or_insert(row.date) != row.date {
-                        return Err(TrialInputError::InconsistentDate { period: row.period });
+                        return Err(Error::InconsistentDate { period: row.period });
                     }
                 }
             }
             Some(PeriodDates::PerPerson) => {
                 for pair in person.periods.windows(2) {
                     if pair[1].date <= pair[0].date {
-                        return Err(TrialInputError::DatesNotIncreasing {
+                        return Err(Error::DatesNotIncreasing {
                             period: pair[1].period,
                         });
                     }
@@ -418,7 +303,7 @@ fn validate<R: MatchingRecord>(
     let mut previous: Option<NaiveDate> = None;
     for (period, date) in &by_period {
         if previous.is_some_and(|before| *date <= before) {
-            return Err(TrialInputError::DatesNotIncreasing { period: *period });
+            return Err(Error::DatesNotIncreasing { period: *period });
         }
         previous = Some(*date);
     }
@@ -504,12 +389,12 @@ fn plan<R: MatchingRecord>(panel: &[TrialPerson<R>], options: &TrialOptions) -> 
 ///
 /// # Errors
 ///
-/// A [`TrialInputError`] when two people share an id or the periods of a
+/// A [`Error`] when two people share an id or the periods of a
 /// person are not in order.
 pub fn expand_trials<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
-) -> Result<Vec<ExpandedRow>, TrialInputError> {
+) -> Result<Vec<ExpandedRow>, Error> {
     validate(panel, None)?;
     let plan = plan(panel, options);
     let mut by_person: Vec<Vec<(i64, Enrolment)>> = vec![Vec::new(); panel.len()];
@@ -707,7 +592,7 @@ fn offsets<R>(panel: &[TrialPerson<R>]) -> Vec<usize> {
 pub fn expand_trial_columns<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
-) -> Result<TrialColumns, TrialInputError> {
+) -> Result<TrialColumns, Error> {
     validate(panel, None)?;
     let plan = plan(panel, options);
     let offsets = offsets(panel);
@@ -746,13 +631,13 @@ pub fn expand_trial_columns<R: MatchingRecord>(
 ///
 /// # Errors
 ///
-/// As [`expand_trials`], and [`TrialInputError::UnknownMember`] for a member
+/// As [`expand_trials`], and [`Error::UnknownMember`] for a member
 /// that is not enrolled in its trial under `options`.
 pub fn matched_trial_columns<R: MatchingRecord>(
     panel: &[TrialPerson<R>],
     matched: &TrialOutcome,
     options: &TrialOptions,
-) -> Result<(TrialColumns, Vec<usize>), TrialInputError> {
+) -> Result<(TrialColumns, Vec<usize>), Error> {
     validate(panel, None)?;
     let plan = plan(panel, options);
     let offsets = offsets(panel);
@@ -766,7 +651,7 @@ pub fn matched_trial_columns<R: MatchingRecord>(
     for (k, trial) in matched.trials.iter().enumerate() {
         let enrolments = plan.trials.get(&trial.period).map(|(_, e)| e.as_slice());
         for member in &trial.members {
-            let unknown = || TrialInputError::UnknownMember {
+            let unknown = || Error::UnknownMember {
                 id: member.id.clone(),
                 period: trial.period,
             };
@@ -866,16 +751,16 @@ impl PeriodStrata {
         }
     }
 
-    fn check<R>(&self, panel: &[TrialPerson<R>]) -> Result<(), TrialInputError> {
+    fn check<R>(&self, panel: &[TrialPerson<R>]) -> Result<(), Error> {
         let expected: usize = panel.iter().map(|p| p.periods.len()).sum();
         if self.keys.len() != self.values.len() {
-            return Err(TrialInputError::StrataRows {
+            return Err(Error::StrataRows {
                 expected: self.keys.len(),
                 found: self.values.len(),
             });
         }
         match self.values.iter().find(|v| v.len() != expected) {
-            Some(v) => Err(TrialInputError::StrataRows {
+            Some(v) => Err(Error::StrataRows {
                 expected,
                 found: v.len(),
             }),
@@ -1054,17 +939,16 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
 ///
 /// # Errors
 ///
-/// A [`TrialsError`] when the panel is not valid or `run` fails. When `run`
+/// A [`Error`] when the panel is not valid or `run` fails. When `run`
 /// fails for several trials, the error is that of the earliest of them.
-pub fn match_trials<R, E, F>(
+pub fn match_trials<R, F>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
     run: F,
-) -> Result<TrialOutcome, TrialsError<E>>
+) -> Result<TrialOutcome, Error>
 where
     R: MatchingRecord + Sync,
-    E: Send,
-    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E> + Sync,
+    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, Error> + Sync,
 {
     match_trials_with(panel, options, &TrialMatching::default(), run)
 }
@@ -1075,19 +959,18 @@ where
 ///
 /// # Errors
 ///
-/// As [`match_trials`], and a [`TrialInputError`] for a person whose dates do
+/// As [`match_trials`], and a [`Error`] for a person whose dates do
 /// not increase under [`PeriodDates::PerPerson`] or period strata without a
 /// value for every row of the panel.
-pub fn match_trials_with<R, E, F>(
+pub fn match_trials_with<R, F>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
     matching: &TrialMatching<'_>,
     run: F,
-) -> Result<TrialOutcome, TrialsError<E>>
+) -> Result<TrialOutcome, Error>
 where
     R: MatchingRecord + Sync,
-    E: Send,
-    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E> + Sync,
+    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, Error> + Sync,
 {
     validate(panel, Some(matching.dates))?;
     if let Some(strata) = matching.strata {
@@ -1099,7 +982,7 @@ where
         ControlReuse::AcrossTrials => {
             let starts: Vec<(&i64, &(NaiveDate, Vec<Enrolment>))> = plan.trials.iter().collect();
             let context = TrialContext::new(panel, &plan, options, matching, panel_order.as_ref());
-            let results: Vec<Option<Result<TrialResult, TrialsError<E>>>> = starts
+            let results: Vec<Option<Result<TrialResult, Error>>> = starts
                 .into_par_iter()
                 .map(|(period, (date, enrolments))| {
                     context
@@ -1122,17 +1005,17 @@ where
 /// The trials of the plan one after the other, in order of their start. A
 /// person drawn as a control leaves the pools of the later trials under
 /// [`ControlReuse::OncePerRun`].
-fn in_order<R, E, F>(
+fn in_order<R, F>(
     panel: &[TrialPerson<R>],
     plan: &Plan,
     options: &TrialOptions,
     matching: &TrialMatching<'_>,
     panel_order: Option<&IdOrder>,
     run: &F,
-) -> Result<Vec<TrialResult>, TrialsError<E>>
+) -> Result<Vec<TrialResult>, Error>
 where
     R: MatchingRecord,
-    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E>,
+    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, Error>,
 {
     let context = TrialContext::new(panel, plan, options, matching, panel_order);
     let once = options.control_reuse == ControlReuse::OncePerRun;
@@ -1209,16 +1092,16 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
     /// The trial that starts at `period`, and the people drawn as its
     /// controls, or `None` when its pool has no initiator. `used_as_control`
     /// marks the people drawn in earlier trials when they leave the pool.
-    fn run<E, F>(
+    fn run<F>(
         &self,
         period: i64,
         date: NaiveDate,
         enrolments: &[Enrolment],
         used_as_control: Option<&[bool]>,
         run: &F,
-    ) -> Option<Result<RunTrial, TrialsError<E>>>
+    ) -> Option<Result<RunTrial, Error>>
     where
-        F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, E>,
+        F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, Error>,
     {
         let (panel, options) = (self.panel, self.options);
         let pool: Vec<&Enrolment> = enrolments
@@ -1263,7 +1146,12 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
         };
         let outcome = match run(&trial_pool) {
             Ok(outcome) => outcome,
-            Err(error) => return Some(Err(TrialsError::Matching { period, error })),
+            Err(error) => {
+                return Some(Err(Error::Trial {
+                    period,
+                    source: Box::new(error),
+                }));
+            }
         };
         // The position in the pool of each person of the panel.
         let mut pool_at = vec![usize::MAX; panel.len()];
@@ -1470,7 +1358,7 @@ mod tests {
         let b = person("a", &[(0, true, Some(false), false)]);
         assert!(matches!(
             expand_trials(&[a.clone(), b], &TrialOptions::default()),
-            Err(TrialInputError::DuplicateId { .. })
+            Err(Error::DuplicateId { .. })
         ));
         let c = person(
             "c",
@@ -1478,7 +1366,7 @@ mod tests {
         );
         assert!(matches!(
             expand_trials(&[c], &TrialOptions::default()),
-            Err(TrialInputError::PeriodsNotIncreasing { .. })
+            Err(Error::PeriodsNotIncreasing { .. })
         ));
         let mut d = person("d", &[(0, true, Some(false), false)]);
         d.periods[0].date = day(9);
@@ -1486,11 +1374,9 @@ mod tests {
         assert!(expand_trials(&[a.clone(), d.clone()], &TrialOptions::default()).is_ok());
         assert!(matches!(
             match_trials(&[a, d], &TrialOptions::default(), |pool| {
-                Ok::<_, std::convert::Infallible>(pool.job(1).run())
+                Ok(pool.job(1).run())
             }),
-            Err(TrialsError::Input(TrialInputError::InconsistentDate {
-                period: 0
-            }))
+            Err(Error::InconsistentDate { period: 0 })
         ));
     }
 
@@ -1576,7 +1462,7 @@ mod tests {
                     &options,
                     &TrialMatching::default(),
                     None,
-                    &|pool| Ok::<_, std::convert::Infallible>(job_on(pool, false, ratio)),
+                    &|pool| Ok(job_on(pool, false, ratio)),
                 )
                 .expect("valid");
                 let ordered = in_order(
@@ -1585,7 +1471,7 @@ mod tests {
                     &options,
                     &TrialMatching::default(),
                     order.as_ref(),
-                    &|pool| Ok::<_, std::convert::Infallible>(job_on(pool, true, ratio)),
+                    &|pool| Ok(job_on(pool, true, ratio)),
                 )
                 .expect("valid");
                 let pairs: usize = reference.iter().map(|t| t.outcome.pairs.len()).sum();
@@ -1593,10 +1479,9 @@ mod tests {
                 let reference = format!("{reference:?}");
                 assert_eq!(format!("{ordered:?}"), reference, "seed {seed}");
                 let parallel = || {
-                    let outcome = match_trials(&people, &options, |pool| {
-                        Ok::<_, std::convert::Infallible>(job_on(pool, true, ratio))
-                    })
-                    .expect("valid");
+                    let outcome =
+                        match_trials(&people, &options, |pool| Ok(job_on(pool, true, ratio)))
+                            .expect("valid");
                     format!("{:?}", outcome.trials)
                 };
                 assert_eq!(parallel(), reference, "seed {seed}");
@@ -1613,10 +1498,8 @@ mod tests {
     fn matched_rows_are_the_expanded_rows_of_the_members() {
         let people = panel(7, 600);
         let options = TrialOptions::default();
-        let matched = match_trials(&people, &options, |pool| {
-            Ok::<_, std::convert::Infallible>(job_on(pool, true, 2))
-        })
-        .expect("valid");
+        let matched =
+            match_trials(&people, &options, |pool| Ok(job_on(pool, true, 2))).expect("valid");
         let members: usize = matched.trials.iter().map(|t| t.members.len()).sum();
         assert!(members > 100, "{members} members");
         for censor_at_deviation in [true, false] {
@@ -1661,14 +1544,14 @@ mod tests {
         let people = panel(4, 500);
         let failed = match_trials(&people, &TrialOptions::default(), |pool| {
             if pool.period() >= 2 {
-                Err(pool.period())
+                Err(Error::option("test", pool.period().to_string()))
             } else {
                 Ok(job_on(pool, true, 1))
             }
         });
-        let Err(TrialsError::Matching { period, error }) = failed else {
+        let Err(Error::Trial { period, source }) = failed else {
             panic!("a trial fails");
         };
-        assert_eq!((period, error), (2, 2));
+        assert_eq!((period, *source), (2, Error::option("test", "2")));
     }
 }

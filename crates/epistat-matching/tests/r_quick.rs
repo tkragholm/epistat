@@ -29,11 +29,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceRecord, CovariateValue, DistanceSpec, MatchMethod, MatchSpec, QuickMatchError,
-    QuickMatchOptions, QuickMatchOutcome, SeedMethod, SpecInput, SpecOutput, quick_clusters,
-    quick_match_subclasses, run_spec,
+    BalanceRecord, CovariateValue, DistanceSpec, MatchMethod, MatchSpec, QuickMatchOptions,
+    QuickMatchOutcome, SeedMethod, SpecInput, SpecOutput, quick_clusters, quick_match_subclasses,
+    run_spec,
 };
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
@@ -549,7 +550,7 @@ fn refuses_what_cannot_be_matched() {
     let options = QuickMatchOptions::default();
     assert_eq!(
         quick_clusters(&points, 1, &[true, true, true, true], &options).unwrap_err(),
-        QuickMatchError::TooFewUnits { stratum: None }
+        Error::TooFewUnits { stratum: None }
     );
     let bad = QuickMatchOptions {
         size: Some(1),
@@ -557,7 +558,7 @@ fn refuses_what_cannot_be_matched() {
     };
     assert_eq!(
         quick_clusters(&points, 1, &[true, false, true, false], &bad).unwrap_err(),
-        QuickMatchError::SizeBelowMinimums
+        Error::SizeBelowMinimums
     );
 }
 

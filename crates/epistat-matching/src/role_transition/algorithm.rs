@@ -653,7 +653,7 @@ fn match_with_role_indexing_with_channel_internal<
     let validated = match config.criteria.validate() {
         Ok(validated) => validated,
         Err(err) => {
-            return refused_outcome(cohort.len(), InvalidCriteriaReason::from(err));
+            return refused_outcome(cohort.len(), InvalidCriteriaReason::of(&err));
         }
     };
 

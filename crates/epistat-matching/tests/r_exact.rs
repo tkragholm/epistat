@@ -25,6 +25,7 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
@@ -58,7 +59,7 @@ fn reference() -> Reference {
     load_reference("matchit_exact.json")
 }
 
-fn ours(data: &Dataset) -> Result<ExactMatchOutcome, ExactMatchError> {
+fn ours(data: &Dataset) -> Result<ExactMatchOutcome, Error> {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
     let mut anchors = Vec::new();
     let mut candidates = Vec::new();
@@ -148,12 +149,7 @@ fn subclasses_and_weights_match_matchit() {
     for data in &reference.datasets {
         let got = ours(data);
         if data.runs.iter().all(|run| run.error) {
-            assert_eq!(
-                got.unwrap_err(),
-                ExactMatchError::NoSharedStratum,
-                "{}",
-                data.name
-            );
+            assert_eq!(got.unwrap_err(), Error::NoSharedStratum, "{}", data.name);
             compared += 1;
             continue;
         }

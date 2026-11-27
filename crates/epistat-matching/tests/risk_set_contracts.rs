@@ -354,14 +354,13 @@ fn run_trials(
     replacement: bool,
 ) -> TrialOutcome {
     match_trials(panel, options, |pool| {
-        Ok::<_, std::convert::Infallible>(
-            pool.job(trial_seed(1, pool.period()))
-                .with_ratio(MatchRatio::new(1).unwrap())
-                .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
-                .with_age_limit(AgeLimitYears::new(100).unwrap())
-                .with_replacement(replacement)
-                .run(),
-        )
+        Ok(pool
+            .job(trial_seed(1, pool.period()))
+            .with_ratio(MatchRatio::new(1).unwrap())
+            .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
+            .with_age_limit(AgeLimitYears::new(100).unwrap())
+            .with_replacement(replacement)
+            .run())
     })
     .unwrap()
 }
