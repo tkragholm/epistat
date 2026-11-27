@@ -6,8 +6,10 @@
 //! table (exit and entry time, status, weight, strata, clusters, subject and
 //! starting state), and a design matrix where they have covariates. They return
 //! plain structs and give the same bits on the same input, whatever the number
-//! of threads. Where an estimator bootstraps, the caller supplies the seeds,
-//! and each replicate depends on its seed only, through [`epistat_rng`].
+//! of threads. Where an estimator bootstraps, the caller gives a [`Bootstrap`]
+//! with a root seed, and replicate `r` depends on `replicate_seed(seed, r)`
+//! only, through [`epistat_rng`]. Invalid input is an [`Error`] of kind
+//! input; confidence levels are a [`Level`].
 //!
 //! # Contents
 //!

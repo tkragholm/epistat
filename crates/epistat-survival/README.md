@@ -80,6 +80,7 @@ Survival analysis for follow-up data in R's vocabulary, checked against `surviva
   `survSplit`, `tmerge` and `survcondense`.
 
 Most estimators read a `SurvData`, the checked columns of a follow-up table.
-Bootstrap replicates are seeded from the caller's seeds through `epistat-rng`,
-and results do not depend on the number of threads. With the `arrow` feature a
+A bootstrap takes a root seed from the caller, replicate `r` drawing from
+`epistat_rng::replicate_seed(seed, r)`, and results do not depend on the number
+of threads. With the `arrow` feature a
 `SurvData` is built from Apache Arrow arrays without copying the columns.
