@@ -113,6 +113,7 @@ use epistat_core::day;
 use epistat_linalg::Mat;
 use rayon::prelude::*;
 
+use crate::check::refuse_non_finite;
 use crate::error::{Error, Result};
 
 /// The calendar stratum within which time-stratified referents are chosen.
@@ -615,13 +616,15 @@ pub fn exposure_in_windows(
 ///
 /// # Errors
 ///
-/// An input error when the two have different lengths.
+/// An input error when the two have different lengths or an exposure is not
+/// finite.
 pub fn case_time_control_design(exposure: &[f64], case_group: &[bool]) -> Result<Mat<f64>> {
     if exposure.len() != case_group.len() {
         return Err(invalid(
             "exposure and case_group must have one entry per window",
         ));
     }
+    refuse_non_finite(exposure, "exposure")?;
     Ok(Mat::from_fn(exposure.len(), 2, |i, j| {
         if j == 0 || case_group[i] {
             exposure[i]
