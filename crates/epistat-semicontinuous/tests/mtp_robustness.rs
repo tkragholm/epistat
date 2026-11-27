@@ -1,10 +1,46 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
-use epistat_semicontinuous::{
-    LongitudinalModelInput, MtpFitOptions, MtpMultiChainOptions, MtpProposalTuning,
-    MtpSamplerConfig, fit_mtp_input_multi_chain_with_config, fit_mtp_input_with_posterior_config,
+use epistat_semicontinuous::LongitudinalData;
+use epistat_semicontinuous::mtp::{
+    self, MtpModel, MtpOptions, MtpPosteriorSamples, MtpProposalTuning,
     posterior_predictive_summary,
 };
+
+/// The columns of a simulated panel.
+struct Panel {
+    outcome: Vec<f64>,
+    x_binary: Mat<f64>,
+    x_mean: Mat<f64>,
+    subject_ids: Vec<u32>,
+    time: Vec<f64>,
+}
+
+impl Panel {
+    fn data(&self) -> LongitudinalData<'_> {
+        LongitudinalData::builder(
+            &self.outcome,
+            self.x_binary.as_ref(),
+            self.x_mean.as_ref(),
+            &self.subject_ids,
+            &self.time,
+        )
+        .build()
+        .expect("data")
+    }
+}
+
+/// The options with one chain, keeping its draws.
+fn one_chain(options: MtpOptions) -> MtpOptions {
+    MtpOptions {
+        chains: 1,
+        keep_draws: true,
+        ..options
+    }
+}
+
+fn draws(model: &MtpModel) -> &MtpPosteriorSamples {
+    &model.draws.as_ref().expect("draws")[0]
+}
 
 fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).unwrap_or(u32::MAX))
@@ -40,7 +76,7 @@ fn simulate_mtp_panel(
     beta: [f64; 2],
     omega_sq: f64,
     seed: u64,
-) -> LongitudinalModelInput {
+) -> Panel {
     let nrows = n_subjects * periods;
     let omega = omega_sq.sqrt();
     let mut rng = Stream::seeded(seed);
@@ -68,32 +104,28 @@ fn simulate_mtp_panel(
             outcome.push(y);
             x_binary.extend_from_slice(&[1.0, t]);
             x_mean.extend_from_slice(&[1.0, t]);
-            subject_ids.push(u64::try_from(subject + 1).unwrap_or(u64::MAX));
+            subject_ids.push(u32::try_from(subject + 1).unwrap_or(u32::MAX));
             time.push(usize_to_f64(period));
         }
     }
 
-    LongitudinalModelInput::new(
-        Mat::from_fn(nrows, 1, |row, _| outcome[row]),
-        Mat::from_fn(nrows, 2, |row, col| x_binary[2 * row + col]),
-        Mat::from_fn(nrows, 2, |row, col| x_mean[2 * row + col]),
+    Panel {
+        outcome,
+        x_binary: Mat::from_fn(nrows, 2, |row, col| x_binary[2 * row + col]),
+        x_mean: Mat::from_fn(nrows, 2, |row, col| x_mean[2 * row + col]),
         subject_ids,
         time,
-    )
+    }
 }
 
-fn zero_rate(input: &LongitudinalModelInput) -> f64 {
-    let zeros = (0..input.outcome.nrows())
-        .filter(|&row| input.outcome[(row, 0)] <= 0.0)
-        .count();
-    usize_to_f64(zeros) / usize_to_f64(input.outcome.nrows())
+fn zero_rate(input: &Panel) -> f64 {
+    let zeros = input.outcome.iter().filter(|&&y| y <= 0.0).count();
+    usize_to_f64(zeros) / usize_to_f64(input.outcome.len())
 }
 
-fn high_tail_ratio(input: &LongitudinalModelInput, threshold: f64) -> f64 {
-    let positives = (0..input.outcome.nrows())
-        .filter(|&row| input.outcome[(row, 0)] > threshold)
-        .count();
-    usize_to_f64(positives) / usize_to_f64(input.outcome.nrows())
+fn high_tail_ratio(input: &Panel, threshold: f64) -> f64 {
+    let positives = input.outcome.iter().filter(|&&y| y > threshold).count();
+    usize_to_f64(positives) / usize_to_f64(input.outcome.len())
 }
 
 #[test]
@@ -103,20 +135,19 @@ fn mtp_recovers_key_parameters_on_synthetic_data() {
     let true_omega_sq = 0.45;
 
     let input = simulate_mtp_panel(120, 4, true_alpha, true_beta, true_omega_sq, 42);
-    let config = MtpSamplerConfig::builder()
-        .fit_options(
-            MtpFitOptions::builder()
-                .iterations(3000)
-                .burn_in(1000)
-                .thin(6)
-                .build(),
-        )
-        .proposal_tuning(MtpProposalTuning::builder().adaptation_interval(40).build())
-        .build();
+    let options = one_chain(MtpOptions {
+        iterations: 3000,
+        burn_in: 1000,
+        thin: 6,
+        proposal: MtpProposalTuning {
+            adaptation_interval: 40,
+            ..MtpProposalTuning::default()
+        },
+        ..MtpOptions::new(42)
+    });
 
-    let (_model, report, _posterior) =
-        fit_mtp_input_with_posterior_config(&input, config).expect("fit should run");
-    let summary = report
+    let model = mtp::fit(&input.data(), &options).expect("fit should run");
+    let summary = model
         .posterior_summary
         .expect("posterior summary should be present");
 
@@ -145,13 +176,8 @@ fn mtp_recovers_key_parameters_on_synthetic_data() {
 #[test]
 fn mtp_split_rhat_below_threshold_on_synthetic_data() {
     let input = simulate_mtp_panel(120, 4, [-0.35, 0.8], [1.2, 0.55], 0.45, 42);
-    let (_model, report) = fit_mtp_input_multi_chain_with_config(
-        &input,
-        MtpSamplerConfig::default(),
-        MtpMultiChainOptions { chains: 4 },
-    )
-    .expect("fit should run");
-    let convergence = report.convergence;
+    let model = mtp::fit(&input.data(), &MtpOptions::new(42)).expect("fit should run");
+    let convergence = model.convergence.expect("convergence");
     for (name, rhat) in [
         ("alpha[1]", convergence.alpha_split_rhat[1]),
         ("beta[1]", convergence.beta_split_rhat[1]),
@@ -168,16 +194,18 @@ fn mtp_stays_stable_under_extreme_zero_inflation() {
     let observed_zero_rate = zero_rate(&input);
     assert!(observed_zero_rate > 0.9);
 
-    let config = MtpSamplerConfig::builder()
-        .fit_options(MtpFitOptions::builder().iterations(320).burn_in(80).build())
-        .build();
+    let options = one_chain(MtpOptions {
+        iterations: 320,
+        burn_in: 80,
+        ..MtpOptions::new(42)
+    });
 
-    let (_model, report, posterior) =
-        fit_mtp_input_with_posterior_config(&input, config).expect("fit should run");
-    assert!(!posterior.draws.is_empty());
-    assert!(report.posterior_summary.is_some());
+    let model = mtp::fit(&input.data(), &options).expect("fit should run");
+    let posterior = draws(&model);
+    assert_ne!(posterior.draws.len(), 0);
+    assert!(model.posterior_summary.is_some());
 
-    let ppc = posterior_predictive_summary(&posterior, &input, 10).expect("ppc should run");
+    let ppc = posterior_predictive_summary(posterior, &input.data(), 10).expect("ppc should run");
     assert!(ppc.predicted_zero_rate.mean.is_finite());
     assert!(ppc.predicted_zero_rate.mean > 0.75);
     assert!(ppc.predicted_mean.mean.is_finite());
@@ -188,23 +216,25 @@ fn mtp_stays_stable_under_highly_skewed_positive_tail() {
     let input = simulate_mtp_panel(120, 4, [-0.2, 0.25], [0.9, 0.35], 2.4, 99);
     assert!(high_tail_ratio(&input, 30.0) > 0.01);
 
-    let config = MtpSamplerConfig::builder()
-        .fit_options(MtpFitOptions::builder().iterations(320).burn_in(80).build())
-        .proposal_tuning(
-            MtpProposalTuning::builder()
-                .log_omega_draw_scale(0.02)
-                .build(),
-        )
-        .build();
+    let options = one_chain(MtpOptions {
+        iterations: 320,
+        burn_in: 80,
+        proposal: MtpProposalTuning {
+            log_omega_draw_scale: 0.02,
+            ..MtpProposalTuning::default()
+        },
+        ..MtpOptions::new(42)
+    });
 
-    let (_model, report, posterior) =
-        fit_mtp_input_with_posterior_config(&input, config).expect("fit should run");
-    let summary = report
+    let model = mtp::fit(&input.data(), &options).expect("fit should run");
+    let summary = model
         .posterior_summary
+        .as_ref()
         .expect("posterior summary should be present");
-    assert!(summary.omega_sq.expect("omega summary").mean > 0.5);
+    assert!(summary.omega_sq.as_ref().expect("omega summary").mean > 0.5);
 
-    let ppc = posterior_predictive_summary(&posterior, &input, 10).expect("ppc should run");
+    let ppc =
+        posterior_predictive_summary(draws(&model), &input.data(), 10).expect("ppc should run");
     assert!(ppc.predicted_mean.mean.is_finite());
     assert!(ppc.brier_score.mean.is_finite());
 }

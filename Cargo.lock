@@ -833,7 +833,6 @@ name = "epistat-semicontinuous"
 version = "0.1.0"
 dependencies = [
  "approx",
- "bon",
  "criterion",
  "epistat-core",
  "epistat-glm",

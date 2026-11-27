@@ -1,15 +1,13 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use epistat_core::Level;
 use epistat_linalg::Mat;
-use epistat_semicontinuous::models::two_part::{ConfidenceInterval, bootstrap_percentile_ci};
+use epistat_semicontinuous::two_part::percentile_intervals;
 
 fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).expect("benchmark size fits u32"))
 }
 
-fn bootstrap_percentile_ci_sorted_reference(
-    betas: &[Mat<f64>],
-    alpha: f64,
-) -> Vec<ConfidenceInterval> {
+fn bootstrap_percentile_ci_sorted_reference(betas: &[Mat<f64>], alpha: f64) -> Vec<(f64, f64)> {
     if betas.is_empty() {
         return Vec::new();
     }
@@ -20,7 +18,7 @@ fn bootstrap_percentile_ci_sorted_reference(
         values.sort_by(f64::total_cmp);
         let lower = epistat_stats::quantile::type7(&values, alpha / 2.0).unwrap();
         let upper = epistat_stats::quantile::type7(&values, 1.0 - alpha / 2.0).unwrap();
-        intervals.push(ConfidenceInterval { lower, upper });
+        intervals.push((lower, upper));
     }
     intervals
 }
@@ -40,12 +38,13 @@ fn build_betas(reps: usize, coefficients: usize) -> Vec<Mat<f64>> {
 fn bench_two_part_bootstrap_percentile_ci(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("two_part_bootstrap_percentile_ci");
     let coefficients = 12usize;
+    let level = Level::alpha(0.05).expect("level");
     for reps in [200usize, 999, 5_000] {
         let betas = build_betas(reps, coefficients);
         group.throughput(Throughput::Elements((reps as u64) * (coefficients as u64)));
         group.bench_function(format!("current_select/reps={reps}"), |bench| {
             bench.iter(|| {
-                let _ = bootstrap_percentile_ci(&betas, 0.05);
+                let _ = percentile_intervals(&betas, level);
             });
         });
         group.bench_function(format!("reference_sort/reps={reps}"), |bench| {
