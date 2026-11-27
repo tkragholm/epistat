@@ -18,10 +18,10 @@ use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("glm ate", 3023, 0x62aa_2817_d4ad_88a7),
-    ("glm att", 3023, 0xda72_a274_54a9_3cfe),
-    ("glm atc", 3023, 0x3672_dce9_4894_b66c),
-    ("core truncated", 3023, 0x06b0_9307_64f2_2aa8),
+    ("glm ate", 9023, 0xe767_230d_7417_9751),
+    ("glm att", 9023, 0xc823_15e5_4e7e_6512),
+    ("glm atc", 9023, 0xec7a_6a9c_28d4_c69b),
+    ("core truncated", 9023, 0xe14d_1353_3315_35de),
 ];
 
 fn outputs() -> Vec<(String, Vec<f64>)> {
