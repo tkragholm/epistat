@@ -37,7 +37,7 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhConfig, DcdhObservation, DrDidConfig,
-    StaggeredPanel, TwfeConfig, TwfeSpec, estimate_att_gt_dr_panel, estimate_dcdh,
+    StaggeredPanel, TwfeConfig, TwfeSpec, estimate_att_gt_dr_panel_with_influence, estimate_dcdh,
     estimate_dcdh_bootstrap, estimate_twfe,
 };
 
@@ -268,7 +268,9 @@ fn main() {
         drdid: DrDidConfig::default(),
     };
     let (times, estimates) = common::timed(common::reps(), || {
-        estimate_att_gt_dr_panel(&rows, config).expect("att_gt")
+        estimate_att_gt_dr_panel_with_influence(&rows, config)
+            .map(|out| out.estimates)
+            .expect("att_gt")
     });
     let mut lines = Lines::default();
     for e in &estimates {

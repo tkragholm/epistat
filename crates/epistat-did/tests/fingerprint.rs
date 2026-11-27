@@ -6,10 +6,6 @@
 //! the hash alone and a value that moves in its last bit changes it. `Debug`
 //! prints an `f64` with the fewest digits that read back to the same bits.
 //! Run with `--nocapture` to print the current hashes.
-#![expect(
-    deprecated,
-    reason = "the fingerprint pins the deprecated bands until they are removed"
-)]
 
 use std::fmt::Debug;
 
@@ -28,12 +24,11 @@ use epistat_did::{
     aggregate_efficient_att_gt_event_time,
     assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
-    att_gt_clustered_standard_errors, att_gt_mboot_bands, att_gt_simultaneous_bands,
-    clustered_standard_error_from_index, compute_original_confidence_set,
-    compute_relative_magnitude_confidence_set, compute_relative_magnitude_identified_set,
-    estimate_acrt_sieve, estimate_att_gt, estimate_att_gt_dr_efficient_with_influence,
-    estimate_att_gt_dr_panel_with_influence, estimate_att_gt_dr_with_influence,
-    estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
+    att_gt_clustered_standard_errors, att_gt_mboot_bands, clustered_standard_error_from_index,
+    compute_original_confidence_set, compute_relative_magnitude_confidence_set,
+    compute_relative_magnitude_identified_set, estimate_acrt_sieve, estimate_att_gt,
+    estimate_att_gt_dr_efficient_with_influence, estimate_att_gt_dr_panel_with_influence,
+    estimate_att_gt_dr_with_influence, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
     estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
     estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
     estimate_att_two_by_two, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
@@ -588,10 +583,6 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         )),
     ));
     out.push((
-        "simultaneous_bands",
-        digest(&att_gt_simultaneous_bands(&fitted.estimates, bands)),
-    ));
-    out.push((
         "clustered_standard_errors",
         digest(&att_gt_clustered_standard_errors(
             &fitted.estimates,
@@ -1050,7 +1041,6 @@ const GOLDEN: &[(&str, u64)] = &[
     ("pretrend_wald", 0x8f10_ca3c_4156_c995),
     ("mboot_bands", 0xb8ba_24d8_c5f3_60f0),
     ("mboot_bands_clustered", 0x9c23_7ed5_f361_ca27),
-    ("simultaneous_bands", 0xc259_eb6c_1fd4_c655),
     ("clustered_standard_errors", 0x121c_5c2e_b2b8_f6f3),
     ("clustered_standard_error_from_index", 0xc62a_1ff2_fb3a_07c3),
     ("att_gt_dr_rc", 0x37ef_b315_808d_1e84),

@@ -8,15 +8,11 @@ use std::hash::Hash;
 use thiserror::Error;
 
 pub mod did_clusters;
-/// Long-form export of influence functions and covariances.
-pub mod export;
 // Gated: the HonestDiD sensitivity machinery is the only consumer of the
 // `clarabel` conic solver. Off by default so the register pipeline does not
 // link it. Enable with `--features honest`.
 #[cfg(feature = "honest")]
 pub mod sensitivity;
-/// Variance and covariance estimators from influence functions.
-pub mod vcov;
 
 use crate::types::{BootstrapConfig, InferenceConfig};
 
@@ -81,7 +77,7 @@ pub enum InferenceError {
 
 /// Whether the confidence level is finite and strictly between 0 and 1.
 #[must_use]
-pub fn validate_confidence_level(confidence_level: f64) -> bool {
+pub(crate) fn validate_confidence_level(confidence_level: f64) -> bool {
     confidence_level.is_finite() && confidence_level > 0.0 && confidence_level < 1.0
 }
 
@@ -101,7 +97,7 @@ pub(crate) fn normal_interval(estimate: f64, se: f64, confidence_level: f64) -> 
 /// Two-sided normal critical value for a confidence level in (0, 1).
 #[must_use]
 pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
-    inverse_standard_normal_cdf(0.5 * confidence_level + 0.5)
+    epistat_stats::dist::normal::quantile(0.5 * confidence_level + 0.5)
 }
 
 /// Standard error of an estimate from its influence function: the standard
@@ -112,7 +108,7 @@ pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
     deprecated,
     reason = "Study I's standard errors stay on the 0.3 influence functions"
 )]
-pub fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
+pub(crate) fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
     epistat_inference::influence::standard_error(influence_function).unwrap_or(f64::NAN)
 }
 
@@ -260,7 +256,7 @@ pub fn clustered_ci_from_influence<L: Eq + Hash>(
 /// not depend on the number of threads. An empty influence function gives
 /// `(NaN, NaN)`.
 #[must_use]
-pub fn multiplier_bootstrap_ci(
+pub(crate) fn multiplier_bootstrap_ci(
     estimate: f64,
     influence_function: &[f64],
     inference: InferenceConfig,
@@ -280,25 +276,11 @@ pub fn multiplier_bootstrap_ci(
     (lower, upper)
 }
 
-/// Type 7 quantile of a sorted sample, with `q` clamped to `[0, 1]`. NaN for an
-/// empty sample.
-#[must_use]
-pub fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
-    epistat_stats::quantile::type7(sorted, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
-}
-
 /// Type 7 quantile of an unsorted sample, which it partially reorders, with
 /// `q` clamped to `[0, 1]`. NaN for an empty sample.
 #[must_use]
-pub fn quantile_unsorted(values: &mut [f64], q: f64) -> f64 {
+pub(crate) fn quantile_unsorted(values: &mut [f64], q: f64) -> f64 {
     epistat_stats::quantile::type7_unsorted(values, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
-}
-
-/// Inverse of the standard normal distribution function (Wichura's AS 241).
-#[inline]
-#[must_use]
-pub fn inverse_standard_normal_cdf(p: f64) -> f64 {
-    epistat_stats::dist::normal::quantile(p)
 }
 
 #[cfg(test)]
@@ -306,6 +288,10 @@ mod tests {
     use super::*;
     use crate::util::usize_to_f64;
     use epistat_rng::Stream;
+
+    fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
+        epistat_stats::quantile::type7(sorted, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
+    }
 
     fn multiplier_bootstrap_ci_sorted_reference(
         estimate: f64,
@@ -484,27 +470,6 @@ mod tests {
                 cluster_len: 1,
             }
         );
-    }
-
-    #[test]
-    fn covariance_matrix_matches_scalar_variance_on_diagonal() {
-        let influence = vec![vec![2.0, -1.0, 0.0, 1.0], vec![1.0, 1.0, -1.0, -1.0]];
-        let covariance = vcov::covariance_matrix_from_influence_matrix(&influence).unwrap();
-        let se = standard_error_from_influence(&influence[0]);
-        assert!((covariance[0][0] - se * se).abs() < 1e-12);
-        assert_eq!(covariance.len(), 2);
-        assert_eq!(covariance[0].len(), 2);
-    }
-
-    #[test]
-    fn clustered_covariance_matrix_aggregates_by_cluster() {
-        let influence = vec![vec![1.0, 2.0, -1.0, -2.0], vec![0.5, 0.5, -0.5, -0.5]];
-        let labels = ["a", "a", "b", "b"];
-        let covariance =
-            vcov::clustered_covariance_matrix_from_influence_matrix(&influence, &labels).unwrap();
-        let se = clustered_standard_error_from_influence(&influence[0], &labels).unwrap();
-        assert!((covariance[0][0] - se * se).abs() < 1e-12);
-        assert!(covariance[0][1].is_finite());
     }
 
     #[test]

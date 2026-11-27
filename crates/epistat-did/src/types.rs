@@ -225,7 +225,7 @@ impl DidCell {
 
 /// Summary statistics for one 2x2 cell.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CellSummary {
+pub(crate) struct CellSummary {
     /// The 2x2 cell concerned.
     pub cell: DidCell,
     /// Number of observations in the cell.
@@ -243,7 +243,7 @@ pub struct CellSummary {
 
 /// Input diagnostics across all 2x2 cells.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DidInputSummary {
+pub(crate) struct DidInputSummary {
     /// Summary of the treated pre-period cell.
     pub treated_pre: CellSummary,
     /// Summary of the treated post-period cell.
@@ -254,6 +254,7 @@ pub struct DidInputSummary {
     pub control_post: CellSummary,
 }
 
+#[cfg(test)]
 impl DidInputSummary {
     /// Total number of observations over the four cells.
     #[must_use]
@@ -274,81 +275,6 @@ impl DidInputSummary {
             DidCell::ControlPost => self.control_post,
         }
     }
-}
-
-/// One event-time estimate point for dynamic `DiD` aggregation.
-#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
-pub struct EventTimePoint {
-    /// Event time, the calendar period minus the first treated period.
-    pub event_time: i32,
-    /// Point estimate at this event time.
-    pub estimate: f64,
-    /// Standard error of the point estimate.
-    pub se: f64,
-    /// Weight of the point in the aggregate under
-    /// [`EventTimeWeighting::ByWeight`], finite and positive, 1.0 by default.
-    /// It is validated but not used under [`EventTimeWeighting::Equal`].
-    #[builder(default = 1.0)]
-    pub weight: f64,
-}
-
-impl EventTimePoint {
-    /// Builds a point with weight 1.0.
-    #[must_use]
-    pub const fn new(event_time: i32, estimate: f64, se: f64) -> Self {
-        Self {
-            event_time,
-            estimate,
-            se,
-            weight: 1.0,
-        }
-    }
-}
-
-/// How points at the same event time are weighted when they are aggregated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EventTimeWeighting {
-    /// Every point has the same weight, so the aggregate is the simple mean.
-    Equal,
-    /// Points are weighted by their `weight`, normalised to sum to 1.
-    ByWeight,
-}
-
-/// Aggregated event-time estimate with confidence interval.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EventTimeEstimate {
-    /// Event time, the calendar period minus the first treated period.
-    pub event_time: i32,
-    /// Weighted mean of the point estimates at this event time.
-    pub estimate: f64,
-    /// Standard error of the estimate, taking the points as independent.
-    pub se: f64,
-    /// Lower bound of the two-sided normal confidence interval.
-    pub ci_low: f64,
-    /// Upper bound of the two-sided normal confidence interval.
-    pub ci_high: f64,
-    /// Number of points aggregated.
-    pub points: usize,
-    /// Sum of the weights used, which is `points` under
-    /// [`EventTimeWeighting::Equal`].
-    pub total_weight: f64,
-}
-
-/// Errors returned by event-time aggregation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum EventTimeError {
-    /// The confidence level is not strictly between 0 and 1.
-    #[error("confidence_level must be finite and in (0, 1)")]
-    InvalidConfidenceLevel,
-    /// A point estimate is not finite.
-    #[error("event-time point estimate must be finite")]
-    InvalidPointEstimate,
-    /// A standard error is not finite or is negative.
-    #[error("event-time point standard error must be finite and non-negative")]
-    InvalidPointSe,
-    /// A weight is not finite and positive.
-    #[error("event-time point weight must be finite and positive")]
-    InvalidPointWeight,
 }
 
 /// Errors returned by `DiD` estimation.
@@ -1239,7 +1165,7 @@ pub enum AttGtError {
 #[derive(bon::Builder, Debug, Clone, PartialEq)]
 pub struct AttGtDrObservation {
     /// Panel identifier. Required by the panel route
-    /// ([`estimate_att_gt_dr_panel`](crate::estimate_att_gt_dr_panel)), which
+    /// ([`estimate_att_gt_dr_panel_with_influence`](crate::estimate_att_gt_dr_panel_with_influence)), which
     /// differences a unit against itself; ignored by the repeated-cross-section
     /// route, where one row is one observation.
     pub unit_id: Option<i64>,
@@ -1294,133 +1220,6 @@ impl AttGtDrObservation {
             covariates: Vec::new(),
             comparison_cohort: None,
         }
-    }
-}
-
-/// Unified configuration surface for event-study estimation and inference.
-///
-/// This groups settings for DR-DiD pair estimation, ATT(g,t) identification,
-/// and subsequent aggregation/inference into a single hierarchical object.
-#[derive(bon::Builder, Debug, Clone, PartialEq)]
-pub struct EventStudyConfig {
-    /// Confidence level as a probability, such as 0.95.
-    #[builder(default = 0.95)]
-    pub confidence_level: f64,
-    /// Settings of the doubly robust pair estimator.
-    #[builder(default)]
-    pub drdid: DrDidConfig,
-    /// Settings of the ATT(g,t) estimation.
-    #[builder(default)]
-    pub att_gt: AttGtConfig,
-    /// Settings of the aggregation of ATT(g,t) estimates.
-    #[builder(default)]
-    pub aggregation: AttGtAggregationConfig,
-}
-
-impl Default for EventStudyConfig {
-    fn default() -> Self {
-        Self {
-            confidence_level: 0.95,
-            drdid: DrDidConfig::default(),
-            att_gt: AttGtConfig::default(),
-            aggregation: AttGtAggregationConfig::default(),
-        }
-    }
-}
-
-impl EventStudyConfig {
-    /// Validate the configuration and ensure no internal conflicts.
-    ///
-    /// # Errors
-    /// Returns an error string if sub-configs contradict top-level settings.
-    pub fn validate(&self) -> Result<(), String> {
-        // The sub-configurations must agree with the top-level settings.
-        if (self.drdid.confidence_level - self.confidence_level).abs() > 1e-9 {
-            return Err(format!(
-                "Conflicting confidence_level: top-level {} vs drdid {}",
-                self.confidence_level, self.drdid.confidence_level
-            ));
-        }
-        if (self.att_gt.confidence_level.confidence_level - self.confidence_level).abs() > 1e-9 {
-            return Err(format!(
-                "Conflicting confidence_level: top-level {} vs att_gt {}",
-                self.confidence_level, self.att_gt.confidence_level.confidence_level
-            ));
-        }
-        if (self.aggregation.confidence_level.confidence_level - self.confidence_level).abs() > 1e-9
-        {
-            return Err(format!(
-                "Conflicting confidence_level: top-level {} vs aggregation {}",
-                self.confidence_level, self.aggregation.confidence_level.confidence_level
-            ));
-        }
-        Ok(())
-    }
-
-    /// Synchronize all leaf configurations to match the top-level settings.
-    #[must_use]
-    pub const fn sync(mut self) -> Self {
-        self.drdid.confidence_level = self.confidence_level;
-        self.att_gt.confidence_level = self.inference();
-        self.aggregation.confidence_level = self.inference();
-        self
-    }
-
-    /// The confidence level as an [`InferenceConfig`].
-    #[must_use]
-    pub const fn inference(&self) -> InferenceConfig {
-        InferenceConfig {
-            confidence_level: self.confidence_level,
-        }
-    }
-}
-
-/// Human-readable summary of an estimation result for reporting.
-#[derive(serde::Serialize, Debug, Clone, PartialEq)]
-pub struct ReportingSummary {
-    /// Schema version for downstream pipeline compatibility.
-    pub schema_version: u32,
-    /// Version of this crate that produced the result.
-    pub crate_version: String,
-    /// Hash of the configuration, if one was computed.
-    pub config_hash: Option<String>,
-
-    // Raw numeric fields
-    /// Point estimate.
-    pub estimate: f64,
-    /// Standard error of the estimate.
-    pub std_error: f64,
-    /// Lower bound of the confidence interval.
-    pub ci_lower: f64,
-    /// Upper bound of the confidence interval.
-    pub ci_upper: f64,
-    /// p-value of the estimate, if computed.
-    pub p_value: Option<f64>,
-
-    // Context
-    /// Name of the outcome.
-    pub outcome: String,
-    /// Name of the subgroup.
-    pub subgroup: String,
-    /// Name of the estimator.
-    pub estimator: String,
-    /// Number of observations.
-    pub n_obs: usize,
-    /// Number of clusters, if clustered.
-    pub n_clusters: Option<usize>,
-}
-
-impl ReportingSummary {
-    /// Display-formatted estimate string (4 decimal places).
-    #[must_use]
-    pub fn estimate_display(&self) -> String {
-        format!("{:.4}", self.estimate)
-    }
-
-    /// Display-formatted CI string: "[lower, upper]".
-    #[must_use]
-    pub fn ci_display(&self) -> String {
-        format!("[{:.4}, {:.4}]", self.ci_lower, self.ci_upper)
     }
 }
 

@@ -1,18 +1,6 @@
-#![expect(
-    deprecated,
-    reason = "these tests cover the deprecated bands and aggregation until they are removed"
-)]
-
 use std::collections::BTreeMap;
 
-use epistat_rng::Stream;
-use rand::RngExt;
-
-use crate::inference::{quantile_sorted, standard_error_from_influence};
-use crate::types::{
-    AttGtAggregatedEstimate, AttGtAggregationConfig, AttGtAggregationWeighting, AttGtBandConfig,
-    AttGtBandError, AttGtBandEstimate, BasePeriod, DrDidConfig,
-};
+use crate::types::{AttGtAggregationConfig, AttGtAggregationWeighting, BasePeriod, DrDidConfig};
 
 use super::*;
 
@@ -22,98 +10,6 @@ fn row(g: Option<i32>, t: i32, y: f64) -> AttGtObservation {
 
 fn panel_row(id: i64, g: Option<i32>, t: i32, y: f64) -> AttGtObservation {
     AttGtObservation::with_unit_id(id, g, t, y)
-}
-
-fn reference_bands_sorted_quantile(
-    estimates: &[AttGtEstimate],
-    config: AttGtBandConfig,
-) -> Vec<AttGtBandEstimate> {
-    let mut rng = Stream::seeded(config.seed);
-    let mut maxima = Vec::with_capacity(config.reps);
-    let k = estimates.len();
-    for _ in 0..config.reps {
-        let mut max_abs = 0.0_f64;
-        for _ in 0..k {
-            let z = rng.normal();
-            max_abs = max_abs.max(z.abs());
-        }
-        maxima.push(max_abs);
-    }
-    maxima.sort_by(f64::total_cmp);
-    let alpha = (1.0 - config.confidence_level.confidence_level).clamp(0.0, 1.0);
-    let critical = quantile_sorted(&maxima, 1.0 - alpha);
-
-    estimates
-        .iter()
-        .map(|estimate| {
-            let margin = critical * estimate.se;
-            AttGtBandEstimate {
-                group: estimate.group,
-                time: estimate.time,
-                event_time: estimate.event_time,
-                att: estimate.att,
-                se: estimate.se,
-                band_low: estimate.att - margin,
-                band_high: estimate.att + margin,
-            }
-        })
-        .collect()
-}
-
-fn reference_bands_with_influence_sorted_quantile(
-    estimates: &[AttGtEstimate],
-    influence_functions: &[Vec<f64>],
-    config: AttGtBandConfig,
-) -> Vec<AttGtBandEstimate> {
-    let n = influence_functions[0].len();
-    let se_if = influence_functions
-        .iter()
-        .map(|influence| standard_error_from_influence(influence))
-        .collect::<Vec<_>>();
-    let mut rng = Stream::seeded(config.seed);
-    let mut maxima = Vec::with_capacity(config.reps);
-    let mut signs = vec![1.0; n];
-    for _ in 0..config.reps {
-        for sign in &mut signs {
-            *sign = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
-        }
-        let mut max_abs = 0.0_f64;
-        for influence in influence_functions {
-            let numerator = influence
-                .iter()
-                .zip(signs.iter())
-                .map(|(value, sign)| value * sign)
-                .sum::<f64>();
-            let denominator = influence
-                .iter()
-                .map(|value| value * value)
-                .sum::<f64>()
-                .sqrt();
-            let t_stat = numerator / denominator;
-            max_abs = max_abs.max(t_stat.abs());
-        }
-        maxima.push(max_abs);
-    }
-    maxima.sort_by(f64::total_cmp);
-    let alpha = (1.0 - config.confidence_level.confidence_level).clamp(0.0, 1.0);
-    let critical = quantile_sorted(&maxima, 1.0 - alpha);
-
-    estimates
-        .iter()
-        .zip(se_if.iter())
-        .map(|(estimate, se_if)| {
-            let margin = critical * *se_if;
-            AttGtBandEstimate {
-                group: estimate.group,
-                time: estimate.time,
-                event_time: estimate.event_time,
-                att: estimate.att,
-                se: *se_if,
-                band_low: estimate.att - margin,
-                band_high: estimate.att + margin,
-            }
-        })
-        .collect()
 }
 
 fn row_dr(g: Option<i32>, t: i32, y: f64, x: f64) -> AttGtDrObservation {
@@ -309,8 +205,10 @@ fn aggregation_helpers_work() {
     // weights every cell equally.
     let influence = vec![vec![0.1, -0.1]; estimates.len()];
     let panel = UnitPanel::unweighted(vec![Some(2), Some(3)]);
-    let by_event = aggregate_att_gt_event_time(&estimates, cfg).expect("event aggregation");
+    let by_event = aggregate_att_gt_event_time_with_influence(&estimates, &influence, cfg)
+        .expect("event aggregation");
     let event_map = by_event
+        .estimates
         .into_iter()
         .map(|entry| (entry.event_time, entry.summary.estimate))
         .collect::<BTreeMap<_, _>>();
@@ -361,19 +259,6 @@ fn aggregation_helpers_work() {
             let want: f64 = if entry.group == 2 { 60.0 } else { 40.0 };
             assert_eq!(entry.summary.total_weight.to_bits(), want.to_bits());
         }
-        let with_influence =
-            aggregate_att_gt_event_time_with_influence(&estimates, &influence, cfg)
-                .expect("event aggregation");
-        for (entry, plain) in with_influence
-            .estimates
-            .iter()
-            .zip(aggregate_att_gt_event_time(&estimates, cfg).expect("event aggregation"))
-        {
-            assert_eq!(
-                entry.summary.total_weight.to_bits(),
-                plain.summary.total_weight.to_bits()
-            );
-        }
     }
 }
 
@@ -392,7 +277,7 @@ fn estimates_dr_group_time_att_with_never_treated_controls() {
         }
     }
 
-    let estimates = estimate_att_gt_dr(
+    let estimates = estimate_att_gt_dr_with_influence(
         &rows,
         AttGtDrConfig {
             att_gt: AttGtConfig {
@@ -405,6 +290,7 @@ fn estimates_dr_group_time_att_with_never_treated_controls() {
                 .build(),
         },
     )
+    .map(|out| out.estimates)
     .expect("dr att(g,t)");
     let att_map = estimates
         .iter()
@@ -433,7 +319,7 @@ fn estimates_dr_group_time_att_with_not_yet_treated_controls() {
         }
     }
 
-    let estimates = estimate_att_gt_dr(
+    let estimates = estimate_att_gt_dr_with_influence(
         &rows,
         AttGtDrConfig {
             att_gt: AttGtConfig::builder()
@@ -446,6 +332,7 @@ fn estimates_dr_group_time_att_with_not_yet_treated_controls() {
                 .build(),
         },
     )
+    .map(|out| out.estimates)
     .expect("dr att(g,t)");
     let att_map = estimates
         .iter()
@@ -478,7 +365,9 @@ fn dr_group_time_rejects_inconsistent_covariates() {
             ..AttGtDrObservation::new(Some(2), 1, 10.0)
         },
     ];
-    let err = estimate_att_gt_dr(&rows, AttGtDrConfig::default()).expect_err("must fail");
+    let err = estimate_att_gt_dr_with_influence(&rows, AttGtDrConfig::default())
+        .map(|out| out.estimates)
+        .expect_err("must fail");
     assert_eq!(
         err,
         AttGtError::InconsistentCovariateCount {
@@ -554,50 +443,6 @@ fn or_with_influence_outputs_aligned_vectors() {
 }
 
 #[test]
-fn influence_bands_work_with_ipw_estimator_output() {
-    let mut rows = Vec::new();
-    for i in 0..300 {
-        let x = if i % 2 == 0 { 0.0 } else { 1.0 };
-        let noise = if i % 5 == 0 { -0.1 } else { 0.1 };
-        for t in 1..=4 {
-            let t_f = f64::from(t);
-            let base = 0.8f64.mul_add(x, 10.0 + t_f) + noise;
-            rows.push(row_dr(None, t, base, x));
-            if i % 4 != 0 {
-                rows.push(row_dr(Some(2), t, base + if t >= 2 { 2.0 } else { 0.0 }, x));
-            }
-            if i % 3 == 0 {
-                rows.push(row_dr(Some(3), t, base + if t >= 3 { 1.0 } else { 0.0 }, x));
-            }
-        }
-    }
-
-    let out = estimate_att_gt_ipw_with_influence(
-        &rows,
-        AttGtDrConfig {
-            drdid: DrDidConfig::builder()
-                .bootstrap_reps(49)
-                .bootstrap_seed(222)
-                .propensity_clip(0.01)
-                .build(),
-            ..AttGtDrConfig::default()
-        },
-    )
-    .expect("ipw with influence");
-    let bands = att_gt_simultaneous_bands_with_influence(
-        &out.estimates,
-        &out.influence_functions,
-        AttGtBandConfig {
-            reps: 999,
-            seed: 33,
-            ..AttGtBandConfig::default()
-        },
-    )
-    .expect("bands from estimator output");
-    assert_eq!(bands.len(), out.estimates.len());
-}
-
-#[test]
 fn estimates_or_group_time_att() {
     let mut rows = Vec::new();
     for _ in 0..50 {
@@ -612,7 +457,7 @@ fn estimates_or_group_time_att() {
         }
     }
 
-    let estimates = estimate_att_gt_or(
+    let estimates = estimate_att_gt_or_with_influence(
         &rows,
         AttGtDrConfig {
             att_gt: AttGtConfig {
@@ -622,6 +467,7 @@ fn estimates_or_group_time_att() {
             ..AttGtDrConfig::default()
         },
     )
+    .map(|out| out.estimates)
     .expect("or att(g,t)");
     let att_map = estimates
         .iter()
@@ -654,7 +500,7 @@ fn estimates_ipw_group_time_att() {
         }
     }
 
-    let estimates = estimate_att_gt_ipw(
+    let estimates = estimate_att_gt_ipw_with_influence(
         &rows,
         AttGtDrConfig {
             att_gt: AttGtConfig {
@@ -668,6 +514,7 @@ fn estimates_ipw_group_time_att() {
                 .build(),
         },
     )
+    .map(|out| out.estimates)
     .expect("ipw att(g,t)");
 
     let att_map = estimates
@@ -680,266 +527,4 @@ fn estimates_ipw_group_time_att() {
     assert!((att_map[&(2, 4)] - 2.0).abs() < 0.35);
     assert!((att_map[&(3, 3)] - 1.0).abs() < 0.35);
     assert!((att_map[&(3, 4)] - 1.0).abs() < 0.35);
-}
-
-#[test]
-fn computes_simultaneous_bands() {
-    let estimates = vec![
-        AttGtEstimate {
-            group: 2,
-            time: 2,
-            event_time: 0,
-            att: 2.0,
-            se: 0.2,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-        AttGtEstimate {
-            group: 3,
-            time: 3,
-            event_time: 0,
-            att: 1.0,
-            se: 0.2,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-    ];
-
-    let bands = att_gt_simultaneous_bands(
-        &estimates,
-        AttGtBandConfig {
-            reps: 1_999,
-            seed: 7,
-            ..AttGtBandConfig::default()
-        },
-    )
-    .expect("bands");
-
-    assert_eq!(bands.len(), 2);
-    assert!(bands[0].band_low < bands[0].att);
-    assert!(bands[0].band_high > bands[0].att);
-    let width0 = bands[0].band_high - bands[0].band_low;
-    let width1 = bands[1].band_high - bands[1].band_low;
-    assert!((width0 - width1).abs() < 1e-12);
-}
-
-#[test]
-fn computes_simultaneous_bands_with_influence() {
-    let influences = vec![
-        vec![1.0, -1.0, 0.5, -0.5, 0.0, 1.5, -1.5, 0.25],
-        vec![0.5, -0.25, 1.0, -1.0, 0.75, -0.5, 0.25, -0.75],
-    ];
-    let estimates = vec![
-        AttGtEstimate {
-            group: 2,
-            time: 2,
-            event_time: 0,
-            att: 2.0,
-            se: 0.1,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-        AttGtEstimate {
-            group: 3,
-            time: 3,
-            event_time: 0,
-            att: 1.0,
-            se: 0.1,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-    ];
-    let bands = att_gt_simultaneous_bands_with_influence(
-        &estimates,
-        &influences,
-        AttGtBandConfig {
-            reps: 2_499,
-            seed: 19,
-            ..AttGtBandConfig::default()
-        },
-    )
-    .expect("bands with influence");
-
-    assert_eq!(bands.len(), 2);
-    for band in &bands {
-        assert!(band.band_low < band.att);
-        assert!(band.band_high > band.att);
-    }
-    let se0 = standard_error_from_influence(&influences[0]);
-    let se1 = standard_error_from_influence(&influences[1]);
-    assert!((bands[0].se - se0).abs() < 1e-12);
-    assert!((bands[1].se - se1).abs() < 1e-12);
-}
-
-#[test]
-fn simultaneous_bands_matches_sorted_reference() {
-    let estimates = vec![
-        AttGtEstimate {
-            group: 2,
-            time: 2,
-            event_time: 0,
-            att: 2.0,
-            se: 0.2,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-        AttGtEstimate {
-            group: 3,
-            time: 3,
-            event_time: 0,
-            att: 1.0,
-            se: 0.2,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-    ];
-    let config = AttGtBandConfig {
-        reps: 2_999,
-        seed: 1_337,
-        ..AttGtBandConfig::default()
-    };
-
-    let actual = att_gt_simultaneous_bands(&estimates, config).expect("bands");
-    let expected = reference_bands_sorted_quantile(&estimates, config);
-
-    for (a, e) in actual.iter().zip(expected.iter()) {
-        assert_eq!(a.band_low.to_bits(), e.band_low.to_bits());
-        assert_eq!(a.band_high.to_bits(), e.band_high.to_bits());
-    }
-}
-
-#[test]
-fn simultaneous_bands_with_influence_matches_sorted_reference() {
-    let influences = vec![
-        vec![1.0, -1.0, 0.5, -0.5, 0.0, 1.5, -1.5, 0.25],
-        vec![0.5, -0.25, 1.0, -1.0, 0.75, -0.5, 0.25, -0.75],
-    ];
-    let estimates = vec![
-        AttGtEstimate {
-            group: 2,
-            time: 2,
-            event_time: 0,
-            att: 2.0,
-            se: 0.1,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-        AttGtEstimate {
-            group: 3,
-            time: 3,
-            event_time: 0,
-            att: 1.0,
-            se: 0.1,
-            ci_low: 0.0,
-            ci_high: 0.0,
-            treated_n: 100,
-            control_n: 120,
-            total_weight: 220.0,
-        },
-    ];
-    let config = AttGtBandConfig {
-        reps: 2_499,
-        seed: 19,
-        ..AttGtBandConfig::default()
-    };
-
-    let actual =
-        att_gt_simultaneous_bands_with_influence(&estimates, &influences, config).expect("bands");
-    let expected = reference_bands_with_influence_sorted_quantile(&estimates, &influences, config);
-
-    for (a, e) in actual.iter().zip(expected.iter()) {
-        assert_eq!(a.band_low.to_bits(), e.band_low.to_bits());
-        assert_eq!(a.band_high.to_bits(), e.band_high.to_bits());
-    }
-}
-
-#[test]
-fn bands_with_influence_reject_mismatched_counts() {
-    let estimates = vec![AttGtEstimate {
-        group: 2,
-        time: 2,
-        event_time: 0,
-        att: 1.0,
-        se: 0.1,
-        ci_low: 0.0,
-        ci_high: 0.0,
-        treated_n: 10,
-        control_n: 10,
-        total_weight: 20.0,
-    }];
-    let err = att_gt_simultaneous_bands_with_influence(&estimates, &[], AttGtBandConfig::default())
-        .expect_err("must fail");
-    assert_eq!(err, AttGtBandError::InfluenceCountMismatch);
-}
-
-#[test]
-fn simultaneous_bands_reject_invalid_reps() {
-    let estimates = vec![AttGtEstimate {
-        group: 2,
-        time: 2,
-        event_time: 0,
-        att: 1.0,
-        se: 0.1,
-        ci_low: 0.0,
-        ci_high: 0.0,
-        treated_n: 10,
-        control_n: 10,
-        total_weight: 20.0,
-    }];
-    let err = att_gt_simultaneous_bands(
-        &estimates,
-        AttGtBandConfig {
-            reps: 0,
-            ..AttGtBandConfig::default()
-        },
-    )
-    .expect_err("must fail");
-    assert_eq!(err, AttGtBandError::InvalidReps);
-}
-
-#[test]
-fn the_lookups_by_event_time_are_none_for_a_missing_event_time() {
-    let summary = AttGtAggregatedEstimate {
-        estimate: 1.0,
-        se: 0.5,
-        ci_low: 0.0,
-        ci_high: 2.0,
-        components: 1,
-        total_weight: 10.0,
-    };
-    let result = EventTimeResult {
-        estimates: vec![AttGtEventTimeEstimate {
-            event_time: 1,
-            summary,
-        }],
-        influence_functions: vec![vec![0.0]],
-        cluster_index: None,
-        config: EventStudyConfig::default(),
-        outcome_name: None,
-    };
-    assert_eq!(result.se_at(1), Some(0.5));
-    assert_eq!(result.ci_at(1), Some((0.0, 2.0)));
-    assert_eq!(result.se_at(2), None);
-    assert_eq!(result.ci_at(2), None);
 }

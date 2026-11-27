@@ -13,17 +13,17 @@
 //! estimates `a` and `b` is `sum_g s_ga s_gb`. There is no finite-cluster
 //! factor `G / (G - 1)`, which is what `did::aggte` and `did::att_gt` do when
 //! `clustervars` is set and `bstrap = FALSE`. [`clustered_variance_from_index`](crate::clustered_variance_from_index)
-//! and the dataset workflow use the cluster-robust variance with that factor
-//! instead, so the same event study gets two standard errors depending on the
-//! route; the two are not interchangeable.
+//! is the cluster-robust variance with that factor instead, so the same event
+//! study gets two standard errors depending on the route; the two are not
+//! interchangeable.
 //!
 //! R forms the same sums without centring. The two differ by
 //! `mean(psi)^2 / n` per unit, which is zero to rounding for an influence
 //! function evaluated at its own estimate.
 //!
-//! With every unit its own cluster, the standard error is that of
-//! [`standard_error_from_influence`](crate::inference::standard_error_from_influence), up
-//! to the order of the floating-point sums.
+//! With every unit its own cluster, the standard error is the unclustered
+//! one, `sqrt(mean((psi_i - mean(psi))^2) / n)`, up to the order of the
+//! floating-point sums.
 //!
 //! # Determinism
 //!

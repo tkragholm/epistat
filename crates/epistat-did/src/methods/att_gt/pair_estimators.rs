@@ -45,13 +45,6 @@ pub fn estimate_att_gt_dr_with_influence(
     )
 }
 
-pub fn estimate_att_gt_dr(
-    observations: &[AttGtDrObservation],
-    config: AttGtDrConfig,
-) -> Result<Vec<AttGtEstimate>, AttGtError> {
-    estimate_att_gt_dr_with_influence(observations, config).map(|out| out.estimates)
-}
-
 /// `ATT(g,t)` through the LOCALLY EFFICIENT repeated-cross-section estimator.
 ///
 /// [`estimate_att_gt_dr_with_influence`](crate::estimate_att_gt_dr_with_influence) uses the traditional one,

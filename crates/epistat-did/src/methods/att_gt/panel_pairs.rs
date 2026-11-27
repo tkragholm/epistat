@@ -626,9 +626,9 @@ fn estimate_att_gt_panel(
 ///
 /// `did::att_gt(..., panel = TRUE, est_method = "dr")`. The input is first
 /// pre-processed as `did` does it (see [`AttGtSample`](crate::AttGtSample)),
-/// and each cell is fitted by [`crate::estimate_drdid_panel_flat`] on the units
-/// observed at both its periods, with the covariates and the weight of the
-/// earlier period's row. Comparators with a fitted propensity score of 0.995
+/// and each cell is fitted by the panel doubly robust estimator,
+/// [`crate::estimate_drdid_panel`], on the units observed at both its periods,
+/// with the covariates and the weight of the earlier period's row. Comparators with a fitted propensity score of 0.995
 /// or higher are trimmed from the cell, as in `did` and `DRDID`. Under
 /// [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) an
 /// unbalanced panel is fitted cell by cell with
@@ -661,7 +661,7 @@ pub fn estimate_att_gt_dr_panel_with_influence(
 
 /// Panel `ATT(g,t)` by inverse probability weighting,
 /// `did::att_gt(..., panel = TRUE, est_method = "ipw")`: each cell is
-/// [`crate::estimate_ipw_did_panel_flat`], `DRDID::std_ipw_did_panel`, and an
+/// [`crate::estimate_ipw_did_panel`], `DRDID::std_ipw_did_panel`, and an
 /// unbalanced panel under
 /// [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) is fitted
 /// with [`crate::estimate_ipw_did_repeated_cross_section`]. Otherwise as
@@ -678,7 +678,7 @@ pub fn estimate_att_gt_ipw_panel_with_influence(
 
 /// Panel `ATT(g,t)` by outcome regression,
 /// `did::att_gt(..., panel = TRUE, est_method = "reg")`: each cell is
-/// [`crate::estimate_or_did_panel_flat`], `DRDID::reg_did_panel`, and an
+/// [`crate::estimate_or_did_panel`], `DRDID::reg_did_panel`, and an
 /// unbalanced panel under
 /// [`UnbalancedPanel::RepeatedCrossSection`](crate::UnbalancedPanel) is fitted
 /// with [`crate::estimate_or_did_repeated_cross_section`]. Otherwise as
@@ -691,17 +691,6 @@ pub fn estimate_att_gt_or_panel_with_influence(
     config: AttGtDrConfig,
 ) -> Result<AttGtInfluenceOutput, AttGtError> {
     estimate_att_gt_panel(observations, config, Estimator::OutcomeRegression)
-}
-
-/// Panel `ATT(g,t)` without influence functions.
-///
-/// # Errors
-/// As [`estimate_att_gt_dr_panel_with_influence`].
-pub fn estimate_att_gt_dr_panel(
-    observations: &[AttGtDrObservation],
-    config: AttGtDrConfig,
-) -> Result<Vec<AttGtEstimate>, AttGtError> {
-    estimate_att_gt_dr_panel_with_influence(observations, config).map(|out| out.estimates)
 }
 
 /// Each unit's cohort and sampling weight, indexed by the sorted distinct unit

@@ -114,9 +114,8 @@
 //! [`att_gt_clustered_standard_errors`] and the bands, clusters replace the
 //! units by the sums of the centred `psi_i` within each cluster, divided by
 //! `n`, without the factor `G / (G - 1)`, as in `did`; [`did_standard_error`] and
-//! [`did_covariance`] are that variance. The deprecated `EventStudyResult` and
-//! the validated dataset use [`clustered_variance_from_index`] and its
-//! siblings, which are the cluster-robust variance with that factor. The
+//! [`did_covariance`] are that variance. [`clustered_variance_from_index`] and
+//! its siblings are the cluster-robust variance with that factor. The
 //! multiplier bootstrap draws a Rademacher weight per unit or cluster and
 //! replicate, each replicate seeded from the caller's seed and its index, and
 //! a simultaneous band uses the `1 - alpha` quantile of the largest
@@ -169,11 +168,6 @@
 //!     [stat.ME]; 2025.
 #![warn(missing_docs)]
 
-#[expect(
-    deprecated,
-    reason = "the deprecated workflow is built from its own deprecated types"
-)]
-pub(crate) mod dataset;
 pub(crate) mod error;
 pub(crate) mod estimators;
 pub mod inference;
@@ -184,20 +178,9 @@ mod tests;
 pub(crate) mod types;
 pub(crate) mod util;
 
-pub use dataset::{Diagnostic, PanelRecord, Severity, ValidationReport};
-#[expect(
-    deprecated,
-    reason = "re-exports deprecated types until they are removed"
-)]
-pub use dataset::{InferenceDataset, ValidatedInferenceDataset};
-pub use error::{DatasetError, InternalDidError};
 pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
 pub use inference::did_clusters::{
     DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
-};
-pub use inference::export::{
-    InferenceCovarianceRow, InferenceInfluenceRow, build_clustered_inference_covariance_rows,
-    build_inference_covariance_rows, build_inference_influence_rows,
 };
 #[cfg(feature = "honest")]
 pub use inference::sensitivity::{
@@ -255,27 +238,16 @@ pub use inference::{
     ClusterIndex, ClusterSpec, InferenceError, clustered_ci_from_index,
     clustered_standard_error_from_index, clustered_variance_from_index,
 };
-#[cfg(feature = "honest")]
-pub use methods::att_gt::WindowAssessment;
 pub use methods::att_gt::{
     AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, PretestError,
     PretrendWald, UnitPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
     aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
     aggregate_att_gt_overall, att_gt_clustered_standard_errors, att_gt_mboot_bands,
-    estimate_att_gt, estimate_att_gt_dr, estimate_att_gt_dr_efficient_with_influence,
-    estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence,
-    estimate_att_gt_dr_with_influence, estimate_att_gt_ipw,
+    estimate_att_gt, estimate_att_gt_dr_efficient_with_influence,
+    estimate_att_gt_dr_panel_with_influence, estimate_att_gt_dr_with_influence,
     estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or, estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
-    pretrend_wald_test, row_panel, unit_panel,
-};
-#[expect(
-    deprecated,
-    reason = "re-exports deprecated items until they are removed"
-)]
-pub use methods::att_gt::{
-    EventStudyResult, EventTimeResult, aggregate_att_gt_event_time, att_gt_simultaneous_bands,
-    att_gt_simultaneous_bands_with_influence,
+    estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence, pretrend_wald_test,
+    row_panel, unit_panel,
 };
 pub use methods::bacon::{
     BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconWithin, bacon_decomposition,
@@ -289,20 +261,18 @@ pub use methods::dcdh::{
     estimate_dcdh_by_path, estimate_dcdh_heterogeneity,
 };
 pub use methods::did_cc::{
-    DidCcObservationView, estimate_did_cc_robust, estimate_did_cc_robust_from_views,
-    estimate_did_cc_stationary, estimate_did_cc_stationary_from_views, test_did_cc_stationarity,
-    test_did_cc_stationarity_from_views,
+    estimate_did_cc_robust, estimate_did_cc_stationary, test_did_cc_stationarity,
 };
 pub use methods::drdid::improved::{
     estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
 };
 pub use methods::drdid::ipw_or::{
-    estimate_ipw_did_panel, estimate_ipw_did_panel_flat, estimate_ipw_did_repeated_cross_section,
-    estimate_or_did_panel, estimate_or_did_panel_flat, estimate_or_did_repeated_cross_section,
+    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
+    estimate_or_did_repeated_cross_section,
 };
 pub use methods::drdid::panel::{
     PanelFlatInput, PanelNuisanceFit, PanelPropensityCoefficients, estimate_drdid_panel,
-    estimate_drdid_panel_flat, fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
+    fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
 };
 pub use methods::drdid::repeated::estimate_drdid_repeated_cross_section;
 pub use methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
@@ -330,14 +300,7 @@ pub use methods::missing::{
     att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
 pub use methods::staggered::StaggeredPanel;
-#[expect(
-    deprecated,
-    reason = "re-exports a deprecated function until it is removed"
-)]
-pub use methods::standard::aggregate_event_time;
-pub use methods::standard::{
-    estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
-};
+pub use methods::standard::estimate_att_two_by_two;
 pub use methods::sunab::{
     SUNAB_DEFAULT_REFERENCES, SunabBins, SunabCell, SunabConfig, SunabControl, SunabError,
     SunabEstimate, SunabReference, SunabResult, SunabTerm, estimate_sunab,

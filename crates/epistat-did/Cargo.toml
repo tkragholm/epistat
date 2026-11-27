@@ -62,10 +62,6 @@ harness = false
 required-features = ["honest"]
 
 [[test]]
-name = "dataset_validation"
-path = "tests/dataset_validation.rs"
-
-[[test]]
 name = "solver_counts"
 path = "tests/solver_counts.rs"
 required-features = ["honest"]

@@ -102,7 +102,7 @@ pub fn estimate_drdid_panel_flat(
 }
 
 /// The panel DR estimator's two nuisance models, as
-/// [`estimate_drdid_panel_flat`] fits them for its ATT.
+/// [`estimate_drdid_panel`] fits them for its ATT.
 ///
 /// The fits are the estimator's own: the same pruning of `input`'s design, the
 /// same weighted logistic propensity score by maximum likelihood, and the same
@@ -111,7 +111,9 @@ pub fn estimate_drdid_panel_flat(
 /// computed here and play no part in the ATT. Neither accounts for clustering.
 ///
 /// # Errors
-/// As [`estimate_drdid_panel_flat`], and [`DrDidError::SingularSystem`] when
+/// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
+/// if `design_matrix_flat` is not `rows * feature_count` long, and
+/// [`DrDidError::SingularSystem`] when
 /// an information matrix cannot be inverted for the standard errors.
 pub fn fit_drdid_panel_nuisance(
     input: PanelFlatInput<'_>,
@@ -148,8 +150,9 @@ pub fn fit_drdid_panel_nuisance(
 /// fail with [`DrDidError::SingularSystem`] therefore succeeds here.
 ///
 /// # Errors
-/// As [`estimate_drdid_panel_flat`], and the errors of the propensity
-/// iterations.
+/// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
+/// if `design_matrix_flat` is not `rows * feature_count` long, and the errors
+/// of the propensity iterations.
 pub fn fit_drdid_panel_propensity_coefficients(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,

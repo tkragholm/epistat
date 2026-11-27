@@ -4,17 +4,15 @@ use criterion::{
     BenchmarkGroup, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
     measurement::WallTime,
 };
-use epistat_did::inference::multiplier_bootstrap_ci;
 use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, BootstrapConfig, DidCcConfig, DrDidConfig,
-    DrDidObservation, DrDidRepeatedObservation, HonestEventStudyInput, HonestJointPathConfig,
-    HonestPostFunctional, HonestSensitivity, HonestWorkflowConfig, HonestWorkflowDirectionMode,
-    InferenceConfig, RelativeMagnitudeConfidenceSetConfig,
-    assess_honest_event_study_directional_region_with_config,
+    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DidCcConfig, DrDidConfig, DrDidObservation,
+    DrDidRepeatedObservation, HonestEventStudyInput, HonestJointPathConfig, HonestPostFunctional,
+    HonestSensitivity, HonestWorkflowConfig, HonestWorkflowDirectionMode, InferenceConfig,
+    RelativeMagnitudeConfidenceSetConfig, assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config,
     assess_honest_event_study_post_functional_multi_flci_with_config,
     assess_honest_event_study_post_functional_with_config, assess_honest_event_study_workflow,
-    estimate_att_gt_dr, estimate_did_cc_robust, estimate_did_cc_stationary,
+    estimate_att_gt_dr_with_influence, estimate_did_cc_robust, estimate_did_cc_stationary,
     estimate_drdid_improved_repeated_cross_section, estimate_drdid_panel, test_did_cc_stationarity,
 };
 
@@ -223,7 +221,7 @@ fn bench_att_gt_dr(criterion: &mut Criterion) {
     group.throughput(Throughput::Elements(throughput));
     group.bench_function("8k_units_6_periods", |bencher| {
         bencher.iter(|| {
-            estimate_att_gt_dr(
+            estimate_att_gt_dr_with_influence(
                 &rows,
                 AttGtDrConfig {
                     att_gt: AttGtConfig::default(),
@@ -555,34 +553,6 @@ fn bench_did_cc(criterion: &mut Criterion) {
     group.finish();
 }
 
-fn bench_multiplier_bootstrap_ci(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("multiplier_bootstrap_ci");
-    for n in [200usize, 1_000, 5_000] {
-        let influence_function = (0..n)
-            .map(|index| {
-                let index_f = usize_to_f64(index);
-                0.25f64.mul_add((0.17 * index_f).cos(), (0.03 * index_f).sin())
-            })
-            .collect::<Vec<_>>();
-        let throughput = u64::try_from(n).expect("influence length fits u64");
-        group.throughput(Throughput::Elements(throughput));
-        group.bench_function(format!("n{n}_reps999"), |bencher| {
-            bencher.iter(|| {
-                multiplier_bootstrap_ci(
-                    0.7,
-                    &influence_function,
-                    InferenceConfig::new(0.95),
-                    BootstrapConfig {
-                        reps: 999,
-                        seed: 17_431,
-                    },
-                )
-            });
-        });
-    }
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_drdid_panel,
@@ -596,6 +566,5 @@ criterion_group!(
     bench_relative_magnitude_joint_path_region,
     bench_relative_magnitude_directional_basis_region,
     bench_did_cc,
-    bench_multiplier_bootstrap_ci,
 );
 criterion_main!(benches);

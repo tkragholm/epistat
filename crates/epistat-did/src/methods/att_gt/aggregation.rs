@@ -13,37 +13,6 @@ use crate::types::{
 };
 use crate::util::usize_to_f64;
 
-/// Aggregate ATT(g,t) estimates by event-time.
-///
-/// Every cell enters, pre-treatment ones included, and the standard error
-/// combines the components' standard errors as if they were independent, which
-/// understates it when cells share units.
-/// [`aggregate_att_gt_event_time_with_influence`] forms it from the combined
-/// influence function instead.
-///
-/// # Errors
-///
-/// Returns [`AttGtAggregationError`] when estimates/configuration are invalid.
-#[deprecated(
-    note = "adds the variances of the cells as if they were independent, which a cell without \
-            influence functions cannot avoid; use `aggregate_att_gt_event_time_with_influence`, \
-            or `aggregate_att_gt` with `AggteType::Dynamic` for `did::aggte`"
-)]
-pub fn aggregate_att_gt_event_time(
-    estimates: &[AttGtEstimate],
-    config: AttGtAggregationConfig,
-) -> Result<Vec<AttGtEventTimeEstimate>, AttGtAggregationError> {
-    aggregate_by_key(estimates, config, |est| est.event_time).map(|grouped| {
-        grouped
-            .into_iter()
-            .map(|(event_time, summary)| AttGtEventTimeEstimate {
-                event_time,
-                summary,
-            })
-            .collect()
-    })
-}
-
 /// Aggregate ATT(g,t) estimates by event-time while preserving aligned
 /// influence-function vectors for joint-process inference.
 ///
@@ -392,60 +361,6 @@ fn aggregate_post_treatment(
             ))
         })
         .collect()
-}
-
-fn aggregate_by_key<F>(
-    estimates: &[AttGtEstimate],
-    config: AttGtAggregationConfig,
-    key_fn: F,
-) -> Result<BTreeMap<i32, AttGtAggregatedEstimate>, AttGtAggregationError>
-where
-    F: Fn(&AttGtEstimate) -> i32,
-{
-    validate_aggregation_inputs(estimates, config)?;
-
-    let mut grouped = BTreeMap::<i32, Vec<&AttGtEstimate>>::new();
-    for estimate in estimates {
-        grouped.entry(key_fn(estimate)).or_default().push(estimate);
-    }
-
-    Ok(grouped
-        .into_iter()
-        .map(|(key, bucket)| {
-            let raw_total = bucket
-                .iter()
-                .map(|estimate| raw_weight(estimate, config.weighting))
-                .sum::<f64>();
-            let estimate = bucket
-                .iter()
-                .map(|entry| {
-                    let w = raw_weight(entry, config.weighting) / raw_total;
-                    w * entry.att
-                })
-                .sum::<f64>();
-            let variance = bucket
-                .iter()
-                .map(|entry| {
-                    let w = raw_weight(entry, config.weighting) / raw_total;
-                    w * w * entry.se * entry.se
-                })
-                .sum::<f64>();
-            let se = variance.sqrt();
-            let (ci_low, ci_high) =
-                normal_interval(estimate, se, config.confidence_level.confidence_level);
-            (
-                key,
-                AttGtAggregatedEstimate {
-                    estimate,
-                    se,
-                    ci_low,
-                    ci_high,
-                    components: bucket.len(),
-                    total_weight: bucket.iter().map(|entry| entry.total_weight).sum::<f64>(),
-                },
-            )
-        })
-        .collect())
 }
 
 fn validate_aggregation_inputs(

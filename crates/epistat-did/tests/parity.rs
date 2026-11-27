@@ -24,8 +24,9 @@ use epistat_did::{
     compute_relative_magnitude_flci_with_config, compute_relative_magnitude_identified_set,
     compute_relative_magnitude_multi_flci, compute_relative_magnitude_multi_flci_with_config,
     estimate_att_gt, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
-    estimate_drdid_panel, inference::vcov::joint_wald_test, test_did_cc_stationarity,
+    estimate_drdid_panel, test_did_cc_stationarity,
 };
+use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -235,9 +236,11 @@ struct DidCcScaffoldFixture {
 fn parity_wald_test() {
     let reference: WaldRef = load_json("tests/data/wald_test_ref.json");
 
-    let (stat, p, _) = joint_wald_test(&reference.estimates, &reference.vcov).expect("wald");
-    assert!((stat - reference.statistic).abs() < 1e-10);
-    assert!((p - reference.p_value).abs() < 1e-10);
+    let k = reference.estimates.len();
+    let vcov = Mat::from_fn(k, k, |i, j| reference.vcov[i][j]);
+    let test = epistat_inference::wald::wald(&reference.estimates, vcov.as_ref()).expect("wald");
+    assert!((test.statistic - reference.statistic).abs() < 1e-10);
+    assert!((test.p_value - reference.p_value).abs() < 1e-10);
 }
 
 #[test]
