@@ -223,9 +223,11 @@ fn run_calendar(
         .with_alive_check()
         .with_resident_check();
     if seed.is_some() {
-        job.run()
+        job.run().expect("a valid job")
     } else {
-        job.with_strategy(DeterministicSelection).run()
+        job.with_strategy(DeterministicSelection)
+            .run()
+            .expect("a valid job")
     }
 }
 
@@ -251,9 +253,11 @@ fn run_calendar_policy(
         .with_resident_check()
         .with_risk_set_policy(policy);
     if seed.is_some() {
-        job.run()
+        job.run().expect("a valid job")
     } else {
-        job.with_strategy(DeterministicSelection).run()
+        job.with_strategy(DeterministicSelection)
+            .run()
+            .expect("a valid job")
     }
 }
 
@@ -271,6 +275,7 @@ fn run_age(reference: &Reference, recs: &[Rec], k: usize) -> MatchOutcome {
         .with_risk_set_policy(policy)
         .with_strategy(DeterministicSelection)
         .run()
+        .expect("a valid job")
 }
 
 fn expected_sets(scale: &Scale) -> BTreeMap<String, BTreeSet<String>> {

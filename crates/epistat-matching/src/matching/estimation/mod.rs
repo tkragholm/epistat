@@ -1013,7 +1013,8 @@ mod tests {
             let outcome = crate::MatchJob::new_standard(&anchors, &candidates, 1)
                 .with_ratio(MatchRatio::new(3).expect("ratio"))
                 .with_distance_config(prepared.distance_config)
-                .run();
+                .run()
+                .expect("a valid job");
             let mut ids: Vec<_> = outcome.pairs.into_iter().map(|p| p.control_id).collect();
             ids.sort();
             ids

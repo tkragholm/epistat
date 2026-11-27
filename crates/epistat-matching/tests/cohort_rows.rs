@@ -535,14 +535,16 @@ fn match_job_nearest_is_the_same_on_rows() {
             .with_exact_matches(["s"])
             .with_unique_by_key(Some("fam".to_string()))
             .with_gender_match()
-            .run();
+            .run()
+            .expect("a valid job");
         let on_rows = MatchJob::new_standard(&g.anchor_rows, &g.candidate_rows, seed)
             .with_ratio(ratio)
             .with_birth_window(window)
             .with_exact_matches(["s"])
             .with_unique_by_key(Some("fam".to_string()))
             .with_gender_match()
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(on_owned.matched_cases > 0);
         assert_same(
             &format!("{on_owned:?}"),
@@ -655,7 +657,8 @@ fn match_job_transition_is_the_same_on_rows() {
             .with_constraints(vec![epistat_matching::constraints::caliper_on_field(
                 "x2", 1.0,
             )])
-            .run();
+            .run()
+            .expect("a valid job");
         let on_rows = MatchJob::new_transition(&rows, seed)
             .with_ratio(ratio)
             .with_ratio_fallback(fallback)
@@ -667,7 +670,8 @@ fn match_job_transition_is_the_same_on_rows() {
             .with_constraints(vec![epistat_matching::constraints::caliper_on_field(
                 "x2", 1.0,
             )])
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(on_owned.matched_cases > 0);
         assert_same(
             &format!("{on_owned:?}"),

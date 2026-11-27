@@ -252,9 +252,9 @@ fn run_ours(
         .collect();
     let job = job.with_constraints(calipers);
     let outcome = if spec.anti {
-        job.with_antiexact("fam").run()
+        job.with_antiexact("fam").run().expect("a valid job")
     } else {
-        job.run()
+        job.run().expect("a valid job")
     };
     (focal_rows, outcome)
 }
@@ -378,7 +378,8 @@ fn ties_are_broken_by_row_order_where_matchit_is_not() {
             .with_nearest()
             .with_replacement(true)
             .with_distance_config(DistanceConfig::propensity_score_map(scores, None))
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(outcome.pairs.len(), 1);
         assert_eq!(outcome.pairs[0].comparator_id(), ours_expected.to_string());
     }
@@ -558,7 +559,8 @@ fn rounds_for_the_existing_strategies_follow_matchit() {
             .with_birth_window(BirthDateWindowDays::new(36_500).expect("window"))
             .with_exact_matches(run.exact.clone())
             .with_constraints(calipers)
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(
             rows_of(&outcome, &focal_rows),
             expected(&run.matchit.rows),
@@ -593,7 +595,8 @@ fn sequential_assignment_is_still_available_in_the_nearest_mode() {
         .with_ratio(MatchRatio::new(3).expect("ratio"))
         .with_assignment(Assignment::Sequential)
         .with_distance_config(DistanceConfig::propensity_score_map(scores(scenario), None))
-        .run();
+        .run()
+        .expect("a valid job");
     let rounds = run_ours(scenario, &spec, Some(MatchOrder::Largest), 0).1;
     assert_eq!(sequential.pairs.len(), rounds.pairs.len());
     assert_ne!(sequential.pairs, rounds.pairs);

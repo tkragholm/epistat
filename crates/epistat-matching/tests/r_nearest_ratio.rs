@@ -204,7 +204,7 @@ fn run_ours(scenario: &Scenario, spec: &Spec) -> (Vec<usize>, MatchOutcome) {
     if scenario.kind == "mahvars" {
         job = job.with_mahvars(mahalanobis(scenario));
     }
-    (focal_rows, job.run())
+    (focal_rows, job.run().expect("a valid job"))
 }
 
 fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {

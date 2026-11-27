@@ -299,6 +299,18 @@ where
         )
     }
 
+    fn check(&self) -> Result<(), crate::Error> {
+        if self.window.is_finite() && self.window >= 0.0 {
+            Ok(())
+        } else {
+            Err(crate::Error::Input(epistat_core::InputError::Domain {
+                what: "caliper window",
+                value: self.window,
+                domain: "[0, inf)",
+            }))
+        }
+    }
+
     fn status_rule(&self) -> Option<StatusRule<'_, R>> {
         Some(StatusRule(StatusRuleKind::ComparesValues {
             reason: self.reason,
@@ -349,6 +361,23 @@ where
 {
     fn reason(&self) -> &'static str {
         self.reason
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        if self.window_days >= 0 {
+            Ok(())
+        } else {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a window of days is far below 2^53"
+            )]
+            let value = self.window_days as f64;
+            Err(crate::Error::Input(epistat_core::InputError::Domain {
+                what: "date window",
+                value,
+                domain: "[0, inf)",
+            }))
+        }
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {

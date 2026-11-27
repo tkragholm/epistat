@@ -2075,7 +2075,7 @@ where
     } else {
         job.run()
     };
-    Ok((reject_invalid(outcome)?, None))
+    Ok((outcome?, None))
 }
 
 /// Check a spec and run it on the units.
@@ -2773,7 +2773,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         }
     };
     Ok(SpecOutput::Pairs {
-        outcome: Box::new(reject_invalid(outcome)?),
+        outcome: Box::new(outcome?),
         propensity: None,
     })
 }

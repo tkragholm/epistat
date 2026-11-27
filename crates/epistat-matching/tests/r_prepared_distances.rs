@@ -218,7 +218,8 @@ fn prepared_distances_give_matchits_pairs() {
             .with_exact_matches(if spec.exact { vec!["s"] } else { Vec::new() })
             .with_distance_config(config)
             .with_constraints(calipers)
-            .run();
+            .run()
+            .expect("a valid job");
         let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
         for pair in &outcome.pairs {
             by_anchor
@@ -278,13 +279,9 @@ fn a_caliper_in_standard_deviations_of_a_covariate_distance_is_refused() {
             .with_std_caliper(true)
             .with_distance_config(config)
             .run();
-        assert!(refused.pairs.is_empty(), "{distance}");
-        assert!(
-            refused
-                .diagnostics
-                .exclusion_counts
-                .keys()
-                .any(|reason| reason.to_string() == "invalid_criteria:nearest_options"),
+        assert_eq!(
+            refused.unwrap_err(),
+            Error::InvalidCriteria(InvalidCriteriaReason::NearestOptions),
             "{distance}"
         );
     }

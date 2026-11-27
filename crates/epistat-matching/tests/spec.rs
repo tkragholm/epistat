@@ -139,7 +139,8 @@ fn spec_reproduces_golden_standard_without_replacement_with_fallback() {
         ])
         .with_birth_window(BirthDateWindowDays::new(20).unwrap())
         .with_exact_matches(["sex", "municipality"])
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
     assert_eq!(hashes(&by_spec), (0x1520dffbb17aef3e, 0x08198f3ecb4ed043));
 }
@@ -220,7 +221,8 @@ fn spec_reproduces_golden_risk_set_nearest_birth_date() {
         .with_exact_matches(["sex", "municipality"])
         .with_alive_check()
         .with_strategy(NearestBirthDateSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
     assert_eq!(hashes(&outcome), (0x2c4ad6fd67c312f7, 0x585c1833c1e022cf));
 }
@@ -279,7 +281,8 @@ fn spec_with_sex_antiexact_and_caliper_matches_the_typed_job() {
         .with_constraint(epistat_matching::constraints::caliper_on_field::<
             BalanceRecord,
         >("x", 6.0))
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 }
 
@@ -301,7 +304,10 @@ fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
             .with_exact_matches(["sex"])
     };
     let random = run_pairs(&base, &anchors, &candidates);
-    same(&random, &job().with_round_assignment().run());
+    same(
+        &random,
+        &job().with_round_assignment().run().expect("a valid job"),
+    );
     let lowest = run_pairs(
         &MatchSpec {
             method: MatchMethod::LowestIndex,
@@ -315,7 +321,8 @@ fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
         &job()
             .with_strategy(DeterministicSelection)
             .with_round_assignment()
-            .run(),
+            .run()
+            .expect("a valid job"),
     );
     let birth = run_pairs(
         &MatchSpec {
@@ -330,7 +337,8 @@ fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
         &job()
             .with_strategy(NearestBirthDateSelection)
             .with_round_assignment()
-            .run(),
+            .run()
+            .expect("a valid job"),
     );
 }
 
@@ -433,7 +441,8 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
         .with_nearest()
         .with_m_order(MatchOrder::Smallest)
         .with_std_caliper(true)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
 }
 
@@ -478,7 +487,8 @@ fn spec_nearest_on_mahalanobis_with_replacement_matches_the_typed_job() {
         .with_distance_config(prepared.distance_config)
         .with_nearest()
         .with_m_order(MatchOrder::Random)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 }
 
@@ -549,7 +559,8 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
         .with_distance_config(score.distance_config)
         .with_nearest()
         .with_mahvars(ranking.distance_config)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 
     let euclidean = MatchSpec {
@@ -581,7 +592,8 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
         .with_distance_config(prepared.distance_config)
         .with_nearest()
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 }
 
@@ -1012,14 +1024,7 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
         .with_nearest()
         .with_m_order(MatchOrder::Largest)
         .run();
-    assert_eq!(outcome.pairs.len(), 0);
-    assert!(
-        outcome
-            .diagnostics
-            .exclusion_counts
-            .keys()
-            .any(|reason| matches!(reason, ExclusionReason::InvalidCriteria(_)))
-    );
+    assert!(matches!(outcome, Err(Error::InvalidCriteria(_))));
 }
 
 #[test]
@@ -1118,7 +1123,8 @@ fn spec_risk_set_with_resident_check_and_caliper_matches_the_typed_job() {
         >("y", 4.0)])
         .with_alive_check()
         .with_resident_check()
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
 }
 
@@ -1290,7 +1296,8 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
         .with_distance_config(DistanceConfig::matrix(matrix, DistanceCaliper::new(4.0)))
-        .run();
+        .run()
+        .expect("a valid job");
     assert!(!by_hand.pairs.is_empty(), "no output, test is vacuous");
     same(&outcome, &by_hand);
 }
@@ -1544,7 +1551,8 @@ fn spec_nearest_with_a_variable_ratio_matches_the_typed_job() {
         .with_distance_config(prepared.distance_config)
         .with_nearest()
         .with_variable_ratio(VariableRatio::new(2.5, 1, 4).unwrap())
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
     let counts: std::collections::BTreeSet<usize> = by_spec
         .pairs
@@ -1588,9 +1596,11 @@ fn spec_discard_matches_the_typed_job_with_common_support() {
                 .with_common_support(Some(typed_policy))
                 .with_distance_config(prepared.distance_config);
             let by_hand = if method == MatchMethod::Nearest {
-                job.with_nearest().run()
+                job.with_nearest().run().expect("a valid job")
             } else {
-                job.with_strategy(DeterministicSelection).run()
+                job.with_strategy(DeterministicSelection)
+                    .run()
+                    .expect("a valid job")
             };
             same(&by_spec, &by_hand);
             trimmed_somewhere |= by_spec.diagnostics.common_support_trimmed_anchors
@@ -1762,7 +1772,8 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
             .with_distance_config(prepared.distance_config)
             .with_nearest()
-            .run();
+            .run()
+            .expect("a valid job");
         same(&outcome, &by_hand);
         paths.push(format!("{:?}", propensity.expect("reported").probabilities));
     }
@@ -1825,7 +1836,8 @@ fn spec_cbps_matches_the_typed_job() {
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
             .with_distance_config(prepared.distance_config)
             .with_nearest()
-            .run();
+            .run()
+            .expect("a valid job");
         same(&outcome, &by_hand);
         let reported = propensity.expect("reported");
         assert!(reported.converged);
@@ -1889,6 +1901,7 @@ fn spec_std_caliper_can_be_set_for_each_caliper() {
             .with_nearest()
             .with_std_caliper(std_distance)
             .run()
+            .expect("a valid job")
     };
     let spec = |std_caliper: StdCaliperSpec| MatchSpec {
         method: MatchMethod::Nearest,
@@ -2230,7 +2243,8 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
         ))
         .with_common_support(Some(CommonSupport::Both))
         .with_strategy(DeterministicSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
     assert!(
         outcome.diagnostics.common_support_trimmed_anchors

@@ -255,7 +255,7 @@ pub fn match_within_clusters(
                 .map(|&i| BalanceRecord::new(ids[i].clone(), dummy_date()))
                 .collect();
             if anchors.is_empty() || candidates.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let scores: RapidHashMap<String, f64> = members
                 .iter()
@@ -277,9 +277,9 @@ pub fn match_within_clusters(
                 .with_replacement(true)
                 .with_distance_config(DistanceConfig::propensity_score_map(scores, width))
                 .run()
-                .pairs
+                .map(|outcome| outcome.pairs)
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     let pairs: Vec<MatchedPair> = per_cluster.into_iter().flatten().collect();
     Ok(pairs)
 }

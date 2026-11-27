@@ -135,6 +135,7 @@ fn run_job(
         .with_alive_check()
         .with_resident_check()
         .run()
+        .expect("a valid job")
 }
 
 fn run(
@@ -338,7 +339,8 @@ fn spec_mode_matches_the_job() {
         .with_exact_matches(["sex", "area"])
         .with_replacement(true)
         .with_strategy(DeterministicSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(direct.outcome.pairs, job.pairs);
     assert_ne!(direct.controls.len(), 0);
 }
@@ -349,8 +351,8 @@ fn duplicate_ids_are_an_error() {
     let reference = reference();
     let mut recs = records(&reference.people);
     let first = recs[0].clone();
-    recs.push(first);
     let outcome = run_job(&reference, &recs, 1, true, 1);
+    recs.push(first);
     assert!(matches!(
         exposure_density_sets(&recs, outcome),
         Err(Error::DuplicateId { .. })

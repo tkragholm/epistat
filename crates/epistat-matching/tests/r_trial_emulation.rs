@@ -328,6 +328,7 @@ fn run_trial(
         .with_alive_check()
         .with_resident_check()
         .run()
+        .expect("a valid job")
 }
 
 fn run(

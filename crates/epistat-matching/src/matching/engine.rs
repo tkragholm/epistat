@@ -2079,7 +2079,8 @@ mod pool_scan_tests {
             .expect("one column");
         let outcome = crate::MatchJob::new_standard(&anchors, &candidates, 0)
             .with_distance_config(config)
-            .run();
+            .run()
+            .expect("a valid job");
         let counts = &outcome.diagnostics.exclusion_counts;
         assert_eq!(
             counts.get(&ExclusionReason::DistanceCaliper(

@@ -47,7 +47,9 @@ fn cohort() -> Cohort {
 }
 
 fn matched(cohort: &Cohort) -> MatchedSample {
-    let outcome = MatchJob::new_standard(&cohort.anchors, &cohort.candidates, 11).run();
+    let outcome = MatchJob::new_standard(&cohort.anchors, &cohort.candidates, 11)
+        .run()
+        .expect("a valid job");
     assert_eq!(outcome.matched_cases, 40, "every anchor finds a candidate");
     let units = Units::new(cohort.ids.clone(), cohort.treated.clone()).expect("unique ids");
     let data = match_data(&outcome, &units, MatchDataOptions::default()).expect("fixed roles");
@@ -86,7 +88,9 @@ fn an_outcome_linear_in_the_covariate_gives_the_effect_exactly() {
 #[test]
 fn without_covariates_the_effect_is_the_difference_in_matched_means() {
     let cohort = cohort();
-    let outcome = MatchJob::new_standard(&cohort.anchors, &cohort.candidates, 11).run();
+    let outcome = MatchJob::new_standard(&cohort.anchors, &cohort.candidates, 11)
+        .run()
+        .expect("a valid job");
     let units = Units::new(cohort.ids.clone(), cohort.treated.clone()).expect("unique ids");
     let data = match_data(&outcome, &units, MatchDataOptions::default()).expect("fixed roles");
     let y: Vec<f64> = cohort

@@ -234,7 +234,8 @@ pub fn two_pass(people: &[Person], seed: u64, with_caliper: bool) -> (MatchOutco
             matched_case_ids: &none,
             used_control_ids: &none,
         })
-        .run();
+        .run()
+        .expect("a valid job");
     let matched: IdSet<'_> = pass1.pairs.iter().map(|p| p.case_id.as_str()).collect();
     let used: IdSet<'_> = pass1.pairs.iter().map(|p| p.control_id.as_str()).collect();
 
@@ -254,7 +255,8 @@ pub fn two_pass(people: &[Person], seed: u64, with_caliper: bool) -> (MatchOutco
             matched_case_ids: &matched,
             used_control_ids: &used,
         })
-        .run();
+        .run()
+        .expect("a valid job");
     (pass1, pass2)
 }
 

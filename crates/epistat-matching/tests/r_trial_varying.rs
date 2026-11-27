@@ -110,7 +110,8 @@ fn sets(
             .with_exact_matches(["sex", "flare"])
             .with_alive_check()
             .with_resident_check()
-            .run())
+            .run()
+            .expect("a valid job"))
     })?;
     let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for trial in &outcome.trials {

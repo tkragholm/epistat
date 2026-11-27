@@ -2208,13 +2208,9 @@ mod tests {
             .with_std_caliper(true)
             .with_distance_config(config)
             .run();
-        assert_eq!(outcome.matched_cases, 0);
-        assert!(
-            outcome
-                .diagnostics
-                .exclusion_counts
-                .keys()
-                .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+        assert_eq!(
+            outcome.unwrap_err(),
+            crate::Error::InvalidCriteria(crate::types::InvalidCriteriaReason::NearestOptions)
         );
     }
 
@@ -2239,7 +2235,8 @@ mod tests {
             .with_constraints(vec![crate::constraints::caliper_on_field::<BaseRecord>(
                 "x", 1.0,
             )])
-            .run();
+            .run()
+            .expect("a valid job");
         let count = |reason: ConstraintReason| {
             outcome
                 .diagnostics
@@ -2264,14 +2261,9 @@ mod tests {
             if variable {
                 job = job.with_variable_ratio(VariableRatio::new(2.0, 1, 3).expect("valid"));
             }
-            let outcome = job.run();
-            assert_eq!(outcome.matched_cases, 0);
-            assert!(
-                outcome
-                    .diagnostics
-                    .exclusion_counts
-                    .keys()
-                    .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+            assert_eq!(
+                job.run().unwrap_err(),
+                crate::Error::InvalidCriteria(crate::types::InvalidCriteriaReason::NearestOptions)
             );
         }
     }

@@ -88,10 +88,17 @@ fn trimmed_count(c: &[P], alive: bool, scan: bool, policy: CommonSupport) -> (us
         .with_common_support(Some(policy))
         .with_strategy(DeterministicSelection);
     let o = match (alive, scan) {
-        (false, false) => job.run(),
-        (true, false) => job.with_alive_check().run(),
-        (false, true) => job.with_risk_set_policy(SameRule).run(),
-        (true, true) => job.with_alive_check().with_risk_set_policy(SameRule).run(),
+        (false, false) => job.run().expect("a valid job"),
+        (true, false) => job.with_alive_check().run().expect("a valid job"),
+        (false, true) => job
+            .with_risk_set_policy(SameRule)
+            .run()
+            .expect("a valid job"),
+        (true, true) => job
+            .with_alive_check()
+            .with_risk_set_policy(SameRule)
+            .run()
+            .expect("a valid job"),
     };
     (
         o.diagnostics.common_support_trimmed_anchors,
@@ -192,13 +199,11 @@ fn event_before_birth_is_an_error_naming_the_id() {
         .with_age_limit(AgeLimitYears::new(18).unwrap())
         .with_strategy(DeterministicSelection)
         .run();
-    assert_eq!(o.pairs, vec![]);
-    assert!(
-        o.diagnostics
-            .exclusion_counts
-            .contains_key(&ExclusionReason::EventBeforeBirth("bad".to_string())),
-        "{:?}",
-        o.diagnostics.exclusion_counts
+    assert_eq!(
+        o.unwrap_err(),
+        Error::EventBeforeBirth {
+            id: "bad".to_string()
+        }
     );
 }
 
@@ -216,13 +221,11 @@ fn duplicate_ids_are_an_error_naming_the_id() {
         .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
         .with_age_limit(AgeLimitYears::new(100).unwrap())
         .run();
-    assert_eq!(o.pairs, vec![]);
-    assert!(
-        o.diagnostics
-            .exclusion_counts
-            .contains_key(&ExclusionReason::DuplicateId("b".to_string())),
-        "{:?}",
-        o.diagnostics.exclusion_counts
+    assert_eq!(
+        o.unwrap_err(),
+        Error::DuplicateId {
+            id: "b".to_string()
+        }
     );
 }
 
@@ -238,7 +241,8 @@ fn tied_cases_are_not_each_others_controls_and_without_replacement_is_distinct()
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(false)
             .with_strategy(DeterministicSelection)
-            .run();
+            .run()
+            .expect("a valid job");
         let by: BTreeMap<&str, &P> = c.iter().map(|p| (p.id.as_str(), p)).collect();
         let mut seen = BTreeSet::new();
         for pair in &o.pairs {
@@ -276,6 +280,7 @@ fn wide_scan_is_the_same_on_one_and_many_threads() {
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(false)
             .run()
+            .expect("a valid job")
             .pairs
             .iter()
             .map(|p| format!("{}>{}", p.anchor_id(), p.comparator_id()))
@@ -306,7 +311,8 @@ fn exposure_density_invariants() {
             .with_birth_window(b)
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(replacement)
-            .run();
+            .run()
+            .expect("a valid job");
         let r = exposure_density_sets(&cohort, o).unwrap();
         let mut total = 0;
         for e in &r.exposed {
@@ -360,7 +366,8 @@ fn run_trials(
             .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(replacement)
-            .run())
+            .run()
+            .expect("a valid job"))
     })
     .unwrap()
 }

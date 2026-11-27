@@ -96,7 +96,8 @@ fn run<P: RiskSetPolicy<Rec> + Send + Sync>(
         .with_common_support(support)
         .with_risk_set_policy(policy)
         .with_strategy(DeterministicSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     let matched = outcome.pairs.iter().map(|p| p.case_id.clone()).collect();
     (matched, outcome)
 }
@@ -119,10 +120,14 @@ fn run_checked(
         .with_common_support(support)
         .with_strategy(DeterministicSelection);
     let outcome = match (alive, resident) {
-        (true, true) => job.with_alive_check().with_resident_check().run(),
-        (true, false) => job.with_alive_check().run(),
-        (false, true) => job.with_resident_check().run(),
-        (false, false) => job.run(),
+        (true, true) => job
+            .with_alive_check()
+            .with_resident_check()
+            .run()
+            .expect("a valid job"),
+        (true, false) => job.with_alive_check().run().expect("a valid job"),
+        (false, true) => job.with_resident_check().run().expect("a valid job"),
+        (false, false) => job.run().expect("a valid job"),
     };
     let matched = outcome.pairs.iter().map(|p| p.case_id.clone()).collect();
     (matched, outcome)
@@ -221,7 +226,8 @@ fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
         .with_alive_check()
         .with_risk_set_policy(SameRule)
         .with_strategy(DeterministicSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     let scanned_alive: BTreeSet<String> = scanned_alive
         .pairs
         .iter()

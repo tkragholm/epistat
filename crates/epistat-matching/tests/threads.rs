@@ -218,9 +218,15 @@ fn standard_matching_and_weights() {
                     .with_replacement(replacement)
             };
             for outcome in [
-                job().run(),
-                job().with_strategy(NearestBirthDateSelection).run(),
-                job().with_strategy(DeterministicSelection).run(),
+                job().run().expect("a valid job"),
+                job()
+                    .with_strategy(NearestBirthDateSelection)
+                    .run()
+                    .expect("a valid job"),
+                job()
+                    .with_strategy(DeterministicSelection)
+                    .run()
+                    .expect("a valid job"),
             ] {
                 assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&outcome);
@@ -242,7 +248,8 @@ fn standard_matching_with_unique_key_and_without_strata() {
         let out = MatchJob::new_standard(&anchors, &candidates, 5)
             .with_ratio(MatchRatio::new(2).unwrap())
             .with_birth_window(BirthDateWindowDays::new(10).unwrap())
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         d.outcome(&out);
         let out = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -250,7 +257,8 @@ fn standard_matching_with_unique_key_and_without_strata() {
             .with_birth_window(BirthDateWindowDays::new(10).unwrap())
             .with_exact_matches(["sex", "region"])
             .with_unique_by_key(Some("unique".to_string()))
-            .run();
+            .run()
+            .expect("a valid job");
         d.outcome(&out);
         d.0
     });
@@ -281,13 +289,19 @@ fn transition_matching() {
                 .with_exact_matches(["sex", "municipality"])
                 .with_alive_check()
         };
-        let out = job().run();
+        let out = job().run().expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         d.outcome(&out);
         d.weights(&out);
-        let out = job().with_strategy(NearestBirthDateSelection).run();
+        let out = job()
+            .with_strategy(NearestBirthDateSelection)
+            .run()
+            .expect("a valid job");
         d.outcome(&out);
-        let out = job().with_strategy(DeterministicSelection).run();
+        let out = job()
+            .with_strategy(DeterministicSelection)
+            .run()
+            .expect("a valid job");
         d.outcome(&out);
         let (pass1, pass2) = two_pass(&people, 7, true);
         d.outcome(&pass1);
@@ -451,7 +465,8 @@ fn run_with_balance_and_balance_reports() {
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(45).unwrap())
         .with_exact_matches(["sex", "region"])
-        .run();
+        .run()
+        .expect("a valid job");
 
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
@@ -461,12 +476,15 @@ fn run_with_balance_and_balance_reports() {
                 .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                 .with_exact_matches(["sex", "region"])
         };
-        let (outcome, report) = job().run_with_balance(&cases, &controls);
+        let (outcome, report) = job()
+            .run_with_balance(&cases, &controls)
+            .expect("a valid job");
         d.outcome(&outcome);
         d.debug(&report);
         let (outcome, report) = job()
             .with_strategy(NearestBirthDateSelection)
-            .run_with_balance(&cases, &controls);
+            .run_with_balance(&cases, &controls)
+            .expect("a valid job");
         d.outcome(&outcome);
         d.debug(&report);
         for transform in [
@@ -535,7 +553,8 @@ fn transition_run_with_balance() {
             .with_age_limit(AgeLimitYears::new(6).unwrap())
             .with_exact_matches(["sex", "municipality"])
             .with_alive_check()
-            .run_with_balance(&cases, &controls);
+            .run_with_balance(&cases, &controls)
+            .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         let mut d = Digest::default();
         d.outcome(&out);
@@ -647,7 +666,8 @@ fn propensity_estimation_and_matching() {
                     .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                     .with_exact_matches(["sex", "region"])
                     .with_distance_config(prepared.distance_config)
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 d.outcome(&outcome);
                 d.0
             });
@@ -752,7 +772,8 @@ fn nearest_matching_on_prepared_distances() {
                     .with_ratio(MatchRatio::new(2).unwrap())
                     .with_exact_matches(["sex"])
                     .with_distance_config(config.clone())
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
             }
@@ -808,7 +829,8 @@ fn mahalanobis_preparation_and_matching() {
                     .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                     .with_exact_matches(["sex", "region"])
                     .with_distance_config(prepared.distance_config)
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&outcome);
                 d.0
@@ -857,7 +879,8 @@ fn euclidean_preparation_and_matching() {
                 .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                 .with_exact_matches(["sex", "region"])
                 .with_distance_config(prepared.distance_config)
-                .run();
+                .run()
+                .expect("a valid job");
             assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&outcome);
             d.0
@@ -1030,7 +1053,7 @@ fn nearest_matching_in_every_order() {
                         caliper,
                     ))
                     .with_constraints(vec![caliper_on_field::<BaseRecord>("age", 20.0)]);
-                let out = job.with_antiexact("fam").run();
+                let out = job.with_antiexact("fam").run().expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
                 d.weights(&out);
@@ -1045,7 +1068,8 @@ fn nearest_matching_in_every_order() {
                     DistanceCaliper::new(0.2),
                 ))
                 .with_mahvars(maha())
-                .run();
+                .run()
+                .expect("a valid job");
             assert!(!out.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&out);
             for replace in [false, true] {
@@ -1060,7 +1084,8 @@ fn nearest_matching_in_every_order() {
                         DistanceCaliper::new(0.4),
                     ))
                     .with_std_caliper(true)
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
                 d.weights(&out);
@@ -1073,7 +1098,8 @@ fn nearest_matching_in_every_order() {
                 .with_ratio(MatchRatio::new(2).unwrap())
                 .with_exact_matches(["sex", "region"])
                 .with_distance_config(maha())
-                .run();
+                .run()
+                .expect("a valid job");
             assert!(!out.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&out);
         }
@@ -1083,7 +1109,8 @@ fn nearest_matching_in_every_order() {
             .with_ratio(MatchRatio::new(3).unwrap())
             .with_birth_window(BirthDateWindowDays::new(45).unwrap())
             .with_exact_matches(["sex", "region"])
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         d.outcome(&out);
         d.0
@@ -1199,7 +1226,8 @@ fn nearest_matching_on_a_distance_matrix() {
                         matrix.clone(),
                         DistanceCaliper::new(1.5),
                     ))
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
                 d.weights(&out);

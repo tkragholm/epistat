@@ -32,7 +32,9 @@ fn pairs_from_the_engine_give_the_bounds_of_their_differences() {
         // Treated units gain about 1 over the controls, with a spread.
         outcome.push(f64::from((i * 37) % 11) / 5.0 + f64::from(u8::from(is_anchor)));
     }
-    let matched = MatchJob::new_standard(&anchors, &candidates, 5).run();
+    let matched = MatchJob::new_standard(&anchors, &candidates, 5)
+        .run()
+        .expect("a valid job");
     assert_eq!(matched.matched_cases, 40);
     let units = Units::new(ids.clone(), treated.clone()).expect("unique ids");
     let long = get_matches(&matched, &units, false).expect("fixed roles");

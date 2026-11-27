@@ -237,7 +237,8 @@ fn run_matching(
             matched_case_ids: &no_ids,
             used_control_ids: &no_ids,
         })
-        .run();
+        .run()
+        .expect("a valid job");
     let matched: HashSet<&str> = pass1.pairs.iter().map(|p| p.case_id.as_str()).collect();
     let used: HashSet<&str> = pass1.pairs.iter().map(|p| p.control_id.as_str()).collect();
     let mut pairs = matched_rows(&pass1, "municipality");
@@ -256,7 +257,8 @@ fn run_matching(
                 matched_case_ids: &matched,
                 used_control_ids: &used,
             })
-            .run();
+            .run()
+            .expect("a valid job");
         passes[1] = (pass2.matched_cases, pass2.unmatched_cases);
         pairs.extend(matched_rows(&pass2, "region"));
     }

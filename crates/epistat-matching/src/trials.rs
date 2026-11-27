@@ -1374,7 +1374,7 @@ mod tests {
         assert!(expand_trials(&[a.clone(), d.clone()], &TrialOptions::default()).is_ok());
         assert!(matches!(
             match_trials(&[a, d], &TrialOptions::default(), |pool| {
-                Ok(pool.job(1).run())
+                pool.job(1).run()
             }),
             Err(Error::InconsistentDate { period: 0 })
         ));
@@ -1440,6 +1440,7 @@ mod tests {
             .with_exact_matches(["sex"])
             .with_alive_check()
             .run()
+            .expect("a valid job")
     }
 
     /// Trials matched in parallel under the default reuse rule equal the

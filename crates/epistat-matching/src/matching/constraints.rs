@@ -90,6 +90,18 @@ pub trait Constraint<R: MatchingRecord>: Send + Sync {
     fn status_rule(&self) -> Option<StatusRule<'_, R>> {
         None
     }
+
+    /// Whether the constraint's own settings can be used, such as a caliper
+    /// whose window is finite and not negative. A job checks its constraints
+    /// before it matches.
+    ///
+    /// # Errors
+    ///
+    /// The error that names the setting. A constraint without settings to
+    /// check returns `Ok`.
+    fn check(&self) -> Result<(), crate::Error> {
+        Ok(())
+    }
 }
 
 /// A constraint whose verdict on a pair is a function of the control and the
@@ -206,6 +218,16 @@ pub trait ConstraintGroup<R: MatchingRecord>: Send + Sync {
     fn status_rules<'s>(&'s self, _rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         false
     }
+
+    /// [`Constraint::check`] of every constraint of the group, in the order
+    /// the group asks them.
+    ///
+    /// # Errors
+    ///
+    /// The first constraint's error.
+    fn check(&self) -> Result<(), crate::Error> {
+        Ok(())
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for () {
@@ -240,6 +262,10 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> ConstraintGroup<R> for &
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         (**self).status_rules(rules)
     }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        (**self).check()
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for [&dyn Constraint<R>] {
@@ -249,6 +275,10 @@ impl<R: MatchingRecord> ConstraintGroup<R> for [&dyn Constraint<R>] {
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.iter().all(|c| push_status_rule(*c, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.iter().try_for_each(|c| c.check())
     }
 
     fn first_blocking_reason(
@@ -273,6 +303,10 @@ where
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.iter().all(|c| push_status_rule(c, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.iter().try_for_each(Constraint::check)
     }
 
     fn first_blocking_reason(
@@ -303,6 +337,10 @@ impl<R: MatchingRecord, C: Constraint<R> + ?Sized> Constraint<R> for Box<C> {
     fn status_rule(&self) -> Option<StatusRule<'_, R>> {
         (**self).status_rule()
     }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        (**self).check()
+    }
 }
 
 /// A homogeneous group whose length is decided at run time.
@@ -326,6 +364,10 @@ where
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.iter().all(|c| push_status_rule(c, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.iter().try_for_each(Constraint::check)
     }
 
     fn first_blocking_reason(
@@ -371,6 +413,11 @@ where
         self.first.status_rules(rules) && self.second.status_rules(rules)
     }
 
+    fn check(&self) -> Result<(), crate::Error> {
+        self.first.check()?;
+        self.second.check()
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -394,6 +441,11 @@ where
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.0.status_rules(rules) && push_status_rule(&self.1, rules)
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.0.check()?;
+        self.1.check()
     }
 
     fn first_blocking_reason(
@@ -424,6 +476,12 @@ macro_rules! impl_constraint_group_tuple {
             fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
                 let ($($value,)+) = self;
                 true $(&& push_status_rule($value, rules))+
+            }
+
+            fn check(&self) -> Result<(), crate::Error> {
+                let ($($value,)+) = self;
+                $($value.check()?;)+
+                Ok(())
             }
 
             fn first_blocking_reason(

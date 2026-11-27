@@ -78,6 +78,7 @@ fn run(units: &Units, config: DistanceConfig, replacement: bool, ratio: usize) -
         .with_replacement(replacement)
         .with_distance_config(config)
         .run()
+        .expect("a valid job")
         .pairs
 }
 

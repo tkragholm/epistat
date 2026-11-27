@@ -190,7 +190,7 @@ fn nearest_pairs_match_matchit() {
         if let Some(order) = &run.order {
             job = job.with_m_order(order_of(order));
         }
-        let outcome = job.run();
+        let outcome = job.run().expect("a valid job");
         let expected: Vec<Vec<usize>> = run.matchit.iter().map(Rows::to_vec).collect();
         assert_eq!(rows_of(&outcome, &focal_rows), expected, "{}", run.name);
         with_caliper += usize::from(run.caliper.is_some());
@@ -219,6 +219,7 @@ fn a_pair_at_the_caliper_is_kept() {
             .with_nearest()
             .with_distance_config(config)
             .run()
+            .expect("a valid job")
             .matched_cases
     };
     assert_eq!(count(reference.caliper_exact), 5);
@@ -241,7 +242,8 @@ fn matrix_is_a_caliper_for_the_other_strategies() {
     let outcome = MatchJob::new_standard(&anchors, &candidates, 7)
         .with_distance_config(config)
         .with_birth_window(BirthDateWindowDays::new(10).expect("window"))
-        .run();
+        .run()
+        .expect("a valid job");
     assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
     for pair in &outcome.pairs {
         let distance = matrix
@@ -273,7 +275,8 @@ fn units_outside_the_matrix_are_not_matched() {
     let outcome = MatchJob::new_standard(&anchors, &candidates, 0)
         .with_nearest()
         .with_distance_config(DistanceConfig::matrix(matrix.clone(), None))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(outcome.pairs.len(), 1);
     assert_eq!(outcome.pairs[0].anchor_id(), "a");
     assert_eq!(outcome.pairs[0].comparator_id(), "x");
@@ -313,11 +316,10 @@ fn an_order_by_score_is_refused() {
         .with_m_order(MatchOrder::Largest)
         .with_distance_config(DistanceConfig::matrix(matrix_for(&reference, run), None))
         .run();
-    assert!(
-        outcome.pairs.is_empty(),
-        "an order by score matches nothing"
+    assert_eq!(
+        outcome.unwrap_err(),
+        Error::InvalidCriteria(InvalidCriteriaReason::NearestOptions)
     );
-    assert_eq!(outcome.diagnostics.exclusion_counts.len(), 1);
 }
 
 #[test]

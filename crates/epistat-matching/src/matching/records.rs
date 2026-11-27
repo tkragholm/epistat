@@ -502,12 +502,14 @@ mod tests {
             .with_ratio(ratio)
             .with_constraints(vec![caliper_on_field("mother_birth_year", 1.0)])
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
         let through_macro = MatchJob::new_transition(&wrapped, 42)
             .with_ratio(ratio)
             .with_constraints(vec![caliper_on_field("mother_birth_year", 1.0)])
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(direct.pairs.len(), 1);
         assert_eq!(direct.pairs[0].control_id, "near");

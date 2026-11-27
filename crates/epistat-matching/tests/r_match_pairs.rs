@@ -171,6 +171,7 @@ fn run_ours(run: &Run, anchors: &[BaseRecord], candidates: &[BaseRecord]) -> Mat
         .with_replacement(run.replace)
         .with_constraints(calipers)
         .run()
+        .expect("a valid job")
 }
 
 /// The units of a run in row order, with the focal group as anchors.

@@ -336,6 +336,7 @@ pub fn benchmark_eqq_distance_stats(
 
 /// Common imports for consumers of this crate.
 pub mod prelude {
+    pub use crate::Error;
     pub use crate::constraints::{AntiExact, GenderMatch};
     pub use crate::matching::{
         Assignment, DeterministicSelection, ExactMatchOutcome, FullMatchConfig, FullMatchOutcome,

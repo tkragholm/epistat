@@ -323,7 +323,8 @@ fn a_match_on_cohort_rows_is_bit_identical() {
         .with_exact_matches(["sex", "municipality"])
         .with_alive_check()
         .with_strategy(NearestBirthDateSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     assert_ne!(on_rows.matched_cases, 0);
     assert_eq!(format!("{:?}", run(&direct)), format!("{on_rows:?}"));
     assert!(!built.has_built_record_maps());
@@ -512,6 +513,7 @@ fn run(records: &[Rec]) -> MatchOutcome {
         .with_alive_check()
         .with_strategy(NearestBirthDateSelection)
         .run()
+        .expect("a valid job")
 }
 
 fn weights_hash(outcome: &MatchOutcome) -> u64 {
@@ -548,6 +550,7 @@ fn a_match_with_a_caliper_on_nullable_numerics_is_bit_identical() {
                 epistat_matching::constraints::caliper_on_field::<Rec>("parent_year", 5.0),
             ])
             .run()
+            .expect("a valid job")
     };
     let direct = run_with(&records(&people, Level::Municipality, false, true));
     let arrow = run_with(&arrow_risk_set(&columns(&people), true));
