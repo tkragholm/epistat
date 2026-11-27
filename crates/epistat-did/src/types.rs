@@ -301,6 +301,10 @@ pub(crate) struct DidCcConfig {
     /// Seed of the cross-fitting fold assignment, read only with more than one
     /// fold.
     pub cross_fit_seed: u64,
+    /// Whether a propensity logit that cannot be fitted on the covariates
+    /// falls back to the intercept alone and then to the shares. Off, the
+    /// default, such a fit is an error.
+    pub propensity_fallback: bool,
 }
 
 impl Default for DidCcConfig {
@@ -310,6 +314,7 @@ impl Default for DidCcConfig {
             bootstrap_confidence_intervals: false,
             cross_fit_folds: 1,
             cross_fit_seed: 0,
+            propensity_fallback: false,
         }
     }
 }
@@ -340,6 +345,9 @@ pub(crate) struct DidCcEstimate {
     pub total_weight: f64,
     /// Influence function of the estimate, one value per input observation.
     pub influence_function: Vec<f64>,
+    /// The propensity models of the estimate that took a fallback, in fold
+    /// order.
+    pub propensity_fallbacks: Vec<crate::methods::did_cc::PropensityFallback>,
 }
 
 /// Hausman-style comparison between robust and stationarity-based `DiD_CC` ATT
@@ -430,6 +438,13 @@ pub(crate) enum DidCcError {
     /// The variance of the Hausman difference is not positive.
     #[error("Hausman difference variance must be strictly positive")]
     DegenerateHausmanVariance,
+    /// A propensity logit could not be fitted on the covariates and the
+    /// fallback is off.
+    #[error("the propensity logit could not be fitted on the covariates")]
+    PropensityFit {
+        /// The cross-fitting fold of the fit, `None` for the fit on every row.
+        fold: Option<usize>,
+    },
 }
 
 /// Errors returned by panel `DR-DiD` estimation.

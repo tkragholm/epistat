@@ -217,6 +217,19 @@ pub enum Error {
     /// cannot be tested.
     #[error("the variance of the difference is not positive")]
     DegenerateVariance,
+    /// A propensity logit could not be fitted on the covariates, and the
+    /// estimator was not allowed to fall back, as
+    /// [`crate::did_cc::DidCcOptions::propensity_fallback`] allows.
+    #[error("the propensity logit could not be fitted on the covariates{}", fold_suffix(*fold))]
+    PropensityFit {
+        /// The cross-fitting fold whose model failed, `None` for the model
+        /// fitted on every row.
+        fold: Option<usize>,
+    },
+}
+
+fn fold_suffix(fold: Option<usize>) -> String {
+    fold.map_or_else(String::new, |fold| format!(" in cross-fitting fold {fold}"))
 }
 
 impl Classify for Error {
@@ -258,7 +271,8 @@ impl Classify for Error {
             | Self::Singular
             | Self::NotFinite
             | Self::Collinear { .. }
-            | Self::DegenerateVariance => ErrorKind::Numerical,
+            | Self::DegenerateVariance
+            | Self::PropensityFit { .. } => ErrorKind::Numerical,
         }
     }
 
@@ -302,6 +316,7 @@ impl Classify for Error {
             Self::EmptyCell { .. } => "did.empty_cell",
             Self::CrossFitCell { .. } => "did.cross_fit_cell",
             Self::DegenerateVariance => "did.degenerate_variance",
+            Self::PropensityFit { .. } => "did.propensity_fit",
         }
     }
 }
@@ -384,6 +399,7 @@ mod tests {
                 post: true,
             },
             Error::DegenerateVariance,
+            Error::PropensityFit { fold: Some(1) },
         ];
         epistat_testkit::assert_codes_unique("did", &errors);
         assert_eq!(Error::Bins.kind(), ErrorKind::Input);
