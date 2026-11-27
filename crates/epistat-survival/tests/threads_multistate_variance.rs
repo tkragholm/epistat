@@ -121,7 +121,8 @@ fn variance_does_not_depend_on_the_number_of_threads() {
         out.extend(&got.std_time);
         out.extend(&got.std_initial);
         out.extend(&got.std_rmean);
-        out.extend(&got.influence);
+        let inf = got.influence.as_ref().unwrap();
+        out.extend((0..inf.n_columns()).flat_map(|j| inf.column(j).to_vec()));
         out
     });
 }

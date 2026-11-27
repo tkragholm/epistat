@@ -89,17 +89,9 @@ fn score_metrics_and_calibration() {
                 out.extend(a.se.iter().map(|&v| absent(v)));
                 out.extend(a.n_cases.iter().map(|&v| v as f64));
                 let inf = b.influence.unwrap();
-                out.extend(
-                    (0..inf.nrows())
-                        .flat_map(|i| (0..inf.ncols()).map(move |j| (i, j)))
-                        .map(|(i, j)| inf[(i, j)]),
-                );
+                out.extend((0..inf.n_columns()).flat_map(|j| inf.column(j).to_vec()));
                 let inf = a.influence.unwrap();
-                out.extend(
-                    (0..inf.nrows())
-                        .flat_map(|i| (0..inf.ncols()).map(move |j| (i, j)))
-                        .map(|(i, j)| inf[(i, j)]),
-                );
+                out.extend((0..inf.n_columns()).flat_map(|j| inf.column(j).to_vec()));
                 out
             });
         }

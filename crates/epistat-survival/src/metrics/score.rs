@@ -190,7 +190,8 @@
 )]
 
 use epistat_core::InputError;
-use epistat_linalg::{Mat, MatRef};
+use epistat_inference::{ClusterRule, Influence};
+use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
 use super::censoring::CensoringKm;
@@ -314,9 +315,11 @@ pub struct Score {
     /// Its standard error, `None` unless asked for and defined (at least two
     /// rows).
     pub se: Vec<Option<f64>>,
-    /// The influence function of each used row at each time, one row per row
-    /// of positive weight in the order of the data. `None` unless asked for.
-    pub influence: Option<Mat<f64>>,
+    /// The influence function at each time, one column per time, with the
+    /// rows of positive weight as units in the order of the data, on the scale
+    /// `sum IF / N` of `Score`. Its rule has the `N - 1` divisor of `se`, which
+    /// the variance of a column reproduces. `None` unless asked for.
+    pub influence: Option<Influence>,
     /// The number of rows given.
     pub n_rows: usize,
     /// The number of rows of positive weight.
@@ -350,8 +353,9 @@ pub struct Auc {
     pub n_survivors: Vec<usize>,
     /// The number of rows with a competing event by each time.
     pub n_competing: Vec<usize>,
-    /// The influence function, as for [`Score::influence`].
-    pub influence: Option<Mat<f64>>,
+    /// The influence function, as for [`Score::influence`], with zeros at a
+    /// time without a case or a control.
+    pub influence: Option<Influence>,
     /// The number of rows given.
     pub n_rows: usize,
     /// The number of rows of positive weight.
@@ -369,6 +373,11 @@ struct Core<'a> {
     /// The baseline hazard of the censoring Cox model at each evaluation time.
     lam_times: Vec<f64>,
     n: usize,
+    /// The row of the data of each used row, ascending: the units of the
+    /// influence functions.
+    units: Vec<u32>,
+    /// The index in `units` of the row at each sorted position.
+    rank: Vec<usize>,
 }
 
 impl<'a> Core<'a> {
@@ -427,6 +436,13 @@ impl<'a> Core<'a> {
                 (Some(*s), g_own)
             }
         };
+        let mut by_row: Vec<usize> = (0..n).collect();
+        by_row.sort_unstable_by_key(|&p| sorted.row[p]);
+        let mut rank = vec![0; n];
+        for (k, &p) in by_row.iter().enumerate() {
+            rank[p] = k;
+        }
+        let units = by_row.iter().map(|&p| sorted.row[p]).collect();
         Ok(Self {
             sorted,
             km,
@@ -435,6 +451,8 @@ impl<'a> Core<'a> {
             cox,
             lam_times,
             n,
+            units,
+            rank,
         })
     }
 
@@ -501,38 +519,53 @@ impl<'a> Core<'a> {
             .collect()
     }
 
-    /// The influence functions of the used rows, one row per used row in the
-    /// order of the data, from columns in sorted order.
-    fn influence_matrix(&self, columns: &[Option<Vec<f64>>]) -> Mat<f64> {
-        let n = self.n;
-        let mut by_row: Vec<usize> = (0..n).collect();
-        by_row.sort_unstable_by_key(|&p| self.sorted.row[p]);
-        let mut rank = vec![0; n];
-        for (k, &p) in by_row.iter().enumerate() {
-            rank[p] = k;
-        }
-        let mut out = Mat::<f64>::zeros(n, columns.len());
-        for (j, column) in columns.iter().enumerate() {
-            if let Some(values) = column {
-                for (pos, &v) in values.iter().enumerate() {
-                    out[(rank[pos], j)] = v;
-                }
-            }
+    /// Values in sorted order put in the order of the data, of `units`.
+    fn in_data_order(&self, values: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; values.len()];
+        for (&k, &v) in self.rank.iter().zip(values) {
+            out[k] = v;
         }
         out
     }
+
+    /// The influence function of the used rows, one column per time, from
+    /// columns in the order of the data, zeros for a column that is `None`.
+    fn influence(&self, columns: &[Option<Vec<f64>>]) -> Result<Influence> {
+        let n = self.n;
+        let mut values = Vec::with_capacity(n * columns.len());
+        for column in columns {
+            match column {
+                Some(column) => values.extend_from_slice(column),
+                None => values.extend(std::iter::repeat_n(0.0, n)),
+            }
+        }
+        Ok(Influence::new(
+            values,
+            self.units.clone(),
+            columns.len(),
+            ClusterRule::SmallSample,
+        )?)
+    }
 }
 
-/// The standard error `sd(IF) / sqrt(N)`, `sd` with divisor `N - 1`.
-pub(super) fn std_err_of(influence: &[f64]) -> Option<f64> {
-    let n = influence.len();
-    if n < 2 {
-        return None;
+/// The standard error `sd(IF) / sqrt(N)`, `sd` with divisor `N - 1`, of the
+/// influence function `influence` of the rows `units`: the square root of the
+/// variance of [`Influence`] under [`ClusterRule::SmallSample`]. `None` for
+/// fewer than two rows.
+///
+/// Each time is its own one-column influence function: the covariance of all
+/// times at once would cost the square of the number of times.
+pub(super) fn se_of(influence: &[f64], units: &[u32]) -> Result<Option<f64>> {
+    if influence.len() < 2 {
+        return Ok(None);
     }
-    let nf = n as f64;
-    let mean = influence.iter().sum::<f64>() / nf;
-    let ss: f64 = influence.iter().map(|&v| (v - mean) * (v - mean)).sum();
-    Some((ss / (nf - 1.0)).sqrt() / nf.sqrt())
+    let one = Influence::new(
+        influence.to_vec(),
+        units.to_vec(),
+        1,
+        ClusterRule::SmallSample,
+    )?;
+    Ok(one.variance(None)?.get(0, 0).map(|v| v.max(0.0).sqrt()))
 }
 
 /// What one time of the Brier score returns.
@@ -549,7 +582,7 @@ fn brier_column(
     j: usize,
     t: f64,
     risk: &dyn Fn(usize) -> f64,
-) -> BrierColumn {
+) -> Result<BrierColumn> {
     let sorted = &core.sorted;
     let n = core.n;
     let mut residual = vec![0.0; n];
@@ -569,11 +602,11 @@ fn brier_column(
     let mean = residual.iter().sum::<f64>() / nf;
     let brier = mean;
     if !opts.variance {
-        return BrierColumn {
+        return Ok(BrierColumn {
             brier,
             se: None,
             influence: None,
-        };
+        });
     }
     let mut influence: Vec<f64> = residual.iter().map(|&r| r - mean).collect();
     if core.uses_censoring_term(opts, t) {
@@ -582,11 +615,12 @@ fn brier_column(
             *i += c;
         }
     }
-    BrierColumn {
+    let influence = core.in_data_order(&influence);
+    Ok(BrierColumn {
         brier,
-        se: std_err_of(&influence),
+        se: se_of(&influence, &core.units)?,
         influence: Some(influence),
-    }
+    })
 }
 
 fn collect_score(
@@ -594,19 +628,21 @@ fn collect_score(
     opts: &ScoreOptions<'_>,
     times: &[f64],
     columns: &[BrierColumn],
-) -> Score {
-    let influence = (opts.keep_influence && opts.variance).then(|| {
-        let cols: Vec<Option<Vec<f64>>> = columns.iter().map(|c| c.influence.clone()).collect();
-        core.influence_matrix(&cols)
-    });
-    Score {
+) -> Result<Score> {
+    let influence = (opts.keep_influence && opts.variance)
+        .then(|| {
+            let cols: Vec<Option<Vec<f64>>> = columns.iter().map(|c| c.influence.clone()).collect();
+            core.influence(&cols)
+        })
+        .transpose()?;
+    Ok(Score {
         times: times.to_vec(),
         brier: columns.iter().map(|c| c.brier).collect(),
         se: columns.iter().map(|c| c.se).collect(),
         influence,
         n_rows: core.sorted.n_rows,
         n_used: core.n,
-    }
+    })
 }
 
 /// The IPCW Brier score of the predictions at `times`.
@@ -665,8 +701,8 @@ pub fn brier(
             };
             brier_column(&core, opts, j, t, &risk)
         })
-        .collect();
-    Ok(collect_score(&core, opts, times, &columns))
+        .collect::<Result<_>>()?;
+    collect_score(&core, opts, times, &columns)
 }
 
 /// The Brier score of the null model, which predicts to everyone the marginal
@@ -685,8 +721,8 @@ pub fn null_brier(data: &SurvData<'_>, times: &[f64], opts: &ScoreOptions<'_>) -
         .par_iter()
         .enumerate()
         .map(|(j, &t)| brier_column(&core, opts, j, t, &|_| marginal[j]))
-        .collect();
-    Ok(collect_score(&core, opts, times, &columns))
+        .collect::<Result<_>>()?;
+    collect_score(&core, opts, times, &columns)
 }
 
 /// The index of prediction accuracy, `1 - B / B_0`, of a model against the
@@ -695,8 +731,8 @@ pub fn null_brier(data: &SurvData<'_>, times: &[f64], opts: &ScoreOptions<'_>) -
 ///
 /// # Errors
 ///
-/// An input error when the two scores are at different times or from data of
-/// different numbers of rows.
+/// An input error when the two scores are at different times, from data of
+/// different numbers of rows, or with influence functions of other rows.
 pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
     if model.times != null.times || model.n_rows != null.n_rows || model.n_used != null.n_used {
         return Err(Error::invalid(
@@ -718,10 +754,18 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
         out.ipa.push(Some(1.0 - b / b0));
         let se = match (&model.influence, &null.influence) {
             (Some(m), Some(z)) => {
-                let combined: Vec<f64> = (0..m.nrows())
-                    .map(|i| -m[(i, j)] / b0 + b * z[(i, j)] / (b0 * b0))
+                if m.units() != z.units() {
+                    return Err(Error::invalid(
+                        "the model and the null model must have influence functions of the same rows",
+                    ));
+                }
+                let combined: Vec<f64> = m
+                    .column(j)
+                    .iter()
+                    .zip(z.column(j))
+                    .map(|(&m, &z)| -m / b0 + b * z / (b0 * b0))
                     .collect();
-                std_err_of(&combined)
+                se_of(&combined, m.units())?
             }
             _ => None,
         };
@@ -753,7 +797,7 @@ fn auc_column(
     j: usize,
     t: f64,
     marker: &dyn Fn(usize) -> f64,
-) -> AucColumn {
+) -> Result<AucColumn> {
     let sorted = &core.sorted;
     let n = core.n;
     let nf = n as f64;
@@ -798,7 +842,7 @@ fn auc_column(
         n_competing,
     };
     if dc == 0.0 || dn == 0.0 {
-        return counts(None, None, None);
+        return Ok(counts(None, None, None));
     }
 
     let mut order: Vec<usize> = (0..n).collect();
@@ -848,7 +892,7 @@ fn auc_column(
     let denominator = dc * dn;
     let auc = numerator / denominator;
     if !opts.variance {
-        return counts(Some(auc), None, None);
+        return Ok(counts(Some(auc), None, None));
     }
     let mut influence: Vec<f64> = (0..n)
         .map(|p| {
@@ -869,7 +913,9 @@ fn auc_column(
             *i += c;
         }
     }
-    counts(Some(auc), std_err_of(&influence), Some(influence))
+    let influence = core.in_data_order(&influence);
+    let se = se_of(&influence, &core.units)?;
+    Ok(counts(Some(auc), se, Some(influence)))
 }
 
 /// The time-dependent area under the ROC curve of the markers at `times`.
@@ -899,11 +945,13 @@ pub fn auc(
             let m = |pos: usize| marker[(core.sorted.row[pos] as usize, j)];
             auc_column(&core, opts, j, t, &m)
         })
-        .collect();
-    let influence = (opts.keep_influence && opts.variance).then(|| {
-        let cols: Vec<Option<Vec<f64>>> = columns.iter().map(|c| c.influence.clone()).collect();
-        core.influence_matrix(&cols)
-    });
+        .collect::<Result<_>>()?;
+    let influence = (opts.keep_influence && opts.variance)
+        .then(|| {
+            let cols: Vec<Option<Vec<f64>>> = columns.iter().map(|c| c.influence.clone()).collect();
+            core.influence(&cols)
+        })
+        .transpose()?;
     Ok(Auc {
         times: times.to_vec(),
         auc: columns.iter().map(|c| c.auc).collect(),

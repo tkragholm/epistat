@@ -42,6 +42,7 @@
 
 use std::collections::BTreeMap;
 
+use epistat_inference::Influence;
 use epistat_linalg::{Attempt, Mat, inverse};
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, fit};
@@ -222,11 +223,10 @@ fn cox_censoring_and_contrasts_against_riskregression() {
             let s0 = null_brier(&data, &d.times, &opts).unwrap();
             let aa = auc(&data, ma.as_ref(), &d.times, &opts).unwrap();
             let ab = auc(&data, mb.as_ref(), &d.times, &opts).unwrap();
-            let big = |m: &Option<Mat<f64>>| {
+            let big = |m: &Option<Influence>| {
                 let m = m.as_ref().unwrap();
-                (0..m.nrows())
-                    .flat_map(|i| (0..t).map(move |j| (i, j)))
-                    .map(|(i, j)| m[(i, j)].abs())
+                (0..t)
+                    .flat_map(|j| m.column(j).iter().map(|v| v.abs()))
                     .fold(0.0f64, f64::max)
             };
             let u = big(&sa.influence)

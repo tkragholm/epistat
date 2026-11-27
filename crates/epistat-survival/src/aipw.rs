@@ -35,10 +35,13 @@
 //!
 //! # The standard error
 //!
-//! The influence function of `F_a^(t)` for the nuisance functions fixed at their
-//! estimates is `(phi_i,a(t) - F_a^(t)) / n`, and the standard error is the
-//! square root of the sum of its squares, the covariance of the two levels the
-//! sum of the products. This is `ate` with `known.nuisance = TRUE`. For the
+//! The influence function of `F_a^(t)` per person, for the nuisance functions
+//! fixed at their estimates, is `psi_i,a(t) = phi_i,a(t) - F_a^(t)`, and the
+//! covariance of the two levels at a time is that of
+//! [`Influence::variance`] without a small-sample factor,
+//! `sum_i (psi_i - mean psi)(psi_i - mean psi)' / n^2`. The mean is zero up to
+//! rounding, so this is the sum of the squares and products of `psi / n`.
+//! This is `ate` with `known.nuisance = TRUE`. For the
 //! augmented estimator it is the variance of the efficient influence function and
 //! it is also the asymptotic variance with the nuisance models estimated, when
 //! they are all right. The variance of the estimator that is right when only some
@@ -141,9 +144,11 @@
 //!    differences in restricted mean lifetimes in observational studies.
 //!    Biometrics 2012;68(4):999-1009.
 
+use epistat_core::Covariance;
 use epistat_core::InputError;
 use epistat_core::Level;
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
@@ -262,11 +267,12 @@ pub struct AipwSurv {
     pub risks: Standardised,
     /// The times.
     pub times: Vec<f64>,
-    /// The influence of each person on the risk of level 0 and of level 1, `n`
-    /// rows of one value per time, as the estimate is the sum of the values
-    /// added to nothing: the influence function of the estimator, `(phi - est) / n`.
-    /// `None` after the last follow-up time.
-    pub influence: [Vec<f64>; 2],
+    /// The influence function of the risks per person, `phi - est`: column
+    /// `l * times.len() + s` is level `l` at `times[s]`, and the units are the
+    /// rows of the data. Its rule is that of the standard errors, without a
+    /// small-sample factor, so the variance of the two columns of a time is
+    /// the covariance in `risks`.
+    pub influence: Influence,
     /// The number of propensities set to a limit of the truncation.
     pub n_trimmed: usize,
     /// The summary of the weights `1 / pi_a` of the treatment of each person.
@@ -1175,60 +1181,59 @@ impl Model {
         );
         let nf = n as f64;
         let est: Vec<f64> = sums.iter().map(|s| s / nf).collect();
-        // The influence function and the covariances.
-        let mut influence = [vec![0.0; n * k], vec![0.0; n * k]];
-        let cov = par::ordered_reduce(
-            n,
-            BLOCK,
-            WAVE,
-            |range| {
-                let mut c = vec![0.0; 3 * k];
-                for i in range {
-                    for s in 0..k {
-                        let a = (phi[i * 2 * k + s] - est[s]) / nf;
-                        let b = (phi[i * 2 * k + k + s] - est[k + s]) / nf;
-                        c[s] += a * a;
-                        c[k + s] += b * b;
-                        c[2 * k + s] += a * b;
-                    }
-                }
-                c
-            },
-            |a, b| {
-                for (x, y) in a.iter_mut().zip(b) {
-                    *x += y;
-                }
-            },
-        );
-        for i in 0..n {
-            for s in 0..k {
-                influence[0][i * k + s] = (phi[i * 2 * k + s] - est[s]) / nf;
-                influence[1][i * k + s] = (phi[i * 2 * k + k + s] - est[k + s]) / nf;
+        // The influence function per person, `phi - est`, in column `l * k + s`
+        // for level `l` at time `s`.
+        let mut values = vec![0.0; 2 * k * n];
+        for (j, column) in values.chunks_mut(n.max(1)).enumerate() {
+            for (i, value) in column.iter_mut().enumerate() {
+                *value = phi[i * 2 * k + j] - est[j];
             }
         }
+        let units: Vec<u32> = (0..n)
+            .map(|i| u32::try_from(i).map_err(|_| Error::invalid("more persons than u32::MAX")))
+            .collect::<Result<_>>()?;
+        let influence = Influence::new(values, units, 2 * k, ClusterRule::NoSmallSample)?;
+        // The covariance of the two levels at each time from a two-column
+        // influence function of that time: the variance of all `2k` columns at
+        // once would form a `2k` by `2k` matrix, `k` times the work.
+        let blocks: Vec<Option<Covariance>> = (0..k)
+            .into_par_iter()
+            .map(|s| {
+                if self.times[s] > self.max_stop {
+                    return Ok(None);
+                }
+                let mut pair = influence.column(s).to_vec();
+                pair.extend_from_slice(influence.column(k + s));
+                let time = Influence::new(
+                    pair,
+                    influence.units().to_vec(),
+                    2,
+                    ClusterRule::NoSmallSample,
+                )?;
+                Ok(Some(time.variance(None)?))
+            })
+            .collect::<Result<_>>()?;
         let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
         let mut risk = vec![None; 2 * k];
         let mut std_err = vec![None; 2 * k];
         let mut lower = vec![None; 2 * k];
         let mut upper = vec![None; 2 * k];
         let mut covariance = vec![None; k * 4];
-        for s in 0..k {
-            if self.times[s] > self.max_stop {
+        for (s, block) in blocks.iter().enumerate() {
+            let Some(block) = block else {
                 continue;
-            }
+            };
             for l in 0..2 {
                 let e = est[l * k + s];
-                let v = cov[l * k + s];
-                let se = v.max(0.0).sqrt();
                 risk[l * k + s] = Some(e);
-                std_err[l * k + s] = Some(se);
-                lower[l * k + s] = Some(e - z * se);
-                upper[l * k + s] = Some(e + z * se);
+                if let Some(v) = block.get(l, l) {
+                    let se = v.max(0.0).sqrt();
+                    std_err[l * k + s] = Some(se);
+                    lower[l * k + s] = Some(e - z * se);
+                    upper[l * k + s] = Some(e + z * se);
+                }
             }
-            covariance[s * 4] = Some(cov[s]);
-            covariance[s * 4 + 3] = Some(cov[k + s]);
-            covariance[s * 4 + 1] = Some(cov[2 * k + s]);
-            covariance[s * 4 + 2] = Some(cov[2 * k + s]);
+            covariance[s * 4..(s + 1) * 4].copy_from_slice(block.as_slice());
         }
         let weights = WeightSummary::new((0..n).map(|i| 1.0 / self.pi[i]));
         Ok(AipwSurv {

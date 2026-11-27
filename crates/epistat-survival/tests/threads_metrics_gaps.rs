@@ -88,11 +88,7 @@ fn cox_censoring_contrasts_and_calibration() {
             }
         }
         let inf = sa.influence.unwrap();
-        out.extend(
-            (0..inf.nrows())
-                .flat_map(|i| (0..inf.ncols()).map(move |j| (i, j)))
-                .map(|(i, j)| inf[(i, j)]),
-        );
+        out.extend((0..inf.n_columns()).flat_map(|j| inf.column(j).to_vec()));
         out
     });
 

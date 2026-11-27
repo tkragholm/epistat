@@ -135,7 +135,11 @@ fn check(sim: &Sim, delayed: bool, strata: bool) {
     assert_eq!(got.counts.tied_xy, want.counts[4]);
     let pairs = want.counts[0] + want.counts[1] + want.counts[2];
     let somer = (want.counts[0] - want.counts[1]) / pairs;
-    let dfbeta = got.influence.as_ref().unwrap();
+    let influence = got.influence.as_ref().unwrap();
+    // The variance is that of the influence function the result carries.
+    assert_eq!(influence.variance(None).unwrap().get(0, 0), got.variance);
+    let n = influence.n_units() as f64;
+    let dfbeta: Vec<f64> = influence.column(0).iter().map(|v| v / n).collect();
     for (k, p) in want.partners.iter().enumerate() {
         let expected = sim.weight[k] * ((1.0 - somer) * p[0] - (1.0 + somer) * p[1] - somer * p[2])
             / (2.0 * pairs);
@@ -183,7 +187,12 @@ fn reversing_swaps_the_counts_and_flips_the_influence() {
     assert_eq!(a.variance, b.variance);
     assert_eq!(a.cox_variance, b.cox_variance);
     let (da, db) = (a.influence.unwrap(), b.influence.unwrap());
-    assert!(da.iter().zip(&db).all(|(p, q)| *p == -*q));
+    assert!(
+        da.column(0)
+            .iter()
+            .zip(db.column(0))
+            .all(|(p, q)| *p == -*q)
+    );
 }
 
 #[test]

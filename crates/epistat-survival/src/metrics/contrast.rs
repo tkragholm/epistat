@@ -39,9 +39,9 @@
 //!    models. R J 2017;9(2):440-60. doi:10.32614/RJ-2017-062
 
 use epistat_core::Level;
-use epistat_linalg::Mat;
+use epistat_inference::Influence;
 
-use super::score::{Auc, Score, std_err_of};
+use super::score::{Auc, Score, se_of};
 use crate::error::{Error, Result};
 
 /// What the contrasts take.
@@ -78,7 +78,8 @@ pub struct Contrast {
 /// # Errors
 ///
 /// An input error when a score has no influence function, when the two are
-/// at different times or from data of different numbers of rows.
+/// at different times or from data of different numbers of rows, or when
+/// their influence functions are of other rows.
 pub fn brier_difference(
     model: &Score,
     reference: &Score,
@@ -134,8 +135,8 @@ fn contrast(
     n_used: usize,
     model: &[Option<f64>],
     reference: &[Option<f64>],
-    model_influence: Option<&Mat<f64>>,
-    reference_influence: Option<&Mat<f64>>,
+    model_influence: Option<&Influence>,
+    reference_influence: Option<&Influence>,
     opts: ContrastOptions,
 ) -> Result<Contrast> {
     let (Some(a), Some(b)) = (model_influence, reference_influence) else {
@@ -144,6 +145,11 @@ fn contrast(
              keep_influence",
         ));
     };
+    if a.units() != b.units() {
+        return Err(Error::invalid(
+            "the two influence functions must be of the same rows",
+        ));
+    }
     let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
     let mut out = Contrast {
         times: times.to_vec(),
@@ -168,8 +174,13 @@ fn contrast(
             continue;
         };
         let delta = x - y;
-        let diff: Vec<f64> = (0..a.nrows()).map(|i| a[(i, j)] - b[(i, j)]).collect();
-        let se = std_err_of(&diff).filter(|&s| s > 0.0);
+        let diff: Vec<f64> = a
+            .column(j)
+            .iter()
+            .zip(b.column(j))
+            .map(|(x, y)| x - y)
+            .collect();
+        let se = se_of(&diff, a.units())?.filter(|&s| s > 0.0);
         out.difference.push(Some(delta));
         out.se.push(se);
         out.lower.push(se.map(|s| delta - z * s));

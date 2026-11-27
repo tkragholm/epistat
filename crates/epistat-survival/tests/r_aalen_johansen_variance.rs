@@ -258,13 +258,19 @@ fn matches_r_survfit() {
                         let g = labels.binary_search(&uclust[cr]).unwrap();
                         for (rt, &t) in rg.time.iter().enumerate() {
                             let k = all_times.iter().position(|&x| x == t).unwrap();
-                            let at = (g * all_times.len() + k) * STATES + s;
+                            // R's influence is on the dfbeta scale, `1 / n` of ours.
+                            let column = got.groups[gi]
+                                .influence
+                                .as_ref()
+                                .unwrap()
+                                .column(k * STATES + s);
+                            let got_value = column[g] / column.len() as f64;
                             worst[4].1.see(
                                 &format!(
                                     "{} group {} influence cluster {} t={t} s{s}",
                                     case.name, rg.group, uclust[cr]
                                 ),
-                                (got.groups[gi].influence[at] - values[rt]).abs(),
+                                (got_value - values[rt]).abs(),
                                 2.0 * kap * eps * a[g],
                             );
                         }

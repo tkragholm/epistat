@@ -95,7 +95,10 @@
 //! ```
 //!
 //! and the variance is the sum of `dfbeta_k^2`, over clusters first when
-//! the data has them. The two sums per row of the second tree give `a_k`,
+//! the data has them. It is taken by [`Influence::variance`] on the influence
+//! function `n dfbeta_k` of the `n` rows, without a small-sample factor, which
+//! centres the cluster sums: their mean is zero up to rounding, and with one
+//! cluster the variance is `None`. The two sums per row of the second tree give `a_k`,
 //! `b_k` and `e_k` in the same sweep: row `k` as the death takes them from the
 //! first tree, and as the other row of a pair it takes them from the second
 //! tree, over the deaths between its start and its stop. They cost 24 bytes per
@@ -161,7 +164,7 @@
 
 use std::cmp::Ordering;
 
-use epistat_stats::sum::compensated;
+use epistat_inference::{ClusterRule, Clusters, Influence};
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, refuse_non_finite};
@@ -263,9 +266,11 @@ pub struct Concordance {
     /// The counts of each stratum with a used row, in the order of the
     /// caller's codes. Empty without a stratum column.
     pub strata: Vec<StratumCounts>,
-    /// The influence of each row, zero for rows not used. `None` unless asked
-    /// for.
-    pub influence: Option<Vec<f64>>,
+    /// The influence function of the concordance, per row: `n` times the
+    /// `dfbeta` of `concordance`, with the rows of the data as units, zero for
+    /// rows not used. Its rule is that of `variance`, which it reproduces with
+    /// the data's clusters. `None` unless asked for.
+    pub influence: Option<Influence>,
     /// The number of rows given.
     pub n_rows: usize,
     /// The number of rows of positive weight.
@@ -465,14 +470,19 @@ pub fn estimate(
                 dfbeta[row as usize] = w * (c[0] * p[0] + c[1] * p[1] + c[2] * p[2]);
             }
         }
-        variance = Some(sum_of_squares(&data, &dfbeta));
-        if opts.influence {
-            if opts.reverse {
-                for d in &mut dfbeta {
-                    *d = -*d;
-                }
+        if opts.reverse {
+            for d in &mut dfbeta {
+                *d = -*d;
             }
-            influence = Some(dfbeta);
+        }
+        let n_rows = u32::try_from(data.n_rows())
+            .map_err(|_| Error::invalid("data: more rows than u32::MAX"))?;
+        let units: Vec<u32> = (0..n_rows).collect();
+        let rows = Influence::from_dfbeta(dfbeta, units, 1, ClusterRule::NoSmallSample)?;
+        let clusters = data.cluster().map(Clusters::from_codes);
+        variance = rows.variance(clusters.as_ref())?.get(0, 0);
+        if opts.influence {
+            influence = Some(rows);
         }
     }
 
@@ -500,20 +510,6 @@ fn counts_of(sums: &[f64; 6], reverse: bool) -> PairCounts {
         tied_x: sums[2],
         tied_y: sums[3],
         tied_xy: sums[4],
-    }
-}
-
-/// The sum of squares of the influences, over clusters when there are any.
-fn sum_of_squares(data: &SurvData<'_>, dfbeta: &[f64]) -> f64 {
-    match data.cluster() {
-        Some(cluster) => {
-            let mut sums = vec![0.0_f64; data.n_clusters()];
-            for (&c, &d) in cluster.iter().zip(dfbeta) {
-                sums[c as usize] += d;
-            }
-            compensated(sums.iter().map(|s| s * s))
-        }
-        None => compensated(dfbeta.iter().map(|d| d * d)),
     }
 }
 

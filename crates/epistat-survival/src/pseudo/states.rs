@@ -445,7 +445,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
         states,
         per_pass,
         |chunk| {
-            let v = multistate::variance(
+            let (_, influence) = multistate::variance_dfbeta(
                 data,
                 &grid,
                 &ms,
@@ -455,7 +455,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
                     influence_times: chunk.to_vec(),
                 },
             )?;
-            Ok(vec![v.influence])
+            Ok(vec![influence])
         },
     )?;
     let influence = &influence[0];

@@ -303,7 +303,7 @@ fn score_against_riskregression() {
                 check("brier se", j, b.se[j].unwrap(), run.brier_se[j], base * u_b);
                 let mut inf: f64 = 0.0;
                 for i in 0..n {
-                    inf = inf.max(b.influence.as_ref().unwrap()[(i, j)].abs());
+                    inf = inf.max(b.influence.as_ref().unwrap().column(j)[i].abs());
                 }
                 assert!(
                     inf <= u_b * (1.0 + 1e-9),

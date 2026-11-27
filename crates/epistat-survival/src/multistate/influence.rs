@@ -79,8 +79,10 @@
     reason = "row, cluster and time counts are checked to fit in u32 by the entry points"
 )]
 
+use epistat_inference::{ClusterRule, Influence};
 use rayon::prelude::*;
 
+use crate::error::Result;
 use crate::order::par_sort_by_key;
 
 /// The clusters in one block. A block is the unit of parallel work and of the
@@ -600,4 +602,30 @@ impl Shared<'_> {
         }
         part
     }
+}
+
+/// The influence function of `units` from the cluster-major values on the
+/// dfbeta scale that the recursion writes, `cluster * column`, `None` without
+/// columns.
+pub(crate) fn per_cluster(
+    values: &[f64],
+    units: &[u32],
+    columns: usize,
+) -> Result<Option<Influence>> {
+    if columns == 0 || units.is_empty() {
+        return Ok(None);
+    }
+    let n = units.len();
+    let mut by_column = vec![0.0; n * columns];
+    for (c, row) in values.chunks_exact(columns).enumerate() {
+        for (j, &value) in row.iter().enumerate() {
+            by_column[j * n + c] = value;
+        }
+    }
+    Ok(Some(Influence::from_dfbeta(
+        by_column,
+        units.to_vec(),
+        columns,
+        ClusterRule::NoSmallSample,
+    )?))
 }

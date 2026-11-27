@@ -114,8 +114,12 @@ fn rows_of_weight_zero_are_left_out_and_the_influence_has_one_row_per_used_row()
     assert_eq!(a.se, b.se);
     assert_eq!((a.n_rows, a.n_used), (n, keep.len()));
     let influence = a.influence.as_ref().unwrap();
-    assert_eq!(influence.nrows(), keep.len());
-    assert_eq!(influence, b.influence.as_ref().unwrap());
+    assert_eq!(influence.n_units(), keep.len());
+    // The same values, with the rows of the data as units.
+    let reduced = b.influence.as_ref().unwrap();
+    assert_eq!(influence.column(0), reduced.column(0));
+    let kept: Vec<u32> = keep.iter().map(|&i| u32::try_from(i).unwrap()).collect();
+    assert_eq!(influence.units(), kept.as_slice());
 }
 
 #[test]

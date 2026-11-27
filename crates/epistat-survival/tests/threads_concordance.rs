@@ -86,7 +86,7 @@ fn estimate_and_influence() {
                         s.counts.tied_x,
                     ]
                 }));
-                out.extend(r.influence.unwrap());
+                out.extend(r.influence.unwrap().column(0));
                 out
             });
         }

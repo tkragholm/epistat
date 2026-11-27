@@ -85,12 +85,12 @@ fn influence_with_tied_censoring_times_against_numerical_derivatives() {
             let (d1, d2) = (r.d1[k][j], r.d2[k][j]);
             let reference = (4.0 * d1 - d2) / 3.0;
             let bound = (d2 - d1).abs() / 3.0 + nf * (r.fit_error + b_b) / r.h1;
-            let dev = (influence[(k, j)] - reference).abs() / bound;
+            let dev = (influence.column(j)[k] - reference).abs() / bound;
             assert!(
                 dev <= 1.0,
                 "row {k}, time {}: influence {} against {reference}, bound {bound}",
                 r.times[j],
-                influence[(k, j)]
+                influence.column(j)[k]
             );
             worst = worst.max(dev);
         }

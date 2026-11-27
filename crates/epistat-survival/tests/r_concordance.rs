@@ -329,7 +329,10 @@ fn every_case_matches_survival_concordance() {
         let somer = (rc - rd) / pairs;
         let partner_tol = 2.0 * k * (total_w * sc.vmax + sc.dv);
         let coef = ((1.0 - somer).abs() + (1.0 + somer).abs() + somer.abs()) / (2.0 * pairs);
-        let influence = got.influence.as_ref().unwrap();
+        // The influence function is `n` times the `dfbeta` that R returns.
+        let units = got.influence.as_ref().unwrap();
+        let n_units = units.n_units() as f64;
+        let influence: Vec<f64> = units.column(0).iter().map(|v| v / n_units).collect();
         let tols: Vec<f64> = (0..n)
             .map(|i| w[i] * coef * partner_tol + 4.0 * f64::EPSILON * influence[i].abs())
             .collect();

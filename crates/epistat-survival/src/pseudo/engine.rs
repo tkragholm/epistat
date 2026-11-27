@@ -16,7 +16,7 @@
 //! inside the recursion and returns only the sum of squares; an output of the
 //! integral at chosen horizons would make the area targets one pass.
 
-use crate::aalen_johansen::{AalenJohansenOptions, VarianceOptions, variance};
+use crate::aalen_johansen::{AalenJohansenOptions, VarianceOptions, variance_dfbeta};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -83,7 +83,7 @@ pub(super) fn run(
         1,
         per_pass,
         |chunk| {
-            let result = variance(
+            let (result, dfbeta) = variance_dfbeta(
                 data,
                 &AalenJohansenOptions {
                     timefix: TimeFix::Exact,
@@ -96,14 +96,14 @@ pub(super) fn run(
             let t = chunk.len();
             Ok(groups
                 .iter()
-                .zip(&result.groups)
-                .map(|(group, influence)| {
+                .zip(result.groups.iter().zip(&dfbeta))
+                .map(|(group, (influence, values))| {
                     debug_assert_eq!(group.labels, influence.clusters);
                     let n = group.n_clusters();
                     let mut column = Vec::with_capacity(n * t);
                     for c in 0..n {
                         for i in 0..t {
-                            column.push(influence.influence[(c * t + i) * states + state]);
+                            column.push(values[(c * t + i) * states + state]);
                         }
                     }
                     column

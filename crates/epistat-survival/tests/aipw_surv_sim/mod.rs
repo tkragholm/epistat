@@ -97,7 +97,8 @@ pub fn flatten(r: &AipwSurv) -> Vec<f64> {
     for c in r.risks.covariance.iter().flatten() {
         v.extend(c.as_slice().iter().map(|o| o.unwrap_or(f64::NAN)));
     }
-    v.extend(&r.influence[0]);
-    v.extend(&r.influence[1]);
+    for j in 0..r.influence.n_columns() {
+        v.extend(r.influence.column(j));
+    }
     v
 }

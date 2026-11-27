@@ -154,6 +154,7 @@
 
 use std::borrow::Cow;
 
+use epistat_inference::Influence;
 use epistat_rng::{dirichlet_weights, replicate_seed};
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
@@ -1151,12 +1152,16 @@ pub struct Variance {
     pub clusters: Vec<u32>,
     /// The times of [`VarianceOptions::influence_times`].
     pub influence_times: Vec<f64>,
-    /// `cluster * influence time * state`, row-major: the influence of each
-    /// cluster on the probability of each state, the sum over its rows of the
-    /// weight times the derivative of the probability with respect to it. The
-    /// squares of a column sum to the variance. Only the times asked for are
-    /// kept, since all of them would hold `clusters * times * states` values.
-    pub influence: Vec<f64>,
+    /// The influence function of each cluster on the probability of each
+    /// state at the influence times, per cluster, with the codes of `clusters`
+    /// as units: column `t * n_states + s` is state `s` at influence time `t`.
+    /// It is `n_clusters` times the sum over the cluster's rows of the weight
+    /// times the derivative of the probability with respect to it. Its rule
+    /// has no small-sample factor, as the standard errors, which its variance
+    /// gives up to rounding. Only the times asked for are kept, since all of
+    /// them would hold `clusters * times * states` values. `None` without
+    /// influence times.
+    pub influence: Option<Influence>,
     /// The number of rows of the data, including rows of weight 0.
     pub n_rows: usize,
     /// The number of rows of positive weight, which are the rows used.
@@ -1199,6 +1204,24 @@ pub fn variance(
     opts: &Options,
     v: &VarianceOptions,
 ) -> Result<Variance> {
+    let (mut out, dfbeta) = variance_dfbeta(data, times, opts, v)?;
+    out.influence = influence::per_cluster(
+        &dfbeta,
+        &out.clusters,
+        v.influence_times.len() * out.n_states,
+    )?;
+    Ok(out)
+}
+
+/// [`variance`] with the influence as the recursion writes it, cluster by
+/// influence time by state on the dfbeta scale, beside a result whose
+/// `influence` is `None`.
+pub(crate) fn variance_dfbeta(
+    data: &SurvData<'_>,
+    times: &[f64],
+    opts: &Options,
+    v: &VarianceOptions,
+) -> Result<(Variance, Vec<f64>)> {
     check_ascending(times, "times", true)?;
     check_ascending(&v.horizons, "horizons", false)?;
     check_ascending(&v.influence_times, "influence_times", false)?;
@@ -1297,7 +1320,7 @@ pub fn variance(
             snapshots: &snapshots,
         },
     );
-    Ok(Variance {
+    let variance = Variance {
         probabilities: out.p,
         se: out.std_p,
         transitions: out.transitions,
@@ -1314,10 +1337,11 @@ pub fn variance(
             .map(|&c| levels.map_or(c, |l| l.code(c as usize).unwrap_or(c)))
             .collect(),
         influence_times: v.influence_times.clone(),
-        influence: out.influence,
+        influence: None,
         n_rows: prepared.data.n_rows(),
         n_used: prepared.data.n_used(),
-    })
+    };
+    Ok((variance, out.influence))
 }
 
 #[cfg(test)]

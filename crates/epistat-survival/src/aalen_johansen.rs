@@ -139,6 +139,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use epistat_core::Bootstrap;
+use epistat_inference::Influence;
 use epistat_rng::{dirichlet_weights, replicate_seed};
 use rayon::prelude::*;
 
@@ -507,10 +508,14 @@ pub struct GroupInfluence {
     /// then each cause: the standard error of the restricted time in the state
     /// from the origin to each horizon.
     pub std_rmean: Vec<f64>,
-    /// `cluster * influence time * state`, row-major: the influence of each
-    /// cluster on the event-free probability and the incidence of each cause.
-    /// The squares of a column sum to the variance.
-    pub influence: Vec<f64>,
+    /// The influence function of each cluster on the event-free probability
+    /// and the incidence of each cause at the influence times, per cluster,
+    /// with the codes of `clusters` as units: column `t * states + s` is
+    /// state `s` at influence time `t`, the states being the event-free state
+    /// and then each cause. Its rule has no small-sample factor, as the
+    /// standard errors, which its variance gives up to rounding. `None`
+    /// without influence times.
+    pub influence: Option<Influence>,
 }
 
 /// The standard errors of the Aalen-Johansen estimate by the infinitesimal
@@ -594,6 +599,22 @@ pub fn variance(
     opts: &AalenJohansenOptions,
     v: &VarianceOptions,
 ) -> Result<Variance> {
+    let (mut out, dfbeta) = variance_dfbeta(data, opts, v)?;
+    let columns = v.influence_times.len() * (out.causes.len() + 1);
+    for (group, values) in out.groups.iter_mut().zip(dfbeta) {
+        group.influence = influence::per_cluster(&values, &group.clusters, columns)?;
+    }
+    Ok(out)
+}
+
+/// [`variance`] with the influence of each group as the recursion writes it,
+/// cluster by influence time by state on the dfbeta scale, beside a result
+/// whose `influence` is `None`.
+pub(crate) fn variance_dfbeta(
+    data: &SurvData<'_>,
+    opts: &AalenJohansenOptions,
+    v: &VarianceOptions,
+) -> Result<(Variance, Vec<Vec<f64>>)> {
     check_ascending(&v.horizons, "horizons", false)?;
     check_ascending(&v.influence_times, "influence_times", false)?;
     let data = data.clone().with_timefix(opts.timefix)?;
@@ -653,6 +674,7 @@ pub fn variance(
     };
     let mut p0 = vec![0.0f64; states];
     p0[0] = 1.0;
+    let mut dfbeta = Vec::new();
     for (dense, rows) in members.iter().enumerate() {
         if rows.is_empty() {
             continue;
@@ -744,10 +766,11 @@ pub fn variance(
             group: g_code,
             clusters: labels,
             std_rmean: result.std_h,
-            influence: result.influence,
+            influence: None,
         });
+        dfbeta.push(result.influence);
     }
-    Ok(out)
+    Ok((out, dfbeta))
 }
 
 /// How the cluster weights of a replicate are drawn for the cells of a
@@ -2083,8 +2106,9 @@ mod variance_tests {
         );
     }
 
-    /// The influence at the times asked for squares and sums to the variance,
-    /// for more clusters than one block holds and a last block that is not full.
+    /// The variance of the influence function at the times asked for is the
+    /// reported variance, for more clusters than one block holds and a last
+    /// block that is not full.
     #[test]
     fn the_influence_values_sum_to_the_variance_across_blocks() {
         let n = 3 * super::influence::BLOCK + 17;
@@ -2105,24 +2129,32 @@ mod variance_tests {
         let g = &got.groups[0];
         assert_eq!(g.clusters.len(), n);
         let width = 4;
+        let influence = g.influence.as_ref().unwrap();
+        assert_eq!(influence.n_columns(), times.len() * width);
+        let covariance = influence.variance(None).unwrap();
+        // The recursion sums the squares of the `n` values uncentred and in
+        // blocks, the influence function centres them and sums in lanes: each
+        // sum of `n` squares carries a relative error of at most `n eps / 2`,
+        // the mean is zero up to rounding, and the square root halves the
+        // relative error, so the two standard errors differ by at most
+        // `n eps` relative.
+        let tolerance = n as f64 * f64::EPSILON;
         for (t, &time) in got.time.iter().enumerate() {
             let k = times
                 .iter()
                 .position(|&x| (x - time).abs() < 1e-12)
                 .unwrap();
             for s in 0..width {
-                let sum: f64 = (0..n)
-                    .map(|c| g.influence[(c * times.len() + k) * width + s].powi(2))
-                    .sum();
+                let j = k * width + s;
+                let se = covariance.get(j, j).unwrap().sqrt();
                 let reported = if s == 0 {
                     got.std_event_free[t]
                 } else {
                     got.std_cif[s - 1][t]
                 };
                 assert!(
-                    (sum.sqrt() - reported).abs() <= 1e-13 * reported.max(1e-3),
-                    "t={time} s={s}: {} against {reported}",
-                    sum.sqrt()
+                    (se - reported).abs() <= tolerance * reported.max(1e-3),
+                    "t={time} s={s}: {se} against {reported}"
                 );
             }
         }

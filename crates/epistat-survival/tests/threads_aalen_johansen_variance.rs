@@ -74,7 +74,8 @@ fn variance_does_not_depend_on_the_number_of_threads() {
         }
         for g in &got.groups {
             out.extend(&g.std_rmean);
-            out.extend(&g.influence);
+            let inf = g.influence.as_ref().unwrap();
+            out.extend((0..inf.n_columns()).flat_map(|j| inf.column(j).to_vec()));
         }
         out
     });
