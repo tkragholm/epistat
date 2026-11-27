@@ -57,7 +57,6 @@ mod conic;
 mod event_study_assessment;
 mod linear_algebra;
 mod relative_magnitude;
-mod report_exports;
 mod smoothness;
 mod solver_tally;
 mod summary_api;
@@ -79,8 +78,7 @@ pub use event_study_assessment::{
     assess_honest_event_study_post_functional_multi_flci,
     assess_honest_event_study_post_functional_multi_flci_with_config,
     assess_honest_event_study_post_functional_with_config, assess_honest_event_study_workflow,
-    assess_honest_event_study_workflow_with_config, compute_honest_ci_scalar,
-    compute_honest_event_study_scalar, compute_honest_event_study_scalar_for_input,
+    assess_honest_event_study_workflow_with_config, compute_honest_event_study_scalar_for_input,
 };
 pub use relative_magnitude::least_favorable_intervals::{
     RelativeMagnitudeFlciProblem, RelativeMagnitudeFlciResult, RelativeMagnitudeMultiFlciProblem,
@@ -109,15 +107,6 @@ pub use relative_magnitude::{
     compute_signed_relative_magnitude_confidence_set_with_config,
     compute_signed_relative_magnitude_identified_set,
 };
-pub use report_exports::{
-    HonestDirectionalReport, HonestDirectionalReportRow, HonestJointPathReport,
-    HonestJointPathReportRow, HonestMultiFlciReport, HonestMultiFlciReportRow,
-    build_honest_directional_report_rows, build_honest_joint_path_report_rows,
-    build_honest_multi_flci_report_rows, render_honest_directional_report_csv,
-    render_honest_directional_report_json, render_honest_joint_path_report_csv,
-    render_honest_joint_path_report_json, render_honest_multi_flci_report_csv,
-    render_honest_multi_flci_report_json,
-};
 pub use smoothness::least_favorable_intervals::{
     SmoothnessFlciConfig, SmoothnessFlciProblem, SmoothnessFlciResult, SmoothnessMultiFlciProblem,
     build_smoothness_flci_problem, build_smoothness_multi_flci_problem, compute_smoothness_flci,
@@ -138,11 +127,9 @@ pub use smoothness::{
 pub(crate) use solver_tally::SolverCounter;
 pub use solver_tally::SolverCounts;
 pub use summary_api::{
-    PostPeriodSensitivitySummary, SensitivityRestrictionKind, SensitivitySummary,
-    SensitivitySummaryMethod, SensitivitySummaryRow,
-    estimate_smoothness_upper_bound_from_pretrends, summarize_post_period_sensitivity,
-    summarize_post_period_sensitivity_with_simulation, summarize_relative_magnitude_sensitivity,
-    summarize_relative_magnitude_sensitivity_many,
+    SensitivityRestrictionKind, SensitivitySummary, SensitivitySummaryMethod,
+    SensitivitySummaryRow, estimate_smoothness_upper_bound_from_pretrends,
+    summarize_relative_magnitude_sensitivity, summarize_relative_magnitude_sensitivity_many,
     summarize_relative_magnitude_sensitivity_many_with_simulation,
     summarize_relative_magnitude_sensitivity_with_simulation, summarize_smoothness_sensitivity,
     summarize_smoothness_sensitivity_with_simulation,
