@@ -73,6 +73,39 @@ fn parse_refuses_malformed_items() {
 }
 
 #[test]
+fn parse_reads_the_wildcard_and_the_en_dash_as_tables_print_them() {
+    let printed =
+        CodeSet::parse("I43.x, I42.5\u{2013}I42.9, C37.x\u{2013}C41.x, D65\u{2013}D68.x, R64")
+            .unwrap();
+    let plain = CodeSet::parse("I43, I425-I429, C37-C41, D65-D68, R64").unwrap();
+    assert_eq!(printed, plain);
+    for yes in [
+        "I43", "I430", "I4381", "I426", "C37", "C419", "D65", "D689", "R64", "R640",
+    ] {
+        assert!(printed.contains(yes), "{yes}");
+    }
+    for no in ["I42", "I424", "C36", "C42", "D64", "D69", "R63"] {
+        assert!(!printed.contains(no), "{no}");
+    }
+    // The wildcard is the dot and `x` at the end of an end; elsewhere `x` is
+    // a letter of the code.
+    assert!(CodeSet::parse("I43X").unwrap().contains("I43X"));
+    assert!(!CodeSet::parse("I43X").unwrap().contains("I430"));
+    assert_eq!(
+        CodeSet::parse("i43.X").unwrap(),
+        CodeSet::parse("I43").unwrap()
+    );
+    for bad in [
+        ".x",
+        "I42.5\u{2013}I43.x",
+        "I42.5\u{2013}I42.9\u{2013}I43.0",
+        "I42.5\u{2014}I42.9",
+    ] {
+        assert!(CodeSet::parse(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn range_edges_and_the_codes_just_outside() {
     let set = CodeSet::parse("C09-C10, E10.2-E10.5").unwrap();
     for (code, expected) in [

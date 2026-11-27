@@ -21,6 +21,12 @@
 //! specification is ignored, so `E10.2` is `E102`. The Danish register prefix
 //! `D` is not part of a specification: the caller normalises the codes first.
 //!
+//! Published code lists write a category with every subdivision as `I43.x`
+//! and a range with an en dash, `I42.5–I42.9`. [`CodeSet::parse`] reads both
+//! as printed: a trailing `.x` stands for any subdivision, so `I43.x` is the
+//! prefix `I43` and `C37.x–C41.x` the range of categories `C37` to `C41`, and
+//! the en dash joins the ends of a range as the hyphen does.
+//!
 //! [`normalize_diagnosis_code`]: crate::normalize_diagnosis_code
 //!
 //! # Representation and algorithm
@@ -201,11 +207,20 @@ fn subtract_lists(a: &[Interval], b: &[Interval], width: usize) -> Vec<Interval>
     out
 }
 
-/// Validate and upper-case one end of an item, dropping dots.
+/// The end of an item without a trailing wildcard `.x`, which stands for any
+/// subdivision of the code before the dot.
+fn strip_wildcard(part: &str) -> &str {
+    part.strip_suffix(".x")
+        .or_else(|| part.strip_suffix(".X"))
+        .unwrap_or(part)
+}
+
+/// Validate and upper-case one end of an item, dropping a trailing wildcard
+/// `.x` and the dots.
 fn clean_part(part: &str, whole: &str) -> Result<(Key, usize), Error> {
     let mut key = [0_u8; MAX_LEN];
     let mut len = 0;
-    for ch in part.chars().filter(|&c| c != '.') {
+    for ch in strip_wildcard(part).chars().filter(|&c| c != '.') {
         if !ch.is_ascii_alphanumeric() {
             return Err(Error::invalid(format!(
                 "code item {whole:?} holds the character {ch:?}, which is neither a letter, a digit nor a dot"
@@ -297,23 +312,25 @@ impl CodeSet {
     /// Parse a specification such as `"I21, I252, C00-C26, E10.2-E10.5"`.
     ///
     /// Whitespace and commas separate items, and dots are ignored. An item is
-    /// a prefix, or two prefixes of the same length joined by a hyphen, for the
-    /// range between them inclusive. Letters are upper-cased. An empty
-    /// specification is the empty set.
+    /// a prefix, or two prefixes of the same length joined by a hyphen or an
+    /// en dash (`–`), for the range between them inclusive. A prefix that
+    /// ends in `.x` stands for every subdivision of the code before the dot:
+    /// `I43.x` is the prefix `I43`, and `C37.x–C41.x` is `C37-C41`. Letters
+    /// are upper-cased. An empty specification is the empty set.
     ///
     /// # Errors
     ///
     /// [`Error::Input`] when an item holds a character other than a
     /// letter, a digit or a dot, is longer than 8 characters, has ends of
     /// different lengths or an end before its start, or has more than one
-    /// hyphen.
+    /// hyphen or en dash.
     pub fn parse(spec: &str) -> Result<Self, Error> {
         let mut items = Vec::new();
         for token in spec
             .split(|c: char| c.is_whitespace() || c == ',')
             .filter(|t| !t.is_empty())
         {
-            let mut parts = token.split('-');
+            let mut parts = token.split(['-', '\u{2013}']);
             let first = parts.next().unwrap_or_default();
             let (lo, len) = clean_part(first, token)?;
             let hi = match parts.next() {
@@ -343,7 +360,8 @@ impl CodeSet {
         Ok(Self::from_items(items))
     }
 
-    /// The set of codes that start with any of the prefixes.
+    /// The set of codes that start with any of the prefixes. A trailing `.x`
+    /// is dropped, as in [`parse`](Self::parse).
     ///
     /// # Errors
     ///

@@ -11,11 +11,24 @@
 //!
 //! # What is built in
 //!
-//! The code lists and weights are those of the R package `comorbidity` 1.1.0
-//! \[6\], which takes them from Quan et al. \[2\] (the coding algorithms for the
-//! Charlson and the Elixhauser conditions) and from the three weight tables
-//! above. They are written to `lists.rs` by `tests/data/comorbidity_lists.R`,
-//! and the tests check every code of the alphabet against the package.
+//! The Quan code lists are transcribed from Quan et al. \[2\], ICD-10
+//! column of Table 1 (Charlson) and Table 2 (Elixhauser), with the tables'
+//! names of the conditions as labels and the codes written as the tables
+//! print them, read by [`CodeSet::parse`]:
+//!
+//! - `I43.x` is the category `I43` with every subdivision, the prefix `I43`.
+//! - `I42.5–I42.9`, with the en dash of the tables, is the range of
+//!   four-character codes `I425` to `I429`: `I42.6` is in it and `I42` is not.
+//! - `C37.x–C41.x` is the range of categories `C37` to `C41` with every
+//!   subdivision, and `D65–D68.x`, printed with the wildcard on one end only,
+//!   is the same kind of range.
+//! - A three-character code printed without a decimal, such as `R64`, `F10`
+//!   or `E52`, is the category as a prefix, as `R64.x` would be.
+//!
+//! The weights are those of the three weight tables above. The tests check
+//! every code of an ICD-10 alphabet and the scores of sampled persons against
+//! the R package `comorbidity` 1.1.0 \[6\], run as a black box, and list each
+//! code where the package and the tables disagree; the tables are followed.
 //!
 //! - [`ComorbidityMap::charlson_quan_icd10`] with [`charlson_original`]
 //!   (Charlson 1987) or [`charlson_quan2011`] (Quan 2011, Table 4).
@@ -265,8 +278,7 @@ impl ComorbidityMap {
     /// et al. 2005 (Table 2), with no ICD-8 codes.
     #[must_use]
     pub fn elixhauser_quan_icd10() -> Self {
-        Self::new(quan::elixhauser())
-            .unwrap_or_else(|_| unreachable!("the built-in map is valid"))
+        Self::new(quan::elixhauser()).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
     }
 
     /// The conditions in the order of their bits.
