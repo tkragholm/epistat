@@ -631,7 +631,8 @@ fn unusable_inputs_are_errors() {
         epistat_did::Error::Input(InputError::Domain {
             what: "weights",
             value: -1.0,
-            domain: "[0, inf)"
+            domain: "[0, inf)",
+            row: None
         })
     );
     // A response outside the family's support names its input row; the row

@@ -263,6 +263,7 @@ fn replications(draws: Draws<'_>) -> Result<usize, Error> {
             what: "replicates",
             value: b as f64,
             domain: "2 or more",
+            row: None,
         }
         .into());
     }

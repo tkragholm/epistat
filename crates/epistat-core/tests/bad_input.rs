@@ -31,11 +31,16 @@ fn the_codes_of_input_error_are_unique() {
             found: 0,
         },
         InputError::Empty { what: "a" },
-        InputError::NotFinite { what: "a", row: 0 },
+        InputError::NotFinite {
+            what: "a",
+            row: 0,
+            column: None,
+        },
         InputError::Domain {
             what: "a",
             value: 0.0,
             domain: "x",
+            row: None,
         },
         InputError::Unsorted { what: "a", row: 1 },
         InputError::Duplicate { what: "a", row: 1 },

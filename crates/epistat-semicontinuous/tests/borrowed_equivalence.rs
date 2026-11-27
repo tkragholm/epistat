@@ -290,7 +290,8 @@ fn with_weights_checks_the_weights_and_build_the_clusters() {
         data.with_weights(&weights),
         Err(Error::Input(InputError::NotFinite {
             what: "weights",
-            row: 3
+            row: 3,
+            column: None
         }))
     ));
     assert!(matches!(
@@ -332,12 +333,18 @@ fn build_refuses_each_kind_of_bad_column() {
             what: "y",
             value: -1.0,
             domain: "[0, inf)",
+            row: None,
         }),
-        Err(InputError::NotFinite { what: "x", row: 4 }),
+        Err(InputError::NotFinite {
+            what: "x",
+            row: 4,
+            column: None,
+        }),
         Err(InputError::Domain {
             what: "weights",
             value: 0.0,
             domain: "(0, inf)",
+            row: None,
         }),
         Err(InputError::Length {
             what: "clusters",

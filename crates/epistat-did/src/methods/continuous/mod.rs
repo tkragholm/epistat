@@ -129,7 +129,7 @@ impl BasisSpec {
                     Err(InputError::Domain {
                         what: "degree of a basis without its constant",
                         value: 0.0,
-                        domain: "[1, inf)",
+                        domain: "[1, inf)", row: None,
                     }
                     .into())
                 } else {
@@ -265,6 +265,7 @@ impl<'a> ContinuousDataBuilder<'a> {
                     what: "weights",
                     value,
                     domain: "[0, inf)",
+                    row: None,
                 }
                 .into());
             }

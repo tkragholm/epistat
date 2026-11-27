@@ -90,6 +90,7 @@ pub fn independent_columns(
             what: "tolerance",
             value: tolerance,
             domain: "[0, inf)",
+            row: None,
         }));
     }
     if let Some(groups) = groups {
@@ -301,14 +302,16 @@ mod tests {
             Error::Input(InputError::Domain {
                 what: "weights",
                 value: -1.0,
-                domain: "[0, inf)"
+                domain: "[0, inf)",
+                row: None
             })
         );
         assert_eq!(
             check(&[1.0, 1.0, f64::NAN], None, 1e-8),
             Error::Input(InputError::NotFinite {
                 what: "weights",
-                row: 2
+                row: 2,
+                column: None
             })
         );
         assert!(matches!(

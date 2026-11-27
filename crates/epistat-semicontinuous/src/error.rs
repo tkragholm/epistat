@@ -141,6 +141,7 @@ pub(crate) fn domain(what: &'static str, value: f64, domain: &'static str) -> Er
         what,
         value,
         domain,
+        row: None,
     }
     .into()
 }

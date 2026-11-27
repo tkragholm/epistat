@@ -290,6 +290,7 @@ impl<'a> TwoPeriodDataBuilder<'a> {
                     what: "weights",
                     value,
                     domain: "(0, inf)",
+                    row: None,
                 }
                 .into());
             }
@@ -301,6 +302,7 @@ impl<'a> TwoPeriodDataBuilder<'a> {
                     return Err(InputError::NotFinite {
                         what: "covariates",
                         row,
+                        column: None,
                     }
                     .into());
                 }

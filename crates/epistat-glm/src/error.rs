@@ -195,10 +195,14 @@ pub(crate) fn finite_matrix(what: &'static str, x: MatRef<'_, f64>) -> Result<()
             first = Some(row);
         }
     }
-    first.map_or(
-        Ok(()),
-        |row| Err(InputError::NotFinite { what, row }.into()),
-    )
+    first.map_or(Ok(()), |row| {
+        Err(InputError::NotFinite {
+            what,
+            row,
+            column: None,
+        }
+        .into())
+    })
 }
 
 /// Every weight is finite and not negative, or the error of the first that is
@@ -219,10 +223,16 @@ pub(crate) fn weight_error(what: &'static str, row: usize, value: f64) -> Error 
             what,
             value,
             domain: "[0, inf)",
+            row: None,
         }
         .into()
     } else {
-        InputError::NotFinite { what, row }.into()
+        InputError::NotFinite {
+            what,
+            row,
+            column: None,
+        }
+        .into()
     }
 }
 
@@ -235,6 +245,7 @@ pub(crate) fn tolerance(what: &'static str, value: f64) -> Result<(), Error> {
             what,
             value,
             domain: "(0, inf)",
+            row: None,
         }
         .into())
     }
@@ -249,6 +260,7 @@ pub(crate) fn iterations(what: &'static str, value: usize) -> Result<(), Error> 
             what,
             value: 0.0,
             domain: "at least 1",
+            row: None,
         }
         .into())
     }
@@ -311,14 +323,16 @@ mod tests {
             Err(Error::Input(InputError::Domain {
                 what: "weights",
                 value: -2.0,
-                domain: "[0, inf)"
+                domain: "[0, inf)",
+                row: None
             }))
         );
         assert_eq!(
             weights("weights", &[1.0, f64::INFINITY]),
             Err(Error::Input(InputError::NotFinite {
                 what: "weights",
-                row: 1
+                row: 1,
+                column: None
             }))
         );
     }

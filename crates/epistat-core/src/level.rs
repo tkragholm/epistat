@@ -78,6 +78,7 @@ fn open_unit(what: &'static str, value: f64) -> Result<f64, InputError> {
             what,
             value,
             domain: "(0, 1)",
+            row: None,
         })
     }
 }
@@ -216,7 +217,8 @@ mod tests {
             Err(InputError::Domain {
                 what: "alpha",
                 value: 1.0,
-                domain: "(0, 1)"
+                domain: "(0, 1)",
+                row: None
             })
         );
     }

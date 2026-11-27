@@ -319,7 +319,12 @@ impl<'a> SwitchingPanelBuilder<'a> {
                 .iter()
                 .position(|v| v.is_some_and(|v| !v.is_finite()))
             {
-                return Err(InputError::NotFinite { what, row }.into());
+                return Err(InputError::NotFinite {
+                    what,
+                    row,
+                    column: None,
+                }
+                .into());
             }
         }
         if let Some(weights) = self.weights {
@@ -330,6 +335,7 @@ impl<'a> SwitchingPanelBuilder<'a> {
                     what: "weights",
                     value,
                     domain: "[0, inf)",
+                    row: None,
                 }
                 .into());
             }
@@ -342,7 +348,12 @@ impl<'a> SwitchingPanelBuilder<'a> {
                 check::same_length(what, n, x.nrows())?;
                 for j in 0..x.ncols() {
                     if let Some(row) = (0..n).find(|&i| !x[(i, j)].is_finite()) {
-                        return Err(InputError::NotFinite { what, row }.into());
+                        return Err(InputError::NotFinite {
+                            what,
+                            row,
+                            column: None,
+                        }
+                        .into());
                     }
                 }
             }
@@ -459,7 +470,8 @@ mod tests {
             error,
             InputError::NotFinite {
                 what: "outcome",
-                row: 4
+                row: 4,
+                column: None
             }
         );
         let w = [1.0, -1.0, 1.0, 1.0, 1.0, 1.0];
@@ -479,7 +491,8 @@ mod tests {
             error,
             InputError::NotFinite {
                 what: "controls",
-                row: 2
+                row: 2,
+                column: None
             }
         );
     }

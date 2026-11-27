@@ -1063,6 +1063,7 @@ impl ElasticNet {
                 what,
                 value,
                 domain,
+                row: None,
             }
             .into()
         };
@@ -1639,7 +1640,8 @@ mod tests {
             run(&ok, &y, Some(&weights), None),
             Error::Input(InputError::NotFinite {
                 what: "weights",
-                row: 2
+                row: 2,
+                column: None
             })
         ));
         assert!(matches!(

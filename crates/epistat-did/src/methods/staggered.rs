@@ -252,6 +252,7 @@ impl<'a> StaggeredPanelBuilder<'a> {
                     what: "weights",
                     value,
                     domain: "[0, inf)",
+                    row: None,
                 }
                 .into());
             }
@@ -263,6 +264,7 @@ impl<'a> StaggeredPanelBuilder<'a> {
                     return Err(InputError::NotFinite {
                         what: "covariates",
                         row,
+                        column: None,
                     }
                     .into());
                 }
@@ -408,7 +410,8 @@ mod tests {
             error,
             InputError::NotFinite {
                 what: "outcome",
-                row: 4
+                row: 4,
+                column: None
             }
         );
         let w = [1.0, 1.0, -1.0, 1.0, 1.0, 1.0];
@@ -432,7 +435,8 @@ mod tests {
             error,
             InputError::NotFinite {
                 what: "covariates",
-                row: 3
+                row: 3,
+                column: None
             }
         );
     }

@@ -202,6 +202,7 @@ pub fn power(study: &EventStudy, options: &PretrendOptions) -> Result<PretrendAn
                     what: "power",
                     value: *target,
                     domain: "(0, 1)",
+                    row: None,
                 }
                 .into());
             }
@@ -241,6 +242,7 @@ fn engine_input(study: &EventStudy) -> Result<PretrendInput, Error> {
             row.push(value.ok_or(InputError::NotFinite {
                 what: "covariance",
                 row: i * k + j,
+                column: None,
             })?);
         }
         covariance.push(row);
@@ -257,6 +259,7 @@ fn engine_input(study: &EventStudy) -> Result<PretrendInput, Error> {
         what: "covariance",
         value: f64::NAN,
         domain: "symmetric",
+        row: None,
     })?;
     Ok(input)
 }
@@ -269,6 +272,7 @@ fn config(options: &PretrendOptions) -> Result<PretrendConfig, Error> {
             what: "threshold",
             value: threshold,
             domain: "positive and finite",
+            row: None,
         }
         .into());
     }
@@ -277,6 +281,7 @@ fn config(options: &PretrendOptions) -> Result<PretrendConfig, Error> {
             what: "tolerance",
             value: options.tolerance,
             domain: "positive",
+            row: None,
         }
         .into());
     }
@@ -285,6 +290,7 @@ fn config(options: &PretrendOptions) -> Result<PretrendConfig, Error> {
             what: "shifts",
             value: options.shifts.replicates as f64,
             domain: "at least 2",
+            row: None,
         }
         .into());
     }

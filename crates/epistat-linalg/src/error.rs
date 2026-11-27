@@ -82,11 +82,13 @@ pub fn weight_error(weights: &[f64]) -> Option<Error> {
             what: "weights",
             value,
             domain: "[0, inf)",
+            row: None,
         }
     } else {
         InputError::NotFinite {
             what: "weights",
             row,
+            column: None,
         }
     }))
 }
@@ -136,7 +138,8 @@ mod tests {
             weight_error(&[1.0, f64::NAN]),
             Some(Error::Input(InputError::NotFinite {
                 what: "weights",
-                row: 1
+                row: 1,
+                column: None
             }))
         );
         assert_eq!(weight_error(&[0.0, 1.0]), None);

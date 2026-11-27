@@ -293,7 +293,8 @@ fn input_errors() {
         ok(&[f64::NAN], &[0.1, 0.2], &cov),
         Err(E::Input(InputError::NotFinite {
             what: "grid",
-            row: 0
+            row: 0,
+            column: None
         }))
     ));
     let skew = Mat::from_fn(2, 2, |i, j| {

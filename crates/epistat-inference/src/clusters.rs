@@ -135,6 +135,7 @@ impl Clusters {
                 what: "unit",
                 value: f64::from(unit),
                 domain: "the units of the clusters",
+                row: None,
             })?;
             numbers.push(self.of[at]);
         }

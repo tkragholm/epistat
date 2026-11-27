@@ -371,6 +371,7 @@ fn validate(program: &MixedBinaryProgram<'_>) -> Result<(), Error> {
             return Err(Error::Input(InputError::NotFinite {
                 what: "bounds of an integer column",
                 row: j,
+                column: None,
             }));
         }
         if program.binary[j]
@@ -382,6 +383,7 @@ fn validate(program: &MixedBinaryProgram<'_>) -> Result<(), Error> {
                 what: "bounds of a binary column",
                 value: program.col_lo[j],
                 domain: "{0, 1}",
+                row: None,
             }));
         }
     }

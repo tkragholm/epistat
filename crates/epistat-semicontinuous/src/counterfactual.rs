@@ -99,6 +99,7 @@ where
             return Err(InputError::NotFinite {
                 what: "outcome",
                 row: row_idx,
+                column: None,
             }
             .into());
         }

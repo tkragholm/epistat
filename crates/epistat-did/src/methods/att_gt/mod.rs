@@ -746,6 +746,7 @@ fn validate(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Result<(), Er
             what: "anticipation",
             value: options.anticipation as f64,
             domain: "[0, inf)",
+            row: None,
         }
         .into());
     }
@@ -799,6 +800,7 @@ fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
         what,
         value,
         domain,
+        row: None,
     }
     .into()
 }

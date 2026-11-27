@@ -102,6 +102,7 @@ pub fn adjust(p: &[f64], method: Adjustment, n: Option<usize>) -> Result<Vec<f64
             what: "p-value",
             value: bad,
             domain: "[0, 1]",
+            row: None,
         }
         .into());
     }
@@ -112,6 +113,7 @@ pub fn adjust(p: &[f64], method: Adjustment, n: Option<usize>) -> Result<Vec<f64
             what: "number of comparisons",
             value: n as f64,
             domain: "at least the number of p-values",
+            row: None,
         }
         .into());
     }

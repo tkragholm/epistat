@@ -794,6 +794,7 @@ impl FixedEffects {
                 return Err(InputError::NotFinite {
                     what: "columns",
                     row,
+                    column: None,
                 }
                 .into());
             }
@@ -860,6 +861,7 @@ impl FixedEffects {
                 return Err(InputError::NotFinite {
                     what: "columns",
                     row,
+                    column: None,
                 }
                 .into());
             }
@@ -944,6 +946,7 @@ impl FixedEffects {
                 return Err(InputError::NotFinite {
                     what: "level sums",
                     row,
+                    column: None,
                 }
                 .into());
             }

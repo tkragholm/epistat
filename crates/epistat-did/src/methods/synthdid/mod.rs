@@ -497,6 +497,7 @@ fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
         what,
         value,
         domain,
+        row: None,
     }
     .into()
 }

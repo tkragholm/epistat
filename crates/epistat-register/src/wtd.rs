@@ -242,6 +242,7 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
             what: "window_days",
             value: window_days,
             domain: "positive and finite",
+            row: None,
         }
         .into());
     }
@@ -256,6 +257,7 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
             what: "times",
             value: times[i],
             domain: "(0, window_days]",
+            row: None,
         }
         .into());
     }

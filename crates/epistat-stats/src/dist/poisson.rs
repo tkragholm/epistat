@@ -135,6 +135,7 @@ pub fn cipoisson(count: f64, time: f64, level: Level, method: Method) -> Result<
             what: "count",
             value: count,
             domain: "[0, inf)",
+            row: None,
         }
         .into());
     }
@@ -142,6 +143,7 @@ pub fn cipoisson(count: f64, time: f64, level: Level, method: Method) -> Result<
         return Err(InputError::NotFinite {
             what: "time",
             row: 0,
+            column: None,
         }
         .into());
     }

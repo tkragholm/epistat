@@ -254,6 +254,7 @@ fn prepare(
             what: "cross-fitting folds",
             value: crate::util::usize_to_f64(cross.folds),
             domain: "[2, inf)",
+            row: None,
         }
         .into());
     }
@@ -300,11 +301,13 @@ impl From<DidCcError> for Error {
             DidCcError::InvalidOutcome { .. } => InputError::NotFinite {
                 what: "outcome",
                 row: 0,
+                column: None,
             }
             .into(),
             DidCcError::InvalidCovariate { .. } => InputError::NotFinite {
                 what: "covariates",
                 row: 0,
+                column: None,
             }
             .into(),
             DidCcError::InconsistentCovariateCount { expected, actual } => InputError::Length {

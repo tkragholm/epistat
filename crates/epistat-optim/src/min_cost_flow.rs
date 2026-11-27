@@ -349,6 +349,7 @@ impl Solver {
                 what: "capacity",
                 value: problem.cap[row] as f64,
                 domain: "[0, inf)",
+                row: None,
             }));
         }
         if let Some(row) = problem.tail.iter().position(|tail| *tail == NONE) {
@@ -356,6 +357,7 @@ impl Solver {
                 what: "arc",
                 value: row as f64,
                 domain: "arcs between nodes of the problem",
+                row: None,
             }));
         }
         let mut total: i128 = 0;

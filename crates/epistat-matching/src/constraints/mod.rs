@@ -316,6 +316,7 @@ where
                 what: "caliper window",
                 value: self.window,
                 domain: "[0, inf)",
+                row: None,
             }))
         }
     }
@@ -385,6 +386,7 @@ where
                 what: "date window",
                 value,
                 domain: "[0, inf)",
+                row: None,
             }))
         }
     }

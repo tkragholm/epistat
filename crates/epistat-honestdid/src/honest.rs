@@ -118,6 +118,7 @@ impl Target {
                         what: "target weights",
                         value: 0.0,
                         domain: "at least one weight non-zero",
+                        row: None,
                     }
                     .into());
                 }
@@ -157,6 +158,7 @@ fn not_a_post_period(period: i64) -> Error {
         what: "target period",
         value: period as f64,
         domain: "a post-treatment period of the event study",
+        row: None,
     }
     .into()
 }
@@ -527,6 +529,7 @@ fn engine_input(study: &EventStudy) -> Result<HonestEventStudyInput, Error> {
             row.push(value.ok_or(InputError::NotFinite {
                 what: "covariance",
                 row: i * k + j,
+                column: None,
             })?);
         }
         rows.push(row);
@@ -536,6 +539,7 @@ fn engine_input(study: &EventStudy) -> Result<HonestEventStudyInput, Error> {
             what: "relative_periods",
             value: period as f64,
             domain: "a 32-bit integer",
+            row: None,
         })
     };
     let pre_periods = study
@@ -574,6 +578,7 @@ fn simulation(bootstrap: Bootstrap, what: &'static str) -> Result<LeastFavorable
             what,
             value: 0.0,
             domain: "at least one draw",
+            row: None,
         }
         .into());
     }
@@ -594,6 +599,7 @@ fn check_values(restriction: &Restriction) -> Result<(), Error> {
                 what,
                 value,
                 domain: "finite and non-negative",
+                row: None,
             }
             .into());
         }

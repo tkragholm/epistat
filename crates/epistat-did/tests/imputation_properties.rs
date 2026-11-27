@@ -261,7 +261,8 @@ fn invalid_input_is_an_error() {
             .unwrap_err(),
         Error::Input(InputError::NotFinite {
             what: "outcome",
-            row: 4
+            row: 4,
+            column: None
         })
     );
 }

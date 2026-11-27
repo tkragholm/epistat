@@ -358,7 +358,11 @@ mod tests {
         );
         assert_eq!(
             harrell_knots(&[f64::NAN; 10], 4, 0.05),
-            Err(Error::Input(InputError::NotFinite { what: "x", row: 0 }))
+            Err(Error::Input(InputError::NotFinite {
+                what: "x",
+                row: 0,
+                column: None
+            }))
         );
         assert_eq!(harrell_knots(&[1.0; 10], 2, 0.05), Err(Error::TooFewKnots));
         assert_eq!(

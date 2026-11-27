@@ -393,7 +393,8 @@ mod tests {
             Error::Input(InputError::Domain {
                 what: "eta",
                 value: -1.0,
-                domain: "[0, inf)"
+                domain: "[0, inf)",
+                row: None
             })
         );
         let problem = SimplexLeastSquares::new(&a, 1, 2, &b, 0.0).unwrap();
@@ -402,7 +403,8 @@ mod tests {
             Error::Input(InputError::Domain {
                 what: "sum of x",
                 value: 1.2,
-                domain: "within 1e-8 of 1"
+                domain: "within 1e-8 of 1",
+                row: None
             })
         );
     }

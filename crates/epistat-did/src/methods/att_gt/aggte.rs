@@ -267,6 +267,7 @@ impl Aggte {
                 return Err(InputError::NotFinite {
                     what: "weights",
                     row: 0,
+                    column: None,
                 }
                 .into());
             }
@@ -278,6 +279,7 @@ impl Aggte {
                     what: "key",
                     value: key as f64,
                     domain: "the keys of the path",
+                    row: None,
                 })?;
             columns[index] += weight;
             estimate += weight * self.points[index].estimate.estimate;
@@ -913,6 +915,7 @@ pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Er
             what: "bootstrap replicates",
             value: 0.0,
             domain: "[1, inf)",
+            row: None,
         }
         .into());
     }
