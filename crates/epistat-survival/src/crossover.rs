@@ -227,14 +227,25 @@ impl Windows {
     }
 
     /// A value of each event repeated on every window of its set, for a
-    /// covariate that belongs to the event, such as the group.
+    /// covariate that belongs to the event, such as the group: `per_event`
+    /// holds one value per event of the input, in its order.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `per_event` is shorter than the largest set number.
-    #[must_use]
-    pub fn expand<T: Copy>(&self, per_event: &[T]) -> Vec<T> {
-        self.set.iter().map(|&s| per_event[s as usize]).collect()
+    /// An input error when `per_event` has no value for the event of some
+    /// window.
+    pub fn gather<T: Copy>(&self, per_event: &[T]) -> Result<Vec<T>> {
+        self.set
+            .iter()
+            .map(|&s| {
+                per_event.get(s as usize).copied().ok_or_else(|| {
+                    Error::invalid(format!(
+                        "per_event: {} values, and a window belongs to event {s}",
+                        per_event.len()
+                    ))
+                })
+            })
+            .collect()
     }
 }
 

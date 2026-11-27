@@ -52,7 +52,7 @@ use rayon::prelude::*;
 
 use super::Target;
 use super::table::{Group, Reading};
-use crate::aalen_johansen::advance;
+use crate::aalen_johansen::advance_step;
 
 /// The event times of a group and what the derivatives read from them.
 struct Events {
@@ -81,7 +81,7 @@ fn events(group: &Group) -> Events {
         let (y, d) = (group.risk[j], group.events[j]);
         if d > 0.0 {
             let h = d / y;
-            advance(&mut s, y, d, &[], &mut []);
+            advance_step(&mut s, y, d, &[], &mut []);
             let temp = if h == 1.0 { 1.0 } else { 1.0 - h };
             e.times.push(group.times[j]);
             e.survival.push(s);

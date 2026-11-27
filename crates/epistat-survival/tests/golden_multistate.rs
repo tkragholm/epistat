@@ -25,7 +25,8 @@
 
 use epistat_core::Bootstrap;
 use epistat_rng::Stream;
-use epistat_survival::multistate::{Options, bootstrap, estimate, integrate};
+use epistat_survival::lowlevel::integrate;
+use epistat_survival::multistate::{Options, bootstrap, estimate};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
 use epistat_testkit::Fingerprint;
@@ -320,14 +321,22 @@ fn curve_case(
     check(&format!("{name}/at_risk"), &occupation.at_risk);
     let mut totals = Vec::new();
     for (horizon, origin) in HORIZONS {
-        totals.extend(integrate(
+        let integral = integrate(
             &occupation.probabilities,
             times,
             initial,
             states as usize,
             horizon,
             origin,
-        ));
+        );
+        // A horizon before the origin is refused; the recorded totals hold 0
+        // for it, as for a horizon at the origin.
+        if horizon < origin {
+            assert!(integral.is_err());
+            totals.extend(vec![0.0; states as usize]);
+        } else {
+            totals.extend(integral.unwrap());
+        }
     }
     check(&format!("{name}/integrate"), &totals);
 }

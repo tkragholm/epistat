@@ -216,7 +216,9 @@ fn the_analysis_equals_clogit_on_the_same_windows() {
         let x: Mat<f64> = match &c.group {
             None => Mat::from_fn(exposed.len(), 1, |i, _| exposed[i]),
             Some(g) => {
-                let per_window = w.expand(&g.iter().map(|&v| v == 1).collect::<Vec<_>>());
+                let per_window = w
+                    .gather(&g.iter().map(|&v| v == 1).collect::<Vec<_>>())
+                    .unwrap();
                 case_time_control_design(&exposed, &per_window).unwrap()
             }
         };

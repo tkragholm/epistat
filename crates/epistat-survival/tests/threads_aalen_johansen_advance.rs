@@ -2,7 +2,7 @@
 //! and 8 threads.
 
 use epistat_rng::Stream;
-use epistat_survival::aalen_johansen::advance;
+use epistat_survival::lowlevel::advance;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 /// `advance` is a single sequential step, and every estimator is built from
@@ -22,7 +22,7 @@ fn aalen_johansen_advance() {
         let mut survival = 1.0;
         let mut incidence = [0.0; 2];
         for (at_risk, d_any, d_causes) in &steps {
-            advance(&mut survival, *at_risk, *d_any, d_causes, &mut incidence);
+            advance(&mut survival, *at_risk, *d_any, d_causes, &mut incidence).unwrap();
         }
         vec![survival, incidence[0], incidence[1]]
     });

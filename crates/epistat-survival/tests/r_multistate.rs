@@ -1,10 +1,11 @@
-//! `multistate::estimate` and `multistate::integrate` checked
+//! `multistate::estimate` and `lowlevel::integrate` checked
 //! against R 4.6.2's `survival::survfit(Surv(start, stop, state) ~ 1, id =,
 //! istate =)` and the restricted mean time in state of `summary(fit, rmean =)`.
 //! The bootstrap has no R counterpart and is not checked here.
 
 use epistat_survival::SurvData;
-use epistat_survival::multistate::{Options, estimate, integrate};
+use epistat_survival::lowlevel::integrate;
+use epistat_survival::multistate::{Options, estimate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -226,7 +227,8 @@ fn occupation_and_restricted_time_match_r() {
                 STATES,
                 tau,
                 case.t0,
-            );
+            )
+            .unwrap();
             for (value, expected) in mine.iter().zip(&case.rmean[k]) {
                 rmean_worst.see(&case.name, (value - expected).abs(), bound);
             }
@@ -242,7 +244,8 @@ fn occupation_and_restricted_time_match_r() {
             STATES,
             tau,
             case.t0,
-        );
+        )
+        .unwrap();
         for (value, expected) in mine.iter().zip(&case.rmean_common) {
             common_worst.see(&case.name, (value - expected).abs(), bound);
         }

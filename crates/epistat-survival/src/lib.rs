@@ -58,6 +58,9 @@
 //!   and the cumulative hazards and transition probabilities of a covariate profile, as
 //!   `msfit` and `probtrans` of `mstate`.
 //! - [`markov`]: the landmark test of the Markov property.
+//! - [`lowlevel`]: steps of the estimators for callers that accumulate the same
+//!   sums themselves: one Aalen-Johansen step, the integral of an occupation
+//!   curve, codes of a float column.
 //! - [`metrics`]: redistribute-to-the-right weights, the Brier score, the IPCW
 //!   Brier score and index of prediction accuracy, the time-dependent AUC and
 //!   calibration by risk group, as `rttright`, `brier`, `riskRegression::Score`
@@ -162,6 +165,7 @@ pub mod informative;
 mod ldl;
 pub mod lexis;
 mod logistic;
+pub mod lowlevel;
 pub mod markov;
 pub mod metrics;
 pub mod msreg;

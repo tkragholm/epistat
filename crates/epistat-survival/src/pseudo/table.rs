@@ -9,7 +9,7 @@
 //! turns a table into the estimate at chosen times, so the estimate and the
 //! leave-one-out estimates are computed by the same arithmetic.
 
-use crate::aalen_johansen::advance;
+use crate::aalen_johansen::advance_step;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 
@@ -294,7 +294,7 @@ pub(super) fn evaluate(columns: &Columns<'_>, origin: f64, reading: &Reading<'_>
             _ => {}
         }
         if with_cause {
-            advance(
+            advance_step(
                 &mut survival,
                 risk[j],
                 events[j],
@@ -302,7 +302,7 @@ pub(super) fn evaluate(columns: &Columns<'_>, origin: f64, reading: &Reading<'_>
                 &mut incidence,
             );
         } else {
-            advance(&mut survival, risk[j], events[j], &[], &mut incidence);
+            advance_step(&mut survival, risk[j], events[j], &[], &mut incidence);
         }
     }
     while k < at.len() {

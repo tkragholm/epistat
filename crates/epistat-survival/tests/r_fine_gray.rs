@@ -37,9 +37,8 @@ use std::collections::BTreeMap;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
-use epistat_survival::fine_gray::{
-    FineGrayOptions, Rows, RowsOptions, fit, float_codes, risk_rows, rows,
-};
+use epistat_survival::fine_gray::{FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows};
+use epistat_survival::lowlevel::float_codes;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 

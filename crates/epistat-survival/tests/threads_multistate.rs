@@ -18,7 +18,8 @@
 use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::multistate::{Options, bootstrap, estimate, integrate};
+use epistat_survival::lowlevel::integrate;
+use epistat_survival::multistate::{Options, bootstrap, estimate};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -124,14 +125,9 @@ fn estimate_does_not_depend_on_the_number_of_threads() {
             out.extend(&got.initial);
             out.extend([got.n_rows as f64, got.n_used as f64]);
             for (horizon, origin) in [(5.0, 0.0), (20.0, 1.3), (0.5, 0.0)] {
-                out.extend(integrate(
-                    &got.probabilities,
-                    times,
-                    &got.initial,
-                    3,
-                    horizon,
-                    origin,
-                ));
+                out.extend(
+                    integrate(&got.probabilities, times, &got.initial, 3, horizon, origin).unwrap(),
+                );
             }
             out
         });

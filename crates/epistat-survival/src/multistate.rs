@@ -516,9 +516,11 @@ fn product_integral(
 /// `curve` holds one row of `states` probabilities for each of `times`, row
 /// major, the row at a time being the distribution from that time on. Rows at
 /// or before `origin` only set the current distribution. The result has one
-/// total per state, all zero when `horizon` is not after `origin`.
+/// total per state, all zero when `horizon` is not after `origin`. The slices
+/// are not checked; [`lowlevel::integrate`](crate::lowlevel::integrate) is the
+/// checked public form.
 #[must_use]
-pub fn integrate(
+pub(crate) fn integrate_unchecked(
     curve: &[f64],
     times: &[f64],
     initial: &[f64],
@@ -558,6 +560,24 @@ pub fn integrate(
         }
     }
     totals
+}
+
+/// The restricted mean time in each state up to `horizon`, under its name in
+/// 0.3, which does not check its slices.
+#[deprecated(
+    since = "0.4.0",
+    note = "use `lowlevel::integrate`, which checks its slices"
+)]
+#[must_use]
+pub fn integrate(
+    curve: &[f64],
+    times: &[f64],
+    initial: &[f64],
+    states: usize,
+    horizon: f64,
+    origin: f64,
+) -> Vec<f64> {
+    integrate_unchecked(curve, times, initial, states, horizon, origin)
 }
 
 /// The clustered bootstrap of the occupation probabilities, replicates and all.
@@ -661,7 +681,7 @@ fn bootstrap_rows(
                 }
                 let mut out = Vec::with_capacity(horizons.len() * states);
                 for &horizon in horizons {
-                    out.extend_from_slice(&integrate(
+                    out.extend_from_slice(&integrate_unchecked(
                         &curve, times, &initial, states, horizon, origin,
                     ));
                 }

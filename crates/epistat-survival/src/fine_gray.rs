@@ -572,9 +572,17 @@ impl<'a> Expansion<'a> {
 }
 
 /// Codes for the distinct values of a float column, in order of first
-/// appearance, by bit pattern.
+/// appearance, by bit pattern, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "use `lowlevel::float_codes`")]
 #[must_use]
 pub fn float_codes(values: &[f64]) -> Vec<u32> {
+    codes_of(values)
+}
+
+/// Codes for the distinct values of a float column, in order of first
+/// appearance, by bit pattern.
+#[must_use]
+pub(crate) fn codes_of(values: &[f64]) -> Vec<u32> {
     let mut codes: HashMap<u64, u32> = HashMap::new();
     values
         .iter()

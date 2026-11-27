@@ -168,11 +168,10 @@ const CENSORED: i32 = 0;
 /// too. The shorter of `incidence` and `d_causes` decides how many causes
 /// are advanced.
 ///
-/// This is the step [`estimate`] and the bootstrap use, so a caller that
-/// accumulates the same sums itself, for example for reweighted data, gets the
-/// same bits by calling it.
+/// This is the step [`estimate`] and the bootstrap use;
+/// [`lowlevel::advance`](crate::lowlevel::advance) is its checked public form.
 #[inline]
-pub fn advance(
+pub(crate) fn advance_step(
     survival: &mut f64,
     at_risk: f64,
     d_any: f64,
@@ -186,6 +185,22 @@ pub fn advance(
         }
         *survival = before * (1.0 - d_any / at_risk);
     }
+}
+
+/// One step of the estimator over one distinct time, under its name in 0.3.
+#[deprecated(
+    since = "0.4.0",
+    note = "use `lowlevel::advance`, which checks its slices"
+)]
+#[inline]
+pub fn advance(
+    survival: &mut f64,
+    at_risk: f64,
+    d_any: f64,
+    d_causes: &[f64],
+    incidence: &mut [f64],
+) {
+    advance_step(survival, at_risk, d_any, d_causes, incidence);
 }
 
 /// The estimate for every group, one row per group and distinct exit time.
@@ -315,7 +330,7 @@ fn curves_checked(
         for (block, at_risk, people) in blocks {
             // Summed over causes in cause order, which is `n_event`.
             let d_any = block.d.iter().fold(0.0, |total, &d| total + d);
-            advance(&mut survival, at_risk, d_any, &block.d, &mut incidence);
+            advance_step(&mut survival, at_risk, d_any, &block.d, &mut incidence);
             out.group.push(g);
             out.time.push(block.time);
             out.n_risk.push(at_risk);
@@ -928,7 +943,7 @@ impl Arm {
                 out[age_at] = cif;
                 age_at += 1;
             }
-            advance(
+            advance_step(
                 &mut survival,
                 scratch.at_risk[b],
                 scratch.d_any[b],
@@ -1460,7 +1475,7 @@ mod curve_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapOptions, Cell, Draw, Error, RowWindows, Scratch, advance, bootstrap, scatter,
+        BootstrapOptions, Cell, Draw, Error, RowWindows, Scratch, advance_step, bootstrap, scatter,
     };
     use crate::surv::SurvData;
     use epistat_core::Bootstrap;
@@ -1470,7 +1485,7 @@ mod tests {
         // Four at risk, one event of cause 0: S = 3/4, F = (1/4, 0).
         let mut survival = 1.0;
         let mut incidence = [0.0, 0.0];
-        advance(&mut survival, 4.0, 1.0, &[1.0, 0.0], &mut incidence);
+        advance_step(&mut survival, 4.0, 1.0, &[1.0, 0.0], &mut incidence);
         assert_eq!(survival.to_bits(), 0.75_f64.to_bits());
         assert_eq!(
             incidence.map(f64::to_bits),
@@ -1478,7 +1493,7 @@ mod tests {
         );
         // Three at risk, one event of each cause: S = 3/4 * 1/3 = 1/4, and each
         // incidence gains (3/4) (1/3) = 1/4.
-        advance(&mut survival, 3.0, 2.0, &[1.0, 1.0], &mut incidence);
+        advance_step(&mut survival, 3.0, 2.0, &[1.0, 1.0], &mut incidence);
         assert_eq!(survival.to_bits(), (0.75_f64 * (1.0 - 2.0 / 3.0)).to_bits());
         assert_eq!(
             incidence[0].to_bits(),
@@ -1487,7 +1502,7 @@ mod tests {
         assert_eq!(incidence[1].to_bits(), (0.75_f64 * 1.0 / 3.0).to_bits());
         // Nobody at risk moves nothing.
         let before = (survival, incidence);
-        advance(&mut survival, 0.0, 0.0, &[0.0, 0.0], &mut incidence);
+        advance_step(&mut survival, 0.0, 0.0, &[0.0, 0.0], &mut incidence);
         assert_eq!((survival, incidence), before);
     }
 
