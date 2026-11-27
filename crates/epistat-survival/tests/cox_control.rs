@@ -1,6 +1,7 @@
 //! Offsets, starting values, iteration limits and tests of `cox::fit`: input
 //! checks, undefined cases and identities that need no reference.
 
+use epistat_core::{Classify, ErrorKind};
 use epistat_linalg::Mat;
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::{Error, SurvData};
@@ -24,7 +25,7 @@ fn data() -> SurvData<'static> {
 }
 
 fn is_input_error<T>(result: &Result<T, Error>) -> bool {
-    matches!(result, Err(Error::Input(_) | Error::Invalid(_)))
+    matches!(result, Err(e) if e.kind() == ErrorKind::Input)
 }
 
 fn with_offset(offset: &[f64]) -> epistat_survival::Result<SurvData<'_>> {

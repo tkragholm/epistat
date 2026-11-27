@@ -136,6 +136,9 @@
     reason = "times are equal or they are not: a change takes effect at an exact time"
 )]
 
+use epistat_core::InputError;
+
+use crate::check::check_lengths;
 use crate::error::{Error, Result};
 
 /// Settings of a [`Tmerge`].
@@ -189,6 +192,7 @@ pub struct Observations<'a> {
 
 /// What kind of variable an operation made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Kind {
     /// From `tdc` or `cumtdc`.
     Covariate,
@@ -198,6 +202,7 @@ pub enum Kind {
 
 /// A variable of the output.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Variable {
     /// The name given at the first operation.
     pub name: String,
@@ -209,6 +214,7 @@ pub struct Variable {
 
 /// How the observations of one operation fell against the intervals.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Counts {
     /// Before the first interval of the subject.
     pub early: usize,
@@ -283,18 +289,19 @@ impl Tmerge {
     pub fn new(base_id: &[u32], spans: &Spans<'_>, options: TmergeOptions) -> Result<Self> {
         check_options(&options)?;
         let m = spans.id.len();
-        if spans.tstop.len() != m || spans.tstart.is_some_and(|s| s.len() != m) {
-            return Err(Error::invalid("spans columns differ in length"));
+        check_lengths(&[("spans id", m), ("spans tstop", spans.tstop.len())])?;
+        if let Some(s) = spans.tstart {
+            check_lengths(&[("spans id", m), ("spans tstart", s.len())])?;
         }
         let base_rows = sorted_unique(base_id).map_err(|id| {
-            Error::invalid(format!("the base table has the id {id} more than once"))
+            Error::inconsistent(format!("the base table has the id {id} more than once"))
         })?;
         let mut row = Vec::with_capacity(m);
         for &id in spans.id {
             let at = base_rows
                 .binary_search_by_key(&id, |&(k, _)| k)
                 .map_err(|_| {
-                    Error::invalid(format!("spans has the id {id}, not in the base table"))
+                    Error::out_of_range(format!("spans has the id {id}, not in the base table"))
                 })?;
             row.push(base_rows[at].1);
         }
@@ -303,7 +310,7 @@ impl Tmerge {
             seen[r as usize] = true;
         }
         if let Some(r) = seen.iter().position(|&s| !s) {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "the base table has the id {}, not in spans",
                 base_id[r]
             )));
@@ -312,25 +319,35 @@ impl Tmerge {
         for i in 0..m {
             let stop = spans.tstop[i];
             if stop.is_nan() {
-                return Err(Error::invalid(format!("missing stop in spans row {i}")));
+                return Err(InputError::NotFinite {
+                    what: "spans tstop",
+                    row: i,
+                    column: None,
+                }
+                .into());
             }
             let start = if let Some(s) = spans.tstart {
                 s[i]
             } else {
                 if stop <= 0.0 {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::value(format!(
                         "found an ending time of {stop}, the default starting time of 0 is invalid"
                     )));
                 }
                 0.0
             };
-            if !start.is_finite() || !stop.is_finite() {
-                return Err(Error::invalid(format!(
-                    "times in spans must be finite, row {i}"
-                )));
+            for (what, value) in [("spans tstart", start), ("spans tstop", stop)] {
+                if !value.is_finite() {
+                    return Err(InputError::NotFinite {
+                        what,
+                        row: i,
+                        column: None,
+                    }
+                    .into());
+                }
             }
             if start >= stop {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "tstart must be below tstop, row {i} has {start} and {stop}"
                 )));
             }
@@ -358,7 +375,7 @@ impl Tmerge {
         if duplicated {
             for i in 1..id.len() {
                 if id[i] == id[i - 1] && t1[i - 1] > t0[i] {
-                    return Err(Error::invalid(
+                    return Err(Error::order(
                         "the first call has created overlapping or duplicated time intervals",
                     ));
                 }
@@ -387,12 +404,10 @@ impl Tmerge {
         time: &[Option<f64>],
         options: TmergeOptions,
     ) -> Result<Self> {
-        if id.len() != time.len() {
-            return Err(Error::invalid("id and time differ in length"));
-        }
+        check_lengths(&[("id", id.len()), ("time", time.len())])?;
         let first = first_appearance(id);
         if let Some(i) = (0..id.len()).find(|&i| first[i] != i) {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "the id {} is repeated in the table that sets the span, row {i}",
                 id[i]
             )));
@@ -401,7 +416,7 @@ impl Tmerge {
         let mut stops = Vec::with_capacity(id.len());
         for t in time {
             stops.push(t.ok_or_else(|| {
-                Error::invalid("missing time value, when that variable defines the span")
+                Error::value("missing time value, when that variable defines the span")
             })?);
         }
         Self::new(
@@ -544,14 +559,14 @@ impl Tmerge {
         init: Option<f64>,
     ) -> Result<()> {
         if name.is_empty() {
-            return Err(Error::invalid("a variable needs a name"));
+            return Err(Error::missing("a variable needs a name"));
         }
         let is_cov = matches!(op, Op::Tdc | Op::Cumtdc);
         let existing = self.variables.iter().position(|v| v.name == name);
         if let Some(v) = existing {
             let kind = self.variables[v].kind;
             if (kind == Kind::Event) == is_cov {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "{name} is already {} and cannot become {}",
                     if kind == Kind::Event {
                         "an event"
@@ -563,29 +578,34 @@ impl Tmerge {
             }
         }
         let n = obs.id.len();
-        if obs.time.len() != n || obs.value.is_some_and(|v| v.len() != n) {
-            return Err(Error::invalid(format!(
-                "the observations of {name} differ in length"
-            )));
+        check_lengths(&[("id", n), ("time", obs.time.len())])?;
+        if let Some(v) = obs.value {
+            check_lengths(&[("id", n), ("value", v.len())])?;
         }
         if let Some(i) = obs
             .time
             .iter()
             .position(|t| t.is_some_and(|t| !t.is_finite()))
         {
-            return Err(Error::invalid(format!(
-                "time of {name} must be finite, row {i}"
-            )));
+            return Err(InputError::NotFinite {
+                what: "time",
+                row: i,
+                column: None,
+            }
+            .into());
         }
         if let Some(v) = obs.value
             && let Some(i) = v.iter().position(|x| x.is_some_and(|x| !x.is_finite()))
         {
-            return Err(Error::invalid(format!(
-                "value of {name} must be finite, row {i}"
-            )));
+            return Err(InputError::NotFinite {
+                what: "value",
+                row: i,
+                column: None,
+            }
+            .into());
         }
         if let Some(x) = init.filter(|x| !x.is_finite()) {
-            return Err(Error::invalid(format!(
+            return Err(Error::options(format!(
                 "init of {name} must be finite, not {x}"
             )));
         }
@@ -640,7 +660,7 @@ impl Tmerge {
         });
         let has_value = obs.value.is_some();
         if op == Op::Cumevent && has_value && kept.iter().any(|o| o.value.is_none()) {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "cumevent {name} has a missing value, which has no running total"
             )));
         }
@@ -788,7 +808,7 @@ impl Tmerge {
                 .iter()
                 .any(|v| v.is_some_and(|v| v != 0.0 && v != 1.0));
             if bad {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "tdc update does not match prior variable: {name} is not 0 or 1"
                 )));
             }
@@ -904,12 +924,12 @@ impl Tmerge {
 
 fn check_options(options: &TmergeOptions) -> Result<()> {
     if !options.delay.is_finite() || options.delay < 0.0 {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "delay must be a number that is not negative",
         ));
     }
     if options.tdcstart.is_some_and(|x| !x.is_finite()) {
-        return Err(Error::invalid("tdcstart must be finite or missing"));
+        return Err(Error::options("tdcstart must be finite or missing"));
     }
     Ok(())
 }

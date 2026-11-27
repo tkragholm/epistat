@@ -465,6 +465,7 @@ fn predict_run(
                 any,
             ]
         }
+        _ => unreachable!("a kind this test does not cover"),
     };
     let model = CauseSpecificCox::from_fits(&data, &designs, fits, &opts).unwrap();
     let new1 = Mat::from_fn(2, 3, |i, j| [[1.0, 0.4, 1.0], [0.0, -0.8, 0.0]][i][j]);

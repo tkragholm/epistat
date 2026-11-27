@@ -1,17 +1,20 @@
 //! Predictions and residuals of a [`SurvregFit`], as `predict.survreg` and
 //! `residuals.survreg`.
 
+use epistat_core::check;
 use epistat_linalg::MatRef;
 
 use super::dist::row_derivs;
 use super::robust::{RowInput, dfbeta_row};
 use super::{SurvregFit, times_of};
+use crate::check::refuse_non_finite_matrix;
 use crate::error::{Error, Result};
 use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
 
 /// What [`SurvregFit::predict`] returns for each row.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub enum SurvregPredictType {
     /// The linear predictor `x'beta`, the location of `ln T` or of `T`.
     #[default]
@@ -45,6 +48,7 @@ pub type PredictType = SurvregPredictType;
 
 /// The point `type = "terms"` measures the columns from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum TermsReference {
     /// The unweighted mean of each column over the rows the model was fitted
     /// on, `means` of `survreg`, which `predict.survreg` subtracts when the
@@ -88,6 +92,7 @@ pub type PredictOptions = SurvregPredictOptions;
 /// Predictions, row-major: `width` values for each row of the design, that is
 /// one value, or one for each probability of a quantile prediction.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SurvregPrediction {
     /// The predictions.
     pub fit: Vec<f64>,
@@ -104,6 +109,7 @@ pub type Prediction = SurvregPrediction;
 /// The kinds of residual of [`SurvregFit::residuals`], named as in
 /// `residuals.survreg`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SurvregResidualKind {
     /// The observed time less the fitted, on the scale of the time. For an
     /// interval, the observation is the point where the density within the
@@ -148,6 +154,7 @@ pub struct DfbetaOptions<'a> {
 /// change in each parameter if the row were dropped, with the sign of
 /// `residuals.survreg`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Dfbeta {
     /// Row-major, `width` values for each output row. `None` for an aliased
     /// column, for a row the fit gives no probability, and for a standardised
@@ -169,6 +176,12 @@ impl SurvregFit {
 
     fn dense_of(&self, variance: &[Option<f64>]) -> Result<Vec<f64>> {
         let q = self.n_params();
+        if variance.len() != q * q {
+            return Err(Error::mismatch(format!(
+                "the variance of the fit has {} entries for {q} parameters",
+                variance.len()
+            )));
+        }
         let mut v = vec![0.0_f64; q * q];
         for (k, entry) in variance.iter().enumerate() {
             let (a, b) = (k / q, k % q);
@@ -177,7 +190,7 @@ impl SurvregFit {
                 Some(value) => v[k] = *value,
                 None if aliased(a) || aliased(b) => {}
                 None => {
-                    return Err(Error::invalid(
+                    return Err(Error::fit(
                         "the variance of the fit is not defined, so standard errors and \
                          displacements are not either"
                             .to_owned(),
@@ -219,20 +232,16 @@ impl SurvregFit {
         let p = self.n_coef();
         let n = x.nrows();
         if x.ncols() != p {
-            return Err(Error::invalid(format!(
+            return Err(Error::mismatch(format!(
                 "the design has {} columns; the fit has {p} coefficients",
                 x.ncols()
             )));
         }
-        if (0..p).any(|j| (0..n).any(|i| !x[(i, j)].is_finite())) {
-            return Err(Error::invalid(
-                "the design has a value that is not finite".to_owned(),
-            ));
-        }
+        refuse_non_finite_matrix(x, "x")?;
         let quantiles: &[f64] = match &options.kind {
             SurvregPredictType::Quantile { p } => {
                 if p.is_empty() || p.iter().any(|&v| !(v > 0.0 && v < 1.0)) {
-                    return Err(Error::invalid(
+                    return Err(Error::options(
                         "quantile probabilities must be in (0, 1), at least one".to_owned(),
                     ));
                 }
@@ -243,7 +252,7 @@ impl SurvregFit {
         let strata: Vec<usize> = match (&options.kind, &options.strata) {
             (SurvregPredictType::Quantile { .. }, Some(codes)) => {
                 if codes.len() != n || codes.iter().any(|&c| c as usize >= self.n_strata) {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::out_of_range(format!(
                         "strata need one code below {} for each of the {n} rows",
                         self.n_strata
                     )));
@@ -251,27 +260,24 @@ impl SurvregFit {
                 codes.iter().map(|&c| c as usize).collect()
             }
             (SurvregPredictType::Quantile { .. }, None) if self.n_strata > 1 => {
-                return Err(Error::invalid(
+                return Err(Error::missing(
                     "a quantile of a fit with strata on the scale needs the stratum of each row"
                         .to_owned(),
                 ));
             }
             _ => vec![0; n],
         };
-        if let Some(offset) = &options.offset
-            && (offset.len() != n || offset.iter().any(|v| !v.is_finite()))
-        {
-            return Err(Error::invalid(format!(
-                "the offset needs one finite value for each of the {n} rows"
-            )));
+        if let Some(offset) = &options.offset {
+            check::same_length("offset", n, offset.len())?;
+            check::finite("offset", offset)?;
         }
         let terms: &[Vec<usize>] = match &options.kind {
             SurvregPredictType::Terms { groups, .. } => {
                 if groups.is_empty() {
-                    return Err(Error::invalid("terms needs at least one group".to_owned()));
+                    return Err(Error::options("terms needs at least one group".to_owned()));
                 }
                 if groups.iter().flatten().any(|&a| a >= p) {
-                    return Err(Error::invalid(
+                    return Err(Error::out_of_range(
                         "terms: an index is not a column of the design".to_owned(),
                     ));
                 }
@@ -284,7 +290,7 @@ impl SurvregFit {
                 match &self.robust_variance {
                     Some(v) => self.dense_of(v)?,
                     None => {
-                        return Err(Error::invalid("the fit has no robust variance".to_owned()));
+                        return Err(Error::fit("the fit has no robust variance".to_owned()));
                     }
                 }
             } else {
@@ -431,13 +437,13 @@ impl SurvregFit {
         let n = data.n_rows();
         let p = self.n_coef();
         if n != self.n_rows || x.nrows() != n || x.ncols() != p {
-            return Err(Error::invalid(format!(
+            return Err(Error::fit(format!(
                 "the data and design must be those of the fit: {} rows and {p} columns",
                 self.n_rows
             )));
         }
         if data.n_strata().max(1) != self.n_strata {
-            return Err(Error::invalid(
+            return Err(Error::fit(
                 "the strata of the data differ from those of the fit".to_owned(),
             ));
         }
@@ -552,23 +558,18 @@ impl SurvregFit {
         let n = data.n_rows();
         let p = self.n_coef();
         if n != self.n_rows || x.nrows() != n || x.ncols() != p {
-            return Err(Error::invalid(format!(
+            return Err(Error::fit(format!(
                 "the data and design must be those of the fit: {} rows and {p} columns",
                 self.n_rows
             )));
         }
         if data.n_strata().max(1) != self.n_strata {
-            return Err(Error::invalid(
+            return Err(Error::fit(
                 "the strata of the data differ from those of the fit".to_owned(),
             ));
         }
-        if let Some(codes) = options.collapse
-            && codes.len() != n
-        {
-            return Err(Error::invalid(format!(
-                "collapse has {} codes for {n} rows",
-                codes.len()
-            )));
+        if let Some(codes) = options.collapse {
+            check::same_length("collapse", n, codes.len())?;
         }
         let v = self.dense_variance()?;
         let q = self.n_params();

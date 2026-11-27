@@ -101,7 +101,7 @@ impl ExpectedHazard {
             &mut |_, _| {},
         )?;
         if let Some(row) = off {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "row {row} has follow-up off the rate table, which has no expected hazard"
             )));
         }

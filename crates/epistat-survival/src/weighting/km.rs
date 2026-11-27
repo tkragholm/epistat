@@ -62,6 +62,7 @@ use super::adjust::Nuisance;
 use super::estimated::{Weights, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
+use crate::check::refuse_non_finite;
 use crate::covariance;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
@@ -80,6 +81,7 @@ pub struct KmOptions {
 
 /// The weighted curves at the chosen times.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct WeightedKm {
     /// The times, as given.
     pub times: Vec<f64>,
@@ -145,7 +147,11 @@ impl WeightedKm {
     #[must_use]
     pub fn survival(&self, group: usize, time: usize) -> Option<f64> {
         let m = self.times.len();
-        (group < self.groups.len() && time < m).then(|| self.surv[group * m + time])
+        if group < self.groups.len() && time < m {
+            self.surv.get(group * m + time).copied()
+        } else {
+            None
+        }
     }
 
     /// The position in [`Self::times`] of the last chosen time at or before
@@ -221,13 +227,20 @@ impl WeightedKm {
     fn check_positions(&self, groups: &[usize], time: usize) -> Result<()> {
         let n = self.groups.len();
         if let Some(&g) = groups.iter().find(|&&g| g >= n) {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "group: position {g} is beyond the {n} groups"
             )));
         }
         if time >= self.times.len() {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "time: position {time} is beyond the {} times",
+                self.times.len()
+            )));
+        }
+        if self.surv.len() != n * self.times.len() {
+            return Err(Error::mismatch(format!(
+                "surv: {} values for {n} groups by {} times",
+                self.surv.len(),
                 self.times.len()
             )));
         }
@@ -428,26 +441,24 @@ fn curves(
     correction: Option<&Correction<'_>>,
     general: Option<&[Box<dyn Nuisance + '_>]>,
 ) -> Result<WeightedKm> {
-    if let Some(t) = times.iter().find(|t| !t.is_finite()) {
-        return Err(Error::invalid(format!("times: {t} is not finite")));
-    }
+    refuse_non_finite(times, "times")?;
     let surv = data.followup()?;
     let code = match (surv.n_codes(), opts.cause) {
         (1, None | Some(1)) => 1,
         (1, Some(c)) => {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "cause: {c} is outside the single code 1"
             )));
         }
         (_, Some(c)) if (1..=surv.n_codes()).contains(&c) => i32::try_from(c).unwrap_or(i32::MAX),
         (_, Some(c)) => {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "cause: {c} is outside 1..={}",
                 surv.n_codes()
             )));
         }
         (_, None) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: needed when the status has several codes",
             ));
         }

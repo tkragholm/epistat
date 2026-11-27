@@ -1,6 +1,7 @@
 //! The stacked data of a multi-state model: one copy of each row for every
 //! transition that leaves the state the row starts in.
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 
 use super::{MsBaseline, MsModel, MsOptions, MsTerm, MsTerms, MsTransition, resolve};
@@ -20,13 +21,13 @@ pub(super) fn observed(data: &SurvData<'_>, istate: &[u32]) -> Result<Vec<(u32, 
         let row = row as usize;
         let from = istate[row];
         if from == 0 {
-            return Err(Error::invalid(format!(
+            return Err(Error::missing(format!(
                 "row {row} starts in an unknown state: give `istate` for the first row of each subject"
             )));
         }
         let to = u32::try_from(status[row]).expect("the builder keeps the status from below zero");
         if to == from {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "row {row} ends in state {to}, the state it starts in"
             )));
         }
@@ -37,7 +38,9 @@ pub(super) fn observed(data: &SurvData<'_>, istate: &[u32]) -> Result<Vec<(u32, 
     seen.sort_unstable();
     seen.dedup();
     if seen.is_empty() {
-        return Err(Error::invalid("no row of positive weight has a transition"));
+        return Err(Error::no_information(
+            "no row of positive weight has a transition",
+        ));
     }
     Ok(seen)
 }
@@ -57,11 +60,13 @@ fn transitions_of(
     let mut list = given.to_vec();
     list.sort_unstable();
     if list.is_empty() {
-        return Err(Error::invalid("transitions: the list is empty"));
+        return Err(Error::from(InputError::Empty {
+            what: "transitions",
+        }));
     }
     for window in list.windows(2) {
         if window[0] == window[1] {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "transitions: ({}, {}) is listed twice",
                 window[0].0, window[0].1
             )));
@@ -69,12 +74,12 @@ fn transitions_of(
     }
     for &(from, to) in &list {
         if from == 0 || from > n_states || to == 0 || to > n_states {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "transitions: ({from}, {to}) is outside the states 1 to {n_states}"
             )));
         }
         if from == to {
-            return Err(Error::invalid(format!(
+            return Err(Error::options(format!(
                 "transitions: ({from}, {to}) leaves and enters one state"
             )));
         }
@@ -97,22 +102,22 @@ fn terms_of(opts: &MsOptions<'_>, n_columns: usize, n_transitions: usize) -> Res
         if let Some(column) = term.column
             && column >= n_columns
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "terms: term {t} uses column {column} of {n_columns}"
             )));
         }
         if term.transitions.is_empty() {
-            return Err(Error::invalid(format!("terms: term {t} has no transition")));
+            return Err(Error::options(format!("terms: term {t} has no transition")));
         }
         for &k in &term.transitions {
             if k >= n_transitions {
-                return Err(Error::invalid(format!(
+                return Err(Error::out_of_range(format!(
                     "terms: term {t} uses transition {k} of {n_transitions}"
                 )));
             }
             let slot = term.column.unwrap_or(n_columns) * n_transitions + k;
             if covered[slot] {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "terms: term {t} repeats a coefficient for transition {k}"
                 )));
             }
@@ -149,6 +154,9 @@ pub(super) fn fit(
     opts: &MsOptions<'_>,
 ) -> Result<MsModel> {
     let rows = data.n_rows();
+    if x.nrows() == 0 && rows > 0 {
+        return Err(Error::from(InputError::Empty { what: "x" }));
+    }
     check_lengths(&[("data", rows), ("x", x.nrows())])?;
     check_row_count(rows)?;
     refuse_non_finite_matrix(x, "x")?;
@@ -177,7 +185,7 @@ pub(super) fn fit(
     // hazards only.
     let p = terms.len();
     if p == 0 && opts.start.is_some() {
-        return Err(Error::invalid("start: the model has no coefficient"));
+        return Err(Error::options("start: the model has no coefficient"));
     }
     let mut design = Mat::<f64>::zeros(n_stacked, p);
     let mut stop = Vec::with_capacity(n_stacked);

@@ -109,6 +109,7 @@
 
 use std::f64::consts::PI;
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
@@ -176,6 +177,7 @@ impl Default for RoystonOptions {
 /// has no estimate (no events, or a predictor that does not vary), or fewer
 /// than two rows were used.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Royston {
     /// `D`, adjusted when an adjustment was asked for.
     pub d: Option<f64>,
@@ -240,12 +242,15 @@ impl Default for FitOptions {
 /// length zero, and when an adjustment has `n_events <= n_coef` or a number
 /// of events that is not finite.
 pub fn estimate(data: &SurvData<'_>, eta: &[f64], opts: &RoystonOptions) -> Result<Royston> {
+    if eta.is_empty() && data.n_rows() > 0 {
+        return Err(Error::from(InputError::Empty { what: "eta" }));
+    }
     check_lengths(&[("data", data.n_rows()), ("eta", eta.len())])?;
     refuse_non_finite(eta, "eta")?;
     if let Some(a) = opts.adjust
         && !(a.n_events.is_finite() && a.n_events > a.n_coef as f64)
     {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "adjust: the number of events must be finite and exceed the number of coefficients",
         ));
     }
@@ -256,7 +261,7 @@ pub fn estimate(data: &SurvData<'_>, eta: &[f64], opts: &RoystonOptions) -> Resu
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -353,14 +358,14 @@ pub fn from_fit(
 ) -> Result<Royston> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() != fitted.coefficients.len() {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "x has {} columns but the fit has {} coefficients",
             x.ncols(),
             fitted.coefficients.len()
         )));
     }
     if x.ncols() > 0 && fitted.coefficients.iter().all(Option::is_none) {
-        return Err(Error::invalid("fit: the fit has no estimate"));
+        return Err(Error::fit("fit: the fit has no estimate"));
     }
     let eta = predict(
         &FittedModel {
@@ -382,7 +387,7 @@ pub fn from_fit(
             (None, 1) => 1,
             (Some(k), _) => k,
             (None, _) => {
-                return Err(Error::invalid(
+                return Err(Error::missing(
                     "cause: the status has several codes, so the event code is required",
                 ));
             }

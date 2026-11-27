@@ -3,7 +3,7 @@
 
 use super::{NetSurvival, NetTransform};
 use crate::error::{Error, Result};
-use epistat_core::Level;
+use epistat_core::{Level, check};
 use epistat_stats::dist::normal;
 
 /// The weights of the International Cancer Survival Standards 1, 2 and 3 for
@@ -20,6 +20,7 @@ pub const ICSS: [[f64; 5]; 3] = [
 
 /// A net survival curve standardised by age.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StandardisedNet {
     /// The times asked for.
     pub times: Vec<f64>,
@@ -69,28 +70,14 @@ pub fn standardise_net(
     level: Level,
     transform: NetTransform,
 ) -> Result<StandardisedNet> {
-    if curves.is_empty() {
-        return Err(Error::invalid("no curve to standardise"));
-    }
-    if weights.len() != curves.len() {
-        return Err(Error::invalid(format!(
-            "{} weights for {} curves",
-            weights.len(),
-            curves.len()
-        )));
-    }
-    if weights.iter().any(|w| !(w.is_finite() && *w >= 0.0)) {
-        return Err(Error::invalid(
-            "the weights must be finite and not negative",
-        ));
-    }
+    check::non_empty("curves", curves.len())?;
+    check::same_length("weights", curves.len(), weights.len())?;
+    check::weights("weights", weights)?;
     let total = epistat_stats::sum::exact(weights.iter().copied());
     if total <= 0.0 {
-        return Err(Error::invalid("the weights sum to 0"));
+        return Err(Error::no_information("the weights sum to 0"));
     }
-    if times.iter().any(|t| !t.is_finite()) {
-        return Err(Error::invalid("the times must be finite"));
-    }
+    check::finite("times", times)?;
     let z = normal::quantile(level.upper_probability());
     let mut out = StandardisedNet {
         times: times.to_vec(),

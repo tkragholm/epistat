@@ -247,9 +247,10 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 
-use crate::check::{check_lengths, check_row_count};
+use crate::check::{check_lengths, check_row_count, refuse_non_finite_matrix};
 use crate::cox::design::{DenseClusters, Newton, Stepping, newton};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
@@ -285,6 +286,7 @@ fn censoring_curve(time: &[f64], event: &[i32], weight: &[f64]) -> Steps {
 /// for [`rows`], and for [`risk_rows`] the individual or any individual with
 /// the covariate value the collapsed row carries.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FineGrayRows {
     /// The input row each row comes from.
     pub row: Vec<u32>,
@@ -393,7 +395,7 @@ impl<'a> Expansion<'a> {
         }
         check_row_count(time.len())?;
         if cause == 0 {
-            return Err(Error::invalid("cause 0 is censoring, not a cause"));
+            return Err(Error::out_of_range("cause 0 is censoring, not a cause"));
         }
         let horizon = time.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let curves = if group.is_empty() {
@@ -801,13 +803,11 @@ pub fn risk_rows(
 pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> Result<CoxModelFit> {
     check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() == 0 {
-        return Err(Error::invalid("x has no columns"));
+        return Err(InputError::Empty { what: "x" }.into());
     }
-    if (0..x.ncols()).any(|j| (0..x.nrows()).any(|i| !x[(i, j)].is_finite())) {
-        return Err(Error::invalid("x: a value is not finite"));
-    }
+    refuse_non_finite_matrix(x, "x")?;
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::invalid("tolerance: must be finite and positive"));
+        return Err(Error::options("tolerance: must be finite and positive"));
     }
     if opts.ties == Ties::Exact && data.cluster().is_some() {
         return Err(Error::unsupported(
@@ -892,7 +892,7 @@ fn exact(
             next > curve.time[j] && curve.value[j] > 0.0
         });
         if later && curve.before(t) > 0.0 {
-            return Err(Error::invalid(
+            return Err(Error::not_applicable(
                 "ties: the exact method needs every Fine-Gray weight to be 1, so no \
                  censoring after a competing event in its stratum",
             ));
@@ -1095,7 +1095,7 @@ mod tests {
     };
     use crate::check::check_lengths;
     use crate::cox::{CoxModelFit, CoxOptions, Ties};
-    use crate::error::{Error, Result};
+    use crate::error::Result;
     use crate::step::Steps;
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
@@ -1113,7 +1113,7 @@ mod tests {
     ) -> Result<CoxModelFit> {
         check_lengths(&[("stop", data.n_rows()), ("x", x.nrows())])?;
         if x.ncols() == 0 {
-            return Err(Error::invalid("x has no columns"));
+            return Err(epistat_core::InputError::Empty { what: "x" }.into());
         }
         with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
             let source =
@@ -1484,7 +1484,7 @@ mod tests {
         );
         let none = Mat::<f64>::zeros(20, 0);
         let error = fit(&d, none.as_ref(), &options(1, Ties::Breslow)).unwrap_err();
-        assert_eq!(error.to_string(), "x has no columns");
+        assert_eq!(error.to_string(), "x is empty");
         let levels = vec![0u32; 19];
         assert!(risk_rows(&d, 1, &levels, &RowsOptions::default()).is_err());
         let mut nan = x.clone();

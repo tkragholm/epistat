@@ -152,6 +152,7 @@ use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
+use crate::check::{check_ascending, refuse_non_finite, refuse_non_finite_matrix};
 use crate::covariance;
 use crate::cox::{
     BaselineOptions, Centring, CoxHazardType, CoxOptions, CoxVariance, FittedModel, Ties, basehaz,
@@ -172,6 +173,7 @@ const WAVE: usize = 32;
 
 /// Which estimator of the risk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Estimator {
     /// Augmented inverse probability weighting, `estimator = "AIPTW"`.
     #[default]
@@ -183,6 +185,7 @@ pub enum Estimator {
 
 /// The model of the censoring hazard.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum AipwCensoring<'a> {
     /// No censoring before the times asked for: the censoring survival is 1. Rows
     /// with status 0 are an error.
@@ -260,6 +263,7 @@ impl Default for AipwSurvOptions {
 
 /// The risks of the two treatments at the times asked for.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct AipwSurv {
     /// The risks and their standard errors and covariances. Level 0 is the
     /// risk had everyone been untreated and level 1 treated, so that
@@ -395,7 +399,9 @@ fn coefficients(fit: &crate::cox::CoxModelFit, what: &str) -> Result<Vec<f64>> {
         .iter()
         .enumerate()
         .map(|(j, c)| {
-            c.ok_or_else(|| Error::invalid(format!("the {what} model has an aliased column {j}")))
+            c.ok_or_else(|| {
+                Error::no_information(format!("the {what} model has an aliased column {j}"))
+            })
         })
         .collect()
 }
@@ -444,18 +450,39 @@ fn cox_model(
     Ok((beta, steps))
 }
 
-fn check_design(name: &str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
+/// Refuse a design argument `name` of another number of rows than the `n` of
+/// the data, without columns, or with a value that is not finite.
+fn check_design(name: &'static str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
     if x.nrows() != n {
-        return Err(Error::invalid(format!(
-            "{name}: {} rows for {n} rows of data",
+        if x.nrows() == 0 {
+            return Err(Error::from(InputError::Empty { what: name }));
+        }
+        return Err(Error::from(InputError::Length {
+            what: name,
+            expected: n,
+            found: x.nrows(),
+        }));
+    }
+    if x.ncols() == 0 {
+        return Err(Error::missing(format!("{name}: no columns")));
+    }
+    refuse_non_finite_matrix(x, name)
+}
+
+/// [`check_design`] for the design of level `l` of `levels`, whose name is not
+/// a literal.
+fn check_level_design(l: usize, x: MatRef<'_, f64>, n: usize) -> Result<()> {
+    if x.nrows() != n {
+        return Err(Error::mismatch(format!(
+            "levels[{l}]: {} rows for {n} rows of data",
             x.nrows()
         )));
     }
     if x.ncols() == 0 {
-        return Err(Error::invalid(format!("{name}: no columns")));
+        return Err(Error::missing(format!("levels[{l}]: no columns")));
     }
     if !epistat_linalg::is_finite(x) {
-        return Err(Error::invalid(format!("{name}: a value is not finite")));
+        return Err(Error::value(format!("levels[{l}]: a value is not finite")));
     }
     Ok(())
 }
@@ -474,18 +501,23 @@ impl Model {
         if let Some((lo, hi)) = opts.truncation
             && !(0.0 < lo && lo < hi && hi < 1.0)
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::options(format!(
                 "truncation: ({lo}, {hi}) are not probabilities in increasing order"
             )));
         }
-        if times.is_empty()
-            || times.iter().any(|t| !(t.is_finite() && *t > 0.0))
-            || times.windows(2).any(|w| w[0] >= w[1])
-        {
-            return Err(Error::invalid(
-                "times: need at least one, finite, positive and increasing",
-            ));
+        if times.is_empty() {
+            return Err(Error::from(InputError::Empty { what: "times" }));
         }
+        refuse_non_finite(times, "times")?;
+        if let Some(row) = times.iter().position(|&t| t <= 0.0) {
+            return Err(Error::from(InputError::Domain {
+                what: "times",
+                value: times[row],
+                domain: "(0, inf)",
+                row: Some(row),
+            }));
+        }
+        check_ascending(times, "times", true)?;
         let fixed = data.clone().with_timefix(opts.timefix)?;
         let surv = fixed.followup()?;
         if surv.start().is_some()
@@ -499,6 +531,9 @@ impl Model {
         }
         let n = fixed.n_rows();
         if spec.treatment.len() != n {
+            if spec.treatment.is_empty() {
+                return Err(Error::from(InputError::Empty { what: "treatment" }));
+            }
             return Err(Error::from(InputError::Length {
                 what: "treatment",
                 expected: n,
@@ -507,22 +542,22 @@ impl Model {
         }
         let n_treated = spec.treatment.iter().filter(|&&a| a).count();
         if n_treated == 0 || n_treated == n {
-            return Err(Error::invalid(
+            return Err(Error::no_information(
                 "treatment: both treated and untreated rows are needed",
             ));
         }
         let stop = surv.stop().to_vec();
         let status = surv.status().to_vec();
         if status.iter().any(|&s| s != 0 && s != 1) {
-            return Err(Error::invalid("data: the status must be 0 or 1"));
+            return Err(Error::not_applicable("data: the status must be 0 or 1"));
         }
         check_design("outcome_x", spec.outcome_x, n)?;
         check_design("propensity_x", spec.propensity_x, n)?;
         for (l, cf) in spec.levels.iter().enumerate() {
             if let Counterfactual::Design(m) = cf {
-                check_design(&format!("levels[{l}]"), *m, n)?;
+                check_level_design(l, *m, n)?;
                 if m.ncols() != spec.outcome_x.ncols() {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::mismatch(format!(
                         "levels[{l}]: {} columns for the {} of the model",
                         m.ncols(),
                         spec.outcome_x.ncols()
@@ -532,7 +567,7 @@ impl Model {
             if let Counterfactual::Columns(set) = cf
                 && set.iter().any(|&(c, _)| c >= spec.outcome_x.ncols())
             {
-                return Err(Error::invalid(format!(
+                return Err(Error::out_of_range(format!(
                     "levels[{l}]: a column is outside the design"
                 )));
             }
@@ -573,7 +608,7 @@ impl Model {
         for (i, &fitted) in fitted.iter().enumerate() {
             let mut e = fitted;
             if !(e > 0.0 && e < 1.0) {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "treatment model: row {i} has fitted probability {e}"
                 )));
             }
@@ -598,7 +633,7 @@ impl Model {
         let cens = match spec.censoring {
             AipwCensoring::None => {
                 if !jump.is_empty() {
-                    return Err(Error::invalid(
+                    return Err(Error::missing(
                         "data: rows with status 0 need a censoring model",
                     ));
                 }
@@ -700,7 +735,7 @@ impl Model {
         // The weight of the event at each time.
         let g_t = if d_i == 1 { self.g_before(i, t_i) } else { 1.0 };
         if d_i == 1 && (g_t.is_nan() || g_t <= 0.0) {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "the censoring survival is 0 before the event of row {i}"
             )));
         }
@@ -740,7 +775,7 @@ impl Model {
             }
         }
         if out.iter().any(|v| !v.is_finite()) {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "row {i} has a value that is not finite"
             )));
         }
@@ -1191,7 +1226,15 @@ impl Model {
             }
         }
         let rows: Vec<u32> = (0..n)
-            .map(|i| u32::try_from(i).map_err(|_| Error::invalid("more persons than u32::MAX")))
+            .map(|i| {
+                u32::try_from(i).map_err(|_| {
+                    Error::from(InputError::TooLarge {
+                        what: "rows",
+                        limit: u64::from(u32::MAX),
+                        found: n as u64,
+                    })
+                })
+            })
             .collect::<Result<_>>()?;
         let influence = Influence::over_rows(values, rows, 2 * k, ClusterRule::NoSmallSample)?;
         // The covariance of the two levels at each time from a two-column
@@ -1572,7 +1615,7 @@ fn runs(rows: &[usize], value: impl Fn(usize) -> f64, width: f64) -> Vec<&[usize
 /// on both sides of a time asked for.
 fn cells_of(jump: &[f64], times: &[f64], k: usize) -> Result<Vec<(usize, usize)>> {
     if k == 0 {
-        return Err(Error::invalid("grid: at least one cell is needed"));
+        return Err(Error::options("grid: at least one cell is needed"));
     }
     let j = jump.len();
     let mut cuts: Vec<usize> = (0..=k).map(|c| c * j / k).collect();

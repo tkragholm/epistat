@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
@@ -64,6 +65,7 @@ pub struct PathData<'a> {
 
 /// The curve of one subject, at the baseline times inside its intervals.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct PathCurve {
     /// The subject.
     pub id: u32,
@@ -91,6 +93,7 @@ pub struct PathCurve {
 
 /// The curves of [`survfit_paths`], one per subject in order of first appearance.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct PathCurves {
     /// The caller's code of each stratum, `None` without strata.
     pub strata: Vec<Option<u32>>,
@@ -122,12 +125,19 @@ pub fn survfit_paths(
         ("paths start", paths.start.len()),
         ("paths stop", paths.stop.len()),
     ])?;
-    for (&a, &b) in paths.start.iter().zip(paths.stop) {
-        if !(a.is_finite() && b.is_finite()) {
-            return Err(Error::invalid("paths: a start or stop is not finite"));
+    for (row, (&a, &b)) in paths.start.iter().zip(paths.stop).enumerate() {
+        for (what, value) in [("paths start", a), ("paths stop", b)] {
+            if !value.is_finite() {
+                return Err(InputError::NotFinite {
+                    what,
+                    row,
+                    column: None,
+                }
+                .into());
+            }
         }
         if a >= b {
-            return Err(Error::invalid("paths: a start is not before its stop"));
+            return Err(Error::value("paths: a start is not before its stop"));
         }
     }
     let as_new = NewData {
@@ -153,7 +163,7 @@ pub fn survfit_paths(
     for rows_of in members.values() {
         for pair in rows_of.windows(2) {
             if paths.start[pair[1]] < paths.stop[pair[0]] {
-                return Err(Error::invalid(
+                return Err(Error::order(
                     "paths: the intervals of a subject must be in time order and not overlap",
                 ));
             }
@@ -188,7 +198,7 @@ pub fn survfit_paths(
             let eta = m.dot_beta(&z) + paths.offset.map_or(0.0, |o| o[i]) - baseline.offset_centre;
             let theta = eta.exp();
             if !theta.is_finite() {
-                return Err(Error::invalid("the risk score of a row is not finite"));
+                return Err(Error::undefined("the risk score of a row is not finite"));
             }
             let s = strata[i];
             let base = &baseline.strata[s];

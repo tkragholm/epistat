@@ -319,6 +319,7 @@ pub enum Theta {
 
 /// How the model is fitted at a given theta.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum FrailtyMethod {
     /// Newton's method on the penalised partial likelihood with the whole
     /// information, `coxph`'s model.
@@ -400,6 +401,7 @@ pub enum ThetaStatus {
 
 /// One theta of a search.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct ThetaStep {
     /// The variance of the frailty.
     pub theta: f64,
@@ -414,6 +416,7 @@ pub struct ThetaStep {
 /// The likelihood-ratio test of theta = 0, on the boundary of the parameter
 /// space.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct BoundaryTest {
     /// Twice the gain of the profile marginal log likelihood over the Cox model.
     pub statistic: f64,
@@ -1112,19 +1115,19 @@ fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
         ));
     }
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::invalid("tolerance: must be finite and positive"));
+        return Err(Error::options("tolerance: must be finite and positive"));
     }
     if opts.max_iterations == 0 {
-        return Err(Error::invalid("max_iterations: must be at least 1"));
+        return Err(Error::options("max_iterations: must be at least 1"));
     }
     if !(opts.theta_tolerance.is_finite() && opts.theta_tolerance > 0.0) {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "theta_tolerance: must be finite and positive",
         ));
     }
     match opts.theta {
         Theta::Fixed(t) if !(t.is_finite() && t >= 0.0) => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "theta: a fixed theta must be finite and not negative",
             ));
         }
@@ -1136,12 +1139,12 @@ fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
     } = opts.method
     {
         if opts.ties != Ties::Breslow {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "method: EM gives the maximum of the marginal likelihood for Breslow ties only",
             ));
         }
         if max_iterations == 0 || !(tolerance.is_finite() && tolerance > 0.0) {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "method: EM needs at least one step and a positive tolerance",
             ));
         }
@@ -1151,7 +1154,7 @@ fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
             .iter()
             .any(|o| !o.is_finite() || !o.exp().is_finite())
     {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "offset: a value is not finite or gives a risk score that is not finite",
         ));
     }
@@ -1184,7 +1187,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
     refuse_non_finite_matrix(x, "x")?;
     check_options(opts, data)?;
     if data.cluster().is_none() {
-        return Err(Error::invalid(
+        return Err(Error::missing(
             "cluster: the frailty model needs a cluster column",
         ));
     }
@@ -1194,7 +1197,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -1261,7 +1264,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
     let estimated = !matches!(opts.theta, Theta::Fixed(_));
     let em = matches!(opts.method, FrailtyMethod::Em { .. });
     if (estimated || em) && !layout.unit_weights {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "weight: estimating theta and EM need case weights of 1, for which the marginal \
              likelihood is defined",
         ));
@@ -1272,7 +1275,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
         .map(|&i| weight[i])
         .sum();
     if n_events == 0.0 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "status: there is no event among the rows used",
         ));
     }

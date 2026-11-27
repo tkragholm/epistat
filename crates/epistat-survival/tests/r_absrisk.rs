@@ -161,6 +161,7 @@ fn limit(kind: RiskLimits, f: f64, se: f64, z: f64) -> (f64, f64) {
                 1.0 - (1.0 - f).powf((z * t).exp()),
             )
         }
+        _ => unreachable!("a kind this test does not cover"),
     }
 }
 

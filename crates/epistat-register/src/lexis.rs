@@ -95,6 +95,7 @@ pub enum Cuts<'a> {
 
 /// The pieces of a split, in row order and in time order within a row.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Split {
     /// The input row of each piece.
     pub source_row: Vec<u32>,
@@ -109,10 +110,11 @@ pub struct Split {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, an interval
-/// ends before it starts, there are more rows than a `u32` holds, a cut
-/// column does not have one entry per row, or an age has no birthday that
-/// fits in an `i64`.
+/// [`Error::Input`] when the columns differ in length, there are more rows
+/// than a `u32` holds or a cut column does not have one entry per row,
+/// [`Error::EndBeforeStart`] when an interval ends before it starts, and
+/// [`Error::DayOverflow`] when an age has no birthday that fits in an
+/// `i64`.
 pub fn split_at(start: &[i64], end: &[i64], cuts: &[Cuts<'_>]) -> Result<Split, Error> {
     let mut out = Split::default();
     split_at_into(start, end, cuts, |row, s, e| {
@@ -144,9 +146,7 @@ pub fn split_at_into(
         check_cut(cut, n)?;
     }
     if let Some(row) = (0..n).find(|&r| end[r] < start[r]) {
-        return Err(Error::invalid(format!(
-            "row {row} has an end before its start"
-        )));
+        return Err(Error::EndBeforeStart { what: "end", row });
     }
     let mut at: Vec<i64> = Vec::new();
     for row in 0..n32 {
@@ -197,9 +197,10 @@ pub fn split_at_into(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a cut source does not have one entry per
-/// source row of the split, a piece names a row beyond it, or an age has no
-/// birthday that fits in an `i64`.
+/// [`Error::Input`] when the columns of the split differ in length,
+/// [`Error::OutOfRange`] when a piece names a row beyond a cut source, and
+/// [`Error::DayOverflow`] when an age has no birthday that fits in an
+/// `i64`.
 pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>, Error> {
     let pieces = split.start.len();
     length("source_row", pieces, split.source_row.len())?;
@@ -218,21 +219,22 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
         .unwrap_or(0);
     let mut out = Vec::with_capacity(cuts.len());
     for cut in cuts {
-        match *cut {
-            Cuts::AgeYears { birth, .. } if birth.len() < rows_needed => {
-                return Err(Error::invalid(
-                    "a piece names a row beyond the birth column",
-                ));
-            }
-            Cuts::TimeSinceEntry { entry, .. } if entry.len() < rows_needed => {
-                return Err(Error::invalid(
-                    "a piece names a row beyond the entry column",
-                ));
-            }
-            Cuts::PerRow { offsets, .. } if offsets.len() < rows_needed + 1 => {
-                return Err(Error::invalid("a piece names a row beyond the cut offsets"));
-            }
-            _ => {}
+        let rows = match *cut {
+            Cuts::AgeYears { birth, .. } => Some(("birth", birth.len())),
+            Cuts::TimeSinceEntry { entry, .. } => Some(("entry", entry.len())),
+            Cuts::PerRow { offsets, .. } => Some(("cut offsets", offsets.len().saturating_sub(1))),
+            _ => None,
+        };
+        if let Some((what, limit)) = rows
+            && rows_needed > limit
+            && let Some(piece) = split.source_row.iter().position(|&r| r as usize >= limit)
+        {
+            return Err(Error::OutOfRange {
+                what,
+                row: Some(piece),
+                value: u64::from(split.source_row[piece]),
+                limit: limit as u64,
+            });
         }
         if let Cuts::PerRow { offsets, at } = *cut {
             csr("cut offsets", offsets, at.len())?;
@@ -245,11 +247,11 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
                 Cuts::AgeYears { birth, ages, rule } => {
                     let mut reached = None;
                     for &age in ages {
-                        let at = birthday_on_age(birth[row], age, rule).ok_or_else(|| {
-                            Error::invalid(format!(
-                                "row {row}: the birthday at age {age} does not fit in an i64"
-                            ))
-                        })?;
+                        let at =
+                            birthday_on_age(birth[row], age, rule).ok_or(Error::DayOverflow {
+                                what: "birthday",
+                                row,
+                            })?;
                         if at <= day {
                             reached = reached.max(Some(i64::from(age)));
                         }
@@ -302,10 +304,9 @@ fn gather(cut: &Cuts<'_>, row: usize, s: i64, e: i64, at: &mut Vec<i64>) -> Resu
         }
         Cuts::AgeYears { birth, ages, rule } => {
             for &age in ages {
-                let day = birthday_on_age(birth[row], age, rule).ok_or_else(|| {
-                    Error::invalid(format!(
-                        "row {row}: the birthday at age {age} does not fit in an i64"
-                    ))
+                let day = birthday_on_age(birth[row], age, rule).ok_or(Error::DayOverflow {
+                    what: "birthday",
+                    row,
                 })?;
                 keep(day);
             }

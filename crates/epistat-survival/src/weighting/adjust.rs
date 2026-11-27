@@ -35,6 +35,7 @@ use crate::error::{Error, Result};
 
 /// Which weight of a row an outcome model uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum WeightAt {
     /// The weight of an outcome observed at the end of the row: `1 / G(stop-)`
     /// of [`ipcw`](super::ipcw), and `weight` of [`pooled`](super::pooled), the

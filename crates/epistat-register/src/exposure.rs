@@ -231,6 +231,7 @@ pub(crate) fn ceil_day(x: f64) -> Option<i64> {
 
 /// The exposure periods, ordered by person, group and start.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct Periods {
     /// The person of each period, a position among the persons.
     pub(crate) person: Vec<u32>,
@@ -342,8 +343,8 @@ impl Periods {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when a period names a person at or beyond
-    /// `persons`, or `persons` does not fit a `u32`.
+    /// [`Error::OutOfRange`] when a period names a person at or beyond
+    /// `persons`, and [`Error::Input`] when `persons` does not fit a `u32`.
     pub fn span_set(&self, group: u32, persons: usize) -> Result<SpanSet, Error> {
         row_count("persons", persons)?;
         let mut start = Vec::new();
@@ -355,14 +356,18 @@ impl Periods {
             }
             let p = self.person[i] as usize;
             if p >= persons {
-                return Err(Error::invalid(format!(
-                    "period {i} names person {p} of {persons}"
-                )));
+                return Err(Error::OutOfRange {
+                    what: "person",
+                    row: Some(i),
+                    value: u64::from(self.person[i]),
+                    limit: persons as u64,
+                });
             }
             offsets[p + 1] += 1;
             start.push(self.start[i]);
-            end.push(ceil_day(self.end[i]).ok_or_else(|| {
-                Error::invalid(format!("period {i} has an end that is not a day"))
+            end.push(ceil_day(self.end[i]).ok_or(Error::DayOverflow {
+                what: "end",
+                row: i,
             })?);
         }
         for p in 0..persons {
@@ -373,27 +378,47 @@ impl Periods {
 }
 
 fn validate_assumptions(a: &[Assumption]) -> Result<(), Error> {
-    if a.is_empty() {
-        return Err(Error::invalid(
-            "no drug assumptions given; none is built in",
-        ));
-    }
+    // None is built in: the caller states the assumptions of every group.
+    check::non_empty("assumptions", a.len())?;
     for (g, x) in a.iter().enumerate() {
-        let ok = x.dose_default.is_finite()
-            && x.dose_default > 0.0
-            && x.dose_min.is_finite()
-            && x.dose_min > 0.0
-            && x.dose_max.is_finite()
-            && x.dose_min <= x.dose_max
-            && !x.max_stock_days.is_nan()
-            && x.max_stock_days >= 0.0
-            && x.grace_days.is_finite()
-            && x.grace_days >= 0.0;
-        if !ok {
-            return Err(Error::invalid(format!(
-                "assumption {g} is not valid: doses must be positive and finite with dose_min <= dose_max, max_stock_days at least 0 and grace_days finite and at least 0"
-            )));
-        }
+        let domain = |what, value: f64, ok: bool, domain| {
+            if ok {
+                Ok(())
+            } else {
+                Err(InputError::Domain {
+                    what,
+                    value,
+                    domain,
+                    row: Some(g),
+                })
+            }
+        };
+        let positive = |v: f64| v.is_finite() && v > 0.0;
+        domain(
+            "dose_default",
+            x.dose_default,
+            positive(x.dose_default),
+            "(0, inf)",
+        )?;
+        domain("dose_min", x.dose_min, positive(x.dose_min), "(0, inf)")?;
+        domain(
+            "dose_max",
+            x.dose_max,
+            x.dose_max.is_finite() && x.dose_min <= x.dose_max,
+            "[dose_min, inf)",
+        )?;
+        domain(
+            "max_stock_days",
+            x.max_stock_days,
+            x.max_stock_days >= 0.0,
+            "[0, inf]",
+        )?;
+        domain(
+            "grace_days",
+            x.grace_days,
+            x.grace_days.is_finite() && x.grace_days >= 0.0,
+            "[0, inf)",
+        )?;
     }
     Ok(())
 }
@@ -403,9 +428,13 @@ fn validate(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<usize, Error> {
     if let DoseRule::Fixed { days } = s.rule
         && !(days.is_finite() && days > 0.0)
     {
-        return Err(Error::invalid(
-            "a fixed duration must be positive and finite",
-        ));
+        return Err(InputError::Domain {
+            what: "days",
+            value: days,
+            domain: "(0, inf)",
+            row: None,
+        }
+        .into());
     }
     let o = d.person_offsets;
     let n = d.day.len();
@@ -413,21 +442,18 @@ fn validate(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<usize, Error> {
     length("group", n, d.group.len())?;
     length("quantity", n, d.quantity.len())?;
     row_count("day", n)?;
-    for (row, &q) in d.quantity.iter().enumerate() {
-        if !(q.is_finite() && q > 0.0) {
-            return Err(Error::invalid(format!(
-                "row {row} has the quantity {q}, which is not positive and finite"
-            )));
-        }
-    }
+    check::positive_weights("quantity", d.quantity)?;
     if let Some(row) = d
         .group
         .iter()
         .position(|g| g.is_some_and(|g| g as usize >= s.assumptions.len()))
     {
-        return Err(Error::invalid(format!(
-            "row {row} names a group without an assumption"
-        )));
+        return Err(Error::OutOfRange {
+            what: "group",
+            row: Some(row),
+            value: u64::from(d.group[row].unwrap_or_default()),
+            limit: s.assumptions.len() as u64,
+        });
     }
     let persons = o.len() - 1;
     if let Some(p) = s.pauses {
@@ -445,14 +471,30 @@ fn validate(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<usize, Error> {
                     other => other,
                 },
             )?;
-            if (a..b).any(|i| p.end[i] < p.start[i]) {
-                return Err(Error::invalid(format!(
-                    "a pause of person {q} ends before it starts"
-                )));
+            if let Some(row) = (a..b).find(|&i| p.end[i] < p.start[i]) {
+                return Err(Error::EndBeforeStart {
+                    what: "pause end",
+                    row,
+                });
             }
         }
     }
     Ok(persons)
+}
+
+/// A lag of 0 days or more, or [`InputError::Domain`].
+fn negative_lag(lag_days: i64) -> Result<(), Error> {
+    if lag_days < 0 {
+        return Err(InputError::Domain {
+            what: "lag_days",
+            #[expect(clippy::cast_precision_loss, reason = "a number of days")]
+            value: lag_days as f64,
+            domain: "[0, inf)",
+            row: None,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// The supply of one dispensing day: its start `s`, its end, the day and
@@ -606,11 +648,13 @@ fn series(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when there are no assumptions or one is invalid,
-/// the columns differ in length or the offsets are not a CSR layout, a quantity
-/// is not positive and finite (with its row), a group has no assumption, a
-/// fixed duration is not positive, or the pauses are not sorted or do not cover
-/// the same persons.
+/// [`Error::Input`] when there are no assumptions or a field of one is
+/// outside its domain (with the assumption's position as the row), the columns
+/// differ in length or the offsets are not a CSR layout, a quantity is not
+/// positive and finite (with its row), a fixed duration is not positive, or
+/// the pauses are not sorted or do not cover the same persons;
+/// [`Error::OutOfRange`] when a group has no assumption, and
+/// [`Error::EndBeforeStart`] for a pause that ends before it starts.
 pub fn exposure_periods(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<Periods, Error> {
     let persons = validate(d, s)?;
     let (steps, unassigned) = walk(d, s, persons);
@@ -679,9 +723,10 @@ pub struct Windows<'a> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for window columns of different lengths, a window
-/// that ends before it starts, a person out of range, a negative lag and, under
-/// [`DoseMode::ProratedOverSupply`], for the reasons of [`exposure_periods`].
+/// [`Error::Input`] for window columns of different lengths or a negative
+/// lag, [`Error::EndBeforeStart`] for a window that ends before it starts,
+/// [`Error::OutOfRange`] for a person out of range and, under
+/// [`DoseMode::ProratedOverSupply`], the errors of [`exposure_periods`].
 pub fn cumulative_dose(
     d: &Dispensings<'_>,
     windows: &Windows<'_>,
@@ -692,9 +737,7 @@ pub fn cumulative_dose(
     length("window group", m, windows.group.len())?;
     length("window start", m, windows.start.len())?;
     length("window end", m, windows.end.len())?;
-    if lag_days < 0 {
-        return Err(Error::invalid("the lag must not be negative"));
-    }
+    negative_lag(lag_days)?;
     let o = d.person_offsets;
     csr("person_offsets", o, d.day.len())?;
     length("group", d.day.len(), d.group.len())?;
@@ -702,12 +745,18 @@ pub fn cumulative_dose(
     let persons = o.len() - 1;
     for w in 0..m {
         if windows.person[w] as usize >= persons {
-            return Err(Error::invalid(format!(
-                "window {w} names a person out of range"
-            )));
+            return Err(Error::OutOfRange {
+                what: "window person",
+                row: Some(w),
+                value: u64::from(windows.person[w]),
+                limit: persons as u64,
+            });
         }
         if windows.end[w] < windows.start[w] {
-            return Err(Error::invalid(format!("window {w} ends before it starts")));
+            return Err(Error::EndBeforeStart {
+                what: "window",
+                row: w,
+            });
         }
     }
     let mut out = vec![0.0; m];
@@ -780,9 +829,7 @@ pub fn exposed_on(
     let m = query.person.len();
     length("point group", m, query.group.len())?;
     length("point day", m, query.day.len())?;
-    if lag_days < 0 {
-        return Err(Error::invalid("the lag must not be negative"));
-    }
+    negative_lag(lag_days)?;
     Ok((0..m)
         .map(|i| {
             let key = (query.person[i], query.group[i]);

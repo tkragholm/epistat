@@ -36,6 +36,7 @@ fn flatten(r: &Rmst2, out: &mut Vec<f64>) {
             lower,
             upper,
             p_value,
+            ..
         } = *c;
         out.extend([
             absent(estimate),

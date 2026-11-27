@@ -44,6 +44,7 @@ pub use zph::{CoxZph, ZphOptions, ZphTransform, zph};
 
 /// How events that share a time are placed in the partial likelihood.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Ties {
     /// Every event at a time has the whole risk set as its denominator.
     Breslow,

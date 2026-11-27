@@ -1,8 +1,9 @@
 //! Every public entry point refuses an empty column, NaN, an infinity, a column
-//! one row short and an unsorted column with an `Input` error, through
-//! `epistat_testkit::assert_rejects_bad_input`. A kind of input an entry point
-//! has no argument for, such as an unsorted column where the order of the rows
-//! does not matter, is not tried.
+//! one row short and an unsorted column with an `Input` error carrying the
+//! code of the shared check, through
+//! `epistat_testkit::assert_rejects_bad_input_with_codes`. A kind of input an
+//! entry point has no argument for, such as an unsorted column where the order
+//! of the rows does not matter, is not tried.
 
 use epistat_core::Bootstrap;
 use epistat_core::Classify;
@@ -70,7 +71,7 @@ use epistat_survival::weighting::{
     km::{self, KmOptions},
 };
 use epistat_survival::{Error, SurvBuf, SurvData};
-use epistat_testkit::{BadInput, assert_rejects_bad_input};
+use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 use std::cell::Cell;
 use std::fmt::Debug;
 
@@ -108,9 +109,69 @@ fn shortened<T: Clone>(bad: BadInput, good: &[T]) -> Vec<T> {
     }
 }
 
-/// Runs `assert_rejects_bad_input`, after checking that the call with nothing
-/// spoiled succeeds, so that a refusal is the doing of the bad input and not
-/// of the rest of the call.
+/// The entry points that meet an empty column through the length of the
+/// columns it goes with, so that it is refused as `input.length`: the column
+/// is checked against another one's length before anything checks it for
+/// rows.
+const EMPTY_AS_LENGTH: &[&str] = &[
+    "RateTable::expected_cells",
+    "RateTable::expected_keyed codes",
+    "RateTable::expected_keyed length",
+    "RateTable::from_long level",
+    "RateTable::from_long start",
+    "RateTable::new rates",
+    "cells::aggregate events",
+    "cells::aggregate keys",
+    "cells::aggregate length",
+    "clone::clone_censor covariates",
+    "ipcw::fit",
+    "iptw::fit design",
+    "iptw::fit treatment",
+    "lexis::split_cells keys",
+    "lexis::split_lexis entry",
+    "pooled::fit design",
+    "rates::fit_rates columns",
+    "rates::fit_rates events",
+    "rates::fit_rates length",
+    "relsurv::excess_hazard x",
+    "relsurv::net_survival potential",
+    "relsurv::net_survival_test groups",
+    "relsurv::standardise_net weights",
+    "sccs::build_pieces end",
+    "sccs::build_pieces events",
+    "sccs::build_pieces start",
+    "survreg::fit",
+    "trials::switch_weights case_weight",
+    "trials::switch_weights denominator",
+    "yates::wald_tests covariance",
+    "yates::yates coefficients",
+    "yates::yates covariance",
+];
+
+/// The code the entry point `label` refuses `bad` with: the shared check's,
+/// except where the spoiled column is refused by what it means rather than by
+/// its shape.
+fn expected_code(label: &str, bad: BadInput) -> &'static str {
+    match (label, bad) {
+        (label, BadInput::Empty) if EMPTY_AS_LENGTH.contains(&label) => "input.length",
+        // The base table is keyed by id, so a shorter one lacks an id the
+        // spans name.
+        ("tmerge::Tmerge::new base", BadInput::Empty | BadInput::Mismatched) => {
+            "survival.out_of_range"
+        }
+        // A test without landmarks is refused as an option, as one without
+        // qualifying states is.
+        ("markov::test grid", BadInput::Empty) => "survival.options",
+        // One estimate is too few to compare before any length is checked.
+        ("yates::wald_tests estimate", BadInput::Mismatched) => "survival.no_information",
+        _ => bad.code(),
+    }
+}
+
+/// Runs `assert_rejects_bad_input_with_codes` with the codes of
+/// [`expected_code`], after checking that the call with nothing spoiled
+/// succeeds, so that a refusal is the doing of the bad input and not of the
+/// rest of the call.
 fn rejects<T: Debug, E: Classify + Debug>(
     label: &str,
     build: impl Fn(BadInput) -> Option<Result<T, E>>,
@@ -122,7 +183,7 @@ fn rejects<T: Debug, E: Classify + Debug>(
         matches!(untouched, Some(Ok(_))),
         "{label}: the call with nothing spoiled returned {untouched:?}"
     );
-    assert_rejects_bad_input(label, build);
+    assert_rejects_bad_input_with_codes(label, |bad| expected_code(label, bad), build);
 }
 
 /// The kinds of bad input that spoil one column whose order does not matter.

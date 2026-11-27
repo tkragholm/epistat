@@ -8,10 +8,13 @@
 //! starting point first, and pass the times. The rules are in the module
 //! documentation of [`survfit`](crate::survfit).
 
+use std::ops::AddAssign;
+
+use epistat_core::{InputError, check};
+
 use super::{GroupCurve, Survfit};
 use crate::check::check_ascending;
 use crate::error::{Error, Result};
-use std::ops::AddAssign;
 
 /// How a read behaves where `summary.survfit` has arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -49,21 +52,22 @@ impl CurveIndex {
     /// is empty or holds a NaN, or `sum` is `Some(true)` and `times` is not
     /// strictly increasing.
     pub fn new(curve_time: &[f64], times: &[f64], opts: &ReadOptions) -> Result<Self> {
-        if curve_time.is_empty() {
-            return Err(Error::invalid("the curve has no times to read"));
-        }
+        check::non_empty("curve_time", curve_time.len())?;
         check_ascending(curve_time, "curve_time", true)?;
-        if times.is_empty() {
-            return Err(Error::invalid("no values in times"));
-        }
-        if times.iter().any(|t| t.is_nan()) {
-            return Err(Error::invalid("times contains a missing value"));
+        check::non_empty("times", times.len())?;
+        if let Some(row) = times.iter().position(|t| t.is_nan()) {
+            return Err(InputError::NotFinite {
+                what: "times",
+                row,
+                column: None,
+            }
+            .into());
         }
         let increasing = times.windows(2).all(|w| w[0] < w[1]);
         let sum = match opts.sum {
             None => increasing,
             Some(true) if !increasing => {
-                return Err(Error::invalid(
+                return Err(Error::options(
                     "summing between times needs strictly increasing times",
                 ));
             }
@@ -103,15 +107,7 @@ impl CurveIndex {
     }
 
     fn check<T>(&self, values: &[T]) -> Result<()> {
-        if values.len() == self.n {
-            Ok(())
-        } else {
-            Err(Error::invalid(format!(
-                "a column has {} values and the curve {} times",
-                values.len(),
-                self.n
-            )))
-        }
+        Ok(check::same_length("values", self.n, values.len())?)
     }
 
     /// The value at each kept time: that of the last curve time at or before it,
@@ -167,6 +163,7 @@ impl CurveIndex {
 
 /// A curve read at chosen times, one entry per kept time in each vector.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CurveAt {
     /// The caller's stratum code.
     pub group: u32,
@@ -282,3 +279,6 @@ impl Survfit {
         s
     }
 }
+
+#[cfg(test)]
+mod r_tests;

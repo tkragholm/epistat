@@ -115,7 +115,7 @@ pub fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array> {
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect();
-            Error::invalid(format!(
+            Error::missing(format!(
                 "column {name} is not in the record batch; it has {}",
                 present.join(", ")
             ))
@@ -133,7 +133,7 @@ fn first_null(array: &dyn Array) -> Option<usize> {
 
 fn check_no_nulls(name: &str, array: &dyn Array) -> Result<()> {
     match first_null(array) {
-        Some(row) => Err(Error::invalid(format!(
+        Some(row) => Err(Error::value(format!(
             "column {name} has a null at row {row}; drop or resolve missing values before \
              building the data"
         ))),
@@ -142,7 +142,7 @@ fn check_no_nulls(name: &str, array: &dyn Array) -> Result<()> {
 }
 
 fn wrong_type(name: &str, array: &dyn Array, expected: &str) -> Error {
-    Error::invalid(format!(
+    Error::not_applicable(format!(
         "column {name} has type {}, expected {expected}; cast it before building the data",
         array.data_type()
     ))
@@ -178,7 +178,7 @@ fn codes<'a>(name: &str, array: &'a dyn Array) -> Result<&'a [u32]> {
                 check_no_nulls(name, array)?;
                 Ok(typed.keys().values())
             }
-            None => Err(Error::invalid(format!(
+            None => Err(Error::not_applicable(format!(
                 "column {name} is a dictionary with {} keys, expected {expected}; cast the keys \
                  before building the data",
                 dictionary.keys().data_type()

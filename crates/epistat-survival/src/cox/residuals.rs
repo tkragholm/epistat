@@ -116,6 +116,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 use epistat_stats::sum::compensated;
 
@@ -129,6 +130,7 @@ use crate::surv::SurvData;
 
 /// The kinds of residual of [`residuals`], named as in `residuals.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CoxResidualKind {
     /// `type = "martingale"`, one value per row.
     Martingale,
@@ -153,6 +155,7 @@ pub type ResidualKind = CoxResidualKind;
 
 /// The groups whose residuals are summed, as `collapse` of `residuals.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Collapse<'a> {
     /// One residual per row.
     #[default]
@@ -200,6 +203,7 @@ impl ResidualOptions<'_> {
 
 /// The residuals of a Cox fit.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CoxResiduals {
     /// The kind that was computed.
     pub kind: CoxResidualKind,
@@ -357,7 +361,7 @@ fn efron(ties: Ties) -> Result<bool> {
     } else if ties == Ties::Breslow {
         Ok(false)
     } else {
-        Err(Error::invalid(
+        Err(Error::unsupported(
             "ties: residuals are defined for Breslow and Efron ties only",
         ))
     }
@@ -382,17 +386,25 @@ pub(crate) fn prepare(
         ("coefficients", coefficients.len()),
     ])?;
     if x.ncols() == 0 {
-        return Err(Error::invalid("x has no columns"));
+        return Err(Error::missing("x has no columns"));
     }
     refuse_non_finite_matrix(x, "x")?;
-    if coefficients.iter().flatten().any(|c| !c.is_finite()) {
-        return Err(Error::invalid("coefficients: a value is not finite"));
+    if let Some(row) = coefficients
+        .iter()
+        .position(|c| c.is_some_and(|c| !c.is_finite()))
+    {
+        return Err(InputError::NotFinite {
+            what: "coefficients",
+            row,
+            column: None,
+        }
+        .into());
     }
     let keep: Vec<usize> = (0..x.ncols())
         .filter(|&j| coefficients[j].is_some())
         .collect();
     if keep.is_empty() {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the fit has no coefficient: there are no residuals of a fit without an estimate",
         ));
     }
@@ -408,7 +420,7 @@ pub(crate) fn prepare(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -568,12 +580,12 @@ pub fn residuals(
         ("fit coefficients", fit.coefficients.len()),
     ])?;
     if fit.covariance.dim() != p {
-        return Err(Error::invalid(
+        return Err(Error::mismatch(
             "fit: the covariance matrix does not have one row and column per column of x",
         ));
     }
     if fit.n_used != data.n_used() {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "fit: the number of rows used differs from the data's, so it is not a fit of these data",
         ));
     }
@@ -583,12 +595,12 @@ pub fn residuals(
         CoxResidualKind::Schoenfeld | CoxResidualKind::ScaledSchoenfeld
     );
     if schoenfeld && opts.collapse != Collapse::None {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "collapse: the Schoenfeld residuals have one row per event and cannot be collapsed",
         ));
     }
     if kind == CoxResidualKind::Deviance && opts.weighted == Some(true) {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "weighted: deviance residuals are defined for the unweighted martingale residuals",
         ));
     }
@@ -664,11 +676,11 @@ pub fn residuals(
         Collapse::None => None,
         Collapse::Cluster => Some(
             data.cluster()
-                .ok_or_else(|| Error::invalid("collapse: the data have no clusters"))?,
+                .ok_or_else(|| Error::missing("collapse: the data have no clusters"))?,
         ),
         Collapse::Id => Some(
             data.id()
-                .ok_or_else(|| Error::invalid("collapse: the data have no ids"))?,
+                .ok_or_else(|| Error::missing("collapse: the data have no ids"))?,
         ),
         Collapse::Codes(codes) => {
             check_lengths(&[("data", rows), ("collapse", codes.len())])?;
@@ -770,7 +782,7 @@ fn deviance(m: f64, status: f64) -> Result<f64> {
     } else {
         let argument = status - m;
         if argument <= 0.0 || !argument.is_finite() {
-            return Err(Error::invalid(
+            return Err(Error::undefined(
                 "the martingale residual is not below the status, so its deviance residual is not defined",
             ));
         }

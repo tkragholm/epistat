@@ -28,6 +28,7 @@
 use std::collections::BTreeSet;
 
 use super::CodeSet;
+use crate::error::CrosswalkProblem;
 use crate::{Error, normalize_diagnosis_code};
 
 /// The revision of the International Classification of Diseases a code is in.
@@ -112,6 +113,7 @@ pub enum MapKind {
 
 /// One mapping of a [`Crosswalk`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CrosswalkEntry {
     /// The ICD-8 code, normalised.
     pub from: String,
@@ -129,6 +131,7 @@ pub struct Crosswalk {
 
 /// How much of a set of ICD-8 codes a [`Crosswalk`] covers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Coverage {
     /// The number of distinct codes asked about.
     pub codes: usize,
@@ -159,20 +162,21 @@ impl Crosswalk {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for a code of the wrong revision or none, a
+    /// [`Error::Crosswalk`] for a code of the wrong revision or none, a
     /// pair given twice, or a kind that the table contradicts.
     pub fn from_pairs(pairs: &[(&str, &str, MapKind)]) -> Result<Self, Error> {
         let mut entries = Vec::with_capacity(pairs.len());
         for &(from, to, kind) in pairs {
+            let pair_error = |problem| Error::Crosswalk {
+                from: from.to_owned(),
+                to: to.to_owned(),
+                problem,
+            };
             let Some((Revision::Icd8, from_code)) = normalize_any(from) else {
-                return Err(Error::invalid(format!(
-                    "crosswalk source {from:?} is not an ICD-8 code"
-                )));
+                return Err(pair_error(CrosswalkProblem::SourceNotIcd8));
             };
             let Some((Revision::Icd10, to_code)) = normalize_any(to) else {
-                return Err(Error::invalid(format!(
-                    "crosswalk target {to:?} is not an ICD-10 code"
-                )));
+                return Err(pair_error(CrosswalkProblem::TargetNotIcd10));
             };
             entries.push(CrosswalkEntry {
                 from: from_code,
@@ -185,10 +189,11 @@ impl Crosswalk {
             .windows(2)
             .find(|w| w[0].from == w[1].from && w[0].to == w[1].to)
         {
-            return Err(Error::invalid(format!(
-                "crosswalk pair {} to {} is given twice",
-                w[0].from, w[0].to
-            )));
+            return Err(Error::Crosswalk {
+                from: w[0].from.clone(),
+                to: w[0].to.clone(),
+                problem: CrosswalkProblem::Repeated,
+            });
         }
         let targets_of = |from: &str| entries.iter().filter(|e| e.from == from).count();
         let sources_of = |to: &str| entries.iter().filter(|e| e.to == to).count();
@@ -201,10 +206,15 @@ impl Crosswalk {
                 MapKind::Approximate => true,
             };
             if !consistent {
-                return Err(Error::invalid(format!(
-                    "crosswalk pair {} to {} is declared {:?}, but its source has {t} targets and its target {s} sources",
-                    e.from, e.to, e.kind
-                )));
+                return Err(Error::Crosswalk {
+                    from: e.from.clone(),
+                    to: e.to.clone(),
+                    problem: CrosswalkProblem::Kind {
+                        declared: e.kind,
+                        targets: t,
+                        sources: s,
+                    },
+                });
             }
         }
         Ok(Self { entries })

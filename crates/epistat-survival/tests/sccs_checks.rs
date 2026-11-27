@@ -281,8 +281,8 @@ fn two_exposure_series_have_their_own_windows_and_columns() {
     assert_eq!(x.ncols(), 3);
     // Days 25 to 29 are in both: the two indicators are both 1.
     assert_eq!((x[(2, 0)], x[(2, 1)], x[(2, 2)]), (1.0, 1.0, 0.0));
-    assert_eq!(p.exposed_cases(0), 1);
-    assert_eq!(p.exposed_cases(1), 1);
+    assert_eq!(p.exposed_cases(0).unwrap(), 1);
+    assert_eq!(p.exposed_cases(1).unwrap(), 1);
     let summary = p.window_summary();
     assert_eq!(summary.len(), 3);
     assert_eq!(

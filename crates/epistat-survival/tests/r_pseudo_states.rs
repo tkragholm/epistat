@@ -189,6 +189,7 @@ fn multistate_pseudo_agrees_with_r() {
                 StateTarget::Occupation => 1.0,
                 StateTarget::TimeInState => (t - case.origin).max(1.0),
                 StateTarget::CumulativeHazard => value.max(1.0),
+                _ => unreachable!("a kind this test does not cover"),
             };
             for c in 0..n {
                 let subject = case.subject[first + c];

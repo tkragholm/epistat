@@ -633,7 +633,7 @@ fn flexible_excess_model_matches_stpm2() {
                 (f.beta[j].unwrap() - bj).abs() / sj,
                 1e-5,
             );
-            let k = f.beta_index(j).unwrap();
+            let k = f.beta_index(j).unwrap().unwrap();
             worst.rel(
                 &format!("{label} beta se"),
                 cov.get(k, k).unwrap().sqrt(),

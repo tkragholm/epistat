@@ -1,6 +1,6 @@
 //! The cumulative hazards of a covariate profile, `mstate::msfit`.
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, InputError};
 use rayon::prelude::*;
 
 use super::MsModel;
@@ -47,6 +47,7 @@ impl Default for MsFitOptions {
 
 /// The form of the variance of the cumulative hazards of [`MsModel::msfit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum MsVarType {
     /// The variance of the Cox baseline hazard and the coefficients, the
     /// delta method of the module documentation. `vartype = "aalen"` of
@@ -66,6 +67,7 @@ pub enum MsVarType {
 
 /// The covariate values of a prediction.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum MsProfile<'a> {
     /// One value for each covariate column, the same for every transition.
     Same(&'a [f64]),
@@ -78,6 +80,7 @@ pub enum MsProfile<'a> {
 /// The cumulative hazards of every transition for one covariate profile, at
 /// the event times of the model.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CumulativeHazards {
     /// The transitions, from state and to state, in the order of the model.
     pub transitions: Vec<(u32, u32)>,
@@ -145,7 +148,7 @@ fn covariance_matrix(fit: &CoxModelFit, variance: CoxVariance) -> Result<Vec<f64
     let matrix = match variance {
         CoxVariance::Model => &fit.covariance,
         CoxVariance::Robust => fit.robust_covariance.as_ref().ok_or_else(|| {
-            Error::invalid("variance: the robust covariance needs `robust` in the fit")
+            Error::fit("variance: the robust covariance needs `robust` in the fit")
         })?,
         CoxVariance::Auto => fit.robust_covariance.as_ref().unwrap_or(&fit.covariance),
     };
@@ -229,7 +232,7 @@ impl MsModel {
             MsProfile::Same(values) => vec![values],
             MsProfile::ByTransition(rows) => {
                 if rows.len() != self.transitions.len() {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::mismatch(format!(
                         "profile: {} vectors for {} transitions",
                         rows.len(),
                         self.transitions.len()
@@ -240,29 +243,34 @@ impl MsModel {
         };
         for values in rows {
             if values.len() != self.n_covariates {
-                return Err(Error::invalid(format!(
+                return Err(Error::mismatch(format!(
                     "profile: {} values for {} covariate columns",
                     values.len(),
                     self.n_covariates
                 )));
             }
             if values.iter().any(|v| !v.is_finite()) {
-                return Err(Error::invalid("profile: a value is not finite"));
+                return Err(Error::value("profile: a value is not finite"));
             }
         }
         if !opts.offset.is_finite() {
-            return Err(Error::invalid("profile: a value is not finite"));
+            return Err(Error::from(InputError::Domain {
+                what: "offset",
+                value: opts.offset,
+                domain: "(-inf, inf)",
+                row: None,
+            }));
         }
         if opts.se && opts.vartype == MsVarType::Greenwood {
             if !self.terms.is_empty() {
-                return Err(Error::invalid(
+                return Err(Error::options(
                     "vartype: the Greenwood variance is for a model without coefficients",
                 ));
             }
             let mut groups: Vec<usize> = self.transitions.iter().map(|t| t.baseline).collect();
             groups.sort_unstable();
             if groups.windows(2).any(|w| w[0] == w[1]) {
-                return Err(Error::invalid(
+                return Err(Error::options(
                     "vartype: the Greenwood variance needs a baseline hazard of its own for \
                      each transition",
                 ));
@@ -320,7 +328,7 @@ impl MsModel {
         let mut z: Vec<Vec<f64>> = Vec::with_capacity(k_n);
         for (k, transition) in self.transitions.iter().enumerate() {
             let code = u32::try_from(transition.baseline)
-                .map_err(|_| Error::invalid("more baselines than a u32 counts"))?;
+                .map_err(|_| Error::out_of_range("more baselines than a u32 counts"))?;
             strata.push(baseline.strata.iter().find(|s| s.code == Some(code)));
             let values = match profile {
                 MsProfile::Same(values) => values,

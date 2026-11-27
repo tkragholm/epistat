@@ -56,14 +56,14 @@
 //!
 //! # Paths
 //!
-//! Thirty names are reachable at the root and in the module that defines
+//! Thirty-three names are reachable at the root and in the module that defines
 //! them. The module path is the canonical one, the path the documentation of
 //! the item and the other modules use. The root path is a shorthand for the
 //! names most callers need and is kept.
 //!
 //! | at the root | canonical path |
 //! |---|---|
-//! | [`Error`], [`RegisterError`] | `error` (private module, named at the root only) |
+//! | [`Error`], [`RegisterError`], [`CodeItemProblem`], [`CrosswalkProblem`], [`PedigreeProblem`] | `error` (private module, named at the root only) |
 //! | [`CpiTable`], `DENMARK_ANNUAL_CPI` | [`cpi`] |
 //! | [`AgeRule`], [`LeapBirthday`], [`age_in_years`], [`birthday_on_age`] | [`age`] |
 //! | [`Icd10Chapter`], [`NormalizedDiagnosis`], [`UnknownChapter`], [`icd10_chapter_label`], [`normalize_diagnosis_code`] | [`icd10`] |
@@ -97,7 +97,7 @@ pub use age::{AgeRule, LeapBirthday, age_in_years, birthday_on_age};
 pub use cpi::CpiTable;
 #[cfg(feature = "denmark")]
 pub use cpi::DENMARK_ANNUAL_CPI;
-pub use error::Error;
+pub use error::{CodeItemProblem, CrosswalkProblem, Error, PedigreeProblem};
 
 /// The name of the error before it was shared with the other crates' naming.
 #[deprecated(since = "0.2.0", note = "use `epistat_register::Error`")]

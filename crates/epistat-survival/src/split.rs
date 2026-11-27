@@ -61,6 +61,9 @@
 //! Model. Springer, 2000, section 6.2 on time-dependent covariates by
 //! splitting follow-up. The `survSplit` help page of the `survival` package.
 
+use epistat_core::InputError;
+
+use crate::check::refuse_non_finite;
 use crate::error::{Error, Result};
 use crate::surv::{Surv, SurvData};
 use crate::timefix::{TimeFix, fix_times};
@@ -87,6 +90,7 @@ impl Default for SplitOptions {
 
 /// The pieces of a split, as columns of equal length.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Split {
     /// The start of each piece.
     pub start: Vec<f64>,
@@ -155,13 +159,9 @@ impl Split {
 /// data has no start column and a stop is not above `zero`.
 pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Result<Split> {
     let data = data.followup()?;
-    if let Some(bad) = cuts.iter().find(|c| !c.is_finite()) {
-        return Err(Error::invalid(format!(
-            "cut points must be finite, found {bad}"
-        )));
-    }
+    refuse_non_finite(cuts, "cuts")?;
     if !options.zero.is_finite() {
-        return Err(Error::invalid("zero must be finite"));
+        return Err(Error::options("zero must be finite"));
     }
     let n = data.len();
     let mut cut = cuts.to_vec();
@@ -183,7 +183,7 @@ pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Resul
     }
     if data.start().is_none() {
         if let Some(i) = stop.iter().position(|&s| s <= options.zero) {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "zero must be less than every stop, but row {i} stops at {}",
                 stop[i]
             )));
@@ -216,7 +216,7 @@ pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Resul
     for i in 0..n {
         let lo = before(start[i], false);
         let hi = before(stop[i], true);
-        let row = u32::try_from(i).map_err(|_| Error::invalid("more rows than u32::MAX"))?;
+        let row = u32::try_from(i).map_err(|_| too_large("rows", n))?;
         for p in lo..=hi {
             let last = p == hi;
             out.start.push(if p == lo { start[i] } else { cut[p - 1] });
@@ -224,16 +224,24 @@ pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Resul
             out.status.push(if last { status[i] } else { 0 });
             out.row.push(row);
             // `p` cuts are at or before the start of this piece.
-            out.episode.push(
-                u32::try_from(p + 1)
-                    .map_err(|_| Error::invalid("more cut points than u32::MAX"))?,
-            );
+            out.episode
+                .push(u32::try_from(p + 1).map_err(|_| too_large("cuts", cut.len()))?);
             out.ends_at_cut.push(!last);
         }
     }
     debug_assert_eq!(out.stop.len(), total);
     out.cuts = cut;
     Ok(out)
+}
+
+/// The refusal of `found` entries of `what`, more than a `u32` numbers.
+fn too_large(what: &'static str, found: usize) -> Error {
+    InputError::TooLarge {
+        what,
+        limit: u64::from(u32::MAX),
+        found: found as u64,
+    }
+    .into()
 }
 
 type Fixed = (Vec<f64>, Vec<f64>, Vec<f64>);

@@ -10,15 +10,25 @@ use crate::error::Result;
 ///
 /// `columns` pairs each column's name with its length. The first is the
 /// reference, and the error names the first column that differs from it.
+/// Columns that are all empty agree; an empty column among columns with rows
+/// is refused as empty rather than as one of the wrong length.
 ///
 /// # Errors
 ///
-/// [`InputError::Length`] when any length differs from the first.
+/// [`InputError::Empty`] when the first column that differs from the
+/// reference, or the reference itself, has no rows, and
+/// [`InputError::Length`] when it has rows.
 pub(crate) fn check_lengths(columns: &[(&'static str, usize)]) -> Result<()> {
-    let Some(&(_, expected)) = columns.first() else {
+    let Some(&(first, expected)) = columns.first() else {
         return Ok(());
     };
     for &(name, len) in columns {
+        if len != expected {
+            if expected == 0 {
+                return Err(InputError::Empty { what: first }.into());
+            }
+            check::non_empty(name, len)?;
+        }
         check::same_length(name, expected, len)?;
     }
     Ok(())
