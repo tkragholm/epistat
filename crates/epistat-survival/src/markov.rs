@@ -125,6 +125,7 @@ use epistat_rng::{Stream, replicate_seed};
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
+use crate::check::refuse_non_finite;
 use crate::error::{Error, Result};
 use crate::step::Steps;
 use crate::surv::SurvData;
@@ -545,7 +546,7 @@ pub type Test = MarkovTest;
 /// between states, when the tie rule fails, when a weight is neither 0 nor 1,
 /// when no row has weight 1, when `qualifying` is empty, has a repeat or a code
 /// outside `1..=n_codes`, when `target` is outside `1..=n_codes`, or when the
-/// grid is empty.
+/// grid is empty or has a value that is not finite.
 #[expect(clippy::float_cmp, reason = "a weight of 0 or 1 is exact")]
 pub fn test(
     data: &SurvData<'_>,
@@ -565,6 +566,7 @@ pub fn test(
             "the test needs at least one qualifying state and one landmark",
         ));
     }
+    refuse_non_finite(grid, "grid")?;
     if let Some(&code) = qualifying.iter().find(|&&code| code == 0 || code > n_codes) {
         return Err(Error::invalid(format!(
             "qualifying state {code} is outside 1..={n_codes}"
