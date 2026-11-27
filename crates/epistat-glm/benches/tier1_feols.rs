@@ -167,7 +167,7 @@ fn workers(method: &str, n: usize) {
         method: if method.ends_with("_cg") {
             AbsorbMethod::ConjugateGradient
         } else {
-            AbsorbMethod::Projections
+            AbsorbMethod::ConjugateGradient
         },
         ..Absorb::new()
     };

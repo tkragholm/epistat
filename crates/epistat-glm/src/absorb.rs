@@ -194,7 +194,6 @@
 //!    singular systems. J Comput Appl Math. 1988;24(1-2):265-75.
 //!    doi:10.1016/0377-0427(88)90358-5
 
-use std::collections::VecDeque;
 
 use epistat_core::InputError;
 use epistat_linalg::ROW_BLOCK;
@@ -213,18 +212,6 @@ pub(crate) const DENSE_LEVELS: usize = DENSE_BLOCK / 4;
 /// The levels handled by one task when a factor is summed level by level.
 const LEVELS_PER_TASK: usize = 4096;
 
-/// The iteration from which a plain sweep follows each extrapolation, as in
-/// `fixest`.
-const PROJECT_AFTER_ACCELERATION: usize = 40;
-
-/// Every this many iterations, an extrapolation over three iterates, as in
-/// `fixest`.
-const GRAND_ACCELERATION: usize = 4;
-
-/// With three or more factors, the iterations on every factor before the
-/// two largest are solved alone, as in `fixest` (`iter_warmup`).
-const WARMUP: usize = 15;
-
 /// What to do with levels that have one row.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,9 +227,6 @@ pub enum Singletons {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AbsorbMethod {
-    /// Alternating projections with the accelerations and the restart of
-    /// `fixest`, for results that follow `fixest`'s path.
-    Projections,
     /// Preconditioned conjugate gradients on the equations of the factors
     /// other than the largest, which is eliminated exactly. Much faster on
     /// poorly connected designs, such as workers who rarely move between
@@ -1138,216 +1122,26 @@ impl FixedEffects {
         }
     }
 
-    /// The fixed effects of the coefficients `alpha` (factor by factor, level
-    /// by level), normalised as `fixest::fixef` does.
-    pub(crate) fn normalise(&self, mut alpha: Vec<Vec<f64>>) -> FixedEffectValues {
-        let q_count = self.factors.len();
-        let n = self.kept.len();
-        let mut references = vec![0usize; q_count];
-        let mut normalised = true;
-        let mut component = None;
-        if q_count == 2 {
-            let (g0, g1) = (self.factors[0].levels(), self.factors[1].levels());
-            let mut parent: Vec<u32> = (0..u32::try_from(g0 + g1).unwrap_or(u32::MAX)).collect();
-            let (c0, c1) = (&self.factors[0].codes, &self.factors[1].codes);
-            let offset = u32::try_from(g0).unwrap_or(u32::MAX);
-            for k in 0..n {
-                let a = find_root(&mut parent, c0[k]);
-                let b = find_root(&mut parent, c1[k] + offset);
-                if a != b {
-                    parent[a.max(b) as usize] = a.min(b);
+    /// The solver's coefficients of `alpha`, not normalised.
+    pub(crate) fn normalise(&self, alpha: Vec<Vec<f64>>) -> FixedEffectValues {
+        let values = alpha
+            .iter()
+            .zip(&self.factors)
+            .map(|(a, level)| {
+                let mut out = vec![None; level.input_levels];
+                for (&label, &v) in level.labels.iter().zip(a) {
+                    out[label as usize] = Some(v);
                 }
-            }
-            // Components numbered by their first row; the reference is that
-            // row's level of the second factor.
-            let mut number = vec![u32::MAX; g0 + g1];
-            let mut shift = Vec::new();
-            for k in 0..n {
-                let root = find_root(&mut parent, c0[k]) as usize;
-                if number[root] == u32::MAX {
-                    number[root] = u32::try_from(shift.len()).unwrap_or(u32::MAX);
-                    shift.push(alpha[1][c1[k] as usize]);
-                }
-            }
-            references[1] = shift.len();
-            let mut comp0 = vec![0u32; g0];
-            let mut comp1 = vec![0u32; g1];
-            for (g, slot) in comp0.iter_mut().enumerate() {
-                *slot = number[find_root(&mut parent, u32::try_from(g).unwrap_or(0)) as usize];
-            }
-            for (g, slot) in comp1.iter_mut().enumerate() {
-                *slot = number[find_root(&mut parent, u32::try_from(g + g0).unwrap_or(0)) as usize];
-            }
-            for (a, &c) in alpha[0].iter_mut().zip(&comp0) {
-                *a += shift[c as usize];
-            }
-            for (a, &c) in alpha[1].iter_mut().zip(&comp1) {
-                *a -= shift[c as usize];
-            }
-            component = Some(vec![
-                self.expand(0, comp0.iter().map(|&c| Some(c))),
-                self.expand(1, comp1.iter().map(|&c| Some(c))),
-            ]);
-        } else if q_count >= 3 {
-            match self.propagate(&alpha) {
-                Some((values, refs)) => {
-                    alpha = values;
-                    references = refs;
-                }
-                None => normalised = false,
-            }
-        }
-        FixedEffectValues {
-            values: (0..q_count)
-                .map(|q| self.expand(q, alpha[q].iter().map(|&a| Some(a))))
-                .collect(),
-            references,
-            normalised,
-            component,
-        }
-    }
-
-    /// Values by level of factor `q` placed at the caller's codes.
-    fn expand<T: Copy>(&self, q: usize, values: impl Iterator<Item = Option<T>>) -> Vec<Option<T>> {
-        let f = &self.factors[q];
-        let mut out = vec![None; f.input_levels];
-        for (label, value) in f.labels.iter().zip(values) {
-            out[*label as usize] = value;
-        }
-        out
-    }
-
-    /// The references and values of `cpp_get_fe_gnl` of `fixest` for three or
-    /// more factors, from the fitted sums of `alpha`; `None` when the values
-    /// do not reproduce the sums.
-    fn propagate(&self, alpha: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<usize>)> {
-        let q_count = self.factors.len();
-        let n = self.kept.len();
-        let codes: Vec<&[u32]> = self.factors.iter().map(|f| f.codes.as_slice()).collect();
-        let fitted: Vec<f64> = (0..n)
-            .into_par_iter()
-            .map(|k| (0..q_count).map(|q| alpha[q][codes[q][k] as usize]).sum())
+                out
+            })
             .collect();
-        let mut state = Propagation {
-            groups: self
-                .factors
-                .iter()
-                .map(|f| {
-                    let (bounds, order) = grouping(&f.codes, f.levels());
-                    let order = order
-                        .unwrap_or_else(|| (0..u32::try_from(n).unwrap_or(u32::MAX)).collect());
-                    (bounds, order)
-                })
-                .collect(),
-            known: self
-                .factors
-                .iter()
-                .map(|f| vec![false; f.levels()])
-                .collect(),
-            value: self.factors.iter().map(|f| vec![0.0; f.levels()]).collect(),
-            done: vec![0usize; n],
-            queue: VecDeque::new(),
-            complete: 0,
-            q_count,
-        };
-        let mut references = vec![0usize; q_count];
-        let mut cursor = 0usize;
-        while state.complete < n {
-            while cursor < n && state.done[cursor] == q_count {
-                cursor += 1;
-            }
-            // The first row with the most coefficients known. After the
-            // propagation no row lacks only one, so `q_count - 2` is the most.
-            let mut pick = cursor;
-            if state.done[pick] + 2 < q_count {
-                for k in cursor..n {
-                    if state.done[k] < q_count && state.done[k] > state.done[pick] {
-                        pick = k;
-                        if state.done[k] + 2 == q_count {
-                            break;
-                        }
-                    }
-                }
-            }
-            let mut spared = false;
-            for q in 0..q_count {
-                let g = codes[q][pick] as usize;
-                if !state.known[q][g] {
-                    if spared {
-                        references[q] += 1;
-                        state.set(q, g, 0.0);
-                    } else {
-                        spared = true;
-                    }
-                }
-            }
-            while let Some(i) = state.queue.pop_front() {
-                if state.done[i] + 1 != q_count {
-                    continue;
-                }
-                let mut unknown = 0;
-                let mut other = 0.0;
-                for q in 0..q_count {
-                    let g = codes[q][i] as usize;
-                    if state.known[q][g] {
-                        other += state.value[q][g];
-                    } else {
-                        unknown = q;
-                    }
-                }
-                state.set(unknown, codes[unknown][i] as usize, fitted[i] - other);
-            }
-        }
-        let largest = fitted.iter().fold(0.0_f64, |m, &v| m.max(v.abs()));
-        let value = state.value;
-        let reproduced = (0..n).into_par_iter().all(|k| {
-            let s: f64 = (0..q_count).map(|q| value[q][codes[q][k] as usize]).sum();
-            (s - fitted[k]).abs() <= 1e-8 * largest.max(f64::MIN_POSITIVE)
-        });
-        reproduced.then_some((value, references))
-    }
-}
-
-/// The bookkeeping of [`FixedEffects::propagate`].
-struct Propagation {
-    /// The rows of each level of each factor: bounds and rows.
-    groups: Vec<(Vec<usize>, Vec<u32>)>,
-    known: Vec<Vec<bool>>,
-    value: Vec<Vec<f64>>,
-    /// The number of known coefficients of each row.
-    done: Vec<usize>,
-    /// Rows with one unknown coefficient.
-    queue: VecDeque<usize>,
-    /// Rows with every coefficient known.
-    complete: usize,
-    q_count: usize,
-}
-
-impl Propagation {
-    fn set(&mut self, q: usize, g: usize, v: f64) {
-        self.known[q][g] = true;
-        self.value[q][g] = v;
-        let (bounds, order) = &self.groups[q];
-        for &i in &order[bounds[g]..bounds[g + 1]] {
-            let i = i as usize;
-            self.done[i] += 1;
-            if self.done[i] + 1 == self.q_count {
-                self.queue.push_back(i);
-            } else if self.done[i] == self.q_count {
-                self.complete += 1;
-            }
+        FixedEffectValues {
+            values,
+            references: vec![0; self.factors.len()],
+            normalised: false,
+            component: None,
         }
     }
-}
-
-/// The root of `x` in the union-find forest `parent`, halving the path.
-fn find_root(parent: &mut [u32], mut x: u32) -> u32 {
-    while parent[x as usize] != x {
-        let up = parent[parent[x as usize] as usize];
-        parent[x as usize] = up;
-        x = up;
-    }
-    x
 }
 
 /// The result of one column.
@@ -1378,22 +1172,6 @@ struct Iteration<'a> {
     state: Vec<usize>,
     offsets: Vec<usize>,
     scratch: Vec<f64>,
-}
-
-/// The result of one sweep: the new state, the coefficients of the first
-/// factor at the start state, and the largest step of the other factors.
-struct Sweep {
-    next: Vec<f64>,
-    first: Vec<f64>,
-    step: f64,
-}
-
-/// How a run of accelerated sweeps ended.
-enum Outcome {
-    /// The point that meets the criterion and the iterations taken.
-    Converged(Vec<Vec<f64>>, usize),
-    /// The iterations ran out; the last state.
-    Exhausted(Vec<f64>),
 }
 
 /// The largest absolute value of `v`.
@@ -1441,6 +1219,14 @@ impl<'a> Iteration<'a> {
         }
     }
 
+    /// Runs the solver of `control` to convergence; the point and the
+    /// iterations, `None` when the iterations run out.
+    fn solve(&mut self, control: &Absorb) -> Option<(Vec<Vec<f64>>, usize)> {
+        match control.method {
+            AbsorbMethod::ConjugateGradient => self.conjugate_gradient(control.max_iterations),
+        }
+    }
+
     fn dimension(&self) -> usize {
         self.offsets.last().copied().unwrap_or(0)
     }
@@ -1463,36 +1249,6 @@ impl<'a> Iteration<'a> {
         }
     }
 
-    fn project(&mut self, q: usize, current: &[&[f64]], out: &mut [f64]) {
-        self.project_with(q, current, out, false);
-    }
-
-    /// One sweep from the state `x`.
-    fn sweep(&mut self, x: &[f64]) -> Sweep {
-        let levels = self.fe.levels();
-        let mut first = vec![0.0; levels[self.first]];
-        let mut next = x.to_vec();
-        {
-            let current = self.view(&first, x);
-            let mut out = vec![0.0; levels[self.first]];
-            self.project(self.first, &current, &mut out);
-            first = out;
-        }
-        let mut step = 0.0_f64;
-        for s in 0..self.state.len() {
-            let q = self.state[s];
-            let mut out = vec![0.0; levels[q]];
-            let current = self.view(&first, &next);
-            self.project(q, &current, &mut out);
-            let range = self.offsets[s]..self.offsets[s + 1];
-            for (o, old) in out.iter().zip(&next[range.clone()]) {
-                step = step.max((o - old).abs());
-            }
-            next[range].copy_from_slice(&out);
-        }
-        Sweep { next, first, step }
-    }
-
     /// The coefficients of every factor as slices, from the first factor's
     /// and the state; empty for the factors that are not active.
     fn view<'b>(&self, first: &'b [f64], x: &'b [f64]) -> Vec<&'b [f64]> {
@@ -1504,33 +1260,6 @@ impl<'a> Iteration<'a> {
         out
     }
 
-    /// Whether the level means of the residual at the point `(first, x)` are
-    /// all within the bound, given the largest step of the sweep from `x`.
-    fn converged(&mut self, first: &[f64], x: &[f64], step: f64) -> bool {
-        if step > self.bound {
-            return false;
-        }
-        if self.state.len() == 1 {
-            // The sweep's step is the level mean of the residual at the
-            // point, and the first factor's means are zero there.
-            return true;
-        }
-        let levels = self.fe.levels();
-        for s in 0..self.state.len() {
-            let q = self.state[s];
-            let mut out = vec![0.0; levels[q]];
-            let current = self.view(first, x);
-            self.project(q, &current, &mut out);
-            let range = self.offsets[s]..self.offsets[s + 1];
-            for (o, old) in out.iter().zip(&x[range]) {
-                if (o - old).abs() > self.bound {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
     /// The point `(first, x)` as coefficients of every factor; empty for the
     /// factors that are not active.
     fn point(&self, first: Vec<f64>, x: &[f64]) -> Vec<Vec<f64>> {
@@ -1540,148 +1269,6 @@ impl<'a> Iteration<'a> {
             out[q] = x[self.offsets[s]..self.offsets[s + 1]].to_vec();
         }
         out
-    }
-
-    /// Runs the solver of `control` to convergence; the point and the
-    /// iterations, `None` when the iterations run out.
-    fn solve(&mut self, control: &Absorb) -> Option<(Vec<Vec<f64>>, usize)> {
-        match control.method {
-            AbsorbMethod::Projections => self.projections(control.max_iterations),
-            AbsorbMethod::ConjugateGradient => self.conjugate_gradient(control.max_iterations),
-        }
-    }
-
-    /// The accelerated projections, with the restart of `fixest` for three
-    /// or more factors: [`WARMUP`] iterations on every factor, then the two
-    /// largest factors alone with the others held fixed, for up to half of
-    /// the iterations, then every factor again.
-    fn projections(&mut self, max_iterations: usize) -> Option<(Vec<Vec<f64>>, usize)> {
-        let start = vec![0.0; self.dimension()];
-        let plain_after = max_iterations.div_ceil(2);
-        let warmup = if self.state.len() == 1 {
-            max_iterations
-        } else {
-            WARMUP.min(max_iterations)
-        };
-        let x = match self.accelerate(start, warmup, plain_after) {
-            Outcome::Converged(point, iterations) => return Some((point, iterations)),
-            Outcome::Exhausted(x) => x,
-        };
-        if warmup == max_iterations {
-            return None;
-        }
-        let mut used = warmup;
-        let restart = (max_iterations / 2).saturating_sub(warmup);
-        let mut x = x;
-        if restart > 0 {
-            let (next, iterations) = self.solve_two_largest(&x, restart);
-            used += iterations;
-            if next.iter().all(|v| v.is_finite()) {
-                x = next;
-            }
-        }
-        let rest = max_iterations - used;
-        match self.accelerate(x, rest, rest.div_ceil(2)) {
-            Outcome::Converged(point, iterations) => Some((point, used + iterations)),
-            Outcome::Exhausted(_) => None,
-        }
-    }
-
-    /// The state `x` with the second largest active factor replaced by the
-    /// solution of the two largest with the others held at `x`, and the
-    /// iterations that took, at most `budget`.
-    fn solve_two_largest(&mut self, x: &[f64], budget: usize) -> (Vec<f64>, usize) {
-        let levels = self.fe.levels();
-        let mut slot = 0;
-        for (s, &q) in self.state.iter().enumerate() {
-            if levels[q] > levels[self.state[slot]] {
-                slot = s;
-            }
-        }
-        let second = self.state[slot];
-        let pair: Vec<usize> = self
-            .active
-            .iter()
-            .copied()
-            .filter(|&q| q == self.first || q == second)
-            .collect();
-        let held: Vec<usize> = self
-            .active
-            .iter()
-            .copied()
-            .filter(|&q| !pair.contains(&q))
-            .collect();
-        let fe = self.fe;
-        let mut sums: Vec<Vec<f64>> = vec![Vec::new(); fe.factors.len()];
-        {
-            let current = self.view(&[], x);
-            for &q in &pair {
-                let mut out = vec![0.0; levels[q]];
-                fe.other_sums(q, &held, &current, &mut self.scratch, &mut out);
-                sums[q] = self.sums[q].iter().zip(&out).map(|(s, o)| s - o).collect();
-            }
-        }
-        let range = self.offsets[slot]..self.offsets[slot + 1];
-        let mut sub = Iteration::with_active(fe, &sums, self.bound, pair);
-        let (values, iterations) =
-            match sub.accelerate(x[range.clone()].to_vec(), budget, budget.div_ceil(2)) {
-                Outcome::Converged(mut point, iterations) => {
-                    (std::mem::take(&mut point[second]), iterations)
-                }
-                Outcome::Exhausted(state) => (state, budget),
-            };
-        let mut next = x.to_vec();
-        next[range].copy_from_slice(&values);
-        (next, iterations)
-    }
-
-    /// At most `budget` iterations of the accelerated sweeps from the state
-    /// `start`, with plain sweeps after `plain_after` of them.
-    fn accelerate(&mut self, start: Vec<f64>, budget: usize, plain_after: usize) -> Outcome {
-        let mut x = start;
-        let sweep = self.sweep(&x);
-        if self.converged(&sweep.first, &x, sweep.step) {
-            return Outcome::Converged(self.point(sweep.first, &x), 0);
-        }
-        let mut gx = sweep.next;
-        let mut grand: Vec<Vec<f64>> = Vec::new();
-        for iteration in 1..=budget {
-            if iteration > plain_after {
-                let sweep = self.sweep(&gx);
-                if self.converged(&sweep.first, &gx, sweep.step) {
-                    return Outcome::Converged(self.point(sweep.first, &gx), iteration);
-                }
-                gx = sweep.next;
-                continue;
-            }
-            let sweep = self.sweep(&gx);
-            if self.converged(&sweep.first, &gx, sweep.step) {
-                return Outcome::Converged(self.point(sweep.first, &gx), iteration);
-            }
-            let ggx = sweep.next;
-            x = irons_tuck(&x, &gx, &ggx);
-            if iteration >= PROJECT_AFTER_ACCELERATION {
-                x = self.sweep(&x).next;
-            }
-            let sweep = self.sweep(&x);
-            if self.converged(&sweep.first, &x, sweep.step) {
-                return Outcome::Converged(self.point(sweep.first, &x), iteration);
-            }
-            gx = sweep.next;
-            if iteration % GRAND_ACCELERATION == 0 {
-                grand.push(gx.clone());
-                if grand.len() == 3 {
-                    let y = irons_tuck(&grand[0], &grand[1], &grand[2]);
-                    grand.clear();
-                    let sweep = self.sweep(&y);
-                    if self.converged(&sweep.first, &y, sweep.step) {
-                        return Outcome::Converged(self.point(sweep.first, &y), iteration);
-                    }
-                    gx = sweep.next;
-                }
-            }
-        }
-        Outcome::Exhausted(gx)
     }
 
     /// The coefficients of the first factor from the state `x`, and the
@@ -1771,28 +1358,6 @@ impl<'a> Iteration<'a> {
         }
         None
     }
-}
-
-/// The extrapolation of Irons and Tuck from `x`, `F(x)` and `F(F(x))`;
-/// `F(F(x))` itself when the second difference is zero or the step is not
-/// finite.
-fn irons_tuck(x: &[f64], gx: &[f64], ggx: &[f64]) -> Vec<f64> {
-    let d: Vec<f64> = ggx.iter().zip(gx).map(|(a, b)| a - b).collect();
-    let d2: Vec<f64> = d
-        .iter()
-        .zip(gx.iter().zip(x))
-        .map(|(d, (g, x))| d - g + x)
-        .collect();
-    let product = blocked_total(d.len(), |k| d[k] * d2[k]);
-    let square = blocked_total(d.len(), |k| d2[k] * d2[k]);
-    let coefficient = product / square;
-    if square == 0.0 || !coefficient.is_finite() {
-        return ggx.to_vec();
-    }
-    ggx.iter()
-        .zip(&d)
-        .map(|(g, d)| g - coefficient * d)
-        .collect()
 }
 
 /// The error of a value of `found` entries where `expected` were needed.
@@ -1972,7 +1537,7 @@ mod tests {
         // runs.
         let (worker, firm, year, v) = chain(20_000, 30);
         let w: Vec<f64> = (0..v.len()).map(|i| 0.5 + (i % 5) as f64 / 4.0).collect();
-        for method in [AbsorbMethod::Projections, AbsorbMethod::ConjugateGradient] {
+        for method in [AbsorbMethod::ConjugateGradient] {
             let control = Absorb {
                 method,
                 ..Absorb::new()
@@ -1985,9 +1550,6 @@ mod tests {
                 bits.push(out.iterations[0] as f64);
                 bits
             };
-            if method == AbsorbMethod::Projections {
-                assert!(run().last().copied().unwrap() > WARMUP as f64);
-            }
             epistat_testkit::assert_same_on_threads(run);
         }
     }

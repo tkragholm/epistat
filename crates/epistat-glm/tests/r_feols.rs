@@ -67,7 +67,7 @@ fn reference() -> Reference {
 
 const EPS: f64 = f64::EPSILON;
 
-const METHODS: [AbsorbMethod; 2] = [AbsorbMethod::Projections, AbsorbMethod::ConjugateGradient];
+const METHODS: [AbsorbMethod; 1] = [AbsorbMethod::ConjugateGradient];
 
 fn design(case: &Case) -> Mat<f64> {
     Mat::from_fn(case.x.len(), case.x[0].len(), |i, j| case.x[i][j])
