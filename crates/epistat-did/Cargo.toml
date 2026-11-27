@@ -162,6 +162,10 @@ name = "parity_etwfe_glm"
 path = "tests/parity_etwfe_glm.rs"
 
 [[test]]
+name = "parity_fe_intervals"
+path = "tests/parity_fe_intervals.rs"
+
+[[test]]
 name = "imputation_properties"
 path = "tests/imputation_properties.rs"
 
