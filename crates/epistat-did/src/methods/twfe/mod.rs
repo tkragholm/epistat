@@ -29,10 +29,11 @@
 //!
 //! The unit and period effects are absorbed by [`epistat_glm::absorb`] and the
 //! regression is fitted by [`epistat_glm::feols`], so the cost is linear in the
-//! rows and no unit dummies are formed. The covariance is clustered by unit,
-//! or by the caller's clusters, with the small-sample correction of `fixest`
-//! (`G/(G - 1) (n - 1)/(n - K)`, with the unit effects nested in unit
-//! clusters not counted in `K`).
+//! rows and no unit dummies are formed. The covariance is clustered by the
+//! panel's clusters, or by unit when it has none, with the small-sample
+//! correction of `fixest` (`G/(G - 1) (n - 1)/(n - K)`, with the unit effects
+//! nested in unit clusters not counted in `K`). The intervals and p-values use
+//! the t distribution with `G - 1` degrees of freedom, as `fixest` does.
 //!
 //! # Influence
 //!
@@ -43,11 +44,11 @@
 //! ```
 //!
 //! with `N_u` the number of units in the fit and `x~` the demeaned
-//! regressors. The `psi_u` sum to zero, and
-//! [`did_cluster_sums`](crate::did_cluster_sums) and
-//! [`did_covariance`](crate::did_covariance) over unit clusters give
-//! `B (sum_u s_u s_u') B`, the clustered covariance without the small-sample
-//! factors, as for the other estimators of the crate.
+//! regressors. The `psi_u` sum to zero. [`Influence::variance`] over the
+//! panel's clusters gives `G/(G - 1) B (sum_g s_g s_g') B`, the reported
+//! covariance without its factor `(n - 1)/(n - K)`, under the
+//! [`ClusterRule`](epistat_inference::ClusterRule) of the factor `G/(G - 1)`
+//! of [`TwfeOptions::ssc`].
 //!
 //! # Interpretation
 //!
@@ -72,17 +73,23 @@
 
 use std::collections::BTreeSet;
 
-use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_core::{Covariance, Estimate, Level};
+use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_inference::Influence;
 use epistat_linalg::Mat;
 
+use crate::error::Error;
+use crate::methods::fe_output::{self, Reference};
 use crate::methods::staggered::StaggeredPanel;
 
 /// The treatment terms.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TwfeSpec {
-    /// One indicator of being treated.
+    /// One indicator of being treated, `feols(y ~ treat | id + t)`.
     Static,
-    /// One indicator per relative period.
+    /// One indicator per relative period, `feols(y ~ i(rel, ref = reference) |
+    /// id + t)`.
     EventStudy {
         /// The relative period left out.
         reference: i64,
@@ -92,117 +99,105 @@ pub enum TwfeSpec {
     },
 }
 
-/// The controls of a two-way fixed-effects fit.
-#[derive(Clone, Copy, Debug)]
-pub struct TwfeConfig {
-    /// The treatment terms.
+impl Default for TwfeSpec {
+    /// The event study with reference period -1 and no bins.
+    fn default() -> Self {
+        Self::EventStudy {
+            reference: -1,
+            bins: None,
+        }
+    }
+}
+
+/// The options of [`fit`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TwfeOptions {
+    /// The treatment terms; by default the event study with reference period
+    /// -1 and no bins.
     pub spec: TwfeSpec,
-    /// The demeaning.
+    /// The demeaning, `fixef.tol` and `fixef.iter` of `feols`.
     pub absorb: Absorb,
-    /// The small-sample correction of the covariance.
+    /// The small-sample correction of the covariance, `ssc` of `feols`.
     pub ssc: Ssc,
-}
-
-impl TwfeConfig {
-    /// The event study with reference period -1, no bins and the defaults of
-    /// `fixest`.
-    #[must_use]
-    pub const fn event_study() -> Self {
-        Self {
-            spec: TwfeSpec::EventStudy {
-                reference: -1,
-                bins: None,
-            },
-            absorb: Absorb::new(),
-            ssc: Ssc::new(),
-        }
-    }
-
-    /// The static regression with the defaults of `fixest`.
-    #[must_use]
-    pub const fn static_twfe() -> Self {
-        Self {
-            spec: TwfeSpec::Static,
-            ..Self::event_study()
-        }
-    }
-}
-
-/// Why a two-way fixed-effects fit failed.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum TwfeError {
-    /// No treated row, so there is no treatment term.
-    #[error("no row carries a treatment indicator")]
-    NoTreatment,
-    /// The bins are empty or do not contain the reference period.
-    #[error("the bins must satisfy lo <= reference <= hi")]
-    Bins,
-    /// The panel has more than 2^32 periods.
-    #[error("the periods span more than 2^32 values")]
-    Periods,
-    /// The fit failed.
-    #[error(transparent)]
-    Fit(#[from] AbsorbError),
+    /// The level of the intervals.
+    pub level: Level,
 }
 
 /// One treatment coefficient.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TwfeTerm {
     /// The relative period, `None` for the static indicator.
     pub relative_period: Option<i64>,
-    /// The coefficient, `None` when the indicator is collinear.
-    pub estimate: Option<f64>,
-    /// Its clustered standard error.
-    pub std_error: Option<f64>,
+    /// The coefficient with its clustered standard error, interval and
+    /// p-value, `None` when the indicator is collinear.
+    pub estimate: Option<Estimate>,
 }
 
 /// A two-way fixed-effects fit.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct TwfeResult {
+pub struct TwfeFit {
     /// The treatment coefficients, in increasing relative period.
     pub terms: Vec<TwfeTerm>,
-    /// The coefficients of the covariates.
-    pub covariate_coefficients: Vec<Option<f64>>,
+    /// The coefficients of the covariates, `None` when aliased.
+    pub covariate_coefficients: Vec<Option<Estimate>>,
     /// The clustered covariance of the treatment terms and then the
-    /// covariates, row-major, `None` for dropped terms.
-    pub covariance: Vec<Option<f64>>,
+    /// covariates, `None` for dropped terms.
+    pub covariance: Covariance,
     /// The `K` of the small-sample correction.
     pub df_k: usize,
     /// The number of clusters.
     pub n_clusters: usize,
-    /// The influence function of each coefficient (terms, then covariates),
-    /// one value per unit of [`TwfeResult::units`]; `None` for dropped terms.
-    pub influence: Vec<Option<Vec<f64>>>,
-    /// The units in the fit, in increasing code.
-    pub units: Vec<u32>,
+    /// The influence functions of the coefficients that were estimated, the
+    /// terms and then the covariates, one column each in that order, with
+    /// one value per unit in the fit in increasing code; `None` when no
+    /// coefficient was estimated. [`TwfeFit::influence_of`] finds the column
+    /// of a coefficient.
+    pub influence: Option<Influence>,
+    /// The units in the fit.
+    pub n_units: usize,
     /// The rows in the fit.
     pub n_rows: usize,
     /// The rows removed as singletons.
     pub removed_singletons: usize,
 }
 
-/// Fits the two-way fixed-effects regression of `config.spec` to `panel`,
+impl TwfeFit {
+    /// The influence function of coefficient `j`, counting the terms and
+    /// then the covariates; `None` for a dropped coefficient or one out of
+    /// range.
+    #[must_use]
+    pub fn influence_of(&self, j: usize) -> Option<&[f64]> {
+        let defined = self
+            .terms
+            .iter()
+            .map(|t| t.estimate.is_some())
+            .chain(self.covariate_coefficients.iter().map(Option::is_some));
+        fe_output::column_of(self.influence.as_ref(), defined, j)
+    }
+}
+
+/// Fits the two-way fixed-effects regression of `options.spec` to `panel`,
 /// with the covariance clustered by the panel's clusters, or by unit when it
 /// has none.
 ///
 /// # Errors
 ///
-/// [`TwfeError`] for no treated row, unusable bins, periods that span more
-/// than 2^32 values, and the errors of the fit.
-pub fn estimate_twfe(
-    panel: &StaggeredPanel<'_>,
-    config: &TwfeConfig,
-) -> Result<TwfeResult, TwfeError> {
+/// [`Error::NoTreatment`] for no treated row, [`Error::Bins`] for bins that do
+/// not contain the reference, [`Error::Periods`] for periods that span more
+/// than 2^32 values, and [`Error::Glm`] for the errors of the fit.
+pub fn fit(panel: &StaggeredPanel<'_>, options: &TwfeOptions) -> Result<TwfeFit, Error> {
     let n = panel.len();
     let period = panel.period();
     let first_treated = panel.first_treated();
-    let time = panel.period_codes().ok_or(TwfeError::Periods)?;
+    let time = panel.period_codes().ok_or(Error::Periods)?;
 
     // The treatment indicators.
     let relative = |i: usize| -> Option<i64> {
         let g = first_treated[i]?;
         let r = period[i].saturating_sub(g);
-        Some(match config.spec {
+        Some(match options.spec {
             TwfeSpec::EventStudy {
                 bins: Some((lo, hi)),
                 ..
@@ -210,13 +205,13 @@ pub fn estimate_twfe(
             _ => r,
         })
     };
-    let periods: Vec<Option<i64>> = match config.spec {
+    let periods: Vec<Option<i64>> = match options.spec {
         TwfeSpec::Static => vec![None],
         TwfeSpec::EventStudy { reference, bins } => {
             if let Some((lo, hi)) = bins
                 && !(lo <= reference && reference <= hi)
             {
-                return Err(TwfeError::Bins);
+                return Err(Error::Bins);
             }
             let set: BTreeSet<i64> = (0..n)
                 .filter_map(relative)
@@ -226,12 +221,12 @@ pub fn estimate_twfe(
         }
     };
     if periods.is_empty() {
-        return Err(TwfeError::NoTreatment);
+        return Err(Error::NoTreatment);
     }
     let k_terms = periods.len();
     let p_cov = panel.covariates().map_or(0, |x| x.ncols());
     let mut x = Mat::<f64>::zeros(n, k_terms + p_cov);
-    match config.spec {
+    match options.spec {
         TwfeSpec::Static => {
             let column = x.col_as_slice_mut(0);
             for (i, v) in column.iter_mut().enumerate() {
@@ -240,7 +235,7 @@ pub fn estimate_twfe(
                 }
             }
             if column.iter().all(|&v| v == 0.0) {
-                return Err(TwfeError::NoTreatment);
+                return Err(Error::NoTreatment);
             }
         }
         TwfeSpec::EventStudy { .. } => {
@@ -265,45 +260,50 @@ pub fn estimate_twfe(
 
     let fe = FixedEffects::new(&[panel.unit(), &time], panel.weights(), Singletons::Remove)?;
     let fit = Feols {
-        absorb: config.absorb,
+        absorb: options.absorb,
     }
     .fit(x.as_ref(), panel.outcome(), &fe)?;
     let clusters = panel.clusters().unwrap_or(panel.unit());
     let ways = [clusters];
-    let cov = fit.vcov(&fe, Vcov::Cluster(&ways), config.ssc)?;
+    let cov = fit.vcov(&fe, Vcov::Cluster(&ways), options.ssc)?;
     let p = k_terms + p_cov;
-    let se = |j: usize| cov.matrix.as_slice()[j * p + j].map(|v| v.max(0.0).sqrt());
+    let reference = Reference::fixest_linear(&cov, fe.n_rows());
+    let coefficient = |j: usize| -> Option<Estimate> {
+        let se = cov.matrix.as_slice()[j * p + j].map(|v| v.max(0.0).sqrt());
+        fit.coefficients[j].map(|b| fe_output::estimate(b, se, options.level, reference))
+    };
     let terms = periods
         .iter()
         .enumerate()
         .map(|(j, &r)| TwfeTerm {
             relative_period: r,
-            estimate: fit.coefficients[j],
-            std_error: se(j),
+            estimate: coefficient(j),
         })
         .collect();
+    let covariate_coefficients = (k_terms..p).map(coefficient).collect();
 
     // Influence by unit.
     let unit_codes = fe.codes(0);
     let units = fe.labels(0).to_vec();
     let n_units = units.len();
     let sums = fit.influence_sums(&fe, unit_codes, n_units)?;
-    let mut influence = vec![None; p];
+    let mut columns = vec![None; p];
     for (a, &j) in fit.kept_columns().iter().enumerate() {
-        influence[j] = Some(
+        columns[j] = Some(
             (0..n_units)
                 .map(|u| n_units as f64 * sums[(u, a)])
                 .collect(),
         );
     }
-    Ok(TwfeResult {
+    let influence = fe_output::influence(columns, units, fe_output::fixest_rule(options.ssc.g_adj))?;
+    Ok(TwfeFit {
         terms,
-        covariate_coefficients: fit.coefficients[k_terms..].to_vec(),
-        covariance: cov.matrix.into_values(),
+        covariate_coefficients,
+        covariance: cov.matrix,
         df_k: cov.df_k,
         n_clusters: cov.min_clusters.unwrap_or(0),
         influence,
-        units,
+        n_units,
         n_rows: fe.n_rows(),
         removed_singletons: fe.removed_singletons(),
     })

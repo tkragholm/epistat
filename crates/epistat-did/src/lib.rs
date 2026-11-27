@@ -305,7 +305,8 @@ pub use methods::synthdid::{
     synthdid_staggered_variance, synthdid_variance,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
-pub use methods::twfe::{TwfeConfig, TwfeError, TwfeResult, TwfeSpec, TwfeTerm, estimate_twfe};
+pub use methods::twfe;
+pub use methods::twfe::{TwfeFit, TwfeOptions, TwfeSpec, TwfeTerm};
 pub use methods::two_stage;
 pub use methods::two_stage::{
     TwoStageConfig, TwoStageResult, TwoStageSpec, TwoStageTerm, estimate_did2s,

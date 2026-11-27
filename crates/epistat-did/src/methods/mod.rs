@@ -5,6 +5,7 @@ pub mod dcdh;
 pub mod did_cc;
 pub mod drdid;
 pub mod efficient;
+pub(crate) mod fe_output;
 pub mod etwfe;
 pub mod imputation;
 pub mod missing;

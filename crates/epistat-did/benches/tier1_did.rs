@@ -37,8 +37,8 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
     AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhConfig, DcdhObservation, DrDidConfig,
-    StaggeredPanel, TwfeConfig, TwfeSpec, estimate_att_gt_dr_panel_with_influence, estimate_dcdh,
-    estimate_dcdh_bootstrap, estimate_twfe,
+    StaggeredPanel, TwfeOptions, TwfeSpec, estimate_att_gt_dr_panel_with_influence, estimate_dcdh,
+    estimate_dcdh_bootstrap, twfe,
 };
 
 const SEED: u64 = 20_261_208;
@@ -135,21 +135,21 @@ fn twfe(n: usize) {
     let panel = StaggeredPanel::builder(&unit, &time, &first, t.col("y"))
         .build()
         .expect("panel");
-    let config = TwfeConfig {
+    let config = TwfeOptions {
         spec: TwfeSpec::EventStudy {
             reference: -1,
             bins: Some((-5, 5)),
         },
-        ..TwfeConfig::event_study()
+        ..TwfeOptions::default()
     };
     let (times, result) = common::timed(common::reps(), || {
-        estimate_twfe(&panel, &config).expect("twfe")
+        twfe::fit(&panel, &config).expect("twfe")
     });
     let mut lines = Lines::default();
     for term in &result.terms {
         let r = term.relative_period.unwrap_or(0);
-        lines.push_opt(&format!("coef_rel{r}"), term.estimate);
-        lines.push_opt(&format!("se_rel{r}"), term.std_error);
+        lines.push_opt(&format!("coef_rel{r}"), term.estimate.map(|e| e.estimate));
+        lines.push_opt(&format!("se_rel{r}"), term.estimate.and_then(|e| e.se));
     }
     common::finish("twfe_es", n, &times, &lines);
 }
