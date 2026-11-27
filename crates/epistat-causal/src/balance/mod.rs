@@ -85,7 +85,7 @@ use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram, weighted_xtz}
 
 use crate::error::{Error, Result};
 pub(crate) use crate::shared::{case_weights as resolve_weights, check_len, compensated};
-use crate::shared::{check_finite, clusters, contrast, rule, unit_codes};
+use crate::shared::{check_finite, clusters, contrast, row_keys, rule};
 
 pub use cbps::{Cbps, CbpsInput, CbpsOptions, Identification, cbps};
 pub use entropy::{EntropyInput, EntropyOptions, balance_columns, entropy_balance};
@@ -388,9 +388,9 @@ impl BalanceWeights {
     /// per-unit scale, with the rule of the module documentation.
     fn influence(&self, columns: &[&[f64]], clustered: bool) -> Result<Influence> {
         let values: Vec<f64> = columns.iter().flat_map(|c| c.iter().copied()).collect();
-        Influence::from_dfbeta(
+        Influence::from_dfbeta_over_rows(
             values,
-            unit_codes(0..self.n())?,
+            row_keys(0..self.n())?,
             columns.len(),
             rule(clustered),
         )

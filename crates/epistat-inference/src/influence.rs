@@ -42,31 +42,45 @@
 //! ```
 //!
 //! With singleton clusters, `SmallSample` gives `sd(psi)^2 / n` with the
-//! `n - 1` divisor, as `riskRegression` reports, and `NoSmallSample` gives
-//! the `n` divisor, as R's `did` and `survival`'s robust variances do. An
-//! influence function evaluated at the estimate has mean zero, so centring
-//! changes nothing there but the rounding.
+//! `n - 1` divisor, as R's `tmle` package reports, and `NoSmallSample` gives
+//! the `n` divisor, as R's `did`, `survival`'s robust variances and
+//! `riskRegression::ate` do. An influence function evaluated at the estimate
+//! has mean zero, so centring changes nothing there but the rounding.
 //!
 //! [`Influence::combine`] forms the influence function of a linear
 //! combination of the estimates, `psi_i = sum_j w_j psi_ij`, the influence
 //! function of `sum_j w_j theta_j`.
 //!
+//! # Keys
+//!
+//! Each value of an influence function has a key. An estimator whose data
+//! carry a unit column keys its values by the caller's unit codes
+//! ([`KeyedBy::Units`]), the same codes the caller clusters by. An estimator
+//! whose data have no unit column keys them by the rows of its input
+//! ([`KeyedBy::Rows`]). Clusters looked up by key carry the same mark, and
+//! [`Influence::variance`] refuses clusters keyed by unit codes on an
+//! influence function keyed by rows, and the other way round: a row number is
+//! also a valid unit code, so the lookup would otherwise succeed and pair
+//! each row with another unit's cluster.
+//!
 //! # Determinism
 //!
 //! Cluster sums are formed in row order and added in cluster order, which is
-//! increasing cluster code for clusters from [`Clusters::from_codes`] and
-//! [`Clusters::per_unit`]. The covariance computes the variance of column `a`
+//! increasing cluster code for clusters from [`Clusters::from_codes`],
+//! [`Clusters::per_unit`] and [`Clusters::per_row`]. The covariance computes the variance of column `a`
 //! with the same sums and the same products in the same order, so its diagonal
 //! entry equals the variance of that column alone to the bit. Nothing depends
 //! on the number of threads.
 //!
 //! # Edge cases
 //!
-//! - No units, no columns, values of the wrong count, a value that is not
-//!   finite and a unit code that repeats are [`InputError`]s when the
+//! - No keys, no columns, values of the wrong count, a value that is not
+//!   finite and a key that repeats are [`InputError`]s when the
 //!   [`Influence`] is built.
-//! - Clusters that cover another number of units, or per-unit clusters that
-//!   do not cover a unit, are [`InputError`]s.
+//! - Positional clusters that cover another number of keys, and clusters
+//!   looked up by key that do not cover a key, are [`InputError`]s. Clusters
+//!   keyed otherwise than the influence function are
+//!   [`Error::KeyMismatch`].
 //! - Fewer than two clusters leave every entry of the covariance `None`: the
 //!   factor of `SmallSample` does not exist, and one cluster carries no
 //!   information about the variance under either rule.
@@ -90,6 +104,8 @@
 //!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
 use std::collections::HashSet;
+use std::fmt;
+use std::sync::Arc;
 
 use epistat_core::{Covariance, InputError, check};
 use epistat_stats::sum::lanes;
@@ -102,32 +118,66 @@ use crate::{Clusters, Error, check_length, empty};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ClusterRule {
     /// `G / (G - 1)` for `G` clusters, R's `sandwich::vcovCL` with
-    /// `cadjust = TRUE` and, without clusters, `riskRegression`'s `n - 1`
-    /// divisor.
+    /// `cadjust = TRUE` and, without clusters, the `n - 1` divisor of R's
+    /// `tmle` package.
     #[default]
     SmallSample,
-    /// No factor, for ports whose R reference has none: R's `did` and the
-    /// robust variances of R's `survival`.
+    /// No factor, for ports whose R reference has none: R's `did`, the
+    /// robust variances of R's `survival`, and `riskRegression::ate`, whose
+    /// variance without clusters has the `n` divisor.
     NoSmallSample,
+}
+
+/// What the keys of an influence function, or of clusters looked up by key,
+/// are.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyedBy {
+    /// The caller's unit codes, such as the codes `epistat_core::Codes` gives
+    /// person ids. A unit has the same key in every estimator and in every
+    /// cluster table built from the same codes.
+    Units,
+    /// Row positions in the input of the estimator, for estimators whose data
+    /// carry no unit column. A row key means nothing outside that input.
+    Rows,
+}
+
+impl fmt::Display for KeyedBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Units => "unit codes",
+            Self::Rows => "rows",
+        })
+    }
 }
 
 /// The influence function of one estimate or several, per unit, on the scale
 /// `theta_hat - theta ~ sum(psi_i) / n`.
 ///
-/// Column `j` holds the values of estimate `j` over the `n` units, whose codes
-/// [`Influence::units`] gives. The rule is the one the estimator's own
-/// standard errors used, so [`Influence::variance`] reproduces them.
+/// Column `j` holds the values of estimate `j` over the `n` keys that
+/// [`Influence::keys`] gives. The keys are the caller's unit codes
+/// ([`Influence::new`]) or, for an estimator whose data have no unit column,
+/// the rows of its input ([`Influence::over_rows`]); [`Influence::keyed_by`]
+/// says which. Clusters looked up by key must be keyed the same way, so unit
+/// clusters are never matched to row positions. The rule is the one the
+/// estimator's own standard errors used, so [`Influence::variance`]
+/// reproduces them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Influence {
     values: Vec<f64>,
-    units: Vec<u32>,
+    keys: Arc<[u32]>,
+    keyed_by: KeyedBy,
     columns: usize,
     rule: ClusterRule,
 }
 
 impl Influence {
     /// The influence function with `columns` columns of `units.len()` values
-    /// each, column after column, on the per-unit scale.
+    /// each, column after column, on the per-unit scale, keyed by the
+    /// caller's unit codes `units`.
+    ///
+    /// Units in increasing code are checked in one pass; units in another
+    /// order are accepted and checked through a hash set.
     ///
     /// # Errors
     ///
@@ -141,32 +191,24 @@ impl Influence {
         columns: usize,
         rule: ClusterRule,
     ) -> Result<Self, Error> {
-        check::non_empty("influence units", units.len())?;
-        check::non_empty("influence columns", columns)?;
-        let size = units
-            .len()
-            .checked_mul(columns)
-            .ok_or(InputError::TooLarge {
-                what: "influence function",
-                limit: usize::MAX as u64,
-                found: u64::MAX,
-            })?;
-        check::same_length("influence function", size, values.len())?;
-        check::finite("influence function", &values)?;
-        let mut seen = HashSet::with_capacity(units.len());
-        if let Some(row) = units.iter().position(|unit| !seen.insert(*unit)) {
-            return Err(InputError::Duplicate {
-                what: "influence units",
-                row,
-            }
-            .into());
-        }
-        Ok(Self {
-            values,
-            units,
-            columns,
-            rule,
-        })
+        Self::build(values, units, KeyedBy::Units, columns, rule)
+    }
+
+    /// [`Influence::new`] keyed by `rows`, positions in the estimator's input,
+    /// for an estimator whose data have no unit column. Its variance takes
+    /// positional clusters or clusters from [`Clusters::per_row`], and refuses
+    /// clusters keyed by unit codes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Influence::new`].
+    pub fn over_rows(
+        values: Vec<f64>,
+        rows: Vec<u32>,
+        columns: usize,
+        rule: ClusterRule,
+    ) -> Result<Self, Error> {
+        Self::build(values, rows, KeyedBy::Rows, columns, rule)
     }
 
     /// The influence function from values on the dfbeta scale, whose squares
@@ -181,32 +223,90 @@ impl Influence {
         columns: usize,
         rule: ClusterRule,
     ) -> Result<Self, Error> {
-        let n = units.len() as f64;
-        let scaled = values.into_iter().map(|d| d * n).collect();
+        let scaled = scale_dfbeta(values, units.len());
         Self::new(scaled, units, columns, rule)
     }
 
-    /// The values of estimate `j`, one per unit.
+    /// [`Influence::from_dfbeta`] keyed by rows, as [`Influence::over_rows`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Influence::new`].
+    pub fn from_dfbeta_over_rows(
+        values: Vec<f64>,
+        rows: Vec<u32>,
+        columns: usize,
+        rule: ClusterRule,
+    ) -> Result<Self, Error> {
+        let scaled = scale_dfbeta(values, rows.len());
+        Self::over_rows(scaled, rows, columns, rule)
+    }
+
+    fn build(
+        values: Vec<f64>,
+        keys: Vec<u32>,
+        keyed_by: KeyedBy,
+        columns: usize,
+        rule: ClusterRule,
+    ) -> Result<Self, Error> {
+        let what = match keyed_by {
+            KeyedBy::Units => "influence units",
+            KeyedBy::Rows => "influence rows",
+        };
+        check::non_empty(what, keys.len())?;
+        check_values(&values, keys.len(), columns)?;
+        distinct(what, &keys)?;
+        Ok(Self {
+            values,
+            keys: keys.into(),
+            keyed_by,
+            columns,
+            rule,
+        })
+    }
+
+    /// The values of estimate `j`, one per key.
     ///
     /// # Panics
     ///
     /// If `j` is not below [`Influence::n_columns`].
     #[must_use]
     pub fn column(&self, j: usize) -> &[f64] {
-        let n = self.units.len();
+        let n = self.keys.len();
         &self.values[j * n..(j + 1) * n]
     }
 
-    /// The unit code of each row.
+    /// What the keys are: unit codes or rows.
     #[must_use]
-    pub fn units(&self) -> &[u32] {
-        &self.units
+    pub const fn keyed_by(&self) -> KeyedBy {
+        self.keyed_by
     }
 
-    /// The number of units.
+    /// The key of each value, a unit code or a row as [`Influence::keyed_by`]
+    /// says.
+    #[must_use]
+    pub fn keys(&self) -> &[u32] {
+        &self.keys
+    }
+
+    /// The unit code of each value, `None` for an influence function keyed by
+    /// rows.
+    #[must_use]
+    pub fn units(&self) -> Option<&[u32]> {
+        (self.keyed_by == KeyedBy::Units).then_some(&*self.keys)
+    }
+
+    /// The row of each value, `None` for an influence function keyed by unit
+    /// codes.
+    #[must_use]
+    pub fn rows(&self) -> Option<&[u32]> {
+        (self.keyed_by == KeyedBy::Rows).then_some(&*self.keys)
+    }
+
+    /// The number of keys, the length of each column.
     #[must_use]
     pub fn n_units(&self) -> usize {
-        self.units.len()
+        self.keys.len()
     }
 
     /// The number of estimates.
@@ -222,7 +322,7 @@ impl Influence {
     }
 
     /// The influence function of `sum_j weights[j] theta_j`, one column, with
-    /// the units and rule of this one. Each value is the sum of
+    /// the keys and rule of this one. Each value is the sum of
     /// `weights[j] * psi_ij` in increasing `j`.
     ///
     /// # Errors
@@ -233,7 +333,7 @@ impl Influence {
     pub fn combine(&self, weights: &[f64]) -> Result<Self, Error> {
         check::same_length("weights", self.columns, weights.len())?;
         check::finite("weights", weights)?;
-        let n = self.units.len();
+        let n = self.keys.len();
         let values: Vec<f64> = (0..n)
             .map(|i| {
                 let mut terms = weights
@@ -244,21 +344,76 @@ impl Influence {
                 terms.fold(first, |acc, term| acc + term)
             })
             .collect();
-        Self::new(values, self.units.clone(), 1, self.rule)
+        self.with_values(values, 1, self.rule)
+    }
+
+    /// The influence function of the estimates `columns`, in that order, with
+    /// the keys and rule of this one.
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::Empty`] for no columns and [`InputError::NotBelow`] for
+    /// a column that is not below [`Influence::n_columns`].
+    pub fn select(&self, columns: &[usize]) -> Result<Self, Error> {
+        check::non_empty("influence columns", columns.len())?;
+        let mut values = Vec::with_capacity(columns.len() * self.keys.len());
+        for &j in columns {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "the column is reported, not computed with"
+            )]
+            check::below("influence column", j as f64, self.columns as f64)?;
+            values.extend_from_slice(self.column(j));
+        }
+        Ok(Self {
+            values,
+            keys: Arc::clone(&self.keys),
+            keyed_by: self.keyed_by,
+            columns: columns.len(),
+            rule: self.rule,
+        })
+    }
+
+    /// An influence function of `columns` other estimates over the keys of
+    /// this one, under `rule`, with the values laid out as in
+    /// [`Influence::new`]. The keys are not checked again.
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::Empty`] for no columns, [`InputError::Length`] unless
+    /// there are `columns` values per key, and [`InputError::NotFinite`] for a
+    /// value that is not finite.
+    pub fn with_values(
+        &self,
+        values: Vec<f64>,
+        columns: usize,
+        rule: ClusterRule,
+    ) -> Result<Self, Error> {
+        check_values(&values, self.keys.len(), columns)?;
+        Ok(Self {
+            values,
+            keys: Arc::clone(&self.keys),
+            keyed_by: self.keyed_by,
+            columns,
+            rule,
+        })
     }
 
     /// The covariance of the estimates under the influence function's own
     /// rule, clustered by `clusters` or with every unit its own cluster.
     ///
-    /// Clusters from [`Clusters::per_unit`] are looked up by unit code, so
-    /// they may cover more units than this influence function; other clusters
-    /// are matched by position and must cover exactly its units. See the
-    /// module for the formula.
+    /// Clusters from [`Clusters::per_unit`] or [`Clusters::per_row`] are
+    /// looked up by key, so they may cover more keys than this influence
+    /// function, and they must be keyed as it is. Other clusters are matched
+    /// by position and must cover exactly its keys. See the module for the
+    /// formula.
     ///
     /// # Errors
     ///
+    /// [`Error::KeyMismatch`] for clusters keyed by unit codes on an influence
+    /// function keyed by rows, or the other way round,
     /// [`InputError::Length`] for positional clusters of another length,
-    /// [`InputError::Domain`] for a unit per-unit clusters do not cover, and
+    /// [`InputError::Domain`] for a key the clusters do not cover, and
     /// [`Error::NotFinite`] for an entry that is not finite.
     pub fn variance(&self, clusters: Option<&Clusters>) -> Result<Covariance, Error> {
         self.variance_with(clusters, self.rule)
@@ -275,19 +430,27 @@ impl Influence {
         clusters: Option<&Clusters>,
         rule: ClusterRule,
     ) -> Result<Covariance, Error> {
-        let n = self.units.len();
+        let n = self.keys.len();
         let k = self.columns;
         let aligned;
         let clusters = match clusters {
             None => None,
-            Some(clusters) if clusters.units().is_none_or(|u| u == self.units.as_slice()) => {
-                check_length("clusters", n, clusters.len())?;
-                Some(clusters)
-            }
-            Some(clusters) => {
-                aligned = clusters.for_units(&self.units)?;
-                Some(&aligned)
-            }
+            Some(clusters) => match (clusters.keyed_by(), clusters.keys()) {
+                (Some(keyed_by), _) if keyed_by != self.keyed_by => {
+                    return Err(Error::KeyMismatch {
+                        influence: self.keyed_by,
+                        clusters: keyed_by,
+                    });
+                }
+                (_, Some(keys)) if keys != &*self.keys => {
+                    aligned = clusters.for_keys(&self.keys)?;
+                    Some(&aligned)
+                }
+                _ => {
+                    check_length("clusters", n, clusters.len())?;
+                    Some(clusters)
+                }
+            },
         };
         let groups = clusters.map_or(n, Clusters::count);
         if groups < 2 {
@@ -333,6 +496,38 @@ impl Influence {
             }
         }
         Ok(Covariance::new(k, values)?)
+    }
+}
+
+/// Values on the dfbeta scale multiplied by the number of keys `n`.
+fn scale_dfbeta(values: Vec<f64>, n: usize) -> Vec<f64> {
+    let n = n as f64;
+    values.into_iter().map(|d| d * n).collect()
+}
+
+/// `columns` columns of `n` finite values.
+fn check_values(values: &[f64], n: usize, columns: usize) -> Result<(), Error> {
+    check::non_empty("influence columns", columns)?;
+    let size = n.checked_mul(columns).ok_or(InputError::TooLarge {
+        what: "influence function",
+        limit: usize::MAX as u64,
+        found: u64::MAX,
+    })?;
+    check::same_length("influence function", size, values.len())?;
+    check::finite("influence function", values)?;
+    Ok(())
+}
+
+/// No key repeats: one comparison per key when the keys increase, as every
+/// estimator gives them, and a hash set otherwise.
+fn distinct(what: &'static str, keys: &[u32]) -> Result<(), InputError> {
+    if keys.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Ok(());
+    }
+    let mut seen = HashSet::with_capacity(keys.len());
+    match keys.iter().position(|key| !seen.insert(*key)) {
+        Some(row) => Err(InputError::Duplicate { what, row }),
+        None => Ok(()),
     }
 }
 
@@ -445,6 +640,7 @@ pub fn clustered_covariance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Classify;
 
     fn one(values: &[f64], rule: ClusterRule) -> Influence {
         let units = (0..u32::try_from(values.len()).unwrap()).collect();
@@ -519,6 +715,132 @@ mod tests {
             .variance(Some(&Clusters::from_codes(&[2, 1, 0, 0])))
             .unwrap();
         assert_eq!(by_unit, by_position);
+    }
+
+    #[test]
+    fn unit_clusters_on_an_influence_keyed_by_rows_are_refused() {
+        // Rows 0..4 of an estimator's input whose persons have the unit codes
+        // 3, 0, 2, 1. Every row number is also a unit code, so a lookup by
+        // code would succeed and pair each row with another person's cluster.
+        let values = vec![1.0, -2.0, 0.5, 3.0];
+        let rows = Influence::over_rows(
+            values.clone(),
+            vec![0, 1, 2, 3],
+            1,
+            ClusterRule::SmallSample,
+        )
+        .unwrap();
+        assert_eq!(rows.keyed_by(), KeyedBy::Rows);
+        assert_eq!((rows.units(), rows.rows()), (None, Some(&[0, 1, 2, 3][..])));
+        let person = [3, 0, 2, 1];
+        let family = [0, 0, 1, 1];
+        let by_person = Clusters::per_unit(&person, &family).unwrap();
+        assert_eq!(
+            rows.variance(Some(&by_person)),
+            Err(Error::KeyMismatch {
+                influence: KeyedBy::Rows,
+                clusters: KeyedBy::Units
+            })
+        );
+        // The same clusters given per row, or by position, are accepted and
+        // agree.
+        let family_by_row: Vec<u32> = person.iter().map(|&p| family[p as usize]).collect();
+        let per_row = rows
+            .variance(Some(&Clusters::per_row(&family_by_row).unwrap()))
+            .unwrap();
+        let positional = rows
+            .variance(Some(&Clusters::from_codes(&family_by_row)))
+            .unwrap();
+        assert_eq!(per_row, positional);
+        // And row clusters are refused on an influence function keyed by
+        // units.
+        let units = Influence::new(values, vec![0, 1, 2, 3], 1, ClusterRule::SmallSample).unwrap();
+        let error = units
+            .variance(Some(&Clusters::per_row(&family_by_row).unwrap()))
+            .unwrap_err();
+        assert_eq!(error.code(), "inference.key_mismatch");
+        assert_eq!(error.kind(), epistat_core::ErrorKind::Input);
+    }
+
+    #[test]
+    fn row_clusters_are_looked_up_by_row() {
+        let rows = Influence::over_rows(
+            vec![1.0, -2.0, 0.5],
+            vec![1, 3, 4],
+            1,
+            ClusterRule::SmallSample,
+        )
+        .unwrap();
+        let clusters = Clusters::per_row(&[5, 5, 6, 6, 7]).unwrap();
+        let by_row = rows.variance(Some(&clusters)).unwrap();
+        let by_position = rows
+            .variance(Some(&Clusters::from_codes(&[5, 6, 7])))
+            .unwrap();
+        assert_eq!(by_row, by_position);
+    }
+
+    #[test]
+    fn units_in_any_order_are_checked_for_repeats() {
+        let rule = ClusterRule::NoSmallSample;
+        assert!(Influence::new(vec![1.0, 2.0, 3.0], vec![5, 1, 3], 1, rule).is_ok());
+        assert_eq!(
+            Influence::new(vec![1.0, 2.0, 3.0], vec![5, 1, 5], 1, rule),
+            Err(Error::Input(InputError::Duplicate {
+                what: "influence units",
+                row: 2
+            }))
+        );
+        assert_eq!(
+            Influence::over_rows(vec![1.0, 2.0], vec![4, 4], 1, rule),
+            Err(Error::Input(InputError::Duplicate {
+                what: "influence rows",
+                row: 1
+            }))
+        );
+    }
+
+    #[test]
+    fn selected_and_replaced_columns_keep_the_keys() {
+        let a = [1.0, -2.0, 0.5];
+        let b = [0.0, 1.0, -1.0];
+        let c = [2.0, 0.25, 4.0];
+        let all = Influence::over_rows(
+            [a, b, c].concat(),
+            vec![2, 5, 9],
+            3,
+            ClusterRule::NoSmallSample,
+        )
+        .unwrap();
+        let picked = all.select(&[2, 0]).unwrap();
+        let direct = Influence::over_rows(
+            [c, a].concat(),
+            vec![2, 5, 9],
+            2,
+            ClusterRule::NoSmallSample,
+        )
+        .unwrap();
+        assert_eq!(picked, direct);
+        assert_eq!(picked.variance(None), direct.variance(None));
+        assert!(matches!(
+            all.select(&[3]),
+            Err(Error::Input(InputError::NotBelow { .. }))
+        ));
+        assert!(matches!(
+            all.select(&[]),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
+        let other = all
+            .with_values(b.to_vec(), 1, ClusterRule::SmallSample)
+            .unwrap();
+        assert_eq!(
+            (other.keyed_by(), other.keys()),
+            (KeyedBy::Rows, &[2, 5, 9][..])
+        );
+        assert_eq!(other.rule(), ClusterRule::SmallSample);
+        assert!(matches!(
+            all.with_values(vec![1.0, f64::NAN, 0.0], 1, ClusterRule::SmallSample),
+            Err(Error::Input(InputError::NotFinite { row: 1, .. }))
+        ));
     }
 
     #[test]

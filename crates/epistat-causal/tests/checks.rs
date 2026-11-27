@@ -310,10 +310,7 @@ fn estimator_is_unbiased_when_one_model_is_wrong() {
 /// The variance of the difference of the two columns of `influence` with the
 /// clusters `cluster` of the rows, under the influence function's own rule.
 fn difference_variance(influence: &Influence, cluster: Option<&[u32]>) -> f64 {
-    let clusters = cluster.map(|c| {
-        let rows: Vec<u32> = (0..u32::try_from(c.len()).unwrap()).collect();
-        Clusters::per_unit(&rows, c).unwrap()
-    });
+    let clusters = cluster.map(|c| Clusters::per_row(c).unwrap());
     influence
         .combine(&[1.0, -1.0])
         .unwrap()

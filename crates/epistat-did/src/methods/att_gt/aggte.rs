@@ -1005,13 +1005,9 @@ fn into_aggte(
     for point in summary.points.iter().chain(summary.overall.as_ref()) {
         values.extend_from_slice(&point.influence);
     }
-    let influence = Influence::new(
-        values,
-        cells_influence.units().to_vec(),
-        n_columns,
-        ClusterRule::NoSmallSample,
-    )
-    .map_err(|_| Error::NotFinite)?;
+    let influence = cells_influence
+        .with_values(values, n_columns, ClusterRule::NoSmallSample)
+        .map_err(|_| Error::NotFinite)?;
     Ok(Aggte {
         aggregation: options.aggregation,
         weights: options.weights,

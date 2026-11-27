@@ -153,7 +153,7 @@ fn contrast(
              keep_influence",
         ));
     };
-    if a.units() != b.units() {
+    if a.keys() != b.keys() {
         return Err(Error::invalid(
             "the two influence functions must be of the same rows",
         ));
@@ -188,7 +188,7 @@ fn contrast(
             .zip(b.column(j))
             .map(|(x, y)| x - y)
             .collect();
-        let se = se_of(&diff, a.units())?.filter(|&s| s > 0.0);
+        let se = se_of(&diff, a.keys())?.filter(|&s| s > 0.0);
         out.difference.push(Some(delta));
         out.se.push(se);
         out.lower.push(se.map(|s| delta - z * s));

@@ -28,8 +28,12 @@
 //! - Invalid input is [`Error::Input`] with the shared
 //!   `epistat_core::InputError`; [`Error`] implements `epistat_core::Classify`.
 //!
+//! - An influence function is keyed by the caller's unit codes or, for an
+//!   estimator whose data have no unit column, by the rows of its input
+//!   ([`KeyedBy`]); clusters looked up by key must be keyed the same way.
+//!
 //! Clusters are numbered in a fixed order (sorted code order for
-//! [`Clusters::from_codes`] and [`Clusters::per_unit`]) and every sum runs in
+//! [`Clusters::from_codes`], [`Clusters::per_unit`] and [`Clusters::per_row`]) and every sum runs in
 //! a fixed order, so results do not depend on hashing or on the number of
 //! threads. Each module documents its formulas, edge cases and references.
 #![warn(missing_docs)]
@@ -46,7 +50,7 @@ pub mod simultaneous;
 pub mod wald;
 
 pub use clusters::Clusters;
-pub use influence::{ClusterRule, Influence};
+pub use influence::{ClusterRule, Influence, KeyedBy};
 
 use epistat_core::check;
 use epistat_core::{Classify, ErrorKind, InputError};
@@ -79,6 +83,20 @@ pub enum Error {
         /// The number of imputed data sets.
         m: usize,
     },
+    /// Clusters looked up by key are keyed otherwise than the influence
+    /// function they cluster: by unit codes against rows, or by rows against
+    /// unit codes.
+    #[error(
+        "the influence function is keyed by {influence} and the clusters by {clusters}: \
+         build the clusters with Clusters::per_unit for unit codes or Clusters::per_row \
+         for rows, or give them by position"
+    )]
+    KeyMismatch {
+        /// The keys of the influence function.
+        influence: KeyedBy,
+        /// The keys of the clusters.
+        clusters: KeyedBy,
+    },
     /// A linear system could not be solved.
     #[error(transparent)]
     Solve(#[from] epistat_linalg::Error),
@@ -88,7 +106,9 @@ impl Classify for Error {
     fn kind(&self) -> ErrorKind {
         match self {
             Self::Input(error) => error.kind(),
-            Self::NotSymmetric | Self::Imputations { .. } => ErrorKind::Input,
+            Self::NotSymmetric | Self::Imputations { .. } | Self::KeyMismatch { .. } => {
+                ErrorKind::Input
+            }
             Self::NotFinite | Self::Solve(_) => ErrorKind::Numerical,
         }
     }
@@ -99,6 +119,7 @@ impl Classify for Error {
             Self::NotFinite => "inference.not_finite",
             Self::NotSymmetric => "inference.not_symmetric",
             Self::Imputations { .. } => "inference.imputations",
+            Self::KeyMismatch { .. } => "inference.key_mismatch",
             Self::Solve(_) => "inference.solve",
         }
     }
@@ -129,6 +150,10 @@ mod tests {
                 what: "D1",
                 k: 1,
                 m: 2,
+            },
+            Error::KeyMismatch {
+                influence: KeyedBy::Rows,
+                clusters: KeyedBy::Units,
             },
             Error::Solve(epistat_linalg::Error::Singular),
         ];

@@ -315,8 +315,8 @@ pub struct Score {
     /// Its standard error, `None` unless asked for and defined (at least two
     /// rows).
     pub se: Vec<Option<f64>>,
-    /// The influence function at each time, one column per time, with the
-    /// rows of positive weight as units in the order of the data, on the scale
+    /// The influence function at each time, one column per time, keyed by
+    /// the rows of positive weight in the order of the data, on the scale
     /// `sum IF / N` of `Score`. Its rule has the `N - 1` divisor of `se`, which
     /// the variance of a column reproduces. `None` unless asked for.
     pub influence: Option<Influence>,
@@ -539,7 +539,7 @@ impl<'a> Core<'a> {
                 None => values.extend(std::iter::repeat_n(0.0, n)),
             }
         }
-        Ok(Influence::new(
+        Ok(Influence::over_rows(
             values,
             self.units.clone(),
             columns.len(),
@@ -559,7 +559,7 @@ pub(super) fn se_of(influence: &[f64], units: &[u32]) -> Result<Option<f64>> {
     if influence.len() < 2 {
         return Ok(None);
     }
-    let one = Influence::new(
+    let one = Influence::over_rows(
         influence.to_vec(),
         units.to_vec(),
         1,
@@ -754,7 +754,7 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
         out.ipa.push(Some(1.0 - b / b0));
         let se = match (&model.influence, &null.influence) {
             (Some(m), Some(z)) => {
-                if m.units() != z.units() {
+                if m.keys() != z.keys() {
                     return Err(Error::invalid(
                         "the model and the null model must have influence functions of the same rows",
                     ));
@@ -765,7 +765,7 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
                     .zip(z.column(j))
                     .map(|(&m, &z)| -m / b0 + b * z / (b0 * b0))
                     .collect();
-                se_of(&combined, m.units())?
+                se_of(&combined, m.keys())?
             }
             _ => None,
         };

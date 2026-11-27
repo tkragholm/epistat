@@ -302,6 +302,7 @@ fn sunab_matches_fixest() {
         let influence = result.influence.as_ref().unwrap();
         let unit_cluster: Vec<u32> = influence
             .units()
+            .expect("keyed by units")
             .iter()
             .map(|&u| {
                 let row = case.unit.iter().position(|&v| v == u).unwrap();

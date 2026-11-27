@@ -371,7 +371,11 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
                 (case.dropped_unweighted, &case.units_unweighted)
             };
             assert_eq!(out.dropped_rows.len(), dropped, "{label}");
-            assert_eq!(out.influence.as_ref().unwrap().units(), units, "{label}");
+            assert_eq!(
+                out.influence.as_ref().unwrap().units(),
+                Some(units.as_slice()),
+                "{label}"
+            );
             let b = Bounds::new(
                 case,
                 weighted,

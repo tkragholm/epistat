@@ -100,7 +100,7 @@ pub fn flatten(r: &Tmle) -> Vec<f64> {
 pub fn by_person(influence: &Influence, n: usize) -> Vec<f64> {
     let difference = influence.combine(&[1.0, -1.0]).unwrap();
     let mut out = vec![0.0; n];
-    for (&unit, &v) in influence.units().iter().zip(difference.column(0)) {
+    for (&unit, &v) in influence.keys().iter().zip(difference.column(0)) {
         out[unit as usize] = v;
     }
     out

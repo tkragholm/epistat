@@ -267,7 +267,7 @@ pub struct Concordance {
     /// caller's codes. Empty without a stratum column.
     pub strata: Vec<StratumCounts>,
     /// The influence function of the concordance, per row: `n` times the
-    /// `dfbeta` of `concordance`, with the rows of the data as units, zero for
+    /// `dfbeta` of `concordance`, keyed by the rows of the data, zero for
     /// rows not used. Its rule is that of `variance`, which it reproduces with
     /// the data's clusters. `None` unless asked for.
     pub influence: Option<Influence>,
@@ -477,8 +477,12 @@ pub fn estimate(
         }
         let n_rows = u32::try_from(data.n_rows())
             .map_err(|_| Error::invalid("data: more rows than u32::MAX"))?;
-        let units: Vec<u32> = (0..n_rows).collect();
-        let rows = Influence::from_dfbeta(dfbeta, units, 1, ClusterRule::NoSmallSample)?;
+        let rows = Influence::from_dfbeta_over_rows(
+            dfbeta,
+            (0..n_rows).collect(),
+            1,
+            ClusterRule::NoSmallSample,
+        )?;
         let clusters = data.cluster().map(Clusters::from_codes);
         variance = rows.variance(clusters.as_ref())?.get(0, 0);
         if opts.influence {

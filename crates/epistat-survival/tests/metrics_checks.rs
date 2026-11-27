@@ -119,7 +119,7 @@ fn rows_of_weight_zero_are_left_out_and_the_influence_has_one_row_per_used_row()
     let reduced = b.influence.as_ref().unwrap();
     assert_eq!(influence.column(0), reduced.column(0));
     let kept: Vec<u32> = keep.iter().map(|&i| u32::try_from(i).unwrap()).collect();
-    assert_eq!(influence.units(), kept.as_slice());
+    assert_eq!(influence.rows(), Some(kept.as_slice()));
 }
 
 #[test]
