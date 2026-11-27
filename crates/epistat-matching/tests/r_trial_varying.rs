@@ -12,16 +12,17 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_matching::Error;
 use epistat_matching::match_trials;
 use epistat_matching::prelude::*;
-use epistat_matching::{
-    PeriodDates, PeriodStrata, TrialMatching, TrialOptions, TrialPeriod, TrialPerson, trial_seed,
-};
+use epistat_matching::{PeriodDates, PeriodStrata, TrialMatching, TrialOptions, trial_seed};
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 #[derive(Deserialize)]
 struct People {
@@ -62,10 +63,10 @@ fn day(days: i64) -> NaiveDate {
 
 /// The panel in the order of the reference's rows, with each person's own
 /// dates, and the flare of every row as period strata.
-fn panel(r: &Reference) -> (Vec<TrialPerson<BaseRecord>>, PeriodStrata) {
+fn panel(r: &Reference) -> (Vec<PanelPerson<BaseRecord>>, PeriodStrata) {
     let p = &r.people;
     let c = &r.panel;
-    let mut panel: Vec<TrialPerson<BaseRecord>> = Vec::new();
+    let mut panel: Vec<PanelPerson<BaseRecord>> = Vec::new();
     for i in 0..c.id.len() {
         if panel.last().is_none_or(|last| last.record.id != c.id[i]) {
             let k = p.id.iter().position(|id| *id == c.id[i]).expect("a person");
@@ -78,7 +79,7 @@ fn panel(r: &Reference) -> (Vec<TrialPerson<BaseRecord>>, PeriodStrata) {
             if let Some(d) = p.emigration[k] {
                 record = record.with_emigration_date(day(d));
             }
-            panel.push(TrialPerson {
+            panel.push(PanelPerson {
                 record,
                 periods: Vec::new(),
             });
@@ -87,7 +88,7 @@ fn panel(r: &Reference) -> (Vec<TrialPerson<BaseRecord>>, PeriodStrata) {
             .last_mut()
             .expect("a person")
             .periods
-            .push(TrialPeriod {
+            .push(PanelPeriod {
                 period: c.period[i],
                 date: day(c.date[i]),
                 eligible: c.eligible[i] == 1,
@@ -101,12 +102,12 @@ fn panel(r: &Reference) -> (Vec<TrialPerson<BaseRecord>>, PeriodStrata) {
 
 fn sets(
     r: &Reference,
-    panel: &[TrialPerson<BaseRecord>],
+    panel: &[PanelPerson<BaseRecord>],
     matching: &TrialMatching<'_>,
 ) -> Result<BTreeMap<String, Vec<String>>, Error> {
-    let outcome = match_trials(panel, &TrialOptions::default(), matching, |pool| {
-        Ok(pool
-            .job(trial_seed(1, pool.period()))
+    let rows = PanelRows::of(panel);
+    let outcome = match_trials(&rows.panel(), &TrialOptions::default(), matching, |pool| {
+        pool.job(trial_seed(1, pool.period()))
             .with_ratio(MatchRatio::new(10_000).expect("a ratio"))
             .with_replacement(true)
             .with_birth_window(BirthDateWindowDays::new(30_000).expect("non-negative"))
@@ -115,7 +116,6 @@ fn sets(
             .with_alive_check()
             .with_resident_check()
             .run()
-            .expect("a valid job"))
     })?;
     let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for trial in &outcome.trials {

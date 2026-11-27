@@ -53,7 +53,7 @@ use crate::matching::{
 };
 use crate::role_transition::IdOrder;
 use crate::role_transition::{ExposureDensityOutcome, exposure_density_sets};
-use crate::trials::{TrialOptions, TrialOutcome, TrialPerson, match_trials, trial_seed};
+use crate::trials::{TrialOptions, TrialOutcome, TrialPanel, match_trials, trial_seed};
 use crate::types::reject_invalid;
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, CommonSupport, DistanceCaliper, Estimand, MatchOutcome,
@@ -941,7 +941,7 @@ pub enum SpecInput<'a, R> {
     Trials {
         /// One entry per person, with the periods in which the person is
         /// observed.
-        panel: &'a [TrialPerson<R>],
+        panel: &'a TrialPanel<'a, R>,
     },
 }
 
@@ -2657,7 +2657,7 @@ fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
 
 fn run_trials<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
-    panel: &[TrialPerson<R>],
+    panel: &TrialPanel<'_, R>,
 ) -> Result<SpecOutput, Error> {
     let outcome = match_trials(panel, &spec.trials, &TrialMatching::default(), |pool| {
         let in_trial = MatchSpec {

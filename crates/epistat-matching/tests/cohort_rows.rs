@@ -10,6 +10,8 @@
 //! and are run on several seeds. After every entry point the cohort must not
 //! have built the per-row maps, which would cost what owned records cost.
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use epistat_matching::output::{MatchDataOptions, Units, match_data};
 use epistat_matching::spec::{
     BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec, DistanceSpec,
@@ -21,13 +23,14 @@ use epistat_matching::{
     SpecOutput, balance_diagnostics, balance_report, balance_summary,
 };
 use std::collections::BTreeMap;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::effects::{
     Clustering, EffectSpec, MatchedSample, OutcomeModel, UnitData, estimate_effects,
 };
 use epistat_matching::prelude::*;
-use epistat_matching::{Cohort, CohortRow, TrialPeriod, TrialPerson};
+use epistat_matching::{Cohort, CohortRow};
 
 const SEEDS: [u64; 3] = [1, 2, 3];
 const COVARIATES: [&str; 3] = ["x1", "x2", "x3"];
@@ -692,7 +695,7 @@ fn match_job_transition_is_the_same_on_rows() {
     }
 }
 
-fn panel<R>(units: &[Unit], record: impl Fn(usize) -> R) -> Vec<TrialPerson<R>> {
+fn panel<R>(units: &[Unit], record: impl Fn(usize) -> R) -> Vec<PanelPerson<R>> {
     units
         .iter()
         .enumerate()
@@ -701,10 +704,10 @@ fn panel<R>(units: &[Unit], record: impl Fn(usize) -> R) -> Vec<TrialPerson<R>> 
             let event_period = unit.event.map(|d| {
                 usize::try_from((d - origin()).num_days() / 500).expect("after the origin")
             });
-            TrialPerson {
+            PanelPerson {
                 record: record(i),
                 periods: (0..4)
-                    .map(|k| TrialPeriod {
+                    .map(|k| PanelPeriod {
                         period: i64::try_from(k).expect("small"),
                         date: day(500 * (k as u64 + 1)),
                         eligible: !unit.treated || k <= start,
@@ -739,10 +742,15 @@ fn sequential_trials_are_the_same_on_rows() {
             let on_owned = run_spec(
                 &spec,
                 SpecInput::Trials {
-                    panel: &owned_panel,
+                    panel: &PanelRows::of(&owned_panel).panel(),
                 },
             );
-            let on_rows = run_spec(&spec, SpecInput::Trials { panel: &row_panel });
+            let on_rows = run_spec(
+                &spec,
+                SpecInput::Trials {
+                    panel: &PanelRows::of(&row_panel).panel(),
+                },
+            );
             assert!(on_owned.is_ok(), "seed {seed}: {on_owned:?}");
             assert_same(
                 &format!("{on_owned:?}"),

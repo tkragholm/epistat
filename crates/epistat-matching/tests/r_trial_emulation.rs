@@ -33,17 +33,19 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_matching::Error;
 use epistat_matching::TrialMatching;
 use epistat_matching::prelude::*;
 use epistat_matching::spec::{MatchMethod, MatchMode};
 use epistat_matching::{
-    BalanceRecord, ControlReuse, SpecOutput, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson,
-    TrialView, match_trials, trial_seed,
+    BalanceRecord, ControlReuse, SpecOutput, TrialOptions, TrialOutcome, TrialView, match_trials,
+    trial_seed,
 };
-use epistat_matching::{ExpandedRow, expand_trials};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
+use trial_panel::{ExpandedRow, PanelPeriod, PanelPerson, PanelRows, expand_trials};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
@@ -115,7 +117,7 @@ struct Draw {
     counts: Vec<usize>,
 }
 
-type Panel = Vec<TrialPerson<BalanceRecord>>;
+type Panel = Vec<PanelPerson<BalanceRecord>>;
 
 fn reference() -> Reference {
     load_reference("trial_emulation.json")
@@ -136,13 +138,13 @@ fn flag(value: i64) -> bool {
 /// People with no matching data, for the expansion.
 fn plain_panel(cols: &PanelCols) -> Panel {
     let mut order: Vec<i64> = Vec::new();
-    let mut rows: HashMap<i64, Vec<TrialPeriod>> = HashMap::new();
+    let mut rows: HashMap<i64, Vec<PanelPeriod>> = HashMap::new();
     for i in 0..cols.id.len() {
         let id = cols.id[i];
         if !rows.contains_key(&id) {
             order.push(id);
         }
-        rows.entry(id).or_default().push(TrialPeriod {
+        rows.entry(id).or_default().push(PanelPeriod {
             period: cols.period[i],
             date: day(10_000 + cols.period[i]),
             eligible: flag(cols.eligible[i]),
@@ -152,7 +154,7 @@ fn plain_panel(cols: &PanelCols) -> Panel {
     }
     order
         .into_iter()
-        .map(|id| TrialPerson {
+        .map(|id| PanelPerson {
             record: BalanceRecord::new(id.to_string(), day(1)),
             periods: rows.remove(&id).expect("listed"),
         })
@@ -163,9 +165,9 @@ fn plain_panel(cols: &PanelCols) -> Panel {
 fn simulated_panel(reference: &Reference) -> Panel {
     let p = &reference.simulated.people;
     let cols = &reference.simulated.panel;
-    let mut rows: HashMap<i64, Vec<TrialPeriod>> = HashMap::new();
+    let mut rows: HashMap<i64, Vec<PanelPeriod>> = HashMap::new();
     for i in 0..cols.id.len() {
-        rows.entry(cols.id[i]).or_default().push(TrialPeriod {
+        rows.entry(cols.id[i]).or_default().push(PanelPeriod {
             period: cols.period[i],
             date: day(reference.day0 + reference.step_days * cols.period[i]),
             eligible: flag(cols.eligible[i]),
@@ -189,7 +191,7 @@ fn simulated_panel(reference: &Reference) -> Panel {
                 base = base.with_emigration_date(day(d));
             }
             let record = BalanceRecord::new(base.id.clone(), base.birth_date);
-            TrialPerson {
+            PanelPerson {
                 record: BalanceRecord {
                     core: base,
                     ..record
@@ -321,7 +323,7 @@ fn ratio(k: usize) -> MatchRatio {
 
 fn run_trial(
     reference: &Reference,
-    cohort: &[RoleTransitionRecord<TrialView<'_, BalanceRecord>>],
+    cohort: &[RoleTransitionRecord<TrialView<'_, &BalanceRecord>>],
     k: usize,
     replacement: bool,
     seed: u64,
@@ -346,7 +348,8 @@ fn run(
     replacement: bool,
     seed: u64,
 ) -> TrialOutcome {
-    match_trials(panel, options, &TrialMatching::default(), |pool| {
+    let rows = PanelRows::of(panel);
+    match_trials(&rows.panel(), options, &TrialMatching::default(), |pool| {
         Ok(run_trial(
             reference,
             pool.records(),
@@ -609,9 +612,13 @@ fn spec_mode_matches_the_function() {
         require_resident: true,
         ..MatchSpec::default()
     };
-    let SpecOutput::Trials(from_spec) =
-        run_spec(&spec, SpecInput::Trials { panel: &panel }).expect("valid spec")
-    else {
+    let SpecOutput::Trials(from_spec) = run_spec(
+        &spec,
+        SpecInput::Trials {
+            panel: &PanelRows::of(&panel).panel(),
+        },
+    )
+    .expect("valid spec") else {
         panic!("expected trials");
     };
     let by_hand = run(&reference, &panel, &TrialOptions::default(), 2, true, 31);
@@ -651,7 +658,12 @@ fn spec_mode_needs_a_panel() {
         ..spec.clone()
     };
     assert!(matches!(
-        run_spec(&nearest, SpecInput::Trials { panel: &panel }),
+        run_spec(
+            &nearest,
+            SpecInput::Trials {
+                panel: &PanelRows::of(&panel).panel(),
+            }
+        ),
         Err(Error::Option {
             option: "method",
             ..
@@ -660,11 +672,8 @@ fn spec_mode_needs_a_panel() {
     let mut twice = panel.clone();
     twice.push(panel[0].clone());
     assert!(matches!(
-        run_spec(&spec, SpecInput::Trials { panel: &twice }),
-        Err(Error::Option {
-            option: "panel",
-            ..
-        })
+        PanelRows::of(&twice).try_panel(),
+        Err(Error::DuplicateId { .. })
     ));
 }
 

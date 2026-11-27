@@ -11,6 +11,8 @@
 
 mod common;
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::NaiveDate;
 use common::{Level, cohort, records, two_pass};
 use epistat_matching::prelude::*;
@@ -23,8 +25,7 @@ use epistat_matching::{
     MatchWeightMethod, MatchingCriteria, MissingValuePolicy, NumericBalanceTransform,
     PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
     PropensityScoreEstimate, PropensityScoreOutputScale, SpecOutput, SupplementalBalanceCovariates,
-    TrialOptions, TrialPeriod, TrialPerson, balance_diagnostics, match_weights_from_pairs,
-    pair_weights_from_pairs,
+    TrialOptions, balance_diagnostics, match_weights_from_pairs, pair_weights_from_pairs,
 };
 use epistat_matching::{
     CbpsConfig, CbpsMethod, DeterministicSelection, NearestBirthDateSelection,
@@ -35,6 +36,7 @@ use epistat_matching::{
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 use std::collections::HashMap;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 /// A list of 64-bit values read back as floats so that the pool check can
 /// compare them by bits.
@@ -374,7 +376,7 @@ fn sequential_trials() {
     // Eight periods of 180 days. A person starts treatment at a period set by
     // the position in the cohort, stops again after two or three periods for
     // some, and is eligible while never treated.
-    let panel: Vec<TrialPerson<BalanceRecord>> = rows
+    let panel: Vec<PanelPerson<BalanceRecord>> = rows
         .into_iter()
         .enumerate()
         .map(|(i, row)| {
@@ -391,7 +393,7 @@ fn sequential_trials() {
                     continue;
                 }
                 let on = i % 5 != 0 && p >= first_on && p < first_on + length;
-                periods.push(TrialPeriod {
+                periods.push(PanelPeriod {
                     period: i64::try_from(p).expect("small"),
                     date,
                     eligible: p <= first_on || i % 5 == 0,
@@ -399,7 +401,7 @@ fn sequential_trials() {
                     event: false,
                 });
             }
-            TrialPerson {
+            PanelPerson {
                 record: BalanceRecord {
                     core: row.record,
                     covariates: HashMap::new(),
@@ -426,9 +428,13 @@ fn sequential_trials() {
             },
             ..MatchSpec::default()
         };
-        let SpecOutput::Trials(out) =
-            run_spec(&spec, SpecInput::Trials { panel: &panel }).expect("valid spec")
-        else {
+        let SpecOutput::Trials(out) = run_spec(
+            &spec,
+            SpecInput::Trials {
+                panel: &PanelRows::of(&panel).panel(),
+            },
+        )
+        .expect("valid spec") else {
             panic!("expected trials");
         };
         assert!(

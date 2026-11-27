@@ -288,10 +288,9 @@ pub use role_transition::{
     ExposedPerson, ExposureDensityControl, ExposureDensityOutcome, exposure_density_sets,
 };
 pub use trials::{
-    ControlReuse, ExpandedRow, PanelColumns, PeriodDates, PeriodStrata, TrialColumns,
-    TrialMatching, TrialMember, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool,
-    TrialRecord, TrialResult, TrialView, expand_trial_columns, expand_trials, match_trials,
-    matched_trial_columns, trial_seed,
+    ControlReuse, PeriodDates, PeriodStrata, TrialColumns, TrialMatching, TrialMember,
+    TrialOptions, TrialOutcome, TrialPanel, TrialPanelBuilder, TrialPool, TrialRecord, TrialResult,
+    TrialView, expand_trial_columns, match_trials, matched_trial_columns, trial_seed,
 };
 pub use types::{
     AgeLimitYears, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder, BalanceReport,

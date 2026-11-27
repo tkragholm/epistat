@@ -84,6 +84,7 @@ use crate::role_transition::IdOrder;
 use crate::types::{CovariateRef, CovariateValue};
 use crate::types::{MatchOutcome, RoleTransitionRecord};
 use chrono::NaiveDate;
+use epistat_core::{InputError, Panel, check};
 use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -93,31 +94,185 @@ use std::sync::OnceLock;
 
 /// One period of one person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TrialPeriod {
+pub(crate) struct TrialPeriod {
     /// The period number. Strictly increasing within a person.
-    pub period: i64,
+    pub(crate) period: i64,
     /// The first day of the period. For [`match_trials`] every person has the
     /// same date for the same period, the dates increase with the period, and
     /// a trial that starts at the period has this date as the index date of its
     /// sets. The expansion does not read it.
-    pub date: NaiveDate,
+    pub(crate) date: NaiveDate,
     /// Whether the person is eligible for a trial that starts at the period.
-    pub eligible: bool,
+    pub(crate) eligible: bool,
     /// Whether the person is treated in the period, or `None` when it is not
     /// known. A trial does not start at a period without a known treatment.
-    pub treatment: Option<bool>,
+    pub(crate) treatment: Option<bool>,
     /// Whether the outcome occurs in the period. Later periods are dropped.
-    pub event: bool,
+    pub(crate) event: bool,
 }
 
 /// A person with the periods in which the person is observed.
 #[derive(Debug, Clone)]
-pub struct TrialPerson<R> {
+pub(crate) struct TrialPerson<R> {
     /// The record the matching constraints read: birth date, strata, entry,
     /// death and emigration. It is the same in every trial.
-    pub record: R,
+    pub(crate) record: R,
     /// The periods, in increasing order.
-    pub periods: Vec<TrialPeriod>,
+    pub(crate) periods: Vec<TrialPeriod>,
+}
+
+/// The person-period panel the trials are emulated on: one row per person and
+/// period, keyed by [`Panel`].
+///
+/// The key's unit is the position of the person's record in `records`, and the
+/// rows are sorted by unit and period with no period repeated within a unit,
+/// as [`Panel::new`] checks. Each row has the eligibility for a trial that
+/// starts in its period, the treatment, `None` when it is not known, and
+/// whether the outcome occurs. A person whose record has no row is in no
+/// trial.
+///
+/// Dates are needed by [`match_trials`] only, since the expansion compares
+/// periods: under [`PeriodDates::Shared`] every person has the same date for
+/// the same period, and the sets of a trial have that date as their index
+/// date; under [`PeriodDates::PerPerson`] each row has the person's own date.
+pub struct TrialPanel<'a, R> {
+    people: Vec<TrialPerson<&'a R>>,
+    rows: usize,
+    dated: bool,
+}
+
+impl<R> std::fmt::Debug for TrialPanel<'_, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrialPanel")
+            .field("people", &self.people.len())
+            .field("rows", &self.rows)
+            .field("dated", &self.dated)
+            .finish()
+    }
+}
+
+/// The columns of a [`TrialPanel`] before it is checked.
+#[derive(Debug)]
+#[must_use]
+pub struct TrialPanelBuilder<'a, R> {
+    records: &'a [R],
+    key: Panel<'a>,
+    eligible: &'a [bool],
+    treatment: &'a [Option<bool>],
+    event: &'a [bool],
+    dates: Option<&'a [NaiveDate]>,
+}
+
+impl<'a, R: MatchingRecord> TrialPanel<'a, R> {
+    /// The panel of `records` on the rows `key`, with the eligibility, the
+    /// treatment and the outcome of each row.
+    pub const fn builder(
+        records: &'a [R],
+        key: Panel<'a>,
+        eligible: &'a [bool],
+        treatment: &'a [Option<bool>],
+        event: &'a [bool],
+    ) -> TrialPanelBuilder<'a, R> {
+        TrialPanelBuilder {
+            records,
+            key,
+            eligible,
+            treatment,
+            event,
+            dates: None,
+        }
+    }
+
+    /// The number of rows.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.rows
+    }
+
+    /// Whether the panel has no rows.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.rows == 0
+    }
+
+    /// The people, each with the record and the periods, in the order of the
+    /// records.
+    pub(crate) fn people(&self) -> &[TrialPerson<&'a R>] {
+        &self.people
+    }
+
+    /// The panel of people built in the crate, checked as [`TrialPanelBuilder::build`]
+    /// checks the columns, with dates.
+    #[cfg(test)]
+    pub(crate) fn of_people(people: &'a [TrialPerson<R>]) -> Result<Self, Error> {
+        let people: Vec<TrialPerson<&'a R>> = people
+            .iter()
+            .map(|p| TrialPerson {
+                record: &p.record,
+                periods: p.periods.clone(),
+            })
+            .collect();
+        validate(&people, None)?;
+        Ok(Self {
+            rows: people.iter().map(|p| p.periods.len()).sum(),
+            people,
+            dated: true,
+        })
+    }
+}
+
+impl<'a, R: MatchingRecord> TrialPanelBuilder<'a, R> {
+    /// The date of the first day of each row's period, which [`match_trials`]
+    /// needs.
+    pub const fn dates(mut self, dates: &'a [NaiveDate]) -> Self {
+        self.dates = Some(dates);
+        self
+    }
+
+    /// The checked panel.
+    ///
+    /// # Errors
+    ///
+    /// An [`Error::Input`] when a column is not as long as the key, when a
+    /// unit is not the position of a record, and [`Error::DuplicateId`] when
+    /// two records share an id.
+    pub fn build(self) -> Result<TrialPanel<'a, R>, Error> {
+        let rows = self.key.len();
+        check::same_length("eligible", rows, self.eligible.len())?;
+        check::same_length("treatment", rows, self.treatment.len())?;
+        check::same_length("event", rows, self.event.len())?;
+        if let Some(dates) = self.dates {
+            check::same_length("dates", rows, dates.len())?;
+        }
+        let mut people: Vec<TrialPerson<&'a R>> = self
+            .records
+            .iter()
+            .map(|record| TrialPerson {
+                record,
+                periods: Vec::new(),
+            })
+            .collect();
+        for (row, (&unit, &period)) in self.key.unit().iter().zip(self.key.period()).enumerate() {
+            let person = people.get_mut(unit as usize).ok_or(InputError::Domain {
+                what: "unit",
+                value: f64::from(unit),
+                domain: "the positions of the records",
+            })?;
+            person.periods.push(TrialPeriod {
+                period,
+                date: self.dates.map_or(NaiveDate::MIN, |dates| dates[row]),
+                eligible: self.eligible[row],
+                treatment: self.treatment[row],
+                event: self.event[row],
+            });
+        }
+        validate(&people, None)?;
+        Ok(TrialPanel {
+            people,
+            rows,
+            dated: self.dates.is_some(),
+        })
+    }
 }
 
 /// Whether a person who served as a control may serve again in a later trial.
@@ -164,24 +319,6 @@ impl Default for TrialOptions {
             censor_at_deviation: true,
         }
     }
-}
-
-/// One row of the expanded data: a person in a trial at one period of the
-/// follow-up.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpandedRow {
-    /// The period at which the trial starts.
-    pub trial_period: i64,
-    /// The person.
-    pub id: String,
-    /// The period of the row minus the period at which the trial starts.
-    pub follow_up_time: i64,
-    /// The treatment of the person at the start of the trial.
-    pub assigned: bool,
-    /// The treatment in the period of the row.
-    pub treatment: Option<bool>,
-    /// Whether the outcome occurs in the row.
-    pub outcome: bool,
 }
 
 /// A person who was matched in a trial.
@@ -379,127 +516,18 @@ fn plan<R: MatchingRecord>(panel: &[TrialPerson<R>], options: &TrialOptions) -> 
     }
 }
 
-/// The expanded data of the panel: one row per person, trial and period of
-/// the follow-up, in the order of the panel, then the trial, then the
-/// follow-up time.
-///
-/// The dates of the periods are not read, so a panel whose periods are times
-/// since a person's own origin (months since diagnosis) may give each person
-/// the calendar dates of their periods.
-///
-/// # Errors
-///
-/// A [`Error`] when two people share an id or the periods of a
-/// person are not in order.
-pub fn expand_trials<R: MatchingRecord>(
-    panel: &[TrialPerson<R>],
-    options: &TrialOptions,
-) -> Result<Vec<ExpandedRow>, Error> {
-    validate(panel, None)?;
-    let plan = plan(panel, options);
-    let mut by_person: Vec<Vec<(i64, Enrolment)>> = vec![Vec::new(); panel.len()];
-    for (period, (_, enrolments)) in &plan.trials {
-        for enrolment in enrolments {
-            by_person[enrolment.person].push((*period, *enrolment));
-        }
-    }
-    let mut rows = Vec::new();
-    for (person, trials) in by_person.iter().enumerate() {
-        let source = &panel[person];
-        for (period, enrolment) in trials {
-            for row in &source.periods[enrolment.start..=enrolment.last] {
-                rows.push(ExpandedRow {
-                    trial_period: *period,
-                    id: source.record.id().to_string(),
-                    follow_up_time: row.period - period,
-                    assigned: enrolment.assigned,
-                    treatment: row.treatment,
-                    outcome: row.event,
-                });
-            }
-        }
-    }
-    Ok(rows)
-}
-
-/// The panel in columns: one row per person and period, in the order of the
-/// panel and then of the periods.
-///
-/// A row of the trials points at these rows ([`TrialColumns::row`] and
-/// [`TrialColumns::start_row`]), so covariates kept in columns in the same
-/// order are read by the row. The columns of a person-period analysis in
-/// `epistat_survival::weighting::trials` (`PersonPeriod`, `Panel`) are these
-/// columns with the treatment known.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PanelColumns {
-    /// The position of the person in the panel.
-    pub person: Vec<u64>,
-    /// The period of the row.
-    pub period: Vec<i64>,
-    /// The treatment in the period, `None` when it is not known.
-    pub treatment: Vec<Option<bool>>,
-    /// Whether the person is eligible for a trial that starts in the period.
-    pub eligible: Vec<bool>,
-    /// Whether the outcome occurs in the period.
-    pub event: Vec<bool>,
-}
-
-impl PanelColumns {
-    /// The columns of `panel`, every period of every person.
-    #[must_use]
-    pub fn of<R>(panel: &[TrialPerson<R>]) -> Self {
-        let rows: usize = panel.iter().map(|p| p.periods.len()).sum();
-        let mut out = Self {
-            person: Vec::with_capacity(rows),
-            period: Vec::with_capacity(rows),
-            treatment: Vec::with_capacity(rows),
-            eligible: Vec::with_capacity(rows),
-            event: Vec::with_capacity(rows),
-        };
-        for (person, p) in (0_u64..).zip(panel) {
-            for row in &p.periods {
-                out.person.push(person);
-                out.period.push(row.period);
-                out.treatment.push(row.treatment);
-                out.eligible.push(row.eligible);
-                out.event.push(row.event);
-            }
-        }
-        out
-    }
-
-    /// The number of rows.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.person.len()
-    }
-
-    /// Whether there are no rows.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.person.is_empty()
-    }
-
-    /// The treatment of every row, `None` when a row's treatment is not known.
-    /// The models of the weights need it known.
-    #[must_use]
-    pub fn known_treatment(&self) -> Option<Vec<bool>> {
-        self.treatment.iter().copied().collect()
-    }
-}
-
 /// The rows of the trials in columns, each with the rows of the panel it is
 /// read from: the form that the weights and the outcome model of
 /// `epistat_survival::weighting::trials` take.
 ///
-/// The rows are in the order of [`expand_trials`]: by person in the order of
-/// the panel, then by trial, then by follow-up time. `person`, `trial_period`
-/// and `follow_up_time` are the columns of its `TrialRows`, and the spans of
+/// The rows of [`expand_trial_columns`] are by person in the order of the
+/// panel, then by trial, then by follow-up time. `unit`, `trial_period` and
+/// `follow_up_time` are the columns of its `TrialRows`, and the spans of
 /// [`Self::spans`] those of its `TrialSpans`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TrialColumns {
-    /// The position of the person in the panel.
-    pub person: Vec<u64>,
+    /// The person, as the unit of the panel's key.
+    pub unit: Vec<u32>,
     /// The period at which the trial starts.
     pub trial_period: Vec<i64>,
     /// The period of the row minus the period at which the trial starts.
@@ -510,11 +538,11 @@ pub struct TrialColumns {
     pub treatment: Vec<Option<bool>>,
     /// Whether the outcome occurs in the row.
     pub outcome: Vec<bool>,
-    /// The row of [`PanelColumns`] this row is read from: the person at the
-    /// period of the row, where the time-varying covariates of the row are.
+    /// The row of the panel this row is read from: the person at the period
+    /// of the row, where the time-varying covariates of the row are.
     pub row: Vec<usize>,
-    /// The row of [`PanelColumns`] at the start of the trial, where the
-    /// covariates at the start (the baseline of the trial) are.
+    /// The row of the panel at the start of the trial, where the covariates at
+    /// the start (the baseline of the trial) are.
     pub start_row: Vec<usize>,
 }
 
@@ -522,16 +550,16 @@ impl TrialColumns {
     /// The number of rows.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.person.len()
+        self.unit.len()
     }
 
     /// Whether there are no rows.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.person.is_empty()
+        self.unit.is_empty()
     }
 
-    /// The trials as spans of the rows of [`PanelColumns`]: for each person in
+    /// The trials as spans of the rows of the panel: for each person in
     /// a trial, the row at which the trial starts and the row after its last
     /// row, in the order of the rows. Each span is a run of consecutive panel
     /// rows, since a person is followed in a trial from its start without a
@@ -552,7 +580,7 @@ impl TrialColumns {
 
     fn push(
         &mut self,
-        person: u64,
+        unit: u32,
         trial: i64,
         rows: &[TrialPeriod],
         start: usize,
@@ -560,7 +588,7 @@ impl TrialColumns {
         e: &Enrolment,
     ) {
         let row = &rows[at];
-        self.person.push(person);
+        self.unit.push(unit);
         self.trial_period.push(trial);
         self.follow_up_time.push(row.period - trial);
         self.assigned.push(e.assigned);
@@ -571,7 +599,7 @@ impl TrialColumns {
     }
 }
 
-/// The first row of each person in [`PanelColumns`], and the total.
+/// The first row of each person in the panel, and the total.
 fn offsets<R>(panel: &[TrialPerson<R>]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(panel.len() + 1);
     let mut at = 0;
@@ -583,17 +611,21 @@ fn offsets<R>(panel: &[TrialPerson<R>]) -> Vec<usize> {
     offsets
 }
 
-/// The expanded data of [`expand_trials`] in columns, with the rows of
-/// [`PanelColumns::of`] that each row of the trials is read from.
+/// The rows of every trial of the panel, each with the rows of the panel it
+/// is read from.
+///
+/// The dates of the panel are not read, so a panel whose periods are times
+/// since a person's own origin (months since diagnosis) expands as any other.
 ///
 /// # Errors
 ///
-/// As [`expand_trials`].
+/// None at present: the panel was checked when it was built. The `Result`
+/// leaves room for options that can be invalid.
 pub fn expand_trial_columns<R: MatchingRecord>(
-    panel: &[TrialPerson<R>],
+    panel: &TrialPanel<'_, R>,
     options: &TrialOptions,
 ) -> Result<TrialColumns, Error> {
-    validate(panel, None)?;
+    let panel = panel.people();
     let plan = plan(panel, options);
     let offsets = offsets(panel);
     let mut by_person: Vec<Vec<(i64, Enrolment)>> = vec![Vec::new(); panel.len()];
@@ -603,7 +635,7 @@ pub fn expand_trial_columns<R: MatchingRecord>(
         }
     }
     let mut out = TrialColumns::default();
-    for ((person, trials), number) in by_person.iter().enumerate().zip(0_u64..) {
+    for ((person, trials), number) in by_person.iter().enumerate().zip(0_u32..) {
         let rows = &panel[person].periods;
         for (period, enrolment) in trials {
             for at in enrolment.start..=enrolment.last {
@@ -623,7 +655,7 @@ pub fn expand_trial_columns<R: MatchingRecord>(
 ///
 /// `panel` must be the panel `matched` was matched on. The rows are in the
 /// order of the trials and, in each, of the members, so an analysis of the
-/// matched trials clusters by [`TrialColumns::person`] as the analysis of all
+/// matched trials clusters by [`TrialColumns::unit`] as the analysis of all
 /// trials does: a person who is a member of several trials has rows in each.
 /// `options` may differ from those of the matching in `censor_at_deviation`
 /// alone, so that the sets matched once are analysed by intention to treat and
@@ -631,14 +663,14 @@ pub fn expand_trial_columns<R: MatchingRecord>(
 ///
 /// # Errors
 ///
-/// As [`expand_trials`], and [`Error::UnknownMember`] for a member
-/// that is not enrolled in its trial under `options`.
+/// [`Error::UnknownMember`] for a member that is not enrolled in its trial
+/// under `options`.
 pub fn matched_trial_columns<R: MatchingRecord>(
-    panel: &[TrialPerson<R>],
+    panel: &TrialPanel<'_, R>,
     matched: &TrialOutcome,
     options: &TrialOptions,
 ) -> Result<(TrialColumns, Vec<usize>), Error> {
-    validate(panel, None)?;
+    let panel = panel.people();
     let plan = plan(panel, options);
     let offsets = offsets(panel);
     let position: RapidHashMap<&str, usize> = panel
@@ -666,7 +698,7 @@ pub fn matched_trial_columns<R: MatchingRecord>(
             let rows = &panel[person].periods;
             for at in enrolment.start..=enrolment.last {
                 out.push(
-                    u64::try_from(person).unwrap_or(u64::MAX),
+                    u32::try_from(person).unwrap_or(u32::MAX),
                     trial.period,
                     rows,
                     offsets[person],
@@ -709,7 +741,7 @@ pub enum PeriodDates {
 /// Strata of each person and period, read in each trial at the period at
 /// which the trial starts.
 ///
-/// The values are in the order of the rows of [`PanelColumns::of`]: person by
+/// The values are in the order of the rows of the panel: person by
 /// person in the order of the panel, period by period.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PeriodStrata {
@@ -720,35 +752,11 @@ pub struct PeriodStrata {
 
 impl PeriodStrata {
     /// Strata from one column of values per key, each in the order of the rows
-    /// of [`PanelColumns::of`]. The lengths are checked against the panel when
-    /// it is matched.
+    /// of the panel. The lengths are checked against the panel when it is
+    /// matched.
     #[must_use]
     pub fn new(keys: Vec<String>, values: Vec<Vec<String>>) -> Self {
         Self { keys, values }
-    }
-
-    /// Strata with the value of each key `value(person, period, key)` for the
-    /// persons and periods of `panel`.
-    #[must_use]
-    pub fn of<R>(
-        panel: &[TrialPerson<R>],
-        keys: &[&str],
-        value: impl Fn(&TrialPerson<R>, &TrialPeriod, &str) -> String,
-    ) -> Self {
-        let values = keys
-            .iter()
-            .map(|key| {
-                panel
-                    .iter()
-                    .flat_map(|person| person.periods.iter().map(move |row| (person, row)))
-                    .map(|(person, row)| value(person, row, key))
-                    .collect()
-            })
-            .collect();
-        Self {
-            keys: keys.iter().map(|k| (*k).to_string()).collect(),
-            values,
-        }
     }
 
     fn check<R>(&self, panel: &[TrialPerson<R>]) -> Result<(), Error> {
@@ -943,18 +951,29 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
 ///
 /// # Errors
 ///
-/// A [`Error`] when the panel is not valid or `run` fails. When `run`
-/// fails for several trials, the error is that of the earliest of them.
-pub fn match_trials<R, F>(
-    panel: &[TrialPerson<R>],
+/// [`Error::Option`] for a panel without dates, [`Error::InconsistentDate`]
+/// and [`Error::DatesNotIncreasing`] for dates that do not fit
+/// `matching.dates`, [`Error::StrataRows`] for period strata without a value
+/// for every row, and [`Error::Trial`] with the error of `run` when it fails.
+/// When `run` fails for several trials, the error is that of the earliest of
+/// them.
+pub fn match_trials<'a, R, F>(
+    panel: &TrialPanel<'a, R>,
     options: &TrialOptions,
     matching: &TrialMatching<'_>,
     run: F,
 ) -> Result<TrialOutcome, Error>
 where
     R: MatchingRecord + Sync,
-    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, Error> + Sync,
+    F: Fn(&TrialPool<'_, &'a R>) -> Result<MatchOutcome, Error> + Sync,
 {
+    if !panel.dated {
+        return Err(Error::option(
+            "dates",
+            "matching the trials needs the date of every row of the panel",
+        ));
+    }
+    let panel = panel.people();
     validate(panel, Some(matching.dates))?;
     if let Some(strata) = matching.strata {
         strata.check(panel)?;
@@ -1032,7 +1051,7 @@ struct TrialContext<'a, R> {
     plan: &'a Plan,
     options: &'a TrialOptions,
     matching: TrialMatching<'a>,
-    /// The first row of each person in [`PanelColumns`], for the strata.
+    /// The first row of each person in the panel, for the strata.
     offsets: Vec<usize>,
     panel_order: Option<&'a IdOrder>,
     /// The panel position of each id, built when a trial first has pairs.
@@ -1209,6 +1228,36 @@ mod tests {
             .expect("in range")
     }
 
+    /// One row of the expanded trials, as the tests read it.
+    #[derive(Debug, PartialEq)]
+    struct Row {
+        trial_period: i64,
+        id: String,
+        follow_up_time: i64,
+        assigned: bool,
+        treatment: Option<bool>,
+        outcome: bool,
+    }
+
+    /// The expanded trials of `people` as rows.
+    fn expand_trials(
+        people: &[TrialPerson<BaseRecord>],
+        options: &TrialOptions,
+    ) -> Result<Vec<Row>, Error> {
+        let panel = TrialPanel::of_people(people)?;
+        let columns = expand_trial_columns(&panel, options)?;
+        Ok((0..columns.len())
+            .map(|i| Row {
+                trial_period: columns.trial_period[i],
+                id: people[columns.unit[i] as usize].record.id.clone(),
+                follow_up_time: columns.follow_up_time[i],
+                assigned: columns.assigned[i],
+                treatment: columns.treatment[i],
+                outcome: columns.outcome[i],
+            })
+            .collect())
+    }
+
     fn person(id: &str, rows: &[(i64, bool, Option<bool>, bool)]) -> TrialPerson<BaseRecord> {
         TrialPerson {
             record: BaseRecord::new(id, NaiveDate::from_ymd_opt(1980, 1, 1).expect("valid")),
@@ -1357,7 +1406,7 @@ mod tests {
         assert!(expand_trials(&[a.clone(), d.clone()], &TrialOptions::default()).is_ok());
         assert!(matches!(
             match_trials(
-                &[a, d],
+                &TrialPanel::of_people(&[a, d]).expect("valid"),
                 &TrialOptions::default(),
                 &TrialMatching::default(),
                 |pool| { pool.job(1).run() }
@@ -1413,7 +1462,11 @@ mod tests {
             .collect()
     }
 
-    fn job_on(pool: &TrialPool<'_, BaseRecord>, ordered: bool, ratio: usize) -> MatchOutcome {
+    fn job_on<R: MatchingRecord>(
+        pool: &TrialPool<'_, R>,
+        ordered: bool,
+        ratio: usize,
+    ) -> MatchOutcome {
         let seed = trial_seed(3, pool.period());
         let job = if ordered {
             pool.job(seed)
@@ -1466,11 +1519,13 @@ mod tests {
                 let reference = format!("{reference:?}");
                 assert_eq!(format!("{ordered:?}"), reference, "seed {seed}");
                 let parallel = || {
-                    let outcome =
-                        match_trials(&people, &options, &TrialMatching::default(), |pool| {
-                            Ok(job_on(pool, true, ratio))
-                        })
-                        .expect("valid");
+                    let outcome = match_trials(
+                        &TrialPanel::of_people(&people).expect("valid"),
+                        &options,
+                        &TrialMatching::default(),
+                        |pool| Ok(job_on(pool, true, ratio)),
+                    )
+                    .expect("valid");
                     format!("{:?}", outcome.trials)
                 };
                 assert_eq!(parallel(), reference, "seed {seed}");
@@ -1487,9 +1542,12 @@ mod tests {
     fn matched_rows_are_the_expanded_rows_of_the_members() {
         let people = panel(7, 600);
         let options = TrialOptions::default();
-        let matched = match_trials(&people, &options, &TrialMatching::default(), |pool| {
-            Ok(job_on(pool, true, 2))
-        })
+        let matched = match_trials(
+            &TrialPanel::of_people(&people).expect("valid"),
+            &options,
+            &TrialMatching::default(),
+            |pool| Ok(job_on(pool, true, 2)),
+        )
         .expect("valid");
         let members: usize = matched.trials.iter().map(|t| t.members.len()).sum();
         assert!(members > 100, "{members} members");
@@ -1498,11 +1556,18 @@ mod tests {
                 censor_at_deviation,
                 ..options
             };
-            let all = expand_trial_columns(&people, &options).expect("valid");
-            let (rows, trial) = matched_trial_columns(&people, &matched, &options).expect("valid");
+            let all =
+                expand_trial_columns(&TrialPanel::of_people(&people).expect("valid"), &options)
+                    .expect("valid");
+            let (rows, trial) = matched_trial_columns(
+                &TrialPanel::of_people(&people).expect("valid"),
+                &matched,
+                &options,
+            )
+            .expect("valid");
             assert_eq!(rows.len(), trial.len());
-            let key = |t: &TrialColumns, i: usize| (t.person[i], t.trial_period[i], t.row[i]);
-            let expanded: HashSet<(u64, i64, usize)> =
+            let key = |t: &TrialColumns, i: usize| (t.unit[i], t.trial_period[i], t.row[i]);
+            let expanded: HashSet<(u32, i64, usize)> =
                 (0..all.len()).map(|i| key(&all, i)).collect();
             for i in 0..rows.len() {
                 assert!(expanded.contains(&key(&rows, i)));
@@ -1515,13 +1580,13 @@ mod tests {
                     let person = people
                         .iter()
                         .position(|p| p.record.id() == m.id)
-                        .and_then(|p| u64::try_from(p).ok())
+                        .and_then(|p| u32::try_from(p).ok())
                         .expect("in the panel");
                     let mine = (0..rows.len())
-                        .filter(|&i| trial[i] == k && rows.person[i] == person)
+                        .filter(|&i| trial[i] == k && rows.unit[i] == person)
                         .count();
                     let theirs = (0..all.len())
-                        .filter(|&i| all.person[i] == person && all.trial_period[i] == t.period)
+                        .filter(|&i| all.unit[i] == person && all.trial_period[i] == t.period)
                         .count();
                     assert_eq!(mine, theirs);
                 }
@@ -1534,7 +1599,7 @@ mod tests {
     fn the_earliest_failing_trial_is_reported() {
         let people = panel(4, 500);
         let failed = match_trials(
-            &people,
+            &TrialPanel::of_people(&people).expect("valid"),
             &TrialOptions::default(),
             &TrialMatching::default(),
             |pool| {

@@ -27,6 +27,8 @@
 //! selection, as one call of `run_spec`. Reading the file and building the
 //! records are not.
 
+#[path = "../tests/common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_matching::CbpsConfig;
 use epistat_matching::abadie_imbens::{AbadieImbensData, AbadieImbensSpec, abadie_imbens};
@@ -52,7 +54,7 @@ use epistat_matching::spec::{
 use epistat_matching::{
     BalanceRecord, CovariateEncodingConfig, CovariateRecord, CovariateValue, ElasticNetCvConfig,
     FineBalance, LogisticRegressionConfig, MatchingCriteria, NearestSelection, PropensityEstimator,
-    PropensityLink, PropensityScoreConfig, SpecOutput, TrialPeriod, TrialPerson, balance_report,
+    PropensityLink, PropensityScoreConfig, SpecOutput, balance_report,
     prepare_propensity_distance_config,
 };
 use epistat_matching::{Cohort, CohortRow};
@@ -61,6 +63,7 @@ use std::fs;
 use std::io::{BufRead, Write as _};
 use std::path::PathBuf;
 use std::time::Instant;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 const SEED: u64 = 20_261_121;
 const COVARIATES: [&str; 5] = ["x1", "x2", "x3", "x4", "x5"];
@@ -764,7 +767,7 @@ fn run_risk_set_on<R: CovariateRecord>(
 fn trial_panel<R>(
     rows: &[Row],
     mut record_of: impl FnMut(usize, &Row) -> R,
-) -> Vec<TrialPerson<R>> {
+) -> Vec<PanelPerson<R>> {
     rows.iter()
         .enumerate()
         .map(|(i, row)| {
@@ -774,7 +777,7 @@ fn trial_panel<R>(
                 .t_case
                 .map(|d| ((u64::from(d) - 1) / TRIAL_SPACING) as usize);
             let periods = (0..TRIAL_PERIODS)
-                .map(|k| TrialPeriod {
+                .map(|k| PanelPeriod {
                     period: i64::try_from(k).expect("small"),
                     date: origin() + Days::new(TRIAL_SPACING * (k as u64 + 1)),
                     eligible: !row.treat || k <= start,
@@ -782,7 +785,7 @@ fn trial_panel<R>(
                     event: event_period == Some(k),
                 })
                 .collect();
-            TrialPerson { record: r, periods }
+            PanelPerson { record: r, periods }
         })
         .collect()
 }
@@ -805,7 +808,9 @@ fn run_trials(rows: Vec<Row>, reps: usize) -> Timed {
 }
 
 /// The cohort's case dates are not read: the panel's periods set the trials.
-fn run_trials_on<R: CovariateRecord>(panel: &[TrialPerson<R>], reps: usize) -> Timed {
+fn run_trials_on<R: CovariateRecord + Clone>(panel: &[PanelPerson<R>], reps: usize) -> Timed {
+    let rows = PanelRows::of(panel);
+    let panel = &rows.panel();
     let spec = MatchSpec {
         mode: MatchMode::SequentialTrials,
         method: MatchMethod::Random,

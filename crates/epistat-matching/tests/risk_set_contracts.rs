@@ -2,15 +2,18 @@
 //! support against a brute-force scan, input checks, thread independence and
 //! the options of the trial loop.
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::TrialMatching;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     CommonSupport, ControlReuse, DefaultRiskSetPolicy, DistanceConfig, RiskSetPolicy, TrialOptions,
-    TrialOutcome, TrialPeriod, TrialPerson, exposure_density_sets, match_trials, trial_seed,
+    TrialOutcome, exposure_density_sets, match_trials, trial_seed,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 type Rec = RoleTransitionRecord<BaseRecord>;
 
@@ -343,12 +346,12 @@ fn exposure_density_invariants() {
     }
 }
 
-fn tp(id: &str, rows: &[(i64, Option<bool>)]) -> TrialPerson<BaseRecord> {
-    TrialPerson {
+fn tp(id: &str, rows: &[(i64, Option<bool>)]) -> PanelPerson<BaseRecord> {
+    PanelPerson {
         record: BaseRecord::new(id, birth()),
         periods: rows
             .iter()
-            .map(|&(period, treatment)| TrialPeriod {
+            .map(|&(period, treatment)| PanelPeriod {
                 period,
                 date: day(period.unsigned_abs() * 30),
                 eligible: true,
@@ -360,19 +363,18 @@ fn tp(id: &str, rows: &[(i64, Option<bool>)]) -> TrialPerson<BaseRecord> {
 }
 
 fn run_trials(
-    panel: &[TrialPerson<BaseRecord>],
+    panel: &[PanelPerson<BaseRecord>],
     options: &TrialOptions,
     replacement: bool,
 ) -> TrialOutcome {
-    match_trials(panel, options, &TrialMatching::default(), |pool| {
-        Ok(pool
-            .job(trial_seed(1, pool.period()))
+    let rows = PanelRows::of(panel);
+    match_trials(&rows.panel(), options, &TrialMatching::default(), |pool| {
+        pool.job(trial_seed(1, pool.period()))
             .with_ratio(MatchRatio::new(1).unwrap())
             .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(replacement)
             .run()
-            .expect("a valid job"))
     })
     .unwrap()
 }
