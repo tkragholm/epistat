@@ -116,7 +116,7 @@
 //!    2011;3:203-11.
 
 mod denmark;
-mod lists;
+mod quan;
 
 use crate::Error;
 use crate::codes::{CodeSet, EraCodeSet, Revision, revision_of};
@@ -160,14 +160,14 @@ impl Weights {
 /// ([`ComorbidityMap::charlson_quan_icd10`]).
 #[must_use]
 pub fn charlson_original() -> Weights {
-    Weights::new("Charlson 1987", lists::CHARLSON_1987.to_vec())
+    Weights::new("Charlson 1987", quan::CHARLSON_1987.to_vec())
 }
 
 /// The updated weights of Quan et al. 2011 for the 17 conditions of the Quan
 /// coding ([`ComorbidityMap::charlson_quan_icd10`]).
 #[must_use]
 pub fn charlson_quan2011() -> Weights {
-    Weights::new("Quan 2011", lists::CHARLSON_QUAN_2011.to_vec())
+    Weights::new("Quan 2011", quan::CHARLSON_QUAN_2011.to_vec())
 }
 
 /// The Charlson 1987 weights of the 19 conditions of
@@ -187,7 +187,7 @@ pub fn charlson_denmark_weights() -> Weights {
 pub fn elixhauser_van_walraven() -> Weights {
     Weights::new(
         "van Walraven 2009",
-        lists::ELIXHAUSER_VAN_WALRAVEN_2009.to_vec(),
+        quan::ELIXHAUSER_VAN_WALRAVEN_2009.to_vec(),
     )
 }
 
@@ -197,19 +197,6 @@ pub struct ComorbidityMap {
     conditions: Vec<Condition>,
     /// For each condition, the mask of the conditions it cancels.
     cancels: Vec<u64>,
-}
-
-fn condition_from(spec: &lists::Spec, supersedes: &[&str]) -> Condition {
-    Condition {
-        key: spec.key.to_owned(),
-        label: spec.label.to_owned(),
-        codes: EraCodeSet {
-            icd8: CodeSet::default(),
-            icd10: CodeSet::from_prefixes(spec.prefixes.iter().copied())
-                .unwrap_or_else(|_| unreachable!("the generated prefixes are valid")),
-        },
-        supersedes: supersedes.iter().map(|&s| s.to_owned()).collect(),
-    }
 }
 
 impl ComorbidityMap {
@@ -259,19 +246,7 @@ impl ComorbidityMap {
     /// al. 2005 (Table 1), with no ICD-8 codes.
     #[must_use]
     pub fn charlson_quan_icd10() -> Self {
-        let supersedes = |key: &str| -> &[&str] {
-            match key {
-                "msld" => &["mld"],
-                "diabwc" => &["diab"],
-                "metacanc" => &["canc"],
-                _ => &[],
-            }
-        };
-        let conditions = lists::CHARLSON_QUAN_ICD10
-            .iter()
-            .map(|s| condition_from(s, supersedes(s.key)))
-            .collect();
-        Self::new(conditions).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
+        Self::new(quan::charlson()).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
     }
 
     /// The 19 conditions of the Charlson index in the Danish coding: ICD-10
@@ -290,19 +265,8 @@ impl ComorbidityMap {
     /// et al. 2005 (Table 2), with no ICD-8 codes.
     #[must_use]
     pub fn elixhauser_quan_icd10() -> Self {
-        let supersedes = |key: &str| -> &[&str] {
-            match key {
-                "hypc" => &["hypunc"],
-                "diabc" => &["diabunc"],
-                "metacanc" => &["solidtum"],
-                _ => &[],
-            }
-        };
-        let conditions = lists::ELIXHAUSER_QUAN_ICD10
-            .iter()
-            .map(|s| condition_from(s, supersedes(s.key)))
-            .collect();
-        Self::new(conditions).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
+        Self::new(quan::elixhauser())
+            .unwrap_or_else(|_| unreachable!("the built-in map is valid"))
     }
 
     /// The conditions in the order of their bits.
