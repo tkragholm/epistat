@@ -1,6 +1,5 @@
-//! Absorption of any number of fixed-effect factors, by preconditioned
-//! conjugate gradients or by the alternating projections with which `fixest`
-//! demeans before it fits.
+//! Absorption of any number of fixed-effect factors by preconditioned
+//! conjugate gradients.
 //!
 //! [`FixedEffects`] holds the factors of a linear model (unit, time, firm and
 //! so on) for the rows that enter it, and [`FixedEffects::demean`] removes them
@@ -19,57 +18,22 @@
 //! ```
 //!
 //! and the demeaned column is the residual `r_i = v_i - sum_q alpha_q[g_q(i)]`.
-//! The method of alternating projections \[1, 2\] updates one factor at a time
-//! to the weighted level means of what the others leave,
+//! With `S_q[g] = sum_{i: g_q(i) = g} w_i v_i` the level sums of the column and
+//! `W_q[g]` those of the weights, the column is read once for the `S_q`, and
+//! each iteration reads only the level codes and the weights. Each column is
+//! first centred at its weighted mean, which lies in the span of every factor
+//! and leaves the residual unchanged, so that the criterion below does not
+//! depend on the column's location.
 //!
-//! ```text
-//! alpha_q[g] <- ( S_q[g] - sum_{i: g_q(i) = g} w_i sum_{r != q} alpha_r[g_r(i)] ) / W_q[g]
-//! S_q[g] = sum_{i: g_q(i) = g} w_i v_i,     W_q[g] = sum_{i: g_q(i) = g} w_i
-//! ```
+//! The classical solver is the method of alternating projections \[1, 2\],
+//! block Gauss-Seidel on the normal equations, which updates one factor at a
+//! time to the weighted level means of what the others leave. Its error falls
+//! by about `1 - 1 / k` a sweep, `k` the condition number below, which is slow
+//! on poorly connected designs.
 //!
-//! which is block Gauss-Seidel on the normal equations, a positive
-//! semi-definite and consistent system, and converges to a solution from any
-//! start \[1\]. As in `fixest` \[3\], the iteration runs in the space of the
-//! coefficients: the column is read once for the sums `S_q`, and each sweep
-//! reads only the level codes and the weights. The factor with the most levels
-//! is updated first in every sweep from the others, so the state of the
-//! iteration is the coefficient vector `x` of the other factors, and a sweep is
-//! a map `x -> F(x)`. The sweeps are accelerated by the extrapolation of Irons
-//! and Tuck \[4\] that `fixest` uses,
-//!
-//! ```text
-//! d   = F(F(x)) - F(x),     d2 = d - F(x) + x
-//! x  <- F(F(x)) - (<d, d2> / <d2, d2>) d
-//! ```
-//!
-//! with the plain projection after each extrapolation from iteration 40 on and
-//! a second extrapolation over every fourth iterate, as `fixest` does. The
-//! extrapolation has no convergence proof of its own, so when half of
-//! [`Absorb::max_iterations`] pass without convergence the iteration continues
-//! with plain sweeps, whose convergence is proved. Each column is first centred
-//! at its weighted mean, which lies in the span of every factor and leaves the
-//! residual unchanged, so that the criterion below does not depend on the
-//! column's location.
-//!
-//! With three or more factors the iteration restarts as `fixest`'s
-//! `demean_single_gnl` does \[3\]: after 15 iterations on every factor
-//! without convergence, the two factors with the most levels are solved alone
-//! by the same accelerated iteration, with the others held at their current
-//! coefficients (their contribution moves into the level sums), for at most
-//! `max_iterations / 2 - 15` iterations; the iteration on every factor then
-//! starts again from the combined point with the iterations left, plain
-//! sweeps taking over after half of them. Each stage starts its acceleration
-//! afresh, and the iterations of all stages count against
-//! [`Absorb::max_iterations`]. `fixest` also stops when the sum of squared
-//! residuals changes little over 40 iterations; that rule is not taken over,
-//! since on poorly connected designs it stops far from the solution.
-//!
-//! # Conjugate gradients
-//!
-//! [`AbsorbMethod::ConjugateGradient`], the default, solves the same
-//! equations by Krylov iteration. Eliminating the largest factor `1` exactly, `alpha_1 = W_1^{-1}
-//! (S_1 - C_1x x)` with `C_qr` the weighted cross tabulation of factors `q`
-//! and `r` and `x` the coefficients of the others, leaves
+//! Eliminating the factor with the most levels, `1`, exactly, `alpha_1 =
+//! W_1^{-1} (S_1 - C_1x x)` with `C_qr` the weighted cross tabulation of
+//! factors `q` and `r` and `x` the coefficients of the others, leaves
 //!
 //! ```text
 //! S x = c,     S = A_xx - C_x1 W_1^{-1} C_1x,     c = S_x - C_x1 W_1^{-1} S_1
@@ -77,31 +41,26 @@
 //!
 //! with `A_xx` the normal equations of the other factors among themselves.
 //! `S` is positive semi-definite and `c` lies in its range, so conjugate
-//! gradients \[6\] preconditioned by the level weights `M = diag(W_q)`
-//! converge to a solution from `x = 0` \[7\]. The preconditioned residual
+//! gradients \[4\] preconditioned by the level weights `M = diag(W_q)`
+//! converge to a solution from `x = 0` \[5\]. The preconditioned residual
 //! `M^{-1} (c - S x)` is exactly the vector of level means `m_q` of the
 //! residual at the point `(alpha_1(x), x)`, where the largest factor's means
 //! are zero, so the criterion below applies unchanged. The error falls by
 //! about the factor `(sqrt(k) - 1) / (sqrt(k) + 1)` an iteration, `k` the
-//! ratio of the extreme positive eigenvalues of `M^{-1} S`, where a plain
-//! sweep reduces it by about `1 - 1 / k`. On a chain of 1000 firms with few
-//! movers between neighbours `k` is large: at 10^5 rows the gradients took
-//! about 1200 iterations, where the projections did not meet the criterion
-//! at `1e-10` in 30 000. An iteration
-//! applies `S` once, one pass over the rows for each factor, as a sweep
-//! does. The residual `c - S x` is carried by its recursion; when that passes
-//! the criterion, the means are computed afresh at the point, and the
-//! iteration continues from them when they do not pass. LSQR or LSMR on the
-//! column-scaled dummies, as some packages use, is conjugate gradients (or
-//! MINRES) on the full equations `A` with the same preconditioner, without
-//! the elimination; on the test designs it took about twice the iterations.
-//!
-//! The gradients are the default because they meet the same criterion, and so
-//! the same bound, at least as fast on every design measured: as fast on well
-//! connected panels, where the projections converge in a few iterations, and
-//! 4 to 5 times faster on a sparse worker-firm graph at 10^7 rows, where the
-//! projections still converge. [`AbsorbMethod::Projections`] remains for
-//! results that follow `fixest`'s path.
+//! ratio of the extreme positive eigenvalues of `M^{-1} S`. On a chain of 1000
+//! firms with few movers between neighbours `k` is large: at 10^5 rows the
+//! gradients took about 1200 iterations, where alternating projections did not
+//! meet the criterion at `1e-10` in 30 000. An iteration applies `S` once, one
+//! pass over the rows for each factor. The residual `c - S x` is carried by
+//! its recursion; when that passes the criterion, the means are computed
+//! afresh at the point, and the iteration continues from them when they do not
+//! pass. LSQR or LSMR on the column-scaled dummies, as some packages use, is
+//! conjugate gradients (or MINRES) on the full equations `A` with the same
+//! preconditioner, without the elimination; on the test designs it took about
+//! twice the iterations. Accelerated alternating projections met the same
+//! criterion no faster on any design measured: as fast on well connected
+//! panels, where both converge in a few iterations, and 4 to 5 times slower on
+//! a sparse worker-firm graph at 10^7 rows.
 //!
 //! # Convergence criterion
 //!
@@ -113,15 +72,9 @@
 //! ```
 //!
 //! with `s = sqrt(sum w v_c^2 / sum w)` the weighted root mean square of the
-//! centred column. The `m_q` are the steps the next projection of each factor
-//! would take, and they vanish exactly at the solution. The update of the
-//! largest factor sets its own means to zero, and with two factors the next
-//! sweep's step of the other factor is its `m`, so the criterion is evaluated
-//! exactly at no extra cost. With three or more factors the steps of a sweep
-//! are taken at different points, and when they all pass, the means are
-//! evaluated at one point before stopping. The conjugate gradients evaluate
-//! the means at the point they return. The criterion is checked at the point
-//! that is returned, whatever the path to it and whichever the method.
+//! centred column. The `m_q` are the steps a projection of each factor would
+//! take, and they vanish exactly at the solution. The criterion is checked at
+//! the point that is returned.
 //!
 //! The criterion bounds the error of the demeaned column. Let `D` be the
 //! dummies of all factors, `A = D' W D` and `r*` the exact residual. The error
@@ -143,24 +96,38 @@
 //! A level with one row fits that row exactly and takes a degree of freedom
 //! without information. [`Singletons::Remove`] drops the rows of such levels,
 //! again and again until no factor has a level with one row, as `fixest`
-//! (`fixef.rm = "perfect_fit"` or `"singletons"`, the default) does. Rows with
-//! weight zero are dropped before that, as `fixest` drops them.
+//! (`fixef.rm = "perfect_fit"` or `"singletons"`, the default) does \[3\].
+//! Rows with weight zero are dropped before that, as `fixest` drops them.
 //!
 //! # Fixed effects and their normalisation
 //!
 //! The coefficients are identified only up to the redundancies of the
-//! factors. [`FixedEffects::fixed_effects`] and `FeolsFit::fixed_effects` set
-//! references as `fixest::fixef` does \[3\]: the first row's levels of the
-//! second and later factors are set to zero, then every coefficient that one
-//! row determines from the others is found from it; when none is, the first
-//! row (in row order) with the most coefficients known supplies new references
-//! in the same way. With two factors this sets one level of the second factor
-//! to zero in each connected component, the level of the component's first
-//! row, and the number of references, the number of components, is the number
-//! of redundant coefficients. With three or more factors the count is the one
-//! `fixest` reports, which need not equal the redundancies; when the
-//! normalised coefficients do not reproduce the fitted sums, the solver's own
-//! coefficients are returned with [`FixedEffectValues::normalised`] false.
+//! factors; the fitted sums `sum_q alpha_q[g_q(i)]` are unique.
+//! [`FixedEffects::fixed_effects`] and `FeolsFit::fixed_effects` set
+//! references and recover the other coefficients from the fitted sums.
+//!
+//! With two factors, the levels joined by rows form a bipartite graph. Its
+//! connected components are found by union-find and numbered in the order of
+//! their first rows. In each, the level of the second factor on the
+//! component's first row is set to zero, and a breadth-first pass from it
+//! fixes every other level of the component, each from one row:
+//! `alpha_1[g_1] + alpha_2[g_2]` equals the row's fitted sum. The number of
+//! references, the number of components, is the number of redundant
+//! coefficients \[6\].
+//!
+//! With three or more factors no rule on the graph gives the redundancies in
+//! general, and the coefficients follow a propagation: the first row's levels
+//! of the second and later factors are set to zero, then every coefficient
+//! that one row determines from the others (a row with one coefficient not
+//! known) is found from its fitted sum; when none is, the first row in row
+//! order with the most coefficients known supplies new references in the same
+//! way, its unknown levels of every factor but the first among them set to
+//! zero. The first factor never holds a reference. This is the count `fixest`
+//! reports \[3\], which the small-sample correction of [`crate::feols`] reads,
+//! and it need not equal the redundancies. When the normalised coefficients do
+//! not reproduce the fitted sums, within a running bound on the rounding of
+//! each coefficient, the solver's own coefficients are returned with
+//! [`FixedEffectValues::normalised`] false and the count unchanged.
 //!
 //! # Determinism
 //!
@@ -170,7 +137,8 @@
 //! by level over its rows in row order; when its codes are not sorted, the
 //! other factors' codes and the weights are kept in its order as well, so that
 //! a pass reads them in sequence. Inner products run over fixed blocks added in
-//! block order. Nothing depends on the number of threads.
+//! block order. The normalisation runs on one thread. Nothing depends on the
+//! number of threads.
 //!
 //! # References
 //!
@@ -179,22 +147,20 @@
 //! 2. Gaure S. OLS with multiple high dimensional category variables. Comput
 //!    Stat Data Anal. 2013;66:8-18. doi:10.1016/j.csda.2013.03.024
 //! 3. Bergé L. Efficient estimation of maximum likelihood models with multiple
-//!    fixed-effects: the R package FENmlm. CREA Discussion Paper 2018-13. The
-//!    R package `fixest` 0.14.2, `demeaning.cpp` and `cpp_get_fe_gnl`.
-//! 4. Irons BM, Tuck RC. A version of the Aitken accelerator for computer
-//!    iteration. Int J Numer Methods Eng. 1969;1(3):275-7.
-//!    doi:10.1002/nme.1620010306
-//! 5. Varadhan R, Roland C. Simple and globally convergent methods for
-//!    accelerating the convergence of any EM algorithm. Scand J Stat.
-//!    2008;35(2):335-53. doi:10.1111/j.1467-9469.2007.00585.x
-//! 6. Hestenes MR, Stiefel E. Methods of conjugate gradients for solving
+//!    fixed-effects: the R package FENmlm. CREA Discussion Paper 2018-13; and
+//!    the documentation of the R package `fixest` 0.14.2 (`feols`, `fixef`).
+//! 4. Hestenes MR, Stiefel E. Methods of conjugate gradients for solving
 //!    linear systems. J Res Natl Bur Stand. 1952;49(6):409-36.
 //!    doi:10.6028/jres.049.044
-//! 7. Kaasschieter EF. Preconditioned conjugate gradients for solving
+//! 5. Kaasschieter EF. Preconditioned conjugate gradients for solving
 //!    singular systems. J Comput Appl Math. 1988;24(1-2):265-75.
 //!    doi:10.1016/0377-0427(88)90358-5
+//! 6. Abowd JM, Creecy RH, Kramarz F. Computing person and firm effects using
+//!    linked longitudinal employer-employee data. US Census Bureau Technical
+//!    Paper TP-2002-06; 2002.
 
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
 
 use epistat_core::InputError;
 use epistat_linalg::ROW_BLOCK;
@@ -213,18 +179,6 @@ pub(crate) const DENSE_LEVELS: usize = DENSE_BLOCK / 4;
 /// The levels handled by one task when a factor is summed level by level.
 const LEVELS_PER_TASK: usize = 4096;
 
-/// The iteration from which a plain sweep follows each extrapolation, as in
-/// `fixest`.
-const PROJECT_AFTER_ACCELERATION: usize = 40;
-
-/// Every this many iterations, an extrapolation over three iterates, as in
-/// `fixest`.
-const GRAND_ACCELERATION: usize = 4;
-
-/// With three or more factors, the iterations on every factor before the
-/// two largest are solved alone, as in `fixest` (`iter_warmup`).
-const WARMUP: usize = 15;
-
 /// What to do with levels that have one row.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,14 +189,12 @@ pub enum Singletons {
     Keep,
 }
 
-/// How the normal equations of the projection are solved. Both stop by the
-/// same criterion, so both carry the same bound on the error.
+/// How the normal equations of the projection are solved. Every method
+/// stops by the criterion of the module documentation, so every method
+/// carries the same bound on the error.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AbsorbMethod {
-    /// Alternating projections with the accelerations and the restart of
-    /// `fixest`, for results that follow `fixest`'s path.
-    Projections,
     /// Preconditioned conjugate gradients on the equations of the factors
     /// other than the largest, which is eliminated exactly. Much faster on
     /// poorly connected designs, such as workers who rarely move between
@@ -257,9 +209,8 @@ pub struct Absorb {
     /// The criterion: every weighted level mean of the residual at most
     /// `tolerance` times the root mean square of the centred column.
     pub tolerance: f64,
-    /// The largest number of iterations: with [`AbsorbMethod::Projections`]
-    /// each of two or three sweeps, with
-    /// [`AbsorbMethod::ConjugateGradient`] each of one sweep's work.
+    /// The largest number of iterations, each of one sweep's work: one pass
+    /// over the rows for each factor.
     pub max_iterations: usize,
     /// The solver.
     pub method: AbsorbMethod,
@@ -420,18 +371,20 @@ pub struct Demeaned {
     pub(crate) coefficients: Vec<Vec<Vec<f64>>>,
 }
 
-/// The fixed effects of a fit, normalised as `fixest::fixef` does.
+/// The fixed effects of a fit, normalised by the rule of the module
+/// documentation.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct FixedEffectValues {
     /// For each factor, the coefficient of each code the caller gave, `None`
     /// for a code without rows in the fit.
     pub values: Vec<Vec<Option<f64>>>,
-    /// The number of coefficients set to zero as references in each factor.
+    /// The number of coefficients set to zero as references in each factor,
+    /// also when [`FixedEffectValues::normalised`] is false.
     pub references: Vec<usize>,
-    /// Whether the references were set as `fixest::fixef` sets them. False
-    /// only with three or more factors whose normalised coefficients do not
-    /// reproduce the fitted sums; the values are then the solver's own.
+    /// Whether the values are the normalised coefficients. False only with
+    /// three or more factors whose normalised coefficients do not reproduce
+    /// the fitted sums; the values are then the solver's own.
     pub normalised: bool,
     /// With two factors, the connected component of each code of each factor,
     /// `None` for codes without rows.
@@ -1002,15 +955,15 @@ impl FixedEffects {
             .collect()
     }
 
-    /// The fixed effects of column `column` of `demeaned`, normalised as
-    /// `fixest::fixef` does.
+    /// The fixed effects of column `column` of `demeaned`, normalised by the
+    /// rule of the module documentation.
     ///
     /// # Panics
     ///
     /// If `column` is not a column of `demeaned`.
     #[must_use]
     pub fn fixed_effects(&self, demeaned: &Demeaned, column: usize) -> FixedEffectValues {
-        self.normalise(demeaned.coefficients[column].clone())
+        self.normalise(&demeaned.coefficients[column])
     }
 
     /// One column, given on the rows that enter, replaced by its residual.
@@ -1139,215 +1092,310 @@ impl FixedEffects {
     }
 
     /// The fixed effects of the coefficients `alpha` (factor by factor, level
-    /// by level), normalised as `fixest::fixef` does.
-    pub(crate) fn normalise(&self, mut alpha: Vec<Vec<f64>>) -> FixedEffectValues {
-        let q_count = self.factors.len();
-        let n = self.kept.len();
-        let mut references = vec![0usize; q_count];
-        let mut normalised = true;
-        let mut component = None;
-        if q_count == 2 {
-            let (g0, g1) = (self.factors[0].levels(), self.factors[1].levels());
-            let mut parent: Vec<u32> = (0..u32::try_from(g0 + g1).unwrap_or(u32::MAX)).collect();
-            let (c0, c1) = (&self.factors[0].codes, &self.factors[1].codes);
-            let offset = u32::try_from(g0).unwrap_or(u32::MAX);
-            for k in 0..n {
-                let a = find_root(&mut parent, c0[k]);
-                let b = find_root(&mut parent, c1[k] + offset);
-                if a != b {
-                    parent[a.max(b) as usize] = a.min(b);
-                }
-            }
-            // Components numbered by their first row; the reference is that
-            // row's level of the second factor.
-            let mut number = vec![u32::MAX; g0 + g1];
-            let mut shift = Vec::new();
-            for k in 0..n {
-                let root = find_root(&mut parent, c0[k]) as usize;
-                if number[root] == u32::MAX {
-                    number[root] = u32::try_from(shift.len()).unwrap_or(u32::MAX);
-                    shift.push(alpha[1][c1[k] as usize]);
-                }
-            }
-            references[1] = shift.len();
-            let mut comp0 = vec![0u32; g0];
-            let mut comp1 = vec![0u32; g1];
-            for (g, slot) in comp0.iter_mut().enumerate() {
-                *slot = number[find_root(&mut parent, u32::try_from(g).unwrap_or(0)) as usize];
-            }
-            for (g, slot) in comp1.iter_mut().enumerate() {
-                *slot = number[find_root(&mut parent, u32::try_from(g + g0).unwrap_or(0)) as usize];
-            }
-            for (a, &c) in alpha[0].iter_mut().zip(&comp0) {
-                *a += shift[c as usize];
-            }
-            for (a, &c) in alpha[1].iter_mut().zip(&comp1) {
-                *a -= shift[c as usize];
-            }
-            component = Some(vec![
-                self.expand(0, comp0.iter().map(|&c| Some(c))),
-                self.expand(1, comp1.iter().map(|&c| Some(c))),
-            ]);
-        } else if q_count >= 3 {
-            match self.propagate(&alpha) {
-                Some((values, refs)) => {
-                    alpha = values;
-                    references = refs;
-                }
-                None => normalised = false,
-            }
-        }
-        FixedEffectValues {
-            values: (0..q_count)
-                .map(|q| self.expand(q, alpha[q].iter().map(|&a| Some(a))))
-                .collect(),
-            references,
-            normalised,
-            component,
+    /// by level), normalised by the rule of the module documentation.
+    pub(crate) fn normalise(&self, alpha: &[Vec<f64>]) -> FixedEffectValues {
+        match self.factors.len() {
+            1 => FixedEffectValues {
+                values: vec![self.by_code(0, &alpha[0])],
+                references: vec![0],
+                normalised: true,
+                component: None,
+            },
+            2 => self.normalise_two(alpha),
+            _ => self.normalise_many(alpha),
         }
     }
 
-    /// Values by level of factor `q` placed at the caller's codes.
-    fn expand<T: Copy>(&self, q: usize, values: impl Iterator<Item = Option<T>>) -> Vec<Option<T>> {
-        let f = &self.factors[q];
-        let mut out = vec![None; f.input_levels];
-        for (label, value) in f.labels.iter().zip(values) {
-            out[*label as usize] = value;
+    /// Values by level of factor `q` placed at the caller's codes, `None` at
+    /// codes without rows.
+    fn by_code<T: Copy>(&self, q: usize, values: &[T]) -> Vec<Option<T>> {
+        let level = &self.factors[q];
+        let mut out = vec![None; level.input_levels];
+        for (&label, &v) in level.labels.iter().zip(values) {
+            out[label as usize] = Some(v);
         }
         out
     }
 
-    /// The references and values of `cpp_get_fe_gnl` of `fixest` for three or
-    /// more factors, from the fitted sums of `alpha`; `None` when the values
-    /// do not reproduce the sums.
-    fn propagate(&self, alpha: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<usize>)> {
-        let q_count = self.factors.len();
+    /// The rows of each level of factor `q`.
+    fn members(&self, q: usize) -> Members {
+        let codes = &self.factors[q].codes;
+        let (bounds, order) = grouping(codes, self.factors[q].levels());
+        let order = order.unwrap_or_else(|| {
+            (0..codes.len())
+                .map(|k| u32::try_from(k).unwrap_or(u32::MAX))
+                .collect()
+        });
+        Members { bounds, order }
+    }
+
+    /// The fitted sum `sum_q alpha_q[g_q(k)]` of row `k`, added in factor
+    /// order as in [`FixedEffects::fitted`].
+    fn fitted_row(&self, alpha: &[Vec<f64>], k: usize) -> f64 {
+        let mut total = 0.0;
+        for (a, f) in alpha.iter().zip(&self.factors) {
+            total += a[f.codes[k] as usize];
+        }
+        total
+    }
+
+    /// Two factors: the connected components of the levels joined by rows,
+    /// found by union-find and numbered in the order of their first rows; in
+    /// each, the level of the second factor on the first row is the
+    /// reference, and a breadth-first pass from it fixes every other level
+    /// from one row's fitted sum.
+    fn normalise_two(&self, alpha: &[Vec<f64>]) -> FixedEffectValues {
+        let codes = [&self.factors[0].codes, &self.factors[1].codes];
+        let levels = [self.factors[0].levels(), self.factors[1].levels()];
         let n = self.kept.len();
-        let codes: Vec<&[u32]> = self.factors.iter().map(|f| f.codes.as_slice()).collect();
-        let fitted: Vec<f64> = (0..n)
-            .into_par_iter()
-            .map(|k| (0..q_count).map(|q| alpha[q][codes[q][k] as usize]).sum())
-            .collect();
-        let mut state = Propagation {
-            groups: self
-                .factors
-                .iter()
-                .map(|f| {
-                    let (bounds, order) = grouping(&f.codes, f.levels());
-                    let order = order
-                        .unwrap_or_else(|| (0..u32::try_from(n).unwrap_or(u32::MAX)).collect());
-                    (bounds, order)
-                })
-                .collect(),
-            known: self
-                .factors
-                .iter()
-                .map(|f| vec![false; f.levels()])
-                .collect(),
-            value: self.factors.iter().map(|f| vec![0.0; f.levels()]).collect(),
-            done: vec![0usize; n],
-            queue: VecDeque::new(),
-            complete: 0,
-            q_count,
-        };
-        let mut references = vec![0usize; q_count];
-        let mut cursor = 0usize;
-        while state.complete < n {
-            while cursor < n && state.done[cursor] == q_count {
-                cursor += 1;
-            }
-            // The first row with the most coefficients known. After the
-            // propagation no row lacks only one, so `q_count - 2` is the most.
-            let mut pick = cursor;
-            if state.done[pick] + 2 < q_count {
-                for k in cursor..n {
-                    if state.done[k] < q_count && state.done[k] > state.done[pick] {
-                        pick = k;
-                        if state.done[k] + 2 == q_count {
-                            break;
-                        }
-                    }
-                }
-            }
-            let mut spared = false;
-            for q in 0..q_count {
-                let g = codes[q][pick] as usize;
-                if !state.known[q][g] {
-                    if spared {
-                        references[q] += 1;
-                        state.set(q, g, 0.0);
-                    } else {
-                        spared = true;
-                    }
-                }
-            }
-            while let Some(i) = state.queue.pop_front() {
-                if state.done[i] + 1 != q_count {
-                    continue;
-                }
-                let mut unknown = 0;
-                let mut other = 0.0;
-                for q in 0..q_count {
-                    let g = codes[q][i] as usize;
-                    if state.known[q][g] {
-                        other += state.value[q][g];
-                    } else {
-                        unknown = q;
-                    }
-                }
-                state.set(unknown, codes[unknown][i] as usize, fitted[i] - other);
+        // The levels of the first factor are nodes 0..G_0, those of the
+        // second follow.
+        let node = |q: usize, g: usize| if q == 0 { g } else { levels[0] + g };
+        let mut parent: Vec<usize> = (0..levels[0] + levels[1]).collect();
+        for k in 0..n {
+            let a = find_root(&mut parent, node(0, codes[0][k] as usize));
+            let b = find_root(&mut parent, node(1, codes[1][k] as usize));
+            parent[a.max(b)] = a.min(b);
+        }
+        let mut number = vec![u32::MAX; parent.len()];
+        let mut first_rows = Vec::new();
+        for (k, &c) in codes[0].iter().enumerate() {
+            let root = find_root(&mut parent, node(0, c as usize));
+            if number[root] == u32::MAX {
+                number[root] = u32::try_from(first_rows.len()).unwrap_or(u32::MAX);
+                first_rows.push(k);
             }
         }
-        let largest = fitted.iter().fold(0.0_f64, |m, &v| m.max(v.abs()));
-        let value = state.value;
-        let reproduced = (0..n).into_par_iter().all(|k| {
-            let s: f64 = (0..q_count).map(|q| value[q][codes[q][k] as usize]).sum();
-            (s - fitted[k]).abs() <= 1e-8 * largest.max(f64::MIN_POSITIVE)
-        });
-        reproduced.then_some((value, references))
+        let mut component = [Vec::new(), Vec::new()];
+        for (q, c) in component.iter_mut().enumerate() {
+            *c = (0..levels[q])
+                .map(|g| number[find_root(&mut parent, node(q, g))])
+                .collect();
+        }
+        let members = [self.members(0), self.members(1)];
+        let mut values = [vec![0.0; levels[0]], vec![0.0; levels[1]]];
+        let mut known = [vec![false; levels[0]], vec![false; levels[1]]];
+        let mut queue = VecDeque::new();
+        for &k in &first_rows {
+            let reference = codes[1][k] as usize;
+            known[1][reference] = true;
+            queue.push_back((1, reference));
+            while let Some((q, g)) = queue.pop_front() {
+                let other = 1 - q;
+                for &row in members[q].rows(g) {
+                    let row = row as usize;
+                    let h = codes[other][row] as usize;
+                    if !known[other][h] {
+                        values[other][h] = self.fitted_row(alpha, row) - values[q][g];
+                        known[other][h] = true;
+                        queue.push_back((other, h));
+                    }
+                }
+            }
+        }
+        FixedEffectValues {
+            values: vec![self.by_code(0, &values[0]), self.by_code(1, &values[1])],
+            references: vec![0, first_rows.len()],
+            normalised: true,
+            component: Some(vec![
+                self.by_code(0, &component[0]),
+                self.by_code(1, &component[1]),
+            ]),
+        }
+    }
+
+    /// Three or more factors: the propagation of the module documentation,
+    /// with a running bound on the rounding of each coefficient, against
+    /// which the fitted sums are checked.
+    fn normalise_many(&self, alpha: &[Vec<f64>]) -> FixedEffectValues {
+        let factors = self.factors.len();
+        let levels = self.levels();
+        let mut state = Propagation {
+            fe: self,
+            alpha,
+            members: (0..factors).map(|q| self.members(q)).collect(),
+            values: levels.iter().map(|&g| vec![0.0; g]).collect(),
+            error: levels.iter().map(|&g| vec![0.0; g]).collect(),
+            known: levels.iter().map(|&g| vec![false; g]).collect(),
+            unknown: levels.iter().sum(),
+            count: vec![0; self.kept.len()],
+            ready: VecDeque::new(),
+            waiting: vec![BinaryHeap::new(); factors - 1],
+            cursor: 0,
+        };
+        let mut references = vec![0usize; factors];
+        loop {
+            while let Some(row) = state.ready.pop_front() {
+                if state.count[row as usize] as usize == factors - 1 {
+                    state.determine(row as usize);
+                }
+            }
+            if state.unknown == 0 {
+                break;
+            }
+            let row = state.next_reference_row();
+            let unknown: Vec<usize> = (0..factors)
+                .filter(|&q| !state.known[q][self.factors[q].codes[row] as usize])
+                .collect();
+            for &q in &unknown[1..] {
+                state.set(q, self.factors[q].codes[row] as usize, 0.0, 0.0);
+                references[q] += 1;
+            }
+            state.determine(row);
+        }
+        let normalised = (0..self.kept.len()).all(|k| state.reproduces(k));
+        let values = if normalised { &state.values } else { alpha };
+        FixedEffectValues {
+            values: (0..factors).map(|q| self.by_code(q, &values[q])).collect(),
+            references,
+            normalised,
+            component: None,
+        }
     }
 }
 
-/// The bookkeeping of [`FixedEffects::propagate`].
-struct Propagation {
-    /// The rows of each level of each factor: bounds and rows.
-    groups: Vec<(Vec<usize>, Vec<u32>)>,
-    known: Vec<Vec<bool>>,
-    value: Vec<Vec<f64>>,
-    /// The number of known coefficients of each row.
-    done: Vec<usize>,
-    /// Rows with one unknown coefficient.
-    queue: VecDeque<usize>,
-    /// Rows with every coefficient known.
-    complete: usize,
-    q_count: usize,
+/// The rows of each level of a factor: those of level `g` are
+/// `order[bounds[g]..bounds[g + 1]]`, in increasing order.
+struct Members {
+    bounds: Vec<usize>,
+    order: Vec<u32>,
 }
 
-impl Propagation {
-    fn set(&mut self, q: usize, g: usize, v: f64) {
-        self.known[q][g] = true;
-        self.value[q][g] = v;
-        let (bounds, order) = &self.groups[q];
-        for &i in &order[bounds[g]..bounds[g + 1]] {
-            let i = i as usize;
-            self.done[i] += 1;
-            if self.done[i] + 1 == self.q_count {
-                self.queue.push_back(i);
-            } else if self.done[i] == self.q_count {
-                self.complete += 1;
-            }
-        }
+impl Members {
+    fn rows(&self, g: usize) -> &[u32] {
+        &self.order[self.bounds[g]..self.bounds[g + 1]]
     }
 }
 
 /// The root of `x` in the union-find forest `parent`, halving the path.
-fn find_root(parent: &mut [u32], mut x: u32) -> u32 {
-    while parent[x as usize] != x {
-        let up = parent[parent[x as usize] as usize];
-        parent[x as usize] = up;
-        x = up;
+fn find_root(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
     }
     x
+}
+
+/// `gamma_m = m u / (1 - m u)`, `u` the unit roundoff: a sum of `m + 1`
+/// terms in floating point is within `gamma_m` times the sum of their
+/// magnitudes of the exact sum (Higham, Accuracy and Stability of Numerical
+/// Algorithms, 2nd ed., section 4.2).
+fn gamma(m: usize) -> f64 {
+    let mu = m as f64 * f64::EPSILON / 2.0;
+    mu / (1.0 - mu)
+}
+
+/// The state of the normalisation of three or more factors.
+struct Propagation<'a> {
+    fe: &'a FixedEffects,
+    /// The solver's coefficients, whose fitted sums the values reproduce.
+    alpha: &'a [Vec<f64>],
+    members: Vec<Members>,
+    /// The normalised coefficients, by factor and level.
+    values: Vec<Vec<f64>>,
+    /// A bound on the rounding error of each value: the distance to the
+    /// value that exact arithmetic gives from the same references.
+    error: Vec<Vec<f64>>,
+    known: Vec<Vec<bool>>,
+    /// The number of coefficients not yet known.
+    unknown: usize,
+    /// The number of known coefficients of each row.
+    count: Vec<u32>,
+    /// Rows that reached one unknown coefficient, in the order they did.
+    ready: VecDeque<u32>,
+    /// For `c` in `1..Q - 1`, rows that reached `c` known coefficients; an
+    /// entry is stale once the row's count has moved on.
+    waiting: Vec<BinaryHeap<Reverse<u32>>>,
+    /// No row before this one has no known coefficient.
+    cursor: usize,
+}
+
+impl Propagation<'_> {
+    fn code(&self, q: usize, row: usize) -> usize {
+        self.fe.factors[q].codes[row] as usize
+    }
+
+    /// Sets level `g` of factor `q` to `value`, with the error bound `error`.
+    fn set(&mut self, q: usize, g: usize, value: f64, error: f64) {
+        self.values[q][g] = value;
+        self.error[q][g] = error;
+        self.known[q][g] = true;
+        self.unknown -= 1;
+        let factors = self.known.len();
+        let Self {
+            members,
+            count,
+            ready,
+            waiting,
+            ..
+        } = self;
+        for &row in members[q].rows(g) {
+            let c = &mut count[row as usize];
+            *c += 1;
+            let c = *c as usize;
+            if c == factors - 1 {
+                ready.push_back(row);
+            } else if c < factors - 1 {
+                waiting[c].push(Reverse(row));
+            }
+        }
+    }
+
+    /// Fixes the one unknown coefficient of `row` from its fitted sum.
+    fn determine(&mut self, row: usize) {
+        let factors = self.known.len();
+        let Some(q) = (0..factors).find(|&q| !self.known[q][self.code(q, row)]) else {
+            return;
+        };
+        let fitted = self.fe.fitted_row(self.alpha, row);
+        let (mut value, mut error, mut magnitude) = (fitted, 0.0, fitted.abs());
+        for r in (0..factors).filter(|&r| r != q) {
+            let g = self.code(r, row);
+            value -= self.values[r][g];
+            error += self.error[r][g];
+            magnitude += self.values[r][g].abs();
+        }
+        let error = error + gamma(factors) * magnitude;
+        self.set(q, self.code(q, row), value, error);
+    }
+
+    /// The first row, in row order, among those with the most known
+    /// coefficients short of all but one. Called only when no row has one
+    /// unknown coefficient and some coefficient is unknown, so that such a
+    /// row exists.
+    fn next_reference_row(&mut self) -> usize {
+        for c in (1..self.waiting.len()).rev() {
+            while let Some(&Reverse(row)) = self.waiting[c].peek() {
+                if self.count[row as usize] as usize == c {
+                    return row as usize;
+                }
+                self.waiting[c].pop();
+            }
+        }
+        while self.count[self.cursor] != 0 {
+            self.cursor += 1;
+        }
+        self.cursor
+    }
+
+    /// Whether the values reproduce the fitted sum of `row` within the
+    /// rounding their error bounds and the sum allow. When the references
+    /// leave the values consistent, the values computed in exact arithmetic
+    /// reproduce every fitted sum exactly; each computed value lies within
+    /// its bound of them, and the sum of `Q` values adds at most `gamma_Q`
+    /// times their magnitudes.
+    fn reproduces(&self, row: usize) -> bool {
+        let factors = self.known.len();
+        let (mut total, mut error, mut magnitude) = (0.0, 0.0, 0.0);
+        for q in 0..factors {
+            let g = self.code(q, row);
+            total += self.values[q][g];
+            error += self.error[q][g];
+            magnitude += self.values[q][g].abs();
+        }
+        let fitted = self.fe.fitted_row(self.alpha, row);
+        (total - fitted).abs() <= error + gamma(factors) * magnitude
+    }
 }
 
 /// The result of one column.
@@ -1358,42 +1406,21 @@ pub(crate) struct ColumnResult {
 }
 
 /// The solution of the normal equations for one column with two or more
-/// factors, by accelerated alternating projections or by conjugate
-/// gradients.
+/// factors by conjugate gradients.
 struct Iteration<'a> {
     fe: &'a FixedEffects,
-    /// The level sums of the column, one vector per factor; only those of
-    /// the active factors are read.
+    /// The level sums of the column, one vector per factor.
     sums: &'a [Vec<f64>],
     /// The bound on the level means of the residual.
     bound: f64,
-    /// The factors solved for, in increasing order: every factor, or the
-    /// two largest while the others are held fixed.
-    active: Vec<usize>,
-    /// The factor updated first in each sweep, the active one with the most
-    /// levels.
+    /// The factor eliminated exactly, the one with the most levels (the
+    /// first of them on a tie).
     first: usize,
-    /// The other active factors, in order; the state is their coefficients,
-    /// one after the other.
+    /// The other factors, in order; the state is their coefficients, one
+    /// after the other.
     state: Vec<usize>,
     offsets: Vec<usize>,
     scratch: Vec<f64>,
-}
-
-/// The result of one sweep: the new state, the coefficients of the first
-/// factor at the start state, and the largest step of the other factors.
-struct Sweep {
-    next: Vec<f64>,
-    first: Vec<f64>,
-    step: f64,
-}
-
-/// How a run of accelerated sweeps ended.
-enum Outcome {
-    /// The point that meets the criterion and the iterations taken.
-    Converged(Vec<Vec<f64>>, usize),
-    /// The iterations ran out; the last state.
-    Exhausted(Vec<f64>),
 }
 
 /// The largest absolute value of `v`.
@@ -1408,23 +1435,14 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 
 impl<'a> Iteration<'a> {
     fn new(fe: &'a FixedEffects, sums: &'a [Vec<f64>], bound: f64) -> Self {
-        Self::with_active(fe, sums, bound, (0..fe.factors.len()).collect())
-    }
-
-    fn with_active(
-        fe: &'a FixedEffects,
-        sums: &'a [Vec<f64>],
-        bound: f64,
-        active: Vec<usize>,
-    ) -> Self {
         let levels = fe.levels();
-        let mut first = active[0];
-        for &q in &active {
-            if levels[q] > levels[first] {
+        let mut first = 0;
+        for (q, &g) in levels.iter().enumerate() {
+            if g > levels[first] {
                 first = q;
             }
         }
-        let state: Vec<usize> = active.iter().copied().filter(|&q| q != first).collect();
+        let state: Vec<usize> = (0..levels.len()).filter(|&q| q != first).collect();
         let mut offsets = vec![0];
         for &q in &state {
             offsets.push(offsets.last().copied().unwrap_or(0) + levels[q]);
@@ -1433,7 +1451,6 @@ impl<'a> Iteration<'a> {
             fe,
             sums,
             bound,
-            active,
             first,
             state,
             offsets,
@@ -1441,16 +1458,24 @@ impl<'a> Iteration<'a> {
         }
     }
 
+    /// Runs the solver of `control` to convergence; the point and the
+    /// iterations, `None` when the iterations run out.
+    fn solve(&mut self, control: &Absorb) -> Option<(Vec<Vec<f64>>, usize)> {
+        match control.method {
+            AbsorbMethod::ConjugateGradient => self.conjugate_gradient(control.max_iterations),
+        }
+    }
+
     fn dimension(&self) -> usize {
         self.offsets.last().copied().unwrap_or(0)
     }
 
-    /// The projection of factor `q` given the coefficients `current` of the
-    /// active factors (its own are not read); with `homogeneous`, as if the
-    /// column's level sums were zero.
+    /// The level means of factor `q` of what the other factors' coefficients
+    /// `current` leave of the column (its own are not read); with
+    /// `homogeneous`, as if the column's level sums were zero.
     fn project_with(&mut self, q: usize, current: &[&[f64]], out: &mut [f64], homogeneous: bool) {
         let fe = self.fe;
-        let others: Vec<usize> = self.active.iter().copied().filter(|&r| r != q).collect();
+        let others: Vec<usize> = (0..fe.factors.len()).filter(|&r| r != q).collect();
         fe.other_sums(q, &others, current, &mut self.scratch, out);
         if homogeneous {
             for (o, w) in out.iter_mut().zip(&fe.factors[q].weight) {
@@ -1463,38 +1488,8 @@ impl<'a> Iteration<'a> {
         }
     }
 
-    fn project(&mut self, q: usize, current: &[&[f64]], out: &mut [f64]) {
-        self.project_with(q, current, out, false);
-    }
-
-    /// One sweep from the state `x`.
-    fn sweep(&mut self, x: &[f64]) -> Sweep {
-        let levels = self.fe.levels();
-        let mut first = vec![0.0; levels[self.first]];
-        let mut next = x.to_vec();
-        {
-            let current = self.view(&first, x);
-            let mut out = vec![0.0; levels[self.first]];
-            self.project(self.first, &current, &mut out);
-            first = out;
-        }
-        let mut step = 0.0_f64;
-        for s in 0..self.state.len() {
-            let q = self.state[s];
-            let mut out = vec![0.0; levels[q]];
-            let current = self.view(&first, &next);
-            self.project(q, &current, &mut out);
-            let range = self.offsets[s]..self.offsets[s + 1];
-            for (o, old) in out.iter().zip(&next[range.clone()]) {
-                step = step.max((o - old).abs());
-            }
-            next[range].copy_from_slice(&out);
-        }
-        Sweep { next, first, step }
-    }
-
     /// The coefficients of every factor as slices, from the first factor's
-    /// and the state; empty for the factors that are not active.
+    /// and the state.
     fn view<'b>(&self, first: &'b [f64], x: &'b [f64]) -> Vec<&'b [f64]> {
         let mut out: Vec<&[f64]> = vec![&[]; self.fe.factors.len()];
         out[self.first] = first;
@@ -1504,35 +1499,7 @@ impl<'a> Iteration<'a> {
         out
     }
 
-    /// Whether the level means of the residual at the point `(first, x)` are
-    /// all within the bound, given the largest step of the sweep from `x`.
-    fn converged(&mut self, first: &[f64], x: &[f64], step: f64) -> bool {
-        if step > self.bound {
-            return false;
-        }
-        if self.state.len() == 1 {
-            // The sweep's step is the level mean of the residual at the
-            // point, and the first factor's means are zero there.
-            return true;
-        }
-        let levels = self.fe.levels();
-        for s in 0..self.state.len() {
-            let q = self.state[s];
-            let mut out = vec![0.0; levels[q]];
-            let current = self.view(first, x);
-            self.project(q, &current, &mut out);
-            let range = self.offsets[s]..self.offsets[s + 1];
-            for (o, old) in out.iter().zip(&x[range]) {
-                if (o - old).abs() > self.bound {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    /// The point `(first, x)` as coefficients of every factor; empty for the
-    /// factors that are not active.
+    /// The point `(first, x)` as coefficients of every factor.
     fn point(&self, first: Vec<f64>, x: &[f64]) -> Vec<Vec<f64>> {
         let mut out: Vec<Vec<f64>> = vec![Vec::new(); self.fe.factors.len()];
         out[self.first] = first;
@@ -1542,150 +1509,8 @@ impl<'a> Iteration<'a> {
         out
     }
 
-    /// Runs the solver of `control` to convergence; the point and the
-    /// iterations, `None` when the iterations run out.
-    fn solve(&mut self, control: &Absorb) -> Option<(Vec<Vec<f64>>, usize)> {
-        match control.method {
-            AbsorbMethod::Projections => self.projections(control.max_iterations),
-            AbsorbMethod::ConjugateGradient => self.conjugate_gradient(control.max_iterations),
-        }
-    }
-
-    /// The accelerated projections, with the restart of `fixest` for three
-    /// or more factors: [`WARMUP`] iterations on every factor, then the two
-    /// largest factors alone with the others held fixed, for up to half of
-    /// the iterations, then every factor again.
-    fn projections(&mut self, max_iterations: usize) -> Option<(Vec<Vec<f64>>, usize)> {
-        let start = vec![0.0; self.dimension()];
-        let plain_after = max_iterations.div_ceil(2);
-        let warmup = if self.state.len() == 1 {
-            max_iterations
-        } else {
-            WARMUP.min(max_iterations)
-        };
-        let x = match self.accelerate(start, warmup, plain_after) {
-            Outcome::Converged(point, iterations) => return Some((point, iterations)),
-            Outcome::Exhausted(x) => x,
-        };
-        if warmup == max_iterations {
-            return None;
-        }
-        let mut used = warmup;
-        let restart = (max_iterations / 2).saturating_sub(warmup);
-        let mut x = x;
-        if restart > 0 {
-            let (next, iterations) = self.solve_two_largest(&x, restart);
-            used += iterations;
-            if next.iter().all(|v| v.is_finite()) {
-                x = next;
-            }
-        }
-        let rest = max_iterations - used;
-        match self.accelerate(x, rest, rest.div_ceil(2)) {
-            Outcome::Converged(point, iterations) => Some((point, used + iterations)),
-            Outcome::Exhausted(_) => None,
-        }
-    }
-
-    /// The state `x` with the second largest active factor replaced by the
-    /// solution of the two largest with the others held at `x`, and the
-    /// iterations that took, at most `budget`.
-    fn solve_two_largest(&mut self, x: &[f64], budget: usize) -> (Vec<f64>, usize) {
-        let levels = self.fe.levels();
-        let mut slot = 0;
-        for (s, &q) in self.state.iter().enumerate() {
-            if levels[q] > levels[self.state[slot]] {
-                slot = s;
-            }
-        }
-        let second = self.state[slot];
-        let pair: Vec<usize> = self
-            .active
-            .iter()
-            .copied()
-            .filter(|&q| q == self.first || q == second)
-            .collect();
-        let held: Vec<usize> = self
-            .active
-            .iter()
-            .copied()
-            .filter(|&q| !pair.contains(&q))
-            .collect();
-        let fe = self.fe;
-        let mut sums: Vec<Vec<f64>> = vec![Vec::new(); fe.factors.len()];
-        {
-            let current = self.view(&[], x);
-            for &q in &pair {
-                let mut out = vec![0.0; levels[q]];
-                fe.other_sums(q, &held, &current, &mut self.scratch, &mut out);
-                sums[q] = self.sums[q].iter().zip(&out).map(|(s, o)| s - o).collect();
-            }
-        }
-        let range = self.offsets[slot]..self.offsets[slot + 1];
-        let mut sub = Iteration::with_active(fe, &sums, self.bound, pair);
-        let (values, iterations) =
-            match sub.accelerate(x[range.clone()].to_vec(), budget, budget.div_ceil(2)) {
-                Outcome::Converged(mut point, iterations) => {
-                    (std::mem::take(&mut point[second]), iterations)
-                }
-                Outcome::Exhausted(state) => (state, budget),
-            };
-        let mut next = x.to_vec();
-        next[range].copy_from_slice(&values);
-        (next, iterations)
-    }
-
-    /// At most `budget` iterations of the accelerated sweeps from the state
-    /// `start`, with plain sweeps after `plain_after` of them.
-    fn accelerate(&mut self, start: Vec<f64>, budget: usize, plain_after: usize) -> Outcome {
-        let mut x = start;
-        let sweep = self.sweep(&x);
-        if self.converged(&sweep.first, &x, sweep.step) {
-            return Outcome::Converged(self.point(sweep.first, &x), 0);
-        }
-        let mut gx = sweep.next;
-        let mut grand: Vec<Vec<f64>> = Vec::new();
-        for iteration in 1..=budget {
-            if iteration > plain_after {
-                let sweep = self.sweep(&gx);
-                if self.converged(&sweep.first, &gx, sweep.step) {
-                    return Outcome::Converged(self.point(sweep.first, &gx), iteration);
-                }
-                gx = sweep.next;
-                continue;
-            }
-            let sweep = self.sweep(&gx);
-            if self.converged(&sweep.first, &gx, sweep.step) {
-                return Outcome::Converged(self.point(sweep.first, &gx), iteration);
-            }
-            let ggx = sweep.next;
-            x = irons_tuck(&x, &gx, &ggx);
-            if iteration >= PROJECT_AFTER_ACCELERATION {
-                x = self.sweep(&x).next;
-            }
-            let sweep = self.sweep(&x);
-            if self.converged(&sweep.first, &x, sweep.step) {
-                return Outcome::Converged(self.point(sweep.first, &x), iteration);
-            }
-            gx = sweep.next;
-            if iteration % GRAND_ACCELERATION == 0 {
-                grand.push(gx.clone());
-                if grand.len() == 3 {
-                    let y = irons_tuck(&grand[0], &grand[1], &grand[2]);
-                    grand.clear();
-                    let sweep = self.sweep(&y);
-                    if self.converged(&sweep.first, &y, sweep.step) {
-                        return Outcome::Converged(self.point(sweep.first, &y), iteration);
-                    }
-                    gx = sweep.next;
-                }
-            }
-        }
-        Outcome::Exhausted(gx)
-    }
-
     /// The coefficients of the first factor from the state `x`, and the
-    /// level means of the residual of the other active factors at that
+    /// level means of the residual of the other factors at that
     /// point, in the layout of the state. With `homogeneous` the column's
     /// sums are dropped, and the means are `-W^{-1} S x`.
     fn means(&mut self, x: &[f64], homogeneous: bool) -> (Vec<f64>, Vec<f64>) {
@@ -1771,28 +1596,6 @@ impl<'a> Iteration<'a> {
         }
         None
     }
-}
-
-/// The extrapolation of Irons and Tuck from `x`, `F(x)` and `F(F(x))`;
-/// `F(F(x))` itself when the second difference is zero or the step is not
-/// finite.
-fn irons_tuck(x: &[f64], gx: &[f64], ggx: &[f64]) -> Vec<f64> {
-    let d: Vec<f64> = ggx.iter().zip(gx).map(|(a, b)| a - b).collect();
-    let d2: Vec<f64> = d
-        .iter()
-        .zip(gx.iter().zip(x))
-        .map(|(d, (g, x))| d - g + x)
-        .collect();
-    let product = blocked_total(d.len(), |k| d[k] * d2[k]);
-    let square = blocked_total(d.len(), |k| d2[k] * d2[k]);
-    let coefficient = product / square;
-    if square == 0.0 || !coefficient.is_finite() {
-        return ggx.to_vec();
-    }
-    ggx.iter()
-        .zip(&d)
-        .map(|(g, d)| g - coefficient * d)
-        .collect()
 }
 
 /// The error of a value of `found` entries where `expected` were needed.
@@ -1964,32 +1767,56 @@ mod tests {
     }
 
     #[test]
-    fn both_solvers_on_a_chain_do_not_depend_on_the_number_of_threads() {
+    fn a_chain_meets_the_criterion_and_does_not_depend_on_the_number_of_threads() {
         // 20 000 workers are more than DENSE_LEVELS and their rows are
         // shuffled, so they are summed through the copied codes; the years
-        // and the 30 firms are summed by dense blocks. The projections need
-        // more than the warm-up, so the restart on the two largest factors
-        // runs.
+        // and the 30 firms are summed by dense blocks. Few workers move, and
+        // only to a neighbouring firm, so the factors are poorly connected.
         let (worker, firm, year, v) = chain(20_000, 30);
         let w: Vec<f64> = (0..v.len()).map(|i| 0.5 + (i % 5) as f64 / 4.0).collect();
-        for method in [AbsorbMethod::Projections, AbsorbMethod::ConjugateGradient] {
-            let control = Absorb {
-                method,
-                ..Absorb::new()
-            };
-            let run = || {
-                let fe = FixedEffects::new(&[&worker, &firm, &year], Some(&w), Singletons::Remove)
-                    .unwrap();
-                let out = fe.demean(&[&v], &control).unwrap();
-                let mut bits = out.columns.col_as_slice(0).to_vec();
-                bits.push(out.iterations[0] as f64);
-                bits
-            };
-            if method == AbsorbMethod::Projections {
-                assert!(run().last().copied().unwrap() > WARMUP as f64);
+        let control = Absorb::new();
+        for factors in [vec![&worker, &firm], vec![&worker, &firm, &year]] {
+            let factors: Vec<&[u32]> = factors.iter().map(|f| f.as_slice()).collect();
+            let fe = FixedEffects::new(&factors, Some(&w), Singletons::Remove).unwrap();
+            let out = fe.demean(&[&v], &control).unwrap();
+            let r = out.columns.col_as_slice(0);
+            let kept = fe.weights().unwrap();
+            let largest_r = largest(r);
+            for q in 0..fe.n_factors() {
+                let g = fe.levels()[q];
+                let (mut sum, mut weight, mut count) =
+                    (vec![0.0; g], vec![0.0; g], vec![0usize; g]);
+                for (k, &c) in fe.codes(q).iter().enumerate() {
+                    sum[c as usize] += kept[k] * r[k];
+                    weight[c as usize] += kept[k];
+                    count[c as usize] += 1;
+                }
+                for c in 0..g {
+                    // Recomputed here, a level mean carries the rounding of
+                    // its sum of `count` terms of at most 1.25 |r|: at most
+                    // count * 1.25 * eps * |r|_max over a weight of at least
+                    // 0.5 * count, so 2.5 eps |r|_max.
+                    let mean = sum[c] / weight[c];
+                    let allowed = control.tolerance * out.scale[0] + 2.5 * f64::EPSILON * largest_r;
+                    assert!(mean.abs() <= allowed, "factor {q} level {c}: {mean:e}");
+                }
             }
-            epistat_testkit::assert_same_on_threads(run);
+            assert!(out.iterations[0] > 10);
         }
+        epistat_testkit::assert_same_on_threads(|| {
+            let fe =
+                FixedEffects::new(&[&worker, &firm, &year], Some(&w), Singletons::Remove).unwrap();
+            let out = fe.demean(&[&v], &control).unwrap();
+            let mut bits = out.columns.col_as_slice(0).to_vec();
+            bits.push(out.iterations[0] as f64);
+            let fe = FixedEffects::new(&[&worker, &firm], Some(&w), Singletons::Remove).unwrap();
+            let out = fe.demean(&[&v], &control).unwrap();
+            bits.extend(out.columns.col_as_slice(0));
+            let fx = fe.fixed_effects(&out, 0);
+            bits.extend(fx.values.iter().flatten().flatten());
+            bits.extend(fx.references.iter().map(|&r| r as f64));
+            bits
+        });
     }
 
     #[test]
@@ -2011,7 +1838,7 @@ mod tests {
             let out = fe.demean(&[&v], &Absorb::new()).unwrap();
             let mut bits = out.columns.col_as_slice(0).to_vec();
             bits.extend(
-                fe.normalise(out.coefficients[0].clone())
+                fe.normalise(&out.coefficients[0])
                     .values
                     .iter()
                     .flatten()
@@ -2019,5 +1846,290 @@ mod tests {
             );
             bits
         });
+    }
+
+    /// The normalised values of factor `q` at the caller's codes `0..`, which
+    /// all have rows in these tests.
+    fn values(fx: &FixedEffectValues, q: usize) -> Vec<f64> {
+        fx.values[q].iter().map(|v| v.unwrap()).collect()
+    }
+
+    /// Checks that the values reproduce the fitted sums of `alpha` exactly:
+    /// with whole numbers far below 2^53 every sum and difference is exact.
+    fn assert_reproduces_exactly(fe: &FixedEffects, alpha: &[Vec<f64>], fx: &FixedEffectValues) {
+        let fitted = fe.fitted(alpha);
+        for (k, &f) in fitted.iter().enumerate() {
+            let codes: Vec<u32> = (0..fe.n_factors())
+                .map(|q| fe.labels(q)[fe.codes(q)[k] as usize])
+                .collect();
+            assert_eq!(fx.sum(&codes), Some(f), "row {k}");
+        }
+    }
+
+    #[test]
+    fn two_components_have_two_references_and_reproduce_the_fitted_sums_exactly() {
+        // Units 2 and 3 with periods 2 and 3 form the component of the first
+        // row, units 0 and 1 with periods 0 and 1 the other. The references
+        // are the periods of each component's first row, 2 and 0.
+        let unit = [2u32, 0, 0, 1, 3, 3];
+        let time = [2u32, 0, 1, 1, 2, 3];
+        let fe = FixedEffects::new(&[&unit, &time], None, Singletons::Keep).unwrap();
+        let alpha = vec![vec![1.0, 2.0, 3.0, 4.0], vec![10.0, 20.0, 30.0, 40.0]];
+        let fx = fe.normalise(&alpha);
+        assert_eq!(fx.references, vec![0, 2]);
+        assert!(fx.normalised);
+        // Component 0: t2 = 0, u2 = 3 + 30, u3 = 4 + 30, t3 = 4 + 40 - 34.
+        // Component 1: t0 = 0, u0 = 1 + 10, t1 = 1 + 20 - 11, u1 = 2 + 20 - 10.
+        assert_eq!(values(&fx, 0), vec![11.0, 12.0, 33.0, 34.0]);
+        assert_eq!(values(&fx, 1), vec![0.0, 10.0, 0.0, 10.0]);
+        assert_reproduces_exactly(&fe, &alpha, &fx);
+        let component = fx.component.as_ref().unwrap();
+        assert_eq!(component[0], vec![Some(1), Some(1), Some(0), Some(0)]);
+        assert_eq!(component[1], vec![Some(1), Some(1), Some(0), Some(0)]);
+        // A unit and a period of different components: not identified.
+        assert_eq!(fx.sum(&[0, 2]), None);
+        assert_eq!(fx.sum(&[0, 7]), None);
+    }
+
+    #[test]
+    fn three_factors_with_a_nested_one_follow_the_propagation() {
+        // Workers, firms and sectors, with firms 0 and 1 in sector 0 and
+        // firms 2 and 3 in sector 1: the sectors are nested in the firms.
+        // The redundancies are 3: one of the connected worker-firm graph and
+        // the two sectors. The first row sets firm 0 and sector 0 to zero and
+        // fixes worker 0; rows 1, 2 and 7 then fix firm 1, worker 1 and
+        // worker 3. Rows 3 and 6 have one coefficient known; the first, row
+        // 3, sets sector 1 to zero and fixes firm 2, and rows 4 and 5 fix
+        // worker 2 and firm 3. References 0, 1 and 2, as many as the
+        // redundancies, so the values reproduce row 6 as well.
+        let worker = [0u32, 0, 1, 1, 2, 2, 3, 3];
+        let firm = [0u32, 1, 1, 2, 2, 3, 3, 0];
+        let sector = [0u32, 0, 0, 1, 1, 1, 1, 0];
+        let fe = FixedEffects::new(&[&worker, &firm, &sector], None, Singletons::Keep).unwrap();
+        let alpha = vec![
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![10.0, 20.0, 30.0, 40.0],
+            vec![100.0, 200.0],
+        ];
+        let fx = fe.normalise(&alpha);
+        assert_eq!(fx.references, vec![0, 1, 2]);
+        assert!(fx.normalised);
+        assert_eq!(values(&fx, 0), vec![111.0, 112.0, 113.0, 114.0]);
+        assert_eq!(values(&fx, 1), vec![0.0, 10.0, 120.0, 130.0]);
+        assert_eq!(values(&fx, 2), vec![0.0, 0.0]);
+        assert_reproduces_exactly(&fe, &alpha, &fx);
+    }
+
+    #[test]
+    fn more_references_than_redundancies_leave_the_solver_coefficients() {
+        // Two levels in each of three factors on four rows: the dummies have
+        // rank 4 of 6, so 2 redundancies. The first row sets b0 and c0 to
+        // zero and fixes a0; no row then has one unknown coefficient, and
+        // row 1, the first with one known, sets c1 to zero and fixes a1; row
+        // 2 fixes b1. Three references: row 3 is not reproduced
+        // (a0 + b1 + c1 = 11 - 2 + 0 against 17).
+        let a = [0u32, 1, 1, 0];
+        let b = [0u32, 0, 1, 1];
+        let c = [0u32, 1, 0, 1];
+        let fe = FixedEffects::new(&[&a, &b, &c], None, Singletons::Keep).unwrap();
+        let alpha = vec![vec![1.0, 2.0], vec![3.0, 5.0], vec![7.0, 11.0]];
+        let fx = fe.normalise(&alpha);
+        assert_eq!(fx.references, vec![0, 1, 2]);
+        assert!(!fx.normalised);
+        assert_eq!(values(&fx, 0), alpha[0]);
+        assert_eq!(values(&fx, 1), alpha[1]);
+        assert_eq!(values(&fx, 2), alpha[2]);
+    }
+
+    /// A fraction of whole numbers in lowest terms with a positive
+    /// denominator, for the exact projections of the small designs.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Ratio(i128, i128);
+
+    impl Ratio {
+        fn new(n: i128, d: i128) -> Self {
+            let (mut a, mut b) = (n.abs(), d.abs());
+            while b != 0 {
+                (a, b) = (b, a % b);
+            }
+            let g = a.max(1) * d.signum();
+            Self(n / g, d / g)
+        }
+        fn int(n: i128) -> Self {
+            Self(n, 1)
+        }
+        fn sub(self, o: Self) -> Self {
+            Self::new(self.0 * o.1 - o.0 * self.1, self.1 * o.1)
+        }
+        fn mul(self, o: Self) -> Self {
+            Self::new(self.0 * o.0, self.1 * o.1)
+        }
+        fn div(self, o: Self) -> Self {
+            Self::new(self.0 * o.1, self.1 * o.0)
+        }
+        fn to_f64(self) -> f64 {
+            self.0 as f64 / self.1 as f64
+        }
+    }
+
+    /// The exact weighted residual of `v` on the dummies of `factors`, by
+    /// Gauss-Jordan elimination of the normal equations in exact arithmetic,
+    /// and the number of redundant coefficients.
+    fn exact_residual(factors: &[&[u32]], w: &[i128], v: &[i128]) -> (Vec<Ratio>, usize) {
+        let levels: Vec<usize> = factors
+            .iter()
+            .map(|f| f.iter().max().map_or(0, |&m| m as usize + 1))
+            .collect();
+        let offset: Vec<usize> = levels
+            .iter()
+            .scan(0, |s, &g| {
+                *s += g;
+                Some(*s - g)
+            })
+            .collect();
+        let m: usize = levels.iter().sum();
+        let column = |k: usize, q: usize| offset[q] + factors[q][k] as usize;
+        let mut a = vec![vec![Ratio::int(0); m + 1]; m];
+        for k in 0..v.len() {
+            for q in 0..factors.len() {
+                for r in 0..factors.len() {
+                    let (i, j) = (column(k, q), column(k, r));
+                    a[i][j] = Ratio::int(a[i][j].0 + w[k]);
+                }
+                let i = column(k, q);
+                a[i][m] = Ratio::int(a[i][m].0 + w[k] * v[k]);
+            }
+        }
+        let mut pivots = Vec::new();
+        let mut row = 0;
+        for col in 0..m {
+            let Some(p) = (row..m).find(|&i| a[i][col].0 != 0) else {
+                continue;
+            };
+            a.swap(row, p);
+            let pivot = a[row][col];
+            for x in &mut a[row] {
+                *x = x.div(pivot);
+            }
+            for i in 0..m {
+                if i != row && a[i][col].0 != 0 {
+                    let factor = a[i][col];
+                    for j in 0..=m {
+                        a[i][j] = a[i][j].sub(factor.mul(a[row][j]));
+                    }
+                }
+            }
+            pivots.push(col);
+            row += 1;
+        }
+        // The free coefficients are zero; each pivot's is its right side.
+        let mut alpha = vec![Ratio::int(0); m];
+        for (i, &col) in pivots.iter().enumerate() {
+            alpha[col] = a[i][m];
+        }
+        let residual = (0..v.len())
+            .map(|k| (0..factors.len()).fold(Ratio::int(v[k]), |r, q| r.sub(alpha[column(k, q)])))
+            .collect();
+        (residual, m - pivots.len())
+    }
+
+    #[test]
+    fn small_designs_meet_the_bound_against_their_exact_projections() {
+        // A loose tolerance, so that the error is well above rounding and the
+        // bound of the module documentation is tested against the exact
+        // residual r*: ||r - r*||_W <= ||gamma|| / sqrt(lambda_+), gamma the
+        // level sums of w r. lambda_+ is the (d + 1)-th smallest eigenvalue of
+        // A = D' W D, d the redundancies found in exact arithmetic; the
+        // Jacobi eigenvalues are those of A + E with ||E|| <= p(m) eps ||A||
+        // for a modest polynomial p (Golub and Van Loan, section 8.5), so
+        // m^2 eps ||A||_F is taken off. The computed residual and gamma carry
+        // the rounding of sums of at most n terms of the size of |v|, so
+        // n m eps ||v||_W is added, as in the comparisons with fixest.
+        let unbalanced: (Vec<Vec<u32>>, Vec<i128>) = (
+            vec![
+                vec![0, 0, 0, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5],
+                vec![0, 1, 2, 1, 2, 0, 2, 3, 3, 4, 4, 5, 4, 5, 6],
+            ],
+            vec![1, 2, 1, 3, 1, 1, 2, 1, 1, 4, 1, 1, 2, 1, 3],
+        );
+        let components: (Vec<Vec<u32>>, Vec<i128>) = (
+            vec![vec![0, 0, 1, 1, 2, 3, 3, 2], vec![0, 1, 0, 1, 2, 3, 2, 3]],
+            vec![1, 2, 3, 1, 1, 2, 1, 2],
+        );
+        let nested: (Vec<Vec<u32>>, Vec<i128>) = (
+            vec![
+                vec![0, 0, 1, 1, 2, 2, 3, 3, 0, 2],
+                vec![0, 1, 1, 2, 2, 3, 3, 0, 2, 0],
+                vec![0, 0, 0, 1, 1, 1, 1, 0, 1, 0],
+            ],
+            vec![1, 1, 2, 1, 3, 1, 1, 2, 1, 1],
+        );
+        let complete: (Vec<Vec<u32>>, Vec<i128>) = (
+            vec![
+                (0..12).map(|i| i / 3).collect(),
+                (0..12).map(|i| i % 3).collect(),
+            ],
+            vec![1; 12],
+        );
+        for (name, (factors, w)) in [
+            ("unbalanced", unbalanced),
+            ("components", components),
+            ("nested", nested),
+            ("complete", complete),
+        ] {
+            let n = w.len();
+            let v: Vec<i128> = (0..n as i128).map(|k| (k * 37 + 11) % 23 - 9).collect();
+            let factors: Vec<&[u32]> = factors.iter().map(Vec::as_slice).collect();
+            let (exact, redundancies) = exact_residual(&factors, &w, &v);
+            let wf: Vec<f64> = w.iter().map(|&x| x as f64).collect();
+            let vf: Vec<f64> = v.iter().map(|&x| x as f64).collect();
+            let fe = FixedEffects::new(&factors, Some(&wf), Singletons::Keep).unwrap();
+            let control = Absorb {
+                tolerance: 1e-6,
+                ..Absorb::new()
+            };
+            let out = fe.demean(&[&vf], &control).unwrap();
+            let r = out.columns.col_as_slice(0);
+            let m: usize = fe.levels().iter().sum();
+            let offset: Vec<usize> = fe
+                .levels()
+                .iter()
+                .scan(0, |s, &g| {
+                    *s += g;
+                    Some(*s - g)
+                })
+                .collect();
+            let mut a = vec![0.0; m * m];
+            let mut gamma2 = 0.0;
+            for q in 0..fe.n_factors() {
+                let mut sum = vec![0.0; fe.levels()[q]];
+                for k in 0..n {
+                    sum[fe.codes(q)[k] as usize] += wf[k] * r[k];
+                    for p in 0..fe.n_factors() {
+                        let i = offset[q] + fe.codes(q)[k] as usize;
+                        let j = offset[p] + fe.codes(p)[k] as usize;
+                        a[i * m + j] += wf[k];
+                    }
+                }
+                gamma2 += sum.iter().map(|s| s * s).sum::<f64>();
+            }
+            let (mut eigen, _) = epistat_linalg::eigen::symmetric_eigen_jacobi(&a, m);
+            eigen.sort_by(f64::total_cmp);
+            let frobenius = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let lambda = eigen[redundancies] - (m * m) as f64 * f64::EPSILON * frobenius;
+            assert!(lambda > 0.0, "{name}");
+            let norm_v = (0..n).map(|k| wf[k] * vf[k] * vf[k]).sum::<f64>().sqrt();
+            let error = (0..n)
+                .map(|k| wf[k] * (r[k] - exact[k].to_f64()).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let bound = gamma2.sqrt() / lambda.sqrt() + (n * m) as f64 * f64::EPSILON * norm_v;
+            assert!(error <= bound, "{name}: {error:e} above {bound:e}");
+            let fx = fe.fixed_effects(&out, 0);
+            assert!(fx.normalised, "{name}");
+            if fe.n_factors() == 2 {
+                assert_eq!(fx.references[1], redundancies, "{name}");
+            }
+        }
     }
 }
