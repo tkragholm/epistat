@@ -250,7 +250,7 @@ use std::collections::HashMap;
 use epistat_linalg::{Mat, MatRef};
 
 use crate::check::{check_lengths, check_row_count};
-use crate::cox::design::{Clusters, Newton, Stepping, newton};
+use crate::cox::design::{DenseClusters, Newton, Stepping, newton};
 use crate::cox::{CoxModelFit, CoxOptions, Ties};
 use crate::error::{Error, Result};
 use crate::metrics::censoring::CensoringKm;
@@ -796,7 +796,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
         }
         let (model, factor) = prepare(expansion, x, &source, opts.ties, clusters);
         let summary = with_clusters
-            .then(|| Clusters::of(&model.cluster, 0..model.cluster.len(), model.n_clusters));
+            .then(|| DenseClusters::of(&model.cluster, 0..model.cluster.len(), model.n_clusters));
         newton(
             &model,
             &Newton {

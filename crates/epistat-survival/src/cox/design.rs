@@ -1715,13 +1715,16 @@ fn gather_stratum(
 
 /// The clusters of a fit: the number of cluster codes, which is the number of
 /// rows of the cluster score sums, and the number of codes some row carries.
+/// The codes are the data's own, dense from 0, and not those of
+/// `epistat_inference::Clusters`, which numbers clusters in the order they
+/// first appear (see `order`).
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Clusters {
+pub(crate) struct DenseClusters {
     pub(crate) count: usize,
     pub(crate) present: usize,
 }
 
-impl Clusters {
+impl DenseClusters {
     /// The clusters of the rows `kept`, with codes below `count`.
     pub(crate) fn of(cluster: &[u32], kept: impl Iterator<Item = usize>, count: usize) -> Self {
         let mut seen = vec![false; count];
@@ -1741,7 +1744,7 @@ impl Clusters {
 fn cluster_meat(
     model: &impl PartialLikelihood,
     p: usize,
-    clusters: Option<Clusters>,
+    clusters: Option<DenseClusters>,
     beta: &[f64],
 ) -> Option<Mat<f64>> {
     let clusters = clusters?;
@@ -1786,7 +1789,7 @@ fn chi_square(statistic: f64, df: usize, expected_df: usize) -> Option<ChiSquare
 fn score_tests(
     model: &impl PartialLikelihood,
     p: usize,
-    clusters: Option<Clusters>,
+    clusters: Option<DenseClusters>,
     beta0: &[f64],
     score: &[f64],
     solved: &[f64],
@@ -1823,9 +1826,9 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     }
 
     let Prepared { model, factor } = prepare(input, &kept);
-    let clusters = input
-        .cluster
-        .map(|cluster| Clusters::of(cluster, kept.iter().map(|&i| i as usize), model.n_clusters));
+    let clusters = input.cluster.map(|cluster| {
+        DenseClusters::of(cluster, kept.iter().map(|&i| i as usize), model.n_clusters)
+    });
     newton(
         &model,
         &Newton {
@@ -1860,7 +1863,7 @@ pub(crate) struct Newton<'a> {
     pub(crate) n_events: f64,
     pub(crate) n_rows: usize,
     /// The clusters of the robust variance, `None` without clusters.
-    pub(crate) clusters: Option<Clusters>,
+    pub(crate) clusters: Option<DenseClusters>,
 }
 
 /// Newton-Raphson with step halving on `model` from the starting
