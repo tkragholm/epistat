@@ -3,8 +3,8 @@
 //!
 //! - [`bfgs`]: BFGS with the line search of Moré and Thuente, for smooth
 //!   functions with a gradient.
-//! - [`brent`]: Brent's one-dimensional minimiser on an interval, as R's
-//!   `optimize`.
+//! - [`brent`]: Brent's one-dimensional minimiser on an interval, with the
+//!   tolerance of R's `optimize`.
 //! - [`nelder_mead`]: the Nelder-Mead simplex method, for functions with values
 //!   only.
 //! - [`simplex`]: a dense primal simplex method for linear programs
@@ -19,8 +19,8 @@
 //! - [`min_cost_flow`]: minimum-cost flow with integer data by the network
 //!   simplex method, for assignment and matching problems of thousands of
 //!   nodes.
-//! - [`root`]: roots in a bracket, by bisection and by Brent's method as R's
-//!   `uniroot`.
+//! - [`root`]: roots in a bracket, by bisection and by the ITP method of
+//!   Oliveira and Takahashi.
 //! - [`multistart`]: independent restarts of a fit, run in parallel under the
 //!   `rayon` feature, with a selection that does not depend on thread count.
 //!

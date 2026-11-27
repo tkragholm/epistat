@@ -18,7 +18,8 @@
     reason = "R's values as R printed them, with 17 significant digits"
 )]
 
-use epistat_optim::brent::minimize;
+use epistat_optim::Error;
+use epistat_optim::brent::{Brent, minimize};
 
 type Case = (&'static str, f64, f64, f64, f64, &'static [f64]);
 
@@ -185,14 +186,17 @@ fn points_and_minimum_equal_optimize() {
     let eps = f64::EPSILON.sqrt();
     for &(name, lower, upper, tol, minimum, points) in CASES {
         let mut seen = Vec::new();
-        let m = minimize(
+        let m = minimize::<Error>(
             |x| {
                 seen.push(x);
-                function(name, x)
+                Ok(function(name, x))
             },
             lower,
             upper,
-            tol,
+            &Brent {
+                tolerance: tol,
+                ..Brent::default()
+            },
         )
         .unwrap();
         let search = &points[..points.len() - 1];
