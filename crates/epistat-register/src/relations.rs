@@ -98,8 +98,8 @@ impl DisjointSets {
 /// # Errors
 ///
 /// [`Error::Input`] when there are no key columns, when the columns
-/// differ in length, when there are more than `u32::MAX` rows, or when a code
-/// is not below the number of rows.
+/// differ in length or when there are more than `u32::MAX` rows, and
+/// [`Error::OutOfRange`] when a code is not below the number of rows.
 pub fn connected_components(keys: &[&[Option<u32>]]) -> Result<Vec<u32>, Error> {
     let Some(first_column) = keys.first() else {
         return Err(InputError::Empty { what: "keys" }.into());
@@ -118,9 +118,12 @@ pub fn connected_components(keys: &[&[Option<u32>]]) -> Result<Vec<u32>, Error> 
         for (row, code) in column.iter().enumerate() {
             let Some(code) = *code else { continue };
             let Some(slot) = first_row.get_mut(code as usize) else {
-                return Err(Error::invalid(format!(
-                    "key code {code} is not below the number of rows, {n}"
-                )));
+                return Err(Error::OutOfRange {
+                    what: "key code",
+                    row: Some(row),
+                    value: u64::from(code),
+                    limit: n as u64,
+                });
             };
             if *slot == u32::MAX {
                 *slot = row as u32;

@@ -47,23 +47,26 @@ impl CodeHierarchy {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when a specification does not parse, a label is
-    /// used twice, or two entries share a code.
+    /// [`Error::CodeItem`] when a specification does not parse,
+    /// [`Error::DuplicateName`] when a label is used twice, and
+    /// [`Error::SharedCode`] when two entries share a code.
     pub fn from_ranges(ranges: &[(&str, &str)]) -> Result<Self, Error> {
         let mut labels: Vec<String> = Vec::with_capacity(ranges.len());
         let mut sets: Vec<CodeSet> = Vec::with_capacity(ranges.len());
         for &(label, spec) in ranges {
             if labels.iter().any(|l| l == label) {
-                return Err(Error::invalid(format!(
-                    "the hierarchy uses the label {label:?} twice"
-                )));
+                return Err(Error::DuplicateName {
+                    what: "label",
+                    name: label.to_owned(),
+                });
             }
             let set = CodeSet::parse(spec)?;
             if let Some(k) = sets.iter().position(|s| !s.intersection(&set).is_empty()) {
-                return Err(Error::invalid(format!(
-                    "the entries {:?} and {label:?} share a code",
-                    labels[k]
-                )));
+                return Err(Error::SharedCode {
+                    what: "entries",
+                    first: labels[k].clone(),
+                    second: label.to_owned(),
+                });
             }
             labels.push(label.to_owned());
             sets.push(set);

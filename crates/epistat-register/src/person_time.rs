@@ -105,6 +105,7 @@ pub fn civil_from_sas_seconds(sas_seconds: i64) -> ((i64, i64, i64), i64) {
 
 /// One calendar year's share of an interval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct YearOverlap {
     /// The calendar year.
     pub calendar_year: i32,

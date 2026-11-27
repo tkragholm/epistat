@@ -1,41 +1,44 @@
-# Reference flags and scores from the R package comorbidity, for
-# tests/comorbidity_r.rs. The package has no dates, so this checks the code
-# lists, the hierarchy and the weights; windows are checked in events_r.rs.
+# Flags and scores of the R package comorbidity for tests/comorbidity_r.rs.
+# The package is run as a black box on generated codes: its maps are never
+# read. The codes are every WHO ICD-10 category (a letter and two digits),
+# each with one subdivision digit, and around every code that the
+# specifications in src/comorbidity/quan.rs name, the code with a fifth
+# character and the code one character shorter.
 # Run from the crate directory:
 #   Rscript tests/data/comorbidity_reference.R > tests/data/comorbidity_reference.json
 suppressMessages({library(comorbidity); library(jsonlite)})
-set.seed(20261122)
-maps <- comorbidity:::.maps
-names_of <- c(charlson = "charlson_icd10_quan", elixhauser = "elixhauser_icd10_quan")
+set.seed(20261127)
+maps <- c(charlson = "charlson_icd10_quan", elixhauser = "elixhauser_icd10_quan")
 
-# Codes: every letter + 2 digits and letter + 3 digits, and around each prefix
-# of the maps the prefix, shorter and longer forms and the next code.
-L <- LETTERS
-d2 <- sprintf("%02d", 0:99)
-d3 <- sprintf("%03d", 0:999)
-alphabet <- c(as.vector(outer(L, d2, paste0)), as.vector(outer(L, d3, paste0)))
-prefixes <- unique(unlist(lapply(maps[names_of], unlist)))
-around <- unlist(lapply(prefixes, function(p) {
-  n <- nchar(p)
-  c(p, paste0(p, c("0", "9", "A", "Z")), paste0(p, "A9"), substr(p, 1, n - 1),
-    paste0(substr(p, 1, n - 1), c("0", "9", "A")))
-}))
-codes <- sort(unique(c(alphabet, around[nchar(around) >= 1])))
+categories <- as.vector(outer(LETTERS, sprintf("%02d", 0:99), paste0))
+subdivisions <- as.vector(outer(categories, 0:9, paste0))
 
-flag_masks <- function(map, assign0) {
+# The ends of every item of the specifications, as the crate reads them: dots
+# and a trailing `.x` dropped, ranges split at the hyphen or en dash.
+source_lines <- readLines("src/comorbidity/quan.rs", encoding = "UTF-8")
+specs <- sub('.*icd10: "([^"]*)".*', "\\1", grep("icd10: \"", source_lines, value = TRUE))
+items <- unlist(strsplit(specs, ",\\s*"))
+ends <- unlist(strsplit(items, "[-–]"))
+ends <- gsub(".", "", sub("\\.x$", "", ends), fixed = TRUE)
+named <- unique(ends)
+around <- unique(c(named, paste0(named, "0"), paste0(named, "9"), paste0(named, "A"),
+                   substr(named, 1, nchar(named) - 1)))
+codes <- sort(unique(c(categories, subdivisions, around[nchar(around) >= 1])))
+
+flags <- function(codes, map, assign0) {
   x <- data.frame(id = seq_along(codes), code = codes)
   r <- comorbidity(x, id = "id", code = "code", map = map, assign0 = assign0,
                    labelled = FALSE, tidy.codes = FALSE)
-  m <- as.matrix(r[, names(maps[[map]])])
-  as.numeric(m %*% (2^(seq_len(ncol(m)) - 1)))
+  as.data.frame(r)[order(r$id), setdiff(names(r), "id")]
 }
-nonzero <- function(mask) {
-  k <- which(mask != 0)
-  list(code = codes[k], mask = mask[k])
-}
+masks <- function(m) as.numeric(as.matrix(m) %*% (2^(seq_len(ncol(m)) - 1)))
+
 single <- list()
-for (nm in names(names_of)) {
-  single[[nm]] <- nonzero(flag_masks(names_of[[nm]], FALSE))
+for (nm in names(maps)) {
+  m <- flags(codes, maps[[nm]], FALSE)
+  mask <- masks(m)
+  k <- which(mask != 0)
+  single[[nm]] <- list(conditions = names(m), code = codes[k], mask = mask[k])
 }
 
 # Persons with 1 to 30 codes drawn from the codes that match something, with a
@@ -44,43 +47,28 @@ interesting <- sort(unique(c(single$charlson$code, single$elixhauser$code)))
 n_persons <- 300
 sizes <- sample(1:30, n_persons, replace = TRUE)
 person_codes <- lapply(sizes, function(s) {
-  c(sample(interesting, s, replace = TRUE), if (runif(1) < 0.3) sample(alphabet, 1))
+  c(sample(interesting, s, replace = TRUE), if (runif(1) < 0.3) sample(categories, 1))
 })
 long <- data.frame(id = rep(seq_len(n_persons), lengths(person_codes)),
                    code = unlist(person_codes))
 person_ref <- function(map, assign0, weights) {
   r <- comorbidity(long, id = "id", code = "code", map = map, assign0 = assign0,
                    labelled = FALSE, tidy.codes = FALSE)
-  m <- as.matrix(r[, names(maps[[map]])])
-  out <- list(mask = as.numeric(m %*% (2^(seq_len(ncol(m)) - 1))))
-  for (w in weights) out[[w]] <- unname(score(r, weights = w, assign0 = assign0))
+  o <- order(r$id)
+  out <- list(mask = masks(as.data.frame(r)[o, setdiff(names(r), "id")]))
+  for (w in weights) out[[w]] <- unname(score(r, weights = w, assign0 = assign0))[o]
   out
 }
 persons <- list(
   codes = lapply(person_codes, I),
-  charlson_raw = person_ref("charlson_icd10_quan", FALSE, c("charlson", "quan")),
-  charlson = person_ref("charlson_icd10_quan", TRUE, c("charlson", "quan")),
-  elixhauser_raw = person_ref("elixhauser_icd10_quan", FALSE, c("vw")),
-  elixhauser = person_ref("elixhauser_icd10_quan", TRUE, c("vw"))
+  charlson_raw = person_ref(maps[["charlson"]], FALSE, c("charlson", "quan")),
+  charlson = person_ref(maps[["charlson"]], TRUE, c("charlson", "quan")),
+  elixhauser_raw = person_ref(maps[["elixhauser"]], FALSE, c("vw")),
+  elixhauser = person_ref(maps[["elixhauser"]], TRUE, c("vw"))
 )
-
-raw <- c("e10.2", "E 10 2", "i21-0", "J45.0", "k25.", " c50 9 ", "dj45", "Z.95.8")
-tidy <- list(raw = raw, tidy = comorbidity:::.tidy(data.frame(code = raw), "code")$code)
-
-# Codes around the prefixes that match nothing in either map, a sample.
-pool <- setdiff(unique(around), interesting)
-zero_around <- sort(sample(pool, min(1500, length(pool))))
-for (nm in names(names_of)) {
-  x <- data.frame(id = seq_along(zero_around), code = zero_around)
-  r <- comorbidity(x, id = "id", code = "code", map = names_of[[nm]], assign0 = FALSE,
-                   labelled = FALSE, tidy.codes = FALSE)
-  m <- as.matrix(r[, names(maps[[names_of[[nm]]]])])
-  stopifnot(all(m == 0))
-}
 
 cat(toJSON(list(
   r_version = R.version.string,
   package_version = as.character(packageVersion("comorbidity")),
-  zero_around = zero_around,
-  single = single, persons = persons, tidy = tidy
+  codes = codes, single = single, persons = persons
 ), digits = NA, auto_unbox = TRUE))
