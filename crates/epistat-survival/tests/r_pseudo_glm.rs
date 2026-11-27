@@ -35,8 +35,10 @@
 //! `(32 kappa (n + p) eps + 8 tc) sqrt(V_ii V_jj)`, with `tc` the allowance
 //! of the coefficients.
 
+use epistat_glm::Link;
+use epistat_glm::robust::SandwichType;
 use epistat_linalg::Mat;
-use epistat_survival::pseudo::regression::{Covariance, GeeOptions, Link, fit};
+use epistat_survival::pseudo::regression::{PseudoRegressionOptions, fit};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -86,7 +88,7 @@ fn run(case: &Case, worst: &mut (f64, f64, String, f64)) {
     let n = case.y.len();
     let p = case.p;
     let x = Mat::from_fn(n, p, |i, j| case.x[i * p + j]);
-    let mut opts = GeeOptions::new(link_of(&case.link));
+    let mut opts = PseudoRegressionOptions::new(link_of(&case.link));
     opts.tolerance = 1e-13;
     opts.max_iterations = 200;
     let got = fit(x.as_ref(), &case.y, &case.id, None, None, None, &opts)
@@ -151,7 +153,7 @@ fn run(case: &Case, worst: &mut (f64, f64, String, f64)) {
     if case.method.as_deref() == Some("glm.fit") {
         let want = case.vcov_hc3.as_ref().expect("eventglm's covariance");
         let mut hc3 = opts;
-        hc3.covariance = Covariance::Hc3;
+        hc3.covariance = SandwichType::Hc3;
         let got = fit(x.as_ref(), &case.y, &case.id, None, None, None, &hc3)
             .unwrap_or_else(|e| panic!("{}: {e}", case.name));
         let h_max = got

@@ -180,7 +180,13 @@ use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 pub use ipcw::{IpcwMethod, IpcwOptions, pseudo_ipcw};
-pub use regression::{Covariance, GeeFit, GeeOptions, Link};
+#[expect(deprecated, reason = "the 0.3 names stay for one release")]
+pub use regression::{Covariance, GeeFit, GeeOptions};
+pub use regression::{PseudoRegression, PseudoRegressionOptions};
+
+/// The link of a regression on pseudo-values, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "use `epistat_glm::Link`")]
+pub type Link = epistat_glm::Link;
 pub use states::{StateEstimate, StateOptions, StatePseudo, StateTarget, pseudo_states};
 
 /// What is estimated at each time.
@@ -546,8 +552,8 @@ impl Pseudo {
         &self,
         covariates: Option<MatRef<'_, f64>>,
         time_effects: bool,
-        opts: &GeeOptions,
-    ) -> Result<GeeFit> {
+        opts: &PseudoRegressionOptions,
+    ) -> Result<PseudoRegression> {
         let s = self.stacked(covariates, time_effects)?;
         regression::fit(s.x.as_ref(), &s.y, &s.cluster, None, None, None, opts)
     }

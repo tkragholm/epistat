@@ -10,11 +10,13 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
+use epistat_glm::Link;
+use epistat_glm::robust::SandwichType;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::pseudo::{
-    Covariance, GeeOptions, IpcwMethod, IpcwOptions, Link, Target, pseudo_ipcw,
+    IpcwMethod, IpcwOptions, PseudoRegressionOptions, Target, pseudo_ipcw,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -66,8 +68,8 @@ fn ipcw_pseudo_values_do_not_depend_on_the_number_of_threads() {
     let opts = IpcwOptions::new(Target::CumulativeIncidence { cause: 1 });
     assert_same_on_pools(&POOLS, || {
         let p = pseudo_ipcw(&competing, z.as_ref(), &[3.0], &opts).unwrap();
-        let mut gee = GeeOptions::new(Link::Identity);
-        gee.covariance = Covariance::Hc3;
+        let mut gee = PseudoRegressionOptions::new(Link::Identity);
+        gee.covariance = SandwichType::Hc3;
         let fit = p.regress(Some(z.as_ref()), false, &gee).unwrap();
         let mut out = fit.coefficients.clone();
         out.extend_from_slice(&fit.covariance);

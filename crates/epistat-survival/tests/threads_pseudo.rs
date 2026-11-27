@@ -12,10 +12,13 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
+use epistat_glm::Link;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::pseudo::{GeeOptions, Link, Method, Pseudo, PseudoOptions, Target, pseudo};
+use epistat_survival::pseudo::{
+    Method, Pseudo, PseudoOptions, PseudoRegressionOptions, Target, pseudo,
+};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 struct Sample {
@@ -139,7 +142,7 @@ fn regression_does_not_depend_on_the_number_of_threads() {
                     f64::from(p.subject[i] % 7) / 7.0
                 }
             });
-            let mut gee = GeeOptions::new(link);
+            let mut gee = PseudoRegressionOptions::new(link);
             gee.max_iterations = 200;
             let fit = p.regress(Some(covariate.as_ref()), true, &gee).unwrap();
             let mut out = fit.coefficients.clone();

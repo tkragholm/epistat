@@ -15,10 +15,11 @@
     reason = "counts and grid values are far below the limits of the casts"
 )]
 
+use epistat_glm::Link;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::pseudo::{GeeOptions, Link, Method, PseudoOptions, Target, pseudo};
+use epistat_survival::pseudo::{Method, PseudoOptions, PseudoRegressionOptions, Target, pseudo};
 
 const EPS: f64 = f64::EPSILON;
 
@@ -294,7 +295,11 @@ fn a_binary_covariate_regression_is_the_difference_of_the_means() {
     let n = p.n_subjects();
     let x = Mat::from_fn(n, 1, |i, _| f64::from(p.subject[i].is_multiple_of(3)));
     let fit = p
-        .regress(Some(x.as_ref()), false, &GeeOptions::new(Link::Identity))
+        .regress(
+            Some(x.as_ref()),
+            false,
+            &PseudoRegressionOptions::new(Link::Identity),
+        )
         .unwrap();
     let mean = |flag: bool| {
         let v: Vec<f64> = (0..n)

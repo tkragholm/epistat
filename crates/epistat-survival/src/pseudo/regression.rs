@@ -45,7 +45,7 @@
 //! cancels, so it is not estimated. `M` is formed by
 //! [`epistat_inference::sandwich::meat`].
 //!
-//! With [`Covariance::Hc3`] each score is divided by one less the leverage of
+//! With [`SandwichType::Hc3`] each score is divided by one less the leverage of
 //! its observation, `h_i = w_i mu'_i^2 x_i' A^-1 x_i`, so that
 //!
 //! ```text
@@ -72,7 +72,7 @@
 //!   its default type, HC3, and for several times that of `geese`, which has no
 //!   leverage correction. The default here is HC0, which is what `geese` gives
 //!   and `vcovHC(type = "HC0")` gives for a `glm`, so that one time and several
-//!   are the same estimator. [`Covariance::Hc3`] is `eventglm`'s for one time.
+//!   are the same estimator. [`SandwichType::Hc3`] is `eventglm`'s for one time.
 //!
 //! # References
 //!
@@ -87,64 +87,41 @@
 //!    covariance matrix estimators with improved finite sample properties,
 //!    J Econometrics 29: 305-325.
 
-use epistat_glm::{Family, Glm};
+use epistat_glm::robust::SandwichType;
+use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram};
 
 use crate::error::{Error, Result};
 
-/// The link between the mean of the pseudo-values and the linear predictor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Link {
-    /// `mu = eta`, a difference of the target.
-    Identity,
-    /// `mu = exp(eta)`, a ratio.
-    Log,
-    /// `mu = 1 - exp(-exp(eta))`, a log hazard ratio when the target is a
-    /// survival probability.
-    Cloglog,
-}
-
-impl Link {
-    const fn glm(self) -> epistat_glm::Link {
-        match self {
-            Self::Identity => epistat_glm::Link::Identity,
-            Self::Log => epistat_glm::Link::Log,
-            Self::Cloglog => epistat_glm::Link::Cloglog,
-        }
-    }
-
-    /// Whether `mu` is a mean the link can start from.
-    fn admits(self, mu: f64) -> bool {
-        match self {
-            Self::Identity => mu.is_finite(),
-            Self::Log => mu > 0.0 && mu.is_finite(),
-            Self::Cloglog => mu > 0.0 && mu < 1.0,
-        }
+/// Whether the mean `mu` lies in the range of `link`, for the links the
+/// regression takes: identity, log, logit and complementary log-log.
+fn admits(link: Link, mu: f64) -> Option<bool> {
+    match link {
+        Link::Identity => Some(mu.is_finite()),
+        Link::Log => Some(mu > 0.0 && mu.is_finite()),
+        Link::Logit | Link::Cloglog => Some(mu > 0.0 && mu < 1.0),
+        _ => None,
     }
 }
 
-/// The covariance of the coefficients.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Covariance {
-    /// The sandwich of Liang and Zeger with no small-sample correction, the one
-    /// of `geese`.
-    #[default]
-    Hc0,
-    /// Each score divided by one less the leverage of its observation, as
-    /// `sandwich::vcovHC(type = "HC3")`. It needs one observation in each
-    /// cluster.
-    Hc3,
-}
+/// The covariance of a regression on pseudo-values, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "use `epistat_glm::robust::SandwichType`")]
+pub type Covariance = SandwichType;
 
 /// What [`fit`] does besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GeeOptions {
-    /// The link. It has no default.
+pub struct PseudoRegressionOptions {
+    /// The link: identity, log, logit or complementary log-log, as
+    /// `eventglm`'s `link`. It has no default.
     pub link: Link,
-    /// The covariance. The default is [`Covariance::Hc0`].
-    pub covariance: Covariance,
+    /// The sandwich: [`SandwichType::Hc0`], Liang and Zeger's with no
+    /// small-sample correction, the one of `geese`, or [`SandwichType::Hc3`],
+    /// each score divided by one less the leverage of its observation, as
+    /// `sandwich::vcovHC(type = "HC3")`, which needs one observation in each
+    /// cluster. The default is `Hc0`.
+    pub covariance: SandwichType,
     /// A step of Fisher scoring smaller than this, relative to the larger of 1
     /// and the largest coefficient, ends the iteration.
     pub tolerance: f64,
@@ -152,14 +129,14 @@ pub struct GeeOptions {
     pub max_iterations: usize,
 }
 
-impl GeeOptions {
+impl PseudoRegressionOptions {
     /// Options for a link with the tolerance of `glm.control`, `1e-8`, and its
     /// 25 iterations.
     #[must_use]
     pub const fn new(link: Link) -> Self {
         Self {
             link,
-            covariance: Covariance::Hc0,
+            covariance: SandwichType::Hc0,
             tolerance: 1e-8,
             max_iterations: 25,
         }
@@ -168,7 +145,7 @@ impl GeeOptions {
 
 /// A fitted regression.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GeeFit {
+pub struct PseudoRegression {
     /// The coefficients, one per column of the design.
     pub coefficients: Vec<f64>,
     /// The sandwich covariance, row-major, `p` by `p`.
@@ -192,11 +169,19 @@ pub struct GeeFit {
     /// solve.
     pub information_condition: f64,
     /// The leverage of each observation, `w mu'^2 x' A^-1 x`, when the
-    /// covariance is [`Covariance::Hc3`], which divides each score by one less it.
+    /// covariance is [`SandwichType::Hc3`], which divides each score by one less it.
     pub leverage: Option<Vec<f64>>,
 }
 
-impl GeeFit {
+/// The options of [`fit`], under their name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `PseudoRegressionOptions`")]
+pub type GeeOptions = PseudoRegressionOptions;
+
+/// The result of [`fit`], under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `PseudoRegression`")]
+pub type GeeFit = PseudoRegression;
+
+impl PseudoRegression {
     /// The standard errors, the square roots of the diagonal of the
     /// covariance.
     #[must_use]
@@ -223,8 +208,10 @@ impl GeeFit {
 /// columns, the tolerance is not positive and finite, no iteration is allowed, the mean of `y` is
 /// outside the range of the link and no start is given, the design is rank
 /// deficient, the iteration leaves the range of the link and cannot return, or
-/// [`Covariance::Hc3`] is asked with a cluster of more than one observation or an
-/// observation of leverage 1.
+/// [`SandwichType::Hc3`] is asked with a cluster of more than one observation or an
+/// observation of leverage 1; [`Error::Unsupported`] for a link other than
+/// identity, log, logit and complementary log-log, or a sandwich other than
+/// `Hc0` and `Hc3`.
 pub fn fit(
     x: MatRef<'_, f64>,
     y: &[f64],
@@ -232,8 +219,8 @@ pub fn fit(
     weights: Option<&[f64]>,
     offset: Option<&[f64]>,
     start: Option<&[f64]>,
-    opts: &GeeOptions,
-) -> Result<GeeFit> {
+    opts: &PseudoRegressionOptions,
+) -> Result<PseudoRegression> {
     let (n, p) = (x.nrows(), x.ncols());
     for (name, length) in [("y", y.len()), ("cluster", cluster.len())]
         .into_iter()
@@ -280,7 +267,18 @@ pub fn fit(
     let w: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
     let o: Vec<f64> = offset.map_or_else(|| vec![0.0; n], <[f64]>::to_vec);
     let link = opts.link;
-    let glm_link = link.glm();
+    let glm_link = link;
+    if admits(link, 0.5).is_none() {
+        return Err(Error::unsupported(format!(
+            "link: {link:?}; the regression takes identity, log, logit and cloglog"
+        )));
+    }
+    if !matches!(opts.covariance, SandwichType::Hc0 | SandwichType::Hc3) {
+        return Err(Error::unsupported(format!(
+            "covariance: {:?}; the regression has Hc0 and Hc3",
+            opts.covariance
+        )));
+    }
     let total_weight: f64 = w.iter().sum();
     if total_weight <= 0.0 {
         return Err(Error::invalid("the weights sum to zero"));
@@ -294,7 +292,7 @@ pub fn fit(
         // The working response of the first iteration at the mean of the
         // pseudo-values, and one weighted least squares step on it.
         let mean = y.iter().zip(&w).map(|(v, wi)| v * wi).sum::<f64>() / total_weight;
-        if !link.admits(mean) {
+        if admits(link, mean) != Some(true) {
             return Err(Error::invalid(format!(
                 "the mean {mean} of the pseudo-values is outside the range of the link, \
                  so there is no start; supply one"
@@ -368,8 +366,7 @@ pub fn fit(
     let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)?.x;
     // The factor of each score: 1, or 1 / (1 - h) with h the leverage.
     let (factor, leverage): (Vec<f64>, Option<Vec<f64>>) = match opts.covariance {
-        Covariance::Hc0 => (vec![1.0; n], None),
-        Covariance::Hc3 => {
+        SandwichType::Hc3 => {
             if clusters.count() != n {
                 return Err(Error::invalid(
                     "HC3 is defined for one observation in each cluster",
@@ -401,6 +398,8 @@ pub fn fit(
                 .collect::<Result<_>>()?;
             (factor, Some(leverage))
         }
+        // Hc0, the one other sandwich the options were checked to hold.
+        _ => (vec![1.0; n], None),
     };
     let m = meat(
         scored.as_ref(),
@@ -419,7 +418,7 @@ pub fn fit(
             .map(|(i, j)| m[(i, j)])
             .collect()
     };
-    Ok(GeeFit {
+    Ok(PseudoRegression {
         coefficients: beta,
         covariance: row_major(&covariance),
         fitted,

@@ -93,12 +93,11 @@
 )]
 
 use epistat_core::InputError;
-use epistat_glm::{Family, Glm};
-use epistat_inference::sandwich::{meat, sandwich};
-use epistat_linalg::{Attempt, Mat, inverse, weighted_gram};
+use epistat_linalg::Mat;
 
 use super::prepare::{check_times, sort_rows};
 use crate::error::{Error, Result};
+use crate::pseudo::regression::{self, PseudoRegressionOptions};
 use crate::pseudo::{Method, PseudoOptions, Target, pseudo};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -500,7 +499,7 @@ pub fn slope_intercept(
             link.link(risk[rows[i] as usize])
         }
     });
-    let fit = gee_independence(&x, &y, link, opts)?;
+    let fit = gee(&x, &y, link, opts)?;
     Ok(Recalibration {
         time,
         intercept: fit.beta[0],
@@ -525,98 +524,41 @@ struct Gee {
     iterations: usize,
 }
 
-/// Fisher scoring of the Gaussian-variance model with `link`, one row per
-/// subject, and its robust covariance.
-fn gee_independence(
+/// The regression of the pseudo-values on the predictions on the scale of
+/// `link`, one row per subject, by [`regression::fit`] with every row its own
+/// cluster and the sandwich of Liang and Zeger.
+fn gee(
     x: &Mat<f64>,
     y: &[f64],
     link: epistat_glm::Link,
     opts: &RecalibrationOptions,
 ) -> Result<Gee> {
     let n = x.nrows();
-    let aliased = || {
-        Error::invalid(
+    #[expect(clippy::float_cmp, reason = "equal predictions are equal values")]
+    if (1..n).all(|i| x[(i, 1)] == x[(0, 1)]) {
+        return Err(Error::invalid(
             "the predictions are all equal on the scale of the link: the slope is not \
              estimable",
-        )
-    };
-    let mean = y.iter().sum::<f64>() / n as f64;
-    if !(mean > 0.0 && mean < 1.0) {
-        return Err(Error::invalid(format!(
-            "the mean {mean} of the pseudo-values is outside the range of the link, so \
-             there is no start"
-        )));
+        ));
     }
-    let eta0 = link.link(mean);
-    let derivative = link.derivative(eta0);
-    let z: Vec<f64> = y.iter().map(|&v| eta0 + (v - mean) / derivative).collect();
-    let start = Glm::new(Family::Gaussian, epistat_glm::Link::Identity)
-        .fit(&crate::logistic::data(x.as_ref(), &z, None, None, None)?)
-        .map_err(Error::model("the starting regression"))?;
-    let mut beta: Vec<f64> = start
-        .coefficients
-        .into_iter()
-        .collect::<Option<_>>()
-        .ok_or_else(aliased)?;
-    let model = Glm {
-        max_iterations: 1,
-        ..Glm::new(Family::Gaussian, link)
+    let cluster: Vec<u32> = (0..n)
+        .map(|i| u32::try_from(i).map_err(|_| Error::invalid("more rows than u32::MAX")))
+        .collect::<Result<_>>()?;
+    let options = PseudoRegressionOptions {
+        tolerance: opts.tolerance,
+        max_iterations: opts.max_iterations,
+        ..PseudoRegressionOptions::new(link)
     };
-    let (mut converged, mut iterations) = (false, 0);
-    let mut solved = None;
-    for _ in 0..opts.max_iterations {
-        iterations += 1;
-        let step = model
-            .fit(&crate::logistic::data(
-                x.as_ref(),
-                y,
-                None,
-                None,
-                Some(&beta),
-            )?)
-            .map_err(Error::model("the regression"))?;
-        let next: Vec<f64> = step
-            .coefficients
-            .iter()
-            .copied()
-            .collect::<Option<_>>()
-            .ok_or_else(aliased)?;
-        let largest = beta.iter().fold(1.0f64, |m, b| m.max(b.abs()));
-        converged = next
-            .iter()
-            .zip(&beta)
-            .all(|(a, b)| (a - b).abs() <= opts.tolerance * largest);
-        beta = next;
-        solved = Some(step);
-        if converged {
-            break;
-        }
-    }
-    let solved = solved.ok_or_else(|| Error::invalid("no iteration ran"))?;
-    let fitted = solved.fitted;
-    let d: Vec<f64> = solved
-        .linear_predictor
-        .iter()
-        .map(|&e| link.derivative(e))
-        .collect();
-    let weight: Vec<f64> = d.iter().map(|v| v * v).collect();
-    let a = weighted_gram(x.as_ref(), &weight)?;
-    let scored = Mat::from_fn(n, 2, |i, j| d[i] * x[(i, j)]);
-    let m = meat(scored.as_ref(), |i| y[i] - fitted[i], None)?;
-    let cov = sandwich(a.as_ref(), m.as_ref(), &Attempt::SYMMETRIC)?;
-    let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)?.x;
-    let one_norm = |m: &Mat<f64>| {
-        (0..2)
-            .map(|j| (0..2).map(|i| m[(i, j)].abs()).sum::<f64>())
-            .fold(0.0f64, f64::max)
-    };
+    let fit = regression::fit(x.as_ref(), y, &cluster, None, None, None, &options)?;
+    let c = &fit.covariance;
+    let a = &fit.information;
     Ok(Gee {
-        beta: [beta[0], beta[1]],
-        covariance: [cov[(0, 0)], cov[(0, 1)], cov[(1, 0)], cov[(1, 1)]],
-        information: [a[(0, 0)], a[(0, 1)], a[(1, 0)], a[(1, 1)]],
-        condition: one_norm(&a) * one_norm(&a_inverse),
-        converged,
-        iterations,
+        beta: [fit.coefficients[0], fit.coefficients[1]],
+        covariance: [c[0], c[1], c[2], c[3]],
+        information: [a[0], a[1], a[2], a[3]],
+        condition: fit.information_condition,
+        converged: fit.converged,
+        iterations: fit.iterations,
     })
 }
 
