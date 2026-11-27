@@ -30,14 +30,29 @@
 //! epistat-stats uses for a confidence (`1 - (1 - level) / 2`) and
 //! epistat-inference uses for an alpha (`1 - alpha / 2`).
 //!
-//! The default is a confidence of 0.95, R's `conf.level` default.
+//! # The default and its tails
+//!
+//! The default is a confidence of 0.95, R's `conf.level` default, and its
+//! probabilities follow the confidence form. Its upper probability
+//! `1 - (1 - 0.95) / 2` equals `1 - 0.05 / 2` to the bit, so a normal or t
+//! quantile is the same under either form. Its lower tail
+//! `(1 - 0.95) / 2 = 0.025000000000000022` and its alpha
+//! `1 - 0.95 = 0.050000000000000044` lie 6 ulps above `0.05 / 2` and `0.05`.
+//! A function that reads the lower tail or the alpha, such as a percentile
+//! interval or a p-value threshold, therefore gives other last bits under
+//! the default than under `Level::alpha(0.05)`. A port of an R function whose
+//! argument is `alpha = 0.05` reproduces it to the bit with
+//! [`Level::alpha`]; the default is not changed to that form, because the
+//! crates' defaults and their recorded results follow the confidence form.
 
 use crate::check::InputError;
 
 /// A confidence level, as the confidence or the alpha the caller gave.
 ///
 /// Construct it with [`Level::confidence`] or [`Level::alpha`]; both refuse a
-/// number outside `(0, 1)`.
+/// number outside `(0, 1)`. Each probability is computed from the number in
+/// the form it was given, so the default, a confidence of 0.95, has a lower
+/// tail 6 ulps above that of `Level::alpha(0.05)` (see the module).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(try_from = "LevelForm", into = "LevelForm"))]
@@ -164,6 +179,22 @@ mod tests {
         assert!(!level.is_alpha());
         assert_eq!(level.confidence_value().to_bits(), 0.95_f64.to_bits());
         assert_eq!(level, Level::confidence(0.95).unwrap());
+    }
+
+    #[test]
+    fn the_default_tails_are_those_of_the_confidence_form() {
+        let default = Level::default();
+        let alpha = Level::alpha(0.05).unwrap();
+        assert_eq!(
+            default.upper_probability().to_bits(),
+            alpha.upper_probability().to_bits()
+        );
+        let ulps = |a: f64, b: f64| a.to_bits().abs_diff(b.to_bits());
+        assert_eq!(
+            ulps(default.lower_probability(), alpha.lower_probability()),
+            6
+        );
+        assert_eq!(ulps(default.alpha_value(), alpha.alpha_value()), 6);
     }
 
     #[test]
