@@ -12,7 +12,7 @@
 //! module [`comorbidity`](super), stated with each row's `supersedes`.
 //!
 //! The weights are those of Charlson et al. 1987, Quan et al. 2011 (Table 4)
-//! and van Walraven et al. 2009, in the order of the tables, and the tests
+//! and van Walraven et al. 2009, one per row of the tables, and the tests
 //! check every score against the R package `comorbidity` 1.1.0.
 
 use super::Condition;
@@ -323,21 +323,88 @@ static ELIXHAUSER: [Row; 31] = [
     },
 ];
 
-/// The weights of Charlson et al. 1987, in the order of [`CHARLSON`].
+/// The weights of Charlson et al. 1987 (J Chronic Dis 40:373-83), 1, 2, 3
+/// or 6 points per condition, in the order of [`CHARLSON`]. The 1987 index
+/// scores leukaemia and lymphoma as conditions of their own, 2 points each;
+/// the Quan coding folds them into any malignancy, also 2 points.
 pub(super) static CHARLSON_1987: [f64; 17] = [
-    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 6.0, 6.0,
+    1.0, // mi
+    1.0, // chf
+    1.0, // pvd
+    1.0, // cevd
+    1.0, // dementia
+    1.0, // cpd
+    1.0, // rheumd
+    1.0, // pud
+    1.0, // mld
+    1.0, // diab
+    2.0, // diabwc
+    2.0, // hp
+    2.0, // rend
+    2.0, // canc
+    3.0, // msld
+    6.0, // metacanc
+    6.0, // aids
 ];
 
-/// The weights of Quan et al. 2011, Table 4, in the order of [`CHARLSON`].
+/// The updated weights of Quan et al. 2011 (Am J Epidemiol 173:676-82),
+/// Table 4, in the order of [`CHARLSON`]. Five conditions have the weight 0.
 pub(super) static CHARLSON_QUAN_2011: [f64; 17] = [
-    0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 1.0, 0.0, 2.0, 0.0, 1.0, 2.0, 1.0, 2.0, 4.0, 6.0, 4.0,
+    0.0, // mi
+    2.0, // chf
+    0.0, // pvd
+    0.0, // cevd
+    2.0, // dementia
+    1.0, // cpd
+    1.0, // rheumd
+    0.0, // pud
+    2.0, // mld
+    0.0, // diab
+    1.0, // diabwc
+    2.0, // hp
+    1.0, // rend
+    2.0, // canc
+    4.0, // msld
+    6.0, // metacanc
+    4.0, // aids
 ];
 
-/// The point weights of van Walraven et al. 2009, in the order of
-/// [`ELIXHAUSER`].
+/// The point weights of van Walraven et al. 2009 (Med Care 47:626-33), in the
+/// order of [`ELIXHAUSER`], some of them negative. Van Walraven fitted
+/// hypertension as one group, so uncomplicated and complicated hypertension
+/// both have its weight, 0.
 pub(super) static ELIXHAUSER_VAN_WALRAVEN_2009: [f64; 31] = [
-    7.0, 5.0, -1.0, 4.0, 2.0, 0.0, 0.0, 7.0, 6.0, 3.0, 0.0, 0.0, 0.0, 5.0, 11.0, 0.0, 0.0, 9.0,
-    12.0, 4.0, 0.0, 3.0, -4.0, 6.0, 5.0, -2.0, -2.0, 0.0, -7.0, 0.0, -3.0,
+    7.0,  // chf
+    5.0,  // carit
+    -1.0, // valv
+    4.0,  // pcd
+    2.0,  // pvd
+    0.0,  // hypunc
+    0.0,  // hypc
+    7.0,  // para
+    6.0,  // ond
+    3.0,  // cpd
+    0.0,  // diabunc
+    0.0,  // diabc
+    0.0,  // hypothy
+    5.0,  // rf
+    11.0, // ld
+    0.0,  // pud
+    0.0,  // aids
+    9.0,  // lymph
+    12.0, // metacanc
+    4.0,  // solidtum
+    0.0,  // rheumd
+    3.0,  // coag
+    -4.0, // obes
+    6.0,  // wloss
+    5.0,  // fed
+    -2.0, // blane
+    -2.0, // dane
+    0.0,  // alcohol
+    -7.0, // drug
+    0.0,  // psycho
+    -3.0, // depre
 ];
 
 fn conditions(table: &[Row]) -> Vec<Condition> {
