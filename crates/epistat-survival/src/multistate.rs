@@ -159,7 +159,7 @@ use epistat_rng::{dirichlet_weights, replicate_seed};
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
-use crate::check::{check_ascending, check_lengths};
+use crate::check::{check_ascending, check_lengths, refuse_non_finite};
 use crate::error::{Error, Result};
 use crate::order::{dense_index, dense_of_present, pick_used};
 use crate::surv::SurvData;
@@ -940,7 +940,8 @@ struct Columns<'a> {
 ///
 /// An input error when the data have no id or start column, a row has no
 /// starting state, no row has positive weight, the rows of a subject overlap or
-/// jump or teleport between states, the tie rule fails, `opts.initial` has the
+/// jump or teleport between states, the tie rule fails, a time is not finite,
+/// `opts.initial` has the
 /// wrong length, a negative or non-finite entry or a sum that is not 1, no
 /// weight is in the opening states when the distribution is formed from the
 /// data, or more weight leaves a state than was at risk in it.
@@ -949,6 +950,7 @@ pub fn estimate(
     times: &[f64],
     opts: &MultistateOptions,
 ) -> Result<OccupationEstimate> {
+    refuse_non_finite(times, "times")?;
     let prepared = Prepared::new(data, opts.timefix, false)?;
     let Columns {
         starts,
@@ -1031,8 +1033,8 @@ fn check_distribution(initial: &[f64], states: usize) -> Result<()> {
 /// # Errors
 ///
 /// As [`estimate`], and an input error when the data have no cluster column,
-/// when `opts.initial` is given, or when in some replicate the opening rows
-/// carry no weight.
+/// when `opts.initial` is given, when a horizon or the origin is not finite,
+/// or when in some replicate the opening rows carry no weight.
 pub fn bootstrap(
     data: &SurvData<'_>,
     times: &[f64],
@@ -1046,6 +1048,9 @@ pub fn bootstrap(
             "the bootstrap forms the initial distribution in each replicate, so none can be given",
         ));
     }
+    refuse_non_finite(times, "times")?;
+    refuse_non_finite(horizons, "horizons")?;
+    refuse_non_finite(&[origin], "origin")?;
     let prepared = Prepared::new(data, opts.timefix, true)?;
     let Columns {
         starts,
